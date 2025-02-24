@@ -133,17 +133,25 @@ async function getThreadHistory(threadId, { functionName, maxRetries, toAppend }
   logs.forEach(log => {
     const { input, ...output } = log;
 
-    const question = {
-      role: 'user',
-      content: (input && typeof input === 'string') ? input : JSON.stringify(input)
-    }
     const answer = {
       role: 'assistant',
       content: (output && typeof output === 'string') ? output : JSON.stringify(output)
     }
 
-    input && messageLogs.push(question);
+    // first log is the answer (it 'll be reversed)
     output && messageLogs.push(answer);
+
+    if (['functionCall', 'taskManager'].indexOf(functionName) !== -1) {
+      if (!input || (typeof input === 'string' && !JSON.parse(input))) {
+        return;
+      }
+    }
+
+    const question = {
+      role: 'user',
+      content: (input && typeof input === 'string') ? input : JSON.stringify(input)
+    }
+    input && messageLogs.push(question);
 
   })
 

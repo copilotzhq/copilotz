@@ -91,7 +91,7 @@ async function request(params) {
     };
 
     try {
-        console.log('fetching', url, fetchOptions);
+        // console.log('fetching', url, fetchOptions);
         const response = await fetch(url, fetchOptions);
 
         const resBody = await response.text();
@@ -105,7 +105,7 @@ async function request(params) {
             if (res) {
                 extractBase64Content(res, '', base64Content, res);
             }
-            console.log('Response', res)
+            // console.log('Response', res)
 
             // Return both the cleaned response and base64 content
             res = {

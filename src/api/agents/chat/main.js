@@ -128,30 +128,59 @@ async function chatAgent(
     const fullPrompt = createPrompt(instructions || promptTemplate, promptVariables, { removeUnusedVariables: true });
 
     // 6. Get AI Chat
-    const { provider, ...providerOptions } = config?.AI_CHAT_PROVIDER || {
+    const { provider, fallbackProvider, ...providerOptions } = config?.AI_CHAT_PROVIDER || {
         provider: 'openai',
     }; // use openai as default provider
-    const aiChatProvider = await withHooks(await ai('chat', provider));
+    
+    // Function to create a bound chat provider
+    const createChatProvider = async (providerName, isFallback = false) => {
+        const chatProvider = await withHooks(await ai('chat', providerName));
+        return chatProvider.bind({
+            __requestId__,
+            __tags__: {
+                threadId: threadId,
+                ...(isFallback && { isFallback: true })
+            },
+            config: {
+                ...providerOptions,
+                apiKey:
+                    config?.[`${providerName}_CREDENTIALS`]?.apiKey || // check for custom credentials in config
+                    env?.[`${providerName}_CREDENTIALS_apiKey`], // use default credentials from env
+            },
+            env,
+        });
+    };
 
-    const aiChat = aiChatProvider.bind({
-        __requestId__,
-        __tags__: {
-            threadId: threadId,
-        },
-        config: {
-            ...providerOptions,
-            apiKey:
-                config?.[`${provider}_CREDENTIALS`]?.apiKey || // check for custom credentials in config
-                env?.[`${provider}_CREDENTIALS_apiKey`], // use default credentials from env
-        },
-        env,
-    });
+    // Create primary chat provider
+    const aiChat = await createChatProvider(provider);
+    
+    // Create fallback chat provider if configured
+    let aiFallbackChat;
+    if (fallbackProvider) {
+        aiFallbackChat = await createChatProvider(fallbackProvider, true);
+    }
 
     // 7. Execute AI Chat
-    const { tokens, answer: assistantAnswer } = await aiChat(
-        { instructions: fullPrompt, messages: threadLogs, answer },
-        config.streamResponseBy === 'token' ? res.stream : () => { }
-    );
+    let tokens, assistantAnswer;
+    try {
+        ({ tokens, answer: assistantAnswer } = await aiChat(
+            { instructions: fullPrompt, messages: threadLogs, answer },
+            config.streamResponseBy === 'token' ? res.stream : () => { }
+        ));
+    } catch (error) {
+        // If primary provider fails and fallback is available, try the fallback
+        if (aiFallbackChat) {
+            console.warn(`Primary AI provider (${provider}) failed: ${error.message}. Trying fallback provider (${fallbackProvider}).`);
+            ({ tokens, answer: assistantAnswer } = await aiFallbackChat(
+                { instructions: fullPrompt, messages: threadLogs, answer },
+                config.streamResponseBy === 'token' ? res.stream : () => { }
+            ));
+        } else {
+            console.error(`Primary AI provider (${provider}) failed: ${error.message}. No fallback provider (${fallbackProvider}) available.`);
+            // If no fallback is available, rethrow the error
+            throw error;
+        }
+    }
 
     // 8. Prepare Response
     // Ensure 'message' is a string

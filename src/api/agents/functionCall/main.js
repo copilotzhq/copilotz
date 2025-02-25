@@ -243,6 +243,13 @@ async function functionCall(
         );
 
         // Update threadLogs for recursion, including only relevant properties
+        if (!threadLogs?.length) {
+          threadLogs.push({
+            role: 'user',
+            content: formattedInput,
+          });
+        }
+
         threadLogs.push({
           role: 'assistant',
           content: assistantMessage,

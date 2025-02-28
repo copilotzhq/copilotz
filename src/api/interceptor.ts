@@ -95,7 +95,7 @@ function afterRun(this: any, { status, executionId, output, duration, properties
             output = sanitizedOutput;
         }
         models.logs.update({ executionId }, {
-            duration: duration || 0,
+            duration: duration || 1,
             status,
             output,
             tags: Object.keys(tags).length > 0 ? tags : undefined

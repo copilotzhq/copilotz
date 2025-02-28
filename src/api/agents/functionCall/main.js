@@ -236,8 +236,8 @@ async function functionCall(
   // 10. Recursion Handling
   if (functionAgentResponse?.functions?.length && iterations < maxIter) {
     if (!Object.keys(actionModules)?.some(actionName => functionAgentResponse.functions.map(func => func.name).includes(actionName))) {
-      if (functionAgentResponse?.nextTurn === 'assistant' || functionAgentResponse?.functions?.length) {
-
+      if (functionAgentResponse?.nextTurn === 'assistant' || functionAgentResponse?.functions?.some(func => func.name !== 'callback')) {
+          
         const assistantMessage = JSON.stringify(
           validate(jsonSchemaToShortSchema(_baseOutputSchema), functionAgentResponse)
         );

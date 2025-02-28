@@ -159,7 +159,6 @@ async function chatAgent(
     if (fallbackProvider) {
         aiFallbackChat = await createChatProvider(fallbackProvider, true);
     }
-
     // 7. Execute AI Chat
     let tokens, assistantAnswer;
     try {

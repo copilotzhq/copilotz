@@ -52,14 +52,17 @@ function beforeRun(this: any, { name, url, requestId, executionId, input, proper
         const sanitizedInput = sanitizeObject({ ...input })
         const tags = properties?.__tags__;
         models.logs.create({
+
             name,
             url,
             requestId,
             executionId,
             input: pruneInput(sanitizedInput, name),
-            tags
+            tags,
+            duration:1
         })
     }
+
     return
 }
 
@@ -92,7 +95,7 @@ function afterRun(this: any, { status, executionId, output, duration, properties
             output = sanitizedOutput;
         }
         models.logs.update({ executionId }, {
-            duration,
+            duration: duration || 0,
             status,
             output,
             tags: Object.keys(tags).length > 0 ? tags : undefined

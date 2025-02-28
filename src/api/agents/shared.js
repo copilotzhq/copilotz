@@ -141,8 +141,16 @@ async function getThreadHistory(threadId, { functionName, maxRetries, toAppend }
     // first log is the answer (it 'll be reversed)
     output && messageLogs.push(answer);
 
+    const tryParseInput = (input) => {
+      try {
+        return JSON.parse(input);
+      } catch (e) {
+        return input;
+      }
+    }
+
     if (['functionCall', 'taskManager'].indexOf(functionName) !== -1) {
-      if (!input || (typeof input === 'string' && !JSON.parse(input))) {
+      if (!input || (typeof input === 'string' && !tryParseInput(input))) {
         return;
       }
     }

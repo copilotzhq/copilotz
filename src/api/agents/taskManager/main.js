@@ -21,7 +21,6 @@ async function taskManager(
     },
     res
 ) {
-    console.log(`[taskManager] Starting iteration ${iterations}`);
 
     agentType = agentType || 'taskManager';
 
@@ -51,12 +50,10 @@ async function taskManager(
     outputSchema = outputSchema ? mergeSchemas(baseOutputSchema, outputSchema) : baseOutputSchema;
 
     // 1. Get or Create Task
-    console.log(`[taskManager] Searching for active task with extId: ${externalId}`);
     taskDoc = await models.tasks.findOne(
         { extId: externalId, status: 'active' },
         { sort: { updatedAt: -1 } }
     );
-    console.log(`[taskManager] Task found: ${taskDoc ? 'Yes' : 'No'}`);
 
     const actionModules = {
         createTask: async (args) => {
@@ -83,7 +80,6 @@ async function taskManager(
                 currentStep: selectedWorkflow.firstStep,
             };
             const newTask = await models.tasks.create(taskData);
-            console.log(`[taskManager] New task created: ${newTask._id}`);
             return newTask
         },
         // listCurrentWorkflowSteps: () => workflow.steps.map((step) => ({ name: step.name, description: step.description })),
@@ -97,8 +93,6 @@ async function taskManager(
         submit: async (_args, onSubmit) => {
 
             const { _user, ...args } = _args;
-
-            console.log(`[taskManager] Processing submit function`);
 
             const updateTaskPayload = {};
             let status = 'completed';
@@ -141,7 +135,6 @@ async function taskManager(
 
             await models.tasks.update({ _id: taskDoc._id }, updateTaskPayload);
 
-            console.log('[taskManager] Updating task step...');
             return results;
         },
         changeStep: async ({ stepName }) => {
@@ -180,17 +173,13 @@ async function taskManager(
     });
 
     if (taskDoc) {
-        console.log(`[taskManager] Fetching workflow and current step`);
         workflow = await models.workflows.findOne({ _id: taskDoc.workflow }, { populate: ['steps'] });
         currentStep = await models.steps.findOne({ _id: taskDoc.currentStep }, { populate: ['actions'] });
         currentStep.onSubmit = currentStep?.onSubmit ? await models.actions.findOne({ _id: currentStep.onSubmit }) : null;
-
         if (currentStep?.job?._id && currentStep?.job?._id !== copilotz?.job?._id) {
             const job = await models.jobs.findOne({ _id: currentStep.job }, { populate: ['actions'] });
             copilotz.job = job;
         }
-
-        console.log(`[taskManager] Current step: ${currentStep.name}`);
 
         // 2. Get current step details
         const {
@@ -239,14 +228,12 @@ async function taskManager(
         instructions = availableWorkflowsPrompt + instructions;
     }
 
-    console.log(`[taskManager] Fetching thread history`);
     if (!threadLogs || !threadLogs?.length) {
         threadLogs = await getThreadHistory(thread.extId, { functionName: 'taskManager', maxRetries: 10 })
     }
 
     const functionCallAgent = await withHooks(await agents('functionCall'));
 
-    console.log(`[taskManager] Calling functionCall agent`);
     const functionCallAgentResponse = await functionCallAgent.bind(this)(
         {
             resources,
@@ -263,12 +250,10 @@ async function taskManager(
         },
         res
     );
-    console.log(`[taskManager] functionCall agent response received`);
 
     let taskManagerAgentResponse = {};
 
     try {
-        console.log(`[taskManager] Validating and formatting output`);
 
         // Use the base output schema for validation
         taskManagerAgentResponse = validate(
@@ -281,7 +266,6 @@ async function taskManager(
             }
         );
 
-        console.log(`[taskManager] Validation successful`);
     } catch (err) {
         console.error('[taskManager] Validation error:', err);
         taskManagerAgentResponse = {
@@ -292,10 +276,9 @@ async function taskManager(
 
     // if any function.name is any of actionModules
     if (
-        Object.keys(actionModules)?.some((key) => taskManagerAgentResponse.functions?.some((func) => func.name === key)) &&
+        Object.keys(actionModules)?.some((key) => taskManagerAgentResponse.functions?.some((func) => func.name === key && func.name !== 'callback')) &&
         iterations < maxIter
     ) {
-        console.log(`[taskManager] Recursively calling taskManager for next step`);
         return await withHooks(taskManager).bind(this)(
             {
                 input: '',

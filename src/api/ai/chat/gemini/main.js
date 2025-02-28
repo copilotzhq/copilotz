@@ -6,6 +6,15 @@ export default async function geminiChat(chat, stream = () => { }) {
 
     const systemPrompts = [];
     const messages = formatChat({ ...chat, config });
+
+    if (chat.answer) {
+        return {
+            prompt: messages,
+            answer: typeof chat.answer === "string" ? chat.answer : JSON.stringify(chat.answer),
+            tokens: 0
+        }
+    }
+
     const formattedMessages = messages
         .map(m => {
             if (m.role === 'system') {

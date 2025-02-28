@@ -14,6 +14,7 @@ export default async function geminiChat(chat, stream = () => { }) {
             tokens: 0
         }
     }
+    
 
     const formattedMessages = messages
         .map(m => {

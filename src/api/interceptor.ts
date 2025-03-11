@@ -28,15 +28,15 @@ function beforeRun(this: any, { name, url, requestId, executionId, input, proper
 
         switch (name) {
             case 'chatAgent': {
-                const { threadLogs: _threadLogs, instructions: _instructions, ...rest } = input?.['0'];
+                const { threadLogs: _threadLogs, instructions: _instructions, resources: _resources, ...rest } = input?.['0'];
                 return {['0']:rest};
             }
             case 'functionCall': {
-                const { threadLogs: _threadLogs, instructions: _instructions, ...rest } = input?.['0'];
+                const { threadLogs: _threadLogs, instructions: _instructions, resources: _resources, ...rest } = input?.['0'];
                 return {['0']:rest};
             }
             case 'taskManager': {
-                const { threadLogs: _threadLogs, instructions: _instructions, ...rest } = input?.['0'];
+                const { threadLogs: _threadLogs, instructions: _instructions, resources: _resources, ...rest } = input?.['0'];
                 return {['0']:rest};
             }
             default: {

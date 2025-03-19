@@ -7,6 +7,6 @@
     "imports": {
         "-axion-components/": "http://AxionCompany--axions-web--main:{{GIT_API_KEY}}@localhost:9000/src/components/",
          "-axion-modules/":"http://localhost:9000/functions/modules/",
-         "axion-modules/":"https://raw.githubusercontent.com/AxionCompany/functions/release/functions/modules/"
+         "axion-modules/":"https://raw.githubusercontent.com/AxionCompany/functions/main/functions/modules/"
     }
 }

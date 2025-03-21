@@ -2,7 +2,8 @@
 import formatChat, { tokenCounter } from '../helpers.js';
 
 export default async function geminiChat(chat, stream = () => { }) {
-    const { config } = this;
+    const env = this.env;
+    const config = { ...this.config, ...chat?.config }
 
     const systemPrompts = [];
     const messages = formatChat({ ...chat, config });

@@ -5,7 +5,7 @@ import {
     getJob,
 } from './_middlewares/main.js';
 
-async function middleware(req: any) {
+async function middleware(this: any, req: any) {
     
     const middlewares = [
         getUser,

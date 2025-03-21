@@ -2,7 +2,9 @@ import formatChat, { tokenCounter } from '../helpers.js';
 
 async function openAiChat(chat, stream = () => { }) {
 
-  const { config, env } = this;
+  const env = this.env
+  const config = { ...this.config, ...chat?.config }
+
   const messages = formatChat({ ...chat, config });
 
   if (chat.answer) {

@@ -15,9 +15,9 @@ export default async function middleware(req) {
     }
 
     const { value: config } = (await models.configs.findOne({ name: `${provider}_CREDENTIALS` })) || {};
-    
 
-    req.data.config = { ...req?.data?.config, ...config };
+
+    req.params.config = { ...req?.params?.config, ...config };
 
     return req
 }

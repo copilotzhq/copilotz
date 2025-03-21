@@ -2,25 +2,9 @@ export default async function middleware(req) {
 
     const models = this.models;
 
-    let provider;
-
-    switch (new URL(req?.url)?.pathname) {
-        case '/ai/chat/openai':
-            provider = 'openai';
-            break;
-        case '/ai/chat/gemini':
-            provider = 'gemini';
-            break;
-        case '/ai/chat/claude':
-            provider = 'claude';
-            break;
-        case '/ai/chat/groq':
-            provider = 'groq';
-            break;
-        case '/ai/chat/deepseek':
-            provider = 'deepseek';
-            break;
-    }
+    const pathname = new URL(req?.url)?.pathname;
+    const providerArr = pathname.split('/').filter(Boolean);
+    const provider = providerArr[providerArr.length - 1];
 
     if (!provider) {
         throw new Error('Provider not found');

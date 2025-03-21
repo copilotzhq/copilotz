@@ -4,7 +4,7 @@ export default async function middleware(req) {
 
     let provider;
 
-    switch (new URL(req?.data?.url)?.pathname) {
+    switch (new URL(req?.url)?.pathname) {
         case '/ai/chat/openai':
             provider = 'openai';
             break;

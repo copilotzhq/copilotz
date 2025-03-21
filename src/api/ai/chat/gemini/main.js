@@ -5,6 +5,10 @@ export default async function geminiChat(chat, stream = () => { }) {
     const env = this.env;
     const config = { ...this.config, ...chat?.config }
 
+    if (typeof stream !== 'function') {
+        stream = stream.stream
+      }
+
     const systemPrompts = [];
     const messages = formatChat({ ...chat, config });
 

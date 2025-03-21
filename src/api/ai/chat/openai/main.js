@@ -3,7 +3,7 @@ import formatChat, { tokenCounter } from '../helpers.js';
 async function openAiChat(chat, stream = () => { }) {
 
   if (typeof stream !== 'function') {
-    stream = stream.stream
+    stream = () => { }
   }
 
   const env = this.env

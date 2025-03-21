@@ -14,7 +14,7 @@ export default async function middleware(req) {
         throw new Error('Provider not supported');
     }
 
-    const config = (await models.configs.findOne({ name: `${provider}_CREDENTIALS` })) || {};
+    const { value: config } = (await models.configs.findOne({ name: `${provider}_CREDENTIALS` })) || {};
 
     req.data.config = { ...req?.data?.config, ...config };
 

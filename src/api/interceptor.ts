@@ -52,7 +52,6 @@ function beforeRun(this: any, { name, url, requestId, executionId, input, proper
         const sanitizedInput = sanitizeObject({ ...input })
         const tags = properties?.__tags__;
         models.logs.create({
-
             name,
             url,
             requestId,

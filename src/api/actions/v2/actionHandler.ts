@@ -156,72 +156,72 @@ export function jsonSchemaToFunctionSpec(
     if (!schema) {
       return `${isRequired ? '!' : ''}${name}<any>`;
     }
-    
+
     const type = formatType(
       Array.isArray(schema.type) ? schema.type[0] : schema.type,
       schema.format
     );
     const prefix = isRequired ? '!' : '';
     const description = formatDescription(schema.description);
-    
+
     // Special case for object properties we want to show in expanded format at depth 0
-    if (type === 'object' && schema.properties && 
-        Object.keys(schema.properties).length > 0 && 
-        depth === 0) {
+    if (type === 'object' && schema.properties &&
+      Object.keys(schema.properties).length > 0 &&
+      depth === 0) {
       // For top-level objects, we want to show an expanded version
       // Create a detailed spec showing all sub-properties
       const subProps = Object.entries(schema.properties).map(([subName, subSchema]) => {
         const subType = formatType(
-          Array.isArray((subSchema as JsonSchema).type) 
-            ? (subSchema as JsonSchema).type![0] 
+          Array.isArray((subSchema as JsonSchema).type)
+            ? (subSchema as JsonSchema).type![0]
             : (subSchema as JsonSchema).type,
           (subSchema as JsonSchema).format
         );
-          
+
         let typeStr = subType;
-        
+
         // Add enum values if they exist
         if ((subSchema as JsonSchema).enum && (subSchema as JsonSchema).enum!.length > 0) {
           typeStr += `[${(subSchema as JsonSchema).enum!.join('|')}]`;
         }
-        
-        const subDesc = (subSchema as JsonSchema).description 
-          ? ` (${(subSchema as JsonSchema).description})` 
+
+        const subDesc = (subSchema as JsonSchema).description
+          ? ` (${(subSchema as JsonSchema).description})`
           : '';
-          
+
         return `${subName}<${typeStr}>${subDesc}`;
       }).join(', ');
-      
+
       if (subProps) {
         // Return as a formatted object showing its properties
         return `${prefix}${name}<object{${subProps}}>${description}`;
       }
     }
-    
+
     // Handle arrays specially to show item types
     if (type === 'array' && schema.items) {
-      const itemSchema = Array.isArray(schema.items) 
+      const itemSchema = Array.isArray(schema.items)
         ? schema.items[0]
         : schema.items;
-      
+
       // If no item schema is defined, just show array
       if (!itemSchema) {
         return `${prefix}${name}<array>${description}`;
       }
-      
+
       // Get item type
       const itemType = formatType(
         Array.isArray((itemSchema as JsonSchema).type)
-          ? (itemSchema as JsonSchema).type![0] 
+          ? (itemSchema as JsonSchema).type![0]
           : (itemSchema as JsonSchema).type,
         (itemSchema as JsonSchema).format
       );
-      
+
       // For simple types or max depth reached or empty objects, just show array<type>
-      if (itemType !== 'object' || 
-          !(itemSchema as JsonSchema).properties || 
-          Object.keys((itemSchema as JsonSchema).properties || {}).length === 0 || 
-          depth > 1) {
+      if (itemType !== 'object' ||
+        !(itemSchema as JsonSchema).properties ||
+        Object.keys((itemSchema as JsonSchema).properties || {}).length === 0 ||
+        depth > 1) {
         // Include enum values if they exist
         let typeDisplay = itemType;
         if ((itemSchema as JsonSchema).enum && (itemSchema as JsonSchema).enum!.length > 0) {
@@ -229,15 +229,15 @@ export function jsonSchemaToFunctionSpec(
         }
         return `${prefix}${name}<array<${typeDisplay}>>${description}`;
       }
-      
+
       // For object arrays, recursively show nested properties of first item
       const arrayProps = Object.entries((itemSchema as JsonSchema).properties || {})
         .map(([childName, childSchema]) => {
-          const childIsRequired = Array.isArray((itemSchema as JsonSchema).required) && 
-                                (itemSchema as JsonSchema).required!.includes(childName);
-          
+          const childIsRequired = Array.isArray((itemSchema as JsonSchema).required) &&
+            (itemSchema as JsonSchema).required!.includes(childName);
+
           return formatSchemaProperty(
-            `${name}[].${childName}`, 
+            `${name}[].${childName}`,
             childSchema as JsonSchema,
             childIsRequired,
             depth + 1
@@ -245,20 +245,20 @@ export function jsonSchemaToFunctionSpec(
         })
         .filter(prop => prop) // Filter out empty strings
         .join(', ');
-      
+
       // If no properties were found after filtering, use the simple format
       if (!arrayProps) {
         return `${prefix}${name}<array<${itemType}>>${description}`;
       }
-      
+
       return arrayProps;
     }
-    
+
     // For non-object types or max depth reached or empty objects, use simple format
-    if (type !== 'object' || 
-        !schema.properties || 
-        Object.keys(schema.properties).length === 0 || 
-        depth > 2) {
+    if (type !== 'object' ||
+      !schema.properties ||
+      Object.keys(schema.properties).length === 0 ||
+      depth > 2) {
       // Include enum values if they exist
       let typeDisplay = type;
       if (schema.enum && schema.enum.length > 0) {
@@ -266,7 +266,7 @@ export function jsonSchemaToFunctionSpec(
       }
       return `${prefix}${name}<${typeDisplay}>${description}`;
     }
-    
+
     // For nested objects, recursively format nested properties
     const nestedProps = Object.entries(schema.properties)
       .map(([propName, propSchema]) => {
@@ -280,12 +280,12 @@ export function jsonSchemaToFunctionSpec(
       })
       .filter(prop => prop) // Filter out empty strings
       .join(', ');
-    
+
     // If no properties were found after filtering, use the simple format
     if (!nestedProps) {
       return `${prefix}${name}<${type}>${description}`;
     }
-    
+
     return nestedProps;
   };
 
@@ -764,7 +764,7 @@ export async function parseOpenAPISchema(
               statusText: response.statusText,
               body: errorText
             });
-            
+
             let errorData;
             try {
               errorData = JSON.parse(errorText);
@@ -785,33 +785,33 @@ export async function parseOpenAPISchema(
           let responseData;
           if (contentType.includes('application/json')) {
             responseData = await response.json();
-            
+
             // Check if the response structure matches our expected schema
             if (responseSchema && responseSchema.properties) {
-              
+
               // Check if there's a structure mismatch but we can adapt it
               const expectedProps = Object.keys(responseSchema.properties);
               const actualProps = Object.keys(responseData);
-              
+
               // If we see a common API pattern where the data is wrapped in a response object
               if (expectedProps.length > 0 && !expectedProps.some(prop => actualProps.includes(prop))) {
-                
+
                 // Some APIs wrap array results in a data/items/results property
                 for (const key of ['data', 'items', 'results', 'response']) {
                   if (key in responseData && Array.isArray(responseData[key])) {
                     if (expectedProps.includes('items') || expectedProps.some(p => responseSchema.properties![p].type === 'array')) {
                       const arrayProp = expectedProps.find(p => responseSchema.properties![p].type === 'array') || 'items';
-                      
+
                       // Create adapted response with the expected property
                       const adaptedResponse = { [arrayProp]: responseData[key] };
-                      
+
                       // Copy over any other properties from the original response that match the schema
                       for (const prop of expectedProps) {
                         if (prop !== arrayProp && prop in responseData) {
                           adaptedResponse[prop] = responseData[prop];
                         }
                       }
-                      
+
                       responseData = adaptedResponse;
                       break;
                     }
@@ -852,73 +852,73 @@ export async function parseOpenAPISchema(
        * Recursively format a schema property for the function spec
        */
       const formatProperty = (
-        propName: string, 
-        propSchema: JsonSchema, 
-        isRequired: boolean, 
+        propName: string,
+        propSchema: JsonSchema,
+        isRequired: boolean,
         depth = 0
       ): string[] => {
         // Handle undefined schema case
         if (!propSchema) {
           return [`${isRequired ? '!' : ''}${propName}<any>`];
         }
-        
+
         // Get base type and description
-        const propType = Array.isArray(propSchema.type) 
-          ? propSchema.type[0] 
+        const propType = Array.isArray(propSchema.type)
+          ? propSchema.type[0]
           : propSchema.type || 'any';
         const required = isRequired ? '!' : '';
         const description = propSchema.description ? ` (${propSchema.description})` : '';
-        
+
         // Special case for object properties we want to show in expanded format at depth 0
-        if (propType === 'object' && propSchema.properties && 
-            Object.keys(propSchema.properties).length > 0 && 
-            depth === 0) {
+        if (propType === 'object' && propSchema.properties &&
+          Object.keys(propSchema.properties).length > 0 &&
+          depth === 0) {
           // For top-level objects, we want to show an expanded version
           // Create a detailed spec showing all sub-properties
           const subProps = Object.entries(propSchema.properties).map(([subName, subSchema]) => {
-            const subType = Array.isArray((subSchema as JsonSchema).type) 
-              ? (subSchema as JsonSchema).type![0] 
+            const subType = Array.isArray((subSchema as JsonSchema).type)
+              ? (subSchema as JsonSchema).type![0]
               : (subSchema as JsonSchema).type || 'any';
-              
+
             let typeStr = subType;
-            
+
             // Add enum values if they exist
             if ((subSchema as JsonSchema).enum && (subSchema as JsonSchema).enum!.length > 0) {
               typeStr += `[${(subSchema as JsonSchema).enum!.join('|')}]`;
             }
-            
-            const subDesc = (subSchema as JsonSchema).description 
-              ? ` (${(subSchema as JsonSchema).description})` 
+
+            const subDesc = (subSchema as JsonSchema).description
+              ? ` (${(subSchema as JsonSchema).description})`
               : '';
-              
+
             return `${subName}<${typeStr}>${subDesc}`;
           }).join(', ');
-          
+
           if (subProps) {
             // Return as a formatted object showing its properties
             return [`${required}${propName}<object{${subProps}}>${description}`];
           }
         }
-        
+
         // Handle arrays specially to show item types
         if (propType === 'array' && propSchema.items) {
-          const itemSchema = Array.isArray(propSchema.items) 
+          const itemSchema = Array.isArray(propSchema.items)
             ? propSchema.items[0]
             : propSchema.items;
-          
+
           // If no item schema is defined, just show array
           if (!itemSchema) {
             return [`${required}${propName}<array>${description}`];
           }
-          
+
           // Get item type
           const itemType = Array.isArray(itemSchema.type)
             ? itemSchema.type[0]
             : itemSchema.type || 'any';
-          
+
           // For simple types or max depth reached, just show array<type>
-          if (itemType !== 'object' || !itemSchema.properties || 
-              Object.keys(itemSchema.properties).length === 0 || depth > 1) {
+          if (itemType !== 'object' || !itemSchema.properties ||
+            Object.keys(itemSchema.properties).length === 0 || depth > 1) {
             // Include enum values if they exist
             let typeDisplay = itemType;
             if (itemSchema.enum && itemSchema.enum.length > 0) {
@@ -926,36 +926,36 @@ export async function parseOpenAPISchema(
             }
             return [`${required}${propName}<array<${typeDisplay}>>${description}`];
           }
-          
+
           // For object arrays, recursively show nested properties of first item
           const arrayProps: string[] = [];
           Object.entries(itemSchema.properties).forEach(([childName, childSchema]) => {
-            const childIsRequired = Array.isArray(itemSchema.required) && 
-                                  itemSchema.required.includes(childName);
-            
+            const childIsRequired = Array.isArray(itemSchema.required) &&
+              itemSchema.required.includes(childName);
+
             const childParams = formatProperty(
-              `${propName}[].${childName}`, 
+              `${propName}[].${childName}`,
               childSchema as JsonSchema,
               childIsRequired,
               depth + 1
             );
-            
+
             arrayProps.push(...childParams);
           });
-          
+
           // If no properties were added, use the simple format
           if (arrayProps.length === 0) {
             return [`${required}${propName}<array<${itemType}>>${description}`];
           }
-          
+
           return arrayProps;
         }
-        
+
         // For non-object types or max depth reached or empty objects, return simple format
-        if (propType !== 'object' || 
-            !propSchema.properties || 
-            Object.keys(propSchema.properties).length === 0 || 
-            depth > 2) {
+        if (propType !== 'object' ||
+          !propSchema.properties ||
+          Object.keys(propSchema.properties).length === 0 ||
+          depth > 2) {
           // Include enum values if they exist
           let typeDisplay = propType;
           if (propSchema.enum && propSchema.enum.length > 0) {
@@ -963,36 +963,36 @@ export async function parseOpenAPISchema(
           }
           return [`${required}${propName}<${typeDisplay}>${description}`];
         }
-        
+
         // For nested objects, recursively format nested properties
         const result: string[] = [];
-        
+
         Object.entries(propSchema.properties).forEach(([childName, childSchema]) => {
-          const childIsRequired = Array.isArray(propSchema.required) && 
-                                propSchema.required.includes(childName);
-          
+          const childIsRequired = Array.isArray(propSchema.required) &&
+            propSchema.required.includes(childName);
+
           const childParams = formatProperty(
-            `${propName}.${childName}`, 
+            `${propName}.${childName}`,
             childSchema as JsonSchema,
             childIsRequired,
             depth + 1
           );
-          
+
           result.push(...childParams);
         });
-        
+
         // If no properties were found, use the simple format
         if (result.length === 0) {
           return [`${required}${propName}<${propType}>${description}`];
         }
-        
+
         return result;
       };
 
       // Add path parameters
       for (const param of parameters) {
         inputParams.push(...formatProperty(
-          param.name, 
+          param.name,
           param.schema,
           !!param.required,
           0
@@ -1002,9 +1002,9 @@ export async function parseOpenAPISchema(
       // Add body parameters if present
       if (requestBodySchema && requestBodySchema.properties) {
         for (const [propName, propSchema] of Object.entries(requestBodySchema.properties)) {
-          const propIsRequired = Array.isArray(requestBodySchema.required) && 
-                               requestBodySchema.required.includes(propName);
-          
+          const propIsRequired = Array.isArray(requestBodySchema.required) &&
+            requestBodySchema.required.includes(propName);
+
           inputParams.push(...formatProperty(
             propName,
             propSchema as JsonSchema,
@@ -1021,7 +1021,7 @@ export async function parseOpenAPISchema(
       if (responseSchema && responseSchema.properties) {
         for (const [propName, propSchema] of Object.entries(responseSchema.properties)) {
           const propDetails = propSchema as JsonSchema;
-          
+
           // Handle nested properties recursively
           outputParams.push(...formatProperty(
             propName,
@@ -1182,7 +1182,7 @@ export async function processAction(
     let actionSpec = '';
     if (inputSchema && outputSchema) {
       const inputDesc = description || name || actionName;
-      
+
       // Generate the input parameters string
       const inputParams = Object.entries(inputSchema.properties || {})
         .map(([paramName, paramSchema]) => {
@@ -1190,7 +1190,7 @@ export async function processAction(
           return formatSchemaProperty(paramName, paramSchema as JsonSchema, isRequired, 0);
         })
         .join(', ');
-      
+
       // Generate the output parameters
       let outputString = '';
       if (outputSchema.properties) {
@@ -1200,7 +1200,7 @@ export async function processAction(
           })
           .join(', ');
       }
-      
+
       // Format the full spec string
       const argsStr = inputParams || '-';
       const outputStr = outputString || outputSchema.description || 'success';
@@ -1253,48 +1253,66 @@ function createWrappedHandler(
 
     // Execute the handler
     const result = await handler(validatedInput);
-    
+
     // Validate output if schema is provided
     if (outputSchema) {
       try {
-        
+
+        const base64Content = {};
+        if (result) {
+
+          extractBase64Content(result, '', base64Content, result);
+
+          // Return both the cleaned response and base64 content
+          result.__media__ = Object.keys(base64Content).length > 0
+            ? base64Content
+            : undefined;
+
+        }
+        let _result = result;
+
         // Check if result is compatible with the schema
         if (outputSchema.type === 'object' && typeof result === 'object' && result !== null) {
           // If the schema expects an object and we have an object, proceed with validation
-          return validate(outputSchema, result);
+          _result = validate(outputSchema, result);
         } else if (outputSchema.type === 'array' && Array.isArray(result)) {
           // If the schema expects an array and we have an array, proceed with validation
-          return validate(outputSchema, result);
-        } else if (outputSchema.type === 'object' && 
-                  typeof result === 'object' && 
-                  outputSchema.properties && 
-                  Object.keys(outputSchema.properties).some(key => key in (result || {}))) {
+          _result = validate(outputSchema, result);
+        } else if (outputSchema.type === 'object' &&
+          typeof result === 'object' &&
+          outputSchema.properties &&
+          Object.keys(outputSchema.properties).some(key => key in (result || {}))) {
           // Special case: if some properties match between schema and result, try validation
-          return validate(outputSchema, result);
+          _result = validate(outputSchema, result);
         } else {
           // Log that we're skipping validation due to type mismatch
-          console.warn(`[${actionName}] Schema/result type mismatch, skipping validation:`, 
+          console.warn(`[${actionName}] Schema/result type mismatch, skipping validation:`,
             { schemaType: outputSchema.type, resultType: typeof result }
           );
-          return result;
         }
+        // Return both the cleaned response and base64 content
+        result.__media__ = Object.keys(base64Content).length > 0
+          ? base64Content
+          : undefined;
+
+
       } catch (error) {
         console.error(`[${actionName}] Output validation error:`, error);
-        
+
         // Check if we can attempt to adapt the response structure
         if (outputSchema.properties && typeof result === 'object' && result !== null) {
-          
+
           try {
             // Create an object with the expected structure
             const adaptedResult: Record<string, any> = {};
-            
+
             // For each property in the schema, try to find a matching property in the result
             for (const propName of Object.keys(outputSchema.properties)) {
               if (propName in result) {
                 adaptedResult[propName] = result[propName];
               } else if (
                 // Special case: if the schema property is an array and there's an array in the result
-                outputSchema.properties[propName].type === 'array' && 
+                outputSchema.properties[propName].type === 'array' &&
                 Object.values(result).some(val => Array.isArray(val))
               ) {
                 // Find the first array in the result
@@ -1304,7 +1322,7 @@ function createWrappedHandler(
                 }
               }
             }
-            
+
             // If we managed to adapt at least some properties, use the adapted result
             if (Object.keys(adaptedResult).length > 0) {
               return adaptedResult;
@@ -1313,7 +1331,7 @@ function createWrappedHandler(
             console.error(`[${actionName}] Error adapting result:`, adaptError);
           }
         }
-        
+
         // If adaptation failed or wasn't attempted, return the original result
         return result;
       }
@@ -1390,6 +1408,8 @@ export async function actionHandler(
 
   return processedActions;
 }
+
+
 
 // Export default handler
 export default actionHandler; 

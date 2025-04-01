@@ -952,9 +952,19 @@ async function handleFunctionCalls(
               // Execute function with args
               const result = await fn(functionCall.args || {});
 
-              // Store result
-              functionCall.results = result;
-              functionCall.status = 'ok';
+              if (typeof result === 'object' && result.__media__) {
+                const { __media__, ...actionResult } = result;
+                console.log('media', __media__);
+                if (config?.streamResponseBy === 'turn' && __media__) {
+                  res.stream(`${JSON.stringify({ media: __media__ })}\n`);
+                }
+                functionCall.results = actionResult;
+              } else{
+                // Store result
+                functionCall.results = result;
+                functionCall.status = 'ok';
+              }
+
             } else {
               throw new Error(`Function '${functionCall.name}' not found`);
             }
@@ -968,7 +978,6 @@ async function handleFunctionCalls(
 
           // Calculate duration
           functionCall.duration = Date.now() - (functionCall.startTime || 0);
-
 
         }
 

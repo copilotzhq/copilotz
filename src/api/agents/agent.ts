@@ -3,8 +3,10 @@
 // ========================================================================================
 
 import { jsonrepair } from "npm:jsonrepair";
-import validate, { getDotNotationObject } from "axion-modules/connectors/validator.ts";
+import { getDotNotationObject } from "axion-modules/connectors/validator.ts";
 import lodash from "npm:lodash";
+import { validate } from '../actions/v2/jsonSchemaValidator.ts';
+import { jsonSchemaToFunctionSpec } from '../actions/v2/main.ts';
 
 // ========================================================================================
 // TYPES DEFINITIONS
@@ -115,6 +117,7 @@ export interface AgentContext {
     agents: (agentType: string) => Promise<any>;
     ai: (type: string, provider: string) => Promise<any>;
     actionExecutor: (params: any, res: ResponseObject) => Promise<any>;
+    actionHandler: (actions: any) => Promise<any>;
     [key: string]: any;
   };
   utils: {
@@ -183,7 +186,7 @@ function jsonSchemaToShortSchema(jsonSchema: any, { detailed }: { detailed?: boo
       const isRequired = required.includes(key);
       const suffix = isRequired ? '!' : '?';
       const description = detailed && prop.description ? ` ${prop.description}` : '';
-      
+
       if (type === 'object' && prop.properties) {
         result[key] = formatProperties(prop.properties, prop.required);
       } else if (type === 'array' && prop.items) {
@@ -237,8 +240,8 @@ function mergeSchemas(schema1: any, schema2: any): any {
 }
 
 function createPrompt(
-  template: string, 
-  data: Record<string, any>, 
+  template: string,
+  data: Record<string, any>,
   options: { removeUnusedVariables?: boolean } = { removeUnusedVariables: false }
 ): string {
   return template.replace(/\{\{(\w+)\}\}/g, function (match, key) {
@@ -411,14 +414,19 @@ const _baseInputSchema = {
     message: {
       type: 'string',
       description: 'The message from the user'
-    }
+    },
   },
+  additionalProperties: true,
   required: ['message']
 };
 
 const _baseOutputSchema = {
   type: 'object',
   properties: {
+    think: {
+      type: 'string',
+      description: 'answer in 1 sentence each question: 1. what is the most important instruction to follow? what information from the conversation should I consider? 3. what are the results from function calls I need to consider? 4. what do I send the user and which function (if any) should I call?'
+    },
     message: {
       type: 'string',
       description: 'The message to the user'
@@ -441,27 +449,28 @@ const _baseOutputSchema = {
       },
       description: 'The functions to call'
     },
-    nextTurn: {
-      type: 'string',
-      enum: ['user', 'assistant'],
-      description: 'Who should take the next turn'
-    }
+    additionalProperties: true,
+    // nextTurn: {
+    //   type: 'string',
+    //   enum: ['user', 'assistant'],
+    //   description: 'Who should take the next turn'
+    // }
   },
-  required: ['message']
+  required: ['message', 'think']
 };
 
 export function responseFormatPromptTemplate({ outputSchema, inputSchema }: { outputSchema: any, inputSchema: any }, shortSchemaFn: Function): string {
   return `
 ## RESPONSE FORMAT
 
-Your response must follow this format:
+Your response must follow the following json-schema:
 \`\`\`json
-${JSON.stringify(shortSchemaFn(outputSchema, { detailed: true }), null, 2)}
+${JSON.stringify(outputSchema)}
 \`\`\`
 
 User input format:
 \`\`\`json
-${JSON.stringify(shortSchemaFn(inputSchema, { detailed: true }), null, 2)}
+${JSON.stringify(inputSchema)}
 \`\`\`
 `;
 }
@@ -499,7 +508,7 @@ async function transcribeAudio(
   });
 
   const audioBlob = base64ToBlob(audio);
-  
+
   const transcribedAudio = await transcriber({
     blob: audioBlob,
     instructions,
@@ -576,7 +585,7 @@ async function chatWithAI(
 
   // Extract utils and dependencies
   const { createPrompt, getThreadHistory } = utils;
-  const { ai, agents } = modules;
+  const { ai } = modules;
   const { copilotz, config } = resources;
 
   // Handle base schemas
@@ -595,12 +604,12 @@ async function chatWithAI(
   if (!finalThreadLogs.length) {
     finalThreadLogs = await getThreadHistory.call(
       context,
-      thread.extId, 
-      { functionName: 'chatAgent', maxRetries: 10 }
+      thread.extId,
+      { functionName: 'agent', maxRetries: 10 }
     );
+    // Handle user input
   }
 
-  // Handle user input
   if (input) {
     finalThreadLogs.push({
       role: 'user',
@@ -610,15 +619,15 @@ async function chatWithAI(
 
   // Handle audio transcription if provided
   if (audio && capabilities.transcribe) {
-    const transcribedText = await transcribeAudio(context, { 
-      resources, 
-      audio, 
-      instructions, 
+    const transcribedText = await transcribeAudio(context, {
+      resources,
+      audio,
+      instructions,
       agentType: 'transcriber',
       user,
       thread
     }, res).then(result => result.message);
-    
+
     finalThreadLogs.push({
       role: 'user',
       content: transcribedText,
@@ -639,18 +648,16 @@ async function chatWithAI(
       currentDate: new Date().toDateString(),
     }),
   };
-  
-  const fullPrompt = createPrompt(chatPromptTemplate, 
-    promptVariables, 
+
+  const fullPrompt = createPrompt(chatPromptTemplate,
+    promptVariables,
     { removeUnusedVariables: true }
   );
-
-  console.log('[chatWithAI] fullPrompt', fullPrompt);
 
   // Configure AI provider
   const providerConfig = config?.AI_CHAT_PROVIDER || { provider: 'openai' };
   const { provider, fallbackProvider, ...providerOptions } = providerConfig;
-  
+
   // Create chat provider function
   const createChatProvider = async (providerName: string, isFallback = false) => {
     const chatProvider = await withHooks(await ai('chat', providerName));
@@ -663,7 +670,7 @@ async function chatWithAI(
       config: {
         ...providerOptions,
         apiKey:
-          config?.[`${providerName}_CREDENTIALS`]?.apiKey || 
+          config?.[`${providerName}_CREDENTIALS`]?.apiKey ||
           env?.[`${providerName}_CREDENTIALS_apiKey`],
       },
       env,
@@ -676,22 +683,22 @@ async function chatWithAI(
   if (fallbackProvider) {
     aiFallbackChat = await createChatProvider(fallbackProvider, true);
   }
-  
+
   // Call the AI with fallback handling
   let tokens, assistantAnswer;
   try {
     ({ tokens, answer: assistantAnswer } = await aiChat(
       { instructions: fullPrompt, messages: finalThreadLogs, answer },
-      config?.streamResponseBy === 'token' ? res.stream : () => {}
+      config?.streamResponseBy === 'token' ? res.stream : () => { }
     ));
   } catch (error) {
     if (aiFallbackChat) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.warn(`Primary AI provider (${provider}) failed: ${errorMessage}. Trying fallback provider (${fallbackProvider}).`);
-      
+
       ({ tokens, answer: assistantAnswer } = await aiFallbackChat(
         { instructions: fullPrompt, messages: finalThreadLogs, answer },
-        config?.streamResponseBy === 'token' ? res.stream : () => {}
+        config?.streamResponseBy === 'token' ? res.stream : () => { }
       ));
     } else {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -750,14 +757,14 @@ async function handleFunctionCalls(
   } = params;
 
   const maxIter = 5; // Maximum iterations to prevent infinite loops
-  
+
   // Setup actions
   let actions: Record<string, any> = {};
-  
+
   // Extract context
   const { modules, utils, env, withHooks } = context;
-  const { actionExecutor, agents } = modules;
-  const { createPrompt, _, getThreadHistory, jsonSchemaToShortSchema, mergeSchemas } = utils;
+  const { actionHandler } = modules;
+  const { createPrompt, _, jsonSchemaToShortSchema, mergeSchemas } = utils;
   const { copilotz, config } = resources;
 
   // Handle schemas
@@ -766,61 +773,66 @@ async function handleFunctionCalls(
   const finalInputSchema = inputSchema ? mergeSchemas(baseInputSchema, inputSchema) : baseInputSchema;
   const finalOutputSchema = outputSchema ? mergeSchemas(baseOutputSchema, outputSchema) : baseOutputSchema;
 
-  // Setup action modules and specs
+  // Setup action modules and specs using the new action system
   if (copilotz?.actions?.length) {
-    // Execute and merge actions
-    const actionsObj = (await Promise.all(
-      copilotz.actions.map(async (_action) => {
-        const action = await actionExecutor.bind({
-          ...context,
-          threadId: thread?.extId,
-        })({
-          specs: _action.spec,
-          specType: _action.specType,
-          module: _action.moduleUrl
-        }, res);
-        return action;
-      })
-    )).reduce((acc, obj) => {
-      Object.assign(acc, obj);
-      return acc;
-    }, {});
+    // Process actions using our new action handler
+    try {
+      // Actions will be a map of functionName -> handler
+      // The handler function will have .spec property for the prompt
+      actions = await actionHandler.bind({
+        ...context,
+        threadId: thread?.extId,
+      })(copilotz.actions);
 
-    // Convert to dot notation
-    actions = getDotNotationObject(actionsObj);
+    } catch (error) {
+      console.error('Error processing actions:', error);
+    }
   }
 
-  // Add callback function to action modules
-  actionModules.callback = async (data: any) => {
+  // Add callback function to actions
+  actions.callback = async (data: any) => {
     await sleep(1000);
     res.stream(`${JSON.stringify(data)}\n`);
   };
-  actionModules.callback.spec = `(send callback to user): message<string> -> (callback sent successfully)`;
+  actions.callback.spec = `(send callback to user): message<string> -> (callback sent successfully)`;
 
   // Merge custom action modules with system actions
   Object.keys(actionModules).forEach((actionModule) => {
     const action = actions[actionModule];
     if (action) {
       actions[actionModule] = (args: any) => actionModules[actionModule](args, action);
-      Object.assign(actions[actionModule], action);
+      // Preserve spec from original action
+      if (action.spec) {
+        actions[actionModule].spec = action.spec;
+      }
     } else {
       actions[actionModule] = actionModules[actionModule];
     }
   });
 
-  // Create action specs string
+  // Create action specs string directly from JSON schemas via our converter
   const actionSpecs = Object.entries(actions)
     .map(([name, action]) => {
-      return `${name}${action.spec || ''}`;
+      // Use action.spec if available, otherwise generate from schema
+      let spec = '';
+
+      if (action.spec) {
+        spec = action.spec;
+      } else if (action.inputSchema && action.outputSchema) {
+        spec = `(${action.description || name}): ${jsonSchemaToFunctionSpec(action.inputSchema, '', action.outputSchema)}`;
+      }
+
+      return spec ? `${name}${spec}` : name;
     })
     .join('\n');
 
+
   // Create function call prompt
   const responseFormatText = responseFormatPromptTemplate(
-    { outputSchema: finalOutputSchema, inputSchema: finalInputSchema }, 
+    { outputSchema: finalOutputSchema, inputSchema: finalInputSchema },
     jsonSchemaToShortSchema
   );
-  
+
   const functionsPrompt = createPrompt(functionCallPromptTemplate, {
     responseFormatPrompt: responseFormatText,
     instructions,
@@ -829,9 +841,9 @@ async function handleFunctionCalls(
     }),
   });
 
-  // Format input based on schema
+  // Format input based on schema using JSON Schema validation
   const formattedInput = input
-    ? JSON.stringify(validate(jsonSchemaToShortSchema(finalInputSchema), { message: input }))
+    ? JSON.stringify(validate(finalInputSchema, { message: input }))
     : '';
 
   // Get thread logs if not provided
@@ -839,9 +851,10 @@ async function handleFunctionCalls(
   if (!finalThreadLogs.length) {
     finalThreadLogs = await getThreadHistory.call(
       context,
-      thread.extId, 
-      { functionName: 'functionCall', maxRetries: 10 }
+      thread.extId,
+      { functionName: 'agent', maxRetries: 10 }
     );
+
   }
 
   // Call chat agent to generate response
@@ -869,16 +882,12 @@ async function handleFunctionCalls(
   if (chatAgentResponse?.message) {
     let responseJson: any = { functions: [] };
     try {
-      // Parse and validate response
+      // Parse and validate response using JSON Schema directly
       const unvalidatedResponseJson = JSON.parse(jsonrepair(chatAgentResponse.message));
-      
+
       responseJson = validate(
-        jsonSchemaToShortSchema(finalOutputSchema),
-        unvalidatedResponseJson,
-        {
-          optional: false,
-          path: '$',
-        }
+        finalOutputSchema,
+        unvalidatedResponseJson
       );
 
       functionAgentResponse = {
@@ -897,103 +906,109 @@ async function handleFunctionCalls(
     } catch (err) {
       // Handle parsing errors
       let errorMessage = 'INVALID JSON, Trying again!';
-      
-      console.log('[functionCall] INVALID JSON, Trying again!', err, 'answer:', chatAgentResponse.message);
-      
-      if (typeof err === 'string') {
-        errorMessage = err;
-      } else if ((err as Error).message) {
-        errorMessage = (err as Error).message;
+      if (err instanceof Error) {
+        errorMessage = `Error: ${err.message}`;
       }
-      
-      throw {
-        ...chatAgentResponse,
-        ...responseJson,
-        error: { code: 'INVALID_JSON', message: errorMessage },
+      // res.stream(errorMessage);
+
+      // Retry if iterations are under limit
+      if (iterations < maxIter) {
+        const iterResponse = await handleFunctionCalls(
+          context,
+          {
+            ...params,
+            iterations: iterations + 1,
+            input: JSON.stringify({ warning: errorMessage, previousAnswer: chatAgentResponse.message }),
+          },
+          res
+        );
+
+        return iterResponse;
+      }
+
+      return {
+        message: errorMessage,
+        functions: [],
       };
     }
 
     // Execute functions
-    if (functionAgentResponse?.functions) {
-      functionAgentResponse.functions = await Promise.all(
-        functionAgentResponse.functions.map(async (func: any) => {
-          func.startTime = new Date().getTime();
-          if (!func.name) return null;
+    try {
+      if (responseJson.functions && responseJson.functions.length > 0) {
+        // Execute each function in sequence
+        for (const functionCall of responseJson.functions) {
+          // Skip if already executed or no name
+          if (functionCall.status === 'pending' || !functionCall.name) continue;
 
-          const action = _.get(actions, func.name);
-          if (!action) {
-            func.status = 'failed';
-            func.results = `Function ${func.name} not found. Please, check and try again`;
-            return func;
-          }
+          // Mark as executing
+          functionCall.startTime = Date.now();
 
-          func.status = 'pending';
           try {
-            const actionResponse = await Promise.resolve(
-              action({ ...func.args, _metadata: { user, thread, extId } })
-            );
-            
-            if (typeof actionResponse === 'object' && actionResponse.__media__) {
-              const { __media__, ...actionResult } = actionResponse;
-              if (config?.streamResponseBy === 'turn' && __media__) {
-                res.stream(`${JSON.stringify({ media: __media__ })}\n`);
-              }
-              func.results = actionResult;
+            // Get function from actions
+            const fn = actions[functionCall.name];
+
+
+            if (typeof fn === 'function') {
+              // Execute function with args
+              const result = await fn(functionCall.args || {});
+
+              // Store result
+              functionCall.results = result;
+              functionCall.status = 'ok';
             } else {
-              func.results = actionResponse || { message: 'function call returned `undefined`' };
+              throw new Error(`Function '${functionCall.name}' not found`);
             }
-            
-            func.status = 'ok';
-          } catch (err) {
-            func.status = 'failed';
-            func.results = { error: { code: 'FUNCTION_ERROR', ...(err as any)?.error } };
+          } catch (fnErr) {
+            // Handle function execution error
+            // console.error(`Error executing function '${functionCall.name}':`, fnErr);
+            functionCall.status = 'failed';
+            functionCall.error = fnErr instanceof Error ? fnErr.message : fnErr;
+            console.log('Function error:', functionCall.error);
           }
 
-          return func;
-        })
-      );
+          // Calculate duration
+          functionCall.duration = Date.now() - (functionCall.startTime || 0);
 
-      // Remove null entries
-      functionAgentResponse.functions = functionAgentResponse.functions.filter(Boolean);
+
+        }
+
+        // Handle recursion for AI follow-up on function results
+        const needsFollowup = responseJson.nextTurn === 'assistant' ||
+          responseJson.functions.some((fn: { status: string }) => !!fn.status);
+
+        if (needsFollowup && iterations < maxIter) {
+          // Add previous interaction to thread logs if needed
+          const updatedThreadLogs = [...finalThreadLogs];
+
+          // Add user input if not already there
+          if (input && !updatedThreadLogs.some(log =>
+            log.role === 'user' && log.content === input)) {
+            updatedThreadLogs.push({
+              role: 'user',
+              content: input,
+            });
+          }
+          // Add the updated assistant message with function results included in the functions array
+          updatedThreadLogs.push({
+            role: 'assistant',
+            content: JSON.stringify(responseJson),
+          });
+
+          // Make recursive call with updated logs
+          await context.withHooks(agent).bind(context)(
+            {
+              ...params,
+              input: '',
+              threadLogs: updatedThreadLogs,
+              iterations: iterations + 1,
+            },
+            res
+          );
+        }
+      }
+    } catch (execErr) {
+      console.error('Error executing functions:', execErr);
     }
-  }
-
-  // Handle recursion for handling function results
-  if (
-    functionAgentResponse?.functions?.length && 
-    iterations < maxIter &&
-    (!Object.keys(actionModules)?.some(actionName => 
-      functionAgentResponse.functions.map((func: any) => func.name).includes(actionName)) || 
-      functionAgentResponse?.nextTurn === 'assistant' || 
-      functionAgentResponse?.functions?.some((func: any) => func.name !== 'callback'))
-  ) {
-    const assistantMessage = JSON.stringify(
-      validate(jsonSchemaToShortSchema(_baseOutputSchema), functionAgentResponse)
-    );
-
-    // Update thread logs for recursion
-    if (!finalThreadLogs?.length) {
-      finalThreadLogs.push({
-        role: 'user',
-        content: formattedInput,
-      });
-    }
-
-    finalThreadLogs.push({
-      role: 'assistant',
-      content: assistantMessage,
-    });
-
-    // Recursively call function handler
-    return handleFunctionCalls(
-      context,
-      {
-        ...params,
-        threadLogs: finalThreadLogs,
-        iterations: iterations + 1,
-      },
-      res
-    );
   }
 
   return functionAgentResponse;
@@ -1025,7 +1040,7 @@ async function manageTask(
   } = params;
 
   const maxIter = 3; // Maximum iteration count
-  
+
   // Setup state
   let currentStep: any;
   let workflow: any;
@@ -1063,7 +1078,7 @@ async function manageTask(
       if (!workflowName) {
         throw new Error(`Error creating task: 'workflowName' arg is required, found: ${Object.keys(args).join(',')}`);
       }
-      
+
       // Find workflow
       const selectedWorkflow = allWorkflows.find(
         (wf) => wf.name.toLowerCase() === workflowName.toLowerCase()
@@ -1083,11 +1098,11 @@ async function manageTask(
         workflow: selectedWorkflow._id,
         currentStep: selectedWorkflow.firstStep,
       };
-      
+
       const newTask = await models.tasks.create(taskData);
       return newTask;
     },
-    
+
     submit: async (_args, onSubmit) => {
       const { _user, ...args } = _args;
 
@@ -1132,7 +1147,7 @@ async function manageTask(
       await models.tasks.update({ _id: taskDoc._id }, updateTaskPayload);
       return results;
     },
-    
+
     changeStep: async ({ stepName }) => {
       const step = workflow.steps.find((step: any) => step.name === stepName);
       if (!step) {
@@ -1142,15 +1157,15 @@ async function manageTask(
       await models.tasks.update({ _id: taskDoc._id }, { currentStep: step._id });
       return { name: step.name, description: step.description, id: step._id };
     },
-    
+
     cancelTask: async () => {
       await models.tasks.update({ _id: taskDoc._id }, { status: 'cancelled' });
       return { message: 'Task cancelled' };
     },
-    
+
     setState: async ({ key, value }) => {
       await models.tasks.update(
-        { _id: taskDoc._id }, 
+        { _id: taskDoc._id },
         { context: { ...taskDoc.context, state: { ...taskDoc.context.state, [key]: value } } }
       );
       return { message: 'Context updated' };
@@ -1179,12 +1194,12 @@ async function manageTask(
     // Load workflow and current step
     workflow = await models.workflows.findOne({ _id: taskDoc.workflow }, { populate: ['steps'] });
     currentStep = await models.steps.findOne({ _id: taskDoc.currentStep }, { populate: ['actions'] });
-    
+
     // Handle onSubmit function
-    currentStep.onSubmit = currentStep?.onSubmit 
-      ? await models.actions.findOne({ _id: currentStep.onSubmit }) 
+    currentStep.onSubmit = currentStep?.onSubmit
+      ? await models.actions.findOne({ _id: currentStep.onSubmit })
       : null;
-    
+
     // Load job context if needed
     if (currentStep?.job?._id && currentStep?.job?._id !== copilotz?.job?._id) {
       const job = await models.jobs.findOne({ _id: currentStep.job }, { populate: ['actions'] });
@@ -1243,9 +1258,9 @@ async function manageTask(
   let finalThreadLogs = threadLogs;
   if (!finalThreadLogs.length) {
     finalThreadLogs = await getThreadHistory.call(
-      context, 
-      thread.extId, 
-      { functionName: 'taskManager', maxRetries: 10 }
+      context,
+      thread.extId,
+      { functionName: 'agent', maxRetries: 10 }
     );
   }
 
@@ -1280,15 +1295,17 @@ async function manageTask(
  * - If capabilities.transcribe === true → use audio transcription (when audio is provided)
  * - Otherwise, falls back to standard chat functionality
  */
-async function unifiedAgent(
+async function agent(
   this: AgentContext,
   params: BaseAgentParams,
   res: ResponseObject
 ): Promise<any> {
-  const context = this;
-  const { 
-    resources, 
-    capabilities = {}, 
+
+  const context = { ...this };
+
+  const {
+    resources,
+    capabilities = {},
     audio,
     agentType // Kept for backward compatibility
   } = params;
@@ -1296,27 +1313,27 @@ async function unifiedAgent(
 
   try {
     console.log(`[unifiedAgent] Starting intelligent agent`);
-    
+
     // Determine which agent functionality to use based on context
-    
+
     // 1. Handle audio transcription if audio is provided and transcription is enabled
     if (audio && (capabilities.transcribe || agentType === 'transcriber')) {
       console.log('[unifiedAgent] Audio detected, using transcription functionality');
       return await transcribeAudio(context, params, res);
     }
-    
+
     // 2. Check for task management (workflows)
-    if (copilotz?.workflows?.length || copilotz?.job?.workflows?.length || agentType === 'taskManager') {
+    if (copilotz?.job?.workflows?.filter(Boolean)?.length || agentType === 'taskManager') {
       console.log('[unifiedAgent] Workflows detected, using task management functionality');
       return await manageTask(context, params, res);
     }
-    
+
     // 3. Check for function calling (actions)
-    if (copilotz?.actions?.length || agentType === 'functionCall') {
+    if (copilotz?.actions?.filter(Boolean)?.length || agentType === 'functionCall') {
       console.log('[unifiedAgent] Actions detected, using function call functionality');
       return await handleFunctionCalls(context, params, res);
     }
-    
+
     // 4. Default to chat functionality
     console.log('[unifiedAgent] Using standard chat functionality');
     return await chatWithAI(context, params, res);
@@ -1338,24 +1355,20 @@ async function unifiedAgent(
  */
 async function getThreadHistory(
   this: AgentContext,
-  threadId: string, 
+  threadId: string,
   { functionName, maxRetries = 10, toAppend = null }: { functionName: string; maxRetries?: number; toAppend?: any }
 ): Promise<LogEntry[]> {
   const { models } = this;
 
   // Find logs for this thread
-  const logs = (await models.logs.find({
-    "name": functionName,
-    "tags.threadId": threadId,
-    "status": "completed",
-    "hidden": null,
-  }, { sort: { createdAt: -1 }, limit: 50 }))
-    .map((log: any) => log.output)
-    .filter(Boolean) || [];
+  const { rows } = (await models.logs.customQuery(`SELECT * FROM logs WHERE name = '${functionName}' AND json_extract(tags, '$.threadId') = '${threadId}' AND status = 'completed' AND hidden IS NULL ORDER BY createdAt DESC LIMIT 50`))
 
   const messageLogs: LogEntry[] = [];
-  
-  logs.forEach((log: any) => {
+
+  rows.forEach((row: any) => {
+
+    const log = tryParseInput(row.output);
+
     const { input, ...output } = log;
 
     const answer: LogEntry = {
@@ -1366,13 +1379,6 @@ async function getThreadHistory(
     // first log is the answer (it'll be reversed)
     if (output) messageLogs.push(answer);
 
-    const tryParseInput = (input: any) => {
-      try {
-        return JSON.parse(input);
-      } catch (e) {
-        return input;
-      }
-    };
 
     if (['functionCall', 'taskManager'].indexOf(functionName) !== -1) {
       if (!input || (typeof input === 'string' && !tryParseInput(input))) {
@@ -1384,15 +1390,23 @@ async function getThreadHistory(
       role: 'user',
       content: (input && typeof input === 'string') ? input : JSON.stringify(input)
     };
-    
+
     if (input) messageLogs.push(question);
   });
 
   return messageLogs.reverse();
 }
 
+const tryParseInput = (input: any) => {
+  try {
+    return JSON.parse(input);
+  } catch (e) {
+    return input;
+  }
+}
+
 // Export the main agent and utilities
-export default unifiedAgent;
+export default agent;
 
 // Export individual agents for direct use if needed
 export {
@@ -1400,7 +1414,7 @@ export {
   chatWithAI,
   handleFunctionCalls,
   manageTask,
-  
+
   // Utilities
   jsonSchemaToShortSchema,
   mergeSchemas,

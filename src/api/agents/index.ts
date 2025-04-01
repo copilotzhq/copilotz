@@ -13,7 +13,7 @@
  * - Otherwise, falls back to basic chat
  */
 
-import unifiedAgent, {
+import agent, {
   transcribeAudio,
   chatWithAI,
   handleFunctionCalls,
@@ -27,12 +27,12 @@ import unifiedAgent, {
   getThreadHistory,
   sleep,
   base64ToBlob
-} from './unified-agent.ts';
+} from './agent.ts';
 
 import middleware from './middleware.ts';
 
 // Export the unified agent as the default export
-export default unifiedAgent;
+export default agent;
 
 // Export individual components for direct access if needed
 export {

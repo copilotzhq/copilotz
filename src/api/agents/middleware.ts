@@ -4,6 +4,7 @@ import {
     getConfig,
     getJob,
 } from './_middlewares/main.js';
+import processActions from './_middlewares/actionProcessor.ts';
 
 /**
  * Middleware function for handling requests before they reach the agent
@@ -18,6 +19,7 @@ async function middleware(this: any, req: any) {
         getCopilotz,
         getConfig,
         getJob,
+        processActions,  // Process actions using the new system
     ];
 
     // Execute each middleware in sequence

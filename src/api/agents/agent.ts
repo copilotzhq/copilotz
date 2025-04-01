@@ -449,6 +449,14 @@ const _baseOutputSchema = {
       },
       description: 'The functions to call'
     },
+    media: {
+      type: 'object',
+      description: 'The media to send to the user. (leave empty if no media is needed)'
+    },
+    continueNextTurn: {
+      type: 'boolean',
+      description: 'set to true if the assistant should continue in the same turn without waiting for the user to respond (leave empty if no follow up is needed)'
+    },
     additionalProperties: true,
     // nextTurn: {
     //   type: 'string',
@@ -954,7 +962,6 @@ async function handleFunctionCalls(
 
               if (typeof result === 'object' && result.__media__) {
                 const { __media__, ...actionResult } = result;
-                console.log('media', __media__);
                 if (config?.streamResponseBy === 'turn' && __media__) {
                   res.stream(`${JSON.stringify({ media: __media__ })}\n`);
                 }
@@ -982,7 +989,7 @@ async function handleFunctionCalls(
         }
 
         // Handle recursion for AI follow-up on function results
-        const needsFollowup = responseJson.nextTurn === 'assistant' ||
+        const needsFollowup = responseJson.continueNextTurn ||
           responseJson.functions.some((fn: { status: string }) => !!fn.status);
 
         if (needsFollowup && iterations < maxIter) {
@@ -997,6 +1004,7 @@ async function handleFunctionCalls(
               content: input,
             });
           }
+
           // Add the updated assistant message with function results included in the functions array
           updatedThreadLogs.push({
             role: 'assistant',

@@ -738,18 +738,25 @@ export async function parseOpenAPISchema(
         }
 
         // Add request body if needed
-        if (requestBodySchema && method !== 'get' && method !== 'head') {
+        if (method !== 'get' && method !== 'head') {
           // Extract only properties defined in the schema
           requestBody = {};
-          for (const key of Object.keys(requestBodySchema.properties || {})) {
-            if (params[key] !== undefined) {
-              requestBody[key] = params[key];
+
+          if (requestBodySchema) {
+            for (const key of Object.keys(requestBodySchema.properties || {})) {
+              if (params[key] !== undefined) {
+                requestBody[key] = params[key];
+              }
             }
           }
+
+          Object.assign(requestBody, { _metadata: params._metadata });
         }
+
 
         // Make the request
         try {
+
           const response = await fetch(url.toString(), {
             method: method.toUpperCase(),
             headers,
@@ -1066,40 +1073,19 @@ export async function parseOpenAPISchema(
  * Load module from URL (http or data URL)
  */
 export async function loadModuleFromUrl(url: string): Promise<Function> {
-  let moduleCode: string;
-
-  if (url.startsWith('data:')) {
-    // Extract module code from data URL
-    const dataUrlParts = url.split(',');
-    if (dataUrlParts.length !== 2) {
-      throw new Error('Invalid data URL format');
-    }
-
-    const isBase64 = dataUrlParts[0].includes('base64');
-    moduleCode = isBase64
-      ? atob(dataUrlParts[1])
-      : decodeURIComponent(dataUrlParts[1]);
-  } else {
-    // Fetch module from URL
-    moduleCode = await fetch(url).then(res => res.text());
-  }
-
-  // Create a blob with the module code
-  const blob = new Blob([moduleCode], { type: 'application/javascript' });
-  const objectUrl = URL.createObjectURL(blob);
 
   try {
     // Import the module
-    const module = await import(objectUrl);
+    const module = await import(url);
 
     if (typeof module.default !== 'function') {
       throw new Error(`Module does not export a default function`);
     }
 
     return module.default;
-  } finally {
-    // Clean up the object URL
-    URL.revokeObjectURL(objectUrl);
+  } catch (error) {
+    console.error(`Error loading module from URL: ${error}`);
+    throw error;
   }
 }
 
@@ -1234,7 +1220,7 @@ function createWrappedHandler(
   // Create a wrapper function that handles validation
   const wrappedHandler = async (args: Record<string, any>): Promise<any> => {
     // Validate input if schema is provided
-    let validatedInput = args;
+    let { _metadata, ...validatedInput } = args;
 
     if (inputSchema) {
       try {
@@ -1252,7 +1238,7 @@ function createWrappedHandler(
     }
 
     // Execute the handler
-    const result = await handler(validatedInput);
+    const result = await handler({ ...validatedInput, _metadata });
 
     // Validate output if schema is provided
     if (outputSchema) {

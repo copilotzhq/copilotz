@@ -453,16 +453,20 @@ const _baseOutputSchema = {
       type: 'object',
       description: 'The media to send to the user. (leave empty if no media is needed)'
     },
-    continueNextTurn: {
-      type: 'boolean',
-      description: 'set to true if the assistant should continue in the same turn without waiting for the user to respond (leave empty if no follow up is needed)'
+    nextTurn: {
+      type: 'string',
+      enum: ['user', 'assistant'],
+      description: 'Set to `assistant` if the assistant should continue in the same turn without waiting for the user to respond (leave empty if no follow up is needed)'
+    },
+    usage: {
+      type: 'object',
+      properties: {
+        tokens: { type: 'number' },
+        actions: { type: 'number' },
+      },
+      additionalProperties: true,
     },
     additionalProperties: true,
-    // nextTurn: {
-    //   type: 'string',
-    //   enum: ['user', 'assistant'],
-    //   description: 'Who should take the next turn'
-    // }
   },
   required: ['message', 'think']
 };
@@ -494,7 +498,7 @@ async function transcribeAudio(
   context: AgentContext,
   params: BaseAgentParams,
   res: ResponseObject
-): Promise<{ message: string; prompt?: any; consumption?: any }> {
+): Promise<{ message: string; prompt?: any; usage?: any }> {
   const { resources, instructions, audio, agentType = 'transcriber' } = params;
   const { modules, env, __requestId__ } = context;
   const { ai } = modules;
@@ -548,9 +552,8 @@ async function transcribeAudio(
   return {
     prompt,
     message,
-    consumption: {
-      type: 'hours',
-      value: transcribedAudio.duration,
+    usage: {
+      hours: transcribedAudio.duration,
     },
   };
 }
@@ -562,7 +565,7 @@ async function chatWithAI(
   context: AgentContext,
   params: BaseAgentParams,
   res: ResponseObject
-): Promise<{ message: string; input?: string; consumption?: any; __tags__?: any }> {
+): Promise<{ message: string; input?: string; usage?: Record<string, any>; __tags__?: any }> {
   const {
     resources,
     instructions,
@@ -626,15 +629,18 @@ async function chatWithAI(
   }
 
   // Handle audio transcription if provided
+  let transcribeUsage: any;
   if (audio && capabilities.transcribe) {
-    const transcribedText = await transcribeAudio(context, {
+    const { message: transcribedText, usage: _usage } = await transcribeAudio(context, {
       resources,
       audio,
       instructions,
       agentType: 'transcriber',
       user,
       thread
-    }, res).then(result => result.message);
+    }, res);
+
+    transcribeUsage = _usage;
 
     finalThreadLogs.push({
       role: 'user',
@@ -725,9 +731,9 @@ async function chatWithAI(
   return {
     message,
     input,
-    consumption: {
-      type: 'tokens',
-      value: tokens,
+    usage: {
+      ...(transcribeUsage  || {}),
+      tokens,
     },
     __tags__: {
       threadId: threadId,
@@ -742,7 +748,7 @@ async function handleFunctionCalls(
   context: AgentContext,
   params: BaseAgentParams,
   res: ResponseObject
-): Promise<any> {
+): Promise<{ message: string; input?: string; usage?: Record<string, any>; __tags__?: any, functions?: any[], nextTurn?: string }> {
   const {
     extId,
     resources,
@@ -901,9 +907,9 @@ async function handleFunctionCalls(
       functionAgentResponse = {
         ...chatAgentResponse,
         ...responseJson,
-        consumption: {
-          type: 'actions',
-          value: responseJson?.functions?.length || 0,
+        usage: {
+          ...chatAgentResponse.usage,
+          actions: responseJson?.functions?.length || 0,
         },
       };
 
@@ -958,7 +964,11 @@ async function handleFunctionCalls(
 
             if (typeof fn === 'function') {
               // Execute function with args
-              const result = await fn(functionCall.args || {});
+              const _metadata = {
+                user,
+                thread,
+              };
+              const result = await fn({ ...functionCall.args, _metadata });
 
               if (typeof result === 'object' && result.__media__) {
                 const { __media__, ...actionResult } = result;
@@ -966,7 +976,7 @@ async function handleFunctionCalls(
                   res.stream(`${JSON.stringify({ media: __media__ })}\n`);
                 }
                 functionCall.results = actionResult;
-              } else{
+              } else {
                 // Store result
                 functionCall.results = result;
                 functionCall.status = 'ok';
@@ -989,7 +999,7 @@ async function handleFunctionCalls(
         }
 
         // Handle recursion for AI follow-up on function results
-        const needsFollowup = responseJson.continueNextTurn ||
+        const needsFollowup = responseJson.nextTurn === 'assistant' ||
           responseJson.functions.some((fn: { status: string }) => !!fn.status);
 
         if (needsFollowup && iterations < maxIter) {

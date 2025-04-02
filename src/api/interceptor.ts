@@ -39,6 +39,10 @@ function beforeRun(this: any, { name, url, requestId, executionId, input, proper
                 const { threadLogs: _threadLogs, instructions: _instructions, resources: _resources, ...rest } = input?.['0'];
                 return {['0']:rest};
             }
+            case 'agent': {
+                const { threadLogs: _threadLogs, instructions: _instructions, resources: _resources, ...rest } = input?.['0'];
+                return {['0']:rest};
+            }
             default: {
                 return input;
             }

@@ -443,6 +443,14 @@ const _baseOutputSchema = {
           args: {
             type: 'object',
             description: 'The arguments for the function call'
+          },
+          results: {
+            type: 'object',
+            description: 'The results of the function call. Leave empty as it will be filled by the function call'
+          },
+          status: {
+            type: 'string',
+            description: 'The status of the function call. Leave empty as it will be filled by the function call'
           }
         },
         required: ['name', 'args']
@@ -732,7 +740,7 @@ async function chatWithAI(
     message,
     input,
     usage: {
-      ...(transcribeUsage  || {}),
+      ...(transcribeUsage || {}),
       tokens,
     },
     __tags__: {
@@ -1000,7 +1008,7 @@ async function handleFunctionCalls(
 
         // Handle recursion for AI follow-up on function results
         const needsFollowup = responseJson.nextTurn === 'assistant' ||
-          responseJson.functions.some((fn: { status: string }) => !!fn.status);
+          responseJson?.functions?.length > 0;
 
         if (needsFollowup && iterations < maxIter) {
           // Add previous interaction to thread logs if needed

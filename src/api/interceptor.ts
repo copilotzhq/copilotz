@@ -29,19 +29,19 @@ function beforeRun(this: any, { name, url, requestId, executionId, input, proper
         switch (name) {
             case 'chatAgent': {
                 const { threadLogs: _threadLogs, instructions: _instructions, resources: _resources, ...rest } = input?.['0'];
-                return {['0']:rest};
+                return { ['0']: rest };
             }
             case 'functionCall': {
                 const { threadLogs: _threadLogs, instructions: _instructions, resources: _resources, ...rest } = input?.['0'];
-                return {['0']:rest};
+                return { ['0']: rest };
             }
             case 'taskManager': {
                 const { threadLogs: _threadLogs, instructions: _instructions, resources: _resources, ...rest } = input?.['0'];
-                return {['0']:rest};
+                return { ['0']: rest };
             }
             case 'agent': {
                 const { threadLogs: _threadLogs, instructions: _instructions, resources: _resources, ...rest } = input?.['0'];
-                return {['0']:rest};
+                return { ['0']: rest };
             }
             default: {
                 return input;
@@ -55,15 +55,12 @@ function beforeRun(this: any, { name, url, requestId, executionId, input, proper
     if (models?.logs) {
         const sanitizedInput = sanitizeObject({ ...input })
         const tags = properties?.__tags__;
-        models.logs.create({
-            name,
-            url,
-            requestId,
-            executionId,
-            input: pruneInput(sanitizedInput, name),
-            tags,
-            duration:1
-        })
+        models.logs.customQuery(`
+            INSERT into logs 
+            (name, requestId, executionId, input, tags, duration, createdAt, updatedAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [name, requestId, executionId, JSON.stringify(pruneInput(sanitizedInput, name)), JSON.stringify(tags) || null, 1, new Date().toISOString(), new Date().toISOString()]
+        )
     }
 
     return
@@ -97,12 +94,18 @@ function afterRun(this: any, { status, executionId, output, duration, properties
         } else {
             output = sanitizedOutput;
         }
-        models.logs.update({ executionId }, {
-            duration: duration || 1,
-            status,
-            output,
-            tags: Object.keys(tags).length > 0 ? tags : undefined
-        })
+
+        models.logs.customQuery(`
+            UPDATE logs 
+            SET duration = ?, 
+            status = ?, 
+            output = ?, 
+            tags = ?,
+            updatedAt = ?
+            WHERE executionId = ?
+        `,
+            [duration || 1, status, JSON.stringify(output), JSON.stringify(tags) || null, new Date().toISOString(), executionId]
+        )
     }
     return
 }

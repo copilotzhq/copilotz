@@ -2,7 +2,7 @@
     "tasks": {
         "start": "DENO_DIR=./data/local/cache/.deno ENV=production deno run -A --importmap=deno.json --reload=http://http://local@localhost:8000 --no-lock --unstable-sloppy-imports --unstable-kv  --no-prompt --unstable https://raw.githubusercontent.com/AxionCompany/functions/main/main.ts",
         "dev": "DENO_DIR=./data/local/cache/.deno ENV=development WATCH=true deno run --importmap=deno.json --reload=http://local@localhost:8000,https://raw.githubusercontent.com/AxionCompany/functions/main --unstable-kv -A --no-lock --unstable-sloppy-imports  --no-prompt --unstable https://raw.githubusercontent.com/AxionCompany/functions/main/main.ts",
-        "dev:local": "DENO_DIR=./data/local/cache/.deno ENV=development WATCH=true deno run --importmap=deno.json --reload=http://local@localhost:9000  -A --no-lock --unstable-sloppy-imports  --unstable-kv --no-prompt --unstable http://localhost:9000"
+        "dev:local": "DENO_DIR=./data/local/cache/.deno ENV=development WATCH=true deno run --importmap=deno.json --reload=http://local@localhost:9000  -A --no-lock --unstable-sloppy-imports  --unstable-kv --no-prompt --unstable http://localhost:9000/start"
     },
     "imports": {
         "-axion-components/": "http://AxionCompany--axions-web--main:{{GIT_API_KEY}}@localhost:9000/src/components/",

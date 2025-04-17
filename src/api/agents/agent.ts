@@ -603,7 +603,7 @@ async function chatWithAI(
   } = context;
 
   // Extract utils and dependencies
-  const { createPrompt, getThreadHistory } = utils;
+  const { createPrompt } = utils;
   const { ai } = modules;
   const { copilotz, config } = resources;
 
@@ -1083,7 +1083,7 @@ async function manageTask(
 
   // Extract context and dependencies
   const { models, modules, utils, withHooks } = context;
-  const { createPrompt, getThreadHistory, jsonSchemaToShortSchema, mergeSchemas } = utils;
+  const { createPrompt, jsonSchemaToShortSchema, mergeSchemas } = utils;
   const { agents } = modules;
   const { copilotz, config } = resources;
 

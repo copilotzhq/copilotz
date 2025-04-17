@@ -352,8 +352,14 @@ const functionCallPromptTemplate = `
 const functionCallsPromptTemplate = `
 ## FUNCTION CALLS
 
+
 Available Functions:
 {{availableFunctions}}
+
+- The functions specs are defined as follow:
+
+$function_name_1($function_description):$arg_name_1<$arg_type_1>($arg_description_1), $arg_name_2<$arg_type_2>($arg_description_2), ... $arg_name_n<$arg_type_n>($arg_description_n) -> ($return_property_1<$return_type_1>($return_description_1), $return_property_2<$return_type_2>($return_description_2), ... $return_property_n<$return_type_n>($return_description_n))
+
 `;
 
 // Task manager templates
@@ -423,10 +429,10 @@ const _baseInputSchema = {
 const _baseOutputSchema = {
   type: 'object',
   properties: {
-    think: {
-      type: 'string',
-      description: 'answer in 1 sentence each question: 1. what is the most important instruction to follow? what information from the conversation should I consider? 3. what are the results from function calls I need to consider? 4. what do I send the user and which function (if any) should I call?'
-    },
+    // think: {
+    //   type: 'string',
+    //   description: 'answer in 1 sentence each question: 1. what is the most important instruction to follow? what information from the conversation should I consider? 3. what are the results from function calls I need to consider? 4. what do I send the user and which function (if any) should I call?'
+    // },
     message: {
       type: 'string',
       description: 'The message to the user'
@@ -476,7 +482,10 @@ const _baseOutputSchema = {
     },
     additionalProperties: true,
   },
-  required: ['message', 'think']
+  required: [
+    'message'
+    // 'think'
+  ]
 };
 
 export function responseFormatPromptTemplate({ outputSchema, inputSchema }: { outputSchema: any, inputSchema: any }, shortSchemaFn: Function): string {

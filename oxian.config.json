@@ -1,0 +1,13 @@
+{
+  "functionsDir": ".",
+  "dirEntrypoint": "index",
+  "database": {
+    "enabled": true,
+    "lwwColumn": "updatedAt"
+  },
+  "debugLogs": true,
+  "permissions": {
+    "allow-read": true,
+    "unstable-raw-imports": true
+  }
+}

@@ -1405,7 +1405,8 @@ async function getThreadHistory(
   const { models } = this;
 
   // Find logs for this thread
-  const { rows } = (await models.logs.customQuery(`SELECT * FROM logs WHERE name = '${functionName}' AND json_extract(tags, '$.threadId') = '${threadId}' AND status = 'completed' AND hidden IS NULL ORDER BY createdAt DESC LIMIT 50`))
+  const timewindow = new Date(Date.now() - 1000 * 60 * 60 * 24 * 2);
+  const { rows } = (await models.logs.customQuery(`SELECT * FROM logs WHERE createdAt > '${timewindow.toISOString()}' AND name = '${functionName}' AND json_extract(tags, '$.threadId') = '${threadId}' AND status = 'completed' AND hidden IS NULL ORDER BY createdAt DESC LIMIT 50`))
 
   const messageLogs: LogEntry[] = [];
 

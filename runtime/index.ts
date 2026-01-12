@@ -2,6 +2,7 @@ import type { CopilotzDb } from "@/database/index.ts";
 import type { ChatContext, Event, NewEvent, NewUnknownEvent, ContentStreamData, MessagePayload, User, TokenEventPayload } from "@/interfaces/index.ts";
 import type { EventBase } from "@/database/schemas/index.ts";
 import { startThreadEventWorker } from "@/event-processors/index.ts";
+import { ulid } from "ulid";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -86,7 +87,7 @@ function _nowIso(): string {
 }
 
 function toEventId(): string {
-    return crypto.randomUUID();
+    return ulid();
 }
 
 function buildUserKey(sender: MessagePayload["sender"]): string {
@@ -264,9 +265,8 @@ export async function runThread(
     // Compose callbacks
     const wrappedOnEvent = async (ev: Event): Promise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void> => {
         if (cancelled) return;
-        try {
-            queue.push(ev);
-        } catch { /* ignore */ }
+        // Note: We no longer push to stream here. Stream push happens via onStreamPush
+        // after processing completes, so custom processors can replace events.
         if (typeof externalOnEvent === "function" && ev.type !== "TOKEN") {
             try {
                 const res = await externalOnEvent(ev);
@@ -278,6 +278,14 @@ export async function runThread(
             // tokens are read-only; still notify but ignore any return
             try { await externalOnEvent(ev); } catch { /* ignore */ }
         }
+    };
+
+    // Called after processing completes, only if event was not replaced by custom processor
+    const onStreamPush = (ev: Event): void => {
+        if (cancelled) return;
+        try {
+            queue.push(ev);
+        } catch { /* ignore */ }
     };
 
     const wrappedOnContentStream = (data: ContentStreamData) => {
@@ -327,6 +335,7 @@ export async function runThread(
         callbacks: {
             onEvent: wrappedOnEvent,
             onContentStream: wrappedOnContentStream,
+            onStreamPush,
         },
     };
 

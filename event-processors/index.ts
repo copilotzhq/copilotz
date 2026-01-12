@@ -104,7 +104,10 @@ export async function startThreadEventWorker(
     context: ChatContext
 ): Promise<void> {
     const workerContext: WorkerContext = {
-        callbacks: context.callbacks?.onEvent ? { onEvent: context.callbacks.onEvent } : undefined,
+        callbacks: {
+            onEvent: context.callbacks?.onEvent,
+            onStreamPush: context.callbacks?.onStreamPush,
+        },
         customProcessors: context.customProcessors,
     };
 
@@ -140,6 +143,8 @@ export type OnEventResponse =
 export interface WorkerContext {
     callbacks?: {
         onEvent?: (ev: Event) => Promise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void> | { producedEvents?: Array<NewEvent | NewUnknownEvent> } | void;
+        /** Called after processing to push events to the client stream. Only called if the event was not replaced by a custom processor. */
+        onStreamPush?: (ev: Event) => void;
     };
     customProcessors?: Record<string, Array<EventProcessor<unknown, ProcessorDeps>>>;
 }
@@ -255,6 +260,7 @@ export async function startEventWorker(
             }
 
             // 2) Custom processors by event type (only if not overridden). Stop on first production.
+            let replacedByCustomProcessor = false;
             if (!overriddenByOnEvent && context?.customProcessors) {
                 const list = context.customProcessors[event.type] ?? [];
                 for (const p of list) {
@@ -264,6 +270,7 @@ export async function startEventWorker(
                         const res = await p.process(event, deps);
                         if (res?.producedEvents && res.producedEvents.length > 0) {
                             finalEvents = res.producedEvents;
+                            replacedByCustomProcessor = true;
                             // Stop at first production
                             break;
                         }
@@ -288,6 +295,14 @@ export async function startEventWorker(
                 for (const e of allToEnqueue) {
                     await enqueueEvent(db, e);
                 }
+            }
+
+            // Push to stream only if not replaced by onEvent callback or custom processor
+            const wasReplaced = overriddenByOnEvent || replacedByCustomProcessor;
+            if (!wasReplaced && context?.callbacks?.onStreamPush) {
+                try {
+                    context.callbacks.onStreamPush(event);
+                } catch { /* ignore stream push errors */ }
             }
 
             const finalStatus = overriddenByOnEvent ? "overwritten" : "completed";

@@ -115,7 +115,10 @@ export interface ChatContext {
 export interface ChatCallbacks {
     onContentStream?: (data: ContentStreamData) => void | Promise<void> | ContentStreamData;
     onEvent?: (event: Event) => Promise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void> | { producedEvents?: Array<NewEvent | NewUnknownEvent> } | void;
+    /** Called after processing to push events to the client stream. Only called if the event was not replaced by a custom processor. */
+    onStreamPush?: (event: Event) => void;
 }
+
 
 export interface ContentStreamData {
     threadId: string;

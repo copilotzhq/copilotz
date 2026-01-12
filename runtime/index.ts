@@ -262,11 +262,25 @@ export async function runThread(
         // swallow to not impact main flow
     }
 
+    // Called after processing completes, only if event was not replaced by custom processor
+    const onStreamPush = (ev: Event): void => {
+        if (cancelled) return;
+        try {
+            queue.push(ev);
+        } catch { /* ignore */ }
+    };
+
     // Compose callbacks
     const wrappedOnEvent = async (ev: Event): Promise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void> => {
         if (cancelled) return;
-        // Note: We no longer push to stream here. Stream push happens via onStreamPush
-        // after processing completes, so custom processors can replace events.
+
+        // NOTE: We do not push normal queued events here (they may be replaced by custom processors).
+        // However, some events are *ephemeral* (not enqueued), and must be pushed immediately to reach the stream.
+        // Today this is used for ASSET_CREATED.
+        if ((ev as unknown as { type?: string })?.type === "ASSET_CREATED") {
+            onStreamPush(ev);
+        }
+
         if (typeof externalOnEvent === "function" && ev.type !== "TOKEN") {
             try {
                 const res = await externalOnEvent(ev);
@@ -274,18 +288,7 @@ export async function runThread(
                     return { producedEvents: (res as { producedEvents?: Array<NewEvent | NewUnknownEvent> }).producedEvents };
                 }
             } catch { /* ignore user callback errors */ }
-        } else if (typeof externalOnEvent === "function" && ev.type === "TOKEN") {
-            // tokens are read-only; still notify but ignore any return
-            try { await externalOnEvent(ev); } catch { /* ignore */ }
         }
-    };
-
-    // Called after processing completes, only if event was not replaced by custom processor
-    const onStreamPush = (ev: Event): void => {
-        if (cancelled) return;
-        try {
-            queue.push(ev);
-        } catch { /* ignore */ }
     };
 
     const wrappedOnContentStream = (data: ContentStreamData) => {
@@ -311,9 +314,7 @@ export async function runThread(
             updatedAt: new Date(),
             status: data.isComplete ? "completed" : "processing",
         };
-        try {
-            queue.push(tokenEvent);
-        } catch { /* ignore */ }
+        onStreamPush(tokenEvent);
         if (typeof externalOnEvent === "function") {
             // fire-and-forget; ignore any override attempt for tokens
             Promise.resolve()

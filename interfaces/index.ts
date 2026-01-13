@@ -5,7 +5,6 @@ import type {
     API, NewAPI,
     MCPServer, NewMCPServer,
     Message, NewMessage,
-    Queue, NewQueue,
     Event, NewEvent,
     Task, NewTask,
     Thread, NewThread,
@@ -16,33 +15,29 @@ import type {
     LlmCallEventPayload,
     TokenEventPayload,
     NewUnknownEvent,
-    EventPayloadMapBase,
-    EventOfMap,
-    NewEventOfMap,
     // RAG types
     Document, NewDocument,
     DocumentChunk, NewDocumentChunk,
 } from "@/database/schemas/index.ts";
 
+// Public entity types for consumers
 export type {
     NewAgent,
     API, NewAPI,
     MCPServer, NewMCPServer,
     Message, NewMessage,
-    Queue, NewQueue,
     Event, NewEvent,
     Task, NewTask,
     Thread, NewThread,
     Tool, NewTool,
     User, NewUser,
+    // Payload types
     MessagePayload,
     ToolCallEventPayload,
     LlmCallEventPayload,
     TokenEventPayload,
+    // Internal but needed for event processors
     NewUnknownEvent,
-    EventPayloadMapBase,
-    EventOfMap,
-    NewEventOfMap,
     // RAG types
     Document, NewDocument,
     DocumentChunk, NewDocumentChunk,
@@ -62,16 +57,10 @@ export type {
 
 import type { EventProcessor, ProcessorDeps } from "@/event-processors/index.ts";
 
+// Only export public extension types from event-processors
 export type {
     EventProcessor,
     ProcessorDeps,
-    ToolCallPayload,
-    ToolResultPayload,
-    ToolExecutionContext,
-    LLMCallPayload,
-    LLMResultPayload,
-    ExecutableTool,
-    ToolExecutor,
 } from "@/event-processors/index.ts";
 
 import type { AssetStore, AssetConfig } from "@/utils/assets.ts";

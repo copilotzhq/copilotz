@@ -15,13 +15,14 @@ import type {
     ChatContext,
     ProcessorDeps,
     Event,
-    ExecutableTool,
-    ToolExecutor,
     MessagePayload,
     LlmCallEventPayload,
     ToolCallEventPayload,
     AgentLlmOptionsResolverArgs,
 } from "@/interfaces/index.ts";
+
+// Import tool types from their source
+import type { ExecutableTool, ToolExecutor } from "@/event-processors/tool_call/types.ts";
 
 type Operations = ProcessorDeps["db"]["ops"];
 

@@ -2,7 +2,7 @@ import { defineSchema, type JsonSchema } from "omnipg";
 import type { FromSchema } from "json-schema-to-ts";
 import { ulid } from "ulid";
 
-// RAG Ingest payload (defined here to avoid circular imports)
+// RAG Ingest payload (used by rag_ingest processor)
 export interface RagIngestPayload {
   source: string;
   title?: string;
@@ -31,8 +31,8 @@ const JSON_ANY_SCHEMA: JsonSchema = {
   ],
 };
 
-// Standalone JSON Schemas for queue payloads (so we can reuse their TS types)
-export const ToolMessageMetadataSchema = {
+// Standalone JSON Schemas for queue payloads (internal - not exported)
+const ToolMessageMetadataSchema = {
   type: "object",
   additionalProperties: true,
   properties: {
@@ -50,7 +50,7 @@ export const ToolMessageMetadataSchema = {
   },
 } as const;
 
-export const MessagePayloadSchema = {
+const MessagePayloadSchema = {
   type: "object",
   additionalProperties: true,
   properties: {
@@ -203,7 +203,7 @@ export const MessagePayloadSchema = {
 
 export type MessagePayload = FromSchema<typeof MessagePayloadSchema>;
 
-export const NewMessageEventPayloadSchema = MessagePayloadSchema;
+const NewMessageEventPayloadSchema = MessagePayloadSchema;
 
 export type NewMessageEventPayload = MessagePayload;
 

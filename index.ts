@@ -23,11 +23,60 @@ import type {
 
 import defaultBanner from "@/runtime/banner.ts";
 
+// Re-export only necessary public types from interfaces
+export type {
+    // Core entity types
+    Agent,
+    API,
+    MCPServer,
+    Tool,
+    Thread,
+    Message,
+    Task,
+    User,
+    Event,
+    NewEvent,
+    // "New" variants for creating entities
+    NewAgent,
+    NewAPI,
+    NewMCPServer,
+    NewTool,
+    NewThread,
+    NewMessage,
+    NewTask,
+    NewUser,
+    // Payload types for event handling
+    MessagePayload,
+    ToolCallEventPayload,
+    LlmCallEventPayload,
+    TokenEventPayload,
+    // Database types
+    DatabaseConfig,
+    CopilotzDb,
+    DbInstance,
+    // Extension types for custom processors
+    EventProcessor,
+    ProcessorDeps,
+    // Callback types
+    ChatCallbacks,
+    ChatContext,
+    ContentStreamData,
+    // RAG configuration types
+    RagConfig,
+    EmbeddingConfig,
+    ChunkingConfig,
+    RetrievalConfig,
+    AgentRagOptions,
+    // Document types for RAG
+    Document,
+    NewDocument,
+    DocumentChunk,
+    NewDocumentChunk,
+} from "@/interfaces/index.ts";
+
 export { getNativeTools } from "@/event-processors/tool_call/native-tools-registry/index.ts";
 
-export * from "@/interfaces/index.ts";
 export { createDatabase, schema, migrations };
-export type { ToolCallPayload, LLMCallPayload } from "@/interfaces/index.ts";
 export { registerEventProcessor } from "@/event-processors/index.ts";
 export type { StreamEvent } from "@/runtime/index.ts";
 

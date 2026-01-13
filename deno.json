@@ -1,12 +1,10 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "license": "MIT",
   "exports": {
-    ".": "./index.ts",
-    "./database": "./database/index.ts",
-    "./types": "./interfaces/index.ts"
+    ".": "./index.ts"
   },  
   "unstable": [
     "bare-node-builtins",

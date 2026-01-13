@@ -11,11 +11,11 @@ import { schema as baseSchema } from "./schemas/index.ts";
 // Import Operations
 import { createOperations, type DatabaseOperations } from "./operations/index.ts";
 
-// Import Migrations File
-// import migrations from "./migrations/migration_0001.sql" with { type: "text" };
+// Import Migrations Files
 import { generateMigrations } from "./migrations/migration_0001.ts";
+import { generateRagMigrations } from "./migrations/migration_0002_rag.ts";
 
-const migrations: string = generateMigrations();
+const migrations: string = generateMigrations() + "\n" + generateRagMigrations();
 
 // Define the database config interface
 export interface DatabaseConfig {
@@ -117,7 +117,7 @@ export async function createDatabase(
     url,
     syncUrl: config?.syncUrl || getEnvVar("SYNC_DATABASE_URL"),
     pgliteExtensions: isPgLite
-      ? config?.pgliteExtensions || ["uuid_ossp", "pg_trgm"]
+      ? config?.pgliteExtensions || ["uuid_ossp", "pg_trgm", "vector"]
       : [],
     schemaSQL: [...config?.schemaSQL || [], ...splitSQLStatements(migrations)],
     useWorker: isPgLite ? config?.useWorker || false : false,

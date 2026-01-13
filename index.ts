@@ -112,6 +112,27 @@ export interface CopilotzConfig {
         config?: AssetConfig;
         store?: AssetStore;
     };
+    rag?: {
+        enabled?: boolean;
+        embedding: {
+            provider: "openai" | "ollama" | "cohere";
+            model: string;
+            apiKey?: string;
+            baseUrl?: string;
+            dimensions?: number;
+            batchSize?: number;
+        };
+        chunking?: {
+            strategy?: "fixed" | "paragraph" | "sentence";
+            chunkSize?: number;
+            chunkOverlap?: number;
+        };
+        retrieval?: {
+            defaultLimit?: number;
+            similarityThreshold?: number;
+        };
+        defaultNamespace?: string;
+    };
 }
 
 export type CopilotzRunResult = RunHandle;
@@ -218,6 +239,15 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                 const id = ref.startsWith("asset://") ? ref.slice("asset://".length) : ref;
                 return await assetStoreInstance.get(id);
             },
+            // RAG configuration
+            ragConfig: config.rag ? {
+                enabled: config.rag.enabled ?? true,
+                embedding: config.rag.embedding,
+                chunking: config.rag.chunking,
+                retrieval: config.rag.retrieval,
+                defaultNamespace: config.rag.defaultNamespace,
+            } : undefined,
+            embeddingConfig: config.rag?.embedding,
         };
         return await runThread(baseDb, ctx, message, onEvent, options);
     };

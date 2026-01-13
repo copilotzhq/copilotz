@@ -37,6 +37,7 @@ import type { NewMessageEventPayload } from "@/database/schemas/index.ts";
 import {
     contextGenerator,
     historyGenerator,
+    generateRagContext,
     type LLMContextData
 } from "./generators/index.ts";
 
@@ -288,10 +289,34 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
                 .filter((t): t is ExecutableTool => Boolean(t));
             const llmTools: ToolDefinition[] = formatToolsForAI(agentTools);
 
-
-            const systemPrompt = typeof llmContext.systemPrompt === "string"
+            // Build system prompt
+            let systemPrompt = typeof llmContext.systemPrompt === "string"
                 ? llmContext.systemPrompt
                 : JSON.stringify(llmContext.systemPrompt ?? {});
+
+            // Auto-inject RAG context if agent has ragOptions.mode === "auto"
+            if (agent.ragOptions?.mode === "auto" && context.embeddingConfig) {
+                try {
+                    // Get user ID from thread metadata if available
+                    const threadMeta = thread.metadata as Record<string, unknown> | null;
+                    const userId = threadMeta?.userExternalId as string | undefined;
+
+                    const ragResult = await generateRagContext({
+                        agent,
+                        query: messageContext.contentText,
+                        ops,
+                        embeddingConfig: context.embeddingConfig,
+                        threadId,
+                        userId,
+                    });
+
+                    if (ragResult.context) {
+                        systemPrompt = `${systemPrompt}\n\n${ragResult.context}`;
+                    }
+                } catch (error) {
+                    console.warn(`[new_message] Failed to generate RAG context for agent "${agent.name}":`, error);
+                }
+            }
 
             const llmMessages: ChatMessage[] = [
                 { role: "system", content: systemPrompt },

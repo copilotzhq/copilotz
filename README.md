@@ -1,6 +1,6 @@
 # COPILOTZ
 
-[![Version](https://img.shields.io/badge/version-0.7.0-blue.svg)](https://github.com/yourusername/copilotz)
+[![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](https://github.com/yourusername/copilotz)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Deno](https://img.shields.io/badge/deno-%5E2.0-black.svg)](https://deno.land/)
 
@@ -65,7 +65,8 @@ listenable and overwritable via callbacks in copilotz.run()
 
 - **Multi-Agent Orchestration**: Define multiple agents with distinct roles, LLM configurations, and access permissions
 - **Event-Driven Processing**: Asynchronous queue-based event handling with customizable callbacks
-- **15 Native Tools**: File operations, system commands, HTTP requests, agent communication, task management
+- **19 Native Tools**: File operations, system commands, HTTP requests, agent communication, task management, RAG
+- **RAG (Retrieval-Augmented Generation)**: Document ingestion, vector embeddings, semantic search with pgvector
 - **OpenAPI Integration**: Auto-generate tools from OpenAPI 3.0 specifications
 - **MCP Protocol Support**: Connect to Model Context Protocol servers via stdio transport
 - **Persistent Threads**: Database-backed conversation history with participant tracking
@@ -314,7 +315,7 @@ Interface:
 export interface AssetConfig {
   inlineThresholdBytes?: number; // default ~256k
   resolveInLLM?: boolean;        // default true (resolve to provider-acceptable formats)
-  backend?: "memory" | "fs" | "s3"; // default "memory"
+  backend?: "memory" | "fs" | "s3" | "passthrough"; // default "memory"
   fs?: { rootDir: string; baseUrl?: string; prefix?: string; connector?: FsConnector };
   s3?: { bucket: string; connector: S3Connector; publicBaseUrl?: string; keyPrefix?: string };
 }
@@ -331,6 +332,7 @@ Backends:
 - **memory** (default): In-memory store, returns data URLs, does not persist across restarts.
 - **fs**: Filesystem-backed store. Requires `fs.rootDir`. Optionally set `fs.baseUrl` for public URLs.
 - **s3**: S3-compatible store. Requires `s3.bucket` and `s3.connector`. Optionally set `s3.publicBaseUrl` or use connector's signed URLs.
+- **passthrough**: Fire-once store for streaming assets without persistence. Assets are extracted, `ASSET_CREATED` events are emitted with full `base64`/`dataUrl`, then data is immediately discarded. Use when you want to handle storage yourself via event listeners.
 
 Defaults:
 - When `resolveInLLM` is true, attachments resolve to provider-specific parts (image_url/file/input_audio).
@@ -386,6 +388,27 @@ const copilotz = await createCopilotz({
     },
   },
 });
+
+// Passthrough backend (no persistence, just emit events)
+// Use when you want to handle storage yourself via ASSET_CREATED events
+const copilotz = await createCopilotz({
+  agents: [/* ... */],
+  assets: {
+    config: { backend: "passthrough" },
+  },
+});
+
+// Then handle assets in your event loop:
+const handle = await copilotz.run(message);
+for await (const ev of handle.events) {
+  if (ev.type === "ASSET_CREATED") {
+    const { assetId, base64, dataUrl, mime, tool } = ev.payload;
+    // Upload to your own storage (S3, CDN, database, etc.)
+    await myStorage.upload(assetId, base64, mime);
+    // Forward to client
+    sendToClient({ type: "MEDIA", assetId, dataUrl });
+  }
+}
 
 // Or inject a custom store directly
 const copilotz = await createCopilotz({
@@ -804,6 +827,10 @@ Gracefully shutdown and cleanup resources.
 | `get_current_time` | Get current timestamp | (no parameters) |
 | `wait` | Delay execution | `ms: number` |
 | `verbal_pause` | Thinking indicator | `duration?: number` |
+| `search_knowledge` | RAG: Semantic search | `query: string, namespaces?: string[]` |
+| `ingest_document` | RAG: Add document | `source: string, namespace?: string` |
+| `list_namespaces` | RAG: List namespaces | (no parameters) |
+| `delete_document` | RAG: Remove document | `documentId: string` or `sourceUri + namespace` |
 
 ## Project Structure
 
@@ -811,23 +838,331 @@ Gracefully shutdown and cleanup resources.
 /Users/vfssantos/Documents/Projetos/COPILOTZ/app/lib/
 ├── cli/                          # CLI utilities and banner
 ├── connectors/
+│   ├── embeddings/               # Embedding providers (OpenAI, etc.)
 │   ├── llm/                      # LLM provider implementations
 │   │   └── providers/            # OpenAI, Anthropic, Google, etc.
 │   └── request/                  # HTTP request utilities
 ├── database/
-│   ├── migrations/               # Database schema migrations
+│   ├── migrations/               # Database schema migrations (incl. RAG)
 │   ├── operations/               # High-level database operations
 │   └── schemas/                  # TypeScript schema definitions
 ├── event-processors/             # Core event processing logic
 │   ├── new_message/              # Message routing and context generation
 │   ├── llm_call/                 # LLM execution and streaming
+│   ├── rag_ingest/               # RAG document ingestion pipeline
 │   └── tool_call/                # Tool validation and execution
 │       ├── generators/           # API and MCP tool generators
-│       └── native-tools-registry/ # Built-in tools
+│       └── native-tools-registry/ # Built-in tools (incl. RAG tools)
 ├── runtime/                      # Thread runner and lifecycle
-├── utils/                        # Shared utilities
+├── utils/                        # Shared utilities (chunker, document-fetcher)
 ├── interfaces/                   # TypeScript type definitions
 └── index.ts                      # Main entry point
+```
+
+## RAG (Retrieval-Augmented Generation)
+
+COPILOTZ includes native RAG support powered by PostgreSQL's pgvector extension. Agents can ingest documents, generate embeddings, and retrieve relevant context during conversations.
+
+### Quick Start
+
+```typescript
+const copilotz = await createCopilotz({
+  agents: [{
+    id: "assistant",
+    name: "Assistant",
+    role: "assistant",
+    allowedTools: ["search_knowledge", "ingest_document", "list_namespaces"],
+    ragOptions: {
+      mode: "tool",              // 'tool' | 'auto' | 'disabled'
+      namespaces: ["docs"],      // Namespaces to search
+      ingestNamespace: "docs",   // Default namespace for ingestion
+    },
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  }],
+  rag: {
+    enabled: true,
+    embedding: {
+      provider: "openai",
+      model: "text-embedding-3-small",  // 1536 dimensions
+    },
+    chunking: {
+      strategy: "paragraph",  // 'fixed' | 'paragraph' | 'sentence'
+      chunkSize: 512,         // tokens per chunk
+      chunkOverlap: 50,       // overlap between chunks
+    },
+    retrieval: {
+      defaultLimit: 5,
+      similarityThreshold: 0.5,
+    },
+    defaultNamespace: "default",
+  },
+});
+```
+
+### RAG Tools
+
+| Tool | Description | Key Parameters |
+|------|-------------|----------------|
+| `search_knowledge` | Semantic search across knowledge base | `query`, `namespaces?`, `limit?`, `threshold?` |
+| `ingest_document` | Add document to knowledge base | `source`, `title?`, `namespace?`, `metadata?` |
+| `list_namespaces` | List namespaces with stats | (none) |
+| `delete_document` | Remove document and chunks | `documentId` or `sourceUri` + `namespace` |
+
+### Ingestion Pipeline
+
+When `ingest_document` is called, documents are processed asynchronously:
+
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│   FETCH     │───>│  PREPROCESS │───>│   CHUNK     │───>│   EMBED     │
+│ URL/File/   │    │ HTML→Text   │    │ 512 tokens  │    │ OpenAI API  │
+│ Text        │    │ MD→Text     │    │ 50 overlap  │    │ 1536 dims   │
+└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+                                                                │
+                   ┌─────────────┐    ┌─────────────┐           │
+                   │   NOTIFY    │<───│   STORE     │<──────────┘
+                   │ Status msg  │    │ PostgreSQL  │
+                   │ to thread   │    │ pgvector    │
+                   └─────────────┘    └─────────────┘
+```
+
+**Supported sources:**
+- URLs: `https://docs.example.com/guide.html`
+- Files: `./docs/readme.md` (Deno/Node runtime)
+- Raw text: `text:This is the content to index`
+
+**Deduplication:** Documents are hashed (SHA-256) and skipped if already indexed in the same namespace.
+
+### Namespaces
+
+Namespaces organize documents into isolated knowledge bases:
+
+```typescript
+// Per-agent namespace configuration
+{
+  name: "Support",
+  ragOptions: {
+    namespaces: ["faq", "policies"],      // Search these
+    ingestNamespace: "support-docs",       // Ingest to this
+  }
+}
+
+// Search specific namespaces via tool
+await agent.call("search_knowledge", {
+  query: "refund policy",
+  namespaces: ["policies", "faq"],
+  limit: 5
+});
+```
+
+**Common namespace patterns:**
+- `default` - Global knowledge base
+- `org:acme` - Organization-specific docs
+- `user:123` - User-uploaded documents
+- `project:alpha` - Project-scoped knowledge
+
+### Vector Search
+
+Retrieval uses cosine similarity via pgvector:
+
+```sql
+-- Under the hood
+SELECT content, 1 - (embedding <=> query_vector) as similarity
+FROM document_chunks
+WHERE namespace = ANY(namespaces)
+  AND similarity > threshold
+ORDER BY embedding <=> query_vector
+LIMIT 5;
+```
+
+### Configuration Reference
+
+```typescript
+interface RagConfig {
+  enabled?: boolean;           // Enable RAG features (default: true when configured)
+  embedding: {
+    provider: "openai";        // Embedding provider
+    model: string;             // e.g., "text-embedding-3-small"
+    apiKey?: string;           // Override OPENAI_API_KEY env var
+    dimensions?: number;       // Vector dimensions (auto-detected)
+    batchSize?: number;        // Chunks per API call (default: 100)
+  };
+  chunking?: {
+    strategy?: "fixed" | "paragraph" | "sentence";  // default: "fixed"
+    chunkSize?: number;        // Tokens per chunk (default: 512)
+    chunkOverlap?: number;     // Overlap tokens (default: 50)
+  };
+  retrieval?: {
+    defaultLimit?: number;     // Results per search (default: 5)
+    similarityThreshold?: number;  // Minimum score 0-1 (default: 0.5)
+  };
+  defaultNamespace?: string;   // Fallback namespace (default: "default")
+}
+
+interface AgentRagOptions {
+  mode?: "tool" | "auto" | "disabled";  // How agent uses RAG
+  namespaces?: string[];       // Namespaces to search
+  ingestNamespace?: string;    // Default ingestion target
+  autoInjectLimit?: number;    // Chunks to inject in 'auto' mode (default: 5)
+}
+```
+
+### RAG Modes
+
+COPILOTZ supports three RAG modes that control how agents interact with the knowledge base:
+
+#### Tool Mode (Default)
+```typescript
+ragOptions: { mode: "tool" }
+```
+The agent explicitly calls `search_knowledge` when it needs information. This gives the agent full control over when and what to search.
+
+**Best for:** Complex reasoning, multi-step tasks, agents that need to decide when to search.
+
+#### Auto Mode
+```typescript
+ragOptions: {
+  mode: "auto",
+  namespaces: ["docs", "faq"],
+  autoInjectLimit: 5  // Max chunks to inject
+}
+```
+Relevant context is **automatically retrieved and injected** into the system prompt before every LLM call. The agent doesn't need to explicitly search - knowledge is always available.
+
+**How it works:**
+1. User sends a message
+2. System embeds the message and searches configured namespaces
+3. Top matching chunks (up to `autoInjectLimit`) are injected into the system prompt
+4. Agent receives context automatically formatted as "KNOWLEDGE BASE CONTEXT"
+
+**Best for:** FAQ bots, customer support, simple Q&A where context is always helpful.
+
+**Example injected context:**
+```
+## KNOWLEDGE BASE CONTEXT
+
+The following information was retrieved from the knowledge base...
+
+[1] (Source: https://docs.example.com/refunds, Relevance: 92.3%)
+Our refund policy allows returns within 30 days of purchase...
+
+[2] (Source: policies/shipping.md, Relevance: 85.1%)
+Standard shipping takes 3-5 business days...
+
+---
+Note: The above context is provided for reference...
+```
+
+#### Disabled Mode
+```typescript
+ragOptions: { mode: "disabled" }
+```
+RAG features are completely disabled for this agent.
+
+### Database Schema
+
+RAG uses two tables with pgvector support:
+
+```sql
+-- Source documents
+CREATE TABLE documents (
+  id VARCHAR(255) PRIMARY KEY,
+  namespace VARCHAR(255) NOT NULL DEFAULT 'default',
+  sourceType VARCHAR(64),      -- 'url', 'file', 'text'
+  sourceUri TEXT,
+  title TEXT,
+  contentHash VARCHAR(128),    -- SHA-256 for deduplication
+  status VARCHAR(32),          -- 'pending', 'processing', 'indexed', 'failed'
+  chunkCount INTEGER,
+  ...
+);
+
+-- Embedded chunks
+CREATE TABLE document_chunks (
+  id VARCHAR(255) PRIMARY KEY,
+  documentId VARCHAR(255) REFERENCES documents(id) ON DELETE CASCADE,
+  namespace VARCHAR(255),
+  chunkIndex INTEGER,
+  content TEXT,
+  tokenCount INTEGER,
+  embedding VECTOR(1536),      -- pgvector column
+  ...
+);
+```
+
+### Example: Knowledge Base Agent
+
+```typescript
+const copilotz = await createCopilotz({
+  agents: [{
+    id: "kb-agent",
+    name: "Knowledge Base",
+    role: "assistant",
+    instructions: `You are a helpful assistant with access to a knowledge base.
+    
+Use search_knowledge to find relevant information before answering questions.
+Use ingest_document when users want to add new documents.
+Always cite your sources when using retrieved information.`,
+    allowedTools: ["search_knowledge", "ingest_document", "list_namespaces", "delete_document"],
+    ragOptions: {
+      mode: "tool",
+      namespaces: ["docs", "faq"],
+      ingestNamespace: "docs",
+    },
+    llmOptions: { provider: "openai", model: "gpt-4o" },
+  }],
+  rag: {
+    embedding: { provider: "openai", model: "text-embedding-3-small" },
+    chunking: { strategy: "paragraph", chunkSize: 512 },
+  },
+  dbConfig: { url: "file:./data/knowledge.db" },  // Persistent PGLite
+});
+
+// Ingest some documents
+await copilotz.run({
+  content: "Please ingest https://docs.example.com/guide.html into the docs namespace",
+  sender: { type: "user", name: "admin" },
+});
+
+// Query the knowledge base
+await copilotz.run({
+  content: "How do I configure authentication?",
+  sender: { type: "user", name: "user" },
+});
+```
+
+### Example: Auto-Inject FAQ Bot
+
+```typescript
+// Auto mode: context is automatically injected
+const faqBot = await createCopilotz({
+  agents: [{
+    id: "faq-bot",
+    name: "FAQ Bot",
+    role: "customer support assistant",
+    instructions: `Answer customer questions based on the provided knowledge base context.
+If the context doesn't contain relevant information, politely say you don't have that information.`,
+    // No RAG tools needed - context is injected automatically
+    ragOptions: {
+      mode: "auto",              // Auto-inject context
+      namespaces: ["faq", "policies"],
+      autoInjectLimit: 5,        // Inject up to 5 relevant chunks
+    },
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  }],
+  rag: {
+    embedding: { provider: "openai", model: "text-embedding-3-small" },
+    chunking: { strategy: "paragraph", chunkSize: 256 },  // Smaller chunks for FAQ
+    retrieval: { similarityThreshold: 0.6 },  // Higher threshold for relevance
+  },
+});
+
+// When user asks a question, relevant FAQ entries are automatically injected
+await faqBot.run({
+  content: "What's your return policy?",
+  sender: { type: "user" },
+});
+// The agent receives the message with relevant FAQ context already in the system prompt
 ```
 
 ## Roadmap
@@ -835,7 +1170,9 @@ Gracefully shutdown and cleanup resources.
 See [ROADMAP.md](./ROADMAP.md) for detailed upcoming features:
 
 - **Cross-Runtime Compatibility**: Node.js and Bun support
-- **RAG (Retrieval-Augmented Generation)**: Document ingestion, embeddings, vector search
+- **RAG Auto-Injection Mode**: Automatically inject retrieved context into LLM calls
+- **Additional Embedding Providers**: Ollama, Cohere support
+- **Document Parsers**: PDF, DOCX, spreadsheet support
 - **MCP Streaming Transport**: HTTP/WebSocket transport for MCP servers
 - **API Tool Response Controls**: Fine-grained response formatting
 
@@ -890,6 +1227,7 @@ For detailed documentation, see the `/docs` directory:
 - [Database Schema](./docs/database.md) - Schema reference and migrations
 - [API Integration](./docs/apis.md) - OpenAPI tool generation
 - [MCP Integration](./docs/mcp.md) - Model Context Protocol setup
+- [RAG Guide](#rag-retrieval-augmented-generation) - Document ingestion and semantic search (see above)
 
 ## License
 
@@ -908,8 +1246,9 @@ Contributions are welcome. Please ensure:
 - [Deno](https://deno.land/) - TypeScript runtime
 - [OmniPG](https://jsr.io/@oxian/ominipg) - Type-safe PostgreSQL client
 - [PGLite](https://pglite.dev/) - Embedded PostgreSQL (WASM)
+- [pgvector](https://github.com/pgvector/pgvector) - Vector similarity search
 - [AJV](https://ajv.js.org/) - JSON schema validation
 - [MCP SDK](https://modelcontextprotocol.io/) - Model Context Protocol
 
-**Version:** 0.7.0 | **Last Updated:** November 2025
+**Version:** 0.8.0 | **Last Updated:** January 2026
 

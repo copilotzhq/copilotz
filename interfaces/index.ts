@@ -19,6 +19,9 @@ import type {
     EventPayloadMapBase,
     EventOfMap,
     NewEventOfMap,
+    // RAG types
+    Document, NewDocument,
+    DocumentChunk, NewDocumentChunk,
 } from "@/database/schemas/index.ts";
 
 export type {
@@ -40,6 +43,9 @@ export type {
     EventPayloadMapBase,
     EventOfMap,
     NewEventOfMap,
+    // RAG types
+    Document, NewDocument,
+    DocumentChunk, NewDocumentChunk,
 }
  
 import type {
@@ -86,8 +92,55 @@ export interface AgentLlmOptionsResolverArgs {
 
 export type AgentLlmOptionsResolver = (args: AgentLlmOptionsResolverArgs) => ProviderConfig | Promise<ProviderConfig>;
 
+// RAG Configuration Types
+export interface EmbeddingConfig {
+    provider: "openai" | "ollama" | "cohere";
+    model: string;
+    apiKey?: string;
+    baseUrl?: string;
+    dimensions?: number;
+    batchSize?: number;
+}
+
+export interface ChunkingConfig {
+    strategy?: "fixed" | "paragraph" | "sentence";  // Default: "fixed"
+    chunkSize?: number;       // Default: 512 tokens
+    chunkOverlap?: number;    // Default: 50 tokens
+}
+
+export interface RetrievalConfig {
+    defaultLimit?: number;          // Default: 5
+    similarityThreshold?: number;   // Default: 0.7
+}
+
+export interface NamespaceContext {
+    thread?: { id?: string; externalId?: string; metadata?: Record<string, unknown> };
+    sender?: { id?: string; externalId?: string; type?: string; metadata?: Record<string, unknown> };
+    agent?: { id?: string; name?: string };
+    message?: { content?: string };
+}
+
+export type NamespaceResolver = (context: NamespaceContext) => Promise<string[]> | string[];
+
+export interface RagConfig {
+    enabled?: boolean;
+    embedding: EmbeddingConfig;
+    chunking?: ChunkingConfig;
+    retrieval?: RetrievalConfig;
+    defaultNamespace?: string;
+    namespaceResolver?: NamespaceResolver;
+}
+
+export interface AgentRagOptions {
+    mode?: "tool" | "auto" | "disabled";
+    namespaces?: string[];
+    ingestNamespace?: string;
+    autoInjectLimit?: number;
+}
+
 export type Agent = Omit<DbAgent, "llmOptions"> & {
     llmOptions?: DbAgent["llmOptions"] | AgentLlmOptionsResolver;
+    ragOptions?: AgentRagOptions;
 };
 
 // Chat context interface
@@ -109,6 +162,9 @@ export interface ChatContext {
     assetStore?: AssetStore;
     assetConfig?: AssetConfig;
     resolveAsset?: (ref: string) => Promise<{ bytes: Uint8Array; mime: string }>;
+    // RAG configuration
+    ragConfig?: RagConfig;
+    embeddingConfig?: EmbeddingConfig;
 }
 
 // Callback types that can return values for interception

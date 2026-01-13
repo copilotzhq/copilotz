@@ -224,3 +224,6 @@ CREATE INDEX IF NOT EXISTS "idx_users_external_id"
 
 CREATE INDEX IF NOT EXISTS "idx_users_email"
   ON "users" ("email");`);
+
+// Re-export RAG migrations for unified migration runner
+export { generateRagMigrations } from "./migration_0002_rag.ts";

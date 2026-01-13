@@ -49,6 +49,13 @@ export interface ToolExecutionContext extends ChatContext {
   threadId?: string;
   agents?: Agent[];
   db?: CopilotzDb;
+  embeddingConfig?: {
+    provider: "openai" | "ollama" | "cohere";
+    model: string;
+    apiKey?: string;
+    baseUrl?: string;
+    dimensions?: number;
+  };
 }
 
 function assertToolCallPayload(payload: unknown): asserts payload is ToolCallPayload {

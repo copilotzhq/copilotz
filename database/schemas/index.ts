@@ -2,6 +2,15 @@ import { defineSchema, type JsonSchema } from "omnipg";
 import type { FromSchema } from "json-schema-to-ts";
 import { ulid } from "ulid";
 
+// RAG Ingest payload (defined here to avoid circular imports)
+export interface RagIngestPayload {
+  source: string;
+  title?: string;
+  namespace?: string;
+  metadata?: Record<string, unknown>;
+  forceReindex?: boolean;
+}
+
 const UUID_SCHEMA: JsonSchema = {
   type: "string",
 };
@@ -875,6 +884,89 @@ const schemaDefinition = {
       id: generateId,
     }
   },
+  // RAG (Retrieval-Augmented Generation) schemas
+  documents: {
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        id: READONLY_UUID_SCHEMA,
+        namespace: { 
+          type: "string", 
+          minLength: 1,
+          default: "default",
+        },
+        externalId: { type: ["string", "null"], maxLength: 255 },
+        sourceType: { 
+          type: "string", 
+          enum: ["url", "file", "text", "asset"],
+        },
+        sourceUri: { type: ["string", "null"] },
+        title: { type: ["string", "null"] },
+        mimeType: { type: ["string", "null"], maxLength: 128 },
+        contentHash: { type: "string", maxLength: 128 },
+        assetId: { type: ["string", "null"], maxLength: 255 },
+        status: { 
+          type: "string", 
+          enum: ["pending", "processing", "indexed", "failed"],
+          default: "pending",
+        },
+        chunkCount: { type: ["integer", "null"] },
+        errorMessage: { type: ["string", "null"] },
+        metadata: { type: ["object", "null"] },
+        createdAt: { type: "string", format: "date-time" },
+        updatedAt: { type: "string", format: "date-time" },
+      },
+      required: ["id", "namespace", "sourceType", "contentHash", "status"],
+    },
+    keys: [{ property: "id" }],
+    timestamps: {
+      createdAt: "createdAt",
+      updatedAt: "updatedAt",
+    },
+    defaults: {
+      id: generateId,
+      namespace: () => "default",
+      status: () => "pending",
+    },
+  },
+  documentChunks: {
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        id: READONLY_UUID_SCHEMA,
+        documentId: UUID_SCHEMA,
+        namespace: { 
+          type: "string", 
+          minLength: 1,
+        },
+        chunkIndex: { type: "integer" },
+        content: { type: "string" },
+        tokenCount: { type: ["integer", "null"] },
+        // Embedding stored as JSON array of floats
+        // PostgreSQL migration will use vector type
+        embedding: { 
+          type: ["array", "null"],
+          items: { type: "number" },
+        },
+        startPosition: { type: ["integer", "null"] },
+        endPosition: { type: ["integer", "null"] },
+        metadata: { type: ["object", "null"] },
+        createdAt: { type: "string", format: "date-time" },
+        updatedAt: { type: "string", format: "date-time" },
+      },
+      required: ["id", "documentId", "namespace", "chunkIndex", "content"],
+    },
+    keys: [{ property: "id" }],
+    timestamps: {
+      createdAt: "createdAt",
+      updatedAt: "updatedAt",
+    },
+    defaults: {
+      id: generateId,
+    },
+  },
 } as const;
 
 type SchemaInternal = ReturnType<typeof defineSchema<typeof schemaDefinition>>;
@@ -891,6 +983,8 @@ const tasks = schemaInternal.tasks;
 const threads = schemaInternal.threads;
 const tools = schemaInternal.tools;
 const users = schemaInternal.users;
+const documents = schemaInternal.documents;
+const documentChunks = schemaInternal.documentChunks;
 
 
 export type Agent = typeof agents.$inferSelect;
@@ -919,6 +1013,12 @@ export type NewTool = typeof tools.$inferInsert;
 
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
+
+export type Document = typeof documents.$inferSelect;
+export type NewDocument = typeof documents.$inferInsert;
+
+export type DocumentChunk = typeof documentChunks.$inferSelect;
+export type NewDocumentChunk = typeof documentChunks.$inferInsert;
 
 export const schema: typeof schemaInternal = schemaInternal;
 

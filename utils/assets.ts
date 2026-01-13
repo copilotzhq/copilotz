@@ -19,10 +19,13 @@ export interface AssetConfig {
 	 */
 	resolveInLLM?: boolean;
 	/**
-	 * Backend type: "memory" (default), "fs" (filesystem), or "s3" (S3-compatible).
+	 * Backend type: "memory" (default), "fs" (filesystem), "s3" (S3-compatible), or "passthrough".
+	 * - "passthrough": Assets are extracted and ASSET_CREATED events are emitted, but data is NOT
+	 *   persisted. Each asset can only be retrieved once (fire-once), then it's discarded.
+	 *   Use this when you want to handle storage yourself via ASSET_CREATED events.
 	 * When set, backend-specific configs must be provided.
 	 */
-	backend?: "memory" | "fs" | "s3";
+	backend?: "memory" | "fs" | "s3" | "passthrough";
 	/**
 	 * Filesystem backend config (required if backend === "fs").
 	 */
@@ -136,6 +139,57 @@ export function createMemoryAssetStore(config: AssetConfig = {}): AssetStore {
 			return Promise.resolve(toDataUrl(rec.bytes, rec.mime));
 		}
 		// Memory backend has no external URL; fall back to data URL
+		return Promise.resolve(toDataUrl(rec.bytes, rec.mime));
+	};
+
+	const info: NonNullable<AssetStore["info"]> = (assetId) => {
+		const rec = byId.get(assetId);
+		if (!rec) return Promise.resolve(undefined);
+		return Promise.resolve({ id: assetId, mime: rec.mime, size: rec.bytes.byteLength, createdAt: rec.createdAt });
+	};
+
+	return { save, get, urlFor, info };
+}
+
+// -----------------------------------------------------------------------------
+// Passthrough Asset Store (fire-once, no persistence)
+// -----------------------------------------------------------------------------
+
+/**
+ * Creates a passthrough asset store that temporarily holds assets just long enough
+ * for ASSET_CREATED events to be emitted, then discards them.
+ * 
+ * - `save()`: Stores in memory, returns assetId
+ * - `get()`: Returns data and DELETES from memory (one-shot retrieval)
+ * - `urlFor()`: Returns data URL if still present, else throws
+ * - `info()`: Returns info if still present, else undefined
+ * 
+ * Use this when you want to receive ASSET_CREATED events with full base64/dataUrl
+ * but handle persistence yourself (e.g., upload to your own CDN, S3, database).
+ */
+export function createPassthroughAssetStore(config: AssetConfig = {}): AssetStore {
+	const byId = new Map<AssetId, { bytes: Uint8Array; mime: string; createdAt: Date }>();
+
+	const save: AssetStore["save"] = (bytes, mime) => {
+		if (!(bytes instanceof Uint8Array)) throw new Error("AssetStore.save: bytes must be Uint8Array");
+		const m = typeof mime === "string" && mime.length > 0 ? mime : "application/octet-stream";
+		const id = crypto.randomUUID();
+		byId.set(id, { bytes, mime: m, createdAt: new Date() });
+		return Promise.resolve({ assetId: id, info: { id, mime: m, size: bytes.byteLength, createdAt: new Date() } });
+	};
+
+	const get: AssetStore["get"] = (assetId) => {
+		const rec = byId.get(assetId);
+		if (!rec) throw new Error(`Asset not found (passthrough store - assets are fire-once): ${assetId}`);
+		// Fire-once: delete after retrieval
+		byId.delete(assetId);
+		return Promise.resolve({ bytes: rec.bytes, mime: rec.mime });
+	};
+
+	const urlFor: AssetStore["urlFor"] = (assetId) => {
+		const rec = byId.get(assetId);
+		if (!rec) throw new Error(`Asset not found (passthrough store - assets are fire-once): ${assetId}`);
+		// Don't delete here - urlFor might be called before get()
 		return Promise.resolve(toDataUrl(rec.bytes, rec.mime));
 	};
 
@@ -281,6 +335,10 @@ export function createAssetStore(config: AssetConfig = {}): AssetStore {
 		inlineThresholdBytes: config.inlineThresholdBytes,
 		resolveInLLM: config.resolveInLLM,
 	};
+
+	if (backend === "passthrough") {
+		return createPassthroughAssetStore(common);
+	}
 
 	if (backend === "fs") {
 		if (!config.fs) {

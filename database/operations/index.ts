@@ -8,6 +8,10 @@ import type {
   Task,
   Thread,
   User,
+  Document,
+  NewDocument,
+  DocumentChunk,
+  NewDocumentChunk,
 } from "../schemas/index.ts";
 import type { DbInstance } from "../index.ts";
 
@@ -31,6 +35,44 @@ export interface QueueEventInput {
   ttlMs?: number;
   expiresAt?: Date | string | null;
   status?: Queue["status"];
+}
+
+// RAG types
+export interface ChunkSearchOptions {
+  query?: string;
+  embedding?: number[];
+  namespaces?: string[];
+  limit?: number;
+  threshold?: number;
+  documentFilters?: {
+    sourceType?: string;
+    mimeType?: string;
+    status?: string;
+  };
+}
+
+export interface ChunkSearchResult {
+  id: string;
+  content: string;
+  namespace: string;
+  chunkIndex: number;
+  similarity: number;
+  tokenCount?: number | null;
+  metadata?: Record<string, unknown> | null;
+  document?: {
+    id: string;
+    title?: string | null;
+    sourceUri?: string | null;
+    sourceType: string;
+    mimeType?: string | null;
+  };
+}
+
+export interface NamespaceStats {
+  namespace: string;
+  documentCount: number;
+  chunkCount: number;
+  lastUpdated: Date | null;
 }
 
 export interface DatabaseOperations {
@@ -65,6 +107,17 @@ export interface DatabaseOperations {
   createTask: (taskData: TaskInsert) => Promise<Task>;
   getUserByExternalId: (externalId: string) => Promise<User | undefined>;
   archiveThread: (threadId: string, summary: string) => Promise<Thread | null>;
+  
+  // RAG operations
+  createDocument: (doc: Omit<NewDocument, "id"> & { id?: string }) => Promise<Document>;
+  getDocumentById: (id: string) => Promise<Document | undefined>;
+  getDocumentByHash: (hash: string, namespace: string) => Promise<Document | undefined>;
+  updateDocumentStatus: (id: string, status: Document["status"], errorMessage?: string, chunkCount?: number) => Promise<void>;
+  deleteDocument: (id: string) => Promise<void>;
+  createChunks: (chunks: Array<Omit<NewDocumentChunk, "id"> & { id?: string }>) => Promise<DocumentChunk[]>;
+  searchChunks: (options: ChunkSearchOptions) => Promise<ChunkSearchResult[]>;
+  getNamespaceStats: () => Promise<NamespaceStats[]>;
+  deleteChunksByDocumentId: (documentId: string) => Promise<void>;
 }
 
 const toIsoString = (
@@ -457,6 +510,239 @@ export function createOperations(db: DbInstance): DatabaseOperations {
     return updated ?? null;
   };
 
+  // RAG Operations
+
+  const createDocument = async (
+    doc: Omit<NewDocument, "id"> & { id?: string },
+  ): Promise<Document> => {
+    const created = await crud.documents.create({
+      namespace: doc.namespace ?? "default",
+      externalId: doc.externalId ?? null,
+      sourceType: doc.sourceType,
+      sourceUri: doc.sourceUri ?? null,
+      title: doc.title ?? null,
+      mimeType: doc.mimeType ?? null,
+      contentHash: doc.contentHash,
+      assetId: doc.assetId ?? null,
+      status: doc.status ?? "pending",
+      chunkCount: doc.chunkCount ?? null,
+      errorMessage: doc.errorMessage ?? null,
+      metadata: doc.metadata ?? null,
+    });
+    return created as Document;
+  };
+
+  const getDocumentById = async (id: string): Promise<Document | undefined> => {
+    const doc = await crud.documents.findOne({ id }) as Document | null;
+    return doc ?? undefined;
+  };
+
+  const getDocumentByHash = async (
+    hash: string,
+    namespace: string,
+  ): Promise<Document | undefined> => {
+    const doc = await crud.documents.findOne({
+      contentHash: hash,
+      namespace,
+    }) as Document | null;
+    return doc ?? undefined;
+  };
+
+  const updateDocumentStatus = async (
+    id: string,
+    status: Document["status"],
+    errorMessage?: string,
+    chunkCount?: number,
+  ): Promise<void> => {
+    const updates: Partial<Document> = { status };
+    if (errorMessage !== undefined) {
+      updates.errorMessage = errorMessage;
+    }
+    if (chunkCount !== undefined) {
+      updates.chunkCount = chunkCount;
+    }
+    await crud.documents.update({ id }, updates);
+  };
+
+  const deleteDocument = async (id: string): Promise<void> => {
+    // Chunks are deleted via CASCADE in the database
+    await crud.documents.delete({ id });
+  };
+
+  const deleteChunksByDocumentId = async (documentId: string): Promise<void> => {
+    await db.query(
+      `DELETE FROM "document_chunks" WHERE "documentId" = $1`,
+      [documentId],
+    );
+  };
+
+  const createChunks = async (
+    chunks: Array<Omit<NewDocumentChunk, "id"> & { id?: string }>,
+  ): Promise<DocumentChunk[]> => {
+    if (chunks.length === 0) return [];
+
+    const created: DocumentChunk[] = [];
+    for (const chunk of chunks) {
+      // For vector embedding, we need to use raw SQL since omnipg may not handle vector type directly
+      if (chunk.embedding && Array.isArray(chunk.embedding)) {
+        const embeddingStr = `[${chunk.embedding.join(",")}]`;
+        const result = await db.query<DocumentChunk>(
+          `INSERT INTO "document_chunks" 
+           ("id", "documentId", "namespace", "chunkIndex", "content", "tokenCount", "embedding", "startPosition", "endPosition", "metadata", "createdAt")
+           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6::vector, $7, $8, $9, NOW())
+           RETURNING *`,
+          [
+            chunk.documentId,
+            chunk.namespace,
+            chunk.chunkIndex,
+            chunk.content,
+            chunk.tokenCount ?? null,
+            embeddingStr,
+            chunk.startPosition ?? null,
+            chunk.endPosition ?? null,
+            chunk.metadata ? JSON.stringify(chunk.metadata) : null,
+          ],
+        );
+        if (result.rows[0]) {
+          created.push(result.rows[0]);
+        }
+      } else {
+        const c = await crud.documentChunks.create({
+          documentId: chunk.documentId,
+          namespace: chunk.namespace,
+          chunkIndex: chunk.chunkIndex,
+          content: chunk.content,
+          tokenCount: chunk.tokenCount ?? null,
+          embedding: null,
+          startPosition: chunk.startPosition ?? null,
+          endPosition: chunk.endPosition ?? null,
+          metadata: chunk.metadata ?? null,
+        });
+        created.push(c as DocumentChunk);
+      }
+    }
+    return created;
+  };
+
+  const searchChunks = async (
+    options: ChunkSearchOptions,
+  ): Promise<ChunkSearchResult[]> => {
+    if (!options.embedding || options.embedding.length === 0) {
+      return [];
+    }
+
+    const embeddingStr = `[${options.embedding.join(",")}]`;
+    const limit = options.limit ?? 5;
+    const threshold = options.threshold ?? 0.0;
+    const namespaces = options.namespaces ?? [];
+
+    const params: unknown[] = [embeddingStr, threshold, limit];
+    let namespaceClause = "";
+    
+    if (namespaces.length > 0) {
+      namespaceClause = `AND dc."namespace" = ANY($4::text[])`;
+      params.push(namespaces);
+    }
+
+    let documentFilterClause = "";
+    if (options.documentFilters) {
+      const filters = options.documentFilters;
+      if (filters.sourceType) {
+        params.push(filters.sourceType);
+        documentFilterClause += ` AND d."sourceType" = $${params.length}`;
+      }
+      if (filters.mimeType) {
+        params.push(filters.mimeType);
+        documentFilterClause += ` AND d."mimeType" = $${params.length}`;
+      }
+      if (filters.status) {
+        params.push(filters.status);
+        documentFilterClause += ` AND d."status" = $${params.length}`;
+      }
+    }
+
+    const result = await db.query<{
+      id: string;
+      content: string;
+      namespace: string;
+      chunkIndex: number;
+      similarity: number;
+      tokenCount: number | null;
+      metadata: Record<string, unknown> | null;
+      documentId: string;
+      documentTitle: string | null;
+      documentSourceUri: string | null;
+      documentSourceType: string;
+      documentMimeType: string | null;
+    }>(
+      `SELECT 
+        dc."id",
+        dc."content",
+        dc."namespace",
+        dc."chunkIndex",
+        1 - (dc."embedding" <=> $1::vector) as similarity,
+        dc."tokenCount",
+        dc."metadata",
+        d."id" as "documentId",
+        d."title" as "documentTitle",
+        d."sourceUri" as "documentSourceUri",
+        d."sourceType" as "documentSourceType",
+        d."mimeType" as "documentMimeType"
+      FROM "document_chunks" dc
+      JOIN "documents" d ON dc."documentId" = d."id"
+      WHERE dc."embedding" IS NOT NULL
+        AND 1 - (dc."embedding" <=> $1::vector) > $2
+        ${namespaceClause}
+        ${documentFilterClause}
+      ORDER BY dc."embedding" <=> $1::vector
+      LIMIT $3`,
+      params,
+    );
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      content: row.content,
+      namespace: row.namespace,
+      chunkIndex: row.chunkIndex,
+      similarity: row.similarity,
+      tokenCount: row.tokenCount,
+      metadata: row.metadata,
+      document: {
+        id: row.documentId,
+        title: row.documentTitle,
+        sourceUri: row.documentSourceUri,
+        sourceType: row.documentSourceType,
+        mimeType: row.documentMimeType,
+      },
+    }));
+  };
+
+  const getNamespaceStats = async (): Promise<NamespaceStats[]> => {
+    const result = await db.query<{
+      namespace: string;
+      documentCount: string;
+      chunkCount: string;
+      lastUpdated: Date | null;
+    }>(
+      `SELECT 
+        d."namespace",
+        COUNT(DISTINCT d."id") as "documentCount",
+        COUNT(dc."id") as "chunkCount",
+        MAX(d."updatedAt") as "lastUpdated"
+      FROM "documents" d
+      LEFT JOIN "document_chunks" dc ON d."id" = dc."documentId"
+      GROUP BY d."namespace"
+      ORDER BY d."namespace"`,
+    );
+
+    return result.rows.map((row) => ({
+      namespace: row.namespace,
+      documentCount: parseInt(String(row.documentCount), 10),
+      chunkCount: parseInt(String(row.chunkCount), 10),
+      lastUpdated: row.lastUpdated,
+    }));
+  };
+
   return {
     crud,
     addToQueue,
@@ -474,5 +760,15 @@ export function createOperations(db: DbInstance): DatabaseOperations {
     createTask,
     getUserByExternalId,
     archiveThread,
+    // RAG operations
+    createDocument,
+    getDocumentById,
+    getDocumentByHash,
+    updateDocumentStatus,
+    deleteDocument,
+    createChunks,
+    searchChunks,
+    getNamespaceStats,
+    deleteChunksByDocumentId,
   };
 }

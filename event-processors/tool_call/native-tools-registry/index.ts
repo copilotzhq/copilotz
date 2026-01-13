@@ -16,6 +16,11 @@ import run_command from "./run_command.ts";
 import wait from "./wait.ts";
 import save_asset from "./save_asset.ts";
 import fetch_asset from "./fetch_asset.ts";
+// RAG tools
+import search_knowledge from "./search_knowledge.ts";
+import ingest_document from "./ingest_document.ts";
+import list_namespaces from "./list_namespaces.ts";
+import delete_document from "./delete_document.ts";
 
 export const nativeTools: { [key: string]: NewTool } = {
     ask_question,
@@ -34,6 +39,11 @@ export const nativeTools: { [key: string]: NewTool } = {
     wait,
     save_asset,
     fetch_asset,
+    // RAG tools
+    search_knowledge,
+    ingest_document,
+    list_namespaces,
+    delete_document,
 };
 
 

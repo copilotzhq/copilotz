@@ -17,6 +17,7 @@ import type {
 import { llmCallProcessor } from "./llm_call/index.ts";
 import { messageProcessor } from "./new_message/index.ts";
 import { toolCallProcessor } from "./tool_call/index.ts";
+import { ragIngestProcessor } from "./rag_ingest/index.ts";
 
 // Internal Event Types
 type EventType = Event["type"];
@@ -53,11 +54,12 @@ const tokenProcessor: EventProcessor<unknown, ProcessorDeps> = {
     process: () => ({ producedEvents: [] }),
 };
 
-const processors: EventProcessors = {
+const processors: Record<string, EventProcessor<unknown, ProcessorDeps>> = {
     LLM_CALL: llmCallProcessor,
     NEW_MESSAGE: messageProcessor,
     TOOL_CALL: toolCallProcessor,
     TOKEN: tokenProcessor,
+    RAG_INGEST: ragIngestProcessor,
 };
 
 export function registerEventProcessor<TPayload = unknown>(

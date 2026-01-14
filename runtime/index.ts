@@ -9,24 +9,48 @@ type MaybePromise<T> = T | Promise<T>;
 const USER_UPSERT_DEBOUNCE_MS = 60_000;
 const userUpsertCache = new Map<string, number>();
 
+/**
+ * Options for running a message through Copilotz.
+ */
 export type RunOptions = {
+    /** Whether to enable streaming mode for real-time token output. */
     stream?: boolean;
+    /** When to acknowledge the message: immediately or after processing completes. */
     ackMode?: "immediate" | "onComplete";
+    /** AbortSignal for cancelling the run. */
     signal?: AbortSignal;
+    /** Time-to-live for queue items in milliseconds. */
     queueTTL?: number;
 };
 
+/**
+ * Event emitted from the streaming event queue.
+ * Can be a typed Event or a custom event with string type and payload.
+ */
 export type StreamEvent = Event | (EventBase & { type: string; payload: Record<string, unknown> });
 
+/**
+ * Handle returned from running a message, providing access to results and streaming.
+ */
 export type RunHandle = {
+    /** ID of the queue item. */
     queueId: string;
+    /** ID of the conversation thread. */
     threadId: string;
+    /** Current status of the run. */
     status: "queued";
+    /** Async iterable of events for streaming. */
     events: AsyncIterable<StreamEvent>;
+    /** Promise that resolves when processing is complete. */
     done: Promise<void>;
+    /** Function to cancel the run. */
     cancel: () => void;
 };
 
+/**
+ * Unified event callback type for handling events during a run.
+ * Return producedEvents to inject new events into the queue.
+ */
 export type UnifiedOnEvent = (event: Event) => MaybePromise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void>;
 
 class AsyncQueue<T> implements AsyncIterable<T> {

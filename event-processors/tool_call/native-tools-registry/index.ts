@@ -22,6 +22,16 @@ import ingest_document from "./ingest_document.ts";
 import list_namespaces from "./list_namespaces.ts";
 import delete_document from "./delete_document.ts";
 
+/**
+ * Registry of all built-in native tools available to agents.
+ * 
+ * Includes tools for:
+ * - Thread and task management (create_thread, end_thread, create_task)
+ * - File operations (read_file, write_file, list_directory, search_files)
+ * - HTTP and asset handling (http_request, fetch_text, save_asset, fetch_asset)
+ * - RAG operations (search_knowledge, ingest_document, list_namespaces, delete_document)
+ * - Utility tools (ask_question, verbal_pause, get_current_time, wait, run_command)
+ */
 export const nativeTools: { [key: string]: NewTool } = {
     ask_question,
     create_thread,

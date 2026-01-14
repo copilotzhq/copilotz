@@ -1,7 +1,15 @@
-// Import Database
+/**
+ * Event processing system for Copilotz.
+ * 
+ * This module provides the event queue processing infrastructure,
+ * including built-in processors for messages, LLM calls, tool calls,
+ * and RAG ingestion, as well as extension points for custom processors.
+ * 
+ * @module
+ */
+
 import { createDatabase, type CopilotzDb } from "@/database/index.ts";
 
-// Import Agent Interfaces  
 import type {
     Thread,
     Event,
@@ -13,30 +21,54 @@ import type {
     NewUnknownEvent,
 } from "@/interfaces/index.ts";
 
-// Import Processors
 import { llmCallProcessor } from "./llm_call/index.ts";
 import { messageProcessor } from "./new_message/index.ts";
 import { toolCallProcessor } from "./tool_call/index.ts";
 import { ragIngestProcessor } from "./rag_ingest/index.ts";
 
-// Internal Event Types
 type EventType = Event["type"];
 
-// Typed Event Payloads
 import type { LLMCallPayload, LLMResultPayload } from "./llm_call/index.ts";
 import type { ToolCallPayload, ToolResultPayload, ToolExecutionContext } from "./tool_call/index.ts";
 import type { ChatContext } from "@/interfaces/index.ts";
 
 import type { ExecutableTool, ToolExecutor } from "./tool_call/types.ts";
-export type { LLMCallPayload, LLMResultPayload, ToolCallPayload, ToolResultPayload, ToolExecutionContext, ExecutableTool, ToolExecutor };
 
+export type {
+    /** Payload for LLM call events. */
+    LLMCallPayload,
+    /** Payload for LLM call results. */
+    LLMResultPayload,
+    /** Payload for tool call events. */
+    ToolCallPayload,
+    /** Payload for tool call results. */
+    ToolResultPayload,
+    /** Context passed to tool execution. */
+    ToolExecutionContext,
+    /** Tool with an execute function. */
+    ExecutableTool,
+    /** Function signature for tool execution. */
+    ToolExecutor
+};
+
+/**
+ * Result from processing an event, containing any new events to enqueue.
+ */
 export interface ProcessResult {
+    /** Array of new events produced by processing. */
     producedEvents: Array<NewEvent | NewUnknownEvent>;
 }
 
+/**
+ * Dependencies injected into event processors.
+ * Provides access to database, current thread, and chat context.
+ */
 export type ProcessorDeps = {
+    /** Database instance for data operations. */
     db: CopilotzDb;
+    /** Current conversation thread. */
     thread: Thread;
+    /** Chat context with configuration and callbacks. */
     context: ChatContext;
 }
 
@@ -62,6 +94,27 @@ const processors: Record<string, EventProcessor<unknown, ProcessorDeps>> = {
     RAG_INGEST: ragIngestProcessor,
 };
 
+/**
+ * Registers a custom event processor for a specific event type.
+ * 
+ * Use this to extend Copilotz with custom event handling logic.
+ * Registered processors will be used instead of built-in processors
+ * for the specified event type.
+ * 
+ * @param type - The event type to handle (e.g., "NEW_MESSAGE", "TOOL_CALL", "CUSTOM_EVENT")
+ * @param processor - The processor implementation
+ * 
+ * @example
+ * ```ts
+ * registerEventProcessor("MY_CUSTOM_EVENT", {
+ *   shouldProcess: (event) => event.type === "MY_CUSTOM_EVENT",
+ *   process: async (event, deps) => {
+ *     // Handle the custom event
+ *     return { producedEvents: [] };
+ *   }
+ * });
+ * ```
+ */
 export function registerEventProcessor<TPayload = unknown>(
     type: string,
     processor: EventProcessor<TPayload, ProcessorDeps>,
@@ -131,23 +184,65 @@ export async function startThreadEventWorker(
     );
 }
 
+/**
+ * Interface for custom event processors.
+ * 
+ * Implement this interface to create custom event handlers that can
+ * intercept and process events in the Copilotz event queue.
+ * 
+ * @typeParam TPayload - The expected payload type for events this processor handles
+ * @typeParam TDeps - The dependencies type (usually ProcessorDeps)
+ * 
+ * @example
+ * ```ts
+ * const myProcessor: EventProcessor<MyPayload, ProcessorDeps> = {
+ *   shouldProcess: (event) => event.type === "MY_EVENT",
+ *   process: async (event, deps) => {
+ *     const payload = event.payload as MyPayload;
+ *     // Process the event...
+ *     return { producedEvents: [{ type: "RESULT", payload: {...} }] };
+ *   }
+ * };
+ * ```
+ */
 export interface EventProcessor<TPayload = unknown, TDeps = unknown> {
+    /** 
+     * Determines if this processor should handle the given event.
+     * @param event - The event to check
+     * @param deps - Processor dependencies
+     * @returns True if this processor should process the event
+     */
     shouldProcess: (event: Event, deps: TDeps) => boolean | Promise<boolean>;
+    /** 
+     * Processes the event and optionally produces new events.
+     * @param event - The event to process
+     * @param deps - Processor dependencies
+     * @returns Optional object containing new events to enqueue
+     */
     process: (event: Event, deps: TDeps) => Promise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void> | { producedEvents?: Array<NewEvent | NewUnknownEvent> } | void;
 }
 
+/**
+ * Possible responses from an onEvent callback.
+ */
 export type OnEventResponse =
     | void
     | { event: Event }
     | { producedEvents: Array<NewEvent | NewUnknownEvent> }
     | { drop: true };
 
+/**
+ * Context for the event worker, containing callbacks and custom processors.
+ */
 export interface WorkerContext {
+    /** Callback functions for event handling. */
     callbacks?: {
+        /** Called for each event, can produce new events. */
         onEvent?: (ev: Event) => Promise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void> | { producedEvents?: Array<NewEvent | NewUnknownEvent> } | void;
         /** Called after processing to push events to the client stream. Only called if the event was not replaced by a custom processor. */
         onStreamPush?: (ev: Event) => void;
     };
+    /** Custom processors organized by event type. */
     customProcessors?: Record<string, Array<EventProcessor<unknown, ProcessorDeps>>>;
 }
 

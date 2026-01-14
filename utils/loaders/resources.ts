@@ -1,3 +1,10 @@
+/**
+ * Resource loader for file-based Copilotz configuration.
+ * 
+ * Loads agents, APIs, tools, and custom processors from a directory structure.
+ * 
+ * @module
+ */
 
 import type {
     AgentConfig,
@@ -7,11 +14,20 @@ import type {
 } from "@/index.ts";
 import type { EventProcessor, Event, NewEvent, NewUnknownEvent, ProcessorDeps } from "@/interfaces/index.ts";
 
+/**
+ * Resources loaded from the file system.
+ * Contains all agents, APIs, tools, MCP servers, and custom processors.
+ */
 export type Resources = {
+    /** Array of loaded agent configurations. */
     agents: AgentConfig[];
+    /** Array of loaded API configurations. */
     apis?: APIConfig[];
+    /** Array of loaded tool configurations. */
     tools?: ToolConfig[];
+    /** Array of loaded MCP server configurations. */
     mcpServers?: MCPServer[];
+    /** Array of loaded custom event processors. */
     processors?: Array<(EventProcessor<unknown, ProcessorDeps> & { eventType: string; priority?: number; id?: string })>;
 };
 
@@ -84,6 +100,45 @@ const asProcess = (
     };
 };
 
+/**
+ * Loads Copilotz resources from a file-based directory structure.
+ * 
+ * Expected directory structure:
+ * ```
+ * resources/
+ *   agents/
+ *     agent-name/
+ *       instructions.md   # Agent instructions (required)
+ *       config.ts         # Agent configuration (optional)
+ *   apis/
+ *     api-name/
+ *       openApiSchema.json  # OpenAPI schema (required)
+ *       config.ts           # API configuration (optional)
+ *   tools/
+ *     tool-name/
+ *       config.ts    # Tool configuration (required)
+ *       execute.ts   # Tool execution function (required)
+ *   event-processors/
+ *     event_type/
+ *       processor.ts  # Processor with shouldProcess and process exports
+ * ```
+ * 
+ * @param options - Options object with path to resources directory
+ * @param options.path - Path to resources directory. Default: "resources"
+ * @returns Promise resolving to loaded Resources
+ * 
+ * @example
+ * ```ts
+ * const resources = await loadResources({ path: "./my-resources" });
+ * 
+ * const copilotz = await createCopilotz({
+ *   agents: resources.agents,
+ *   apis: resources.apis,
+ *   tools: resources.tools,
+ *   processors: resources.processors
+ * });
+ * ```
+ */
 const loadResources = async ({ path }: { path: string } = { path: "resources" }): Promise<Resources> => {
     const agentConfigs: Array<AgentConfig> = [];
 

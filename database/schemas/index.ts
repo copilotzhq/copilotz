@@ -201,6 +201,10 @@ const MessagePayloadSchema = {
   required: ["content", "sender"],
 } as const;
 
+/** 
+ * Payload structure for incoming messages to Copilotz.
+ * Contains the message content, sender information, thread context, and optional tool calls.
+ */
 export type MessagePayload = FromSchema<typeof MessagePayloadSchema>;
 
 const NewMessageEventPayloadSchema = MessagePayloadSchema;
@@ -987,47 +991,72 @@ const documents = schemaInternal.documents;
 const documentChunks = schemaInternal.documentChunks;
 
 
+/** AI Agent entity with configuration for LLM interactions and capabilities. */
 export type Agent = typeof agents.$inferSelect;
+/** Input type for creating a new Agent. */
 export type NewAgent = typeof agents.$inferInsert;
 
+/** API configuration for connecting to external REST APIs via OpenAPI. */
 export type API = typeof apis.$inferSelect;
+/** Input type for creating a new API configuration. */
 export type NewAPI = typeof apis.$inferInsert;
 
+/** MCP (Model Context Protocol) server configuration. */
 export type MCPServer = typeof mcpServers.$inferSelect;
+/** Input type for creating a new MCP server configuration. */
 export type NewMCPServer = typeof mcpServers.$inferInsert;
 
+/** Individual message within a conversation thread. */
 export type Message = typeof messages.$inferSelect;
+/** Input type for creating a new Message. */
 export type NewMessage = typeof messages.$inferInsert;
 
+/** Queue item in the event processing system. */
 export type Queue = typeof queue.$inferSelect;
+/** Input type for creating a new Queue item. */
 export type NewQueue = Record<string, unknown>;
 
+/** Task entity for goal-oriented agent workflows. */
 export type Task = typeof tasks.$inferSelect;
+/** Input type for creating a new Task. */
 export type NewTask = typeof tasks.$inferInsert;
 
+/** Conversation thread containing messages between users and agents. */
 export type Thread = typeof threads.$inferSelect;
+/** Input type for creating a new Thread. */
 export type NewThread = typeof threads.$inferInsert;
 
+/** Tool definition with input/output schemas for agent capabilities. */
 export type Tool = typeof tools.$inferSelect;
+/** Input type for creating a new Tool. */
 export type NewTool = typeof tools.$inferInsert;
 
+/** User entity representing a conversation participant. */
 export type User = typeof users.$inferSelect;
+/** Input type for creating a new User. */
 export type NewUser = typeof users.$inferInsert;
 
+/** Document stored in the RAG knowledge base. */
 export type Document = typeof documents.$inferSelect;
+/** Input type for creating a new Document. */
 export type NewDocument = typeof documents.$inferInsert;
 
+/** Chunk of a document with embedding vector for similarity search. */
 export type DocumentChunk = typeof documentChunks.$inferSelect;
+/** Input type for creating a new DocumentChunk. */
 export type NewDocumentChunk = typeof documentChunks.$inferInsert;
 
+/** Database schema definitions for all Copilotz entities. */
 export const schema: typeof schemaInternal = schemaInternal;
 
-// Strongly-typed MessagePayload for copilotz.run input
 type QueueRow = typeof queue.$inferSelect;
 type QueueStatus = QueueRow["status"];
 
+/** Payload structure for tool call events, containing the tool invocation details. */
 export type ToolCallEventPayload = FromSchema<typeof schemaDefinition.events.schema.$defs.ToolCallEventPayload>;
+/** Payload structure for LLM call events, containing messages and configuration. */
 export type LlmCallEventPayload = FromSchema<typeof schemaDefinition.events.schema.$defs.LlmCallEventPayload>;
+/** Payload structure for streaming token events during LLM response generation. */
 export type TokenEventPayload = FromSchema<typeof schemaDefinition.events.schema.$defs.TokenEventPayload>;
 
 export type EventPayloadMapBase = {
@@ -1038,12 +1067,22 @@ export type EventPayloadMapBase = {
 };
 
 type EventPayloadMap = EventPayloadMapBase 
+
+/** Base event properties without type-specific payload. */
 export type EventBase = Omit<QueueRow, "eventType" | "payload">;
 
+/** 
+ * Event in the Copilotz event queue system.
+ * A discriminated union of all possible event types with their typed payloads.
+ */
 export type Event = {
   [K in keyof EventPayloadMap]: EventBase & { type: K; payload: EventPayloadMap[K] }
 }[keyof EventPayloadMap];
 
+/** 
+ * Input type for creating a new Event in the queue.
+ * Supports all built-in event types with their typed payloads.
+ */
 export type NewEvent = {
   [K in keyof EventPayloadMap]: {
     threadId: string;
@@ -1086,7 +1125,10 @@ export type NewEventOfMap<TCustom extends Record<string, unknown>> = {
   }
 }[keyof (EventPayloadMapBase & TCustom)];
 
-// Broadly-typed event shape to support custom events passed at runtime via config.processors
+/** 
+ * Broadly-typed event shape to support custom events passed at runtime via config.processors.
+ * Use this when creating events with custom types not in the built-in EventPayloadMap.
+ */
 export type NewUnknownEvent = {
   threadId: string;
   type: string;

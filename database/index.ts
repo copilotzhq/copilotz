@@ -1,39 +1,74 @@
-// Import Ominipg
+/**
+ * Database module for Copilotz.
+ * 
+ * Provides database connectivity using Ominipg with support for PostgreSQL 
+ * and PGlite (in-memory/file-based). Includes schema definitions, migrations,
+ * and high-level database operations.
+ * 
+ * @module
+ */
+
 import { Ominipg } from "omnipg";
 import type { OminipgWithCrud } from "omnipg";
 
-// Import Utils
 import { splitSQLStatements } from "./migrations/utils.ts";
-
-// Import Schemas
 import { schema as baseSchema } from "./schemas/index.ts";
-
-// Import Operations
 import { createOperations, type DatabaseOperations } from "./operations/index.ts";
-
-// Import Migrations Files
 import { generateMigrations } from "./migrations/migration_0001.ts";
 import { generateRagMigrations } from "./migrations/migration_0002_rag.ts";
 
+/** SQL migration statements for setting up the database schema. */
 const migrations: string = generateMigrations() + "\n" + generateRagMigrations();
 
-// Define the database config interface
+/**
+ * Configuration options for creating a database connection.
+ * 
+ * @example
+ * ```ts
+ * // In-memory database (default)
+ * const db = await createDatabase();
+ * 
+ * // File-based PGlite database
+ * const db = await createDatabase({ url: "file:./data.db" });
+ * 
+ * // PostgreSQL connection
+ * const db = await createDatabase({ url: "postgres://user:pass@host:5432/db" });
+ * ```
+ */
 export interface DatabaseConfig {
+  /** 
+   * Database connection URL. 
+   * - `:memory:` for in-memory PGlite (default)
+   * - `file:./path` for file-based PGlite
+   * - `postgres://...` for PostgreSQL
+   */
   url?: string;
+  /** Optional sync URL for database replication. */
   syncUrl?: string;
+  /** PGlite extensions to load. Default: ["uuid_ossp", "pg_trgm", "vector"]. */
   pgliteExtensions?: string[];
+  /** Additional SQL statements to run during initialization. */
   schemaSQL?: string[];
+  /** Whether to use a web worker for PGlite. Default: false. */
   useWorker?: boolean;
+  /** Whether to log database performance metrics. */
   logMetrics?: boolean;
+  /** Custom schema definitions. */
   schemas?: typeof baseSchema;
 }
 
 
 type Operations = DatabaseOperations;
 
-// Strongly-typed instance returned by Ominipg when schemas are provided
+/**
+ * Low-level database instance type from Ominipg with CRUD operations.
+ */
 export type DbInstance = OminipgWithCrud<typeof baseSchema>;
 
+/**
+ * Copilotz database instance with CRUD operations and high-level ops.
+ * This is the main database type used throughout Copilotz.
+ */
 export type CopilotzDb = DbInstance & { ops: Operations };
 
 function getEnvVar(key: string): string | undefined {
@@ -104,7 +139,32 @@ const globalCache: Map<string, Promise<CopilotzDb>> = existingCache ??
   new Map();
 (globalThis as Record<string, unknown>)[GLOBAL_CACHE_KEY] = globalCache;
 
-// Create singleton database instance with
+/**
+ * Creates or retrieves a database connection for Copilotz.
+ * 
+ * This function manages a global connection cache, so calling it multiple times
+ * with the same configuration will return the same database instance.
+ * 
+ * @param config - Optional database configuration. Defaults to in-memory PGlite.
+ * @returns Promise resolving to a CopilotzDb instance
+ * 
+ * @example
+ * ```ts
+ * // Create an in-memory database
+ * const db = await createDatabase();
+ * 
+ * // Create a file-based database
+ * const db = await createDatabase({ url: "file:./my-data.db" });
+ * 
+ * // Connect to PostgreSQL
+ * const db = await createDatabase({ 
+ *   url: process.env.DATABASE_URL 
+ * });
+ * 
+ * // Use the database
+ * const threads = await db.ops.getAllThreads();
+ * ```
+ */
 export async function createDatabase(
   config?: DatabaseConfig,
 ): Promise<CopilotzDb> {
@@ -148,4 +208,8 @@ export async function createDatabase(
   return await connectPromise;
 }
 
-export { baseSchema as schema, migrations };
+/** Database schema definitions for all Copilotz entities. */
+export { baseSchema as schema };
+
+/** SQL migration statements for setting up the database schema. */
+export { migrations };

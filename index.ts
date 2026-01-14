@@ -1,30 +1,3 @@
-/**
- * Copilotz - AI Agent Framework with event-driven architecture.
- * 
- * This module provides the main entry point for creating and running AI agents
- * with support for tools, APIs, MCP servers, and RAG (Retrieval-Augmented Generation).
- * 
- * @example
- * ```ts
- * import { createCopilotz } from "@copilotz/copilotz";
- * 
- * const copilotz = await createCopilotz({
- *   agents: [{
- *     id: "assistant",
- *     name: "Assistant",
- *     role: "A helpful AI assistant",
- *     instructions: "You are a helpful assistant."
- *   }]
- * });
- * 
- * const result = await copilotz.run({
- *   content: "Hello!",
- *   sender: { type: "user", name: "User" }
- * });
- * ```
- * 
- * @module
- */
 
 import { createDatabase, schema, migrations } from "@/database/index.ts";
 import type { OminipgWithCrud } from "omnipg";

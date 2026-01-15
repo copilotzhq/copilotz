@@ -16,9 +16,10 @@ import { schema as baseSchema } from "./schemas/index.ts";
 import { createOperations, type DatabaseOperations } from "./operations/index.ts";
 import { generateMigrations } from "./migrations/migration_0001.ts";
 import { generateRagMigrations } from "./migrations/migration_0002_rag.ts";
+import { generateKnowledgeGraphMigrations } from "./migrations/migration_0003_knowledge_graph.ts";
 
 /** SQL migration statements for setting up the database schema. */
-const migrations: string = generateMigrations() + "\n" + generateRagMigrations();
+const migrations: string = generateMigrations() + "\n" + generateRagMigrations() + "\n" + generateKnowledgeGraphMigrations();
 
 /**
  * Configuration options for creating a database connection.

@@ -971,6 +971,108 @@ const schemaDefinition = {
       id: generateId,
     },
   },
+  // ============================================
+  // KNOWLEDGE GRAPH SCHEMAS
+  // ============================================
+  // Unified knowledge graph: nodes can be chunks, entities, concepts, decisions, etc.
+  // This generalizes RAG into a full graph-based knowledge system.
+  nodes: {
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        id: READONLY_UUID_SCHEMA,
+        namespace: { 
+          type: "string", 
+          minLength: 1,
+          description: "Scoping: thread_id, agent_id, repo_id, or 'global'",
+        },
+        type: { 
+          type: "string", 
+          minLength: 1,
+          description: "Node type: 'chunk', 'entity', 'concept', 'decision', 'file', etc.",
+        },
+        name: { 
+          type: "string",
+          minLength: 1,
+          description: "Human-readable identifier for the node",
+        },
+        // Embedding stored as JSON array of floats
+        // PostgreSQL migration uses vector type
+        embedding: { 
+          type: ["array", "null"],
+          items: { type: "number" },
+          description: "Vector embedding for semantic search",
+        },
+        content: { 
+          type: ["string", "null"],
+          description: "Full text content (primarily for chunk nodes)",
+        },
+        data: { 
+          type: ["object", "null"],
+          description: "Flexible properties specific to node type",
+        },
+        sourceType: { 
+          type: ["string", "null"],
+          description: "Origin type: 'document', 'message', 'file', 'extraction'",
+        },
+        sourceId: { 
+          type: ["string", "null"],
+          description: "Reference to source entity ID",
+        },
+        createdAt: { type: "string", format: "date-time" },
+        updatedAt: { type: "string", format: "date-time" },
+      },
+      required: ["id", "namespace", "type", "name"],
+    },
+    keys: [{ property: "id" }],
+    timestamps: {
+      createdAt: "createdAt",
+      updatedAt: "updatedAt",
+    },
+    defaults: {
+      id: generateId,
+    },
+  },
+  edges: {
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        id: READONLY_UUID_SCHEMA,
+        sourceNodeId: { 
+          type: "string",
+          description: "ID of the source node",
+        },
+        targetNodeId: { 
+          type: "string",
+          description: "ID of the target node",
+        },
+        type: { 
+          type: "string", 
+          minLength: 1,
+          description: "Relationship type: 'mentions', 'contains', 'caused', 'imports', etc.",
+        },
+        data: { 
+          type: ["object", "null"],
+          description: "Relationship properties",
+        },
+        weight: { 
+          type: ["number", "null"],
+          default: 1.0,
+          description: "Relationship strength/confidence",
+        },
+        createdAt: { type: "string", format: "date-time" },
+      },
+      required: ["id", "sourceNodeId", "targetNodeId", "type"],
+    },
+    keys: [{ property: "id" }],
+    // Edges are immutable, no updatedAt needed
+    defaults: {
+      id: generateId,
+      weight: () => 1.0,
+    },
+  },
 } as const;
 
 type SchemaInternal = ReturnType<typeof defineSchema<typeof schemaDefinition>>;
@@ -989,6 +1091,8 @@ const tools = schemaInternal.tools;
 const users = schemaInternal.users;
 const documents = schemaInternal.documents;
 const documentChunks = schemaInternal.documentChunks;
+const nodes = schemaInternal.nodes;
+const edges = schemaInternal.edges;
 
 
 /** AI Agent entity with configuration for LLM interactions and capabilities. */
@@ -1045,6 +1149,22 @@ export type NewDocument = typeof documents.$inferInsert;
 export type DocumentChunk = typeof documentChunks.$inferSelect;
 /** Input type for creating a new DocumentChunk. */
 export type NewDocumentChunk = typeof documentChunks.$inferInsert;
+
+/** 
+ * Knowledge graph node: can represent chunks, entities, concepts, decisions, etc.
+ * This is the unified primitive for all knowledge in Copilotz.
+ */
+export type KnowledgeNode = typeof nodes.$inferSelect;
+/** Input type for creating a new KnowledgeNode. */
+export type NewKnowledgeNode = typeof nodes.$inferInsert;
+
+/** 
+ * Knowledge graph edge: typed relationship between nodes.
+ * Enables graph traversal for context retrieval.
+ */
+export type KnowledgeEdge = typeof edges.$inferSelect;
+/** Input type for creating a new KnowledgeEdge. */
+export type NewKnowledgeEdge = typeof edges.$inferInsert;
 
 /** Database schema definitions for all Copilotz entities. */
 export const schema: typeof schemaInternal = schemaInternal;

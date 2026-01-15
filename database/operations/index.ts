@@ -12,6 +12,10 @@ import type {
   NewDocument,
   DocumentChunk,
   NewDocumentChunk,
+  KnowledgeNode,
+  NewKnowledgeNode,
+  KnowledgeEdge,
+  NewKnowledgeEdge,
 } from "../schemas/index.ts";
 import type { DbInstance } from "../index.ts";
 
@@ -75,6 +79,48 @@ export interface NamespaceStats {
   lastUpdated: Date | null;
 }
 
+// ============================================
+// KNOWLEDGE GRAPH TYPES
+// ============================================
+
+/** Options for querying the knowledge graph */
+export interface GraphQueryOptions {
+  /** Natural language query for semantic search */
+  query?: string;
+  /** Pre-computed embedding vector */
+  embedding?: number[];
+  /** Namespace(s) to search within */
+  namespaces?: string[];
+  /** Filter by node types (e.g., 'chunk', 'entity', 'concept') */
+  nodeTypes?: string[];
+  /** Edge types to traverse (e.g., 'mentions', 'caused') */
+  edgeTypes?: string[];
+  /** Maximum traversal depth (0 = vector search only) */
+  maxDepth?: number;
+  /** Maximum number of results */
+  limit?: number;
+  /** Minimum similarity threshold for vector search */
+  minSimilarity?: number;
+}
+
+/** Result from graph retrieval */
+export interface GraphQueryResult {
+  /** The retrieved node */
+  node: KnowledgeNode;
+  /** Similarity score (if from vector search) */
+  similarity?: number;
+  /** Depth from seed node (0 = seed itself) */
+  depth: number;
+  /** Path of edge types from seed to this node */
+  path: string[];
+}
+
+/** Result from graph traversal */
+export interface TraversalResult {
+  nodes: KnowledgeNode[];
+  edges: KnowledgeEdge[];
+}
+
 export interface DatabaseOperations {
   crud: DbInstance["crud"];
   addToQueue: (threadId: string, event: QueueEventInput) => Promise<NewQueue>;
@@ -108,7 +154,7 @@ export interface DatabaseOperations {
   getUserByExternalId: (externalId: string) => Promise<User | undefined>;
   archiveThread: (threadId: string, summary: string) => Promise<Thread | null>;
   
-  // RAG operations
+  // RAG operations (legacy - use graph operations for new code)
   createDocument: (doc: Omit<NewDocument, "id"> & { id?: string }) => Promise<Document>;
   getDocumentById: (id: string) => Promise<Document | undefined>;
   getDocumentByHash: (hash: string, namespace: string) => Promise<Document | undefined>;
@@ -118,6 +164,31 @@ export interface DatabaseOperations {
   searchChunks: (options: ChunkSearchOptions) => Promise<ChunkSearchResult[]>;
   getNamespaceStats: () => Promise<NamespaceStats[]>;
   deleteChunksByDocumentId: (documentId: string) => Promise<void>;
+
+  // ============================================
+  // KNOWLEDGE GRAPH OPERATIONS
+  // ============================================
+  
+  // Node CRUD
+  createNode: (node: Omit<NewKnowledgeNode, "id"> & { id?: string }) => Promise<KnowledgeNode>;
+  createNodes: (nodes: Array<Omit<NewKnowledgeNode, "id"> & { id?: string }>) => Promise<KnowledgeNode[]>;
+  getNodeById: (id: string) => Promise<KnowledgeNode | undefined>;
+  getNodesByNamespace: (namespace: string, type?: string) => Promise<KnowledgeNode[]>;
+  updateNode: (id: string, updates: Partial<NewKnowledgeNode>) => Promise<KnowledgeNode | undefined>;
+  deleteNode: (id: string) => Promise<void>;
+  deleteNodesBySource: (sourceType: string, sourceId: string) => Promise<void>;
+  
+  // Edge CRUD
+  createEdge: (edge: Omit<NewKnowledgeEdge, "id"> & { id?: string }) => Promise<KnowledgeEdge>;
+  createEdges: (edges: Array<Omit<NewKnowledgeEdge, "id"> & { id?: string }>) => Promise<KnowledgeEdge[]>;
+  getEdgesForNode: (nodeId: string, direction?: "in" | "out" | "both", types?: string[]) => Promise<KnowledgeEdge[]>;
+  deleteEdge: (id: string) => Promise<void>;
+  deleteEdgesForNode: (nodeId: string) => Promise<void>;
+  
+  // Graph queries
+  searchNodes: (options: GraphQueryOptions) => Promise<GraphQueryResult[]>;
+  traverseGraph: (startNodeId: string, edgeTypes?: string[], maxDepth?: number) => Promise<TraversalResult>;
+  findRelatedNodes: (nodeId: string, depth?: number) => Promise<KnowledgeNode[]>;
 }
 
 const toIsoString = (
@@ -743,6 +814,379 @@ export function createOperations(db: DbInstance): DatabaseOperations {
     }));
   };
 
+  // ============================================
+  // KNOWLEDGE GRAPH OPERATIONS
+  // ============================================
+
+  const createNode = async (
+    node: Omit<NewKnowledgeNode, "id"> & { id?: string }
+  ): Promise<KnowledgeNode> => {
+    // Use raw SQL for vector embedding support
+    const embeddingStr = node.embedding ? `[${node.embedding.join(",")}]` : null;
+    
+    const result = await db.query<KnowledgeNode>(
+      `INSERT INTO "nodes" (
+        "namespace", "type", "name", "embedding", "content", "data", 
+        "source_type", "source_id", "created_at", "updated_at"
+      ) VALUES (
+        $1, $2, $3, $4::vector, $5, $6, $7, $8, NOW(), NOW()
+      ) RETURNING *`,
+      [
+        node.namespace,
+        node.type,
+        node.name,
+        embeddingStr,
+        node.content ?? null,
+        node.data ?? {},
+        node.sourceType ?? null,
+        node.sourceId ?? null,
+      ]
+    );
+    return result.rows[0];
+  };
+
+  const createNodes = async (
+    nodes: Array<Omit<NewKnowledgeNode, "id"> & { id?: string }>
+  ): Promise<KnowledgeNode[]> => {
+    if (nodes.length === 0) return [];
+    
+    const created: KnowledgeNode[] = [];
+    for (const node of nodes) {
+      const result = await createNode(node);
+      created.push(result);
+    }
+    return created;
+  };
+
+  const getNodeById = async (id: string): Promise<KnowledgeNode | undefined> => {
+    const result = await db.query<KnowledgeNode>(
+      `SELECT * FROM "nodes" WHERE "id" = $1`,
+      [id]
+    );
+    return result.rows[0];
+  };
+
+  const getNodesByNamespace = async (
+    namespace: string,
+    type?: string
+  ): Promise<KnowledgeNode[]> => {
+    if (type) {
+      const result = await db.query<KnowledgeNode>(
+        `SELECT * FROM "nodes" WHERE "namespace" = $1 AND "type" = $2 ORDER BY "created_at" DESC`,
+        [namespace, type]
+      );
+      return result.rows;
+    }
+    const result = await db.query<KnowledgeNode>(
+      `SELECT * FROM "nodes" WHERE "namespace" = $1 ORDER BY "created_at" DESC`,
+      [namespace]
+    );
+    return result.rows;
+  };
+
+  const updateNode = async (
+    id: string,
+    updates: Partial<NewKnowledgeNode>
+  ): Promise<KnowledgeNode | undefined> => {
+    const setClauses: string[] = [`"updated_at" = NOW()`];
+    const params: unknown[] = [];
+    let paramIdx = 1;
+
+    if (updates.namespace !== undefined) {
+      setClauses.push(`"namespace" = $${paramIdx++}`);
+      params.push(updates.namespace);
+    }
+    if (updates.type !== undefined) {
+      setClauses.push(`"type" = $${paramIdx++}`);
+      params.push(updates.type);
+    }
+    if (updates.name !== undefined) {
+      setClauses.push(`"name" = $${paramIdx++}`);
+      params.push(updates.name);
+    }
+    if (updates.embedding !== undefined) {
+      setClauses.push(`"embedding" = $${paramIdx++}::vector`);
+      params.push(updates.embedding ? `[${updates.embedding.join(",")}]` : null);
+    }
+    if (updates.content !== undefined) {
+      setClauses.push(`"content" = $${paramIdx++}`);
+      params.push(updates.content);
+    }
+    if (updates.data !== undefined) {
+      setClauses.push(`"data" = $${paramIdx++}`);
+      params.push(updates.data);
+    }
+    if (updates.sourceType !== undefined) {
+      setClauses.push(`"source_type" = $${paramIdx++}`);
+      params.push(updates.sourceType);
+    }
+    if (updates.sourceId !== undefined) {
+      setClauses.push(`"source_id" = $${paramIdx++}`);
+      params.push(updates.sourceId);
+    }
+
+    params.push(id);
+    
+    const result = await db.query<KnowledgeNode>(
+      `UPDATE "nodes" SET ${setClauses.join(", ")} WHERE "id" = $${paramIdx} RETURNING *`,
+      params
+    );
+    return result.rows[0];
+  };
+
+  const deleteNode = async (id: string): Promise<void> => {
+    await db.query(`DELETE FROM "nodes" WHERE "id" = $1`, [id]);
+  };
+
+  const deleteNodesBySource = async (
+    sourceType: string,
+    sourceId: string
+  ): Promise<void> => {
+    await db.query(
+      `DELETE FROM "nodes" WHERE "source_type" = $1 AND "source_id" = $2`,
+      [sourceType, sourceId]
+    );
+  };
+
+  const createEdge = async (
+    edge: Omit<NewKnowledgeEdge, "id"> & { id?: string }
+  ): Promise<KnowledgeEdge> => {
+    const result = await db.query<KnowledgeEdge>(
+      `INSERT INTO "edges" (
+        "source_node_id", "target_node_id", "type", "data", "weight", "created_at"
+      ) VALUES (
+        $1, $2, $3, $4, $5, NOW()
+      ) RETURNING *`,
+      [
+        edge.sourceNodeId,
+        edge.targetNodeId,
+        edge.type,
+        edge.data ?? {},
+        edge.weight ?? 1.0,
+      ]
+    );
+    return result.rows[0];
+  };
+
+  const createEdges = async (
+    edges: Array<Omit<NewKnowledgeEdge, "id"> & { id?: string }>
+  ): Promise<KnowledgeEdge[]> => {
+    if (edges.length === 0) return [];
+    
+    const created: KnowledgeEdge[] = [];
+    for (const edge of edges) {
+      const result = await createEdge(edge);
+      created.push(result);
+    }
+    return created;
+  };
+
+  const getEdgesForNode = async (
+    nodeId: string,
+    direction: "in" | "out" | "both" = "both",
+    types?: string[]
+  ): Promise<KnowledgeEdge[]> => {
+    let whereClause = "";
+    const params: unknown[] = [nodeId];
+    
+    if (direction === "out") {
+      whereClause = `"source_node_id" = $1`;
+    } else if (direction === "in") {
+      whereClause = `"target_node_id" = $1`;
+    } else {
+      whereClause = `("source_node_id" = $1 OR "target_node_id" = $1)`;
+    }
+    
+    if (types && types.length > 0) {
+      params.push(types);
+      whereClause += ` AND "type" = ANY($${params.length})`;
+    }
+    
+    type EdgeRow = {
+      id: string;
+      source_node_id: string;
+      target_node_id: string;
+      type: string;
+      data: Record<string, unknown> | null;
+      weight: number | null;
+      created_at: Date;
+    };
+    
+    const result = await db.query<EdgeRow>(
+      `SELECT * FROM "edges" WHERE ${whereClause} ORDER BY "created_at" DESC`,
+      params
+    );
+    
+    // Convert snake_case to camelCase
+    return result.rows.map(row => ({
+      id: row.id,
+      sourceNodeId: row.source_node_id,
+      targetNodeId: row.target_node_id,
+      type: row.type,
+      data: row.data,
+      weight: row.weight,
+      createdAt: row.created_at,
+    }));
+  };
+
+  const deleteEdge = async (id: string): Promise<void> => {
+    await db.query(`DELETE FROM "edges" WHERE "id" = $1`, [id]);
+  };
+
+  const deleteEdgesForNode = async (nodeId: string): Promise<void> => {
+    await db.query(
+      `DELETE FROM "edges" WHERE "source_node_id" = $1 OR "target_node_id" = $1`,
+      [nodeId]
+    );
+  };
+
+  const searchNodes = async (
+    options: GraphQueryOptions
+  ): Promise<GraphQueryResult[]> => {
+    const { 
+      embedding, 
+      namespaces, 
+      nodeTypes, 
+      limit = 10, 
+      minSimilarity = 0.5 
+    } = options;
+
+    if (!embedding || embedding.length === 0) {
+      // No embedding provided, return empty (or could do a text search)
+      return [];
+    }
+
+    const params: unknown[] = [`[${embedding.join(",")}]`];
+    let namespaceClause = "";
+    let typeClause = "";
+
+    if (namespaces && namespaces.length > 0) {
+      params.push(namespaces);
+      namespaceClause = `AND "namespace" = ANY($${params.length})`;
+    }
+
+    if (nodeTypes && nodeTypes.length > 0) {
+      params.push(nodeTypes);
+      typeClause = `AND "type" = ANY($${params.length})`;
+    }
+
+    params.push(minSimilarity);
+    const thresholdIdx = params.length;
+
+    params.push(limit);
+    const limitIdx = params.length;
+
+    const result = await db.query<KnowledgeNode & { similarity: number }>(
+      `SELECT 
+        *,
+        1 - ("embedding" <=> $1::vector) as similarity
+      FROM "nodes"
+      WHERE "embedding" IS NOT NULL
+        AND 1 - ("embedding" <=> $1::vector) > $${thresholdIdx}
+        ${namespaceClause}
+        ${typeClause}
+      ORDER BY "embedding" <=> $1::vector
+      LIMIT $${limitIdx}`,
+      params
+    );
+
+    return result.rows.map((row) => ({
+      node: row,
+      similarity: row.similarity,
+      depth: 0,
+      path: [],
+    }));
+  };
+
+  const traverseGraph = async (
+    startNodeId: string,
+    edgeTypes?: string[],
+    maxDepth: number = 2
+  ): Promise<TraversalResult> => {
+    // Iterative BFS traversal (compatible with PGLite)
+    const visited = new Set<string>();
+    const allNodes: KnowledgeNode[] = [];
+    const allEdges: KnowledgeEdge[] = [];
+    let frontier = [startNodeId];
+
+    // Raw SQL result type with snake_case columns
+    type EdgeRow = {
+      id: string;
+      source_node_id: string;
+      target_node_id: string;
+      type: string;
+      data: Record<string, unknown> | null;
+      weight: number | null;
+      created_at: Date;
+    };
+
+    for (let depth = 0; depth <= maxDepth && frontier.length > 0; depth++) {
+      // Get nodes at current frontier
+      const nodeResult = await db.query<KnowledgeNode>(
+        `SELECT * FROM "nodes" WHERE "id" = ANY($1)`,
+        [frontier]
+      );
+      
+      for (const node of nodeResult.rows) {
+        if (!visited.has(node.id as string)) {
+          visited.add(node.id as string);
+          allNodes.push(node);
+        }
+      }
+
+      if (depth >= maxDepth) break;
+
+      // Get edges from frontier nodes
+      let edgeQuery = `
+        SELECT * FROM "edges" 
+        WHERE ("source_node_id" = ANY($1) OR "target_node_id" = ANY($1))
+      `;
+      const params: unknown[] = [frontier];
+
+      if (edgeTypes && edgeTypes.length > 0) {
+        params.push(edgeTypes);
+        edgeQuery += ` AND "type" = ANY($2)`;
+      }
+
+      const edgeResult = await db.query<EdgeRow>(edgeQuery, params);
+
+      // Collect next frontier
+      const nextFrontier = new Set<string>();
+      for (const row of edgeResult.rows) {
+        // Convert snake_case to camelCase for KnowledgeEdge type
+        const edge: KnowledgeEdge = {
+          id: row.id,
+          sourceNodeId: row.source_node_id,
+          targetNodeId: row.target_node_id,
+          type: row.type,
+          data: row.data,
+          weight: row.weight,
+          createdAt: row.created_at,
+        };
+        
+        if (!allEdges.some(e => e.id === edge.id)) {
+          allEdges.push(edge);
+        }
+        // Add connected nodes to next frontier
+        if (!visited.has(edge.sourceNodeId)) nextFrontier.add(edge.sourceNodeId);
+        if (!visited.has(edge.targetNodeId)) nextFrontier.add(edge.targetNodeId);
+      }
+
+      frontier = Array.from(nextFrontier);
+    }
+
+    return { nodes: allNodes, edges: allEdges };
+  };
+
+  const findRelatedNodes = async (
+    nodeId: string,
+    depth: number = 1
+  ): Promise<KnowledgeNode[]> => {
+    const result = await traverseGraph(nodeId, undefined, depth);
+    // Exclude the starting node
+    return result.nodes.filter(n => n.id !== nodeId);
+  };
+
   return {
     crud,
     addToQueue,
@@ -760,7 +1204,7 @@ export function createOperations(db: DbInstance): DatabaseOperations {
     createTask,
     getUserByExternalId,
     archiveThread,
-    // RAG operations
+    // RAG operations (legacy)
     createDocument,
     getDocumentById,
     getDocumentByHash,
@@ -770,5 +1214,21 @@ export function createOperations(db: DbInstance): DatabaseOperations {
     searchChunks,
     getNamespaceStats,
     deleteChunksByDocumentId,
+    // Knowledge graph operations
+    createNode,
+    createNodes,
+    getNodeById,
+    getNodesByNamespace,
+    updateNode,
+    deleteNode,
+    deleteNodesBySource,
+    createEdge,
+    createEdges,
+    getEdgesForNode,
+    deleteEdge,
+    deleteEdgesForNode,
+    searchNodes,
+    traverseGraph,
+    findRelatedNodes,
   };
 }

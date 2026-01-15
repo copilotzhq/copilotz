@@ -166,6 +166,9 @@ export function createMemoryAssetStore(config: AssetConfig = {}): AssetStore {
  * 
  * Use this when you want to receive ASSET_CREATED events with full base64/dataUrl
  * but handle persistence yourself (e.g., upload to your own CDN, S3, database).
+ * 
+ * Note: When using `backend: "passthrough"`, the framework automatically sets
+ * `resolveInLLM: false` since assets are deleted after ASSET_CREATED emission.
  */
 export function createPassthroughAssetStore(config: AssetConfig = {}): AssetStore {
 	const byId = new Map<AssetId, { bytes: Uint8Array; mime: string; createdAt: Date }>();

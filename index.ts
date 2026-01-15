@@ -464,10 +464,23 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
         baseConfig.customProcessorsByType = byType;
     }
 
+    // Normalize asset config: passthrough backend implies resolveInLLM: false
+    let normalizedAssetConfig: AssetConfig | undefined = undefined;
+    if (config.assets?.config) {
+        const srcConfig = config.assets.config;
+        normalizedAssetConfig = {
+            inlineThresholdBytes: srcConfig.inlineThresholdBytes,
+            resolveInLLM: srcConfig.backend === "passthrough" ? false : srcConfig.resolveInLLM,
+            backend: srcConfig.backend,
+            fs: srcConfig.fs,
+            s3: srcConfig.s3,
+        };
+    }
+
     // Single asset store instance per Copilotz
     const assetStoreInstance = (config.assets && config.assets.store)
         ? config.assets.store
-        : (config.assets?.config ? createAssetStore(config.assets.config) : createMemoryAssetStore());
+        : (normalizedAssetConfig ? createAssetStore(normalizedAssetConfig) : createMemoryAssetStore());
 
     const performRun = async (
         message: MessagePayload,
@@ -491,7 +504,7 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
             activeTaskId: baseConfig.activeTaskId,
             customProcessors: baseConfig.customProcessorsByType,
             assetStore: assetStoreInstance,
-            assetConfig: config.assets?.config,
+            assetConfig: normalizedAssetConfig,
             resolveAsset: async (ref: string) => {
                 const id = ref.startsWith("asset://") ? ref.slice("asset://".length) : ref;
                 return await assetStoreInstance.get(id);

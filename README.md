@@ -80,7 +80,7 @@ listenable and overwritable via callbacks in copilotz.run()
 # Add to your deno.json imports
 {
   "imports": {
-    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.7.0"
+    "@copilotz/copilotz": "jsr:@copilotz/copilotz"
   }
 }
 ```
@@ -332,7 +332,7 @@ Backends:
 - **memory** (default): In-memory store, returns data URLs, does not persist across restarts.
 - **fs**: Filesystem-backed store. Requires `fs.rootDir`. Optionally set `fs.baseUrl` for public URLs.
 - **s3**: S3-compatible store. Requires `s3.bucket` and `s3.connector`. Optionally set `s3.publicBaseUrl` or use connector's signed URLs.
-- **passthrough**: Fire-once store for streaming assets without persistence. Assets are extracted, `ASSET_CREATED` events are emitted with full `base64`/`dataUrl`, then data is immediately discarded. Use when you want to handle storage yourself via event listeners.
+- **passthrough**: Fire-once store for streaming assets without persistence. Assets are extracted, `ASSET_CREATED` events are emitted with full `base64`/`dataUrl`, then data is immediately discarded. Automatically sets `resolveInLLM: false` since assets are deleted after emission. Use when you want to handle storage yourself via event listeners.
 
 Defaults:
 - When `resolveInLLM` is true, attachments resolve to provider-specific parts (image_url/file/input_audio).
@@ -397,6 +397,7 @@ const copilotz = await createCopilotz({
     config: { backend: "passthrough" },
   },
 });
+// Note: resolveInLLM is automatically set to false for passthrough
 
 // Then handle assets in your event loop:
 const handle = await copilotz.run(message);

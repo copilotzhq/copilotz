@@ -164,6 +164,9 @@ export const ragIngestProcessor: EventProcessor<RagIngestPayload, ProcessorDeps>
       }
 
       // Step 7: Store chunks with embeddings
+      // Dual-write: document_chunks table (legacy) + nodes table (new)
+      
+      // Legacy: Create chunks in document_chunks table
       await ops.createChunks(
         allChunksWithEmbeddings.map((chunk) => ({
           documentId: document.id,
@@ -176,6 +179,49 @@ export const ragIngestProcessor: EventProcessor<RagIngestPayload, ProcessorDeps>
           endPosition: chunk.endPosition,
         })),
       );
+
+      // New: Create chunks as nodes in graph
+      try {
+        const chunkNodes: Array<{ id: string; chunkIndex: number }> = [];
+        
+        for (const chunk of allChunksWithEmbeddings) {
+          const node = await ops.createNode({
+            namespace,
+            type: "chunk",
+            name: `${document.id}:${chunk.chunkIndex}`,
+            content: chunk.content,
+            embedding: chunk.embedding,
+            data: {
+              documentId: document.id,
+              chunkIndex: chunk.chunkIndex,
+              tokenCount: chunk.tokenCount,
+              startPosition: chunk.startPosition,
+              endPosition: chunk.endPosition,
+              title,
+            },
+            sourceType: "document",
+            sourceId: document.id,
+          });
+          
+          chunkNodes.push({ 
+            id: node.id as string, 
+            chunkIndex: chunk.chunkIndex 
+          });
+        }
+
+        // Create NEXT_CHUNK edges between sequential chunks
+        chunkNodes.sort((a, b) => a.chunkIndex - b.chunkIndex);
+        for (let i = 0; i < chunkNodes.length - 1; i++) {
+          await ops.createEdge({
+            sourceNodeId: chunkNodes[i].id,
+            targetNodeId: chunkNodes[i + 1].id,
+            type: "NEXT_CHUNK",
+          });
+        }
+      } catch (nodeError) {
+        // Log but don't fail - document_chunks write succeeded
+        console.warn("[RAG_INGEST] Failed to create chunk nodes:", nodeError);
+      }
 
       // Step 8: Update document status
       await ops.updateDocumentStatus(document.id, "indexed", undefined, chunks.length);

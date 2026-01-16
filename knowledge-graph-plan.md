@@ -187,7 +187,7 @@ interface KnowledgeOperations {
 
 ---
 
-## Phase 3: Messages as Nodes ⏳
+## Phase 3: Messages as Nodes ✅ COMPLETE
 
 ### The Shift
 Messages move from a separate table to nodes in the graph.
@@ -227,61 +227,202 @@ await ops.createEdge({
 ```
 
 ### Backward Compatibility
-- Keep `messages` table as read-only view on nodes(type='message')
-- OR dual-write during migration period
-- `getMessageHistory()` → queries nodes, returns in message format
+- Dual-write: `createMessage()` writes to both `messages` table and `nodes` table
+- `getMessageHistory()` reads from `nodes` table (graph is source of truth)
+- Thread hierarchy and participant permissions still enforced via `threads` table
 
 ### Tasks
-- [ ] Update NEW_MESSAGE processor to create message nodes
-- [ ] Add REPLIED_BY edges between sequential messages
-- [ ] Create backward-compatible message query operations
-- [ ] Migrate or dual-write existing messages
+- [x] Update createMessage to dual-write (messages table + nodes)
+- [x] Add REPLIED_BY edges between sequential messages
+- [x] Create backward-compatible message query operations (getMessageHistoryFromGraph)
+- [x] Add getLastMessageNode for edge creation
+- [x] **Switch getMessageHistory to read from graph** (hybrid approach)
+- [x] Tests passing (25 tests)
 
 ---
 
-## Phase 4: Unified Extraction ⏳
+## Phase 4: Unified Extraction ✅ COMPLETE
 
 ### All Content → Nodes + Edges
 
 ```typescript
-// Document ingestion
-Document → [chunk nodes] + [entity nodes] + [edges]
+// Document ingestion - IMPLEMENTED
+Document → [chunk nodes] + [NEXT_CHUNK edges]
 
-// Message processing  
-Message → [message node] + [entity nodes] + [edges]
+// Message processing - IMPLEMENTED  
+Message → [message node] + [REPLIED_BY edges]
 
 // Future: Code files
 File → [symbol nodes] + [edges]
 ```
 
-### Extraction Utility
-```typescript
-interface ExtractionResult {
-  nodes: NewKnowledgeNode[];
-  edges: NewKnowledgeEdge[];
-}
+### What's Implemented
 
-// Document extraction: chunk + embed + (optional) entity extraction
-async function extractFromDocument(content: string, ctx): Promise<ExtractionResult>;
+**RAG_INGEST Dual-Write** (`event-processors/rag_ingest/index.ts`):
+- Document ingestion now creates chunks in BOTH:
+  - Legacy `document_chunks` table (backward compatibility)
+  - New `nodes` table with `type='chunk'`
+- Creates `NEXT_CHUNK` edges between sequential chunks
 
-// Message extraction: embed + (optional) entity extraction
-async function extractFromMessage(content: string, ctx): Promise<ExtractionResult>;
-```
+**Chunk-as-Node Operations** (`database/operations/index.ts`):
+- `searchChunksFromGraph`: Vector search on chunk nodes
 
-### Entity Extraction (Optional Enhancement)
-- LLM-based extraction of concepts, decisions, facts
-- Creates additional nodes linked to source (chunk or message)
-- Enables richer graph traversal
+**Tests** (`examples/chunk-as-node-test.ts`):
+- 8 tests verifying chunk node creation, embedding, edges, search, and cleanup
 
 ### Tasks
-- [ ] Update RAG_INGEST to create chunk nodes (not document_chunks)
-- [ ] Add optional entity extraction during ingestion
-- [ ] Add optional entity extraction during message processing
-- [ ] Implement entity deduplication/merge logic
+- [x] Update RAG_INGEST to create chunk nodes (dual-write)
+- [x] Add NEXT_CHUNK edges between sequential chunks
+- [x] Implement searchChunksFromGraph operation
+- [x] Tests passing (8 tests)
 
 ---
 
-## Phase 5: Advanced Features (Future)
+## Phase 5: Entity Extraction ✅ COMPLETE
+
+### Overview
+
+Extract semantic entities (concepts, decisions, people, etc.) from messages and chunks,
+creating a richer knowledge graph with cross-referenced concepts.
+
+### Architecture
+
+```
+NEW_MESSAGE processor
+       │
+       ├──> Create message node (sync, fast)
+       │
+       └──> Emit ENTITY_EXTRACT event (async)
+                   │
+                   ▼
+       ┌─────────────────────────┐
+       │  1. LLM Extraction      │  ← Extract entities from content
+       └───────────┬─────────────┘
+                   │
+                   ▼ (for each entity)
+       ┌─────────────────────────┐
+       │  2. Semantic Search     │  ← Find similar existing entities
+       └───────────┬─────────────┘
+                   │
+           ┌───────┴───────┐
+           │               │
+           ▼               ▼
+       No match         Match found
+       (< 0.95)         (≥ 0.95)
+           │               │
+           ▼               │
+       Create new         │
+       entity node        ├── ≥0.99: Auto-merge (skip LLM)
+                          │
+                          └── ≥0.95: LLM Confirm
+                                      │
+                              ┌───────┴───────┐
+                              │               │
+                              ▼               ▼
+                          "Same"         "Different"
+                              │               │
+                              ▼               ▼
+                          Merge +         Create new +
+                          add alias       RELATED_TO edge
+```
+
+### Deduplication Strategy
+
+| Similarity | Action |
+|------------|--------|
+| ≥ 0.99 | Auto-merge (high confidence) |
+| ≥ 0.95 | LLM confirms if same entity |
+| < 0.95 | Create new entity |
+
+**Merge behavior**: Reuse existing entity node, track aliases in `data.aliases[]`
+
+### Namespace Strategy
+
+**Instance-level prefix** (optional):
+```typescript
+const copilotz = createCopilotz({
+  namespacePrefix: "myapp",  // Optional, default: ""
+});
+```
+
+**Entity scope** (per-agent):
+```typescript
+entityExtraction: {
+  namespace: "agent",  // "thread" | "agent" | "global"
+}
+```
+
+**Resolution**:
+```
+prefix + scope + id → "myapp:agent:support-bot"
+```
+
+| Scope | Resolved Namespace |
+|-------|-------------------|
+| thread | `{prefix}:thread:{threadId}` |
+| agent | `{prefix}:agent:{agentId}` |
+| global | `{prefix}:global` |
+
+### Configuration
+
+```typescript
+interface CopilotzConfig {
+  namespacePrefix?: string;  // Optional isolation prefix
+  // ...
+}
+
+interface EntityExtractionConfig {
+  enabled: boolean;                           // Default: false
+  similarityThreshold?: number;               // Default: 0.95
+  autoMergeThreshold?: number;                // Default: 0.99
+  namespace?: "thread" | "agent" | "global";  // Default: "agent"
+  entityTypes?: string[];                     // e.g., ["concept", "decision", "person"]
+}
+
+// Per-agent configuration
+agent.ragOptions.entityExtraction = {
+  enabled: true,
+  namespace: "agent",
+};
+```
+
+### Entity Types (Open Vocabulary)
+
+Common types for AI agents:
+- `concept` — technical terms, ideas, topics
+- `decision` — agreed actions, conclusions
+- `task` — action items, todos
+- `person` — mentioned individuals
+- `tool` — APIs, services, resources
+- `fact` — stated truths or assertions
+
+Types are strings (open vocabulary), not enums.
+
+### Edge Types
+
+| Edge | Meaning |
+|------|---------|
+| `MENTIONS` | message/chunk → entity |
+| `SAME_AS` | entity ↔ entity (aliases) |
+| `RELATED_TO` | entity → entity (similar but different) |
+| `CAUSED` | decision → task |
+
+### Tasks
+- [x] Add ENTITY_EXTRACT event type and payload
+- [x] Create EntityExtractProcessor
+- [x] Implement LLM extraction prompt
+- [x] Add semantic search for entity dedup
+- [x] Implement LLM merge confirmation (≥0.99 auto-merge, ≥0.95 LLM confirm)
+- [x] Add alias tracking in entity data
+- [x] Add namespacePrefix to ChatContext
+- [x] Implement resolveNamespace utility
+- [x] Update agent config with entityExtraction options
+- [x] Update NEW_MESSAGE processor to emit ENTITY_EXTRACT events
+- [x] Tests (13 tests passing)
+
+---
+
+## Phase 6: Advanced Features (Future)
 
 ### Code Extractor
 - Parse AST for symbols
@@ -333,8 +474,9 @@ lib/
 |-------|--------|------|
 | 1. Unified Schema | ✅ Complete | Jan 15, 2026 |
 | 2. Unified Operations | ✅ Complete | Jan 15, 2026 |
-| 3. Messages as Nodes | ⏳ Pending | |
-| 4. Unified Extraction | ⏳ Pending | |
+| 3. Messages as Nodes | ✅ Complete | Jan 15, 2026 |
+| 4. Unified Extraction | ✅ Complete | Jan 15, 2026 |
+| 5. Entity Extraction | ✅ Complete | Jan 15, 2026 |
 
 ### Architectural Breakthrough (Jan 15, 2026)
 
@@ -358,4 +500,12 @@ Realized that the graph should BE the database, not a layer on top:
 
 **Tests** (`examples/knowledge-graph-test.ts`):
 - 23 tests covering all CRUD operations, vector search, graph traversal, and namespace queries
+
+**Chunk Nodes** (`event-processors/rag_ingest/index.ts`):
+- Dual-write: chunks → `document_chunks` table + `nodes` table
+- NEXT_CHUNK edges between sequential chunks
+- searchChunksFromGraph for graph-based retrieval
+
+**Tests** (`examples/chunk-as-node-test.ts`):
+- 8 tests covering chunk node creation, embedding, edges, search, and cleanup
 

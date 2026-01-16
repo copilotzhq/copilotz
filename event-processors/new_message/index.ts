@@ -20,6 +20,8 @@ import type {
     ToolCallEventPayload,
     AgentLlmOptionsResolverArgs,
 } from "@/interfaces/index.ts";
+import { resolveNamespace } from "@/interfaces/index.ts";
+import type { EntityExtractPayload } from "@/database/schemas/index.ts";
 
 // Import tool types from their source
 import type { ExecutableTool, ToolExecutor } from "@/event-processors/tool_call/types.ts";
@@ -214,12 +216,62 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
         };
 
         // Persist incoming message before processing
-        await ops.createMessage(incomingMsg);
+        const createdMessage = await ops.createMessage(incomingMsg);
+
+        // Emit ENTITY_EXTRACT event for agents with entity extraction enabled
+        const entityExtractEvents: Array<{ threadId: string; type: string; payload: unknown; parentEventId?: string; traceId?: string; priority?: number }> = [];
+        const agentsForExtraction = context.agents || [];
+        
+        for (const agent of agentsForExtraction) {
+            const entityConfig = agent.ragOptions?.entityExtraction;
+            if (entityConfig?.enabled && persistedContent.trim()) {
+                try {
+                    const agentIdStr = typeof agent.id === "string" ? agent.id : agent.name;
+                    const entityNamespace = resolveNamespace(
+                        entityConfig.namespace ?? "agent",
+                        { threadId, agentId: agentIdStr },
+                        context.namespacePrefix
+                    );
+
+                    // Get the message node ID (from the dual-write)
+                    // The message node uses the same namespace as the thread
+                    const messageNodes = await ops.getNodesByNamespace(threadId, "message");
+                    const messageNode = messageNodes.find(n => {
+                        const data = n.data as Record<string, unknown> | null;
+                        return data?.messageId === createdMessage.id;
+                    });
+
+                    if (messageNode) {
+                        const extractPayload: EntityExtractPayload = {
+                            sourceNodeId: messageNode.id as string,
+                            content: persistedContent,
+                            namespace: entityNamespace,
+                            sourceType: "message",
+                            sourceContext: {
+                                threadId,
+                                agentId: agentIdStr,
+                            },
+                        };
+
+                        entityExtractEvents.push({
+                            threadId,
+                            type: "ENTITY_EXTRACT",
+                            payload: extractPayload,
+                            parentEventId: typeof event.id === "string" ? event.id : undefined,
+                            traceId: typeof event.traceId === "string" ? event.traceId : undefined,
+                            priority: 0, // Low priority - runs async after main processing
+                        });
+                    }
+                } catch (err) {
+                    console.warn(`[NEW_MESSAGE] Failed to queue entity extraction for agent "${agent.name}":`, err);
+                }
+            }
+        }
 
         // Allow custom processors to emit follow-up NEW_MESSAGE events that should not trigger default routing/LLM
         const skipRouting = !!(messageMetadata && typeof messageMetadata === "object" && (messageMetadata as { skipRouting?: unknown }).skipRouting === true);
         if (skipRouting) {
-            return { producedEvents: [] };
+            return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
         }
 
         // Resolve targets
@@ -370,7 +422,8 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
 
         }
 
-        return { producedEvents };
+        // Add entity extraction events (low priority, runs after main processing)
+        return { producedEvents: [...producedEvents, ...(entityExtractEvents as unknown as NewEvent[])] };
     }
 };
 

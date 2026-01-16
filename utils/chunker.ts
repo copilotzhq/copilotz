@@ -5,14 +5,12 @@
  * Uses tiktoken for accurate token counting.
  */
 
-import { Tiktoken } from "js-tiktoken";
-
-// cl100k_base is used by text-embedding-3-* models
-const encoder = new Tiktoken({
-  bpe_ranks: "cl100k_base",
-  special_tokens: {},
-  pat_str: "",
-});
+/**
+ * Token counting using character-based approximation.
+ * OpenAI's cl100k_base tokenizer averages ~4 characters per token for English.
+ * This is a lightweight approximation that avoids bundling large BPE tables.
+ */
+const CHARS_PER_TOKEN = 4;
 
 export interface ChunkMetadata {
   chunkIndex: number;
@@ -38,16 +36,12 @@ export interface ChunkerOptions {
 }
 
 /**
- * Count tokens in a text string using tiktoken
+ * Count tokens in a text string using character-based approximation.
+ * Uses ~4 characters per token which is typical for English text.
  */
 export function countTokens(text: string): number {
-  try {
-    const tokens = encoder.encode(text);
-    return tokens.length;
-  } catch {
-    // Fallback to rough estimation if encoding fails
-    return Math.ceil(text.length / 4);
-  }
+  if (!text) return 0;
+  return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
 /**

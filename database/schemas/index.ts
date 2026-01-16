@@ -11,6 +11,24 @@ export interface RagIngestPayload {
   forceReindex?: boolean;
 }
 
+// Entity Extract payload (used by entity_extract processor)
+export interface EntityExtractPayload {
+  /** The source node ID (message or chunk) to extract entities from */
+  sourceNodeId: string;
+  /** The content to extract entities from */
+  content: string;
+  /** The namespace scope for extracted entities */
+  namespace: string;
+  /** Source type for provenance tracking */
+  sourceType: "message" | "chunk";
+  /** Optional context about the source */
+  sourceContext?: {
+    threadId?: string;
+    agentId?: string;
+    documentId?: string;
+  };
+}
+
 const UUID_SCHEMA: JsonSchema = {
   type: "string",
 };
@@ -212,7 +230,7 @@ const NewMessageEventPayloadSchema = MessagePayloadSchema;
 export type NewMessageEventPayload = MessagePayload;
 
 // create ulid
-function generateId(): string { return ulid(); }
+export function generateId(): string { return ulid(); }
 
 const schemaDefinition = {
   agents: {

@@ -229,6 +229,22 @@ export interface RagConfig {
 }
 
 /**
+ * Configuration for entity extraction from messages and documents.
+ */
+export interface EntityExtractionConfig {
+    /** Whether entity extraction is enabled. Default: false. */
+    enabled: boolean;
+    /** Similarity threshold for dedup candidate matching. Default: 0.95. */
+    similarityThreshold?: number;
+    /** Threshold above which to auto-merge without LLM confirm. Default: 0.99. */
+    autoMergeThreshold?: number;
+    /** Namespace scope for extracted entities. Default: "agent". */
+    namespace?: "thread" | "agent" | "global";
+    /** Filter to specific entity types (open vocabulary). e.g., ["concept", "decision", "person"]. */
+    entityTypes?: string[];
+}
+
+/**
  * RAG options specific to an individual agent.
  */
 export interface AgentRagOptions {
@@ -240,6 +256,8 @@ export interface AgentRagOptions {
     ingestNamespace?: string;
     /** Number of chunks to auto-inject when mode is "auto". */
     autoInjectLimit?: number;
+    /** Entity extraction configuration. */
+    entityExtraction?: EntityExtractionConfig;
 }
 
 /**
@@ -296,6 +314,58 @@ export interface ChatContext {
     ragConfig?: RagConfig;
     /** Embedding configuration. */
     embeddingConfig?: EmbeddingConfig;
+    /** Optional namespace prefix for multi-tenancy isolation. */
+    namespacePrefix?: string;
+}
+
+/**
+ * Context for namespace resolution.
+ */
+export interface NamespaceResolutionContext {
+    /** Thread ID for thread-scoped namespaces. */
+    threadId?: string;
+    /** Agent ID for agent-scoped namespaces. */
+    agentId?: string;
+}
+
+/**
+ * Resolves a namespace based on scope and optional prefix.
+ * 
+ * @param scope - The scope level: "thread", "agent", or "global"
+ * @param context - Context containing threadId and agentId
+ * @param prefix - Optional namespace prefix for isolation
+ * @returns Resolved namespace string
+ * 
+ * @example
+ * ```ts
+ * resolveNamespace("agent", { agentId: "bot-1" }, "myapp")
+ * // Returns: "myapp:agent:bot-1"
+ * 
+ * resolveNamespace("thread", { threadId: "abc-123" })
+ * // Returns: "thread:abc-123"
+ * ```
+ */
+export function resolveNamespace(
+    scope: "thread" | "agent" | "global",
+    context: NamespaceResolutionContext,
+    prefix?: string
+): string {
+    const base = prefix ? `${prefix}:` : "";
+    
+    switch (scope) {
+        case "thread":
+            if (!context.threadId) {
+                throw new Error("threadId required for thread-scoped namespace");
+            }
+            return `${base}thread:${context.threadId}`;
+        case "agent":
+            if (!context.agentId) {
+                throw new Error("agentId required for agent-scoped namespace");
+            }
+            return `${base}agent:${context.agentId}`;
+        case "global":
+            return `${base}global`;
+    }
 }
 
 /**

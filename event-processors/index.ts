@@ -25,6 +25,7 @@ import { llmCallProcessor } from "./llm_call/index.ts";
 import { messageProcessor } from "./new_message/index.ts";
 import { toolCallProcessor } from "./tool_call/index.ts";
 import { ragIngestProcessor } from "./rag_ingest/index.ts";
+import { entityExtractProcessor } from "./entity_extract/index.ts";
 
 type EventType = Event["type"];
 
@@ -92,6 +93,7 @@ const processors: Record<string, EventProcessor<unknown, ProcessorDeps>> = {
     TOOL_CALL: toolCallProcessor,
     TOKEN: tokenProcessor,
     RAG_INGEST: ragIngestProcessor,
+    ENTITY_EXTRACT: entityExtractProcessor,
 };
 
 /**

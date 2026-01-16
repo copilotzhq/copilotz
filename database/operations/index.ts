@@ -18,6 +18,7 @@ import type {
   NewKnowledgeEdge,
 } from "../schemas/index.ts";
 import type { DbInstance } from "../index.ts";
+import { ulid } from "ulid";
 
 const MAX_EXPIRED_CLEANUP_BATCH = 100;
 const EXPIRED_RETENTION_INTERVAL = "1 day";
@@ -164,6 +165,24 @@ export interface DatabaseOperations {
   searchChunks: (options: ChunkSearchOptions) => Promise<ChunkSearchResult[]>;
   getNamespaceStats: () => Promise<NamespaceStats[]>;
   deleteChunksByDocumentId: (documentId: string) => Promise<void>;
+
+  // ============================================
+  // MESSAGE AS NODE OPERATIONS
+  // ============================================
+
+  // Create message as a node (used internally by createMessage)
+  createMessageNode: (message: MessageInsert, previousMessageId?: string) => Promise<KnowledgeNode>;
+  // Get message history from graph (nodes with type='message')
+  getMessageHistoryFromGraph: (threadId: string, limit?: number) => Promise<Message[]>;
+  // Get the last message node in a thread
+  getLastMessageNode: (threadId: string) => Promise<KnowledgeNode | undefined>;
+
+  // ============================================
+  // CHUNK AS NODE OPERATIONS
+  // ============================================
+
+  // Search chunks from graph (nodes with type='chunk')
+  searchChunksFromGraph: (options: ChunkSearchOptions) => Promise<ChunkSearchResult[]>;
 
   // ============================================
   // KNOWLEDGE GRAPH OPERATIONS
@@ -400,7 +419,13 @@ export function createOperations(db: DbInstance): DatabaseOperations {
   };
 
   const createMessage = async (message: MessageInsert): Promise<Message> => {
+    // Generate consistent ID for both stores
+    const messageId = message.id ?? ulid();
+    const messageWithId = { ...message, id: messageId };
+
+    // Dual-write: Create in messages table (legacy)
     const created = await crud.messages.create({
+      id: messageId,
       threadId: message.threadId,
       senderId: message.senderId,
       senderType: message.senderType,
@@ -411,6 +436,18 @@ export function createOperations(db: DbInstance): DatabaseOperations {
       toolCalls: message.toolCalls ?? undefined,
       metadata: message.metadata ?? undefined,
     });
+
+    // Dual-write: Create as node in graph (new source of truth)
+    try {
+      // Find previous message to create REPLIED_BY edge
+      const threadIdStr = message.threadId as string;
+      const lastMessage = await getLastMessageNode(threadIdStr);
+      await createMessageNode(messageWithId, lastMessage?.id as string | undefined);
+    } catch (error) {
+      // Log but don't fail - messages table write succeeded
+      console.warn('[createMessage] Failed to create message node:', error);
+    }
+
     return created as Message;
   };
 
@@ -424,14 +461,12 @@ export function createOperations(db: DbInstance): DatabaseOperations {
     let level = 0;
 
     while (currentThreadId) {
-
       const thread = await crud.threads.findOne({
         id: currentThreadId,
       }) as Thread | null;
       if (!thread || thread.status !== "active") {
         break;
       }
-
 
       const participants = Array.isArray(thread.participants)
         ? thread.participants.filter((participant: string): participant is string =>
@@ -442,12 +477,11 @@ export function createOperations(db: DbInstance): DatabaseOperations {
         break;
       }
 
-      const threadMessages = await crud.messages.find({
-        threadId: currentThreadId,
-      });
+      // Read messages from graph (nodes table) instead of messages table
+      const threadMessages = await getMessagesFromGraphForThread(currentThreadId);
 
       for (const msg of threadMessages) {
-        allMessages.push({ message: msg as Message, threadLevel: level });
+        allMessages.push({ message: msg, threadLevel: level });
       }
 
       const parentId: string | null = typeof thread.parentThreadId === "string"
@@ -455,7 +489,6 @@ export function createOperations(db: DbInstance): DatabaseOperations {
         : null;
 
       currentThreadId = parentId;
-
       level += 1;
     }
 
@@ -474,6 +507,201 @@ export function createOperations(db: DbInstance): DatabaseOperations {
     }
 
     return result;
+  };
+
+  // Helper: Get messages from graph for a specific thread (no limit, for hierarchy traversal)
+  const getMessagesFromGraphForThread = async (
+    threadId: string
+  ): Promise<Message[]> => {
+    const result = await db.query<Record<string, unknown>>(
+      `SELECT * FROM "nodes"
+       WHERE "namespace" = $1 AND "type" = 'message'
+       ORDER BY "created_at" ASC`,
+      [threadId]
+    );
+
+    return result.rows.map((node) => {
+      const data = (node.data ?? {}) as Record<string, unknown>;
+      return {
+        id: (data.messageId ?? node.id) as string,
+        threadId: node.namespace as string,
+        senderId: data.senderId as string,
+        senderType: data.senderType as Message["senderType"],
+        senderUserId: data.senderUserId as string | null,
+        externalId: data.externalId as string | null,
+        content: node.content as string,
+        toolCallId: data.toolCallId as string | null,
+        toolCalls: data.toolCalls as Message["toolCalls"],
+        metadata: data.metadata as Message["metadata"],
+        createdAt: node.created_at as Date ?? node.createdAt as Date,
+        updatedAt: node.updated_at as Date ?? node.updatedAt as Date,
+      } as Message;
+    });
+  };
+
+  // ============================================
+  // MESSAGE AS NODE OPERATIONS
+  // ============================================
+
+  const getLastMessageNode = async (
+    threadId: string
+  ): Promise<KnowledgeNode | undefined> => {
+    const result = await db.query<KnowledgeNode>(
+      `SELECT * FROM "nodes" 
+       WHERE "namespace" = $1 AND "type" = 'message'
+       ORDER BY "created_at" DESC
+       LIMIT 1`,
+      [threadId]
+    );
+    return result.rows[0];
+  };
+
+  const createMessageNode = async (
+    message: MessageInsert,
+    previousMessageId?: string
+  ): Promise<KnowledgeNode> => {
+    const messageId = (message.id ?? ulid()) as string;
+    const timestamp = new Date().toISOString();
+    const threadId = message.threadId as string;
+    const senderId = message.senderId as string;
+    const senderType = message.senderType as string;
+    
+    // Create message as node
+    const messageNode = await createNode({
+      namespace: threadId,
+      type: 'message',
+      name: `${senderType}:${senderId}:${timestamp}`,
+      content: (message.content ?? '') as string,
+      data: {
+        messageId,
+        senderId,
+        senderType,
+        senderUserId: message.senderUserId ?? null,
+        externalId: message.externalId ?? null,
+        toolCallId: message.toolCallId ?? null,
+        toolCalls: message.toolCalls ?? null,
+        metadata: message.metadata ?? null,
+      },
+      sourceType: 'thread',
+      sourceId: threadId,
+    });
+
+    // Create REPLIED_BY edge from previous message if provided
+    if (previousMessageId) {
+      await createEdge({
+        sourceNodeId: previousMessageId,
+        targetNodeId: messageNode.id as string,
+        type: 'REPLIED_BY',
+      });
+    }
+
+    return messageNode;
+  };
+
+  const getMessageHistoryFromGraph = async (
+    threadId: string,
+    limit = 50
+  ): Promise<Message[]> => {
+    // Query message nodes ordered by creation time
+    const result = await db.query<KnowledgeNode>(
+      `SELECT * FROM "nodes"
+       WHERE "namespace" = $1 AND "type" = 'message'
+       ORDER BY "created_at" ASC
+       LIMIT $2`,
+      [threadId, limit]
+    );
+
+    // Transform nodes back to Message format
+    return result.rows.map((node) => {
+      const data = (node.data ?? {}) as Record<string, unknown>;
+      return {
+        id: (data.messageId ?? node.id) as string,
+        threadId: node.namespace,
+        senderId: data.senderId as string,
+        senderType: data.senderType as Message["senderType"],
+        senderUserId: data.senderUserId as string | null,
+        externalId: data.externalId as string | null,
+        content: node.content,
+        toolCallId: data.toolCallId as string | null,
+        toolCalls: data.toolCalls as Message["toolCalls"],
+        metadata: data.metadata as Message["metadata"],
+        createdAt: node.createdAt,
+        updatedAt: node.updatedAt,
+      } as Message;
+    });
+  };
+
+  // ============================================
+  // CHUNK AS NODE OPERATIONS  
+  // ============================================
+
+  const searchChunksFromGraph = async (
+    options: ChunkSearchOptions
+  ): Promise<ChunkSearchResult[]> => {
+    const { embedding, namespaces, limit = 10, threshold = 0.5 } = options;
+
+    if (!embedding || embedding.length === 0) {
+      return [];
+    }
+
+    const params: unknown[] = [`[${embedding.join(",")}]`];
+    let namespaceClause = "";
+
+    if (namespaces && namespaces.length > 0) {
+      params.push(namespaces);
+      namespaceClause = `AND "namespace" = ANY($${params.length})`;
+    }
+
+    params.push(threshold);
+    const thresholdIdx = params.length;
+
+    params.push(limit);
+    const limitIdx = params.length;
+
+    const result = await db.query<{
+      id: string;
+      namespace: string;
+      content: string;
+      data: Record<string, unknown>;
+      similarity: number;
+      source_id: string;
+    }>(
+      `SELECT 
+        "id",
+        "namespace",
+        "content",
+        "data",
+        "source_id",
+        1 - ("embedding" <=> $1::vector) as similarity
+      FROM "nodes"
+      WHERE "type" = 'chunk'
+        AND "embedding" IS NOT NULL
+        AND 1 - ("embedding" <=> $1::vector) > $${thresholdIdx}
+        ${namespaceClause}
+      ORDER BY "embedding" <=> $1::vector
+      LIMIT $${limitIdx}`,
+      params
+    );
+
+    return result.rows.map((row) => {
+      const data = row.data ?? {};
+      return {
+        id: row.id,
+        content: row.content,
+        namespace: row.namespace,
+        chunkIndex: (data.chunkIndex ?? 0) as number,
+        similarity: row.similarity,
+        tokenCount: (data.tokenCount ?? null) as number | null,
+        metadata: data,
+        document: {
+          id: row.source_id ?? (data.documentId as string),
+          title: (data.title ?? null) as string | null,
+          sourceUri: null,
+          sourceType: "document",
+          mimeType: null,
+        },
+      };
+    });
   };
 
   const getThreadsForParticipant = async (
@@ -858,30 +1086,46 @@ export function createOperations(db: DbInstance): DatabaseOperations {
     return created;
   };
 
-  const getNodeById = async (id: string): Promise<KnowledgeNode | undefined> => {
-    const result = await db.query<KnowledgeNode>(
-      `SELECT * FROM "nodes" WHERE "id" = $1`,
-      [id]
-    );
-    return result.rows[0];
-  };
+  // Helper to map snake_case node rows to camelCase KnowledgeNode
+  const mapNodeRow = (row: Record<string, unknown>): KnowledgeNode => ({
+    id: row.id as string,
+    namespace: row.namespace as string,
+    type: row.type as string,
+    name: (row.name ?? '') as string,
+    content: row.content as string | null,
+    embedding: row.embedding as number[] | null,
+    data: row.data as Record<string, unknown> | null,
+    sourceType: (row.source_type ?? row.sourceType) as string | null,
+    sourceId: (row.source_id ?? row.sourceId) as string | null,
+    createdAt: row.created_at as Date ?? row.createdAt as Date,
+    updatedAt: row.updated_at as Date ?? row.updatedAt as Date,
+  });
 
   const getNodesByNamespace = async (
     namespace: string,
     type?: string
   ): Promise<KnowledgeNode[]> => {
     if (type) {
-      const result = await db.query<KnowledgeNode>(
+      const result = await db.query<Record<string, unknown>>(
         `SELECT * FROM "nodes" WHERE "namespace" = $1 AND "type" = $2 ORDER BY "created_at" DESC`,
         [namespace, type]
       );
-      return result.rows;
+      return result.rows.map(mapNodeRow);
     }
-    const result = await db.query<KnowledgeNode>(
+    const result = await db.query<Record<string, unknown>>(
       `SELECT * FROM "nodes" WHERE "namespace" = $1 ORDER BY "created_at" DESC`,
       [namespace]
     );
-    return result.rows;
+    return result.rows.map(mapNodeRow);
+  };
+
+  const getNodeById = async (id: string): Promise<KnowledgeNode | undefined> => {
+    const result = await db.query<Record<string, unknown>>(
+      `SELECT * FROM "nodes" WHERE "id" = $1`,
+      [id]
+    );
+    if (result.rows.length === 0) return undefined;
+    return mapNodeRow(result.rows[0]);
   };
 
   const updateNode = async (
@@ -1204,6 +1448,12 @@ export function createOperations(db: DbInstance): DatabaseOperations {
     createTask,
     getUserByExternalId,
     archiveThread,
+    // Message as node operations
+    createMessageNode,
+    getMessageHistoryFromGraph,
+    getLastMessageNode,
+    // Chunk as node operations
+    searchChunksFromGraph,
     // RAG operations (legacy)
     createDocument,
     getDocumentById,

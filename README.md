@@ -1,6 +1,6 @@
 # COPILOTZ
 
-[![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](https://github.com/yourusername/copilotz)
+[![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](https://github.com/yourusername/copilotz)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Deno](https://img.shields.io/badge/deno-%5E2.0-black.svg)](https://deno.land/)
 
@@ -11,12 +11,14 @@ Event-driven multi-agent AI framework for building production-grade conversation
 COPILOTZ is a TypeScript/Deno framework designed for developers building complex AI agent systems. It provides an event-driven architecture that handles message routing, LLM orchestration, tool execution, and conversation persistence through a PostgreSQL-backed queue system.
 
 **Key Differentiators:**
-- Event-driven processing with four core event types (NEW_MESSAGE, LLM_CALL, TOOL_CALL, TOKEN)
+- Event-driven processing with core event types (NEW_MESSAGE, LLM_CALL, TOOL_CALL, TOKEN, RAG_INGEST, ENTITY_EXTRACT)
 - Multi-agent coordination with fine-grained access control
 - Native support for multiple LLM providers (OpenAI, Anthropic, Google, Groq, DeepSeek, Ollama)
 - Built-in tool ecosystem: native tools, OpenAPI integration, and MCP protocol support
 - PostgreSQL/PGLite-backed persistence with type-safe database operations
 - Real-time streaming with configurable callbacks
+- **Unified Knowledge Graph**: Messages, documents, and entities in a single queryable graph
+- **RAG with Vector Search**: Document ingestion, chunking, and semantic retrieval via pgvector
 
 ## Architecture
 
@@ -67,6 +69,8 @@ listenable and overwritable via callbacks in copilotz.run()
 - **Event-Driven Processing**: Asynchronous queue-based event handling with customizable callbacks
 - **19 Native Tools**: File operations, system commands, HTTP requests, agent communication, task management, RAG
 - **RAG (Retrieval-Augmented Generation)**: Document ingestion, vector embeddings, semantic search with pgvector
+- **Unified Knowledge Graph**: Messages, documents, and entities connected in a queryable graph
+- **Entity Extraction**: LLM-based extraction with embedding deduplication and alias tracking
 - **OpenAPI Integration**: Auto-generate tools from OpenAPI 3.0 specifications
 - **MCP Protocol Support**: Connect to Model Context Protocol servers via stdio transport
 - **Persistent Threads**: Database-backed conversation history with participant tracking
@@ -170,7 +174,7 @@ await copilotz.shutdown();
 
 ### Event Types
 
-COPILOTZ processes four event types through its queue:
+COPILOTZ processes events through its queue:
 
 | Event Type | Purpose | Triggers |
 |------------|---------|----------|
@@ -178,6 +182,8 @@ COPILOTZ processes four event types through its queue:
 | `LLM_CALL` | Executes LLM requests with context | Agent activation, conversation history |
 | `TOOL_CALL` | Validates and executes tool calls | LLM-generated tool invocations |
 | `TOKEN` | Streams response tokens in real-time | LLM streaming responses |
+| `RAG_INGEST` | Processes document ingestion pipeline | `ingest_document` tool call |
+| `ENTITY_EXTRACT` | Extracts entities from messages (async) | NEW_MESSAGE when entity extraction enabled |
 
 ### Agents
 
@@ -844,19 +850,24 @@ Gracefully shutdown and cleanup resources.
 │   │   └── providers/            # OpenAI, Anthropic, Google, etc.
 │   └── request/                  # HTTP request utilities
 ├── database/
-│   ├── migrations/               # Database schema migrations (incl. RAG)
-│   ├── operations/               # High-level database operations
+│   ├── migrations/               # Database schema migrations
+│   │   ├── migration_0001.ts     # Core tables
+│   │   ├── migration_0002_rag.ts # RAG tables (documents, chunks)
+│   │   └── migration_0003_knowledge_graph.ts  # Graph tables (nodes, edges)
+│   ├── operations/               # High-level database operations + graph ops
 │   └── schemas/                  # TypeScript schema definitions
 ├── event-processors/             # Core event processing logic
-│   ├── new_message/              # Message routing and context generation
+│   ├── new_message/              # Message routing + entity extraction trigger
 │   ├── llm_call/                 # LLM execution and streaming
-│   ├── rag_ingest/               # RAG document ingestion pipeline
+│   ├── rag_ingest/               # Document ingestion → chunk nodes
+│   ├── entity_extract/           # Async entity extraction pipeline
 │   └── tool_call/                # Tool validation and execution
 │       ├── generators/           # API and MCP tool generators
 │       └── native-tools-registry/ # Built-in tools (incl. RAG tools)
 ├── runtime/                      # Thread runner and lifecycle
 ├── utils/                        # Shared utilities (chunker, document-fetcher)
-├── interfaces/                   # TypeScript type definitions
+├── interfaces/                   # TypeScript type definitions + resolveNamespace
+├── examples/                     # Test files for knowledge graph features
 └── index.ts                      # Main entry point
 ```
 
@@ -1166,16 +1177,285 @@ await faqBot.run({
 // The agent receives the message with relevant FAQ context already in the system prompt
 ```
 
+## Knowledge Graph
+
+COPILOTZ includes a unified knowledge graph that connects all content — messages, documents, and extracted entities — into a single queryable structure. This enables semantic search, relationship traversal, and persistent memory across conversations.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         UNIFIED KNOWLEDGE GRAPH                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐              │
+│  │   MESSAGES   │    │   CHUNKS     │    │   ENTITIES   │              │
+│  │ type=message │    │ type=chunk   │    │ type=concept │              │
+│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘              │
+│         │                   │                   │                       │
+│         │ REPLIED_BY        │ NEXT_CHUNK        │ SAME_AS               │
+│         │                   │                   │ RELATED_TO            │
+│         │                   │                   │                       │
+│         └───────────MENTIONS────────────────────┘                       │
+│                                                                         │
+│  Storage: PostgreSQL nodes + edges tables with pgvector embeddings      │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Core Concepts
+
+**Nodes** — Universal content units:
+- Messages (conversations)
+- Chunks (document fragments)
+- Entities (concepts, decisions, people, tools)
+
+**Edges** — Typed relationships:
+- `REPLIED_BY` — Message → Message (conversation flow)
+- `NEXT_CHUNK` — Chunk → Chunk (document structure)
+- `MENTIONS` — Message/Chunk → Entity (semantic links)
+- `RELATED_TO` — Entity → Entity (similar but different)
+
+### Automatic Graph Population
+
+The knowledge graph is populated automatically:
+
+| Event | Graph Action |
+|-------|--------------|
+| New message | Creates message node + REPLIED_BY edge to previous |
+| Document ingestion | Creates chunk nodes + NEXT_CHUNK edges |
+| Entity extraction | Creates entity nodes + MENTIONS edges |
+
+### Entity Extraction
+
+When enabled, entities (concepts, decisions, people) are automatically extracted from messages using LLM:
+
+```typescript
+const agent = {
+  name: "Assistant",
+  ragOptions: {
+    mode: "auto",
+    entityExtraction: {
+      enabled: true,
+      similarityThreshold: 0.95,  // Dedup threshold
+      autoMergeThreshold: 0.99,   // Skip LLM confirmation
+      namespace: "agent",         // "thread" | "agent" | "global"
+    }
+  }
+};
+```
+
+**Deduplication Pipeline:**
+```
+Extract entities (LLM)
+       │
+       ▼
+Search for similar entities (embedding)
+       │
+       ├── No match (<0.95) → Create new entity
+       │
+       ├── High match (≥0.99) → Auto-merge (add alias)
+       │
+       └── Medium match (0.95-0.99) → LLM confirms merge
+```
+
+**Alias Tracking:** When entities are merged, original names are preserved in `data.aliases[]`.
+
+### Namespace Isolation
+
+Namespaces provide multi-tenancy and scope isolation:
+
+```typescript
+const copilotz = await createCopilotz({
+  namespacePrefix: "myapp",  // Optional isolation prefix
+  agents: [/* ... */],
+});
+```
+
+**Namespace Resolution:**
+| Scope | Resolved Namespace |
+|-------|-------------------|
+| `thread` | `{prefix}:thread:{threadId}` |
+| `agent` | `{prefix}:agent:{agentId}` |
+| `global` | `{prefix}:global` |
+
+```typescript
+import { resolveNamespace } from "@copilotz/copilotz";
+
+resolveNamespace("agent", { agentId: "bot-1" }, "myapp");
+// → "myapp:agent:bot-1"
+
+resolveNamespace("thread", { threadId: "abc-123" });
+// → "thread:abc-123"
+```
+
+### Graph Operations
+
+The `ops` API provides graph-specific operations:
+
+```typescript
+// Node CRUD
+await ops.createNode({ namespace, type, name, content, embedding, data });
+await ops.getNodeById(id);
+await ops.getNodesByNamespace(namespace, type?);
+await ops.updateNode(id, updates);
+await ops.deleteNode(id);
+
+// Edge CRUD
+await ops.createEdge({ sourceNodeId, targetNodeId, type, data?, weight? });
+await ops.getEdgesForNode(nodeId, direction?, types?);
+await ops.deleteEdge(id);
+
+// Graph Queries
+await ops.searchNodes({ embedding, namespaces?, nodeTypes?, limit?, minSimilarity? });
+await ops.traverseGraph(startNodeId, edgeTypes?, maxDepth?);
+await ops.findRelatedNodes(nodeId, depth?);
+```
+
+### Semantic Search Across All Content
+
+Search returns nodes of any type with similarity scores:
+
+```typescript
+const results = await ops.searchNodes({
+  embedding: queryEmbedding,
+  namespaces: ["agent:support-bot"],
+  nodeTypes: ["message", "chunk", "concept"],  // Optional filter
+  limit: 10,
+  minSimilarity: 0.7,
+});
+
+for (const result of results) {
+  console.log(`${result.node.type}: ${result.node.name} (${result.similarity})`);
+}
+```
+
+### Graph Traversal
+
+Navigate relationships to find connected knowledge:
+
+```typescript
+// Find all nodes connected to a starting node
+const traversal = await ops.traverseGraph(entityId, ["MENTIONS", "RELATED_TO"], 2);
+
+for (const visited of traversal.visited) {
+  console.log(`${visited.node.type}: ${visited.node.name} (depth: ${visited.depth})`);
+}
+
+// Find related nodes within N hops
+const related = await ops.findRelatedNodes(messageId, 2);
+```
+
+### Configuration Reference
+
+```typescript
+interface EntityExtractionConfig {
+  enabled: boolean;                           // Enable extraction (default: false)
+  similarityThreshold?: number;               // Dedup candidate threshold (default: 0.95)
+  autoMergeThreshold?: number;                // Skip LLM confirm threshold (default: 0.99)
+  namespace?: "thread" | "agent" | "global";  // Entity scope (default: "agent")
+  entityTypes?: string[];                     // Filter types: ["concept", "decision", "person"]
+}
+
+interface ChatContext {
+  namespacePrefix?: string;  // Multi-tenant isolation prefix
+  // ... other fields
+}
+```
+
+### Example: Persistent Agent Memory
+
+```typescript
+const copilotz = await createCopilotz({
+  namespacePrefix: "acme-corp",
+  agents: [{
+    id: "support-bot",
+    name: "Support",
+    role: "customer support assistant",
+    instructions: "Help customers with their questions. You have access to conversation history and extracted knowledge.",
+    ragOptions: {
+      mode: "auto",
+      namespaces: ["agent:support-bot"],  // Search own knowledge
+      entityExtraction: {
+        enabled: true,
+        namespace: "agent",  // Entities persist across conversations
+      }
+    },
+    llmOptions: { provider: "openai", model: "gpt-4o" },
+  }],
+  rag: {
+    embedding: { provider: "openai", model: "text-embedding-3-small" },
+  },
+});
+
+// First conversation: User mentions a preference
+await copilotz.run({
+  content: "I prefer email updates over SMS",
+  sender: { type: "user", id: "customer-123" },
+  thread: { externalId: "session-1" },
+});
+// → Entity "email updates" extracted and stored
+
+// Later conversation: Agent remembers
+await copilotz.run({
+  content: "How should I contact you about order updates?",
+  sender: { type: "agent", name: "Support" },
+  thread: { externalId: "session-2" },
+});
+// → Previous entities are searchable, agent can reference preferences
+```
+
+### Database Schema
+
+```sql
+-- All content in unified node table
+CREATE TABLE nodes (
+  id TEXT PRIMARY KEY,
+  namespace TEXT NOT NULL,           -- Scoping: thread_id, agent_id, 'global'
+  type TEXT NOT NULL,                -- 'message', 'chunk', 'concept', 'decision'...
+  name TEXT NOT NULL,                -- Human-readable identifier
+  content TEXT,                      -- Full text content
+  embedding VECTOR(1536),            -- For semantic search
+  data JSONB DEFAULT '{}',           -- Type-specific properties
+  source_type TEXT,                  -- 'thread', 'document', 'extraction'
+  source_id TEXT,                    -- Reference to origin
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Relationships between nodes
+CREATE TABLE edges (
+  id TEXT PRIMARY KEY,
+  source_node_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,
+  target_node_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,                -- 'REPLIED_BY', 'MENTIONS', 'RELATED_TO'...
+  data JSONB DEFAULT '{}',           -- Edge properties
+  weight FLOAT DEFAULT 1.0,          -- Relationship strength
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Indexes for efficient queries
+CREATE INDEX idx_nodes_namespace_type ON nodes(namespace, type);
+CREATE INDEX idx_nodes_embedding ON nodes USING ivfflat (embedding vector_cosine_ops);
+CREATE INDEX idx_edges_source_type ON edges(source_node_id, type);
+```
+
+---
+
 ## Roadmap
 
 See [ROADMAP.md](./ROADMAP.md) for detailed upcoming features:
 
-- **Cross-Runtime Compatibility**: Node.js and Bun support
-- **RAG Auto-Injection Mode**: Automatically inject retrieved context into LLM calls
-- **Additional Embedding Providers**: Ollama, Cohere support
-- **Document Parsers**: PDF, DOCX, spreadsheet support
-- **MCP Streaming Transport**: HTTP/WebSocket transport for MCP servers
-- **API Tool Response Controls**: Fine-grained response formatting
+- ✅ **RAG with Vector Search**: Document ingestion, chunking, semantic retrieval
+- ✅ **Unified Knowledge Graph**: Messages, chunks, entities as nodes
+- ✅ **Entity Extraction**: LLM-based extraction with deduplication
+- ✅ **RAG Auto-Injection Mode**: Automatically inject retrieved context into LLM calls
+- 🔜 **Cross-Domain Links**: Connect entities across conversations and documents
+- 🔜 **Cross-Runtime Compatibility**: Node.js and Bun support
+- 🔜 **Additional Embedding Providers**: Ollama, Cohere support
+- 🔜 **Document Parsers**: PDF, DOCX, spreadsheet support
+- 🔜 **Memory Compression**: Entity summarization, edge pruning
 
 ## Troubleshooting
 
@@ -1228,7 +1508,8 @@ For detailed documentation, see the `/docs` directory:
 - [Database Schema](./docs/database.md) - Schema reference and migrations
 - [API Integration](./docs/apis.md) - OpenAPI tool generation
 - [MCP Integration](./docs/mcp.md) - Model Context Protocol setup
-- [RAG Guide](#rag-retrieval-augmented-generation) - Document ingestion and semantic search (see above)
+- [RAG Guide](#rag-retrieval-augmented-generation) - Document ingestion and semantic search
+- [Knowledge Graph](#knowledge-graph) - Unified graph, entity extraction, traversal
 
 ## License
 
@@ -1251,5 +1532,5 @@ Contributions are welcome. Please ensure:
 - [AJV](https://ajv.js.org/) - JSON schema validation
 - [MCP SDK](https://modelcontextprotocol.io/) - Model Context Protocol
 
-**Version:** 0.8.0 | **Last Updated:** January 2026
+**Version:** 0.9.0 | **Last Updated:** January 2026
 

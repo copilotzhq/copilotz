@@ -18,6 +18,8 @@ import type {
     ToolCallEventPayload,
     LlmCallEventPayload,
     TokenEventPayload,
+    EntityExtractionConfig,
+    NamespaceResolutionContext,
 } from "./interfaces/index.ts";
 
 
@@ -88,6 +90,10 @@ export type {
     RagConfig,
     /** Configuration for embedding generation. */
     EmbeddingConfig,
+    /** Configuration for entity extraction. */
+    EntityExtractionConfig,
+    /** Context for namespace resolution. */
+    NamespaceResolutionContext,
     /** Configuration for document chunking strategies. */
     ChunkingConfig,
     /** Configuration for similarity-based retrieval. */
@@ -132,6 +138,12 @@ export { migrations };
  * @param processor - The processor implementation
  */
 export { registerEventProcessor } from "@/event-processors/index.ts";
+
+/**
+ * Resolves a namespace based on scope and optional prefix.
+ * Use for multi-tenancy and entity scope resolution.
+ */
+export { resolveNamespace } from "@/interfaces/index.ts";
 
 /** Event emitted from the streaming event queue. */
 export type { StreamEvent } from "@/runtime/index.ts";

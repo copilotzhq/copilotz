@@ -1226,6 +1226,8 @@ The knowledge graph is populated automatically:
 | Document ingestion | Creates chunk nodes + NEXT_CHUNK edges |
 | Entity extraction | Creates entity nodes + MENTIONS edges |
 
+**Message History:** The `getMessageHistory()` function reads message content from the graph while preserving thread hierarchy and participant permissions from the threads table. This hybrid approach ensures backward compatibility while using the graph as the source of truth for content.
+
 ### Entity Extraction
 
 When enabled, entities (concepts, decisions, people) are automatically extracted from messages using LLM:

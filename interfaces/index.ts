@@ -105,6 +105,8 @@ export type {
     EventProcessor,
     /** Dependencies injected into event processors. */
     ProcessorDeps,
+    /** Context passed to tool execution. */
+    ToolExecutionContext,
 } from "@/event-processors/index.ts";
 
 import type { AssetStore, AssetConfig } from "@/utils/assets.ts";

@@ -376,7 +376,16 @@ export async function resolveAssetRefsInMessages(
 	const referenced = new Set<AssetRef>();
 	const clone = JSON.parse(JSON.stringify(messages)) as ChatMessage[];
 
-	const resolvePart = async (part: ChatContentPart): Promise<ChatContentPart> => {
+	// Returns null to signal the part should be filtered out
+	const resolvePart = async (part: ChatContentPart): Promise<ChatContentPart | null> => {
+		// Filter out text placeholders like [asset:...] - they're redundant with multimodal parts
+		if (part.type === "text") {
+			const text = (part.text ?? "").trim();
+			if (/^\[asset:[^\]]+\]$/.test(text)) {
+				return null; // Remove this placeholder
+			}
+			return part;
+		}
 		if (part.type === "image_url") {
 			const url = part.image_url?.url;
 			if (typeof url === "string" && isAssetRef(url)) {
@@ -417,9 +426,17 @@ export async function resolveAssetRefsInMessages(
 		if (Array.isArray(m.content)) {
 			const resolvedParts: ChatContentPart[] = [];
 			for (const p of m.content) {
-				resolvedParts.push(await resolvePart(p));
+				const resolved = await resolvePart(p);
+				if (resolved !== null) {
+					resolvedParts.push(resolved);
+				}
 			}
-			out.push({ ...m, content: resolvedParts });
+			// If only one text part remains, flatten to string
+			if (resolvedParts.length === 1 && resolvedParts[0].type === "text") {
+				out.push({ ...m, content: (resolvedParts[0] as { text?: string }).text ?? "" });
+			} else {
+				out.push({ ...m, content: resolvedParts.length > 0 ? resolvedParts : "" });
+			}
 		} else {
 			out.push(m);
 		}

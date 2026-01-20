@@ -376,45 +376,53 @@ export async function resolveAssetRefsInMessages(
 	const referenced = new Set<AssetRef>();
 	const clone = JSON.parse(JSON.stringify(messages)) as ChatMessage[];
 
-	// Returns null to signal the part should be filtered out
-	const resolvePart = async (part: ChatContentPart): Promise<ChatContentPart | null> => {
-		// Filter out text placeholders like [asset:...] - they're redundant with multimodal parts
-		if (part.type === "text") {
-			const text = (part.text ?? "").trim();
-			if (/^\[asset:[^\]]+\]$/.test(text)) {
-				return null; // Remove this placeholder
-			}
-			return part;
-		}
+	const resolvePart = async (part: ChatContentPart): Promise<ChatContentPart> => {
+		// Wrap each resolution in try-catch so one failing asset doesn't break all assets
 		if (part.type === "image_url") {
 			const url = part.image_url?.url;
 			if (typeof url === "string" && isAssetRef(url)) {
-				const id = extractAssetId(url);
-				const dataUrl = await store.urlFor(id, { inline: true });
-				referenced.add(url as AssetRef);
-				return { type: "image_url", image_url: { url: dataUrl } };
+				try {
+					const id = extractAssetId(url);
+					const dataUrl = await store.urlFor(id, { inline: true });
+					referenced.add(url as AssetRef);
+					return { type: "image_url", image_url: { url: dataUrl } };
+				} catch {
+					// Asset not found or read error - keep original ref so LLM knows there was an asset
+					// but return text fallback instead of broken image_url
+					return { type: "text", text: `[unresolved image: ${url}]` };
+				}
 			}
 			return part;
 		}
 		if (part.type === "file") {
 			const fileData = part.file?.file_data;
 			if (typeof fileData === "string" && isAssetRef(fileData)) {
-				const id = extractAssetId(fileData);
-				const { bytes, mime } = await store.get(id);
-				const dataUrl = toDataUrl(bytes, mime);
-				referenced.add(fileData as AssetRef);
-				return { type: "file", file: { file_data: dataUrl, mime_type: mime } };
+				try {
+					const id = extractAssetId(fileData);
+					const { bytes, mime } = await store.get(id);
+					const dataUrl = toDataUrl(bytes, mime);
+					referenced.add(fileData as AssetRef);
+					return { type: "file", file: { file_data: dataUrl, mime_type: mime } };
+				} catch {
+					// Asset not found - return text fallback
+					return { type: "text", text: `[unresolved file: ${fileData}]` };
+				}
 			}
 			return part;
 		}
 		if (part.type === "input_audio") {
 			const dataVal = part.input_audio?.data;
 			if (typeof dataVal === "string" && isAssetRef(dataVal)) {
-				const id = extractAssetId(dataVal);
-				const { bytes, mime } = await store.get(id);
-				const format = mime.includes("/") ? mime.split("/")[1] : part.input_audio.format;
-				referenced.add(dataVal as AssetRef);
-				return { type: "input_audio", input_audio: { data: bytesToBase64(bytes), ...(format ? { format } : {}) } };
+				try {
+					const id = extractAssetId(dataVal);
+					const { bytes, mime } = await store.get(id);
+					const format = mime.includes("/") ? mime.split("/")[1] : part.input_audio.format;
+					referenced.add(dataVal as AssetRef);
+					return { type: "input_audio", input_audio: { data: bytesToBase64(bytes), ...(format ? { format } : {}) } };
+				} catch {
+					// Asset not found - return text fallback
+					return { type: "text", text: `[unresolved audio: ${dataVal}]` };
+				}
 			}
 			return part;
 		}
@@ -426,17 +434,9 @@ export async function resolveAssetRefsInMessages(
 		if (Array.isArray(m.content)) {
 			const resolvedParts: ChatContentPart[] = [];
 			for (const p of m.content) {
-				const resolved = await resolvePart(p);
-				if (resolved !== null) {
-					resolvedParts.push(resolved);
-				}
+				resolvedParts.push(await resolvePart(p));
 			}
-			// If only one text part remains, flatten to string
-			if (resolvedParts.length === 1 && resolvedParts[0].type === "text") {
-				out.push({ ...m, content: (resolvedParts[0] as { text?: string }).text ?? "" });
-			} else {
-				out.push({ ...m, content: resolvedParts.length > 0 ? resolvedParts : "" });
-			}
+			out.push({ ...m, content: resolvedParts });
 		} else {
 			out.push(m);
 		}

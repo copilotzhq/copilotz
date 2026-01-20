@@ -13,23 +13,7 @@ export interface FsConnector {
 }
 
 export function createFsConnector(rootDir: FsPath): FsConnector {
-	// Normalize to an absolute root to avoid cwd-dependent path issues
-	const toAbsolute = (p: string): string => {
-		const raw = String(p || ".").replace(/\/+$/, "");
-		// Unix absolute or Windows drive prefix
-		if (raw.startsWith("/") || /^[A-Za-z]:[\\/]/.test(raw)) return raw;
-		const cwd = String(Deno.cwd() || ".").replace(/\/+$/, "");
-		return `${cwd}/${raw}`.replace(/\/{2,}/g, "/");
-	};
-
-	const root = toAbsolute(rootDir);
-	
-	// Debug: log resolved root on creation (only in debug mode)
-	try {
-		if (Deno.env.get("COPILOTZ_DEBUG") === "1") {
-			console.log(`[fs-connector] Resolved root: "${rootDir}" → "${root}"`);
-		}
-	} catch { /* ignore */ }
+	const root = String(rootDir || ".").replace(/\/+$/, "");
 
 	const join = (...parts: string[]): FsPath => {
 		const clean = parts.filter(Boolean).join("/");
@@ -51,7 +35,16 @@ export function createFsConnector(rootDir: FsPath): FsConnector {
 	};
 
 	const readFile = async (path: FsPath): Promise<Uint8Array> => {
-		return await Deno.readFile(path);
+		try {
+			return await Deno.readFile(path);
+		} catch (err) {
+			// Add debug info to help diagnose asset resolution failures
+			const debugFlag = (globalThis as unknown as { Deno?: { env?: { get?: (k: string) => string } } })?.Deno?.env?.get?.("COPILOTZ_DEBUG");
+			if (debugFlag === "1") {
+				console.warn(`[fs] Failed to read file at path: ${path}`, err);
+			}
+			throw err;
+		}
 	};
 
 	const exists = async (path: FsPath): Promise<boolean> => {

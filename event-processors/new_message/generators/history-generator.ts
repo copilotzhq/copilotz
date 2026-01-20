@@ -51,9 +51,9 @@ const buildAttachmentParts = (metadata?: MessageMetadata): ChatContentPart[] | n
         const dataInfo = toDataUrl(attachment);
 
         // Prefer assetRef if provided; resolved later in LLM_CALL
+        // Note: We no longer add a redundant [asset:...] text marker.
+        // Asset resolution in llm_call will either resolve to data URL or provide a clear fallback.
         if (typeof attachment.assetRef === "string" && isAssetRef(attachment.assetRef)) {
-            // Note: Don't add text placeholder - the multimodal part is sufficient
-            // and will be resolved to data URL in resolveAssetRefsInMessages
             if (kind === "image") {
                 parts.push({ type: "image_url", image_url: { url: attachment.assetRef } });
                 continue;

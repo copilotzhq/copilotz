@@ -79,22 +79,54 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         // If allowed, resolve asset:// refs in message parts to provider-acceptable data URLs.
         // Otherwise, strip multimodal parts and send text-only to let the LLM call a fetch tool.
         const shouldResolve = context.assetConfig?.resolveInLLM !== false;
-        const resolvedMessages = await (async () => {
-            if (shouldResolve) {
-                const res = await resolveAssetRefsInMessages(payload.messages as ChatMessage[], context.assetStore);
-                return res.messages;
-            }
-            // Strip multimodal parts, keep text only
-            return (payload.messages as ChatMessage[]).map((m) => {
-                if (Array.isArray(m.content)) {
-                    const textOnly = m.content
-                        .map((p) => (p && typeof p === "object" && (p as { type?: string }).type === "text") ? (p as { text?: string }).text ?? "" : "")
-                        .join("");
-                    return { ...m, content: textOnly };
+        const resolvedMessages = (await (async () => {
+            try {
+                if (shouldResolve) {
+                    // Warn if resolution is expected but store is missing
+                    if (!context.assetStore) {
+                        try {
+                            const anyGlobal = globalThis as unknown as {
+                                Deno?: { env?: { get?: (key: string) => string | undefined } };
+                                console?: { warn?: (...args: unknown[]) => void };
+                            };
+                            const debugFlag = anyGlobal?.Deno?.env?.get?.("COPILOTZ_DEBUG");
+                            if (debugFlag === "1" && anyGlobal.console?.warn) {
+                                anyGlobal.console.warn("[llm_call] resolveInLLM is true but assetStore is undefined - asset refs will not be resolved");
+                            }
+                        } catch {
+                            // ignore logging failures
+                        }
+                    }
+                    const res = await resolveAssetRefsInMessages(payload.messages as ChatMessage[], context.assetStore);
+                    return res.messages;
                 }
-                return m;
-            });
-        })();
+                const msgs = (payload.messages as ChatMessage[]).map((m) => {
+                    if (Array.isArray(m.content)) {
+                        const textOnly = m.content
+                            .map((p) => (p && typeof p === "object" && (p as { type?: string }).type === "text") ? (p as { text?: string }).text ?? "" : "")
+                            .join("");
+                        return { ...m, content: textOnly };
+                    }
+                    return m;
+                });
+                return msgs;
+            } catch (err) {
+                // In debug mode, surface the underlying error so asset resolution issues are visible.
+                try {
+                    const anyGlobal = globalThis as unknown as {
+                        Deno?: { env?: { get?: (key: string) => string | undefined }; stderr?: { writeSync?: (data: Uint8Array) => unknown } };
+                        console?: { warn?: (...args: unknown[]) => void };
+                    };
+                    const debugFlag = anyGlobal?.Deno?.env?.get?.("COPILOTZ_DEBUG");
+                    if (debugFlag === "1" && anyGlobal.console?.warn) {
+                        anyGlobal.console.warn("[llm_call] resolveAssetRefsInMessages failed:", err);
+                    }
+                } catch {
+                    // ignore logging failures
+                }
+                return payload.messages as ChatMessage[];
+            }
+        })());
 
         const agentForCall = context.agents?.find((a) => a.id === payload.agentId);
         let finalConfig: ProviderConfig | undefined = payload.config;
@@ -107,6 +139,16 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         }
 
         const configForCall: ProviderConfig = finalConfig ?? {};
+
+
+        if (Deno.env.get("COPILOTZ_DEBUG") === "1") {
+            console.log("shouldResolve", shouldResolve);
+            console.log("hasAssetStore", !!context.assetStore);
+            console.log("configForCall", configForCall);
+            console.log("resolvedMessages", resolvedMessages);
+            console.log("payload.messages", payload.messages);
+            console.log("payload.tools", payload.tools);
+        }
 
         const response = await chat(
             {

@@ -1,6 +1,6 @@
 import type { NewMessage, Agent } from "@/interfaces/index.ts";
 import type { ChatMessage, ToolCall, ChatContentPart } from "@/connectors/llm/types.ts";
-import { isAssetRef } from "@/utils/assets.ts";
+import { isAssetRef, extractAssetId } from "@/utils/assets.ts";
 
 type StoredAttachment = {
     kind?: string;
@@ -51,9 +51,12 @@ const buildAttachmentParts = (metadata?: MessageMetadata): ChatContentPart[] | n
         const dataInfo = toDataUrl(attachment);
 
         // Prefer assetRef if provided; resolved later in LLM_CALL
-        // Note: We no longer add a redundant [asset:...] text marker.
-        // Asset resolution in llm_call will either resolve to data URL or provide a clear fallback.
+        // Add asset ID as text so the agent can reference it in tool calls or conversation
         if (typeof attachment.assetRef === "string" && isAssetRef(attachment.assetRef)) {
+            const assetId = extractAssetId(attachment.assetRef);
+            // Add text marker with asset ID for agent reference
+            parts.push({ type: "text", text: `[Attached ${kind || "file"}: asset_id="${assetId}"]` });
+            
             if (kind === "image") {
                 parts.push({ type: "image_url", image_url: { url: attachment.assetRef } });
                 continue;

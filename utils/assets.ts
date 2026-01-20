@@ -109,6 +109,115 @@ function detectKindFromMime(mime: string): "image" | "audio" | "video" | "file" 
 	return "file";
 }
 
+/**
+ * Detect MIME type from file magic bytes (file signature).
+ * Returns detected MIME type or "application/octet-stream" if unknown.
+ */
+export function detectMimeFromBytes(bytes: Uint8Array): string {
+	if (bytes.length < 12) return "application/octet-stream";
+
+	// JPEG: FF D8 FF
+	if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
+		return "image/jpeg";
+	}
+
+	// PNG: 89 50 4E 47 0D 0A 1A 0A
+	if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47 &&
+		bytes[4] === 0x0D && bytes[5] === 0x0A && bytes[6] === 0x1A && bytes[7] === 0x0A) {
+		return "image/png";
+	}
+
+	// GIF: 47 49 46 38 (GIF8)
+	if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
+		return "image/gif";
+	}
+
+	// WebP: 52 49 46 46 ... 57 45 42 50 (RIFF....WEBP)
+	if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+		bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+		return "image/webp";
+	}
+
+	// BMP: 42 4D (BM)
+	if (bytes[0] === 0x42 && bytes[1] === 0x4D) {
+		return "image/bmp";
+	}
+
+	// TIFF: 49 49 2A 00 (little-endian) or 4D 4D 00 2A (big-endian)
+	if ((bytes[0] === 0x49 && bytes[1] === 0x49 && bytes[2] === 0x2A && bytes[3] === 0x00) ||
+		(bytes[0] === 0x4D && bytes[1] === 0x4D && bytes[2] === 0x00 && bytes[3] === 0x2A)) {
+		return "image/tiff";
+	}
+
+	// ICO: 00 00 01 00
+	if (bytes[0] === 0x00 && bytes[1] === 0x00 && bytes[2] === 0x01 && bytes[3] === 0x00) {
+		return "image/x-icon";
+	}
+
+	// HEIC/HEIF: Check for ftyp box with heic/heix/hevc/mif1
+	if (bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) {
+		const brand = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]);
+		if (brand === "heic" || brand === "heix" || brand === "mif1") {
+			return "image/heic";
+		}
+		if (brand === "avif") {
+			return "image/avif";
+		}
+	}
+
+	// SVG: Check for XML declaration or <svg tag
+	const textStart = new TextDecoder().decode(bytes.subarray(0, Math.min(100, bytes.length)));
+	if (textStart.includes("<svg") || textStart.includes("<?xml")) {
+		return "image/svg+xml";
+	}
+
+	// MP3: FF FB, FF FA, FF F3, FF F2 or ID3
+	if ((bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) ||
+		(bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33)) {
+		return "audio/mpeg";
+	}
+
+	// WAV: 52 49 46 46 ... 57 41 56 45 (RIFF....WAVE)
+	if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+		bytes[8] === 0x57 && bytes[9] === 0x41 && bytes[10] === 0x56 && bytes[11] === 0x45) {
+		return "audio/wav";
+	}
+
+	// OGG: 4F 67 67 53 (OggS)
+	if (bytes[0] === 0x4F && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53) {
+		return "audio/ogg";
+	}
+
+	// FLAC: 66 4C 61 43 (fLaC)
+	if (bytes[0] === 0x66 && bytes[1] === 0x4C && bytes[2] === 0x61 && bytes[3] === 0x43) {
+		return "audio/flac";
+	}
+
+	// MP4/M4A: Check for ftyp box
+	if (bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) {
+		const brand = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]);
+		if (brand === "M4A " || brand === "M4B ") {
+			return "audio/mp4";
+		}
+		// Video MP4 variants
+		if (brand === "isom" || brand === "mp41" || brand === "mp42" || brand === "avc1" || brand === "qt  ") {
+			return "video/mp4";
+		}
+	}
+
+	// WebM: 1A 45 DF A3 (EBML header)
+	if (bytes[0] === 0x1A && bytes[1] === 0x45 && bytes[2] === 0xDF && bytes[3] === 0xA3) {
+		return "video/webm";
+	}
+
+	// PDF: 25 50 44 46 (%PDF)
+	if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) {
+		return "application/pdf";
+	}
+
+	return "application/octet-stream";
+}
+
 // -----------------------------------------------------------------------------
 // Memory Asset Store
 // -----------------------------------------------------------------------------
@@ -238,8 +347,8 @@ export function createFsAssetStore(config: FsAssetConfig): AssetStore {
 		const rel = relPathFor(assetId);
 		const path = fs.join(rel);
 		const bytes = await fs.readFile(path);
-		// No sidecar mime: default to octet-stream; callers can carry mime via metadata if needed
-		const mime = "application/octet-stream";
+		// Detect MIME type from file magic bytes since we don't persist mime info
+		const mime = detectMimeFromBytes(bytes);
 		return { bytes, mime };
 	};
 

@@ -216,7 +216,8 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
         };
 
         // Persist incoming message before processing
-        const createdMessage = await ops.createMessage(incomingMsg);
+        // Pass namespace for SENT_BY edge creation (user → message)
+        const createdMessage = await ops.createMessage(incomingMsg, context.namespace);
 
         // Emit ENTITY_EXTRACT event for agents with entity extraction enabled
         const entityExtractEvents: Array<{ threadId: string; type: string; payload: unknown; parentEventId?: string; traceId?: string; priority?: number }> = [];

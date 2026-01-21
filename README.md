@@ -1744,6 +1744,7 @@ COPILOTZ includes a unified knowledge graph that connects all content — messag
 - Entities (concepts, decisions, people, tools)
 
 **Edges** — Typed relationships:
+- `SENT_BY` — User → Message (authorship)
 - `REPLIED_BY` — Message → Message (conversation flow)
 - `NEXT_CHUNK` — Chunk → Chunk (document structure)
 - `MENTIONS` — Message/Chunk → Entity (semantic links)
@@ -1755,7 +1756,8 @@ The knowledge graph is populated automatically:
 
 | Event | Graph Action |
 |-------|--------------|
-| New message | Creates message node + REPLIED_BY edge to previous |
+| New message | Creates message node + REPLIED_BY edge to previous + SENT_BY edge from user |
+| User upsert | Creates/updates user node with namespace support |
 | Document ingestion | Creates chunk nodes + NEXT_CHUNK edges |
 | Entity extraction | Creates entity nodes + MENTIONS edges |
 

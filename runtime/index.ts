@@ -239,13 +239,19 @@ export async function runThread(
     const senderCanonical = (sender.id ?? sender.name ?? "user") as string;
     const participants = Array.from(new Set([senderCanonical, ...baseParticipants]));
 
+    // Auto-populate userExternalId in thread metadata for user context lookup
+    const senderExternalId = sender?.externalId ?? sender?.id;
+    const threadMetadataWithUser = senderExternalId && sender?.type === "user"
+        ? { ...((threadRef?.metadata ?? {}) as Record<string, unknown>), userExternalId: senderExternalId }
+        : threadRef?.metadata ?? undefined;
+
     const ensuredThread = await ops.findOrCreateThread(threadId, {
         name: threadRef?.name ?? "Main Thread",
         description: threadRef?.description ?? undefined,
         participants,
         externalId: threadRef?.externalId ?? undefined,
         parentThreadId: undefined,
-        metadata: threadRef?.metadata ?? undefined,
+        metadata: threadMetadataWithUser,
         status: "active",
         mode: "immediate",
     });

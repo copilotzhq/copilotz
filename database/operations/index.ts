@@ -151,7 +151,7 @@ export interface DatabaseOperations {
   getThreadById: (threadId: string) => Promise<Thread | undefined>;
   getThreadByExternalId: (externalId: string) => Promise<Thread | undefined>;
   findOrCreateThread: (threadId: string | undefined, threadData: ThreadInsert) => Promise<Thread>;
-  createMessage: (message: MessageInsert) => Promise<Message>;
+  createMessage: (message: MessageInsert, namespace?: string) => Promise<Message>;
   getTaskById: (taskId: string) => Promise<Task | undefined>;
   createTask: (taskData: TaskInsert) => Promise<Task>;
   /** @deprecated Use getUserNode instead for graph-based users with namespace support */
@@ -205,7 +205,8 @@ export interface DatabaseOperations {
   // ============================================
 
   // Create message as a node (used internally by createMessage)
-  createMessageNode: (message: MessageInsert, previousMessageId?: string) => Promise<KnowledgeNode>;
+  // namespace: Optional namespace for user lookup (for SENT_BY edge)
+  createMessageNode: (message: MessageInsert, previousMessageId?: string, namespace?: string) => Promise<KnowledgeNode>;
   // Get message history from graph (nodes with type='message')
   getMessageHistoryFromGraph: (threadId: string, limit?: number) => Promise<Message[]>;
   // Get the last message node in a thread
@@ -460,7 +461,7 @@ export function createOperations(db: DbInstance): DatabaseOperations {
     return (updated ?? existing) as Thread;
   };
 
-  const createMessage = async (message: MessageInsert): Promise<Message> => {
+  const createMessage = async (message: MessageInsert, namespace?: string): Promise<Message> => {
     // Generate consistent ID for both stores
     const messageId = message.id ?? ulid();
     const messageWithId = { ...message, id: messageId };
@@ -484,7 +485,8 @@ export function createOperations(db: DbInstance): DatabaseOperations {
       // Find previous message to create REPLIED_BY edge
       const threadIdStr = message.threadId as string;
       const lastMessage = await getLastMessageNode(threadIdStr);
-      await createMessageNode(messageWithId, lastMessage?.id as string | undefined);
+      // Pass namespace for SENT_BY edge creation (user → message)
+      await createMessageNode(messageWithId, lastMessage?.id as string | undefined, namespace);
     } catch (error) {
       // Log but don't fail - messages table write succeeded
       console.warn('[createMessage] Failed to create message node:', error);
@@ -600,7 +602,8 @@ export function createOperations(db: DbInstance): DatabaseOperations {
 
   const createMessageNode = async (
     message: MessageInsert,
-    previousMessageId?: string
+    previousMessageId?: string,
+    namespace?: string
   ): Promise<KnowledgeNode> => {
     const messageId = (message.id ?? ulid()) as string;
     const timestamp = new Date().toISOString();
@@ -635,6 +638,23 @@ export function createOperations(db: DbInstance): DatabaseOperations {
         targetNodeId: messageNode.id as string,
         type: 'REPLIED_BY',
       });
+    }
+
+    // Create SENT_BY edge from user node to message (if sender is a user with externalId)
+    if (senderType === 'user' && senderId) {
+      try {
+        // Try to find the user node using the run's namespace (falls back to global)
+        const userNode = await getUserNode(senderId, namespace);
+        if (userNode) {
+          await createEdge({
+            sourceNodeId: userNode.id as string,
+            targetNodeId: messageNode.id as string,
+            type: 'SENT_BY',
+          });
+        }
+      } catch {
+        // Ignore errors - user node might not exist yet
+      }
     }
 
     return messageNode;

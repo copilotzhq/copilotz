@@ -708,6 +708,7 @@ const schemaDefinition = {
         priority: { type: ["integer", "null"] },
         ttlMs: { type: ["integer", "null"] },
         expiresAt: { type: ["string", "null"], format: "date-time" },
+        namespace: { type: ["string", "null"], maxLength: 255 },
         status: {
           type: "string",
           enum: [
@@ -1233,6 +1234,7 @@ export type NewEvent = {
     ttlMs?: number;
     id?: string;
     status?: QueueStatus;
+    namespace?: string;
     createdAt?: string | Date;
     updatedAt?: string | Date;
   }
@@ -1258,6 +1260,7 @@ export type NewEventOfMap<TCustom extends Record<string, unknown>> = {
     ttlMs?: number;
     id?: string;
     status?: QueueStatus;
+    namespace?: string;
     createdAt?: string | Date;
     updatedAt?: string | Date;
   }

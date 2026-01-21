@@ -56,6 +56,8 @@ export interface ToolExecutionContext extends ChatContext {
     baseUrl?: string;
     dimensions?: number;
   };
+  // Collections is inherited from ChatContext, but we re-declare for clarity
+  // collections?: CollectionsManager;
 }
 
 function assertToolCallPayload(payload: unknown): asserts payload is ToolCallPayload {

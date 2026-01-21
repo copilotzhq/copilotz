@@ -17,9 +17,11 @@ import { createOperations, type DatabaseOperations } from "./operations/index.ts
 import { generateMigrations } from "./migrations/migration_0001.ts";
 import { generateRagMigrations } from "./migrations/migration_0002_rag.ts";
 import { generateKnowledgeGraphMigrations } from "./migrations/migration_0003_knowledge_graph.ts";
+import { generateUlidSupportMigrations } from "./migrations/migration_0004_ulid_support.ts";
+import { generateNamespaceEventsMigrations } from "./migrations/migration_0005_namespace_events.ts";
 
 /** SQL migration statements for setting up the database schema. */
-const migrations: string = generateMigrations() + "\n" + generateRagMigrations() + "\n" + generateKnowledgeGraphMigrations();
+const migrations: string = generateMigrations() + "\n" + generateRagMigrations() + "\n" + generateKnowledgeGraphMigrations() + "\n" + generateUlidSupportMigrations() + "\n" + generateNamespaceEventsMigrations();
 
 /**
  * Configuration options for creating a database connection.
@@ -214,3 +216,45 @@ export { baseSchema as schema };
 
 /** SQL migration statements for setting up the database schema. */
 export { migrations };
+
+// ============================================
+// COLLECTIONS API
+// ============================================
+
+/** 
+ * Collections API for defining and working with custom data collections.
+ * Collections map to the graph structure (nodes + edges) with a developer-friendly interface.
+ */
+export {
+  defineCollection,
+  createCollectionsManager,
+  createScopedCollections,
+  createCollectionCrud,
+  relation,
+  index,
+} from "./collections/index.ts";
+
+export {
+  generateCollectionIndexes,
+  createCollectionIndexes,
+} from "./collections/manager.ts";
+
+export type {
+  CollectionDefinition,
+  CollectionInput,
+  CollectionCrud,
+  ScopedCollectionCrud,
+  CollectionsMap,
+  ScopedCollectionsMap,
+  CollectionsConfig,
+  WhereFilter,
+  WhereOperators,
+  QueryOptions,
+  SearchOptions,
+  IndexDefinition,
+  RelationDefinition,
+  SearchConfig,
+  CollectionHooks,
+  HookContext,
+  SortOrder,
+} from "./collections/index.ts";

@@ -149,9 +149,10 @@ export async function enqueueEvent(db: CopilotzDb, event: NewEvent | NewUnknownE
         parentEventId,
         traceId,
         priority: event.priority ?? undefined,
-        metadata:event.metadata,
+        metadata: event.metadata,
         ttlMs: event.ttlMs ?? undefined,
         status: event.status,
+        namespace: (event as { namespace?: string }).namespace,
     });
 }
 

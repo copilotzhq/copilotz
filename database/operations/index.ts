@@ -40,6 +40,8 @@ export interface QueueEventInput {
   ttlMs?: number;
   expiresAt?: Date | string | null;
   status?: Queue["status"];
+  /** Namespace for multi-tenant isolation */
+  namespace?: string;
 }
 
 // RAG types
@@ -126,7 +128,7 @@ export interface DatabaseOperations {
   crud: DbInstance["crud"];
   addToQueue: (threadId: string, event: QueueEventInput) => Promise<NewQueue>;
   getProcessingQueueItem: (threadId: string) => Promise<Queue | undefined>;
-  getNextPendingQueueItem: (threadId: string) => Promise<Queue | undefined>;
+  getNextPendingQueueItem: (threadId: string, namespace?: string) => Promise<Queue | undefined>;
   updateQueueItemStatus: (queueId: string, status: Queue["status"]) => Promise<void>;
   getMessageHistory: (threadId: string, userId: string, limit?: number) => Promise<Message[]>;
   getThreadsForParticipant: (
@@ -152,8 +154,40 @@ export interface DatabaseOperations {
   createMessage: (message: MessageInsert) => Promise<Message>;
   getTaskById: (taskId: string) => Promise<Task | undefined>;
   createTask: (taskData: TaskInsert) => Promise<Task>;
+  /** @deprecated Use getUserNode instead for graph-based users with namespace support */
   getUserByExternalId: (externalId: string) => Promise<User | undefined>;
   archiveThread: (threadId: string, summary: string) => Promise<Thread | null>;
+
+  // ============================================
+  // USER AS NODE OPERATIONS (Graph-based users)
+  // ============================================
+  
+  /**
+   * Find or create a user node in the graph.
+   * - Global users: namespace = null (can access all namespaces)
+   * - Scoped users: namespace = "tenantA" (only access specific namespace)
+   * 
+   * @param externalId - External user identifier (from auth system)
+   * @param namespace - Namespace scope (null for global users)
+   * @param userData - User data to create/update
+   */
+  upsertUserNode: (
+    externalId: string,
+    namespace: string | null,
+    userData: { name?: string | null; email?: string | null; metadata?: Record<string, unknown> | null }
+  ) => Promise<KnowledgeNode>;
+  
+  /**
+   * Get a user node by external ID and namespace.
+   * Also checks for global users (namespace = null) as fallback.
+   */
+  getUserNode: (externalId: string, namespace?: string | null) => Promise<KnowledgeNode | undefined>;
+  
+  /**
+   * Get all user nodes for an external ID (across namespaces).
+   * Useful for users with access to multiple namespaces.
+   */
+  getUserNodesByExternalId: (externalId: string) => Promise<KnowledgeNode[]>;
   
   // RAG operations (legacy - use graph operations for new code)
   createDocument: (doc: Omit<NewDocument, "id"> & { id?: string }) => Promise<Document>;
@@ -271,6 +305,7 @@ export function createOperations(db: DbInstance): DatabaseOperations {
       expiresAt: expiresAt ? new Date(expiresAt) : null,
       status: event.status ?? "pending",
       metadata: event.metadata ?? null,
+      namespace: event.namespace ?? null,
     };
 
     const newQueueItem = await crud.events.create(insertQueueItem);
@@ -291,12 +326,19 @@ export function createOperations(db: DbInstance): DatabaseOperations {
 
   const getNextPendingQueueItem = async (
     threadId: string,
+    namespace?: string,
   ): Promise<Queue | undefined> => {
     while (true) {
-      const [candidate] = await crud.events.find({
+      // Build filter with optional namespace
+      const filter: Record<string, unknown> = {
         threadId,
         status: "pending",
-      }, {
+      };
+      if (namespace !== undefined) {
+        filter.namespace = namespace;
+      }
+
+      const [candidate] = await crud.events.find(filter, {
         limit: 1,
         sort: [
           ["priority", "desc"],
@@ -809,6 +851,134 @@ export function createOperations(db: DbInstance): DatabaseOperations {
     return updated ?? null;
   };
 
+  // ============================================
+  // USER AS NODE OPERATIONS
+  // ============================================
+
+  const upsertUserNode = async (
+    externalId: string,
+    namespace: string | null,
+    userData: { name?: string | null; email?: string | null; metadata?: Record<string, unknown> | null }
+  ): Promise<KnowledgeNode> => {
+    // Try to find existing user node
+    const existing = await getUserNode(externalId, namespace);
+    
+    if (existing) {
+      // Update existing user
+      const updates: Partial<NewKnowledgeNode> = {};
+      const currentData = (existing.data ?? {}) as Record<string, unknown>;
+      const newData = { ...currentData };
+      let hasChanges = false;
+
+      if (userData.name !== undefined && currentData.name !== userData.name) {
+        newData.name = userData.name;
+        hasChanges = true;
+      }
+      if (userData.email !== undefined && currentData.email !== userData.email) {
+        newData.email = userData.email;
+        hasChanges = true;
+      }
+      if (userData.metadata !== undefined) {
+        const currentMeta = JSON.stringify(currentData.metadata ?? null);
+        const newMeta = JSON.stringify(userData.metadata);
+        if (currentMeta !== newMeta) {
+          newData.metadata = userData.metadata;
+          hasChanges = true;
+        }
+      }
+
+      if (hasChanges) {
+        updates.data = newData;
+        updates.name = userData.name ?? existing.name;
+        const updated = await updateNode(existing.id as string, updates);
+        return updated ?? existing;
+      }
+      return existing;
+    }
+
+    // Create new user node
+    const userNode = await createNode({
+      namespace: namespace ?? "global", // "global" namespace for global users
+      type: "user",
+      name: userData.name ?? externalId,
+      content: null,
+      data: {
+        externalId,
+        name: userData.name ?? null,
+        email: userData.email ?? null,
+        metadata: userData.metadata ?? null,
+        isGlobal: namespace === null,
+      },
+      sourceType: "user",
+      sourceId: externalId,
+    });
+
+    // Also write to legacy users table for backwards compatibility
+    try {
+      const existingLegacy = await crud.users.findOne({ externalId }) as User | null;
+      if (!existingLegacy) {
+        await crud.users.create({
+          name: userData.name ?? null,
+          email: userData.email ?? null,
+          externalId,
+          metadata: userData.metadata ?? null,
+        });
+      }
+    } catch {
+      // Ignore legacy write failures
+    }
+
+    return userNode;
+  };
+
+  const getUserNode = async (
+    externalId: string,
+    namespace?: string | null,
+  ): Promise<KnowledgeNode | undefined> => {
+    // First try exact namespace match
+    if (namespace) {
+      const result = await db.query<KnowledgeNode>(
+        `SELECT * FROM "nodes" 
+         WHERE "type" = 'user' 
+         AND "data"->>'externalId' = $1 
+         AND "namespace" = $2
+         LIMIT 1`,
+        [externalId, namespace]
+      );
+      if (result.rows[0]) {
+        return mapNodeRow(result.rows[0]);
+      }
+    }
+
+    // Fallback to global user (namespace = "global")
+    const globalResult = await db.query<KnowledgeNode>(
+      `SELECT * FROM "nodes" 
+       WHERE "type" = 'user' 
+       AND "data"->>'externalId' = $1 
+       AND "namespace" = 'global'
+       LIMIT 1`,
+      [externalId]
+    );
+    if (globalResult.rows[0]) {
+      return mapNodeRow(globalResult.rows[0]);
+    }
+
+    return undefined;
+  };
+
+  const getUserNodesByExternalId = async (
+    externalId: string,
+  ): Promise<KnowledgeNode[]> => {
+    const result = await db.query<KnowledgeNode>(
+      `SELECT * FROM "nodes" 
+       WHERE "type" = 'user' 
+       AND "data"->>'externalId' = $1
+       ORDER BY "created_at" ASC`,
+      [externalId]
+    );
+    return result.rows.map(mapNodeRow);
+  };
+
   // RAG Operations
 
   const createDocument = async (
@@ -1049,17 +1219,20 @@ export function createOperations(db: DbInstance): DatabaseOperations {
   const createNode = async (
     node: Omit<NewKnowledgeNode, "id"> & { id?: string }
   ): Promise<KnowledgeNode> => {
+    // Generate ULID if not provided
+    const nodeId = node.id ?? ulid();
     // Use raw SQL for vector embedding support
     const embeddingStr = node.embedding ? `[${node.embedding.join(",")}]` : null;
     
     const result = await db.query<KnowledgeNode>(
       `INSERT INTO "nodes" (
-        "namespace", "type", "name", "embedding", "content", "data", 
+        "id", "namespace", "type", "name", "embedding", "content", "data", 
         "source_type", "source_id", "created_at", "updated_at"
       ) VALUES (
-        $1, $2, $3, $4::vector, $5, $6, $7, $8, NOW(), NOW()
+        $1, $2, $3, $4, $5::vector, $6, $7, $8, $9, NOW(), NOW()
       ) RETURNING *`,
       [
+        nodeId,
         node.namespace,
         node.type,
         node.name,
@@ -1195,13 +1368,16 @@ export function createOperations(db: DbInstance): DatabaseOperations {
   const createEdge = async (
     edge: Omit<NewKnowledgeEdge, "id"> & { id?: string }
   ): Promise<KnowledgeEdge> => {
+    // Generate ULID if not provided
+    const edgeId = edge.id ?? ulid();
     const result = await db.query<KnowledgeEdge>(
       `INSERT INTO "edges" (
-        "source_node_id", "target_node_id", "type", "data", "weight", "created_at"
+        "id", "source_node_id", "target_node_id", "type", "data", "weight", "created_at"
       ) VALUES (
-        $1, $2, $3, $4, $5, NOW()
+        $1, $2, $3, $4, $5, $6, NOW()
       ) RETURNING *`,
       [
+        edgeId,
         edge.sourceNodeId,
         edge.targetNodeId,
         edge.type,
@@ -1448,6 +1624,10 @@ export function createOperations(db: DbInstance): DatabaseOperations {
     createTask,
     getUserByExternalId,
     archiveThread,
+    // User as node operations
+    upsertUserNode,
+    getUserNode,
+    getUserNodesByExternalId,
     // Message as node operations
     createMessageNode,
     getMessageHistoryFromGraph,

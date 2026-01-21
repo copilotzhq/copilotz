@@ -318,6 +318,40 @@ export interface ChatContext {
     embeddingConfig?: EmbeddingConfig;
     /** Optional namespace prefix for multi-tenancy isolation. */
     namespacePrefix?: string;
+    /** 
+     * Resolved namespace for this run.
+     * Priority: RunOptions.namespace > CopilotzConfig.namespace > undefined
+     */
+    namespace?: string;
+    /**
+     * Collections manager for custom data storage.
+     * - If namespace is set: returns pre-scoped collections (no withNamespace needed)
+     * - If no namespace: returns raw manager (use withNamespace manually)
+     */
+    collections?: ScopedCollectionsManager | CollectionsManager;
+}
+
+/**
+ * Collections manager interface for accessing custom collections.
+ * Access collections by name and use withNamespace() for scoped access.
+ */
+export interface CollectionsManager {
+    /** Get a scoped client with namespace pre-applied to all operations. */
+    withNamespace(namespace: string): ScopedCollectionsManager;
+    /** List all registered collection names. */
+    getCollectionNames(): string[];
+    /** Check if a collection exists. */
+    hasCollection(name: string): boolean;
+    /** Access collections by name. */
+    [collectionName: string]: unknown;
+}
+
+/**
+ * Scoped collections manager with namespace pre-applied.
+ */
+export interface ScopedCollectionsManager {
+    /** Access scoped collections by name. */
+    [collectionName: string]: unknown;
 }
 
 /**

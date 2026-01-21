@@ -489,9 +489,11 @@ async function buildProcessingContext(ops: Operations, threadId: string, context
     if (!userMetadata && threadMetadata?.userExternalId) {
         const externalId = threadMetadata.userExternalId as string;
         try {
-            const user = await ops.getUserByExternalId(externalId);
-            if (user?.metadata && typeof user.metadata === "object") {
-                userMetadata = user.metadata as Record<string, unknown>;
+            // Use graph-based user lookup with namespace support
+            const userNode = await ops.getUserNode(externalId, context.namespace);
+            const userData = userNode?.data as Record<string, unknown> | undefined;
+            if (userData?.metadata && typeof userData.metadata === "object") {
+                userMetadata = userData.metadata as Record<string, unknown>;
             }
         } catch (error) {
             console.warn(`buildProcessingContext: failed to load user metadata for ${externalId}`, error);

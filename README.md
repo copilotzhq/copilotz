@@ -70,12 +70,13 @@ listenable and overwritable via callbacks in copilotz.run()
 - **19 Native Tools**: File operations, system commands, HTTP requests, agent communication, task management, RAG
 - **RAG (Retrieval-Augmented Generation)**: Document ingestion, vector embeddings, semantic search with pgvector
 - **Unified Knowledge Graph**: Messages, documents, and entities connected in a queryable graph
+- **Collections API**: Define custom data collections with type-safe CRUD, relations, and namespace isolation
 - **Entity Extraction**: LLM-based extraction with embedding deduplication and alias tracking
 - **OpenAPI Integration**: Auto-generate tools from OpenAPI 3.0 specifications
 - **MCP Protocol Support**: Connect to Model Context Protocol servers via stdio transport
 - **Persistent Threads**: Database-backed conversation history with participant tracking
 - **Real-Time Streaming**: Token-level streaming with configurable acknowledgment modes
-- **Type-Safe Operations**: Full TypeScript types with database schema validation
+- **Type-Safe Operations**: Full TypeScript types with JSON Schema validation and inference
 - **Flexible Database**: PostgreSQL for production, PGLite for development/embedded use
 
 ## Installation
@@ -625,6 +626,483 @@ await crud.tasks.findMany({ status: "pending", assignedTo: agentId });
 **Available tables:**
 `users`, `agents`, `threads`, `messages`, `tools`, `apis`, `mcpServers`, `queue`, `events`, `tasks`
 
+## Collections API
+
+The Collections API provides a developer-friendly interface for defining custom data collections on top of COPILOTZ's graph structure. It's designed for application-level data — user profiles, billing records, custom entities — that benefits from type-safe CRUD operations, filtering, relations, and namespace isolation.
+
+### Quick Start
+
+```typescript
+import { createCopilotz, defineCollection, relation, index } from "@copilotz/copilotz";
+
+// 1. Define your schema with `as const` for type inference
+const customerSchema = {
+  type: "object",
+  properties: {
+    id: { type: "string", readOnly: true },
+    email: { type: "string" },
+    name: { type: ["string", "null"] },
+    plan: { type: "string", enum: ["free", "pro", "enterprise"] },
+    tags: { type: "array", items: { type: "string" } },
+    createdAt: { type: "string", format: "date-time" },
+    updatedAt: { type: "string", format: "date-time" },
+  },
+  required: ["id", "email"],
+} as const;  // <-- Required for type inference!
+
+// 2. Define the collection
+const customers = defineCollection({
+  name: "customer",
+  schema: customerSchema,
+  defaults: {
+    plan: "free",
+    tags: () => [],
+  },
+  indexes: [
+    "email",                      // Simple index
+    ["plan", "createdAt"],        // Composite index
+    index.gin("tags"),            // GIN index for arrays
+  ],
+  relations: {
+    orders: relation.hasMany("order", "customerId"),
+  },
+});
+
+// 3. Create Copilotz with collections
+const copilotz = await createCopilotz({
+  agents: [/* ... */],
+  collections: [customers],
+});
+
+// 4. Use the collections API
+const scoped = copilotz.collections.withNamespace("tenant:acme");
+
+// Create
+const customer = await scoped.customer.create({
+  email: "alice@example.com",
+  name: "Alice",
+  plan: "pro",
+});
+
+// Query
+const proCustomers = await scoped.customer.find({ plan: "pro" });
+const alice = await scoped.customer.findOne({ email: "alice@example.com" });
+
+// Update
+await scoped.customer.update({ id: customer.id }, { plan: "enterprise" });
+
+// Delete
+await scoped.customer.delete({ id: customer.id });
+```
+
+### Type Inference
+
+Types are automatically inferred from your JSON Schema:
+
+```typescript
+// Infer types from collection definition
+type Customer = typeof customers.$inferSelect;
+// { id: string; email: string; name?: string | null; plan?: "free" | "pro" | "enterprise"; ... }
+
+type NewCustomer = typeof customers.$inferInsert;
+// { email: string; id?: string; plan?: ...; }  (id, createdAt, updatedAt are optional)
+
+// Type errors are caught at compile time:
+const bad: Customer = {
+  id: "123",
+  email: "test@example.com",
+  plan: "invalid",  // ❌ Error: not assignable to "free" | "pro" | "enterprise"
+};
+```
+
+### Defining Collections
+
+```typescript
+import { defineCollection, relation, index } from "@copilotz/copilotz";
+
+const orders = defineCollection({
+  // Required
+  name: "order",                    // Collection name (used as node type)
+  schema: orderSchema,              // JSON Schema with `as const`
+  
+  // Optional
+  keys: [{ property: "id" }],       // Primary key fields (default: id)
+  
+  timestamps: {                     // Auto-managed timestamps
+    createdAt: "createdAt",
+    updatedAt: "updatedAt",
+  },
+  
+  defaults: {                       // Default values (static or factory functions)
+    status: "pending",
+    items: () => [],
+  },
+  
+  indexes: [                        // Database indexes for query performance
+    "customerId",                   // Simple index
+    ["status", "createdAt"],        // Composite index
+    index.unique("orderNumber"),    // Unique constraint
+    index.gin("items"),             // GIN for JSONB/arrays
+  ],
+  
+  relations: {                      // Relationships to other collections
+    customer: relation.belongsTo("customer", "customerId"),
+    lineItems: relation.hasMany("lineItem", "orderId"),
+  },
+  
+  search: {                         // Semantic search configuration
+    enabled: true,
+    fields: ["description", "notes"],
+  },
+  
+  hooks: {                          // Lifecycle hooks
+    beforeCreate: async (data, ctx) => { /* validate, transform */ },
+    afterCreate: async (record, ctx) => { /* notify, audit */ },
+    beforeUpdate: async (data, ctx) => { /* validate changes */ },
+    afterUpdate: async (record, ctx) => { /* sync, notify */ },
+    beforeDelete: async (filter, ctx) => { /* check permissions */ },
+    afterDelete: async (count, ctx) => { /* cleanup */ },
+  },
+});
+```
+
+### CRUD Operations
+
+All collections provide these operations:
+
+```typescript
+const scoped = copilotz.collections.withNamespace("my-namespace");
+
+// CREATE
+const record = await scoped.customer.create({ email: "new@example.com" });
+const records = await scoped.customer.createMany([
+  { email: "a@example.com" },
+  { email: "b@example.com" },
+]);
+
+// READ
+const byId = await scoped.customer.findById("customer-id");
+const one = await scoped.customer.findOne({ email: "a@example.com" });
+const many = await scoped.customer.find(
+  { plan: "pro" },
+  { 
+    limit: 10, 
+    offset: 0, 
+    sort: [["createdAt", "desc"]],
+    populate: ["orders"],  // Include related records
+  }
+);
+
+// UPDATE
+const updated = await scoped.customer.update(
+  { id: "customer-id" },
+  { plan: "enterprise" }
+);
+const { updated: count } = await scoped.customer.updateMany(
+  { plan: "free" },
+  { plan: "legacy" }
+);
+
+// DELETE
+const { deleted } = await scoped.customer.delete({ id: "customer-id" });
+const { deleted: deletedCount } = await scoped.customer.deleteMany({ plan: "legacy" });
+
+// UPSERT (create or update)
+const upserted = await scoped.customer.upsert(
+  { email: "unique@example.com" },           // Match condition
+  { email: "unique@example.com", plan: "pro" } // Data to insert/update
+);
+
+// COUNT
+const total = await scoped.customer.count();
+const proCount = await scoped.customer.count({ plan: "pro" });
+
+// EXISTS
+const exists = await scoped.customer.exists({ email: "check@example.com" });
+```
+
+### Query Operators
+
+Filters support MongoDB-style operators:
+
+```typescript
+// Comparison
+{ age: { $gt: 18 } }           // Greater than
+{ age: { $gte: 18 } }          // Greater than or equal
+{ age: { $lt: 65 } }           // Less than
+{ age: { $lte: 65 } }          // Less than or equal
+{ plan: { $ne: "free" } }      // Not equal
+{ status: { $in: ["active", "pending"] } }    // In array
+{ status: { $nin: ["deleted", "banned"] } }   // Not in array
+
+// String matching
+{ email: { $like: "%@example.com" } }         // SQL LIKE
+{ email: { $ilike: "%@EXAMPLE.COM" } }        // Case-insensitive LIKE
+{ name: { $startsWith: "John" } }             // Starts with
+{ name: { $endsWith: "Smith" } }              // Ends with
+{ bio: { $regex: "developer|engineer" } }    // Regex match
+
+// Array operations
+{ tags: { $contains: "vip" } }                // Array contains value
+
+// Logical operators
+{ $or: [{ plan: "pro" }, { plan: "enterprise" }] }
+{ $and: [{ status: "active" }, { verified: true }] }
+{ $not: { status: "deleted" } }
+
+// Nested field access (dot notation)
+{ "settings.theme": "dark" }
+{ "address.city": "New York" }
+```
+
+### Relations
+
+Define relationships between collections:
+
+```typescript
+// One-to-many: Customer has many Orders
+const customers = defineCollection({
+  name: "customer",
+  schema: customerSchema,
+  relations: {
+    orders: relation.hasMany("order", "customerId"),
+  },
+});
+
+// Many-to-one: Order belongs to Customer
+const orders = defineCollection({
+  name: "order",
+  schema: orderSchema,
+  relations: {
+    customer: relation.belongsTo("customer", "customerId"),
+  },
+});
+
+// One-to-one
+const users = defineCollection({
+  name: "user",
+  schema: userSchema,
+  relations: {
+    profile: relation.hasOne("profile", "userId"),
+  },
+});
+```
+
+**Populate related records:**
+
+```typescript
+// Single level
+const ordersWithCustomer = await scoped.order.find(
+  {},
+  { populate: ["customer"] }
+);
+// ordersWithCustomer[0].customer = { id, email, name, ... }
+
+// Multi-level (dot notation)
+const ordersWithDetails = await scoped.order.find(
+  {},
+  { populate: ["customer", "lineItems.product"] }
+);
+```
+
+### Namespace Isolation
+
+Namespaces provide multi-tenancy and data isolation:
+
+```typescript
+// Create scoped client
+const tenant1 = copilotz.collections.withNamespace("tenant:acme");
+const tenant2 = copilotz.collections.withNamespace("tenant:globex");
+
+// Data is isolated between namespaces
+await tenant1.customer.create({ email: "alice@acme.com" });
+await tenant2.customer.create({ email: "bob@globex.com" });
+
+// Each namespace only sees its own data
+await tenant1.customer.find({});  // Only ACME customers
+await tenant2.customer.find({});  // Only Globex customers
+
+// Or pass namespace explicitly per operation
+await copilotz.collections.customer.create(
+  { email: "explicit@example.com" },
+  { namespace: "tenant:specific" }
+);
+```
+
+### Semantic Search
+
+Enable vector search on collection fields:
+
+```typescript
+const articles = defineCollection({
+  name: "article",
+  schema: articleSchema,
+  search: {
+    enabled: true,
+    fields: ["title", "content", "summary"],
+  },
+});
+
+// Configure embedding provider
+const copilotz = await createCopilotz({
+  collections: [articles],
+  rag: {
+    embedding: {
+      provider: "openai",
+      model: "text-embedding-3-small",
+    },
+  },
+});
+
+// Semantic search
+const scoped = copilotz.collections.withNamespace("blog");
+const results = await scoped.article.search("machine learning tutorials", {
+  limit: 10,
+  threshold: 0.7,  // Minimum similarity score
+});
+
+for (const { _similarity, ...article } of results) {
+  console.log(`${article.title} (${(_similarity * 100).toFixed(1)}% match)`);
+}
+```
+
+### Indexes
+
+Optimize query performance with indexes:
+
+```typescript
+import { index } from "@copilotz/copilotz";
+
+const products = defineCollection({
+  name: "product",
+  schema: productSchema,
+  indexes: [
+    // Simple index
+    "sku",
+    
+    // Composite index
+    ["category", "price"],
+    
+    // Unique constraint
+    index.unique("sku"),
+    
+    // GIN index for JSONB/arrays
+    index.gin("tags"),
+    index.gin("metadata"),
+    
+    // GiST index for full-text search
+    index.gist("description"),
+    
+    // Partial index with condition
+    index.partial("status", { status: "active" }),
+  ],
+});
+```
+
+### Hooks
+
+Add custom logic at key lifecycle points:
+
+```typescript
+const orders = defineCollection({
+  name: "order",
+  schema: orderSchema,
+  hooks: {
+    beforeCreate: async (data, ctx) => {
+      // Generate order number
+      data.orderNumber = `ORD-${Date.now()}`;
+      // Validate inventory
+      await validateInventory(data.items);
+    },
+    
+    afterCreate: async (record, ctx) => {
+      // Send confirmation email
+      await sendOrderConfirmation(record);
+      // Update analytics
+      await analytics.track("order_created", record);
+    },
+    
+    beforeUpdate: async (data, ctx) => {
+      // Prevent status rollback
+      if (data.status === "shipped" && ctx.existing?.status === "delivered") {
+        throw new Error("Cannot change status from delivered to shipped");
+      }
+    },
+    
+    afterUpdate: async (record, ctx) => {
+      // Sync with external system
+      await externalCRM.updateOrder(record);
+    },
+    
+    beforeDelete: async (filter, ctx) => {
+      // Check for dependent records
+      const hasShipments = await checkShipments(filter);
+      if (hasShipments) {
+        throw new Error("Cannot delete order with active shipments");
+      }
+    },
+    
+    afterDelete: async (count, ctx) => {
+      console.log(`Deleted ${count} orders`);
+    },
+  },
+});
+```
+
+### How It Works
+
+Collections use the underlying **knowledge graph** (nodes + edges tables):
+
+- Each collection record is stored as a **node** with `type = collectionName`
+- Record data is stored in the node's `data` JSONB column
+- Relations create **edges** between nodes
+- Namespace isolation uses the node's `namespace` field
+- Search uses the node's `embedding` vector column
+
+This means:
+- Collections integrate seamlessly with RAG and entity extraction
+- You can traverse between messages, documents, and collection records
+- All data benefits from the graph's indexing and vector search capabilities
+
+### Use Cases
+
+**Custom Auth System:**
+```typescript
+const users = defineCollection({ name: "user", schema: userSchema });
+const sessions = defineCollection({ 
+  name: "session", 
+  schema: sessionSchema,
+  relations: { user: relation.belongsTo("user", "userId") },
+});
+const roles = defineCollection({ name: "role", schema: roleSchema });
+```
+
+**Billing & Subscriptions:**
+```typescript
+const subscriptions = defineCollection({
+  name: "subscription",
+  schema: subscriptionSchema,
+  relations: {
+    customer: relation.belongsTo("customer", "customerId"),
+    plan: relation.belongsTo("plan", "planId"),
+    invoices: relation.hasMany("invoice", "subscriptionId"),
+  },
+});
+```
+
+**E-commerce:**
+```typescript
+const products = defineCollection({ name: "product", schema: productSchema });
+const orders = defineCollection({ 
+  name: "order", 
+  schema: orderSchema,
+  relations: {
+    customer: relation.belongsTo("customer", "customerId"),
+    items: relation.hasMany("orderItem", "orderId"),
+  },
+});
+```
+
 ## Advanced Usage
 
 ### Multi-Agent Collaboration
@@ -850,10 +1328,16 @@ Gracefully shutdown and cleanup resources.
 │   │   └── providers/            # OpenAI, Anthropic, Google, etc.
 │   └── request/                  # HTTP request utilities
 ├── database/
+│   ├── collections/              # Collections API
+│   │   ├── index.ts              # defineCollection, relation, index helpers
+│   │   ├── crud.ts               # CRUD operations factory
+│   │   ├── manager.ts            # Collections manager (withNamespace)
+│   │   └── types.ts              # TypeScript type definitions
 │   ├── migrations/               # Database schema migrations
 │   │   ├── migration_0001.ts     # Core tables
 │   │   ├── migration_0002_rag.ts # RAG tables (documents, chunks)
-│   │   └── migration_0003_knowledge_graph.ts  # Graph tables (nodes, edges)
+│   │   ├── migration_0003_knowledge_graph.ts  # Graph tables (nodes, edges)
+│   │   └── migration_0004_ulid_support.ts     # ULID support for IDs
 │   ├── operations/               # High-level database operations + graph ops
 │   └── schemas/                  # TypeScript schema definitions
 ├── event-processors/             # Core event processing logic
@@ -1453,6 +1937,7 @@ See [ROADMAP.md](./ROADMAP.md) for detailed upcoming features:
 - ✅ **Unified Knowledge Graph**: Messages, chunks, entities as nodes
 - ✅ **Entity Extraction**: LLM-based extraction with deduplication
 - ✅ **RAG Auto-Injection Mode**: Automatically inject retrieved context into LLM calls
+- ✅ **Collections API**: Type-safe custom data collections with CRUD, relations, and namespace isolation
 - 🔜 **Cross-Domain Links**: Connect entities across conversations and documents
 - 🔜 **Cross-Runtime Compatibility**: Node.js and Bun support
 - 🔜 **Additional Embedding Providers**: Ollama, Cohere support
@@ -1512,6 +1997,7 @@ For detailed documentation, see the `/docs` directory:
 - [MCP Integration](./docs/mcp.md) - Model Context Protocol setup
 - [RAG Guide](#rag-retrieval-augmented-generation) - Document ingestion and semantic search
 - [Knowledge Graph](#knowledge-graph) - Unified graph, entity extraction, traversal
+- [Collections API](#collections-api) - Custom data collections with type-safe CRUD
 
 ## License
 

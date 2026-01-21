@@ -1,7 +1,8 @@
 
-import { createDatabase, schema, migrations } from "@/database/index.ts";
+import { createDatabase, schema, migrations, createCollectionsManager, createCollectionIndexes } from "@/database/index.ts";
 import type { OminipgWithCrud } from "omnipg";
 import { runThread, type RunHandle, type RunOptions, type UnifiedOnEvent } from "@/runtime/index.ts";
+import type { CollectionDefinition, CollectionCrud, ScopedCollectionCrud } from "@/database/collections/types.ts";
 
 import type {
     Agent,
@@ -18,8 +19,6 @@ import type {
     ToolCallEventPayload,
     LlmCallEventPayload,
     TokenEventPayload,
-    EntityExtractionConfig,
-    NamespaceResolutionContext,
 } from "./interfaces/index.ts";
 
 
@@ -129,6 +128,47 @@ export { schema };
 
 /** SQL migrations for setting up the database schema. */
 export { migrations };
+
+/**
+ * Define a custom collection with JSON Schema.
+ * Collections map to the graph structure (nodes + edges) with a developer-friendly CRUD interface.
+ * 
+ * @example
+ * ```ts
+ * const customerSchema = {
+ *   type: 'object',
+ *   properties: {
+ *     id: { type: 'string' },
+ *     email: { type: 'string' },
+ *     plan: { type: 'string', enum: ['free', 'pro', 'enterprise'] },
+ *   },
+ *   required: ['id', 'email'],
+ * } as const;
+ * 
+ * const customers = defineCollection({
+ *   name: 'customer',
+ *   schema: customerSchema,
+ *   indexes: ['email'],
+ * });
+ * 
+ * type Customer = typeof customers.$inferSelect;
+ * ```
+ */
+export { defineCollection, relation, index } from "@/database/collections/index.ts";
+
+/** Type definitions for collections API. */
+export type {
+    CollectionDefinition,
+    CollectionCrud,
+    ScopedCollectionCrud,
+    CollectionsConfig,
+    WhereFilter,
+    WhereOperators,
+    QueryOptions,
+    SearchOptions,
+    IndexDefinition,
+    RelationDefinition,
+} from "@/database/collections/types.ts";
 
 /**
  * Registers a custom event processor for handling specific event types.
@@ -272,6 +312,21 @@ export interface CopilotzConfig {
     stream?: boolean;
     /** Optional active task ID for task-oriented workflows. */
     activeTaskId?: string;
+    /**
+     * Default namespace for collections and data isolation.
+     * Can be overridden per-run via RunOptions.namespace.
+     * Used for multi-tenancy isolation.
+     * 
+     * @example
+     * ```ts
+     * const copilotz = await createCopilotz({
+     *   agents: [...],
+     *   collections: [customers],
+     *   namespace: 'tenant-123', // All operations scoped to this namespace
+     * });
+     * ```
+     */
+    namespace?: string;
     /** Optional asset storage configuration for handling files and media. */
     assets?: {
         /** Asset storage configuration options. */
@@ -316,6 +371,37 @@ export interface CopilotzConfig {
         };
         /** Default namespace for document storage. */
         defaultNamespace?: string;
+    };
+    /** 
+     * Custom collections for application data storage.
+     * Collections map to the graph structure (nodes + edges) with a developer-friendly CRUD interface.
+     * 
+     * @example
+     * ```ts
+     * const customers = defineCollection({
+     *   name: 'customer',
+     *   schema: customerSchema,
+     *   indexes: ['email'],
+     * });
+     * 
+     * const copilotz = await createCopilotz({
+     *   agents: [...],
+     *   collections: [customers],
+     * });
+     * 
+     * // Use collections
+     * const db = copilotz.collections.withNamespace('tenant-123');
+     * await db.customer.create({ email: 'alice@example.com' });
+     * ```
+     */
+    // deno-lint-ignore no-explicit-any
+    collections?: CollectionDefinition<any, any, any>[];
+    /** Configuration options for collections. */
+    collectionsConfig?: {
+        /** Auto-create indexes on startup. Default: true */
+        autoIndex?: boolean;
+        /** Validate writes against schema. Default: false */
+        validateOnWrite?: boolean;
     };
 }
 
@@ -406,6 +492,51 @@ export interface Copilotz {
          */
         getDataUrl: (refOrId: string) => Promise<string>;
     };
+    /** 
+     * Custom collections for application data storage.
+     * Access collections with explicit namespace or use withNamespace() for scoped access.
+     * 
+     * @example
+     * ```ts
+     * // Explicit namespace
+     * await copilotz.collections.customer.create(data, { namespace: 'tenant-123' });
+     * 
+     * // Scoped namespace (recommended)
+     * const db = copilotz.collections.withNamespace('tenant-123');
+     * await db.customer.create(data);
+     * await db.customer.find({ plan: 'pro' });
+     * await db.customer.search('enterprise companies');
+     * ```
+     */
+    collections: CollectionsManager | undefined;
+}
+
+/** 
+ * Collections manager interface with dynamic collection access.
+ * Access collections by name: `manager.customer`, `manager.order`, etc.
+ * Use `withNamespace()` to get a scoped client with namespace pre-applied.
+ * 
+ * Note: The index signature allows accessing any collection by name.
+ * TypeScript will show methods and collections together in autocomplete.
+ */
+export interface CollectionsManager {
+    /** Get a scoped client with namespace pre-applied to all operations. */
+    withNamespace(namespace: string): ScopedCollectionsManager;
+    /** List all registered collection names. */
+    getCollectionNames(): string[];
+    /** Check if a collection exists. */
+    hasCollection(name: string): boolean;
+    /** Access collections by name. */
+    [collectionName: string]: CollectionCrud<unknown, unknown> | unknown;
+}
+
+/** 
+ * Scoped collections manager with namespace pre-applied.
+ * Access collections by name: `scoped.customer`, `scoped.order`, etc.
+ */
+export interface ScopedCollectionsManager {
+    /** Access scoped collections by name. */
+    [collectionName: string]: ScopedCollectionCrud<unknown, unknown>;
 }
 
 /**
@@ -494,6 +625,38 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
         ? config.assets.store
         : (normalizedAssetConfig ? createAssetStore(normalizedAssetConfig) : createMemoryAssetStore());
 
+    // Initialize collections if defined
+    let collectionsManager: CollectionsManager | undefined = undefined;
+    if (config.collections && config.collections.length > 0) {
+        // Create embedding function for collections search
+        const collectionEmbeddingFn = config.rag?.embedding
+            ? async (text: string): Promise<number[]> => {
+                // Import embedding connector dynamically to avoid circular deps
+                const { embed } = await import("@/connectors/embeddings/index.ts");
+                const result = await embed([text], config.rag!.embedding);
+                return result.embeddings[0] ?? [];
+            }
+            : undefined;
+
+        // Create collections manager
+        collectionsManager = createCollectionsManager(
+            baseDb,
+            config.collections,
+            {
+                embeddingFn: collectionEmbeddingFn,
+                autoIndex: config.collectionsConfig?.autoIndex ?? true,
+                validateOnWrite: config.collectionsConfig?.validateOnWrite ?? false,
+            },
+        ) as unknown as CollectionsManager;
+
+        // Auto-create indexes if enabled
+        if (config.collectionsConfig?.autoIndex !== false) {
+            createCollectionIndexes(baseDb, config.collections).catch((error: unknown) => {
+                console.warn("[collections] Failed to create indexes:", error);
+            });
+        }
+    }
+
     const performRun = async (
         message: MessagePayload,
         onEvent?: UnifiedOnEvent,
@@ -502,9 +665,26 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
         if (!message?.content && !message?.toolCalls?.length) {
             throw new Error("message with content or toolCalls is required.");
         }
+
+        // Resolve namespace: RunOptions > CopilotzConfig > undefined
+        const resolvedNamespace = options?.namespace ?? config.namespace;
+
+        // Resolve collections: scoped if namespace is set, otherwise raw manager
+        const resolvedCollections = (resolvedNamespace && collectionsManager)
+            ? collectionsManager.withNamespace(resolvedNamespace)
+            : collectionsManager;
+
+        // Resolve agents: RunOptions > CopilotzConfig
+        // If RunOptions provides agents, they completely override config agents
+        const resolvedAgents = options?.agents ?? baseConfig.agents;
+
+        // Resolve tools: RunOptions > CopilotzConfig
+        // If RunOptions provides tools, they completely override config tools
+        const resolvedTools = options?.tools ?? baseConfig.tools;
+
         const ctx: ChatContext = {
-            agents: baseConfig.agents,
-            tools: baseConfig.tools,
+            agents: resolvedAgents,
+            tools: resolvedTools,
             apis: baseConfig.apis,
             mcpServers: baseConfig.mcpServers,
             callbacks: baseConfig.callbacks,
@@ -530,6 +710,10 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                 defaultNamespace: config.rag.defaultNamespace,
             } : undefined,
             embeddingConfig: config.rag?.embedding,
+            // Resolved namespace for this run
+            namespace: resolvedNamespace,
+            // Collections: scoped if namespace is set, otherwise raw manager
+            collections: resolvedCollections,
         };
         return await runThread(baseDb, ctx, message, onEvent, options);
     };
@@ -689,5 +873,6 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                 return `data:${mime};base64,${base64}`;
             },
         },
+        collections: collectionsManager,
     } satisfies Copilotz;
 }

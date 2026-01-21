@@ -544,9 +544,19 @@ The `copilotz.ops` API provides high-level operations and raw CRUD access:
 ### High-Level Operations
 
 ```typescript
-// User management
-const user = await copilotz.ops.getUserByExternalId("customer-42");
-const userById = await copilotz.ops.getUserById("uuid");
+// User management (graph-based with namespace support)
+const user = await copilotz.ops.getUserNode("customer-42", "tenant:acme");
+const globalUser = await copilotz.ops.getUserNode("admin-1"); // Falls back to global
+
+// Upsert user (create or update by externalId + namespace)
+await copilotz.ops.upsertUserNode("customer-42", "tenant:acme", {
+  name: "John Doe",
+  email: "john@example.com",
+  metadata: { plan: "pro" },
+});
+
+// Get all user nodes across namespaces (for multi-namespace users)
+const allUserNodes = await copilotz.ops.getUserNodesByExternalId("customer-42");
 
 // Thread operations
 const thread = await copilotz.ops.getThreadByExternalId("session-123");
@@ -582,12 +592,10 @@ The `ops.crud` interface provides direct access to all database tables:
 // Access any table with full CRUD operations
 const { crud } = copilotz.ops;
 
-// Users
+// Users (legacy table - prefer graph-based ops.upsertUserNode for new code)
+// Legacy CRUD still works for backwards compatibility
 await crud.users.create({ name: "John", email: "john@example.com" });
 await crud.users.findOne({ email: "john@example.com" });
-await crud.users.findMany({ status: "active" }, { limit: 10 });
-await crud.users.update({ id: userId }, { name: "John Doe" });
-await crud.users.deleteMany({ status: "inactive" });
 
 // Threads
 await crud.threads.create({ name: "New Thread", participants: ["Agent1"] });
@@ -907,26 +915,52 @@ const ordersWithDetails = await scoped.order.find(
 
 ### Namespace Isolation
 
-Namespaces provide multi-tenancy and data isolation:
+Namespaces provide multi-tenancy and data isolation. You can set namespaces at three levels:
 
+**1. Instance level (createCopilotz):**
 ```typescript
-// Create scoped client
-const tenant1 = copilotz.collections.withNamespace("tenant:acme");
-const tenant2 = copilotz.collections.withNamespace("tenant:globex");
+const copilotz = await createCopilotz({
+  agents: [/* ... */],
+  collections: [customers],
+  namespace: "tenant:acme",  // Default namespace for all operations
+});
+```
 
-// Data is isolated between namespaces
-await tenant1.customer.create({ email: "alice@acme.com" });
-await tenant2.customer.create({ email: "bob@globex.com" });
+**2. Run level (per request):**
+```typescript
+// Override namespace for this specific run
+await copilotz.run(
+  { content: "Hello", sender: { type: "user" } },
+  onEvent,
+  { namespace: "tenant:globex" }  // Overrides instance default
+);
+```
 
-// Each namespace only sees its own data
-await tenant1.customer.find({});  // Only ACME customers
-await tenant2.customer.find({});  // Only Globex customers
-
-// Or pass namespace explicitly per operation
+**3. Operation level (explicit):**
+```typescript
+// Pass namespace explicitly per operation
 await copilotz.collections.customer.create(
   { email: "explicit@example.com" },
   { namespace: "tenant:specific" }
 );
+
+// Or use withNamespace for scoped client
+const tenant1 = copilotz.collections.withNamespace("tenant:acme");
+await tenant1.customer.find({});  // Only ACME customers
+```
+
+**Priority:** Run-level > Instance-level > Operation-level default
+
+**Inside tools/processors:** When namespace is set (via config or run options), `context.collections` is automatically scoped:
+```typescript
+const myTool = {
+  key: "get_customers",
+  execute: async (params, context) => {
+    // context.collections is pre-scoped when namespace is set
+    const customers = await context.collections?.customer.find({});
+    return { customers };
+  },
+};
 ```
 
 ### Semantic Search
@@ -1248,6 +1282,7 @@ interface CopilotzConfig {
   tools?: ToolConfig[];            // Optional custom tools
   apis?: APIConfig[];              // Optional OpenAPI specs
   mcpServers?: MCPServerConfig[];  // Optional MCP servers
+  collections?: CollectionDefinition[]; // Optional custom data collections
   callbacks?: ChatCallbacks;       // Global callbacks
   dbConfig?: DatabaseConfig;       // Database configuration
   dbInstance?: CopilotzDb;         // Pre-existing database instance
@@ -1255,12 +1290,26 @@ interface CopilotzConfig {
   queueTTL?: number;               // Default queue item TTL (ms)
   stream?: boolean;                // Enable streaming by default
   activeTaskId?: string;           // Current active task context
+  namespace?: string;              // Default namespace for multi-tenancy
 }
 ```
 
 ### `copilotz.run(message, onEvent?, options?): Promise<RunHandle>`
 
 Execute a single message interaction.
+
+**Options:**
+```typescript
+interface RunOptions {
+  stream?: boolean;                // Enable streaming
+  ackMode?: "onQueued" | "onComplete"; // Acknowledgment mode
+  queueTTL?: number;               // Queue item TTL (ms)
+  namespace?: string;              // Override instance namespace
+  agents?: AgentConfig[];          // Override instance agents
+  tools?: ToolConfig[];            // Override instance tools
+  signal?: AbortSignal;            // Cancellation signal
+}
+```
 
 **Returns:**
 ```typescript
@@ -1754,9 +1803,39 @@ Namespaces provide multi-tenancy and scope isolation:
 ```typescript
 const copilotz = await createCopilotz({
   namespacePrefix: "myapp",  // Optional isolation prefix
+  namespace: "tenant:acme",  // Default namespace for all operations
   agents: [/* ... */],
 });
 ```
+
+### User Nodes (Graph-based Users)
+
+Users are stored as nodes in the knowledge graph with namespace support:
+
+```typescript
+// Global user (accessible from any namespace)
+await ops.upsertUserNode("admin-1", null, { name: "Admin", email: "admin@example.com" });
+
+// Namespace-scoped user
+await ops.upsertUserNode("customer-42", "tenant:acme", { name: "John", email: "john@acme.com" });
+
+// Lookup (checks namespace first, then falls back to global)
+const user = await ops.getUserNode("customer-42", "tenant:acme");
+
+// Multi-namespace users: create multiple nodes linked by externalId
+await ops.upsertUserNode("consultant-1", "tenant:acme", { name: "Jane" });
+await ops.upsertUserNode("consultant-1", "tenant:globex", { name: "Jane" });
+
+// Get all nodes for a user
+const allNodes = await ops.getUserNodesByExternalId("consultant-1");
+```
+
+**User scope model:**
+- **Global users**: `namespace: null` → stored with namespace "global", accessible everywhere
+- **Scoped users**: `namespace: "tenantA"` → only accessible in that namespace
+- **Multi-namespace users**: Create multiple nodes (one per namespace) linked by `externalId`
+
+**Auto-upsert:** Users are automatically upserted during `copilotz.run()` with the resolved namespace.
 
 **Namespace Resolution:**
 | Scope | Resolved Namespace |

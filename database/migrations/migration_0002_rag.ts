@@ -65,34 +65,63 @@ BEGIN
   END;
 END $$;
 
--- Indexes for documents table
-CREATE INDEX IF NOT EXISTS "idx_documents_namespace"
-  ON "documents" ("namespace");
+-- Indexes for documents table (wrapped in DO blocks for error isolation)
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_documents_namespace') THEN
+    CREATE INDEX "idx_documents_namespace" ON "documents" ("namespace");
+  END IF;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
 
-CREATE INDEX IF NOT EXISTS "idx_documents_namespace_status"
-  ON "documents" ("namespace", "status");
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_documents_namespace_status') THEN
+    CREATE INDEX "idx_documents_namespace_status" ON "documents" ("namespace", "status");
+  END IF;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
 
-CREATE INDEX IF NOT EXISTS "idx_documents_content_hash"
-  ON "documents" ("contentHash", "namespace");
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_documents_content_hash') THEN
+    CREATE INDEX "idx_documents_content_hash" ON "documents" ("contentHash", "namespace");
+  END IF;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
 
-CREATE INDEX IF NOT EXISTS "idx_documents_external_id"
-  ON "documents" ("externalId");
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_documents_external_id') THEN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'documents' AND column_name = 'externalId') THEN
+      CREATE INDEX "idx_documents_external_id" ON "documents" ("externalId");
+    END IF;
+  END IF;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
 
-CREATE INDEX IF NOT EXISTS "idx_documents_asset_id"
-  ON "documents" ("assetId");
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_documents_asset_id') THEN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'documents' AND column_name = 'assetId') THEN
+      CREATE INDEX "idx_documents_asset_id" ON "documents" ("assetId");
+    END IF;
+  END IF;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
 
 -- Indexes for document_chunks table
-CREATE INDEX IF NOT EXISTS "idx_chunks_document_id"
-  ON "document_chunks" ("documentId");
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_chunks_document_id') THEN
+    CREATE INDEX "idx_chunks_document_id" ON "document_chunks" ("documentId");
+  END IF;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
 
-CREATE INDEX IF NOT EXISTS "idx_chunks_namespace"
-  ON "document_chunks" ("namespace");
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_chunks_namespace') THEN
+    CREATE INDEX "idx_chunks_namespace" ON "document_chunks" ("namespace");
+  END IF;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
 
--- Composite index for namespace-filtered searches
-CREATE INDEX IF NOT EXISTS "idx_chunks_namespace_document"
-  ON "document_chunks" ("namespace", "documentId");
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_chunks_namespace_document') THEN
+    CREATE INDEX "idx_chunks_namespace_document" ON "document_chunks" ("namespace", "documentId");
+  END IF;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
 
--- Unique constraint to prevent duplicate chunks
-CREATE UNIQUE INDEX IF NOT EXISTS "idx_chunks_document_chunk_unique"
-  ON "document_chunks" ("documentId", "chunkIndex");
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_chunks_document_chunk_unique') THEN
+    CREATE UNIQUE INDEX "idx_chunks_document_chunk_unique" ON "document_chunks" ("documentId", "chunkIndex");
+  END IF;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
 `;

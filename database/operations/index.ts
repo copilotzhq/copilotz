@@ -557,16 +557,12 @@ export function createOperations(db: DbInstance): DatabaseOperations {
   const getMessagesFromLegacyTable = async (
     threadId: string
   ): Promise<Message[]> => {
-    const messages = await crud.messages.findMany({
-      threadId,
-    }) as Message[];
+    const messages = await crud.messages.find(
+      { threadId },
+      { orderBy: { createdAt: "asc" } }
+    ) as Message[];
     
-    // Sort by createdAt ascending
-    return messages.sort((a, b) => {
-      const dateA = new Date(String(a.createdAt)).getTime();
-      const dateB = new Date(String(b.createdAt)).getTime();
-      return dateA - dateB;
-    });
+    return messages;
   };
 
   // Helper: Get messages from graph for a specific thread (no limit, for hierarchy traversal)

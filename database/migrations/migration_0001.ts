@@ -1,4 +1,11 @@
-export const generateMigrations = (): string => (`-- Enable extensions once; safe to re-run.
+export const generateMigrations = (): string => (`-- CRITICAL: Add namespace column FIRST (before any extensions that might fail)
+-- This must run before anything else to ensure upgrades from older DBs work
+ALTER TABLE IF EXISTS "events" ADD COLUMN IF NOT EXISTS "namespace" varchar(255);
+ALTER TABLE IF EXISTS "events" ADD COLUMN IF NOT EXISTS "ttlMs" integer;
+ALTER TABLE IF EXISTS "events" ADD COLUMN IF NOT EXISTS "expiresAt" timestamp;
+ALTER TABLE IF EXISTS "events" ADD COLUMN IF NOT EXISTS "metadata" jsonb;
+
+-- Enable extensions once; safe to re-run.
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 CREATE EXTENSION IF NOT EXISTS "vector";
 
@@ -150,18 +157,6 @@ CREATE TABLE IF NOT EXISTS "events" (
   "createdAt" timestamp DEFAULT now() NOT NULL,
   "updatedAt" timestamp DEFAULT now() NOT NULL
 );
-
-ALTER TABLE IF EXISTS "events"
-  ADD COLUMN IF NOT EXISTS "ttlMs" integer;
-
-ALTER TABLE IF EXISTS "events"
-  ADD COLUMN IF NOT EXISTS "expiresAt" timestamp;
-
-ALTER TABLE IF EXISTS "events"
-  ADD COLUMN IF NOT EXISTS "metadata" jsonb;
-
-ALTER TABLE IF EXISTS "events"
-  ADD COLUMN IF NOT EXISTS "namespace" varchar(255);
 
 /* Foreign keys rewritten without DO blocks */
 ALTER TABLE "messages"

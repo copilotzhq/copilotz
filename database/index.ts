@@ -176,8 +176,6 @@ export async function createDatabase(
 
   const url = config?.url || getEnvVar("DATABASE_URL") || ":memory:";
 
-  console.log('migrations', JSON.stringify([...config?.schemaSQL || [], ...splitSQLStatements(migrations)])); 
-
   const finalConfig: DatabaseConfig = {
     url,
     syncUrl: config?.syncUrl || getEnvVar("SYNC_DATABASE_URL"),

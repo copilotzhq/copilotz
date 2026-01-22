@@ -144,6 +144,7 @@ CREATE TABLE IF NOT EXISTS "events" (
   "priority" integer,
   "ttlMs" integer,
   "expiresAt" timestamp,
+  "namespace" varchar(255),
   "status" varchar DEFAULT 'pending' NOT NULL,
   "metadata" jsonb,
   "createdAt" timestamp DEFAULT now() NOT NULL,
@@ -158,6 +159,9 @@ ALTER TABLE IF EXISTS "events"
 
 ALTER TABLE IF EXISTS "events"
   ADD COLUMN IF NOT EXISTS "metadata" jsonb;
+
+ALTER TABLE IF EXISTS "events"
+  ADD COLUMN IF NOT EXISTS "namespace" varchar(255);
 
 /* Foreign keys rewritten without DO blocks */
 ALTER TABLE "messages"

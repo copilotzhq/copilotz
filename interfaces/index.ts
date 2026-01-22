@@ -329,6 +329,17 @@ export interface ChatContext {
      * - If no namespace: returns raw manager (use withNamespace manually)
      */
     collections?: ScopedCollectionsManager | CollectionsManager;
+    /**
+     * The sender of the current message being processed.
+     * Available in processors and tools for the message that triggered this run.
+     */
+    sender?: {
+        id?: string | null;
+        externalId?: string | null;
+        type?: "user" | "agent" | "tool" | "system";
+        name?: string | null;
+        metadata?: Record<string, unknown> | null;
+    };
 }
 
 /**

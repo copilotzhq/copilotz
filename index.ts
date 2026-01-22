@@ -714,6 +714,14 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
             namespace: resolvedNamespace,
             // Collections: scoped if namespace is set, otherwise raw manager
             collections: resolvedCollections,
+            // Sender of the current message (available to processors and tools)
+            sender: message.sender ? {
+                id: message.sender.id ?? null,
+                externalId: message.sender.externalId ?? null,
+                type: message.sender.type ?? "user",
+                name: message.sender.name ?? null,
+                metadata: message.sender.metadata ?? null,
+            } : undefined,
         };
         return await runThread(baseDb, ctx, message, onEvent, options);
     };

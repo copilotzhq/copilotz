@@ -1218,6 +1218,18 @@ export type Event = {
   [K in keyof EventPayloadMap]: EventBase & { type: K; payload: EventPayloadMap[K] }
 }[keyof EventPayloadMap];
 
+/** Specific event type for NEW_MESSAGE events with typed payload. */
+export type NewMessageEvent = EventBase & { type: "NEW_MESSAGE"; payload: MessagePayload };
+
+/** Specific event type for TOOL_CALL events with typed payload. */
+export type ToolCallEvent = EventBase & { type: "TOOL_CALL"; payload: ToolCallEventPayload };
+
+/** Specific event type for LLM_CALL events with typed payload. */
+export type LlmCallEvent = EventBase & { type: "LLM_CALL"; payload: LlmCallEventPayload };
+
+/** Specific event type for TOKEN events with typed payload. */
+export type TokenEvent = EventBase & { type: "TOKEN"; payload: TokenEventPayload };
+
 /** 
  * Input type for creating a new Event in the queue.
  * Supports all built-in event types with their typed payloads.

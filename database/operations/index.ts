@@ -553,34 +553,60 @@ export function createOperations(db: DbInstance): DatabaseOperations {
     return result;
   };
 
+  // Helper: Get messages from legacy messages table (fallback when nodes table doesn't exist)
+  const getMessagesFromLegacyTable = async (
+    threadId: string
+  ): Promise<Message[]> => {
+    const messages = await crud.messages.findMany({
+      threadId,
+    }) as Message[];
+    
+    // Sort by createdAt ascending
+    return messages.sort((a, b) => {
+      const dateA = new Date(String(a.createdAt)).getTime();
+      const dateB = new Date(String(b.createdAt)).getTime();
+      return dateA - dateB;
+    });
+  };
+
   // Helper: Get messages from graph for a specific thread (no limit, for hierarchy traversal)
   const getMessagesFromGraphForThread = async (
     threadId: string
   ): Promise<Message[]> => {
-    const result = await db.query<Record<string, unknown>>(
-      `SELECT * FROM "nodes"
-       WHERE "namespace" = $1 AND "type" = 'message'
-       ORDER BY "created_at" ASC`,
-      [threadId]
-    );
+    try {
+      const result = await db.query<Record<string, unknown>>(
+        `SELECT * FROM "nodes"
+         WHERE "namespace" = $1 AND "type" = 'message'
+         ORDER BY "created_at" ASC`,
+        [threadId]
+      );
 
-    return result.rows.map((node) => {
-      const data = (node.data ?? {}) as Record<string, unknown>;
-      return {
-        id: (data.messageId ?? node.id) as string,
-        threadId: node.namespace as string,
-        senderId: data.senderId as string,
-        senderType: data.senderType as Message["senderType"],
-        senderUserId: data.senderUserId as string | null,
-        externalId: data.externalId as string | null,
-        content: node.content as string,
-        toolCallId: data.toolCallId as string | null,
-        toolCalls: data.toolCalls as Message["toolCalls"],
-        metadata: data.metadata as Message["metadata"],
-        createdAt: node.created_at as Date ?? node.createdAt as Date,
-        updatedAt: node.updated_at as Date ?? node.updatedAt as Date,
-      } as Message;
-    });
+      return result.rows.map((node) => {
+        const data = (node.data ?? {}) as Record<string, unknown>;
+        return {
+          id: (data.messageId ?? node.id) as string,
+          threadId: node.namespace as string,
+          senderId: data.senderId as string,
+          senderType: data.senderType as Message["senderType"],
+          senderUserId: data.senderUserId as string | null,
+          externalId: data.externalId as string | null,
+          content: node.content as string,
+          toolCallId: data.toolCallId as string | null,
+          toolCalls: data.toolCalls as Message["toolCalls"],
+          metadata: data.metadata as Message["metadata"],
+          createdAt: node.created_at as Date ?? node.createdAt as Date,
+          updatedAt: node.updated_at as Date ?? node.updatedAt as Date,
+        } as Message;
+      });
+    } catch (error) {
+      // Fallback to legacy messages table if nodes table doesn't exist (42P01 = undefined_table)
+      const pgError = error as { code?: string };
+      if (pgError?.code === '42P01') {
+        console.warn('[getMessagesFromGraphForThread] nodes table does not exist, falling back to messages table');
+        return getMessagesFromLegacyTable(threadId);
+      }
+      throw error;
+    }
   };
 
   // ============================================
@@ -590,14 +616,24 @@ export function createOperations(db: DbInstance): DatabaseOperations {
   const getLastMessageNode = async (
     threadId: string
   ): Promise<KnowledgeNode | undefined> => {
-    const result = await db.query<KnowledgeNode>(
-      `SELECT * FROM "nodes" 
-       WHERE "namespace" = $1 AND "type" = 'message'
-       ORDER BY "created_at" DESC
-       LIMIT 1`,
-      [threadId]
-    );
-    return result.rows[0];
+    try {
+      const result = await db.query<KnowledgeNode>(
+        `SELECT * FROM "nodes" 
+         WHERE "namespace" = $1 AND "type" = 'message'
+         ORDER BY "created_at" DESC
+         LIMIT 1`,
+        [threadId]
+      );
+      return result.rows[0];
+    } catch (error) {
+      // Return undefined if nodes table doesn't exist (42P01 = undefined_table)
+      // This allows createMessage to still work without graph edges
+      const pgError = error as { code?: string };
+      if (pgError?.code === '42P01') {
+        return undefined;
+      }
+      throw error;
+    }
   };
 
   const createMessageNode = async (

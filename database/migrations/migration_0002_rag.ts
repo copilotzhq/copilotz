@@ -47,14 +47,23 @@ CREATE TABLE IF NOT EXISTS "document_chunks" (
   "updatedAt" timestamp DEFAULT now() NOT NULL
 );
 
--- Foreign key constraint
-ALTER TABLE "document_chunks"
-  DROP CONSTRAINT IF EXISTS "document_chunks_documentId_documents_id_fk";
-
-ALTER TABLE "document_chunks"
-  ADD CONSTRAINT "document_chunks_documentId_documents_id_fk"
-  FOREIGN KEY ("documentId") REFERENCES "documents"("id")
-  ON DELETE CASCADE ON UPDATE NO ACTION;
+-- Foreign key constraint (wrapped in DO block to handle existing data gracefully)
+DO $$
+BEGIN
+  -- Drop old constraint if exists
+  ALTER TABLE "document_chunks"
+    DROP CONSTRAINT IF EXISTS "document_chunks_documentId_documents_id_fk";
+  
+  -- Try to add constraint, but don't fail if data violates it
+  BEGIN
+    ALTER TABLE "document_chunks"
+      ADD CONSTRAINT "document_chunks_documentId_documents_id_fk"
+      FOREIGN KEY ("documentId") REFERENCES "documents"("id")
+      ON DELETE CASCADE ON UPDATE NO ACTION;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'FK constraint document_chunks_documentId_documents_id_fk not added: %', SQLERRM;
+  END;
+END $$;
 
 -- Indexes for documents table
 CREATE INDEX IF NOT EXISTS "idx_documents_namespace"

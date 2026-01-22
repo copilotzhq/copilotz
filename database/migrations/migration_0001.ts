@@ -1,5 +1,6 @@
 export const generateMigrations = (): string => (`-- Enable extensions once; safe to re-run.
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+CREATE EXTENSION IF NOT EXISTS "vector";
 
 -- If legacy "queue" table exists (and new 'events' doesn't), drop Copilotz tables to recreate with new schema
 DO $$

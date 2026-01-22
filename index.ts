@@ -45,6 +45,12 @@ export type {
     Event,
     /** New event to be created in the event queue. */
     NewEvent,
+    /** Specific NEW_MESSAGE event type with typed payload. */
+    NewMessageEvent,
+    /** Specific TOOL_CALL event type with typed payload. */
+    ToolCallEvent,
+    /** Specific LLM_CALL event type with typed payload. */
+    LlmCallEvent,
     /** Input type for creating a new Agent. */
     NewAgent,
     /** Input type for creating a new API configuration. */

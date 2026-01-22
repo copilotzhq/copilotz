@@ -14,7 +14,7 @@ import type {
     API, NewAPI,
     MCPServer, NewMCPServer,
     Message, NewMessage,
-    Event, NewEvent,
+    Event, NewEvent, NewMessageEvent, ToolCallEvent, LlmCallEvent, TokenEvent,
     Task, NewTask,
     Thread, NewThread,
     Tool, NewTool,
@@ -47,6 +47,14 @@ export type {
     Event,
     /** Input type for creating a new Event. */
     NewEvent,
+    /** Specific NEW_MESSAGE event with typed payload. */
+    NewMessageEvent,
+    /** Specific TOOL_CALL event with typed payload. */
+    ToolCallEvent,
+    /** Specific LLM_CALL event with typed payload. */
+    LlmCallEvent,
+    /** Specific TOKEN event with typed payload. */
+    TokenEvent,
     /** Task entity for goal-oriented workflows. */
     Task,
     /** Input type for creating a new Task. */
@@ -451,12 +459,6 @@ export interface ContentStreamData {
     /** Whether this is the final token (stream complete). */
     isComplete: boolean;
 }
-
-/** Payload type for TOKEN events, extending ContentStreamData with additional properties. */
-type TokenPayload = ContentStreamData & { [x: string]: unknown };
-
-/** Event type specifically for TOKEN events with typed payload. */
-export type TokenEvent = Event & { type: "TOKEN"; payload: TokenPayload };
 
 /**
  * Type guard to check if an event is a TOKEN event.

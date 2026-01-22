@@ -222,7 +222,7 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
         // Emit ENTITY_EXTRACT event for agents with entity extraction enabled
         const entityExtractEvents: Array<{ threadId: string; type: string; payload: unknown; parentEventId?: string; traceId?: string; priority?: number }> = [];
         const agentsForExtraction = context.agents || [];
-        
+
         for (const agent of agentsForExtraction) {
             const entityConfig = agent.ragOptions?.entityExtraction;
             if (entityConfig?.enabled && persistedContent.trim()) {
@@ -568,10 +568,10 @@ function discoverTargetAgentsForMessage(contextDetails: MessageContextDetails, t
 
     // Default two-party fallback
     if (thread.participants && thread.participants.length === 2) {
-      
+
         const otherParticipant: string | undefined = thread.participants.find((p: string) =>
             p !== contextDetails.senderName &&
-            p !== contextDetails.senderId 
+            p !== contextDetails.senderId
 
         );
         if (otherParticipant) {

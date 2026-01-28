@@ -1,5 +1,17 @@
 
-import { createDatabase, schema, migrations, createCollectionsManager, createCollectionIndexes } from "@/database/index.ts";
+import { 
+    createDatabase, 
+    schema, 
+    migrations, 
+    createCollectionsManager, 
+    createCollectionIndexes,
+    withSchema,
+    provisionTenantSchema,
+    dropTenantSchema,
+    schemaExists,
+    listTenantSchemas,
+    warmSchemaCache,
+} from "@/database/index.ts";
 import type { OminipgWithCrud } from "omnipg";
 import { runThread, type RunHandle, type RunOptions, type UnifiedOnEvent } from "@/runtime/index.ts";
 import type { CollectionDefinition, CollectionCrud, ScopedCollectionCrud } from "@/database/collections/types.ts";
@@ -134,6 +146,47 @@ export { schema };
 
 /** SQL migrations for setting up the database schema. */
 export { migrations };
+
+/**
+ * Schema context utilities for multi-tenant PostgreSQL schema isolation.
+ * Use withSchema() to execute operations in a specific tenant's schema.
+ * 
+ * @example
+ * ```ts
+ * import { withSchema } from "@copilotz/lib";
+ * 
+ * // Execute operations in a specific schema
+ * await withSchema('tenant_abc', async () => {
+ *   await db.query('SELECT * FROM users');
+ * });
+ * ```
+ */
+export { withSchema } from "@/database/schema-context.ts";
+
+/**
+ * Schema provisioning utilities for creating and managing tenant schemas.
+ * 
+ * @example
+ * ```ts
+ * import { provisionTenantSchema, schemaExists } from "@copilotz/lib";
+ * 
+ * // Create a new tenant schema with all tables
+ * await provisionTenantSchema(db, 'tenant_abc');
+ * 
+ * // Check if a schema exists
+ * if (await schemaExists(db, 'tenant_abc')) {
+ *   // Ready to use
+ * }
+ * ```
+ */
+export { 
+    provisionTenantSchema,
+    dropTenantSchema,
+    schemaExists,
+    listTenantSchemas,
+    warmSchemaCache,
+    clearSchemaCache,
+} from "@/database/schema-provisioning.ts";
 
 /**
  * Define a custom collection with JSON Schema.
@@ -515,6 +568,58 @@ export interface Copilotz {
      * ```
      */
     collections: CollectionsManager | undefined;
+
+    /**
+     * Schema management utilities for multi-tenant PostgreSQL schema isolation.
+     * Use these methods to provision, check, and manage tenant schemas.
+     * 
+     * @example
+     * ```ts
+     * // Provision a new tenant schema (creates all tables)
+     * await copilotz.schema.provision('tenant_abc');
+     * 
+     * // Check if a schema exists
+     * if (await copilotz.schema.exists('tenant_abc')) {
+     *   // Safe to use
+     * }
+     * 
+     * // Run with a specific schema
+     * await copilotz.run(message, onEvent, { schema: 'tenant_abc' });
+     * 
+     * // Drop a tenant schema (WARNING: deletes all data!)
+     * await copilotz.schema.drop('tenant_abc');
+     * ```
+     */
+    schema: {
+        /**
+         * Provisions a new tenant schema with all required tables.
+         * Idempotent - safe to call multiple times.
+         * @param schemaName - Name of the schema to create
+         */
+        provision: (schemaName: string) => Promise<void>;
+        /**
+         * Drops a tenant schema and all its data.
+         * WARNING: This permanently deletes all data in the schema!
+         * @param schemaName - Name of the schema to drop
+         */
+        drop: (schemaName: string) => Promise<void>;
+        /**
+         * Checks if a schema exists in the database.
+         * @param schemaName - Name of the schema to check
+         * @returns true if the schema exists
+         */
+        exists: (schemaName: string) => Promise<boolean>;
+        /**
+         * Lists all tenant schemas (excludes system schemas).
+         * @returns Array of schema names
+         */
+        list: () => Promise<string[]>;
+        /**
+         * Warms the schema cache by loading all existing schemas.
+         * Call during startup to avoid first-request latency for existing tenants.
+         */
+        warmCache: () => Promise<void>;
+    };
 }
 
 /** 
@@ -672,6 +777,10 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
             throw new Error("message with content or toolCalls is required.");
         }
 
+        // Resolve schema: RunOptions > DbConfig > undefined
+        // When set, all queries will execute in the specified schema
+        const resolvedSchema = options?.schema ?? config.dbConfig?.defaultSchema;
+
         // Resolve namespace: RunOptions > CopilotzConfig > undefined
         const resolvedNamespace = options?.namespace ?? config.namespace;
 
@@ -729,6 +838,15 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                 metadata: message.sender.metadata ?? null,
             } : undefined,
         };
+
+        // If schema is specified, wrap execution in schema context
+        // This sets the search_path for all queries within this run
+        if (resolvedSchema && resolvedSchema !== 'public') {
+            return withSchema(resolvedSchema, async () => {
+                return await runThread(baseDb, ctx, message, onEvent, options);
+            });
+        }
+
         return await runThread(baseDb, ctx, message, onEvent, options);
     };
 
@@ -888,5 +1006,12 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
             },
         },
         collections: collectionsManager,
+        schema: {
+            provision: (schemaName: string) => provisionTenantSchema(baseDb, schemaName),
+            drop: (schemaName: string) => dropTenantSchema(baseDb, schemaName),
+            exists: (schemaName: string) => schemaExists(baseDb, schemaName),
+            list: () => listTenantSchemas(baseDb),
+            warmCache: () => warmSchemaCache(baseDb),
+        },
     } satisfies Copilotz;
 }

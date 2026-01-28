@@ -19,6 +19,8 @@ import { generateRagMigrations } from "./migrations/migration_0002_rag.ts";
 import { generateKnowledgeGraphMigrations } from "./migrations/migration_0003_knowledge_graph.ts";
 import { generateUlidSupportMigrations } from "./migrations/migration_0004_ulid_support.ts";
 import { generateNamespaceEventsMigrations } from "./migrations/migration_0005_namespace_events.ts";
+import { getCurrentSchema } from "./schema-context.ts";
+import { ensureSchemaProvisioned, validateSchemaName } from "./schema-provisioning.ts";
 
 /** SQL migration statements for setting up the database schema. */
 const migrations: string = generateMigrations() + "\n" + generateRagMigrations() + "\n" + generateKnowledgeGraphMigrations() + "\n" + generateUlidSupportMigrations() + "\n" + generateNamespaceEventsMigrations();
@@ -36,6 +38,13 @@ const migrations: string = generateMigrations() + "\n" + generateRagMigrations()
  * 
  * // PostgreSQL connection
  * const db = await createDatabase({ url: "postgres://user:pass@host:5432/db" });
+ * 
+ * // PostgreSQL with multi-tenant schema support
+ * const db = await createDatabase({ 
+ *   url: "postgres://...", 
+ *   defaultSchema: "tenant_abc",
+ *   autoProvisionSchema: true 
+ * });
  * ```
  */
 export interface DatabaseConfig {
@@ -58,6 +67,23 @@ export interface DatabaseConfig {
   logMetrics?: boolean;
   /** Custom schema definitions. */
   schemas?: typeof baseSchema;
+  /**
+   * Default PostgreSQL schema for multi-tenant isolation.
+   * If not specified, uses PostgreSQL's default search_path (typically 'public').
+   * Can be overridden per-request via RunOptions.schema.
+   */
+  defaultSchema?: string;
+  /**
+   * Whether to automatically provision (create) schemas that don't exist.
+   * When true, if a schema doesn't exist, it will be created with all migrations.
+   * Default: true (lazy provisioning enabled).
+   * 
+   * @remarks
+   * First request to a new schema may have ~50-500ms latency for provisioning.
+   * For production with strict latency requirements, consider explicit provisioning 
+   * during tenant onboarding via `copilotz.schema.provision()`.
+   */
+  autoProvisionSchema?: boolean;
 }
 
 
@@ -108,10 +134,96 @@ const createDbInstance = async (
     logMetrics: finalConfig.logMetrics,
   });
 
-  const ops = createOperations(dbInstance);
+  // Wrap db.query with schema-aware logic
+  const wrappedDb = wrapDbWithSchemaSupport(dbInstance, finalConfig, debug);
 
-  return Object.assign(dbInstance, { ops }) as CopilotzDb;
+  const ops = createOperations(wrappedDb);
+
+  return Object.assign(wrappedDb, { ops }) as CopilotzDb;
 };
+
+/**
+ * Wraps a database instance with schema-aware query execution.
+ * When a schema context is active (via withSchema()), queries are executed
+ * within a transaction that sets the search_path.
+ */
+function wrapDbWithSchemaSupport(
+  db: DbInstance,
+  config: DatabaseConfig,
+  debug: boolean
+): DbInstance {
+  const originalQuery = db.query.bind(db) as <T extends Record<string, unknown>>(
+    sql: string, 
+    params?: unknown[]
+  ) => Promise<{ rows: T[]; rowCount?: number }>;
+  const autoProvision = config.autoProvisionSchema ?? true;
+
+  // Create a wrapped query function that respects schema context
+  const wrappedQuery = async function<T extends Record<string, unknown>>(
+    sql: string,
+    params?: unknown[]
+  ): Promise<{ rows: T[]; rowCount?: number }> {
+    const schema = getCurrentSchema();
+
+    // If no schema context or using public, execute directly
+    if (!schema || schema === 'public') {
+      return originalQuery<T>(sql, params);
+    }
+
+    // SECURITY: Always validate schema name before using in SQL
+    // This is critical since schema names cannot be parameterized in PostgreSQL
+    // and we're interpolating them into SET LOCAL search_path
+    try {
+      validateSchemaName(schema);
+    } catch (err) {
+      if (debug) {
+        console.error(`[db] Invalid schema name "${schema}":`, err);
+      }
+      throw err;
+    }
+
+    // Auto-provision schema if enabled
+    if (autoProvision) {
+      try {
+        await ensureSchemaProvisioned(db, schema);
+      } catch (err) {
+        if (debug) {
+          console.error(`[db] Failed to provision schema "${schema}":`, err);
+        }
+        throw err;
+      }
+    }
+
+    // Execute with schema context using manual transaction wrapping
+    // BEGIN starts the transaction, SET LOCAL sets search_path for this tx only
+    // The query executes in the schema context, then we COMMIT
+    try {
+      await originalQuery<Record<string, unknown>>(`BEGIN`);
+      await originalQuery<Record<string, unknown>>(`SET LOCAL search_path TO "${schema}", public`);
+      const result = await originalQuery<T>(sql, params);
+      await originalQuery<Record<string, unknown>>(`COMMIT`);
+      return result;
+    } catch (err) {
+      // Rollback on error to clean up the transaction
+      try {
+        await originalQuery<Record<string, unknown>>(`ROLLBACK`);
+      } catch {
+        // Ignore rollback errors
+      }
+      throw err;
+    }
+  };
+
+  // Return a proxy that intercepts query calls
+  return new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop === 'query') {
+        return wrappedQuery;
+      }
+      return Reflect.get(target, prop, receiver);
+    }
+  }) as DbInstance;
+}
 
 interface Connect {
   (
@@ -258,3 +370,42 @@ export type {
   HookContext,
   SortOrder,
 } from "./collections/index.ts";
+
+// ============================================
+// SCHEMA MULTI-TENANCY API
+// ============================================
+
+/**
+ * Schema context and provisioning for multi-tenant PostgreSQL schema isolation.
+ * 
+ * @example
+ * ```ts
+ * // Use withSchema to execute operations in a specific schema
+ * import { withSchema } from "@copilotz/lib/database";
+ * 
+ * await withSchema('tenant_abc', async () => {
+ *   // All DB operations here use the 'tenant_abc' schema
+ *   await db.query('SELECT * FROM users');
+ * });
+ * 
+ * // Provision a new tenant schema
+ * await provisionTenantSchema(db, 'tenant_xyz');
+ * ```
+ */
+export {
+  getCurrentSchema,
+  withSchema,
+  isInSchemaContext,
+} from "./schema-context.ts";
+
+export {
+  provisionTenantSchema,
+  dropTenantSchema,
+  schemaExists,
+  ensureSchemaProvisioned,
+  warmSchemaCache,
+  listTenantSchemas,
+  isSchemaInCache,
+  clearSchemaCache,
+  validateSchemaName,
+} from "./schema-provisioning.ts";

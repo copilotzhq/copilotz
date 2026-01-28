@@ -23,9 +23,23 @@ export type RunOptions = {
     queueTTL?: number;
     /** 
      * Namespace for this run. Overrides the default namespace from config.
-     * Used for multi-tenancy isolation of collections and data.
+     * Used for multi-tenancy isolation of collections and data within a schema.
      */
     namespace?: string;
+    /**
+     * PostgreSQL schema for this run. Overrides the default schema from dbConfig.
+     * Used for multi-tenant schema-level isolation (one schema per tenant).
+     * 
+     * @remarks
+     * When set, all database queries will execute in the specified schema.
+     * If autoProvisionSchema is enabled, the schema will be created if it doesn't exist.
+     * 
+     * @example
+     * ```ts
+     * await copilotz.run(message, onEvent, { schema: 'tenant_abc' });
+     * ```
+     */
+    schema?: string;
     /**
      * Agents for this run. Overrides/extends the agents from config.
      * Useful for loading agents dynamically from a database.

@@ -963,6 +963,134 @@ const myTool = {
 };
 ```
 
+### Schema-Based Multi-Tenancy (PostgreSQL)
+
+For stronger isolation than namespace columns, COPILOTZ supports **PostgreSQL schema-level isolation** — one schema per tenant. This provides complete database-level separation while reusing the same connection.
+
+**How it works:**
+- Namespace isolation: Same tables, data separated by a `namespace` column
+- Schema isolation: Separate tables per tenant in different PostgreSQL schemas
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        PostgreSQL Database                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐         │
+│  │  public schema  │  │  tenant_abc     │  │  tenant_xyz     │         │
+│  │                 │  │  schema         │  │  schema         │         │
+│  │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  │         │
+│  │  │  nodes    │  │  │  │  nodes    │  │  │  │  nodes    │  │         │
+│  │  │  edges    │  │  │  │  edges    │  │  │  │  edges    │  │         │
+│  │  │  threads  │  │  │  │  threads  │  │  │  │  threads  │  │         │
+│  │  │  ...      │  │  │  │  ...      │  │  │  │  ...      │  │         │
+│  │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  │         │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘         │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Configuration:**
+
+```typescript
+const copilotz = await createCopilotz({
+  agents: [/* ... */],
+  dbConfig: {
+    url: "postgres://user:pass@host:5432/db",
+    defaultSchema: "tenant_abc",      // Default schema for all operations
+    autoProvisionSchema: true,        // Auto-create schemas (default: true)
+  },
+});
+```
+
+**Per-request schema override:**
+
+```typescript
+// Override schema for a specific run
+await copilotz.run(message, onEvent, {
+  schema: "tenant_xyz",               // Use different schema for this request
+  namespace: "workspace-1",           // Namespace within that schema
+});
+```
+
+**Schema management API:**
+
+```typescript
+// Provision a new tenant schema (creates all tables)
+await copilotz.schema.provision("tenant_new");
+
+// Check if a schema exists
+if (await copilotz.schema.exists("tenant_abc")) {
+  // Ready to use
+}
+
+// List all tenant schemas
+const schemas = await copilotz.schema.list();
+// ["public", "tenant_abc", "tenant_xyz"]
+
+// Warm cache on startup (avoid first-request latency)
+await copilotz.schema.warmCache();
+
+// Drop a tenant schema (WARNING: deletes all data!)
+await copilotz.schema.drop("tenant_old");
+```
+
+**Lazy provisioning:**
+
+When `autoProvisionSchema: true` (default), schemas are created automatically on first access:
+
+| Scenario | Latency |
+|----------|---------|
+| Subsequent requests (cached) | ~0ms |
+| First request after restart (schema exists) | ~1-5ms |
+| First request for new tenant (schema created) | ~50-500ms |
+
+For strict latency requirements, provision schemas during tenant onboarding:
+
+```typescript
+// During tenant signup
+async function onboardTenant(tenantId: string) {
+  await copilotz.schema.provision(`tenant_${tenantId}`);
+  // Now ready for immediate use
+}
+```
+
+**Combining schema + namespace:**
+
+Use schemas for tenant isolation and namespaces for logical grouping within a tenant:
+
+```typescript
+await copilotz.run(message, onEvent, {
+  schema: "tenant_acme",              // Tenant's schema
+  namespace: "project:alpha",         // Logical grouping within tenant
+});
+```
+
+**How schema switching works internally:**
+
+COPILOTZ uses `AsyncLocalStorage` to propagate schema context and wraps queries with:
+```sql
+BEGIN;
+SET LOCAL search_path TO "tenant_schema", public;
+-- your query --
+COMMIT;
+```
+
+This ensures:
+- Connection reuse across schemas (no new connections needed)
+- Transaction-scoped isolation (no state leakage between requests)
+- Automatic rollback on errors
+
+**When to use schemas vs namespaces:**
+
+| Use Case | Recommendation |
+|----------|---------------|
+| Multi-tenant SaaS (enterprise) | Schemas (complete isolation) |
+| Workspaces within a tenant | Namespaces (column-based) |
+| Regulatory compliance | Schemas (separate tables) |
+| Simple multi-tenancy | Namespaces (simpler) |
+| Both enterprise + workspaces | Schema per tenant + namespace per workspace |
+
 ### Semantic Search
 
 Enable vector search on collection fields:

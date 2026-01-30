@@ -184,12 +184,18 @@ export async function upsertUser(
             ? metadata.email
             : null;
 
-        // Use graph-based user storage with upsert
-        await ops.upsertUserNode(externalId, namespace ?? null, {
+        // Build userData object, only including metadata when actually present.
+        // This prevents null from overwriting existing metadata in upsertUserNode.
+        const userData: { name?: string | null; email?: string | null; metadata?: Record<string, unknown> } = {
             name: sender.name ?? null,
             email,
-            metadata: metadata ?? null,
-        });
+        };
+        if (metadata !== undefined) {
+            userData.metadata = metadata;
+        }
+
+        // Use graph-based user storage with upsert
+        await ops.upsertUserNode(externalId, namespace ?? null, userData);
     } catch (_err) {
         // Ignore user upsert failures to avoid breaking the run flow
     } finally {

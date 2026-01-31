@@ -1,6 +1,7 @@
-import type { Tool, MCPServer } from "@/interfaces/index.ts";
+import type { MCPServer } from "@/interfaces/index.ts";
 import { Client } from "modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "modelcontextprotocol/sdk/client/stdio.js";
+import type { ExecutableTool } from "../types.ts";
 
 interface MCPTool {
     name: string;
@@ -11,6 +12,20 @@ interface MCPTool {
 /**
  * MCP client using the official MCP TypeScript SDK
  */
+type StdioTransportConfig = {
+    type: "stdio";
+    command?: unknown;
+    args?: unknown;
+    env?: unknown;
+};
+
+const isStdioTransport = (value: unknown): value is StdioTransportConfig =>
+    Boolean(
+        value &&
+        typeof value === "object" &&
+        (value as { type?: unknown }).type === "stdio",
+    );
+
 class MCPClient {
     private config: MCPServer;
     private client?: Client;
@@ -27,13 +42,20 @@ class MCPClient {
     async connect(): Promise<void> {
         if (this.connected) return;
 
+        const transport = this.config.transport;
+        if (!transport) {
+            throw new Error(`Transport configuration missing for MCP server ${this.config.name}`);
+        }
+
         try {
-            if (this.config.transport.type === "stdio") {
-                await this.connectStdio();
+            if (isStdioTransport(transport)) {
+                await this.connectStdio(transport);
             } else {
                 // Note: Official MCP SDK currently only supports stdio transport
                 // SSE and WebSocket transports would need custom implementation
-                throw new Error(`Transport type ${this.config.transport.type} not yet supported by official MCP SDK. Only 'stdio' is currently supported.`);
+                throw new Error(
+                    `Transport type ${(transport as { type?: unknown }).type ?? "unknown"} not yet supported by official MCP SDK. Only 'stdio' is currently supported.`,
+                );
             }
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
@@ -44,17 +66,28 @@ class MCPClient {
     /**
      * Connect using stdio transport with official MCP SDK
      */
-    private async connectStdio(): Promise<void> {
-        if (!this.config.transport.command) {
+    private async connectStdio(transport: StdioTransportConfig): Promise<void> {
+        if (typeof transport.command !== "string" || transport.command.trim() === "") {
             throw new Error("Command is required for stdio transport");
         }
+
+        const args = Array.isArray(transport.args)
+            ? transport.args.map((value) => String(value))
+            : [];
+
+        const envEntries = transport.env && typeof transport.env === "object"
+            ? Object.entries(transport.env).filter((
+                entry,
+            ): entry is [string, string] => typeof entry[1] === "string")
+            : [];
+        const env = envEntries.length > 0 ? Object.fromEntries(envEntries) : undefined;
 
         try {
             // Create stdio transport using official SDK
             this.transport = new StdioClientTransport({
-                command: this.config.transport.command,
-                args: this.config.transport.args || [],
-                env: this.config.env || undefined
+                command: transport.command,
+                args,
+                env,
             });
 
             // Create client using the transport
@@ -107,14 +140,18 @@ class MCPClient {
 
         try {
             
-            // Add 10-second timeout to prevent hanging
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error(`MCP tool call timeout after 10 seconds`)), 10000);
-            });
-
             const callPromise = this.client.callTool({
                 name: name,
                 arguments: arguments_
+            });
+
+            // Add 10-second timeout to prevent hanging
+            const timeoutPromise = new Promise((_, reject) => {
+                const timeoutId = setTimeout(
+                    () => reject(new Error("MCP tool call timeout after 10 seconds")),
+                    10_000,
+                );
+                callPromise.finally(() => clearTimeout(timeoutId));
             });
             
             const response = await Promise.race([callPromise, timeoutPromise]);
@@ -149,7 +186,8 @@ class MCPClient {
  * Creates a tool execution function for an MCP tool
  */
 function createMcpExecutor(client: MCPClient, originalToolName: string, serverName: string) {
-    return async (params: any = {}) => {
+    return async (args: unknown, _context?: unknown) => {
+        const params = args && typeof args === "object" ? args : {};
         try {
             const result = await client.callTool(originalToolName, params);
             return result;
@@ -163,8 +201,8 @@ function createMcpExecutor(client: MCPClient, originalToolName: string, serverNa
 /**
  * Generates Tool instances from an MCP server configuration
  */
-export async function generateMcpTools(mcpConfig: MCPServer): Promise<Tool[]> {
-    const tools: Tool[] = [];
+export async function generateMcpTools(mcpConfig: MCPServer): Promise<ExecutableTool[]> {
+    const tools: ExecutableTool[] = [];
     const client = new MCPClient(mcpConfig);
 
     try {
@@ -175,8 +213,11 @@ export async function generateMcpTools(mcpConfig: MCPServer): Promise<Tool[]> {
         const mcpTools = await client.listTools();
 
         // Filter tools based on capabilities if specified
-        const filteredTools = mcpConfig.capabilities 
-            ? mcpTools.filter(tool => mcpConfig.capabilities!.includes(tool.name))
+        const capabilityList = Array.isArray(mcpConfig.capabilities)
+            ? mcpConfig.capabilities.filter((cap): cap is string => typeof cap === "string")
+            : undefined;
+        const filteredTools = capabilityList && capabilityList.length > 0
+            ? mcpTools.filter((tool) => capabilityList.includes(tool.name))
             : mcpTools;
 
         // Convert each MCP tool to a Tool
@@ -186,14 +227,20 @@ export async function generateMcpTools(mcpConfig: MCPServer): Promise<Tool[]> {
             const toolDescription = mcpTool.description || 
                 `${mcpConfig.description ? mcpConfig.description + ': ' : ''}${mcpTool.name}`;
 
-            const tool: Tool = {
+            const tool: ExecutableTool = {
+                id: crypto.randomUUID(),
                 key: toolKey,
                 name: toolName,
                 description: toolDescription,
+                externalId: null,
+                metadata: null,
+                createdAt: new Date(),
+                updatedAt: new Date(),
                 inputSchema: mcpTool.inputSchema || {
                     type: "object",
                     properties: {},
                 },
+                outputSchema: null,
                 execute: createMcpExecutor(client, mcpTool.name, mcpConfig.name),
             };
 
@@ -215,16 +262,11 @@ export async function generateMcpTools(mcpConfig: MCPServer): Promise<Tool[]> {
  * Generates tools from multiple MCP server configurations
  * Note: Currently only supports stdio transport via official MCP SDK
  */
-export async function generateAllMcpTools(mcpConfigs: MCPServer[]): Promise<Tool[]> {
-    const allTools: Tool[] = [];
+export async function generateAllMcpTools(mcpConfigs: MCPServer[]): Promise<ExecutableTool[]> {
+    const allTools: ExecutableTool[] = [];
     
     // Filter for supported transports
-    const supportedConfigs = mcpConfigs.filter(config => {
-        if (config.transport.type !== "stdio") {
-            return false;
-        }
-        return true;
-    });
+    const supportedConfigs = mcpConfigs.filter((config) => isStdioTransport(config.transport));
     
     // Process each supported MCP server configuration
     const toolPromises = supportedConfigs.map(async (config) => {

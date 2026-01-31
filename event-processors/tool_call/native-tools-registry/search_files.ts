@@ -60,7 +60,9 @@ export default {
                 if (depth > 10) return; // Prevent infinite recursion
                 
                 try {
-                    for await (const entry of Deno.readDir(dir)) {
+                    const denoNs = (globalThis as unknown as { Deno?: { readDir?: (p: string) => AsyncIterable<{ name: string; isFile: boolean; isDirectory: boolean }> } }).Deno;
+                    if (!denoNs?.readDir) throw new Error("search_files tool requires Deno runtime");
+                    for await (const entry of denoNs.readDir(dir)) {
                         // Skip hidden files unless requested
                         if (!includeHidden && entry.name.startsWith(".")) {
                             continue;
@@ -78,7 +80,7 @@ export default {
                             await searchDir(fullPath, depth + 1);
                         }
                     }
-                } catch (error) {
+                } catch (_error) {
                     // Skip directories we can't access
                     console.warn(`Cannot access directory: ${dir}`);
                 }

@@ -20,7 +20,7 @@ export default {
     execute: async ({ name, goal }: CreateTaskParams, context?: ToolExecutionContext) => {
         // Get database instance from context or fallback to global
 
-        const ops = context?.db?.operations;
+        const ops = context?.db?.ops;
         const task = await ops?.createTask({ name, goal });
         return { task };
     },

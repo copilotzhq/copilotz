@@ -19,7 +19,7 @@ export default {
         },
         required: ["path"],
     },
-    execute: async ({ path, encoding = "utf8" }: ReadFileParams) => {
+    execute: async ({ path, encoding: _encoding = "utf8" }: ReadFileParams) => {
         try {
             // Security check - prevent directory traversal
             if (path.includes("..") || path.includes("~")) {
@@ -27,7 +27,11 @@ export default {
             }
             
             // Read file content (Deno.readTextFile always uses UTF-8)
-            const content = await Deno.readTextFile(path);
+            const denoNs = (globalThis as unknown as { Deno?: { readTextFile?: (p: string) => Promise<string>; errors?: { NotFound?: unknown; PermissionDenied?: unknown } } }).Deno;
+            if (!denoNs?.readTextFile) {
+                throw new Error("read_file tool requires Deno runtime");
+            }
+            const content = await denoNs.readTextFile(path);
             
             return {
                 path,
@@ -36,9 +40,10 @@ export default {
                 encoding: "utf8"
             };
         } catch (error) {
-            if (error instanceof Deno.errors.NotFound) {
+            const denoErrors = (globalThis as unknown as { Deno?: { errors?: { NotFound?: unknown; PermissionDenied?: unknown } } }).Deno?.errors;
+            if (denoErrors?.NotFound && error instanceof (denoErrors.NotFound as { new (...args: unknown[]): unknown })) {
                 throw new Error(`File not found: ${path}`);
-            } else if (error instanceof Deno.errors.PermissionDenied) {
+            } else if (denoErrors?.PermissionDenied && error instanceof (denoErrors.PermissionDenied as { new (...args: unknown[]): unknown })) {
                 throw new Error(`Permission denied: ${path}`);
             }
             throw new Error(`Failed to read file: ${(error as Error).message}`);

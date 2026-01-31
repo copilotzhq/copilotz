@@ -38,12 +38,22 @@ export default {
             if (createDirs) {
                 const dir = path.substring(0, path.lastIndexOf("/"));
                 if (dir) {
-                    await Deno.mkdir(dir, { recursive: true });
+                    const denoNs = (globalThis as unknown as { Deno?: { mkdir?: (p: string, opts?: { recursive?: boolean }) => Promise<void>; errors?: { NotFound?: unknown; PermissionDenied?: unknown } } }).Deno;
+                    if (!denoNs?.mkdir) {
+                        throw new Error("write_file tool requires Deno runtime");
+                    }
+                    await denoNs.mkdir(dir, { recursive: true });
                 }
             }
             
             // Write file content (Deno.writeTextFile always uses UTF-8)
-            await Deno.writeTextFile(path, content);
+            {
+                const denoNs = (globalThis as unknown as { Deno?: { writeTextFile?: (p: string, data: string) => Promise<void> } }).Deno;
+                if (!denoNs?.writeTextFile) {
+                    throw new Error("write_file tool requires Deno runtime");
+                }
+                await denoNs.writeTextFile(path, content);
+            }
             
             return {
                 path,
@@ -52,9 +62,10 @@ export default {
                 created: createDirs
             };
         } catch (error) {
-            if (error instanceof Deno.errors.NotFound) {
+            const denoErrors = (globalThis as unknown as { Deno?: { errors?: { NotFound?: unknown; PermissionDenied?: unknown } } }).Deno?.errors;
+            if (denoErrors?.NotFound && error instanceof (denoErrors.NotFound as { new (...args: unknown[]): unknown })) {
                 throw new Error(`Directory not found: ${path}`);
-            } else if (error instanceof Deno.errors.PermissionDenied) {
+            } else if (denoErrors?.PermissionDenied && error instanceof (denoErrors.PermissionDenied as { new (...args: unknown[]): unknown })) {
                 throw new Error(`Permission denied: ${path}`);
             }
             throw new Error(`Failed to write file: ${(error as Error).message}`);

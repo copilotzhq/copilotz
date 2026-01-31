@@ -1,8 +1,10 @@
-import type { Tool, API } from "@/interfaces/index.ts";
-import { parse as parseYaml } from "yaml";
 
-type AuthConfig = API['auth'];
-type DynamicAuth = API['auth']['dynamic'];
+import type { API } from "@/interfaces/index.ts";
+import { parse as parseYaml } from "yaml";
+import type { ExecutableTool } from "../types.ts";
+
+type AuthConfig = NonNullable<API["auth"]>;
+type DynamicAuth = Extract<AuthConfig, { type: "dynamic" }>;
 
 // Token cache for dynamic authentication
 interface CachedToken {
@@ -309,39 +311,40 @@ async function getDynamicToken(authConfig: DynamicAuth, baseUrl: string, apiName
  * Applies authentication configuration to headers and query parameters
  */
 async function applyAuthentication(
-    auth: AuthConfig | undefined,
+    auth: API["auth"] | undefined,
     headers: Record<string, string>,
     queryParams: URLSearchParams,
     baseUrl?: string,
     apiName?: string
 ) {
     if (!auth) return;
+    const normalizedAuth: AuthConfig = auth;
 
-    switch (auth.type) {
+    switch (normalizedAuth.type) {
         case 'apiKey':
-            if (auth.in === 'header') {
-                headers[auth.name] = auth.key;
-            } else if (auth.in === 'query') {
-                queryParams.set(auth.name, auth.key);
+            if (normalizedAuth.in === 'header') {
+                headers[normalizedAuth.name] = normalizedAuth.key;
+            } else if (normalizedAuth.in === 'query') {
+                queryParams.set(normalizedAuth.name, normalizedAuth.key);
             }
             break;
 
         case 'bearer': {
-            const scheme = auth.scheme || 'Bearer';
-            headers['Authorization'] = `${scheme} ${auth.token}`;
+            const scheme = normalizedAuth.scheme || 'Bearer';
+            headers['Authorization'] = `${scheme} ${normalizedAuth.token}`;
             break;
         }
         case 'basic': {
-            const credentials = btoa(`${auth.username}:${auth.password}`);
+            const credentials = btoa(`${normalizedAuth.username}:${normalizedAuth.password}`);
             headers['Authorization'] = `Basic ${credentials}`;
             break;
         }
         case 'custom':
-            if (auth.headers) {
-                Object.assign(headers, auth.headers);
+            if (normalizedAuth.headers) {
+                Object.assign(headers, normalizedAuth.headers);
             }
-            if (auth.queryParams) {
-                Object.entries(auth.queryParams).forEach(([key, value]) => {
+            if (normalizedAuth.queryParams) {
+                Object.entries(normalizedAuth.queryParams).forEach(([key, value]) => {
                     queryParams.set(key, String(value));
                 });
             }
@@ -352,14 +355,14 @@ async function applyAuthentication(
                 throw new Error('Dynamic authentication requires baseUrl and apiName');
             }
 
-            const token = await getDynamicToken(auth, baseUrl, apiName);
+            const token = await getDynamicToken(normalizedAuth, baseUrl, apiName);
 
-            if (auth.tokenExtraction.type === 'bearer') {
-                const prefix = auth.tokenExtraction.prefix || 'Bearer ';
+            if (normalizedAuth.tokenExtraction.type === 'bearer') {
+                const prefix = normalizedAuth.tokenExtraction.prefix || 'Bearer ';
                 headers['Authorization'] = `${prefix}${token}`;
-            } else if (auth.tokenExtraction.type === 'apiKey') {
-                const headerName = auth.tokenExtraction.headerName || 'Authorization';
-                const prefix = auth.tokenExtraction.prefix || '';
+            } else if (normalizedAuth.tokenExtraction.type === 'apiKey') {
+                const headerName = normalizedAuth.tokenExtraction.headerName || 'Authorization';
+                const prefix = normalizedAuth.tokenExtraction.prefix || '';
                 headers[headerName] = `${prefix}${token}`;
             }
             break;
@@ -383,15 +386,22 @@ function createApiExecutor(
         isObjectBody: boolean;
     }
 ) {
-    return async (params: any = {}) => {
+    return async (
+        args: unknown,
+        _context?: unknown,
+    ) => {
         try {
+            const params = (args && typeof args === "object")
+                ? args as Record<string, unknown>
+                : {};
+
             // Build the URL
             let url = baseUrl + path;
 
             // Replace path parameters
             parameterMetadata.pathParams.forEach(key => {
                 if (params[key] !== undefined) {
-                    url = url.replace(`{${key}}`, encodeURIComponent(params[key]));
+                    url = url.replace(`{${key}}`, encodeURIComponent(String(params[key])));
                 }
             });
 
@@ -490,8 +500,8 @@ function createApiExecutor(
 /**
  * Generates Tool instances from an OpenAPI configuration
  */
-export function generateApiTools(apiConfig: API): Tool[] {
-    const tools: Tool[] = [];
+export function generateApiTools(apiConfig: API): ExecutableTool[] {
+    const tools: ExecutableTool[] = [];
     const schema = normalizeOpenApiSchema(apiConfig.openApiSchema);
 
     // Determine base URL
@@ -526,10 +536,16 @@ export function generateApiTools(apiConfig: API): Tool[] {
             const { schema: inputSchema, parameterMetadata } = convertParameterToJsonSchema(op.parameters, op.requestBody);
 
             // Create the tool
-            const tool: Tool = {
+            const tool: ExecutableTool = {
+                id: crypto.randomUUID(),
                 key: toolKey,
                 name: toolName,
                 description: toolDescription,
+                externalId: null,
+                metadata: null,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+                outputSchema: null,
                 inputSchema,
                 execute: createApiExecutor(apiConfig, path, method, op, baseUrl, parameterMetadata),
             };
@@ -544,8 +560,8 @@ export function generateApiTools(apiConfig: API): Tool[] {
 /**
  * Generates tools from multiple API configurations
  */
-export function generateAllApiTools(apiConfigs: API[]): Tool[] {
-    const allTools: Tool[] = [];
+export function generateAllApiTools(apiConfigs: API[]): ExecutableTool[] {
+    const allTools: ExecutableTool[] = [];
 
     apiConfigs.forEach(config => {
         try {

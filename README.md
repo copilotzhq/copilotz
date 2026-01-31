@@ -1,349 +1,262 @@
-# Copilotz 🤖
+# Copilotz
 
-An event-driven AI agent framework built with TypeScript/Deno. Create multi-agent systems with tool calling, streaming, and persistent conversation threads.
+**The full-stack framework for AI applications.**
 
-## Features
+LLM wrappers give you chat. Copilotz gives you everything else: persistent memory, RAG, tool calling, background jobs, and multi-tenancy — in one framework.
 
-- 🔄 **Event-Driven Architecture** - Async event queue with NEW_MESSAGE, LLM_CALL, and TOOL_CALL processors
-- 🤖 **Multi-Agent Support** - Coordinate multiple AI agents with agent-to-agent communication
-- 🔌 **Multiple LLM Providers** - OpenAI, Anthropic, Gemini, Groq, Deepseek, Ollama
-- 🛠️ **Built-in Tools** - File operations, command execution, thread/task management, agent questions
-- 🌐 **API & MCP Integration** - Auto-generate tools from OpenAPI specs and MCP servers
-- 💾 **Persistent Threads** - PostgreSQL/PGLite storage with message history
-- 📡 **Streaming Support** - Real-time token streaming with callbacks
-- 🎯 **Type-Safe** - Full TypeScript types with Drizzle ORM
+Build AI apps, not AI infrastructure.
 
-## Installation
-
-```bash
-# Using Deno
-deno add @copilotz/copilotz
-```
-
-## Quick Start
-
-### Single Interaction
-
-```typescript
-import { run } from "@copilotz/copilotz";
-
-const result = await run({
-  initialMessage: {
-    content: "Hello! What can you help me with?",
-  },
-  agents: [
-    {
-      id: "assistant-1",
-      name: "Assistant",
-      type: "agent",
-      instructions: "You are a helpful assistant.",
-      llmOptions: {
-        provider: "openai",
-        model: "gpt-4o-mini",
-        temperature: 0.7,
-      },
-    },
-  ],
-  dbConfig: { url: ":memory:" }, // or PostgreSQL URL
-  stream: true,
-  callbacks: {
-    onContentStream: (data) => {
-      if (!data.isComplete) {
-        Deno.stdout.writeSync(new TextEncoder().encode(data.token));
-      }
-    },
-  },
-});
-
-console.log(`Thread ID: ${result.threadId}`);
-```
-
-### Interactive CLI
-
-```typescript
-import { runCLI } from "@copilotz/copilotz";
-
-await runCLI({
-  agents: [
-    {
-      id: "bot-1",
-      name: "Bot",
-      type: "agent",
-      instructions: "You are a helpful assistant.",
-      llmOptions: {
-        provider: "openai",
-        model: "gpt-4o-mini",
-      },
-      allowedTools: ["read_file", "write_file", "run_command"],
-    },
-  ],
-  dbConfig: { url: ":memory:" },
-});
-```
-
-## Configuration
-
-### Agent Configuration
-
-```typescript
-interface Agent {
-  id: string;
-  name: string;
-  type: "agent" | "user" | "tool" | "system";
-  instructions?: string;
-  description?: string;
-  personality?: string;
-  allowedAgents?: string[]; // Which agents this agent can communicate with
-  allowedTools?: string[]; // Which tools this agent can use
-  llmOptions: {
-    provider: "openai" | "anthropic" | "gemini" | "groq" | "deepseek" | "ollama";
-    model: string;
-    temperature?: number;
-    maxTokens?: number;
-    apiKey?: string; // Falls back to env vars
-  };
-}
-```
-
-### Database Configuration
-
-```typescript
-interface DatabaseConfig {
-  url?: string; // ":memory:" | "file:./db.db" | "postgresql://..."
-  syncUrl?: string; // Optional sync URL for PGLite
-  pgliteExtensions?: string[];
-}
-```
-
-## Native Tools
-
-Copilotz includes powerful built-in tools:
-
-- **File Operations**: `read_file`, `write_file`, `list_directory`, `search_files`
-- **System**: `run_command`, `wait`, `get_current_time`
-- **Agent Communication**: `ask_question`, `create_thread`, `end_thread`
-- **Task Management**: `create_task`
-- **Web**: `fetch_text`, `http_request`
-- **Knowledge**: `knowledge_search` (vector search)
-
-Enable tools per agent:
-
-```typescript
-const agent = {
-  // ...
-  allowedTools: ["read_file", "write_file", "run_command", "ask_question"],
-};
-```
-
-## Custom Tools
-
-Define custom tools:
-
-```typescript
-const customTool = {
-  key: "my_tool",
-  name: "My Tool",
-  description: "Does something useful",
-  inputSchema: {
-    type: "object",
-    properties: {
-      input: { type: "string", description: "Input parameter" },
-    },
-    required: ["input"],
-  },
-  execute: async (params, context) => {
-    return { result: `Processed: ${params.input}` };
-  },
-};
-
-await run({
-  // ...
-  tools: [customTool],
-});
-```
-
-## API Integration
-
-Auto-generate tools from OpenAPI specs:
-
-```typescript
-await run({
-  // ...
-  apis: [
-    {
-      name: "My API",
-      baseUrl: "https://api.example.com",
-      openApiSchema: { /* OpenAPI 3.0 spec */ },
-      headers: { "Authorization": "Bearer token" },
-    },
-  ],
-});
-```
-
-## MCP Servers
-
-Connect to Model Context Protocol servers:
-
-```typescript
-await run({
-  // ...
-  mcpServers: [
-    {
-      name: "filesystem",
-      transport: {
-        type: "stdio",
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-filesystem", "/path"],
-      },
-    },
-  ],
-});
-```
-
-## Multi-Agent Communication
-
-Agents can communicate with each other:
-
-```typescript
-const agents = [
-  {
-    id: "researcher",
-    name: "Researcher",
-    instructions: "Research topics thoroughly",
-    allowedTools: ["fetch_text", "ask_question"],
-    allowedAgents: ["Writer"], // Can communicate with Writer
-    // ...
-  },
-  {
-    id: "writer",
-    name: "Writer",
-    instructions: "Write clear articles",
-    allowedTools: ["write_file"],
-    // ...
-  },
-];
-
-// Researcher can ask Writer questions using ask_question tool
-// Or use @mentions in messages: "Hey @Writer, can you help?"
-```
-
-## Event System
-
-Copilotz uses an event queue with three core processors:
-
-1. **NEW_MESSAGE** - Handles incoming messages, routes to agents
-2. **LLM_CALL** - Executes LLM requests with streaming
-3. **TOOL_CALL** - Validates and executes tool calls
-
-Customize behavior with callbacks:
-
-```typescript
-await run({
-  // ...
-  callbacks: {
-    onContentStream: (data) => {
-      console.log(`[${data.agentName}] ${data.token}`);
-    },
-    onEvent: async (event) => {
-      console.log(`Event: ${event.type}`, event.payload);
-      // Optionally return custom events
-      return { producedEvents: [/* custom events */] };
-    },
-  },
-});
-```
-
-## Thread Management
-
-Threads maintain conversation context:
-
-```typescript
-// Create a new thread
-const { threadId } = await run({
-  initialMessage: {
-    content: "Start conversation",
-    threadName: "My Thread",
-    participants: ["Agent1", "Agent2"],
-  },
-  // ...
-});
-
-// Continue existing thread
-await run({
-  initialMessage: {
-    content: "Follow-up message",
-    threadId: threadId, // Reuse thread
-  },
-  // ...
-});
-
-// Use external IDs for stable references
-await run({
-  initialMessage: {
-    threadExternalId: "user-session-123",
-    content: "Message",
-  },
-  // ...
-});
-```
-
-## Environment Variables
-
-```bash
-# LLM Provider API Keys
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-GOOGLE_API_KEY=...
-GROQ_API_KEY=...
-DEEPSEEK_API_KEY=...
-
-# Database
-DATABASE_URL=postgresql://...
-SYNC_DATABASE_URL=postgresql://... # Optional PGLite sync
-
-# Debug
-COPILOTZ_DB_DEBUG=1
-```
-
-## Architecture
-
-```
-┌─────────────┐
-│   run()     │
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│ Event Queue │
-└──────┬──────┘
-       │
-       ├──► NEW_MESSAGE Processor ──► Route to agents
-       │
-       ├──► LLM_CALL Processor ──► Call LLM with streaming
-       │
-       └──► TOOL_CALL Processor ──► Execute tools
-                                    └──► Native / API / MCP
-```
-
-## Testing
-
-```bash
-# Run unit tests
-deno test --allow-env --allow-net --allow-read
-
-# Manual CLI test
-deno run --allow-env --allow-net --allow-read manual-cli-test.ts
-```
-
-## License
-
-MIT
-
-## Contributing
-
-Contributions welcome! Please open an issue or PR.
+[![Deno](https://img.shields.io/badge/Deno-2.0+-000?logo=deno)](https://deno.land)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
 ---
 
-Built with ❤️ using [Deno](https://deno.com) and [Drizzle ORM](https://orm.drizzle.team)
+## The Problem
 
+Building AI features today feels like building websites in 2005.
+
+You start with an LLM wrapper. Then you need memory — so you add Redis. Then RAG — so you add a vector database. Then your tool generates an image — now you need asset storage and a way to pass it back to the LLM. Then background jobs, multi-tenancy, tool calling, handling media, observability... Before you know it, you're maintaining infrastructure instead of building your product.
+
+**There's no Rails for AI. No Next.js. Just parts.**
+
+## The Solution
+
+Copilotz is the full-stack framework for AI applications. Everything you need to ship production AI, in one package:
+
+| What You Need | What Copilotz Gives You |
+|---------------|------------------------|
+| Memory | Knowledge graph that remembers users, conversations, and entities |
+| RAG | Document ingestion, chunking, embeddings, and semantic search |
+| Tools | 23 native tools + OpenAPI integration + MCP support |
+| Assets | Automatic extraction, storage, and LLM resolution of images and files |
+| Background Jobs | Event queue with persistent workers and custom processors |
+| Multi-tenancy | Schema isolation + namespace partitioning |
+| Database | PostgreSQL (production) or PGLite (development/embedded) |
+| Streaming | Real-time token streaming with async iterables |
+
+**One framework. One dependency. Production-ready.**
+
+---
+
+## Quick Start
+
+```bash
+deno add jsr:@copilotz/copilotz
+```
+
+### Interactive Mode (Fastest)
+
+Try Copilotz instantly with an interactive chat:
+
+```typescript
+import { createCopilotz } from "@copilotz/copilotz";
+
+const copilotz = await createCopilotz({
+  agents: [{
+    id: "assistant",
+    name: "Assistant",
+    role: "assistant",
+    instructions: "You are a helpful assistant. Remember what users tell you.",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  }],
+  dbConfig: { url: ":memory:" },
+});
+
+// Start an interactive REPL — streams responses to stdout
+copilotz.start({ banner: "🤖 Chat with your AI! Type 'quit' to exit.\n" });
+```
+
+Run it: `OPENAI_API_KEY=your-key deno run --allow-net --allow-env chat.ts`
+
+### Programmatic Mode
+
+For applications, use `run()` for full control:
+
+```typescript
+import { createCopilotz } from "@copilotz/copilotz";
+
+const copilotz = await createCopilotz({
+  agents: [{
+    id: "assistant",
+    name: "Assistant",
+    role: "assistant",
+    instructions: "You are a helpful assistant with a great memory.",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  }],
+  dbConfig: { url: ":memory:" },
+});
+
+// First conversation
+const result = await copilotz.run({
+  content: "Hi! I'm Alex and I love hiking in the mountains.",
+  sender: { type: "user", name: "Alex" },
+});
+await result.done;
+
+// Later... your AI remembers
+const result2 = await copilotz.run({
+  content: "What do you know about me?",
+  sender: { type: "user", name: "Alex" },
+});
+await result2.done;
+// → "You're Alex, and you love hiking in the mountains!"
+
+await copilotz.shutdown();
+```
+
+---
+
+## Why Copilotz?
+
+### Memory That Actually Works
+
+Most AI frameworks give you chat history. Copilotz gives you a **knowledge graph** — users, conversations, documents, and entities all connected. Your AI doesn't just remember what was said; it understands relationships.
+
+```typescript
+// Entities are extracted automatically
+await copilotz.run({ content: "I work at Acme Corp as a senior engineer" });
+
+// Later, your AI knows:
+// - User: Alex
+// - Organization: Acme Corp  
+// - Role: Senior Engineer
+// - Relationship: Alex works at Acme Corp
+```
+
+### Tools That Do Things
+
+23 built-in tools for file operations, HTTP requests, RAG, and more. Plus automatic tool generation from OpenAPI specs and MCP servers.
+
+```typescript
+const copilotz = await createCopilotz({
+  agents: [{
+    // ...
+    allowedTools: ["read_file", "write_file", "http_request", "search_knowledge"],
+  }],
+  apis: [{
+    id: "github",
+    openApiSchema: myOpenApiSchema,  // Object or JSON/YAML string
+    auth: { type: "bearer", token: process.env.GITHUB_TOKEN },
+  }],
+});
+```
+
+### Multi-Tenant From Day One
+
+Schema-level isolation for hard boundaries. Namespace-level isolation for logical partitioning. Your SaaS is ready for customers on day one.
+
+```typescript
+// Each customer gets complete isolation
+await copilotz.run(message, onEvent, { 
+  schema: "tenant_acme",      // PostgreSQL schema
+  namespace: "workspace:123", // Logical partition
+});
+```
+
+### Assets Without the Headache
+
+When your tool generates an image or fetches a file, what happens next? With most frameworks, you're on your own. Copilotz automatically extracts assets from tool outputs, stores them, and resolves them for vision-capable LLMs.
+
+```typescript
+// Your tool just returns base64 data
+const generateChart = {
+  id: "generate_chart",
+  execute: async ({ data }) => ({
+    mimeType: "image/png",
+    dataBase64: await createChart(data),
+  }),
+};
+
+// Copilotz automatically:
+// 1. Detects the asset in the tool output
+// 2. Stores it (filesystem, S3, or memory)
+// 3. Replaces it with an asset:// reference
+// 4. Resolves it to a data URL for the next LLM call
+// 5. Emits an ASSET_CREATED event for your hooks
+```
+
+### Production Infrastructure, Not Prototypes
+
+Event-driven architecture with persistent queues. Background workers for heavy processing. Custom processors for your business logic. This is infrastructure you'd build anyway — already built.
+
+```typescript
+// Events are persisted and recoverable
+// Background jobs process RAG ingestion, entity extraction
+// Custom processors extend the pipeline
+const copilotz = await createCopilotz({
+  // ...
+  processors: [{
+    eventType: "NEW_MESSAGE",
+    shouldProcess: (event) => event.payload.needsApproval,
+    process: async (event, deps) => {
+      // Your custom logic here
+      return { producedEvents: [] };
+    },
+  }],
+});
+```
+
+---
+
+## What's Included
+
+### Agents
+Multi-agent orchestration with permissions, mentions, and inter-agent communication.
+
+### Collections
+Type-safe data storage on top of the knowledge graph with JSON Schema validation.
+
+### RAG Pipeline
+Document ingestion → chunking → embeddings → semantic search. Works out of the box.
+
+### Streaming
+Real-time token streaming with callbacks and async iterables.
+
+### Assets
+Automatic extraction and storage of images, files, and media from tool outputs. Seamless resolution for vision LLMs.
+
+---
+
+## Documentation
+
+**Getting Started**
+- [Quick Start](./docs/getting-started.md) — Install and run your first agent
+- [Overview](./docs/overview.md) — Architecture and core concepts
+
+**Core Concepts**
+- [Agents](./docs/agents.md) — Multi-agent configuration and communication
+- [Events](./docs/events.md) — Event-driven processing pipeline
+- [Tools](./docs/tools.md) — Native tools, APIs, and MCP integration
+
+**Data Layer**
+- [Database](./docs/database.md) — PostgreSQL, PGLite, and the knowledge graph
+- [Tables Structure](./docs/tables-structure.md) — Database schema reference
+- [Collections](./docs/collections.md) — Type-safe data storage
+- [RAG](./docs/rag.md) — Document ingestion and semantic search
+
+**Advanced**
+- [Configuration](./docs/configuration.md) — Full configuration reference
+- [Assets](./docs/assets.md) — File and media storage
+- [Loaders](./docs/loaders.md) — Load resources from filesystem
+- [API Reference](./docs/api-reference.md) — Complete API documentation
+
+---
+
+## Requirements
+
+- Deno 2.0+
+- PostgreSQL 13+ (production) or PGLite (development/embedded)
+- LLM API key (OpenAI, Anthropic, Gemini, Groq, DeepSeek, or Ollama)
+
+---
+
+## License
+
+MIT — see [LICENSE](./LICENSE)
+
+---
+
+<p align="center">
+  <strong>Stop gluing. Start shipping.</strong>
+</p>

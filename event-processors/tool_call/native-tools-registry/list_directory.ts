@@ -37,7 +37,11 @@ export default {
             
             const entries: DirectoryEntry[] = [];
             
-            for await (const entry of Deno.readDir(path)) {
+            const denoNs = (globalThis as unknown as { Deno?: { readDir?: (p: string) => AsyncIterable<{ name: string; isFile: boolean; isDirectory: boolean }>; stat?: (p: string) => Promise<{ size?: number }> } }).Deno;
+            if (!denoNs?.readDir) {
+                throw new Error("list_directory tool requires Deno runtime");
+            }
+            for await (const entry of denoNs.readDir(path)) {
                 // Skip hidden files unless requested
                 if (!showHidden && entry.name.startsWith(".")) {
                     continue;
@@ -51,8 +55,10 @@ export default {
                 // Try to get file size for files
                 if (entry.isFile) {
                     try {
-                        const stat = await Deno.stat(`${path}/${entry.name}`);
-                        dirEntry.size = stat.size;
+                        if (denoNs?.stat) {
+                            const stat = await denoNs.stat(`${path}/${entry.name}`);
+                            dirEntry.size = stat?.size;
+                        }
                     } catch {
                         // Ignore stat errors
                     }
@@ -75,9 +81,10 @@ export default {
                 count: entries.length
             };
         } catch (error) {
-            if (error instanceof Deno.errors.NotFound) {
+            const denoErrors = (globalThis as unknown as { Deno?: { errors?: { NotFound?: unknown; PermissionDenied?: unknown } } }).Deno?.errors;
+            if (denoErrors?.NotFound && error instanceof (denoErrors.NotFound as { new (...args: unknown[]): unknown })) {
                 throw new Error(`Directory not found: ${path}`);
-            } else if (error instanceof Deno.errors.PermissionDenied) {
+            } else if (denoErrors?.PermissionDenied && error instanceof (denoErrors.PermissionDenied as { new (...args: unknown[]): unknown })) {
                 throw new Error(`Permission denied: ${path}`);
             }
             throw new Error(`Failed to list directory: ${(error as Error).message}`);

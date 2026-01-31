@@ -1,7 +1,30 @@
+/**
+ * Multimodal content parts accepted by providers.
+ *
+ * Provider notes:
+ * - OpenAI/Groq: supports `text`, `image_url` (http(s) or data URL), `input_audio` (base64), limited file via data URL images.
+ * - Anthropic: supports `text`, images via URL or base64 data URL (mapped internally to Claude schema). System is text-only.
+ * - Gemini: supports `text`, inline_data (from `image_url` data URL, `input_audio`, or `file` data URL).
+ * - Ollama: accepts text and base64 images (we extract from data URLs into `images` array).
+ * - DeepSeek: text only (non-text parts are ignored).
+ */
+export type ChatContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
+  | { type: 'input_audio'; input_audio: { data: string; format?: string } }
+  | { type: 'file'; file: { file_data: string; mime_type?: string } };
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool' | 'tool_result';
-  content: string;
+  /**
+   * Either a plain text string or an array of multimodal parts.
+   *
+   * Examples:
+   * - "Explain this image"
+   * - [ { type: 'text', text: 'Describe this:' }, { type: 'image_url', image_url: { url: 'https://...' } } ]
+   * - [ { type: 'input_audio', input_audio: { data: '<base64>', format: 'wav' } } ]
+   */
+  content: string | ChatContentPart[];
   tool_call_id?: string;
   // Prefer passing tool calls explicitly for assistant messages
   toolCalls?: ToolCall[];

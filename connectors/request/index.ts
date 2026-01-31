@@ -51,7 +51,7 @@ export async function request<T = unknown>(
     method = 'GET',
     headers = {},
     body,
-    timeout = 30000,
+    timeout = 300000,
     signal,
     retries = 0,
     retryDelay = 1000,

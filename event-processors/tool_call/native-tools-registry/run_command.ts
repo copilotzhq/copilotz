@@ -48,7 +48,11 @@ export default {
             }
             
             // Create command with timeout
-            const cmd = new Deno.Command(command, {
+            const denoNs = (globalThis as unknown as { Deno?: { Command?: new (cmd: string, opts: { args?: string[]; cwd?: string; stdout?: "piped" | "inherit" | "null"; stderr?: "piped" | "inherit" | "null" }) => { output: () => Promise<{ code: number; success: boolean; stdout: Uint8Array; stderr: Uint8Array }> } } }).Deno;
+            if (!denoNs?.Command) {
+                throw new Error("run_command tool requires Deno runtime");
+            }
+            const cmd = new denoNs.Command(command, {
                 args,
                 cwd,
                 stdout: "piped",
@@ -64,7 +68,7 @@ export default {
             const result = await Promise.race([
                 cmd.output(),
                 timeoutPromise
-            ]) as Deno.CommandOutput;
+            ]) as unknown as { code: number; success: boolean; stdout: Uint8Array; stderr: Uint8Array };
             
             const stdout = new TextDecoder().decode(result.stdout);
             const stderr = new TextDecoder().decode(result.stderr);

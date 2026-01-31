@@ -1,13 +1,10 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.5.5",
+  "version": "0.15.1",
   "license": "MIT",
   "exports": {
-    ".": "./index.ts",
-    "./database": "./database/index.ts",
-    "./types": "./interfaces/index.ts",
-    "./utils": "./utils/index.ts"
+    ".": "./index.ts"
   },  
   "unstable": [
     "bare-node-builtins",
@@ -28,13 +25,13 @@
     "@/": "./",
     "ajv": "npm:ajv@8.17.1",
     "ajv-formats": "npm:ajv-formats@3.0.1",
-    "omnipg": "jsr:@oxian/ominipg@0.3.0", 
-    "drizzle-orm/pg-core": "npm:drizzle-orm@0.44.4/pg-core",
-    "drizzle-orm/pg-proxy": "npm:drizzle-orm@0.44.4/pg-proxy",
-    "zod": "npm:zod@3.21.4",
+    "omnipg": "jsr:@oxian/ominipg@0.4.7",
+    "zod": "npm:zod@3.24.8",
     "yaml": "npm:yaml@2.8.0",
     "js-tiktoken": "npm:js-tiktoken@1.0.21/lite",
-    "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client"
+    "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client",
+    "ulid": "jsr:@std/ulid@1.0.0",
+    "json-schema-to-ts": "npm:json-schema-to-ts@3.1.1"
   },
   "lock": false
 }

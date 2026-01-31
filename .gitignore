@@ -43,3 +43,6 @@ test-data
 
 # internal examples
 agents/examples/internal
+
+# database files
+*.db

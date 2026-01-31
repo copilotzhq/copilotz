@@ -1,17 +1,27 @@
 import type { API } from "@/interfaces/index.ts";
 
-export function getToolNames(openApiSchema: API['openApiSchema']): string[] {
-    return [...Object.keys(openApiSchema.paths).flatMap(path => {
-        const pathObj = openApiSchema.paths[path];
-        const operationIds: string[] = [];
+export function getToolNames(openApiSchema: API["openApiSchema"]): string[] {
+    if (!openApiSchema || typeof openApiSchema !== "object") {
+        return [];
+    }
 
-        // Handle different HTTP methods
-        ['get', 'post', 'put', 'delete', 'patch'].forEach(method => {
-            if (pathObj[method] && pathObj[method].operationId) {
-                operationIds.push(pathObj[method].operationId);
+    const paths = (openApiSchema as { paths?: Record<string, Record<string, { operationId?: string }>> }).paths;
+    if (!paths || typeof paths !== "object") {
+        return [];
+    }
+
+    return Object.keys(paths).flatMap((path) => {
+        const pathObj = paths[path];
+        if (!pathObj || typeof pathObj !== "object") return [];
+
+        const operationIds: string[] = [];
+        ["get", "post", "put", "delete", "patch"].forEach((method) => {
+            const operation = (pathObj as Record<string, { operationId?: string }>)[method];
+            if (operation?.operationId) {
+                operationIds.push(operation.operationId);
             }
         });
 
         return operationIds;
-    })]
+    });
 }

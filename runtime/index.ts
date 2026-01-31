@@ -1,5 +1,5 @@
 import type { CopilotzDb } from "@/database/index.ts";
-import type { ChatContext, Event, NewEvent, NewUnknownEvent, ContentStreamData, MessagePayload, User, TokenEventPayload } from "@/interfaces/index.ts";
+import type { ChatContext, Event, NewEvent, NewUnknownEvent, ContentStreamData, MessagePayload, User, TokenEventPayload, Agent, Tool } from "@/interfaces/index.ts";
 import type { EventBase } from "@/database/schemas/index.ts";
 import { startThreadEventWorker } from "@/event-processors/index.ts";
 import { ulid } from "ulid";
@@ -21,6 +21,35 @@ export type RunOptions = {
     signal?: AbortSignal;
     /** Time-to-live for queue items in milliseconds. */
     queueTTL?: number;
+    /** 
+     * Namespace for this run. Overrides the default namespace from config.
+     * Used for multi-tenancy isolation of collections and data within a schema.
+     */
+    namespace?: string;
+    /**
+     * PostgreSQL schema for this run. Overrides the default schema from dbConfig.
+     * Used for multi-tenant schema-level isolation (one schema per tenant).
+     * 
+     * @remarks
+     * When set, all database queries will execute in the specified schema.
+     * If autoProvisionSchema is enabled, the schema will be created if it doesn't exist.
+     * 
+     * @example
+     * ```ts
+     * await copilotz.run(message, onEvent, { schema: 'tenant_abc' });
+     * ```
+     */
+    schema?: string;
+    /**
+     * Agents for this run. Overrides/extends the agents from config.
+     * Useful for loading agents dynamically from a database.
+     */
+    agents?: Agent[];
+    /**
+     * Tools for this run. Overrides/extends the tools from config.
+     * Useful for loading tools dynamically from a database.
+     */
+    tools?: Tool[];
 };
 
 /**
@@ -125,54 +154,57 @@ function buildUserKey(sender: MessagePayload["sender"]): string {
     return sender.externalId ?? sender.id ?? email ?? sender.name ?? "anonymous";
 }
 
-export async function upserUser(ops: CopilotzDb["ops"], sender: MessagePayload["sender"]): Promise<void> {
+/**
+ * Upsert a user into the graph.
+ * 
+ * @param ops - Database operations
+ * @param sender - Message sender info
+ * @param namespace - Namespace for scoped users (null for global users)
+ */
+export async function upsertUser(
+    ops: CopilotzDb["ops"], 
+    sender: MessagePayload["sender"],
+    namespace?: string | null
+): Promise<void> {
     if (!sender || sender.type !== "user") return;
-    const key = buildUserKey(sender);
+    
+    // Need externalId for graph-based user storage
+    const externalId = sender.externalId ?? sender.id;
+    if (!externalId) return;
+
+    const key = buildUserKey(sender) + (namespace ?? "");
     const last = userUpsertCache.get(key) ?? 0;
     if (Date.now() - last < USER_UPSERT_DEBOUNCE_MS) return;
 
     try {
-        // Try by externalId first
-        let existing = sender.externalId ? await ops.getUserByExternalId(sender.externalId).catch(() => undefined) : undefined;
-        // Fallback by email if present
         const metadata = sender.metadata && typeof sender.metadata === "object"
             ? sender.metadata as Record<string, unknown>
             : undefined;
         const email = metadata && typeof metadata.email === "string"
             ? metadata.email
             : null;
-        if (!existing && email) {
-            const byEmail = await ops.crud.users.findOne({ email }).catch(() => null);
-            existing = (byEmail as unknown as User) ?? undefined;
-        }
 
-        const desired = {
+        // Build userData object, only including metadata when actually present.
+        // This prevents null from overwriting existing metadata in upsertUserNode.
+        const userData: { name?: string | null; email?: string | null; metadata?: Record<string, unknown> } = {
             name: sender.name ?? null,
             email,
-            externalId: sender.externalId ?? null,
-            metadata: metadata ?? null,
         };
-
-        if (existing && typeof (existing as { id?: unknown }).id !== "undefined") {
-            const updates: Record<string, unknown> = {};
-            if (desired.name && existing.name !== desired.name) updates.name = desired.name;
-            if (desired.email && existing.email !== desired.email) updates.email = desired.email;
-            if (desired.externalId && existing.externalId !== desired.externalId) updates.externalId = desired.externalId;
-            if (JSON.stringify(existing.metadata ?? null) !== JSON.stringify(desired.metadata ?? null)) {
-                updates.metadata = desired.metadata;
-            }
-            if (Object.keys(updates).length > 0) {
-                await ops.crud.users.update({ id: (existing as { id: string }).id }, updates);
-            }
-        } else {
-            await ops.crud.users.create(desired);
+        if (metadata !== undefined) {
+            userData.metadata = metadata;
         }
+
+        // Use graph-based user storage with upsert
+        await ops.upsertUserNode(externalId, namespace ?? null, userData);
     } catch (_err) {
         // Ignore user upsert failures to avoid breaking the run flow
     } finally {
         userUpsertCache.set(key, Date.now());
     }
 }
+
+/** @deprecated Use upsertUser instead */
+export const upserUser = upsertUser;
 
 export async function runThread(
     db: CopilotzDb,
@@ -227,13 +259,19 @@ export async function runThread(
     const senderCanonical = (sender.id ?? sender.name ?? "user") as string;
     const participants = Array.from(new Set([senderCanonical, ...baseParticipants]));
 
+    // Auto-populate userExternalId in thread metadata for user context lookup
+    const senderExternalId = sender?.externalId ?? sender?.id;
+    const threadMetadataWithUser = senderExternalId && sender?.type === "user"
+        ? { ...((threadRef?.metadata ?? {}) as Record<string, unknown>), userExternalId: senderExternalId }
+        : threadRef?.metadata ?? undefined;
+
     const ensuredThread = await ops.findOrCreateThread(threadId, {
         name: threadRef?.name ?? "Main Thread",
         description: threadRef?.description ?? undefined,
         participants,
         externalId: threadRef?.externalId ?? undefined,
         parentThreadId: undefined,
-        metadata: threadRef?.metadata ?? undefined,
+        metadata: threadMetadataWithUser,
         status: "active",
         mode: "immediate",
     });
@@ -279,9 +317,9 @@ export async function runThread(
         metadata: normalizedMetadata,
     };
 
-    // Best-effort upsert user sender
+    // Best-effort upsert user sender (with namespace for scoped users)
     try {
-        await upserUser(ops, normalizedSender);
+        await upsertUser(ops, normalizedSender, baseContext.namespace);
     } catch (_err) {
         // swallow to not impact main flow
     }

@@ -1,7 +1,20 @@
 
-import { createDatabase, schema, migrations } from "@/database/index.ts";
+import { 
+    createDatabase, 
+    schema, 
+    migrations, 
+    createCollectionsManager, 
+    createCollectionIndexes,
+    withSchema,
+    provisionTenantSchema,
+    dropTenantSchema,
+    schemaExists,
+    listTenantSchemas,
+    warmSchemaCache,
+} from "@/database/index.ts";
 import type { OminipgWithCrud } from "omnipg";
 import { runThread, type RunHandle, type RunOptions, type UnifiedOnEvent } from "@/runtime/index.ts";
+import type { CollectionDefinition, CollectionCrud, ScopedCollectionCrud } from "@/database/collections/types.ts";
 
 import type {
     Agent,
@@ -44,6 +57,12 @@ export type {
     Event,
     /** New event to be created in the event queue. */
     NewEvent,
+    /** Specific NEW_MESSAGE event type with typed payload. */
+    NewMessageEvent,
+    /** Specific TOOL_CALL event type with typed payload. */
+    ToolCallEvent,
+    /** Specific LLM_CALL event type with typed payload. */
+    LlmCallEvent,
     /** Input type for creating a new Agent. */
     NewAgent,
     /** Input type for creating a new API configuration. */
@@ -88,6 +107,10 @@ export type {
     RagConfig,
     /** Configuration for embedding generation. */
     EmbeddingConfig,
+    /** Configuration for entity extraction. */
+    EntityExtractionConfig,
+    /** Context for namespace resolution. */
+    NamespaceResolutionContext,
     /** Configuration for document chunking strategies. */
     ChunkingConfig,
     /** Configuration for similarity-based retrieval. */
@@ -125,6 +148,88 @@ export { schema };
 export { migrations };
 
 /**
+ * Schema context utilities for multi-tenant PostgreSQL schema isolation.
+ * Use withSchema() to execute operations in a specific tenant's schema.
+ * 
+ * @example
+ * ```ts
+ * import { withSchema } from "@copilotz/lib";
+ * 
+ * // Execute operations in a specific schema
+ * await withSchema('tenant_abc', async () => {
+ *   await db.query('SELECT * FROM users');
+ * });
+ * ```
+ */
+export { withSchema } from "@/database/schema-context.ts";
+
+/**
+ * Schema provisioning utilities for creating and managing tenant schemas.
+ * 
+ * @example
+ * ```ts
+ * import { provisionTenantSchema, schemaExists } from "@copilotz/lib";
+ * 
+ * // Create a new tenant schema with all tables
+ * await provisionTenantSchema(db, 'tenant_abc');
+ * 
+ * // Check if a schema exists
+ * if (await schemaExists(db, 'tenant_abc')) {
+ *   // Ready to use
+ * }
+ * ```
+ */
+export { 
+    provisionTenantSchema,
+    dropTenantSchema,
+    schemaExists,
+    listTenantSchemas,
+    warmSchemaCache,
+    clearSchemaCache,
+} from "@/database/schema-provisioning.ts";
+
+/**
+ * Define a custom collection with JSON Schema.
+ * Collections map to the graph structure (nodes + edges) with a developer-friendly CRUD interface.
+ * 
+ * @example
+ * ```ts
+ * const customerSchema = {
+ *   type: 'object',
+ *   properties: {
+ *     id: { type: 'string' },
+ *     email: { type: 'string' },
+ *     plan: { type: 'string', enum: ['free', 'pro', 'enterprise'] },
+ *   },
+ *   required: ['id', 'email'],
+ * } as const;
+ * 
+ * const customers = defineCollection({
+ *   name: 'customer',
+ *   schema: customerSchema,
+ *   indexes: ['email'],
+ * });
+ * 
+ * type Customer = typeof customers.$inferSelect;
+ * ```
+ */
+export { defineCollection, relation, index } from "@/database/collections/index.ts";
+
+/** Type definitions for collections API. */
+export type {
+    CollectionDefinition,
+    CollectionCrud,
+    ScopedCollectionCrud,
+    CollectionsConfig,
+    WhereFilter,
+    WhereOperators,
+    QueryOptions,
+    SearchOptions,
+    IndexDefinition,
+    RelationDefinition,
+} from "@/database/collections/types.ts";
+
+/**
  * Registers a custom event processor for handling specific event types.
  * Use this to extend Copilotz with custom event handling logic.
  * 
@@ -132,6 +237,12 @@ export { migrations };
  * @param processor - The processor implementation
  */
 export { registerEventProcessor } from "@/event-processors/index.ts";
+
+/**
+ * Resolves a namespace based on scope and optional prefix.
+ * Use for multi-tenancy and entity scope resolution.
+ */
+export { resolveNamespace } from "@/interfaces/index.ts";
 
 /** Event emitted from the streaming event queue. */
 export type { StreamEvent } from "@/runtime/index.ts";
@@ -260,6 +371,21 @@ export interface CopilotzConfig {
     stream?: boolean;
     /** Optional active task ID for task-oriented workflows. */
     activeTaskId?: string;
+    /**
+     * Default namespace for collections and data isolation.
+     * Can be overridden per-run via RunOptions.namespace.
+     * Used for multi-tenancy isolation.
+     * 
+     * @example
+     * ```ts
+     * const copilotz = await createCopilotz({
+     *   agents: [...],
+     *   collections: [customers],
+     *   namespace: 'tenant-123', // All operations scoped to this namespace
+     * });
+     * ```
+     */
+    namespace?: string;
     /** Optional asset storage configuration for handling files and media. */
     assets?: {
         /** Asset storage configuration options. */
@@ -304,6 +430,37 @@ export interface CopilotzConfig {
         };
         /** Default namespace for document storage. */
         defaultNamespace?: string;
+    };
+    /** 
+     * Custom collections for application data storage.
+     * Collections map to the graph structure (nodes + edges) with a developer-friendly CRUD interface.
+     * 
+     * @example
+     * ```ts
+     * const customers = defineCollection({
+     *   name: 'customer',
+     *   schema: customerSchema,
+     *   indexes: ['email'],
+     * });
+     * 
+     * const copilotz = await createCopilotz({
+     *   agents: [...],
+     *   collections: [customers],
+     * });
+     * 
+     * // Use collections
+     * const db = copilotz.collections.withNamespace('tenant-123');
+     * await db.customer.create({ email: 'alice@example.com' });
+     * ```
+     */
+    // deno-lint-ignore no-explicit-any
+    collections?: CollectionDefinition<any, any, any>[];
+    /** Configuration options for collections. */
+    collectionsConfig?: {
+        /** Auto-create indexes on startup. Default: true */
+        autoIndex?: boolean;
+        /** Validate writes against schema. Default: false */
+        validateOnWrite?: boolean;
     };
 }
 
@@ -394,6 +551,103 @@ export interface Copilotz {
          */
         getDataUrl: (refOrId: string) => Promise<string>;
     };
+    /** 
+     * Custom collections for application data storage.
+     * Access collections with explicit namespace or use withNamespace() for scoped access.
+     * 
+     * @example
+     * ```ts
+     * // Explicit namespace
+     * await copilotz.collections.customer.create(data, { namespace: 'tenant-123' });
+     * 
+     * // Scoped namespace (recommended)
+     * const db = copilotz.collections.withNamespace('tenant-123');
+     * await db.customer.create(data);
+     * await db.customer.find({ plan: 'pro' });
+     * await db.customer.search('enterprise companies');
+     * ```
+     */
+    collections: CollectionsManager | undefined;
+
+    /**
+     * Schema management utilities for multi-tenant PostgreSQL schema isolation.
+     * Use these methods to provision, check, and manage tenant schemas.
+     * 
+     * @example
+     * ```ts
+     * // Provision a new tenant schema (creates all tables)
+     * await copilotz.schema.provision('tenant_abc');
+     * 
+     * // Check if a schema exists
+     * if (await copilotz.schema.exists('tenant_abc')) {
+     *   // Safe to use
+     * }
+     * 
+     * // Run with a specific schema
+     * await copilotz.run(message, onEvent, { schema: 'tenant_abc' });
+     * 
+     * // Drop a tenant schema (WARNING: deletes all data!)
+     * await copilotz.schema.drop('tenant_abc');
+     * ```
+     */
+    schema: {
+        /**
+         * Provisions a new tenant schema with all required tables.
+         * Idempotent - safe to call multiple times.
+         * @param schemaName - Name of the schema to create
+         */
+        provision: (schemaName: string) => Promise<void>;
+        /**
+         * Drops a tenant schema and all its data.
+         * WARNING: This permanently deletes all data in the schema!
+         * @param schemaName - Name of the schema to drop
+         */
+        drop: (schemaName: string) => Promise<void>;
+        /**
+         * Checks if a schema exists in the database.
+         * @param schemaName - Name of the schema to check
+         * @returns true if the schema exists
+         */
+        exists: (schemaName: string) => Promise<boolean>;
+        /**
+         * Lists all tenant schemas (excludes system schemas).
+         * @returns Array of schema names
+         */
+        list: () => Promise<string[]>;
+        /**
+         * Warms the schema cache by loading all existing schemas.
+         * Call during startup to avoid first-request latency for existing tenants.
+         */
+        warmCache: () => Promise<void>;
+    };
+}
+
+/** 
+ * Collections manager interface with dynamic collection access.
+ * Access collections by name: `manager.customer`, `manager.order`, etc.
+ * Use `withNamespace()` to get a scoped client with namespace pre-applied.
+ * 
+ * Note: The index signature allows accessing any collection by name.
+ * TypeScript will show methods and collections together in autocomplete.
+ */
+export interface CollectionsManager {
+    /** Get a scoped client with namespace pre-applied to all operations. */
+    withNamespace(namespace: string): ScopedCollectionsManager;
+    /** List all registered collection names. */
+    getCollectionNames(): string[];
+    /** Check if a collection exists. */
+    hasCollection(name: string): boolean;
+    /** Access collections by name. */
+    [collectionName: string]: CollectionCrud<unknown, unknown> | unknown;
+}
+
+/** 
+ * Scoped collections manager with namespace pre-applied.
+ * Access collections by name: `scoped.customer`, `scoped.order`, etc.
+ */
+export interface ScopedCollectionsManager {
+    /** Access scoped collections by name. */
+    [collectionName: string]: ScopedCollectionCrud<unknown, unknown>;
 }
 
 /**
@@ -482,6 +736,38 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
         ? config.assets.store
         : (normalizedAssetConfig ? createAssetStore(normalizedAssetConfig) : createMemoryAssetStore());
 
+    // Initialize collections if defined
+    let collectionsManager: CollectionsManager | undefined = undefined;
+    if (config.collections && config.collections.length > 0) {
+        // Create embedding function for collections search
+        const collectionEmbeddingFn = config.rag?.embedding
+            ? async (text: string): Promise<number[]> => {
+                // Import embedding connector dynamically to avoid circular deps
+                const { embed } = await import("@/connectors/embeddings/index.ts");
+                const result = await embed([text], config.rag!.embedding);
+                return result.embeddings[0] ?? [];
+            }
+            : undefined;
+
+        // Create collections manager
+        collectionsManager = createCollectionsManager(
+            baseDb,
+            config.collections,
+            {
+                embeddingFn: collectionEmbeddingFn,
+                autoIndex: config.collectionsConfig?.autoIndex ?? true,
+                validateOnWrite: config.collectionsConfig?.validateOnWrite ?? false,
+            },
+        ) as unknown as CollectionsManager;
+
+        // Auto-create indexes if enabled
+        if (config.collectionsConfig?.autoIndex !== false) {
+            createCollectionIndexes(baseDb, config.collections).catch((error: unknown) => {
+                console.warn("[collections] Failed to create indexes:", error);
+            });
+        }
+    }
+
     const performRun = async (
         message: MessagePayload,
         onEvent?: UnifiedOnEvent,
@@ -490,9 +776,30 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
         if (!message?.content && !message?.toolCalls?.length) {
             throw new Error("message with content or toolCalls is required.");
         }
+
+        // Resolve schema: RunOptions > DbConfig > undefined
+        // When set, all queries will execute in the specified schema
+        const resolvedSchema = options?.schema ?? config.dbConfig?.defaultSchema;
+
+        // Resolve namespace: RunOptions > CopilotzConfig > undefined
+        const resolvedNamespace = options?.namespace ?? config.namespace;
+
+        // Resolve collections: scoped if namespace is set, otherwise raw manager
+        const resolvedCollections = (resolvedNamespace && collectionsManager)
+            ? collectionsManager.withNamespace(resolvedNamespace)
+            : collectionsManager;
+
+        // Resolve agents: RunOptions > CopilotzConfig
+        // If RunOptions provides agents, they completely override config agents
+        const resolvedAgents = options?.agents ?? baseConfig.agents;
+
+        // Resolve tools: RunOptions > CopilotzConfig
+        // If RunOptions provides tools, they completely override config tools
+        const resolvedTools = options?.tools ?? baseConfig.tools;
+
         const ctx: ChatContext = {
-            agents: baseConfig.agents,
-            tools: baseConfig.tools,
+            agents: resolvedAgents,
+            tools: resolvedTools,
             apis: baseConfig.apis,
             mcpServers: baseConfig.mcpServers,
             callbacks: baseConfig.callbacks,
@@ -518,7 +825,28 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                 defaultNamespace: config.rag.defaultNamespace,
             } : undefined,
             embeddingConfig: config.rag?.embedding,
+            // Resolved namespace for this run
+            namespace: resolvedNamespace,
+            // Collections: scoped if namespace is set, otherwise raw manager
+            collections: resolvedCollections,
+            // Sender of the current message (available to processors and tools)
+            sender: message.sender ? {
+                id: message.sender.id ?? null,
+                externalId: message.sender.externalId ?? null,
+                type: message.sender.type ?? "user",
+                name: message.sender.name ?? null,
+                metadata: message.sender.metadata ?? null,
+            } : undefined,
         };
+
+        // If schema is specified, wrap execution in schema context
+        // This sets the search_path for all queries within this run
+        if (resolvedSchema && resolvedSchema !== 'public') {
+            return withSchema(resolvedSchema, async () => {
+                return await runThread(baseDb, ctx, message, onEvent, options);
+            });
+        }
+
         return await runThread(baseDb, ctx, message, onEvent, options);
     };
 
@@ -676,6 +1004,14 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                 const base64 = bytesToBase64(bytes);
                 return `data:${mime};base64,${base64}`;
             },
+        },
+        collections: collectionsManager,
+        schema: {
+            provision: (schemaName: string) => provisionTenantSchema(baseDb, schemaName),
+            drop: (schemaName: string) => dropTenantSchema(baseDb, schemaName),
+            exists: (schemaName: string) => schemaExists(baseDb, schemaName),
+            list: () => listTenantSchemas(baseDb),
+            warmCache: () => warmSchemaCache(baseDb),
         },
     } satisfies Copilotz;
 }

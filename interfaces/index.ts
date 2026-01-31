@@ -14,7 +14,7 @@ import type {
     API, NewAPI,
     MCPServer, NewMCPServer,
     Message, NewMessage,
-    Event, NewEvent,
+    Event, NewEvent, NewMessageEvent, ToolCallEvent, LlmCallEvent, TokenEvent,
     Task, NewTask,
     Thread, NewThread,
     Tool, NewTool,
@@ -47,6 +47,14 @@ export type {
     Event,
     /** Input type for creating a new Event. */
     NewEvent,
+    /** Specific NEW_MESSAGE event with typed payload. */
+    NewMessageEvent,
+    /** Specific TOOL_CALL event with typed payload. */
+    ToolCallEvent,
+    /** Specific LLM_CALL event with typed payload. */
+    LlmCallEvent,
+    /** Specific TOKEN event with typed payload. */
+    TokenEvent,
     /** Task entity for goal-oriented workflows. */
     Task,
     /** Input type for creating a new Task. */
@@ -105,6 +113,8 @@ export type {
     EventProcessor,
     /** Dependencies injected into event processors. */
     ProcessorDeps,
+    /** Context passed to tool execution. */
+    ToolExecutionContext,
 } from "@/event-processors/index.ts";
 
 import type { AssetStore, AssetConfig } from "@/utils/assets.ts";
@@ -229,6 +239,22 @@ export interface RagConfig {
 }
 
 /**
+ * Configuration for entity extraction from messages and documents.
+ */
+export interface EntityExtractionConfig {
+    /** Whether entity extraction is enabled. Default: false. */
+    enabled: boolean;
+    /** Similarity threshold for dedup candidate matching. Default: 0.95. */
+    similarityThreshold?: number;
+    /** Threshold above which to auto-merge without LLM confirm. Default: 0.99. */
+    autoMergeThreshold?: number;
+    /** Namespace scope for extracted entities. Default: "agent". */
+    namespace?: "thread" | "agent" | "global";
+    /** Filter to specific entity types (open vocabulary). e.g., ["concept", "decision", "person"]. */
+    entityTypes?: string[];
+}
+
+/**
  * RAG options specific to an individual agent.
  */
 export interface AgentRagOptions {
@@ -240,6 +266,8 @@ export interface AgentRagOptions {
     ingestNamespace?: string;
     /** Number of chunks to auto-inject when mode is "auto". */
     autoInjectLimit?: number;
+    /** Entity extraction configuration. */
+    entityExtraction?: EntityExtractionConfig;
 }
 
 /**
@@ -296,6 +324,103 @@ export interface ChatContext {
     ragConfig?: RagConfig;
     /** Embedding configuration. */
     embeddingConfig?: EmbeddingConfig;
+    /** Optional namespace prefix for multi-tenancy isolation. */
+    namespacePrefix?: string;
+    /** 
+     * Resolved namespace for this run.
+     * Priority: RunOptions.namespace > CopilotzConfig.namespace > undefined
+     */
+    namespace?: string;
+    /**
+     * Collections manager for custom data storage.
+     * - If namespace is set: returns pre-scoped collections (no withNamespace needed)
+     * - If no namespace: returns raw manager (use withNamespace manually)
+     */
+    collections?: ScopedCollectionsManager | CollectionsManager;
+    /**
+     * The sender of the current message being processed.
+     * Available in processors and tools for the message that triggered this run.
+     */
+    sender?: {
+        id?: string | null;
+        externalId?: string | null;
+        type?: "user" | "agent" | "tool" | "system";
+        name?: string | null;
+        metadata?: Record<string, unknown> | null;
+    };
+}
+
+/**
+ * Collections manager interface for accessing custom collections.
+ * Access collections by name and use withNamespace() for scoped access.
+ */
+export interface CollectionsManager {
+    /** Get a scoped client with namespace pre-applied to all operations. */
+    withNamespace(namespace: string): ScopedCollectionsManager;
+    /** List all registered collection names. */
+    getCollectionNames(): string[];
+    /** Check if a collection exists. */
+    hasCollection(name: string): boolean;
+    /** Access collections by name. */
+    [collectionName: string]: unknown;
+}
+
+/**
+ * Scoped collections manager with namespace pre-applied.
+ */
+export interface ScopedCollectionsManager {
+    /** Access scoped collections by name. */
+    [collectionName: string]: unknown;
+}
+
+/**
+ * Context for namespace resolution.
+ */
+export interface NamespaceResolutionContext {
+    /** Thread ID for thread-scoped namespaces. */
+    threadId?: string;
+    /** Agent ID for agent-scoped namespaces. */
+    agentId?: string;
+}
+
+/**
+ * Resolves a namespace based on scope and optional prefix.
+ * 
+ * @param scope - The scope level: "thread", "agent", or "global"
+ * @param context - Context containing threadId and agentId
+ * @param prefix - Optional namespace prefix for isolation
+ * @returns Resolved namespace string
+ * 
+ * @example
+ * ```ts
+ * resolveNamespace("agent", { agentId: "bot-1" }, "myapp")
+ * // Returns: "myapp:agent:bot-1"
+ * 
+ * resolveNamespace("thread", { threadId: "abc-123" })
+ * // Returns: "thread:abc-123"
+ * ```
+ */
+export function resolveNamespace(
+    scope: "thread" | "agent" | "global",
+    context: NamespaceResolutionContext,
+    prefix?: string
+): string {
+    const base = prefix ? `${prefix}:` : "";
+    
+    switch (scope) {
+        case "thread":
+            if (!context.threadId) {
+                throw new Error("threadId required for thread-scoped namespace");
+            }
+            return `${base}thread:${context.threadId}`;
+        case "agent":
+            if (!context.agentId) {
+                throw new Error("agentId required for agent-scoped namespace");
+            }
+            return `${base}agent:${context.agentId}`;
+        case "global":
+            return `${base}global`;
+    }
 }
 
 /**
@@ -334,12 +459,6 @@ export interface ContentStreamData {
     /** Whether this is the final token (stream complete). */
     isComplete: boolean;
 }
-
-/** Payload type for TOKEN events, extending ContentStreamData with additional properties. */
-type TokenPayload = ContentStreamData & { [x: string]: unknown };
-
-/** Event type specifically for TOKEN events with typed payload. */
-export type TokenEvent = Event & { type: "TOKEN"; payload: TokenPayload };
 
 /**
  * Type guard to check if an event is a TOKEN event.

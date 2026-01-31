@@ -51,11 +51,12 @@ const buildAttachmentParts = (metadata?: MessageMetadata): ChatContentPart[] | n
         const dataInfo = toDataUrl(attachment);
 
         // Prefer assetRef if provided; resolved later in LLM_CALL
+        // Add asset ID as text so the agent can reference it in tool calls or conversation
         if (typeof attachment.assetRef === "string" && isAssetRef(attachment.assetRef)) {
             const assetId = extractAssetId(attachment.assetRef);
-            if (assetId) {
-                parts.push({ type: "text", text: `[asset:${assetId}]` });
-            }
+            // Add text marker with asset ID for agent reference
+            parts.push({ type: "text", text: `[Attached ${kind || "file"}: asset_id="${assetId}"]` });
+            
             if (kind === "image") {
                 parts.push({ type: "image_url", image_url: { url: attachment.assetRef } });
                 continue;

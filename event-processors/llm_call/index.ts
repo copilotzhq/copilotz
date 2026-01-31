@@ -82,6 +82,21 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         const resolvedMessages = (await (async () => {
             try {
                 if (shouldResolve) {
+                    // Warn if resolution is expected but store is missing
+                    if (!context.assetStore) {
+                        try {
+                            const anyGlobal = globalThis as unknown as {
+                                Deno?: { env?: { get?: (key: string) => string | undefined } };
+                                console?: { warn?: (...args: unknown[]) => void };
+                            };
+                            const debugFlag = anyGlobal?.Deno?.env?.get?.("COPILOTZ_DEBUG");
+                            if (debugFlag === "1" && anyGlobal.console?.warn) {
+                                anyGlobal.console.warn("[llm_call] resolveInLLM is true but assetStore is undefined - asset refs will not be resolved");
+                            }
+                        } catch {
+                            // ignore logging failures
+                        }
+                    }
                     const res = await resolveAssetRefsInMessages(payload.messages as ChatMessage[], context.assetStore);
                     return res.messages;
                 }

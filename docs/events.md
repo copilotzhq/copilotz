@@ -220,15 +220,15 @@ Events are stored in a persistent queue:
 ```typescript
 // Queue fields
 {
-  id: "uuid",
-  threadId: "thread-uuid",
+  id: "ulid",
+  threadId: "thread-ulid",
   type: "NEW_MESSAGE",
   payload: { ... },
   status: "pending",        // pending, processing, completed, failed
   priority: 100,            // Higher = processed first
   ttl: 3600000,            // Time-to-live in ms
   traceId: "trace-uuid",   // For debugging
-  parentEventId: "uuid",   // Parent event (for chains)
+  parentEventId: "ulid",   // Parent event (for chains)
   namespace: "default",    // For multi-tenancy
   createdAt: "...",
   updatedAt: "...",

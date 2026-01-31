@@ -1,3 +1,16 @@
+```
+╔═════════════════════════════════════════════════════════════════╗
+║                                                                 ║
+║   ██████╗ ██████╗ ██████╗ ██╗██╗      ██████╗ ████████╗███████╗ ║
+║  ██╔════╝██╔═══██╗██╔══██╗██║██║     ██╔═══██╗╚══██╔══╝╚══███╔╝ ║
+║  ██║     ██║   ██║██████╔╝██║██║     ██║   ██║   ██║     ███╔╝  ║
+║  ██║     ██║   ██║██╔═══╝ ██║██║     ██║   ██║   ██║    ███╔╝   ║
+║  ╚██████╗╚██████╔╝██║     ██║███████╗╚██████╔╝   ██║   ███████╗ ║
+║   ╚═════╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝   ╚══════╝ ║
+║                                                                 ║
+╚═════════════════════════════════════════════════════════════════╝
+```
+
 # Copilotz
 
 **The full-stack framework for AI applications.**
@@ -5,6 +18,8 @@
 LLM wrappers give you chat. Copilotz gives you everything else: persistent memory, RAG, tool calling, background jobs, and multi-tenancy — in one framework.
 
 Build AI apps, not AI infrastructure.
+
+
 
 [![Deno](https://img.shields.io/badge/Deno-2.0+-000?logo=deno)](https://deno.land)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)

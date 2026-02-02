@@ -59,11 +59,31 @@ assets: {
     backend: "s3",
     s3: {
       bucket: "my-assets-bucket",
+      endpoint: "https://s3.amazonaws.com",  // Or MinIO, R2, etc.
       region: "us-east-1",
       accessKeyId: process.env.AWS_ACCESS_KEY_ID,
       secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-      endpoint: "https://s3.amazonaws.com",  // Or MinIO, R2, etc.
     },
+  },
+}
+```
+
+You can also provide a custom connector (optional):
+
+```typescript
+import { createS3Connector } from "@copilotz/copilotz/connectors/storage/s3";
+
+const connector = createS3Connector({
+  endpoint: "https://s3.amazonaws.com",
+  region: "us-east-1",
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+});
+
+assets: {
+  config: {
+    backend: "s3",
+    s3: { bucket: "my-assets-bucket", connector },
   },
 }
 ```
@@ -580,6 +600,10 @@ const dataUrl = await copilotz.assets.getDataUrl("asset://abc123");
 | `s3.endpoint` | `string` | — | Custom S3 endpoint (MinIO, R2, etc.) |
 | `s3.accessKeyId` | `string` | — | AWS access key |
 | `s3.secretAccessKey` | `string` | — | AWS secret key |
+| `s3.sessionToken` | `string` | — | Optional session token for temporary creds |
+| `s3.connector` | `S3Connector` | — | Custom S3 connector (optional) |
+| `s3.publicBaseUrl` | `string` | — | Public URL prefix for asset keys |
+| `s3.keyPrefix` | `string` | — | Key prefix within the bucket |
 | `inlineThresholdBytes` | `number` | `100000` | Max bytes for inline data URLs |
 | `resolveInLLM` | `boolean` | `true` | Auto-resolve asset refs for LLM |
 

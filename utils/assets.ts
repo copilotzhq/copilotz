@@ -5,7 +5,7 @@
 import type { ChatMessage, ChatContentPart } from "@/connectors/llm/types.ts";
 import type { FsConnector } from "@/connectors/storage/fs.ts";
 import { createFsConnector } from "@/connectors/storage/fs.ts";
-import type { S3Connector } from "@/connectors/storage/s3.ts";
+import { createS3Connector, type S3Connector, type S3ConnectorConfig } from "@/connectors/storage/s3.ts";
 
 export type AssetId = string;
 export type AssetRef = `asset://${string}`;
@@ -377,16 +377,32 @@ export function createFsAssetStore(config: FsAssetConfig): AssetStore {
 // S3/MinIO Asset Store
 // -----------------------------------------------------------------------------
 
-export interface S3AssetConfig extends AssetConfig {
+export interface S3AssetConfig extends AssetConfig, Omit<S3ConnectorConfig, "bucket" | "publicBaseUrl"> {
 	bucket: string;
-	connector: S3Connector; // bring your own connector (or use createS3Connector from connectors)
+	connector?: S3Connector; // bring your own connector (optional)
 	publicBaseUrl?: string; // optional public endpoint for GETs
 	keyPrefix?: string; // optional key prefix within bucket
 }
 
 export function createS3AssetStore(config: S3AssetConfig): AssetStore {
 	const bucket = config.bucket;
-	const s3 = config.connector;
+	const s3 = config.connector ?? createS3Connector({
+		baseUrl: config.baseUrl,
+		endpoint: config.endpoint,
+		endPoint: config.endPoint,
+		region: config.region,
+		accessKeyId: config.accessKeyId,
+		secretAccessKey: config.secretAccessKey,
+		accessKey: config.accessKey,
+		secretKey: config.secretKey,
+		sessionToken: config.sessionToken,
+		bucket: config.bucket,
+		pathStyle: config.pathStyle,
+		useSSL: config.useSSL,
+		port: config.port,
+		pathPrefix: config.pathPrefix,
+		publicBaseUrl: config.publicBaseUrl,
+	});
 	const publicBaseUrl = typeof config.publicBaseUrl === "string" && config.publicBaseUrl.length > 0 ? config.publicBaseUrl.replace(/\/+$/, "") : undefined;
 	const keyPrefix = typeof config.keyPrefix === "string" && config.keyPrefix.length > 0 ? config.keyPrefix.replace(/^\/+|\/+$/g, "") : "";
 

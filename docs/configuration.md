@@ -267,10 +267,11 @@ assets: {
     // S3 backend
     s3: {
       bucket: "my-bucket",
+      endpoint: "...",      // Custom S3 endpoint
       region: "us-east-1",
       accessKeyId: "...",
       secretAccessKey: "...",
-      endpoint: "...",      // Custom S3 endpoint
+      // connector: createS3Connector({ ... }) // optional
     },
     
     inlineThresholdBytes: 100_000,  // Max size for inline assets

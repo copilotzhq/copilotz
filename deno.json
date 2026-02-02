@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.15.2",
+  "version": "0.15.3",
   "license": "MIT",
   "exports": {
     ".": "./index.ts"
@@ -23,6 +23,7 @@
   ],
   "imports": {
     "@/": "./",
+    "@bradenmacdonald/s3-lite-client": "jsr:@bradenmacdonald/s3-lite-client@^0.9.4",
     "ajv": "npm:ajv@8.17.1",
     "ajv-formats": "npm:ajv-formats@3.0.1",
     "omnipg": "jsr:@oxian/ominipg@0.4.7",

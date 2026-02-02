@@ -35,6 +35,15 @@ type NormalizedAttachment = {
 
 type CreatedAssetInfo = { ref: string; mime?: string; kind?: AttachmentKind };
 
+type AssetErrorInfo = {
+	error: unknown;
+	kind?: AttachmentKind;
+	mime?: string;
+	fileName?: string;
+	size?: number;
+	source: "attachments" | "tool_output";
+};
+
 function shouldDebugAssets(): boolean {
     try {
         const anyGlobal = globalThis as unknown as {
@@ -100,6 +109,7 @@ function extractAttachmentsFromContent(content: MessagePayload["content"]): RawA
 async function normalizeAttachments(
     attachments: RawAttachment[],
     store?: AssetStore,
+    onError?: (info: AssetErrorInfo) => void,
 ): Promise<{ normalized: NormalizedAttachment[]; created: CreatedAssetInfo[] }> {
     if (!attachments.length) return { normalized: [], created: [] };
 
@@ -165,6 +175,14 @@ async function normalizeAttachments(
                 if (shouldDebugAssets()) {
                     console.warn("[assets] save failed (attachments):", err);
                 }
+                onError?.({
+                    error: err,
+                    kind: att.kind,
+                    mime,
+                    fileName: att.fileName,
+                    size: bytes?.byteLength,
+                    source: "attachments",
+                });
                 // fall through to non-asset path
             }
         }
@@ -180,6 +198,61 @@ async function normalizeAttachments(
     }
 
     return { normalized, created };
+}
+
+async function emitAssetError(args: {
+    context: ChatContext;
+    event: Event;
+    threadId: string;
+    senderType: "agent" | "user" | "tool" | "system";
+    toolCallMetadata: unknown[];
+    info: AssetErrorInfo;
+}): Promise<void> {
+    const { context, event, threadId, senderType, toolCallMetadata, info } = args;
+    if (!context.callbacks?.onEvent) return;
+
+    const by =
+        senderType === "tool" ? "tool" :
+            senderType === "agent" ? "agent" :
+                senderType === "user" ? "user" : "system";
+
+    const toolMeta = toolCallMetadata[0] && typeof toolCallMetadata[0] === "object"
+        ? (toolCallMetadata[0] as { id?: string; name?: string })
+        : undefined;
+
+    const errorObj = info.error as Record<string, unknown> | undefined;
+    const payload = {
+        error: {
+            message: info.error instanceof Error ? info.error.message : String(info.error),
+            ...(errorObj?.code ? { code: String(errorObj.code) } : {}),
+            ...(typeof errorObj?.statusCode === "number" ? { statusCode: errorObj.statusCode } : {}),
+        },
+        source: info.source,
+        ...(info.kind ? { kind: info.kind } : {}),
+        ...(info.mime ? { mime: info.mime } : {}),
+        ...(info.fileName ? { fileName: info.fileName } : {}),
+        ...(typeof info.size === "number" ? { size: info.size } : {}),
+        by,
+        ...(toolMeta?.name ? { tool: toolMeta.name } : {}),
+        ...(toolMeta?.id ? { toolCallId: toolMeta.id } : {}),
+        ...(context.namespace ? { namespace: context.namespace } : {}),
+    };
+
+    await context.callbacks.onEvent({
+        id: crypto.randomUUID(),
+        threadId,
+        type: "ASSET_ERROR" as unknown as Event["type"],
+        payload: payload as unknown as Event["payload"],
+        parentEventId: event.id as string,
+        traceId: event.traceId,
+        priority: null,
+        metadata: null,
+        ttlMs: null,
+        expiresAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        status: "completed",
+    } as unknown as Event);
 }
 
 export interface AssetProcessingResult {
@@ -207,8 +280,10 @@ export async function processAssetsForNewMessage(args: {
     const mergedAttachments = existing.concat(derivedAttachments);
 
     const store = context.assetStore;
+    const onAttachmentError = (info: AssetErrorInfo) =>
+        emitAssetError({ context, event, threadId, senderType, toolCallMetadata: [], info });
     const { normalized: normalizedAttachments, created: createdFromAttachments } =
-        await normalizeAttachments(mergedAttachments, store);
+        await normalizeAttachments(mergedAttachments, store, onAttachmentError);
 
     // Normalize any toolCall outputs into asset refs as well
     const toolCallEntries = Array.isArray((baseMetadata as { toolCalls?: unknown[] }).toolCalls)
@@ -236,6 +311,14 @@ export async function processAssetsForNewMessage(args: {
                 if (shouldDebugAssets()) {
                     console.warn("[assets] normalize tool output failed:", err);
                 }
+                await emitAssetError({
+                    context,
+                    event,
+                    threadId,
+                    senderType,
+                    toolCallMetadata,
+                    info: { error: err, source: "tool_output" },
+                });
                 // ignore normalization errors, keep raw output
             }
         }

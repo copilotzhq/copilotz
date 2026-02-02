@@ -1,5 +1,5 @@
 import type { CopilotzDb } from "@/database/index.ts";
-import type { ChatContext, Event, NewEvent, NewUnknownEvent, ContentStreamData, MessagePayload, User, TokenEventPayload, Agent, Tool } from "@/interfaces/index.ts";
+import type { ChatContext, Event, NewEvent, NewUnknownEvent, ContentStreamData, MessagePayload, TokenEventPayload, Agent, Tool } from "@/interfaces/index.ts";
 import type { EventBase } from "@/database/schemas/index.ts";
 import { startThreadEventWorker } from "@/event-processors/index.ts";
 import { ulid } from "ulid";
@@ -339,7 +339,8 @@ export async function runThread(
         // NOTE: We do not push normal queued events here (they may be replaced by custom processors).
         // However, some events are *ephemeral* (not enqueued), and must be pushed immediately to reach the stream.
         // Today this is used for ASSET_CREATED.
-        if ((ev as unknown as { type?: string })?.type === "ASSET_CREATED") {
+        const evType = (ev as unknown as { type?: string })?.type;
+        if (evType === "ASSET_CREATED" || evType === "ASSET_ERROR") {
             onStreamPush(ev);
         }
 

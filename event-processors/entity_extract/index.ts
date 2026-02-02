@@ -139,12 +139,14 @@ export const entityExtractProcessor: EventProcessor<EntityExtractPayload, Proces
       return { producedEvents: [] };
     }
 
-    // Get LLM config from first agent or context
+    // Get LLM config from first agent or fallback to RAG config
     const agent = context.agents?.[0];
-    const llmConfig = (typeof agent?.llmOptions === "object" ? agent.llmOptions : {}) as ProviderConfig;
+    const agentLlmConfig = (typeof agent?.llmOptions === "object" ? agent.llmOptions : null) as ProviderConfig | null;
+    const ragLlmConfig = context.ragConfig?.llmConfig as ProviderConfig | undefined;
+    const llmConfig = agentLlmConfig?.provider ? agentLlmConfig : ragLlmConfig;
     
-    if (!llmConfig.provider) {
-      console.warn("[ENTITY_EXTRACT] No LLM config available, skipping extraction");
+    if (!llmConfig?.provider) {
+      console.warn("[ENTITY_EXTRACT] No LLM config available (agent uses dynamic llmOptions and no rag.llmConfig set), skipping extraction");
       return { producedEvents: [] };
     }
 

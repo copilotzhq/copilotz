@@ -236,6 +236,13 @@ export interface RagConfig {
     defaultNamespace?: string;
     /** Dynamic namespace resolver function. */
     namespaceResolver?: NamespaceResolver;
+    /** LLM configuration for background RAG tasks (entity extraction, summarization). */
+    llmConfig?: {
+        provider: string;
+        model?: string;
+        apiKey?: string;
+        temperature?: number;
+    };
 }
 
 /**

@@ -654,6 +654,30 @@ const dataUrl = await copilotz.assets.getDataUrl("asset://abc123");
 
 ---
 
+## Common issues and fixes 
+
+On Google Cloud Storage, using HMAC/interop keys:
+
+- **S3 `AccessDenied` on upload/list**
+  - Ensure you are using **HMAC/interop keys** (not OAuth keys) and the IAM identity has `storage.objects.*` permissions (e.g. `roles/storage.objectAdmin`).
+  - Double-check `s3.bucket`, `s3.endpoint`, and `s3.region` (GCS: `endpoint: "https://storage.googleapis.com"`, `region: "auto"`).
+  - If you use `BUCKET_URL`, make sure it matches either `https://storage.googleapis.com/<bucket>` or `https://<bucket>.storage.googleapis.com`.
+
+All environments:
+  - Remove spaces around `=` in `.env` files so env loaders don't include whitespace.
+
+- **Assets stored at bucket root instead of namespaced prefix**
+  - Namespacing only applies when `ChatContext.namespace` is set. Use `CopilotzConfig.namespace` or pass `RunOptions.namespace` per request.
+
+- **LLM not receiving images**
+  - Confirm `resolveInLLM` is not set to `false`.
+  - For private buckets, avoid setting `s3.publicBaseUrl` unless it’s publicly accessible; otherwise rely on inline data URLs.
+
+- **Silent failures**
+  - `ASSET_ERROR` events are emitted when asset saves fail (useful in clients streaming SSE).
+
+---
+
 ## Next Steps
 
 - [Tools](./tools.md) — Creating tools that work with assets

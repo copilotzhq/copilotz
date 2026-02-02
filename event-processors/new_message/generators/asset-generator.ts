@@ -316,7 +316,7 @@ export async function processAssetsForNewMessage(args: {
                     event,
                     threadId,
                     senderType,
-                    toolCallMetadata,
+                    toolCallMetadata: toolCallEntries,
                     info: { error: err, source: "tool_output" },
                 });
                 // ignore normalization errors, keep raw output

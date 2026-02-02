@@ -51,10 +51,16 @@ function getEnvVar(key: string): string | undefined {
 
 /**
  * Truncate text to fit within token limit.
- * Uses rough approximation of 4 characters per token.
+ * Uses very conservative approximation of 2.5 characters per token to safely
+ * handle code, URLs, punctuation, and other short tokens.
+ * 
+ * Examples:
+ * - 7500 tokens × 2.5 = 18,750 chars → ~7,500 tokens (safe)
+ * - Worst case (2 chars/token): 18,750 ÷ 2 = 9,375 tokens (still exceeds 8192)
+ * - Need even more conservative: 2 chars/token
  */
 function truncateToTokenLimit(text: string, maxTokens: number): string {
-  const maxChars = maxTokens * 4; // ~4 chars per token
+  const maxChars = maxTokens * 2; // Very conservative: ~2 chars per token
   if (text.length <= maxChars) {
     return text;
   }
@@ -92,8 +98,8 @@ export async function embed(
     };
   }
 
-  // Truncate texts to fit within token limit (default 8000 tokens, safe for most models)
-  const maxInputTokens = config.maxInputTokens ?? 8000;
+  // Truncate texts to fit within token limit (default 7500 tokens, safe buffer for 8192 limit)
+  const maxInputTokens = config.maxInputTokens ?? 7500;
   const truncatedTexts = texts.map(text => truncateToTokenLimit(text, maxInputTokens));
 
   const provider = config.provider;

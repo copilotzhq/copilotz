@@ -74,6 +74,13 @@ export interface DatabaseConfig {
    */
   defaultSchema?: string;
   /**
+   * Stale processing event threshold in milliseconds.
+   * Events stuck in "processing" status longer than this will be reset to "pending" on next check.
+   * This provides crash recovery for events that were being processed when the server crashed.
+   * Default: 300000 (5 minutes).
+   */
+  staleProcessingThresholdMs?: number;
+  /**
    * Whether to automatically provision (create) schemas that don't exist.
    * When true, if a schema doesn't exist, it will be created with all migrations.
    * Default: true (lazy provisioning enabled).
@@ -137,7 +144,9 @@ const createDbInstance = async (
   // Wrap db.query with schema-aware logic
   const wrappedDb = wrapDbWithSchemaSupport(dbInstance, finalConfig, debug);
 
-  const ops = createOperations(wrappedDb);
+  const ops = createOperations(wrappedDb, { 
+    staleProcessingThresholdMs: finalConfig.staleProcessingThresholdMs 
+  });
 
   return Object.assign(wrappedDb, { ops }) as CopilotzDb;
 };

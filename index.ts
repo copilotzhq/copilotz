@@ -386,6 +386,13 @@ export interface CopilotzConfig {
     threadMetadata?: Record<string, unknown>;
     /** Optional TTL (time-to-live) in milliseconds for queue items. */
     queueTTL?: number;
+    /** 
+     * Stale processing event threshold in milliseconds. 
+     * Events stuck in "processing" status longer than this will be reset to "pending" on next check.
+     * This provides crash recovery for events that were being processed when the server crashed.
+     * Default: 300000 (5 minutes).
+     */
+    staleProcessingThresholdMs?: number;
     /** Whether to enable streaming mode for real-time token output. */
     stream?: boolean;
     /** Optional active task ID for task-oriented workflows. */
@@ -729,7 +736,10 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
         mcpServers: normalizedMcpServers,
     };
 
-    const managedDb = config.dbInstance ? undefined : await createDatabase(config.dbConfig);
+    const managedDb = config.dbInstance ? undefined : await createDatabase({
+        ...config.dbConfig,
+        staleProcessingThresholdMs: config.staleProcessingThresholdMs ?? config.dbConfig?.staleProcessingThresholdMs,
+    });
     const baseDb = config.dbInstance ?? managedDb;
     if (!baseDb) {
         throw new Error("Failed to initialize Copilotz database instance.");

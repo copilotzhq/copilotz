@@ -253,8 +253,9 @@ const toIsoString = (
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 };
 
-export function createOperations(db: DbInstance): DatabaseOperations {
+export function createOperations(db: DbInstance, config?: { staleProcessingThresholdMs?: number }): DatabaseOperations {
   const { crud } = db;
+  const STALE_PROCESSING_THRESHOLD_MS = config?.staleProcessingThresholdMs ?? 300000; // Default: 5 minutes
 
   const cleanupExpiredQueueItems = async (): Promise<void> => {
     await db.query(
@@ -318,6 +319,35 @@ export function createOperations(db: DbInstance): DatabaseOperations {
   const getProcessingQueueItem = async (
     threadId: string,
   ): Promise<Queue | undefined> => {
+    // Recovery mechanism: Reset stale "processing" events that have been stuck for too long
+    // This handles server crashes where events were left in "processing" state
+    const staleThreshold = new Date(Date.now() - STALE_PROCESSING_THRESHOLD_MS);
+    
+    // Find processing events older than threshold
+    const staleEvents = await crud.events.find({
+      threadId,
+      status: "processing",
+    });
+    
+    for (const event of staleEvents) {
+      const updatedAt = typeof event.updatedAt === "string" 
+        ? new Date(event.updatedAt) 
+        : event.updatedAt;
+      
+      if (updatedAt && updatedAt < staleThreshold) {
+        // Reset stale event to pending so it can be retried
+        await crud.events.update(
+          { id: event.id },
+          { 
+            status: "pending",
+            updatedAt: new Date(),
+          }
+        );
+        console.warn(`[recovery] Reset stale processing event ${event.id} in thread ${threadId} (stuck since ${updatedAt.toISOString()})`);
+      }
+    }
+    
+    // Now check for any remaining processing events
     const item = await crud.events.findOne({
       threadId,
       status: "processing",

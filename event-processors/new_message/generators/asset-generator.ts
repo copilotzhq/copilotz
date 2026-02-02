@@ -37,8 +37,14 @@ type CreatedAssetInfo = { ref: string; mime?: string; kind?: AttachmentKind };
 
 function shouldDebugAssets(): boolean {
     try {
-        const anyGlobal = globalThis as unknown as { Deno?: { env?: { get?: (k: string) => string | undefined } } };
-        return anyGlobal?.Deno?.env?.get?.("COPILOTZ_DEBUG") === "1";
+        const anyGlobal = globalThis as unknown as {
+            Deno?: { env?: { get?: (k: string) => string | undefined } };
+            process?: { env?: Record<string, string | undefined> };
+        };
+        const denoFlag = anyGlobal?.Deno?.env?.get?.("COPILOTZ_NEXT_DEBUG");
+        if (denoFlag === "1") return true;
+        const nodeFlag = anyGlobal?.process?.env?.COPILOTZ_NEXT_DEBUG;
+        return nodeFlag === "1";
     } catch {
         return false;
     }

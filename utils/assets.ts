@@ -134,6 +134,12 @@ export function resolveAssetIdForStore(refOrId: string, store?: AssetStore): Ass
 	const parsed = parseAssetRef(refOrId);
 	if (!parsed) return refOrId as AssetId;
 	if (parsed.namespace && store?.namespace && parsed.namespace !== store.namespace) {
+		if (shouldDebugNext()) {
+			console.warn("[assets] namespace mismatch", {
+				expected: store.namespace,
+				got: parsed.namespace,
+			});
+		}
 		throw new Error(`Asset ref namespace mismatch (expected "${store.namespace}", got "${parsed.namespace}")`);
 	}
 	return parsed.id;
@@ -202,6 +208,20 @@ export function parseDataUrl(url: string): { mime: string; bytes: Uint8Array } |
 	}
 }
 
+function shouldDebugNext(): boolean {
+	try {
+		const anyGlobal = globalThis as unknown as {
+			Deno?: { env?: { get?: (k: string) => string | undefined } };
+			process?: { env?: Record<string, string | undefined> };
+		};
+		const denoFlag = anyGlobal?.Deno?.env?.get?.("COPILOTZ_NEXT_DEBUG");
+		if (denoFlag === "1") return true;
+		const nodeFlag = anyGlobal?.process?.env?.COPILOTZ_NEXT_DEBUG;
+		return nodeFlag === "1";
+	} catch {
+		return false;
+	}
+}
 function detectKindFromMime(mime: string): "image" | "audio" | "video" | "file" {
 	if (mime.startsWith("image/")) return "image";
 	if (mime.startsWith("audio/")) return "audio";

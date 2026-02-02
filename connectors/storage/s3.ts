@@ -168,6 +168,21 @@ export function createS3Connector(baseUrlOrConfig: string | S3ConnectorConfig): 
 	};
 }
 
+function shouldDebugNext(): boolean {
+	try {
+		const anyGlobal = globalThis as unknown as {
+			Deno?: { env?: { get?: (k: string) => string | undefined } };
+			process?: { env?: Record<string, string | undefined> };
+		};
+		const denoFlag = anyGlobal?.Deno?.env?.get?.("COPILOTZ_NEXT_DEBUG");
+		if (denoFlag === "1") return true;
+		const nodeFlag = anyGlobal?.process?.env?.COPILOTZ_NEXT_DEBUG;
+		return nodeFlag === "1";
+	} catch {
+		return false;
+	}
+}
+
 function createS3Client(config: S3ConnectorConfig, endpoint: string): S3Client {
 	if (!endpoint) {
 		throw new Error("S3 connector requires endpoint when using authenticated requests.");
@@ -197,20 +212,42 @@ function createS3Client(config: S3ConnectorConfig, endpoint: string): S3Client {
 
 async function putViaClient(client: S3Client, params: S3PutObjectParams): Promise<void> {
 	const metadata = params.contentType ? { "Content-Type": params.contentType } : undefined;
-	await client.putObject(params.key, params.body, {
-		bucketName: params.bucket,
-		...(metadata ? { metadata } : {}),
-	});
+	try {
+		await client.putObject(params.key, params.body, {
+			bucketName: params.bucket,
+			...(metadata ? { metadata } : {}),
+		});
+	} catch (err) {
+		if (shouldDebugNext()) {
+			console.warn("[s3] putObject failed", {
+				bucket: params.bucket,
+				key: params.key,
+				message: err instanceof Error ? err.message : String(err),
+			});
+		}
+		throw err;
+	}
 }
 
 async function getViaClient(
 	client: S3Client,
 	params: S3GetObjectParams,
 ): Promise<{ body: Uint8Array; contentType?: string }> {
-	const res = await client.getObject(params.key, { bucketName: params.bucket });
-	const contentType = res.headers.get("content-type") || undefined;
-	const buf = new Uint8Array(await res.arrayBuffer());
-	return { body: buf, contentType };
+	try {
+		const res = await client.getObject(params.key, { bucketName: params.bucket });
+		const contentType = res.headers.get("content-type") || undefined;
+		const buf = new Uint8Array(await res.arrayBuffer());
+		return { body: buf, contentType };
+	} catch (err) {
+		if (shouldDebugNext()) {
+			console.warn("[s3] getObject failed", {
+				bucket: params.bucket,
+				key: params.key,
+				message: err instanceof Error ? err.message : String(err),
+			});
+		}
+		throw err;
+	}
 }
 
 async function putViaFetch(url: string, params: S3PutObjectParams): Promise<void> {
@@ -222,14 +259,32 @@ async function putViaFetch(url: string, params: S3PutObjectParams): Promise<void
 		body: params.body,
 	});
 	if (!res.ok) {
-		throw new Error(`S3 putObject failed: ${res.status} ${await safeText(res)}`);
+		const bodyText = await safeText(res);
+		if (shouldDebugNext()) {
+			console.warn("[s3] putObject failed (fetch)", {
+				url,
+				status: res.status,
+				statusText: res.statusText,
+				body: bodyText.slice(0, 500),
+			});
+		}
+		throw new Error(`S3 putObject failed: ${res.status} ${bodyText}`);
 	}
 }
 
 async function getViaFetch(url: string): Promise<{ body: Uint8Array; contentType?: string }> {
 	const res = await fetch(url);
 	if (!res.ok) {
-		throw new Error(`S3 getObject failed: ${res.status} ${await safeText(res)}`);
+		const bodyText = await safeText(res);
+		if (shouldDebugNext()) {
+			console.warn("[s3] getObject failed (fetch)", {
+				url,
+				status: res.status,
+				statusText: res.statusText,
+				body: bodyText.slice(0, 500),
+			});
+		}
+		throw new Error(`S3 getObject failed: ${res.status} ${bodyText}`);
 	}
 	const contentType = res.headers.get("content-type") || undefined;
 	const buf = new Uint8Array(await res.arrayBuffer());

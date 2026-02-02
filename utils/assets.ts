@@ -524,6 +524,11 @@ export function createS3AssetStore(config: S3AssetConfig): AssetStore {
 
 	const urlFor: AssetStore["urlFor"] = async (assetId, opts) => {
 		const key = keyFor(assetId);
+		const inlineRequested = opts?.inline === true;
+		if (inlineRequested) {
+			const { bytes, mime } = await get(assetId);
+			return toDataUrl(bytes, mime);
+		}
 		// Prefer explicit public URL
 		if (typeof s3.publicUrl === "function") {
 			return s3.publicUrl(bucket, key);
@@ -537,8 +542,7 @@ export function createS3AssetStore(config: S3AssetConfig): AssetStore {
 		}
 		// Fallback to inline data URL (will cost memory/tokens)
 		const { bytes, mime } = await get(assetId);
-		const inline = opts?.inline ?? true;
-		return inline ? toDataUrl(bytes, mime) : toDataUrl(bytes, mime);
+		return toDataUrl(bytes, mime);
 	};
 
 	const info: NonNullable<AssetStore["info"]> = async (assetId) => {

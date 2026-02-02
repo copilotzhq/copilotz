@@ -85,9 +85,8 @@ export function createS3Connector(baseUrlOrConfig: string | S3ConnectorConfig): 
 	const config: S3ConnectorConfig = typeof baseUrlOrConfig === "string"
 		? { baseUrl: baseUrlOrConfig }
 		: (baseUrlOrConfig ?? {});
-	const baseUrl = normalizeBaseUrl(config.baseUrl ?? config.endpoint ?? config.endPoint);
-	const publicBaseUrl = normalizeBaseUrl(config.publicBaseUrl);
 	const endpoint = config.endPoint ?? config.endpoint ?? config.baseUrl ?? "";
+	const publicBaseUrl = normalizeBaseUrl(config.publicBaseUrl);
 	const wantsClient = Boolean(
 		config.region ||
 			config.accessKeyId ||
@@ -99,6 +98,10 @@ export function createS3Connector(baseUrlOrConfig: string | S3ConnectorConfig): 
 			config.useSSL ||
 			config.port ||
 			config.pathPrefix,
+	);
+
+	const baseUrl = normalizeBaseUrl(
+		config.baseUrl ?? (wantsClient ? undefined : (config.endpoint ?? config.endPoint)),
 	);
 
 	const client = wantsClient ? createS3Client(config, endpoint) : undefined;
@@ -151,13 +154,7 @@ export function createS3Connector(baseUrlOrConfig: string | S3ConnectorConfig): 
 		if (publicBaseUrl) {
 			return (_bucket: string, key: string): string => joinUrl(publicBaseUrl, key);
 		}
-		if (client) {
-			return (bucket: string, key: string): string => {
-				const base = buildClientBaseUrl(client, bucket);
-				return client.pathStyle ? joinUrl(base, bucket, key) : joinUrl(base, key);
-			};
-		}
-		if (baseUrl) {
+		if (!client && baseUrl) {
 			return (bucket: string, key: string): string => toUrl(bucket, key, baseUrl);
 		}
 		return undefined;
@@ -237,12 +234,6 @@ async function getViaFetch(url: string): Promise<{ body: Uint8Array; contentType
 	const contentType = res.headers.get("content-type") || undefined;
 	const buf = new Uint8Array(await res.arrayBuffer());
 	return { body: buf, contentType };
-}
-
-function buildClientBaseUrl(client: S3Client, bucket: string): string {
-	const host = client.pathStyle ? client.host : `${bucket}.${client.host}`;
-	const prefix = client.pathPrefix || "";
-	return `${client.protocol}//${host}${prefix}`;
 }
 
 function normalizeBaseUrl(value?: string): string | undefined {

@@ -35,6 +35,15 @@ type NormalizedAttachment = {
 
 type CreatedAssetInfo = { ref: string; mime?: string; kind?: AttachmentKind };
 
+function shouldDebugAssets(): boolean {
+    try {
+        const anyGlobal = globalThis as unknown as { Deno?: { env?: { get?: (k: string) => string | undefined } } };
+        return anyGlobal?.Deno?.env?.get?.("COPILOTZ_DEBUG") === "1";
+    } catch {
+        return false;
+    }
+}
+
 function extractAttachmentsFromContent(content: MessagePayload["content"]): RawAttachment[] {
     const attachments: RawAttachment[] = [];
     if (!Array.isArray(content)) return attachments;
@@ -146,7 +155,10 @@ async function normalizeAttachments(
                 });
                 created.push({ ref, mime, kind: att.kind });
                 continue;
-            } catch {
+            } catch (err) {
+                if (shouldDebugAssets()) {
+                    console.warn("[assets] save failed (attachments):", err);
+                }
                 // fall through to non-asset path
             }
         }
@@ -214,7 +226,10 @@ export async function processAssetsForNewMessage(args: {
                         kind: c.kind === "image" || c.kind === "audio" || c.kind === "file" ? c.kind : "file",
                     });
                 }
-            } catch {
+            } catch (err) {
+                if (shouldDebugAssets()) {
+                    console.warn("[assets] normalize tool output failed:", err);
+                }
                 // ignore normalization errors, keep raw output
             }
         }

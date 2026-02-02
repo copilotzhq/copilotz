@@ -92,11 +92,43 @@ dbConfig: {
   schemaSQL: "CREATE TABLE ...",  // Extra init SQL
   useWorker: false,             // PGLite worker mode
   logMetrics: false,            // Performance logging
+  
+  // Crash recovery configuration
+  staleProcessingThresholdMs: 300000,  // 5 minutes (default)
 }
 
 // OR reuse existing database
 dbInstance: existingDatabase
 ```
+
+### Crash Recovery
+
+The `staleProcessingThresholdMs` option provides automatic recovery from server crashes:
+
+```typescript
+dbConfig: {
+  url: "postgres://...",
+  staleProcessingThresholdMs: 120000,  // 2 minutes
+}
+
+// OR at top level
+const copilotz = await createCopilotz({
+  agents: [...],
+  staleProcessingThresholdMs: 120000,  // 2 minutes
+  dbConfig: { url: "postgres://..." },
+});
+```
+
+**How it works:**
+- Events stuck in `"processing"` status longer than the threshold are automatically reset to `"pending"`
+- This prevents permanent deadlocks when the server crashes mid-processing
+- Default: 5 minutes (300000ms)
+- Set lower for faster recovery, higher for long-running operations
+
+**When to adjust:**
+- **Lower (1-2 min)**: Fast recovery, but may reset legitimately slow operations
+- **Higher (10-15 min)**: For operations that genuinely take a long time
+- **Default (5 min)**: Good balance for most use cases
 
 ## Custom Tools
 
@@ -292,14 +324,15 @@ assets: {
 ## Runtime Defaults
 
 ```typescript
-stream: false,              // Enable streaming by default
-queueTTL: 3600000,         // Queue item TTL (1 hour)
-namespace: "default",       // Default namespace
-threadMetadata: {           // Metadata for new threads
+stream: false,                        // Enable streaming by default
+queueTTL: 3600000,                   // Queue item TTL (1 hour)
+staleProcessingThresholdMs: 300000,  // Crash recovery threshold (5 minutes)
+namespace: "default",                 // Default namespace
+threadMetadata: {                     // Metadata for new threads
   source: "api",
   version: "1.0",
 },
-activeTaskId: "task-123",   // Default task context
+activeTaskId: "task-123",             // Default task context
 ```
 
 ---

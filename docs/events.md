@@ -254,6 +254,29 @@ const next = await copilotz.ops.getNextPendingQueueItem(threadId, namespace);
 await copilotz.ops.updateQueueItemStatus(queueId, "completed");
 ```
 
+### Crash Recovery
+
+Copilotz automatically recovers from server crashes that occur mid-processing:
+
+```typescript
+const copilotz = await createCopilotz({
+  agents: [...],
+  staleProcessingThresholdMs: 300000,  // 5 minutes (default)
+});
+```
+
+**How it works:**
+- Events stuck in `"processing"` status for longer than the threshold are automatically reset to `"pending"`
+- This prevents permanent thread deadlocks when the server crashes while processing an event
+- The next time the queue is checked, stale events are recovered and reprocessed
+
+**Configuration:**
+- Default: 5 minutes (300000ms)
+- Lower values (1-2 min): Faster recovery, but may reset legitimately slow operations
+- Higher values (10-15 min): For operations that genuinely take a long time
+
+See [Configuration](./configuration.md#crash-recovery) for more details.
+
 ## Token Streaming
 
 When streaming is enabled, `TOKEN` events are emitted for each token:

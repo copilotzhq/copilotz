@@ -50,6 +50,19 @@ function getEnvVar(key: string): string | undefined {
 }
 
 /**
+ * Truncate text to fit within token limit.
+ * Uses rough approximation of 4 characters per token.
+ */
+function truncateToTokenLimit(text: string, maxTokens: number): string {
+  const maxChars = maxTokens * 4; // ~4 chars per token
+  if (text.length <= maxChars) {
+    return text;
+  }
+  // Truncate and add ellipsis to indicate truncation
+  return text.slice(0, maxChars - 3) + "...";
+}
+
+/**
  * Generate embeddings for an array of texts
  * 
  * @param texts - Array of text strings to embed
@@ -79,6 +92,10 @@ export async function embed(
     };
   }
 
+  // Truncate texts to fit within token limit (default 8000 tokens, safe for most models)
+  const maxInputTokens = config.maxInputTokens ?? 8000;
+  const truncatedTexts = texts.map(text => truncateToTokenLimit(text, maxInputTokens));
+
   const provider = config.provider;
   const defaults = getEmbeddingProviderDefaults()[provider];
 
@@ -104,8 +121,8 @@ export async function embed(
   let totalPromptTokens = 0;
   let totalTokens = 0;
 
-  for (let i = 0; i < texts.length; i += batchSize) {
-    const batch = texts.slice(i, i + batchSize);
+  for (let i = 0; i < truncatedTexts.length; i += batchSize) {
+    const batch = truncatedTexts.slice(i, i + batchSize);
 
     // Make API request
     const response = await post(

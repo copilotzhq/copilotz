@@ -15,6 +15,8 @@ export interface EmbeddingConfig {
   baseUrl?: string;
   dimensions?: number;
   batchSize?: number;
+  /** Maximum input tokens per text. Texts exceeding this limit will be truncated. Default: 8000 (safe for most models). */
+  maxInputTokens?: number;
 }
 
 // Request for embedding generation

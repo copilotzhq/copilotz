@@ -5,8 +5,10 @@ import {
     parseDataUrl,
     isDataUrl,
     normalizeOutputToAssetRefs,
-    extractAssetId,
+    resolveAssetIdForStore,
+    buildAssetRefForStore,
     bytesToBase64,
+    type AssetStore,
 } from "@/utils/assets.ts";
 
 type AttachmentKind = "image" | "audio" | "file";
@@ -82,7 +84,7 @@ function extractAttachmentsFromContent(content: MessagePayload["content"]): RawA
 
 async function normalizeAttachments(
     attachments: RawAttachment[],
-    store?: { save: (bytes: Uint8Array, mime: string) => Promise<{ assetId: string }> },
+    store?: AssetStore,
 ): Promise<{ normalized: NormalizedAttachment[]; created: CreatedAssetInfo[] }> {
     if (!attachments.length) return { normalized: [], created: [] };
 
@@ -134,7 +136,7 @@ async function normalizeAttachments(
         if (bytes && mime) {
             try {
                 const { assetId } = await store.save(bytes, mime);
-                const ref = `asset://${assetId}`;
+                const ref = buildAssetRefForStore(store, assetId);
                 normalized.push({
                     kind: att.kind,
                     mimeType: mime,
@@ -270,7 +272,7 @@ export async function processAssetsForNewMessage(args: {
     if (newlyCreatedRefs.size > 0 && context.callbacks?.onEvent && store) {
         for (const ref of newlyCreatedRefs) {
             try {
-                const id = extractAssetId(ref);
+                const id = resolveAssetIdForStore(ref, store);
                 let base64: string | undefined = undefined;
                 let mimeForEvent: string | undefined = undefined;
                 let dataUrl: string | undefined = undefined;

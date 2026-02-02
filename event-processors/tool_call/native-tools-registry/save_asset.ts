@@ -1,10 +1,10 @@
 import type { ToolExecutionContext } from "../index.ts";
-import { base64ToBytes } from "@/utils/assets.ts";
+import { base64ToBytes, buildAssetRefForStore, resolveAssetIdForStore } from "@/utils/assets.ts";
 
 interface SaveAssetParams {
 	mimeType?: string;
 	dataBase64?: string;
-	ref?: string; // asset://<id>
+	ref?: string; // asset://<id> or asset://<namespace>/<id>
 }
 
 export default {
@@ -16,7 +16,7 @@ export default {
 		properties: {
 			mimeType: { type: "string", description: "MIME type of the data" },
 			dataBase64: { type: "string", description: "Base64-encoded bytes" },
-			ref: { type: "string", description: "Existing asset ref (asset://...)" },
+			ref: { type: "string", description: "Existing asset ref (asset://<id> or asset://<namespace>/<id>)" },
 		},
 		oneOf: [
 			{ required: ["mimeType", "dataBase64"] },
@@ -30,11 +30,11 @@ export default {
 
 		if (typeof ref === "string" && ref.startsWith("asset://")) {
 			// Return existing ref (noop)
-			const { bytes, mime } = await (context.resolveAsset
-				? context.resolveAsset(ref)
-				: context.assetStore.get(ref.slice("asset://".length)));
+		const assetId = resolveAssetIdForStore(ref, context.assetStore);
+		const { bytes, mime } = await context.assetStore.get(assetId);
+		const assetRef = buildAssetRefForStore(context.assetStore, assetId);
 			return {
-				assetRef: ref,
+			assetRef,
 				mimeType: mime,
 				size: bytes.byteLength,
 				kind: mime.startsWith("image/") ? "image" : (mime.startsWith("audio/") ? "audio" : (mime.startsWith("video/") ? "video" : "file")),
@@ -47,7 +47,7 @@ export default {
 
 		const bytes = base64ToBytes(dataBase64);
 		const { assetId } = await context.assetStore.save(bytes, mimeType);
-		const assetRef = `asset://${assetId}`;
+	const assetRef = buildAssetRefForStore(context.assetStore, assetId);
 		return {
 			assetRef,
 			mimeType,

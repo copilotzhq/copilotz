@@ -117,6 +117,34 @@ Assets are retrievable once after creation, then deleted. Use this when you want
 
 ---
 
+### Namespacing (Tenant Isolation)
+
+Enable namespacing to scope assets by `ChatContext.namespace` (which comes from `CopilotzConfig.namespace` or `RunOptions.namespace`):
+
+```typescript
+const copilotz = await createCopilotz({
+  namespace: "tenant-123",
+  agents: [...],
+  assets: {
+    config: {
+      backend: "s3",
+      namespacing: { mode: "context", includeInRef: true },
+      s3: {
+        bucket: "my-assets-bucket",
+        endpoint: "https://s3.amazonaws.com",
+        region: "us-east-1",
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+      },
+    },
+  },
+});
+```
+
+With `includeInRef: true`, refs look like `asset://tenant-123/<id>`.
+
+---
+
 ## Asset References
 
 Assets are referenced using `asset://` URIs:
@@ -125,15 +153,27 @@ Assets are referenced using `asset://` URIs:
 asset://550e8400-e29b-41d4-a716-446655440000
 ```
 
+When namespacing is enabled, refs include the namespace:
+
+```
+asset://tenant-123/550e8400-e29b-41d4-a716-446655440000
+```
+
+Namespaces are URL-encoded inside the ref; use `parseAssetRef()` to decode.
+
 Helper functions:
 
 ```typescript
-import { isAssetRef, extractAssetId } from "@copilotz/copilotz";
+import { isAssetRef, extractAssetId, parseAssetRef } from "@copilotz/copilotz";
 
 isAssetRef("asset://abc123");     // true
 isAssetRef("https://example.com"); // false
 
 extractAssetId("asset://abc123");  // "abc123"
+extractAssetId("asset://tenant-123/abc123");  // "abc123"
+
+parseAssetRef("asset://tenant-123/abc123");
+// { id: "abc123", namespace: "tenant-123" }
 ```
 
 ---
@@ -148,6 +188,8 @@ Get an asset as base64-encoded data:
 const { base64, mime } = await copilotz.assets.getBase64("asset://abc123");
 // Or just the ID:
 const { base64, mime } = await copilotz.assets.getBase64("abc123");
+// Or with explicit namespace:
+const { base64, mime } = await copilotz.assets.getBase64("asset://abc123", { namespace: "tenant-123" });
 
 // base64: "iVBORw0KGgoAAAANSUhEUg..."
 // mime: "image/png"
@@ -159,6 +201,7 @@ Get an asset as a data URL (ready for HTML or LLM):
 
 ```typescript
 const dataUrl = await copilotz.assets.getDataUrl("asset://abc123");
+const dataUrl = await copilotz.assets.getDataUrl("asset://abc123", { namespace: "tenant-123" });
 // "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg..."
 ```
 
@@ -604,6 +647,8 @@ const dataUrl = await copilotz.assets.getDataUrl("asset://abc123");
 | `s3.connector` | `S3Connector` | — | Custom S3 connector (optional) |
 | `s3.publicBaseUrl` | `string` | — | Public URL prefix for asset keys |
 | `s3.keyPrefix` | `string` | — | Key prefix within the bucket |
+| `namespacing.mode` | `"none"` \| `"context"` | `"none"` | Scope assets by `ChatContext.namespace` |
+| `namespacing.includeInRef` | `boolean` | `false` | Include namespace in asset refs |
 | `inlineThresholdBytes` | `number` | `100000` | Max bytes for inline data URLs |
 | `resolveInLLM` | `boolean` | `true` | Auto-resolve asset refs for LLM |
 

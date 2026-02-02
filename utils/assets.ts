@@ -10,6 +10,21 @@ import { createS3Connector, type S3Connector, type S3ConnectorConfig } from "@/c
 export type AssetId = string;
 export type AssetRef = `asset://${string}`;
 
+export type AssetNamespacingMode = "none" | "context";
+
+export interface AssetNamespacingConfig {
+	/**
+	 * "none": single global asset namespace (default)
+	 * "context": scope assets by ChatContext.namespace
+	 */
+	mode?: AssetNamespacingMode;
+	/**
+	 * If true, include the namespace in asset refs (asset://<ns>/<id>).
+	 * Defaults to false for backwards compatibility.
+	 */
+	includeInRef?: boolean;
+}
+
 export interface AssetConfig {
 	inlineThresholdBytes?: number;
 	/**
@@ -34,6 +49,10 @@ export interface AssetConfig {
 	 * S3 backend config (required if backend === "s3").
 	 */
 	s3?: Omit<S3AssetConfig, "inlineThresholdBytes" | "resolveInLLM">;
+	/**
+	 * Optional namespacing settings for tenant isolation.
+	 */
+	namespacing?: AssetNamespacingConfig;
 }
 
 export interface AssetInfo {
@@ -48,6 +67,12 @@ export interface AssetStore {
 	get(assetId: AssetId): Promise<{ bytes: Uint8Array; mime: string }>;
 	urlFor(assetId: AssetId, opts?: { inline?: boolean }): Promise<string>;
 	info?(assetId: AssetId): Promise<AssetInfo | undefined>;
+	/** Optional namespace associated with this store. */
+	namespace?: string;
+	/** If true, include namespace in generated asset refs. */
+	includeNamespaceInRef?: boolean;
+	/** Optional helper for building refs. */
+	refFor?(assetId: AssetId): AssetRef;
 }
 
 // -----------------------------------------------------------------------------
@@ -58,8 +83,83 @@ export function isAssetRef(value: unknown): value is AssetRef {
 	return typeof value === "string" && value.startsWith("asset://");
 }
 
+export type ParsedAssetRef = { id: AssetId; namespace?: string };
+
+export function parseAssetRef(value: string): ParsedAssetRef | null {
+	if (!isAssetRef(value)) return null;
+	const raw = value.slice("asset://".length);
+	if (!raw) return null;
+	const parts = raw.split("/");
+	if (parts.length <= 1) {
+		return { id: raw as AssetId };
+	}
+	const [maybeNamespace, ...rest] = parts;
+	const id = rest.join("/");
+	if (!id) return null;
+	return { id: id as AssetId, namespace: decodeAssetNamespace(maybeNamespace) };
+}
+
+function encodeAssetNamespace(value: string): string {
+	return encodeURIComponent(value);
+}
+
+function decodeAssetNamespace(value: string): string {
+	try {
+		return decodeURIComponent(value);
+	} catch {
+		return value;
+	}
+}
+
+export function buildAssetRef(
+	assetId: AssetId,
+	namespace?: string,
+	includeNamespace?: boolean,
+): AssetRef {
+	if (includeNamespace && namespace) {
+		const encoded = encodeAssetNamespace(namespace);
+		return (`asset://${encoded}/${assetId}`) as AssetRef;
+	}
+	return (`asset://${assetId}`) as AssetRef;
+}
+
 export function extractAssetId(ref: AssetRef | string): AssetId {
-	return (ref.startsWith("asset://") ? ref.slice("asset://".length) : ref) as AssetId;
+	if (!isAssetRef(ref)) return ref as AssetId;
+	const parsed = parseAssetRef(ref);
+	return (parsed?.id ?? ref.slice("asset://".length)) as AssetId;
+}
+
+export function resolveAssetIdForStore(refOrId: string, store?: AssetStore): AssetId {
+	if (!isAssetRef(refOrId)) return refOrId as AssetId;
+	const parsed = parseAssetRef(refOrId);
+	if (!parsed) return refOrId as AssetId;
+	if (parsed.namespace && store?.namespace && parsed.namespace !== store.namespace) {
+		throw new Error(`Asset ref namespace mismatch (expected "${store.namespace}", got "${parsed.namespace}")`);
+	}
+	return parsed.id;
+}
+
+export function buildAssetRefForStore(store: AssetStore | undefined, assetId: AssetId): AssetRef {
+	if (store?.refFor) return store.refFor(assetId);
+	return buildAssetRef(assetId, store?.namespace, store?.includeNamespaceInRef);
+}
+
+export type ResolvedAssetNamespace = {
+	namespace?: string;
+	includeInRef: boolean;
+	cacheKey: string;
+};
+
+export function resolveAssetNamespace(
+	config?: AssetConfig,
+	contextNamespace?: string,
+): ResolvedAssetNamespace {
+	const mode = config?.namespacing?.mode ?? "none";
+	if (mode === "context" && typeof contextNamespace === "string" && contextNamespace.length > 0) {
+		const includeInRef = Boolean(config?.namespacing?.includeInRef);
+		return { namespace: contextNamespace, includeInRef, cacheKey: `context:${contextNamespace}` };
+	}
+	return { namespace: undefined, includeInRef: false, cacheKey: "global" };
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {
@@ -279,7 +379,7 @@ export function createMemoryAssetStore(config: AssetConfig = {}): AssetStore {
  * Note: When using `backend: "passthrough"`, the framework automatically sets
  * `resolveInLLM: false` since assets are deleted after ASSET_CREATED emission.
  */
-export function createPassthroughAssetStore(config: AssetConfig = {}): AssetStore {
+export function createPassthroughAssetStore(_config: AssetConfig = {}): AssetStore {
 	const byId = new Map<AssetId, { bytes: Uint8Array; mime: string; createdAt: Date }>();
 
 	const save: AssetStore["save"] = (bytes, mime) => {
@@ -486,6 +586,51 @@ export function createAssetStore(config: AssetConfig = {}): AssetStore {
 	return createMemoryAssetStore(common);
 }
 
+export function createAssetStoreForNamespace(
+	config: AssetConfig = {},
+	contextNamespace?: string,
+): AssetStore {
+	const resolved = resolveAssetNamespace(config, contextNamespace);
+	const namespacedConfig = resolved.namespace
+		? applyNamespaceToAssetConfig(config, resolved.namespace)
+		: config;
+	const store = createAssetStore(namespacedConfig);
+	return attachNamespaceToStore(store, resolved);
+}
+
+function attachNamespaceToStore(store: AssetStore, resolved: ResolvedAssetNamespace): AssetStore {
+	if (resolved.namespace) {
+		store.namespace = resolved.namespace;
+		store.includeNamespaceInRef = resolved.includeInRef;
+	}
+	if (resolved.includeInRef && resolved.namespace) {
+		store.refFor = (assetId: AssetId) => buildAssetRef(assetId, resolved.namespace, true);
+	}
+	return store;
+}
+
+function applyNamespaceToAssetConfig(config: AssetConfig, namespace: string): AssetConfig {
+	const nsSegment = encodeAssetNamespace(namespace);
+	const next: AssetConfig = {
+		...config,
+		fs: config.fs ? { ...config.fs } : undefined,
+		s3: config.s3 ? { ...config.s3 } : undefined,
+	};
+	if (next.fs) {
+		next.fs.prefix = joinAssetPrefix(next.fs.prefix, nsSegment);
+	}
+	if (next.s3) {
+		next.s3.keyPrefix = joinAssetPrefix(next.s3.keyPrefix, nsSegment);
+	}
+	return next;
+}
+
+function joinAssetPrefix(base: string | undefined, suffix: string): string {
+	const cleanBase = typeof base === "string" ? base.replace(/^\/+|\/+$/g, "") : "";
+	const cleanSuffix = suffix.replace(/^\/+|\/+$/g, "");
+	return [cleanBase, cleanSuffix].filter(Boolean).join("/");
+}
+
 // -----------------------------------------------------------------------------
 // Message Asset Ref Resolution
 // -----------------------------------------------------------------------------
@@ -507,7 +652,7 @@ export async function resolveAssetRefsInMessages(
 			const url = part.image_url?.url;
 			if (typeof url === "string" && isAssetRef(url)) {
 				try {
-					const id = extractAssetId(url);
+					const id = resolveAssetIdForStore(url, store);
 					const dataUrl = await store.urlFor(id, { inline: true });
 					referenced.add(url as AssetRef);
 					return { type: "image_url", image_url: { url: dataUrl } };
@@ -523,7 +668,7 @@ export async function resolveAssetRefsInMessages(
 			const fileData = part.file?.file_data;
 			if (typeof fileData === "string" && isAssetRef(fileData)) {
 				try {
-					const id = extractAssetId(fileData);
+					const id = resolveAssetIdForStore(fileData, store);
 					const { bytes, mime } = await store.get(id);
 					const dataUrl = toDataUrl(bytes, mime);
 					referenced.add(fileData as AssetRef);
@@ -539,7 +684,7 @@ export async function resolveAssetRefsInMessages(
 			const dataVal = part.input_audio?.data;
 			if (typeof dataVal === "string" && isAssetRef(dataVal)) {
 				try {
-					const id = extractAssetId(dataVal);
+					const id = resolveAssetIdForStore(dataVal, store);
 					const { bytes, mime } = await store.get(id);
 					const format = mime.includes("/") ? mime.split("/")[1] : part.input_audio.format;
 					referenced.add(dataVal as AssetRef);
@@ -615,7 +760,7 @@ export async function normalizeOutputToAssetRefs(value: unknown, store?: AssetSt
 		const single = detectAssetFromValue(node);
 		if (single) {
 			const { assetId } = await store.save(single.bytes, single.mime);
-			const ref = (`asset://${assetId}`) as AssetRef;
+			const ref = buildAssetRefForStore(store, assetId);
 			created.push({ ref, mime: single.mime, kind: single.kind });
 			// Replace with a compact ref object
 			return { assetRef: ref, mimeType: single.mime, kind: single.kind };
@@ -645,13 +790,13 @@ export async function normalizeOutputToAssetRefs(value: unknown, store?: AssetSt
 // -----------------------------------------------------------------------------
 
 export async function getBase64ForRef(store: AssetStore, refOrId: string): Promise<{ base64: string; mime: string }> {
-	const id = refOrId.startsWith("asset://") ? refOrId.slice("asset://".length) : refOrId;
+	const id = resolveAssetIdForStore(refOrId, store);
 	const { bytes, mime } = await store.get(id);
 	return { base64: bytesToBase64(bytes), mime };
 }
 
 export async function getDataUrlForRef(store: AssetStore, refOrId: string): Promise<string> {
-	const id = refOrId.startsWith("asset://") ? refOrId.slice("asset://".length) : refOrId;
+	const id = resolveAssetIdForStore(refOrId, store);
 	const { bytes, mime } = await store.get(id);
 	return toDataUrl(bytes, mime);
 }

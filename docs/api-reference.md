@@ -487,12 +487,14 @@ Asset storage and retrieval.
 ```typescript
 // Get asset as base64
 const { base64, mime } = await copilotz.assets.getBase64(
-  refOrId: string  // "asset://id" or just "id"
+  refOrId: string,  // "asset://id" or just "id"
+  options?: { namespace?: string }
 ): Promise<{ base64: string; mime: string }>
 
 // Get asset as data URL
 const dataUrl = await copilotz.assets.getDataUrl(
-  refOrId: string
+  refOrId: string,
+  options?: { namespace?: string }
 ): Promise<string>  // "data:mime;base64,..."
 ```
 

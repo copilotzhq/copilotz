@@ -274,6 +274,12 @@ assets: {
       // connector: createS3Connector({ ... }) // optional
     },
     
+    // Optional asset namespacing (tenant isolation)
+    namespacing: {
+      mode: "context",      // "none" or "context"
+      includeInRef: true,   // asset://<namespace>/<id>
+    },
+    
     inlineThresholdBytes: 100_000,  // Max size for inline assets
     resolveInLLM: true,             // Resolve asset refs for LLM
   },

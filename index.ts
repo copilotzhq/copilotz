@@ -244,11 +244,30 @@ export { registerEventProcessor } from "@/event-processors/index.ts";
  */
 export { resolveNamespace } from "@/interfaces/index.ts";
 
+/**
+ * Asset utilities and stores.
+ */
+export {
+	createMemoryAssetStore,
+	createAssetStoreForNamespace,
+	isAssetRef,
+	extractAssetId,
+	parseAssetRef,
+	getBase64ForRef,
+	getDataUrlForRef,
+} from "@/utils/assets.ts";
+
 /** Event emitted from the streaming event queue. */
 export type { StreamEvent } from "@/runtime/index.ts";
 
 import type { AssetStore, AssetConfig } from "@/utils/assets.ts";
-import { createMemoryAssetStore, createAssetStore, bytesToBase64 } from "@/utils/assets.ts";
+import {
+	createMemoryAssetStore,
+	createAssetStoreForNamespace,
+	resolveAssetNamespace,
+	resolveAssetIdForStore,
+	bytesToBase64,
+} from "@/utils/assets.ts";
 
 /** Type representing all database schemas. */
 export type DbSchemas = typeof schema;
@@ -541,15 +560,17 @@ export interface Copilotz {
         /** 
          * Gets an asset as base64-encoded string.
          * @param refOrId - Asset reference (asset://id) or ID
+         * @param options - Optional options (e.g., namespace)
          * @returns Base64 data and MIME type
          */
-        getBase64: (refOrId: string) => Promise<{ base64: string; mime: string }>;
+        getBase64: (refOrId: string, options?: { namespace?: string }) => Promise<{ base64: string; mime: string }>;
         /** 
          * Gets an asset as a data URL.
          * @param refOrId - Asset reference (asset://id) or ID
+         * @param options - Optional options (e.g., namespace)
          * @returns Data URL string
          */
-        getDataUrl: (refOrId: string) => Promise<string>;
+        getDataUrl: (refOrId: string, options?: { namespace?: string }) => Promise<string>;
     };
     /** 
      * Custom collections for application data storage.
@@ -728,13 +749,26 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
             backend: srcConfig.backend,
             fs: srcConfig.fs,
             s3: srcConfig.s3,
+            namespacing: srcConfig.namespacing,
         };
     }
 
-    // Single asset store instance per Copilotz
-    const assetStoreInstance = (config.assets && config.assets.store)
+    const staticAssetStore = (config.assets && config.assets.store)
         ? config.assets.store
-        : (normalizedAssetConfig ? createAssetStore(normalizedAssetConfig) : createMemoryAssetStore());
+        : undefined;
+    const assetStoreCache = new Map<string, AssetStore>();
+
+    const getAssetStoreForNamespace = (contextNamespace?: string): AssetStore => {
+        if (staticAssetStore) return staticAssetStore;
+        const resolved = resolveAssetNamespace(normalizedAssetConfig, contextNamespace);
+        const cached = assetStoreCache.get(resolved.cacheKey);
+        if (cached) return cached;
+        const store = normalizedAssetConfig
+            ? createAssetStoreForNamespace(normalizedAssetConfig, contextNamespace)
+            : createMemoryAssetStore();
+        assetStoreCache.set(resolved.cacheKey, store);
+        return store;
+    };
 
     // Initialize collections if defined
     let collectionsManager: CollectionsManager | undefined = undefined;
@@ -797,6 +831,8 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
         // If RunOptions provides tools, they completely override config tools
         const resolvedTools = options?.tools ?? baseConfig.tools;
 
+        const assetStoreForRun = getAssetStoreForNamespace(resolvedNamespace);
+
         const ctx: ChatContext = {
             agents: resolvedAgents,
             tools: resolvedTools,
@@ -810,11 +846,11 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
             stream: options?.stream ?? baseConfig.stream ?? false,
             activeTaskId: baseConfig.activeTaskId,
             customProcessors: baseConfig.customProcessorsByType,
-            assetStore: assetStoreInstance,
+            assetStore: assetStoreForRun,
             assetConfig: normalizedAssetConfig,
             resolveAsset: async (ref: string) => {
-                const id = ref.startsWith("asset://") ? ref.slice("asset://".length) : ref;
-                return await assetStoreInstance.get(id);
+                const id = resolveAssetIdForStore(ref, assetStoreForRun);
+                return await assetStoreForRun.get(id);
             },
             // RAG configuration
             ragConfig: config.rag ? {
@@ -992,15 +1028,17 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
             }
         },
         assets: {
-            getBase64: async (refOrId: string) => {
-                const id = refOrId.startsWith("asset://") ? refOrId.slice("asset://".length) : refOrId;
-                const { bytes, mime } = await assetStoreInstance.get(id);
+            getBase64: async (refOrId: string, options?: { namespace?: string }) => {
+                const store = getAssetStoreForNamespace(options?.namespace ?? config.namespace);
+                const id = resolveAssetIdForStore(refOrId, store);
+                const { bytes, mime } = await store.get(id);
                 const base64 = bytesToBase64(bytes);
                 return { base64, mime };
             },
-            getDataUrl: async (refOrId: string) => {
-                const id = refOrId.startsWith("asset://") ? refOrId.slice("asset://".length) : refOrId;
-                const { bytes, mime } = await assetStoreInstance.get(id);
+            getDataUrl: async (refOrId: string, options?: { namespace?: string }) => {
+                const store = getAssetStoreForNamespace(options?.namespace ?? config.namespace);
+                const id = resolveAssetIdForStore(refOrId, store);
+                const { bytes, mime } = await store.get(id);
                 const base64 = bytesToBase64(bytes);
                 return `data:${mime};base64,${base64}`;
             },

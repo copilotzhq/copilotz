@@ -449,6 +449,17 @@ export interface CopilotzConfig {
         };
         /** Default namespace for document storage. */
         defaultNamespace?: string;
+        /** LLM configuration for background RAG tasks (entity extraction, summarization). */
+        llmConfig?: {
+            /** LLM provider name. */
+            provider: string;
+            /** Model name. */
+            model?: string;
+            /** API key for the LLM provider. */
+            apiKey?: string;
+            /** Temperature for generation. */
+            temperature?: number;
+        };
     };
     /** 
      * Custom collections for application data storage.
@@ -859,6 +870,7 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                 chunking: config.rag.chunking,
                 retrieval: config.rag.retrieval,
                 defaultNamespace: config.rag.defaultNamespace,
+                llmConfig: config.rag.llmConfig,
             } : undefined,
             embeddingConfig: config.rag?.embedding,
             // Resolved namespace for this run

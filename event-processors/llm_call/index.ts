@@ -188,8 +188,16 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             answer = answer.replace(selfPrefixPattern, '');
         }
 
+        // Generate batch metadata for multiple tool calls
+        const batchId = Array.isArray(toolCalls) && toolCalls.length > 1
+            ? crypto.randomUUID()
+            : null;
+        const batchSize = Array.isArray(toolCalls) && toolCalls.length > 1
+            ? toolCalls.length
+            : null;
+
         const normalizedToolCalls = Array.isArray(toolCalls)
-            ? toolCalls.map((call) => {
+            ? toolCalls.map((call, index) => {
                 let parsedArgs: Record<string, unknown> = {};
                 try {
                     parsedArgs = call?.function?.arguments
@@ -202,6 +210,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
                     id: call?.id ?? null,
                     name: call?.function?.name ?? "",
                     args: parsedArgs,
+                    // Include batch info for tool call aggregation
+                    batchId,
+                    batchSize,
+                    batchIndex: batchId ? index : null,
                 };
             })
             : undefined;

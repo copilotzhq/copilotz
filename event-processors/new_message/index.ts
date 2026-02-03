@@ -46,7 +46,141 @@ import {
 
 import { processAssetsForNewMessage } from "./generators/asset-generator.ts";
 
+// ============================================================================
+// Tool Result Batch Aggregation
+// ============================================================================
+// When the LLM issues multiple tool calls in a single response, we need to
+// wait for ALL tool results before triggering the next LLM call. Otherwise,
+// the LLM sees partial results and may re-issue the same tool calls.
+// ============================================================================
 
+interface StoredToolResult {
+    callId: string;
+    name: string;
+    args: string;
+    output: unknown;
+    status: string;
+    batchIndex: number;
+    content: string;
+}
+
+interface PendingBatch {
+    batchSize: number;
+    agentName: string;
+    senderId: string;
+    results: StoredToolResult[];
+    createdAt: string;
+}
+
+type PendingBatches = Record<string, PendingBatch>;
+
+/**
+ * Get pending batches from thread metadata
+ */
+function getPendingBatches(thread: Thread): PendingBatches {
+    const metadata = thread.metadata as Record<string, unknown> | null;
+    const pendingBatches = metadata?.pendingToolBatches;
+    if (pendingBatches && typeof pendingBatches === "object") {
+        return pendingBatches as PendingBatches;
+    }
+    return {};
+}
+
+/**
+ * Store a tool result in the pending batch
+ * Returns the updated batch and whether it's now complete
+ */
+async function storeToolResultInBatch(
+    ops: Operations,
+    thread: Thread,
+    batchId: string,
+    batchSize: number,
+    agentName: string,
+    senderId: string,
+    result: StoredToolResult
+): Promise<{ batch: PendingBatch; isComplete: boolean }> {
+    const pendingBatches = getPendingBatches(thread);
+    
+    // Initialize batch if not exists
+    if (!pendingBatches[batchId]) {
+        pendingBatches[batchId] = {
+            batchSize,
+            agentName,
+            senderId,
+            results: [],
+            createdAt: new Date().toISOString(),
+        };
+    }
+    
+    const batch = pendingBatches[batchId];
+    
+    // Check if this result is already stored (deduplication)
+    const existingIdx = batch.results.findIndex(r => r.callId === result.callId);
+    if (existingIdx >= 0) {
+        // Already have this result, just return current state
+        return {
+            batch,
+            isComplete: batch.results.length >= batch.batchSize,
+        };
+    }
+    
+    // Add new result
+    batch.results.push(result);
+    
+    // Update thread metadata
+    const currentMetadata = (thread.metadata ?? {}) as Record<string, unknown>;
+    const updatedMetadata = {
+        ...currentMetadata,
+        pendingToolBatches: pendingBatches,
+    };
+    
+    await ops.crud.threads?.update?.({ id: thread.id }, { metadata: updatedMetadata });
+    
+    // Also update local thread object
+    (thread as { metadata: unknown }).metadata = updatedMetadata;
+    
+    return {
+        batch,
+        isComplete: batch.results.length >= batch.batchSize,
+    };
+}
+
+/**
+ * Clear a completed batch from thread metadata
+ */
+async function clearCompletedBatch(
+    ops: Operations,
+    thread: Thread,
+    batchId: string
+): Promise<void> {
+    const pendingBatches = getPendingBatches(thread);
+    delete pendingBatches[batchId];
+    
+    const currentMetadata = (thread.metadata ?? {}) as Record<string, unknown>;
+    const updatedMetadata = {
+        ...currentMetadata,
+        pendingToolBatches: Object.keys(pendingBatches).length > 0 ? pendingBatches : undefined,
+    };
+    
+    await ops.crud.threads?.update?.({ id: thread.id }, { metadata: updatedMetadata });
+    (thread as { metadata: unknown }).metadata = updatedMetadata;
+}
+
+/**
+ * Extract batch info from message metadata
+ */
+function extractBatchInfo(payload: NewMessageEventPayload): {
+    batchId: string | null;
+    batchSize: number | null;
+    batchIndex: number | null;
+} {
+    const metadata = payload.metadata as Record<string, unknown> | null;
+    return {
+        batchId: typeof metadata?.batchId === "string" ? metadata.batchId : null,
+        batchSize: typeof metadata?.batchSize === "number" ? metadata.batchSize : null,
+        batchIndex: typeof metadata?.batchIndex === "number" ? metadata.batchIndex : null,
+    };
+}
 
 function toExecutableTool(tool: unknown): ExecutableTool | null {
     if (!tool || typeof tool !== "object") return null;
@@ -97,6 +231,10 @@ type NormalizedToolCall = {
     id: string | null;
     name: string;
     args: Record<string, unknown>;
+    // Batch tracking for multiple tool calls from a single LLM response
+    batchId?: string | null;
+    batchSize?: number | null;
+    batchIndex?: number | null;
 };
 
 interface MessageContextDetails {
@@ -132,13 +270,23 @@ function normalizeToolCalls(toolCalls: MessagePayload["toolCalls"]): NormalizedT
     if (!Array.isArray(toolCalls)) return [];
     return toolCalls
         .filter((call): call is NonNullable<typeof call> => Boolean(call && call.name))
-        .map((call) => ({
-            id: call.id ?? null,
-            name: call.name,
-            args: (call.args && typeof call.args === "object")
-                ? call.args as Record<string, unknown>
-                : {},
-        }));
+        .map((call) => {
+            const callWithBatch = call as typeof call & {
+                batchId?: string | null;
+                batchSize?: number | null;
+                batchIndex?: number | null;
+            };
+            return {
+                id: call.id ?? null,
+                name: call.name,
+                args: (call.args && typeof call.args === "object")
+                    ? call.args as Record<string, unknown>
+                    : {},
+                batchId: callWithBatch.batchId ?? null,
+                batchSize: callWithBatch.batchSize ?? null,
+                batchIndex: callWithBatch.batchIndex ?? null,
+            };
+        });
 }
 
 function getMessageContext(payload: MessagePayload): MessageContextDetails {
@@ -275,6 +423,66 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
             return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
         }
 
+        // ====================================================================
+        // Tool Result Batch Aggregation
+        // ====================================================================
+        // If this is a tool result that's part of a batch, we need to wait
+        // for all results before triggering the next LLM call.
+        // ====================================================================
+        const batchInfo = extractBatchInfo(payload);
+        const isToolResult = messageContext.senderType === "tool";
+        
+        if (isToolResult && batchInfo.batchId && batchInfo.batchSize && batchInfo.batchSize > 1) {
+            // This is a batched tool result - we need to aggregate
+            const toolCallMeta = Array.isArray(payload.metadata?.toolCalls)
+                ? (payload.metadata.toolCalls as Array<{
+                    name?: string;
+                    args?: string;
+                    output?: unknown;
+                    id?: string;
+                    status?: string;
+                }>)[0]
+                : null;
+            
+            if (toolCallMeta) {
+                const storedResult: StoredToolResult = {
+                    callId: toolCallMeta.id ?? `unknown_${Date.now()}`,
+                    name: toolCallMeta.name ?? "unknown",
+                    args: typeof toolCallMeta.args === "string" 
+                        ? toolCallMeta.args 
+                        : JSON.stringify(toolCallMeta.args ?? {}),
+                    output: toolCallMeta.output,
+                    status: toolCallMeta.status ?? "completed",
+                    batchIndex: batchInfo.batchIndex ?? 0,
+                    content: messageContext.contentText,
+                };
+                
+                const { batch, isComplete } = await storeToolResultInBatch(
+                    ops,
+                    thread,
+                    batchInfo.batchId,
+                    batchInfo.batchSize,
+                    messageContext.senderName,
+                    messageContext.senderId,
+                    storedResult
+                );
+                
+                if (!isComplete) {
+                    // Not all results are in yet - skip routing, don't trigger LLM
+                    // The message is already persisted, so it will be in history
+                    console.log(`[NEW_MESSAGE] Batch ${batchInfo.batchId}: ${batch.results.length}/${batch.batchSize} results received, waiting for more...`);
+                    return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
+                }
+                
+                // All results are in! Clear the batch and proceed with aggregated context
+                console.log(`[NEW_MESSAGE] Batch ${batchInfo.batchId}: All ${batch.batchSize} results received, proceeding with LLM call`);
+                await clearCompletedBatch(ops, thread, batchInfo.batchId);
+                
+                // The aggregated results are now in the message history (each was persisted)
+                // We can proceed normally - the LLM will see all tool results in history
+            }
+        }
+
         // Resolve targets
         const availableAgents = context.agents || [];
         const targets = discoverTargetAgentsForMessage(messageContext, thread, availableAgents);
@@ -311,7 +519,11 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
                                 name: callName,
                                 arguments: argumentsString,
                             }
-                        }
+                        },
+                        // Pass batch info for tool result aggregation
+                        batchId: call.batchId ?? null,
+                        batchSize: call.batchSize ?? null,
+                        batchIndex: call.batchIndex ?? null,
                     } as ToolCallEventPayload;
                     producedEvents.push({
                         threadId,

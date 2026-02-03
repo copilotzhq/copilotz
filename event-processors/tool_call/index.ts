@@ -168,6 +168,16 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
     } else {
       content = `No output returned`;
     }
+    // Extract batch info from payload
+    const payloadWithBatch = payload as typeof payload & {
+      batchId?: string | null;
+      batchSize?: number | null;
+      batchIndex?: number | null;
+    };
+    const batchId = payloadWithBatch.batchId ?? null;
+    const batchSize = payloadWithBatch.batchSize ?? null;
+    const batchIndex = payloadWithBatch.batchIndex ?? null;
+
     // Enqueue a MESSAGE event
     const producedEvents: NewEvent[] = [
       {
@@ -190,6 +200,10 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
                 status: error ? "failed" : "completed",
               },
             ],
+            // Include batch info for aggregation in NEW_MESSAGE processor
+            batchId,
+            batchSize,
+            batchIndex,
           },
         },
         parentEventId: typeof event.id === "string" ? event.id : undefined,

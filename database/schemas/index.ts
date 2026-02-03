@@ -653,6 +653,10 @@ const schemaDefinition = {
               },
               required: ["function"],
             },
+            // Batch tracking for multiple tool calls from a single LLM response
+            batchId: { type: ["string", "null"] },
+            batchSize: { type: ["number", "null"] },
+            batchIndex: { type: ["number", "null"] },
           },
           required: ["agentName", "senderId", "senderType", "call"],
         },

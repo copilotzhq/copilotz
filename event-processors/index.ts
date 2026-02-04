@@ -268,13 +268,15 @@ export async function startEventWorker(
 
     const ops = dbInstance.ops as Operations;
 
-    const processing = await ops.getProcessingQueueItem(threadId);
+    // Default: skip negative-priority events (background events like ENTITY_EXTRACT)
+    // Set minPriority to -Infinity to process all events including background
+    const minPriority = context.minPriority ?? 0;
+
+    // Only check for processing events at or above our priority threshold
+    // This allows main processing to proceed even if background events are being processed
+    const processing = await ops.getProcessingQueueItem(threadId, minPriority);
 
     if (processing) return;
-
-    // Default: skip negative-priority events (background events like ENTITY_EXTRACT)
-    // Set minPriority to undefined or a very negative number to process all events
-    const minPriority = context.minPriority ?? 0;
 
     while (true) {
 
@@ -400,10 +402,23 @@ export async function startEventWorker(
 
             const allToEnqueue = [...preEvents, ...finalEvents];
 
+            // Track threads that need background workers
+            const backgroundThreadIds = new Set<string>();
+
             if (allToEnqueue.length > 0) {
                 for (const e of allToEnqueue) {
                     await enqueueEvent(db, e);
+                    
+                    // If event is for a different thread, mark it for background processing
+                    if (e.threadId !== threadId) {
+                        backgroundThreadIds.add(e.threadId);
+                    }
                 }
+            }
+
+            // Fire-and-forget: start background workers for child threads
+            for (const bgThreadId of backgroundThreadIds) {
+                startBackgroundWorker(db, bgThreadId, context, processors, buildDeps);
             }
 
             // Push to stream only if not replaced by onEvent callback or custom processor
@@ -422,42 +437,36 @@ export async function startEventWorker(
             break;
         }
     }
-
-    // Fire-and-forget: trigger background event processing after main processing completes
-    // Only if we skipped background events (minPriority > some threshold)
-    if (minPriority > -Infinity) {
-        // Use queueMicrotask to defer background processing without blocking return
-        queueMicrotask(() => {
-            processBackgroundEvents(db, threadId, context, processors, buildDeps).catch((err) => {
-                console.warn("[BACKGROUND] Background event processing failed:", err);
-            });
-        });
-    }
 }
 
 /**
- * Process background events (negative priority) for a thread.
- * Called automatically after main processing completes, or can be invoked manually.
+ * Start a background worker for a child thread.
+ * This processes events in a separate thread queue without blocking the main thread.
+ * Fire-and-forget: errors are logged but don't propagate.
  */
-export async function processBackgroundEvents(
+export function startBackgroundWorker(
     db: CopilotzDb,
-    threadId: string,
+    backgroundThreadId: string,
     context: WorkerContext,
     processors: Record<string, EventProcessor<unknown, ProcessorDeps>>,
     buildDeps: (ops: Operations, event: Event, context: WorkerContext) => Promise<ProcessorDeps> | ProcessorDeps,
-): Promise<void> {
-    // Process with no minimum priority (all events including negative)
-    const backgroundContext: WorkerContext = {
-        ...context,
-        minPriority: -Infinity,
-        // Don't push to stream for background events
-        callbacks: {
-            ...context.callbacks,
-            onStreamPush: undefined,
-        },
-    };
+): void {
+    // Fire-and-forget: process background thread events asynchronously
+    Promise.resolve().then(async () => {
+        const backgroundContext: WorkerContext = {
+            ...context,
+            minPriority: -Infinity, // Process all events in background thread
+            // Don't push to stream for background events
+            callbacks: {
+                ...context.callbacks,
+                onStreamPush: undefined,
+            },
+        };
 
-    await startEventWorker(db, threadId, backgroundContext, processors, buildDeps);
+        await startEventWorker(db, backgroundThreadId, backgroundContext, processors, buildDeps);
+    }).catch((err) => {
+        console.warn("[BACKGROUND] Background worker failed:", err);
+    });
 }
 
 

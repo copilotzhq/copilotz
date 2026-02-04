@@ -127,7 +127,7 @@ export interface TraversalResult {
 export interface DatabaseOperations {
   crud: DbInstance["crud"];
   addToQueue: (threadId: string, event: QueueEventInput) => Promise<NewQueue>;
-  getProcessingQueueItem: (threadId: string) => Promise<Queue | undefined>;
+  getProcessingQueueItem: (threadId: string, minPriority?: number) => Promise<Queue | undefined>;
   getNextPendingQueueItem: (threadId: string, namespace?: string, minPriority?: number) => Promise<Queue | undefined>;
   updateQueueItemStatus: (queueId: string, status: Queue["status"]) => Promise<void>;
   getMessageHistory: (threadId: string, userId: string, limit?: number) => Promise<Message[]>;
@@ -355,6 +355,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
 
   const getProcessingQueueItem = async (
     threadId: string,
+    minPriority?: number,
   ): Promise<Queue | undefined> => {
     // Recovery mechanism: Reset stale "processing" events that have been stuck for too long
     // This handles server crashes where events were left in "processing" state
@@ -384,12 +385,21 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
       }
     }
     
-    // Now check for any remaining processing events
-    const item = await crud.events.findOne({
+    // Now check for any remaining processing events at or above minPriority
+    const processingEvents = await crud.events.find({
       threadId,
       status: "processing",
-    }) as Queue | null;
-    return item ?? undefined;
+    });
+    
+    // Filter by minPriority if specified (ignore background events being processed)
+    const relevantEvents = minPriority !== undefined
+      ? processingEvents.filter(e => {
+          const eventPriority = typeof e.priority === "number" ? e.priority : 0;
+          return eventPriority >= minPriority;
+        })
+      : processingEvents;
+    
+    return (relevantEvents[0] as Queue) ?? undefined;
   };
 
   const getNextPendingQueueItem = async (

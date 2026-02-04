@@ -27,6 +27,23 @@ export interface EntityExtractPayload {
     agentId?: string;
     documentId?: string;
   };
+  /** Inline extraction config (avoids lookup, enables deduplication) */
+  extractionConfig?: {
+    /** LLM config for extraction calls */
+    llmConfig?: {
+      provider: string;
+      model?: string;
+      apiKey?: string;
+      temperature?: number;
+      maxTokens?: number;
+    };
+    /** Similarity threshold for dedup candidate matching */
+    similarityThreshold?: number;
+    /** Threshold above which to auto-merge without LLM confirm */
+    autoMergeThreshold?: number;
+    /** Entity types to extract */
+    entityTypes?: string[];
+  };
 }
 
 const UUID_SCHEMA: JsonSchema = {

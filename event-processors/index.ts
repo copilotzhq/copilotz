@@ -247,6 +247,11 @@ export interface WorkerContext {
     };
     /** Custom processors organized by event type. */
     customProcessors?: Record<string, Array<EventProcessor<unknown, ProcessorDeps>>>;
+    /** 
+     * Minimum event priority to process. Events below this priority are skipped and left for background processing.
+     * Default: 0 (skips negative-priority events like ENTITY_EXTRACT)
+     */
+    minPriority?: number;
 }
 
 // Generic worker
@@ -267,9 +272,13 @@ export async function startEventWorker(
 
     if (processing) return;
 
+    // Default: skip negative-priority events (background events like ENTITY_EXTRACT)
+    // Set minPriority to undefined or a very negative number to process all events
+    const minPriority = context.minPriority ?? 0;
+
     while (true) {
 
-        const next = await ops.getNextPendingQueueItem(threadId);
+        const next = await ops.getNextPendingQueueItem(threadId, undefined, minPriority);
 
         if (!next) break;
 
@@ -414,6 +423,41 @@ export async function startEventWorker(
         }
     }
 
+    // Fire-and-forget: trigger background event processing after main processing completes
+    // Only if we skipped background events (minPriority > some threshold)
+    if (minPriority > -Infinity) {
+        // Use queueMicrotask to defer background processing without blocking return
+        queueMicrotask(() => {
+            processBackgroundEvents(db, threadId, context, processors, buildDeps).catch((err) => {
+                console.warn("[BACKGROUND] Background event processing failed:", err);
+            });
+        });
+    }
+}
+
+/**
+ * Process background events (negative priority) for a thread.
+ * Called automatically after main processing completes, or can be invoked manually.
+ */
+export async function processBackgroundEvents(
+    db: CopilotzDb,
+    threadId: string,
+    context: WorkerContext,
+    processors: Record<string, EventProcessor<unknown, ProcessorDeps>>,
+    buildDeps: (ops: Operations, event: Event, context: WorkerContext) => Promise<ProcessorDeps> | ProcessorDeps,
+): Promise<void> {
+    // Process with no minimum priority (all events including negative)
+    const backgroundContext: WorkerContext = {
+        ...context,
+        minPriority: -Infinity,
+        // Don't push to stream for background events
+        callbacks: {
+            ...context.callbacks,
+            onStreamPush: undefined,
+        },
+    };
+
+    await startEventWorker(db, threadId, backgroundContext, processors, buildDeps);
 }
 
 

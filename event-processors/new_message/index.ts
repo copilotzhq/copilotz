@@ -594,37 +594,94 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
         const createdMessage = await ops.createMessage(incomingMsg, context.namespace);
 
         // Emit ENTITY_EXTRACT event for agents with entity extraction enabled
+        // Deduplicate by config to avoid redundant LLM calls for same content
         const entityExtractEvents: Array<{ threadId: string; type: string; payload: unknown; parentEventId?: string; traceId?: string; priority?: number }> = [];
         const agentsForExtraction = context.agents || [];
+
+        // Group agents by their extraction config to deduplicate
+        // Key: JSON-serialized config (namespace scope + entityTypes + thresholds)
+        // Value: { config, namespaces: string[], agentIds: string[] }
+        const configGroups = new Map<string, {
+            entityConfig: NonNullable<typeof agentsForExtraction[0]["ragOptions"]>["entityExtraction"];
+            namespaces: string[];
+            agentIds: string[];
+        }>();
 
         for (const agent of agentsForExtraction) {
             const entityConfig = agent.ragOptions?.entityExtraction;
             if (entityConfig?.enabled && persistedContent.trim()) {
-                try {
-                    const agentIdStr = typeof agent.id === "string" ? agent.id : agent.name;
-                    const entityNamespace = resolveNamespace(
-                        entityConfig.namespace ?? "agent",
-                        { threadId, agentId: agentIdStr },
-                        context.namespacePrefix
-                    );
+                const agentIdStr = typeof agent.id === "string" ? agent.id : agent.name;
+                const entityNamespace = resolveNamespace(
+                    entityConfig.namespace ?? "agent",
+                    { threadId, agentId: agentIdStr },
+                    context.namespacePrefix
+                );
 
-                    // Get the message node ID (from the dual-write)
-                    // The message node uses the same namespace as the thread
-                    const messageNodes = await ops.getNodesByNamespace(threadId, "message");
-                    const messageNode = messageNodes.find(n => {
-                        const data = n.data as Record<string, unknown> | null;
-                        return data?.messageId === createdMessage.id;
+                // Create a config key that captures the extraction behavior
+                // Same entityTypes + thresholds + llmConfig = same extraction, different namespace
+                const configKey = JSON.stringify({
+                    entityTypes: entityConfig.entityTypes ?? [],
+                    similarityThreshold: entityConfig.similarityThreshold,
+                    autoMergeThreshold: entityConfig.autoMergeThreshold,
+                    llmConfig: (entityConfig as { llmConfig?: unknown }).llmConfig ?? null,
+                });
+
+                const existing = configGroups.get(configKey);
+                if (existing) {
+                    // Same config - add namespace if not already included
+                    if (!existing.namespaces.includes(entityNamespace)) {
+                        existing.namespaces.push(entityNamespace);
+                    }
+                    existing.agentIds.push(agentIdStr);
+                } else {
+                    configGroups.set(configKey, {
+                        entityConfig,
+                        namespaces: [entityNamespace],
+                        agentIds: [agentIdStr],
                     });
+                }
+            }
+        }
 
-                    if (messageNode) {
+        // Get the message node ID once (shared across all extraction events)
+        let messageNodeId: string | null = null;
+        if (configGroups.size > 0) {
+            try {
+                const messageNodes = await ops.getNodesByNamespace(threadId, "message");
+                const messageNode = messageNodes.find(n => {
+                    const data = n.data as Record<string, unknown> | null;
+                    return data?.messageId === createdMessage.id;
+                });
+                messageNodeId = messageNode?.id as string ?? null;
+            } catch (err) {
+                console.warn(`[NEW_MESSAGE] Failed to get message node for entity extraction:`, err);
+            }
+        }
+
+        // Create one event per unique config (entities will be stored in all relevant namespaces)
+        if (messageNodeId) {
+            for (const [, group] of configGroups) {
+                const { entityConfig, namespaces, agentIds } = group;
+                
+                // For each unique namespace, create an extraction event
+                // (same extraction, but entities stored in different namespaces)
+                for (const entityNamespace of namespaces) {
+                    try {
                         const extractPayload: EntityExtractPayload = {
-                            sourceNodeId: messageNode.id as string,
+                            sourceNodeId: messageNodeId,
                             content: persistedContent,
                             namespace: entityNamespace,
                             sourceType: "message",
                             sourceContext: {
                                 threadId,
-                                agentId: agentIdStr,
+                                agentId: agentIds[0], // Primary agent for this namespace
+                            },
+                            // Include extraction config inline to avoid agent lookup
+                            extractionConfig: {
+                                llmConfig: (entityConfig as { llmConfig?: { provider: string; model?: string; apiKey?: string; temperature?: number; maxTokens?: number } }).llmConfig,
+                                similarityThreshold: entityConfig?.similarityThreshold,
+                                autoMergeThreshold: entityConfig?.autoMergeThreshold,
+                                entityTypes: entityConfig?.entityTypes,
                             },
                         };
 
@@ -634,11 +691,11 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
                             payload: extractPayload,
                             parentEventId: typeof event.id === "string" ? event.id : undefined,
                             traceId: typeof event.traceId === "string" ? event.traceId : undefined,
-                            priority: 0, // Low priority - runs async after main processing
+                            priority: -100, // Very low priority - background processing
                         });
+                    } catch (err) {
+                        console.warn(`[NEW_MESSAGE] Failed to queue entity extraction for namespace "${entityNamespace}":`, err);
                     }
-                } catch (err) {
-                    console.warn(`[NEW_MESSAGE] Failed to queue entity extraction for agent "${agent.name}":`, err);
                 }
             }
         }

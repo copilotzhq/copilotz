@@ -128,7 +128,7 @@ export interface DatabaseOperations {
   crud: DbInstance["crud"];
   addToQueue: (threadId: string, event: QueueEventInput) => Promise<NewQueue>;
   getProcessingQueueItem: (threadId: string) => Promise<Queue | undefined>;
-  getNextPendingQueueItem: (threadId: string, namespace?: string) => Promise<Queue | undefined>;
+  getNextPendingQueueItem: (threadId: string, namespace?: string, minPriority?: number) => Promise<Queue | undefined>;
   updateQueueItemStatus: (queueId: string, status: Queue["status"]) => Promise<void>;
   getMessageHistory: (threadId: string, userId: string, limit?: number) => Promise<Message[]>;
   getThreadsForParticipant: (
@@ -395,6 +395,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
   const getNextPendingQueueItem = async (
     threadId: string,
     namespace?: string,
+    minPriority?: number,
   ): Promise<Queue | undefined> => {
     while (true) {
       // Build filter with optional namespace
@@ -418,6 +419,15 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
       if (!candidate) {
         await cleanupExpiredQueueItems();
         return undefined;
+      }
+
+      // Skip events below minimum priority threshold (for background processing)
+      if (minPriority !== undefined) {
+        const eventPriority = typeof candidate.priority === "number" ? candidate.priority : 0;
+        if (eventPriority < minPriority) {
+          // Leave background events for later processing
+          return undefined;
+        }
       }
 
       const expiresAtIso = typeof candidate.expiresAt === "string"

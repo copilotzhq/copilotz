@@ -130,6 +130,7 @@ export const entityExtractProcessor: EventProcessor<EntityExtractPayload, Proces
       namespace,
       sourceType,
       sourceContext,
+      extractionConfig,
     } = payload;
 
     // Get embedding config
@@ -139,22 +140,21 @@ export const entityExtractProcessor: EventProcessor<EntityExtractPayload, Proces
       return { producedEvents: [] };
     }
 
-    // Get LLM config from first agent or fallback to RAG config
-    const agent = context.agents?.[0];
-    const agentLlmConfig = (typeof agent?.llmOptions === "object" ? agent.llmOptions : null) as ProviderConfig | null;
+    // Get LLM config from payload (preferred) or fallback to RAG config
+    // The payload config is set per-agent or per-deduplicated-group during event creation
+    const payloadLlmConfig = extractionConfig?.llmConfig as ProviderConfig | undefined;
     const ragLlmConfig = context.ragConfig?.llmConfig as ProviderConfig | undefined;
-    const llmConfig = agentLlmConfig?.provider ? agentLlmConfig : ragLlmConfig;
+    const llmConfig = payloadLlmConfig?.provider ? payloadLlmConfig : ragLlmConfig;
     
     if (!llmConfig?.provider) {
-      console.warn("[ENTITY_EXTRACT] No LLM config available (agent uses dynamic llmOptions and no rag.llmConfig set), skipping extraction");
+      console.warn("[ENTITY_EXTRACT] No LLM config available in payload or rag.llmConfig, skipping extraction");
       return { producedEvents: [] };
     }
 
-    // Get entity extraction config from agent
-    const entityConfig = agent?.ragOptions?.entityExtraction;
-    const similarityThreshold = entityConfig?.similarityThreshold ?? DEFAULT_SIMILARITY_THRESHOLD;
-    const autoMergeThreshold = entityConfig?.autoMergeThreshold ?? DEFAULT_AUTO_MERGE_THRESHOLD;
-    const entityTypes = entityConfig?.entityTypes;
+    // Get entity extraction config from payload
+    const similarityThreshold = extractionConfig?.similarityThreshold ?? DEFAULT_SIMILARITY_THRESHOLD;
+    const autoMergeThreshold = extractionConfig?.autoMergeThreshold ?? DEFAULT_AUTO_MERGE_THRESHOLD;
+    const entityTypes = extractionConfig?.entityTypes;
 
     try {
       // Step 1: Extract entities using LLM

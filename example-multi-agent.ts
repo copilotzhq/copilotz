@@ -119,9 +119,14 @@ When collaborating with Researcher, @mention them to hand off.`,
     await chat("What do you know about my interests?");
   }
 
-  // Test 6: Agent-to-agent collaboration
+  // Test 6: Tool call flow test
+  // Researcher has update_my_memory tool - test that tool results are processed
+  console.log("═══ Test 6: Tool call flow ═══");
+  await chat("@Researcher, use your update_my_memory tool to store that my favorite city is Tokyo. Then confirm what you stored.");
+
+  // Test 7: Agent-to-agent collaboration
   // Agents should @mention each other to work together on a task
-  console.log("═══ Test 6: Agent collaboration ═══");
+  console.log("═══ Test 7: Agent collaboration ═══");
   await chat(`@Researcher and @Writer, work together to create a short travel guide for Rome. 
 Researcher: find 2 key facts. Writer: turn them into engaging prose. 
 Take turns, @mention each other, and when done, address me (@Alex) with the final result.`);

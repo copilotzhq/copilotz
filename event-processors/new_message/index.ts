@@ -761,16 +761,6 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
             return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
         }
 
-        // Get the target agent
-        const targetAgent = availableAgents.find(a => 
-            a.id === targetResolution.targetId || a.name === targetResolution.targetId
-        );
-        
-        if (!targetAgent) {
-            // Target is not an agent (might be a user) - no LLM call needed
-            return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
-        }
-
         // Assign descending priorities per target to enforce strict serial-per-target
         const basePriority = 1000;
         // If this event already has a priority (continuation of a chain), keep it
@@ -778,22 +768,27 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
 
         const normalizedToolCalls = messageContext.toolCalls;
 
-        // Process the primary target agent
-        const targets = [targetAgent];
-        
-        for (let idx = 0; idx < targets.length; idx++) {
-            const agent = targets[idx];
-            if (!agent) continue;
-
-            // Emit tool calls as events
-            if (normalizedToolCalls.length > 0) {
+        // ====================================================================
+        // Tool Call Processing (BEFORE target resolution)
+        // ====================================================================
+        // If this message (from an agent) includes tool calls, we need to emit
+        // TOOL_CALL events. The tool calls belong to the SENDER (the agent that
+        // made the request), not the target.
+        // ====================================================================
+        if (normalizedToolCalls.length > 0 && messageContext.senderType === "agent") {
+            // Find the sending agent
+            const sendingAgent = availableAgents.find(a => 
+                a.id === messageContext.senderId || a.name === messageContext.senderName
+            );
+            
+            if (sendingAgent) {
                 normalizedToolCalls.forEach((call, i: number) => {
-                    const callName = call.name || agent.name || "unknown_tool";
+                    const callName = call.name || sendingAgent.name || "unknown_tool";
                     const callId = call.id || `${callName}_${i}`;
-                    const senderIdForTool = agent.id ?? agent.name ?? "agent";
+                    const senderIdForTool = (sendingAgent.id ?? sendingAgent.name) as string;
                     const argumentsString = JSON.stringify(call.args ?? {});
                     const toolCallEventPayload = {
-                        agentName: agent.name,
+                        agentName: sendingAgent.name,
                         senderId: senderIdForTool,
                         senderType: "agent",
                         call: {
@@ -817,8 +812,29 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
                         priority: chainPriority
                     });
                 });
-                continue;
+                
+                // Tool calls processed - return without triggering LLM call
+                // The tool results will come back as NEW_MESSAGE events and route back to this agent
+                return { producedEvents: [...producedEvents, ...(entityExtractEvents as unknown as NewEvent[])] };
             }
+        }
+
+        // Get the target agent
+        const targetAgent = availableAgents.find(a => 
+            a.id === targetResolution.targetId || a.name === targetResolution.targetId
+        );
+        
+        if (!targetAgent) {
+            // Target is not an agent (might be a user) - no LLM call needed
+            return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
+        }
+
+        // Process the target agent - create LLM_CALL
+        const targets = [targetAgent];
+        
+        for (let idx = 0; idx < targets.length; idx++) {
+            const agent = targets[idx];
+            if (!agent) continue;
 
             /** If the message is not a tool call, we need to add the message to the LLM context */
 
@@ -920,10 +936,30 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
             } as LlmCallEventPayload;
 
             // Include target queue in LLM_CALL metadata for agent response routing
+            // For tool responses: use the agent's persisted target (who they were talking to)
+            // to avoid the agent targeting itself after responding
+            let originalSenderId = messageContext.senderId;
+            if (messageContext.senderType === "tool") {
+                // Tool response - find who the agent was originally talking to
+                const threadMeta = (thread.metadata ?? {}) as ThreadMetadata;
+                const agentTarget = threadMeta.participantTargets?.[messageContext.senderId];
+                if (agentTarget) {
+                    originalSenderId = agentTarget;
+                } else {
+                    // Fallback: find a user in the thread participants
+                    const userInThread = thread.participants?.find(p => 
+                        !availableAgents.some(a => a.name === p || a.id === p)
+                    );
+                    if (userInThread) {
+                        originalSenderId = userInThread;
+                    }
+                }
+            }
+            
             const llmEventMetadata = {
                 targetId: targetResolution.targetId,
                 targetQueue: targetResolution.targetQueue,
-                sourceMessageSenderId: messageContext.senderId,
+                sourceMessageSenderId: originalSenderId,
             };
 
             producedEvents.push({

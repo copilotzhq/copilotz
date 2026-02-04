@@ -111,6 +111,8 @@ export type {
     EntityExtractionConfig,
     /** Context for namespace resolution. */
     NamespaceResolutionContext,
+    /** Thread metadata interface for multi-agent conversation state. */
+    ThreadMetadata,
     /** Configuration for document chunking strategies. */
     ChunkingConfig,
     /** Configuration for similarity-based retrieval. */
@@ -498,6 +500,24 @@ export interface CopilotzConfig {
         autoIndex?: boolean;
         /** Validate writes against schema. Default: false */
         validateOnWrite?: boolean;
+    };
+    /**
+     * Multi-agent conversation configuration.
+     * Controls how agents interact in threads with multiple participants.
+     */
+    multiAgent?: {
+        /**
+         * Maximum consecutive agent-to-agent messages before forcing target to user.
+         * Prevents infinite agent loops.
+         * Default: 5
+         */
+        maxAgentTurns?: number;
+        /**
+         * Whether to include target info in conversation history.
+         * Helps agents understand conversation flow.
+         * Default: true
+         */
+        includeTargetContext?: boolean;
     };
 }
 
@@ -895,6 +915,11 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                 name: message.sender.name ?? null,
                 metadata: message.sender.metadata ?? null,
             } : undefined,
+            // Multi-agent conversation configuration
+            multiAgent: config.multiAgent ?? {
+                maxAgentTurns: 5,
+                includeTargetContext: true,
+            },
         };
 
         // If schema is specified, wrap execution in schema context

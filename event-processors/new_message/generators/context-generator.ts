@@ -1,4 +1,5 @@
 import type { Agent, Thread } from "@/interfaces/index.ts";
+import type { KnowledgeNode } from "@/database/schemas/index.ts";
 
 export interface LLMContextData {
     threadContext: string;
@@ -7,18 +8,36 @@ export interface LLMContextData {
     systemPrompt: string;
 }
 
+/**
+ * Agent memory extracted from the agent's participant node.
+ */
+interface AgentMemory {
+    workingMemory?: string;
+    expertise?: string[];
+    learnedPreferences?: Record<string, unknown>;
+    [key: string]: unknown;
+}
+
 export function contextGenerator(
     agent: Agent,
     thread: Thread,
     activeTask: unknown,
     availableAgents: Agent[],
     allSystemAgents: Agent[],
-    userMetadata?: Record<string, unknown>
+    userMetadata?: Record<string, unknown>,
+    agentNode?: KnowledgeNode  // NEW: Agent's participant node for persistent memory
 ): LLMContextData {
+    // Enhanced participant info with clear role indicators
     const participantInfo = thread.participants?.map((p: string) => {
         const agentInfo = availableAgents.find((a: Agent) => a.name === p);
-        return `name: ${p} | role: ${agentInfo?.role || "N/A"} | description: ${agentInfo?.description || "N/A"}`;
-    }).join("\n- ") || "N/A";
+        const isUser = !agentInfo;
+        const isSelf = p === agent.name;
+        return [
+            `- **${p}**${isSelf ? " (you)" : ""}`,
+            agentInfo?.role ? `  Role: ${agentInfo.role}` : (isUser ? "  Role: User" : "  Role: N/A"),
+            agentInfo?.description ? `  Description: ${agentInfo.description}` : "",
+        ].filter(Boolean).join("\n");
+    }).join("\n") || "N/A";
 
     const otherAvailableAgents = allSystemAgents.filter(a =>
         a.name !== agent.name &&
@@ -31,16 +50,22 @@ export function contextGenerator(
         ).join("\n- ") : "None";
 
     const threadContext = [
-        "## THREAD CONTEXT",
-        `Current thread: "${thread.name}".`,
-        ...(thread?.participants && thread.participants.length > 1 ? [
-            `Participants in this thread:`,
-            `- ${participantInfo}`,
-            "",
-            "IMPORTANT: In the conversation history, messages from other participants are prefixed with [SpeakerName]: to help you understand who said what. Your own previous messages appear without prefixes.",
-            "",
-            `If you expect an answer from a specific participant, use mention with @<name>, for example: @${thread.participants?.find((p: string) => p !== agent.name)} (otherwise, the participant will not be able to see your message).`
-        ] : []),
+        "## CONVERSATION CONTEXT",
+        "",
+        `You are in thread: "${thread.name}"`,
+        "",
+        "### Participants",
+        participantInfo,
+        "",
+        "### Conversation Rules",
+        "- Messages from others are prefixed with [SpeakerName]: so you know who said what",
+        "- Your own messages appear without prefix",
+        "- To address someone, use @mention (e.g., @Researcher)",
+        "- To respond to the person who addressed you, just reply normally",
+        "- To hand off to someone else, @mention them in your response",
+        "",
+        "### Current Turn",
+        "You were just addressed. Respond naturally, and @mention another participant if you want them to continue the conversation.",
         ...(otherAvailableAgents.length > 0 ? [
             "",
             "Other available agents (not in current thread):",
@@ -86,7 +111,33 @@ export function contextGenerator(
         ? ["## USER METADATA", JSON.stringify(userMetadata, null, 2)].join("\n")
         : "";
 
-    const systemPrompt = [threadContext, taskContext, agentContext, metadataSection, userMetadataSection, dateContext]
+    // Agent's persistent memory (from participant node)
+    const agentData = agentNode?.data as Record<string, unknown> | undefined;
+    const agentMemory = agentData?.metadata as AgentMemory | undefined;
+    
+    const agentMemorySection = agentMemory ? [
+        "## YOUR PERSISTENT MEMORY",
+        "",
+        ...(agentMemory.workingMemory 
+            ? [`Recent learnings: ${agentMemory.workingMemory}`] 
+            : []),
+        ...((agentMemory.expertise as string[])?.length 
+            ? [`Your expertise areas: ${(agentMemory.expertise as string[]).join(", ")}`] 
+            : []),
+        ...(agentMemory.learnedPreferences 
+            ? [`Learned preferences: ${JSON.stringify(agentMemory.learnedPreferences)}`] 
+            : []),
+    ].filter(Boolean).join("\n") : "";
+
+    const systemPrompt = [
+        threadContext, 
+        taskContext, 
+        agentContext, 
+        agentMemorySection,  // Include agent memory before metadata
+        metadataSection, 
+        userMetadataSection, 
+        dateContext
+    ]
         .filter(Boolean)
         .join("\n\n");
 

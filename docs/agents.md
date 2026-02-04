@@ -118,7 +118,7 @@ See [Tools](./tools.md) for the full list of native tools.
 
 ## Multi-Agent Systems
 
-### Agent Communication
+### Agent Communication with @Mentions
 
 Agents can talk to each other using `@mentions`:
 
@@ -149,6 +149,48 @@ const agents = [
 
 When the Coordinator says "@Researcher, what are the latest stats?", Copilotz routes the message to the Researcher agent.
 
+### Persistent Targets
+
+Once an agent addresses someone via @mention, that target becomes their "default" for subsequent messages — no need to repeat @mentions for every turn.
+
+```typescript
+// User: "@Researcher, I need info on climate change"
+// Researcher responds and is now the user's target
+
+// User: "What about renewable energy?"  
+// Routes to Researcher automatically (persistent target)
+
+// User: "@Writer, draft a summary"
+// Target changes to Writer
+```
+
+Targets are stored in thread metadata and persist across the conversation.
+
+### Multi-Mention Queue
+
+When multiple agents are mentioned, they respond in order:
+
+```typescript
+// User: "@Researcher find data, @Writer summarize it"
+// 1. Researcher responds first
+// 2. Writer responds second (from queue)
+```
+
+### Loop Prevention
+
+To prevent infinite agent-to-agent conversations, Copilotz tracks consecutive agent turns and forces the conversation back to a human after a configurable limit.
+
+```typescript
+const copilotz = await createCopilotz({
+  agents: [...],
+  multiAgent: {
+    maxAgentTurns: 5,  // Default: 5 consecutive agent turns
+  },
+});
+```
+
+When the limit is reached, the next response is directed to the original human user rather than another agent.
+
 ### Ask Question Tool
 
 Agents can programmatically ask questions to other agents:
@@ -169,6 +211,64 @@ The `ask_question` tool:
 2. Sends the question to the target agent
 3. Waits for the response
 4. Returns the answer to the calling agent
+
+## Agent Persistent Memory
+
+Agents can store learnings that persist across conversations using the `update_my_memory` tool.
+
+```typescript
+const agent = {
+  id: "personal-assistant",
+  name: "Assistant",
+  allowedTools: ["update_my_memory"],
+  // ...
+};
+```
+
+### Memory Types
+
+Agents can store three types of memory:
+
+| Type | Description |
+|------|-------------|
+| `workingMemory` | Short-term facts for the current context |
+| `expertise` | Accumulated knowledge and skills |
+| `learnedPreferences` | User preferences discovered over time |
+
+### Using the Memory Tool
+
+The agent calls the `update_my_memory` tool to persist information:
+
+```typescript
+// Agent learns user prefers morning meetings
+// Tool call: update_my_memory({ key: "learnedPreferences", value: "User prefers meetings before 10am", operation: "append" })
+```
+
+Operations:
+- `set` — Replace the value for a key
+- `append` — Add to existing value (comma-separated)
+- `remove` — Remove a value or clear the key
+
+### Memory in Context
+
+Agent memory is automatically injected into the system prompt, so the agent "remembers" learnings from previous conversations:
+
+```
+YOUR PERSISTENT MEMORY:
+- Working Memory: Current project is Q4 planning
+- Expertise: Financial analysis, market research
+- Learned Preferences: User prefers morning meetings, concise summaries
+```
+
+### Unified Participant Nodes
+
+Both users and agents are stored as participant nodes in the knowledge graph with a `participantType` field:
+
+| Field | Values |
+|-------|--------|
+| `participantType` | `"human"` or `"agent"` |
+
+This enables agents to have persistent memory just like users have profiles, and allows the same graph queries across all participants.
 
 ## RAG Configuration
 

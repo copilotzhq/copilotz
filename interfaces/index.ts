@@ -289,6 +289,27 @@ export type Agent = Omit<DbAgent, "llmOptions"> & {
 };
 
 /**
+ * Thread metadata interface for multi-agent conversation state.
+ * Stored directly in thread.metadata for persistence.
+ */
+export interface ThreadMetadata {
+    /** Per-participant target state: senderId → targetId */
+    participantTargets?: {
+        [senderId: string]: string;
+    };
+    /** Agent turn counter for loop prevention */
+    agentTurnCount?: number;
+    /** Max agent turns config (per-thread override) */
+    maxAgentTurns?: number;
+    /** User external ID for user context lookup */
+    userExternalId?: string;
+    /** Pending tool batches for aggregation */
+    pendingToolBatches?: Record<string, unknown>;
+    /** Allow additional properties */
+    [key: string]: unknown;
+}
+
+/**
  * Context object passed through the chat processing pipeline.
  * Contains all configuration and state needed by event processors.
  */
@@ -354,6 +375,24 @@ export interface ChatContext {
         type?: "user" | "agent" | "tool" | "system";
         name?: string | null;
         metadata?: Record<string, unknown> | null;
+    };
+    /**
+     * Multi-agent conversation configuration.
+     * Controls how agents interact in threads with multiple participants.
+     */
+    multiAgent?: {
+        /**
+         * Maximum consecutive agent-to-agent messages before forcing target to user.
+         * Prevents infinite agent loops.
+         * Default: 5
+         */
+        maxAgentTurns?: number;
+        /**
+         * Whether to include target info in conversation history.
+         * Helps agents understand conversation flow.
+         * Default: true
+         */
+        includeTargetContext?: boolean;
     };
 }
 

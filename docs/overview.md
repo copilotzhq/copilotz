@@ -36,8 +36,9 @@ Agents are the actors in your AI application. Each agent has:
 - **LLM Configuration**: Which model to use and how
 - **Permissions**: Which tools and other agents it can access
 - **RAG Settings**: How to use the knowledge base
+- **Persistent Memory**: Learnings that survive across conversations
 
-Agents can talk to each other using `@mentions`, ask questions to other agents, and collaborate on complex tasks.
+Agents can talk to each other using `@mentions`, maintain persistent targets for natural conversation flow, and collaborate on complex tasks. Loop prevention ensures agent-to-agent conversations don't run infinitely.
 
 ```typescript
 const agent = {
@@ -45,7 +46,7 @@ const agent = {
   name: "Support",
   instructions: "You help customers with their questions.",
   llmOptions: { provider: "openai", model: "gpt-4o-mini" },
-  allowedTools: ["search_knowledge", "create_ticket"],
+  allowedTools: ["search_knowledge", "create_ticket", "update_my_memory"],
   allowedAgents: ["escalation-agent"],
 };
 ```
@@ -72,15 +73,17 @@ Core event types:
 
 This is what makes Copilotz different. Instead of just storing chat history, everything becomes nodes in a graph:
 
-- **Users** are nodes
-- **Messages** are nodes connected to users and threads
+- **Participants** (users and agents) are nodes with `participantType: "human" | "agent"`
+- **Messages** are nodes connected to participants and threads
 - **Documents** are nodes, with chunks as child nodes
 - **Entities** (people, companies, concepts) are nodes extracted from conversations
+- **Agent Memory** is stored as metadata on agent participant nodes
 
 The graph enables queries like:
 - "What entities has this user mentioned?"
 - "What documents are related to this topic?"
 - "What's the conversation history with context?"
+- "What has this agent learned across all conversations?"
 
 ```
 User:Alex ──SENT_BY──▶ Message:"I work at Acme"
@@ -89,6 +92,8 @@ User:Alex ──SENT_BY──▶ Message:"I work at Acme"
                         Entity:Acme Corp
                               │
                         ◀──MENTIONS──
+
+Agent:Assistant ──────▶ Memory: { learnedPreferences: "User prefers morning meetings" }
 ```
 
 ### Collections
@@ -115,14 +120,14 @@ await copilotz.collections.customer.find({ plan: "pro" });
 
 ### Tools
 
-Tools let your agents interact with the world. Copilotz includes 23 native tools and can generate more from OpenAPI specs and MCP servers.
+Tools let your agents interact with the world. Copilotz includes 24 native tools and can generate more from OpenAPI specs and MCP servers.
 
 **Native tools include:**
 - File operations: `read_file`, `write_file`, `list_directory`, `search_files`
 - HTTP: `http_request`, `fetch_text`
 - RAG: `search_knowledge`, `ingest_document`, `list_namespaces`
 - System: `run_command`, `get_current_time`, `wait`
-- Agent: `ask_question`, `create_thread`, `end_thread`
+- Agent: `ask_question`, `create_thread`, `end_thread`, `update_my_memory`
 - Assets: `save_asset`, `fetch_asset`
 
 ### Multi-Tenancy

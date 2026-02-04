@@ -21,6 +21,67 @@ export type LLMResultPayload = LlmCallEventPayload;
 // Utilities reused from legacy engine (minimized/duplicated to avoid refactors)
 const escapeRegex = (string: string): string => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/**
+ * Parse @mentions from agent response content.
+ * Returns array of mentioned names.
+ */
+function parseMentionsFromResponse(content: string): string[] {
+    const mentionPattern = /(?<!\w)@([\w](?:[\w.-]*[\w])?)/g;
+    const matches = content.matchAll(mentionPattern);
+    
+    const mentioned: string[] = [];
+    const seen = new Set<string>();
+    
+    for (const match of matches) {
+        const name = match[1];
+        if (!seen.has(name)) {
+            mentioned.push(name);
+            seen.add(name);
+        }
+    }
+    
+    return mentioned;
+}
+
+/**
+ * Resolve agent response target based on:
+ * 1. @mentions in the response (explicit addressing)
+ * 2. Source message's targetQueue (for multi-mention chains)
+ * 3. Source message sender (default: respond back)
+ */
+function resolveAgentResponseTarget(
+    response: string,
+    _agentId: string,
+    sourceEvent: Event,
+): { targetId: string | null; targetQueue: string[] } {
+    // Get source event metadata for target queue
+    const eventMetadata = sourceEvent.metadata as Record<string, unknown> | null;
+    const sourceTargetQueue = (eventMetadata?.targetQueue as string[] | null) ?? [];
+    const sourceSenderId = (eventMetadata?.sourceMessageSenderId as string | null) ?? null;
+    
+    // 1. Parse @mentions from agent's response
+    const mentions = parseMentionsFromResponse(response);
+    
+    if (mentions.length > 0) {
+        // Agent explicitly mentioned someone(s)
+        const queue = mentions.slice(1);
+        return { targetId: mentions[0], targetQueue: queue };
+    }
+    
+    // 2. Check if there's a remaining queue from source message
+    if (sourceTargetQueue.length > 0) {
+        const nextTarget = sourceTargetQueue[0];
+        const remainingQueue = sourceTargetQueue.slice(1);
+        return { targetId: nextTarget, targetQueue: remainingQueue };
+    }
+    
+    // 3. Default: respond to whoever sent the message (via source metadata)
+    return { 
+        targetId: sourceSenderId,
+        targetQueue: [] 
+    };
+}
+
 
 export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     shouldProcess: () => true,
@@ -218,6 +279,13 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             })
             : undefined;
 
+        // Resolve target for agent's response (based on @mentions or queue)
+        const responseTarget = resolveAgentResponseTarget(
+            answer || "",
+            payload.agentId,
+            event
+        );
+
         const newMessagePayload: MessagePayload = {
             content: answer || "",
             sender: {
@@ -228,7 +296,13 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             toolCalls: normalizedToolCalls,
         };
 
-        // Enqueue a NEW_MESSAGE event
+        // Include target info in message metadata for routing
+        const messageMetadata: Record<string, unknown> = {
+            targetId: responseTarget.targetId,
+            targetQueue: responseTarget.targetQueue,
+        };
+
+        // Enqueue a NEW_MESSAGE event with target routing info
         producedEvents.push({
             threadId,
             type: "NEW_MESSAGE",
@@ -236,6 +310,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             parentEventId: typeof event.id === "string" ? event.id : undefined,
             traceId: typeof event.traceId === "string" ? event.traceId : undefined,
             priority: typeof event.priority === "number" ? event.priority : undefined,
+            metadata: messageMetadata,
         });
 
         return { producedEvents };

@@ -141,22 +141,63 @@ const buildAttachmentParts = (metadata?: MessageMetadata): ChatContentPart[] | n
     return parts.length > 0 ? parts : null;
 };
 
-export function historyGenerator(chatHistory: NewMessage[], currentAgent: Agent): ChatMessage[] {
+/**
+ * Options for history generation.
+ */
+export interface HistoryGeneratorOptions {
+    /** Whether to include target info in message context */
+    includeTargetContext?: boolean;
+}
+
+/**
+ * Resolve a target ID to a display name.
+ */
+function resolveTargetName(targetId: string | null | undefined, _metadata?: MessageMetadata): string {
+    if (!targetId) return "unknown";
+    return targetId;
+}
+
+export function historyGenerator(
+    chatHistory: NewMessage[], 
+    currentAgent: Agent,
+    options?: HistoryGeneratorOptions
+): ChatMessage[] {
+    const includeTargetContext = options?.includeTargetContext ?? true;
+    
     return chatHistory.map((msg, _i) => {
-        const role = msg.senderType === "agent"
-            ? (msg.senderId === currentAgent.name ? "assistant" : "user")
-            : msg.senderType;
+        // Current agent's messages = "assistant"
+        // Everyone else (users + other agents) = "user" with [Name]: prefix
+        const isCurrentAgent = msg.senderId === currentAgent.id || 
+                              msg.senderId === currentAgent.name;
+        
+        const role = isCurrentAgent ? "assistant" : 
+                    (msg.senderType === "agent" ? "user" : msg.senderType);
 
         const metadata = (msg.metadata ?? undefined) as MessageMetadata | undefined;
 
         let content = msg.content || "";
 
-        if (msg.senderType === "agent" && msg.senderId !== currentAgent.name) {
-            content = `[${msg.senderId}]: ${content}`;
-        } else if (msg.senderType === "user" && msg.senderId !== "user") {
-            content = `[${msg.senderId}]: ${content}`;
-        } else if (msg.senderType === "tool") {
-            content = `[Tool Result]: ${content}`;
+        // Prefix with sender name for non-current-agent messages
+        if (!isCurrentAgent && msg.senderType !== "system") {
+            const senderName = msg.senderId ?? "unknown";
+            if (msg.senderType === "tool") {
+                content = `[Tool Result]: ${content}`;
+            } else {
+                content = `[${senderName}]: ${content}`;
+            }
+        }
+        
+        // Include target info for context (who they were addressing)
+        // This helps agents understand the conversation flow in multi-agent scenarios
+        if (includeTargetContext && !isCurrentAgent) {
+            const msgWithTarget = msg as NewMessage & { targetId?: string | null };
+            if (msgWithTarget.targetId) {
+                const targetName = resolveTargetName(msgWithTarget.targetId, metadata);
+                // Only add if it's meaningful context
+                if (targetName !== currentAgent.name && targetName !== currentAgent.id) {
+                    content = `${content}\n(addressed to: ${targetName})`;
+                }
+            }
         }
 
         const attachmentParts = buildAttachmentParts(metadata);

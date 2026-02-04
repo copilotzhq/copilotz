@@ -21,6 +21,8 @@ import search_knowledge from "./search_knowledge.ts";
 import ingest_document from "./ingest_document.ts";
 import list_namespaces from "./list_namespaces.ts";
 import delete_document from "./delete_document.ts";
+// Multi-agent tools
+import update_my_memory from "./update_my_memory.ts";
 
 /**
  * Registry of all built-in native tools available to agents.
@@ -54,6 +56,8 @@ export const nativeTools: { [key: string]: NewTool } = {
     ingest_document,
     list_namespaces,
     delete_document,
+    // Multi-agent tools
+    update_my_memory,
 };
 
 

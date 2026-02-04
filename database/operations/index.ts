@@ -159,10 +159,46 @@ export interface DatabaseOperations {
   archiveThread: (threadId: string, summary: string) => Promise<Thread | null>;
 
   // ============================================
-  // USER AS NODE OPERATIONS (Graph-based users)
+  // PARTICIPANT NODE OPERATIONS (Unified users & agents)
   // ============================================
   
   /**
+   * Find or create a participant node in the graph (human or agent).
+   * This is the preferred method for creating participant nodes.
+   * 
+   * - Human participants: Store user identity with optional metadata
+   * - Agent participants: Store agent identity with persistent memory
+   * 
+   * @param externalId - External identifier (user ID or agent ID/name)
+   * @param participantType - "human" or "agent"
+   * @param namespace - Namespace scope (null for global participants)
+   * @param data - Participant data
+   */
+  upsertParticipantNode: (
+    externalId: string,
+    participantType: "human" | "agent",
+    namespace: string | null,
+    data: {
+      name?: string | null;
+      email?: string | null;          // humans only
+      agentId?: string | null;        // agents only
+      metadata?: Record<string, unknown> | null;
+    }
+  ) => Promise<KnowledgeNode>;
+  
+  /**
+   * Get a participant node by externalId.
+   * Works for both humans and agents.
+   * Also checks for global participants (namespace = "global") as fallback.
+   */
+  getParticipantNode: (externalId: string, namespace?: string | null) => Promise<KnowledgeNode | undefined>;
+
+  // ============================================
+  // USER AS NODE OPERATIONS (Legacy - use Participant ops)
+  // ============================================
+  
+  /**
+   * @deprecated Use upsertParticipantNode(externalId, "human", ...) instead
    * Find or create a user node in the graph.
    * - Global users: namespace = null (can access all namespaces)
    * - Scoped users: namespace = "tenantA" (only access specific namespace)
@@ -178,6 +214,7 @@ export interface DatabaseOperations {
   ) => Promise<KnowledgeNode>;
   
   /**
+   * @deprecated Use getParticipantNode() instead
    * Get a user node by external ID and namespace.
    * Also checks for global users (namespace = null) as fallback.
    */
@@ -934,86 +971,105 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
   };
 
   // ============================================
-  // USER AS NODE OPERATIONS
+  // PARTICIPANT NODE OPERATIONS (Unified users & agents)
   // ============================================
 
-  const upsertUserNode = async (
+  const upsertParticipantNode = async (
     externalId: string,
+    participantType: "human" | "agent",
     namespace: string | null,
-    userData: { name?: string | null; email?: string | null; metadata?: Record<string, unknown> | null }
+    data: {
+      name?: string | null;
+      email?: string | null;          // humans only
+      agentId?: string | null;        // agents only
+      metadata?: Record<string, unknown> | null;
+    }
   ): Promise<KnowledgeNode> => {
-    // Try to find existing user node
-    const existing = await getUserNode(externalId, namespace);
+    // Try to find existing participant node
+    const existing = await getParticipantNode(externalId, namespace);
     
     if (existing) {
-      // Update existing user
-      const updates: Partial<NewKnowledgeNode> = {};
+      // Update existing participant
       const currentData = (existing.data ?? {}) as Record<string, unknown>;
       const newData = { ...currentData };
       let hasChanges = false;
 
-      if (userData.name !== undefined && currentData.name !== userData.name) {
-        newData.name = userData.name;
+      if (data.name !== undefined && currentData.name !== data.name) {
+        newData.name = data.name;
         hasChanges = true;
       }
-      if (userData.email !== undefined && currentData.email !== userData.email) {
-        newData.email = userData.email;
+      if (data.email !== undefined && currentData.email !== data.email) {
+        newData.email = data.email;
         hasChanges = true;
       }
-      if (userData.metadata !== undefined) {
-        const currentMeta = JSON.stringify(currentData.metadata ?? null);
-        const newMeta = JSON.stringify(userData.metadata);
-        if (currentMeta !== newMeta) {
-          newData.metadata = userData.metadata;
-          hasChanges = true;
-        }
+      if (data.agentId !== undefined && currentData.agentId !== data.agentId) {
+        newData.agentId = data.agentId;
+        hasChanges = true;
+      }
+      if (data.metadata !== undefined) {
+        // Merge metadata rather than replace (for agent memory persistence)
+        newData.metadata = { 
+          ...(currentData.metadata as Record<string, unknown> ?? {}),
+          ...data.metadata 
+        };
+        hasChanges = true;
+      }
+      // Ensure participantType is set (for migration of existing nodes)
+      if (currentData.participantType !== participantType) {
+        newData.participantType = participantType;
+        hasChanges = true;
       }
 
       if (hasChanges) {
-        updates.data = newData;
-        updates.name = userData.name ?? existing.name;
-        const updated = await updateNode(existing.id as string, updates);
+        const updated = await updateNode(existing.id as string, { 
+          data: newData,
+          name: data.name ?? existing.name,
+        });
         return updated ?? existing;
       }
       return existing;
     }
 
-    // Create new user node
-    const userNode = await createNode({
-      namespace: namespace ?? "global", // "global" namespace for global users
-      type: "user",
-      name: userData.name ?? externalId,
+    // Create new participant node
+    const participantNode = await createNode({
+      namespace: namespace ?? "global",
+      type: "user",  // Keep type: "user" for backward compat
+      name: data.name ?? externalId,
       content: null,
       data: {
         externalId,
-        name: userData.name ?? null,
-        email: userData.email ?? null,
-        metadata: userData.metadata ?? null,
+        participantType,  // NEW: "human" | "agent"
+        name: data.name ?? null,
+        email: data.email ?? null,
+        agentId: data.agentId ?? null,
+        metadata: data.metadata ?? null,
         isGlobal: namespace === null,
       },
-      sourceType: "user",
+      sourceType: participantType === "human" ? "user" : "agent",
       sourceId: externalId,
     });
 
-    // Also write to legacy users table for backwards compatibility
-    try {
-      const existingLegacy = await crud.users.findOne({ externalId }) as User | null;
-      if (!existingLegacy) {
-        await crud.users.create({
-          name: userData.name ?? null,
-          email: userData.email ?? null,
-          externalId,
-          metadata: userData.metadata ?? null,
-        });
+    // Also write to legacy users table for backwards compatibility (humans only)
+    if (participantType === "human") {
+      try {
+        const existingLegacy = await crud.users.findOne({ externalId }) as User | null;
+        if (!existingLegacy) {
+          await crud.users.create({
+            name: data.name ?? null,
+            email: data.email ?? null,
+            externalId,
+            metadata: data.metadata ?? null,
+          });
+        }
+      } catch {
+        // Ignore legacy write failures
       }
-    } catch {
-      // Ignore legacy write failures
     }
 
-    return userNode;
+    return participantNode;
   };
 
-  const getUserNode = async (
+  const getParticipantNode = async (
     externalId: string,
     namespace?: string | null,
   ): Promise<KnowledgeNode | undefined> => {
@@ -1022,22 +1078,22 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
       const result = await db.query<KnowledgeNode>(
         `SELECT * FROM "nodes" 
          WHERE "type" = 'user' 
-         AND "data"->>'externalId' = $1 
-         AND "namespace" = $2
+         AND "namespace" = $1 
+         AND ("data"->>'externalId' = $2 OR "source_id" = $2)
          LIMIT 1`,
-        [externalId, namespace]
+        [namespace, externalId]
       );
       if (result.rows[0]) {
         return mapNodeRow(result.rows[0]);
       }
     }
 
-    // Fallback to global user (namespace = "global")
+    // Fallback to global participant (namespace = "global")
     const globalResult = await db.query<KnowledgeNode>(
       `SELECT * FROM "nodes" 
        WHERE "type" = 'user' 
-       AND "data"->>'externalId' = $1 
        AND "namespace" = 'global'
+       AND ("data"->>'externalId' = $1 OR "source_id" = $1)
        LIMIT 1`,
       [externalId]
     );
@@ -1046,6 +1102,28 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     }
 
     return undefined;
+  };
+
+  // ============================================
+  // USER AS NODE OPERATIONS (Legacy - delegates to participant ops)
+  // ============================================
+
+  /** @deprecated Use upsertParticipantNode(externalId, "human", ...) instead */
+  const upsertUserNode = async (
+    externalId: string,
+    namespace: string | null,
+    userData: { name?: string | null; email?: string | null; metadata?: Record<string, unknown> | null }
+  ): Promise<KnowledgeNode> => {
+    // Delegate to new method with participantType: "human"
+    return upsertParticipantNode(externalId, "human", namespace, userData);
+  };
+
+  /** @deprecated Use getParticipantNode() instead */
+  const getUserNode = async (
+    externalId: string,
+    namespace?: string | null,
+  ): Promise<KnowledgeNode | undefined> => {
+    return getParticipantNode(externalId, namespace);
   };
 
   const getUserNodesByExternalId = async (
@@ -1706,7 +1784,10 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     createTask,
     getUserByExternalId,
     archiveThread,
-    // User as node operations
+    // Participant node operations (unified users & agents)
+    upsertParticipantNode,
+    getParticipantNode,
+    // User as node operations (legacy - delegates to participant ops)
     upsertUserNode,
     getUserNode,
     getUserNodesByExternalId,

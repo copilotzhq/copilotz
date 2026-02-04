@@ -4,6 +4,33 @@ import type { EventBase } from "@/database/schemas/index.ts";
 import { startThreadEventWorker } from "@/event-processors/index.ts";
 import { ulid } from "ulid";
 
+/**
+ * Ensure all agents in context have participant nodes.
+ * Called once per runThread to create/update agent nodes in the knowledge graph.
+ * Agent nodes enable cross-thread memory and identity.
+ */
+async function ensureAgentParticipants(
+    ops: CopilotzDb["ops"],
+    agents: Agent[],
+    namespace?: string | null
+): Promise<void> {
+    for (const agent of agents) {
+        const externalId = (agent.id ?? agent.name) as string;
+        if (!externalId) continue;
+        
+        try {
+            await ops.upsertParticipantNode(externalId, "agent", namespace ?? null, {
+                name: agent.name,
+                agentId: (agent.id ?? agent.name) as string,
+                metadata: null,  // Start empty, agent can update via tool
+            });
+        } catch (err) {
+            // Log but don't break the flow - agent node creation is best-effort
+            console.warn(`[ensureAgentParticipants] Failed to upsert agent node for "${agent.name}":`, err);
+        }
+    }
+}
+
 type MaybePromise<T> = T | Promise<T>;
 
 const USER_UPSERT_DEBOUNCE_MS = 60_000;
@@ -50,6 +77,17 @@ export type RunOptions = {
      * Useful for loading tools dynamically from a database.
      */
     tools?: Tool[];
+    /**
+     * Explicit target for this message.
+     * Overrides @mention parsing and persisted targets.
+     * Useful for programmatic routing.
+     */
+    target?: string;
+    /**
+     * Target queue for multi-recipient messages.
+     * Processed in order after the primary target.
+     */
+    targetQueue?: string[];
 };
 
 /**
@@ -320,6 +358,13 @@ export async function runThread(
     // Best-effort upsert user sender (with namespace for scoped users)
     try {
         await upsertUser(ops, normalizedSender, baseContext.namespace);
+    } catch (_err) {
+        // swallow to not impact main flow
+    }
+
+    // Best-effort ensure agent participants exist (for multi-agent conversation support)
+    try {
+        await ensureAgentParticipants(ops, baseContext.agents ?? [], baseContext.namespace);
     } catch (_err) {
         // swallow to not impact main flow
     }

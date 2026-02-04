@@ -27,7 +27,7 @@ LLM continues conversation
 
 ## Native Tools
 
-Copilotz includes 23 built-in tools. Enable them per-agent with `allowedTools`:
+Copilotz includes 24 built-in tools. Enable them per-agent with `allowedTools`:
 
 ```typescript
 const agent = {
@@ -72,6 +72,12 @@ const agent = {
 | `create_task` | Create a goal-oriented task |
 | `ask_question` | Ask another agent a question and wait for response |
 
+### Agent Memory
+
+| Tool | Description |
+|------|-------------|
+| `update_my_memory` | Store persistent learnings (preferences, expertise, working memory) |
+
 ### Assets
 
 | Tool | Description |
@@ -87,6 +93,49 @@ const agent = {
 | `get_current_time` | Get current time in various formats and timezones |
 | `wait` | Pause for a specified duration (0.1-60 seconds) |
 | `verbal_pause` | Create a conversational pause for emphasis |
+
+## Agent Memory Tool
+
+The `update_my_memory` tool allows agents to store persistent learnings that survive across conversations. This is useful for building agents that learn user preferences or accumulate expertise over time.
+
+```typescript
+const agent = {
+  id: "personal-assistant",
+  name: "Assistant",
+  llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  allowedTools: ["update_my_memory"],
+};
+```
+
+### Memory Keys
+
+| Key | Purpose |
+|-----|---------|
+| `workingMemory` | Short-term context for the current task |
+| `expertise` | Skills and knowledge the agent has learned |
+| `learnedPreferences` | User preferences discovered over time |
+
+### Operations
+
+```typescript
+// Set a value (replaces existing)
+update_my_memory({ key: "workingMemory", value: "Working on Q4 report", operation: "set" })
+
+// Append to existing (comma-separated)
+update_my_memory({ key: "learnedPreferences", value: "Prefers bullet points", operation: "append" })
+
+// Remove a specific value or clear the key
+update_my_memory({ key: "expertise", value: "Python", operation: "remove" })
+```
+
+### How It Works
+
+1. Agent decides to remember something important
+2. Calls `update_my_memory` with key, value, and operation
+3. Memory is stored in the agent's participant node in the knowledge graph
+4. On future conversations, memory is automatically injected into the system prompt
+
+See [Agents](./agents.md#agent-persistent-memory) for more details.
 
 ## Custom Tools
 

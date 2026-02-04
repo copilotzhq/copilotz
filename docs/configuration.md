@@ -321,6 +321,46 @@ assets: {
 }
 ```
 
+## Multi-Agent Configuration
+
+```typescript
+multiAgent: {
+  maxAgentTurns: 5,           // Max consecutive agent-to-agent turns before forcing user target
+  includeTargetContext: true, // Include "(addressed to: X)" in history for multi-agent awareness
+}
+```
+
+### Loop Prevention
+
+The `maxAgentTurns` setting prevents infinite agent-to-agent conversations:
+
+```typescript
+const copilotz = await createCopilotz({
+  agents: [...],
+  multiAgent: {
+    maxAgentTurns: 3,  // After 3 agent turns, force target back to user
+  },
+});
+```
+
+**How it works:**
+- Each consecutive agent turn increments a counter in thread metadata
+- When the counter reaches `maxAgentTurns`, the next message targets the original human user
+- Human messages reset the counter to 0
+
+### Target Context in History
+
+When `includeTargetContext` is true (default), chat history includes addressing info:
+
+```
+[User]: @Researcher, what's the data on climate change?
+[Researcher]: (addressed to: User) Here's what I found...
+[User]: @Writer, can you summarize that?
+[Writer]: (addressed to: User) Here's a summary...
+```
+
+This helps agents understand conversation flow and who is speaking to whom.
+
 ## Runtime Defaults
 
 ```typescript
@@ -350,6 +390,10 @@ await copilotz.run(message, onEvent, {
   namespace: "workspace:123",      // Override default namespace
   schema: "tenant_acme",           // Override default schema
   
+  // Multi-agent routing (programmatic)
+  target: "agent-id",              // Explicit target agent/user for this message
+  targetQueue: ["agent-1", "agent-2"], // Queue of targets for multi-recipient messages
+  
   // Override agents for this run
   agents: [{
     id: "assistant",
@@ -362,6 +406,26 @@ await copilotz.run(message, onEvent, {
     execute: async (input) => { ... },
   }],
 });
+```
+
+### Programmatic Routing
+
+Use `target` and `targetQueue` to route messages programmatically without relying on @mentions:
+
+```typescript
+// Route directly to a specific agent
+await copilotz.run(
+  { content: "Process this data", sender: { type: "user", name: "Alex" } },
+  onEvent,
+  { target: "data-processor" }
+);
+
+// Route to multiple agents in sequence
+await copilotz.run(
+  { content: "Review and approve", sender: { type: "user", name: "Alex" } },
+  onEvent,
+  { targetQueue: ["reviewer", "approver"] }
+);
 ```
 
 ---

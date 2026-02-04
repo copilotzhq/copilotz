@@ -514,6 +514,16 @@ const schemaDefinition = {
           type: "string",
           enum: ["agent", "user", "system", "tool"],
         },
+        // NEW: Multi-agent conversation routing fields
+        targetId: { 
+          type: ["string", "null"],
+          description: "Primary recipient of this message (participant ID or agent ID)",
+        },
+        targetQueue: { 
+          type: ["array", "null"], 
+          items: { type: "string" },
+          description: "Remaining targets in queue for multi-@mention scenarios",
+        },
         thread: {
           readOnly: true,
           anyOf: [

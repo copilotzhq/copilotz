@@ -19,9 +19,10 @@ import type {
     LlmCallEventPayload,
     ToolCallEventPayload,
     AgentLlmOptionsResolverArgs,
+    ThreadMetadata,
 } from "@/interfaces/index.ts";
 import { resolveNamespace } from "@/interfaces/index.ts";
-import type { EntityExtractPayload } from "@/database/schemas/index.ts";
+import type { EntityExtractPayload, KnowledgeNode } from "@/database/schemas/index.ts";
 
 // Import tool types from their source
 import type { ExecutableTool, ToolExecutor } from "@/event-processors/tool_call/types.ts";
@@ -180,6 +181,231 @@ function extractBatchInfo(payload: NewMessageEventPayload): {
         batchSize: typeof metadata?.batchSize === "number" ? metadata.batchSize : null,
         batchIndex: typeof metadata?.batchIndex === "number" ? metadata.batchIndex : null,
     };
+}
+
+// ============================================================================
+// Multi-Agent Routing Helpers
+// ============================================================================
+
+/**
+ * Parse @mentions from message content, preserving order.
+ * Resolves to participant IDs (agent.id or agent.name).
+ */
+function parseMentions(
+    content: string, 
+    participants: string[] | null,
+    agents: Agent[]
+): string[] {
+    const mentionPattern = /(?<!\w)@([\w](?:[\w.-]*[\w])?)/g;
+    const matches = content.matchAll(mentionPattern);
+    
+    const resolved: string[] = [];
+    const seen = new Set<string>();
+    
+    for (const match of matches) {
+        const name = match[1]; // Remove @ prefix via regex capture
+        
+        // Check if it's a valid participant/agent
+        const agent = agents.find(a => a.name === name);
+        const isParticipant = participants?.includes(name);
+        
+        if ((agent || isParticipant) && !seen.has(name)) {
+            // Return agent ID if available, otherwise name
+            resolved.push((agent?.id ?? name) as string);
+            seen.add(name);
+        }
+    }
+    
+    return resolved;
+}
+
+/**
+ * Update a participant's target in thread metadata.
+ * This persists the "current conversation target" for routing without @mentions.
+ */
+async function updateParticipantTarget(
+    ops: Operations,
+    thread: Thread,
+    senderId: string,
+    targetId: string
+): Promise<void> {
+    const metadata = (thread.metadata ?? {}) as ThreadMetadata;
+    const participantTargets = metadata.participantTargets ?? {};
+    
+    const updatedMetadata: ThreadMetadata = {
+        ...metadata,
+        participantTargets: {
+            ...participantTargets,
+            [senderId]: targetId
+        }
+    };
+    
+    await ops.crud.threads?.update?.({ id: thread.id }, { metadata: updatedMetadata });
+    
+    // Update local thread object for subsequent operations in same request
+    (thread as { metadata: unknown }).metadata = updatedMetadata;
+}
+
+/**
+ * Target resolution result from discoverTargetForMessage.
+ */
+interface TargetResolution {
+    targetId: string;
+    targetQueue: string[];
+}
+
+/**
+ * Result from agent turn check.
+ */
+interface AgentTurnCheckResult {
+    shouldForceUserTarget: boolean;
+    userToTarget?: string;
+}
+
+/**
+ * Check and update agent turn counter for loop prevention.
+ * 
+ * - User messages reset the counter
+ * - Agent-to-agent messages increment the counter
+ * - When maxAgentTurns is reached, force target to a user
+ */
+async function checkAndUpdateAgentTurns(
+    ops: Operations,
+    thread: Thread,
+    senderType: "agent" | "user" | "tool" | "system",
+    targetId: string,
+    availableAgents: Agent[],
+    maxAgentTurns: number = 5
+): Promise<AgentTurnCheckResult> {
+    const metadata = (thread.metadata ?? {}) as ThreadMetadata;
+    const configuredMax = metadata.maxAgentTurns ?? maxAgentTurns;
+    
+    if (senderType === "user") {
+        // User message resets counter
+        if (metadata.agentTurnCount && metadata.agentTurnCount > 0) {
+            const updatedMetadata: ThreadMetadata = { ...metadata, agentTurnCount: 0 };
+            await ops.crud.threads?.update?.({ id: thread.id }, { metadata: updatedMetadata });
+            (thread as { metadata: unknown }).metadata = updatedMetadata;
+        }
+        return { shouldForceUserTarget: false };
+    }
+    
+    if (senderType === "agent") {
+        // Check if target is another agent
+        const targetIsAgent = availableAgents.some(a => 
+            a.id === targetId || a.name === targetId
+        );
+        
+        if (targetIsAgent) {
+            const newCount = (metadata.agentTurnCount ?? 0) + 1;
+            
+            if (newCount >= configuredMax) {
+                // Force target to a user in the thread
+                const userInThread = thread.participants?.find(p => 
+                    !availableAgents.some(a => a.name === p || a.id === p)
+                );
+                
+                console.warn(`[multi-agent] Max agent turns (${configuredMax}) reached, forcing target to user`);
+                
+                // Reset counter
+                const updatedMetadata: ThreadMetadata = { ...metadata, agentTurnCount: 0 };
+                await ops.crud.threads?.update?.({ id: thread.id }, { metadata: updatedMetadata });
+                (thread as { metadata: unknown }).metadata = updatedMetadata;
+                
+                return { shouldForceUserTarget: true, userToTarget: userInThread };
+            }
+            
+            // Update counter
+            const updatedMetadata: ThreadMetadata = { ...metadata, agentTurnCount: newCount };
+            await ops.crud.threads?.update?.({ id: thread.id }, { metadata: updatedMetadata });
+            (thread as { metadata: unknown }).metadata = updatedMetadata;
+        } else {
+            // Target is user, reset counter
+            if (metadata.agentTurnCount && metadata.agentTurnCount > 0) {
+                const updatedMetadata: ThreadMetadata = { ...metadata, agentTurnCount: 0 };
+                await ops.crud.threads?.update?.({ id: thread.id }, { metadata: updatedMetadata });
+                (thread as { metadata: unknown }).metadata = updatedMetadata;
+            }
+        }
+    }
+    
+    return { shouldForceUserTarget: false };
+}
+
+/**
+ * Discover the target(s) for a message using the new multi-agent routing logic.
+ * 
+ * Priority:
+ * 1. Tool results → route back to requesting agent
+ * 2. @mentions → route to mentioned agents (preserves order, builds queue)
+ * 3. Persisted target → use sender's last target from thread metadata
+ * 4. Default → first non-self participant
+ */
+async function discoverTargetForMessage(
+    messageContext: MessageContextDetails,
+    thread: Thread,
+    availableAgents: Agent[],
+    ops: Operations
+): Promise<TargetResolution | null> {
+    const metadata = (thread.metadata ?? {}) as ThreadMetadata;
+    const participantTargets = metadata.participantTargets ?? {};
+    
+    // 1. Tool results → route back to requesting agent (unchanged behavior)
+    if (messageContext.senderType === "tool" && messageContext.senderId) {
+        const agent = availableAgents.find(a => 
+            a.id === messageContext.senderId || a.name === messageContext.senderName
+        );
+        return agent ? { targetId: (agent.id ?? agent.name) as string, targetQueue: [] } : null;
+    }
+
+    // 2. Parse @mentions from content
+    const mentions = parseMentions(messageContext.contentText, thread.participants ?? null, availableAgents);
+    
+    if (mentions.length > 0) {
+        // Update sender's persistent target in thread metadata
+        await updateParticipantTarget(ops, thread, messageContext.senderId, mentions[0]);
+        
+        // Build queue: [first_mention, ...remaining_mentions, original_sender]
+        const queue = mentions.slice(1);
+        
+        // Append original sender to end of queue (for return path)
+        // unless sender is already in queue
+        if (!queue.includes(messageContext.senderId) && 
+            mentions[0] !== messageContext.senderId) {
+            queue.push(messageContext.senderId);
+        }
+        
+        return { targetId: mentions[0], targetQueue: queue };
+    }
+
+    // 3. Use sender's persisted target from thread metadata
+    const persistedTarget = participantTargets[messageContext.senderId];
+    if (persistedTarget) {
+        // Validate the target still exists as an agent
+        const targetAgent = availableAgents.find(a => 
+            a.id === persistedTarget || a.name === persistedTarget
+        );
+        if (targetAgent) {
+            return { targetId: persistedTarget, targetQueue: [] };
+        }
+    }
+
+    // 4. Default: First non-self participant (that is an agent)
+    const defaultTarget = thread.participants?.find(p => 
+        p !== messageContext.senderName && 
+        p !== messageContext.senderId &&
+        availableAgents.some(a => a.name === p || a.id === p)
+    );
+    
+    if (defaultTarget) {
+        // Persist this as sender's default target
+        await updateParticipantTarget(ops, thread, messageContext.senderId, defaultTarget);
+        const targetAgent = availableAgents.find(a => a.name === defaultTarget || a.id === defaultTarget);
+        return { targetId: (targetAgent?.id ?? defaultTarget) as string, targetQueue: [] };
+    }
+
+    // 5. No valid target found
+    return null;
 }
 
 function toExecutableTool(tool: unknown): ExecutableTool | null {
@@ -483,22 +709,79 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
             }
         }
 
-        // Resolve targets
+        // Resolve targets using new multi-agent routing
         const availableAgents = context.agents || [];
-        const targets = discoverTargetAgentsForMessage(messageContext, thread, availableAgents);
+        
+        // Check if event metadata already has target routing (from llm_call response)
+        const eventMetadata = event.metadata as Record<string, unknown> | null;
+        const metadataTargetId = eventMetadata?.targetId as string | null;
+        const metadataTargetQueue = eventMetadata?.targetQueue as string[] | null;
+        
+        let targetResolution: TargetResolution | null;
+        
+        if (metadataTargetId) {
+            // Use target from event metadata (set by llm_call processor)
+            targetResolution = { 
+                targetId: metadataTargetId, 
+                targetQueue: metadataTargetQueue ?? [] 
+            };
+        } else {
+            // Discover target from message content (@mentions, persisted target, default)
+            targetResolution = await discoverTargetForMessage(messageContext, thread, availableAgents, ops);
+        }
 
         const producedEvents: NewEvent[] = [];
+
+        // If no target resolved, skip routing (no agents to respond)
+        if (!targetResolution) {
+            return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
+        }
+
+        // Check for loop prevention (agent-to-agent turn limit)
+        const maxAgentTurns = context.multiAgent?.maxAgentTurns ?? 5;
+        const loopCheck = await checkAndUpdateAgentTurns(
+            ops, 
+            thread, 
+            messageContext.senderType,
+            targetResolution.targetId,
+            availableAgents,
+            maxAgentTurns
+        );
+        
+        if (loopCheck.shouldForceUserTarget) {
+            // Force target to user - don't trigger any more LLM calls
+            if (loopCheck.userToTarget) {
+                // Update the target to be the user instead
+                targetResolution = { 
+                    targetId: loopCheck.userToTarget, 
+                    targetQueue: [] 
+                };
+            }
+            // No LLM call for user targets
+            return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
+        }
+
+        // Get the target agent
+        const targetAgent = availableAgents.find(a => 
+            a.id === targetResolution.targetId || a.name === targetResolution.targetId
+        );
+        
+        if (!targetAgent) {
+            // Target is not an agent (might be a user) - no LLM call needed
+            return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
+        }
 
         // Assign descending priorities per target to enforce strict serial-per-target
         const basePriority = 1000;
         // If this event already has a priority (continuation of a chain), keep it
+        const chainPriority = typeof event.priority === 'number' ? (event.priority as number) : basePriority;
 
         const normalizedToolCalls = messageContext.toolCalls;
 
+        // Process the primary target agent
+        const targets = [targetAgent];
+        
         for (let idx = 0; idx < targets.length; idx++) {
-
-            const chainPriority = typeof event.priority === 'number' ? (event.priority as number) : (basePriority - idx);
-
             const agent = targets[idx];
             if (!agent) continue;
 
@@ -539,12 +822,24 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
 
             /** If the message is not a tool call, we need to add the message to the LLM context */
 
-            // Build processing context
-            const ctx = await buildProcessingContext(ops, threadId, context, agent.name);
+            // Build processing context (include agent ID for fetching agent's participant node)
+            const agentId = (agent.id ?? agent.name) as string;
+            const ctx = await buildProcessingContext(ops, threadId, context, agent.name, agentId);
 
-            // Build LLM request
-            const llmContext: LLMContextData = contextGenerator(agent, thread, ctx.activeTask, ctx.availableAgents, availableAgents, ctx.userMetadata);
-            const llmHistory: ChatMessage[] = historyGenerator(ctx.chatHistory, agent);
+            // Build LLM request (pass agent node for persistent memory injection)
+            const llmContext: LLMContextData = contextGenerator(
+                agent, 
+                thread, 
+                ctx.activeTask, 
+                ctx.availableAgents, 
+                availableAgents, 
+                ctx.userMetadata,
+                ctx.agentNode  // NEW: Agent's participant node for memory
+            );
+            
+            // Generate history with target context for multi-agent awareness
+            const includeTargetContext = context.multiAgent?.includeTargetContext ?? true;
+            const llmHistory: ChatMessage[] = historyGenerator(ctx.chatHistory, agent, { includeTargetContext });
 
             // Select tools available to this agent
             const allowedToolKeys: string[] = Array.isArray(agent.allowedTools) && agent.allowedTools.length > 0
@@ -624,6 +919,13 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
                 config: providerConfig as unknown as Record<string, unknown>,
             } as LlmCallEventPayload;
 
+            // Include target queue in LLM_CALL metadata for agent response routing
+            const llmEventMetadata = {
+                targetId: targetResolution.targetId,
+                targetQueue: targetResolution.targetQueue,
+                sourceMessageSenderId: messageContext.senderId,
+            };
+
             producedEvents.push({
                 threadId,
                 type: "LLM_CALL",
@@ -631,6 +933,7 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
                 parentEventId: typeof event.id === "string" ? event.id : undefined,
                 traceId: typeof event.traceId === "string" ? event.traceId : undefined,
                 priority: chainPriority,
+                metadata: llmEventMetadata,
             });
 
         }
@@ -663,7 +966,7 @@ const formatToolsForAI = (tools: ExecutableTool[]): ToolDefinition[] => {
 };
 
 
-async function buildProcessingContext(ops: Operations, threadId: string, context: ChatContext, senderIdForHistory: string) {
+async function buildProcessingContext(ops: Operations, threadId: string, context: ChatContext, senderIdForHistory: string, targetAgentId?: string) {
     const thread: Thread | undefined = await ops.getThreadById(threadId);
     if (!thread) throw new Error(`Thread not found: ${threadId}`);
 
@@ -717,6 +1020,16 @@ async function buildProcessingContext(ops: Operations, threadId: string, context
         context.userMetadata = userMetadata;
     }
 
+    // Fetch agent's participant node for persistent memory (if target agent specified)
+    let agentNode: KnowledgeNode | undefined = undefined;
+    if (targetAgentId) {
+        try {
+            agentNode = await ops.getParticipantNode(targetAgentId, context.namespace);
+        } catch {
+            // Ignore errors - agent node might not exist
+        }
+    }
+
     return {
         thread,
         chatHistory,
@@ -724,6 +1037,7 @@ async function buildProcessingContext(ops: Operations, threadId: string, context
         availableAgents,
         allTools,
         userMetadata,
+        agentNode,
     } as {
         thread: Thread;
         chatHistory: NewMessage[];
@@ -731,10 +1045,12 @@ async function buildProcessingContext(ops: Operations, threadId: string, context
         availableAgents: Agent[];
         allTools: ExecutableTool[];
         userMetadata?: Record<string, unknown>;
+        agentNode?: KnowledgeNode;
     };
 }
 
-function filterAllowedAgents(contextDetails: MessageContextDetails, targetAgents: Agent[], availableAgents: Agent[]): Agent[] {
+/** @deprecated Use discoverTargetForMessage instead - kept for backward compatibility */
+function _filterAllowedAgents(contextDetails: MessageContextDetails, targetAgents: Agent[], availableAgents: Agent[]): Agent[] {
     if (contextDetails.senderType !== "agent") return targetAgents;
     const senderAgent = availableAgents.find(a =>
         a.name === contextDetails.senderName ||
@@ -746,7 +1062,8 @@ function filterAllowedAgents(contextDetails: MessageContextDetails, targetAgents
     return targetAgents.filter((agent) => allowed.includes(agent.name));
 }
 
-function discoverTargetAgentsForMessage(contextDetails: MessageContextDetails, thread: Thread, availableAgents: Agent[]): Agent[] {
+/** @deprecated Use discoverTargetForMessage instead - kept for backward compatibility */
+function _discoverTargetAgentsForMessage(contextDetails: MessageContextDetails, thread: Thread, availableAgents: Agent[]): Agent[] {
     // Tool messages route back to the requesting agent by senderId
     if (
         (contextDetails.senderType === "tool" || contextDetails.toolCalls.length > 0) &&
@@ -771,7 +1088,7 @@ function discoverTargetAgentsForMessage(contextDetails: MessageContextDetails, t
                 seen.add(name);
             }
         }
-        const allowedMentionedAgents = filterAllowedAgents(contextDetails, orderedMentioned, availableAgents);
+        const allowedMentionedAgents = _filterAllowedAgents(contextDetails, orderedMentioned, availableAgents);
         if (allowedMentionedAgents.length > 0) {
             return allowedMentionedAgents;
         }

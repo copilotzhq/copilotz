@@ -134,7 +134,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       agentTools,
       {
         ...context,
-        senderId: agent.name,
+        senderId: (agent.id ?? agent.name) as string,
         senderType: "agent",
         threadId,
         agents: availableAgents,

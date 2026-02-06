@@ -166,11 +166,20 @@ export function historyGenerator(
     
     return chatHistory.map((msg, _i) => {
         // Current agent's messages = "assistant"
+        // Tool results = "tool" (even if senderId matches agent, because senderType is "tool")
         // Everyone else (users + other agents) = "user" with [Name]: prefix
-        const isCurrentAgent = msg.senderId === currentAgent.id || 
-                              msg.senderId === currentAgent.name;
         
-        const role = isCurrentAgent ? "assistant" : 
+        // IMPORTANT: Check senderType FIRST to correctly identify tool results
+        // Tool results have senderId set to the requesting agent's ID, but senderType is "tool"
+        const isToolResult = msg.senderType === "tool";
+        const isCurrentAgent = !isToolResult && (
+            msg.senderId === currentAgent.id || 
+            msg.senderId === currentAgent.name
+        );
+        
+        // Determine role: tool results stay as "tool", agent messages as "assistant", others based on type
+        const role = isToolResult ? "tool" :
+                    isCurrentAgent ? "assistant" : 
                     (msg.senderType === "agent" ? "user" : msg.senderType);
 
         const metadata = (msg.metadata ?? undefined) as MessageMetadata | undefined;
@@ -178,9 +187,10 @@ export function historyGenerator(
         let content = msg.content || "";
 
         // Prefix with sender name for non-current-agent messages
-        if (!isCurrentAgent && msg.senderType !== "system") {
+        // Tool results also get prefixed (they're not "assistant" messages)
+        if ((!isCurrentAgent || isToolResult) && msg.senderType !== "system") {
             const senderName = msg.senderId ?? "unknown";
-            if (msg.senderType === "tool") {
+            if (isToolResult) {
                 content = `[Tool Result]: ${content}`;
             } else {
                 content = `[${senderName}]: ${content}`;
@@ -189,7 +199,7 @@ export function historyGenerator(
         
         // Include target info for context (who they were addressing)
         // This helps agents understand the conversation flow in multi-agent scenarios
-        if (includeTargetContext && !isCurrentAgent) {
+        if (includeTargetContext && !isCurrentAgent && !isToolResult) {
             const msgWithTarget = msg as NewMessage & { targetId?: string | null };
             if (msgWithTarget.targetId) {
                 const targetName = resolveTargetName(msgWithTarget.targetId, metadata);

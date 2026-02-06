@@ -1,5 +1,13 @@
 import type {
+  Document,
+  DocumentChunk,
+  KnowledgeEdge,
+  KnowledgeNode,
   Message,
+  NewDocument,
+  NewDocumentChunk,
+  NewKnowledgeEdge,
+  NewKnowledgeNode,
   NewMessage,
   NewQueue,
   NewTask,
@@ -8,21 +16,12 @@ import type {
   Task,
   Thread,
   User,
-  Document,
-  NewDocument,
-  DocumentChunk,
-  NewDocumentChunk,
-  KnowledgeNode,
-  NewKnowledgeNode,
-  KnowledgeEdge,
-  NewKnowledgeEdge,
 } from "../schemas/index.ts";
 import type { DbInstance } from "../index.ts";
 import { ulid } from "ulid";
 
 const MAX_EXPIRED_CLEANUP_BATCH = 100;
 const EXPIRED_RETENTION_INTERVAL = "1 day";
-
 
 type MessageInsert =
   & Omit<NewMessage, "id">
@@ -127,10 +126,49 @@ export interface TraversalResult {
 export interface DatabaseOperations {
   crud: DbInstance["crud"];
   addToQueue: (threadId: string, event: QueueEventInput) => Promise<NewQueue>;
-  getProcessingQueueItem: (threadId: string, minPriority?: number) => Promise<Queue | undefined>;
-  getNextPendingQueueItem: (threadId: string, namespace?: string, minPriority?: number) => Promise<Queue | undefined>;
-  updateQueueItemStatus: (queueId: string, status: Queue["status"]) => Promise<void>;
-  getMessageHistory: (threadId: string, userId: string, limit?: number) => Promise<Message[]>;
+  getProcessingQueueItem: (
+    threadId: string,
+    minPriority?: number,
+  ) => Promise<Queue | undefined>;
+  getNextPendingQueueItem: (
+    threadId: string,
+    namespace?: string,
+    minPriority?: number,
+  ) => Promise<Queue | undefined>;
+  updateQueueItemStatus: (
+    queueId: string,
+    status: Queue["status"],
+  ) => Promise<void>;
+  /**
+   * Acquire an exclusive worker lease for a thread.
+   * Returns false when another worker holds an active lease.
+   */
+  acquireThreadWorkerLease: (
+    threadId: string,
+    workerId: string,
+  ) => Promise<boolean>;
+  /** Renew an existing thread worker lease (only succeeds for the current lease owner). */
+  renewThreadWorkerLease: (
+    threadId: string,
+    workerId: string,
+  ) => Promise<boolean>;
+  /** Release a thread worker lease (best-effort; only affects the current lease owner). */
+  releaseThreadWorkerLease: (
+    threadId: string,
+    workerId: string,
+  ) => Promise<void>;
+  /** Get effective thread worker lease configuration. */
+  getThreadWorkerLeaseConfig: () => { leaseMs: number; heartbeatMs: number };
+  /**
+   * Crash recovery: reset any "processing" queue items for a thread back to "pending".
+   * This should only be used by a worker that successfully acquired the thread lease.
+   */
+  recoverThreadProcessingQueueItems: (threadId: string) => Promise<number>;
+  getMessageHistory: (
+    threadId: string,
+    userId: string,
+    limit?: number,
+  ) => Promise<Message[]>;
   getThreadsForParticipant: (
     participantId: string,
     options?: {
@@ -150,8 +188,14 @@ export interface DatabaseOperations {
   ) => Promise<Message[]>;
   getThreadById: (threadId: string) => Promise<Thread | undefined>;
   getThreadByExternalId: (externalId: string) => Promise<Thread | undefined>;
-  findOrCreateThread: (threadId: string | undefined, threadData: ThreadInsert) => Promise<Thread>;
-  createMessage: (message: MessageInsert, namespace?: string) => Promise<Message>;
+  findOrCreateThread: (
+    threadId: string | undefined,
+    threadData: ThreadInsert,
+  ) => Promise<Thread>;
+  createMessage: (
+    message: MessageInsert,
+    namespace?: string,
+  ) => Promise<Message>;
   getTaskById: (taskId: string) => Promise<Task | undefined>;
   createTask: (taskData: TaskInsert) => Promise<Task>;
   /** @deprecated Use getUserNode instead for graph-based users with namespace support */
@@ -161,14 +205,14 @@ export interface DatabaseOperations {
   // ============================================
   // PARTICIPANT NODE OPERATIONS (Unified users & agents)
   // ============================================
-  
+
   /**
    * Find or create a participant node in the graph (human or agent).
    * This is the preferred method for creating participant nodes.
-   * 
+   *
    * - Human participants: Store user identity with optional metadata
    * - Agent participants: Store agent identity with persistent memory
-   * 
+   *
    * @param externalId - External identifier (user ID or agent ID/name)
    * @param participantType - "human" or "agent"
    * @param namespace - Namespace scope (null for global participants)
@@ -180,29 +224,32 @@ export interface DatabaseOperations {
     namespace: string | null,
     data: {
       name?: string | null;
-      email?: string | null;          // humans only
-      agentId?: string | null;        // agents only
+      email?: string | null; // humans only
+      agentId?: string | null; // agents only
       metadata?: Record<string, unknown> | null;
-    }
+    },
   ) => Promise<KnowledgeNode>;
-  
+
   /**
    * Get a participant node by externalId.
    * Works for both humans and agents.
    * Also checks for global participants (namespace = "global") as fallback.
    */
-  getParticipantNode: (externalId: string, namespace?: string | null) => Promise<KnowledgeNode | undefined>;
+  getParticipantNode: (
+    externalId: string,
+    namespace?: string | null,
+  ) => Promise<KnowledgeNode | undefined>;
 
   // ============================================
   // USER AS NODE OPERATIONS (Legacy - use Participant ops)
   // ============================================
-  
+
   /**
    * @deprecated Use upsertParticipantNode(externalId, "human", ...) instead
    * Find or create a user node in the graph.
    * - Global users: namespace = null (can access all namespaces)
    * - Scoped users: namespace = "tenantA" (only access specific namespace)
-   * 
+   *
    * @param externalId - External user identifier (from auth system)
    * @param namespace - Namespace scope (null for global users)
    * @param userData - User data to create/update
@@ -210,29 +257,48 @@ export interface DatabaseOperations {
   upsertUserNode: (
     externalId: string,
     namespace: string | null,
-    userData: { name?: string | null; email?: string | null; metadata?: Record<string, unknown> | null }
+    userData: {
+      name?: string | null;
+      email?: string | null;
+      metadata?: Record<string, unknown> | null;
+    },
   ) => Promise<KnowledgeNode>;
-  
+
   /**
    * @deprecated Use getParticipantNode() instead
    * Get a user node by external ID and namespace.
    * Also checks for global users (namespace = null) as fallback.
    */
-  getUserNode: (externalId: string, namespace?: string | null) => Promise<KnowledgeNode | undefined>;
-  
+  getUserNode: (
+    externalId: string,
+    namespace?: string | null,
+  ) => Promise<KnowledgeNode | undefined>;
+
   /**
    * Get all user nodes for an external ID (across namespaces).
    * Useful for users with access to multiple namespaces.
    */
   getUserNodesByExternalId: (externalId: string) => Promise<KnowledgeNode[]>;
-  
+
   // RAG operations (legacy - use graph operations for new code)
-  createDocument: (doc: Omit<NewDocument, "id"> & { id?: string }) => Promise<Document>;
+  createDocument: (
+    doc: Omit<NewDocument, "id"> & { id?: string },
+  ) => Promise<Document>;
   getDocumentById: (id: string) => Promise<Document | undefined>;
-  getDocumentByHash: (hash: string, namespace: string) => Promise<Document | undefined>;
-  updateDocumentStatus: (id: string, status: Document["status"], errorMessage?: string, chunkCount?: number) => Promise<void>;
+  getDocumentByHash: (
+    hash: string,
+    namespace: string,
+  ) => Promise<Document | undefined>;
+  updateDocumentStatus: (
+    id: string,
+    status: Document["status"],
+    errorMessage?: string,
+    chunkCount?: number,
+  ) => Promise<void>;
   deleteDocument: (id: string) => Promise<void>;
-  createChunks: (chunks: Array<Omit<NewDocumentChunk, "id"> & { id?: string }>) => Promise<DocumentChunk[]>;
+  createChunks: (
+    chunks: Array<Omit<NewDocumentChunk, "id"> & { id?: string }>,
+  ) => Promise<DocumentChunk[]>;
   searchChunks: (options: ChunkSearchOptions) => Promise<ChunkSearchResult[]>;
   getNamespaceStats: () => Promise<NamespaceStats[]>;
   deleteChunksByDocumentId: (documentId: string) => Promise<void>;
@@ -243,9 +309,16 @@ export interface DatabaseOperations {
 
   // Create message as a node (used internally by createMessage)
   // namespace: Optional namespace for user lookup (for SENT_BY edge)
-  createMessageNode: (message: MessageInsert, previousMessageId?: string, namespace?: string) => Promise<KnowledgeNode>;
+  createMessageNode: (
+    message: MessageInsert,
+    previousMessageId?: string,
+    namespace?: string,
+  ) => Promise<KnowledgeNode>;
   // Get message history from graph (nodes with type='message')
-  getMessageHistoryFromGraph: (threadId: string, limit?: number) => Promise<Message[]>;
+  getMessageHistoryFromGraph: (
+    threadId: string,
+    limit?: number,
+  ) => Promise<Message[]>;
   // Get the last message node in a thread
   getLastMessageNode: (threadId: string) => Promise<KnowledgeNode | undefined>;
 
@@ -254,32 +327,59 @@ export interface DatabaseOperations {
   // ============================================
 
   // Search chunks from graph (nodes with type='chunk')
-  searchChunksFromGraph: (options: ChunkSearchOptions) => Promise<ChunkSearchResult[]>;
+  searchChunksFromGraph: (
+    options: ChunkSearchOptions,
+  ) => Promise<ChunkSearchResult[]>;
 
   // ============================================
   // KNOWLEDGE GRAPH OPERATIONS
   // ============================================
-  
+
   // Node CRUD
-  createNode: (node: Omit<NewKnowledgeNode, "id"> & { id?: string }) => Promise<KnowledgeNode>;
-  createNodes: (nodes: Array<Omit<NewKnowledgeNode, "id"> & { id?: string }>) => Promise<KnowledgeNode[]>;
+  createNode: (
+    node: Omit<NewKnowledgeNode, "id"> & { id?: string },
+  ) => Promise<KnowledgeNode>;
+  createNodes: (
+    nodes: Array<Omit<NewKnowledgeNode, "id"> & { id?: string }>,
+  ) => Promise<KnowledgeNode[]>;
   getNodeById: (id: string) => Promise<KnowledgeNode | undefined>;
-  getNodesByNamespace: (namespace: string, type?: string) => Promise<KnowledgeNode[]>;
-  updateNode: (id: string, updates: Partial<NewKnowledgeNode>) => Promise<KnowledgeNode | undefined>;
+  getNodesByNamespace: (
+    namespace: string,
+    type?: string,
+  ) => Promise<KnowledgeNode[]>;
+  updateNode: (
+    id: string,
+    updates: Partial<NewKnowledgeNode>,
+  ) => Promise<KnowledgeNode | undefined>;
   deleteNode: (id: string) => Promise<void>;
   deleteNodesBySource: (sourceType: string, sourceId: string) => Promise<void>;
-  
+
   // Edge CRUD
-  createEdge: (edge: Omit<NewKnowledgeEdge, "id"> & { id?: string }) => Promise<KnowledgeEdge>;
-  createEdges: (edges: Array<Omit<NewKnowledgeEdge, "id"> & { id?: string }>) => Promise<KnowledgeEdge[]>;
-  getEdgesForNode: (nodeId: string, direction?: "in" | "out" | "both", types?: string[]) => Promise<KnowledgeEdge[]>;
+  createEdge: (
+    edge: Omit<NewKnowledgeEdge, "id"> & { id?: string },
+  ) => Promise<KnowledgeEdge>;
+  createEdges: (
+    edges: Array<Omit<NewKnowledgeEdge, "id"> & { id?: string }>,
+  ) => Promise<KnowledgeEdge[]>;
+  getEdgesForNode: (
+    nodeId: string,
+    direction?: "in" | "out" | "both",
+    types?: string[],
+  ) => Promise<KnowledgeEdge[]>;
   deleteEdge: (id: string) => Promise<void>;
   deleteEdgesForNode: (nodeId: string) => Promise<void>;
-  
+
   // Graph queries
   searchNodes: (options: GraphQueryOptions) => Promise<GraphQueryResult[]>;
-  traverseGraph: (startNodeId: string, edgeTypes?: string[], maxDepth?: number) => Promise<TraversalResult>;
-  findRelatedNodes: (nodeId: string, depth?: number) => Promise<KnowledgeNode[]>;
+  traverseGraph: (
+    startNodeId: string,
+    edgeTypes?: string[],
+    maxDepth?: number,
+  ) => Promise<TraversalResult>;
+  findRelatedNodes: (
+    nodeId: string,
+    depth?: number,
+  ) => Promise<KnowledgeNode[]>;
 }
 
 const toIsoString = (
@@ -290,9 +390,19 @@ const toIsoString = (
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 };
 
-export function createOperations(db: DbInstance, config?: { staleProcessingThresholdMs?: number }): DatabaseOperations {
+export function createOperations(
+  db: DbInstance,
+  config?: {
+    staleProcessingThresholdMs?: number;
+    threadLeaseMs?: number;
+    threadLeaseHeartbeatMs?: number;
+  },
+): DatabaseOperations {
   const { crud } = db;
-  const STALE_PROCESSING_THRESHOLD_MS = config?.staleProcessingThresholdMs ?? 300000; // Default: 5 minutes
+  const STALE_PROCESSING_THRESHOLD_MS = config?.staleProcessingThresholdMs ??
+    300000; // Default: 5 minutes
+  const THREAD_WORKER_LEASE_MS = config?.threadLeaseMs ?? 120_000; // Default: 2 minutes
+  const THREAD_WORKER_HEARTBEAT_MS = config?.threadLeaseHeartbeatMs ?? 30_000; // Default: 30 seconds
 
   const cleanupExpiredQueueItems = async (): Promise<void> => {
     await db.query(
@@ -330,8 +440,8 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     const expiresAt = event.expiresAt
       ? toIsoString(event.expiresAt)
       : ttlMs
-        ? new Date(Date.now() + ttlMs).toISOString()
-        : null;
+      ? new Date(Date.now() + ttlMs).toISOString()
+      : null;
 
     const insertQueueItem = {
       threadId,
@@ -360,45 +470,47 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     // Recovery mechanism: Reset stale "processing" events that have been stuck for too long
     // This handles server crashes where events were left in "processing" state
     const staleThreshold = new Date(Date.now() - STALE_PROCESSING_THRESHOLD_MS);
-    
+
     // Find processing events older than threshold
     const staleEvents = await crud.events.find({
       threadId,
       status: "processing",
     });
-    
+
     for (const event of staleEvents) {
-      const updatedAt = typeof event.updatedAt === "string" 
-        ? new Date(event.updatedAt) 
+      const updatedAt = typeof event.updatedAt === "string"
+        ? new Date(event.updatedAt)
         : event.updatedAt;
-      
+
       if (updatedAt && updatedAt < staleThreshold) {
         // Reset stale event to pending so it can be retried
         await crud.events.update(
           { id: event.id },
-          { 
+          {
             status: "pending",
             updatedAt: new Date(),
-          }
+          },
         );
-        console.warn(`[recovery] Reset stale processing event ${event.id} in thread ${threadId} (stuck since ${updatedAt.toISOString()})`);
+        console.warn(
+          `[recovery] Reset stale processing event ${event.id} in thread ${threadId} (stuck since ${updatedAt.toISOString()})`,
+        );
       }
     }
-    
+
     // Now check for any remaining processing events at or above minPriority
     const processingEvents = await crud.events.find({
       threadId,
       status: "processing",
     });
-    
+
     // Filter by minPriority if specified (ignore background events being processed)
     const relevantEvents = minPriority !== undefined
-      ? processingEvents.filter(e => {
-          const eventPriority = typeof e.priority === "number" ? e.priority : 0;
-          return eventPriority >= minPriority;
-        })
+      ? processingEvents.filter((e) => {
+        const eventPriority = typeof e.priority === "number" ? e.priority : 0;
+        return eventPriority >= minPriority;
+      })
       : processingEvents;
-    
+
     return (relevantEvents[0] as Queue) ?? undefined;
   };
 
@@ -433,7 +545,9 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
 
       // Skip events below minimum priority threshold (for background processing)
       if (minPriority !== undefined) {
-        const eventPriority = typeof candidate.priority === "number" ? candidate.priority : 0;
+        const eventPriority = typeof candidate.priority === "number"
+          ? candidate.priority
+          : 0;
         if (eventPriority < minPriority) {
           // Leave background events for later processing
           return undefined;
@@ -462,6 +576,80 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     await crud.events.update({ id: queueId }, { status });
   };
 
+  const getThreadWorkerLeaseConfig = () => ({
+    leaseMs: THREAD_WORKER_LEASE_MS,
+    heartbeatMs: THREAD_WORKER_HEARTBEAT_MS,
+  });
+
+  const acquireThreadWorkerLease = async (
+    threadId: string,
+    workerId: string,
+  ): Promise<boolean> => {
+    const result = await db.query<{ id: string }>(
+      `UPDATE "threads"
+       SET "workerLockedBy" = $2,
+           "workerLeaseExpiresAt" = NOW() + ($3 * INTERVAL '1 millisecond'),
+           "updatedAt" = NOW()
+       WHERE "id" = $1
+         AND (
+           "workerLeaseExpiresAt" IS NULL
+           OR "workerLeaseExpiresAt" < NOW()
+           OR "workerLockedBy" = $2
+         )
+       RETURNING "id"`,
+      [threadId, workerId, THREAD_WORKER_LEASE_MS],
+    );
+    return result.rows.length > 0;
+  };
+
+  const renewThreadWorkerLease = async (
+    threadId: string,
+    workerId: string,
+  ): Promise<boolean> => {
+    const result = await db.query<{ id: string }>(
+      `UPDATE "threads"
+       SET "workerLeaseExpiresAt" = NOW() + ($3 * INTERVAL '1 millisecond'),
+           "updatedAt" = NOW()
+       WHERE "id" = $1
+         AND "workerLockedBy" = $2
+         AND (
+           "workerLeaseExpiresAt" IS NULL
+           OR "workerLeaseExpiresAt" >= NOW()
+         )
+       RETURNING "id"`,
+      [threadId, workerId, THREAD_WORKER_LEASE_MS],
+    );
+    return result.rows.length > 0;
+  };
+
+  const releaseThreadWorkerLease = async (
+    threadId: string,
+    workerId: string,
+  ): Promise<void> => {
+    await db.query(
+      `UPDATE "threads"
+       SET "workerLockedBy" = NULL,
+           "workerLeaseExpiresAt" = NULL,
+           "updatedAt" = NOW()
+       WHERE "id" = $1 AND "workerLockedBy" = $2`,
+      [threadId, workerId],
+    );
+  };
+
+  const recoverThreadProcessingQueueItems = async (
+    threadId: string,
+  ): Promise<number> => {
+    const result = await db.query<{ id: string }>(
+      `UPDATE "events"
+       SET "status" = 'pending',
+           "updatedAt" = NOW()
+       WHERE "threadId" = $1 AND "status" = 'processing'
+       RETURNING "id"`,
+      [threadId],
+    );
+    return result.rows.length;
+  };
+
   const getThreadById = async (
     threadId: string,
   ): Promise<Thread | undefined> => {
@@ -475,7 +663,10 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
   const getThreadByExternalId = async (
     externalId: string,
   ): Promise<Thread | undefined> => {
-    const thread = await crud.threads.findOne({ externalId, status: "active" }) as Thread | null;
+    const thread = await crud.threads.findOne({
+      externalId,
+      status: "active",
+    }) as Thread | null;
     return thread ?? undefined;
   };
 
@@ -486,8 +677,12 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     let existing: Thread | null = null;
     if (threadId) {
       existing = await crud.threads.findOne({ id: threadId }) as Thread | null;
-    } else if (typeof threadData.externalId === "string" && threadData.externalId) {
-      existing = await crud.threads.findOne({ externalId: threadData.externalId }) as Thread | null;
+    } else if (
+      typeof threadData.externalId === "string" && threadData.externalId
+    ) {
+      existing = await crud.threads.findOne({
+        externalId: threadData.externalId,
+      }) as Thread | null;
     }
 
     const normalizeParticipants = (participants?: string[] | null) => {
@@ -507,10 +702,10 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
         status: threadData.status ?? "active",
         summary: threadData.summary ?? null,
         parentThreadId: threadData.parentThreadId ?? null,
-        metadata: threadData.metadata ?? null
+        metadata: threadData.metadata ?? null,
       };
       const created = await crud.threads.create(
-        threadId ? { id: threadId, ...baseInsert } : baseInsert
+        threadId ? { id: threadId, ...baseInsert } : baseInsert,
       ) as Thread;
       return created;
     }
@@ -534,7 +729,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
       const normalizedMetadata = threadData.metadata ?? null;
       if (
         JSON.stringify(existing.metadata ?? null) !==
-        JSON.stringify(normalizedMetadata)
+          JSON.stringify(normalizedMetadata)
       ) {
         updates.metadata = normalizedMetadata;
       }
@@ -548,7 +743,10 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     return (updated ?? existing) as Thread;
   };
 
-  const createMessage = async (message: MessageInsert, namespace?: string): Promise<Message> => {
+  const createMessage = async (
+    message: MessageInsert,
+    namespace?: string,
+  ): Promise<Message> => {
     // Generate consistent ID for both stores
     const messageId = message.id ?? ulid();
     const messageWithId = { ...message, id: messageId };
@@ -573,10 +771,14 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
       const threadIdStr = message.threadId as string;
       const lastMessage = await getLastMessageNode(threadIdStr);
       // Pass namespace for SENT_BY edge creation (user → message)
-      await createMessageNode(messageWithId, lastMessage?.id as string | undefined, namespace);
+      await createMessageNode(
+        messageWithId,
+        lastMessage?.id as string | undefined,
+        namespace,
+      );
     } catch (error) {
       // Log but don't fail - messages table write succeeded
-      console.warn('[createMessage] Failed to create message node:', error);
+      console.warn("[createMessage] Failed to create message node:", error);
     }
 
     return created as Message;
@@ -587,7 +789,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     userId: string,
     limit = 50,
   ): Promise<Message[]> => {
-    const allMessages: { message: Message, threadLevel: number }[] = [];
+    const allMessages: { message: Message; threadLevel: number }[] = [];
     let currentThreadId: string | null = threadId;
     let level = 0;
 
@@ -600,16 +802,18 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
       }
 
       const participants = Array.isArray(thread.participants)
-        ? thread.participants.filter((participant: string): participant is string =>
-          typeof participant === "string"
-        )
+        ? thread.participants.filter((
+          participant: string,
+        ): participant is string => typeof participant === "string")
         : [];
       if (!participants.includes(userId)) {
         break;
       }
 
       // Read messages from graph (nodes table) instead of messages table
-      const threadMessages = await getMessagesFromGraphForThread(currentThreadId);
+      const threadMessages = await getMessagesFromGraphForThread(
+        currentThreadId,
+      );
 
       for (const msg of threadMessages) {
         allMessages.push({ message: msg, threadLevel: level });
@@ -642,26 +846,26 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
 
   // Helper: Get messages from legacy messages table (fallback when nodes table doesn't exist)
   const getMessagesFromLegacyTable = async (
-    threadId: string
+    threadId: string,
   ): Promise<Message[]> => {
     const messages = await crud.messages.find(
       { threadId },
-      { orderBy: { createdAt: "asc" } }
+      { orderBy: { createdAt: "asc" } },
     ) as Message[];
-    
+
     return messages;
   };
 
   // Helper: Get messages from graph for a specific thread (no limit, for hierarchy traversal)
   const getMessagesFromGraphForThread = async (
-    threadId: string
+    threadId: string,
   ): Promise<Message[]> => {
     try {
       const result = await db.query<Record<string, unknown>>(
         `SELECT * FROM "nodes"
          WHERE "namespace" = $1 AND "type" = 'message'
          ORDER BY "created_at" ASC`,
-        [threadId]
+        [threadId],
       );
 
       return result.rows.map((node) => {
@@ -684,8 +888,10 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     } catch (error) {
       // Fallback to legacy messages table if nodes table doesn't exist (42P01 = undefined_table)
       const pgError = error as { code?: string };
-      if (pgError?.code === '42P01') {
-        console.warn('[getMessagesFromGraphForThread] nodes table does not exist, falling back to messages table');
+      if (pgError?.code === "42P01") {
+        console.warn(
+          "[getMessagesFromGraphForThread] nodes table does not exist, falling back to messages table",
+        );
         return getMessagesFromLegacyTable(threadId);
       }
       throw error;
@@ -697,7 +903,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
   // ============================================
 
   const getLastMessageNode = async (
-    threadId: string
+    threadId: string,
   ): Promise<KnowledgeNode | undefined> => {
     try {
       const result = await db.query<KnowledgeNode>(
@@ -705,14 +911,14 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
          WHERE "namespace" = $1 AND "type" = 'message'
          ORDER BY "created_at" DESC
          LIMIT 1`,
-        [threadId]
+        [threadId],
       );
       return result.rows[0];
     } catch (error) {
       // Return undefined if nodes table doesn't exist (42P01 = undefined_table)
       // This allows createMessage to still work without graph edges
       const pgError = error as { code?: string };
-      if (pgError?.code === '42P01') {
+      if (pgError?.code === "42P01") {
         return undefined;
       }
       throw error;
@@ -722,20 +928,20 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
   const createMessageNode = async (
     message: MessageInsert,
     previousMessageId?: string,
-    namespace?: string
+    namespace?: string,
   ): Promise<KnowledgeNode> => {
     const messageId = (message.id ?? ulid()) as string;
     const timestamp = new Date().toISOString();
     const threadId = message.threadId as string;
     const senderId = message.senderId as string;
     const senderType = message.senderType as string;
-    
+
     // Create message as node
     const messageNode = await createNode({
       namespace: threadId,
-      type: 'message',
+      type: "message",
       name: `${senderType}:${senderId}:${timestamp}`,
-      content: (message.content ?? '') as string,
+      content: (message.content ?? "") as string,
       data: {
         messageId,
         senderId,
@@ -746,7 +952,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
         toolCalls: message.toolCalls ?? null,
         metadata: message.metadata ?? null,
       },
-      sourceType: 'thread',
+      sourceType: "thread",
       sourceId: threadId,
     });
 
@@ -755,12 +961,12 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
       await createEdge({
         sourceNodeId: previousMessageId,
         targetNodeId: messageNode.id as string,
-        type: 'REPLIED_BY',
+        type: "REPLIED_BY",
       });
     }
 
     // Create SENT_BY edge from user node to message (if sender is a user with externalId)
-    if (senderType === 'user' && senderId) {
+    if (senderType === "user" && senderId) {
       try {
         // Try to find the user node using the run's namespace (falls back to global)
         const userNode = await getUserNode(senderId, namespace);
@@ -768,7 +974,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
           await createEdge({
             sourceNodeId: userNode.id as string,
             targetNodeId: messageNode.id as string,
-            type: 'SENT_BY',
+            type: "SENT_BY",
           });
         }
       } catch {
@@ -781,7 +987,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
 
   const getMessageHistoryFromGraph = async (
     threadId: string,
-    limit = 50
+    limit = 50,
   ): Promise<Message[]> => {
     // Query message nodes ordered by creation time
     const result = await db.query<KnowledgeNode>(
@@ -789,7 +995,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
        WHERE "namespace" = $1 AND "type" = 'message'
        ORDER BY "created_at" ASC
        LIMIT $2`,
-      [threadId, limit]
+      [threadId, limit],
     );
 
     // Transform nodes back to Message format
@@ -813,11 +1019,11 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
   };
 
   // ============================================
-  // CHUNK AS NODE OPERATIONS  
+  // CHUNK AS NODE OPERATIONS
   // ============================================
 
   const searchChunksFromGraph = async (
-    options: ChunkSearchOptions
+    options: ChunkSearchOptions,
   ): Promise<ChunkSearchResult[]> => {
     const { embedding, namespaces, limit = 10, threshold = 0.5 } = options;
 
@@ -861,7 +1067,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
         ${namespaceClause}
       ORDER BY "embedding" <=> $1::vector
       LIMIT $${limitIdx}`,
-      params
+      params,
     );
 
     return result.rows.map((row) => {
@@ -1000,14 +1206,14 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     namespace: string | null,
     data: {
       name?: string | null;
-      email?: string | null;          // humans only
-      agentId?: string | null;        // agents only
+      email?: string | null; // humans only
+      agentId?: string | null; // agents only
       metadata?: Record<string, unknown> | null;
-    }
+    },
   ): Promise<KnowledgeNode> => {
     // Try to find existing participant node
     const existing = await getParticipantNode(externalId, namespace);
-    
+
     if (existing) {
       // Update existing participant
       const currentData = (existing.data ?? {}) as Record<string, unknown>;
@@ -1028,9 +1234,9 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
       }
       if (data.metadata !== undefined) {
         // Merge metadata rather than replace (for agent memory persistence)
-        newData.metadata = { 
+        newData.metadata = {
           ...(currentData.metadata as Record<string, unknown> ?? {}),
-          ...data.metadata 
+          ...data.metadata,
         };
         hasChanges = true;
       }
@@ -1041,7 +1247,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
       }
 
       if (hasChanges) {
-        const updated = await updateNode(existing.id as string, { 
+        const updated = await updateNode(existing.id as string, {
           data: newData,
           name: data.name ?? existing.name,
         });
@@ -1053,12 +1259,12 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     // Create new participant node
     const participantNode = await createNode({
       namespace: namespace ?? "global",
-      type: "user",  // Keep type: "user" for backward compat
+      type: "user", // Keep type: "user" for backward compat
       name: data.name ?? externalId,
       content: null,
       data: {
         externalId,
-        participantType,  // NEW: "human" | "agent"
+        participantType, // NEW: "human" | "agent"
         name: data.name ?? null,
         email: data.email ?? null,
         agentId: data.agentId ?? null,
@@ -1072,7 +1278,9 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     // Also write to legacy users table for backwards compatibility (humans only)
     if (participantType === "human") {
       try {
-        const existingLegacy = await crud.users.findOne({ externalId }) as User | null;
+        const existingLegacy = await crud.users.findOne({ externalId }) as
+          | User
+          | null;
         if (!existingLegacy) {
           await crud.users.create({
             name: data.name ?? null,
@@ -1101,7 +1309,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
          AND "namespace" = $1 
          AND ("data"->>'externalId' = $2 OR "source_id" = $2)
          LIMIT 1`,
-        [namespace, externalId]
+        [namespace, externalId],
       );
       if (result.rows[0]) {
         return mapNodeRow(result.rows[0]);
@@ -1115,7 +1323,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
        AND "namespace" = 'global'
        AND ("data"->>'externalId' = $1 OR "source_id" = $1)
        LIMIT 1`,
-      [externalId]
+      [externalId],
     );
     if (globalResult.rows[0]) {
       return mapNodeRow(globalResult.rows[0]);
@@ -1132,7 +1340,11 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
   const upsertUserNode = async (
     externalId: string,
     namespace: string | null,
-    userData: { name?: string | null; email?: string | null; metadata?: Record<string, unknown> | null }
+    userData: {
+      name?: string | null;
+      email?: string | null;
+      metadata?: Record<string, unknown> | null;
+    },
   ): Promise<KnowledgeNode> => {
     // Delegate to new method with participantType: "human"
     return upsertParticipantNode(externalId, "human", namespace, userData);
@@ -1154,7 +1366,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
        WHERE "type" = 'user' 
        AND "data"->>'externalId' = $1
        ORDER BY "created_at" ASC`,
-      [externalId]
+      [externalId],
     );
     return result.rows.map(mapNodeRow);
   };
@@ -1218,7 +1430,9 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     await crud.documents.delete({ id });
   };
 
-  const deleteChunksByDocumentId = async (documentId: string): Promise<void> => {
+  const deleteChunksByDocumentId = async (
+    documentId: string,
+  ): Promise<void> => {
     await db.query(
       `DELETE FROM "document_chunks" WHERE "documentId" = $1`,
       [documentId],
@@ -1287,7 +1501,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
 
     const params: unknown[] = [embeddingStr, threshold, limit];
     let namespaceClause = "";
-    
+
     if (namespaces.length > 0) {
       namespaceClause = `AND dc."namespace" = ANY($4::text[])`;
       params.push(namespaces);
@@ -1397,13 +1611,15 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
   // ============================================
 
   const createNode = async (
-    node: Omit<NewKnowledgeNode, "id"> & { id?: string }
+    node: Omit<NewKnowledgeNode, "id"> & { id?: string },
   ): Promise<KnowledgeNode> => {
     // Generate ULID if not provided
     const nodeId = node.id ?? ulid();
     // Use raw SQL for vector embedding support
-    const embeddingStr = node.embedding ? `[${node.embedding.join(",")}]` : null;
-    
+    const embeddingStr = node.embedding
+      ? `[${node.embedding.join(",")}]`
+      : null;
+
     const result = await db.query<KnowledgeNode>(
       `INSERT INTO "nodes" (
         "id", "namespace", "type", "name", "embedding", "content", "data", 
@@ -1421,16 +1637,16 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
         node.data ?? {},
         node.sourceType ?? null,
         node.sourceId ?? null,
-      ]
+      ],
     );
     return result.rows[0];
   };
 
   const createNodes = async (
-    nodes: Array<Omit<NewKnowledgeNode, "id"> & { id?: string }>
+    nodes: Array<Omit<NewKnowledgeNode, "id"> & { id?: string }>,
   ): Promise<KnowledgeNode[]> => {
     if (nodes.length === 0) return [];
-    
+
     const created: KnowledgeNode[] = [];
     for (const node of nodes) {
       const result = await createNode(node);
@@ -1444,7 +1660,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     id: row.id as string,
     namespace: row.namespace as string,
     type: row.type as string,
-    name: (row.name ?? '') as string,
+    name: (row.name ?? "") as string,
     content: row.content as string | null,
     embedding: row.embedding as number[] | null,
     data: row.data as Record<string, unknown> | null,
@@ -1456,26 +1672,28 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
 
   const getNodesByNamespace = async (
     namespace: string,
-    type?: string
+    type?: string,
   ): Promise<KnowledgeNode[]> => {
     if (type) {
       const result = await db.query<Record<string, unknown>>(
         `SELECT * FROM "nodes" WHERE "namespace" = $1 AND "type" = $2 ORDER BY "created_at" DESC`,
-        [namespace, type]
+        [namespace, type],
       );
       return result.rows.map(mapNodeRow);
     }
     const result = await db.query<Record<string, unknown>>(
       `SELECT * FROM "nodes" WHERE "namespace" = $1 ORDER BY "created_at" DESC`,
-      [namespace]
+      [namespace],
     );
     return result.rows.map(mapNodeRow);
   };
 
-  const getNodeById = async (id: string): Promise<KnowledgeNode | undefined> => {
+  const getNodeById = async (
+    id: string,
+  ): Promise<KnowledgeNode | undefined> => {
     const result = await db.query<Record<string, unknown>>(
       `SELECT * FROM "nodes" WHERE "id" = $1`,
-      [id]
+      [id],
     );
     if (result.rows.length === 0) return undefined;
     return mapNodeRow(result.rows[0]);
@@ -1483,7 +1701,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
 
   const updateNode = async (
     id: string,
-    updates: Partial<NewKnowledgeNode>
+    updates: Partial<NewKnowledgeNode>,
   ): Promise<KnowledgeNode | undefined> => {
     const setClauses: string[] = [`"updated_at" = NOW()`];
     const params: unknown[] = [];
@@ -1503,7 +1721,9 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     }
     if (updates.embedding !== undefined) {
       setClauses.push(`"embedding" = $${paramIdx++}::vector`);
-      params.push(updates.embedding ? `[${updates.embedding.join(",")}]` : null);
+      params.push(
+        updates.embedding ? `[${updates.embedding.join(",")}]` : null,
+      );
     }
     if (updates.content !== undefined) {
       setClauses.push(`"content" = $${paramIdx++}`);
@@ -1523,10 +1743,12 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     }
 
     params.push(id);
-    
+
     const result = await db.query<KnowledgeNode>(
-      `UPDATE "nodes" SET ${setClauses.join(", ")} WHERE "id" = $${paramIdx} RETURNING *`,
-      params
+      `UPDATE "nodes" SET ${
+        setClauses.join(", ")
+      } WHERE "id" = $${paramIdx} RETURNING *`,
+      params,
     );
     return result.rows[0];
   };
@@ -1537,16 +1759,16 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
 
   const deleteNodesBySource = async (
     sourceType: string,
-    sourceId: string
+    sourceId: string,
   ): Promise<void> => {
     await db.query(
       `DELETE FROM "nodes" WHERE "source_type" = $1 AND "source_id" = $2`,
-      [sourceType, sourceId]
+      [sourceType, sourceId],
     );
   };
 
   const createEdge = async (
-    edge: Omit<NewKnowledgeEdge, "id"> & { id?: string }
+    edge: Omit<NewKnowledgeEdge, "id"> & { id?: string },
   ): Promise<KnowledgeEdge> => {
     // Generate ULID if not provided
     const edgeId = edge.id ?? ulid();
@@ -1563,16 +1785,16 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
         edge.type,
         edge.data ?? {},
         edge.weight ?? 1.0,
-      ]
+      ],
     );
     return result.rows[0];
   };
 
   const createEdges = async (
-    edges: Array<Omit<NewKnowledgeEdge, "id"> & { id?: string }>
+    edges: Array<Omit<NewKnowledgeEdge, "id"> & { id?: string }>,
   ): Promise<KnowledgeEdge[]> => {
     if (edges.length === 0) return [];
-    
+
     const created: KnowledgeEdge[] = [];
     for (const edge of edges) {
       const result = await createEdge(edge);
@@ -1584,11 +1806,11 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
   const getEdgesForNode = async (
     nodeId: string,
     direction: "in" | "out" | "both" = "both",
-    types?: string[]
+    types?: string[],
   ): Promise<KnowledgeEdge[]> => {
     let whereClause = "";
     const params: unknown[] = [nodeId];
-    
+
     if (direction === "out") {
       whereClause = `"source_node_id" = $1`;
     } else if (direction === "in") {
@@ -1596,12 +1818,12 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     } else {
       whereClause = `("source_node_id" = $1 OR "target_node_id" = $1)`;
     }
-    
+
     if (types && types.length > 0) {
       params.push(types);
       whereClause += ` AND "type" = ANY($${params.length})`;
     }
-    
+
     type EdgeRow = {
       id: string;
       source_node_id: string;
@@ -1611,14 +1833,14 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
       weight: number | null;
       created_at: Date;
     };
-    
+
     const result = await db.query<EdgeRow>(
       `SELECT * FROM "edges" WHERE ${whereClause} ORDER BY "created_at" DESC`,
-      params
+      params,
     );
-    
+
     // Convert snake_case to camelCase
-    return result.rows.map(row => ({
+    return result.rows.map((row) => ({
       id: row.id,
       sourceNodeId: row.source_node_id,
       targetNodeId: row.target_node_id,
@@ -1636,19 +1858,19 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
   const deleteEdgesForNode = async (nodeId: string): Promise<void> => {
     await db.query(
       `DELETE FROM "edges" WHERE "source_node_id" = $1 OR "target_node_id" = $1`,
-      [nodeId]
+      [nodeId],
     );
   };
 
   const searchNodes = async (
-    options: GraphQueryOptions
+    options: GraphQueryOptions,
   ): Promise<GraphQueryResult[]> => {
-    const { 
-      embedding, 
-      namespaces, 
-      nodeTypes, 
-      limit = 10, 
-      minSimilarity = 0.5 
+    const {
+      embedding,
+      namespaces,
+      nodeTypes,
+      limit = 10,
+      minSimilarity = 0.5,
     } = options;
 
     if (!embedding || embedding.length === 0) {
@@ -1687,7 +1909,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
         ${typeClause}
       ORDER BY "embedding" <=> $1::vector
       LIMIT $${limitIdx}`,
-      params
+      params,
     );
 
     return result.rows.map((row) => ({
@@ -1701,7 +1923,7 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
   const traverseGraph = async (
     startNodeId: string,
     edgeTypes?: string[],
-    maxDepth: number = 2
+    maxDepth: number = 2,
   ): Promise<TraversalResult> => {
     // Iterative BFS traversal (compatible with PGLite)
     const visited = new Set<string>();
@@ -1724,9 +1946,9 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
       // Get nodes at current frontier
       const nodeResult = await db.query<KnowledgeNode>(
         `SELECT * FROM "nodes" WHERE "id" = ANY($1)`,
-        [frontier]
+        [frontier],
       );
-      
+
       for (const node of nodeResult.rows) {
         if (!visited.has(node.id as string)) {
           visited.add(node.id as string);
@@ -1763,13 +1985,17 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
           weight: row.weight,
           createdAt: row.created_at,
         };
-        
-        if (!allEdges.some(e => e.id === edge.id)) {
+
+        if (!allEdges.some((e) => e.id === edge.id)) {
           allEdges.push(edge);
         }
         // Add connected nodes to next frontier
-        if (!visited.has(edge.sourceNodeId)) nextFrontier.add(edge.sourceNodeId);
-        if (!visited.has(edge.targetNodeId)) nextFrontier.add(edge.targetNodeId);
+        if (!visited.has(edge.sourceNodeId)) {
+          nextFrontier.add(edge.sourceNodeId);
+        }
+        if (!visited.has(edge.targetNodeId)) {
+          nextFrontier.add(edge.targetNodeId);
+        }
       }
 
       frontier = Array.from(nextFrontier);
@@ -1780,11 +2006,11 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
 
   const findRelatedNodes = async (
     nodeId: string,
-    depth: number = 1
+    depth: number = 1,
   ): Promise<KnowledgeNode[]> => {
     const result = await traverseGraph(nodeId, undefined, depth);
     // Exclude the starting node
-    return result.nodes.filter(n => n.id !== nodeId);
+    return result.nodes.filter((n) => n.id !== nodeId);
   };
 
   return {
@@ -1793,6 +2019,11 @@ export function createOperations(db: DbInstance, config?: { staleProcessingThres
     getProcessingQueueItem,
     getNextPendingQueueItem,
     updateQueueItemStatus,
+    acquireThreadWorkerLease,
+    renewThreadWorkerLease,
+    releaseThreadWorkerLease,
+    getThreadWorkerLeaseConfig,
+    recoverThreadProcessingQueueItems,
     getMessageHistory,
     getThreadsForParticipant,
     getMessagesForThread,

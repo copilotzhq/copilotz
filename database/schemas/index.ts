@@ -181,7 +181,10 @@ const MessagePayloadSchema = {
         externalId: { type: ["string", "null"] },
         type: { type: "string", enum: ["agent", "user", "tool", "system"] },
         name: { type: ["string", "null"] },
-        identifierType: { type: ["string", "null"], enum: ["id", "name", "email"] },
+        identifierType: {
+          type: ["string", "null"],
+          enum: ["id", "name", "email"],
+        },
         metadata: { type: ["object", "null"] },
       },
       required: ["type"],
@@ -197,7 +200,10 @@ const MessagePayloadSchema = {
             name: { type: ["string", "null"] },
             description: { type: ["string", "null"] },
             externalId: { type: ["string", "null"] },
-            participants: { type: ["array", "null"], items: { type: "string" } },
+            participants: {
+              type: ["array", "null"],
+              items: { type: "string" },
+            },
             metadata: { type: ["object", "null"] },
           },
         },
@@ -222,7 +228,14 @@ const MessagePayloadSchema = {
                   id: { type: ["string", "null"] },
                   status: {
                     type: ["string", "null"],
-                    enum: ["pending", "processing", "completed", "failed", "expired", "overwritten"],
+                    enum: [
+                      "pending",
+                      "processing",
+                      "completed",
+                      "failed",
+                      "expired",
+                      "overwritten",
+                    ],
                   },
                 },
                 required: ["name", "args"],
@@ -236,7 +249,7 @@ const MessagePayloadSchema = {
   required: ["content", "sender"],
 } as const;
 
-/** 
+/**
  * Payload structure for incoming messages to Copilotz.
  * Contains the message content, sender information, thread context, and optional tool calls.
  */
@@ -247,7 +260,9 @@ const NewMessageEventPayloadSchema = MessagePayloadSchema;
 export type NewMessageEventPayload = MessagePayload;
 
 // create ulid
-export function generateId(): string { return ulid(); }
+export function generateId(): string {
+  return ulid();
+}
 
 const schemaDefinition = {
   agents: {
@@ -257,7 +272,15 @@ const schemaDefinition = {
       $defs: {
         ProviderName: {
           type: "string",
-          enum: ["openai", "anthropic", "gemini", "groq", "deepseek", "ollama", "xai"],
+          enum: [
+            "openai",
+            "anthropic",
+            "gemini",
+            "groq",
+            "deepseek",
+            "ollama",
+            "xai",
+          ],
         },
         ProviderConfig: {
           type: "object",
@@ -340,7 +363,7 @@ const schemaDefinition = {
     },
     defaults: {
       id: generateId,
-    }
+    },
   },
   apis: {
     schema: {
@@ -407,7 +430,9 @@ const schemaDefinition = {
                 },
                 queryParams: {
                   type: ["object", "null"],
-                  additionalProperties: { type: ["string", "number", "boolean"] },
+                  additionalProperties: {
+                    type: ["string", "number", "boolean"],
+                  },
                 },
               },
               required: ["type"],
@@ -483,8 +508,8 @@ const schemaDefinition = {
       updatedAt: "updatedAt",
     },
     defaults: {
-      id: generateId
-    }
+      id: generateId,
+    },
   },
   mcpServers: {
     schema: {
@@ -511,7 +536,7 @@ const schemaDefinition = {
     },
     defaults: {
       id: generateId,
-    }
+    },
   },
   messages: {
     schema: {
@@ -532,14 +557,16 @@ const schemaDefinition = {
           enum: ["agent", "user", "system", "tool"],
         },
         // NEW: Multi-agent conversation routing fields
-        targetId: { 
+        targetId: {
           type: ["string", "null"],
-          description: "Primary recipient of this message (participant ID or agent ID)",
+          description:
+            "Primary recipient of this message (participant ID or agent ID)",
         },
-        targetQueue: { 
-          type: ["array", "null"], 
+        targetQueue: {
+          type: ["array", "null"],
           items: { type: "string" },
-          description: "Remaining targets in queue for multi-@mention scenarios",
+          description:
+            "Remaining targets in queue for multi-@mention scenarios",
         },
         thread: {
           readOnly: true,
@@ -570,7 +597,7 @@ const schemaDefinition = {
     },
     defaults: {
       id: generateId,
-    }
+    },
   },
   events: {
     schema: {
@@ -712,7 +739,7 @@ const schemaDefinition = {
         id: READONLY_UUID_SCHEMA,
         threadId: { $ref: "#/$defs/threads/properties/id" },
         eventType: {
-          type: "string"
+          type: "string",
         },
         payload: { type: "object" },
         thread: {
@@ -813,7 +840,7 @@ const schemaDefinition = {
     },
     defaults: {
       id: generateId,
-    }
+    },
   },
   tasks: {
     schema: {
@@ -859,6 +886,8 @@ const schemaDefinition = {
         mode: { type: "string", default: "immediate" },
         status: { type: "string", default: "active" },
         summary: { type: ["string", "null"] },
+        workerLockedBy: { type: ["string", "null"], maxLength: 255 },
+        workerLeaseExpiresAt: { type: ["string", "null"], format: "date-time" },
         parentThreadId: {
           anyOf: [
             UUID_SCHEMA,
@@ -912,7 +941,7 @@ const schemaDefinition = {
     },
     defaults: {
       id: generateId,
-    }
+    },
   },
   users: {
     schema: {
@@ -936,7 +965,7 @@ const schemaDefinition = {
     },
     defaults: {
       id: generateId,
-    }
+    },
   },
   // RAG (Retrieval-Augmented Generation) schemas
   documents: {
@@ -945,14 +974,14 @@ const schemaDefinition = {
       additionalProperties: false,
       properties: {
         id: READONLY_UUID_SCHEMA,
-        namespace: { 
-          type: "string", 
+        namespace: {
+          type: "string",
           minLength: 1,
           default: "default",
         },
         externalId: { type: ["string", "null"], maxLength: 255 },
-        sourceType: { 
-          type: "string", 
+        sourceType: {
+          type: "string",
           enum: ["url", "file", "text", "asset"],
         },
         sourceUri: { type: ["string", "null"] },
@@ -960,8 +989,8 @@ const schemaDefinition = {
         mimeType: { type: ["string", "null"], maxLength: 128 },
         contentHash: { type: "string", maxLength: 128 },
         assetId: { type: ["string", "null"], maxLength: 255 },
-        status: { 
-          type: "string", 
+        status: {
+          type: "string",
           enum: ["pending", "processing", "indexed", "failed"],
           default: "pending",
         },
@@ -991,8 +1020,8 @@ const schemaDefinition = {
       properties: {
         id: READONLY_UUID_SCHEMA,
         documentId: UUID_SCHEMA,
-        namespace: { 
-          type: "string", 
+        namespace: {
+          type: "string",
           minLength: 1,
         },
         chunkIndex: { type: "integer" },
@@ -1000,7 +1029,7 @@ const schemaDefinition = {
         tokenCount: { type: ["integer", "null"] },
         // Embedding stored as JSON array of floats
         // PostgreSQL migration will use vector type
-        embedding: { 
+        embedding: {
           type: ["array", "null"],
           items: { type: "number" },
         },
@@ -1032,41 +1061,43 @@ const schemaDefinition = {
       additionalProperties: false,
       properties: {
         id: READONLY_UUID_SCHEMA,
-        namespace: { 
-          type: "string", 
+        namespace: {
+          type: "string",
           minLength: 1,
           description: "Scoping: thread_id, agent_id, repo_id, or 'global'",
         },
-        type: { 
-          type: "string", 
+        type: {
+          type: "string",
           minLength: 1,
-          description: "Node type: 'chunk', 'entity', 'concept', 'decision', 'file', etc.",
+          description:
+            "Node type: 'chunk', 'entity', 'concept', 'decision', 'file', etc.",
         },
-        name: { 
+        name: {
           type: "string",
           minLength: 1,
           description: "Human-readable identifier for the node",
         },
         // Embedding stored as JSON array of floats
         // PostgreSQL migration uses vector type
-        embedding: { 
+        embedding: {
           type: ["array", "null"],
           items: { type: "number" },
           description: "Vector embedding for semantic search",
         },
-        content: { 
+        content: {
           type: ["string", "null"],
           description: "Full text content (primarily for chunk nodes)",
         },
-        data: { 
+        data: {
           type: ["object", "null"],
           description: "Flexible properties specific to node type",
         },
-        sourceType: { 
+        sourceType: {
           type: ["string", "null"],
-          description: "Origin type: 'document', 'message', 'file', 'extraction'",
+          description:
+            "Origin type: 'document', 'message', 'file', 'extraction'",
         },
-        sourceId: { 
+        sourceId: {
           type: ["string", "null"],
           description: "Reference to source entity ID",
         },
@@ -1090,24 +1121,25 @@ const schemaDefinition = {
       additionalProperties: false,
       properties: {
         id: READONLY_UUID_SCHEMA,
-        sourceNodeId: { 
+        sourceNodeId: {
           type: "string",
           description: "ID of the source node",
         },
-        targetNodeId: { 
+        targetNodeId: {
           type: "string",
           description: "ID of the target node",
         },
-        type: { 
-          type: "string", 
+        type: {
+          type: "string",
           minLength: 1,
-          description: "Relationship type: 'mentions', 'contains', 'caused', 'imports', etc.",
+          description:
+            "Relationship type: 'mentions', 'contains', 'caused', 'imports', etc.",
         },
-        data: { 
+        data: {
           type: ["object", "null"],
           description: "Relationship properties",
         },
-        weight: { 
+        weight: {
           type: ["number", "null"],
           default: 1.0,
           description: "Relationship strength/confidence",
@@ -1143,7 +1175,6 @@ const documents = schemaInternal.documents;
 const documentChunks = schemaInternal.documentChunks;
 const nodes = schemaInternal.nodes;
 const edges = schemaInternal.edges;
-
 
 /** AI Agent entity with configuration for LLM interactions and capabilities. */
 export type Agent = typeof agents.$inferSelect;
@@ -1200,7 +1231,7 @@ export type DocumentChunk = typeof documentChunks.$inferSelect;
 /** Input type for creating a new DocumentChunk. */
 export type NewDocumentChunk = typeof documentChunks.$inferInsert;
 
-/** 
+/**
  * Knowledge graph node: can represent chunks, entities, concepts, decisions, etc.
  * This is the unified primitive for all knowledge in Copilotz.
  */
@@ -1208,7 +1239,7 @@ export type KnowledgeNode = typeof nodes.$inferSelect;
 /** Input type for creating a new KnowledgeNode. */
 export type NewKnowledgeNode = typeof nodes.$inferInsert;
 
-/** 
+/**
  * Knowledge graph edge: typed relationship between nodes.
  * Enables graph traversal for context retrieval.
  */
@@ -1223,11 +1254,17 @@ type QueueRow = typeof queue.$inferSelect;
 type QueueStatus = QueueRow["status"];
 
 /** Payload structure for tool call events, containing the tool invocation details. */
-export type ToolCallEventPayload = FromSchema<typeof schemaDefinition.events.schema.$defs.ToolCallEventPayload>;
+export type ToolCallEventPayload = FromSchema<
+  typeof schemaDefinition.events.schema.$defs.ToolCallEventPayload
+>;
 /** Payload structure for LLM call events, containing messages and configuration. */
-export type LlmCallEventPayload = FromSchema<typeof schemaDefinition.events.schema.$defs.LlmCallEventPayload>;
+export type LlmCallEventPayload = FromSchema<
+  typeof schemaDefinition.events.schema.$defs.LlmCallEventPayload
+>;
 /** Payload structure for streaming token events during LLM response generation. */
-export type TokenEventPayload = FromSchema<typeof schemaDefinition.events.schema.$defs.TokenEventPayload>;
+export type TokenEventPayload = FromSchema<
+  typeof schemaDefinition.events.schema.$defs.TokenEventPayload
+>;
 
 export type EventPayloadMapBase = {
   NEW_MESSAGE: MessagePayload;
@@ -1236,32 +1273,47 @@ export type EventPayloadMapBase = {
   TOKEN: TokenEventPayload;
 };
 
-type EventPayloadMap = EventPayloadMapBase 
+type EventPayloadMap = EventPayloadMapBase;
 
 /** Base event properties without type-specific payload. */
 export type EventBase = Omit<QueueRow, "eventType" | "payload">;
 
-/** 
+/**
  * Event in the Copilotz event queue system.
  * A discriminated union of all possible event types with their typed payloads.
  */
 export type Event = {
-  [K in keyof EventPayloadMap]: EventBase & { type: K; payload: EventPayloadMap[K] }
+  [K in keyof EventPayloadMap]: EventBase & {
+    type: K;
+    payload: EventPayloadMap[K];
+  };
 }[keyof EventPayloadMap];
 
 /** Specific event type for NEW_MESSAGE events with typed payload. */
-export type NewMessageEvent = EventBase & { type: "NEW_MESSAGE"; payload: MessagePayload };
+export type NewMessageEvent = EventBase & {
+  type: "NEW_MESSAGE";
+  payload: MessagePayload;
+};
 
 /** Specific event type for TOOL_CALL events with typed payload. */
-export type ToolCallEvent = EventBase & { type: "TOOL_CALL"; payload: ToolCallEventPayload };
+export type ToolCallEvent = EventBase & {
+  type: "TOOL_CALL";
+  payload: ToolCallEventPayload;
+};
 
 /** Specific event type for LLM_CALL events with typed payload. */
-export type LlmCallEvent = EventBase & { type: "LLM_CALL"; payload: LlmCallEventPayload };
+export type LlmCallEvent = EventBase & {
+  type: "LLM_CALL";
+  payload: LlmCallEventPayload;
+};
 
 /** Specific event type for TOKEN events with typed payload. */
-export type TokenEvent = EventBase & { type: "TOKEN"; payload: TokenEventPayload };
+export type TokenEvent = EventBase & {
+  type: "TOKEN";
+  payload: TokenEventPayload;
+};
 
-/** 
+/**
  * Input type for creating a new Event in the queue.
  * Supports all built-in event types with their typed payloads.
  */
@@ -1280,7 +1332,7 @@ export type NewEvent = {
     namespace?: string;
     createdAt?: string | Date;
     updatedAt?: string | Date;
-  }
+  };
 }[keyof EventPayloadMap];
 
 // Generic helpers to enable typed custom events without global augmentation
@@ -1288,7 +1340,7 @@ export type EventOfMap<TCustom extends Record<string, unknown>> = {
   [K in keyof (EventPayloadMapBase & TCustom)]: EventBase & {
     type: K;
     payload: (EventPayloadMapBase & TCustom)[K];
-  }
+  };
 }[keyof (EventPayloadMapBase & TCustom)];
 
 export type NewEventOfMap<TCustom extends Record<string, unknown>> = {
@@ -1306,10 +1358,10 @@ export type NewEventOfMap<TCustom extends Record<string, unknown>> = {
     namespace?: string;
     createdAt?: string | Date;
     updatedAt?: string | Date;
-  }
+  };
 }[keyof (EventPayloadMapBase & TCustom)];
 
-/** 
+/**
  * Broadly-typed event shape to support custom events passed at runtime via config.processors.
  * Use this when creating events with custom types not in the built-in EventPayloadMap.
  */

@@ -1,10 +1,10 @@
 /**
  * Database module for Copilotz.
- * 
- * Provides database connectivity using Ominipg with support for PostgreSQL 
+ *
+ * Provides database connectivity using Ominipg with support for PostgreSQL
  * and PGlite (in-memory/file-based). Includes schema definitions, migrations,
  * and high-level database operations.
- * 
+ *
  * @module
  */
 
@@ -13,43 +13,53 @@ import type { OminipgWithCrud } from "omnipg";
 
 import { splitSQLStatements } from "./migrations/utils.ts";
 import { schema as baseSchema } from "./schemas/index.ts";
-import { createOperations, type DatabaseOperations } from "./operations/index.ts";
+import {
+  createOperations,
+  type DatabaseOperations,
+} from "./operations/index.ts";
 import { generateMigrations } from "./migrations/migration_0001.ts";
 import { generateRagMigrations } from "./migrations/migration_0002_rag.ts";
 import { generateKnowledgeGraphMigrations } from "./migrations/migration_0003_knowledge_graph.ts";
 import { generateUlidSupportMigrations } from "./migrations/migration_0004_ulid_support.ts";
 import { generateNamespaceEventsMigrations } from "./migrations/migration_0005_namespace_events.ts";
+import { generateThreadLeasesMigrations } from "./migrations/migration_0006_thread_leases.ts";
 import { getCurrentSchema } from "./schema-context.ts";
-import { ensureSchemaProvisioned, validateSchemaName } from "./schema-provisioning.ts";
+import {
+  ensureSchemaProvisioned,
+  validateSchemaName,
+} from "./schema-provisioning.ts";
 
 /** SQL migration statements for setting up the database schema. */
-const migrations: string = generateMigrations() + "\n" + generateRagMigrations() + "\n" + generateKnowledgeGraphMigrations() + "\n" + generateUlidSupportMigrations() + "\n" + generateNamespaceEventsMigrations();
+const migrations: string = generateMigrations() + "\n" +
+  generateRagMigrations() + "\n" + generateKnowledgeGraphMigrations() + "\n" +
+  generateUlidSupportMigrations() + "\n" + generateNamespaceEventsMigrations() +
+  "\n" + generateThreadLeasesMigrations();
 
 /**
  * Configuration options for creating a database connection.
- * 
+ *
  * @example
  * ```ts
  * // In-memory database (default)
  * const db = await createDatabase();
- * 
+ *
  * // File-based PGlite database
  * const db = await createDatabase({ url: "file:./data.db" });
- * 
+ *
  * // PostgreSQL connection
  * const db = await createDatabase({ url: "postgres://user:pass@host:5432/db" });
- * 
+ *
  * // PostgreSQL with multi-tenant schema support
- * const db = await createDatabase({ 
- *   url: "postgres://...", 
+ * const db = await createDatabase({
+ *   url: "postgres://...",
  *   defaultSchema: "tenant_abc",
- *   autoProvisionSchema: true 
+ *   autoProvisionSchema: true
  * });
  * ```
  */
 export interface DatabaseConfig {
-  /** 
-   * Database connection URL. 
+  /**
+   * Database connection URL.
    * - `:memory:` for in-memory PGlite (default)
    * - `file:./path` for file-based PGlite
    * - `postgres://...` for PostgreSQL
@@ -81,18 +91,29 @@ export interface DatabaseConfig {
    */
   staleProcessingThresholdMs?: number;
   /**
+   * Thread worker lease duration (ms).
+   * Only one worker may process a given thread while the lease is active.
+   * Default: 120000 (2 minutes).
+   */
+  threadLeaseMs?: number;
+  /**
+   * Thread worker lease heartbeat interval (ms).
+   * The worker will renew the lease at this interval while processing.
+   * Default: 30000 (30 seconds).
+   */
+  threadLeaseHeartbeatMs?: number;
+  /**
    * Whether to automatically provision (create) schemas that don't exist.
    * When true, if a schema doesn't exist, it will be created with all migrations.
    * Default: true (lazy provisioning enabled).
-   * 
+   *
    * @remarks
    * First request to a new schema may have ~50-500ms latency for provisioning.
-   * For production with strict latency requirements, consider explicit provisioning 
+   * For production with strict latency requirements, consider explicit provisioning
    * during tenant onboarding via `copilotz.schema.provision()`.
    */
   autoProvisionSchema?: boolean;
 }
-
 
 type Operations = DatabaseOperations;
 
@@ -144,8 +165,10 @@ const createDbInstance = async (
   // Wrap db.query with schema-aware logic
   const wrappedDb = wrapDbWithSchemaSupport(dbInstance, finalConfig, debug);
 
-  const ops = createOperations(wrappedDb, { 
-    staleProcessingThresholdMs: finalConfig.staleProcessingThresholdMs 
+  const ops = createOperations(wrappedDb, {
+    staleProcessingThresholdMs: finalConfig.staleProcessingThresholdMs,
+    threadLeaseMs: finalConfig.threadLeaseMs,
+    threadLeaseHeartbeatMs: finalConfig.threadLeaseHeartbeatMs,
   });
 
   return Object.assign(wrappedDb, { ops }) as CopilotzDb;
@@ -159,23 +182,25 @@ const createDbInstance = async (
 function wrapDbWithSchemaSupport(
   db: DbInstance,
   config: DatabaseConfig,
-  debug: boolean
+  debug: boolean,
 ): DbInstance {
-  const originalQuery = db.query.bind(db) as <T extends Record<string, unknown>>(
-    sql: string, 
-    params?: unknown[]
+  const originalQuery = db.query.bind(db) as <
+    T extends Record<string, unknown>,
+  >(
+    sql: string,
+    params?: unknown[],
   ) => Promise<{ rows: T[]; rowCount?: number }>;
   const autoProvision = config.autoProvisionSchema ?? true;
 
   // Create a wrapped query function that respects schema context
-  const wrappedQuery = async function<T extends Record<string, unknown>>(
+  const wrappedQuery = async function <T extends Record<string, unknown>>(
     sql: string,
-    params?: unknown[]
+    params?: unknown[],
   ): Promise<{ rows: T[]; rowCount?: number }> {
     const schema = getCurrentSchema();
 
     // If no schema context or using public, execute directly
-    if (!schema || schema === 'public') {
+    if (!schema || schema === "public") {
       return originalQuery<T>(sql, params);
     }
 
@@ -208,7 +233,9 @@ function wrapDbWithSchemaSupport(
     // The query executes in the schema context, then we COMMIT
     try {
       await originalQuery<Record<string, unknown>>(`BEGIN`);
-      await originalQuery<Record<string, unknown>>(`SET LOCAL search_path TO "${schema}", public`);
+      await originalQuery<Record<string, unknown>>(
+        `SET LOCAL search_path TO "${schema}", public`,
+      );
       const result = await originalQuery<T>(sql, params);
       await originalQuery<Record<string, unknown>>(`COMMIT`);
       return result;
@@ -226,11 +253,11 @@ function wrapDbWithSchemaSupport(
   // Return a proxy that intercepts query calls
   return new Proxy(db, {
     get(target, prop, receiver) {
-      if (prop === 'query') {
+      if (prop === "query") {
         return wrappedQuery;
       }
       return Reflect.get(target, prop, receiver);
-    }
+    },
   }) as DbInstance;
 }
 
@@ -255,6 +282,8 @@ const connect: Connect = async (
 };
 
 const GLOBAL_CACHE_KEY = "__copilotz_db_cache__";
+const GLOBAL_SCHEMA_ID_MAP_KEY = "__copilotz_db_schema_id_map__";
+const GLOBAL_SCHEMA_ID_COUNTER_KEY = "__copilotz_db_schema_id_counter__";
 const existingCache =
   (globalThis as Record<string, unknown>)[GLOBAL_CACHE_KEY] as
     | Map<string, Promise<CopilotzDb>>
@@ -263,28 +292,63 @@ const globalCache: Map<string, Promise<CopilotzDb>> = existingCache ??
   new Map();
 (globalThis as Record<string, unknown>)[GLOBAL_CACHE_KEY] = globalCache;
 
+const existingSchemaIdMap =
+  (globalThis as Record<string, unknown>)[GLOBAL_SCHEMA_ID_MAP_KEY] as
+    | WeakMap<object, number>
+    | undefined;
+const schemaIdMap: WeakMap<object, number> = existingSchemaIdMap ??
+  new WeakMap();
+(globalThis as Record<string, unknown>)[GLOBAL_SCHEMA_ID_MAP_KEY] =
+  schemaIdMap;
+
+function getSchemaCacheToken(schemaCandidate: unknown): string {
+  if (
+    !schemaCandidate ||
+    (typeof schemaCandidate !== "object" &&
+      typeof schemaCandidate !== "function")
+  ) {
+    return "schema:none";
+  }
+
+  const schemaObject = schemaCandidate as object;
+  const existingId = schemaIdMap.get(schemaObject);
+  if (typeof existingId === "number") {
+    return `schema:${existingId}`;
+  }
+
+  const globals = globalThis as Record<string, unknown>;
+  const lastId = typeof globals[GLOBAL_SCHEMA_ID_COUNTER_KEY] === "number"
+    ? globals[GLOBAL_SCHEMA_ID_COUNTER_KEY] as number
+    : 0;
+  const nextId = lastId + 1;
+  globals[GLOBAL_SCHEMA_ID_COUNTER_KEY] = nextId;
+  schemaIdMap.set(schemaObject, nextId);
+
+  return `schema:${nextId}`;
+}
+
 /**
  * Creates or retrieves a database connection for Copilotz.
- * 
+ *
  * This function manages a global connection cache, so calling it multiple times
  * with the same configuration will return the same database instance.
- * 
+ *
  * @param config - Optional database configuration. Defaults to in-memory PGlite.
  * @returns Promise resolving to a CopilotzDb instance
- * 
+ *
  * @example
  * ```ts
  * // Create an in-memory database
  * const db = await createDatabase();
- * 
+ *
  * // Create a file-based database
  * const db = await createDatabase({ url: "file:./my-data.db" });
- * 
+ *
  * // Connect to PostgreSQL
- * const db = await createDatabase({ 
- *   url: process.env.DATABASE_URL 
+ * const db = await createDatabase({
+ *   url: process.env.DATABASE_URL
  * });
- * 
+ *
  * // Use the database
  * const threads = await db.ops.getAllThreads();
  * ```
@@ -307,9 +371,15 @@ export async function createDatabase(
     useWorker: isPgLite ? config?.useWorker || false : false,
     logMetrics: config?.logMetrics,
     schemas: config?.schemas,
+    staleProcessingThresholdMs: config?.staleProcessingThresholdMs,
+    threadLeaseMs: config?.threadLeaseMs,
+    threadLeaseHeartbeatMs: config?.threadLeaseHeartbeatMs,
   };
 
-  const cacheKey = `${finalConfig.url}|${finalConfig.syncUrl || ""}`;
+  const cacheSchema = finalConfig.schemas ?? baseSchema;
+  const schemaCacheToken = getSchemaCacheToken(cacheSchema);
+  const cacheKey =
+    `${finalConfig.url}|${finalConfig.syncUrl || ""}|${schemaCacheToken}`;
   const debug = getEnvVar("COPILOTZ_DB_DEBUG") === "1";
   if (debug) {
     console.log(
@@ -342,42 +412,42 @@ export { migrations };
 // COLLECTIONS API
 // ============================================
 
-/** 
+/**
  * Collections API for defining and working with custom data collections.
  * Collections map to the graph structure (nodes + edges) with a developer-friendly interface.
  */
 export {
-  defineCollection,
+  createCollectionCrud,
   createCollectionsManager,
   createScopedCollections,
-  createCollectionCrud,
-  relation,
+  defineCollection,
   index,
+  relation,
 } from "./collections/index.ts";
 
 export {
-  generateCollectionIndexes,
   createCollectionIndexes,
+  generateCollectionIndexes,
 } from "./collections/manager.ts";
 
 export type {
-  CollectionDefinition,
-  CollectionInput,
   CollectionCrud,
-  ScopedCollectionCrud,
-  CollectionsMap,
-  ScopedCollectionsMap,
+  CollectionDefinition,
+  CollectionHooks,
+  CollectionInput,
   CollectionsConfig,
+  CollectionsMap,
+  HookContext,
+  IndexDefinition,
+  QueryOptions,
+  RelationDefinition,
+  ScopedCollectionCrud,
+  ScopedCollectionsMap,
+  SearchConfig,
+  SearchOptions,
+  SortOrder,
   WhereFilter,
   WhereOperators,
-  QueryOptions,
-  SearchOptions,
-  IndexDefinition,
-  RelationDefinition,
-  SearchConfig,
-  CollectionHooks,
-  HookContext,
-  SortOrder,
 } from "./collections/index.ts";
 
 // ============================================
@@ -386,35 +456,35 @@ export type {
 
 /**
  * Schema context and provisioning for multi-tenant PostgreSQL schema isolation.
- * 
+ *
  * @example
  * ```ts
  * // Use withSchema to execute operations in a specific schema
  * import { withSchema } from "@copilotz/lib/database";
- * 
+ *
  * await withSchema('tenant_abc', async () => {
  *   // All DB operations here use the 'tenant_abc' schema
  *   await db.query('SELECT * FROM users');
  * });
- * 
+ *
  * // Provision a new tenant schema
  * await provisionTenantSchema(db, 'tenant_xyz');
  * ```
  */
 export {
   getCurrentSchema,
-  withSchema,
   isInSchemaContext,
+  withSchema,
 } from "./schema-context.ts";
 
 export {
-  provisionTenantSchema,
-  dropTenantSchema,
-  schemaExists,
-  ensureSchemaProvisioned,
-  warmSchemaCache,
-  listTenantSchemas,
-  isSchemaInCache,
   clearSchemaCache,
+  dropTenantSchema,
+  ensureSchemaProvisioned,
+  isSchemaInCache,
+  listTenantSchemas,
+  provisionTenantSchema,
+  schemaExists,
   validateSchemaName,
+  warmSchemaCache,
 } from "./schema-provisioning.ts";

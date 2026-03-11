@@ -173,6 +173,21 @@ const MessagePayloadSchema = {
         },
       ],
     },
+    target: {
+      anyOf: [
+        { type: "null" },
+        { type: "string" },
+      ],
+    },
+    targetQueue: {
+      anyOf: [
+        { type: "null" },
+        {
+          type: "array",
+          items: { type: "string" },
+        },
+      ],
+    },
     sender: {
       type: "object",
       additionalProperties: false,
@@ -251,7 +266,7 @@ const MessagePayloadSchema = {
 
 /**
  * Payload structure for incoming messages to Copilotz.
- * Contains the message content, sender information, thread context, and optional tool calls.
+ * Contains the message content, sender information, thread context, routing, and optional tool calls.
  */
 export type MessagePayload = FromSchema<typeof MessagePayloadSchema>;
 

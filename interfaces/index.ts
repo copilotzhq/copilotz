@@ -382,6 +382,12 @@ export interface ChatContext {
      */
     multiAgent?: {
         /**
+         * Whether multi-agent routing is enabled for this run.
+         * When disabled, agent responses always route back to the original sender.
+         * Default: false unless multiAgent config is explicitly provided.
+         */
+        enabled?: boolean;
+        /**
          * Maximum consecutive agent-to-agent messages before forcing target to user.
          * Prevents infinite agent loops.
          * Default: 5

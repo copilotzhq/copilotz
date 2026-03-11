@@ -507,6 +507,12 @@ export interface CopilotzConfig {
      */
     multiAgent?: {
         /**
+         * Whether multi-agent routing is enabled.
+         * When disabled, agent responses always route back to the original sender.
+         * Default: false unless multiAgent config is explicitly provided.
+         */
+        enabled?: boolean;
+        /**
          * Maximum consecutive agent-to-agent messages before forcing target to user.
          * Prevents infinite agent loops.
          * Default: 5
@@ -915,11 +921,15 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                 name: message.sender.name ?? null,
                 metadata: message.sender.metadata ?? null,
             } : undefined,
-            // Multi-agent conversation configuration
-            multiAgent: config.multiAgent ?? {
-                maxAgentTurns: 5,
-                includeTargetContext: true,
-            },
+            // Multi-agent routing is opt-in. Without explicit config, agent replies
+            // should go back to the original sender instead of delegating via @mentions.
+            multiAgent: config.multiAgent
+                ? {
+                    enabled: config.multiAgent.enabled ?? true,
+                    maxAgentTurns: config.multiAgent.maxAgentTurns ?? 5,
+                    includeTargetContext: config.multiAgent.includeTargetContext ?? true,
+                }
+                : undefined,
         };
 
         // If schema is specified, wrap execution in schema context

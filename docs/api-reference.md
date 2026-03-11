@@ -80,6 +80,8 @@ const result = await copilotz.run(
 {
   content: string;
   sender: { type: "user" | "assistant" | "system"; name: string };
+  target?: string;          // Explicit routing target
+  targetQueue?: string[];   // Follow-up routing queue
   threadId?: string;        // Existing thread or auto-created
   metadata?: Record<string, any>;
   attachments?: Attachment[];

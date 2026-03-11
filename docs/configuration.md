@@ -325,6 +325,7 @@ assets: {
 
 ```typescript
 multiAgent: {
+  enabled: true,              // Required to allow agent-to-agent delegation
   maxAgentTurns: 5,           // Max consecutive agent-to-agent turns before forcing user target
   includeTargetContext: true, // Include "(addressed to: X)" in history for multi-agent awareness
 }
@@ -338,6 +339,7 @@ The `maxAgentTurns` setting prevents infinite agent-to-agent conversations:
 const copilotz = await createCopilotz({
   agents: [...],
   multiAgent: {
+    enabled: true,
     maxAgentTurns: 3,  // After 3 agent turns, force target back to user
   },
 });
@@ -390,10 +392,6 @@ await copilotz.run(message, onEvent, {
   namespace: "workspace:123",      // Override default namespace
   schema: "tenant_acme",           // Override default schema
   
-  // Multi-agent routing (programmatic)
-  target: "agent-id",              // Explicit target agent/user for this message
-  targetQueue: ["agent-1", "agent-2"], // Queue of targets for multi-recipient messages
-  
   // Override agents for this run
   agents: [{
     id: "assistant",
@@ -415,18 +413,26 @@ Use `target` and `targetQueue` to route messages programmatically without relyin
 ```typescript
 // Route directly to a specific agent
 await copilotz.run(
-  { content: "Process this data", sender: { type: "user", name: "Alex" } },
-  onEvent,
-  { target: "data-processor" }
+  {
+    content: "Process this data",
+    sender: { type: "user", name: "Alex" },
+    target: "data-processor",
+  },
+  onEvent
 );
 
 // Route to multiple agents in sequence
 await copilotz.run(
-  { content: "Review and approve", sender: { type: "user", name: "Alex" } },
-  onEvent,
-  { targetQueue: ["reviewer", "approver"] }
+  {
+    content: "Review and approve",
+    sender: { type: "user", name: "Alex" },
+    targetQueue: ["reviewer", "approver"],
+  },
+  onEvent
 );
 ```
+
+When `targetQueue` is provided without `target`, the first item in the queue becomes the primary target and the remaining items stay queued.
 
 ---
 

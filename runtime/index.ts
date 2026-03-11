@@ -36,6 +36,39 @@ type MaybePromise<T> = T | Promise<T>;
 const USER_UPSERT_DEBOUNCE_MS = 60_000;
 const userUpsertCache = new Map<string, number>();
 
+function buildInitialRoutingMetadata(
+    messageMetadata: Record<string, unknown> | null,
+    message: MessagePayload,
+): Record<string, unknown> | null {
+    const configuredQueue = Array.isArray(message.targetQueue)
+        ? message.targetQueue.filter((value): value is string =>
+            typeof value === "string" && value.trim().length > 0
+        )
+        : [];
+    const configuredTarget = typeof message.target === "string" &&
+            message.target.trim().length > 0
+        ? message.target
+        : null;
+
+    let targetId = configuredTarget;
+    let targetQueue = configuredQueue;
+
+    if (!targetId && configuredQueue.length > 0) {
+        targetId = configuredQueue[0] ?? null;
+        targetQueue = configuredQueue.slice(1);
+    }
+
+    if (!targetId && targetQueue.length === 0) {
+        return messageMetadata;
+    }
+
+    return {
+        ...(messageMetadata ?? {}),
+        ...(targetId ? { targetId } : {}),
+        targetQueue,
+    };
+}
+
 /**
  * Options for running a message through Copilotz.
  */
@@ -77,17 +110,6 @@ export type RunOptions = {
      * Useful for loading tools dynamically from a database.
      */
     tools?: Tool[];
-    /**
-     * Explicit target for this message.
-     * Overrides @mention parsing and persisted targets.
-     * Useful for programmatic routing.
-     */
-    target?: string;
-    /**
-     * Target queue for multi-recipient messages.
-     * Processed in order after the primary target.
-     */
-    targetQueue?: string[];
 };
 
 /**
@@ -352,6 +374,13 @@ export async function runThread(
         sender: normalizedSender,
         thread: normalizedThread,
         toolCalls: normalizedToolCalls,
+        target: typeof message.target === "string" && message.target.trim().length > 0
+            ? message.target
+            : null,
+        targetQueue: Array.isArray(message.targetQueue)
+            ? message.targetQueue
+                .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+            : null,
         metadata: normalizedMetadata,
     };
 
@@ -431,11 +460,16 @@ export async function runThread(
         }
     };
 
+    const initialEventMetadata = buildInitialRoutingMetadata(
+        normalizedMetadata,
+        normalizedMessage,
+    );
+
     const newQueueItem = await ops.addToQueue(threadId, {
         eventType: "NEW_MESSAGE",
         payload: normalizedMessage,
         ttlMs: options?.queueTTL,
-        metadata: normalizedMetadata ?? undefined,
+        metadata: initialEventMetadata ?? undefined,
     });
 
     const contextForWorker: ChatContext = {
@@ -472,5 +506,3 @@ export async function runThread(
     };
     return handle;
 }
-
-

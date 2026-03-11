@@ -53,11 +53,19 @@ function resolveAgentResponseTarget(
     response: string,
     _agentId: string,
     sourceEvent: Event,
+    multiAgentEnabled: boolean,
 ): { targetId: string | null; targetQueue: string[] } {
     // Get source event metadata for target queue
     const eventMetadata = sourceEvent.metadata as Record<string, unknown> | null;
     const sourceTargetQueue = (eventMetadata?.targetQueue as string[] | null) ?? [];
     const sourceSenderId = (eventMetadata?.sourceMessageSenderId as string | null) ?? null;
+
+    if (!multiAgentEnabled) {
+        return {
+            targetId: sourceSenderId,
+            targetQueue: [],
+        };
+    }
     
     // 1. Parse @mentions from agent's response
     const mentions = parseMentionsFromResponse(response);
@@ -283,7 +291,8 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         const responseTarget = resolveAgentResponseTarget(
             answer || "",
             payload.agentId,
-            event
+            event,
+            context.multiAgent?.enabled === true,
         );
 
         const newMessagePayload: MessagePayload = {

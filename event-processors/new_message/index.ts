@@ -223,17 +223,20 @@ function parseMentions(
     const name = match[1]; // Remove @ prefix via regex capture
     const nameLower = name.toLowerCase();
 
-    // Check if it's a valid participant/agent (case-insensitive)
+    // Mentions are only valid for participants already declared on the thread.
     const agent = agents.find((a) =>
       (typeof a.name === "string" && a.name.toLowerCase() === nameLower) ||
       (typeof a.id === "string" && a.id.toLowerCase() === nameLower)
     );
-    const isParticipant = participants?.some((p) =>
-      p.toLowerCase() === nameLower
-    );
+    const isParticipant = participants?.some((p) => {
+      const pLower = p.toLowerCase();
+      return pLower === nameLower ||
+        (typeof agent?.name === "string" && pLower === agent.name.toLowerCase()) ||
+        (typeof agent?.id === "string" && pLower === agent.id.toLowerCase());
+    });
 
     // Use the matched name for dedup tracking (lowercase for consistency)
-    if ((agent || isParticipant) && !seen.has(nameLower)) {
+    if (isParticipant && !seen.has(nameLower)) {
       // Return agent ID if available, otherwise the original participant name
       const resolvedId = agent?.id ?? agent?.name ??
         participants?.find((p) => p.toLowerCase() === nameLower) ?? name;
@@ -288,6 +291,110 @@ interface TargetResolution {
 interface AgentTurnCheckResult {
   shouldForceUserTarget: boolean;
   userToTarget?: string;
+}
+
+function resolveThreadParticipantTarget(
+  targetId: string,
+  thread: Thread,
+  availableAgents: Agent[],
+): string | null {
+  const targetLower = targetId.toLowerCase();
+  const participants = Array.isArray(thread.participants)
+    ? thread.participants.filter((p): p is string => typeof p === "string")
+    : [];
+
+  const matchedAgent = availableAgents.find((a) =>
+    (typeof a.id === "string" && a.id.toLowerCase() === targetLower) ||
+    (typeof a.name === "string" && a.name.toLowerCase() === targetLower)
+  );
+
+  if (matchedAgent) {
+    const isAllowedParticipant = participants.some((p) => {
+      const pLower = p.toLowerCase();
+      return (typeof matchedAgent.id === "string" &&
+          pLower === matchedAgent.id.toLowerCase()) ||
+        (typeof matchedAgent.name === "string" &&
+          pLower === matchedAgent.name.toLowerCase());
+    });
+    return isAllowedParticipant
+      ? (matchedAgent.id ?? matchedAgent.name) as string
+      : null;
+  }
+
+  const matchedParticipant = participants.find((p) => p.toLowerCase() === targetLower);
+  return matchedParticipant ?? null;
+}
+
+function isDirectConversationThread(
+  thread: Thread,
+  availableAgents: Agent[],
+  currentAgent: Agent,
+): boolean {
+  const participants = Array.isArray(thread.participants)
+    ? thread.participants.filter((p): p is string => typeof p === "string")
+    : [];
+
+  const agentParticipantIds = new Set<string>();
+  const userParticipants: string[] = [];
+
+  for (const participant of participants) {
+    const participantLower = participant.toLowerCase();
+    const matchedAgent = availableAgents.find((a) =>
+      (typeof a.name === "string" && a.name.toLowerCase() === participantLower) ||
+      (typeof a.id === "string" && a.id.toLowerCase() === participantLower)
+    );
+
+    if (matchedAgent) {
+      agentParticipantIds.add((matchedAgent.id ?? matchedAgent.name) as string);
+    } else {
+      userParticipants.push(participant);
+    }
+  }
+
+  return agentParticipantIds.size === 1 &&
+    agentParticipantIds.has((currentAgent.id ?? currentAgent.name) as string) &&
+    userParticipants.length === 1;
+}
+
+function discoverSingleAgentTargetForMessage(
+  messageContext: MessageContextDetails,
+  thread: Thread,
+  availableAgents: Agent[],
+): TargetResolution | null {
+  if (messageContext.senderType === "tool" && messageContext.senderId) {
+    const agent = availableAgents.find((a) =>
+      a.id === messageContext.senderId || a.name === messageContext.senderName
+    );
+    return agent
+      ? { targetId: (agent.id ?? agent.name) as string, targetQueue: [] }
+      : null;
+  }
+
+  const senderNameLower = messageContext.senderName?.toLowerCase();
+  const senderIdLower = messageContext.senderId?.toLowerCase();
+  const defaultTarget = thread.participants?.find((p) => {
+    const pLower = p.toLowerCase();
+    return pLower !== senderNameLower &&
+      pLower !== senderIdLower &&
+      availableAgents.some((a) =>
+        (typeof a.name === "string" && a.name.toLowerCase() === pLower) ||
+        (typeof a.id === "string" && a.id.toLowerCase() === pLower)
+      );
+  });
+
+  if (!defaultTarget) return null;
+
+  const defaultTargetLower = defaultTarget.toLowerCase();
+  const targetAgent = availableAgents.find((a) =>
+    (typeof a.name === "string" &&
+      a.name.toLowerCase() === defaultTargetLower) ||
+    (typeof a.id === "string" && a.id.toLowerCase() === defaultTargetLower)
+  );
+
+  return {
+    targetId: (targetAgent?.id ?? targetAgent?.name ?? defaultTarget) as string,
+    targetQueue: [],
+  };
 }
 
 /**
@@ -951,18 +1058,36 @@ export const messageProcessor: EventProcessor<
     let targetResolution: TargetResolution | null;
 
     if (metadataTargetId) {
+      const resolvedMetadataTarget = resolveThreadParticipantTarget(
+        metadataTargetId,
+        thread,
+        availableAgents,
+      );
+
       // Use target from event metadata (set by llm_call processor)
-      targetResolution = {
-        targetId: metadataTargetId,
-        targetQueue: metadataTargetQueue ?? [],
-      };
-    } else {
-      // Discover target from message content (@mentions, persisted target, default)
+      targetResolution = resolvedMetadataTarget
+        ? {
+          targetId: resolvedMetadataTarget,
+          targetQueue: (metadataTargetQueue ?? []).filter((candidate) =>
+            resolveThreadParticipantTarget(candidate, thread, availableAgents)
+          ),
+        }
+        : null;
+    } else if (context.multiAgent?.enabled === true) {
+      // Multi-agent mode enables delegation via @mentions and persisted targets.
       targetResolution = await discoverTargetForMessage(
         messageContext,
         thread,
         availableAgents,
         ops,
+      );
+    } else {
+      // Single-agent mode only resolves the active agent participant and does not
+      // allow autonomous delegation based on plain-text agent output.
+      targetResolution = discoverSingleAgentTargetForMessage(
+        messageContext,
+        thread,
+        availableAgents,
       );
     }
 
@@ -1079,48 +1204,6 @@ export const messageProcessor: EventProcessor<
       return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
     }
 
-    // If the user addressed an agent via @mention, ensure the agent is added as a thread participant.
-    // This is important because history loading is participant-gated (getMessageHistory),
-    // and newly-invited agents should be able to see the thread context immediately.
-    try {
-      const currentParticipants = Array.isArray(thread.participants)
-        ? thread.participants.filter((p): p is string => typeof p === "string")
-        : [];
-
-      const desired = new Set<string>(currentParticipants);
-      const toInclude = [
-        targetResolution.targetId,
-        ...(targetResolution.targetQueue ?? []),
-      ];
-
-      for (const id of toInclude) {
-        const idLower = String(id).toLowerCase();
-        const a = availableAgents.find((agent) =>
-          (typeof agent.id === "string" &&
-            agent.id.toLowerCase() === idLower) ||
-          (typeof agent.name === "string" &&
-            agent.name.toLowerCase() === idLower)
-        );
-        if (!a) continue;
-        if (typeof a.id === "string" && a.id.length > 0) desired.add(a.id);
-        if (typeof a.name === "string" && a.name.length > 0) {
-          desired.add(a.name);
-        }
-      }
-
-      const nextParticipants = Array.from(desired);
-      if (
-        JSON.stringify(currentParticipants) !== JSON.stringify(nextParticipants)
-      ) {
-        await ops.crud.threads?.update?.({ id: thread.id }, {
-          participants: nextParticipants,
-        });
-        (thread as { participants: unknown }).participants = nextParticipants;
-      }
-    } catch {
-      // Best-effort: participant update shouldn't block processing
-    }
-
     // === Message coalescing ===
     // When this is a plain text message (no tool calls, not a tool result),
     // look for other pending NEW_MESSAGE events from the same sender in this
@@ -1227,10 +1310,15 @@ export const messageProcessor: EventProcessor<
       // Generate history with target context for multi-agent awareness
       const includeTargetContext = context.multiAgent?.includeTargetContext ??
         true;
+      const directConversation = isDirectConversationThread(
+        thread,
+        availableAgents,
+        agent,
+      );
       const llmHistory: ChatMessage[] = historyGenerator(
         ctx.chatHistory,
         agent,
-        { includeTargetContext },
+        { includeTargetContext: includeTargetContext && !directConversation, directConversation },
       );
 
       // Select tools available to this agent

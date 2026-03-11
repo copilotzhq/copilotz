@@ -8,6 +8,37 @@ export interface LLMContextData {
     systemPrompt: string;
 }
 
+function isDirectConversationThread(
+    thread: Thread,
+    availableAgents: Agent[],
+    currentAgent: Agent,
+): boolean {
+    const participants = Array.isArray(thread.participants)
+        ? thread.participants.filter((p): p is string => typeof p === "string")
+        : [];
+
+    const agentParticipantIds = new Set<string>();
+    const userParticipants: string[] = [];
+
+    for (const participant of participants) {
+        const participantLower = participant.toLowerCase();
+        const matchedAgent = availableAgents.find((a) =>
+            (typeof a.name === "string" && a.name.toLowerCase() === participantLower) ||
+            (typeof a.id === "string" && a.id.toLowerCase() === participantLower)
+        );
+
+        if (matchedAgent) {
+            agentParticipantIds.add((matchedAgent.id ?? matchedAgent.name) as string);
+        } else {
+            userParticipants.push(participant);
+        }
+    }
+
+    return agentParticipantIds.size === 1 &&
+        agentParticipantIds.has((currentAgent.id ?? currentAgent.name) as string) &&
+        userParticipants.length === 1;
+}
+
 /**
  * Agent memory extracted from the agent's participant node.
  */
@@ -27,6 +58,12 @@ export function contextGenerator(
     userMetadata?: Record<string, unknown>,
     agentNode?: KnowledgeNode  // NEW: Agent's participant node for persistent memory
 ): LLMContextData {
+    const directConversation = isDirectConversationThread(
+        thread,
+        availableAgents,
+        agent,
+    );
+
     // Enhanced participant info with clear role indicators
     const participantInfo = thread.participants?.map((p: string) => {
         const agentInfo = availableAgents.find((a: Agent) => a.name === p);
@@ -49,31 +86,39 @@ export function contextGenerator(
             `name: ${a.name} | role: ${a.role} | description: ${a.description || "N/A"}`
         ).join("\n- ") : "None";
 
-    const threadContext = [
-        "## CONVERSATION CONTEXT",
-        "",
-        `You are in thread: "${thread.name}"`,
-        "",
-        "### Participants",
-        participantInfo,
-        "",
-        "### Conversation Rules",
-        "- Messages from others are prefixed with [SpeakerName]: so you know who said what",
-        "- Your own messages appear without prefix",
-        "- To address someone, use @mention (e.g., @Researcher)",
-        "- To respond to the person who addressed you, just reply normally",
-        "- To hand off to someone else, @mention them in your response",
-        "",
-        "### Current Turn",
-        "You were just addressed. Respond naturally, and @mention another participant if you want them to continue the conversation.",
-        ...(otherAvailableAgents.length > 0 ? [
+    const threadContext = directConversation
+        ? [
+            "## CONVERSATION CONTEXT",
             "",
-            "Other available agents (not in current thread):",
-            `- ${availableAgentsInfo}`,
+            `You are in a direct conversation with the user in thread: "${thread.name}"`,
             "",
-            "NOTE: You can communicate with these agents using tools like 'ask_question' for quick queries or 'create_thread' for longer discussions."
-        ] : [])
-    ].filter(Boolean).join("\n");
+            "Respond directly to the user. There are no other active agent participants in this thread.",
+        ].join("\n")
+        : [
+            "## CONVERSATION CONTEXT",
+            "",
+            `You are in thread: "${thread.name}"`,
+            "",
+            "### Participants",
+            participantInfo,
+            "",
+            "### Conversation Rules",
+            "- Messages from others are prefixed with [SpeakerName]: so you know who said what",
+            "- Your own messages appear without prefix",
+            "- To address someone, use @mention (e.g., @Researcher)",
+            "- To respond to the person who addressed you, just reply normally",
+            "- To hand off to someone else, @mention them in your response",
+            "",
+            "### Current Turn",
+            "You were just addressed. Respond naturally, and @mention another participant if you want them to continue the conversation.",
+            ...(otherAvailableAgents.length > 0 ? [
+                "",
+                "Other available agents (not in current thread):",
+                `- ${availableAgentsInfo}`,
+                "",
+                "NOTE: You can communicate with these agents using tools like 'ask_question' for quick queries or 'create_thread' for longer discussions."
+            ] : [])
+        ].filter(Boolean).join("\n");
 
     let taskContext = "";
     if (activeTask && typeof activeTask === 'object') {

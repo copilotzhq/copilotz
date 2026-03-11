@@ -184,6 +184,7 @@ To prevent infinite agent-to-agent conversations, Copilotz tracks consecutive ag
 const copilotz = await createCopilotz({
   agents: [...],
   multiAgent: {
+    enabled: true,
     maxAgentTurns: 5,  // Default: 5 consecutive agent turns
   },
 });

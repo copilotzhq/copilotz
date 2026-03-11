@@ -147,6 +147,8 @@ const buildAttachmentParts = (metadata?: MessageMetadata): ChatContentPart[] | n
 export interface HistoryGeneratorOptions {
     /** Whether to include target info in message context */
     includeTargetContext?: boolean;
+    /** Whether this is a simple direct user-agent conversation */
+    directConversation?: boolean;
 }
 
 /**
@@ -163,6 +165,7 @@ export function historyGenerator(
     options?: HistoryGeneratorOptions
 ): ChatMessage[] {
     const includeTargetContext = options?.includeTargetContext ?? true;
+    const directConversation = options?.directConversation === true;
     
     return chatHistory.map((msg, _i) => {
         // Current agent's messages = "assistant"
@@ -188,13 +191,11 @@ export function historyGenerator(
 
         // Prefix with sender name for non-current-agent messages
         // Tool results also get prefixed (they're not "assistant" messages)
-        if ((!isCurrentAgent || isToolResult) && msg.senderType !== "system") {
+        if (isToolResult && msg.senderType !== "system") {
+            content = `[Tool Result]: ${content}`;
+        } else if (!directConversation && !isCurrentAgent && msg.senderType !== "system") {
             const senderName = msg.senderId ?? "unknown";
-            if (isToolResult) {
-                content = `[Tool Result]: ${content}`;
-            } else {
-                content = `[${senderName}]: ${content}`;
-            }
+            content = `[${senderName}]: ${content}`;
         }
         
         // Include target info for context (who they were addressing)

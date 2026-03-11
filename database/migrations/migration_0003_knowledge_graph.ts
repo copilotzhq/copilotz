@@ -38,131 +38,36 @@ CREATE TABLE IF NOT EXISTS "edges" (
   "created_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Add FK constraints for edges (in DO block for better error handling)
+/* FK constraints for edges — DO blocks needed since ADD CONSTRAINT has no IF NOT EXISTS */
 DO $$
 BEGIN
-  IF EXISTS (
-    SELECT 1 FROM information_schema.tables 
-    WHERE table_schema = current_schema() AND table_name = 'edges'
-  ) AND EXISTS (
-    SELECT 1 FROM information_schema.tables 
-    WHERE table_schema = current_schema() AND table_name = 'nodes'
-  ) THEN
-    -- Add source FK if not exists
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.table_constraints 
-      WHERE table_schema = current_schema() 
-        AND table_name = 'edges' 
-        AND constraint_name = 'edges_source_node_id_nodes_fk'
-    ) THEN
-      BEGIN
-        ALTER TABLE "edges" ADD CONSTRAINT "edges_source_node_id_nodes_fk"
-          FOREIGN KEY ("source_node_id") REFERENCES "nodes"("id") ON DELETE CASCADE;
-      EXCEPTION WHEN OTHERS THEN
-        RAISE NOTICE 'FK edges_source_node_id_nodes_fk not added: %', SQLERRM;
-      END;
-    END IF;
-    
-    -- Add target FK if not exists
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.table_constraints 
-      WHERE table_schema = current_schema() 
-        AND table_name = 'edges' 
-        AND constraint_name = 'edges_target_node_id_nodes_fk'
-    ) THEN
-      BEGIN
-        ALTER TABLE "edges" ADD CONSTRAINT "edges_target_node_id_nodes_fk"
-          FOREIGN KEY ("target_node_id") REFERENCES "nodes"("id") ON DELETE CASCADE;
-      EXCEPTION WHEN OTHERS THEN
-        RAISE NOTICE 'FK edges_target_node_id_nodes_fk not added: %', SQLERRM;
-      END;
-    END IF;
-  END IF;
+  ALTER TABLE "edges" DROP CONSTRAINT IF EXISTS "edges_source_node_id_nodes_fk";
+  ALTER TABLE "edges" ADD CONSTRAINT "edges_source_node_id_nodes_fk"
+    FOREIGN KEY ("source_node_id") REFERENCES "nodes"("id") ON DELETE CASCADE;
 END $$;
 
--- ============================================
--- INDEXES FOR NODES (wrapped in DO blocks for error isolation)
--- ============================================
+DO $$
+BEGIN
+  ALTER TABLE "edges" DROP CONSTRAINT IF EXISTS "edges_target_node_id_nodes_fk";
+  ALTER TABLE "edges" ADD CONSTRAINT "edges_target_node_id_nodes_fk"
+    FOREIGN KEY ("target_node_id") REFERENCES "nodes"("id") ON DELETE CASCADE;
+END $$;
 
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_nodes_namespace') THEN
-    CREATE INDEX "idx_nodes_namespace" ON "nodes"("namespace");
-  END IF;
-EXCEPTION WHEN OTHERS THEN NULL; END $$;
+-- Indexes for nodes
+CREATE INDEX IF NOT EXISTS "idx_nodes_namespace" ON "nodes"("namespace");
+CREATE INDEX IF NOT EXISTS "idx_nodes_type" ON "nodes"("type");
+CREATE INDEX IF NOT EXISTS "idx_nodes_namespace_type" ON "nodes"("namespace", "type");
+CREATE INDEX IF NOT EXISTS "idx_nodes_source" ON "nodes"("source_type", "source_id");
+CREATE INDEX IF NOT EXISTS "idx_nodes_embedding" ON "nodes" USING ivfflat ("embedding" vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS "idx_nodes_name" ON "nodes"("name");
+CREATE INDEX IF NOT EXISTS "idx_nodes_data" ON "nodes" USING gin ("data");
 
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_nodes_type') THEN
-    CREATE INDEX "idx_nodes_type" ON "nodes"("type");
-  END IF;
-EXCEPTION WHEN OTHERS THEN NULL; END $$;
-
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_nodes_namespace_type') THEN
-    CREATE INDEX "idx_nodes_namespace_type" ON "nodes"("namespace", "type");
-  END IF;
-EXCEPTION WHEN OTHERS THEN NULL; END $$;
-
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_nodes_source') THEN
-    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'nodes' AND column_name = 'source_type') THEN
-      CREATE INDEX "idx_nodes_source" ON "nodes"("source_type", "source_id");
-    END IF;
-  END IF;
-EXCEPTION WHEN OTHERS THEN NULL; END $$;
-
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_nodes_embedding') THEN
-    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'nodes' AND column_name = 'embedding') THEN
-      CREATE INDEX "idx_nodes_embedding" ON "nodes" USING ivfflat ("embedding" vector_cosine_ops) WITH (lists = 100);
-    END IF;
-  END IF;
-EXCEPTION WHEN OTHERS THEN NULL; END $$;
-
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_nodes_name') THEN
-    CREATE INDEX "idx_nodes_name" ON "nodes"("name");
-  END IF;
-EXCEPTION WHEN OTHERS THEN NULL; END $$;
-
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_nodes_data') THEN
-    CREATE INDEX "idx_nodes_data" ON "nodes" USING gin ("data");
-  END IF;
-EXCEPTION WHEN OTHERS THEN NULL; END $$;
-
--- ============================================
--- INDEXES FOR EDGES (wrapped in DO blocks for error isolation)
--- ============================================
-
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_edges_source') THEN
-    CREATE INDEX "idx_edges_source" ON "edges"("source_node_id");
-  END IF;
-EXCEPTION WHEN OTHERS THEN NULL; END $$;
-
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_edges_target') THEN
-    CREATE INDEX "idx_edges_target" ON "edges"("target_node_id");
-  END IF;
-EXCEPTION WHEN OTHERS THEN NULL; END $$;
-
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_edges_type') THEN
-    CREATE INDEX "idx_edges_type" ON "edges"("type");
-  END IF;
-EXCEPTION WHEN OTHERS THEN NULL; END $$;
-
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_edges_source_type') THEN
-    CREATE INDEX "idx_edges_source_type" ON "edges"("source_node_id", "type");
-  END IF;
-EXCEPTION WHEN OTHERS THEN NULL; END $$;
-
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_edges_target_type') THEN
-    CREATE INDEX "idx_edges_target_type" ON "edges"("target_node_id", "type");
-  END IF;
-EXCEPTION WHEN OTHERS THEN NULL; END $$;
+-- Indexes for edges
+CREATE INDEX IF NOT EXISTS "idx_edges_source" ON "edges"("source_node_id");
+CREATE INDEX IF NOT EXISTS "idx_edges_target" ON "edges"("target_node_id");
+CREATE INDEX IF NOT EXISTS "idx_edges_type" ON "edges"("type");
+CREATE INDEX IF NOT EXISTS "idx_edges_source_type" ON "edges"("source_node_id", "type");
+CREATE INDEX IF NOT EXISTS "idx_edges_target_type" ON "edges"("target_node_id", "type");
 
 -- ============================================
 -- HELPER FUNCTIONS

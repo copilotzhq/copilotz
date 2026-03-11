@@ -201,6 +201,10 @@ export interface DatabaseOperations {
   /** @deprecated Use getUserNode instead for graph-based users with namespace support */
   getUserByExternalId: (externalId: string) => Promise<User | undefined>;
   archiveThread: (threadId: string, summary: string) => Promise<Thread | null>;
+  /** Return pending NEW_MESSAGE queue events in this thread (excluding current), oldest first. */
+  peekCoalescableCandidates: (threadId: string, currentEventId: string, namespace?: string) => Promise<Queue[]>;
+  /** Atomically mark a batch of pending queue events as completed. Returns IDs actually claimed. */
+  claimAndCompleteEventsBatch: (ids: string[]) => Promise<string[]>;
 
   // ============================================
   // PARTICIPANT NODE OPERATIONS (Unified users & agents)
@@ -529,14 +533,23 @@ export function createOperations(
         filter.namespace = namespace;
       }
 
-      const [candidate] = await crud.events.find(filter, {
-        limit: 1,
-        sort: [
-          ["priority", "desc"],
-          ["createdAt", "asc"],
-          ["id", "asc"],
-        ],
-      });
+      // Use raw SQL with COALESCE so NULL-priority events (user messages) do NOT
+      // sort before high-priority chain events (LLM_CALL, TOOL_CALL) due to
+      // PostgreSQL's default NULLS FIRST behaviour on DESC sorts.
+      const whereParams: unknown[] = [threadId];
+      const whereParts: string[] = [`"threadId" = $1`, `"status" = 'pending'`];
+      if (namespace !== undefined) {
+        whereParts.push(`"namespace" = $${whereParams.length + 1}`);
+        whereParams.push(namespace);
+      }
+      const pendingResult = await db.query<Queue>(
+        `SELECT * FROM "events"
+         WHERE ${whereParts.join(" AND ")}
+         ORDER BY COALESCE("priority", 0) DESC, "createdAt" ASC, "id" ASC
+         LIMIT 1`,
+        whereParams,
+      );
+      const [candidate] = pendingResult.rows;
 
       if (!candidate) {
         await cleanupExpiredQueueItems();
@@ -1183,6 +1196,43 @@ export function createOperations(
   ): Promise<User | undefined> => {
     const user = await crud.users.findOne({ externalId }) as User | null;
     return user ?? undefined;
+  };
+
+  const peekCoalescableCandidates = async (
+    threadId: string,
+    currentEventId: string,
+    namespace?: string,
+  ): Promise<Queue[]> => {
+    const params: unknown[] = [threadId, currentEventId];
+    let namespaceClause = "";
+    if (namespace !== undefined) {
+      params.push(namespace);
+      namespaceClause = `AND "namespace" = $${params.length}`;
+    }
+    const result = await db.query<Queue>(
+      `SELECT * FROM "events"
+       WHERE "threadId" = $1
+         AND "id" != $2
+         AND "status" = 'pending'
+         AND "eventType" = 'NEW_MESSAGE'
+         ${namespaceClause}
+       ORDER BY "createdAt" ASC`,
+      params,
+    );
+    return result.rows as Queue[];
+  };
+
+  const claimAndCompleteEventsBatch = async (ids: string[]): Promise<string[]> => {
+    if (ids.length === 0) return [];
+    const result = await db.query<{ id: string }>(
+      `UPDATE "events"
+       SET "status" = 'completed', "updatedAt" = NOW()
+       WHERE "id" = ANY($1)
+         AND "status" = 'pending'
+       RETURNING "id"`,
+      [ids],
+    );
+    return result.rows.map((r) => r.id);
   };
 
   const archiveThread = async (
@@ -2035,6 +2085,8 @@ export function createOperations(
     createTask,
     getUserByExternalId,
     archiveThread,
+    peekCoalescableCandidates,
+    claimAndCompleteEventsBatch,
     // Participant node operations (unified users & agents)
     upsertParticipantNode,
     getParticipantNode,

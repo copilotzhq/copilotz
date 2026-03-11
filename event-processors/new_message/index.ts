@@ -688,7 +688,6 @@ export const messageProcessor: EventProcessor<
       : messageContext.contentText;
 
     const incomingMsg = {
-      id: crypto.randomUUID(),
       threadId,
       senderId: messageContext.senderId,
       senderType: messageContext.senderType,
@@ -1120,6 +1119,79 @@ export const messageProcessor: EventProcessor<
       }
     } catch {
       // Best-effort: participant update shouldn't block processing
+    }
+
+    // === Message coalescing ===
+    // When this is a plain text message (no tool calls, not a tool result),
+    // look for other pending NEW_MESSAGE events from the same sender in this
+    // thread. If they would route to the same agent, absorb them now so the
+    // LLM sees all concurrent inputs in a single context window instead of
+    // spawning separate chains.
+    if (normalizedToolCalls.length === 0 && messageContext.senderType !== "tool") {
+      const eventId = typeof event.id === "string" ? event.id : "";
+      const targetIdLowerCoalesce = ((targetAgent.id ?? targetAgent.name) as string).toLowerCase();
+      const candidates = await ops.peekCoalescableCandidates(threadId, eventId, context.namespace);
+      const idsToAbsorb: string[] = [];
+
+      for (const candidate of candidates) {
+        const candidatePayload = candidate.payload as NewMessageEventPayload;
+        const candidateMeta = isRecord(candidatePayload.metadata)
+          ? candidatePayload.metadata as Record<string, unknown>
+          : null;
+
+        if (candidateMeta?.skipRouting === true) continue;
+
+        const candidateCtx = getMessageContext(candidatePayload);
+
+        // Only coalesce same-sender plain messages
+        if (
+          candidateCtx.senderId !== messageContext.senderId ||
+          candidateCtx.toolCalls.length > 0 ||
+          candidateCtx.senderType === "tool"
+        ) continue;
+
+        // Reject candidates whose @mentions target a different agent
+        const candidateMentions = parseMentions(
+          candidateCtx.contentText,
+          thread.participants ?? null,
+          availableAgents,
+        );
+        if (
+          candidateMentions.length > 0 &&
+          !candidateMentions.some((m) => m.toLowerCase() === targetIdLowerCoalesce)
+        ) continue;
+
+        idsToAbsorb.push(candidate.id as string);
+
+        // Resolve toolCallId (mirrors incomingMsg logic)
+        let candToolCallId: string | null = null;
+        const candTcMeta = Array.isArray(
+          (candidateMeta as { toolCalls?: unknown[] } | null)?.toolCalls,
+        )
+          ? ((candidateMeta as { toolCalls?: unknown[] }).toolCalls ?? [])
+          : [];
+        for (const entry of candTcMeta) {
+          if (entry && typeof entry === "object") {
+            const maybeId = (entry as { id?: unknown }).id;
+            if (typeof maybeId === "string") { candToolCallId = maybeId; break; }
+          }
+        }
+
+        // Persist absorbed message — id omitted so createMessage generates a ULID
+        await ops.createMessage({
+          threadId,
+          senderId: candidateCtx.senderId,
+          senderType: candidateCtx.senderType,
+          content: candidateCtx.contentText,
+          toolCallId: candToolCallId ?? undefined,
+          toolCalls: candidatePayload.toolCalls ?? null,
+          metadata: candidateMeta,
+        }, context.namespace);
+      }
+
+      if (idsToAbsorb.length > 0) {
+        await ops.claimAndCompleteEventsBatch(idsToAbsorb);
+      }
     }
 
     // Process the target agent - create LLM_CALL

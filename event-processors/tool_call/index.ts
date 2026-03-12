@@ -104,8 +104,8 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
     }
 
     const availableAgents = context.agents || [];
-    const agent = availableAgents.find(a => a.name === payload.agentName);
-    if (!agent) return { producedEvents: [] };
+    // Agent may be absent if filtered out by env config — fall back to payload data
+    const agent = availableAgents.find(a => a.name === payload.agentName) ?? null;
 
     // Build tools
     const nativeToolsArray = Object.values(getNativeTools()).filter(hasExecute);
@@ -123,7 +123,8 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       ...mcpTools,
     ];
 
-    const allowedKeys = Array.isArray(agent.allowedTools) && agent.allowedTools.length > 0
+    // If agent not found, allow all tools; otherwise respect agent.allowedTools
+    const allowedKeys = agent && Array.isArray(agent.allowedTools) && agent.allowedTools.length > 0
       ? agent.allowedTools
       : allTools.map((t) => t.key);
     const agentTools =
@@ -134,7 +135,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       agentTools,
       {
         ...context,
-        senderId: (agent.id ?? agent.name) as string,
+        senderId: (agent ? (agent.id ?? agent.name) : payload.senderId) as string,
         senderType: "agent",
         threadId,
         agents: availableAgents,

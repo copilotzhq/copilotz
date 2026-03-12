@@ -1141,55 +1141,59 @@ export const messageProcessor: EventProcessor<
     if (
       normalizedToolCalls.length > 0 && messageContext.senderType === "agent"
     ) {
-      // Find the sending agent
+      // Find the sending agent (may be absent if filtered out by env config)
       const sendingAgent = availableAgents.find((a) =>
         a.id === messageContext.senderId || a.name === messageContext.senderName
       );
 
-      if (sendingAgent) {
-        normalizedToolCalls.forEach((call, i: number) => {
-          const callName = call.name || sendingAgent.name || "unknown_tool";
-          const callId = call.id || `${callName}_${i}`;
-          const senderIdForTool =
-            (sendingAgent.id ?? sendingAgent.name) as string;
-          const argumentsString = JSON.stringify(call.args ?? {});
-          const toolCallEventPayload = {
-            agentName: sendingAgent.name,
-            senderId: senderIdForTool,
-            senderType: "agent",
-            call: {
-              id: callId,
-              function: {
-                name: callName,
-                arguments: argumentsString,
-              },
-            },
-            // Pass batch info for tool result aggregation
-            batchId: call.batchId ?? null,
-            batchSize: call.batchSize ?? null,
-            batchIndex: call.batchIndex ?? null,
-          } as ToolCallEventPayload;
-          producedEvents.push({
-            threadId,
-            type: "TOOL_CALL",
-            payload: toolCallEventPayload,
-            parentEventId: typeof event.id === "string" ? event.id : undefined,
-            traceId: typeof event.traceId === "string"
-              ? event.traceId
-              : undefined,
-            priority: chainPriority,
-          });
-        });
+      // Fall back to message context when agent is not in availableAgents
+      const agentForToolCalls = sendingAgent ?? {
+        id: messageContext.senderId,
+        name: messageContext.senderName,
+      };
 
-        // Tool calls processed - return without triggering LLM call
-        // The tool results will come back as NEW_MESSAGE events and route back to this agent
-        return {
-          producedEvents: [
-            ...producedEvents,
-            ...(entityExtractEvents as unknown as NewEvent[]),
-          ],
-        };
-      }
+      normalizedToolCalls.forEach((call, i: number) => {
+        const callName = call.name || agentForToolCalls.name || "unknown_tool";
+        const callId = call.id || `${callName}_${i}`;
+        const senderIdForTool =
+          (agentForToolCalls.id ?? agentForToolCalls.name) as string;
+        const argumentsString = JSON.stringify(call.args ?? {});
+        const toolCallEventPayload = {
+          agentName: agentForToolCalls.name,
+          senderId: senderIdForTool,
+          senderType: "agent",
+          call: {
+            id: callId,
+            function: {
+              name: callName,
+              arguments: argumentsString,
+            },
+          },
+          // Pass batch info for tool result aggregation
+          batchId: call.batchId ?? null,
+          batchSize: call.batchSize ?? null,
+          batchIndex: call.batchIndex ?? null,
+        } as ToolCallEventPayload;
+        producedEvents.push({
+          threadId,
+          type: "TOOL_CALL",
+          payload: toolCallEventPayload,
+          parentEventId: typeof event.id === "string" ? event.id : undefined,
+          traceId: typeof event.traceId === "string"
+            ? event.traceId
+            : undefined,
+          priority: chainPriority,
+        });
+      });
+
+      // Tool calls processed - return without triggering LLM call
+      // The tool results will come back as NEW_MESSAGE events and route back to this agent
+      return {
+        producedEvents: [
+          ...producedEvents,
+          ...(entityExtractEvents as unknown as NewEvent[]),
+        ],
+      };
     }
 
     // Get the target agent (case-insensitive matching)

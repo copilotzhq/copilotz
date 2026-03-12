@@ -6,6 +6,11 @@ import type { ChatMessage, ChatContentPart } from "@/connectors/llm/types.ts";
 import type { FsConnector } from "@/connectors/storage/fs.ts";
 import { createFsConnector } from "@/connectors/storage/fs.ts";
 import { createS3Connector, type S3Connector, type S3ConnectorConfig } from "@/connectors/storage/s3.ts";
+import {
+	DEFAULT_DOCUMENT_TEXT_LIMIT,
+	detectOfficeDocumentMime,
+	parseDocumentToText,
+} from "@/utils/document-parser.ts";
 
 export type AssetId = string;
 export type AssetRef = `asset://${string}`;
@@ -335,7 +340,45 @@ export function detectMimeFromBytes(bytes: Uint8Array): string {
 		return "application/pdf";
 	}
 
+	const officeMime = detectOfficeDocumentMime(bytes);
+	if (officeMime) {
+		return officeMime;
+	}
+
+	const isZip = bytes[0] === 0x50 && bytes[1] === 0x4B &&
+		(bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07) &&
+		(bytes[3] === 0x04 || bytes[3] === 0x06 || bytes[3] === 0x08);
+	if (isZip) {
+		return "application/zip";
+	}
+
 	return "application/octet-stream";
+}
+
+function getFsAssetMetaPath(rel: string): string {
+	return `${rel}.meta.json`;
+}
+
+async function readFsStoredMime(
+	fs: FsConnector,
+	rel: string,
+): Promise<string | null> {
+	const metaPath = fs.join(getFsAssetMetaPath(rel));
+	if (!(await fs.exists(metaPath))) return null;
+
+	try {
+		const raw = await fs.readFile(metaPath);
+		const parsed = JSON.parse(new TextDecoder().decode(raw)) as { mime?: unknown };
+		return typeof parsed.mime === "string" && parsed.mime.length > 0
+			? parsed.mime
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+function buildParsedDocumentText(text: string, mime: string): string {
+	return `[Extracted text from attached document (${mime})]\n\n${text}`;
 }
 
 // -----------------------------------------------------------------------------
@@ -460,6 +503,10 @@ export function createFsAssetStore(config: FsAssetConfig): AssetStore {
 		const rel = relPathFor(id);
 		const path = fs.join(rel);
 		await fs.writeFile(path, bytes);
+		await fs.writeFile(
+			fs.join(getFsAssetMetaPath(rel)),
+			new TextEncoder().encode(JSON.stringify({ mime })),
+		);
 		return { assetId: id, info: { id, mime, size: bytes.byteLength, createdAt: new Date() } };
 	};
 
@@ -467,8 +514,8 @@ export function createFsAssetStore(config: FsAssetConfig): AssetStore {
 		const rel = relPathFor(assetId);
 		const path = fs.join(rel);
 		const bytes = await fs.readFile(path);
-		// Detect MIME type from file magic bytes since we don't persist mime info
-		const mime = detectMimeFromBytes(bytes);
+		// Prefer stored MIME for new assets, fall back to detection for legacy assets.
+		const mime = await readFsStoredMime(fs, rel) ?? detectMimeFromBytes(bytes);
 		return { bytes, mime };
 	};
 
@@ -670,6 +717,36 @@ export async function resolveAssetRefsInMessages(
 	const referenced = new Set<AssetRef>();
 	const clone = JSON.parse(JSON.stringify(messages)) as ChatMessage[];
 
+	const resolveDocumentPart = async (
+		fileData: string,
+		bytes: Uint8Array,
+		mime?: string,
+	): Promise<ChatContentPart | null> => {
+		try {
+			const parsed = await parseDocumentToText(bytes, mime, {
+				maxChars: DEFAULT_DOCUMENT_TEXT_LIMIT,
+			});
+			if (!parsed) return null;
+			if (isAssetRef(fileData)) {
+				referenced.add(fileData);
+			}
+			return {
+				type: "text",
+				text: buildParsedDocumentText(parsed.text, parsed.mime),
+			};
+		} catch (error) {
+			if (isAssetRef(fileData)) {
+				referenced.add(fileData);
+			}
+			const message = error instanceof Error ? error.message : String(error);
+			return {
+				type: "text",
+				text:
+					`[Attached document could not be parsed (${mime ?? "unknown mime"}): ${message}]`,
+			};
+		}
+	};
+
 	const resolvePart = async (part: ChatContentPart): Promise<ChatContentPart> => {
 		// Wrap each resolution in try-catch so one failing asset doesn't break all assets
 		if (part.type === "image_url") {
@@ -694,6 +771,8 @@ export async function resolveAssetRefsInMessages(
 				try {
 					const id = resolveAssetIdForStore(fileData, store);
 					const { bytes, mime } = await store.get(id);
+					const documentPart = await resolveDocumentPart(fileData, bytes, mime);
+					if (documentPart) return documentPart;
 					const dataUrl = toDataUrl(bytes, mime);
 					referenced.add(fileData as AssetRef);
 					return { type: "file", file: { file_data: dataUrl, mime_type: mime } };
@@ -701,6 +780,12 @@ export async function resolveAssetRefsInMessages(
 					// Asset not found - return text fallback
 					return { type: "text", text: `[unresolved file: ${fileData}]` };
 				}
+			}
+			if (typeof fileData === "string" && fileData.startsWith("data:")) {
+				const parsed = parseDataUrl(fileData);
+				if (!parsed) return part;
+				const documentPart = await resolveDocumentPart(fileData, parsed.bytes, parsed.mime);
+				if (documentPart) return documentPart;
 			}
 			return part;
 		}
@@ -843,5 +928,3 @@ export function findAssetRefs(value: unknown): AssetRef[] {
 	visit(value);
 	return Array.from(out);
 }
-
-

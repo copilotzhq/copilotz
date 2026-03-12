@@ -38,20 +38,14 @@ CREATE TABLE IF NOT EXISTS "edges" (
   "created_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-/* FK constraints for edges — DO blocks needed since ADD CONSTRAINT has no IF NOT EXISTS */
-DO $$
-BEGIN
-  ALTER TABLE "edges" DROP CONSTRAINT IF EXISTS "edges_source_node_id_nodes_fk";
-  ALTER TABLE "edges" ADD CONSTRAINT "edges_source_node_id_nodes_fk"
-    FOREIGN KEY ("source_node_id") REFERENCES "nodes"("id") ON DELETE CASCADE;
-END $$;
+/* Idempotent FKs: drop first (IF EXISTS), then re-add. NOT VALID skips existing-row checks. */
+ALTER TABLE "edges" DROP CONSTRAINT IF EXISTS "edges_source_node_id_nodes_fk";
+ALTER TABLE "edges" ADD CONSTRAINT "edges_source_node_id_nodes_fk"
+  FOREIGN KEY ("source_node_id") REFERENCES "nodes"("id") ON DELETE CASCADE NOT VALID;
 
-DO $$
-BEGIN
-  ALTER TABLE "edges" DROP CONSTRAINT IF EXISTS "edges_target_node_id_nodes_fk";
-  ALTER TABLE "edges" ADD CONSTRAINT "edges_target_node_id_nodes_fk"
-    FOREIGN KEY ("target_node_id") REFERENCES "nodes"("id") ON DELETE CASCADE;
-END $$;
+ALTER TABLE "edges" DROP CONSTRAINT IF EXISTS "edges_target_node_id_nodes_fk";
+ALTER TABLE "edges" ADD CONSTRAINT "edges_target_node_id_nodes_fk"
+  FOREIGN KEY ("target_node_id") REFERENCES "nodes"("id") ON DELETE CASCADE NOT VALID;
 
 -- Indexes for nodes
 CREATE INDEX IF NOT EXISTS "idx_nodes_namespace" ON "nodes"("namespace");

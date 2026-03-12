@@ -31,6 +31,14 @@ CREATE TABLE IF NOT EXISTS "documents" (
   "updatedAt" timestamp DEFAULT now() NOT NULL
 );
 
+-- Add any columns that may be missing from older documents tables (no-op on fresh installs).
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "namespace" VARCHAR(255) NOT NULL DEFAULT 'default';
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "externalId" VARCHAR(255);
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "contentHash" VARCHAR(128);
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "assetId" VARCHAR(255);
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "errorMessage" TEXT;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "metadata" JSONB;
+
 -- Document chunks table: stores chunked content with embeddings
 CREATE TABLE IF NOT EXISTS "document_chunks" (
   "id" varchar(255) PRIMARY KEY NOT NULL,
@@ -47,16 +55,11 @@ CREATE TABLE IF NOT EXISTS "document_chunks" (
   "updatedAt" timestamp DEFAULT now() NOT NULL
 );
 
-/* Foreign key constraint — DO block needed since ADD CONSTRAINT has no IF NOT EXISTS */
-DO $$
-BEGIN
-  ALTER TABLE "document_chunks"
-    DROP CONSTRAINT IF EXISTS "document_chunks_documentId_documents_id_fk";
-  ALTER TABLE "document_chunks"
-    ADD CONSTRAINT "document_chunks_documentId_documents_id_fk"
-    FOREIGN KEY ("documentId") REFERENCES "documents"("id")
-    ON DELETE CASCADE ON UPDATE NO ACTION;
-END $$;
+/* Idempotent FK: drop first (IF EXISTS), then re-add. NOT VALID skips existing-row checks. */
+ALTER TABLE "document_chunks" DROP CONSTRAINT IF EXISTS "document_chunks_documentId_documents_id_fk";
+ALTER TABLE "document_chunks" ADD CONSTRAINT "document_chunks_documentId_documents_id_fk"
+  FOREIGN KEY ("documentId") REFERENCES "documents"("id")
+  ON DELETE CASCADE ON UPDATE NO ACTION NOT VALID;
 
 CREATE INDEX IF NOT EXISTS "idx_documents_namespace" ON "documents" ("namespace");
 CREATE INDEX IF NOT EXISTS "idx_documents_namespace_status" ON "documents" ("namespace", "status");

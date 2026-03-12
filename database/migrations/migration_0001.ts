@@ -157,26 +157,18 @@ ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "ttlMs" INTEGER;
 ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "expiresAt" TIMESTAMP;
 ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "metadata" JSONB;
 
-/* Foreign key constraints — DO blocks needed since ADD CONSTRAINT has no IF NOT EXISTS */
-DO $$
-BEGIN
-  ALTER TABLE "messages" DROP CONSTRAINT IF EXISTS "messages_thread_id_threads_id_fk";
-  ALTER TABLE "messages" DROP CONSTRAINT IF EXISTS "messages_threadId_threads_id_fk";
-  ALTER TABLE "messages"
-    ADD CONSTRAINT "messages_threadId_threads_id_fk"
-    FOREIGN KEY ("threadId") REFERENCES "threads"("id")
-    ON DELETE NO ACTION ON UPDATE NO ACTION;
-END $$;
+/* Idempotent FKs: drop first (IF EXISTS), then re-add. NOT VALID skips existing-row checks. */
+ALTER TABLE "messages" DROP CONSTRAINT IF EXISTS "messages_thread_id_threads_id_fk";
+ALTER TABLE "messages" DROP CONSTRAINT IF EXISTS "messages_threadId_threads_id_fk";
+ALTER TABLE "messages" ADD CONSTRAINT "messages_threadId_threads_id_fk"
+  FOREIGN KEY ("threadId") REFERENCES "threads"("id")
+  ON DELETE NO ACTION ON UPDATE NO ACTION NOT VALID;
 
-DO $$
-BEGIN
-  ALTER TABLE "messages" DROP CONSTRAINT IF EXISTS "messages_sender_user_id_users_id_fk";
-  ALTER TABLE "messages" DROP CONSTRAINT IF EXISTS "messages_senderUserId_users_id_fk";
-  ALTER TABLE "messages"
-    ADD CONSTRAINT "messages_senderUserId_users_id_fk"
-    FOREIGN KEY ("senderUserId") REFERENCES "users"("id")
-    ON DELETE NO ACTION ON UPDATE NO ACTION;
-END $$;
+ALTER TABLE "messages" DROP CONSTRAINT IF EXISTS "messages_sender_user_id_users_id_fk";
+ALTER TABLE "messages" DROP CONSTRAINT IF EXISTS "messages_senderUserId_users_id_fk";
+ALTER TABLE "messages" ADD CONSTRAINT "messages_senderUserId_users_id_fk"
+  FOREIGN KEY ("senderUserId") REFERENCES "users"("id")
+  ON DELETE NO ACTION ON UPDATE NO ACTION NOT VALID;
 
 CREATE INDEX IF NOT EXISTS "idx_threads_external_id_active" ON "threads" ("externalId") WHERE "status" = 'active';
 CREATE INDEX IF NOT EXISTS "idx_threads_participants_gin" ON "threads" USING GIN ("participants");

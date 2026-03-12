@@ -214,6 +214,17 @@ function buildUserKey(sender: MessagePayload["sender"]): string {
     return sender.externalId ?? sender.id ?? email ?? sender.name ?? "anonymous";
 }
 
+function buildParticipantIdentity(sender: MessagePayload["sender"]): string {
+    if (!sender) return "anonymous";
+    const metadata = sender.metadata && typeof sender.metadata === "object"
+        ? sender.metadata as Record<string, unknown>
+        : undefined;
+    const email = metadata && typeof metadata.email === "string"
+        ? metadata.email
+        : "";
+    return sender.id ?? sender.externalId ?? email ?? sender.name ?? "anonymous";
+}
+
 /**
  * Upsert a user into the graph.
  * 
@@ -316,7 +327,7 @@ export async function runThread(
             baseParticipants = (baseContext.agents ?? []).map((a) => a.name).filter(Boolean);
         }
     }
-    const senderCanonical = (sender.id ?? sender.name ?? "user") as string;
+    const senderCanonical = buildParticipantIdentity(sender);
     const participants = Array.from(new Set([senderCanonical, ...baseParticipants]));
 
     // Auto-populate userExternalId in thread metadata for user context lookup

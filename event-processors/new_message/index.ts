@@ -322,7 +322,32 @@ function resolveThreadParticipantTarget(
   }
 
   const matchedParticipant = participants.find((p) => p.toLowerCase() === targetLower);
-  return matchedParticipant ?? null;
+  if (matchedParticipant) {
+    return matchedParticipant;
+  }
+
+  const threadMetadata = (thread.metadata && typeof thread.metadata === "object")
+    ? thread.metadata as { userExternalId?: unknown }
+    : null;
+  const metadataUserExternalId = threadMetadata?.userExternalId;
+  if (
+    typeof metadataUserExternalId === "string" &&
+    metadataUserExternalId.toLowerCase() === targetLower
+  ) {
+    const legacyUserParticipant = participants.find((participant) =>
+      !availableAgents.some((agent) =>
+        (typeof agent.id === "string" &&
+          agent.id.toLowerCase() === participant.toLowerCase()) ||
+        (typeof agent.name === "string" &&
+          agent.name.toLowerCase() === participant.toLowerCase())
+      )
+    );
+    if (legacyUserParticipant) {
+      return legacyUserParticipant;
+    }
+  }
+
+  return null;
 }
 
 function isDirectConversationThread(

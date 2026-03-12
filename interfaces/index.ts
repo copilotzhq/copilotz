@@ -158,6 +158,32 @@ export interface AgentLlmOptionsResolverArgs {
 export type AgentLlmOptionsResolver = (args: AgentLlmOptionsResolverArgs) => ProviderConfig | Promise<ProviderConfig>;
 
 /**
+ * Arguments passed to the history transform hook.
+ * Allows applications to filter or rewrite LLM-visible history per call.
+ */
+export interface HistoryTransformArgs {
+    /** History as generated for the LLM, before the system prompt is added. */
+    messages: ChatMessage[];
+    /** Raw stored thread messages used to build the generated history. */
+    rawHistory: NewMessage[];
+    /** Current thread being processed. */
+    thread: Thread;
+    /** Agent that will receive the final history. */
+    agent: Agent;
+    /** Event that triggered the current LLM call. */
+    sourceEvent: Event;
+    /** Processor dependencies for advanced lookups or logging. */
+    deps: ProcessorDeps;
+}
+
+/**
+ * Hook for rewriting the generated message history before it is sent to the LLM.
+ */
+export type HistoryTransform = (
+    args: HistoryTransformArgs,
+) => ChatMessage[] | Promise<ChatMessage[]>;
+
+/**
  * Configuration for embedding generation in RAG.
  */
 export interface EmbeddingConfig {
@@ -340,6 +366,8 @@ export interface ChatContext {
     queueTTL?: number;
     /** User metadata. */
     userMetadata?: Record<string, unknown>;
+    /** Hook for rewriting generated message history before the LLM call. */
+    historyTransform?: HistoryTransform;
     /** Custom event processors by event type. */
     customProcessors?: Record<string, Array<EventProcessor<unknown, ProcessorDeps>>>;
     /** Asset storage instance. */

@@ -21,6 +21,8 @@ import type {
     API,
     ChatCallbacks,
     ChatContext,
+    HistoryTransform,
+    HistoryTransformArgs,
     EventProcessor,
     ProcessorDeps,
     CopilotzDb,
@@ -109,6 +111,10 @@ export type {
     EmbeddingConfig,
     /** Configuration for entity extraction. */
     EntityExtractionConfig,
+    /** Hook for rewriting generated message history before the LLM call. */
+    HistoryTransform,
+    /** Arguments passed to the history transform hook. */
+    HistoryTransformArgs,
     /** Context for namespace resolution. */
     NamespaceResolutionContext,
     /** Thread metadata interface for multi-agent conversation state. */
@@ -380,6 +386,8 @@ export interface CopilotzConfig {
     processors?: Array<(EventProcessor<unknown, ProcessorDeps> & { eventType: string; priority?: number; id?: string })>;
     /** Optional callbacks for handling events during execution. */
     callbacks?: ChatCallbacks;
+    /** Optional hook for rewriting generated message history before the LLM call. */
+    historyTransform?: HistoryTransform;
     /** Optional database configuration. Defaults to in-memory PGlite. */
     dbConfig?: DatabaseConfig;
     /** Optional pre-existing database instance to reuse. */
@@ -886,6 +894,7 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
             apis: baseConfig.apis,
             mcpServers: baseConfig.mcpServers,
             callbacks: baseConfig.callbacks,
+            historyTransform: baseConfig.historyTransform,
             dbConfig: baseConfig.dbConfig,
             dbInstance: baseDb,
             threadMetadata: baseConfig.threadMetadata,

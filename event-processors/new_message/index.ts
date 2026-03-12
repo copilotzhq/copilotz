@@ -1343,11 +1343,21 @@ export const messageProcessor: EventProcessor<
         availableAgents,
         agent,
       );
-      const llmHistory: ChatMessage[] = historyGenerator(
+      const generatedHistory: ChatMessage[] = historyGenerator(
         ctx.chatHistory,
         agent,
         { includeTargetContext: includeTargetContext && !directConversation, directConversation },
       );
+      const llmHistory: ChatMessage[] = context.historyTransform
+        ? await context.historyTransform({
+          messages: generatedHistory,
+          rawHistory: ctx.chatHistory,
+          thread,
+          agent,
+          sourceEvent: event,
+          deps,
+        })
+        : generatedHistory;
 
       // Select tools available to this agent
       const allowedToolKeys: string[] =

@@ -2,6 +2,8 @@
 
 Assets are how Copilotz handles files, images, and media. The asset system provides automatic extraction from tool outputs, persistent storage, and seamless resolution for LLM vision capabilities.
 
+For document attachments, Copilotz can also parse supported file types into text before the LLM call.
+
 ## How Assets Work
 
 When a tool returns binary data (like an image), Copilotz:
@@ -204,6 +206,38 @@ const dataUrl = await copilotz.assets.getDataUrl("asset://abc123");
 const dataUrl = await copilotz.assets.getDataUrl("asset://abc123", { namespace: "tenant-123" });
 // "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg..."
 ```
+
+---
+
+## Document Attachments
+
+Copilotz supports document-aware attachment handling in the shared asset resolution path.
+
+### Current Behavior
+
+- New filesystem-backed assets preserve their original MIME type
+- Legacy filesystem assets without stored MIME are inspected from bytes when possible
+- OOXML Office files such as `.docx`, `.xlsx`, and `.pptx` can be identified even when MIME metadata is missing
+- Supported parsed documents are converted to text before the provider request
+- Unsupported file types are passed through unchanged as file parts
+
+### DOCX Parsing
+
+`.docx` files are treated as parsable documents. Copilotz extracts text from the document package and injects that text into the message history instead of forwarding the raw file bytes.
+
+This is useful when a provider handles text reliably but may reject arbitrary binary document uploads.
+
+### Parse Failures and Fallbacks
+
+If a document type is recognized as parsable but parsing fails:
+
+- the whole LLM request is not failed
+- Copilotz replaces the file part with a short text notice
+- the provider still receives the rest of the request
+
+### Size Limits
+
+Extracted document text is truncated before being injected into prompt history so large files do not exhaust the available context window.
 
 ---
 

@@ -166,6 +166,23 @@ Once an agent addresses someone via @mention, that target becomes their "default
 
 Targets are stored in thread metadata and persist across the conversation.
 
+### Participant Identity
+
+For routing to stay stable across runs, thread participants should use canonical identities such as `sender.id` or `sender.externalId`, not display names.
+
+Recommended pattern for custom adapters:
+
+```typescript
+sender: {
+  type: "user",
+  id: "user-123",
+  externalId: "user-123",
+  name: "Alice",
+}
+```
+
+Using names as thread participant identifiers can break target resolution for agent replies and assistant-initiated tool chains.
+
 ### Multi-Mention Queue
 
 When multiple agents are mentioned, they respond in order:

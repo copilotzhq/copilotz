@@ -95,6 +95,36 @@ Here's what happens when you call `copilotz.run()`:
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Assistant-Initiated Tool Calls
+
+Custom processors and external adapters can trigger tool execution by emitting a `NEW_MESSAGE` event from an agent with top-level `toolCalls`.
+
+Canonical shape:
+
+```typescript
+{
+  type: "NEW_MESSAGE",
+  payload: {
+    sender: { type: "agent", id: "assistant", name: "Assistant" },
+    content: "",
+    toolCalls: [
+      {
+        id: crypto.randomUUID(),
+        name: "getWeather",
+        args: { city: "Sao Paulo" },
+      },
+    ],
+  },
+}
+```
+
+Notes:
+
+- Use top-level `payload.toolCalls`, not provider-native response formats
+- Use the normalized assistant shape `{ id, name, args }`
+- Copilotz emits `TOOL_CALL` events from these assistant messages before target resolution
+- This allows agent follow-up messages from custom processors to directly continue the tool chain
+
 ## Listening to Events
 
 ### Callback Function

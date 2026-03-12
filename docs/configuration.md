@@ -25,6 +25,7 @@ const copilotz = await createCopilotz({
   // Processing
   processors: [...],
   callbacks: { ... },
+  historyTransform: async ({ messages, rawHistory }) => messages,
   
   // RAG
   rag: { ... },
@@ -237,6 +238,36 @@ callbacks: {
   },
 }
 ```
+
+## History Transform
+
+Use `historyTransform` to filter or rewrite the generated message history before it is sent to the LLM.
+
+```typescript
+const copilotz = await createCopilotz({
+  agents: [...],
+  historyTransform: async ({ messages, rawHistory, thread, agent, sourceEvent, deps }) => {
+    // Example: keep only the last 2 hours of history
+    const cutoff = Date.now() - (2 * 60 * 60 * 1000);
+
+    return messages.filter((_message, index) => {
+      const createdAt = rawHistory[index]?.createdAt;
+      const timestamp = createdAt ? new Date(createdAt).getTime() : Number.NaN;
+      return Number.isNaN(timestamp) || timestamp >= cutoff;
+    });
+  },
+});
+```
+
+### History Transform Semantics
+
+- Runs after Copilotz generates chat history and before the system prompt is added
+- Receives both normalized `messages` and aligned `rawHistory`
+- Must return the final `ChatMessage[]` to send as history
+- May be async
+- Does not receive or modify the agent system prompt
+
+Use this hook for redaction, age-based filtering, attachment stripping, or tenant-specific history rules. If you need to change instructions, do that in the agent configuration instead.
 
 ## RAG Configuration
 

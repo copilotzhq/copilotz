@@ -1074,78 +1074,7 @@ export const messageProcessor: EventProcessor<
 
     // Resolve targets using new multi-agent routing
     const availableAgents = context.agents || [];
-
-    // Check if event metadata already has target routing (from llm_call response)
-    const eventMetadata = event.metadata as Record<string, unknown> | null;
-    const metadataTargetId = eventMetadata?.targetId as string | null;
-    const metadataTargetQueue = eventMetadata?.targetQueue as string[] | null;
-
-    let targetResolution: TargetResolution | null;
-
-    if (metadataTargetId) {
-      const resolvedMetadataTarget = resolveThreadParticipantTarget(
-        metadataTargetId,
-        thread,
-        availableAgents,
-      );
-
-      // Use target from event metadata (set by llm_call processor)
-      targetResolution = resolvedMetadataTarget
-        ? {
-          targetId: resolvedMetadataTarget,
-          targetQueue: (metadataTargetQueue ?? []).filter((candidate) =>
-            resolveThreadParticipantTarget(candidate, thread, availableAgents)
-          ),
-        }
-        : null;
-    } else if (context.multiAgent?.enabled === true) {
-      // Multi-agent mode enables delegation via @mentions and persisted targets.
-      targetResolution = await discoverTargetForMessage(
-        messageContext,
-        thread,
-        availableAgents,
-        ops,
-      );
-    } else {
-      // Single-agent mode only resolves the active agent participant and does not
-      // allow autonomous delegation based on plain-text agent output.
-      targetResolution = discoverSingleAgentTargetForMessage(
-        messageContext,
-        thread,
-        availableAgents,
-      );
-    }
-
     const producedEvents: NewEvent[] = [];
-
-    // If no target resolved, skip routing (no agents to respond)
-    if (!targetResolution) {
-      return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
-    }
-
-    // Check for loop prevention (agent-to-agent turn limit)
-    const maxAgentTurns = context.multiAgent?.maxAgentTurns ?? 5;
-    const loopCheck = await checkAndUpdateAgentTurns(
-      ops,
-      thread,
-      messageContext.senderType,
-      targetResolution.targetId,
-      availableAgents,
-      maxAgentTurns,
-    );
-
-    if (loopCheck.shouldForceUserTarget) {
-      // Force target to user - don't trigger any more LLM calls
-      if (loopCheck.userToTarget) {
-        // Update the target to be the user instead
-        targetResolution = {
-          targetId: loopCheck.userToTarget,
-          targetQueue: [],
-        };
-      }
-      // No LLM call for user targets
-      return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
-    }
 
     // Assign descending priorities per target to enforce strict serial-per-target
     const basePriority = 1000;
@@ -1219,6 +1148,76 @@ export const messageProcessor: EventProcessor<
           ...(entityExtractEvents as unknown as NewEvent[]),
         ],
       };
+    }
+
+    // Check if event metadata already has target routing (from llm_call response)
+    const eventMetadata = event.metadata as Record<string, unknown> | null;
+    const metadataTargetId = eventMetadata?.targetId as string | null;
+    const metadataTargetQueue = eventMetadata?.targetQueue as string[] | null;
+
+    let targetResolution: TargetResolution | null;
+
+    if (metadataTargetId) {
+      const resolvedMetadataTarget = resolveThreadParticipantTarget(
+        metadataTargetId,
+        thread,
+        availableAgents,
+      );
+
+      // Use target from event metadata (set by llm_call processor)
+      targetResolution = resolvedMetadataTarget
+        ? {
+          targetId: resolvedMetadataTarget,
+          targetQueue: (metadataTargetQueue ?? []).filter((candidate) =>
+            resolveThreadParticipantTarget(candidate, thread, availableAgents)
+          ),
+        }
+        : null;
+    } else if (context.multiAgent?.enabled === true) {
+      // Multi-agent mode enables delegation via @mentions and persisted targets.
+      targetResolution = await discoverTargetForMessage(
+        messageContext,
+        thread,
+        availableAgents,
+        ops,
+      );
+    } else {
+      // Single-agent mode only resolves the active agent participant and does not
+      // allow autonomous delegation based on plain-text agent output.
+      targetResolution = discoverSingleAgentTargetForMessage(
+        messageContext,
+        thread,
+        availableAgents,
+      );
+    }
+
+    // If no target resolved, skip routing (no agents to respond)
+    if (!targetResolution) {
+      return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
+    }
+
+    // Check for loop prevention (agent-to-agent turn limit)
+    const maxAgentTurns = context.multiAgent?.maxAgentTurns ?? 5;
+    const loopCheck = await checkAndUpdateAgentTurns(
+      ops,
+      thread,
+      messageContext.senderType,
+      targetResolution.targetId,
+      availableAgents,
+      maxAgentTurns,
+    );
+
+    if (loopCheck.shouldForceUserTarget) {
+      // Force target to user - don't trigger any more LLM calls
+      if (loopCheck.userToTarget) {
+        // Update the target to be the user instead
+        targetResolution = {
+          targetId: loopCheck.userToTarget,
+          targetQueue: [],
+        };
+      }
+      // No LLM call for user targets
+      return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
     }
 
     // Get the target agent (case-insensitive matching)

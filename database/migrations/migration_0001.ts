@@ -20,13 +20,6 @@ IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'queue')
 END IF;
 END $$;
 
--- Add any columns that may be missing from older events tables.
--- Each statement is independent; failures are ignored by the runner.
-ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "namespace" VARCHAR(255);
-ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "ttlMs" INTEGER;
-ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "expiresAt" TIMESTAMP;
-ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "metadata" JSONB;
-
 CREATE TABLE IF NOT EXISTS "agents" (
   "id" varchar(255) PRIMARY KEY NOT NULL,
   "name" varchar(255) NOT NULL,
@@ -158,9 +151,11 @@ CREATE TABLE IF NOT EXISTS "events" (
   "updatedAt" timestamp DEFAULT now() NOT NULL
 );
 
-/* Note: Column additions (ttlMs, expiresAt, metadata, namespace) are handled
-   by the DO block at the top of this migration for better compatibility
-   with existing databases that may have the events table without these columns. */
+-- Add any columns that may be missing from older events tables (no-op on fresh installs).
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "namespace" VARCHAR(255);
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "ttlMs" INTEGER;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "expiresAt" TIMESTAMP;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "metadata" JSONB;
 
 /* Foreign key constraints — DO blocks needed since ADD CONSTRAINT has no IF NOT EXISTS */
 DO $$

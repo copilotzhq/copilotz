@@ -294,6 +294,7 @@ const schemaDefinition = {
             "groq",
             "deepseek",
             "ollama",
+            "minimax",
             "xai",
           ],
         },

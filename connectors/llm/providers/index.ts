@@ -5,6 +5,7 @@ import { geminiProvider } from './gemini.ts';
 import { groqProvider } from './groq.ts';
 import { deepseekProvider } from './deepseek.ts';
 import { ollamaProvider } from './ollama.ts';
+import { minimaxProvider } from './minimax.ts';
 
 // Provider registry with all available providers
 export const providers: ProviderRegistry = {
@@ -14,6 +15,7 @@ export const providers: ProviderRegistry = {
   groq: groqProvider,
   deepseek: deepseekProvider,
   ollama: ollamaProvider,
+  minimax: minimaxProvider,
 };
 
 /**
@@ -52,6 +54,7 @@ export function getProviderDefaults(): Record<LLMProviderName, { model: string; 
     groq: { model: 'llama3-8b-8192', apiKeyEnv: 'GROQ_API_KEY' },
     deepseek: { model: 'deepseek-chat', apiKeyEnv: 'DEEPSEEK_API_KEY' },
     ollama: { model: 'llama3.2', apiKeyEnv: 'OLLAMA_BASE_URL' },
+    minimax: { model: 'M2-her', apiKeyEnv: 'MINIMAX_API_KEY' },
     xai: { model: 'grok-beta', apiKeyEnv: 'XAI_API_KEY' },
   };
 }
@@ -64,4 +67,5 @@ export {
   groqProvider,
   deepseekProvider,
   ollamaProvider,
-}; 
+  minimaxProvider,
+};

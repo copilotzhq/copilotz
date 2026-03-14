@@ -2,6 +2,7 @@ import type { CopilotzDb } from "@/database/index.ts";
 import type { ChatContext, Event, NewEvent, NewUnknownEvent, ContentStreamData, MessagePayload, TokenEventPayload, Agent, Tool } from "@/interfaces/index.ts";
 import type { EventBase } from "@/database/schemas/index.ts";
 import { startThreadEventWorker } from "@/event-processors/index.ts";
+import { normalizeInboundRunMessage } from "@/utils/inbound-message.ts";
 import { ulid } from "ulid";
 
 /**
@@ -284,6 +285,9 @@ export async function runThread(
     externalOnEvent?: UnifiedOnEvent,
     options?: RunOptions,
 ): Promise<RunHandle> {
+    const inboundMessage = normalizeInboundRunMessage(
+        message as MessagePayload & { tool_calls?: unknown },
+    );
     const ops = db.ops;
     const stream = options?.stream ?? baseContext.stream ?? false;
     const queue = new AsyncQueue<StreamEvent>();
@@ -302,8 +306,8 @@ export async function runThread(
     }
 
     // Resolve thread
-    const sender = message.sender;
-    const threadRef = message.thread ?? undefined;
+    const sender = inboundMessage.sender;
+    const threadRef = inboundMessage.thread ?? undefined;
     let threadId: string | undefined = (threadRef?.id ?? undefined) || undefined;
     if (!threadId && threadRef?.externalId) {
         const existingByExt = await ops.getThreadByExternalId(threadRef.externalId);
@@ -349,47 +353,37 @@ export async function runThread(
     threadId = ensuredThread.id as string;
 
     const normalizedSender: MessagePayload["sender"] = {
-        id: message.sender?.id ?? message.sender?.externalId ?? message.sender?.name ?? undefined,
-        externalId: message.sender?.externalId ?? null,
-        type: message.sender?.type ?? "user",
-        name: message.sender?.name ?? message.sender?.id ?? message.sender?.externalId ?? null,
-        identifierType: message.sender?.identifierType ?? undefined,
-        metadata: message.sender?.metadata && typeof message.sender.metadata === "object"
-            ? message.sender.metadata as Record<string, unknown>
+        id: inboundMessage.sender?.id ?? inboundMessage.sender?.externalId ?? inboundMessage.sender?.name ?? undefined,
+        externalId: inboundMessage.sender?.externalId ?? null,
+        type: inboundMessage.sender?.type ?? "user",
+        name: inboundMessage.sender?.name ?? inboundMessage.sender?.id ?? inboundMessage.sender?.externalId ?? null,
+        identifierType: inboundMessage.sender?.identifierType ?? undefined,
+        metadata: inboundMessage.sender?.metadata && typeof inboundMessage.sender.metadata === "object"
+            ? inboundMessage.sender.metadata as Record<string, unknown>
             : null,
     };
 
     const normalizedThread: MessagePayload["thread"] = {
-        ...(message.thread ?? {}),
-        externalId: message.thread?.externalId ?? threadRef?.externalId ?? undefined,
+        ...(inboundMessage.thread ?? {}),
+        externalId: inboundMessage.thread?.externalId ?? threadRef?.externalId ?? undefined,
     };
 
-    const normalizedToolCalls: MessagePayload["toolCalls"] = Array.isArray(message.toolCalls)
-        ? message.toolCalls
-            .filter((call): call is NonNullable<typeof call> => Boolean(call && call.name))
-            .map((call) => ({
-                id: call.id ?? null,
-                name: call.name,
-                args: (call.args && typeof call.args === "object")
-                    ? call.args as Record<string, unknown>
-                    : {},
-            }))
-        : null;
+    const normalizedToolCalls: MessagePayload["toolCalls"] = inboundMessage.toolCalls ?? null;
 
-    const normalizedMetadata = message.metadata && typeof message.metadata === "object"
-        ? message.metadata as Record<string, unknown>
-        : message.metadata ?? null;
+    const normalizedMetadata = inboundMessage.metadata && typeof inboundMessage.metadata === "object"
+        ? inboundMessage.metadata as Record<string, unknown>
+        : inboundMessage.metadata ?? null;
 
     const normalizedMessage: MessagePayload = {
-        ...message,
+        ...inboundMessage,
         sender: normalizedSender,
         thread: normalizedThread,
         toolCalls: normalizedToolCalls,
-        target: typeof message.target === "string" && message.target.trim().length > 0
-            ? message.target
+        target: typeof inboundMessage.target === "string" && inboundMessage.target.trim().length > 0
+            ? inboundMessage.target
             : null,
-        targetQueue: Array.isArray(message.targetQueue)
-            ? message.targetQueue
+        targetQueue: Array.isArray(inboundMessage.targetQueue)
+            ? inboundMessage.targetQueue
                 .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
             : null,
         metadata: normalizedMetadata,

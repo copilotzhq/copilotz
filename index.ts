@@ -15,6 +15,7 @@ import {
 import type { OminipgWithCrud } from "omnipg";
 import { runThread, type RunHandle, type RunOptions, type UnifiedOnEvent } from "@/runtime/index.ts";
 import type { CollectionDefinition, CollectionCrud, ScopedCollectionCrud } from "@/database/collections/types.ts";
+import { hasRunInput, normalizeInboundRunMessage } from "@/utils/inbound-message.ts";
 
 import type {
     Agent,
@@ -862,7 +863,9 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
         onEvent?: UnifiedOnEvent,
         options?: RunOptions,
     ): Promise<CopilotzRunResult> => {
-        if (!message?.content && !message?.toolCalls?.length) {
+        const normalizedMessage = normalizeInboundRunMessage(message);
+
+        if (!hasRunInput(normalizedMessage)) {
             throw new Error("message with content or toolCalls is required.");
         }
 
@@ -923,12 +926,12 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
             // Collections: scoped if namespace is set, otherwise raw manager
             collections: resolvedCollections,
             // Sender of the current message (available to processors and tools)
-            sender: message.sender ? {
-                id: message.sender.id ?? null,
-                externalId: message.sender.externalId ?? null,
-                type: message.sender.type ?? "user",
-                name: message.sender.name ?? null,
-                metadata: message.sender.metadata ?? null,
+            sender: normalizedMessage.sender ? {
+                id: normalizedMessage.sender.id ?? null,
+                externalId: normalizedMessage.sender.externalId ?? null,
+                type: normalizedMessage.sender.type ?? "user",
+                name: normalizedMessage.sender.name ?? null,
+                metadata: normalizedMessage.sender.metadata ?? null,
             } : undefined,
             // Multi-agent routing is opt-in. Without explicit config, agent replies
             // should go back to the original sender instead of delegating via @mentions.
@@ -945,11 +948,11 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
         // This sets the search_path for all queries within this run
         if (resolvedSchema && resolvedSchema !== 'public') {
             return withSchema(resolvedSchema, async () => {
-                return await runThread(baseDb, ctx, message, onEvent, options);
+                return await runThread(baseDb, ctx, normalizedMessage, onEvent, options);
             });
         }
 
-        return await runThread(baseDb, ctx, message, onEvent, options);
+        return await runThread(baseDb, ctx, normalizedMessage, onEvent, options);
     };
 
     return {

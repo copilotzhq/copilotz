@@ -159,7 +159,7 @@ export interface ProviderFactory {
 }
 
 // LLM-specific providers
-export type LLMProviderName = 'openai' | 'anthropic' | 'gemini' | 'groq' | 'deepseek' | 'ollama' | 'xai';
+export type LLMProviderName = 'openai' | 'anthropic' | 'gemini' | 'groq' | 'deepseek' | 'ollama' | 'minimax' | 'xai';
 
 // All supported providers (includes LLM, embedding, image generation, speech-to-text, and text-to-speech providers)
 export type ProviderName =

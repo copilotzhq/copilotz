@@ -72,6 +72,7 @@ llmOptions: {
 | `groq` | `llama3-8b-8192`, `mixtral-8x7b-32768` |
 | `deepseek` | `deepseek-chat` |
 | `ollama` | `llama3.2`, `mistral` (local) |
+| `minimax` | `M2-her` |
 
 ### Dynamic Configuration
 

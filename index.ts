@@ -1043,14 +1043,38 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                     return undefined;
                 };
 
-                const send = async (content: string) => {
-                    const handle = await performRun({
-                        content,
-                        sender: sessionSender ?? { type: "user", name: "user" },
-                        thread: sessionParticipants
-                            ? { externalId: threadExternalId, participants: sessionParticipants }
-                            : { externalId: threadExternalId },
-                    }, unifiedOnEvent, { stream: true, ackMode: "onComplete" });
+                const send = async (message: string | MessagePayload) => {
+                    const outboundMessage = typeof message === "string"
+                        ? {
+                            content: message,
+                            sender: sessionSender ?? { type: "user", name: "user" },
+                            thread: sessionParticipants
+                                ? { externalId: threadExternalId, participants: sessionParticipants }
+                                : { externalId: threadExternalId },
+                        } as MessagePayload
+                        : (() => {
+                            const messageThread = message.thread ?? undefined;
+                            const participants = Array.isArray(messageThread?.participants) &&
+                                    messageThread.participants.length > 0
+                                ? messageThread.participants
+                                : sessionParticipants;
+
+                            return {
+                                ...message,
+                                sender: message.sender ?? sessionSender ?? { type: "user", name: "user" },
+                                thread: {
+                                    ...(messageThread ?? {}),
+                                    externalId: threadExternalId,
+                                    ...(participants ? { participants } : {}),
+                                },
+                            } as MessagePayload;
+                        })();
+
+                    const handle = await performRun(
+                        outboundMessage,
+                        unifiedOnEvent,
+                        { stream: true, ackMode: "onComplete" },
+                    );
                     for await (const _ of handle.events) { /* drain */ }
                     await handle.done;
                 };
@@ -1059,13 +1083,7 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                     await send(initialMessage);
                 } else if (initialMessage && typeof initialMessage === "object") {
                     const { banner: _b, quitCommand: _q, threadExternalId: _t, ...rest } = initialMessage as Record<string, unknown>;
-                    const msg = {
-                        ...(rest as MessagePayload),
-                        thread: (rest as MessagePayload).thread ?? { externalId: threadExternalId },
-                    } as MessagePayload;
-                    const handle = await performRun(msg, unifiedOnEvent, { stream: true, ackMode: "onComplete" });
-                    for await (const _ of handle.events) { /* drain */ }
-                    await handle.done;
+                    await send(rest as MessagePayload);
                 }
 
                 while (!stopped) {

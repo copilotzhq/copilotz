@@ -9,13 +9,13 @@
  * - DeepSeek: text only (non-text parts are ignored).
  */
 export type ChatContentPart =
-  | { type: 'text'; text: string }
-  | { type: 'image_url'; image_url: { url: string } }
-  | { type: 'input_audio'; input_audio: { data: string; format?: string } }
-  | { type: 'file'; file: { file_data: string; mime_type?: string } };
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } }
+  | { type: "input_audio"; input_audio: { data: string; format?: string } }
+  | { type: "file"; file: { file_data: string; mime_type?: string } };
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool' | 'tool_result';
+  role: "system" | "user" | "assistant" | "tool" | "tool_result";
   /**
    * Either a plain text string or an array of multimodal parts.
    *
@@ -32,7 +32,6 @@ export interface ChatMessage {
 
 // Comprehensive configuration for AI providers with multimodal support
 export interface ProviderConfig {
-
   // Provider selection
   provider?: ProviderName;
   apiKey?: string;
@@ -47,7 +46,7 @@ export interface ProviderConfig {
   maxLength?: number; // For message truncation
 
   // Response format
-  responseType?: 'text' | 'json';
+  responseType?: "text" | "json";
   stream?: boolean;
 
   // Advanced sampling parameters
@@ -80,19 +79,19 @@ export interface ProviderConfig {
   metadata?: Record<string, any>; // Anthropic
 
   // OpenAI-specific parameters
-  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high'; // OpenAI reasoning models (o3, o4)
+  reasoningEffort?: "minimal" | "low" | "medium" | "high"; // OpenAI reasoning models (o3, o4)
   user?: string; // OpenAI user identifier
-  verbosity?: 'none' | 'low' | 'medium' | 'high'; // OpenAI reasoning models (o3, o4)
+  verbosity?: "none" | "low" | "medium" | "high"; // OpenAI reasoning models (o3, o4)
 }
 
 // Tool definition for standardized tool calling
 export interface ToolDefinition {
-  type: 'function';
+  type: "function";
   function: {
     name: string;
     description: string;
     parameters: {
-      type: 'object';
+      type: "object";
       properties: Record<string, any>;
       required?: string[];
     };
@@ -130,12 +129,11 @@ export interface ChatResponse {
     provider?: ProviderName;
     timestamp: string;
     messageCount: number;
-  } // Execution metadata
+  }; // Execution metadata
 }
 
 // Stream callback function
 export type StreamCallback = (chunk: string) => void;
-
 
 // Provider API interface with multimodal support
 export interface ProviderAPI {
@@ -148,9 +146,8 @@ export interface ProviderAPI {
   processStream?: (
     reader: ReadableStreamDefaultReader<Uint8Array>,
     onChunk: StreamCallback,
-    extractContent: (data: any) => string | null
+    extractContent: (data: any) => string | null,
   ) => Promise<string>;
-
 }
 
 // Provider factory function signature - now much simpler
@@ -159,13 +156,19 @@ export interface ProviderFactory {
 }
 
 // LLM-specific providers
-export type LLMProviderName = 'openai' | 'anthropic' | 'gemini' | 'groq' | 'deepseek' | 'ollama' | 'minimax' | 'xai';
+export type LLMProviderName =
+  | "openai"
+  | "anthropic"
+  | "gemini"
+  | "groq"
+  | "deepseek"
+  | "ollama"
+  | "minimax"
+  | "xai";
 
 // All supported providers (includes LLM, embedding, image generation, speech-to-text, and text-to-speech providers)
-export type ProviderName =
-  // LLM providers
-  | LLMProviderName
-
+export type ProviderName = // LLM providers
+  LLMProviderName;
 
 // Provider registry
 export interface ProviderRegistry {
@@ -175,4 +178,4 @@ export interface ProviderRegistry {
 // Base connector interface (now unused, keeping for backwards compatibility)
 export interface ChatConnector {
   (request: ChatRequest, stream?: StreamCallback): Promise<ChatResponse>;
-} 
+}

@@ -1,6 +1,6 @@
 /**
  * Migration to add namespace support to events table.
- * 
+ *
  * This enables multi-tenant isolation for the event queue.
  * Events can be scoped to a namespace (e.g., tenant ID).
  */
@@ -26,4 +26,3 @@ CREATE INDEX "idx_events_pending_order"
   )
   WHERE "status" = 'pending';
 `;
-

@@ -146,10 +146,13 @@ import type { AssetConfig, AssetStore } from "@/utils/assets.ts";
  * Contains all context needed to dynamically configure LLM options per call.
  */
 export interface AgentLlmOptionsResolverPayload {
-  /** Name of the agent making the LLM call. */
-  agentName: string;
-  /** ID of the agent making the LLM call. */
-  agentId: string;
+  /** Details of the agent making the LLM call. */
+  agent: {
+    /** Optional ID of the agent making the LLM call. */
+    id?: string;
+    /** Name of the agent making the LLM call. */
+    name: string;
+  };
   /** Array of chat messages to send to the LLM. */
   messages: ChatMessage[];
   /** Array of tool definitions available for the call. */
@@ -577,8 +580,13 @@ export interface ChatCallbacks {
 export interface ContentStreamData {
   /** The thread ID this token belongs to. */
   threadId: string;
-  /** Name of the agent generating the content. */
-  agentName: string;
+  /** Details of the agent generating the content. */
+  agent: {
+    /** Optional ID of the agent generating the content. */
+    id?: string;
+    /** Name of the agent generating the content. */
+    name: string;
+  };
   /** The token string being streamed. */
   token: string;
   /** Whether this is the final token (stream complete). */

@@ -60,8 +60,8 @@ export default {
     let searchNamespaces = namespaces;
     if (!searchNamespaces || searchNamespaces.length === 0) {
       // Try to get from agent's ragOptions
-      const agentName = context?.senderId;
-      const agent = context?.agents?.find((a) => a.name === agentName || a.id === agentName);
+      const senderId = context?.senderId;
+      const agent = context?.agents?.find((a) => a.id === senderId || a.name === senderId);
       const agentRagOptions = agent?.ragOptions as { namespaces?: string[] } | undefined;
       searchNamespaces = agentRagOptions?.namespaces ?? ["default"];
     }

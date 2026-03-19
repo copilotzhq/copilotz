@@ -51,8 +51,8 @@ export default {
     // Determine namespace
     let targetNamespace = namespace;
     if (!targetNamespace) {
-      const agentName = context?.senderId;
-      const agent = context?.agents?.find((a) => a.name === agentName || a.id === agentName);
+      const senderId = context?.senderId;
+      const agent = context?.agents?.find((a) => a.id === senderId || a.name === senderId);
       const agentRagOptions = agent?.ragOptions as { ingestNamespace?: string } | undefined;
       targetNamespace = agentRagOptions?.ingestNamespace ?? "default";
     }

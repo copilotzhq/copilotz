@@ -626,12 +626,19 @@ const schemaDefinition = {
           additionalProperties: false,
           properties: {
             threadId: { type: "string" },
-            agentName: { type: "string" },
+            agent: {
+              type: "object",
+              properties: {
+                id: { type: ["string", "null"] },
+                name: { type: "string" }
+              },
+              required: ["name"]
+            },
             token: { type: "string" },
             isComplete: { type: "boolean" },
             isReasoning: { type: "boolean" },
           },
-          required: ["threadId", "agentName", "token", "isComplete"],
+          required: ["threadId", "agent", "token", "isComplete"],
         },
         ChatContentPart: {
           anyOf: [
@@ -705,7 +712,14 @@ const schemaDefinition = {
           type: "object",
           additionalProperties: false,
           properties: {
-            agentName: { type: "string" },
+            agent: {
+              type: "object",
+              properties: {
+                id: { type: ["string", "null"] },
+                name: { type: "string" }
+              },
+              required: ["name"]
+            },
             senderId: { type: "string" },
             senderType: { const: "agent" },
             call: {
@@ -730,15 +744,21 @@ const schemaDefinition = {
             batchSize: { type: ["number", "null"] },
             batchIndex: { type: ["number", "null"] },
           },
-          required: ["agentName", "senderId", "senderType", "call"],
+          required: ["agent", "senderId", "senderType", "call"],
         },
         NewMessageEventPayload: NewMessageEventPayloadSchema,
         LlmCallEventPayload: {
           type: "object",
           additionalProperties: false,
           properties: {
-            agentName: { type: "string" },
-            agentId: { type: "string" },
+            agent: {
+              type: "object",
+              properties: {
+                id: { type: ["string", "null"] },
+                name: { type: "string" }
+              },
+              required: ["name"]
+            },
             messages: {
               type: "array",
               items: { $ref: "#/$defs/ChatMessage" },
@@ -750,7 +770,7 @@ const schemaDefinition = {
             },
             config: { type: "object" },
           },
-          required: ["agentName", "agentId", "messages", "tools", "config"],
+          required: ["agent", "messages", "tools", "config"],
         },
       },
       properties: {

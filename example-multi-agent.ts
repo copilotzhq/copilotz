@@ -82,10 +82,10 @@ When collaborating with Researcher, @mention them to hand off.`,
     let currentAgent = "";
     for await (const event of result.events) {
       if (event.type === "TOKEN") {
-        const payload = event.payload as { token?: string; agentName?: string };
-        if (payload.agentName && payload.agentName !== currentAgent) {
-          if (currentAgent) console.log("\n");
-          currentAgent = payload.agentName;
+        const payload = event.payload as { token?: string; agent?: { id?: string; name: string } };
+        if (payload.agent?.name && payload.agent.name !== currentAgent) {
+          console.log(`\n\n\x1b[36m[${payload.agent.name}]\x1b[0m`);
+          currentAgent = payload.agent.name;
           process.stdout.write(`🤖 ${currentAgent}: `);
         }
         if (payload.token) {

@@ -72,7 +72,7 @@ interface StoredToolResult {
 
 interface PendingBatch {
   batchSize: number;
-  agentName: string;
+  agent: { id?: string; name: string };
   senderId: string;
   results: StoredToolResult[];
   createdAt: string;
@@ -101,7 +101,7 @@ async function storeToolResultInBatch(
   thread: Thread,
   batchId: string,
   batchSize: number,
-  agentName: string,
+  agent: { id?: string; name: string },
   senderId: string,
   result: StoredToolResult,
 ): Promise<{ batch: PendingBatch; isComplete: boolean }> {
@@ -111,7 +111,7 @@ async function storeToolResultInBatch(
   if (!pendingBatches[batchId]) {
     pendingBatches[batchId] = {
       batchSize,
-      agentName,
+      agent,
       senderId,
       results: [],
       createdAt: new Date().toISOString(),
@@ -1045,7 +1045,7 @@ export const messageProcessor: EventProcessor<
           thread,
           batchInfo.batchId,
           batchInfo.batchSize,
-          messageContext.senderName,
+          { id: messageContext.senderId, name: messageContext.senderName },
           messageContext.senderId,
           storedResult,
         );
@@ -1113,7 +1113,7 @@ export const messageProcessor: EventProcessor<
           (agentForToolCalls.id ?? agentForToolCalls.name) as string;
         const argumentsString = JSON.stringify(call.args ?? {});
         const toolCallEventPayload = {
-          agentName: agentForToolCalls.name,
+          agent: { id: senderIdForTool, name: agentForToolCalls.name },
           senderId: senderIdForTool,
           senderType: "agent",
           call: {
@@ -1407,8 +1407,7 @@ export const messageProcessor: EventProcessor<
       ];
 
       const resolverPayload = {
-        agentName: agent.name,
-        agentId: agent.id,
+        agent: { id: agent.id ?? undefined, name: agent.name },
         messages: llmMessages,
         tools: llmTools,
       } as AgentLlmOptionsResolverArgs["payload"];

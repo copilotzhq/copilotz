@@ -28,14 +28,14 @@ import { resolveAssetIdForStore } from "@/utils/assets.ts";
 export type ToolCallInput = Omit<ToolCall, 'id'> & { id?: string };
 
 export interface ToolCallPayload {
-  agentName: string; // agent that requested the tool
+  agent: { id?: string; name: string }; // agent that requested the tool
   senderId: string;
   senderType: "user" | "agent" | "tool" | "system";
   call: ToolCallInput;
 }
 
 export interface ToolResultPayload {
-  agentName: string; // agent that requested the tool
+  agent: { id?: string; name: string }; // agent that requested the tool
   callId: string;
   output?: unknown;
   error?: unknown;
@@ -65,7 +65,8 @@ function assertToolCallPayload(payload: unknown): asserts payload is ToolCallPay
     throw new Error("Invalid tool call payload");
   }
   const value = payload as Record<string, unknown>;
-  if (typeof value.agentName !== "string") throw new Error("Invalid tool call payload: agentName");
+  const agentObj = value.agent as Record<string, unknown> | undefined;
+  if (!agentObj || typeof agentObj.name !== "string") throw new Error("Invalid tool call payload: agent.name");
   if (typeof value.senderId !== "string") throw new Error("Invalid tool call payload: senderId");
   if (
     typeof value.senderType !== "string" ||
@@ -105,7 +106,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
 
     const availableAgents = context.agents || [];
     // Agent may be absent if filtered out by env config — fall back to payload data
-    const agent = availableAgents.find(a => a.name === payload.agentName) ?? null;
+    const agent = availableAgents.find(a => (payload.agent.id && a.id === payload.agent.id) || a.name === payload.agent.name) ?? null;
 
     // Build tools
     const nativeToolsArray = Object.values(getNativeTools()).filter(hasExecute);

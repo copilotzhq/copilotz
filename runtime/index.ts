@@ -437,7 +437,7 @@ export async function runThread(
         if (cancelled) return;
         const tokenPayload: TokenEventPayload = {
             threadId,
-            agentName: data.agentName,
+            agent: data.agent,
             token: data.token,
             isComplete: !!data.isComplete,
             isReasoning: data.isReasoning,

@@ -107,7 +107,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
 
                     const callbackData: ContentStreamData = {
                         threadId,
-                        agentName: payload.agentName,
+                        agent: { id: payload.agent.id ?? undefined, name: payload.agent.name },
                         token,
                         isComplete: false,
                         isReasoning: options?.isReasoning,
@@ -191,7 +191,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             }
         })());
 
-        const agentForCall = context.agents?.find((a) => a.id === payload.agentId);
+        const agentForCall = context.agents?.find((a) => a.id === payload.agent.id);
         let finalConfig: ProviderConfig | undefined = payload.config;
 
         if (!finalConfig && agentForCall) {
@@ -231,7 +231,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             if (context.callbacks?.onContentStream) {
                 context.callbacks.onContentStream({
                     threadId,
-                    agentName: payload.agentName,
+                    agent: { id: payload.agent.id ?? undefined, name: payload.agent.name },
                     token: "",
                     isComplete: true,
                 } as ContentStreamData);
@@ -247,7 +247,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         }
 
         if (answer) {
-            const selfPrefixPattern = new RegExp(`^(\\[${escapeRegex(payload.agentName)}\\]:\\s*|@${escapeRegex(payload.agentName)}\\b(:\\s*|\\s+))`, 'i');
+            const selfPrefixPattern = new RegExp(`^(\\[${escapeRegex(payload.agent.name)}\\]:\\s*|@${escapeRegex(payload.agent.name)}\\b(:\\s*|\\s+))`, 'i');
             answer = answer.replace(selfPrefixPattern, '');
         }
 
@@ -284,7 +284,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         // Resolve target for agent's response (based on @mentions or queue)
         const responseTarget = resolveAgentResponseTarget(
             answer || "",
-            payload.agentId,
+            payload.agent.id ?? payload.agent.name,
             event,
             context.multiAgent?.enabled === true,
         );
@@ -292,9 +292,9 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         const newMessagePayload: MessagePayload = {
             content: answer || "",
             sender: {
-                id: payload.agentId,
+                id: payload.agent.id ?? undefined,
                 type: "agent",
-                name: payload.agentName,
+                name: payload.agent.name,
             },
             toolCalls: normalizedToolCalls,
         };

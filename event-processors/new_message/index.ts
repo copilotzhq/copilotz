@@ -38,6 +38,7 @@ import type {
   ChatMessage,
   ProviderConfig,
   ToolDefinition,
+  ToolInvocation,
 } from "@/connectors/llm/types.ts";
 
 import type { NewMessageEventPayload } from "@/database/schemas/index.ts";
@@ -231,7 +232,8 @@ function parseMentions(
     const isParticipant = participants?.some((p) => {
       const pLower = p.toLowerCase();
       return pLower === nameLower ||
-        (typeof agent?.name === "string" && pLower === agent.name.toLowerCase()) ||
+        (typeof agent?.name === "string" &&
+          pLower === agent.name.toLowerCase()) ||
         (typeof agent?.id === "string" && pLower === agent.id.toLowerCase());
     });
 
@@ -312,7 +314,7 @@ function resolveThreadParticipantTarget(
     const isAllowedParticipant = participants.some((p) => {
       const pLower = p.toLowerCase();
       return (typeof matchedAgent.id === "string" &&
-          pLower === matchedAgent.id.toLowerCase()) ||
+        pLower === matchedAgent.id.toLowerCase()) ||
         (typeof matchedAgent.name === "string" &&
           pLower === matchedAgent.name.toLowerCase());
     });
@@ -321,14 +323,17 @@ function resolveThreadParticipantTarget(
       : null;
   }
 
-  const matchedParticipant = participants.find((p) => p.toLowerCase() === targetLower);
+  const matchedParticipant = participants.find((p) =>
+    p.toLowerCase() === targetLower
+  );
   if (matchedParticipant) {
     return matchedParticipant;
   }
 
-  const threadMetadata = (thread.metadata && typeof thread.metadata === "object")
-    ? thread.metadata as { userExternalId?: unknown }
-    : null;
+  const threadMetadata =
+    (thread.metadata && typeof thread.metadata === "object")
+      ? thread.metadata as { userExternalId?: unknown }
+      : null;
   const metadataUserExternalId = threadMetadata?.userExternalId;
   if (
     typeof metadataUserExternalId === "string" &&
@@ -365,7 +370,8 @@ function isDirectConversationThread(
   for (const participant of participants) {
     const participantLower = participant.toLowerCase();
     const matchedAgent = availableAgents.find((a) =>
-      (typeof a.name === "string" && a.name.toLowerCase() === participantLower) ||
+      (typeof a.name === "string" &&
+        a.name.toLowerCase() === participantLower) ||
       (typeof a.id === "string" && a.id.toLowerCase() === participantLower)
     );
 
@@ -678,7 +684,7 @@ function toExecutableTool(tool: unknown): ExecutableTool | null {
 
 type NormalizedToolCall = {
   id: string | null;
-  name: string;
+  tool: { id: string; name?: string };
   args: Record<string, unknown>;
   // Batch tracking for multiple tool calls from a single LLM response
   batchId?: string | null;
@@ -721,7 +727,7 @@ function normalizeToolCalls(
   if (!Array.isArray(toolCalls)) return [];
   return toolCalls
     .filter((call): call is NonNullable<typeof call> =>
-      Boolean(call && call.name)
+      Boolean(call && call.tool?.id)
     )
     .map((call) => {
       const callWithBatch = call as typeof call & {
@@ -729,12 +735,20 @@ function normalizeToolCalls(
         batchSize?: number | null;
         batchIndex?: number | null;
       };
+
+      let parsedArgs: Record<string, unknown> = {};
+      if (typeof call.args === "string") {
+        try {
+          parsedArgs = JSON.parse(call.args);
+        } catch { /* ignore */ }
+      } else if (isRecord(call.args)) {
+        parsedArgs = call.args;
+      }
+
       return {
         id: call.id ?? null,
-        name: call.name,
-        args: (call.args && typeof call.args === "object")
-          ? call.args as Record<string, unknown>
-          : {},
+        tool: { id: call.tool.id, name: call.tool.name ?? call.tool.id },
+        args: parsedArgs,
         batchId: callWithBatch.batchId ?? null,
         batchSize: callWithBatch.batchSize ?? null,
         batchIndex: callWithBatch.batchIndex ?? null,
@@ -1018,19 +1032,13 @@ export const messageProcessor: EventProcessor<
     ) {
       // This is a batched tool result - we need to aggregate
       const toolCallMeta = Array.isArray(payload.metadata?.toolCalls)
-        ? (payload.metadata.toolCalls as Array<{
-          name?: string;
-          args?: string;
-          output?: unknown;
-          id?: string;
-          status?: string;
-        }>)[0]
+        ? (payload.metadata.toolCalls as ToolInvocation[])[0]
         : null;
 
       if (toolCallMeta) {
         const storedResult: StoredToolResult = {
           callId: toolCallMeta.id ?? `unknown_${Date.now()}`,
-          name: toolCallMeta.name ?? "unknown",
+          name: toolCallMeta.tool?.id ?? "unknown",
           args: typeof toolCallMeta.args === "string"
             ? toolCallMeta.args
             : JSON.stringify(toolCallMeta.args ?? {}),
@@ -1105,28 +1113,54 @@ export const messageProcessor: EventProcessor<
         id: messageContext.senderId,
         name: messageContext.senderName,
       };
+      const toolReplyMetadata = event.metadata &&
+          typeof event.metadata === "object" &&
+          !Array.isArray(event.metadata)
+        ? {
+          replyToParticipantId:
+            typeof (event.metadata as Record<string, unknown>).targetId ===
+                "string"
+              ? (event.metadata as Record<string, unknown>).targetId as string
+              : null,
+          replyToTargetQueue: Array.isArray(
+              (event.metadata as Record<string, unknown>).targetQueue,
+            )
+            ? (
+              (event.metadata as Record<string, unknown>)
+                .targetQueue as unknown[]
+            ).filter((candidate): candidate is string =>
+              typeof candidate === "string"
+            )
+            : [],
+        }
+        : { replyToParticipantId: null, replyToTargetQueue: [] as string[] };
 
       normalizedToolCalls.forEach((call, i: number) => {
-        const callName = call.name || agentForToolCalls.name || "unknown_tool";
-        const callId = call.id || `${callName}_${i}`;
+        const toolId = call.tool?.id || agentForToolCalls.name ||
+          "unknown_tool";
+        const toolName = call.tool?.name || toolId;
+        const callId = call.id || `${toolId}_${i}`;
         const senderIdForTool =
           (agentForToolCalls.id ?? agentForToolCalls.name) as string;
-        const argumentsString = JSON.stringify(call.args ?? {});
+        const argumentsString = typeof call.args === "string"
+          ? call.args
+          : JSON.stringify(call.args ?? {});
+
         const toolCallEventPayload = {
           agent: { id: senderIdForTool, name: agentForToolCalls.name },
           senderId: senderIdForTool,
           senderType: "agent",
-          call: {
+          toolCall: {
             id: callId,
-            function: {
-              name: callName,
-              arguments: argumentsString,
+            tool: {
+              id: toolId,
+              name: toolName,
             },
+            args: argumentsString,
+            batchId: call.batchId ?? null,
+            batchSize: call.batchSize ?? null,
+            batchIndex: call.batchIndex ?? null,
           },
-          // Pass batch info for tool result aggregation
-          batchId: call.batchId ?? null,
-          batchSize: call.batchSize ?? null,
-          batchIndex: call.batchIndex ?? null,
         } as ToolCallEventPayload;
         producedEvents.push({
           threadId,
@@ -1137,6 +1171,10 @@ export const messageProcessor: EventProcessor<
             ? event.traceId
             : undefined,
           priority: chainPriority,
+          metadata: toolReplyMetadata.replyToParticipantId ||
+              toolReplyMetadata.replyToTargetQueue.length > 0
+            ? toolReplyMetadata
+            : undefined,
         });
       });
 
@@ -1154,6 +1192,15 @@ export const messageProcessor: EventProcessor<
     const eventMetadata = event.metadata as Record<string, unknown> | null;
     const metadataTargetId = eventMetadata?.targetId as string | null;
     const metadataTargetQueue = eventMetadata?.targetQueue as string[] | null;
+    const replyToParticipantId = typeof eventMetadata?.replyToParticipantId ===
+        "string"
+      ? eventMetadata.replyToParticipantId
+      : null;
+    const replyToTargetQueue = Array.isArray(eventMetadata?.replyToTargetQueue)
+      ? eventMetadata.replyToTargetQueue.filter((
+        candidate,
+      ): candidate is string => typeof candidate === "string")
+      : [];
 
     let targetResolution: TargetResolution | null;
 
@@ -1238,10 +1285,17 @@ export const messageProcessor: EventProcessor<
     // thread. If they would route to the same agent, absorb them now so the
     // LLM sees all concurrent inputs in a single context window instead of
     // spawning separate chains.
-    if (normalizedToolCalls.length === 0 && messageContext.senderType !== "tool") {
+    if (
+      normalizedToolCalls.length === 0 && messageContext.senderType !== "tool"
+    ) {
       const eventId = typeof event.id === "string" ? event.id : "";
-      const targetIdLowerCoalesce = ((targetAgent.id ?? targetAgent.name) as string).toLowerCase();
-      const candidates = await ops.peekCoalescableCandidates(threadId, eventId, context.namespace);
+      const targetIdLowerCoalesce =
+        ((targetAgent.id ?? targetAgent.name) as string).toLowerCase();
+      const candidates = await ops.peekCoalescableCandidates(
+        threadId,
+        eventId,
+        context.namespace,
+      );
       const idsToAbsorb: string[] = [];
 
       for (const candidate of candidates) {
@@ -1269,7 +1323,9 @@ export const messageProcessor: EventProcessor<
         );
         if (
           candidateMentions.length > 0 &&
-          !candidateMentions.some((m) => m.toLowerCase() === targetIdLowerCoalesce)
+          !candidateMentions.some((m) =>
+            m.toLowerCase() === targetIdLowerCoalesce
+          )
         ) continue;
 
         idsToAbsorb.push(candidate.id as string);
@@ -1277,14 +1333,17 @@ export const messageProcessor: EventProcessor<
         // Resolve toolCallId (mirrors incomingMsg logic)
         let candToolCallId: string | null = null;
         const candTcMeta = Array.isArray(
-          (candidateMeta as { toolCalls?: unknown[] } | null)?.toolCalls,
-        )
+            (candidateMeta as { toolCalls?: unknown[] } | null)?.toolCalls,
+          )
           ? ((candidateMeta as { toolCalls?: unknown[] }).toolCalls ?? [])
           : [];
         for (const entry of candTcMeta) {
           if (entry && typeof entry === "object") {
             const maybeId = (entry as { id?: unknown }).id;
-            if (typeof maybeId === "string") { candToolCallId = maybeId; break; }
+            if (typeof maybeId === "string") {
+              candToolCallId = maybeId;
+              break;
+            }
           }
         }
 
@@ -1346,7 +1405,10 @@ export const messageProcessor: EventProcessor<
       const generatedHistory: ChatMessage[] = historyGenerator(
         ctx.chatHistory,
         agent,
-        { includeTargetContext: includeTargetContext && !directConversation, directConversation },
+        {
+          includeTargetContext: includeTargetContext && !directConversation,
+          directConversation,
+        },
       );
       const llmHistory: ChatMessage[] = context.historyTransform
         ? await context.historyTransform({
@@ -1449,27 +1511,34 @@ export const messageProcessor: EventProcessor<
       // For tool responses: use the agent's persisted target (who they were talking to)
       // to avoid the agent targeting itself after responding
       let originalSenderId = messageContext.senderId;
+      let responseTargetQueue = targetResolution.targetQueue;
       if (messageContext.senderType === "tool") {
-        // Tool response - find who the agent was originally talking to
-        const threadMeta = (thread.metadata ?? {}) as ThreadMetadata;
-        const agentTarget = threadMeta.participantTargets
-          ?.[messageContext.senderId];
-        if (agentTarget) {
-          originalSenderId = agentTarget;
+        if (replyToParticipantId) {
+          originalSenderId = replyToParticipantId;
         } else {
-          // Fallback: find a user in the thread participants
-          const userInThread = thread.participants?.find((p) =>
-            !availableAgents.some((a) => a.name === p || a.id === p)
-          );
-          if (userInThread) {
-            originalSenderId = userInThread;
+          // Tool response - find who the agent was originally talking to
+          const threadMeta = (thread.metadata ?? {}) as ThreadMetadata;
+          const agentTarget = threadMeta.participantTargets
+            ?.[messageContext.senderId];
+          if (agentTarget) {
+            originalSenderId = agentTarget;
+          } else {
+            // Fallback: find a user in the thread participants
+            const userInThread = thread.participants?.find((p) =>
+              !availableAgents.some((a) => a.name === p || a.id === p)
+            );
+            if (userInThread) {
+              originalSenderId = userInThread;
+            }
           }
         }
+
+        responseTargetQueue = replyToTargetQueue;
       }
 
       const llmEventMetadata = {
         targetId: targetResolution.targetId,
-        targetQueue: targetResolution.targetQueue,
+        targetQueue: responseTargetQueue,
         sourceMessageSenderId: originalSenderId,
       };
 

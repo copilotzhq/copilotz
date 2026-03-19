@@ -69,7 +69,7 @@ export function normalizeInboundToolCalls(
 
     return [{
       id: typeof rawCall.id === "string" ? rawCall.id : null,
-      name,
+      tool: { id: name, name },
       args: parseInboundToolArgs(rawCall.args ?? rawCall.function?.arguments),
     }];
   });

@@ -1,7 +1,6 @@
 import { chat } from "@/connectors/llm/index.ts";
-import type { ChatMessage, ChatRequest, ChatResponse, ProviderConfig } from "@/connectors/llm/types.ts";
+import type { ChatMessage, ProviderConfig, ChatResponse, ChatRequest, ToolInvocation } from "@/connectors/llm/types.ts";
 import type { Event, NewEvent, EventProcessor, MessagePayload, ProcessorDeps, LlmCallEventPayload, ContentStreamData } from "@/interfaces/index.ts";
-import type { ToolCallInput } from "@/event-processors/tool_call/index.ts";
 import { resolveAssetRefsInMessages } from "@/utils/assets.ts";
 
 export type {
@@ -240,7 +239,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
 
         // Clean response
         let answer: string | undefined = ("answer" in llmResponse) ? (llmResponse as unknown as { answer?: string }).answer : undefined;
-        const toolCalls: ToolCallInput[] | undefined = ("toolCalls" in llmResponse) ? (llmResponse as unknown as { toolCalls?: ToolCallInput[] }).toolCalls : undefined;
+        const toolCalls: ToolInvocation[] | undefined = ("toolCalls" in llmResponse) ? (llmResponse as unknown as { toolCalls?: ToolInvocation[] }).toolCalls : undefined;
 
         if (!answer && !toolCalls) {
             return { producedEvents: [] };
@@ -263,15 +262,15 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             ? toolCalls.map((call, index) => {
                 let parsedArgs: Record<string, unknown> = {};
                 try {
-                    parsedArgs = call?.function?.arguments
-                        ? JSON.parse(call.function.arguments)
-                        : {};
+                    parsedArgs = typeof call?.args === "string"
+                        ? JSON.parse(call.args)
+                        : (call?.args || {});
                 } catch (_err) {
                     parsedArgs = {};
                 }
                 return {
                     id: call?.id ?? null,
-                    name: call?.function?.name ?? "",
+                    tool: { id: call?.tool?.id ?? "", name: call?.tool?.name },
                     args: parsedArgs,
                     // Include batch info for tool call aggregation
                     batchId,

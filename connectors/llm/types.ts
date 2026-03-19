@@ -27,7 +27,7 @@ export interface ChatMessage {
   content: string | ChatContentPart[];
   tool_call_id?: string;
   // Prefer passing tool calls explicitly for assistant messages
-  toolCalls?: ToolCall[];
+  toolCalls?: ToolInvocation[];
 }
 
 // Comprehensive configuration for AI providers with multimodal support
@@ -109,13 +109,20 @@ export interface ChatRequest {
   tool_call_id?: string;
 }
 
-// Parsed tool call from AI response
-export interface ToolCall {
-  id: string;
-  function: {
-    name: string;
-    arguments: string; // JSON string of arguments
+// Unified Tool Invocation payload mapping executions end-to-end
+export interface ToolInvocation {
+  id: string; // The LLM-assigned unique execution ID (e.g. call_12345)
+  tool: {
+    id: string; // The programmatic tool key
+    name?: string; // Optional human-readable tool title
   };
+  args: string; // JSON string of arguments
+  output?: unknown; // Present when the tool completes
+  status?: "pending" | "processing" | "completed" | "failed" | "expired" | "overwritten";
+  // Internal batch aggregator metadata
+  batchId?: string | null;
+  batchSize?: number | null;
+  batchIndex?: number | null;
 }
 
 // Response from chat completions with media processing results
@@ -125,7 +132,7 @@ export interface ChatResponse {
   tokens: number;
   provider?: ProviderName;
   model?: string;
-  toolCalls?: ToolCall[]; // Parsed tool calls from response
+  toolCalls?: ToolInvocation[]; // Parsed tool calls from response
   metadata?: {
     provider?: ProviderName;
     timestamp: string;

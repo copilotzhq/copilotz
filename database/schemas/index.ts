@@ -85,6 +85,32 @@ const ToolMessageMetadataSchema = {
   },
 } as const;
 
+export const ToolInvocationSchema = {
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    id: { type: ["string", "null"] },
+    tool: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        name: { type: ["string", "null"] },
+      },
+      required: ["id"],
+    },
+    args: { type: ["object", "string", "null"] },
+    output: {},
+    status: {
+      type: ["string", "null"],
+      enum: ["pending", "processing", "completed", "failed", "expired", "overwritten"],
+    },
+    batchId: { type: ["string", "null"] },
+    batchSize: { type: ["number", "null"] },
+    batchIndex: { type: ["number", "null"] },
+  },
+  required: ["id", "tool", "args"],
+} as const;
+
 const MessagePayloadSchema = {
   type: "object",
   additionalProperties: true,
@@ -160,16 +186,7 @@ const MessagePayloadSchema = {
         { type: "null" },
         {
           type: "array",
-          items: {
-            type: "object",
-            additionalProperties: true,
-            properties: {
-              id: { type: ["string", "null"] },
-              name: { type: "string" },
-              args: { type: "object", additionalProperties: true },
-            },
-            required: ["name", "args"],
-          },
+          items: ToolInvocationSchema,
         },
       ],
     },
@@ -233,28 +250,7 @@ const MessagePayloadSchema = {
           properties: {
             toolCalls: {
               type: ["array", "null"],
-              items: {
-                type: "object",
-                additionalProperties: true,
-                properties: {
-                  name: { type: "string" },
-                  args: { type: "string" },
-                  output: {},
-                  id: { type: ["string", "null"] },
-                  status: {
-                    type: ["string", "null"],
-                    enum: [
-                      "pending",
-                      "processing",
-                      "completed",
-                      "failed",
-                      "expired",
-                      "overwritten",
-                    ],
-                  },
-                },
-                required: ["name", "args"],
-              },
+              items: ToolInvocationSchema,
             },
           },
         },
@@ -722,29 +718,9 @@ const schemaDefinition = {
             },
             senderId: { type: "string" },
             senderType: { const: "agent" },
-            call: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                id: { type: ["string", "null"] },
-                function: {
-                  type: "object",
-                  additionalProperties: false,
-                  properties: {
-                    name: { type: "string" },
-                    arguments: { type: "string" },
-                  },
-                  required: ["name", "arguments"],
-                },
-              },
-              required: ["function"],
-            },
-            // Batch tracking for multiple tool calls from a single LLM response
-            batchId: { type: ["string", "null"] },
-            batchSize: { type: ["number", "null"] },
-            batchIndex: { type: ["number", "null"] },
+            toolCall: ToolInvocationSchema,
           },
-          required: ["agent", "senderId", "senderType", "call"],
+          required: ["agent", "senderId", "senderType", "toolCall"],
         },
         NewMessageEventPayload: NewMessageEventPayloadSchema,
         LlmCallEventPayload: {

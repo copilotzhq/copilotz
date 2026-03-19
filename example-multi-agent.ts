@@ -71,9 +71,10 @@ When collaborating with Researcher, @mention them to hand off.`,
       },
       async (event) => {
         if (event.type === "TOOL_CALL") {
-          const payload = event.payload as { call?: { name?: string } };
-          if (payload.call?.name) {
-            console.log(`  🔧 [${payload.call.name}]`);
+          const payload = event.payload as { toolCall?: { tool?: { id: string; name?: string } } };
+          const tool = payload.toolCall?.tool;
+          if (tool?.id) {
+            console.log(`  🔧 [${tool.name || tool.id}]`);
           }
         }
       },

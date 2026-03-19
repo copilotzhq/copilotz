@@ -1,4 +1,3 @@
-
 // Import Generators
 import { generateAllApiTools } from "@/event-processors/tool_call/generators/api-generator.ts";
 import { generateAllMcpTools } from "@/event-processors/tool_call/generators/mcp-generator.ts";
@@ -8,30 +7,27 @@ import { getNativeTools } from "./native-tools-registry/index.ts";
 
 // Import Types
 import type {
+  Agent,
+  ChatContext,
+  CopilotzDb,
   Event,
   EventProcessor,
   NewEvent,
-  Tool,
   ProcessorDeps,
-  ChatContext,
-  Agent,
-  CopilotzDb,
+  Tool,
 } from "@/interfaces/index.ts";
 import type { ExecutableTool } from "./types.ts";
-import type { ToolCall } from "@/connectors/llm/types.ts";
+import type { ToolInvocation } from "@/connectors/llm/types.ts";
 
 import Ajv from "npm:ajv@^8.17.1";
 import addFormats from "npm:ajv-formats@^3.0.1";
 import { resolveAssetIdForStore } from "@/utils/assets.ts";
 
-// Tool call with optional id (before being sent to LLM)
-export type ToolCallInput = Omit<ToolCall, 'id'> & { id?: string };
-
 export interface ToolCallPayload {
   agent: { id?: string; name: string }; // agent that requested the tool
   senderId: string;
   senderType: "user" | "agent" | "tool" | "system";
-  call: ToolCallInput;
+  toolCall: ToolInvocation;
 }
 
 export interface ToolResultPayload {
@@ -60,170 +56,220 @@ export interface ToolExecutionContext extends ChatContext {
   // collections?: CollectionsManager;
 }
 
-function assertToolCallPayload(payload: unknown): asserts payload is ToolCallPayload {
+function assertToolCallPayload(
+  payload: unknown,
+): asserts payload is ToolCallPayload {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error("Invalid tool call payload");
   }
   const value = payload as Record<string, unknown>;
   const agentObj = value.agent as Record<string, unknown> | undefined;
-  if (!agentObj || typeof agentObj.name !== "string") throw new Error("Invalid tool call payload: agent.name");
-  if (typeof value.senderId !== "string") throw new Error("Invalid tool call payload: senderId");
+  if (!agentObj || typeof agentObj.name !== "string") {
+    throw new Error("Invalid tool call payload: agent.name");
+  }
+  if (typeof value.senderId !== "string") {
+    throw new Error("Invalid tool call payload: senderId");
+  }
   if (
     typeof value.senderType !== "string" ||
     !["user", "agent", "tool", "system"].includes(value.senderType)
   ) {
     throw new Error("Invalid tool call payload: senderType");
   }
-  const call = value.call as Record<string, unknown> | undefined;
-  const fn = call?.function as Record<string, unknown> | undefined;
-  if (!call || typeof call !== "object") throw new Error("Invalid tool call payload: call");
-  if (!fn || typeof fn !== "object") throw new Error("Invalid tool call payload: call.function");
-  if (typeof fn.name !== "string") throw new Error("Invalid tool call payload: function.name");
-  if (typeof fn.arguments !== "string") {
-    throw new Error("Invalid tool call payload: function.arguments");
+  const call = value.toolCall as Record<string, unknown> | undefined;
+  if (!call || typeof call !== "object") {
+    throw new Error("Invalid tool call payload: toolCall");
+  }
+  const tool = call.tool as Record<string, unknown> | undefined;
+  if (!tool || typeof tool !== "object") {
+    throw new Error("Invalid tool call payload: toolCall.tool");
+  }
+  if (typeof tool.id !== "string") {
+    throw new Error("Invalid tool call payload: toolCall.tool.id");
+  }
+  if (typeof call.args !== "string" && typeof call.args !== "object") {
+    throw new Error("Invalid tool call payload: toolCall.args");
   }
 }
-
 
 const hasExecute = (tool: unknown): tool is ExecutableTool =>
   Boolean(
     tool &&
-    typeof tool === "object" &&
-    typeof (tool as { execute?: unknown }).execute === "function",
+      typeof tool === "object" &&
+      typeof (tool as { execute?: unknown }).execute === "function",
   );
 
-export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> = {
-  shouldProcess: () => true,
-  process: async (event: Event, deps: ProcessorDeps) => {
-    const { db, thread: _thread, context } = deps;
-    assertToolCallPayload(event.payload);
-    const payload = event.payload;
+export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
+  {
+    shouldProcess: () => true,
+    process: async (event: Event, deps: ProcessorDeps) => {
+      const { db, thread: _thread, context } = deps;
+      assertToolCallPayload(event.payload);
+      const payload = event.payload;
 
-    const threadId = typeof event.threadId === "string" ? event.threadId : undefined;
-    if (!threadId) {
-      throw new Error("Invalid thread id for tool call event");
-    }
-
-    const availableAgents = context.agents || [];
-    // Agent may be absent if filtered out by env config — fall back to payload data
-    const agent = availableAgents.find(a => (payload.agent.id && a.id === payload.agent.id) || a.name === payload.agent.name) ?? null;
-
-    // Build tools
-    const nativeToolsArray = Object.values(getNativeTools()).filter(hasExecute);
-    const userTools = (context.tools || []).filter(hasExecute);
-    const apiTools = context.apis
-      ? generateAllApiTools(context.apis).filter(hasExecute)
-      : [];
-    const mcpTools = context.mcpServers
-      ? (await generateAllMcpTools(context.mcpServers)).filter(hasExecute)
-      : [];
-    const allTools: ExecutableTool[] = [
-      ...nativeToolsArray,
-      ...userTools,
-      ...apiTools,
-      ...mcpTools,
-    ];
-
-    // If agent not found, allow all tools; otherwise respect agent.allowedTools
-    const allowedKeys = agent && Array.isArray(agent.allowedTools) && agent.allowedTools.length > 0
-      ? agent.allowedTools
-      : allTools.map((t) => t.key);
-    const agentTools =
-      allowedKeys.map((key: string) => allTools.find((t) => t.key === key)).filter(hasExecute) || [];
-
-    const results = await processToolCalls(
-      [payload.call],
-      agentTools,
-      {
-        ...context,
-        senderId: (agent ? (agent.id ?? agent.name) : payload.senderId) as string,
-        senderType: "agent",
-        threadId,
-        agents: availableAgents,
-        tools: allTools,
-        db,
-        resolveAsset: async (ref: string) => {
-          if (!context.assetStore) throw new Error("Asset store is not configured");
-          const id = resolveAssetIdForStore(ref, context.assetStore);
-          return await context.assetStore.get(id);
-        },
+      const threadId = typeof event.threadId === "string"
+        ? event.threadId
+        : undefined;
+      if (!threadId) {
+        throw new Error("Invalid thread id for tool call event");
       }
-    );
 
-    const result = results[0];
-    const call = payload.call;
-    const callId = call.id || `${call.function.name}_${Date.now()}`;
+      const availableAgents = context.agents || [];
+      const eventMetadata =
+        event.metadata && typeof event.metadata === "object" &&
+          !Array.isArray(event.metadata)
+          ? event.metadata as Record<string, unknown>
+          : null;
+      const replyToParticipantId =
+        typeof eventMetadata?.replyToParticipantId === "string"
+          ? eventMetadata.replyToParticipantId
+          : null;
+      const replyToTargetQueue =
+        Array.isArray(eventMetadata?.replyToTargetQueue)
+          ? eventMetadata.replyToTargetQueue.filter((
+            candidate,
+          ): candidate is string => typeof candidate === "string")
+          : [];
+      // Agent may be absent if filtered out by env config — fall back to payload data
+      const agent =
+        availableAgents.find((a) =>
+          (payload.agent.id && a.id === payload.agent.id) ||
+          a.name === payload.agent.name
+        ) ?? null;
 
-    // Schedule a follow-up message event to let the agent continue after tool result
-    const output = result.output;
-    const error = result.error;
+      // Build tools
+      const nativeToolsArray = Object.values(getNativeTools()).filter(
+        hasExecute,
+      );
+      const userTools = (context.tools || []).filter(hasExecute);
+      const apiTools = context.apis
+        ? generateAllApiTools(context.apis).filter(hasExecute)
+        : [];
+      const mcpTools = context.mcpServers
+        ? (await generateAllMcpTools(context.mcpServers)).filter(hasExecute)
+        : [];
+      const allTools: ExecutableTool[] = [
+        ...nativeToolsArray,
+        ...userTools,
+        ...apiTools,
+        ...mcpTools,
+      ];
 
-    let content: string;
-    if (error) {
-      content = `tool error: ${String(error)}\n\nPlease review the error above and try again with the correct format.`;
-    } else if (typeof output !== "undefined") {
-      try {
-        content = typeof output === "string" ? output : JSON.stringify(output);
-      } catch {
-        content = String(output);
-      }
-    } else {
-      content = `No output returned`;
-    }
-    // Extract batch info from payload
-    const payloadWithBatch = payload as typeof payload & {
-      batchId?: string | null;
-      batchSize?: number | null;
-      batchIndex?: number | null;
-    };
-    const batchId = payloadWithBatch.batchId ?? null;
-    const batchSize = payloadWithBatch.batchSize ?? null;
-    const batchIndex = payloadWithBatch.batchIndex ?? null;
+      // If agent not found, allow all tools; otherwise respect agent.allowedTools
+      const allowedKeys = agent && Array.isArray(agent.allowedTools) &&
+          agent.allowedTools.length > 0
+        ? agent.allowedTools
+        : allTools.map((t) => t.key);
+      const agentTools =
+        allowedKeys.map((key: string) => allTools.find((t) => t.key === key))
+          .filter(hasExecute) || [];
 
-    // Enqueue a MESSAGE event
-    const producedEvents: NewEvent[] = [
-      {
-        threadId,
-        type: "NEW_MESSAGE",
-        payload: {
-          content,
-          sender: {
-            type: "tool",
-            id: payload.senderId,
-            name: payload.senderId,
-          },
-          metadata: {
-            toolCalls: [
-              {
-                name: call.function.name,
-                args: call.function.arguments,
-                output,
-                id: callId,
-                status: error ? "failed" : "completed",
-              },
-            ],
-            // Include batch info for aggregation in NEW_MESSAGE processor
-            batchId,
-            batchSize,
-            batchIndex,
+      const results = await processToolCalls(
+        [payload.toolCall],
+        agentTools,
+        {
+          ...context,
+          senderId:
+            (agent ? (agent.id ?? agent.name) : payload.senderId) as string,
+          senderType: "agent",
+          threadId,
+          agents: availableAgents,
+          tools: allTools,
+          db,
+          resolveAsset: async (ref: string) => {
+            if (!context.assetStore) {
+              throw new Error("Asset store is not configured");
+            }
+            const id = resolveAssetIdForStore(ref, context.assetStore);
+            return await context.assetStore.get(id);
           },
         },
-        parentEventId: typeof event.id === "string" ? event.id : undefined,
-        traceId: typeof event.traceId === "string" ? event.traceId : undefined,
-        priority: typeof event.priority === "number" ? event.priority : undefined,
+      );
+
+      const result = results[0];
+      const call = payload.toolCall;
+      const callId = call.id || `${call.tool.id}_${Date.now()}`;
+
+      // Schedule a follow-up message event to let the agent continue after tool result
+      const output = result.output;
+      const error = result.error;
+
+      let content: string;
+      if (error) {
+        content = `tool error: ${
+          String(error)
+        }\n\nPlease review the error above and try again with the correct format.`;
+      } else if (typeof output !== "undefined") {
+        try {
+          content = typeof output === "string"
+            ? output
+            : JSON.stringify(output);
+        } catch {
+          content = String(output);
+        }
+      } else {
+        content = `No output returned`;
       }
-    ];
+      // Extract batch info from toolCall cleanly
+      const batchId = call.batchId ?? null;
+      const batchSize = call.batchSize ?? null;
+      const batchIndex = call.batchIndex ?? null;
 
-    return { producedEvents };
-  }
-};
+      // Enqueue a MESSAGE event
+      const producedEvents: NewEvent[] = [
+        {
+          threadId,
+          type: "NEW_MESSAGE",
+          payload: {
+            content,
+            sender: {
+              type: "tool",
+              id: payload.senderId,
+              name: payload.senderId,
+            },
+            metadata: {
+              toolCalls: [
+                {
+                  id: callId,
+                  tool: { id: call.tool.id, name: call.tool.name },
+                  args: call.args,
+                  output,
+                  status: error ? "failed" : "completed",
+                },
+              ],
+              // Include batch info for aggregation in NEW_MESSAGE processor
+              batchId,
+              batchSize,
+              batchIndex,
+            },
+          },
+          parentEventId: typeof event.id === "string" ? event.id : undefined,
+          traceId: typeof event.traceId === "string"
+            ? event.traceId
+            : undefined,
+          priority: typeof event.priority === "number"
+            ? event.priority
+            : undefined,
+          metadata: replyToParticipantId || replyToTargetQueue.length > 0
+            ? {
+              replyToParticipantId,
+              replyToTargetQueue,
+            }
+            : undefined,
+        },
+      ];
 
+      return { producedEvents };
+    },
+  };
 
 /**
  * Calculate Levenshtein distance between two strings (for typo detection)
  */
 function levenshteinDistance(str1: string, str2: string): number {
-  const matrix = Array(str2.length + 1).fill(null).map(() => Array(str1.length + 1).fill(null));
+  const matrix = Array(str2.length + 1).fill(null).map(() =>
+    Array(str1.length + 1).fill(null)
+  );
 
   for (let i = 0; i <= str1.length; i++) matrix[0][i] = i;
   for (let j = 0; j <= str2.length; j++) matrix[j][0] = j;
@@ -232,9 +278,9 @@ function levenshteinDistance(str1: string, str2: string): number {
     for (let i = 1; i <= str1.length; i++) {
       const indicator = str1[i - 1] === str2[j - 1] ? 0 : 1;
       matrix[j][i] = Math.min(
-        matrix[j][i - 1] + 1,     // insertion
-        matrix[j - 1][i] + 1,     // deletion
-        matrix[j - 1][i - 1] + indicator // substitution
+        matrix[j][i - 1] + 1, // insertion
+        matrix[j - 1][i] + 1, // deletion
+        matrix[j - 1][i - 1] + indicator, // substitution
       );
     }
   }
@@ -243,11 +289,11 @@ function levenshteinDistance(str1: string, str2: string): number {
 }
 
 export const processToolCalls = async (
-  toolCalls: ToolCallInput[],
+  toolCalls: ToolInvocation[],
   agentTools: ExecutableTool[] = [],
-  context: ToolExecutionContext = {}
+  context: ToolExecutionContext = {},
 ) => {
-  const availableTools = agentTools.map(t => t.key).join(", ");
+  const availableTools = agentTools.map((t) => t.key).join(", ");
 
   const results = await Promise.all(
     toolCalls.map(async (toolCall) => {
@@ -257,43 +303,55 @@ export const processToolCalls = async (
 
       try {
         // Check if tool call has proper structure
-        if (!toolCall.function) {
+        if (!toolCall.tool || !toolCall.tool.id) {
           // Check if it looks like the agent tried to call a tool directly
-          const potentialToolName = Object.keys(toolCall).find(key =>
-            agentTools.some(tool => tool.key === key)
+          const potentialToolName = Object.keys(toolCall).find((key) =>
+            agentTools.some((tool) => tool.key === key)
           );
 
           let suggestion = "";
           if (potentialToolName) {
-            suggestion = `\n\nDid you mean to call "${potentialToolName}"? Use this format:\n<tool_calls>\n{"function": {"name": "${potentialToolName}", "arguments": ${JSON.stringify(toolCall)}}}\n</tool_calls>`;
+            suggestion =
+              `\n\nDid you mean to call "${potentialToolName}"? Use this format:\n<function_calls>\n<invoke name="${potentialToolName}">\n${
+                JSON.stringify(toolCall)
+              }\n</invoke>\n</function_calls>`;
           } else {
-            suggestion = `\n\nCorrect format example:\n<tool_calls>\n{"function": {"name": "create_thread", "arguments": {"name": "My Thread", "participants": ["Agent1"]}}}\n</tool_calls>`;
+            suggestion =
+              `\n\nCorrect format example:\n<function_calls>\n<invoke name="create_thread">\n{"name": "My Thread", "participants": ["Agent1"]}\n</invoke>\n</function_calls>`;
           }
 
           return {
             tool_call_id: toolCall.id || "unknown",
             name: "unknown",
-            error: `MALFORMED TOOL CALL: Expected format {"function": {"name": "tool_name", "arguments": "..."}}. Available tools: [${availableTools}].${suggestion}`
+            error:
+              `MALFORMED TOOL CALL: Expected tool key. Available tools: [${availableTools}].${suggestion}`,
           };
         }
 
-        name = toolCall.function.name;
-        argsString = toolCall.function.arguments;
+        name = toolCall.tool.id;
+        const rawArgs = toolCall.args;
+        argsString = typeof rawArgs === "string"
+          ? rawArgs
+          : JSON.stringify(rawArgs || {});
 
         // Validate name exists
         if (!name) {
           return {
             tool_call_id: toolCall.id || "unknown",
             name: "unknown",
-            error: `MISSING TOOL NAME: You must specify a tool name. Available tools: [${availableTools}]. Your call was: ${JSON.stringify(toolCall)}`
+            error:
+              `MISSING TOOL NAME: You must specify a tool name. Available tools: [${availableTools}]. Your call was: ${
+                JSON.stringify(toolCall)
+              }`,
           };
         }
-
       } catch (error) {
         return {
           tool_call_id: toolCall.id || "unknown",
           name: "unknown",
-          error: `INVALID TOOL CALL STRUCTURE: ${error instanceof Error ? error.message : String(error)}. Available tools: [${availableTools}]`
+          error: `INVALID TOOL CALL STRUCTURE: ${
+            error instanceof Error ? error.message : String(error)
+          }. Available tools: [${availableTools}]`,
         };
       }
 
@@ -302,7 +360,7 @@ export const processToolCalls = async (
 
       if (!tool) {
         // Find similar tool names (typo detection)
-        const similarTools = agentTools.filter(t =>
+        const similarTools = agentTools.filter((t) =>
           t.key.toLowerCase().includes(name.toLowerCase()) ||
           name.toLowerCase().includes(t.key.toLowerCase()) ||
           levenshteinDistance(t.key.toLowerCase(), name.toLowerCase()) <= 2
@@ -310,15 +368,21 @@ export const processToolCalls = async (
 
         let suggestion = "";
         if (similarTools.length > 0) {
-          suggestion = `\n\nDid you mean: ${similarTools.map(t => `"${t.key}"`).join(", ")}?`;
+          suggestion = `\n\nDid you mean: ${
+            similarTools.map((t) => `"${t.key}"`).join(", ")
+          }?`;
         } else {
-          suggestion = `\n\nExample usage:\n<tool_calls>\n{"function": {"name": "${agentTools[0]?.key || 'tool_name'}", "arguments": {...}}}\n</tool_calls>`;
+          suggestion =
+            `\n\nExample usage:\n<tool_calls>\n{"function": {"name": "${
+              agentTools[0]?.key || "tool_name"
+            }", "arguments": {...}}}\n</tool_calls>`;
         }
 
         return {
           tool_call_id: toolCall.id,
           name,
-          error: `TOOL NOT FOUND: "${name}" is not available. Available tools: [${availableTools}].${suggestion}`,
+          error:
+            `TOOL NOT FOUND: "${name}" is not available. Available tools: [${availableTools}].${suggestion}`,
         };
       }
 
@@ -330,7 +394,10 @@ export const processToolCalls = async (
         return {
           tool_call_id: toolCall.id,
           name,
-          error: `INVALID JSON ARGUMENTS: The arguments must be valid JSON. Your arguments: ${argsString}. Error: ${e instanceof Error ? e.message : String(e)}`,
+          error:
+            `INVALID JSON ARGUMENTS: The arguments must be valid JSON. Your arguments: ${argsString}. Error: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
         };
       }
 
@@ -340,7 +407,8 @@ export const processToolCalls = async (
         return {
           tool_call_id: toolCall.id,
           name,
-          error: `VALIDATION ERROR: ${validation.error}. Please check the tool's required parameters and try again.`,
+          error:
+            `VALIDATION ERROR: ${validation.error}. Please check the tool's required parameters and try again.`,
         };
       }
 
@@ -353,15 +421,16 @@ export const processToolCalls = async (
           name,
           output,
         };
-
       } catch (error) {
         return {
           tool_call_id: toolCall.id,
           name,
-          error: `EXECUTION ERROR: ${error instanceof Error ? error.message : String(error)}`,
+          error: `EXECUTION ERROR: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
         };
       }
-    })
+    }),
   );
 
   return results;
@@ -387,7 +456,10 @@ interface ToolCallValidation {
   arguments: unknown;
 }
 
-export const validateToolCall = (toolCall: ToolCallValidation, tool: Tool): ValidationResult => {
+export const validateToolCall = (
+  toolCall: ToolCallValidation,
+  tool: Tool,
+): ValidationResult => {
   // If no input schema is defined, any input is valid
   if (!tool.inputSchema) {
     return { valid: true };
@@ -396,18 +468,20 @@ export const validateToolCall = (toolCall: ToolCallValidation, tool: Tool): Vali
   // Handle undefined or null arguments
   const args = toolCall.arguments || {};
 
-  const schemaProperties =
-    tool.inputSchema.properties && typeof tool.inputSchema.properties === "object"
-      ? tool.inputSchema.properties as Record<string, unknown>
-      : undefined;
+  const schemaProperties = tool.inputSchema.properties &&
+      typeof tool.inputSchema.properties === "object"
+    ? tool.inputSchema.properties as Record<string, unknown>
+    : undefined;
   const requiredFields = Array.isArray(tool.inputSchema.required)
     ? tool.inputSchema.required
     : undefined;
 
   // If the schema has no properties and no required fields, accept empty arguments
-  if (tool.inputSchema.type === 'object' &&
+  if (
+    tool.inputSchema.type === "object" &&
     (!schemaProperties || Object.keys(schemaProperties).length === 0) &&
-    (!requiredFields || requiredFields.length === 0)) {
+    (!requiredFields || requiredFields.length === 0)
+  ) {
     return { valid: true };
   }
 
@@ -424,7 +498,9 @@ export const validateToolCall = (toolCall: ToolCallValidation, tool: Tool): Vali
   } catch (error) {
     return {
       valid: false,
-      error: `Schema validation error: ${error instanceof Error ? error.message : 'Unknown error'}`
+      error: `Schema validation error: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`,
     };
   }
 };

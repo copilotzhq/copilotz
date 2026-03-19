@@ -11,6 +11,7 @@ import type {
   ChatMessage,
   ProviderConfig,
   ToolDefinition,
+  ToolInvocation,
 } from "@/connectors/llm/types.ts";
 
 import type {

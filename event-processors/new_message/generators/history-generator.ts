@@ -1,5 +1,5 @@
 import type { NewMessage, Agent } from "@/interfaces/index.ts";
-import type { ChatMessage, ToolCall, ChatContentPart } from "@/connectors/llm/types.ts";
+import type { ChatMessage, ToolInvocation, ChatContentPart } from "@/connectors/llm/types.ts";
 import { isAssetRef, extractAssetId } from "@/utils/assets.ts";
 
 type StoredAttachment = {
@@ -219,30 +219,31 @@ export function historyGenerator(
         // Prefer top-level toolCalls on assistant messages for rehydration
         const rawToolCalls = (msg as unknown as { toolCalls?: unknown }).toolCalls;
         const toolCallsSource = Array.isArray(rawToolCalls) ? rawToolCalls : [];
-        const toolCalls: ToolCall[] | undefined = toolCallsSource.length > 0
+        const toolCalls: ToolInvocation[] | undefined = toolCallsSource.length > 0
             ? toolCallsSource.map((call, i) => {
                 const maybeCall = call as
                     | { id?: string | null; function?: { name?: string; arguments?: string } }
-                    | { id?: string | null; name?: string; args?: Record<string, unknown> };
+                    | { id?: string | null; tool?: { id?: string, name?: string }; name?: string; args?: Record<string, unknown> };
 
                 const callId = typeof maybeCall.id === "string" && maybeCall.id.length > 0
                     ? maybeCall.id
                     : (() => {
                         const candidateName = ('function' in maybeCall && maybeCall.function?.name)
                             ? maybeCall.function?.name
-                            : ('name' in maybeCall ? maybeCall.name : undefined);
+                            : ('tool' in maybeCall && maybeCall.tool?.id ? maybeCall.tool.id : ('name' in maybeCall ? maybeCall.name : undefined));
                         return `${candidateName || 'call'}_${i}`;
                     })();
 
                 let functionName = "";
-                let functionArguments = "{}";
+                let functionArguments: string | Record<string, unknown> = "{}";
                 if ('function' in maybeCall && maybeCall.function) {
                     functionName = maybeCall.function.name ?? "";
                     functionArguments = maybeCall.function.arguments ?? "{}";
-                } else if ('name' in maybeCall || 'args' in maybeCall) {
-                    functionName = (maybeCall as { name?: string }).name ?? "";
+                } else if ('tool' in maybeCall || 'name' in maybeCall || 'args' in maybeCall) {
+                    functionName = maybeCall.tool?.id ?? (maybeCall as { name?: string }).name ?? "";
                     try {
-                        functionArguments = JSON.stringify((maybeCall as { args?: Record<string, unknown> }).args ?? {});
+                        const rawArgs = (maybeCall as { args?: Record<string, unknown> }).args;
+                        functionArguments = typeof rawArgs === "string" ? rawArgs : JSON.stringify(rawArgs ?? {});
                     } catch (_err) {
                         functionArguments = "{}";
                     }
@@ -250,11 +251,11 @@ export function historyGenerator(
 
                 return {
                     id: callId,
-                    function: {
-                        name: functionName,
-                        arguments: functionArguments,
+                    tool: {
+                        id: functionName,
                     },
-                } satisfies ToolCall;
+                    args: typeof functionArguments === "string" ? functionArguments : JSON.stringify(functionArguments),
+                } satisfies ToolInvocation;
             })
             : undefined;
 

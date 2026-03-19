@@ -1,6 +1,6 @@
 import { Tiktoken } from "js-tiktoken";
 
-import type { ChatMessage, ChatRequest, ChatResponse, ToolDefinition, ToolCall } from './types.ts';
+import type { ChatMessage, ChatRequest, ChatResponse, ToolDefinition, ToolInvocation } from './types.ts';
 
 /**
  * Formats chat messages with instructions and applies length limits
@@ -319,11 +319,11 @@ ${toolDefinitions}
 /**
  * Rehydrate a <function_calls> block from recorded tool calls, if present in message metadata
  */
-export function buildFunctionCallsBlock(toolCalls: { id?: string; function: { name: string; arguments: string } }[]): string {
+export function buildFunctionCallsBlock(toolCalls: ToolInvocation[]): string {
   const objects = toolCalls.map(call => {
     let args: any;
-    try { args = JSON.parse(call.function.arguments); } catch { args = call.function.arguments; }
-    const obj: any = { name: call.function.name, arguments: args };
+    try { args = typeof call.args === "string" ? JSON.parse(call.args) : call.args; } catch { args = call.args; }
+    const obj: any = { name: call.tool.id, arguments: args };
     if (call.id) obj.tool_call_id = call.id;
     return JSON.stringify(obj);
   });
@@ -333,8 +333,8 @@ export function buildFunctionCallsBlock(toolCalls: { id?: string; function: { na
 /**
  * Parse tool calls from AI response using the Anthropic-style <tool_calls> JSON block
  */
-export function parseToolCallsFromResponse(response: string): { cleanResponse: string; tool_calls: ToolCall[] } {
-  const toolCalls: ToolCall[] = [];
+export function parseToolCallsFromResponse(response: string): { cleanResponse: string; tool_calls: ToolInvocation[] } {
+  const toolCalls: ToolInvocation[] = [];
   let cleanResponse = response;
 
   // 1) Recover missing closing tags by balancing braces inside the last <function_calls>
@@ -373,13 +373,13 @@ export function parseToolCallsFromResponse(response: string): { cleanResponse: s
         const obj = JSON.parse(jsonStr);
         if (obj && typeof obj.name === 'string') {
           const executionId = crypto.randomUUID();
-          toolCalls.push({
-            id: executionId,
-            function: {
-              name: obj.name,
-              arguments: JSON.stringify(obj.arguments)
-            }
-          });
+            toolCalls.push({
+              id: executionId,
+              tool: {
+                id: obj.name
+              },
+              args: JSON.stringify(obj.arguments)
+            });
         }
       } catch { /* ignore malformed object */ }
     }

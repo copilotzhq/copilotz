@@ -102,7 +102,14 @@ export const ToolInvocationSchema = {
     output: {},
     status: {
       type: ["string", "null"],
-      enum: ["pending", "processing", "completed", "failed", "expired", "overwritten"],
+      enum: [
+        "pending",
+        "processing",
+        "completed",
+        "failed",
+        "expired",
+        "overwritten",
+      ],
     },
     batchId: { type: ["string", "null"] },
     batchSize: { type: ["number", "null"] },
@@ -506,6 +513,7 @@ const schemaDefinition = {
           ],
         },
         timeout: { type: ["integer", "null"] },
+        includeResponseHeaders: { type: ["boolean", "null"] },
         metadata: {
           type: ["object", "null"],
           additionalProperties: true,
@@ -626,9 +634,9 @@ const schemaDefinition = {
               type: "object",
               properties: {
                 id: { type: ["string", "null"] },
-                name: { type: "string" }
+                name: { type: "string" },
               },
-              required: ["name"]
+              required: ["name"],
             },
             token: { type: "string" },
             isComplete: { type: "boolean" },
@@ -712,9 +720,9 @@ const schemaDefinition = {
               type: "object",
               properties: {
                 id: { type: ["string", "null"] },
-                name: { type: "string" }
+                name: { type: "string" },
               },
-              required: ["name"]
+              required: ["name"],
             },
             senderId: { type: "string" },
             senderType: { const: "agent" },
@@ -731,9 +739,9 @@ const schemaDefinition = {
               type: "object",
               properties: {
                 id: { type: ["string", "null"] },
-                name: { type: "string" }
+                name: { type: "string" },
               },
-              required: ["name"]
+              required: ["name"],
             },
             messages: {
               type: "array",

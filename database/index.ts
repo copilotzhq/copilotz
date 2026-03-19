@@ -23,6 +23,7 @@ import { generateKnowledgeGraphMigrations } from "./migrations/migration_0003_kn
 import { generateUlidSupportMigrations } from "./migrations/migration_0004_ulid_support.ts";
 import { generateNamespaceEventsMigrations } from "./migrations/migration_0005_namespace_events.ts";
 import { generateThreadLeasesMigrations } from "./migrations/migration_0006_thread_leases.ts";
+import { generateApiResponseHeaderMigrations } from "./migrations/migration_0007_api_response_headers.ts";
 import { getCurrentSchema } from "./schema-context.ts";
 import {
   ensureSchemaProvisioned,
@@ -33,7 +34,8 @@ import {
 const migrations: string = generateMigrations() + "\n" +
   generateRagMigrations() + "\n" + generateKnowledgeGraphMigrations() + "\n" +
   generateUlidSupportMigrations() + "\n" + generateNamespaceEventsMigrations() +
-  "\n" + generateThreadLeasesMigrations();
+  "\n" + generateThreadLeasesMigrations() + "\n" +
+  generateApiResponseHeaderMigrations();
 
 /**
  * Configuration options for creating a database connection.
@@ -298,8 +300,7 @@ const existingSchemaIdMap =
     | undefined;
 const schemaIdMap: WeakMap<object, number> = existingSchemaIdMap ??
   new WeakMap();
-(globalThis as Record<string, unknown>)[GLOBAL_SCHEMA_ID_MAP_KEY] =
-  schemaIdMap;
+(globalThis as Record<string, unknown>)[GLOBAL_SCHEMA_ID_MAP_KEY] = schemaIdMap;
 
 function getSchemaCacheToken(schemaCandidate: unknown): string {
   if (
@@ -378,8 +379,9 @@ export async function createDatabase(
 
   const cacheSchema = finalConfig.schemas ?? baseSchema;
   const schemaCacheToken = getSchemaCacheToken(cacheSchema);
-  const cacheKey =
-    `${finalConfig.url}|${finalConfig.syncUrl || ""}|${schemaCacheToken}`;
+  const cacheKey = `${finalConfig.url}|${
+    finalConfig.syncUrl || ""
+  }|${schemaCacheToken}`;
   const debug = getEnvVar("COPILOTZ_DB_DEBUG") === "1";
   if (debug) {
     console.log(

@@ -1012,25 +1012,47 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
             const closed = (async () => {
                 if (banner) console.log(banner);
 
+                let isThinking = false;
+
                 const unifiedOnEvent: UnifiedOnEvent = async (ev) => {
-                    const e = ev as unknown as { type?: string; payload?: { token?: string; isComplete?: boolean } };
+                    const e = ev as unknown as { type?: string; payload?: { token?: string; isComplete?: boolean; isReasoning?: boolean } };
                     if (e?.type === "TOKEN" && e?.payload) {
                         const token = e.payload.token ?? "";
                         const done = Boolean(e.payload.isComplete);
+                        const isReasoning = Boolean(e.payload.isReasoning);
+
                         if (!done) {
                             const anyGlobal = globalThis as unknown as {
                                 Deno?: { stdout?: { writeSync?: (data: Uint8Array) => unknown } };
                                 process?: { stdout?: { write?: (chunk: string) => unknown } };
                             };
-                            const bytes = new TextEncoder().encode(token);
-                            if (anyGlobal?.Deno?.stdout?.writeSync) {
-                                anyGlobal.Deno.stdout.writeSync(bytes);
-                            } else if (anyGlobal?.process?.stdout?.write) {
-                                anyGlobal.process.stdout.write(token);
-                            } else {
-                                console.log(token);
+
+                            let toWrite = "";
+                            if (isReasoning && !isThinking) {
+                                toWrite += "💭 ";
+                                isThinking = true;
+                            } else if (!isReasoning && isThinking) {
+                                toWrite += "\n\n";
+                                isThinking = false;
+                            }
+                            toWrite += token;
+
+                            if (toWrite) {
+                                const bytes = new TextEncoder().encode(toWrite);
+                                if (anyGlobal?.Deno?.stdout?.writeSync) {
+                                    anyGlobal.Deno.stdout.writeSync(bytes);
+                                } else if (anyGlobal?.process?.stdout?.write) {
+                                    anyGlobal.process.stdout.write(toWrite);
+                                } else {
+                                    // Fallback when raw stdout writing isn't available
+                                    console.log(toWrite);
+                                }
                             }
                         } else {
+                            if (isThinking) {
+                                isThinking = false;
+                                console.log("\n");
+                            }
                             console.log("");
                         }
                     }

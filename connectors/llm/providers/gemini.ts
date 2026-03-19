@@ -1,4 +1,4 @@
-import type { ChatMessage, ProviderConfig, ProviderFactory } from "../types.ts";
+import type { ChatMessage, ProviderConfig, ProviderFactory, StreamCallback } from "../types.ts";
 
 interface GeminiPart {
   text?: string;
@@ -156,6 +156,73 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
 
     extractContent: (data: any) => {
       return data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+    },
+
+    processStream: async (
+      reader: ReadableStreamDefaultReader<Uint8Array>,
+      onChunk: StreamCallback,
+      _extractContent: (data: any) => string | null,
+      config: ProviderConfig,
+    ): Promise<string> => {
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+      let fullResponse = "";
+
+      const parseLine = (line: string): any | null => {
+        if (!line.startsWith("data:")) return null;
+        const raw = line.slice(5).trim();
+        if (raw === "[DONE]") return null;
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return null;
+        }
+      };
+
+      const handleData = (data: any) => {
+        const parts = data?.candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+          if (part.thought) {
+            if (config.outputReasoning !== false) {
+              onChunk(part.text || "", { isReasoning: true });
+            }
+          } else if (part.text) {
+            onChunk(part.text);
+            fullResponse += part.text;
+          }
+        }
+      };
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+
+          if (done) {
+            if (buffer) {
+              for (const line of buffer.split("\n")) {
+                const data = parseLine(line);
+                if (data) handleData(data);
+              }
+            }
+            break;
+          }
+
+          const chunk = decoder.decode(value, { stream: true });
+          buffer += chunk;
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            const data = parseLine(line);
+            if (data) handleData(data);
+          }
+        }
+      } catch (error) {
+        console.error("Gemini Stream processing error:", error);
+        throw error;
+      }
+
+      return fullResponse;
     },
   };
 };

@@ -1,11 +1,11 @@
 /**
  * Example: Single agent with custom collections and namespace support.
- * 
+ *
  * Demonstrates:
  * - Setting default namespace at createCopilotz level
  * - Overriding namespace per-run
  * - Using scopedCollections in tools (no manual withNamespace needed)
- * 
+ *
  * Run with: deno run -A --env example.ts
  */
 
@@ -14,10 +14,12 @@ import type { ToolExecutionContext } from "./event-processors/tool_call/index.ts
 import type { ScopedCollectionCrud } from "./database/collections/types.ts";
 
 // Get API key from environment
-const OPENAI_API_KEY = Deno.env.get("DEFAULT_OPENAI_KEY");
-if (!OPENAI_API_KEY) {
-  console.error("❌ Error: DEFAULT_OPENAI_KEY environment variable is required");
-  console.error("   Run with: DEFAULT_OPENAI_KEY=sk-... deno run -A --env example.ts");
+const API_KEY = Deno.env.get("API_KEY");
+if (!API_KEY) {
+  console.error("❌ Error: API_KEY environment variable is required");
+  console.error(
+    "   Run with: API_KEY=sk-... deno run -A --env example.ts",
+  );
   Deno.exit(1);
 }
 
@@ -70,16 +72,26 @@ const createTaskTool = {
     properties: {
       title: { type: "string", description: "Task title" },
       description: { type: "string", description: "Task description" },
-      priority: { type: "string", enum: ["low", "medium", "high"], description: "Task priority" },
+      priority: {
+        type: "string",
+        enum: ["low", "medium", "high"],
+        description: "Task priority",
+      },
     },
     required: ["title"],
   },
   execute: async (
-    params: { title: string; description?: string; priority?: "low" | "medium" | "high" },
+    params: {
+      title: string;
+      description?: string;
+      priority?: "low" | "medium" | "high";
+    },
     context?: ToolExecutionContext,
   ) => {
     // Use collections - automatically scoped to namespace when set!
-    const taskCollection = context?.collections?.task as ScopedCollectionCrud<Task, TaskInsert> | undefined;
+    const taskCollection = context?.collections?.task as
+      | ScopedCollectionCrud<Task, TaskInsert>
+      | undefined;
     if (!taskCollection) {
       return { error: "Collections not available" };
     }
@@ -105,15 +117,24 @@ const listTasksTool = {
   inputSchema: {
     type: "object" as const,
     properties: {
-      completed: { type: "boolean", description: "Filter by completion status" },
-      priority: { type: "string", enum: ["low", "medium", "high"], description: "Filter by priority" },
+      completed: {
+        type: "boolean",
+        description: "Filter by completion status",
+      },
+      priority: {
+        type: "string",
+        enum: ["low", "medium", "high"],
+        description: "Filter by priority",
+      },
     },
   },
   execute: async (
     params: { completed?: boolean; priority?: "low" | "medium" | "high" },
     context?: ToolExecutionContext,
   ) => {
-    const taskCollection = context?.collections?.task as ScopedCollectionCrud<Task, TaskInsert> | undefined;
+    const taskCollection = context?.collections?.task as
+      | ScopedCollectionCrud<Task, TaskInsert>
+      | undefined;
     if (!taskCollection) {
       return { error: "Collections not available" };
     }
@@ -146,7 +167,9 @@ const completeTaskTool = {
     params: { taskId: string },
     context?: ToolExecutionContext,
   ) => {
-    const taskCollection = context?.collections?.task as ScopedCollectionCrud<Task, TaskInsert> | undefined;
+    const taskCollection = context?.collections?.task as
+      | ScopedCollectionCrud<Task, TaskInsert>
+      | undefined;
     if (!taskCollection) {
       return { error: "Collections not available" };
     }
@@ -176,7 +199,8 @@ async function main() {
         id: "assistant",
         name: "Task Assistant",
         role: "A helpful assistant that manages tasks",
-        instructions: `You are a task management assistant. You help users manage their to-do list.
+        instructions:
+          `You are a task management assistant. You help users manage their to-do list.
 
 Available actions:
 - List tasks (can filter by completed status or priority)
@@ -186,9 +210,9 @@ Available actions:
 When asked to complete a task, first list the tasks to find the task ID, then use the complete_task tool with that ID.
 Be concise in your responses.`,
         llmOptions: {
-          provider: "openai",
-          model: "gpt-4o-mini",
-          apiKey: OPENAI_API_KEY,
+          provider: "minimax",
+          model: "MiniMax-M2.7",
+          apiKey: API_KEY,
         },
         allowedTools: ["create_task", "list_tasks", "complete_task"],
       },
@@ -252,7 +276,9 @@ Be concise in your responses.`,
       // Event handler to show tool calls
       async (event) => {
         if (event.type === "TOOL_CALL") {
-          const payload = event.payload as { call?: { name?: string; arguments?: unknown } };
+          const payload = event.payload as {
+            call?: { name?: string; arguments?: unknown };
+          };
           if (payload.call?.name) {
             console.log(`\n  🔧 [Tool: ${payload.call.name}]`);
             console.log(`     Args: ${JSON.stringify(payload.call.arguments)}`);
@@ -290,7 +316,7 @@ Be concise in your responses.`,
   // ============================================
   console.log("─".repeat(50));
   console.log("\n🔀 Demonstrating namespace override:\n");
-  
+
   // This will use a different namespace - no tasks will be found
   await chat("What tasks do I have?", "tenant-other");
 

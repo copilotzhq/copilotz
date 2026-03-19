@@ -1,18 +1,11 @@
 import { chat } from "@/connectors/llm/index.ts";
 import type { ChatMessage, ChatRequest, ChatResponse, ProviderConfig } from "@/connectors/llm/types.ts";
-import type { Event, NewEvent, EventProcessor, MessagePayload, ProcessorDeps, LlmCallEventPayload } from "@/interfaces/index.ts";
+import type { Event, NewEvent, EventProcessor, MessagePayload, ProcessorDeps, LlmCallEventPayload, ContentStreamData } from "@/interfaces/index.ts";
 import type { ToolCallInput } from "@/event-processors/tool_call/index.ts";
 import { resolveAssetRefsInMessages } from "@/utils/assets.ts";
 
 export type {
     ChatMessage,
-}
-
-export interface ContentStreamData {
-    threadId: string;
-    agentName: string;
-    token: string;
-    isComplete: boolean;
 }
 
 export type LLMCallPayload = LlmCallEventPayload;
@@ -108,7 +101,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
 
         // Streaming callback: ai/llm filters out <function_calls> already.
         const streamCallback = (context.stream && (context.callbacks?.onContentStream))
-            ? (token: string) => {
+            ? (token: string, options?: { isReasoning?: boolean }) => {
 
                 if (context.callbacks?.onContentStream) {
 
@@ -117,6 +110,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
                         agentName: payload.agentName,
                         token,
                         isComplete: false,
+                        isReasoning: options?.isReasoning,
                     }
                     context.callbacks.onContentStream(callbackData);
                 }

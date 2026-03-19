@@ -59,6 +59,7 @@ llmOptions: {
   temperature: 0.7,             // Creativity (0-2)
   maxTokens: 4096,              // Max response length
   apiKey: "sk-...",             // Optional: override env variable
+  outputReasoning: false,       // Default true; whether to emit reasoning tokens ("thinking") during stream
 }
 ```
 

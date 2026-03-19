@@ -440,6 +440,7 @@ export async function runThread(
             agentName: data.agentName,
             token: data.token,
             isComplete: !!data.isComplete,
+            isReasoning: data.isReasoning,
         };
         const tokenEvent: Event = {
             id: toEventId(),

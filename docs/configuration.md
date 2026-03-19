@@ -61,6 +61,7 @@ agents: [{
     maxTokens: 4096,
     apiKey: "sk-...",           // Override env variable
     baseUrl: "...",             // Custom endpoint
+    outputReasoning: false,     // Default true; whether to emit reasoning tokens ("thinking") during stream
   },
   allowedTools: ["*"],          // Tool whitelist
   allowedAgents: ["other"],     // Agent communication whitelist

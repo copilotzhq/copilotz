@@ -48,6 +48,7 @@ export interface ProviderConfig {
   // Response format
   responseType?: "text" | "json";
   stream?: boolean;
+  outputReasoning?: boolean; // Whether to output thinking/reasoning tokens during stream (default true)
 
   // Advanced sampling parameters
   topP?: number;
@@ -132,8 +133,13 @@ export interface ChatResponse {
   }; // Execution metadata
 }
 
+// Stream callback function options
+export interface StreamCallbackOptions {
+  isReasoning?: boolean;
+}
+
 // Stream callback function
-export type StreamCallback = (chunk: string) => void;
+export type StreamCallback = (chunk: string, options?: StreamCallbackOptions) => void;
 
 // Provider API interface with multimodal support
 export interface ProviderAPI {
@@ -147,6 +153,7 @@ export interface ProviderAPI {
     reader: ReadableStreamDefaultReader<Uint8Array>,
     onChunk: StreamCallback,
     extractContent: (data: any) => string | null,
+    config: ProviderConfig,
   ) => Promise<string>;
 }
 

@@ -583,6 +583,8 @@ export interface ContentStreamData {
   token: string;
   /** Whether this is the final token (stream complete). */
   isComplete: boolean;
+  /** Optional flag indicating if the token is part of a reasoning chain (e.g. "thoughts"). */
+  isReasoning?: boolean;
 }
 
 /**

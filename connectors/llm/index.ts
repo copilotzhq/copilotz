@@ -85,7 +85,7 @@ export async function chat(
 
     if (providerAPI.processStream) {
         // Use provider-specific stream processor for non-standard streaming formats
-        fullResponse = await providerAPI.processStream(reader, stream || (() => { }), providerAPI.extractContent);
+        fullResponse = await providerAPI.processStream(reader, stream || (() => { }), providerAPI.extractContent, mergedConfig);
     } else {
         // Standard SSE processing for most providers
         fullResponse = await processStream(reader, stream || (() => { }), providerAPI.extractContent);

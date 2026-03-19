@@ -819,7 +819,10 @@ export function createOperations(
           participant: string,
         ): participant is string => typeof participant === "string")
         : [];
-      if (!participants.includes(userId)) {
+      // Use case-insensitive comparison: thread participants use agent.name (e.g. "Assistant")
+      // but history lookups use agent.id (e.g. "assistant"). Normalize both to lowercase.
+      const userIdLower = userId.toLowerCase();
+      if (!participants.some((p) => p.toLowerCase() === userIdLower)) {
         break;
       }
 

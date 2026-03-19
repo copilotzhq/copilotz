@@ -162,8 +162,8 @@ export type LLMProviderName =
   | "gemini"
   | "groq"
   | "deepseek"
-  | "ollama"
   | "minimax"
+  | "ollama"
   | "xai";
 
 // All supported providers (includes LLM, embedding, image generation, speech-to-text, and text-to-speech providers)

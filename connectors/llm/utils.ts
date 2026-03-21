@@ -1,6 +1,6 @@
 import { Tiktoken } from "js-tiktoken";
 
-import type { ChatMessage, ChatRequest, ChatResponse, ToolDefinition, ToolInvocation } from './types.ts';
+import type { ChatMessage, ChatRequest, ChatResponse, ToolDefinition, ToolInvocation, ExtractedPart, StreamCallback, ProcessStreamOptions } from './types.ts';
 
 /**
  * Formats chat messages with instructions and applies length limits
@@ -136,36 +136,68 @@ export function parseSSEData(line: string): any | null {
 }
 
 /**
- * Processes streaming response chunks
+ * Parses a single line according to the stream format.
+ * SSE: expects `data: {...}` prefix.  JSONL: raw JSON per line.
+ */
+function parseLine(line: string, format: 'sse' | 'jsonl'): any | null {
+  if (format === 'jsonl') {
+    const trimmed = line.trim();
+    if (!trimmed) return null;
+    try { return JSON.parse(trimmed); } catch { return null; }
+  }
+  return parseSSEData(line);
+}
+
+/**
+ * Unified stream processor for all LLM providers.
+ *
+ * Each provider only needs to implement `extractContent` which maps a parsed
+ * event object to an array of `ExtractedPart`s (text + optional isReasoning flag).
+ * This function handles SSE/JSONL parsing, `<function_calls>` filtering,
+ * reasoning gating, and buffer management — so providers don't have to.
  */
 export async function processStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-  onChunk: (chunk: string) => void,
-  extractContent: (data: any) => string | null
+  onChunk: StreamCallback,
+  extractContent: (data: any) => ExtractedPart[] | null,
+  options?: ProcessStreamOptions,
 ): Promise<string> {
   const decoder = new TextDecoder('utf-8');
-  // fullResponse should be the RAW response including any <function_calls> blocks,
-  // while chunks passed to onChunk are filtered to exclude tool-call tokens.
+  const format = options?.format ?? 'sse';
+  const config = options?.config;
+  // fullResponse accumulates RAW content (including <function_calls> blocks)
+  // so parseToolCallsFromResponse can extract them downstream.
   let fullResponse = '';
   let buffer = '';
-  // Filter out <function_calls> blocks from streaming content
-  const filterState: {
-    inside: boolean;
-    pending: string; // stores boundary overlap for start/end tags across tokens
-  } = { inside: false, pending: '' };
+  const filterState: { inside: boolean; pending: string } = { inside: false, pending: '' };
+
+  const handleParts = (parts: ExtractedPart[]) => {
+    for (const part of parts) {
+      if (part.isReasoning) {
+        if (config?.outputReasoning !== false) {
+          onChunk(part.text, { isReasoning: true });
+        }
+      } else {
+        fullResponse += part.text;
+        const filtered = filterToolCallTokensStreaming(part.text, filterState);
+        if (filtered) onChunk(filtered);
+      }
+    }
+  };
 
   try {
     while (true) {
       const { done, value } = await reader.read();
 
       if (done) {
-        // Process any remaining buffered data
         if (buffer) {
-          processBufferedLines(buffer, (filtered) => {
-            if (filtered) onChunk(filtered);
-          }, extractContent, (raw) => {
-            fullResponse += raw; // accumulate RAW content for downstream parsing
-          }, filterState);
+          for (const line of buffer.split('\n')) {
+            const data = parseLine(line, format);
+            if (data) {
+              const parts = extractContent(data);
+              if (parts) handleParts(parts);
+            }
+          }
         }
         break;
       }
@@ -174,52 +206,29 @@ export async function processStream(
       buffer += chunk;
 
       const lines = buffer.split('\n');
-      buffer = lines.pop() || ''; // Keep incomplete line in buffer
+      buffer = lines.pop() || '';
 
-      lines.forEach(line => {
-        const data = parseSSEData(line);
+      for (const line of lines) {
+        const data = parseLine(line, format);
         if (data) {
-          const content = extractContent(data);
-          if (content) {
-            // Accumulate RAW content
-            fullResponse += content;
-            // Emit filtered chunk (handle cross-token boundaries)
-            const filtered = filterToolCallTokensStreaming(content, filterState);
-            if (filtered) onChunk(filtered);
-          }
+          const parts = extractContent(data);
+          if (parts) handleParts(parts);
         }
-      });
+      }
     }
   } catch (error) {
     console.error('Stream processing error:', error);
     throw error;
   }
 
+  if (options?.postProcess) {
+    fullResponse = options.postProcess(fullResponse);
+  }
+
   return fullResponse;
 }
 
-function processBufferedLines(
-  buffer: string,
-  onFilteredChunk: (chunk: string) => void,
-  extractContent: (data: any) => string | null,
-  onContent: (content: string) => void,
-  state: { inside: boolean; pending: string }
-): void {
-  const lines = buffer.split('\n');
-  lines.forEach(line => {
-    const data = parseSSEData(line);
-    if (data) {
-      const content = extractContent(data);
-      if (content) {
-        const filtered = filterToolCallTokensStreaming(content, state);
-        if (filtered) onFilteredChunk(filtered);
-        onContent(content);
-      }
-    }
-  });
-}
-
-function filterToolCallTokensStreaming(
+export function filterToolCallTokensStreaming(
   input: string,
   state: { inside: boolean; pending: string }
 ): string {

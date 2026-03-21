@@ -2,6 +2,7 @@ import { chat } from "@/connectors/llm/index.ts";
 import type { ChatMessage, ProviderConfig, ChatResponse, ChatRequest, ToolInvocation } from "@/connectors/llm/types.ts";
 import type { Event, NewEvent, EventProcessor, MessagePayload, ProcessorDeps, LlmCallEventPayload, ContentStreamData } from "@/interfaces/index.ts";
 import { resolveAssetRefsInMessages } from "@/utils/assets.ts";
+import { filterToolCallTokensStreaming } from "@/connectors/llm/utils.ts";
 
 export type {
     ChatMessage,
@@ -98,16 +99,25 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         // Get context from dependencies
         const context = deps.context;
 
-        // Streaming callback: ai/llm filters out <function_calls> already.
+        // Defense-in-depth: the shared processStream already filters
+        // <function_calls> blocks, but we keep a second pass here in case
+        // any slip through (e.g. non-standard provider integration).
+        const toolCallFilterState: { inside: boolean; pending: string } = { inside: false, pending: '' };
+
         const streamCallback = (context.stream && (context.callbacks?.onContentStream))
             ? (token: string, options?: { isReasoning?: boolean }) => {
 
                 if (context.callbacks?.onContentStream) {
+                    // Don't filter reasoning tokens — they're internal thoughts,
+                    // not user-facing content, and may legitimately discuss tools.
+                    const filtered = options?.isReasoning
+                        ? token
+                        : filterToolCallTokensStreaming(token, toolCallFilterState);
 
                     const callbackData: ContentStreamData = {
                         threadId,
                         agent: { id: payload.agent.id ?? undefined, name: payload.agent.name },
-                        token,
+                        token: filtered,
                         isComplete: false,
                         isReasoning: options?.isReasoning,
                     }

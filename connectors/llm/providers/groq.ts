@@ -1,4 +1,4 @@
-import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart } from '../types.ts';
+import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart, ExtractedPart } from '../types.ts';
 
 export const groqProvider: ProviderFactory = (config: ProviderConfig) => {
   return {
@@ -42,8 +42,10 @@ export const groqProvider: ProviderFactory = (config: ProviderConfig) => {
       };
     },
     
-    extractContent: (data: any) => {
-      return data?.choices?.[0]?.delta?.content || null;
+    extractContent: (data: any): ExtractedPart[] | null => {
+      const content = data?.choices?.[0]?.delta?.content;
+      if (!content) return null;
+      return [{ text: content }];
     }
   };
 }; 

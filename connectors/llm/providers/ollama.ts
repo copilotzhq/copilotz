@@ -1,66 +1,4 @@
-import type { ProviderFactory, ProviderConfig, ChatMessage, StreamCallback, ChatContentPart } from '../types.ts';
-
-/**
- * Special handler for Ollama's JSONL streaming format
- */
-export async function processOllamaStream(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    onChunk: StreamCallback,
-    extractContent: (data: any) => string | null
-): Promise<string> {
-    const decoder = new TextDecoder('utf-8');
-    let fullResponse = '';
-    let buffer = '';
-
-    try {
-        while (true) {
-            const { done, value } = await reader.read();
-
-            if (done) {
-                // Process any remaining buffered data
-                if (buffer.trim()) {
-                    try {
-                        const data = JSON.parse(buffer.trim());
-                        const content = extractContent(data);
-                        if (content) {
-                            onChunk(content);
-                            fullResponse += content;
-                        }
-                    } catch (error) {
-                        console.warn('Failed to parse remaining Ollama data:', error);
-                    }
-                }
-                break;
-            }
-
-            const chunk = decoder.decode(value, { stream: true });
-            buffer += chunk;
-
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || ''; // Keep incomplete line in buffer
-
-            for (const line of lines) {
-                if (line.trim()) {
-                    try {
-                        const data = JSON.parse(line.trim());
-                        const content = extractContent(data);
-                        if (content) {
-                            onChunk(content);
-                            fullResponse += content;
-                        }
-                    } catch (error) {
-                        console.warn('Failed to parse Ollama JSON:', error, 'Line:', line);
-                    }
-                }
-            }
-        }
-    } catch (error) {
-        console.error('Ollama stream processing error:', error);
-        throw error;
-    }
-
-    return fullResponse;
-}
+import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart, ExtractedPart } from '../types.ts';
 
 export const ollamaProvider: ProviderFactory = (config: ProviderConfig) => {
   return {
@@ -112,11 +50,12 @@ export const ollamaProvider: ProviderFactory = (config: ProviderConfig) => {
       };
     },
     
-    extractContent: (data: any) => {
-      return data?.message?.content || null;
+    extractContent: (data: any): ExtractedPart[] | null => {
+      const content = data?.message?.content;
+      if (!content) return null;
+      return [{ text: content }];
     },
 
-    // Ollama-specific stream processor
-    processStream: processOllamaStream
+    streamOptions: { format: 'jsonl' },
   };
 }; 

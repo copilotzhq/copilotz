@@ -148,20 +148,33 @@ export interface StreamCallbackOptions {
 // Stream callback function
 export type StreamCallback = (chunk: string, options?: StreamCallbackOptions) => void;
 
+// A single extracted chunk from a parsed SSE/JSONL event.
+// Providers return an array of these from extractContent so the shared
+// processStream can handle reasoning vs content uniformly.
+export interface ExtractedPart {
+  text: string;
+  isReasoning?: boolean;
+}
+
+// Options for the shared processStream in utils.ts
+export interface ProcessStreamOptions {
+  config?: ProviderConfig;
+  /** 'sse' (default) for `data: {...}` lines, 'jsonl' for raw JSON-per-line (Ollama). */
+  format?: 'sse' | 'jsonl';
+  /** Transform the accumulated raw response before returning (e.g. strip wrapper tags). */
+  postProcess?: (raw: string) => string;
+}
+
 // Provider API interface with multimodal support
 export interface ProviderAPI {
   endpoint: string;
   headers: (config: ProviderConfig) => Record<string, string>;
   body: (messages: ChatMessage[], config: ProviderConfig) => any;
-  extractContent: (data: any) => string | null;
-  transformMessages?: (messages: ChatMessage[]) => any; // For provider-specific format
-  // Optional custom stream processor for providers with non-standard streaming formats
-  processStream?: (
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    onChunk: StreamCallback,
-    extractContent: (data: any) => string | null,
-    config: ProviderConfig,
-  ) => Promise<string>;
+  /** Extract content/reasoning parts from a single parsed SSE or JSONL event. */
+  extractContent: (data: any) => ExtractedPart[] | null;
+  transformMessages?: (messages: ChatMessage[]) => any;
+  /** Options passed to the shared processStream (format, config, postProcess). */
+  streamOptions?: Omit<ProcessStreamOptions, 'config'>;
 }
 
 // Provider factory function signature - now much simpler

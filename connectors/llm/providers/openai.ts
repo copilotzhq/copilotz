@@ -1,4 +1,4 @@
-import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart, StreamCallback } from '../types.ts';
+import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart, ExtractedPart } from '../types.ts';
 
 // Helper function to check if a model is a reasoning model
 function isReasoningModel(model: string): boolean {
@@ -74,80 +74,21 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
       return bodyConfig;
     },
 
-    extractContent: (data: any) => {
-      return data?.choices?.[0]?.delta?.content || null;
-    },
+    extractContent: (data: any): ExtractedPart[] | null => {
+      const delta = data?.choices?.[0]?.delta;
+      const parts: ExtractedPart[] = [];
 
-    processStream: async (
-      reader: ReadableStreamDefaultReader<Uint8Array>,
-      onChunk: StreamCallback,
-      _extractContent: (data: any) => string | null,
-      config: ProviderConfig,
-    ): Promise<string> => {
-      const decoder = new TextDecoder("utf-8");
-      let buffer = "";
-      let fullResponse = "";
-
-      const parseLine = (line: string): any | null => {
-        if (!line.startsWith("data:")) return null;
-        const raw = line.slice(5).trim();
-        if (raw === "[DONE]") return null;
-        try {
-          return JSON.parse(raw);
-        } catch {
-          return null;
-        }
-      };
-
-      const handleData = (data: any) => {
-        const delta = data?.choices?.[0]?.delta;
-        if (delta) {
-          const reasoning = delta.reasoning_content || delta.reasoning_summary_text || data.response?.reasoning_summary_text?.delta;
-          if (reasoning && config.outputReasoning !== false) {
-            onChunk(reasoning, { isReasoning: true });
-          }
-          if (delta.content) {
-            onChunk(delta.content);
-            fullResponse += delta.content;
-          }
-        } else if (data?.response?.reasoning_summary_text?.delta) {
-           // Direct responses stream delta
-           if(config.outputReasoning !== false) {
-              onChunk(data.response.reasoning_summary_text.delta, { isReasoning: true });
-           }
-        }
-      };
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-
-          if (done) {
-            if (buffer) {
-              for (const line of buffer.split("\n")) {
-                const data = parseLine(line);
-                if (data) handleData(data);
-              }
-            }
-            break;
-          }
-
-          const chunk = decoder.decode(value, { stream: true });
-          buffer += chunk;
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            const data = parseLine(line);
-            if (data) handleData(data);
-          }
-        }
-      } catch (error) {
-        console.error("OpenAI Stream processing error:", error);
-        throw error;
+      if (delta) {
+        const reasoning = delta.reasoning_content || delta.reasoning_summary_text;
+        if (reasoning) parts.push({ text: reasoning, isReasoning: true });
+        if (delta.content) parts.push({ text: delta.content });
       }
 
-      return fullResponse;
+      // Direct response stream (e.g. Responses API)
+      const directReasoning = data?.response?.reasoning_summary_text?.delta;
+      if (directReasoning) parts.push({ text: directReasoning, isReasoning: true });
+
+      return parts.length > 0 ? parts : null;
     },
   };
 }; 

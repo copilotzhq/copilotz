@@ -80,16 +80,15 @@ export async function chat(
 
     const reader = response.stream.getReader();
 
-    // Handle streaming response
-    let fullResponse = '';
-
-    if (providerAPI.processStream) {
-        // Use provider-specific stream processor for non-standard streaming formats
-        fullResponse = await providerAPI.processStream(reader, stream || (() => { }), providerAPI.extractContent, mergedConfig);
-    } else {
-        // Standard SSE processing for most providers
-        fullResponse = await processStream(reader, stream || (() => { }), providerAPI.extractContent);
-    }
+    // Handle streaming response — all providers go through the shared processStream.
+    // Provider-specific differences (SSE vs JSONL, reasoning extraction, post-processing)
+    // are expressed via extractContent and streamOptions, not custom loops.
+    const fullResponse = await processStream(
+        reader,
+        stream || (() => { }),
+        providerAPI.extractContent,
+        { ...providerAPI.streamOptions, config: mergedConfig },
+    );
 
     // Parse tool calls from response and strip them from the final answer
     let cleanResponse = fullResponse;

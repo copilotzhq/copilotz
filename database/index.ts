@@ -24,6 +24,7 @@ import { generateUlidSupportMigrations } from "./migrations/migration_0004_ulid_
 import { generateNamespaceEventsMigrations } from "./migrations/migration_0005_namespace_events.ts";
 import { generateThreadLeasesMigrations } from "./migrations/migration_0006_thread_leases.ts";
 import { generateApiResponseHeaderMigrations } from "./migrations/migration_0007_api_response_headers.ts";
+import { generateMessageReasoningMigrations } from "./migrations/migration_0008_message_reasoning.ts";
 import { getCurrentSchema } from "./schema-context.ts";
 import {
   ensureSchemaProvisioned,
@@ -35,7 +36,8 @@ const migrations: string = generateMigrations() + "\n" +
   generateRagMigrations() + "\n" + generateKnowledgeGraphMigrations() + "\n" +
   generateUlidSupportMigrations() + "\n" + generateNamespaceEventsMigrations() +
   "\n" + generateThreadLeasesMigrations() + "\n" +
-  generateApiResponseHeaderMigrations();
+  generateApiResponseHeaderMigrations() + "\n" +
+  generateMessageReasoningMigrations();
 
 /**
  * Configuration options for creating a database connection.

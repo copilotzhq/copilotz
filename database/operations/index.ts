@@ -1029,6 +1029,7 @@ export function createOperations(
         content: node.content,
         toolCallId: data.toolCallId as string | null,
         toolCalls: data.toolCalls as Message["toolCalls"],
+        reasoning: (data.reasoning as string | null) ?? null,
         metadata: data.metadata as Message["metadata"],
         createdAt: node.createdAt,
         updatedAt: node.updatedAt,

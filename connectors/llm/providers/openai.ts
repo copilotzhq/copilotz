@@ -1,13 +1,5 @@
-import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart, ExtractedPart } from '../types.ts';
-
-// Helper function to check if a model is a reasoning model
-function isReasoningModel(model: string): boolean {
-  return model.startsWith('o3') || model.startsWith('o4') || model.includes('o1') || model.startsWith('gpt-5');
-}
-
-function isGPT5Model(model: string): boolean {
-  return model.startsWith('gpt-5');
-}
+import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart } from '../types.ts';
+import { extractOpenAiChatStreamParts } from '../reasoning.ts';
 
 export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
   return {
@@ -74,21 +66,6 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
       return bodyConfig;
     },
 
-    extractContent: (data: any): ExtractedPart[] | null => {
-      const delta = data?.choices?.[0]?.delta;
-      const parts: ExtractedPart[] = [];
-
-      if (delta) {
-        const reasoning = delta.reasoning_content || delta.reasoning_summary_text;
-        if (reasoning) parts.push({ text: reasoning, isReasoning: true });
-        if (delta.content) parts.push({ text: delta.content });
-      }
-
-      // Direct response stream (e.g. Responses API)
-      const directReasoning = data?.response?.reasoning_summary_text?.delta;
-      if (directReasoning) parts.push({ text: directReasoning, isReasoning: true });
-
-      return parts.length > 0 ? parts : null;
-    },
+    extractContent: (data: any) => extractOpenAiChatStreamParts(data),
   };
 }; 

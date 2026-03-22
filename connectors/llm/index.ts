@@ -31,10 +31,11 @@ export async function chat(
     const mergedConfig: ProviderConfig = {
         ...config,
         ...request.config,
-        // Environment variables fallback
+        // Environment variables fallback (supports OPENAI_API_KEY and OPENAI_KEY-style names)
         apiKey: config.apiKey ||
             env[`${provider.toUpperCase()}_API_KEY`] ||
-            env.OPENAI_API_KEY, // Fallback for compatibility
+            env[`${provider.toUpperCase()}_KEY`] ||
+            env.OPENAI_API_KEY,
     };
 
     // Get provider API configuration

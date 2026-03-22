@@ -1,4 +1,5 @@
 import type { ChatMessage, ProviderConfig, ProviderFactory, ExtractedPart } from "../types.ts";
+import { shouldStreamGeminiThoughts } from "../reasoning.ts";
 
 interface GeminiPart {
   text?: string;
@@ -122,6 +123,7 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
 
     body: (messages: ChatMessage[], config: ProviderConfig) => {
       const transformed = transformMessages(messages);
+      const modelId = config.model || "gemini-2.0-flash-lite-preview-02-05";
 
       const safetySettings = [
         { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
@@ -136,19 +138,28 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
         },
       ];
 
+      const generationConfig: Record<string, unknown> = {
+        temperature: config.temperature || 0,
+        maxOutputTokens: config.maxTokens || 1000,
+        topP: config.topP,
+        topK: config.topK,
+        candidateCount: config.candidateCount,
+        stopSequences: config.stopSequences || config.stop,
+        responseMimeType: config.responseType === "json"
+          ? "application/json"
+          : config.responseMimeType,
+      };
+
+      if (shouldStreamGeminiThoughts(config, modelId)) {
+        generationConfig.thinkingConfig = {
+          includeThoughts: true,
+          ...(config.geminiThinkingConfig ?? {}),
+        };
+      }
+
       return {
         contents: transformed.messages,
-        generationConfig: {
-          temperature: config.temperature || 0,
-          maxOutputTokens: config.maxTokens || 1000,
-          topP: config.topP,
-          topK: config.topK,
-          candidateCount: config.candidateCount,
-          stopSequences: config.stopSequences || config.stop,
-          responseMimeType: config.responseType === "json"
-            ? "application/json"
-            : config.responseMimeType,
-        },
+        generationConfig,
         safetySettings,
         systemInstruction: transformed.systemInstruction,
       };

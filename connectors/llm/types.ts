@@ -71,6 +71,18 @@ export interface ProviderConfig {
   // Gemini-specific parameters
   candidateCount?: number; // Gemini
   responseMimeType?: string; // Gemini JSON format
+  /**
+   * Merged into `generationConfig.thinkingConfig` when streaming thoughts is enabled.
+   * Use `includeThoughts: false` to disable even on thinking-capable models.
+   * Use `includeThoughts: true` to force-enable on models you know support thinking.
+   *
+   * @see https://ai.google.dev/api/generate-content#ThinkingConfig
+   */
+  geminiThinkingConfig?: {
+    includeThoughts?: boolean;
+    thinkingBudget?: number;
+    thinkingLevel?: string;
+  };
 
   // Ollama-specific parameters
   repeatPenalty?: number; // Ollama

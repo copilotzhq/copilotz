@@ -249,6 +249,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
 
         // Clean response
         let answer: string | undefined = ("answer" in llmResponse) ? (llmResponse as unknown as { answer?: string }).answer : undefined;
+        const reasoning: string | undefined = ("reasoning" in llmResponse) ? (llmResponse as unknown as { reasoning?: string }).reasoning : undefined;
         const toolCalls: ToolInvocation[] | undefined = ("toolCalls" in llmResponse) ? (llmResponse as unknown as { toolCalls?: ToolInvocation[] }).toolCalls : undefined;
 
         if (!answer && !toolCalls) {
@@ -306,6 +307,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
                 name: payload.agent.name,
             },
             toolCalls: normalizedToolCalls,
+            ...(reasoning && { reasoning }),
         };
 
         // Include target info in message metadata for routing

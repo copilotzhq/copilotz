@@ -84,7 +84,7 @@ export async function chat(
     // Handle streaming response — all providers go through the shared processStream.
     // Provider-specific differences (SSE vs JSONL, reasoning extraction, post-processing)
     // are expressed via extractContent and streamOptions, not custom loops.
-    const fullResponse = await processStream(
+    const streamResult = await processStream(
         reader,
         stream || (() => { }),
         providerAPI.extractContent,
@@ -92,10 +92,10 @@ export async function chat(
     );
 
     // Parse tool calls from response and strip them from the final answer
-    let cleanResponse = fullResponse;
+    let cleanResponse = streamResult.content;
     let tool_calls: any[] = [];
     {
-        const parsed = parseToolCallsFromResponse(fullResponse);
+        const parsed = parseToolCallsFromResponse(streamResult.content);
         cleanResponse = parsed.cleanResponse;
         tool_calls = parsed.tool_calls;
     }
@@ -104,7 +104,8 @@ export async function chat(
     const chatResponse: ChatResponse = {
         prompt: messages,
         answer: cleanResponse,
-        tokens: await countTokens(messages, fullResponse),
+        ...(streamResult.reasoning && { reasoning: streamResult.reasoning }),
+        tokens: await countTokens(messages, streamResult.content),
         provider,
         model: mergedConfig.model,
         ...(tool_calls.length > 0 && { toolCalls: tool_calls })

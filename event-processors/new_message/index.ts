@@ -840,6 +840,7 @@ export const messageProcessor: EventProcessor<
       content: persistedContent,
       toolCallId: toolCallId,
       toolCalls: payload.toolCalls ?? null,
+      reasoning: payload.reasoning ?? null,
       metadata: messageMetadata,
     };
 

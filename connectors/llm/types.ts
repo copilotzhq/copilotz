@@ -150,15 +150,16 @@ export interface ToolInvocation {
 export interface ChatResponse {
   prompt: ChatMessage[];
   answer: string;
+  reasoning?: string;
   tokens: number;
   provider?: ProviderName;
   model?: string;
-  toolCalls?: ToolInvocation[]; // Parsed tool calls from response
+  toolCalls?: ToolInvocation[];
   metadata?: {
     provider?: ProviderName;
     timestamp: string;
     messageCount: number;
-  }; // Execution metadata
+  };
 }
 
 // Stream callback function options

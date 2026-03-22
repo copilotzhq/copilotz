@@ -248,6 +248,12 @@ const MessagePayloadSchema = {
         },
       ],
     },
+    reasoning: {
+      anyOf: [
+        { type: "null" },
+        { type: "string" },
+      ],
+    },
     metadata: {
       anyOf: [
         { type: "null" },
@@ -600,6 +606,7 @@ const schemaDefinition = {
         content: { type: ["string", "null"] },
         toolCallId: { type: ["string", "null"], maxLength: 255 },
         toolCalls: { type: ["array", "null"], items: JSON_ANY_SCHEMA },
+        reasoning: { type: ["string", "null"] },
         metadata: { type: ["object", "null"] },
         createdAt: { type: "string", format: "date-time" },
         updatedAt: { type: "string", format: "date-time" },

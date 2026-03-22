@@ -161,19 +161,21 @@ export async function processStream(
   onChunk: StreamCallback,
   extractContent: (data: any) => ExtractedPart[] | null,
   options?: ProcessStreamOptions,
-): Promise<string> {
+): Promise<{ content: string; reasoning: string }> {
   const decoder = new TextDecoder('utf-8');
   const format = options?.format ?? 'sse';
   const config = options?.config;
   // fullResponse accumulates RAW content (including <function_calls> blocks)
   // so parseToolCallsFromResponse can extract them downstream.
   let fullResponse = '';
+  let reasoningResponse = '';
   let buffer = '';
   const filterState: { inside: boolean; pending: string } = { inside: false, pending: '' };
 
   const handleParts = (parts: ExtractedPart[]) => {
     for (const part of parts) {
       if (part.isReasoning) {
+        reasoningResponse += part.text;
         if (config?.outputReasoning !== false) {
           onChunk(part.text, { isReasoning: true });
         }
@@ -225,7 +227,7 @@ export async function processStream(
     fullResponse = options.postProcess(fullResponse);
   }
 
-  return fullResponse;
+  return { content: fullResponse, reasoning: reasoningResponse };
 }
 
 export function filterToolCallTokensStreaming(

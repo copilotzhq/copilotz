@@ -775,6 +775,7 @@ export function createOperations(
       content: message.content ?? undefined,
       toolCallId: message.toolCallId ?? undefined,
       toolCalls: message.toolCalls ?? undefined,
+      reasoning: (message as Record<string, unknown>).reasoning ?? undefined,
       metadata: message.metadata ?? undefined,
     });
 
@@ -966,6 +967,7 @@ export function createOperations(
         externalId: message.externalId ?? null,
         toolCallId: message.toolCallId ?? null,
         toolCalls: message.toolCalls ?? null,
+        reasoning: (message as Record<string, unknown>).reasoning ?? null,
         metadata: message.metadata ?? null,
       },
       sourceType: "thread",

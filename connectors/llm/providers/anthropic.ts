@@ -1,8 +1,14 @@
 import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart, ExtractedPart } from '../types.ts';
 
+const EFFORT_BUDGET_MAP: Record<string, number> = {
+  minimal: 1024,
+  low: 4096,
+  medium: 16384,
+  high: 65536,
+};
+
 export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
   const transformMessages = (messages: ChatMessage[]) => {
-    // Anthropic requires system prompts to be separate from messages
     const systemPrompts: string[] = [];
     const userMessages: any[] = [];
 
@@ -18,7 +24,6 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
           if (text) systemPrompts.push(text);
         }
       } else {
-        // Anthropic expects content blocks: { type: 'text'|'image', ... }
         let contentBlocks: any[] = [];
         if (typeof msg.content === 'string') {
           contentBlocks = [{ type: 'text', text: msg.content }];
@@ -28,7 +33,7 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
             if (p.type === 'image_url' && p.image_url?.url) {
               const url = p.image_url.url;
               if (typeof url === 'string' && url.startsWith('data:')) {
-                const header = url.substring(5); // mime;base64,....
+                const header = url.substring(5);
                 const [mimeType, base64Data] = header.split(';base64,');
                 if (base64Data) {
                   return [{ type: 'image', source: { type: 'base64', media_type: mimeType, data: base64Data } }];
@@ -39,14 +44,13 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
             if (p.type === 'file' && p.file?.file_data) {
               const fileData = p.file.file_data;
               if (typeof fileData === 'string' && fileData.startsWith('data:')) {
-                const header = fileData.substring(5); // mime;base64,....
+                const header = fileData.substring(5);
                 const [mimeType, base64Data] = header.split(';base64,');
                 if (base64Data) {
                   return [{ type: 'image', source: { type: 'base64', media_type: mimeType, data: base64Data } }];
                 }
               }
             }
-            // input_audio not supported in this path yet
             return [] as any[];
           });
         }
@@ -74,18 +78,30 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
     body: (messages: ChatMessage[], config: ProviderConfig) => {
       const transformed = transformMessages(messages);
 
-      return {
+      const budgetTokens = config.reasoningEffort
+        ? EFFORT_BUDGET_MAP[config.reasoningEffort]
+        : undefined;
+      const maxTokens = config.maxTokens || 1000;
+
+      const body: Record<string, unknown> = {
         model: config.model || 'claude-3-haiku-20240307',
         messages: transformed.messages,
         stream: true,
         temperature: config.temperature || 0,
-        max_tokens: config.maxTokens || 1000,
+        max_tokens: budgetTokens ? Math.max(maxTokens, budgetTokens + 1) : maxTokens,
         top_p: config.topP,
         top_k: config.topK,
         stop_sequences: config.stopSequences || config.stop,
         system: transformed.system,
         metadata: config.metadata,
       };
+
+      if (budgetTokens) {
+        body.thinking = { type: "enabled", budget_tokens: budgetTokens };
+        delete body.temperature;
+      }
+
+      return body;
     },
 
     extractContent: (data: any): ExtractedPart[] | null => {
@@ -103,4 +119,4 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
       return parts.length > 0 ? parts : null;
     },
   };
-}; 
+};

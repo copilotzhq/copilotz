@@ -1,5 +1,4 @@
-import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart } from '../types.ts';
-import { extractOpenAiChatStreamParts } from '../reasoning.ts';
+import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart, ExtractedPart } from '../types.ts';
 
 export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
   return {
@@ -11,7 +10,6 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
     }),
 
     body: (messages: ChatMessage[], config: ProviderConfig) => {
-      // Transform messages to OpenAI content parts
       const openaiMessages = messages.map(msg => {
         if (Array.isArray(msg.content)) {
           const parts = (msg.content as ChatContentPart[]).flatMap((p) => {
@@ -26,7 +24,6 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
             }
             if (p.type === 'file' && p.file?.file_data) {
               const data = p.file.file_data;
-              // If it's a data URL for an image, convert to image_url
               if (typeof data === 'string' && data.startsWith('data:')) {
                 return [{ type: 'image_url', image_url: { url: data } }];
               }
@@ -57,7 +54,6 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
           : undefined,
       };
 
-      // Token limits: OpenAI chat completions expects max_completion_tokens
       {
         const maxComp = config.maxCompletionTokens ?? config.maxTokens ?? 1000;
         if (typeof maxComp === 'number') bodyConfig.max_completion_tokens = maxComp;
@@ -66,6 +62,22 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
       return bodyConfig;
     },
 
-    extractContent: (data: any) => extractOpenAiChatStreamParts(data),
+    extractContent: (data: any): ExtractedPart[] | null => {
+      const delta = data?.choices?.[0]?.delta;
+      if (!delta || typeof delta !== "object") return null;
+
+      const parts: ExtractedPart[] = [];
+
+      const reasoning = delta.reasoning_content;
+      if (typeof reasoning === "string" && reasoning.length > 0) {
+        parts.push({ text: reasoning, isReasoning: true });
+      }
+
+      if (typeof delta.content === "string" && delta.content.length > 0) {
+        parts.push({ text: delta.content });
+      }
+
+      return parts.length > 0 ? parts : null;
+    },
   };
-}; 
+};

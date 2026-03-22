@@ -1,5 +1,4 @@
 import type { ChatMessage, ProviderConfig, ProviderFactory, ExtractedPart } from "../types.ts";
-import { shouldStreamGeminiThoughts } from "../reasoning.ts";
 
 interface GeminiPart {
   text?: string;
@@ -12,6 +11,40 @@ interface GeminiPart {
 interface GeminiMessage {
   parts: GeminiPart[];
   role: "user" | "model";
+}
+
+/**
+ * Build the Gemini `thinkingConfig` for a model, or return undefined to omit it.
+ *
+ * Model families:  2.5 → thinkingBudget,  3.x/exp → thinkingLevel.
+ * Lite models only think when explicitly requested (reasoningEffort or geminiThinkingConfig).
+ */
+function buildThinkingConfig(
+  config: ProviderConfig,
+  model: string,
+): Record<string, unknown> | undefined {
+  if (config.outputReasoning === false) return undefined;
+
+  const g = config.geminiThinkingConfig;
+  if (g?.includeThoughts === false) return undefined;
+
+  const m = model.toLowerCase().replace(/^models\//, "");
+  const is25 = /^gemini-2\.5/.test(m);
+  const is3x = /^gemini-3/.test(m) || /gemini-exp/.test(m);
+  if (!is25 && !is3x && !g?.includeThoughts) return undefined;
+
+  const isLite = m.includes("-lite");
+  if (isLite && !config.reasoningEffort && !g) return undefined;
+
+  const effort = config.reasoningEffort;
+  let effortFields: Record<string, unknown> | undefined;
+  if (effort && !g?.thinkingLevel && g?.thinkingBudget == null) {
+    effortFields = is3x
+      ? { thinkingLevel: { minimal: "MINIMAL", low: "LOW", medium: "MEDIUM", high: "HIGH" }[effort] }
+      : { thinkingBudget: { minimal: 0, low: 2048, medium: 8192, high: -1 }[effort] };
+  }
+
+  return { includeThoughts: true, ...effortFields, ...g };
 }
 
 export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
@@ -29,13 +62,11 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
       } else {
         const parts: GeminiPart[] = [];
 
-        // Handle multimodal content (OpenAI-style arrays)
         if (Array.isArray(msg.content)) {
           msg.content.forEach((item: any) => {
             if (item.type === "text") {
               parts.push({ text: item.text });
             } else if (item.type === "image_url" && item.image_url?.url) {
-              // Convert OpenAI image format to Gemini format
               const url = item.image_url.url;
               if (url.startsWith("data:")) {
                 const [mimeType, base64Data] = url.substring(5).split(
@@ -49,7 +80,6 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
                 });
               }
             } else if (item.type === "input_audio" && item.input_audio?.data) {
-              // Convert OpenAI audio format to Gemini format
               parts.push({
                 inline_data: {
                   mime_type: `audio/${item.input_audio.format || "wav"}`,
@@ -57,7 +87,6 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
                 },
               });
             } else if (item.type === "file" && item.file?.file_data) {
-              // Convert OpenAI file format to Gemini format
               const fileData = item.file.file_data;
               if (fileData.startsWith("data:")) {
                 const [mimeType, base64Data] = fileData.substring(5).split(
@@ -73,7 +102,6 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
             }
           });
         } else {
-          // Simple text content
           parts.push({
             text: typeof msg.content === "string"
               ? msg.content
@@ -88,9 +116,6 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
       }
     });
 
-    // Gemini requires at least one message in contents
-    // If no non-system messages exist, add a placeholder user message
-    // (Gemini rejects requests with empty `contents` even if systemInstruction is provided).
     if (geminiMessages.length === 0) {
       geminiMessages.push({
         parts: [{
@@ -150,12 +175,8 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
           : config.responseMimeType,
       };
 
-      if (shouldStreamGeminiThoughts(config, modelId)) {
-        generationConfig.thinkingConfig = {
-          includeThoughts: true,
-          ...(config.geminiThinkingConfig ?? {}),
-        };
-      }
+      const thinkingConfig = buildThinkingConfig(config, modelId);
+      if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
 
       return {
         contents: transformed.messages,

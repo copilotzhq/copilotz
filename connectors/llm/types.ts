@@ -91,8 +91,17 @@ export interface ProviderConfig {
   // Anthropic-specific parameters
   metadata?: Record<string, any>; // Anthropic
 
+  /**
+   * Unified reasoning effort across providers. Each provider maps this to its native param:
+   * - OpenAI: `reasoning_effort`
+   * - Gemini 3.x: `thinkingConfig.thinkingLevel`
+   * - Anthropic: `thinking.budget_tokens` (approximate mapping)
+   *
+   * Provider-specific overrides (geminiThinkingConfig, etc.) take precedence when set.
+   */
+  reasoningEffort?: "minimal" | "low" | "medium" | "high";
+
   // OpenAI-specific parameters
-  reasoningEffort?: "minimal" | "low" | "medium" | "high"; // OpenAI reasoning models (o3, o4)
   user?: string; // OpenAI user identifier
   verbosity?: "none" | "low" | "medium" | "high"; // OpenAI reasoning models (o3, o4)
 }

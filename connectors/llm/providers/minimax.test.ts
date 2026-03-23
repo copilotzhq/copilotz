@@ -77,3 +77,51 @@ Deno.test("minimax provider uses sane defaults and bearer auth", () => {
   assertEquals((body as Record<string, unknown>).temperature, 1);
   assertEquals((body as Record<string, unknown>).top_p, 0.95);
 });
+
+Deno.test("minimax extractContent preserves leading whitespace in tokens", () => {
+  const config: ProviderConfig = {
+    provider: "minimax",
+    apiKey: "test-key",
+  };
+
+  const provider = minimaxProvider(config);
+
+  // Simulate streaming tokens that the LLM emits with leading spaces as word separators
+  const tokens = [
+    { choices: [{ delta: { content: "confirme" } }] },
+    { choices: [{ delta: { content: " se" } }] },
+    { choices: [{ delta: { content: " essa" } }] },
+    { choices: [{ delta: { content: " é" } }] },
+    { choices: [{ delta: { content: " a" } }] },
+    { choices: [{ delta: { content: " rota" } }] },
+  ];
+
+  let assembled = "";
+  for (const token of tokens) {
+    const parts = provider.extractContent(token);
+    if (parts) {
+      for (const part of parts) {
+        assembled += part.text;
+      }
+    }
+  }
+
+  assertEquals(assembled, "confirme se essa é a rota");
+});
+
+Deno.test("minimax extractContent strips output tags but keeps whitespace", () => {
+  const config: ProviderConfig = {
+    provider: "minimax",
+    apiKey: "test-key",
+  };
+
+  const provider = minimaxProvider(config);
+
+  const parts = provider.extractContent({
+    choices: [{ delta: { content: "<output> hello world " } }],
+  });
+
+  assertExists(parts);
+  assertEquals(parts.length, 1);
+  assertEquals(parts[0].text, " hello world ");
+});

@@ -44,8 +44,15 @@ function normalizeTopP(value: number | undefined): number {
 function stripOutputTags(text: string): string {
   return text
     .replace(/<output>/g, "")
-    .replace(/<\/output>/g, "")
-    .trim();
+    .replace(/<\/output>/g, "");
+}
+
+/**
+ * Strip output tags and trim — safe only for the fully accumulated response,
+ * not for individual streaming tokens where leading spaces are significant.
+ */
+function stripOutputTagsFinal(text: string): string {
+  return stripOutputTags(text).trim();
 }
 
 export const minimaxProvider: ProviderFactory = (config: ProviderConfig) => {
@@ -102,7 +109,7 @@ export const minimaxProvider: ProviderFactory = (config: ProviderConfig) => {
     },
 
     streamOptions: {
-      postProcess: stripOutputTags,
+      postProcess: stripOutputTagsFinal,
     },
   };
 };

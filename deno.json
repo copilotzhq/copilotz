@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.20.12",
+  "version": "0.20.13",
   "license": "MIT",
   "exports": {
     ".": "./index.ts"

@@ -65,8 +65,6 @@ export async function chat(
     ? providerAPI.transformMessages(messages)
     : messages;
 
-  console.log("Final Messages", finalMessages);
-
   // Make API request using request connector
   const response = await streamPost(
     providerAPI.endpoint,
@@ -90,8 +88,6 @@ export async function chat(
     providerAPI.extractContent,
     { ...providerAPI.streamOptions, config: mergedConfig },
   );
-
-  console.log("Stream result: ", streamResult);
 
   // Parse tool calls from response and strip them from the final answer
   let cleanResponse = streamResult.content;

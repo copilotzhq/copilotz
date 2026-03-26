@@ -1,14 +1,28 @@
 import { Tiktoken } from "js-tiktoken";
 
-import type { ChatMessage, ChatRequest, ChatResponse, ToolDefinition, ToolInvocation, ExtractedPart, StreamCallback, ProcessStreamOptions } from './types.ts';
+import type {
+  ChatContentPart,
+  ChatMessage,
+  ChatRequest,
+  ChatResponse,
+  ExtractedPart,
+  ProcessStreamOptions,
+  StreamCallback,
+  ToolDefinition,
+  ToolInvocation,
+} from "./types.ts";
 
 /**
  * Formats chat messages with instructions and applies length limits
  */
-export function formatMessages({ messages, instructions, config, tools }: ChatRequest): ChatMessage[] {
-
+export function formatMessages(
+  { messages, instructions, config, tools }: ChatRequest,
+): ChatMessage[] {
   // Build system content with instructions and tool definitions
-  let systemContent = instructions || messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
+  let systemContent = instructions ||
+    messages.filter((m) => m.role === "system").map((m) => m.content).join(
+      "\n\n",
+    );
 
   // Add tool definitions to system prompt if tools are provided
   if (tools && tools.length > 0) {
@@ -20,40 +34,150 @@ export function formatMessages({ messages, instructions, config, tools }: ChatRe
 
   // Add system message if content exists
   const systemMessage: ChatMessage[] = systemContent
-    ? [{ role: 'system', content: systemContent }]
+    ? [{ role: "system", content: systemContent }]
     : [];
 
-  let formattedMessages = [...systemMessage, ...messages.filter(m => m.role !== 'system')];
+  let formattedMessages = [
+    ...systemMessage,
+    ...messages.filter((m) => m.role !== "system"),
+  ];
 
   // Apply length limit if specified
   if (config?.maxLength) {
     formattedMessages = limitMessageLength(
       formattedMessages,
-      config.maxLength - (systemContent?.length || 0)
+      config.maxLength - (systemContent?.length || 0),
     );
   }
 
   // Ensure system message is first if it exists
-  if (systemContent && formattedMessages[0]?.role !== 'system') {
-    formattedMessages = [{ role: 'system', content: systemContent }, ...formattedMessages];
+  if (systemContent && formattedMessages[0]?.role !== "system") {
+    formattedMessages = [
+      { role: "system", content: systemContent },
+      ...formattedMessages,
+    ];
   }
 
-  // Convert tool messages to assistant text so providers that require structured tool_calls don't reject the payload.
-  // We still rehydrate <function_calls> from either top-level message.toolCalls or metadata.toolCalls for assistant messages.
-  formattedMessages = formattedMessages.map((m) => ({
-    ...m,
-    // Present tool results as regular context to the model to avoid provider tool-call constraints
-    role: m.role === 'tool' ? 'user' : m.role,
-    content: m.content,
-  }));
+  // Present tool results as assistant-side context, materialize each
+  // assistant message's own tool-call block into its own content, then
+  // collapse consecutive messages from the same sender to avoid provider
+  // errors with repeated assistant turns while preserving chronology.
+  return mergeConsecutiveMessages(
+    formattedMessages.map((m) =>
+      materializeAssistantToolCalls({
+        ...m,
+        role: m.role === "tool" || m.role === "tool_result"
+          ? "assistant"
+          : m.role,
+        content: m.content,
+      })
+    ),
+  );
+}
 
-  return formattedMessages;
+function isEmptyContent(content: ChatMessage["content"]): boolean {
+  if (typeof content === "string") return content.length === 0;
+  return content.length === 0;
+}
+
+function toContentParts(content: ChatMessage["content"]): ChatContentPart[] {
+  return typeof content === "string"
+    ? [{ type: "text", text: content }]
+    : [...content];
+}
+
+function mergeMessageContent(
+  left: ChatMessage["content"],
+  right: ChatMessage["content"],
+): ChatMessage["content"] {
+  if (isEmptyContent(left)) return right;
+  if (isEmptyContent(right)) return left;
+
+  if (typeof left === "string" && typeof right === "string") {
+    return `${left}\n\n${right}`;
+  }
+
+  return [
+    ...toContentParts(left),
+    { type: "text", text: "\n\n" },
+    ...toContentParts(right),
+  ];
+}
+
+function prependTextToContent(
+  prefix: string,
+  content: ChatMessage["content"],
+): ChatMessage["content"] {
+  if (typeof content === "string") {
+    return content.length > 0 ? `${prefix}\n${content}` : prefix;
+  }
+
+  return [
+    {
+      type: "text",
+      text: content.length > 0 ? `${prefix}\n` : prefix,
+    },
+    ...content,
+  ];
+}
+
+function materializeAssistantToolCalls(message: ChatMessage): ChatMessage {
+  const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+  if (message.role !== "assistant" || toolCalls.length === 0) {
+    return message;
+  }
+
+  try {
+    const block = buildFunctionCallsBlock(toolCalls);
+    return {
+      ...message,
+      content: prependTextToContent(block, message.content),
+      toolCalls: undefined,
+      tool_call_id: undefined,
+    };
+  } catch {
+    return message;
+  }
+}
+
+function mergeConsecutiveMessages(messages: ChatMessage[]): ChatMessage[] {
+  const merged: ChatMessage[] = [];
+
+  for (const message of messages) {
+    const previous = merged[merged.length - 1];
+    if (
+      previous &&
+      previous.role !== "system" &&
+      message.role !== "system" &&
+      typeof previous.senderId === "string" &&
+      typeof message.senderId === "string" &&
+      previous.senderId === message.senderId &&
+      previous.role === message.role &&
+      (!Array.isArray(previous.toolCalls) || previous.toolCalls.length === 0) &&
+      (!Array.isArray(message.toolCalls) || message.toolCalls.length === 0)
+    ) {
+      merged[merged.length - 1] = {
+        ...previous,
+        content: mergeMessageContent(previous.content, message.content),
+        tool_call_id: undefined,
+        toolCalls: undefined,
+      };
+      continue;
+    }
+
+    merged.push(message);
+  }
+
+  return merged;
 }
 
 /**
  * Limits the total character length of messages, keeping the most recent ones
  */
-function limitMessageLength(messages: ChatMessage[], limit: number): ChatMessage[] {
+function limitMessageLength(
+  messages: ChatMessage[],
+  limit: number,
+): ChatMessage[] {
   const result: ChatMessage[] = [];
   let totalLength = 0;
 
@@ -73,7 +197,7 @@ function limitMessageLength(messages: ChatMessage[], limit: number): ChatMessage
       if (remainingSpace > 0) {
         result.unshift({
           ...message,
-          content: message.content.slice(-remainingSpace)
+          content: message.content.slice(-remainingSpace),
         });
       }
       break;
@@ -86,18 +210,23 @@ function limitMessageLength(messages: ChatMessage[], limit: number): ChatMessage
 /**
  * Counts tokens in messages and response using tiktoken
  */
-export async function countTokens(messages: ChatMessage[], response: string): Promise<number> {
+export async function countTokens(
+  messages: ChatMessage[],
+  response: string,
+): Promise<number> {
   try {
-    const base = await fetch('https://tiktoken.pages.dev/js/o200k_base.json', {cache: 'force-cache'}).then(res => res.json());
+    const base = await fetch("https://tiktoken.pages.dev/js/o200k_base.json", {
+      cache: "force-cache",
+    }).then((res) => res.json());
     const encoding = new Tiktoken(base);
-    const allContent = messages.map(m => m.content).join(' ') + response;
+    const allContent = messages.map((m) => m.content).join(" ") + response;
     const tokens = encoding.encode(allContent);
     // const tokens= [1,2];
     return tokens.length;
   } catch (error) {
-    console.warn('Token counting failed:', error);
+    console.warn("Token counting failed:", error);
     // Fallback to approximate count (4 chars per token)
-    const totalText = messages.map(m => m.content).join(' ') + response;
+    const totalText = messages.map((m) => m.content).join(" ") + response;
     return Math.ceil(totalText.length / 4);
   }
 }
@@ -107,14 +236,14 @@ export async function countTokens(messages: ChatMessage[], response: string): Pr
  */
 export function createMockResponse(request: ChatRequest): ChatResponse {
   const prompt = formatMessages(request);
-  const answer = typeof request.answer === 'string'
+  const answer = typeof request.answer === "string"
     ? request.answer
     : JSON.stringify(request.answer);
 
   return {
     prompt,
     answer,
-    tokens: 0
+    tokens: 0,
   };
 }
 
@@ -122,15 +251,15 @@ export function createMockResponse(request: ChatRequest): ChatResponse {
  * Parses Server-Sent Events data
  */
 export function parseSSEData(line: string): any | null {
-  if (!line.startsWith('data:')) return null;
+  if (!line.startsWith("data:")) return null;
 
   const data = line.slice(5).trim();
-  if (data === '[DONE]') return null;
+  if (data === "[DONE]") return null;
 
   try {
     return JSON.parse(data);
   } catch (error) {
-    console.warn('Failed to parse SSE data:', error, 'Line:', line);
+    console.warn("Failed to parse SSE data:", error, "Line:", line);
     return null;
   }
 }
@@ -139,11 +268,15 @@ export function parseSSEData(line: string): any | null {
  * Parses a single line according to the stream format.
  * SSE: expects `data: {...}` prefix.  JSONL: raw JSON per line.
  */
-function parseLine(line: string, format: 'sse' | 'jsonl'): any | null {
-  if (format === 'jsonl') {
+function parseLine(line: string, format: "sse" | "jsonl"): any | null {
+  if (format === "jsonl") {
     const trimmed = line.trim();
     if (!trimmed) return null;
-    try { return JSON.parse(trimmed); } catch { return null; }
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
   }
   return parseSSEData(line);
 }
@@ -162,15 +295,18 @@ export async function processStream(
   extractContent: (data: any) => ExtractedPart[] | null,
   options?: ProcessStreamOptions,
 ): Promise<{ content: string; reasoning: string }> {
-  const decoder = new TextDecoder('utf-8');
-  const format = options?.format ?? 'sse';
+  const decoder = new TextDecoder("utf-8");
+  const format = options?.format ?? "sse";
   const config = options?.config;
   // fullResponse accumulates RAW content (including <function_calls> blocks)
   // so parseToolCallsFromResponse can extract them downstream.
-  let fullResponse = '';
-  let reasoningResponse = '';
-  let buffer = '';
-  const filterState: { inside: boolean; pending: string } = { inside: false, pending: '' };
+  let fullResponse = "";
+  let reasoningResponse = "";
+  let buffer = "";
+  const filterState: { inside: boolean; pending: string } = {
+    inside: false,
+    pending: "",
+  };
 
   const handleParts = (parts: ExtractedPart[]) => {
     for (const part of parts) {
@@ -193,7 +329,7 @@ export async function processStream(
 
       if (done) {
         if (buffer) {
-          for (const line of buffer.split('\n')) {
+          for (const line of buffer.split("\n")) {
             const data = parseLine(line, format);
             if (data) {
               const parts = extractContent(data);
@@ -207,8 +343,8 @@ export async function processStream(
       const chunk = decoder.decode(value, { stream: true });
       buffer += chunk;
 
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
 
       for (const line of lines) {
         const data = parseLine(line, format);
@@ -219,7 +355,7 @@ export async function processStream(
       }
     }
   } catch (error) {
-    console.error('Stream processing error:', error);
+    console.error("Stream processing error:", error);
     throw error;
   }
 
@@ -232,14 +368,14 @@ export async function processStream(
 
 export function filterToolCallTokensStreaming(
   input: string,
-  state: { inside: boolean; pending: string }
+  state: { inside: boolean; pending: string },
 ): string {
-  const startTag = '<function_calls>';
-  const endTag = '</function_calls>';
+  const startTag = "<function_calls>";
+  const endTag = "</function_calls>";
 
   let s = state.pending + input;
-  state.pending = '';
-  let output = '';
+  state.pending = "";
+  let output = "";
 
   // Helper to compute the longest suffix of text that is a prefix of tag
   const suffixPrefix = (text: string, tag: string): number => {
@@ -264,7 +400,7 @@ export function filterToolCallTokensStreaming(
         } else {
           output += s;
         }
-        s = '';
+        s = "";
       } else {
         // Output before tag, then enter inside
         output += s.slice(0, idx);
@@ -277,7 +413,7 @@ export function filterToolCallTokensStreaming(
         // Entire remainder is inside the tag; keep overlap to catch end tag
         const overlap = suffixPrefix(s, endTag);
         state.pending = s.slice(s.length - overlap);
-        s = '';
+        s = "";
       } else {
         // Skip content inside and consume end tag, exit inside
         s = s.slice(endIdx + endTag.length);
@@ -294,7 +430,7 @@ export function filterToolCallTokensStreaming(
 // =============================================================================
 
 export function generateToolSystemPrompt(tools: ToolDefinition[]): string {
-  const toolDefinitions = tools.map(tool => JSON.stringify(tool)).join('\n');
+  const toolDefinitions = tools.map((tool) => JSON.stringify(tool)).join("\n");
 
   return `
 === TOOL USAGE ===
@@ -331,28 +467,34 @@ ${toolDefinitions}
  * Rehydrate a <function_calls> block from recorded tool calls, if present in message metadata
  */
 export function buildFunctionCallsBlock(toolCalls: ToolInvocation[]): string {
-  const objects = toolCalls.map(call => {
+  const objects = toolCalls.map((call) => {
     let args: any;
-    try { args = typeof call.args === "string" ? JSON.parse(call.args) : call.args; } catch { args = call.args; }
+    try {
+      args = typeof call.args === "string" ? JSON.parse(call.args) : call.args;
+    } catch {
+      args = call.args;
+    }
     const obj: any = { name: call.tool.id, arguments: args };
     if (call.id) obj.tool_call_id = call.id;
     return JSON.stringify(obj);
   });
-  return [`<function_calls>`, ...objects, `</function_calls>`].join('\n');
+  return [`<function_calls>`, ...objects, `</function_calls>`].join("\n");
 }
 
 /**
  * Parse tool calls from AI response using the Anthropic-style <tool_calls> JSON block
  */
-export function parseToolCallsFromResponse(response: string): { cleanResponse: string; tool_calls: ToolInvocation[] } {
+export function parseToolCallsFromResponse(
+  response: string,
+): { cleanResponse: string; tool_calls: ToolInvocation[] } {
   const toolCalls: ToolInvocation[] = [];
   let cleanResponse = response;
 
   // 1) Recover missing closing tags by balancing braces inside the last <function_calls>
   //    If we find an opening tag without a closing one, attempt to extract until balanced JSON objects are complete,
   //    then synthetically append the closing tag to allow the standard parser to run.
-  const startTag = '<function_calls>';
-  const endTag = '</function_calls>';
+  const startTag = "<function_calls>";
+  const endTag = "</function_calls>";
 
   const hasStart = response.includes(startTag);
   const hasEnd = response.includes(endTag);
@@ -382,20 +524,20 @@ export function parseToolCallsFromResponse(response: string): { cleanResponse: s
     for (const jsonStr of jsonObjects) {
       try {
         const obj = JSON.parse(jsonStr);
-        if (obj && typeof obj.name === 'string') {
+        if (obj && typeof obj.name === "string") {
           const executionId = crypto.randomUUID();
-            toolCalls.push({
-              id: executionId,
-              tool: {
-                id: obj.name
-              },
-              args: JSON.stringify(obj.arguments)
-            });
+          toolCalls.push({
+            id: executionId,
+            tool: {
+              id: obj.name,
+            },
+            args: JSON.stringify(obj.arguments),
+          });
         }
       } catch { /* ignore malformed object */ }
     }
 
-    cleanResponse = cleanResponse.replace(match[0], '').trimStart();
+    cleanResponse = cleanResponse.replace(match[0], "").trimStart();
   }
 
   return { cleanResponse, tool_calls: toolCalls };
@@ -417,22 +559,22 @@ function extractJsonObjects(content: string): string[] {
     if (i >= content.length) break;
 
     // Look for opening brace
-    if (content[i] === '{') {
+    if (content[i] === "{") {
       const startPos = i;
       let braceCount = 1;
       i++; // Move past the opening brace
 
       // Find the matching closing brace
       while (i < content.length && braceCount > 0) {
-        if (content[i] === '{') {
+        if (content[i] === "{") {
           braceCount++;
-        } else if (content[i] === '}') {
+        } else if (content[i] === "}") {
           braceCount--;
         } else if (content[i] === '"') {
           // Skip quoted strings to avoid counting braces inside strings
           i++;
           while (i < content.length && content[i] !== '"') {
-            if (content[i] === '\\') {
+            if (content[i] === "\\") {
               i++; // Skip escaped character
             }
             i++;

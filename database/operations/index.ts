@@ -157,6 +157,15 @@ export interface DatabaseOperations {
     threadId: string,
     workerId: string,
   ) => Promise<void>;
+  /**
+   * Release a thread worker lease only when no eligible pending work remains.
+   * Returns true when the lease was released, false when the worker should keep polling.
+   */
+  releaseThreadWorkerLeaseIfNoPendingWork: (
+    threadId: string,
+    workerId: string,
+    minPriority?: number,
+  ) => Promise<boolean>;
   /** Get effective thread worker lease configuration. */
   getThreadWorkerLeaseConfig: () => { leaseMs: number; heartbeatMs: number };
   /**
@@ -202,7 +211,11 @@ export interface DatabaseOperations {
   getUserByExternalId: (externalId: string) => Promise<User | undefined>;
   archiveThread: (threadId: string, summary: string) => Promise<Thread | null>;
   /** Return pending NEW_MESSAGE queue events in this thread (excluding current), oldest first. */
-  peekCoalescableCandidates: (threadId: string, currentEventId: string, namespace?: string) => Promise<Queue[]>;
+  peekCoalescableCandidates: (
+    threadId: string,
+    currentEventId: string,
+    namespace?: string,
+  ) => Promise<Queue[]>;
   /** Atomically mark a batch of pending queue events as completed. Returns IDs actually claimed. */
   claimAndCompleteEventsBatch: (ids: string[]) => Promise<string[]>;
 
@@ -649,6 +662,41 @@ export function createOperations(
     );
   };
 
+  const releaseThreadWorkerLeaseIfNoPendingWork = async (
+    threadId: string,
+    workerId: string,
+    minPriority?: number,
+  ): Promise<boolean> => {
+    const params: unknown[] = [threadId, workerId];
+    let pendingPriorityClause = "";
+
+    if (typeof minPriority === "number" && Number.isFinite(minPriority)) {
+      params.push(minPriority);
+      pendingPriorityClause =
+        ` AND COALESCE("priority", 0) >= $${params.length}`;
+    }
+
+    const result = await db.query<{ id: string }>(
+      `UPDATE "threads"
+       SET "workerLockedBy" = NULL,
+           "workerLeaseExpiresAt" = NULL,
+           "updatedAt" = NOW()
+       WHERE "id" = $1
+         AND "workerLockedBy" = $2
+         AND NOT EXISTS (
+           SELECT 1
+           FROM "events"
+           WHERE "threadId" = $1
+             AND "status" = 'pending'
+             ${pendingPriorityClause}
+         )
+       RETURNING "id"`,
+      params,
+    );
+
+    return result.rows.length > 0;
+  };
+
   const recoverThreadProcessingQueueItems = async (
     threadId: string,
   ): Promise<number> => {
@@ -775,7 +823,9 @@ export function createOperations(
       content: message.content ?? undefined,
       toolCallId: message.toolCallId ?? undefined,
       toolCalls: message.toolCalls ?? undefined,
-      reasoning: ((message as Record<string, unknown>).reasoning as string | null) ?? undefined,
+      reasoning:
+        ((message as Record<string, unknown>).reasoning as string | null) ??
+          undefined,
       metadata: message.metadata ?? undefined,
     });
 
@@ -967,7 +1017,9 @@ export function createOperations(
         externalId: message.externalId ?? null,
         toolCallId: message.toolCallId ?? null,
         toolCalls: message.toolCalls ?? null,
-        reasoning: ((message as Record<string, unknown>).reasoning as string | null) ?? null,
+        reasoning:
+          ((message as Record<string, unknown>).reasoning as string | null) ??
+            null,
         metadata: message.metadata ?? null,
       },
       sourceType: "thread",
@@ -1228,7 +1280,9 @@ export function createOperations(
     return result.rows as Queue[];
   };
 
-  const claimAndCompleteEventsBatch = async (ids: string[]): Promise<string[]> => {
+  const claimAndCompleteEventsBatch = async (
+    ids: string[],
+  ): Promise<string[]> => {
     if (ids.length === 0) return [];
     const result = await db.query<{ id: string }>(
       `UPDATE "events"
@@ -2078,6 +2132,7 @@ export function createOperations(
     acquireThreadWorkerLease,
     renewThreadWorkerLease,
     releaseThreadWorkerLease,
+    releaseThreadWorkerLeaseIfNoPendingWork,
     getThreadWorkerLeaseConfig,
     recoverThreadProcessingQueueItems,
     getMessageHistory,

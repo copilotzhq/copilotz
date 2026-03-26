@@ -1257,14 +1257,25 @@ export const messageProcessor: EventProcessor<
 
     if (loopCheck.shouldForceUserTarget) {
       // Force target to user - don't trigger any more LLM calls
-      if (loopCheck.userToTarget) {
-        // Update the target to be the user instead
-        targetResolution = {
-          targetId: loopCheck.userToTarget,
-          targetQueue: [],
-        };
-      }
-      // No LLM call for user targets
+      const forcedUserTarget = loopCheck.userToTarget ?? "user";
+      targetResolution = {
+        targetId: forcedUserTarget,
+        targetQueue: [],
+      };
+
+      // Persist the forced user target to break the agent loop for future messages
+      const updatedMetadata = {
+        ...(thread.metadata as Record<string, unknown> ?? {}),
+        participantTargets: {}, // Clear all persisted targets to force an explicit mention or user action
+        agentTurnCount: 0,
+      };
+      
+      await ops.crud.threads?.update?.({ id: thread.id }, {
+        metadata: updatedMetadata,
+      });
+      (thread as unknown as { metadata: unknown }).metadata = updatedMetadata;
+
+      // We explicitly clear the counter back to 0 (already done in loopCheck)
       return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
     }
 
@@ -1424,9 +1435,11 @@ export const messageProcessor: EventProcessor<
 
       // Select tools available to this agent
       const allowedToolKeys: string[] =
-        Array.isArray(agent.allowedTools) && agent.allowedTools.length > 0
+        Array.isArray(agent.allowedTools)
           ? agent.allowedTools
-          : ctx.allTools.map((t) => t.key);
+          : agent.allowedTools === null
+            ? []
+            : ctx.allTools.map((t) => t.key);
       const agentTools: ExecutableTool[] = allowedToolKeys
         .map((key) => ctx.allTools.find((t) => t.key === key))
         .filter((t): t is ExecutableTool => Boolean(t));

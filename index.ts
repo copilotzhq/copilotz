@@ -1013,13 +1013,15 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                 if (banner) console.log(banner);
 
                 let isThinking = false;
+                let currentAgent = "";
 
                 const unifiedOnEvent: UnifiedOnEvent = async (ev) => {
-                    const e = ev as unknown as { type?: string; payload?: { token?: string; isComplete?: boolean; isReasoning?: boolean } };
+                    const e = ev as unknown as { type?: string; payload?: { token?: string; isComplete?: boolean; isReasoning?: boolean; agent?: { id?: string | null; name?: string } } };
                     if (e?.type === "TOKEN" && e?.payload) {
                         const token = e.payload.token ?? "";
                         const done = Boolean(e.payload.isComplete);
                         const isReasoning = Boolean(e.payload.isReasoning);
+                        const agentName = e.payload.agent?.name ?? null;
 
                         if (!done) {
                             const anyGlobal = globalThis as unknown as {
@@ -1028,6 +1030,12 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                             };
 
                             let toWrite = "";
+                            // Print agent label when the speaking agent changes
+                            if (agentName && agentName !== currentAgent) {
+                                if (currentAgent) toWrite += "\n\n";
+                                toWrite += `\x1b[36m[${agentName}]\x1b[0m\n`;
+                                currentAgent = agentName;
+                            }
                             if (isReasoning && !isThinking) {
                                 toWrite += "💭 ";
                                 isThinking = true;

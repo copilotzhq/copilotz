@@ -25,6 +25,8 @@ export interface ChatMessage {
    * - [ { type: 'input_audio', input_audio: { data: '<base64>', format: 'wav' } } ]
    */
   content: string | ChatContentPart[];
+  /** Internal sender identity used for history-aware message normalization. */
+  senderId?: string;
   tool_call_id?: string;
   // Prefer passing tool calls explicitly for assistant messages
   toolCalls?: ToolInvocation[];
@@ -139,7 +141,13 @@ export interface ToolInvocation {
   };
   args: string; // JSON string of arguments
   output?: unknown; // Present when the tool completes
-  status?: "pending" | "processing" | "completed" | "failed" | "expired" | "overwritten";
+  status?:
+    | "pending"
+    | "processing"
+    | "completed"
+    | "failed"
+    | "expired"
+    | "overwritten";
   // Internal batch aggregator metadata
   batchId?: string | null;
   batchSize?: number | null;
@@ -168,7 +176,10 @@ export interface StreamCallbackOptions {
 }
 
 // Stream callback function
-export type StreamCallback = (chunk: string, options?: StreamCallbackOptions) => void;
+export type StreamCallback = (
+  chunk: string,
+  options?: StreamCallbackOptions,
+) => void;
 
 // A single extracted chunk from a parsed SSE/JSONL event.
 // Providers return an array of these from extractContent so the shared
@@ -182,7 +193,7 @@ export interface ExtractedPart {
 export interface ProcessStreamOptions {
   config?: ProviderConfig;
   /** 'sse' (default) for `data: {...}` lines, 'jsonl' for raw JSON-per-line (Ollama). */
-  format?: 'sse' | 'jsonl';
+  format?: "sse" | "jsonl";
   /** Transform the accumulated raw response before returning (e.g. strip wrapper tags). */
   postProcess?: (raw: string) => string;
 }
@@ -196,7 +207,7 @@ export interface ProviderAPI {
   extractContent: (data: any) => ExtractedPart[] | null;
   transformMessages?: (messages: ChatMessage[]) => any;
   /** Options passed to the shared processStream (format, config, postProcess). */
-  streamOptions?: Omit<ProcessStreamOptions, 'config'>;
+  streamOptions?: Omit<ProcessStreamOptions, "config">;
 }
 
 // Provider factory function signature - now much simpler

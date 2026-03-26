@@ -156,10 +156,11 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       ];
 
       // If agent not found, allow all tools; otherwise respect agent.allowedTools
-      const allowedKeys = agent && Array.isArray(agent.allowedTools) &&
-          agent.allowedTools.length > 0
+      const allowedKeys = agent && Array.isArray(agent.allowedTools)
         ? agent.allowedTools
-        : allTools.map((t) => t.key);
+        : agent?.allowedTools === null
+          ? []
+          : allTools.map((t) => t.key);
       const agentTools =
         allowedKeys.map((key: string) => allTools.find((t) => t.key === key))
           .filter(hasExecute) || [];

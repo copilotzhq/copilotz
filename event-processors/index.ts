@@ -302,6 +302,7 @@ export async function startEventWorker(
   if (!acquiredLease) return;
 
   let leaseLost = false;
+  let leaseReleased = false;
   const heartbeatTimer = setInterval(() => {
     Promise.resolve()
       .then(() => ops.renewThreadWorkerLease(threadId, workerId))
@@ -345,7 +346,18 @@ export async function startEventWorker(
         minPriority,
       );
 
-      if (!next) break;
+      if (!next) {
+        const released = await ops.releaseThreadWorkerLeaseIfNoPendingWork(
+          threadId,
+          workerId,
+          minPriority,
+        );
+        if (released) {
+          leaseReleased = true;
+          break;
+        }
+        continue;
+      }
 
       const eventType = next.eventType as Event["type"];
       const baseEvent = {
@@ -529,7 +541,9 @@ export async function startEventWorker(
     }
   } finally {
     clearInterval(heartbeatTimer);
-    await ops.releaseThreadWorkerLease(threadId, workerId);
+    if (!leaseReleased) {
+      await ops.releaseThreadWorkerLease(threadId, workerId);
+    }
   }
 }
 

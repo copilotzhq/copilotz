@@ -227,14 +227,24 @@ export function historyGenerator(
 
     const metadata = (msg.metadata ?? undefined) as MessageMetadata | undefined;
 
+    const rawToolCalls = (msg as unknown as { toolCalls?: unknown }).toolCalls;
+    const metadataToolCalls = Array.isArray(metadata?.toolCalls)
+      ? metadata.toolCalls
+      : [];
+    const hasStructuredToolResult =
+      (Array.isArray(rawToolCalls) && rawToolCalls.length > 0) ||
+      metadataToolCalls.length > 0;
+
     let content = msg.content || "";
 
-    // Prefix with sender name for non-current-agent messages
-    // Tool results also get prefixed (they're not "assistant" messages)
-    if (isToolResult && msg.senderType !== "system") {
+    // Prefix with sender name for non-current-agent messages.
+    // Structured tool results are rendered later in the formatter, so keep
+    // their raw content untouched here unless we have no structured metadata.
+    if (isToolResult && !hasStructuredToolResult && msg.senderType !== "system") {
       content = `[Tool Result]: ${content}`;
     } else if (
       !directConversation && !isCurrentAgent && msg.senderType !== "system"
+      && !isToolResult
     ) {
       const senderName = msg.senderId ?? "unknown";
       content = `[${senderName}]: ${content}`;
@@ -260,9 +270,11 @@ export function historyGenerator(
       ? [{ type: "text", text: content }, ...attachmentParts]
       : content;
 
-    // Prefer top-level toolCalls on assistant messages for rehydration
-    const rawToolCalls = (msg as unknown as { toolCalls?: unknown }).toolCalls;
-    const toolCallsSource = Array.isArray(rawToolCalls) ? rawToolCalls : [];
+    // Prefer top-level toolCalls when present, but fall back to metadata for
+    // persisted tool-result messages where execution data lives under metadata.
+    const toolCallsSource = Array.isArray(rawToolCalls) && rawToolCalls.length > 0
+      ? rawToolCalls
+      : metadataToolCalls;
     const toolCalls: ToolInvocation[] | undefined = toolCallsSource.length > 0
       ? toolCallsSource.map((call, i) => {
         const maybeCall = call as
@@ -274,7 +286,9 @@ export function historyGenerator(
             id?: string | null;
             tool?: { id?: string; name?: string };
             name?: string;
-            args?: Record<string, unknown>;
+            args?: Record<string, unknown> | string;
+            output?: unknown;
+            status?: ToolInvocation["status"];
           };
 
         const callId =
@@ -319,6 +333,12 @@ export function historyGenerator(
           args: typeof functionArguments === "string"
             ? functionArguments
             : JSON.stringify(functionArguments),
+          ...("output" in maybeCall && typeof maybeCall.output !== "undefined"
+            ? { output: maybeCall.output }
+            : {}),
+          ...("status" in maybeCall && typeof maybeCall.status === "string"
+            ? { status: maybeCall.status }
+            : {}),
         } satisfies ToolInvocation;
       })
       : undefined;

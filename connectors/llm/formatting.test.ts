@@ -1,4 +1,5 @@
-import { formatMessages } from "./utils.ts";
+import { formatMessages, withDefaultStopSequences } from "./utils.ts";
+import { historyGenerator } from "../../event-processors/new_message/generators/history-generator.ts";
 import type { ChatMessage } from "./types.ts";
 
 function assertEquals<T>(actual: T, expected: T, message?: string): void {
@@ -29,8 +30,17 @@ Deno.test("formatMessages rewrites tool results to assistant and preserves chron
     {
       role: "tool",
       senderId: "mobizap",
-      content: '[Tool Result]: {"sessionId":"abc"}',
+      content: '{"sessionId":"abc"}',
       tool_call_id: "tool-1",
+      toolCalls: [
+        {
+          id: "tool-1",
+          tool: { id: "startSession" },
+          args: "{}",
+          output: { sessionId: "abc" },
+          status: "completed",
+        },
+      ],
     },
     {
       role: "assistant",
@@ -57,7 +67,9 @@ Deno.test("formatMessages rewrites tool results to assistant and preserves chron
 </function_calls>
 Para começarmos, me diga origem e destino.
 
-[Tool Result]: {"sessionId":"abc"}
+<function_results>
+{"name":"startSession","output":{"sessionId":"abc"},"tool_call_id":"tool-1","status":"completed"}
+</function_results>
 
 <function_calls>
 {"name":"searchTrips","arguments":{"date":"2026-04-06"},"tool_call_id":"tool-2"}
@@ -92,4 +104,51 @@ Deno.test("formatMessages merges consecutive user messages from the same sender"
   assertEquals(formatted.length, 1);
   assertEquals(formatted[0].role, "user");
   assertEquals(formatted[0].content, "Oi\n\nPreciso de ajuda");
+});
+
+Deno.test("withDefaultStopSequences appends function_results without dropping caller stops", () => {
+  const config = withDefaultStopSequences({
+    stop: ["DONE"],
+    stopSequences: ["HALT"],
+  });
+
+  assertEquals(config.stop, ["HALT", "DONE", "<function_results>"]);
+  assertEquals(config.stopSequences, ["HALT", "DONE", "<function_results>"]);
+});
+
+Deno.test("historyGenerator exposes structured tool result metadata for formatter blocks", () => {
+  const history = historyGenerator(
+    [
+      {
+        senderId: "mobizap",
+        senderType: "tool",
+        content: '{"sessionId":"abc"}',
+        metadata: {
+          toolCalls: [
+            {
+              id: "tool-1",
+              tool: { id: "startSession", name: "startSession" },
+              args: "{}",
+              output: { sessionId: "abc" },
+              status: "completed",
+            },
+          ],
+        },
+      },
+    ] as any,
+    { id: "mobizap", name: "mobizap" } as any,
+  );
+
+  assertEquals(history.length, 1);
+  assertEquals(history[0].role, "tool");
+  assertEquals(history[0].content, '{"sessionId":"abc"}');
+  assertEquals(history[0].toolCalls, [
+    {
+      id: "tool-1",
+      tool: { id: "startSession" },
+      args: "{}",
+      output: { sessionId: "abc" },
+      status: "completed",
+    },
+  ]);
 });

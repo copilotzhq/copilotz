@@ -7,10 +7,13 @@ import type {
   ChatResponse,
   ExtractedPart,
   ProcessStreamOptions,
+  ProviderConfig,
   StreamCallback,
   ToolDefinition,
   ToolInvocation,
 } from "./types.ts";
+
+const DEFAULT_STOP_SEQUENCES = ["<function_results>"];
 
 /**
  * Formats chat messages with instructions and applies length limits
@@ -63,15 +66,7 @@ export function formatMessages(
   // collapse consecutive messages from the same sender to avoid provider
   // errors with repeated assistant turns while preserving chronology.
   return mergeConsecutiveMessages(
-    formattedMessages.map((m) =>
-      materializeAssistantToolCalls({
-        ...m,
-        role: m.role === "tool" || m.role === "tool_result"
-          ? "assistant"
-          : m.role,
-        content: m.content,
-      })
-    ),
+    formattedMessages.map(materializeHistoryMessage),
   );
 }
 
@@ -121,6 +116,15 @@ function prependTextToContent(
   ];
 }
 
+function contentToText(content: ChatMessage["content"]): string {
+  if (typeof content === "string") return content;
+
+  return content
+    .filter((part) => part.type === "text")
+    .map((part) => (part as Extract<ChatContentPart, { type: "text" }>).text)
+    .join("");
+}
+
 function materializeAssistantToolCalls(message: ChatMessage): ChatMessage {
   const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
   if (message.role !== "assistant" || toolCalls.length === 0) {
@@ -138,6 +142,46 @@ function materializeAssistantToolCalls(message: ChatMessage): ChatMessage {
   } catch {
     return message;
   }
+}
+
+function materializeToolResults(message: ChatMessage): ChatMessage {
+  const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+  if (
+    (message.role !== "tool" && message.role !== "tool_result") ||
+    toolCalls.length === 0
+  ) {
+    return message;
+  }
+
+  try {
+    return {
+      ...message,
+      content: buildFunctionResultsBlock(toolCalls, contentToText(message.content)),
+      toolCalls: undefined,
+      tool_call_id: undefined,
+    };
+  } catch {
+    return {
+      ...message,
+      toolCalls: undefined,
+    };
+  }
+}
+
+function materializeHistoryMessage(message: ChatMessage): ChatMessage {
+  if (message.role === "assistant") {
+    return materializeAssistantToolCalls(message);
+  }
+
+  if (message.role === "tool" || message.role === "tool_result") {
+    const toolResultMessage = materializeToolResults(message);
+    return {
+      ...toolResultMessage,
+      role: "assistant",
+    };
+  }
+
+  return message;
 }
 
 function mergeConsecutiveMessages(messages: ChatMessage[]): ChatMessage[] {
@@ -169,6 +213,36 @@ function mergeConsecutiveMessages(messages: ChatMessage[]): ChatMessage[] {
   }
 
   return merged;
+}
+
+function normalizeStopValues(value?: string | string[]): string[] {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value.filter((candidate): candidate is string =>
+      typeof candidate === "string" && candidate.length > 0
+    );
+  }
+  return typeof value === "string" && value.length > 0 ? [value] : [];
+}
+
+export function withDefaultStopSequences(
+  config: ProviderConfig,
+): ProviderConfig {
+  const mergedStops = [
+    ...new Set([
+      ...normalizeStopValues(config.stopSequences),
+      ...normalizeStopValues(config.stop),
+      ...DEFAULT_STOP_SEQUENCES,
+    ]),
+  ];
+
+  if (mergedStops.length === 0) return config;
+
+  return {
+    ...config,
+    stop: mergedStops,
+    stopSequences: mergedStops,
+  };
 }
 
 /**
@@ -455,6 +529,7 @@ Hi, I'm going to execute two function calls.
 \`\`\`
 
 VERY IMPORTANT, PAY ATTENTION TO THIS >>>>>> ALWAYS Start your messages with the <function_calls> block when you have a tool to call.
+5. Tool outputs may appear later as <function_results> blocks. Treat them as returned execution results and never generate <function_results> yourself.
 
 === TOOL CATALOG (read-only) ===
 
@@ -479,6 +554,41 @@ export function buildFunctionCallsBlock(toolCalls: ToolInvocation[]): string {
     return JSON.stringify(obj);
   });
   return [`<function_calls>`, ...objects, `</function_calls>`].join("\n");
+}
+
+function normalizeToolResultOutput(
+  call: ToolInvocation,
+  fallbackContent?: string,
+): unknown {
+  if (typeof call.output !== "undefined") {
+    return call.output;
+  }
+
+  if (fallbackContent && fallbackContent.length > 0) {
+    return fallbackContent;
+  }
+
+  return null;
+}
+
+export function buildFunctionResultsBlock(
+  toolResults: ToolInvocation[],
+  fallbackContent?: string,
+): string {
+  const objects = toolResults.map((call) => {
+    const obj: Record<string, unknown> = {
+      name: call.tool.id,
+      output: normalizeToolResultOutput(
+        call,
+        toolResults.length === 1 ? fallbackContent : undefined,
+      ),
+    };
+    if (call.id) obj.tool_call_id = call.id;
+    if (call.status) obj.status = call.status;
+    return JSON.stringify(obj);
+  });
+
+  return [`<function_results>`, ...objects, `</function_results>`].join("\n");
 }
 
 /**

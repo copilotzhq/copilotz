@@ -11,6 +11,7 @@ import {
   formatMessages,
   parseToolCallsFromResponse,
   processStream,
+  withDefaultStopSequences,
 } from "./utils.ts";
 import { streamPost, type StreamResponse } from "../request/index.ts";
 
@@ -39,7 +40,7 @@ export async function chat(
   const provider = config.provider || (request as any).provider;
 
   // Merge configurations
-  const mergedConfig: ProviderConfig = {
+  const mergedConfig = withDefaultStopSequences({
     ...config,
     ...request.config,
     // Environment variables fallback (supports OPENAI_API_KEY and OPENAI_KEY-style names)
@@ -47,7 +48,7 @@ export async function chat(
       env[`${provider.toUpperCase()}_API_KEY`] ||
       env[`${provider.toUpperCase()}_KEY`] ||
       env.OPENAI_API_KEY,
-  };
+  } as ProviderConfig);
 
   // Get provider API configuration
   const providerFactory = getProvider(provider);
@@ -63,6 +64,8 @@ export async function chat(
   const finalMessages = providerAPI.transformMessages
     ? providerAPI.transformMessages(messages)
     : messages;
+
+  console.log("Final Messages", finalMessages);
 
   // Make API request using request connector
   const response = await streamPost(
@@ -87,6 +90,8 @@ export async function chat(
     providerAPI.extractContent,
     { ...providerAPI.streamOptions, config: mergedConfig },
   );
+
+  console.log("Stream result: ", streamResult);
 
   // Parse tool calls from response and strip them from the final answer
   let cleanResponse = streamResult.content;

@@ -117,9 +117,14 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     // Defense-in-depth: the shared processStream already filters
     // <function_calls> blocks, but we keep a second pass here in case
     // any slip through (e.g. non-standard provider integration).
-    const toolCallFilterState: { inside: boolean; pending: string } = {
+    const toolCallFilterState: {
+      inside: boolean;
+      pending: string;
+      controlPending: string;
+    } = {
       inside: false,
       pending: "",
+      controlPending: "",
     };
 
     const streamCallback =

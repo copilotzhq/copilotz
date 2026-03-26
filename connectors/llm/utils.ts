@@ -14,6 +14,20 @@ import type {
 } from "./types.ts";
 
 const DEFAULT_STOP_SEQUENCES = ["<function_results>"];
+const TOOL_RESULTS_CONTINUATION_CUE = "<continue_after_tool_results/>";
+const TOOL_RESULTS_CONTINUATION_BLOCK = `<continue_after_tool_results>
+Continue based on the function results above.
+Do not repeat the previous assistant message.
+If no user-facing reply is necessary, respond with exactly <no_response/>.
+Never output the <continue_after_tool_results> block itself.
+</continue_after_tool_results>`;
+const NO_RESPONSE_SELF_CLOSING_TAG = "<no_response/>";
+const NO_RESPONSE_EMPTY_BLOCK_TAG = "<no_response></no_response>";
+const INTERNAL_LITERAL_CONTROL_TAGS = [
+  TOOL_RESULTS_CONTINUATION_CUE,
+  NO_RESPONSE_SELF_CLOSING_TAG,
+  NO_RESPONSE_EMPTY_BLOCK_TAG,
+];
 
 /**
  * Formats chat messages with instructions and applies length limits
@@ -65,9 +79,11 @@ export function formatMessages(
   // assistant message's own tool-call block into its own content, then
   // collapse consecutive messages from the same sender to avoid provider
   // errors with repeated assistant turns while preserving chronology.
-  return mergeConsecutiveMessages(
+  const normalizedMessages = mergeConsecutiveMessages(
     formattedMessages.map(materializeHistoryMessage),
   );
+
+  return appendContinuationCueIfNeeded(normalizedMessages);
 }
 
 function isEmptyContent(content: ChatMessage["content"]): boolean {
@@ -213,6 +229,26 @@ function mergeConsecutiveMessages(messages: ChatMessage[]): ChatMessage[] {
   }
 
   return merged;
+}
+
+function appendContinuationCueIfNeeded(messages: ChatMessage[]): ChatMessage[] {
+  const lastMessage = messages[messages.length - 1];
+  if (!lastMessage || lastMessage.role !== "assistant") {
+    return messages;
+  }
+
+  const lastContent = contentToText(lastMessage.content);
+  if (!lastContent.includes("<function_results>")) {
+    return messages;
+  }
+
+  return [
+    ...messages,
+    {
+      role: "user",
+      content: TOOL_RESULTS_CONTINUATION_CUE,
+    },
+  ];
 }
 
 function normalizeStopValues(value?: string | string[]): string[] {
@@ -377,9 +413,14 @@ export async function processStream(
   let fullResponse = "";
   let reasoningResponse = "";
   let buffer = "";
-  const filterState: { inside: boolean; pending: string } = {
+  const filterState: {
+    inside: boolean;
+    pending: string;
+    controlPending: string;
+  } = {
     inside: false,
     pending: "",
+    controlPending: "",
   };
 
   const handleParts = (parts: ExtractedPart[]) => {
@@ -442,7 +483,7 @@ export async function processStream(
 
 export function filterToolCallTokensStreaming(
   input: string,
-  state: { inside: boolean; pending: string },
+  state: { inside: boolean; pending: string; controlPending?: string },
 ): string {
   const startTag = "<function_calls>";
   const endTag = "</function_calls>";
@@ -450,15 +491,6 @@ export function filterToolCallTokensStreaming(
   let s = state.pending + input;
   state.pending = "";
   let output = "";
-
-  // Helper to compute the longest suffix of text that is a prefix of tag
-  const suffixPrefix = (text: string, tag: string): number => {
-    const maxLen = Math.min(text.length, tag.length - 1);
-    for (let len = maxLen; len > 0; len--) {
-      if (text.slice(-len) === tag.slice(0, len)) return len;
-    }
-    return 0;
-  };
 
   // Process iteratively removing balanced blocks
   while (s.length > 0) {
@@ -496,7 +528,15 @@ export function filterToolCallTokensStreaming(
     }
   }
 
-  return output;
+  const literalState = { pending: state.controlPending ?? "" };
+  const filteredOutput = stripLiteralControlTagsStreaming(
+    output,
+    literalState,
+    INTERNAL_LITERAL_CONTROL_TAGS,
+  );
+  state.controlPending = literalState.pending;
+
+  return filteredOutput;
 }
 
 // =============================================================================
@@ -530,6 +570,9 @@ Hi, I'm going to execute two function calls.
 
 VERY IMPORTANT, PAY ATTENTION TO THIS >>>>>> ALWAYS Start your messages with the <function_calls> block when you have a tool to call.
 5. Tool outputs may appear later as <function_results> blocks. Treat them as returned execution results and never generate <function_results> yourself.
+6. If you later receive the exact user message <continue_after_tool_results/>, apply the following continuation rule:
+
+${TOOL_RESULTS_CONTINUATION_BLOCK}
 
 === TOOL CATALOG (read-only) ===
 
@@ -653,6 +696,28 @@ export function parseToolCallsFromResponse(
   return { cleanResponse, tool_calls: toolCalls };
 }
 
+export function parseInternalControlTagsFromResponse(
+  response: string,
+): { cleanResponse: string; suppressResponse: boolean } {
+  let cleanResponse = response;
+  let suppressResponse = false;
+
+  const noResponsePattern = /<no_response\s*\/>|<no_response>\s*<\/no_response>/g;
+  const hasNoResponse = noResponsePattern.test(cleanResponse);
+  noResponsePattern.lastIndex = 0;
+  if (hasNoResponse) {
+    suppressResponse = true;
+    cleanResponse = cleanResponse.replace(noResponsePattern, "");
+  }
+
+  cleanResponse = cleanResponse
+    .replace(/<continue_after_tool_results\s*\/>/g, "")
+    .replace(/<continue_after_tool_results>[\s\S]*?<\/continue_after_tool_results>/g, "")
+    .trim();
+
+  return { cleanResponse, suppressResponse };
+}
+
 /**
  * Extract complete JSON objects from a string using proper bracket matching
  */
@@ -705,4 +770,63 @@ function extractJsonObjects(content: string): string[] {
   }
 
   return jsonObjects;
+}
+
+function suffixPrefix(text: string, tag: string): number {
+  const maxLen = Math.min(text.length, tag.length - 1);
+  for (let len = maxLen; len > 0; len--) {
+    if (text.slice(-len) === tag.slice(0, len)) return len;
+  }
+  return 0;
+}
+
+function suffixPrefixAny(text: string, tags: string[]): number {
+  let maxOverlap = 0;
+  for (const tag of tags) {
+    maxOverlap = Math.max(maxOverlap, suffixPrefix(text, tag));
+  }
+  return maxOverlap;
+}
+
+function stripLiteralControlTagsStreaming(
+  input: string,
+  state: { pending: string },
+  tags: string[],
+): string {
+  let s = state.pending + input;
+  state.pending = "";
+  let output = "";
+
+  while (s.length > 0) {
+    let earliestIdx = -1;
+    let matchedTag = "";
+
+    for (const tag of tags) {
+      const idx = s.indexOf(tag);
+      if (
+        idx !== -1 &&
+        (earliestIdx === -1 || idx < earliestIdx ||
+          (idx === earliestIdx && tag.length > matchedTag.length))
+      ) {
+        earliestIdx = idx;
+        matchedTag = tag;
+      }
+    }
+
+    if (earliestIdx === -1) {
+      const overlap = suffixPrefixAny(s, tags);
+      if (overlap > 0) {
+        output += s.slice(0, s.length - overlap);
+        state.pending = s.slice(s.length - overlap);
+      } else {
+        output += s;
+      }
+      break;
+    }
+
+    output += s.slice(0, earliestIdx);
+    s = s.slice(earliestIdx + matchedTag.length);
+  }
+
+  return output;
 }

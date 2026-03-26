@@ -1,4 +1,9 @@
-import { formatMessages, withDefaultStopSequences } from "./utils.ts";
+import {
+  filterToolCallTokensStreaming,
+  formatMessages,
+  parseInternalControlTagsFromResponse,
+  withDefaultStopSequences,
+} from "./utils.ts";
 import { historyGenerator } from "../../event-processors/new_message/generators/history-generator.ts";
 import type { ChatMessage } from "./types.ts";
 
@@ -58,7 +63,7 @@ Deno.test("formatMessages rewrites tool results to assistant and preserves chron
 
   const formatted = formatMessages({ messages });
 
-  assertEquals(formatted.length, 1);
+  assertEquals(formatted.length, 2);
   assertEquals(formatted[0].role, "assistant");
   assertEquals(
     formatted[0].content,
@@ -78,6 +83,11 @@ Agora confirme a data da viagem.`,
   );
   assertEquals(formatted[0].tool_call_id, undefined);
   assertEquals(formatted[0].toolCalls, undefined);
+  assertEquals(formatted[1].role, "user");
+  assertEquals(
+    formatted[1].content,
+    "<continue_after_tool_results/>",
+  );
 });
 
 Deno.test("formatMessages does not merge same-role messages from different senders", () => {
@@ -106,6 +116,45 @@ Deno.test("formatMessages merges consecutive user messages from the same sender"
   assertEquals(formatted[0].content, "Oi\n\nPreciso de ajuda");
 });
 
+Deno.test("formatMessages does not append a continuation cue when the last message is already user", () => {
+  const messages: ChatMessage[] = [
+    {
+      role: "assistant",
+      senderId: "mobizap",
+      content: "Tudo certo.",
+      toolCalls: [
+        {
+          id: "tool-1",
+          tool: { id: "startSession" },
+          args: "{}",
+        },
+      ],
+    },
+    {
+      role: "tool",
+      senderId: "mobizap",
+      content: '{"sessionId":"abc"}',
+      tool_call_id: "tool-1",
+      toolCalls: [
+        {
+          id: "tool-1",
+          tool: { id: "startSession" },
+          args: "{}",
+          output: { sessionId: "abc" },
+          status: "completed",
+        },
+      ],
+    },
+    { role: "user", senderId: "user-a", content: "E agora?" },
+  ];
+
+  const formatted = formatMessages({ messages });
+
+  assertEquals(formatted.length, 2);
+  assertEquals(formatted[1].role, "user");
+  assertEquals(formatted[1].content, "E agora?");
+});
+
 Deno.test("withDefaultStopSequences appends function_results without dropping caller stops", () => {
   const config = withDefaultStopSequences({
     stop: ["DONE"],
@@ -114,6 +163,27 @@ Deno.test("withDefaultStopSequences appends function_results without dropping ca
 
   assertEquals(config.stop, ["HALT", "DONE", "<function_results>"]);
   assertEquals(config.stopSequences, ["HALT", "DONE", "<function_results>"]);
+});
+
+Deno.test("parseInternalControlTagsFromResponse strips no_response and continuation cues", () => {
+  const parsed = parseInternalControlTagsFromResponse(
+    "  <continue_after_tool_results/><no_response/>  ",
+  );
+
+  assertEquals(parsed.cleanResponse, "");
+  assertEquals(parsed.suppressResponse, true);
+});
+
+Deno.test("filterToolCallTokensStreaming strips no_response from streamed tokens", () => {
+  const state = { inside: false, pending: "", controlPending: "" };
+
+  const first = filterToolCallTokensStreaming("Ol", state);
+  const second = filterToolCallTokensStreaming("a<no_res", state);
+  const third = filterToolCallTokensStreaming("ponse/>", state);
+
+  assertEquals(first, "Ol");
+  assertEquals(second, "a");
+  assertEquals(third, "");
 });
 
 Deno.test("historyGenerator exposes structured tool result metadata for formatter blocks", () => {

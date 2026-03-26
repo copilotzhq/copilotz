@@ -9,6 +9,7 @@ import {
   countTokens,
   createMockResponse,
   formatMessages,
+  parseInternalControlTagsFromResponse,
   parseToolCallsFromResponse,
   processStream,
   withDefaultStopSequences,
@@ -96,6 +97,10 @@ export async function chat(
     const parsed = parseToolCallsFromResponse(streamResult.content);
     cleanResponse = parsed.cleanResponse;
     tool_calls = parsed.tool_calls;
+  }
+  {
+    const parsed = parseInternalControlTagsFromResponse(cleanResponse);
+    cleanResponse = parsed.cleanResponse;
   }
 
   // Prepare comprehensive response

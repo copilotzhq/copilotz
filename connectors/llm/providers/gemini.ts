@@ -13,6 +13,25 @@ interface GeminiMessage {
   role: "user" | "model";
 }
 
+function getEnvFlag(key: string): string | undefined {
+  try {
+    const anyGlobal = globalThis as unknown as {
+      Deno?: { env?: { get?: (name: string) => string | undefined } };
+      process?: { env?: Record<string, string | undefined> };
+    };
+
+    const fromDeno = anyGlobal?.Deno?.env?.get?.(key);
+    if (typeof fromDeno === "string") return fromDeno;
+
+    const fromNode = anyGlobal?.process?.env?.[key];
+    if (typeof fromNode === "string") return fromNode;
+  } catch {
+    // Ignore env lookup failures in unsupported runtimes.
+  }
+
+  return undefined;
+}
+
 /**
  * Build the Gemini `thinkingConfig` for a model, or return undefined to omit it.
  *
@@ -48,6 +67,12 @@ function buildThinkingConfig(
 }
 
 export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
+  const debugStream = getEnvFlag("COPILOTZ_DEBUG_GEMINI_STREAM") === "1" ||
+    getEnvFlag("COPILOTZ_DEBUG") === "1";
+  let streamEventIndex = 0;
+  let lastVisibleSnapshot = "";
+  let lastReasoningSnapshot = "";
+
   const transformMessages = (messages: ChatMessage[]) => {
     const systemPrompts: string[] = [];
     const geminiMessages: GeminiMessage[] = [];
@@ -189,12 +214,66 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
     extractContent: (data: any): ExtractedPart[] | null => {
       const gParts = data?.candidates?.[0]?.content?.parts || [];
       const parts: ExtractedPart[] = [];
+      const visibleParts: string[] = [];
+      const reasoningParts: string[] = [];
 
       for (const part of gParts) {
         if (part.thought) {
-          if (part.text) parts.push({ text: part.text, isReasoning: true });
+          if (part.text) {
+            reasoningParts.push(part.text);
+            parts.push({ text: part.text, isReasoning: true });
+          }
         } else if (part.text) {
+          visibleParts.push(part.text);
           parts.push({ text: part.text });
+        }
+      }
+
+      if (debugStream) {
+        streamEventIndex += 1;
+
+        const previousVisibleSnapshot = lastVisibleSnapshot;
+        const previousReasoningSnapshot = lastReasoningSnapshot;
+        const visibleSnapshot = visibleParts.join("");
+        const reasoningSnapshot = reasoningParts.join("");
+        const visibleLooksCumulative = visibleSnapshot.length > 0 &&
+          previousVisibleSnapshot.length > 0 &&
+          visibleSnapshot.startsWith(previousVisibleSnapshot);
+        const reasoningLooksCumulative = reasoningSnapshot.length > 0 &&
+          previousReasoningSnapshot.length > 0 &&
+          reasoningSnapshot.startsWith(previousReasoningSnapshot);
+
+        console.log("[gemini.extractContent]", {
+          eventIndex: streamEventIndex,
+          candidateIndex: 0,
+          finishReason: data?.candidates?.[0]?.finishReason,
+          rawPartCount: Array.isArray(gParts) ? gParts.length : 0,
+          rawParts: Array.isArray(gParts)
+            ? gParts.map((part: GeminiPart & { thought?: boolean }) => ({
+              thought: part?.thought === true,
+              text: part?.text ?? "",
+            }))
+            : [],
+          visibleSnapshot,
+          previousVisibleSnapshot,
+          visibleLooksCumulative,
+          visibleDeltaGuess: visibleLooksCumulative
+            ? visibleSnapshot.slice(previousVisibleSnapshot.length)
+            : null,
+          reasoningSnapshot,
+          previousReasoningSnapshot,
+          reasoningLooksCumulative,
+          reasoningDeltaGuess: reasoningLooksCumulative
+            ? reasoningSnapshot.slice(previousReasoningSnapshot.length)
+            : null,
+          extractedParts: parts,
+        });
+
+        if (visibleSnapshot.length > 0) {
+          lastVisibleSnapshot = visibleSnapshot;
+        }
+        if (reasoningSnapshot.length > 0) {
+          lastReasoningSnapshot = reasoningSnapshot;
         }
       }
 

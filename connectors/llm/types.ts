@@ -32,8 +32,14 @@ export interface ChatMessage {
   toolCalls?: ToolInvocation[];
 }
 
-// Comprehensive configuration for AI providers with multimodal support
-export interface ProviderConfig {
+export type ProviderFallbackReason =
+  | "timeout"
+  | "network"
+  | "rate_limit"
+  | "server_error"
+  | "provider_error";
+
+export interface ProviderConfigBase {
   // Provider selection
   provider?: ProviderName;
   apiKey?: string;
@@ -106,6 +112,18 @@ export interface ProviderConfig {
   // OpenAI-specific parameters
   user?: string; // OpenAI user identifier
   verbosity?: "none" | "low" | "medium" | "high"; // OpenAI reasoning models (o3, o4)
+}
+
+export type ProviderFallbackConfig =
+  & Omit<ProviderConfigBase, "provider">
+  & { provider: ProviderName };
+
+// Comprehensive configuration for AI providers with multimodal support
+export interface ProviderConfig extends ProviderConfigBase {
+  /** Ordered fallback models/providers to try when the primary attempt fails before any visible streaming output. */
+  fallbacks?: ProviderFallbackConfig[];
+  /** Error classes that are allowed to trigger a fallback attempt. */
+  fallbackOn?: ProviderFallbackReason[];
 }
 
 // Tool definition for standardized tool calling

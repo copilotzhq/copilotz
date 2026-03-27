@@ -307,7 +307,17 @@ const schemaDefinition = {
             "xai",
           ],
         },
-        ProviderConfig: {
+        ProviderFallbackReason: {
+          type: "string",
+          enum: [
+            "timeout",
+            "network",
+            "rate_limit",
+            "server_error",
+            "provider_error",
+          ],
+        },
+        ProviderConfigBase: {
           type: "object",
           additionalProperties: true,
           properties: {
@@ -352,6 +362,37 @@ const schemaDefinition = {
               enum: ["none", "low", "medium", "high"], // OpenAI reasoning
             },
           },
+        },
+        ProviderFallbackConfig: {
+          allOf: [
+            { $ref: "#/$defs/ProviderConfigBase" },
+            {
+              type: "object",
+              properties: {
+                provider: { $ref: "#/$defs/ProviderName" },
+              },
+              required: ["provider"],
+            },
+          ],
+        },
+        ProviderConfig: {
+          allOf: [
+            { $ref: "#/$defs/ProviderConfigBase" },
+            {
+              type: "object",
+              additionalProperties: true,
+              properties: {
+                fallbacks: {
+                  type: "array",
+                  items: { $ref: "#/$defs/ProviderFallbackConfig" },
+                },
+                fallbackOn: {
+                  type: "array",
+                  items: { $ref: "#/$defs/ProviderFallbackReason" },
+                },
+              },
+            },
+          ],
         },
       },
       properties: {

@@ -348,7 +348,7 @@ export interface AgentRagOptions {
  */
 export type Agent = Omit<DbAgent, "llmOptions"> & {
   /** LLM provider configuration or dynamic resolver function. */
-  llmOptions?: DbAgent["llmOptions"] | AgentLlmOptionsResolver;
+  llmOptions?: ProviderConfig | AgentLlmOptionsResolver;
   /** RAG options for this agent. */
   ragOptions?: AgentRagOptions;
 };

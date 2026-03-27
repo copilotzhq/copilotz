@@ -101,6 +101,32 @@ const agent = {
 };
 ```
 
+### LLM Fallbacks
+
+You can define fallback providers/models directly inside `llmOptions`:
+
+```typescript
+const agent = {
+  id: "resilient-agent",
+  name: "Resilient",
+  llmOptions: {
+    provider: "gemini",
+    model: "gemini-3.1-flash-lite-preview",
+    apiKey: Deno.env.get("GEMINI_API_KEY"),
+    fallbacks: [
+      {
+        provider: "openai",
+        model: "gpt-5-mini",
+        apiKey: Deno.env.get("OPENAI_API_KEY"),
+      },
+    ],
+    fallbackOn: ["timeout", "rate_limit", "server_error", "network", "provider_error"],
+  },
+};
+```
+
+Fallbacks only run when the primary attempt fails before any visible streamed output is emitted.
+
 ## Tool Permissions
 
 Control which tools each agent can access:

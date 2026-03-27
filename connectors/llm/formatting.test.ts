@@ -2,6 +2,7 @@ import {
   filterToolCallTokensStreaming,
   formatMessages,
   parseInternalControlTagsFromResponse,
+  processStream,
   withDefaultStopSequences,
 } from "./utils.ts";
 import { historyGenerator } from "../../event-processors/new_message/generators/history-generator.ts";
@@ -155,23 +156,55 @@ Deno.test("formatMessages does not append a continuation cue when the last messa
   assertEquals(formatted[1].content, "E agora?");
 });
 
-Deno.test("withDefaultStopSequences appends function_results without dropping caller stops", () => {
+Deno.test("withDefaultStopSequences preserves caller stops without adding defaults", () => {
   const config = withDefaultStopSequences({
     stop: ["DONE"],
     stopSequences: ["HALT"],
   });
 
-  assertEquals(config.stop, ["HALT", "DONE", "<function_results>"]);
-  assertEquals(config.stopSequences, ["HALT", "DONE", "<function_results>"]);
+  assertEquals(config.stop, ["HALT", "DONE"]);
+  assertEquals(config.stopSequences, ["HALT", "DONE"]);
 });
 
 Deno.test("parseInternalControlTagsFromResponse strips no_response and continuation cues", () => {
   const parsed = parseInternalControlTagsFromResponse(
-    "  <continue_after_tool_results/><no_response/>  ",
+    "  <continue_after_tool_results/><no_response/><function_results>\n{\"name\":\"x\"}\n</function_results>  ",
   );
 
   assertEquals(parsed.cleanResponse, "");
   assertEquals(parsed.suppressResponse, true);
+});
+
+Deno.test("processStream enforces local stop sequences and triggers upstream abort callback", async () => {
+  const encoder = new TextEncoder();
+  let aborted = false;
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode('{"text":"Ol"}\n'));
+      controller.enqueue(encoder.encode('{"text":"a <function_res"}\n'));
+      controller.enqueue(encoder.encode('{"text":"ults>ignored afterwards"}\n'));
+      controller.close();
+    },
+  });
+
+  const tokens: string[] = [];
+  const result = await processStream(
+    stream.getReader(),
+    (chunk) => tokens.push(chunk),
+    (data) => typeof data?.text === "string" ? [{ text: data.text }] : null,
+    {
+      format: "jsonl",
+      localStopSequences: ["<function_results>"],
+      onLocalStop: () => {
+        aborted = true;
+      },
+    },
+  );
+
+  assertEquals(result.content, "Ola ");
+  assertEquals(tokens.join(""), "Ola ");
+  assertEquals(aborted, true);
 });
 
 Deno.test("filterToolCallTokensStreaming strips no_response from streamed tokens", () => {

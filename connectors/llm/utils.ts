@@ -13,8 +13,8 @@ import type {
   ToolInvocation,
 } from "./types.ts";
 
-const DEFAULT_STOP_SEQUENCES = ["<function_results>"];
 const TOOL_RESULTS_CONTINUATION_CUE = "<continue_after_tool_results/>";
+const LOCAL_DEFAULT_STOP_SEQUENCES = ["<function_results>"];
 const TOOL_RESULTS_CONTINUATION_BLOCK = `<continue_after_tool_results>
 Continue based on the function results above.
 Do not repeat the previous assistant message.
@@ -268,7 +268,6 @@ export function withDefaultStopSequences(
     ...new Set([
       ...normalizeStopValues(config.stopSequences),
       ...normalizeStopValues(config.stop),
-      ...DEFAULT_STOP_SEQUENCES,
     ]),
   ];
 
@@ -279,6 +278,62 @@ export function withDefaultStopSequences(
     stop: mergedStops,
     stopSequences: mergedStops,
   };
+}
+
+export function getLocalStopSequences(config?: ProviderConfig): string[] {
+  return [
+    ...new Set([
+      ...normalizeStopValues(config?.stopSequences),
+      ...normalizeStopValues(config?.stop),
+      ...LOCAL_DEFAULT_STOP_SEQUENCES,
+    ]),
+  ];
+}
+
+type LocalStopState = {
+  pending: string;
+  matchedStop?: string;
+};
+
+function applyLocalStopSequences(
+  input: string,
+  stopSequences: string[],
+  state: LocalStopState,
+): { text: string; matchedStop?: string } {
+  if (stopSequences.length === 0) {
+    return { text: input };
+  }
+
+  const combined = state.pending + input;
+  state.pending = "";
+
+  let earliestIndex = -1;
+  let matchedStop: string | undefined;
+
+  for (const stop of stopSequences) {
+    const index = combined.indexOf(stop);
+    if (index === -1) continue;
+    if (earliestIndex === -1 || index < earliestIndex) {
+      earliestIndex = index;
+      matchedStop = stop;
+    }
+  }
+
+  if (earliestIndex !== -1) {
+    state.matchedStop = matchedStop;
+    return {
+      text: combined.slice(0, earliestIndex),
+      matchedStop,
+    };
+  }
+
+  const overlap = suffixPrefixAny(combined, stopSequences);
+  if (overlap > 0) {
+    state.pending = combined.slice(combined.length - overlap);
+    return { text: combined.slice(0, combined.length - overlap) };
+  }
+
+  return { text: combined };
 }
 
 /**
@@ -413,6 +468,11 @@ export async function processStream(
   let fullResponse = "";
   let reasoningResponse = "";
   let buffer = "";
+  const localStopSequences = getLocalStopSequences(options?.config).length > 0
+    ? (options?.localStopSequences ?? getLocalStopSequences(options?.config))
+    : (options?.localStopSequences ?? []);
+  const localStopState: LocalStopState = { pending: "" };
+  let stoppedByLocalStop = false;
   const filterState: {
     inside: boolean;
     pending: string;
@@ -423,6 +483,20 @@ export async function processStream(
     controlPending: "",
   };
 
+  const appendVisibleContent = (text: string) => {
+    if (!text) return;
+    fullResponse += text;
+    const filtered = filterToolCallTokensStreaming(text, filterState);
+    if (filtered) onChunk(filtered);
+  };
+
+  const flushLocalStopPending = () => {
+    if (!localStopState.pending || stoppedByLocalStop) return;
+    const pending = localStopState.pending;
+    localStopState.pending = "";
+    appendVisibleContent(pending);
+  };
+
   const handleParts = (parts: ExtractedPart[]) => {
     for (const part of parts) {
       if (part.isReasoning) {
@@ -431,11 +505,21 @@ export async function processStream(
           onChunk(part.text, { isReasoning: true });
         }
       } else {
-        fullResponse += part.text;
-        const filtered = filterToolCallTokensStreaming(part.text, filterState);
-        if (filtered) onChunk(filtered);
+        const localStopResult = applyLocalStopSequences(
+          part.text,
+          localStopSequences,
+          localStopState,
+        );
+        appendVisibleContent(localStopResult.text);
+        if (localStopResult.matchedStop) {
+          stoppedByLocalStop = true;
+          options?.onLocalStop?.(localStopResult.matchedStop);
+          return true;
+        }
       }
     }
+
+    return false;
   };
 
   try {
@@ -448,10 +532,14 @@ export async function processStream(
             const data = parseLine(line, format);
             if (data) {
               const parts = extractContent(data);
-              if (parts) handleParts(parts);
+              if (parts) {
+                const shouldStop = handleParts(parts);
+                if (shouldStop) break;
+              }
             }
           }
         }
+        flushLocalStopPending();
         break;
       }
 
@@ -465,13 +553,28 @@ export async function processStream(
         const data = parseLine(line, format);
         if (data) {
           const parts = extractContent(data);
-          if (parts) handleParts(parts);
+          if (parts) {
+            const shouldStop = handleParts(parts);
+            if (shouldStop) break;
+          }
         }
+      }
+
+      if (stoppedByLocalStop) {
+        break;
       }
     }
   } catch (error) {
-    console.error("Stream processing error:", error);
-    throw error;
+    if (!stoppedByLocalStop) {
+      console.error("Stream processing error:", error);
+      throw error;
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // ignore release errors
+    }
   }
 
   if (options?.postProcess) {
@@ -711,6 +814,7 @@ export function parseInternalControlTagsFromResponse(
   }
 
   cleanResponse = cleanResponse
+    .replace(/<function_results>[\s\S]*?(?:<\/function_results>|$)/g, "")
     .replace(/<continue_after_tool_results\s*\/>/g, "")
     .replace(/<continue_after_tool_results>[\s\S]*?<\/continue_after_tool_results>/g, "")
     .trim();

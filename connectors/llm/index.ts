@@ -13,6 +13,7 @@ import {
   countTokens,
   createMockResponse,
   formatMessages,
+  getLocalStopSequences,
   parseInternalControlTagsFromResponse,
   parseToolCallsFromResponse,
   processStream,
@@ -173,11 +174,18 @@ export async function chat(
     const attemptProvider = attemptConfig.provider!;
     const providerFactory = getProvider(attemptProvider);
     const providerAPI = providerFactory(attemptConfig);
+    const localStopSequences = getLocalStopSequences(attemptConfig);
+    const requestConfig = {
+      ...attemptConfig,
+      stop: undefined,
+      stopSequences: undefined,
+    } satisfies ProviderConfig;
     const finalMessages = providerAPI.transformMessages
       ? providerAPI.transformMessages(messages)
       : messages;
 
     let visibleStreamStarted = false;
+    const abortController = new AbortController();
     const trackedStream = stream
       ? ((chunk: string, options?: { isReasoning?: boolean }) => {
         if (chunk.length > 0 || options?.isReasoning) {
@@ -192,10 +200,11 @@ export async function chat(
         providerAPI.endpoint,
         providerAPI.body(
           Array.isArray(finalMessages) ? finalMessages : messages,
-          attemptConfig,
+          requestConfig,
         ),
         {
-          headers: providerAPI.headers(attemptConfig),
+          headers: providerAPI.headers(requestConfig),
+          signal: abortController.signal,
         },
       ) as StreamResponse;
 
@@ -204,7 +213,12 @@ export async function chat(
         reader,
         trackedStream || (() => {}),
         providerAPI.extractContent,
-        { ...providerAPI.streamOptions, config: attemptConfig },
+        {
+          ...providerAPI.streamOptions,
+          config: attemptConfig,
+          localStopSequences,
+          onLocalStop: () => abortController.abort(),
+        },
       );
 
       let cleanResponse = streamResult.content;

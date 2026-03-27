@@ -214,6 +214,10 @@ export interface ProcessStreamOptions {
   format?: "sse" | "jsonl";
   /** Transform the accumulated raw response before returning (e.g. strip wrapper tags). */
   postProcess?: (raw: string) => string;
+  /** Local stop sequences enforced client-side across all providers. */
+  localStopSequences?: string[];
+  /** Called when a local stop sequence is matched. */
+  onLocalStop?: (matchedStop: string) => void;
 }
 
 // Provider API interface with multimodal support

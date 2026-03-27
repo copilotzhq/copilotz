@@ -15,9 +15,14 @@ import type {
   NewEvent,
   ProcessorDeps,
   Tool,
+  ToolHistoryVisibility,
 } from "@/interfaces/index.ts";
 import type { ExecutableTool } from "./types.ts";
 import type { ToolInvocation } from "@/connectors/llm/types.ts";
+import {
+  DEFAULT_TOOL_HISTORY_VISIBILITY,
+  projectToolResultForHistory,
+} from "./history-policy.ts";
 
 import Ajv from "npm:ajv@^8.17.1";
 import addFormats from "npm:ajv-formats@^3.0.1";
@@ -55,6 +60,15 @@ export interface ToolExecutionContext extends ChatContext {
   // Collections is inherited from ChatContext, but we re-declare for clarity
   // collections?: CollectionsManager;
 }
+
+type ProcessedToolCallResult = {
+  tool_call_id?: string;
+  name: string;
+  output?: unknown;
+  error?: unknown;
+  historyVisibility?: ToolHistoryVisibility;
+  projectedOutput?: unknown;
+};
 
 function assertToolCallPayload(
   payload: unknown,
@@ -132,7 +146,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
           : [];
       // Agent may be absent if filtered out by env config — fall back to payload data
       const agent =
-        availableAgents.find((a) =>
+        availableAgents.find((a: Agent) =>
           (payload.agent.id && a.id === payload.agent.id) ||
           a.name === payload.agent.name
         ) ?? null;
@@ -236,6 +250,11 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
                   args: call.args,
                   output,
                   status: error ? "failed" : "completed",
+                  visibility: result.historyVisibility ??
+                    DEFAULT_TOOL_HISTORY_VISIBILITY,
+                  ...(typeof result.projectedOutput !== "undefined"
+                    ? { projectedOutput: result.projectedOutput }
+                    : {}),
                 },
               ],
               // Include batch info for aggregation in NEW_MESSAGE processor
@@ -293,7 +312,7 @@ export const processToolCalls = async (
   toolCalls: ToolInvocation[],
   agentTools: ExecutableTool[] = [],
   context: ToolExecutionContext = {},
-) => {
+): Promise<ProcessedToolCallResult[]> => {
   const availableTools = agentTools.map((t) => t.key).join(", ");
 
   const results = await Promise.all(
@@ -324,6 +343,7 @@ export const processToolCalls = async (
           return {
             tool_call_id: toolCall.id || "unknown",
             name: "unknown",
+            historyVisibility: DEFAULT_TOOL_HISTORY_VISIBILITY,
             error:
               `MALFORMED TOOL CALL: Expected tool key. Available tools: [${availableTools}].${suggestion}`,
           };
@@ -340,6 +360,7 @@ export const processToolCalls = async (
           return {
             tool_call_id: toolCall.id || "unknown",
             name: "unknown",
+            historyVisibility: DEFAULT_TOOL_HISTORY_VISIBILITY,
             error:
               `MISSING TOOL NAME: You must specify a tool name. Available tools: [${availableTools}]. Your call was: ${
                 JSON.stringify(toolCall)
@@ -350,6 +371,7 @@ export const processToolCalls = async (
         return {
           tool_call_id: toolCall.id || "unknown",
           name: "unknown",
+          historyVisibility: DEFAULT_TOOL_HISTORY_VISIBILITY,
           error: `INVALID TOOL CALL STRUCTURE: ${
             error instanceof Error ? error.message : String(error)
           }. Available tools: [${availableTools}]`,
@@ -382,6 +404,7 @@ export const processToolCalls = async (
         return {
           tool_call_id: toolCall.id,
           name,
+          historyVisibility: DEFAULT_TOOL_HISTORY_VISIBILITY,
           error:
             `TOOL NOT FOUND: "${name}" is not available. Available tools: [${availableTools}].${suggestion}`,
         };
@@ -395,6 +418,8 @@ export const processToolCalls = async (
         return {
           tool_call_id: toolCall.id,
           name,
+          historyVisibility: tool.historyPolicy?.visibility ??
+            DEFAULT_TOOL_HISTORY_VISIBILITY,
           error:
             `INVALID JSON ARGUMENTS: The arguments must be valid JSON. Your arguments: ${argsString}. Error: ${
               e instanceof Error ? e.message : String(e)
@@ -408,6 +433,8 @@ export const processToolCalls = async (
         return {
           tool_call_id: toolCall.id,
           name,
+          historyVisibility: tool.historyPolicy?.visibility ??
+            DEFAULT_TOOL_HISTORY_VISIBILITY,
           error:
             `VALIDATION ERROR: ${validation.error}. Please check the tool's required parameters and try again.`,
         };
@@ -416,19 +443,40 @@ export const processToolCalls = async (
       // Execute the tool
       try {
         const output = await tool.execute(args, context);
+        const { visibility, projectedOutput } = await projectToolResultForHistory(
+          tool,
+          args,
+          output,
+          undefined,
+        );
 
         return {
           tool_call_id: toolCall.id,
           name,
           output,
+          historyVisibility: visibility,
+          ...(typeof projectedOutput !== "undefined"
+            ? { projectedOutput }
+            : {}),
         };
       } catch (error) {
+        const errorMessage = `EXECUTION ERROR: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+        const { visibility, projectedOutput } = await projectToolResultForHistory(
+          tool,
+          args,
+          undefined,
+          errorMessage,
+        );
         return {
           tool_call_id: toolCall.id,
           name,
-          error: `EXECUTION ERROR: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          error: errorMessage,
+          historyVisibility: visibility,
+          ...(typeof projectedOutput !== "undefined"
+            ? { projectedOutput }
+            : {}),
         };
       }
     }),

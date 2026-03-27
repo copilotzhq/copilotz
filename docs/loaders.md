@@ -148,10 +148,19 @@ const config: Omit<Tool, "execute"> = {
       },
     },
   },
+  historyPolicy: {
+    visibility: "public_result",
+    projector: ({ text }, output) => {
+      const result = output as { sentiment: string; confidence: number };
+      return `Sentiment analyzed for ${text.length} characters: ${result.sentiment} (${result.confidence})`;
+    },
+  },
 };
 
 export default config;
 ```
+
+`historyPolicy` is especially useful in loader-based projects because it lives in `config.ts`, so you can keep the projector callback in code.
 
 ### execute.ts (Required)
 
@@ -232,10 +241,24 @@ const config: Omit<API, "openApiSchema"> = {
     type: "bearer",
     token: Deno.env.get("GITHUB_TOKEN"),
   },
+  historyPolicyDefaults: {
+    visibility: "requester_only",
+  },
+  toolPolicies: {
+    getRepository: {
+      visibility: "public_result",
+      projector: (_args, output) => {
+        const repo = output as { full_name?: string };
+        return `Repository loaded: ${repo.full_name}`;
+      },
+    },
+  },
 };
 
 export default config;
 ```
+
+`toolPolicies` are keyed by the generated tool key, which is usually the OpenAPI `operationId`.
 
 ## Processor Files
 

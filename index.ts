@@ -24,6 +24,9 @@ import type {
     ChatContext,
     HistoryTransform,
     HistoryTransformArgs,
+    NewAPI,
+    NewMCPServer,
+    NewTool,
     EventProcessor,
     ProcessorDeps,
     CopilotzDb,
@@ -31,6 +34,11 @@ import type {
     MCPServer,
     MessagePayload,
     Tool,
+    ToolHistoryPolicy,
+    ToolHistoryPolicyConfig,
+    ToolHistoryVisibility,
+    ToolResultProjector,
+    ToolResultProjectorContext,
     ToolCallEventPayload,
     LlmCallEventPayload,
     TokenEventPayload,
@@ -48,6 +56,16 @@ export type {
     MCPServer,
     /** Tool definition with input/output schemas for agent capabilities. */
     Tool,
+    /** Runtime-only history visibility for tool results across agents. */
+    ToolHistoryVisibility,
+    /** Declarative history policy for tools. */
+    ToolHistoryPolicyConfig,
+    /** Runtime tool history policy with optional projector callback. */
+    ToolHistoryPolicy,
+    /** Callback type for projecting shared tool results. */
+    ToolResultProjector,
+    /** Context passed to tool result projector callbacks. */
+    ToolResultProjectorContext,
     /** Conversation thread containing messages between users and agents. */
     Thread,
     /** Individual message within a conversation thread. */
@@ -307,13 +325,13 @@ export type CopilotzEvent =
 export type AgentConfig = Agent; 
 
 /** Alias for Tool type, used in configuration. */
-export type ToolConfig = Tool;
+export type ToolConfig = NewTool;
 
 /** Alias for API type, used in configuration. */
-export type APIConfig = API;
+export type APIConfig = NewAPI;
 
 /** Alias for MCPServer type, used in configuration. */
-export type MCPServerConfig = MCPServer;
+export type MCPServerConfig = NewMCPServer;
 
 type NormalizedCopilotzConfig = Omit<CopilotzConfig, "agents" | "tools" | "apis" | "mcpServers"> & {
     agents: Agent[];
@@ -336,6 +354,7 @@ function normalizeTool(tool: ToolConfig): Tool {
     const now = new Date().toISOString();
     return {
         ...tool,
+        id: ("id" in tool && tool.id ? tool.id : tool.key) as Tool["id"],
         createdAt: ("createdAt" in tool && tool.createdAt ? tool.createdAt : now) as Tool["createdAt"],
         updatedAt: ("updatedAt" in tool && tool.updatedAt ? tool.updatedAt : now) as Tool["updatedAt"],
     };
@@ -345,6 +364,7 @@ function normalizeApi(api: APIConfig): API {
     const now = new Date().toISOString();
     return {
         ...api,
+        id: ("id" in api && api.id ? api.id : api.name) as API["id"],
         createdAt: ("createdAt" in api && api.createdAt ? api.createdAt : now) as API["createdAt"],
         updatedAt: ("updatedAt" in api && api.updatedAt ? api.updatedAt : now) as API["updatedAt"],
     };
@@ -354,6 +374,7 @@ function normalizeMcpServer(server: MCPServerConfig): MCPServer {
     const now = new Date().toISOString();
     return {
         ...server,
+        id: ("id" in server && server.id ? server.id : server.name) as MCPServer["id"],
         createdAt: ("createdAt" in server && server.createdAt ? server.createdAt : now) as MCPServer["createdAt"],
         updatedAt: ("updatedAt" in server && server.updatedAt ? server.updatedAt : now) as MCPServer["updatedAt"],
     };

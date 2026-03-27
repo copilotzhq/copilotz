@@ -3,7 +3,7 @@ import {
   assertObjectMatch,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import type { API } from "@/database/schemas/index.ts";
+import type { API } from "@/interfaces/index.ts";
 
 import { generateApiTools } from "./api-generator.ts";
 
@@ -90,4 +90,24 @@ Deno.test("API tool can include response headers", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+Deno.test("API tool applies history policy overrides to generated tools", () => {
+  const [tool] = generateApiTools(buildApiConfig({
+    historyPolicyDefaults: {
+      visibility: "requester_only",
+    },
+    toolPolicies: {
+      getStatus: {
+        visibility: "public_result",
+      },
+    },
+  }));
+
+  assertObjectMatch(tool, {
+    key: "getStatus",
+    historyPolicy: {
+      visibility: "public_result",
+    },
+  });
 });

@@ -159,8 +159,23 @@ tools: [{
     // Your implementation
     return { temperature: 72, conditions: "sunny" };
   },
+  historyPolicy: {
+    visibility: "public_result",
+    projector: ({ city }, output) => {
+      const weather = output as { temperature: number; conditions: string };
+      return `Weather loaded for ${city}: ${weather.temperature}°, ${weather.conditions}`;
+    },
+  },
 }]
 ```
+
+`historyPolicy.visibility` supports:
+
+- `requester_only`
+- `public_result`
+- `public_full`
+
+Use `projector` with `public_result` when other agents should see a compact business-level outcome instead of the raw tool payload.
 
 ## OpenAPI Integrations
 
@@ -174,6 +189,18 @@ apis: [{
     type: "bearer",
     token: process.env.GITHUB_TOKEN,
   },
+  historyPolicyDefaults: {
+    visibility: "requester_only",
+  },
+  toolPolicies: {
+    getRepository: {
+      visibility: "public_result",
+      projector: (_args, output) => {
+        const repo = output as { full_name?: string };
+        return `Repository loaded: ${repo.full_name}`;
+      },
+    },
+  },
   // OR other auth types:
   // auth: { type: "apiKey", key: "X-API-Key", value: "...", in: "header" }
   // auth: { type: "basic", username: "...", password: "..." }
@@ -182,6 +209,8 @@ apis: [{
 ```
 
 > **Note:** To load OpenAPI specs from files, use [`loadResources()`](./loaders.md) or import the file yourself.
+>
+> `toolPolicies` are keyed by the generated tool key, usually the OpenAPI `operationId`.
 
 ## MCP Servers
 
@@ -195,8 +224,25 @@ mcpServers: [{
     args: ["./mcp-server.js"],
     env: { ... },
   },
+  historyPolicyDefaults: {
+    visibility: "requester_only",
+  },
+  toolPolicies: {
+    read_file: {
+      visibility: "requester_only",
+    },
+    list_directory: {
+      visibility: "public_result",
+      projector: (_args, output) => {
+        const result = output as { entries?: unknown[] };
+        return `Directory listed successfully (${result.entries?.length ?? 0} entries).`;
+      },
+    },
+  },
 }]
 ```
+
+For MCP servers, overrides can be keyed by either the generated Copilotz tool key (`serverName_toolName`) or the original MCP tool name.
 
 ## Custom Processors
 

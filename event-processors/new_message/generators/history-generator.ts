@@ -1,4 +1,8 @@
-import type { Agent, NewMessage } from "@/interfaces/index.ts";
+import type {
+  Agent,
+  NewMessage,
+  ToolHistoryVisibility,
+} from "@/interfaces/index.ts";
 import type {
   ChatContentPart,
   ChatMessage,
@@ -197,6 +201,31 @@ function resolveTargetName(
   return targetId;
 }
 
+type ParsedToolCall = ToolInvocation & {
+  visibility?: ToolHistoryVisibility;
+  projectedOutput?: unknown;
+};
+
+function matchesAgentIdentity(
+  agent: Agent,
+  senderId: string | null | undefined,
+): boolean {
+  if (!senderId) return false;
+  return senderId === agent.id || senderId === agent.name;
+}
+
+function stripParsedToolCall(call: ParsedToolCall): ToolInvocation {
+  return {
+    id: call.id,
+    tool: call.tool,
+    args: call.args,
+    ...("output" in call ? { output: call.output } : {}),
+    ...("status" in call && typeof call.status === "string"
+      ? { status: call.status }
+      : {}),
+  };
+}
+
 export function historyGenerator(
   chatHistory: NewMessage[],
   currentAgent: Agent,
@@ -205,7 +234,7 @@ export function historyGenerator(
   const includeTargetContext = options?.includeTargetContext ?? true;
   const directConversation = options?.directConversation === true;
 
-  return chatHistory.map((msg, _i) => {
+  return chatHistory.flatMap((msg, _i) => {
     // Current agent's messages = "assistant"
     // Tool results = "tool" (even if senderId matches agent, because senderType is "tool")
     // Everyone else (users + other agents) = "user" with [Name]: prefix
@@ -213,9 +242,9 @@ export function historyGenerator(
     // IMPORTANT: Check senderType FIRST to correctly identify tool results
     // Tool results have senderId set to the requesting agent's ID, but senderType is "tool"
     const isToolResult = msg.senderType === "tool";
+    const isRequestingAgent = matchesAgentIdentity(currentAgent, msg.senderId);
     const isCurrentAgent = !isToolResult && (
-      msg.senderId === currentAgent.id ||
-      msg.senderId === currentAgent.name
+      isRequestingAgent
     );
 
     // Determine role: tool results stay as "tool", agent messages as "assistant", others based on type
@@ -275,7 +304,7 @@ export function historyGenerator(
     const toolCallsSource = Array.isArray(rawToolCalls) && rawToolCalls.length > 0
       ? rawToolCalls
       : metadataToolCalls;
-    const toolCalls: ToolInvocation[] | undefined = toolCallsSource.length > 0
+    const parsedToolCalls: ParsedToolCall[] = toolCallsSource.length > 0
       ? toolCallsSource.map((call, i) => {
         const maybeCall = call as
           | {
@@ -289,6 +318,8 @@ export function historyGenerator(
             args?: Record<string, unknown> | string;
             output?: unknown;
             status?: ToolInvocation["status"];
+            visibility?: ToolHistoryVisibility;
+            projectedOutput?: unknown;
           };
 
         const callId =
@@ -339,17 +370,54 @@ export function historyGenerator(
           ...("status" in maybeCall && typeof maybeCall.status === "string"
             ? { status: maybeCall.status }
             : {}),
-        } satisfies ToolInvocation;
+          ...("visibility" in maybeCall &&
+              typeof maybeCall.visibility === "string"
+            ? { visibility: maybeCall.visibility }
+            : {}),
+          ...("projectedOutput" in maybeCall
+            ? { projectedOutput: maybeCall.projectedOutput }
+            : {}),
+        } satisfies ParsedToolCall;
       })
-      : undefined;
+      : [];
 
-    return {
+    let toolCalls: ToolInvocation[] | undefined;
+    if (isToolResult) {
+      const visibleToolCalls = parsedToolCalls.flatMap((call) => {
+        const visibility = call.visibility ?? "public_full";
+
+        if (isRequestingAgent || visibility === "public_full") {
+          return [stripParsedToolCall(call)];
+        }
+
+        if (visibility === "public_result") {
+          return [{
+            ...stripParsedToolCall(call),
+            output: typeof call.projectedOutput !== "undefined"
+              ? call.projectedOutput
+              : null,
+          }];
+        }
+
+        return [];
+      });
+
+      if (visibleToolCalls.length === 0) {
+        return [];
+      }
+
+      toolCalls = visibleToolCalls;
+    } else if (role === "assistant" && parsedToolCalls.length > 0) {
+      toolCalls = parsedToolCalls.map(stripParsedToolCall);
+    }
+
+    return [{
       content: finalContent,
       role: role,
       senderId: msg.senderId || undefined,
       tool_call_id: (msg as unknown as { toolCallId?: string }).toolCallId ||
         undefined,
       ...(toolCalls ? { toolCalls } : {}),
-    };
+    }];
   });
 }

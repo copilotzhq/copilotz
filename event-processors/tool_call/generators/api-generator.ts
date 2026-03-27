@@ -631,6 +631,8 @@ export function generateApiTools(apiConfig: API): ExecutableTool[] {
         updatedAt: new Date(),
         outputSchema: null,
         inputSchema,
+        historyPolicy: apiConfig.toolPolicies?.[toolKey] ??
+          apiConfig.historyPolicyDefaults,
         execute: createApiExecutor(
           apiConfig,
           path,

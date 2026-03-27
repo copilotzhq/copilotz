@@ -222,3 +222,92 @@ Deno.test("historyGenerator exposes structured tool result metadata for formatte
     },
   ]);
 });
+
+Deno.test("historyGenerator projects public_result tool outputs for other agents", () => {
+  const history = historyGenerator(
+    [
+      {
+        senderId: "planner",
+        senderType: "tool",
+        content: '{"sessionId":"abc"}',
+        metadata: {
+          toolCalls: [
+            {
+              id: "tool-1",
+              tool: { id: "startSession", name: "startSession" },
+              args: "{}",
+              output: { sessionId: "abc", internalCode: "secret" },
+              projectedOutput: "Booking session started successfully.",
+              visibility: "public_result",
+              status: "completed",
+            },
+          ],
+        },
+      },
+    ] as any,
+    { id: "reviewer", name: "reviewer" } as any,
+  );
+
+  assertEquals(history.length, 1);
+  assertEquals(history[0].role, "tool");
+  assertEquals(history[0].toolCalls, [
+    {
+      id: "tool-1",
+      tool: { id: "startSession" },
+      args: "{}",
+      output: "Booking session started successfully.",
+      status: "completed",
+    },
+  ]);
+});
+
+Deno.test("historyGenerator hides requester_only tool outputs from other agents", () => {
+  const history = historyGenerator(
+    [
+      {
+        senderId: "planner",
+        senderType: "tool",
+        content: '{"sessionId":"abc"}',
+        metadata: {
+          toolCalls: [
+            {
+              id: "tool-1",
+              tool: { id: "startSession", name: "startSession" },
+              args: "{}",
+              output: { sessionId: "abc" },
+              visibility: "requester_only",
+              status: "completed",
+            },
+          ],
+        },
+      },
+    ] as any,
+    { id: "reviewer", name: "reviewer" } as any,
+  );
+
+  assertEquals(history.length, 0);
+});
+
+Deno.test("historyGenerator keeps raw assistant tool calls private to the calling agent", () => {
+  const sharedHistory = historyGenerator(
+    [
+      {
+        senderId: "planner",
+        senderType: "agent",
+        content: "Vou consultar a rota.",
+        toolCalls: [
+          {
+            id: "tool-1",
+            tool: { id: "checkRoute", name: "checkRoute" },
+            args: '{"origin":"Sao Paulo","destination":"Piracicaba"}',
+          },
+        ],
+      },
+    ] as any,
+    { id: "reviewer", name: "reviewer" } as any,
+  );
+
+  assertEquals(sharedHistory.length, 1);
+  assertEquals(sharedHistory[0].role, "user");
+  assertEquals(sharedHistory[0].toolCalls, undefined);
+});

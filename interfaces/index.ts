@@ -16,41 +16,39 @@ import type {
 
 import type {
   Agent as DbAgent,
-  API,
+  API as DbAPI,
   Document,
   DocumentChunk,
   Event,
   LlmCallEvent,
   LlmCallEventPayload,
-  MCPServer,
+  MCPServer as DbMCPServer,
   Message,
   MessagePayload,
   NewAgent,
-  NewAPI,
+  NewAPI as DbNewAPI,
   NewDocument,
   NewDocumentChunk,
   NewEvent,
-  NewMCPServer,
+  NewMCPServer as DbNewMCPServer,
   NewMessage,
   NewMessageEvent,
   NewTask,
   NewThread,
-  NewTool,
+  NewTool as DbNewTool,
   NewUnknownEvent,
   NewUser,
   Task,
   Thread,
   TokenEvent,
   TokenEventPayload,
-  Tool,
+  Tool as DbTool,
   ToolCallEvent,
   ToolCallEventPayload,
   User,
 } from "@/database/schemas/index.ts";
 
 export type {
-  /** API configuration for connecting to external REST APIs. */
-  API,
   /** Document stored in the RAG knowledge base. */
   Document,
   /** Chunk of a document with embedding vector. */
@@ -61,24 +59,18 @@ export type {
   LlmCallEvent,
   /** Payload for LLM call events. */
   LlmCallEventPayload,
-  /** MCP (Model Context Protocol) server configuration. */
-  MCPServer,
   /** Message entity representing a single message in a thread. */
   Message,
   /** Payload structure for incoming messages. */
   MessagePayload,
   /** Input type for creating a new Agent entity. */
   NewAgent,
-  /** Input type for creating a new API configuration. */
-  NewAPI,
   /** Input type for creating a new Document. */
   NewDocument,
   /** Input type for creating a new DocumentChunk. */
   NewDocumentChunk,
   /** Input type for creating a new Event. */
   NewEvent,
-  /** Input type for creating a new MCP server configuration. */
-  NewMCPServer,
   /** Input type for creating a new Message. */
   NewMessage,
   /** Specific NEW_MESSAGE event with typed payload. */
@@ -87,8 +79,6 @@ export type {
   NewTask,
   /** Input type for creating a new Thread. */
   NewThread,
-  /** Input type for creating a new Tool. */
-  NewTool,
   /** Generic event type for custom event processors. */
   NewUnknownEvent,
   /** Input type for creating a new User. */
@@ -101,8 +91,6 @@ export type {
   TokenEvent,
   /** Payload for streaming token events. */
   TokenEventPayload,
-  /** Tool entity defining an agent capability. */
-  Tool,
   /** Specific TOOL_CALL event with typed payload. */
   ToolCallEvent,
   /** Payload for tool call events. */
@@ -184,6 +172,75 @@ export interface AgentLlmOptionsResolverArgs {
 export type AgentLlmOptionsResolver = (
   args: AgentLlmOptionsResolverArgs,
 ) => ProviderConfig | Promise<ProviderConfig>;
+
+export type ToolHistoryVisibility =
+  | "requester_only"
+  | "public_result"
+  | "public_full";
+
+export interface ToolResultProjectorContext {
+  toolKey: string;
+  toolName: string;
+  status: "completed" | "failed";
+  error?: unknown;
+}
+
+export type ToolResultProjector = (
+  args: unknown,
+  output: unknown,
+  context: ToolResultProjectorContext,
+) => unknown | Promise<unknown>;
+
+export interface ToolHistoryPolicyConfig {
+  visibility?: ToolHistoryVisibility;
+}
+
+export interface ToolHistoryPolicy extends ToolHistoryPolicyConfig {
+  projector?: ToolResultProjector;
+}
+
+type ToolExecuteFn = (
+  // deno-lint-ignore no-explicit-any
+  args: any,
+  // deno-lint-ignore no-explicit-any
+  context?: any,
+) => Promise<unknown> | unknown;
+
+/** Tool definition with optional runtime-only execution and history policy hooks. */
+export type Tool = DbTool & {
+  execute?: ToolExecuteFn;
+  historyPolicy?: ToolHistoryPolicy;
+};
+
+/** Input type for creating a new Tool with optional runtime-only hooks. */
+export type NewTool = DbNewTool & {
+  execute?: ToolExecuteFn;
+  historyPolicy?: ToolHistoryPolicy;
+};
+
+/** API configuration with optional runtime-only history policy overrides for generated tools. */
+export type API = DbAPI & {
+  historyPolicyDefaults?: ToolHistoryPolicyConfig;
+  toolPolicies?: Record<string, ToolHistoryPolicy>;
+};
+
+/** Input type for creating a new API configuration with runtime-only overrides. */
+export type NewAPI = DbNewAPI & {
+  historyPolicyDefaults?: ToolHistoryPolicyConfig;
+  toolPolicies?: Record<string, ToolHistoryPolicy>;
+};
+
+/** MCP server configuration with optional runtime-only history policy overrides for generated tools. */
+export type MCPServer = DbMCPServer & {
+  historyPolicyDefaults?: ToolHistoryPolicyConfig;
+  toolPolicies?: Record<string, ToolHistoryPolicy>;
+};
+
+/** Input type for creating a new MCP server configuration with runtime-only overrides. */
+export type NewMCPServer = DbNewMCPServer & {
+  historyPolicyDefaults?: ToolHistoryPolicyConfig;
+  toolPolicies?: Record<string, ToolHistoryPolicy>;
+};
 
 /**
  * Arguments passed to the history transform hook.

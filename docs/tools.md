@@ -170,6 +170,61 @@ const copilotz = await createCopilotz({
 });
 ```
 
+### Tool History Visibility
+
+In multi-agent conversations, tool results do not need to be shared with every agent in the same way. You can control that with `historyPolicy` on code-defined tools.
+
+Supported modes:
+
+| `visibility` | Behavior |
+|---|---|
+| `requester_only` | Only the agent that called the tool sees the result in later generated history |
+| `public_result` | Other agents see a shared result, optionally projected into a simpler summary |
+| `public_full` | Other agents see the full raw tool result |
+
+Notes:
+
+- This is currently a runtime feature for code-defined resources.
+- `projector` is optional and only matters for `public_result`.
+- Raw tool-call arguments from one agent are not exposed to other agents in generated history; other agents see the message text plus whatever result visibility allows.
+
+```typescript
+const checkRouteTool = {
+  id: "check_route",
+  key: "check_route",
+  name: "Check Route",
+  description: "Resolve an origin/destination pair into a valid route",
+  inputSchema: {
+    type: "object",
+    properties: {
+      origin: { type: "string" },
+      destination: { type: "string" },
+    },
+    required: ["origin", "destination"],
+  },
+  historyPolicy: {
+    visibility: "public_result",
+    projector: (args, output, context) => {
+      const input = args as { origin: string; destination: string };
+      const result = output as { origin?: { name?: string }; destination?: { name?: string } };
+
+      return {
+        summary: `Route resolved: ${result.origin?.name ?? input.origin} -> ${result.destination?.name ?? input.destination}`,
+        tool: context.toolName,
+      };
+    },
+  },
+  execute: async ({ origin, destination }) => {
+    // ...
+    return {
+      origin: { name: "SAO PAULO (TODOS) - SP" },
+      destination: { name: "PIRACICABA - SP" },
+      internalCodes: { originId: "-3", destinationId: "19212" },
+    };
+  },
+};
+```
+
 ## OpenAPI Tools
 
 Generate tools automatically from OpenAPI 3.0 specifications. Each API operation becomes a callable tool.
@@ -208,11 +263,25 @@ const copilotz = await createCopilotz({
       type: "bearer",
       token: Deno.env.get("GITHUB_TOKEN"),
     },
+    historyPolicyDefaults: {
+      visibility: "requester_only",
+    },
+    toolPolicies: {
+      getRepository: {
+        visibility: "public_result",
+        projector: (_args, output) => {
+          const repo = output as { full_name?: string; private?: boolean };
+          return `Repository loaded: ${repo.full_name} (${repo.private ? "private" : "public"})`;
+        },
+      },
+    },
   }],
 });
 ```
 
 > **Note:** `openApiSchema` accepts an object or a JSON/YAML string. To load from a file, use [`loadResources()`](./loaders.md) or import the file yourself.
+>
+> `toolPolicies` are keyed by `operationId` when present. If an operation has no `operationId`, Copilotz falls back to the generated tool key.
 
 ### Authentication Options
 
@@ -255,9 +324,26 @@ const copilotz = await createCopilotz({
       command: "node",
       args: ["./mcp-servers/filesystem.js"],
     },
+    historyPolicyDefaults: {
+      visibility: "requester_only",
+    },
+    toolPolicies: {
+      read_file: {
+        visibility: "requester_only",
+      },
+      list_directory: {
+        visibility: "public_result",
+        projector: (_args, output) => {
+          const result = output as { entries?: Array<{ name?: string }> };
+          return `Directory listing completed (${result.entries?.length ?? 0} entries).`;
+        },
+      },
+    },
   }],
 });
 ```
+
+For MCP tools, per-tool overrides can be keyed by either the generated Copilotz tool key (`serverName_toolName`) or the original MCP tool name.
 
 ## Tool Permissions
 

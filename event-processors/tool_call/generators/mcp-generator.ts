@@ -226,6 +226,10 @@ export async function generateMcpTools(mcpConfig: MCPServer): Promise<Executable
             const toolName = `${mcpConfig.name}: ${mcpTool.name}`;
             const toolDescription = mcpTool.description || 
                 `${mcpConfig.description ? mcpConfig.description + ': ' : ''}${mcpTool.name}`;
+            const historyPolicy =
+                mcpConfig.toolPolicies?.[toolKey] ??
+                mcpConfig.toolPolicies?.[mcpTool.name] ??
+                mcpConfig.historyPolicyDefaults;
 
             const tool: ExecutableTool = {
                 id: crypto.randomUUID(),
@@ -241,6 +245,7 @@ export async function generateMcpTools(mcpConfig: MCPServer): Promise<Executable
                     properties: {},
                 },
                 outputSchema: null,
+                historyPolicy,
                 execute: createMcpExecutor(client, mcpTool.name, mcpConfig.name),
             };
 

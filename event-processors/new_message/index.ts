@@ -678,6 +678,7 @@ function toExecutableTool(tool: unknown): ExecutableTool | null {
     updatedAt: toDate(maybe.updatedAt),
     inputSchema: maybe.inputSchema ?? null,
     outputSchema: maybe.outputSchema ?? null,
+    historyPolicy: maybe.historyPolicy,
     execute: executor,
   };
 }

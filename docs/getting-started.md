@@ -214,6 +214,23 @@ await copilotz.run({
 });
 ```
 
+If an agent or its tool calls may generate large inline images/files that should not be persisted, you can disable generated asset persistence per agent:
+
+```typescript
+agents: [{
+  id: "assistant",
+  name: "Assistant",
+  role: "assistant",
+  instructions: "You are a helpful assistant.",
+  llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  assetOptions: {
+    produce: {
+      persistGeneratedAssets: false,
+    },
+  },
+}]
+```
+
 ## Enabling RAG
 
 Add a knowledge base your agent can search:

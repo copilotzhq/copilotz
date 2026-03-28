@@ -801,6 +801,7 @@ export const messageProcessor: EventProcessor<
       await processAssetsForNewMessage({
         payload,
         baseMetadata,
+        senderId: messageContext.senderId,
         senderType: messageContext.senderType,
         context,
         event,

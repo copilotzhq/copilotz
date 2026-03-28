@@ -48,6 +48,11 @@ const agent = {
   llmOptions: { provider: "openai", model: "gpt-4o-mini" },
   allowedTools: ["search_knowledge", "create_ticket", "update_my_memory"],
   allowedAgents: ["escalation-agent"],
+  assetOptions: {
+    produce: {
+      persistGeneratedAssets: false,
+    },
+  },
 };
 ```
 

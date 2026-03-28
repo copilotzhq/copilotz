@@ -71,6 +71,11 @@ agents: [{
     autoInjectLimit: 4,
     entityExtraction: { enabled: true },
   },
+  assetOptions: {               // Per-agent asset generation settings
+    produce: {
+      persistGeneratedAssets: true,
+    },
+  },
 }]
 ```
 

@@ -261,15 +261,94 @@ export interface AssetProcessingResult {
     contentOverride?: string;
 }
 
+function findProducerAgent(
+    context: ChatContext,
+    senderType: "agent" | "user" | "tool" | "system",
+    senderId: string,
+) {
+    if ((senderType !== "agent" && senderType !== "tool") || !senderId) {
+        return undefined;
+    }
+    return context.agents?.find((agent) => agent.id === senderId || agent.name === senderId);
+}
+
+function shouldPersistGeneratedAssets(
+    context: ChatContext,
+    senderType: "agent" | "user" | "tool" | "system",
+    senderId: string,
+): boolean {
+    const producerAgent = findProducerAgent(context, senderType, senderId);
+    return producerAgent?.assetOptions?.produce?.persistGeneratedAssets !== false;
+}
+
+function kindFromMime(mimeType?: string): AttachmentKind {
+    if (typeof mimeType === "string" && mimeType.startsWith("image/")) return "image";
+    if (typeof mimeType === "string" && mimeType.startsWith("audio/")) return "audio";
+    return "file";
+}
+
+function sanitizeGeneratedAssetsInValue(value: unknown): unknown {
+    const visit = (node: unknown): unknown => {
+        if (typeof node === "string" && isDataUrl(node)) {
+            const parsed = parseDataUrl(node);
+            const mimeType = parsed?.mime ?? "application/octet-stream";
+            return { kind: kindFromMime(mimeType), mimeType };
+        }
+
+        if (Array.isArray(node)) {
+            return node.map((item) => visit(item));
+        }
+
+        if (node && typeof node === "object") {
+            const record = node as Record<string, unknown>;
+            const mimeType = typeof record.mimeType === "string"
+                ? record.mimeType
+                : undefined;
+
+            if (typeof record.dataBase64 === "string") {
+                const sanitized: Record<string, unknown> = { ...record };
+                delete sanitized.dataBase64;
+                if (typeof sanitized.kind !== "string") {
+                    sanitized.kind = kindFromMime(mimeType);
+                }
+                return sanitized;
+            }
+
+            if (typeof record.dataUrl === "string" && isDataUrl(record.dataUrl)) {
+                const parsed = parseDataUrl(record.dataUrl);
+                const resolvedMimeType = parsed?.mime ?? mimeType ?? "application/octet-stream";
+                const sanitized: Record<string, unknown> = { ...record };
+                delete sanitized.dataUrl;
+                sanitized.mimeType = resolvedMimeType;
+                if (typeof sanitized.kind !== "string") {
+                    sanitized.kind = kindFromMime(resolvedMimeType);
+                }
+                return sanitized;
+            }
+
+            const out: Record<string, unknown> = {};
+            for (const [key, value] of Object.entries(record)) {
+                out[key] = visit(value);
+            }
+            return out;
+        }
+
+        return node;
+    };
+
+    return visit(value);
+}
+
 export async function processAssetsForNewMessage(args: {
     payload: MessagePayload;
     baseMetadata: Record<string, unknown>;
+    senderId: string;
     senderType: "agent" | "user" | "tool" | "system";
     context: ChatContext;
     event: Event;
     threadId: string;
 }): Promise<AssetProcessingResult> {
-    const { payload, baseMetadata, senderType, context, event, threadId } = args;
+    const { payload, baseMetadata, senderId, senderType, context, event, threadId } = args;
 
     const derivedAttachments = extractAttachmentsFromContent(payload.content);
     const existingRaw = (baseMetadata as { attachments?: unknown }).attachments;
@@ -279,7 +358,12 @@ export async function processAssetsForNewMessage(args: {
 
     const mergedAttachments = existing.concat(derivedAttachments);
 
-    const store = context.assetStore;
+    const persistGeneratedAssets = shouldPersistGeneratedAssets(
+        context,
+        senderType,
+        senderId,
+    );
+    const store = persistGeneratedAssets ? context.assetStore : undefined;
     const onAttachmentError = (info: AssetErrorInfo) =>
         emitAssetError({ context, event, threadId, senderType, toolCallMetadata: [], info });
     const { normalized: normalizedAttachments, created: createdFromAttachments } =
@@ -292,11 +376,15 @@ export async function processAssetsForNewMessage(args: {
 
     const createdFromToolOutputs: CreatedAssetInfo[] = [];
 
-    if (toolCallEntries.length > 0 && store) {
+    if (toolCallEntries.length > 0) {
         for (const entry of toolCallEntries) {
             if (!entry || typeof entry !== "object") continue;
             const maybeOutput = (entry as { output?: unknown }).output;
             if (typeof maybeOutput === "undefined") continue;
+            if (!store) {
+                (entry as { output?: unknown }).output = sanitizeGeneratedAssetsInValue(maybeOutput);
+                continue;
+            }
             try {
                 const normalized = await normalizeOutputToAssetRefs(maybeOutput, store);
                 (entry as { output?: unknown }).output = normalized.normalized;
@@ -430,5 +518,4 @@ export async function processAssetsForNewMessage(args: {
         contentOverride,
     };
 }
-
 

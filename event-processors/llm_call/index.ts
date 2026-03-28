@@ -174,9 +174,12 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       return {};
     })();
 
-    // If allowed, resolve asset:// refs in message parts to provider-acceptable data URLs.
-    // Otherwise, strip multimodal parts and send text-only to let the LLM call a fetch tool.
-    const shouldResolve = context.assetConfig?.resolveInLLM !== false;
+    // Per-agent resolveInLLM takes precedence over the global asset config.
+    const agentForAssets = context.agents?.find((a) => a.id === payload.agent.id);
+    const perAgentResolve = agentForAssets?.assetOptions?.resolveInLLM;
+    const shouldResolve = perAgentResolve !== undefined
+      ? perAgentResolve
+      : context.assetConfig?.resolveInLLM !== false;
     const resolvedMessages = await (async () => {
       try {
         if (shouldResolve) {

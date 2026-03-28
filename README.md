@@ -192,6 +192,10 @@ const generateChart = {
 // 5. Emits an ASSET_CREATED event for your hooks
 ```
 
+Need finer control? Agents can opt out of persisting assets they generate via
+`assetOptions.produce.persistGeneratedAssets = false`, which also sanitizes
+inline base64/data URLs returned by their tool calls before persistence.
+
 ### Production Infrastructure, Not Prototypes
 
 Event-driven architecture with persistent queues. Background workers for heavy processing. Custom processors for your business logic. This is infrastructure you'd build anyway — already built.

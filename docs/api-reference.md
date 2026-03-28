@@ -599,6 +599,11 @@ interface Agent {
   allowedTools?: string[];
   allowedAgents?: string[];
   ragOptions?: AgentRagOptions;
+  assetOptions?: {
+    produce?: {
+      persistGeneratedAssets?: boolean;
+    };
+  };
 }
 
 interface Message {

@@ -47,6 +47,7 @@ const agent = {
 | `allowedTools` | Tools this agent can use |
 | `allowedAgents` | Other agents this agent can communicate with |
 | `ragOptions` | Knowledge base configuration |
+| `assetOptions` | Controls how this agent handles generated assets |
 
 ## LLM Configuration
 
@@ -141,6 +142,35 @@ allowedTools: ["*"]
 // No tools
 allowedTools: []
 ```
+
+## Asset Behavior
+
+Agents can opt out of persisting assets they generate directly or through their tool calls:
+
+```typescript
+const agent = {
+  id: "vision-agent",
+  name: "Vision",
+  role: "assistant",
+  llmOptions: {
+    provider: "openai",
+    model: "gpt-4o-mini",
+  },
+  assetOptions: {
+    produce: {
+      persistGeneratedAssets: false,
+    },
+  },
+};
+```
+
+When `persistGeneratedAssets` is `false`:
+
+- generated attachments are not saved into the shared asset store
+- tool outputs with inline base64/data URLs are sanitized before persistence
+- Copilotz does not emit `ASSET_CREATED` for those generated blobs
+
+This only applies to assets produced by that agent or by tools it invoked. Existing `asset://` refs and external `http(s)` URLs are left unchanged.
 
 See [Tools](./tools.md) for the full list of native tools.
 

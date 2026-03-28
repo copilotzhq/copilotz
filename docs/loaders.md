@@ -108,10 +108,17 @@ const config: Partial<Agent> = {
     mode: "auto",
     namespaces: ["support-docs", "faq"],
   },
+  assetOptions: {
+    produce: {
+      persistGeneratedAssets: false,
+    },
+  },
 };
 
 export default config;
 ```
+
+`assetOptions.produce.persistGeneratedAssets` is useful in loader-based projects when an agent or its tool calls may produce large inline assets that you do not want persisted into the shared asset store or conversation history.
 
 ## Tool Files
 

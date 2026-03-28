@@ -356,7 +356,13 @@ export async function processAssetsForNewMessage(args: {
         ? (existingRaw as RawAttachment[])
         : [];
 
-    const mergedAttachments = existing.concat(derivedAttachments);
+    // Deduplicate: when the same kind (e.g. "audio") appears in both content-derived
+    // and metadata attachments, prefer the content-derived version (it may already be
+    // converted to a more suitable format like WAV). This prevents the same user
+    // recording from producing two separate assets.
+    const derivedKinds = new Set(derivedAttachments.map((a) => a.kind));
+    const deduplicatedExisting = existing.filter((a) => !derivedKinds.has(a.kind));
+    const mergedAttachments = deduplicatedExisting.concat(derivedAttachments);
 
     const persistGeneratedAssets = shouldPersistGeneratedAssets(
         context,

@@ -16,6 +16,10 @@ import type { OminipgWithCrud } from "omnipg";
 import { runThread, type RunHandle, type RunOptions, type UnifiedOnEvent } from "@/runtime/index.ts";
 import type { CollectionDefinition, CollectionCrud, ScopedCollectionCrud } from "@/database/collections/types.ts";
 import { hasRunInput, normalizeInboundRunMessage } from "@/utils/inbound-message.ts";
+import loadResources from "@/utils/loaders/resources.ts";
+import type { Resources } from "@/utils/loaders/resources.ts";
+import { mergeResourceArrays } from "@/utils/merge-resources.ts";
+import { listPublicAgents } from "@/utils/list-agents.ts";
 
 import type {
     Agent,
@@ -311,6 +315,19 @@ export type DbCrud = OminipgWithCrud<DbSchemas>["crud"];
  */
 export { default as loadResources } from "@/utils/loaders/resources.ts";
 
+/** Type for resources loaded from the file system. */
+export type { Resources } from "@/utils/loaders/resources.ts";
+
+/**
+ * Returns a simplified list of agents suitable for public API responses.
+ */
+export { listPublicAgents } from "@/utils/list-agents.ts";
+
+/**
+ * Merges two resource arrays with "append, explicit wins on ID collision" semantics.
+ */
+export { mergeResourceArrays } from "@/utils/merge-resources.ts";
+
 /**
  * Union type representing all possible events in the Copilotz event system.
  * Used for type-safe event handling in callbacks and processors.
@@ -396,8 +413,12 @@ function normalizeMcpServer(server: MCPServerConfig): MCPServer {
  * ```
  */
 export interface CopilotzConfig {
-    /** Array of agent configurations. At least one agent is required. */
-    agents: AgentConfig[];
+    /**
+     * Array of agent configurations.
+     * Required unless `resources.path` is provided (agents will be loaded from files).
+     * When both are set, explicit agents are merged with file-loaded agents (explicit wins on ID collision).
+     */
+    agents?: AgentConfig[];
     /** Optional array of custom tool definitions. */
     tools?: ToolConfig[];
     /** Optional array of API configurations for external REST APIs. */
@@ -406,6 +427,25 @@ export interface CopilotzConfig {
     mcpServers?: MCPServerConfig[];
     /** Optional custom event processors to extend or override default behavior. */
     processors?: Array<(EventProcessor<unknown, ProcessorDeps> & { eventType: string; priority?: number; id?: string })>;
+    /**
+     * Load resources (agents, tools, APIs, processors) from a directory structure.
+     * When set, `createCopilotz` internally calls `loadResources` and merges results
+     * with any explicitly provided resource arrays.
+     *
+     * @example
+     * ```ts
+     * const copilotz = await createCopilotz({
+     *   dbConfig: { url: Deno.env.get("DATABASE_URL") },
+     *   resources: { path: "./resources" },
+     * });
+     * ```
+     */
+    resources?: {
+        /** Path to the resources directory (relative to cwd or absolute). Default: "resources" */
+        path?: string;
+        /** Enable live reload of file-based resources during development. Reserved for future use. */
+        watch?: boolean;
+    };
     /** Optional callbacks for handling events during execution. */
     callbacks?: ChatCallbacks;
     /** Optional hook for rewriting generated message history before the LLM call. */
@@ -777,12 +817,50 @@ export interface ScopedCollectionsManager {
  * }
  * ```
  */
+// ============================================
+// DB CONNECTION CACHE
+// ============================================
+
+const _dbConnectionCache = new Map<string, { db: CopilotzDb; refCount: number }>();
+
 export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> {
 
-    const normalizedAgents = config.agents.map(normalizeAgent);
-    const normalizedTools = config.tools?.map(normalizeTool);
-    const normalizedApis = config.apis?.map(normalizeApi);
-    const normalizedMcpServers = config.mcpServers?.map(normalizeMcpServer);
+    // ---- Phase 1: Resolve resources (file-loaded + explicit merge) ----
+    let resolvedAgents: AgentConfig[] = config.agents ?? [];
+    let resolvedTools: ToolConfig[] | undefined = config.tools;
+    let resolvedApis: APIConfig[] | undefined = config.apis;
+    let resolvedMcpServers: MCPServerConfig[] | undefined = config.mcpServers;
+    let resolvedProcessors = config.processors;
+
+    if (config.resources?.path) {
+        const loaded = await loadResources({ path: config.resources.path });
+        resolvedAgents = mergeResourceArrays(loaded.agents ?? [], config.agents);
+        resolvedTools = mergeResourceArrays(loaded.tools ?? [], config.tools);
+        resolvedApis = mergeResourceArrays(loaded.apis ?? [], config.apis);
+        resolvedMcpServers = mergeResourceArrays(loaded.mcpServers ?? [], config.mcpServers);
+        // Processors: append explicit after loaded (no ID-based dedup for processors)
+        resolvedProcessors = [
+            ...(loaded.processors ?? []),
+            ...(config.processors ?? []),
+        ];
+
+        if (config.resources.watch) {
+            console.warn("[copilotz] resources.watch is reserved for future use and has no effect yet.");
+        }
+    }
+
+    if (resolvedAgents.length === 0) {
+        throw new Error(
+            "createCopilotz requires at least one agent. " +
+            "Provide agents explicitly or via resources.path.",
+        );
+    }
+
+    // ---- Phase 2: Normalize resources ----
+    const normalizedAgents = resolvedAgents.map(normalizeAgent);
+    const normalizedTools = resolvedTools?.map(normalizeTool);
+    const normalizedApis = resolvedApis?.map(normalizeApi);
+    const normalizedMcpServers = resolvedMcpServers?.map(normalizeMcpServer);
 
     const baseConfig: NormalizedCopilotzConfig = {
         ...config,
@@ -792,10 +870,28 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
         mcpServers: normalizedMcpServers,
     };
 
-    const managedDb = config.dbInstance ? undefined : await createDatabase({
-        ...config.dbConfig,
-        staleProcessingThresholdMs: config.staleProcessingThresholdMs ?? config.dbConfig?.staleProcessingThresholdMs,
-    });
+    // ---- Phase 3: Resolve database (with connection caching) ----
+    const dbCacheKey = config.dbConfig?.url ?? ':memory:';
+    let managedDb: CopilotzDb | undefined;
+    let fromCache = false;
+
+    if (config.dbInstance) {
+        managedDb = undefined;
+    } else if (dbCacheKey !== ':memory:' && _dbConnectionCache.has(dbCacheKey)) {
+        const cached = _dbConnectionCache.get(dbCacheKey)!;
+        cached.refCount++;
+        managedDb = cached.db;
+        fromCache = true;
+    } else {
+        managedDb = await createDatabase({
+            ...config.dbConfig,
+            staleProcessingThresholdMs: config.staleProcessingThresholdMs ?? config.dbConfig?.staleProcessingThresholdMs,
+        });
+        if (dbCacheKey !== ':memory:' && managedDb) {
+            _dbConnectionCache.set(dbCacheKey, { db: managedDb, refCount: 1 });
+        }
+    }
+
     const baseDb = config.dbInstance ?? managedDb;
     if (!baseDb) {
         throw new Error("Failed to initialize Copilotz database instance.");
@@ -803,9 +899,9 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
     const baseOps = baseDb.ops;
 
     // Prepare custom processors map (order preserved; highest priority first in provided array)
-    if (Array.isArray(config.processors) && config.processors.length > 0) {
+    if (Array.isArray(resolvedProcessors) && resolvedProcessors.length > 0) {
         const byType: Record<string, Array<EventProcessor<unknown, ProcessorDeps>>> = {};
-        for (const p of config.processors) {
+        for (const p of resolvedProcessors) {
             if (!p || typeof p !== "object") continue;
             const eventType = (p as { eventType?: string }).eventType;
             if (!eventType || typeof (p as EventProcessor<unknown, ProcessorDeps>).shouldProcess !== "function" || typeof (p as EventProcessor<unknown, ProcessorDeps>).process !== "function") continue;
@@ -1157,6 +1253,17 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
         },
         shutdown: async () => {
             if (managedDb) {
+                if (fromCache) {
+                    const cached = _dbConnectionCache.get(dbCacheKey);
+                    if (cached) {
+                        cached.refCount--;
+                        if (cached.refCount <= 0) {
+                            _dbConnectionCache.delete(dbCacheKey);
+                        } else {
+                            return; // Other instances still using this connection
+                        }
+                    }
+                }
                 const resource = managedDb as unknown as { close?: () => Promise<void> | void; end?: () => Promise<void> | void };
                 if (typeof resource.close === "function") {
                     await resource.close.call(resource);

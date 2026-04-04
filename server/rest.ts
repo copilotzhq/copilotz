@@ -113,25 +113,34 @@ export function parseQueryParams(searchParams: URLSearchParams): RestListOptions
     };
 }
 
-export function createRestHandlers(copilotz: Copilotz) {
+/** Handlers returned by {@link createRestHandlers}. */
+export interface RestHandlers {
+    list: (resource: string, options?: RestListOptions) => Promise<unknown[]>;
+    getById: (resource: string, id: string) => Promise<unknown>;
+    create: (resource: string, body: Record<string, unknown> | Array<Record<string, unknown>>) => Promise<unknown>;
+    update: (resource: string, id: string, data: Record<string, unknown>) => Promise<unknown>;
+    delete: (resource: string, id: string) => Promise<unknown>;
+    parseQueryParams: (searchParams: URLSearchParams) => RestListOptions;
+}
+
+export function createRestHandlers(copilotz: Copilotz): RestHandlers {
     const { ops } = copilotz;
 
-    const resolveCrud = (resource: string) => {
+    const resolveCrud = (resource: string): {
+        find: (filter?: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<unknown[]>;
+        findOne: (filter: Record<string, unknown>) => Promise<unknown>;
+        create: (row: Record<string, unknown>) => Promise<unknown>;
+        createMany: (rows: Array<Record<string, unknown>>) => Promise<unknown[]>;
+        update: (filter: Record<string, unknown>, data: Record<string, unknown>) => Promise<unknown>;
+        delete: (filter: Record<string, unknown>) => Promise<unknown>;
+    } => {
         const crud = ops.crud[resource as keyof typeof ops.crud];
         if (!crud) throw Object.assign(new Error(`Resource '${resource}' not found`), { status: 404 });
-        return crud as unknown as {
-            find: (filter?: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<unknown[]>;
-            findOne: (filter: Record<string, unknown>) => Promise<unknown>;
-            create: (row: Record<string, unknown>) => Promise<unknown>;
-            createMany: (rows: Array<Record<string, unknown>>) => Promise<unknown[]>;
-            update: (filter: Record<string, unknown>, data: Record<string, unknown>) => Promise<unknown>;
-            delete: (filter: Record<string, unknown>) => Promise<unknown>;
-        };
+        return crud as unknown as ReturnType<typeof resolveCrud>;
     };
 
     return {
-        /** List items for a resource with query options. */
-        list: async (resource: string, options: RestListOptions = {}) => {
+        list: async (resource: string, options: RestListOptions = {}): Promise<unknown[]> => {
             const crud = resolveCrud(resource);
             return crud.find(options.filters, {
                 limit: options.limit,
@@ -141,14 +150,12 @@ export function createRestHandlers(copilotz: Copilotz) {
             });
         },
 
-        /** Get a single item by ID. */
-        getById: async (resource: string, id: string) => {
+        getById: async (resource: string, id: string): Promise<unknown> => {
             const crud = resolveCrud(resource);
             return crud.findOne({ id });
         },
 
-        /** Create one or many items. */
-        create: async (resource: string, body: Record<string, unknown> | Array<Record<string, unknown>>) => {
+        create: async (resource: string, body: Record<string, unknown> | Array<Record<string, unknown>>): Promise<unknown> => {
             const crud = resolveCrud(resource);
             if (Array.isArray(body)) {
                 return crud.createMany(body);
@@ -156,19 +163,16 @@ export function createRestHandlers(copilotz: Copilotz) {
             return crud.create(body);
         },
 
-        /** Update an item by ID. */
-        update: async (resource: string, id: string, data: Record<string, unknown>) => {
+        update: async (resource: string, id: string, data: Record<string, unknown>): Promise<unknown> => {
             const crud = resolveCrud(resource);
             return crud.update({ id }, data);
         },
 
-        /** Delete an item by ID. */
-        delete: async (resource: string, id: string) => {
+        delete: async (resource: string, id: string): Promise<unknown> => {
             const crud = resolveCrud(resource);
             return crud.delete({ id });
         },
 
-        /** Parse URL search params into list options. */
         parseQueryParams,
     };
 }

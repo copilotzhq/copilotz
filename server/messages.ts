@@ -6,28 +6,34 @@
  */
 
 import type { Copilotz } from "@/index.ts";
+import type { Message } from "@/database/schemas/index.ts";
 
-export function createMessageHandlers(copilotz: Copilotz) {
+/** Handlers returned by {@link createMessageHandlers}. */
+export interface MessageHandlers {
+    listForThread: (
+        threadId: string,
+        options?: { limit?: number; offset?: number; order?: "asc" | "desc" },
+    ) => Promise<Message[]>;
+    getHistory: (
+        threadId: string,
+        userId: string,
+        limit?: number,
+    ) => Promise<Message[]>;
+    listFromGraph: (
+        threadId: string,
+        limit?: number,
+    ) => Promise<Message[]>;
+}
+
+export function createMessageHandlers(copilotz: Copilotz): MessageHandlers {
     const { ops } = copilotz;
 
     return {
-        /** Get messages for a thread (graph-backed). */
-        listForThread: (
-            threadId: string,
-            options?: { limit?: number; offset?: number; order?: "asc" | "desc" },
-        ) => ops.getMessagesForThread(threadId, options),
-
-        /** Get message history for a thread + user pair. */
-        getHistory: (
-            threadId: string,
-            userId: string,
-            limit?: number,
-        ) => ops.getMessageHistory(threadId, userId, limit),
-
-        /** Get message history from graph (nodes with type='message'). */
-        listFromGraph: (
-            threadId: string,
-            limit?: number,
-        ) => ops.getMessageHistoryFromGraph(threadId, limit),
+        listForThread: (threadId, options) =>
+            ops.getMessagesForThread(threadId, options),
+        getHistory: (threadId, userId, limit) =>
+            ops.getMessageHistory(threadId, userId, limit),
+        listFromGraph: (threadId, limit) =>
+            ops.getMessageHistoryFromGraph(threadId, limit),
     };
 }

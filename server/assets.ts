@@ -6,21 +6,27 @@
 
 import type { Copilotz } from "@/index.ts";
 import { parseAssetRef } from "@/utils/assets.ts";
+import type { ParsedAssetRef } from "@/utils/assets.ts";
 
-export function createAssetHandlers(copilotz: Copilotz) {
+/** Handlers returned by {@link createAssetHandlers}. */
+export interface AssetHandlers {
+    getBase64: (refOrId: string) => Promise<{ base64: string; mime: string }>;
+    getDataUrl: (refOrId: string) => Promise<{ dataUrl: string; mime: string | undefined }>;
+    parseRef: (ref: string) => ParsedAssetRef | null;
+}
+
+export function createAssetHandlers(copilotz: Copilotz): AssetHandlers {
     const { assets } = copilotz;
 
     return {
-        /** Read an asset as base64. */
-        getBase64: async (refOrId: string) => {
+        getBase64: async (refOrId: string): Promise<{ base64: string; mime: string }> => {
             const ref = refOrId.startsWith("asset://") ? refOrId : `asset://${refOrId}`;
             const parsed = parseAssetRef(ref);
             const options = parsed?.namespace ? { namespace: parsed.namespace } : undefined;
             return assets.getBase64(ref, options);
         },
 
-        /** Read an asset as a data URL. */
-        getDataUrl: async (refOrId: string) => {
+        getDataUrl: async (refOrId: string): Promise<{ dataUrl: string; mime: string | undefined }> => {
             const ref = refOrId.startsWith("asset://") ? refOrId : `asset://${refOrId}`;
             const parsed = parseAssetRef(ref);
             const options = parsed?.namespace ? { namespace: parsed.namespace } : undefined;
@@ -31,7 +37,6 @@ export function createAssetHandlers(copilotz: Copilotz) {
             return { dataUrl, mime: mimeMatch ? mimeMatch[1] : undefined };
         },
 
-        /** Parse an asset reference string. */
-        parseRef: (ref: string) => parseAssetRef(ref),
+        parseRef: (ref: string): ParsedAssetRef | null => parseAssetRef(ref),
     };
 }

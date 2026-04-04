@@ -5,34 +5,41 @@
  */
 
 import type { Copilotz } from "@/index.ts";
+import type { Queue } from "@/database/schemas/index.ts";
+import type { QueueEventInput } from "@/database/operations/index.ts";
 
-export function createEventHandlers(copilotz: Copilotz) {
+/** Handlers returned by {@link createEventHandlers}. */
+export interface EventHandlers {
+    enqueue: (
+        threadId: string,
+        event: QueueEventInput,
+    ) => Promise<Record<string, unknown>>;
+    getProcessing: (
+        threadId: string,
+        minPriority?: number,
+    ) => Promise<Queue | undefined>;
+    getNextPending: (
+        threadId: string,
+        namespace?: string,
+        minPriority?: number,
+    ) => Promise<Queue | undefined>;
+    updateStatus: (
+        eventId: string,
+        status: "pending" | "processing" | "completed" | "failed" | "expired",
+    ) => Promise<void>;
+}
+
+export function createEventHandlers(copilotz: Copilotz): EventHandlers {
     const { ops } = copilotz;
 
     return {
-        /** Enqueue a new event for a thread. */
-        enqueue: (
-            threadId: string,
-            event: Parameters<typeof ops.addToQueue>[1],
-        ) => ops.addToQueue(threadId, event),
-
-        /** Get the currently processing event for a thread. */
-        getProcessing: (
-            threadId: string,
-            minPriority?: number,
-        ) => ops.getProcessingQueueItem(threadId, minPriority),
-
-        /** Get the next pending event for a thread. */
-        getNextPending: (
-            threadId: string,
-            namespace?: string,
-            minPriority?: number,
-        ) => ops.getNextPendingQueueItem(threadId, namespace, minPriority),
-
-        /** Update the status of a queue item. */
-        updateStatus: (
-            eventId: string,
-            status: "pending" | "processing" | "completed" | "failed" | "expired",
-        ) => ops.updateQueueItemStatus(eventId, status),
+        enqueue: (threadId, event) =>
+            ops.addToQueue(threadId, event),
+        getProcessing: (threadId, minPriority) =>
+            ops.getProcessingQueueItem(threadId, minPriority),
+        getNextPending: (threadId, namespace, minPriority) =>
+            ops.getNextPendingQueueItem(threadId, namespace, minPriority),
+        updateStatus: (eventId, status) =>
+            ops.updateQueueItemStatus(eventId, status),
     };
 }

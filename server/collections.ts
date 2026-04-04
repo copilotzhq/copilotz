@@ -7,27 +7,64 @@
 
 import type { Copilotz, CollectionsManager } from "@/index.ts";
 
-export function createCollectionHandlers(copilotz: Copilotz) {
+/** Handlers returned by {@link createCollectionHandlers}. */
+export interface CollectionHandlers {
+    listCollections: () => string[];
+    hasCollection: (name: string) => boolean;
+    resolve: (collectionName: string, namespace?: string) => unknown;
+    list: (
+        collectionName: string,
+        options?: {
+            namespace?: string;
+            filter?: Record<string, unknown>;
+            limit?: number;
+            offset?: number;
+            sort?: Array<{ field: string; direction: "asc" | "desc" }>;
+        },
+    ) => Promise<unknown[]>;
+    getById: (
+        collectionName: string,
+        id: string,
+        options?: { namespace?: string },
+    ) => Promise<unknown>;
+    create: (
+        collectionName: string,
+        data: Record<string, unknown>,
+        options?: { namespace?: string },
+    ) => Promise<unknown>;
+    update: (
+        collectionName: string,
+        id: string,
+        data: Record<string, unknown>,
+        options?: { namespace?: string },
+    ) => Promise<unknown>;
+    delete: (
+        collectionName: string,
+        id: string,
+        options?: { namespace?: string },
+    ) => Promise<unknown>;
+    search: (
+        collectionName: string,
+        query: string,
+        options?: { namespace?: string; limit?: number },
+    ) => Promise<unknown[]>;
+}
+
+export function createCollectionHandlers(copilotz: Copilotz): CollectionHandlers {
     const manager = copilotz.collections as CollectionsManager | undefined;
 
     return {
-        /** List all registered collection names. */
         listCollections: (): string[] => {
             if (!manager || typeof manager.getCollectionNames !== "function") return [];
             return manager.getCollectionNames();
         },
 
-        /** Check if a collection exists. */
         hasCollection: (name: string): boolean => {
             if (!manager || typeof manager.hasCollection !== "function") return false;
             return manager.hasCollection(name);
         },
 
-        /**
-         * Get a scoped CRUD interface for a collection.
-         * @returns The collection CRUD or undefined if not found.
-         */
-        resolve: (collectionName: string, namespace?: string) => {
+        resolve: (collectionName: string, namespace?: string): unknown => {
             if (!manager) return undefined;
             if (namespace) {
                 const scoped = manager.withNamespace(namespace);
@@ -36,7 +73,6 @@ export function createCollectionHandlers(copilotz: Copilotz) {
             return manager[collectionName] ?? undefined;
         },
 
-        /** Execute a list/find query on a collection. */
         list: async (
             collectionName: string,
             options: {
@@ -46,7 +82,7 @@ export function createCollectionHandlers(copilotz: Copilotz) {
                 offset?: number;
                 sort?: Array<{ field: string; direction: "asc" | "desc" }>;
             } = {},
-        ) => {
+        ): Promise<unknown[]> => {
             if (!manager) throw new Error("Collections not configured");
             const coll = options.namespace
                 ? manager.withNamespace(options.namespace)[collectionName]
@@ -62,12 +98,11 @@ export function createCollectionHandlers(copilotz: Copilotz) {
             });
         },
 
-        /** Get a single item by ID from a collection. */
         getById: async (
             collectionName: string,
             id: string,
             options: { namespace?: string } = {},
-        ) => {
+        ): Promise<unknown> => {
             if (!manager) throw new Error("Collections not configured");
             const coll = options.namespace
                 ? manager.withNamespace(options.namespace)[collectionName]
@@ -79,12 +114,11 @@ export function createCollectionHandlers(copilotz: Copilotz) {
             return crud.findOne({ id });
         },
 
-        /** Create a new item in a collection. */
         create: async (
             collectionName: string,
             data: Record<string, unknown>,
             options: { namespace?: string } = {},
-        ) => {
+        ): Promise<unknown> => {
             if (!manager) throw new Error("Collections not configured");
             const coll = options.namespace
                 ? manager.withNamespace(options.namespace)[collectionName]
@@ -96,13 +130,12 @@ export function createCollectionHandlers(copilotz: Copilotz) {
             return crud.create(data);
         },
 
-        /** Update an item in a collection by ID. */
         update: async (
             collectionName: string,
             id: string,
             data: Record<string, unknown>,
             options: { namespace?: string } = {},
-        ) => {
+        ): Promise<unknown> => {
             if (!manager) throw new Error("Collections not configured");
             const coll = options.namespace
                 ? manager.withNamespace(options.namespace)[collectionName]
@@ -114,12 +147,11 @@ export function createCollectionHandlers(copilotz: Copilotz) {
             return crud.update({ id }, data);
         },
 
-        /** Delete an item from a collection by ID. */
         delete: async (
             collectionName: string,
             id: string,
             options: { namespace?: string } = {},
-        ) => {
+        ): Promise<unknown> => {
             if (!manager) throw new Error("Collections not configured");
             const coll = options.namespace
                 ? manager.withNamespace(options.namespace)[collectionName]
@@ -131,12 +163,11 @@ export function createCollectionHandlers(copilotz: Copilotz) {
             return crud.delete({ id });
         },
 
-        /** Search a collection using text/semantic search. */
         search: async (
             collectionName: string,
             query: string,
             options: { namespace?: string; limit?: number } = {},
-        ) => {
+        ): Promise<unknown[]> => {
             if (!manager) throw new Error("Collections not configured");
             const coll = options.namespace
                 ? manager.withNamespace(options.namespace)[collectionName]

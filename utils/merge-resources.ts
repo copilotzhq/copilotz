@@ -7,10 +7,9 @@
  * @module
  */
 
-type ResourceItem = { id?: string; key?: string; name?: string };
-
-function getResourceId(item: ResourceItem): string | undefined {
-    return item.id ?? item.key ?? item.name ?? undefined;
+function getResourceId(item: Record<string, unknown>): string | undefined {
+    const id = item.id ?? item.key ?? item.name;
+    return typeof id === "string" ? id : undefined;
 }
 
 /**
@@ -20,7 +19,7 @@ function getResourceId(item: ResourceItem): string | undefined {
  * @param explicit - Explicitly provided resources (override on collision)
  * @returns Merged array with explicit items replacing file-loaded items when IDs match
  */
-export function mergeResourceArrays<T extends ResourceItem>(
+export function mergeResourceArrays<T>(
     fileLoaded: T[],
     explicit: T[] | undefined,
 ): T[] {
@@ -29,13 +28,13 @@ export function mergeResourceArrays<T extends ResourceItem>(
 
     const explicitIds = new Set<string>();
     for (const item of explicit) {
-        const id = getResourceId(item);
+        const id = getResourceId(item as Record<string, unknown>);
         if (id) explicitIds.add(id);
     }
 
     // Keep file-loaded items whose IDs don't collide with explicit ones
     const kept = fileLoaded.filter((item) => {
-        const id = getResourceId(item);
+        const id = getResourceId(item as Record<string, unknown>);
         return !id || !explicitIds.has(id);
     });
 

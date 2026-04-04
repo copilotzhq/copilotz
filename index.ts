@@ -834,10 +834,10 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
 
     if (config.resources?.path) {
         const loaded = await loadResources({ path: config.resources.path });
-        resolvedAgents = mergeResourceArrays(loaded.agents ?? [], config.agents);
-        resolvedTools = mergeResourceArrays(loaded.tools ?? [], config.tools);
-        resolvedApis = mergeResourceArrays(loaded.apis ?? [], config.apis);
-        resolvedMcpServers = mergeResourceArrays(loaded.mcpServers ?? [], config.mcpServers);
+        resolvedAgents = mergeResourceArrays<AgentConfig>(loaded.agents ?? [], config.agents);
+        resolvedTools = mergeResourceArrays<ToolConfig>(loaded.tools as ToolConfig[] ?? [], config.tools);
+        resolvedApis = mergeResourceArrays<APIConfig>(loaded.apis as APIConfig[] ?? [], config.apis);
+        resolvedMcpServers = mergeResourceArrays<MCPServerConfig>(loaded.mcpServers as MCPServerConfig[] ?? [], config.mcpServers);
         // Processors: append explicit after loaded (no ID-based dedup for processors)
         resolvedProcessors = [
             ...(loaded.processors ?? []),

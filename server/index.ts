@@ -37,5 +37,8 @@ export type { AssetHandlers } from "./assets.ts";
 export { createCollectionHandlers } from "./collections.ts";
 export type { CollectionHandlers } from "./collections.ts";
 
+export { createGraphHandlers } from "./graph.ts";
+export type { GraphHandlers, GraphSearchOptions } from "./graph.ts";
+
 export { createRestHandlers, parseQueryParams, parseSort } from "./rest.ts";
 export type { RestHandlers, RestListOptions } from "./rest.ts";

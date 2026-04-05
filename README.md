@@ -44,6 +44,7 @@ Copilotz is the full-stack framework for AI applications. Everything you need to
 |---------------|------------------------|
 | Memory | Knowledge graph that remembers users, conversations, and entities |
 | RAG | Document ingestion, chunking, embeddings, and semantic search |
+| Skills | SKILL.md-based instructions with progressive disclosure and a bundled admin agent |
 | Tools | 24 native tools + OpenAPI integration + MCP support |
 | Assets | Automatic extraction, storage, and LLM resolution of images and files |
 | Background Jobs | Event queue with persistent workers and custom processors |
@@ -237,6 +238,9 @@ const copilotz = await createCopilotz({
 
 ## What's Included
 
+### Skills & Admin Agent
+SKILL.md files teach agents how to perform framework tasks. Progressive disclosure keeps prompts lean — only names and descriptions are loaded upfront; full instructions are fetched on-demand. A bundled admin agent uses skills to help you build agents, tools, and APIs interactively.
+
 ### Agents
 Multi-agent orchestration with persistent targets, @mentions, loop prevention, and inter-agent communication. Agents can remember learnings across conversations with persistent memory.
 
@@ -272,6 +276,7 @@ Automatic extraction and storage of images, files, and media from tool outputs. 
 - [RAG](./docs/rag.md) — Document ingestion and semantic search
 
 **Advanced**
+- [Skills](./docs/skills.md) — SKILL.md format, discovery, and admin agent
 - [Configuration](./docs/configuration.md) — Full configuration reference
 - [Assets](./docs/assets.md) — File and media storage
 - [Loaders](./docs/loaders.md) — Load resources from filesystem

@@ -28,6 +28,12 @@ const copilotz = await createCopilotz({
   apis: [...],
   mcpServers: [...],
   
+  // Skills
+  skills: [...],
+  
+  // Admin agent
+  admin: true,
+  
   // Processing
   processors: [...],
   callbacks: { ... },
@@ -182,6 +188,46 @@ const copilotz = await createCopilotz({
 - **Lower (1-2 min)**: Fast recovery, but may reset legitimately slow operations
 - **Higher (10-15 min)**: For operations that genuinely take a long time
 - **Default (5 min)**: Good balance for most use cases
+
+## Skills
+
+Load remote or inline skills in addition to skills discovered from `resources/skills/`, `~/.copilotz/skills/`, and bundled skills.
+
+```typescript
+skills: [
+  // Remote skill from URL
+  "https://example.com/skills/my-skill/SKILL.md",
+  
+  // Remote skill with explicit URL
+  { url: "https://example.com/skills/other/SKILL.md" },
+  
+  // Inline skill
+  {
+    name: "custom-workflow",
+    description: "Guide through the custom workflow.",
+    content: "# Custom Workflow\n\nStep-by-step instructions...",
+  },
+]
+```
+
+Skills are merged with precedence: project > explicit > user > bundled. See [Skills](./skills.md) for the full SKILL.md format, discovery system, and native tools.
+
+## Admin Agent
+
+Enable the bundled admin agent — a framework development assistant with access to all skills and file tools:
+
+```typescript
+// Simple — uses default name "admin"
+admin: true
+
+// Custom name and LLM
+admin: {
+  name: "dev-assistant",
+  llmOptions: { provider: "anthropic", model: "claude-sonnet-4-5-20241022" },
+}
+```
+
+The admin agent is added alongside your existing agents. If you define an agent with the same ID, your definition takes precedence.
 
 ## Custom Tools
 
@@ -656,5 +702,6 @@ await copilotz.shutdown();
 ## Next Steps
 
 - [Getting Started](./getting-started.md) — Quick start guide
+- [Skills](./skills.md) — SKILL.md format, discovery, and admin agent
 - [Agents](./agents.md) — Agent configuration details
 - [API Reference](./api-reference.md) — Full API documentation

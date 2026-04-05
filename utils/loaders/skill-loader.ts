@@ -26,15 +26,15 @@ export async function loadSkillsFromDirectory(
 ): Promise<Skill[]> {
     const skills: Skill[] = [];
 
-    let entries: AsyncIterable<Deno.DirEntry>;
+    // Check directory exists before iterating (readDir is lazy and throws during iteration)
     try {
-        entries = Deno.readDir(dirPath);
+        const stat = await Deno.stat(dirPath);
+        if (!stat.isDirectory) return skills;
     } catch {
-        // Directory doesn't exist — that's fine
         return skills;
     }
 
-    for await (const entry of entries) {
+    for await (const entry of Deno.readDir(dirPath)) {
         if (!entry.isDirectory) continue;
 
         const skillDir = dirPath.endsWith("/") ? dirPath + entry.name : dirPath + "/" + entry.name;

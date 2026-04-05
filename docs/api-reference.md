@@ -21,6 +21,9 @@ import {
   listPublicAgents,
   mergeResourceArrays,
   
+  // Skills
+  filterSkillsForAgent,
+  
   // Database utilities
   createDatabase,
   
@@ -42,7 +45,7 @@ import {
 } from "@copilotz/copilotz";
 
 // Types
-import type { Copilotz, Resources } from "@copilotz/copilotz";
+import type { Copilotz, Resources, Skill, SkillIndexEntry } from "@copilotz/copilotz";
 ```
 
 ---
@@ -600,8 +603,70 @@ type Resources = {
   apis: API[];
   processors: EventProcessor[];
   mcpServers: MCPServerConfig[];
+  skills: Skill[];
 }
 ```
+
+---
+
+## Skills
+
+### filterSkillsForAgent()
+
+Filter skills based on an agent's `allowedSkills` setting.
+
+```typescript
+const agentSkills = filterSkillsForAgent(
+  skills: Skill[],
+  agent?: Agent | null
+): Skill[]
+```
+
+| `allowedSkills` value | Result |
+|-----------------------|--------|
+| `undefined` (default) | Returns all skills |
+| `string[]` | Returns only named skills |
+| `null` | Returns empty array |
+
+### Skill type
+
+```typescript
+interface Skill {
+  name: string;           // Unique name (from directory or frontmatter)
+  description: string;    // Short description from frontmatter
+  content: string;        // Full markdown body
+  allowedTools?: string[];
+  tags?: string[];
+  source: "project" | "user" | "bundled" | "remote";
+  sourcePath: string;     // Absolute path or URL
+  hasReferences: boolean; // Whether references/ subdir exists
+  metadata?: Record<string, unknown>;
+}
+```
+
+### SkillIndexEntry type
+
+Compact entry injected into the system prompt (~15-30 tokens per entry):
+
+```typescript
+interface SkillIndexEntry {
+  name: string;
+  description: string;
+  tags?: string[];
+}
+```
+
+### Skill Native Tools
+
+Three built-in tools for the progressive disclosure workflow:
+
+| Tool | Parameters | Description |
+|------|-----------|-------------|
+| `list_skills` | _(none)_ | Lists available skills filtered by agent's `allowedSkills` |
+| `load_skill` | `{ name: string }` | Returns full SKILL.md content for a named skill |
+| `read_skill_resource` | `{ skill: string, path: string }` | Reads a file from a skill's `references/` directory |
+
+See [Skills](./skills.md) for full documentation.
 
 ---
 
@@ -642,6 +707,7 @@ interface Agent {
   llmOptions: LlmOptions | AgentLlmOptionsResolver;
   allowedTools?: string[];
   allowedAgents?: string[];
+  allowedSkills?: string[] | null;
   ragOptions?: AgentRagOptions;
   assetOptions?: {
     produce?: {
@@ -811,6 +877,7 @@ See [Server Helpers](./server.md) for usage examples and framework wiring.
 ## Next Steps
 
 - [Configuration](./configuration.md) — Full configuration options
+- [Skills](./skills.md) — SKILL.md format, discovery, and admin agent
 - [Database](./database.md) — Database operations details
 - [Collections](./collections.md) — Collection CRUD reference
 - [Server Helpers](./server.md) — Framework-independent handler factories

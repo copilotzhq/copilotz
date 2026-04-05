@@ -900,7 +900,7 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
     }
 
     // ---- Phase 1b: Resolve skills (bundled + user + project + explicit) ----
-    const bundledSkillsPath = new URL("./skills/", import.meta.url).pathname;
+    const bundledSkillsPath = decodeURIComponent(new URL("./skills/", import.meta.url).pathname);
     const bundledSkills = await loadSkillsFromDirectory(bundledSkillsPath, "bundled");
 
     const homeDir = Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE") ?? "";
@@ -941,7 +941,7 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
     // ---- Phase 1c: Resolve admin agent ----
     if (config.admin) {
         try {
-            const adminDir = new URL("./agents/admin/", import.meta.url).pathname;
+            const adminDir = decodeURIComponent(new URL("./agents/admin/", import.meta.url).pathname);
             const adminInstructions = await Deno.readTextFile(adminDir + "instructions.md");
             const adminConfigModule = await import(adminDir + "config.ts");
             const adminConfigBase = adminConfigModule.default ?? {};

@@ -31,8 +31,8 @@ const copilotz = await createCopilotz({
   // Skills
   skills: [...],
   
-  // Admin agent
-  admin: true,
+  // Copilotz development agent
+  copilotzAgent: { llmOptions: { ... } },
   
   // Processing
   processors: [...],
@@ -212,22 +212,23 @@ skills: [
 
 Skills are merged with precedence: project > explicit > user > bundled. See [Skills](./skills.md) for the full SKILL.md format, discovery system, and native tools.
 
-## Admin Agent
+## Copilotz Agent
 
-Enable the bundled admin agent — a framework development assistant with access to all skills and file tools:
+Enable the bundled Copilotz development agent — a framework assistant with access to all skills and file tools:
 
 ```typescript
-// Simple — uses default name "admin"
-admin: true
+copilotzAgent: {
+  llmOptions: { provider: "openai", model: "gpt-4o" },
+}
 
-// Custom name and LLM
-admin: {
+// Or with a custom name
+copilotzAgent: {
   name: "dev-assistant",
   llmOptions: { provider: "anthropic", model: "claude-sonnet-4-5-20241022" },
 }
 ```
 
-The admin agent is added alongside your existing agents. If you define an agent with the same ID, your definition takes precedence.
+The Copilotz agent is added alongside your existing agents. If you define an agent with the same ID (`"copilotz"` by default), your definition takes precedence.
 
 ## Custom Tools
 

@@ -624,24 +624,21 @@ export interface CopilotzConfig {
      */
     skills?: Array<string | { url?: string; name?: string; description?: string; content?: string }>;
     /**
-     * Enable the bundled admin/developer agent.
-     * The admin agent can create and configure other agents, tools, and resources
+     * Enable the bundled Copilotz development agent.
+     * This agent can create and configure other agents, tools, APIs, and resources
      * using the built-in framework skills.
-     *
-     * - `false` (default): admin agent is not included
-     * Enable the bundled admin agent with the given LLM configuration.
      *
      * @example
      * ```ts
-     * admin: { llmOptions: { provider: "openai", model: "gpt-4o" } }
+     * copilotzAgent: { llmOptions: { provider: "openai", model: "gpt-4o" } }
      * // or with custom name
-     * admin: { name: "dev", llmOptions: { provider: "openai", model: "gpt-4o" } }
+     * copilotzAgent: { name: "dev", llmOptions: { provider: "openai", model: "gpt-4o" } }
      * ```
      */
-    admin?: {
-        /** Override the admin agent's name. Default: "admin" */
+    copilotzAgent?: {
+        /** Override the agent's name/id. Default: "copilotz" */
         name?: string;
-        /** LLM options for the admin agent. */
+        /** LLM options for the Copilotz agent. */
         llmOptions: import("@/connectors/llm/types.ts").ProviderConfig;
     };
 }
@@ -938,27 +935,27 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
     // Merge: project > explicit > user > bundled (first wins on name collision)
     const allSkills = mergeSkills(projectSkills, explicitSkills, userSkills, bundledSkills);
 
-    // ---- Phase 1c: Resolve admin agent ----
-    if (config.admin) {
+    // ---- Phase 1c: Resolve copilotz agent ----
+    if (config.copilotzAgent) {
         try {
-            const { instructions, config: adminConfigBase } = await loadAdminAgent();
-            const adminAgent = {
-                id: config.admin.name ?? "admin",
-                name: config.admin.name ?? "admin",
+            const { instructions, config: agentConfigBase } = await loadAdminAgent();
+            const copilotzAgent = {
+                id: config.copilotzAgent.name ?? "copilotz",
+                name: config.copilotzAgent.name ?? "copilotz",
                 role: "assistant",
                 instructions,
-                ...adminConfigBase,
-                llmOptions: config.admin.llmOptions,
+                ...agentConfigBase,
+                llmOptions: config.copilotzAgent.llmOptions,
             } as AgentConfig;
             // Only add if not already overridden by user
             const alreadyDefined = resolvedAgents.some(
-                (a) => (a.id ?? a.name) === adminAgent.id,
+                (a) => (a.id ?? a.name) === copilotzAgent.id,
             );
             if (!alreadyDefined) {
-                resolvedAgents.push(adminAgent);
+                resolvedAgents.push(copilotzAgent);
             }
         } catch (err) {
-            console.warn("[copilotz] Failed to load bundled admin agent:", err);
+            console.warn("[copilotz] Failed to load bundled copilotz agent:", err);
         }
     }
 

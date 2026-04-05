@@ -178,13 +178,15 @@ Reads a file from a skill's `references/` directory. Only works for local skills
 
 ---
 
-## Admin Agent
+## Copilotz Agent
 
-Copilotz ships with a bundled admin agent — a framework development assistant that uses skills to help you build agents, tools, APIs, and other resources. Enable it with `admin: true`:
+Copilotz ships with a bundled development agent — a framework assistant that uses skills to help you build agents, tools, APIs, and other resources. Enable it with `copilotzAgent`:
 
 ```typescript
 const copilotz = await createCopilotz({
-  admin: true,
+  copilotzAgent: {
+    llmOptions: { provider: "openai", model: "gpt-4o" },
+  },
   agents: [{
     id: "assistant",
     name: "Assistant",
@@ -196,20 +198,20 @@ const copilotz = await createCopilotz({
 });
 ```
 
-The admin agent is added alongside your existing agents. It has access to all skills and file tools (`list_skills`, `load_skill`, `read_skill_resource`, `read_file`, `write_file`, `list_directory`, `search_files`).
+The Copilotz agent is added alongside your existing agents. It has access to all skills and file tools (`list_skills`, `load_skill`, `read_skill_resource`, `read_file`, `write_file`, `list_directory`, `search_files`).
 
-### Custom Admin Config
+### Custom Name
 
-Override the admin agent's name or LLM options:
+Override the agent's name (default: `"copilotz"`):
 
 ```typescript
-admin: {
+copilotzAgent: {
   name: "dev-assistant",
   llmOptions: { provider: "anthropic", model: "claude-sonnet-4-5-20241022" },
 }
 ```
 
-If you define an agent with the same ID as the admin agent, your definition takes precedence.
+If you define an agent with the same ID, your definition takes precedence.
 
 ---
 
@@ -280,6 +282,6 @@ export default {
 
 ## Next Steps
 
-- [Configuration](./configuration.md) — Full `skills` and `admin` config options
+- [Configuration](./configuration.md) — Full `skills` and `copilotzAgent` config options
 - [Loaders](./loaders.md) — Resource directory structure
 - [Tools](./tools.md) — Native tools reference

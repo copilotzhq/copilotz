@@ -629,21 +629,20 @@ export interface CopilotzConfig {
      * using the built-in framework skills.
      *
      * - `false` (default): admin agent is not included
-     * - `true`: admin agent is included with default settings
-     * - `object`: admin agent is included with custom settings
+     * Enable the bundled admin agent with the given LLM configuration.
      *
      * @example
      * ```ts
-     * admin: true
-     * // or
+     * admin: { llmOptions: { provider: "openai", model: "gpt-4o" } }
+     * // or with custom name
      * admin: { name: "dev", llmOptions: { provider: "openai", model: "gpt-4o" } }
      * ```
      */
-    admin?: boolean | {
+    admin?: {
         /** Override the admin agent's name. Default: "admin" */
         name?: string;
-        /** LLM options for the admin agent (required if no other agent provides defaults). */
-        llmOptions?: import("@/connectors/llm/types.ts").ProviderConfig;
+        /** LLM options for the admin agent. */
+        llmOptions: import("@/connectors/llm/types.ts").ProviderConfig;
     };
 }
 
@@ -943,14 +942,13 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
     if (config.admin) {
         try {
             const { instructions, config: adminConfigBase } = await loadAdminAgent();
-            const adminOverrides = typeof config.admin === "object" ? config.admin : {};
             const adminAgent = {
-                id: adminOverrides.name ?? "admin",
-                name: adminOverrides.name ?? "admin",
+                id: config.admin.name ?? "admin",
+                name: config.admin.name ?? "admin",
                 role: "assistant",
                 instructions,
                 ...adminConfigBase,
-                ...(adminOverrides.llmOptions ? { llmOptions: adminOverrides.llmOptions } : {}),
+                llmOptions: config.admin.llmOptions,
             } as AgentConfig;
             // Only add if not already overridden by user
             const alreadyDefined = resolvedAgents.some(

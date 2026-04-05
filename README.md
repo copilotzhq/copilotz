@@ -85,6 +85,22 @@ copilotz.start({ banner: "🤖 Chat with your AI! Type 'quit' to exit.\n" });
 
 Run it: `OPENAI_API_KEY=your-key deno run --allow-net --allow-env chat.ts`
 
+### File-Based Resources
+
+Organize agents, tools, and APIs in a directory structure — no giant config objects:
+
+```typescript
+import { createCopilotz } from "@copilotz/copilotz";
+
+const copilotz = await createCopilotz({
+  resources: { path: "./resources" },  // Loads agents/, tools/, apis/ automatically
+  dbConfig: { url: Deno.env.get("DATABASE_URL") },
+  stream: true,
+});
+```
+
+See the [copilotz-starter](./clients/copilotz-starter/) template for a complete example.
+
 ### Programmatic Mode
 
 For applications, use `run()` for full control:
@@ -259,6 +275,7 @@ Automatic extraction and storage of images, files, and media from tool outputs. 
 - [Configuration](./docs/configuration.md) — Full configuration reference
 - [Assets](./docs/assets.md) — File and media storage
 - [Loaders](./docs/loaders.md) — Load resources from filesystem
+- [Server Helpers](./docs/server.md) — Framework-independent handler factories
 - [API Reference](./docs/api-reference.md) — Complete API documentation
 
 ---

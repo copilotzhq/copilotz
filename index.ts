@@ -20,6 +20,8 @@ import loadResources from "@/utils/loaders/resources.ts";
 import type { Resources } from "@/utils/loaders/resources.ts";
 import { mergeResourceArrays } from "@/utils/merge-resources.ts";
 import { listPublicAgents } from "@/utils/list-agents.ts";
+import type { Skill, SkillIndexEntry } from "@/utils/loaders/skill-types.ts";
+import { loadSkillsFromDirectory, loadSkillFromUrl, mergeSkills } from "@/utils/loaders/skill-loader.ts";
 
 import type {
     Agent,
@@ -329,6 +331,16 @@ export { listPublicAgents } from "@/utils/list-agents.ts";
 export { mergeResourceArrays } from "@/utils/merge-resources.ts";
 
 /**
+ * Skill type representing a loaded skill definition.
+ */
+export type { Skill, SkillIndexEntry } from "@/utils/loaders/skill-types.ts";
+
+/**
+ * Filter skills based on an agent's allowedSkills configuration.
+ */
+export { filterSkillsForAgent } from "@/utils/loaders/skill-loader.ts";
+
+/**
  * Union type representing all possible events in the Copilotz event system.
  * Used for type-safe event handling in callbacks and processors.
  */
@@ -355,6 +367,7 @@ type NormalizedCopilotzConfig = Omit<CopilotzConfig, "agents" | "tools" | "apis"
     tools?: Tool[];
     apis?: API[];
     mcpServers?: MCPServer[];
+    skills?: import("@/utils/loaders/skill-types.ts").Skill[];
     customProcessorsByType?: ChatContext["customProcessors"];
 };
 
@@ -595,6 +608,41 @@ export interface CopilotzConfig {
          */
         includeTargetContext?: boolean;
     };
+    /**
+     * Remote skill URLs or inline skill definitions.
+     * Merged with skills discovered from `resources.path` and default locations.
+     *
+     * @example
+     * ```ts
+     * skills: [
+     *   "https://skills.example.com/create-agent/SKILL.md",
+     *   { name: "my-skill", description: "...", content: "..." },
+     * ]
+     * ```
+     */
+    skills?: Array<string | { url?: string; name?: string; description?: string; content?: string }>;
+    /**
+     * Enable the bundled admin/developer agent.
+     * The admin agent can create and configure other agents, tools, and resources
+     * using the built-in framework skills.
+     *
+     * - `false` (default): admin agent is not included
+     * - `true`: admin agent is included with default settings
+     * - `object`: admin agent is included with custom settings
+     *
+     * @example
+     * ```ts
+     * admin: true
+     * // or
+     * admin: { name: "dev", llmOptions: { provider: "openai", model: "gpt-4o" } }
+     * ```
+     */
+    admin?: boolean | {
+        /** Override the admin agent's name. Default: "admin" */
+        name?: string;
+        /** LLM options for the admin agent (required if no other agent provides defaults). */
+        llmOptions?: import("@/connectors/llm/types.ts").ProviderConfig;
+    };
 }
 
 /**
@@ -831,9 +879,11 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
     let resolvedApis: APIConfig[] | undefined = config.apis;
     let resolvedMcpServers: MCPServerConfig[] | undefined = config.mcpServers;
     let resolvedProcessors = config.processors;
+    let loadedResources: Resources | undefined;
 
     if (config.resources?.path) {
         const loaded = await loadResources({ path: config.resources.path });
+        loadedResources = loaded;
         resolvedAgents = mergeResourceArrays<AgentConfig>(loaded.agents ?? [], config.agents);
         resolvedTools = mergeResourceArrays<ToolConfig>(loaded.tools as ToolConfig[] ?? [], config.tools);
         resolvedApis = mergeResourceArrays<APIConfig>(loaded.apis as APIConfig[] ?? [], config.apis);
@@ -846,6 +896,72 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
 
         if (config.resources.watch) {
             console.warn("[copilotz] resources.watch is reserved for future use and has no effect yet.");
+        }
+    }
+
+    // ---- Phase 1b: Resolve skills (bundled + user + project + explicit) ----
+    const bundledSkillsPath = new URL("./skills/", import.meta.url).pathname;
+    const bundledSkills = await loadSkillsFromDirectory(bundledSkillsPath, "bundled");
+
+    const homeDir = Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE") ?? "";
+    const userSkills = homeDir
+        ? await loadSkillsFromDirectory(homeDir + "/.copilotz/skills/", "user")
+        : [];
+
+    const projectSkills = loadedResources?.skills ?? [];
+
+    // Load remote/explicit skills from config
+    const explicitSkills: Skill[] = [];
+    if (config.skills) {
+        for (const s of config.skills) {
+            try {
+                if (typeof s === "string") {
+                    explicitSkills.push(await loadSkillFromUrl(s));
+                } else if (s.url) {
+                    explicitSkills.push(await loadSkillFromUrl(s.url));
+                } else if (s.name && s.content) {
+                    explicitSkills.push({
+                        name: s.name,
+                        description: s.description ?? "",
+                        content: s.content,
+                        source: "remote",
+                        sourcePath: "inline",
+                        hasReferences: false,
+                    });
+                }
+            } catch (err) {
+                console.warn(`[copilotz] Failed to load skill: ${typeof s === "string" ? s : s.url ?? s.name}`, err);
+            }
+        }
+    }
+
+    // Merge: project > explicit > user > bundled (first wins on name collision)
+    const allSkills = mergeSkills(projectSkills, explicitSkills, userSkills, bundledSkills);
+
+    // ---- Phase 1c: Resolve admin agent ----
+    if (config.admin) {
+        try {
+            const adminDir = new URL("./agents/admin/", import.meta.url).pathname;
+            const adminInstructions = await Deno.readTextFile(adminDir + "instructions.md");
+            const adminConfigModule = await import(adminDir + "config.ts");
+            const adminConfigBase = adminConfigModule.default ?? {};
+            const adminOverrides = typeof config.admin === "object" ? config.admin : {};
+            const adminAgent: AgentConfig = {
+                id: adminOverrides.name ?? "admin",
+                name: adminOverrides.name ?? "admin",
+                instructions: adminInstructions,
+                ...adminConfigBase,
+                ...(adminOverrides.llmOptions ? { llmOptions: adminOverrides.llmOptions } : {}),
+            };
+            // Only add if not already overridden by user
+            const alreadyDefined = resolvedAgents.some(
+                (a) => (a.id ?? a.name) === adminAgent.id,
+            );
+            if (!alreadyDefined) {
+                resolvedAgents.push(adminAgent);
+            }
+        } catch (err) {
+            console.warn("[copilotz] Failed to load bundled admin agent:", err);
         }
     }
 
@@ -868,6 +984,7 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
         tools: normalizedTools,
         apis: normalizedApis,
         mcpServers: normalizedMcpServers,
+        skills: allSkills,
     };
 
     // ---- Phase 3: Resolve database (with connection caching) ----
@@ -1013,6 +1130,7 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
             tools: resolvedTools,
             apis: baseConfig.apis,
             mcpServers: baseConfig.mcpServers,
+            skills: baseConfig.skills,
             callbacks: baseConfig.callbacks,
             historyTransform: baseConfig.historyTransform,
             dbConfig: baseConfig.dbConfig,

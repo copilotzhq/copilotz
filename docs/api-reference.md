@@ -17,6 +17,10 @@ import {
   // Resource loading
   loadResources,
   
+  // Resource utilities
+  listPublicAgents,
+  mergeResourceArrays,
+  
   // Database utilities
   createDatabase,
   
@@ -36,6 +40,9 @@ import {
   resolveNamespace,
   getNativeTools,
 } from "@copilotz/copilotz";
+
+// Types
+import type { Copilotz, Resources } from "@copilotz/copilotz";
 ```
 
 ---
@@ -561,6 +568,43 @@ See [Loaders](./loaders.md) for directory structure.
 
 ---
 
+### listPublicAgents()
+
+Extract a safe, deduplicated list of agents for public-facing endpoints.
+
+```typescript
+const agents = listPublicAgents(
+  copilotz.config.agents ?? []
+): Array<{ id: string; name: string; description: string | null }>
+```
+
+### mergeResourceArrays()
+
+Merge two resource arrays with ID-collision replacement. Explicit items win when they share the same `id`, `key`, or `name` as a file-loaded item.
+
+```typescript
+const merged = mergeResourceArrays<T>(
+  fileLoaded: T[],
+  explicit: T[] | undefined
+): T[]
+```
+
+### Resources type
+
+The return type of `loadResources()`:
+
+```typescript
+type Resources = {
+  agents: Agent[];
+  tools: Tool[];
+  apis: API[];
+  processors: EventProcessor[];
+  mcpServers: MCPServerConfig[];
+}
+```
+
+---
+
 ## Utility Functions
 
 ### getNativeTools()
@@ -653,8 +697,120 @@ interface Edge {
 
 ---
 
+## Server Helpers (`copilotz/server`)
+
+Framework-independent handler factories that wrap Copilotz operations into domain-specific helpers. Import from the `copilotz/server` entrypoint.
+
+```typescript
+import {
+  createThreadHandlers,
+  createMessageHandlers,
+  createEventHandlers,
+  createAssetHandlers,
+  createCollectionHandlers,
+  createRestHandlers,
+  parseQueryParams,
+  parseSort,
+} from "copilotz/server";
+
+import type {
+  ThreadHandlers,
+  MessageHandlers,
+  EventHandlers,
+  AssetHandlers,
+  CollectionHandlers,
+  RestHandlers,
+  RestListOptions,
+} from "copilotz/server";
+```
+
+### createThreadHandlers(copilotz)
+
+Returns `ThreadHandlers`:
+
+| Method | Signature |
+|--------|-----------|
+| `list` | `(participantId, options?) → Promise<Thread[]>` |
+| `getById` | `(id) → Promise<Thread \| undefined>` |
+| `getByExternalId` | `(externalId) → Promise<Thread \| undefined>` |
+| `findOrCreate` | `(threadId, threadData) → Promise<Thread>` |
+| `archive` | `(id, summary) → Promise<Thread \| null>` |
+
+### createMessageHandlers(copilotz)
+
+Returns `MessageHandlers`:
+
+| Method | Signature |
+|--------|-----------|
+| `listForThread` | `(threadId, options?) → Promise<Message[]>` |
+| `getHistory` | `(threadId, userId, limit?) → Promise<Message[]>` |
+| `listFromGraph` | `(threadId, limit?) → Promise<Message[]>` |
+
+### createEventHandlers(copilotz)
+
+Returns `EventHandlers`:
+
+| Method | Signature |
+|--------|-----------|
+| `enqueue` | `(threadId, event) → Promise<Record<string, unknown>>` |
+| `getProcessing` | `(threadId, minPriority?) → Promise<Queue \| undefined>` |
+| `getNextPending` | `(threadId, namespace?, minPriority?) → Promise<Queue \| undefined>` |
+| `updateStatus` | `(eventId, status) → Promise<void>` |
+
+### createAssetHandlers(copilotz)
+
+Returns `AssetHandlers`:
+
+| Method | Signature |
+|--------|-----------|
+| `getBase64` | `(refOrId) → Promise<{ base64, mime }>` |
+| `getDataUrl` | `(refOrId) → Promise<{ dataUrl, mime }>` |
+| `parseRef` | `(ref) → ParsedAssetRef \| null` |
+
+### createCollectionHandlers(copilotz)
+
+Returns `CollectionHandlers`:
+
+| Method | Signature |
+|--------|-----------|
+| `listCollections` | `() → string[]` |
+| `hasCollection` | `(name) → boolean` |
+| `resolve` | `(collectionName, namespace?) → unknown` |
+| `list` | `(collectionName, options?) → Promise<unknown[]>` |
+| `getById` | `(collectionName, id, options?) → Promise<unknown>` |
+| `create` | `(collectionName, data, options?) → Promise<unknown>` |
+| `update` | `(collectionName, id, data, options?) → Promise<unknown>` |
+| `delete` | `(collectionName, id, options?) → Promise<unknown>` |
+| `search` | `(collectionName, query, options?) → Promise<unknown[]>` |
+
+### createRestHandlers(copilotz)
+
+Returns `RestHandlers` — generic CRUD over `copilotz.ops.crud` tables:
+
+| Method | Signature |
+|--------|-----------|
+| `list` | `(resource, options?) → Promise<unknown[]>` |
+| `getById` | `(resource, id) → Promise<unknown>` |
+| `create` | `(resource, body) → Promise<unknown>` |
+| `update` | `(resource, id, data) → Promise<unknown>` |
+| `delete` | `(resource, id) → Promise<unknown>` |
+| `parseQueryParams` | `(searchParams) → RestListOptions` |
+
+### parseQueryParams(searchParams)
+
+Standalone utility to parse URL `SearchParams` into `RestListOptions` (limit, offset, sort, fields, filters).
+
+### parseSort(sortParam)
+
+Parse a sort string like `"name:asc,-createdAt"` into `Array<{ field, direction }>`.
+
+See [Server Helpers](./server.md) for usage examples and framework wiring.
+
+---
+
 ## Next Steps
 
 - [Configuration](./configuration.md) — Full configuration options
 - [Database](./database.md) — Database operations details
 - [Collections](./collections.md) — Collection CRUD reference
+- [Server Helpers](./server.md) — Framework-independent handler factories

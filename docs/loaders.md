@@ -2,6 +2,22 @@
 
 Resource loaders let you organize agents, tools, APIs, and processors in a filesystem structure. This is useful for larger projects where configuration-as-code becomes unwieldy.
 
+## Recommended: Built-in Resource Loading
+
+The simplest way to use file-based resources is via the `resources.path` option in `createCopilotz`. This loads and merges everything automatically:
+
+```typescript
+import { createCopilotz } from "@copilotz/copilotz";
+
+const copilotz = await createCopilotz({
+  resources: { path: "./resources" },
+  dbConfig: { url: Deno.env.get("DATABASE_URL") },
+  stream: true,
+});
+```
+
+When `resources.path` is set, `createCopilotz` internally calls `loadResources` and merges the results with any explicit config arrays. See [Configuration — Resources](./configuration.md#resources) for merge semantics.
+
 ## Why Loaders?
 
 As your AI application grows, managing everything in a single config object gets messy:
@@ -44,7 +60,9 @@ resources/
         └── processor.ts
 ```
 
-## Usage
+## Low-Level Usage with `loadResources()`
+
+If you need more control over the loaded resources before passing them to `createCopilotz`, use `loadResources()` directly:
 
 ```typescript
 import { loadResources, createCopilotz } from "@copilotz/copilotz";
@@ -52,7 +70,9 @@ import { loadResources, createCopilotz } from "@copilotz/copilotz";
 // Load resources from directory
 const resources = await loadResources({ path: "./resources" });
 
-// Create Copilotz with loaded resources
+// Inspect or transform before passing to createCopilotz
+console.log(`Loaded ${resources.agents.length} agents`);
+
 const copilotz = await createCopilotz({
   agents: resources.agents,
   tools: resources.tools,
@@ -61,6 +81,8 @@ const copilotz = await createCopilotz({
   dbConfig: { url: ":memory:" },
 });
 ```
+
+> **Tip**: For most projects, `resources.path` in `createCopilotz` is simpler and handles the merge automatically. Use `loadResources()` when you need to inspect, filter, or transform resources before initialization.
 
 ## Agent Files
 
@@ -321,29 +343,35 @@ const resources = await loadResources({
 
 ## Combining with Inline Config
 
-You can combine loaded resources with inline configuration:
+The recommended way to combine file-loaded and inline resources is via `resources.path`:
 
 ```typescript
+const copilotz = await createCopilotz({
+  resources: { path: "./resources" },
+
+  // Explicit items are merged with file-loaded ones:
+  // - Appended by default
+  // - Override on ID collision (matched by id, key, or name)
+  tools: [myInlineTool],
+  agents: [{ id: "assistant", instructions: "Override file-loaded assistant" }],
+
+  dbConfig: { url: ":memory:" },
+});
+```
+
+If you need manual control, use `loadResources()` with `mergeResourceArrays`:
+
+```typescript
+import { loadResources, createCopilotz, mergeResourceArrays } from "@copilotz/copilotz";
+
 const resources = await loadResources({ path: "./resources" });
 
 const copilotz = await createCopilotz({
-  // Loaded resources
   agents: resources.agents,
-  tools: resources.tools,
+  tools: mergeResourceArrays(resources.tools, [myInlineTool]),
   apis: resources.apis,
   processors: resources.processors,
-  
-  // Additional inline config
-  tools: [
-    ...resources.tools,
-    {
-      id: "inline-tool",
-      // ...
-    },
-  ],
-  
   dbConfig: { url: ":memory:" },
-  rag: { ... },
 });
 ```
 

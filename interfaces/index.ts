@@ -436,6 +436,13 @@ export type Agent = Omit<DbAgent, "llmOptions"> & {
   ragOptions?: AgentRagOptions;
   /** Optional per-agent asset behavior. */
   assetOptions?: AgentAssetOptions;
+  /**
+   * Controls which skills this agent can access.
+   * - `undefined` (default): all skills available
+   * - `null`: no skills available
+   * - `string[]`: only the named skills are available
+   */
+  allowedSkills?: string[] | null;
 };
 
 /**
@@ -472,6 +479,8 @@ export interface ChatContext {
   apis?: API[];
   /** MCP server configurations. */
   mcpServers?: MCPServer[];
+  /** Available skills loaded from project/user/bundled/remote sources. */
+  skills?: import("@/utils/loaders/skill-types.ts").Skill[];
   /** User context. */
   users?: User[];
   /** Whether streaming is enabled. */

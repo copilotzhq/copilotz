@@ -52,6 +52,7 @@ import {
 } from "./generators/index.ts";
 
 import { processAssetsForNewMessage } from "./generators/asset-generator.ts";
+import { filterSkillsForAgent } from "@/utils/loaders/skill-loader.ts";
 
 // ============================================================================
 // Tool Result Batch Aggregation
@@ -1397,6 +1398,12 @@ export const messageProcessor: EventProcessor<
         agentId,
       );
 
+      // Filter skills for this agent and build compact index for system prompt
+      const agentSkills = filterSkillsForAgent(context.skills ?? [], agent);
+      const agentSkillIndex = agentSkills.length > 0
+        ? agentSkills.map((s) => ({ name: s.name, description: s.description, tags: s.tags }))
+        : undefined;
+
       // Build LLM request (pass agent node for persistent memory injection)
       const llmContext: LLMContextData = contextGenerator(
         agent,
@@ -1405,7 +1412,8 @@ export const messageProcessor: EventProcessor<
         ctx.availableAgents,
         availableAgents,
         ctx.userMetadata,
-        ctx.agentNode, // NEW: Agent's participant node for memory
+        ctx.agentNode,
+        agentSkillIndex,
       );
 
       // Generate history with target context for multi-agent awareness

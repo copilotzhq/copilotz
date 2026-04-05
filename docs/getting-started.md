@@ -291,6 +291,38 @@ Or use PGLite with file persistence:
 dbConfig: { url: "file:./data/copilotz.db" }
 ```
 
+## File-Based Resources
+
+For larger projects, organize agents, tools, and APIs in a directory instead of inline config:
+
+```
+resources/
+├── agents/
+│   └── assistant/
+│       ├── instructions.md    # System prompt
+│       └── config.ts          # LLM options, allowed tools, etc.
+├── tools/
+│   └── my-tool/
+│       ├── config.ts          # Tool definition
+│       └── execute.ts         # Implementation
+└── apis/
+    └── github/
+        ├── openApiSchema.json
+        └── config.ts
+```
+
+Then point `createCopilotz` at the directory:
+
+```typescript
+const copilotz = await createCopilotz({
+  resources: { path: "./resources" },
+  dbConfig: { url: Deno.env.get("DATABASE_URL") },
+  stream: true,
+});
+```
+
+No manual `loadResources()`, no spreading — everything is loaded and merged automatically. See [Resource Loaders](./loaders.md) for the full directory structure.
+
 ## Environment Variables
 
 Set your LLM API key via environment variable:
@@ -316,4 +348,5 @@ You now have a working AI agent with memory and streaming. Explore further:
 - [Agents](./agents.md) — Multi-agent systems and configuration
 - [Tools](./tools.md) — All 23 native tools and custom tools
 - [RAG](./rag.md) — Document ingestion and semantic search
+- [Server Helpers](./server.md) — Framework-independent API handlers
 - [Configuration](./configuration.md) — Full configuration reference

@@ -13,10 +13,12 @@ import type {
     MCPServer,
 } from "@/index.ts";
 import type { EventProcessor, Event, NewEvent, NewUnknownEvent, ProcessorDeps } from "@/interfaces/index.ts";
+import type { Skill } from "@/utils/loaders/skill-types.ts";
+import { loadSkillsFromDirectory } from "@/utils/loaders/skill-loader.ts";
 
 /**
  * Resources loaded from the file system.
- * Contains all agents, APIs, tools, MCP servers, and custom processors.
+ * Contains all agents, APIs, tools, MCP servers, skills, and custom processors.
  */
 export type Resources = {
     /** Array of loaded agent configurations. */
@@ -27,6 +29,8 @@ export type Resources = {
     tools?: ToolConfig[];
     /** Array of loaded MCP server configurations. */
     mcpServers?: MCPServer[];
+    /** Array of loaded skill definitions. */
+    skills?: Skill[];
     /** Array of loaded custom event processors. */
     processors?: Array<(EventProcessor<unknown, ProcessorDeps> & { eventType: string; priority?: number; id?: string })>;
 };
@@ -289,10 +293,15 @@ const loadResources = async ({ path }: { path: string } = { path: "resources" })
         console.warn(`Failed to load processors from: ${processorsPath}`, message);
     }
 
+    // Load skills from resources/skills/
+    const skillsPath = Deno.cwd() + '/' + path + '/skills/';
+    const skills = await loadSkillsFromDirectory(skillsPath, "project");
+
     return {
         agents: agentConfigs,
         apis: apiConfigs,
         tools: toolConfigs,
+        skills,
         processors,
     };
 };

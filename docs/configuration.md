@@ -10,8 +10,14 @@ The main configuration object passed to `createCopilotz`:
 import { createCopilotz } from "@copilotz/copilotz";
 
 const copilotz = await createCopilotz({
-  // Required
+  // Agents (required unless resources.path is set)
   agents: [...],
+  
+  // File-based resources (loads agents, tools, APIs, processors from directory)
+  resources: {
+    path: "./resources",
+    watch: false,            // Reserved for future use
+  },
   
   // Database
   dbConfig: { ... },
@@ -45,6 +51,46 @@ const copilotz = await createCopilotz({
   activeTaskId: "task-id",
 });
 ```
+
+## Resources
+
+Load agents, tools, APIs, and processors from a directory structure instead of (or in addition to) defining them inline. When `resources.path` is set, `createCopilotz` automatically calls `loadResources` internally and merges the results with any explicit config.
+
+```typescript
+// File-based only — agents loaded from resources/agents/
+const copilotz = await createCopilotz({
+  resources: { path: "./resources" },
+  dbConfig: { url: Deno.env.get("DATABASE_URL") },
+  stream: true,
+});
+
+// Mixed — file-loaded resources + explicit overrides
+const copilotz = await createCopilotz({
+  resources: { path: "./resources" },
+  tools: [myExtraTool],           // Appended to file-loaded tools
+  agents: [{ id: "assistant" }],  // Replaces file-loaded "assistant" (ID collision)
+  dbConfig: { url: Deno.env.get("DATABASE_URL") },
+});
+```
+
+### Merge Behavior
+
+When both `resources.path` and explicit arrays are provided:
+
+- **Append**: Explicit items are added after file-loaded ones
+- **Override on ID collision**: If an explicit item has the same `id` (or `key`/`name`) as a file-loaded one, the explicit item wins
+- **Processors**: Always appended (no ID-based dedup)
+
+### Options
+
+```typescript
+resources: {
+  path: "./resources",   // Path to resources directory (relative to cwd or absolute)
+  watch: false,          // Reserved for future live-reload support
+}
+```
+
+See [Resource Loaders](./loaders.md) for the expected directory structure.
 
 ## Agents
 

@@ -1,5 +1,6 @@
 import type { Agent, Thread } from "@/interfaces/index.ts";
 import type { KnowledgeNode } from "@/database/schemas/index.ts";
+import type { SkillIndexEntry } from "@/utils/loaders/skill-types.ts";
 
 export interface LLMContextData {
     threadContext: string;
@@ -56,7 +57,8 @@ export function contextGenerator(
     availableAgents: Agent[],
     allSystemAgents: Agent[],
     userMetadata?: Record<string, unknown>,
-    agentNode?: KnowledgeNode  // NEW: Agent's participant node for persistent memory
+    agentNode?: KnowledgeNode,  // Agent's participant node for persistent memory
+    availableSkills?: SkillIndexEntry[],
 ): LLMContextData {
     const directConversation = isDirectConversationThread(
         thread,
@@ -174,13 +176,23 @@ export function contextGenerator(
             : []),
     ].filter(Boolean).join("\n") : "";
 
+    const skillsSection = availableSkills && availableSkills.length > 0
+        ? [
+            "## AVAILABLE SKILLS",
+            "Use the `load_skill` tool to read full instructions for any skill before executing it.",
+            "",
+            ...availableSkills.map((s) => `- **${s.name}**: ${s.description}`),
+        ].join("\n")
+        : "";
+
     const systemPrompt = [
-        threadContext, 
-        taskContext, 
-        agentContext, 
-        agentMemorySection,  // Include agent memory before metadata
-        metadataSection, 
-        userMetadataSection, 
+        threadContext,
+        taskContext,
+        agentContext,
+        agentMemorySection,
+        skillsSection,
+        metadataSection,
+        userMetadataSection,
         dateContext
     ]
         .filter(Boolean)

@@ -23,6 +23,10 @@ import list_namespaces from "./list_namespaces.ts";
 import delete_document from "./delete_document.ts";
 // Multi-agent tools
 import update_my_memory from "./update_my_memory.ts";
+// Skill tools
+import list_skills from "./list_skills.ts";
+import load_skill from "./load_skill.ts";
+import read_skill_resource from "./read_skill_resource.ts";
 
 /**
  * Registry of all built-in native tools available to agents.
@@ -58,6 +62,10 @@ export const nativeTools: { [key: string]: NewTool } = {
     delete_document,
     // Multi-agent tools
     update_my_memory,
+    // Skill tools
+    list_skills,
+    load_skill,
+    read_skill_resource,
 };
 
 

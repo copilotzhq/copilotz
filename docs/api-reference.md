@@ -6,46 +6,43 @@ Complete reference for the Copilotz public API.
 
 ```typescript
 import {
+  clearSchemaCache,
   // Main factory
   createCopilotz,
-  
-  // Collections
-  defineCollection,
-  relation,
-  index,
-  
-  // Resource loading
-  loadResources,
-  
-  // Resource utilities
-  listPublicAgents,
-  mergeResourceArrays,
-  
-  // Skills
-  filterSkillsForAgent,
-  
   // Database utilities
   createDatabase,
-  
-  // Schema management
-  withSchema,
-  provisionTenantSchema,
+  // Collections
+  defineCollection,
   dropTenantSchema,
-  schemaExists,
+  // Skills
+  filterSkillsForAgent,
+  getNativeTools,
+  index,
+  // Resource utilities
+  listPublicAgents,
   listTenantSchemas,
-  warmSchemaCache,
-  clearSchemaCache,
-  
+  // Resource loading
+  loadResources,
+  mergeResourceArrays,
+  provisionTenantSchema,
   // Event processing
   registerEventProcessor,
-  
+  relation,
   // Utilities
   resolveNamespace,
-  getNativeTools,
+  schemaExists,
+  warmSchemaCache,
+  // Schema management
+  withSchema,
 } from "@copilotz/copilotz";
 
 // Types
-import type { Copilotz, Resources, Skill, SkillIndexEntry } from "@copilotz/copilotz";
+import type {
+  Copilotz,
+  Resources,
+  Skill,
+  SkillIndexEntry,
+} from "@copilotz/copilotz";
 ```
 
 ---
@@ -78,11 +75,11 @@ const result = await copilotz.run(
 
 **Parameters:**
 
-| Name | Type | Description |
-|------|------|-------------|
-| `message` | `MessageInput` | The message to process |
-| `onEvent` | `function` | Optional callback for each event |
-| `options` | `RunOptions` | Optional run configuration |
+| Name      | Type           | Description                      |
+| --------- | -------------- | -------------------------------- |
+| `message` | `MessageInput` | The message to process           |
+| `onEvent` | `function`     | Optional callback for each event |
+| `options` | `RunOptions`   | Optional run configuration       |
 
 **MessageInput:**
 
@@ -117,9 +114,9 @@ const result = await copilotz.run(
 
 ```typescript
 {
-  events: AsyncIterable<StreamEvent>;  // Event stream
-  done: Promise<void>;                 // Completion promise
-  threadId: string;                    // Thread ID
+  events: AsyncIterable<StreamEvent>; // Event stream
+  done: Promise<void>; // Completion promise
+  threadId: string; // Thread ID
 }
 ```
 
@@ -129,7 +126,7 @@ const result = await copilotz.run(
 const result = await copilotz.run(
   { content: "Hello!", sender: { type: "user", name: "Alex" } },
   (event) => console.log(event.type),
-  { stream: true }
+  { stream: true },
 );
 
 for await (const event of result.events) {
@@ -145,7 +142,8 @@ await result.done;
 
 ### copilotz.start()
 
-Start an interactive REPL session. Prompts for user input, streams responses to stdout, and maintains conversation state.
+Start an interactive REPL session. Prompts for user input, streams responses to
+stdout, and maintains conversation state.
 
 ```typescript
 const session = copilotz.start(
@@ -209,7 +207,7 @@ await session.closed;
 
 1. Displays the banner (if provided)
 2. Sends the initial message (if provided)
-3. Enters a prompt loop (`Message: `)
+3. Enters a prompt loop (`Message:`)
 4. Streams responses to stdout in real-time
 5. Exits when user types the quit command or `stop()` is called
 
@@ -583,7 +581,8 @@ const agents = listPublicAgents(
 
 ### mergeResourceArrays()
 
-Merge two resource arrays with ID-collision replacement. Explicit items win when they share the same `id`, `key`, or `name` as a file-loaded item.
+Merge two resource arrays with ID-collision replacement. Explicit items win when
+they share the same `id`, `key`, or `name` as a file-loaded item.
 
 ```typescript
 const merged = mergeResourceArrays<T>(
@@ -604,7 +603,7 @@ type Resources = {
   processors: EventProcessor[];
   mcpServers: MCPServerConfig[];
   skills: Skill[];
-}
+};
 ```
 
 ---
@@ -622,23 +621,23 @@ const agentSkills = filterSkillsForAgent(
 ): Skill[]
 ```
 
-| `allowedSkills` value | Result |
-|-----------------------|--------|
-| `undefined` (default) | Returns all skills |
-| `string[]` | Returns only named skills |
-| `null` | Returns empty array |
+| `allowedSkills` value | Result                    |
+| --------------------- | ------------------------- |
+| `undefined` (default) | Returns all skills        |
+| `string[]`            | Returns only named skills |
+| `null`                | Returns empty array       |
 
 ### Skill type
 
 ```typescript
 interface Skill {
-  name: string;           // Unique name (from directory or frontmatter)
-  description: string;    // Short description from frontmatter
-  content: string;        // Full markdown body
+  name: string; // Unique name (from directory or frontmatter)
+  description: string; // Short description from frontmatter
+  content: string; // Full markdown body
   allowedTools?: string[];
   tags?: string[];
   source: "project" | "user" | "bundled" | "remote";
-  sourcePath: string;     // Absolute path or URL
+  sourcePath: string; // Absolute path or URL
   hasReferences: boolean; // Whether references/ subdir exists
   metadata?: Record<string, unknown>;
 }
@@ -660,11 +659,11 @@ interface SkillIndexEntry {
 
 Three built-in tools for the progressive disclosure workflow:
 
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `list_skills` | _(none)_ | Lists available skills filtered by agent's `allowedSkills` |
-| `load_skill` | `{ name: string }` | Returns full SKILL.md content for a named skill |
-| `read_skill_resource` | `{ skill: string, path: string }` | Reads a file from a skill's `references/` directory |
+| Tool                  | Parameters                        | Description                                                |
+| --------------------- | --------------------------------- | ---------------------------------------------------------- |
+| `list_skills`         | _(none)_                          | Lists available skills filtered by agent's `allowedSkills` |
+| `load_skill`          | `{ name: string }`                | Returns full SKILL.md content for a named skill            |
+| `read_skill_resource` | `{ skill: string, path: string }` | Reads a file from a skill's `references/` directory        |
 
 See [Skills](./skills.md) for full documentation.
 
@@ -765,28 +764,31 @@ interface Edge {
 
 ## Server Helpers (`copilotz/server`)
 
-Framework-independent handler factories that wrap Copilotz operations into domain-specific helpers. Import from the `copilotz/server` entrypoint.
+Framework-independent handler factories that wrap Copilotz operations into
+domain-specific helpers. Import from the `copilotz/server` entrypoint.
 
 ```typescript
 import {
-  createThreadHandlers,
-  createMessageHandlers,
-  createEventHandlers,
   createAssetHandlers,
   createCollectionHandlers,
+  createEventHandlers,
+  createMessageHandlers,
+  createParticipantHandlers,
   createRestHandlers,
+  createThreadHandlers,
   parseQueryParams,
   parseSort,
 } from "copilotz/server";
 
 import type {
-  ThreadHandlers,
-  MessageHandlers,
-  EventHandlers,
   AssetHandlers,
   CollectionHandlers,
+  EventHandlers,
+  MessageHandlers,
+  ParticipantHandlers,
   RestHandlers,
   RestListOptions,
+  ThreadHandlers,
 } from "copilotz/server";
 ```
 
@@ -794,81 +796,92 @@ import type {
 
 Returns `ThreadHandlers`:
 
-| Method | Signature |
-|--------|-----------|
-| `list` | `(participantId, options?) → Promise<Thread[]>` |
-| `getById` | `(id) → Promise<Thread \| undefined>` |
-| `getByExternalId` | `(externalId) → Promise<Thread \| undefined>` |
-| `findOrCreate` | `(threadId, threadData) → Promise<Thread>` |
-| `archive` | `(id, summary) → Promise<Thread \| null>` |
+| Method            | Signature                                       |
+| ----------------- | ----------------------------------------------- |
+| `list`            | `(participantId, options?) → Promise<Thread[]>` |
+| `getById`         | `(id) → Promise<Thread \| undefined>`           |
+| `getByExternalId` | `(externalId) → Promise<Thread \| undefined>`   |
+| `findOrCreate`    | `(threadId, threadData) → Promise<Thread>`      |
+| `archive`         | `(id, summary) → Promise<Thread \| null>`       |
 
 ### createMessageHandlers(copilotz)
 
 Returns `MessageHandlers`:
 
-| Method | Signature |
-|--------|-----------|
-| `listForThread` | `(threadId, options?) → Promise<Message[]>` |
-| `getHistory` | `(threadId, userId, limit?) → Promise<Message[]>` |
-| `listFromGraph` | `(threadId, limit?) → Promise<Message[]>` |
+| Method          | Signature                                         |
+| --------------- | ------------------------------------------------- |
+| `listForThread` | `(threadId, options?) → Promise<Message[]>`       |
+| `getHistory`    | `(threadId, userId, limit?) → Promise<Message[]>` |
+| `listFromGraph` | `(threadId, limit?) → Promise<Message[]>`         |
 
 ### createEventHandlers(copilotz)
 
 Returns `EventHandlers`:
 
-| Method | Signature |
-|--------|-----------|
-| `enqueue` | `(threadId, event) → Promise<Record<string, unknown>>` |
-| `getProcessing` | `(threadId, minPriority?) → Promise<Queue \| undefined>` |
+| Method           | Signature                                                            |
+| ---------------- | -------------------------------------------------------------------- |
+| `enqueue`        | `(threadId, event) → Promise<Record<string, unknown>>`               |
+| `getProcessing`  | `(threadId, minPriority?) → Promise<Queue \| undefined>`             |
 | `getNextPending` | `(threadId, namespace?, minPriority?) → Promise<Queue \| undefined>` |
-| `updateStatus` | `(eventId, status) → Promise<void>` |
+| `updateStatus`   | `(eventId, status) → Promise<void>`                                  |
 
 ### createAssetHandlers(copilotz)
 
 Returns `AssetHandlers`:
 
-| Method | Signature |
-|--------|-----------|
-| `getBase64` | `(refOrId) → Promise<{ base64, mime }>` |
+| Method       | Signature                                |
+| ------------ | ---------------------------------------- |
+| `getBase64`  | `(refOrId) → Promise<{ base64, mime }>`  |
 | `getDataUrl` | `(refOrId) → Promise<{ dataUrl, mime }>` |
-| `parseRef` | `(ref) → ParsedAssetRef \| null` |
+| `parseRef`   | `(ref) → ParsedAssetRef \| null`         |
 
 ### createCollectionHandlers(copilotz)
 
 Returns `CollectionHandlers`:
 
-| Method | Signature |
-|--------|-----------|
-| `listCollections` | `() → string[]` |
-| `hasCollection` | `(name) → boolean` |
-| `resolve` | `(collectionName, namespace?) → unknown` |
-| `list` | `(collectionName, options?) → Promise<unknown[]>` |
-| `getById` | `(collectionName, id, options?) → Promise<unknown>` |
-| `create` | `(collectionName, data, options?) → Promise<unknown>` |
-| `update` | `(collectionName, id, data, options?) → Promise<unknown>` |
-| `delete` | `(collectionName, id, options?) → Promise<unknown>` |
-| `search` | `(collectionName, query, options?) → Promise<unknown[]>` |
+| Method            | Signature                                                 |
+| ----------------- | --------------------------------------------------------- |
+| `listCollections` | `() → string[]`                                           |
+| `hasCollection`   | `(name) → boolean`                                        |
+| `resolve`         | `(collectionName, namespace?) → unknown`                  |
+| `list`            | `(collectionName, options?) → Promise<unknown[]>`         |
+| `getById`         | `(collectionName, id, options?) → Promise<unknown>`       |
+| `create`          | `(collectionName, data, options?) → Promise<unknown>`     |
+| `update`          | `(collectionName, id, data, options?) → Promise<unknown>` |
+| `delete`          | `(collectionName, id, options?) → Promise<unknown>`       |
+| `search`          | `(collectionName, query, options?) → Promise<unknown[]>`  |
+
+### createParticipantHandlers(copilotz)
+
+Returns `ParticipantHandlers`:
+
+| Method   | Signature                                                            |
+| -------- | -------------------------------------------------------------------- |
+| `get`    | `(externalId, options?) → Promise<Record<string, unknown> \| null>`  |
+| `update` | `(externalId, updates, options?) → Promise<Record<string, unknown>>` |
 
 ### createRestHandlers(copilotz)
 
 Returns `RestHandlers` — generic CRUD over `copilotz.ops.crud` tables:
 
-| Method | Signature |
-|--------|-----------|
-| `list` | `(resource, options?) → Promise<unknown[]>` |
-| `getById` | `(resource, id) → Promise<unknown>` |
-| `create` | `(resource, body) → Promise<unknown>` |
-| `update` | `(resource, id, data) → Promise<unknown>` |
-| `delete` | `(resource, id) → Promise<unknown>` |
-| `parseQueryParams` | `(searchParams) → RestListOptions` |
+| Method             | Signature                                   |
+| ------------------ | ------------------------------------------- |
+| `list`             | `(resource, options?) → Promise<unknown[]>` |
+| `getById`          | `(resource, id) → Promise<unknown>`         |
+| `create`           | `(resource, body) → Promise<unknown>`       |
+| `update`           | `(resource, id, data) → Promise<unknown>`   |
+| `delete`           | `(resource, id) → Promise<unknown>`         |
+| `parseQueryParams` | `(searchParams) → RestListOptions`          |
 
 ### parseQueryParams(searchParams)
 
-Standalone utility to parse URL `SearchParams` into `RestListOptions` (limit, offset, sort, fields, filters).
+Standalone utility to parse URL `SearchParams` into `RestListOptions` (limit,
+offset, sort, fields, filters).
 
 ### parseSort(sortParam)
 
-Parse a sort string like `"name:asc,-createdAt"` into `Array<{ field, direction }>`.
+Parse a sort string like `"name:asc,-createdAt"` into
+`Array<{ field, direction }>`.
 
 See [Server Helpers](./server.md) for usage examples and framework wiring.
 

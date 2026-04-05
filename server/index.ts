@@ -37,6 +37,14 @@ export type { AssetHandlers } from "./assets.ts";
 export { createCollectionHandlers } from "./collections.ts";
 export type { CollectionHandlers } from "./collections.ts";
 
+export { createParticipantHandlers } from "./participants.ts";
+export type {
+  ParticipantData,
+  ParticipantGetOptions,
+  ParticipantHandlers,
+  ParticipantUpdateOptions,
+} from "./participants.ts";
+
 export { createGraphHandlers } from "./graph.ts";
 export type { GraphHandlers, GraphSearchOptions } from "./graph.ts";
 

@@ -195,12 +195,18 @@ export interface DatabaseOperations {
       order?: "asc" | "desc";
     },
   ) => Promise<Message[]>;
+  deleteMessagesForThread: (threadId: string) => Promise<void>;
   getThreadById: (threadId: string) => Promise<Thread | undefined>;
   getThreadByExternalId: (externalId: string) => Promise<Thread | undefined>;
   findOrCreateThread: (
     threadId: string | undefined,
     threadData: ThreadInsert,
   ) => Promise<Thread>;
+  updateThread: (
+    threadId: string,
+    updates: Partial<ThreadInsert>,
+  ) => Promise<Thread | null>;
+  deleteThread: (threadId: string) => Promise<void>;
   createMessage: (
     message: MessageInsert,
     namespace?: string,
@@ -1232,6 +1238,18 @@ export function createOperations(
     return messages as Message[];
   };
 
+  const deleteMessagesForThread = async (threadId: string): Promise<void> => {
+    await crud.messages.deleteMany({ threadId });
+    try {
+      await deleteNodesBySource("thread", threadId);
+    } catch (error) {
+      const pgError = error as { code?: string };
+      if (pgError?.code !== "42P01") {
+        throw error;
+      }
+    }
+  };
+
   const getTaskById = async (taskId: string): Promise<Task | undefined> => {
     const task = await crud.tasks.findOne({ id: taskId }) as Task | null;
     return task ?? undefined;
@@ -1304,6 +1322,22 @@ export function createOperations(
       summary,
     }) as Thread | null;
     return updated ?? null;
+  };
+
+  const updateThread = async (
+    threadId: string,
+    updates: Partial<ThreadInsert>,
+  ): Promise<Thread | null> => {
+    const updated = await crud.threads.update({ id: threadId }, updates) as
+      | Thread
+      | null;
+    return updated ?? null;
+  };
+
+  const deleteThread = async (threadId: string): Promise<void> => {
+    await deleteMessagesForThread(threadId);
+    await db.query(`DELETE FROM "events" WHERE "threadId" = $1`, [threadId]);
+    await crud.threads.delete({ id: threadId });
   };
 
   // ============================================
@@ -2138,9 +2172,12 @@ export function createOperations(
     getMessageHistory,
     getThreadsForParticipant,
     getMessagesForThread,
+    deleteMessagesForThread,
     getThreadById,
     getThreadByExternalId,
     findOrCreateThread,
+    updateThread,
+    deleteThread,
     createMessage,
     getTaskById,
     createTask,

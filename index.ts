@@ -22,6 +22,8 @@ import { mergeResourceArrays } from "@/utils/merge-resources.ts";
 import { listPublicAgents } from "@/utils/list-agents.ts";
 import type { Skill, SkillIndexEntry } from "@/utils/loaders/skill-types.ts";
 import { loadSkillsFromDirectory, loadSkillFromUrl, mergeSkills } from "@/utils/loaders/skill-loader.ts";
+import { loadBundledSkills } from "@/skills/index.ts";
+import { loadAdminAgent } from "@/agents/admin/index.ts";
 
 import type {
     Agent,
@@ -900,8 +902,7 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
     }
 
     // ---- Phase 1b: Resolve skills (bundled + user + project + explicit) ----
-    const bundledSkillsPath = decodeURIComponent(new URL("./skills/", import.meta.url).pathname);
-    const bundledSkills = await loadSkillsFromDirectory(bundledSkillsPath, "bundled");
+    const bundledSkills = await loadBundledSkills();
 
     const homeDir = Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE") ?? "";
     const userSkills = homeDir
@@ -941,18 +942,16 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
     // ---- Phase 1c: Resolve admin agent ----
     if (config.admin) {
         try {
-            const adminDir = decodeURIComponent(new URL("./agents/admin/", import.meta.url).pathname);
-            const adminInstructions = await Deno.readTextFile(adminDir + "instructions.md");
-            const adminConfigModule = await import(adminDir + "config.ts");
-            const adminConfigBase = adminConfigModule.default ?? {};
+            const { instructions, config: adminConfigBase } = await loadAdminAgent();
             const adminOverrides = typeof config.admin === "object" ? config.admin : {};
-            const adminAgent: AgentConfig = {
+            const adminAgent = {
                 id: adminOverrides.name ?? "admin",
                 name: adminOverrides.name ?? "admin",
-                instructions: adminInstructions,
+                role: "assistant",
+                instructions,
                 ...adminConfigBase,
                 ...(adminOverrides.llmOptions ? { llmOptions: adminOverrides.llmOptions } : {}),
-            };
+            } as AgentConfig;
             // Only add if not already overridden by user
             const alreadyDefined = resolvedAgents.some(
                 (a) => (a.id ?? a.name) === adminAgent.id,

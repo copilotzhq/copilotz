@@ -140,7 +140,7 @@ export function createRestHandlers(copilotz: Copilotz): RestHandlers {
     };
 
     return {
-        list: async (resource: string, options: RestListOptions = {}): Promise<unknown[]> => {
+        list: (resource: string, options: RestListOptions = {}): Promise<unknown[]> => {
             const crud = resolveCrud(resource);
             return crud.find(options.filters, {
                 limit: options.limit,
@@ -150,12 +150,12 @@ export function createRestHandlers(copilotz: Copilotz): RestHandlers {
             });
         },
 
-        getById: async (resource: string, id: string): Promise<unknown> => {
+        getById: (resource: string, id: string): Promise<unknown> => {
             const crud = resolveCrud(resource);
             return crud.findOne({ id });
         },
 
-        create: async (resource: string, body: Record<string, unknown> | Array<Record<string, unknown>>): Promise<unknown> => {
+        create: (resource: string, body: Record<string, unknown> | Array<Record<string, unknown>>): Promise<unknown> => {
             const crud = resolveCrud(resource);
             if (Array.isArray(body)) {
                 return crud.createMany(body);
@@ -163,12 +163,12 @@ export function createRestHandlers(copilotz: Copilotz): RestHandlers {
             return crud.create(body);
         },
 
-        update: async (resource: string, id: string, data: Record<string, unknown>): Promise<unknown> => {
+        update: (resource: string, id: string, data: Record<string, unknown>): Promise<unknown> => {
             const crud = resolveCrud(resource);
             return crud.update({ id }, data);
         },
 
-        delete: async (resource: string, id: string): Promise<unknown> => {
+        delete: (resource: string, id: string): Promise<unknown> => {
             const crud = resolveCrud(resource);
             return crud.delete({ id });
         },

@@ -73,7 +73,7 @@ export function createCollectionHandlers(copilotz: Copilotz): CollectionHandlers
             return manager[collectionName] ?? undefined;
         },
 
-        list: async (
+        list: (
             collectionName: string,
             options: {
                 namespace?: string;
@@ -98,7 +98,7 @@ export function createCollectionHandlers(copilotz: Copilotz): CollectionHandlers
             });
         },
 
-        getById: async (
+        getById: (
             collectionName: string,
             id: string,
             options: { namespace?: string } = {},
@@ -114,7 +114,7 @@ export function createCollectionHandlers(copilotz: Copilotz): CollectionHandlers
             return crud.findOne({ id });
         },
 
-        create: async (
+        create: (
             collectionName: string,
             data: Record<string, unknown>,
             options: { namespace?: string } = {},
@@ -130,7 +130,7 @@ export function createCollectionHandlers(copilotz: Copilotz): CollectionHandlers
             return crud.create(data);
         },
 
-        update: async (
+        update: (
             collectionName: string,
             id: string,
             data: Record<string, unknown>,
@@ -147,7 +147,7 @@ export function createCollectionHandlers(copilotz: Copilotz): CollectionHandlers
             return crud.update({ id }, data);
         },
 
-        delete: async (
+        delete: (
             collectionName: string,
             id: string,
             options: { namespace?: string } = {},
@@ -163,7 +163,7 @@ export function createCollectionHandlers(copilotz: Copilotz): CollectionHandlers
             return crud.delete({ id });
         },
 
-        search: async (
+        search: (
             collectionName: string,
             query: string,
             options: { namespace?: string; limit?: number } = {},

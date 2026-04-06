@@ -1,171 +1,185 @@
-
-import { 
-    createDatabase, 
-    schema, 
-    migrations, 
-    createCollectionsManager, 
-    createCollectionIndexes,
-    withSchema,
-    provisionTenantSchema,
-    dropTenantSchema,
-    schemaExists,
-    listTenantSchemas,
-    warmSchemaCache,
+import {
+  createCollectionIndexes,
+  createCollectionsManager,
+  createDatabase,
+  dropTenantSchema,
+  listTenantSchemas,
+  migrations,
+  provisionTenantSchema,
+  schema,
+  schemaExists,
+  warmSchemaCache,
+  withSchema,
 } from "@/database/index.ts";
 import type { OminipgWithCrud } from "omnipg";
-import { runThread, type RunHandle, type RunOptions, type UnifiedOnEvent } from "@/runtime/index.ts";
-import type { CollectionDefinition, CollectionCrud, ScopedCollectionCrud } from "@/database/collections/types.ts";
-import { hasRunInput, normalizeInboundRunMessage } from "@/utils/inbound-message.ts";
+import {
+  type RunHandle,
+  type RunOptions,
+  runThread,
+  type UnifiedOnEvent,
+} from "@/runtime/index.ts";
+import type {
+  CollectionCrud,
+  CollectionDefinition,
+  ScopedCollectionCrud,
+} from "@/database/collections/types.ts";
+import {
+  hasRunInput,
+  normalizeInboundRunMessage,
+} from "@/utils/inbound-message.ts";
 import loadResources from "@/utils/loaders/resources.ts";
 import type { Resources } from "@/utils/loaders/resources.ts";
 import { mergeResourceArrays } from "@/utils/merge-resources.ts";
 import { listPublicAgents } from "@/utils/list-agents.ts";
 import type { Skill, SkillIndexEntry } from "@/utils/loaders/skill-types.ts";
-import { loadSkillsFromDirectory, loadSkillFromUrl, mergeSkills } from "@/utils/loaders/skill-loader.ts";
+import {
+  loadSkillFromUrl,
+  loadSkillsFromDirectory,
+  mergeSkills,
+} from "@/utils/loaders/skill-loader.ts";
 import { loadBundledSkills } from "@/skills/index.ts";
 import { loadAdminAgent } from "@/agents/admin/index.ts";
 
 import type {
-    Agent,
-    API,
-    ChatCallbacks,
-    ChatContext,
-    HistoryTransform,
-    HistoryTransformArgs,
-    NewAPI,
-    NewMCPServer,
-    NewTool,
-    EventProcessor,
-    ProcessorDeps,
-    CopilotzDb,
-    DatabaseConfig,
-    MCPServer,
-    MessagePayload,
-    Tool,
-    ToolHistoryPolicy,
-    ToolHistoryPolicyConfig,
-    ToolHistoryVisibility,
-    ToolResultProjector,
-    ToolResultProjectorContext,
-    ToolCallEventPayload,
-    LlmCallEventPayload,
-    TokenEventPayload,
+  Agent,
+  API,
+  ChatCallbacks,
+  ChatContext,
+  CopilotzDb,
+  DatabaseConfig,
+  EventProcessor,
+  HistoryTransform,
+  HistoryTransformArgs,
+  LlmCallEventPayload,
+  MCPServer,
+  MessagePayload,
+  NewAPI,
+  NewMCPServer,
+  NewTool,
+  ProcessorDeps,
+  TokenEventPayload,
+  Tool,
+  ToolCallEventPayload,
+  ToolHistoryPolicy,
+  ToolHistoryPolicyConfig,
+  ToolHistoryVisibility,
+  ToolResultProjector,
+  ToolResultProjectorContext,
 } from "./interfaces/index.ts";
-
 
 import defaultBanner from "@/runtime/banner.ts";
 
 export type {
-    /** AI Agent configuration with LLM options and capabilities. */
-    Agent,
-    /** API configuration for connecting to external REST APIs via OpenAPI. */
-    API,
-    /** MCP (Model Context Protocol) server configuration. */
-    MCPServer,
-    /** Tool definition with input/output schemas for agent capabilities. */
-    Tool,
-    /** Runtime-only history visibility for tool results across agents. */
-    ToolHistoryVisibility,
-    /** Declarative history policy for tools. */
-    ToolHistoryPolicyConfig,
-    /** Runtime tool history policy with optional projector callback. */
-    ToolHistoryPolicy,
-    /** Callback type for projecting shared tool results. */
-    ToolResultProjector,
-    /** Context passed to tool result projector callbacks. */
-    ToolResultProjectorContext,
-    /** Conversation thread containing messages between users and agents. */
-    Thread,
-    /** Individual message within a conversation thread. */
-    Message,
-    /** Task definition for goal-oriented agent workflows. */
-    Task,
-    /** User entity representing a conversation participant. */
-    User,
-    /** Event in the event queue system. */
-    Event,
-    /** New event to be created in the event queue. */
-    NewEvent,
-    /** Specific NEW_MESSAGE event type with typed payload. */
-    NewMessageEvent,
-    /** Specific TOOL_CALL event type with typed payload. */
-    ToolCallEvent,
-    /** Specific LLM_CALL event type with typed payload. */
-    LlmCallEvent,
-    /** Input type for creating a new Agent. */
-    NewAgent,
-    /** Input type for creating a new API configuration. */
-    NewAPI,
-    /** Input type for creating a new MCP server configuration. */
-    NewMCPServer,
-    /** Input type for creating a new Tool. */
-    NewTool,
-    /** Input type for creating a new Thread. */
-    NewThread,
-    /** Input type for creating a new Message. */
-    NewMessage,
-    /** Input type for creating a new Task. */
-    NewTask,
-    /** Input type for creating a new User. */
-    NewUser,
-    /** Payload structure for incoming messages. */
-    MessagePayload,
-    /** Payload structure for tool call events. */
-    ToolCallEventPayload,
-    /** Payload structure for LLM call events. */
-    LlmCallEventPayload,
-    /** Payload structure for streaming token events. */
-    TokenEventPayload,
-    /** Configuration options for the database connection. */
-    DatabaseConfig,
-    /** Database instance with CRUD operations and custom ops. */
-    CopilotzDb,
-    /** Low-level database instance type from Ominipg. */
-    DbInstance,
-    /** Interface for custom event processors. */
-    EventProcessor,
-    /** Dependencies injected into event processors. */
-    ProcessorDeps,
-    /** Callback functions for handling chat events. */
-    ChatCallbacks,
-    /** Context object passed through the chat pipeline. */
-    ChatContext,
-    /** Data structure for streaming content tokens. */
-    ContentStreamData,
-    /** Configuration for RAG (Retrieval-Augmented Generation). */
-    RagConfig,
-    /** Configuration for embedding generation. */
-    EmbeddingConfig,
-    /** Configuration for entity extraction. */
-    EntityExtractionConfig,
-    /** Hook for rewriting generated message history before the LLM call. */
-    HistoryTransform,
-    /** Arguments passed to the history transform hook. */
-    HistoryTransformArgs,
-    /** Context for namespace resolution. */
-    NamespaceResolutionContext,
-    /** Thread metadata interface for multi-agent conversation state. */
-    ThreadMetadata,
-    /** Configuration for document chunking strategies. */
-    ChunkingConfig,
-    /** Configuration for similarity-based retrieval. */
-    RetrievalConfig,
-    /** RAG options specific to an agent. */
-    AgentRagOptions,
-    /** Document stored in the RAG knowledge base. */
-    Document,
-    /** Input type for creating a new Document. */
-    NewDocument,
-    /** Chunk of a document with embedding vector. */
-    DocumentChunk,
-    /** Input type for creating a new DocumentChunk. */
-    NewDocumentChunk,
+  /** AI Agent configuration with LLM options and capabilities. */
+  Agent,
+  /** RAG options specific to an agent. */
+  AgentRagOptions,
+  /** API configuration for connecting to external REST APIs via OpenAPI. */
+  API,
+  /** Callback functions for handling chat events. */
+  ChatCallbacks,
+  /** Context object passed through the chat pipeline. */
+  ChatContext,
+  /** Configuration for document chunking strategies. */
+  ChunkingConfig,
+  /** Data structure for streaming content tokens. */
+  ContentStreamData,
+  /** Database instance with CRUD operations and custom ops. */
+  CopilotzDb,
+  /** Configuration options for the database connection. */
+  DatabaseConfig,
+  /** Low-level database instance type from Ominipg. */
+  DbInstance,
+  /** Document stored in the RAG knowledge base. */
+  Document,
+  /** Chunk of a document with embedding vector. */
+  DocumentChunk,
+  /** Configuration for embedding generation. */
+  EmbeddingConfig,
+  /** Configuration for entity extraction. */
+  EntityExtractionConfig,
+  /** Event in the event queue system. */
+  Event,
+  /** Interface for custom event processors. */
+  EventProcessor,
+  /** Hook for rewriting generated message history before the LLM call. */
+  HistoryTransform,
+  /** Arguments passed to the history transform hook. */
+  HistoryTransformArgs,
+  /** Specific LLM_CALL event type with typed payload. */
+  LlmCallEvent,
+  /** Payload structure for LLM call events. */
+  LlmCallEventPayload,
+  /** MCP (Model Context Protocol) server configuration. */
+  MCPServer,
+  /** Individual message within a conversation thread. */
+  Message,
+  /** Payload structure for incoming messages. */
+  MessagePayload,
+  /** Context for namespace resolution. */
+  NamespaceResolutionContext,
+  /** Input type for creating a new Agent. */
+  NewAgent,
+  /** Input type for creating a new API configuration. */
+  NewAPI,
+  /** Input type for creating a new Document. */
+  NewDocument,
+  /** Input type for creating a new DocumentChunk. */
+  NewDocumentChunk,
+  /** New event to be created in the event queue. */
+  NewEvent,
+  /** Input type for creating a new MCP server configuration. */
+  NewMCPServer,
+  /** Input type for creating a new Message. */
+  NewMessage,
+  /** Specific NEW_MESSAGE event type with typed payload. */
+  NewMessageEvent,
+  /** Input type for creating a new Task. */
+  NewTask,
+  /** Input type for creating a new Thread. */
+  NewThread,
+  /** Input type for creating a new Tool. */
+  NewTool,
+  /** Input type for creating a new User. */
+  NewUser,
+  /** Dependencies injected into event processors. */
+  ProcessorDeps,
+  /** Configuration for RAG (Retrieval-Augmented Generation). */
+  RagConfig,
+  /** Configuration for similarity-based retrieval. */
+  RetrievalConfig,
+  /** Task definition for goal-oriented agent workflows. */
+  Task,
+  /** Conversation thread containing messages between users and agents. */
+  Thread,
+  /** Thread metadata interface for multi-agent conversation state. */
+  ThreadMetadata,
+  /** Payload structure for streaming token events. */
+  TokenEventPayload,
+  /** Tool definition with input/output schemas for agent capabilities. */
+  Tool,
+  /** Specific TOOL_CALL event type with typed payload. */
+  ToolCallEvent,
+  /** Payload structure for tool call events. */
+  ToolCallEventPayload,
+  /** Runtime tool history policy with optional projector callback. */
+  ToolHistoryPolicy,
+  /** Declarative history policy for tools. */
+  ToolHistoryPolicyConfig,
+  /** Runtime-only history visibility for tool results across agents. */
+  ToolHistoryVisibility,
+  /** Callback type for projecting shared tool results. */
+  ToolResultProjector,
+  /** Context passed to tool result projector callbacks. */
+  ToolResultProjectorContext,
+  /** User entity representing a conversation participant. */
+  User,
 } from "@/interfaces/index.ts";
 
 /**
  * Returns a record of all built-in native tools available to agents.
  * Native tools include file operations, HTTP requests, task management, and more.
- * 
+ *
  * @returns Record of tool names to tool definitions
  */
 export { getNativeTools } from "@/event-processors/tool_call/native-tools-registry/index.ts";
@@ -185,11 +199,11 @@ export { migrations };
 /**
  * Schema context utilities for multi-tenant PostgreSQL schema isolation.
  * Use withSchema() to execute operations in a specific tenant's schema.
- * 
+ *
  * @example
  * ```ts
  * import { withSchema } from "@copilotz/lib";
- * 
+ *
  * // Execute operations in a specific schema
  * await withSchema('tenant_abc', async () => {
  *   await db.query('SELECT * FROM users');
@@ -200,33 +214,33 @@ export { withSchema } from "@/database/schema-context.ts";
 
 /**
  * Schema provisioning utilities for creating and managing tenant schemas.
- * 
+ *
  * @example
  * ```ts
  * import { provisionTenantSchema, schemaExists } from "@copilotz/lib";
- * 
+ *
  * // Create a new tenant schema with all tables
  * await provisionTenantSchema(db, 'tenant_abc');
- * 
+ *
  * // Check if a schema exists
  * if (await schemaExists(db, 'tenant_abc')) {
  *   // Ready to use
  * }
  * ```
  */
-export { 
-    provisionTenantSchema,
-    dropTenantSchema,
-    schemaExists,
-    listTenantSchemas,
-    warmSchemaCache,
-    clearSchemaCache,
+export {
+  clearSchemaCache,
+  dropTenantSchema,
+  listTenantSchemas,
+  provisionTenantSchema,
+  schemaExists,
+  warmSchemaCache,
 } from "@/database/schema-provisioning.ts";
 
 /**
  * Define a custom collection with JSON Schema.
  * Collections map to the graph structure (nodes + edges) with a developer-friendly CRUD interface.
- * 
+ *
  * @example
  * ```ts
  * const customerSchema = {
@@ -238,36 +252,40 @@ export {
  *   },
  *   required: ['id', 'email'],
  * } as const;
- * 
+ *
  * const customers = defineCollection({
  *   name: 'customer',
  *   schema: customerSchema,
  *   indexes: ['email'],
  * });
- * 
+ *
  * type Customer = typeof customers.$inferSelect;
  * ```
  */
-export { defineCollection, relation, index } from "@/database/collections/index.ts";
+export {
+  defineCollection,
+  index,
+  relation,
+} from "@/database/collections/index.ts";
 
 /** Type definitions for collections API. */
 export type {
-    CollectionDefinition,
-    CollectionCrud,
-    ScopedCollectionCrud,
-    CollectionsConfig,
-    WhereFilter,
-    WhereOperators,
-    QueryOptions,
-    SearchOptions,
-    IndexDefinition,
-    RelationDefinition,
+  CollectionCrud,
+  CollectionDefinition,
+  CollectionsConfig,
+  IndexDefinition,
+  QueryOptions,
+  RelationDefinition,
+  ScopedCollectionCrud,
+  SearchOptions,
+  WhereFilter,
+  WhereOperators,
 } from "@/database/collections/types.ts";
 
 /**
  * Registers a custom event processor for handling specific event types.
  * Use this to extend Copilotz with custom event handling logic.
- * 
+ *
  * @param type - The event type to handle (e.g., "NEW_MESSAGE", "TOOL_CALL")
  * @param processor - The processor implementation
  */
@@ -283,25 +301,25 @@ export { resolveNamespace } from "@/interfaces/index.ts";
  * Asset utilities and stores.
  */
 export {
-	createMemoryAssetStore,
-	createAssetStoreForNamespace,
-	isAssetRef,
-	extractAssetId,
-	parseAssetRef,
-	getBase64ForRef,
-	getDataUrlForRef,
+  createAssetStoreForNamespace,
+  createMemoryAssetStore,
+  extractAssetId,
+  getBase64ForRef,
+  getDataUrlForRef,
+  isAssetRef,
+  parseAssetRef,
 } from "@/utils/assets.ts";
 
 /** Event emitted from the streaming event queue. */
 export type { StreamEvent } from "@/runtime/index.ts";
 
-import type { AssetStore, AssetConfig } from "@/utils/assets.ts";
+import type { AssetConfig, AssetStore } from "@/utils/assets.ts";
 import {
-	createMemoryAssetStore,
-	createAssetStoreForNamespace,
-	resolveAssetNamespace,
-	resolveAssetIdForStore,
-	bytesToBase64,
+  bytesToBase64,
+  createAssetStoreForNamespace,
+  createMemoryAssetStore,
+  resolveAssetIdForStore,
+  resolveAssetNamespace,
 } from "@/utils/assets.ts";
 
 /** Type representing all database schemas. */
@@ -313,7 +331,7 @@ export type DbCrud = OminipgWithCrud<DbSchemas>["crud"];
 /**
  * Loads resources (agents, APIs, tools, processors) from a file-based directory structure.
  * Useful for organizing agent configurations in separate files.
- * 
+ *
  * @param options - Options including the path to the resources directory
  * @returns Loaded resources ready to pass to createCopilotz
  */
@@ -347,13 +365,13 @@ export { filterSkillsForAgent } from "@/utils/loaders/skill-loader.ts";
  * Used for type-safe event handling in callbacks and processors.
  */
 export type CopilotzEvent =
-    | { type: "NEW_MESSAGE"; payload: MessagePayload }
-    | { type: "TOOL_CALL"; payload: ToolCallEventPayload }
-    | { type: "LLM_CALL"; payload: LlmCallEventPayload }
-    | { type: "TOKEN"; payload: TokenEventPayload };
+  | { type: "NEW_MESSAGE"; payload: MessagePayload }
+  | { type: "TOOL_CALL"; payload: ToolCallEventPayload }
+  | { type: "LLM_CALL"; payload: LlmCallEventPayload }
+  | { type: "TOKEN"; payload: TokenEventPayload };
 
 /** Alias for Agent type, used in configuration. */
-export type AgentConfig = Agent; 
+export type AgentConfig = Agent;
 
 /** Alias for Tool type, used in configuration. */
 export type ToolConfig = NewTool;
@@ -364,57 +382,85 @@ export type APIConfig = NewAPI;
 /** Alias for MCPServer type, used in configuration. */
 export type MCPServerConfig = NewMCPServer;
 
-type NormalizedCopilotzConfig = Omit<CopilotzConfig, "agents" | "tools" | "apis" | "mcpServers"> & {
+type NormalizedCopilotzConfig =
+  & Omit<CopilotzConfig, "agents" | "tools" | "apis" | "mcpServers">
+  & {
     agents: Agent[];
     tools?: Tool[];
     apis?: API[];
     mcpServers?: MCPServer[];
     skills?: import("@/utils/loaders/skill-types.ts").Skill[];
     customProcessorsByType?: ChatContext["customProcessors"];
-};
+  };
 
 function normalizeAgent(agent: AgentConfig): Agent {
-    const now = new Date().toISOString();
-    return {
-        ...agent,
-        createdAt: ("createdAt" in agent && agent.createdAt ? agent.createdAt : now) as Agent["createdAt"],
-        updatedAt: ("updatedAt" in agent && agent.updatedAt ? agent.updatedAt : now) as Agent["updatedAt"],
-    };
+  const now = new Date().toISOString();
+  return {
+    ...agent,
+    createdAt:
+      ("createdAt" in agent && agent.createdAt
+        ? agent.createdAt
+        : now) as Agent["createdAt"],
+    updatedAt:
+      ("updatedAt" in agent && agent.updatedAt
+        ? agent.updatedAt
+        : now) as Agent["updatedAt"],
+  };
 }
 
 function normalizeTool(tool: ToolConfig): Tool {
-    const now = new Date().toISOString();
-    return {
-        ...tool,
-        id: ("id" in tool && tool.id ? tool.id : tool.key) as Tool["id"],
-        createdAt: ("createdAt" in tool && tool.createdAt ? tool.createdAt : now) as Tool["createdAt"],
-        updatedAt: ("updatedAt" in tool && tool.updatedAt ? tool.updatedAt : now) as Tool["updatedAt"],
-    };
+  const now = new Date().toISOString();
+  return {
+    ...tool,
+    id: ("id" in tool && tool.id ? tool.id : tool.key) as Tool["id"],
+    createdAt:
+      ("createdAt" in tool && tool.createdAt ? tool.createdAt : now) as Tool[
+        "createdAt"
+      ],
+    updatedAt:
+      ("updatedAt" in tool && tool.updatedAt ? tool.updatedAt : now) as Tool[
+        "updatedAt"
+      ],
+  };
 }
 
 function normalizeApi(api: APIConfig): API {
-    const now = new Date().toISOString();
-    return {
-        ...api,
-        id: ("id" in api && api.id ? api.id : api.name) as API["id"],
-        createdAt: ("createdAt" in api && api.createdAt ? api.createdAt : now) as API["createdAt"],
-        updatedAt: ("updatedAt" in api && api.updatedAt ? api.updatedAt : now) as API["updatedAt"],
-    };
+  const now = new Date().toISOString();
+  return {
+    ...api,
+    id: ("id" in api && api.id ? api.id : api.name) as API["id"],
+    createdAt:
+      ("createdAt" in api && api.createdAt ? api.createdAt : now) as API[
+        "createdAt"
+      ],
+    updatedAt:
+      ("updatedAt" in api && api.updatedAt ? api.updatedAt : now) as API[
+        "updatedAt"
+      ],
+  };
 }
 
 function normalizeMcpServer(server: MCPServerConfig): MCPServer {
-    const now = new Date().toISOString();
-    return {
-        ...server,
-        id: ("id" in server && server.id ? server.id : server.name) as MCPServer["id"],
-        createdAt: ("createdAt" in server && server.createdAt ? server.createdAt : now) as MCPServer["createdAt"],
-        updatedAt: ("updatedAt" in server && server.updatedAt ? server.updatedAt : now) as MCPServer["updatedAt"],
-    };
+  const now = new Date().toISOString();
+  return {
+    ...server,
+    id: ("id" in server && server.id ? server.id : server.name) as MCPServer[
+      "id"
+    ],
+    createdAt:
+      ("createdAt" in server && server.createdAt
+        ? server.createdAt
+        : now) as MCPServer["createdAt"],
+    updatedAt:
+      ("updatedAt" in server && server.updatedAt
+        ? server.updatedAt
+        : now) as MCPServer["updatedAt"],
+  };
 }
 
 /**
  * Configuration options for creating a Copilotz instance.
- * 
+ *
  * @example
  * ```ts
  * const config: CopilotzConfig = {
@@ -428,219 +474,232 @@ function normalizeMcpServer(server: MCPServerConfig): MCPServer {
  * ```
  */
 export interface CopilotzConfig {
-    /**
-     * Array of agent configurations.
-     * Required unless `resources.path` is provided (agents will be loaded from files).
-     * When both are set, explicit agents are merged with file-loaded agents (explicit wins on ID collision).
-     */
-    agents?: AgentConfig[];
-    /** Optional array of custom tool definitions. */
-    tools?: ToolConfig[];
-    /** Optional array of API configurations for external REST APIs. */
-    apis?: APIConfig[];
-    /** Optional array of MCP server configurations. */
-    mcpServers?: MCPServerConfig[];
-    /** Optional custom event processors to extend or override default behavior. */
-    processors?: Array<(EventProcessor<unknown, ProcessorDeps> & { eventType: string; priority?: number; id?: string })>;
-    /**
-     * Load resources (agents, tools, APIs, processors) from a directory structure.
-     * When set, `createCopilotz` internally calls `loadResources` and merges results
-     * with any explicitly provided resource arrays.
-     *
-     * @example
-     * ```ts
-     * const copilotz = await createCopilotz({
-     *   dbConfig: { url: Deno.env.get("DATABASE_URL") },
-     *   resources: { path: "./resources" },
-     * });
-     * ```
-     */
-    resources?: {
-        /** Path to the resources directory (relative to cwd or absolute). Default: "resources" */
-        path?: string;
-        /** Enable live reload of file-based resources during development. Reserved for future use. */
-        watch?: boolean;
+  /**
+   * Array of agent configurations.
+   * Required unless `resources.path` is provided (agents will be loaded from files).
+   * When both are set, explicit agents are merged with file-loaded agents (explicit wins on ID collision).
+   */
+  agents?: AgentConfig[];
+  /** Optional array of custom tool definitions. */
+  tools?: ToolConfig[];
+  /** Optional array of API configurations for external REST APIs. */
+  apis?: APIConfig[];
+  /** Optional array of MCP server configurations. */
+  mcpServers?: MCPServerConfig[];
+  /** Optional custom event processors to extend or override default behavior. */
+  processors?: Array<
+    (EventProcessor<unknown, ProcessorDeps> & {
+      eventType: string;
+      priority?: number;
+      id?: string;
+    })
+  >;
+  /**
+   * Load resources (agents, tools, APIs, processors) from a directory structure.
+   * When set, `createCopilotz` internally calls `loadResources` and merges results
+   * with any explicitly provided resource arrays.
+   *
+   * @example
+   * ```ts
+   * const copilotz = await createCopilotz({
+   *   dbConfig: { url: Deno.env.get("DATABASE_URL") },
+   *   resources: { path: "./resources" },
+   * });
+   * ```
+   */
+  resources?: {
+    /** Path to the resources directory (relative to cwd or absolute). Default: "resources" */
+    path?: string;
+    /** Enable live reload of file-based resources during development. Reserved for future use. */
+    watch?: boolean;
+  };
+  /** Optional callbacks for handling events during execution. */
+  callbacks?: ChatCallbacks;
+  /** Optional hook for rewriting generated message history before the LLM call. */
+  historyTransform?: HistoryTransform;
+  /** Optional database configuration. Defaults to in-memory PGlite. */
+  dbConfig?: DatabaseConfig;
+  /** Optional pre-existing database instance to reuse. */
+  dbInstance?: CopilotzDb;
+  /** Optional metadata to attach to all threads. */
+  threadMetadata?: Record<string, unknown>;
+  /** Optional TTL (time-to-live) in milliseconds for queue items. */
+  queueTTL?: number;
+  /**
+   * Stale processing event threshold in milliseconds.
+   * Events stuck in "processing" status longer than this will be reset to "pending" on next check.
+   * This provides crash recovery for events that were being processed when the server crashed.
+   * Default: 300000 (5 minutes).
+   */
+  staleProcessingThresholdMs?: number;
+  /** Whether to enable streaming mode for real-time token output. */
+  stream?: boolean;
+  /** Optional active task ID for task-oriented workflows. */
+  activeTaskId?: string;
+  /**
+   * Default namespace for collections and data isolation.
+   * Can be overridden per-run via RunOptions.namespace.
+   * Used for multi-tenancy isolation.
+   *
+   * @example
+   * ```ts
+   * const copilotz = await createCopilotz({
+   *   agents: [...],
+   *   collections: [customers],
+   *   namespace: 'tenant-123', // All operations scoped to this namespace
+   * });
+   * ```
+   */
+  namespace?: string;
+  /** Optional asset storage configuration for handling files and media. */
+  assets?: {
+    /** Asset storage configuration options. */
+    config?: AssetConfig;
+    /** Pre-existing asset store instance. */
+    store?: AssetStore;
+  };
+  /** Optional RAG (Retrieval-Augmented Generation) configuration. */
+  rag?: {
+    /** Whether RAG is enabled. Defaults to true if rag config is provided. */
+    enabled?: boolean;
+    /** Embedding provider configuration (required for RAG). */
+    embedding: {
+      /** Embedding provider: "openai", "ollama", or "cohere". */
+      provider: "openai" | "ollama" | "cohere";
+      /** Model name for generating embeddings. */
+      model: string;
+      /** API key for the embedding provider. */
+      apiKey?: string;
+      /** Base URL for the embedding API. */
+      baseUrl?: string;
+      /** Embedding vector dimensions. */
+      dimensions?: number;
+      /** Batch size for embedding generation. */
+      batchSize?: number;
     };
-    /** Optional callbacks for handling events during execution. */
-    callbacks?: ChatCallbacks;
-    /** Optional hook for rewriting generated message history before the LLM call. */
-    historyTransform?: HistoryTransform;
-    /** Optional database configuration. Defaults to in-memory PGlite. */
-    dbConfig?: DatabaseConfig;
-    /** Optional pre-existing database instance to reuse. */
-    dbInstance?: CopilotzDb;
-    /** Optional metadata to attach to all threads. */
-    threadMetadata?: Record<string, unknown>;
-    /** Optional TTL (time-to-live) in milliseconds for queue items. */
-    queueTTL?: number;
-    /** 
-     * Stale processing event threshold in milliseconds. 
-     * Events stuck in "processing" status longer than this will be reset to "pending" on next check.
-     * This provides crash recovery for events that were being processed when the server crashed.
-     * Default: 300000 (5 minutes).
-     */
-    staleProcessingThresholdMs?: number;
-    /** Whether to enable streaming mode for real-time token output. */
-    stream?: boolean;
-    /** Optional active task ID for task-oriented workflows. */
-    activeTaskId?: string;
+    /** Document chunking configuration. */
+    chunking?: {
+      /** Chunking strategy: "fixed", "paragraph", or "sentence". */
+      strategy?: "fixed" | "paragraph" | "sentence";
+      /** Target chunk size in tokens. */
+      chunkSize?: number;
+      /** Overlap between chunks in tokens. */
+      chunkOverlap?: number;
+    };
+    /** Retrieval configuration. */
+    retrieval?: {
+      /** Default number of results to return. */
+      defaultLimit?: number;
+      /** Minimum similarity score threshold. */
+      similarityThreshold?: number;
+    };
+    /** Default namespace for document storage. */
+    defaultNamespace?: string;
+    /** LLM configuration for background RAG tasks (entity extraction, summarization). */
+    llmConfig?: {
+      /** LLM provider name. */
+      provider: string;
+      /** Model name. */
+      model?: string;
+      /** API key for the LLM provider. */
+      apiKey?: string;
+      /** Temperature for generation. */
+      temperature?: number;
+    };
+  };
+  /**
+   * Custom collections for application data storage.
+   * Collections map to the graph structure (nodes + edges) with a developer-friendly CRUD interface.
+   *
+   * @example
+   * ```ts
+   * const customers = defineCollection({
+   *   name: 'customer',
+   *   schema: customerSchema,
+   *   indexes: ['email'],
+   * });
+   *
+   * const copilotz = await createCopilotz({
+   *   agents: [...],
+   *   collections: [customers],
+   * });
+   *
+   * // Use collections
+   * const db = copilotz.collections.withNamespace('tenant-123');
+   * await db.customer.create({ email: 'alice@example.com' });
+   * ```
+   */
+  // deno-lint-ignore no-explicit-any
+  collections?: CollectionDefinition<any, any, any>[];
+  /** Configuration options for collections. */
+  collectionsConfig?: {
+    /** Auto-create indexes on startup. Default: true */
+    autoIndex?: boolean;
+    /** Validate writes against schema. Default: false */
+    validateOnWrite?: boolean;
+  };
+  /**
+   * Multi-agent conversation configuration.
+   * Controls how agents interact in threads with multiple participants.
+   */
+  multiAgent?: {
     /**
-     * Default namespace for collections and data isolation.
-     * Can be overridden per-run via RunOptions.namespace.
-     * Used for multi-tenancy isolation.
-     * 
-     * @example
-     * ```ts
-     * const copilotz = await createCopilotz({
-     *   agents: [...],
-     *   collections: [customers],
-     *   namespace: 'tenant-123', // All operations scoped to this namespace
-     * });
-     * ```
+     * Whether multi-agent routing is enabled.
+     * When disabled, agent responses always route back to the original sender.
+     * Default: false unless multiAgent config is explicitly provided.
      */
-    namespace?: string;
-    /** Optional asset storage configuration for handling files and media. */
-    assets?: {
-        /** Asset storage configuration options. */
-        config?: AssetConfig;
-        /** Pre-existing asset store instance. */
-        store?: AssetStore;
-    };
-    /** Optional RAG (Retrieval-Augmented Generation) configuration. */
-    rag?: {
-        /** Whether RAG is enabled. Defaults to true if rag config is provided. */
-        enabled?: boolean;
-        /** Embedding provider configuration (required for RAG). */
-        embedding: {
-            /** Embedding provider: "openai", "ollama", or "cohere". */
-            provider: "openai" | "ollama" | "cohere";
-            /** Model name for generating embeddings. */
-            model: string;
-            /** API key for the embedding provider. */
-            apiKey?: string;
-            /** Base URL for the embedding API. */
-            baseUrl?: string;
-            /** Embedding vector dimensions. */
-            dimensions?: number;
-            /** Batch size for embedding generation. */
-            batchSize?: number;
-        };
-        /** Document chunking configuration. */
-        chunking?: {
-            /** Chunking strategy: "fixed", "paragraph", or "sentence". */
-            strategy?: "fixed" | "paragraph" | "sentence";
-            /** Target chunk size in tokens. */
-            chunkSize?: number;
-            /** Overlap between chunks in tokens. */
-            chunkOverlap?: number;
-        };
-        /** Retrieval configuration. */
-        retrieval?: {
-            /** Default number of results to return. */
-            defaultLimit?: number;
-            /** Minimum similarity score threshold. */
-            similarityThreshold?: number;
-        };
-        /** Default namespace for document storage. */
-        defaultNamespace?: string;
-        /** LLM configuration for background RAG tasks (entity extraction, summarization). */
-        llmConfig?: {
-            /** LLM provider name. */
-            provider: string;
-            /** Model name. */
-            model?: string;
-            /** API key for the LLM provider. */
-            apiKey?: string;
-            /** Temperature for generation. */
-            temperature?: number;
-        };
-    };
-    /** 
-     * Custom collections for application data storage.
-     * Collections map to the graph structure (nodes + edges) with a developer-friendly CRUD interface.
-     * 
-     * @example
-     * ```ts
-     * const customers = defineCollection({
-     *   name: 'customer',
-     *   schema: customerSchema,
-     *   indexes: ['email'],
-     * });
-     * 
-     * const copilotz = await createCopilotz({
-     *   agents: [...],
-     *   collections: [customers],
-     * });
-     * 
-     * // Use collections
-     * const db = copilotz.collections.withNamespace('tenant-123');
-     * await db.customer.create({ email: 'alice@example.com' });
-     * ```
-     */
-    // deno-lint-ignore no-explicit-any
-    collections?: CollectionDefinition<any, any, any>[];
-    /** Configuration options for collections. */
-    collectionsConfig?: {
-        /** Auto-create indexes on startup. Default: true */
-        autoIndex?: boolean;
-        /** Validate writes against schema. Default: false */
-        validateOnWrite?: boolean;
-    };
+    enabled?: boolean;
     /**
-     * Multi-agent conversation configuration.
-     * Controls how agents interact in threads with multiple participants.
+     * Maximum consecutive agent-to-agent messages before forcing target to user.
+     * Prevents infinite agent loops.
+     * Default: 5
      */
-    multiAgent?: {
-        /**
-         * Whether multi-agent routing is enabled.
-         * When disabled, agent responses always route back to the original sender.
-         * Default: false unless multiAgent config is explicitly provided.
-         */
-        enabled?: boolean;
-        /**
-         * Maximum consecutive agent-to-agent messages before forcing target to user.
-         * Prevents infinite agent loops.
-         * Default: 5
-         */
-        maxAgentTurns?: number;
-        /**
-         * Whether to include target info in conversation history.
-         * Helps agents understand conversation flow.
-         * Default: true
-         */
-        includeTargetContext?: boolean;
-    };
+    maxAgentTurns?: number;
     /**
-     * Remote skill URLs or inline skill definitions.
-     * Merged with skills discovered from `resources.path` and default locations.
-     *
-     * @example
-     * ```ts
-     * skills: [
-     *   "https://skills.example.com/create-agent/SKILL.md",
-     *   { name: "my-skill", description: "...", content: "..." },
-     * ]
-     * ```
+     * Whether to include target info in conversation history.
+     * Helps agents understand conversation flow.
+     * Default: true
      */
-    skills?: Array<string | { url?: string; name?: string; description?: string; content?: string }>;
-    /**
-     * Enable the bundled Copilotz development agent.
-     * This agent can create and configure other agents, tools, APIs, and resources
-     * using the built-in framework skills.
-     *
-     * @example
-     * ```ts
-     * copilotzAgent: { llmOptions: { provider: "openai", model: "gpt-4o" } }
-     * // or with custom name
-     * copilotzAgent: { name: "dev", llmOptions: { provider: "openai", model: "gpt-4o" } }
-     * ```
-     */
-    copilotzAgent?: {
-        /** Override the agent's name/id. Default: "copilotz" */
-        name?: string;
-        /** LLM options for the Copilotz agent. */
-        llmOptions: import("@/connectors/llm/types.ts").ProviderConfig;
-    };
+    includeTargetContext?: boolean;
+  };
+  /**
+   * Remote skill URLs or inline skill definitions.
+   * Merged with skills discovered from `resources.path` and default locations.
+   *
+   * @example
+   * ```ts
+   * skills: [
+   *   "https://skills.example.com/create-agent/SKILL.md",
+   *   { name: "my-skill", description: "...", content: "..." },
+   * ]
+   * ```
+   */
+  skills?: Array<
+    string | {
+      url?: string;
+      name?: string;
+      description?: string;
+      content?: string;
+    }
+  >;
+  /**
+   * Enable the bundled Copilotz development agent.
+   * This agent can create and configure other agents, tools, APIs, and resources
+   * using the built-in framework skills.
+   *
+   * @example
+   * ```ts
+   * copilotzAgent: { llmOptions: { provider: "openai", model: "gpt-4o" } }
+   * // or with custom name
+   * copilotzAgent: { name: "dev", llmOptions: { provider: "openai", model: "gpt-4o" } }
+   * ```
+   */
+  copilotzAgent?: {
+    /** Override the agent's name/id. Default: "copilotz" */
+    name?: string;
+    /** LLM options for the Copilotz agent. */
+    llmOptions: import("@/connectors/llm/types.ts").ProviderConfig;
+  };
 }
 
 /**
@@ -656,37 +715,37 @@ export type CopilotzRunOverrides = never;
  * Entry in the session history, containing the original message and its result.
  */
 export interface CopilotzSessionHistoryEntry {
-    /** The original message that was sent. */
-    message: MessagePayload;
-    /** The result from processing the message. */
-    result: CopilotzRunResult;
+  /** The original message that was sent. */
+  message: MessagePayload;
+  /** The result from processing the message. */
+  result: CopilotzRunResult;
 }
 
 /**
  * Interface for CLI input/output operations.
  */
 export interface CopilotzCliIO {
-    /** 
-     * Prompts the user for input.
-     * @param message - The prompt message to display
-     * @returns The user's input
-     */
-    prompt(message: string): Promise<string>;
-    /** 
-     * Prints a line to the output.
-     * @param line - The line to print
-     */
-    print(line: string): void;
+  /**
+   * Prompts the user for input.
+   * @param message - The prompt message to display
+   * @returns The user's input
+   */
+  prompt(message: string): Promise<string>;
+  /**
+   * Prints a line to the output.
+   * @param line - The line to print
+   */
+  print(line: string): void;
 }
 
 /**
  * Controller for managing an interactive CLI session.
  */
 export interface CopilotzCliController {
-    /** Stops the CLI session. */
-    stop(): void;
-    /** Promise that resolves when the session is fully closed. */
-    readonly closed: Promise<void>;
+  /** Stops the CLI session. */
+  stop(): void;
+  /** Promise that resolves when the session is fully closed. */
+  readonly closed: Promise<void>;
 }
 
 /**
@@ -694,170 +753,189 @@ export interface CopilotzCliController {
  * Provides methods for running messages, starting interactive sessions, and managing resources.
  */
 export interface Copilotz {
-    /** The frozen configuration used to create this instance. */
-    readonly config: Readonly<CopilotzConfig>;
-    /** Database operations for direct data access. */
-    readonly ops: CopilotzDb["ops"];
+  /** The frozen configuration used to create this instance. */
+  readonly config: Readonly<CopilotzConfig>;
+  /** Database operations for direct data access. */
+  readonly ops: CopilotzDb["ops"];
+  /**
+   * Runs a message through the agent pipeline.
+   * @param message - The message payload to process
+   * @param onEvent - Optional callback for handling events
+   * @param options - Optional run configuration
+   * @returns Promise resolving to the run result with event stream
+   */
+  run(
+    message: MessagePayload,
+    onEvent?: UnifiedOnEvent,
+    options?: RunOptions,
+  ): Promise<CopilotzRunResult>;
+  /**
+   * Starts an interactive CLI session.
+   * @param initialMessage - Optional initial message or configuration
+   * @param onEvent - Optional callback for handling events
+   * @returns Controller for managing the session
+   */
+  start(
+    initialMessage?:
+      | (MessagePayload & {
+        banner?: string | null;
+        quitCommand?: string;
+        threadExternalId?: string;
+      })
+      | string,
+    onEvent?: UnifiedOnEvent,
+  ): CopilotzCliController;
+  /** Shuts down the instance and releases resources. */
+  shutdown(): Promise<void>;
+  /** Asset utilities for working with stored files and media. */
+  assets: {
     /**
-     * Runs a message through the agent pipeline.
-     * @param message - The message payload to process
-     * @param onEvent - Optional callback for handling events
-     * @param options - Optional run configuration
-     * @returns Promise resolving to the run result with event stream
+     * Gets an asset as base64-encoded string.
+     * @param refOrId - Asset reference (asset://id) or ID
+     * @param options - Optional options (e.g., namespace)
+     * @returns Base64 data and MIME type
      */
-    run(message: MessagePayload, onEvent?: UnifiedOnEvent, options?: RunOptions): Promise<CopilotzRunResult>;
+    getBase64: (
+      refOrId: string,
+      options?: { namespace?: string },
+    ) => Promise<{ base64: string; mime: string }>;
     /**
-     * Starts an interactive CLI session.
-     * @param initialMessage - Optional initial message or configuration
-     * @param onEvent - Optional callback for handling events
-     * @returns Controller for managing the session
+     * Gets an asset as a data URL.
+     * @param refOrId - Asset reference (asset://id) or ID
+     * @param options - Optional options (e.g., namespace)
+     * @returns Data URL string
      */
-    start(initialMessage?: (MessagePayload & { banner?: string | null; quitCommand?: string; threadExternalId?: string }) | string, onEvent?: UnifiedOnEvent): CopilotzCliController;
-    /** Shuts down the instance and releases resources. */
-    shutdown(): Promise<void>;
-    /** Asset utilities for working with stored files and media. */
-    assets: {
-        /** 
-         * Gets an asset as base64-encoded string.
-         * @param refOrId - Asset reference (asset://id) or ID
-         * @param options - Optional options (e.g., namespace)
-         * @returns Base64 data and MIME type
-         */
-        getBase64: (refOrId: string, options?: { namespace?: string }) => Promise<{ base64: string; mime: string }>;
-        /** 
-         * Gets an asset as a data URL.
-         * @param refOrId - Asset reference (asset://id) or ID
-         * @param options - Optional options (e.g., namespace)
-         * @returns Data URL string
-         */
-        getDataUrl: (refOrId: string, options?: { namespace?: string }) => Promise<string>;
-    };
-    /** 
-     * Custom collections for application data storage.
-     * Access collections with explicit namespace or use withNamespace() for scoped access.
-     * 
-     * @example
-     * ```ts
-     * // Explicit namespace
-     * await copilotz.collections.customer.create(data, { namespace: 'tenant-123' });
-     * 
-     * // Scoped namespace (recommended)
-     * const db = copilotz.collections.withNamespace('tenant-123');
-     * await db.customer.create(data);
-     * await db.customer.find({ plan: 'pro' });
-     * await db.customer.search('enterprise companies');
-     * ```
-     */
-    collections: CollectionsManager | undefined;
+    getDataUrl: (
+      refOrId: string,
+      options?: { namespace?: string },
+    ) => Promise<string>;
+  };
+  /**
+   * Custom collections for application data storage.
+   * Access collections with explicit namespace or use withNamespace() for scoped access.
+   *
+   * @example
+   * ```ts
+   * // Explicit namespace
+   * await copilotz.collections.customer.create(data, { namespace: 'tenant-123' });
+   *
+   * // Scoped namespace (recommended)
+   * const db = copilotz.collections.withNamespace('tenant-123');
+   * await db.customer.create(data);
+   * await db.customer.find({ plan: 'pro' });
+   * await db.customer.search('enterprise companies');
+   * ```
+   */
+  collections: CollectionsManager | undefined;
 
+  /**
+   * Schema management utilities for multi-tenant PostgreSQL schema isolation.
+   * Use these methods to provision, check, and manage tenant schemas.
+   *
+   * @example
+   * ```ts
+   * // Provision a new tenant schema (creates all tables)
+   * await copilotz.schema.provision('tenant_abc');
+   *
+   * // Check if a schema exists
+   * if (await copilotz.schema.exists('tenant_abc')) {
+   *   // Safe to use
+   * }
+   *
+   * // Run with a specific schema
+   * await copilotz.run(message, onEvent, { schema: 'tenant_abc' });
+   *
+   * // Drop a tenant schema (WARNING: deletes all data!)
+   * await copilotz.schema.drop('tenant_abc');
+   * ```
+   */
+  schema: {
     /**
-     * Schema management utilities for multi-tenant PostgreSQL schema isolation.
-     * Use these methods to provision, check, and manage tenant schemas.
-     * 
-     * @example
-     * ```ts
-     * // Provision a new tenant schema (creates all tables)
-     * await copilotz.schema.provision('tenant_abc');
-     * 
-     * // Check if a schema exists
-     * if (await copilotz.schema.exists('tenant_abc')) {
-     *   // Safe to use
-     * }
-     * 
-     * // Run with a specific schema
-     * await copilotz.run(message, onEvent, { schema: 'tenant_abc' });
-     * 
-     * // Drop a tenant schema (WARNING: deletes all data!)
-     * await copilotz.schema.drop('tenant_abc');
-     * ```
+     * Provisions a new tenant schema with all required tables.
+     * Idempotent - safe to call multiple times.
+     * @param schemaName - Name of the schema to create
      */
-    schema: {
-        /**
-         * Provisions a new tenant schema with all required tables.
-         * Idempotent - safe to call multiple times.
-         * @param schemaName - Name of the schema to create
-         */
-        provision: (schemaName: string) => Promise<void>;
-        /**
-         * Drops a tenant schema and all its data.
-         * WARNING: This permanently deletes all data in the schema!
-         * @param schemaName - Name of the schema to drop
-         */
-        drop: (schemaName: string) => Promise<void>;
-        /**
-         * Checks if a schema exists in the database.
-         * @param schemaName - Name of the schema to check
-         * @returns true if the schema exists
-         */
-        exists: (schemaName: string) => Promise<boolean>;
-        /**
-         * Lists all tenant schemas (excludes system schemas).
-         * @returns Array of schema names
-         */
-        list: () => Promise<string[]>;
-        /**
-         * Warms the schema cache by loading all existing schemas.
-         * Call during startup to avoid first-request latency for existing tenants.
-         */
-        warmCache: () => Promise<void>;
-    };
+    provision: (schemaName: string) => Promise<void>;
+    /**
+     * Drops a tenant schema and all its data.
+     * WARNING: This permanently deletes all data in the schema!
+     * @param schemaName - Name of the schema to drop
+     */
+    drop: (schemaName: string) => Promise<void>;
+    /**
+     * Checks if a schema exists in the database.
+     * @param schemaName - Name of the schema to check
+     * @returns true if the schema exists
+     */
+    exists: (schemaName: string) => Promise<boolean>;
+    /**
+     * Lists all tenant schemas (excludes system schemas).
+     * @returns Array of schema names
+     */
+    list: () => Promise<string[]>;
+    /**
+     * Warms the schema cache by loading all existing schemas.
+     * Call during startup to avoid first-request latency for existing tenants.
+     */
+    warmCache: () => Promise<void>;
+  };
 }
 
-/** 
+/**
  * Collections manager interface with dynamic collection access.
  * Access collections by name: `manager.customer`, `manager.order`, etc.
  * Use `withNamespace()` to get a scoped client with namespace pre-applied.
- * 
+ *
  * Note: The index signature allows accessing any collection by name.
  * TypeScript will show methods and collections together in autocomplete.
  */
 export interface CollectionsManager {
-    /** Get a scoped client with namespace pre-applied to all operations. */
-    withNamespace(namespace: string): ScopedCollectionsManager;
-    /** List all registered collection names. */
-    getCollectionNames(): string[];
-    /** Check if a collection exists. */
-    hasCollection(name: string): boolean;
-    /** Access collections by name. */
-    [collectionName: string]: CollectionCrud<unknown, unknown> | unknown;
+  /** Get a scoped client with namespace pre-applied to all operations. */
+  withNamespace(namespace: string): ScopedCollectionsManager;
+  /** List all registered collection names. */
+  getCollectionNames(): string[];
+  /** Check if a collection exists. */
+  hasCollection(name: string): boolean;
+  /** Access collections by name. */
+  [collectionName: string]: CollectionCrud<unknown, unknown> | unknown;
 }
 
-/** 
+/**
  * Scoped collections manager with namespace pre-applied.
  * Access collections by name: `scoped.customer`, `scoped.order`, etc.
  */
 export interface ScopedCollectionsManager {
-    /** Access scoped collections by name. */
-    [collectionName: string]: ScopedCollectionCrud<unknown, unknown>;
+  /** Access scoped collections by name. */
+  [collectionName: string]: ScopedCollectionCrud<unknown, unknown>;
 }
 
 /**
  * Creates a new Copilotz instance with the provided configuration.
- * 
+ *
  * This is the main entry point for using Copilotz. It initializes the database,
  * sets up agents, tools, and processors, and returns an instance ready for use.
- * 
+ *
  * @param config - Configuration options for the Copilotz instance
  * @returns Promise resolving to a configured Copilotz instance
- * 
+ *
  * @example
  * ```ts
  * const copilotz = await createCopilotz({
  *   agents: [{
  *     id: "assistant",
- *     name: "Assistant", 
+ *     name: "Assistant",
  *     role: "A helpful AI assistant",
  *     instructions: "Help users with their questions.",
  *     llmOptions: { provider: "openai", model: "gpt-4" }
  *   }],
  *   stream: true
  * });
- * 
+ *
  * const result = await copilotz.run({
  *   content: "What is the weather today?",
  *   sender: { type: "user", name: "User" }
  * });
- * 
+ *
  * for await (const event of result.events) {
  *   console.log(event.type, event.payload);
  * }
@@ -867,546 +945,734 @@ export interface ScopedCollectionsManager {
 // DB CONNECTION CACHE
 // ============================================
 
-const _dbConnectionCache = new Map<string, { db: CopilotzDb; refCount: number }>();
+const _dbConnectionCache = new Map<
+  string,
+  { db: CopilotzDb; refCount: number }
+>();
+const isInitDebugEnabled = () => Deno.env.get("COPILOTZ_INIT_DEBUG") === "1";
+const elapsedMs = (startedAt: number) =>
+  Number((performance.now() - startedAt).toFixed(1));
 
-export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> {
+export async function createCopilotz(
+  config: CopilotzConfig,
+): Promise<Copilotz> {
+  const initDebug = isInitDebugEnabled();
+  const initStartedAt = performance.now();
+  const logInit = (
+    phase: string,
+    startedAt: number,
+    extra?: Record<string, unknown>,
+  ) => {
+    if (!initDebug) return;
+    console.log("[copilotz:init]", {
+      phase,
+      elapsedMs: elapsedMs(startedAt),
+      ...(extra ?? {}),
+    });
+  };
 
-    // ---- Phase 1: Resolve resources (file-loaded + explicit merge) ----
-    let resolvedAgents: AgentConfig[] = config.agents ?? [];
-    let resolvedTools: ToolConfig[] | undefined = config.tools;
-    let resolvedApis: APIConfig[] | undefined = config.apis;
-    let resolvedMcpServers: MCPServerConfig[] | undefined = config.mcpServers;
-    let resolvedProcessors = config.processors;
-    let loadedResources: Resources | undefined;
+  // ---- Phase 1: Resolve resources (file-loaded + explicit merge) ----
+  let resolvedAgents: AgentConfig[] = config.agents ?? [];
+  let resolvedTools: ToolConfig[] | undefined = config.tools;
+  let resolvedApis: APIConfig[] | undefined = config.apis;
+  let resolvedMcpServers: MCPServerConfig[] | undefined = config.mcpServers;
+  let resolvedProcessors = config.processors;
+  let loadedResources: Resources | undefined;
 
-    if (config.resources?.path) {
-        const loaded = await loadResources({ path: config.resources.path });
-        loadedResources = loaded;
-        resolvedAgents = mergeResourceArrays<AgentConfig>(loaded.agents ?? [], config.agents);
-        resolvedTools = mergeResourceArrays<ToolConfig>(loaded.tools as ToolConfig[] ?? [], config.tools);
-        resolvedApis = mergeResourceArrays<APIConfig>(loaded.apis as APIConfig[] ?? [], config.apis);
-        resolvedMcpServers = mergeResourceArrays<MCPServerConfig>(loaded.mcpServers as MCPServerConfig[] ?? [], config.mcpServers);
-        // Processors: append explicit after loaded (no ID-based dedup for processors)
-        resolvedProcessors = [
-            ...(loaded.processors ?? []),
-            ...(config.processors ?? []),
-        ];
+  if (config.resources?.path) {
+    const startedAt = performance.now();
+    const loaded = await loadResources({ path: config.resources.path });
+    logInit("loadResources", startedAt, {
+      path: config.resources.path,
+      agents: loaded.agents?.length ?? 0,
+      tools: loaded.tools?.length ?? 0,
+      apis: loaded.apis?.length ?? 0,
+      mcpServers: loaded.mcpServers?.length ?? 0,
+      skills: loaded.skills?.length ?? 0,
+      processors: loaded.processors?.length ?? 0,
+    });
+    loadedResources = loaded;
+    resolvedAgents = mergeResourceArrays<AgentConfig>(
+      loaded.agents ?? [],
+      config.agents,
+    );
+    resolvedTools = mergeResourceArrays<ToolConfig>(
+      loaded.tools as ToolConfig[] ?? [],
+      config.tools,
+    );
+    resolvedApis = mergeResourceArrays<APIConfig>(
+      loaded.apis as APIConfig[] ?? [],
+      config.apis,
+    );
+    resolvedMcpServers = mergeResourceArrays<MCPServerConfig>(
+      loaded.mcpServers as MCPServerConfig[] ?? [],
+      config.mcpServers,
+    );
+    // Processors: append explicit after loaded (no ID-based dedup for processors)
+    resolvedProcessors = [
+      ...(loaded.processors ?? []),
+      ...(config.processors ?? []),
+    ];
 
-        if (config.resources.watch) {
-            console.warn("[copilotz] resources.watch is reserved for future use and has no effect yet.");
-        }
+    if (config.resources.watch) {
+      console.warn(
+        "[copilotz] resources.watch is reserved for future use and has no effect yet.",
+      );
     }
+  }
 
-    // ---- Phase 1b: Resolve skills (bundled + user + project + explicit) ----
-    const bundledSkills = await loadBundledSkills();
+  // ---- Phase 1b: Resolve skills (bundled + user + project + explicit) ----
+  let startedAt = performance.now();
+  const bundledSkills = await loadBundledSkills();
+  logInit("loadBundledSkills", startedAt, { skills: bundledSkills.length });
 
-    const homeDir = Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE") ?? "";
-    const userSkills = homeDir
-        ? await loadSkillsFromDirectory(homeDir + "/.copilotz/skills/", "user")
-        : [];
+  const homeDir = Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE") ?? "";
+  startedAt = performance.now();
+  const userSkills = homeDir
+    ? await loadSkillsFromDirectory(homeDir + "/.copilotz/skills/", "user")
+    : [];
+  logInit("loadUserSkills", startedAt, {
+    homeDir: homeDir ? "present" : "missing",
+    skills: userSkills.length,
+  });
 
-    const projectSkills = loadedResources?.skills ?? [];
+  const projectSkills = loadedResources?.skills ?? [];
 
-    // Load remote/explicit skills from config
-    const explicitSkills: Skill[] = [];
-    if (config.skills) {
-        for (const s of config.skills) {
-            try {
-                if (typeof s === "string") {
-                    explicitSkills.push(await loadSkillFromUrl(s));
-                } else if (s.url) {
-                    explicitSkills.push(await loadSkillFromUrl(s.url));
-                } else if (s.name && s.content) {
-                    explicitSkills.push({
-                        name: s.name,
-                        description: s.description ?? "",
-                        content: s.content,
-                        source: "remote",
-                        sourcePath: "inline",
-                        hasReferences: false,
-                    });
-                }
-            } catch (err) {
-                console.warn(`[copilotz] Failed to load skill: ${typeof s === "string" ? s : s.url ?? s.name}`, err);
-            }
+  // Load remote/explicit skills from config
+  startedAt = performance.now();
+  const explicitSkills: Skill[] = [];
+  if (config.skills) {
+    for (const s of config.skills) {
+      try {
+        if (typeof s === "string") {
+          explicitSkills.push(await loadSkillFromUrl(s));
+        } else if (s.url) {
+          explicitSkills.push(await loadSkillFromUrl(s.url));
+        } else if (s.name && s.content) {
+          explicitSkills.push({
+            name: s.name,
+            description: s.description ?? "",
+            content: s.content,
+            source: "remote",
+            sourcePath: "inline",
+            hasReferences: false,
+          });
         }
-    }
-
-    // Merge: project > explicit > user > bundled (first wins on name collision)
-    const allSkills = mergeSkills(projectSkills, explicitSkills, userSkills, bundledSkills);
-
-    // ---- Phase 1c: Resolve copilotz agent ----
-    if (config.copilotzAgent) {
-        try {
-            const { instructions, config: agentConfigBase } = await loadAdminAgent();
-            const copilotzAgent = {
-                id: config.copilotzAgent.name ?? "copilotz",
-                name: config.copilotzAgent.name ?? "copilotz",
-                role: "assistant",
-                instructions,
-                ...agentConfigBase,
-                llmOptions: config.copilotzAgent.llmOptions,
-            } as AgentConfig;
-            // Only add if not already overridden by user
-            const alreadyDefined = resolvedAgents.some(
-                (a) => (a.id ?? a.name) === copilotzAgent.id,
-            );
-            if (!alreadyDefined) {
-                resolvedAgents.push(copilotzAgent);
-            }
-        } catch (err) {
-            console.warn("[copilotz] Failed to load bundled copilotz agent:", err);
-        }
-    }
-
-    if (resolvedAgents.length === 0) {
-        throw new Error(
-            "createCopilotz requires at least one agent. " +
-            "Provide agents explicitly or via resources.path.",
+      } catch (err) {
+        console.warn(
+          `[copilotz] Failed to load skill: ${
+            typeof s === "string" ? s : s.url ?? s.name
+          }`,
+          err,
         );
+      }
     }
+  }
+  logInit("loadExplicitSkills", startedAt, {
+    configured: config.skills?.length ?? 0,
+    loaded: explicitSkills.length,
+  });
 
-    // ---- Phase 2: Normalize resources ----
-    const normalizedAgents = resolvedAgents.map(normalizeAgent);
-    const normalizedTools = resolvedTools?.map(normalizeTool);
-    const normalizedApis = resolvedApis?.map(normalizeApi);
-    const normalizedMcpServers = resolvedMcpServers?.map(normalizeMcpServer);
+  // Merge: project > explicit > user > bundled (first wins on name collision)
+  startedAt = performance.now();
+  const allSkills = mergeSkills(
+    projectSkills,
+    explicitSkills,
+    userSkills,
+    bundledSkills,
+  );
+  logInit("mergeSkills", startedAt, {
+    totalSkills: allSkills.length,
+    projectSkills: projectSkills.length,
+  });
 
-    const baseConfig: NormalizedCopilotzConfig = {
-        ...config,
-        agents: normalizedAgents,
-        tools: normalizedTools,
-        apis: normalizedApis,
-        mcpServers: normalizedMcpServers,
-        skills: allSkills,
+  // ---- Phase 1c: Resolve copilotz agent ----
+  if (config.copilotzAgent) {
+    try {
+      startedAt = performance.now();
+      const { instructions, config: agentConfigBase } = await loadAdminAgent();
+      logInit("loadAdminAgent", startedAt, {
+        instructionLength: instructions.length,
+      });
+      const copilotzAgent = {
+        id: config.copilotzAgent.name ?? "copilotz",
+        name: config.copilotzAgent.name ?? "copilotz",
+        role: "assistant",
+        instructions,
+        ...agentConfigBase,
+        llmOptions: config.copilotzAgent.llmOptions,
+      } as AgentConfig;
+      // Only add if not already overridden by user
+      const alreadyDefined = resolvedAgents.some(
+        (a) => (a.id ?? a.name) === copilotzAgent.id,
+      );
+      if (!alreadyDefined) {
+        resolvedAgents.push(copilotzAgent);
+      }
+    } catch (err) {
+      console.warn("[copilotz] Failed to load bundled copilotz agent:", err);
+    }
+  }
+
+  if (resolvedAgents.length === 0) {
+    throw new Error(
+      "createCopilotz requires at least one agent. " +
+        "Provide agents explicitly or via resources.path.",
+    );
+  }
+
+  // ---- Phase 2: Normalize resources ----
+  startedAt = performance.now();
+  const normalizedAgents = resolvedAgents.map(normalizeAgent);
+  const normalizedTools = resolvedTools?.map(normalizeTool);
+  const normalizedApis = resolvedApis?.map(normalizeApi);
+  const normalizedMcpServers = resolvedMcpServers?.map(normalizeMcpServer);
+
+  const baseConfig: NormalizedCopilotzConfig = {
+    ...config,
+    agents: normalizedAgents,
+    tools: normalizedTools,
+    apis: normalizedApis,
+    mcpServers: normalizedMcpServers,
+    skills: allSkills,
+  };
+  logInit("normalizeResources", startedAt, {
+    agents: normalizedAgents.length,
+    tools: normalizedTools?.length ?? 0,
+    apis: normalizedApis?.length ?? 0,
+    mcpServers: normalizedMcpServers?.length ?? 0,
+  });
+
+  // ---- Phase 3: Resolve database (with connection caching) ----
+  const dbCacheKey = config.dbConfig?.url ?? ":memory:";
+  let managedDb: CopilotzDb | undefined;
+  let fromCache = false;
+  startedAt = performance.now();
+
+  if (config.dbInstance) {
+    managedDb = undefined;
+  } else if (dbCacheKey !== ":memory:" && _dbConnectionCache.has(dbCacheKey)) {
+    const cached = _dbConnectionCache.get(dbCacheKey)!;
+    cached.refCount++;
+    managedDb = cached.db;
+    fromCache = true;
+  } else {
+    managedDb = await createDatabase({
+      ...config.dbConfig,
+      staleProcessingThresholdMs: config.staleProcessingThresholdMs ??
+        config.dbConfig?.staleProcessingThresholdMs,
+    });
+    if (dbCacheKey !== ":memory:" && managedDb) {
+      _dbConnectionCache.set(dbCacheKey, { db: managedDb, refCount: 1 });
+    }
+  }
+  logInit("resolveDatabase", startedAt, {
+    cacheKey: dbCacheKey,
+    fromCache,
+    usedProvidedInstance: Boolean(config.dbInstance),
+  });
+
+  const baseDb = config.dbInstance ?? managedDb;
+  if (!baseDb) {
+    throw new Error("Failed to initialize Copilotz database instance.");
+  }
+  const baseOps = baseDb.ops;
+
+  // Prepare custom processors map (order preserved; highest priority first in provided array)
+  if (Array.isArray(resolvedProcessors) && resolvedProcessors.length > 0) {
+    const byType: Record<
+      string,
+      Array<EventProcessor<unknown, ProcessorDeps>>
+    > = {};
+    for (const p of resolvedProcessors) {
+      if (!p || typeof p !== "object") continue;
+      const eventType = (p as { eventType?: string }).eventType;
+      if (
+        !eventType ||
+        typeof (p as EventProcessor<unknown, ProcessorDeps>).shouldProcess !==
+          "function" ||
+        typeof (p as EventProcessor<unknown, ProcessorDeps>).process !==
+          "function"
+      ) continue;
+      const key = String(eventType).toUpperCase();
+      if (!byType[key]) byType[key] = [];
+      byType[key].push(p as EventProcessor<unknown, ProcessorDeps>);
+    }
+    baseConfig.customProcessorsByType = byType;
+  }
+
+  // Normalize asset config: passthrough backend implies resolveInLLM: false
+  let normalizedAssetConfig: AssetConfig | undefined = undefined;
+  if (config.assets?.config) {
+    const srcConfig = config.assets.config;
+    normalizedAssetConfig = {
+      inlineThresholdBytes: srcConfig.inlineThresholdBytes,
+      resolveInLLM: srcConfig.backend === "passthrough"
+        ? false
+        : srcConfig.resolveInLLM,
+      backend: srcConfig.backend,
+      fs: srcConfig.fs,
+      s3: srcConfig.s3,
+      namespacing: srcConfig.namespacing,
     };
+  }
 
-    // ---- Phase 3: Resolve database (with connection caching) ----
-    const dbCacheKey = config.dbConfig?.url ?? ':memory:';
-    let managedDb: CopilotzDb | undefined;
-    let fromCache = false;
+  const staticAssetStore = (config.assets && config.assets.store)
+    ? config.assets.store
+    : undefined;
+  const assetStoreCache = new Map<string, AssetStore>();
 
-    if (config.dbInstance) {
-        managedDb = undefined;
-    } else if (dbCacheKey !== ':memory:' && _dbConnectionCache.has(dbCacheKey)) {
-        const cached = _dbConnectionCache.get(dbCacheKey)!;
-        cached.refCount++;
-        managedDb = cached.db;
-        fromCache = true;
-    } else {
-        managedDb = await createDatabase({
-            ...config.dbConfig,
-            staleProcessingThresholdMs: config.staleProcessingThresholdMs ?? config.dbConfig?.staleProcessingThresholdMs,
-        });
-        if (dbCacheKey !== ':memory:' && managedDb) {
-            _dbConnectionCache.set(dbCacheKey, { db: managedDb, refCount: 1 });
-        }
-    }
+  const getAssetStoreForNamespace = (contextNamespace?: string): AssetStore => {
+    if (staticAssetStore) return staticAssetStore;
+    const resolved = resolveAssetNamespace(
+      normalizedAssetConfig,
+      contextNamespace,
+    );
+    const cached = assetStoreCache.get(resolved.cacheKey);
+    if (cached) return cached;
+    const store = normalizedAssetConfig
+      ? createAssetStoreForNamespace(normalizedAssetConfig, contextNamespace)
+      : createMemoryAssetStore();
+    assetStoreCache.set(resolved.cacheKey, store);
+    return store;
+  };
 
-    const baseDb = config.dbInstance ?? managedDb;
-    if (!baseDb) {
-        throw new Error("Failed to initialize Copilotz database instance.");
-    }
-    const baseOps = baseDb.ops;
+  // Initialize collections if defined
+  startedAt = performance.now();
+  let collectionsManager: CollectionsManager | undefined = undefined;
+  if (config.collections && config.collections.length > 0) {
+    // Create embedding function for collections search
+    const collectionEmbeddingFn = config.rag?.embedding
+      ? async (text: string): Promise<number[]> => {
+        // Import embedding connector dynamically to avoid circular deps
+        const { embed } = await import("@/connectors/embeddings/index.ts");
+        const result = await embed([text], config.rag!.embedding);
+        return result.embeddings[0] ?? [];
+      }
+      : undefined;
 
-    // Prepare custom processors map (order preserved; highest priority first in provided array)
-    if (Array.isArray(resolvedProcessors) && resolvedProcessors.length > 0) {
-        const byType: Record<string, Array<EventProcessor<unknown, ProcessorDeps>>> = {};
-        for (const p of resolvedProcessors) {
-            if (!p || typeof p !== "object") continue;
-            const eventType = (p as { eventType?: string }).eventType;
-            if (!eventType || typeof (p as EventProcessor<unknown, ProcessorDeps>).shouldProcess !== "function" || typeof (p as EventProcessor<unknown, ProcessorDeps>).process !== "function") continue;
-            const key = String(eventType).toUpperCase();
-            if (!byType[key]) byType[key] = [];
-            byType[key].push(p as EventProcessor<unknown, ProcessorDeps>);
-        }
-        baseConfig.customProcessorsByType = byType;
-    }
+    // Create collections manager
+    collectionsManager = createCollectionsManager(
+      baseDb,
+      config.collections,
+      {
+        embeddingFn: collectionEmbeddingFn,
+        autoIndex: config.collectionsConfig?.autoIndex ?? true,
+        validateOnWrite: config.collectionsConfig?.validateOnWrite ?? false,
+      },
+    ) as unknown as CollectionsManager;
 
-    // Normalize asset config: passthrough backend implies resolveInLLM: false
-    let normalizedAssetConfig: AssetConfig | undefined = undefined;
-    if (config.assets?.config) {
-        const srcConfig = config.assets.config;
-        normalizedAssetConfig = {
-            inlineThresholdBytes: srcConfig.inlineThresholdBytes,
-            resolveInLLM: srcConfig.backend === "passthrough" ? false : srcConfig.resolveInLLM,
-            backend: srcConfig.backend,
-            fs: srcConfig.fs,
-            s3: srcConfig.s3,
-            namespacing: srcConfig.namespacing,
-        };
-    }
-
-    const staticAssetStore = (config.assets && config.assets.store)
-        ? config.assets.store
-        : undefined;
-    const assetStoreCache = new Map<string, AssetStore>();
-
-    const getAssetStoreForNamespace = (contextNamespace?: string): AssetStore => {
-        if (staticAssetStore) return staticAssetStore;
-        const resolved = resolveAssetNamespace(normalizedAssetConfig, contextNamespace);
-        const cached = assetStoreCache.get(resolved.cacheKey);
-        if (cached) return cached;
-        const store = normalizedAssetConfig
-            ? createAssetStoreForNamespace(normalizedAssetConfig, contextNamespace)
-            : createMemoryAssetStore();
-        assetStoreCache.set(resolved.cacheKey, store);
-        return store;
-    };
-
-    // Initialize collections if defined
-    let collectionsManager: CollectionsManager | undefined = undefined;
-    if (config.collections && config.collections.length > 0) {
-        // Create embedding function for collections search
-        const collectionEmbeddingFn = config.rag?.embedding
-            ? async (text: string): Promise<number[]> => {
-                // Import embedding connector dynamically to avoid circular deps
-                const { embed } = await import("@/connectors/embeddings/index.ts");
-                const result = await embed([text], config.rag!.embedding);
-                return result.embeddings[0] ?? [];
-            }
-            : undefined;
-
-        // Create collections manager
-        collectionsManager = createCollectionsManager(
-            baseDb,
-            config.collections,
-            {
-                embeddingFn: collectionEmbeddingFn,
-                autoIndex: config.collectionsConfig?.autoIndex ?? true,
-                validateOnWrite: config.collectionsConfig?.validateOnWrite ?? false,
-            },
-        ) as unknown as CollectionsManager;
-
-        // Auto-create indexes if enabled
-        if (config.collectionsConfig?.autoIndex !== false) {
-            createCollectionIndexes(baseDb, config.collections).catch((error: unknown) => {
-                console.warn("[collections] Failed to create indexes:", error);
-            });
-        }
-    }
-
-    const performRun = async (
-        message: MessagePayload,
-        onEvent?: UnifiedOnEvent,
-        options?: RunOptions,
-    ): Promise<CopilotzRunResult> => {
-        const normalizedMessage = normalizeInboundRunMessage(message);
-
-        if (!hasRunInput(normalizedMessage)) {
-            throw new Error("message with content or toolCalls is required.");
-        }
-
-        // Resolve schema: RunOptions > DbConfig > undefined
-        // When set, all queries will execute in the specified schema
-        const resolvedSchema = options?.schema ?? config.dbConfig?.defaultSchema;
-
-        // Resolve namespace: RunOptions > CopilotzConfig > undefined
-        const resolvedNamespace = options?.namespace ?? config.namespace;
-
-        // Resolve collections: scoped if namespace is set, otherwise raw manager
-        const resolvedCollections = (resolvedNamespace && collectionsManager)
-            ? collectionsManager.withNamespace(resolvedNamespace)
-            : collectionsManager;
-
-        // Resolve agents: RunOptions > CopilotzConfig
-        // If RunOptions provides agents, they completely override config agents
-        const resolvedAgents = options?.agents ?? baseConfig.agents;
-
-        // Resolve tools: RunOptions > CopilotzConfig
-        // If RunOptions provides tools, they completely override config tools
-        const resolvedTools = options?.tools ?? baseConfig.tools;
-
-        const assetStoreForRun = getAssetStoreForNamespace(resolvedNamespace);
-
-        const ctx: ChatContext = {
-            agents: resolvedAgents,
-            tools: resolvedTools,
-            apis: baseConfig.apis,
-            mcpServers: baseConfig.mcpServers,
-            skills: baseConfig.skills,
-            callbacks: baseConfig.callbacks,
-            historyTransform: baseConfig.historyTransform,
-            dbConfig: baseConfig.dbConfig,
-            dbInstance: baseDb,
-            threadMetadata: baseConfig.threadMetadata,
-            queueTTL: baseConfig.queueTTL,
-            stream: options?.stream ?? baseConfig.stream ?? false,
-            activeTaskId: baseConfig.activeTaskId,
-            customProcessors: baseConfig.customProcessorsByType,
-            assetStore: assetStoreForRun,
-            assetConfig: normalizedAssetConfig,
-            resolveAsset: async (ref: string) => {
-                const id = resolveAssetIdForStore(ref, assetStoreForRun);
-                return await assetStoreForRun.get(id);
-            },
-            // RAG configuration
-            ragConfig: config.rag ? {
-                enabled: config.rag.enabled ?? true,
-                embedding: config.rag.embedding,
-                chunking: config.rag.chunking,
-                retrieval: config.rag.retrieval,
-                defaultNamespace: config.rag.defaultNamespace,
-                llmConfig: config.rag.llmConfig,
-            } : undefined,
-            embeddingConfig: config.rag?.embedding,
-            // Resolved namespace for this run
-            namespace: resolvedNamespace,
-            // Collections: scoped if namespace is set, otherwise raw manager
-            collections: resolvedCollections,
-            // Sender of the current message (available to processors and tools)
-            sender: normalizedMessage.sender ? {
-                id: normalizedMessage.sender.id ?? null,
-                externalId: normalizedMessage.sender.externalId ?? null,
-                type: normalizedMessage.sender.type ?? "user",
-                name: normalizedMessage.sender.name ?? null,
-                metadata: normalizedMessage.sender.metadata ?? null,
-            } : undefined,
-            // Multi-agent routing is opt-in. Without explicit config, agent replies
-            // should go back to the original sender instead of delegating via @mentions.
-            multiAgent: config.multiAgent
-                ? {
-                    enabled: config.multiAgent.enabled ?? true,
-                    maxAgentTurns: config.multiAgent.maxAgentTurns ?? 5,
-                    includeTargetContext: config.multiAgent.includeTargetContext ?? true,
-                }
-                : undefined,
-        };
-
-        // If schema is specified, wrap execution in schema context
-        // This sets the search_path for all queries within this run
-        if (resolvedSchema && resolvedSchema !== 'public') {
-            return withSchema(resolvedSchema, async () => {
-                return await runThread(baseDb, ctx, normalizedMessage, onEvent, options);
-            });
-        }
-
-        return await runThread(baseDb, ctx, normalizedMessage, onEvent, options);
-    };
-
-    return {
-        config: Object.freeze({ ...baseConfig }),
-        get ops() {
-            return baseOps;
+    // Auto-create indexes if enabled
+    if (config.collectionsConfig?.autoIndex !== false) {
+      createCollectionIndexes(baseDb, config.collections).catch(
+        (error: unknown) => {
+          console.warn("[collections] Failed to create indexes:", error);
         },
-        run: performRun,
-        start: (initialMessage?: (MessagePayload & { banner?: string | null; quitCommand?: string; threadExternalId?: string }) | string, onEvent?: UnifiedOnEvent) => {
-            let quitCommand = "quit";
-            let banner: string | null = typeof defaultBanner === "string" ? defaultBanner : null;
-            let threadExternalId = crypto.randomUUID().slice(0, 24);
-            let sessionSender: MessagePayload["sender"] | undefined = { type: "user", name: "user" };
-            let sessionParticipants: string[] | undefined = undefined;
+      );
+    }
+  }
+  logInit("initializeCollections", startedAt, {
+    collections: config.collections?.length ?? 0,
+    hasManager: Boolean(collectionsManager),
+  });
 
-            if (initialMessage && typeof initialMessage === "object") {
-                if (typeof (initialMessage as { quitCommand?: string }).quitCommand === "string") {
-                    quitCommand = (initialMessage as { quitCommand?: string }).quitCommand as string;
-                }
-                const maybeBanner = (initialMessage as { banner?: string | null }).banner;
-                if (typeof maybeBanner === "string" || maybeBanner === null) {
-                    banner = maybeBanner;
-                }
-                const maybeThreadExternalId = (initialMessage as { threadExternalId?: string }).threadExternalId;
-                if (typeof maybeThreadExternalId === "string" && maybeThreadExternalId.trim().length > 0) {
-                    threadExternalId = maybeThreadExternalId;
+  const performRun = async (
+    message: MessagePayload,
+    onEvent?: UnifiedOnEvent,
+    options?: RunOptions,
+  ): Promise<CopilotzRunResult> => {
+    const normalizedMessage = normalizeInboundRunMessage(message);
+
+    if (!hasRunInput(normalizedMessage)) {
+      throw new Error("message with content or toolCalls is required.");
+    }
+
+    // Resolve schema: RunOptions > DbConfig > undefined
+    // When set, all queries will execute in the specified schema
+    const resolvedSchema = options?.schema ?? config.dbConfig?.defaultSchema;
+
+    // Resolve namespace: RunOptions > CopilotzConfig > undefined
+    const resolvedNamespace = options?.namespace ?? config.namespace;
+
+    // Resolve collections: scoped if namespace is set, otherwise raw manager
+    const resolvedCollections = (resolvedNamespace && collectionsManager)
+      ? collectionsManager.withNamespace(resolvedNamespace)
+      : collectionsManager;
+
+    // Resolve agents: RunOptions > CopilotzConfig
+    // If RunOptions provides agents, they completely override config agents
+    const resolvedAgents = options?.agents ?? baseConfig.agents;
+
+    // Resolve tools: RunOptions > CopilotzConfig
+    // If RunOptions provides tools, they completely override config tools
+    const resolvedTools = options?.tools ?? baseConfig.tools;
+
+    const assetStoreForRun = getAssetStoreForNamespace(resolvedNamespace);
+
+    const ctx: ChatContext = {
+      agents: resolvedAgents,
+      tools: resolvedTools,
+      apis: baseConfig.apis,
+      mcpServers: baseConfig.mcpServers,
+      skills: baseConfig.skills,
+      callbacks: baseConfig.callbacks,
+      historyTransform: baseConfig.historyTransform,
+      dbConfig: baseConfig.dbConfig,
+      dbInstance: baseDb,
+      threadMetadata: baseConfig.threadMetadata,
+      queueTTL: baseConfig.queueTTL,
+      stream: options?.stream ?? baseConfig.stream ?? false,
+      activeTaskId: baseConfig.activeTaskId,
+      customProcessors: baseConfig.customProcessorsByType,
+      assetStore: assetStoreForRun,
+      assetConfig: normalizedAssetConfig,
+      resolveAsset: async (ref: string) => {
+        const id = resolveAssetIdForStore(ref, assetStoreForRun);
+        return await assetStoreForRun.get(id);
+      },
+      // RAG configuration
+      ragConfig: config.rag
+        ? {
+          enabled: config.rag.enabled ?? true,
+          embedding: config.rag.embedding,
+          chunking: config.rag.chunking,
+          retrieval: config.rag.retrieval,
+          defaultNamespace: config.rag.defaultNamespace,
+          llmConfig: config.rag.llmConfig,
+        }
+        : undefined,
+      embeddingConfig: config.rag?.embedding,
+      // Resolved namespace for this run
+      namespace: resolvedNamespace,
+      // Collections: scoped if namespace is set, otherwise raw manager
+      collections: resolvedCollections,
+      // Sender of the current message (available to processors and tools)
+      sender: normalizedMessage.sender
+        ? {
+          id: normalizedMessage.sender.id ?? null,
+          externalId: normalizedMessage.sender.externalId ?? null,
+          type: normalizedMessage.sender.type ?? "user",
+          name: normalizedMessage.sender.name ?? null,
+          metadata: normalizedMessage.sender.metadata ?? null,
+        }
+        : undefined,
+      // Multi-agent routing is opt-in. Without explicit config, agent replies
+      // should go back to the original sender instead of delegating via @mentions.
+      multiAgent: config.multiAgent
+        ? {
+          enabled: config.multiAgent.enabled ?? true,
+          maxAgentTurns: config.multiAgent.maxAgentTurns ?? 5,
+          includeTargetContext: config.multiAgent.includeTargetContext ?? true,
+        }
+        : undefined,
+    };
+
+    // If schema is specified, wrap execution in schema context
+    // This sets the search_path for all queries within this run
+    if (resolvedSchema && resolvedSchema !== "public") {
+      return withSchema(resolvedSchema, async () => {
+        return await runThread(
+          baseDb,
+          ctx,
+          normalizedMessage,
+          onEvent,
+          options,
+        );
+      });
+    }
+
+    return await runThread(baseDb, ctx, normalizedMessage, onEvent, options);
+  };
+
+  const copilotz = {
+    config: Object.freeze({ ...baseConfig }),
+    get ops() {
+      return baseOps;
+    },
+    run: performRun,
+    start: (
+      initialMessage?:
+        | (MessagePayload & {
+          banner?: string | null;
+          quitCommand?: string;
+          threadExternalId?: string;
+        })
+        | string,
+      onEvent?: UnifiedOnEvent,
+    ) => {
+      let quitCommand = "quit";
+      let banner: string | null = typeof defaultBanner === "string"
+        ? defaultBanner
+        : null;
+      let threadExternalId = crypto.randomUUID().slice(0, 24);
+      let sessionSender: MessagePayload["sender"] | undefined = {
+        type: "user",
+        name: "user",
+      };
+      let sessionParticipants: string[] | undefined = undefined;
+
+      if (initialMessage && typeof initialMessage === "object") {
+        if (
+          typeof (initialMessage as { quitCommand?: string }).quitCommand ===
+            "string"
+        ) {
+          quitCommand = (initialMessage as { quitCommand?: string })
+            .quitCommand as string;
+        }
+        const maybeBanner =
+          (initialMessage as { banner?: string | null }).banner;
+        if (typeof maybeBanner === "string" || maybeBanner === null) {
+          banner = maybeBanner;
+        }
+        const maybeThreadExternalId =
+          (initialMessage as { threadExternalId?: string }).threadExternalId;
+        if (
+          typeof maybeThreadExternalId === "string" &&
+          maybeThreadExternalId.trim().length > 0
+        ) {
+          threadExternalId = maybeThreadExternalId;
+        } else {
+          // Fallback to the thread.externalId inside the initial MessagePayload if present
+          const maybeMsg = initialMessage as unknown as MessagePayload;
+          const fromThread = (maybeMsg && typeof maybeMsg === "object")
+            ? (maybeMsg.thread as { externalId?: string } | undefined)
+            : undefined;
+          if (
+            fromThread && typeof fromThread.externalId === "string" &&
+            fromThread.externalId.trim().length > 0
+          ) {
+            threadExternalId = fromThread.externalId;
+          }
+        }
+        // Capture sender and participants for subsequent messages
+        const maybeMsg = initialMessage as unknown as MessagePayload;
+        if (maybeMsg?.sender && typeof maybeMsg.sender === "object") {
+          sessionSender = {
+            id: maybeMsg.sender.id ?? undefined,
+            externalId: maybeMsg.sender.externalId ?? null,
+            type: maybeMsg.sender.type ?? "user",
+            name: maybeMsg.sender.name ?? null,
+            identifierType: maybeMsg.sender.identifierType ?? undefined,
+            metadata: (maybeMsg.sender.metadata &&
+                typeof maybeMsg.sender.metadata === "object")
+              ? maybeMsg.sender.metadata as Record<string, unknown>
+              : null,
+          };
+        }
+        const fromParticipants =
+          (initialMessage as { thread?: { participants?: string[] } }).thread
+            ?.participants;
+        if (Array.isArray(fromParticipants) && fromParticipants.length > 0) {
+          sessionParticipants = fromParticipants.slice();
+        }
+      }
+
+      let stopped = false;
+
+      const closed = (async () => {
+        if (banner) console.log(banner);
+
+        let isThinking = false;
+        let currentAgent = "";
+
+        const unifiedOnEvent: UnifiedOnEvent = async (ev) => {
+          const e = ev as unknown as {
+            type?: string;
+            payload?: {
+              token?: string;
+              isComplete?: boolean;
+              isReasoning?: boolean;
+              agent?: { id?: string | null; name?: string };
+            };
+          };
+          if (e?.type === "TOKEN" && e?.payload) {
+            const token = e.payload.token ?? "";
+            const done = Boolean(e.payload.isComplete);
+            const isReasoning = Boolean(e.payload.isReasoning);
+            const agentName = e.payload.agent?.name ?? null;
+
+            if (!done) {
+              const anyGlobal = globalThis as unknown as {
+                Deno?: {
+                  stdout?: { writeSync?: (data: Uint8Array) => unknown };
+                };
+                process?: { stdout?: { write?: (chunk: string) => unknown } };
+              };
+
+              let toWrite = "";
+              // Print agent label when the speaking agent changes
+              if (agentName && agentName !== currentAgent) {
+                if (currentAgent) toWrite += "\n\n";
+                toWrite += `\x1b[36m[${agentName}]\x1b[0m\n`;
+                currentAgent = agentName;
+              }
+              if (isReasoning && !isThinking) {
+                toWrite += "💭 ";
+                isThinking = true;
+              } else if (!isReasoning && isThinking) {
+                toWrite += "\n\n";
+                isThinking = false;
+              }
+              toWrite += token;
+
+              if (toWrite) {
+                const bytes = new TextEncoder().encode(toWrite);
+                if (anyGlobal?.Deno?.stdout?.writeSync) {
+                  anyGlobal.Deno.stdout.writeSync(bytes);
+                } else if (anyGlobal?.process?.stdout?.write) {
+                  anyGlobal.process.stdout.write(toWrite);
                 } else {
-                    // Fallback to the thread.externalId inside the initial MessagePayload if present
-                    const maybeMsg = initialMessage as unknown as MessagePayload;
-                    const fromThread = (maybeMsg && typeof maybeMsg === "object") ? (maybeMsg.thread as { externalId?: string } | undefined) : undefined;
-                    if (fromThread && typeof fromThread.externalId === "string" && fromThread.externalId.trim().length > 0) {
-                        threadExternalId = fromThread.externalId;
-                    }
+                  // Fallback when raw stdout writing isn't available
+                  console.log(toWrite);
                 }
-                // Capture sender and participants for subsequent messages
-                const maybeMsg = initialMessage as unknown as MessagePayload;
-                if (maybeMsg?.sender && typeof maybeMsg.sender === "object") {
-                    sessionSender = {
-                        id: maybeMsg.sender.id ?? undefined,
-                        externalId: maybeMsg.sender.externalId ?? null,
-                        type: maybeMsg.sender.type ?? "user",
-                        name: maybeMsg.sender.name ?? null,
-                        identifierType: maybeMsg.sender.identifierType ?? undefined,
-                        metadata: (maybeMsg.sender.metadata && typeof maybeMsg.sender.metadata === "object")
-                            ? maybeMsg.sender.metadata as Record<string, unknown>
-                            : null,
-                    };
-                }
-                const fromParticipants = (initialMessage as { thread?: { participants?: string[] } }).thread?.participants;
-                if (Array.isArray(fromParticipants) && fromParticipants.length > 0) {
-                    sessionParticipants = fromParticipants.slice();
-                }
+              }
+            } else {
+              if (isThinking) {
+                isThinking = false;
+                console.log("\n");
+              }
+              console.log("");
             }
+          }
+          if (typeof onEvent === "function" && ev.type !== "TOKEN") {
+            return await onEvent(ev);
+          } else if (typeof onEvent === "function") {
+            // TOKEN returns ignored (read-only)
+            await Promise.resolve(onEvent(ev)).catch(() => undefined);
+          }
+          return undefined;
+        };
 
-            let stopped = false;
-
-            const closed = (async () => {
-                if (banner) console.log(banner);
-
-                let isThinking = false;
-                let currentAgent = "";
-
-                const unifiedOnEvent: UnifiedOnEvent = async (ev) => {
-                    const e = ev as unknown as { type?: string; payload?: { token?: string; isComplete?: boolean; isReasoning?: boolean; agent?: { id?: string | null; name?: string } } };
-                    if (e?.type === "TOKEN" && e?.payload) {
-                        const token = e.payload.token ?? "";
-                        const done = Boolean(e.payload.isComplete);
-                        const isReasoning = Boolean(e.payload.isReasoning);
-                        const agentName = e.payload.agent?.name ?? null;
-
-                        if (!done) {
-                            const anyGlobal = globalThis as unknown as {
-                                Deno?: { stdout?: { writeSync?: (data: Uint8Array) => unknown } };
-                                process?: { stdout?: { write?: (chunk: string) => unknown } };
-                            };
-
-                            let toWrite = "";
-                            // Print agent label when the speaking agent changes
-                            if (agentName && agentName !== currentAgent) {
-                                if (currentAgent) toWrite += "\n\n";
-                                toWrite += `\x1b[36m[${agentName}]\x1b[0m\n`;
-                                currentAgent = agentName;
-                            }
-                            if (isReasoning && !isThinking) {
-                                toWrite += "💭 ";
-                                isThinking = true;
-                            } else if (!isReasoning && isThinking) {
-                                toWrite += "\n\n";
-                                isThinking = false;
-                            }
-                            toWrite += token;
-
-                            if (toWrite) {
-                                const bytes = new TextEncoder().encode(toWrite);
-                                if (anyGlobal?.Deno?.stdout?.writeSync) {
-                                    anyGlobal.Deno.stdout.writeSync(bytes);
-                                } else if (anyGlobal?.process?.stdout?.write) {
-                                    anyGlobal.process.stdout.write(toWrite);
-                                } else {
-                                    // Fallback when raw stdout writing isn't available
-                                    console.log(toWrite);
-                                }
-                            }
-                        } else {
-                            if (isThinking) {
-                                isThinking = false;
-                                console.log("\n");
-                            }
-                            console.log("");
-                        }
-                    }
-                    if (typeof onEvent === "function" && ev.type !== "TOKEN") {
-                        return await onEvent(ev);
-                    } else if (typeof onEvent === "function") {
-                        // TOKEN returns ignored (read-only)
-                        await Promise.resolve(onEvent(ev)).catch(() => undefined);
-                    }
-                    return undefined;
-                };
-
-                const send = async (message: string | MessagePayload) => {
-                    const outboundMessage = typeof message === "string"
-                        ? {
-                            content: message,
-                            sender: sessionSender ?? { type: "user", name: "user" },
-                            thread: sessionParticipants
-                                ? { externalId: threadExternalId, participants: sessionParticipants }
-                                : { externalId: threadExternalId },
-                        } as MessagePayload
-                        : (() => {
-                            const messageThread = message.thread ?? undefined;
-                            const participants = Array.isArray(messageThread?.participants) &&
-                                    messageThread.participants.length > 0
-                                ? messageThread.participants
-                                : sessionParticipants;
-
-                            return {
-                                ...message,
-                                sender: message.sender ?? sessionSender ?? { type: "user", name: "user" },
-                                thread: {
-                                    ...(messageThread ?? {}),
-                                    externalId: threadExternalId,
-                                    ...(participants ? { participants } : {}),
-                                },
-                            } as MessagePayload;
-                        })();
-
-                    const handle = await performRun(
-                        outboundMessage,
-                        unifiedOnEvent,
-                        { stream: true, ackMode: "onComplete" },
-                    );
-                    for await (const _ of handle.events) { /* drain */ }
-                    await handle.done;
-                };
-
-                if (typeof initialMessage === "string" && initialMessage.trim().length > 0) {
-                    await send(initialMessage);
-                } else if (initialMessage && typeof initialMessage === "object") {
-                    const { banner: _b, quitCommand: _q, threadExternalId: _t, ...rest } = initialMessage as Record<string, unknown>;
-                    await send(rest as MessagePayload);
+        const send = async (message: string | MessagePayload) => {
+          const outboundMessage = typeof message === "string"
+            ? {
+              content: message,
+              sender: sessionSender ?? { type: "user", name: "user" },
+              thread: sessionParticipants
+                ? {
+                  externalId: threadExternalId,
+                  participants: sessionParticipants,
                 }
+                : { externalId: threadExternalId },
+            } as MessagePayload
+            : (() => {
+              const messageThread = message.thread ?? undefined;
+              const participants = Array.isArray(messageThread?.participants) &&
+                  messageThread.participants.length > 0
+                ? messageThread.participants
+                : sessionParticipants;
 
-                while (!stopped) {
-                    const anyGlobal = globalThis as unknown as { prompt?: (msg?: string) => string | null | undefined };
-                    const q = ((typeof anyGlobal.prompt === "function" ? anyGlobal.prompt("Message: ") : "") ?? "").trim();
-                    if (!q || q.toLowerCase() === quitCommand) {
-                        console.log("👋 Ending session. Goodbye!");
-                        break;
-                    }
-                    console.log("\n🔬 Thinking...\n");
-                    await send(q);
-                    console.log("\n------------------------------------------------------------\n");
-                }
+              return {
+                ...message,
+                sender: message.sender ?? sessionSender ??
+                  { type: "user", name: "user" },
+                thread: {
+                  ...(messageThread ?? {}),
+                  externalId: threadExternalId,
+                  ...(participants ? { participants } : {}),
+                },
+              } as MessagePayload;
             })();
 
-            return {
-                stop: () => { stopped = true; },
-                closed,
-            };
+          const handle = await performRun(
+            outboundMessage,
+            unifiedOnEvent,
+            { stream: true, ackMode: "onComplete" },
+          );
+          for await (const _ of handle.events) { /* drain */ }
+          await handle.done;
+        };
+
+        if (
+          typeof initialMessage === "string" && initialMessage.trim().length > 0
+        ) {
+          await send(initialMessage);
+        } else if (initialMessage && typeof initialMessage === "object") {
+          const { banner: _b, quitCommand: _q, threadExternalId: _t, ...rest } =
+            initialMessage as Record<string, unknown>;
+          await send(rest as MessagePayload);
+        }
+
+        while (!stopped) {
+          const anyGlobal = globalThis as unknown as {
+            prompt?: (msg?: string) => string | null | undefined;
+          };
+          const q = ((typeof anyGlobal.prompt === "function"
+            ? anyGlobal.prompt("Message: ")
+            : "") ?? "").trim();
+          if (!q || q.toLowerCase() === quitCommand) {
+            console.log("👋 Ending session. Goodbye!");
+            break;
+          }
+          console.log("\n🔬 Thinking...\n");
+          await send(q);
+          console.log(
+            "\n------------------------------------------------------------\n",
+          );
+        }
+      })();
+
+      return {
+        stop: () => {
+          stopped = true;
         },
-        shutdown: async () => {
-            if (managedDb) {
-                if (fromCache) {
-                    const cached = _dbConnectionCache.get(dbCacheKey);
-                    if (cached) {
-                        cached.refCount--;
-                        if (cached.refCount <= 0) {
-                            _dbConnectionCache.delete(dbCacheKey);
-                        } else {
-                            return; // Other instances still using this connection
-                        }
-                    }
-                }
-                const resource = managedDb as unknown as { close?: () => Promise<void> | void; end?: () => Promise<void> | void };
-                if (typeof resource.close === "function") {
-                    await resource.close.call(resource);
-                } else if (typeof resource.end === "function") {
-                    await resource.end.call(resource);
-                }
+        closed,
+      };
+    },
+    shutdown: async () => {
+      if (managedDb) {
+        if (fromCache) {
+          const cached = _dbConnectionCache.get(dbCacheKey);
+          if (cached) {
+            cached.refCount--;
+            if (cached.refCount <= 0) {
+              _dbConnectionCache.delete(dbCacheKey);
+            } else {
+              return; // Other instances still using this connection
             }
-        },
-        assets: {
-            getBase64: async (refOrId: string, options?: { namespace?: string }) => {
-                const store = getAssetStoreForNamespace(options?.namespace ?? config.namespace);
-                const id = resolveAssetIdForStore(refOrId, store);
-                const { bytes, mime } = await store.get(id);
-                const base64 = bytesToBase64(bytes);
-                return { base64, mime };
-            },
-            getDataUrl: async (refOrId: string, options?: { namespace?: string }) => {
-                const store = getAssetStoreForNamespace(options?.namespace ?? config.namespace);
-                const id = resolveAssetIdForStore(refOrId, store);
-                const { bytes, mime } = await store.get(id);
-                const base64 = bytesToBase64(bytes);
-                return `data:${mime};base64,${base64}`;
-            },
-        },
-        collections: collectionsManager,
-        schema: {
-            provision: (schemaName: string) => provisionTenantSchema(baseDb, schemaName),
-            drop: (schemaName: string) => dropTenantSchema(baseDb, schemaName),
-            exists: (schemaName: string) => schemaExists(baseDb, schemaName),
-            list: () => listTenantSchemas(baseDb),
-            warmCache: () => warmSchemaCache(baseDb),
-        },
-    } satisfies Copilotz;
+          }
+        }
+        const resource = managedDb as unknown as {
+          close?: () => Promise<void> | void;
+          end?: () => Promise<void> | void;
+        };
+        if (typeof resource.close === "function") {
+          await resource.close.call(resource);
+        } else if (typeof resource.end === "function") {
+          await resource.end.call(resource);
+        }
+      }
+    },
+    assets: {
+      getBase64: async (refOrId: string, options?: { namespace?: string }) => {
+        const store = getAssetStoreForNamespace(
+          options?.namespace ?? config.namespace,
+        );
+        const id = resolveAssetIdForStore(refOrId, store);
+        const { bytes, mime } = await store.get(id);
+        const base64 = bytesToBase64(bytes);
+        return { base64, mime };
+      },
+      getDataUrl: async (refOrId: string, options?: { namespace?: string }) => {
+        const store = getAssetStoreForNamespace(
+          options?.namespace ?? config.namespace,
+        );
+        const id = resolveAssetIdForStore(refOrId, store);
+        const { bytes, mime } = await store.get(id);
+        const base64 = bytesToBase64(bytes);
+        return `data:${mime};base64,${base64}`;
+      },
+    },
+    collections: collectionsManager,
+    schema: {
+      provision: (schemaName: string) =>
+        provisionTenantSchema(baseDb, schemaName),
+      drop: (schemaName: string) => dropTenantSchema(baseDb, schemaName),
+      exists: (schemaName: string) => schemaExists(baseDb, schemaName),
+      list: () => listTenantSchemas(baseDb),
+      warmCache: () => warmSchemaCache(baseDb),
+    },
+  } satisfies Copilotz;
+  logInit("createCopilotzTotal", initStartedAt);
+  return copilotz;
 }

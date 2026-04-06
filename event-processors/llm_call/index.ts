@@ -17,7 +17,10 @@ import type {
 } from "@/interfaces/index.ts";
 import { resolveAssetRefsInMessages } from "@/utils/assets.ts";
 import { filterToolCallTokensStreaming } from "@/connectors/llm/utils.ts";
-import { extractMentionNames } from "@/utils/mentions.ts";
+import {
+  buildMentionTargetRoute,
+  extractMentionNames,
+} from "@/utils/mentions.ts";
 
 export type { ChatMessage };
 
@@ -59,12 +62,11 @@ export function resolveAgentResponseTarget(
     !selfIdentifiers.has(mention.toLowerCase())
   );
 
-  if (mentions.length > 0) {
-    return {
-      targetId: mentions[0],
-      targetQueue: mentions.slice(1),
-    };
-  }
+  const mentionRoute = buildMentionTargetRoute(mentions, {
+    returnTarget: sourceSenderId,
+    fallbackQueue: sourceTargetQueue,
+  });
+  if (mentionRoute) return mentionRoute;
 
   if (sourceTargetQueue.length > 0) {
     const nextTarget = sourceTargetQueue[0];

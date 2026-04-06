@@ -42,7 +42,7 @@ Deno.test("resolveAgentResponseTarget routes to other mentioned agents", () => {
 
   assertEquals(result, {
     targetId: "Writer",
-    targetQueue: [],
+    targetQueue: ["alex"],
   });
 });
 
@@ -64,7 +64,29 @@ Deno.test("resolveAgentResponseTarget skips self mention and keeps the next vali
 
   assertEquals(result, {
     targetId: "Writer",
-    targetQueue: [],
+    targetQueue: ["alex"],
+  });
+});
+
+Deno.test("resolveAgentResponseTarget preserves upstream return path on explicit handoff", () => {
+  const result = resolveAgentResponseTarget(
+    "@Assistant I finished my part.",
+    {
+      id: "copilotz",
+      name: "Copilotz",
+    },
+    {
+      metadata: {
+        sourceMessageSenderId: "assistente-teste",
+        targetQueue: ["user"],
+      },
+    } as never,
+    true,
+  );
+
+  assertEquals(result, {
+    targetId: "Assistant",
+    targetQueue: ["assistente-teste", "user"],
   });
 });
 

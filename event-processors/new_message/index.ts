@@ -53,7 +53,10 @@ import {
 
 import { processAssetsForNewMessage } from "./generators/asset-generator.ts";
 import { filterSkillsForAgent } from "@/utils/loaders/skill-loader.ts";
-import { extractMentionNames } from "@/utils/mentions.ts";
+import {
+  buildMentionTargetRoute,
+  extractMentionNames,
+} from "@/utils/mentions.ts";
 
 // ============================================================================
 // Tool Result Batch Aggregation
@@ -562,19 +565,9 @@ async function discoverTargetForMessage(
       mentions[0],
     );
 
-    // Build queue: [first_mention, ...remaining_mentions, original_sender]
-    const queue = mentions.slice(1);
-
-    // Append original sender to end of queue (for return path)
-    // unless sender is already in queue
-    if (
-      !queue.includes(messageContext.senderId) &&
-      mentions[0] !== messageContext.senderId
-    ) {
-      queue.push(messageContext.senderId);
-    }
-
-    return { targetId: mentions[0], targetQueue: queue };
+    return buildMentionTargetRoute(mentions, {
+      returnTarget: messageContext.senderId,
+    });
   }
 
   // 3. Use sender's persisted target from thread metadata

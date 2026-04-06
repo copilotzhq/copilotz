@@ -376,7 +376,7 @@ async function uploadAttachment(
   const baseMime = mimeType.split(";")[0].trim();
   const ext = mimeToExt(mimeType);
   const formData = new FormData();
-  const blob = new Blob([bytes], { type: baseMime });
+  const blob = new Blob([bytes.buffer as ArrayBuffer], { type: baseMime });
   formData.append("source", blob, `file.${ext}`);
 
   try {

@@ -110,7 +110,7 @@ export async function verifyHmacSha256(
     false,
     ["sign"],
   );
-  const bodyBuffer = body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
+  const bodyBuffer = (body.buffer as ArrayBuffer).slice(body.byteOffset, body.byteOffset + body.byteLength);
   const signatureBuffer = await crypto.subtle.sign("HMAC", key, bodyBuffer);
   const computedHash = Array.from(new Uint8Array(signatureBuffer))
     .map((b) => b.toString(16).padStart(2, "0"))

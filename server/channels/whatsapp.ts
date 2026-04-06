@@ -321,7 +321,7 @@ async function uploadMedia(
   const { bytes, mimeType } = parsed;
   const mediaType = whatsappMediaType(mimeType);
   const formData = new FormData();
-  const blob = new Blob([bytes], { type: mimeType });
+  const blob = new Blob([bytes.buffer as ArrayBuffer], { type: mimeType });
   formData.append("file", blob, `file.${mimeType.split("/")[1]}`);
   formData.append("type", mimeType);
   formData.append("messaging_product", "whatsapp");

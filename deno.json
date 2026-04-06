@@ -1,11 +1,12 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.25.4",
+  "version": "0.26.0",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
-    "./server": "./server/index.ts"
+    "./server": "./server/index.ts",
+    "./create": "./create/mod.ts"
   },  
   "unstable": [
     "bare-node-builtins",
@@ -23,6 +24,7 @@
     "raw-imports"
   ],
   "imports": {
+    "@std/path": "jsr:@std/path@1",
     "@/": "./",
     "@bradenmacdonald/s3-lite-client": "jsr:@bradenmacdonald/s3-lite-client@^0.9.4",
     "ajv": "npm:ajv@8.17.1",

@@ -13,6 +13,8 @@ import type { Skill } from "@/utils/loaders/skill-types.ts";
 const BUNDLED_SKILL_DIRS = [
   "add-api-integration",
   "add-processor",
+  "advanced-chat-features",
+  "configure-chat-ui",
   "configure-mcp",
   "configure-rag",
   "create-agent",

@@ -58,6 +58,27 @@ Copilotz is the full-stack framework for AI applications. Everything you need to
 
 ## Quick Start
 
+### Create a New Project
+
+Scaffold a full Copilotz project with API routes, a React chat UI, and everything wired up:
+
+```bash
+deno run -Ar jsr:@copilotz/copilotz/create my-app
+```
+
+Then follow the prompts:
+
+```bash
+cd my-app
+# Edit .env with your API keys
+deno task dev           # start the API server
+deno task dev:web       # start the web UI
+```
+
+This uses the [copilotz-starter](https://github.com/copilotzhq/starter) template -- a minimal but complete reference app with threads, knowledge graph, assets, and a chat UI.
+
+### Add to an Existing Project
+
 ```bash
 deno add jsr:@copilotz/copilotz
 ```
@@ -100,7 +121,7 @@ const copilotz = await createCopilotz({
 });
 ```
 
-See the [copilotz-starter](./clients/copilotz-starter/) template for a complete example.
+See the [copilotz-starter](https://github.com/copilotzhq/starter) template for a complete example.
 
 ### Programmatic Mode
 

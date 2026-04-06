@@ -15,6 +15,7 @@ entrypoints:
   - runtime/index.ts
   - utils/loaders/resources.ts
   - database/index.ts
+  - create/mod.ts
 status: active
 ---
 
@@ -35,6 +36,7 @@ Shared framework repo used by clients for agent execution, event processing, mem
 - Event processors and native tools: `event-processors/`
 - Database schema, migrations, collections: `database/`
 - Connectors for LLM, embeddings, storage, HTTP: `connectors/`
+- Project scaffolding CLI: `create/` (exported as `./create`, used by `deno run -Ar jsr:@copilotz/copilotz/create`)
 
 ## Warnings
 

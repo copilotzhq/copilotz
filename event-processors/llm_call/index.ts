@@ -17,47 +17,19 @@ import type {
 } from "@/interfaces/index.ts";
 import { resolveAssetRefsInMessages } from "@/utils/assets.ts";
 import { filterToolCallTokensStreaming } from "@/connectors/llm/utils.ts";
+import { extractMentionNames } from "@/utils/mentions.ts";
 
 export type { ChatMessage };
 
 export type LLMCallPayload = LlmCallEventPayload;
 export type LLMResultPayload = LlmCallEventPayload;
 
-// Utilities reused from legacy engine (minimized/duplicated to avoid refactors)
 const escapeRegex = (string: string): string =>
   string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/**
- * Parse @mentions from agent response content.
- * Returns array of mentioned names.
- */
-function parseMentionsFromResponse(content: string): string[] {
-  const mentionPattern = /(?<!\w)@([\w](?:[\w.-]*[\w])?)/g;
-  const matches = content.matchAll(mentionPattern);
-
-  const mentioned: string[] = [];
-  const seen = new Set<string>();
-
-  for (const match of matches) {
-    const name = match[1];
-    if (!seen.has(name)) {
-      mentioned.push(name);
-      seen.add(name);
-    }
-  }
-
-  return mentioned;
-}
-
-/**
- * Resolve agent response target based on:
- * 1. @mentions in the response (explicit addressing)
- * 2. Source message's targetQueue (for multi-mention chains)
- * 3. Source message sender (default: respond back)
- */
-function resolveAgentResponseTarget(
+export function resolveAgentResponseTarget(
   response: string,
-  _agentId: string,
+  agent: { id?: string | null; name?: string | null },
   sourceEvent: Event,
   multiAgentEnabled: boolean,
 ): { targetId: string | null; targetQueue: string[] } {
@@ -75,23 +47,32 @@ function resolveAgentResponseTarget(
     };
   }
 
-  // 1. Parse @mentions from agent's response
-  const mentions = parseMentionsFromResponse(response);
+  const selfIdentifiers = new Set(
+    [agent.id, agent.name]
+      .filter((value): value is string =>
+        typeof value === "string" && value.trim().length > 0
+      )
+      .map((value) => value.toLowerCase()),
+  );
+
+  const mentions = extractMentionNames(response).filter((mention) =>
+    !selfIdentifiers.has(mention.toLowerCase())
+  );
 
   if (mentions.length > 0) {
-    // Agent explicitly mentioned someone(s)
-    const queue = mentions.slice(1);
-    return { targetId: mentions[0], targetQueue: queue };
+    return {
+      targetId: mentions[0],
+      targetQueue: mentions.slice(1),
+    };
   }
 
-  // 2. Check if there's a remaining queue from source message
   if (sourceTargetQueue.length > 0) {
     const nextTarget = sourceTargetQueue[0];
     const remainingQueue = sourceTargetQueue.slice(1);
     return { targetId: nextTarget, targetQueue: remainingQueue };
   }
 
-  // 3. Default: respond to whoever sent the message (via source metadata)
+  // Default: respond to whoever sent the message (via source metadata)
   return {
     targetId: sourceSenderId,
     targetQueue: [],
@@ -175,7 +156,9 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     })();
 
     // Per-agent resolveInLLM takes precedence over the global asset config.
-    const agentForAssets = context.agents?.find((a) => a.id === payload.agent.id);
+    const agentForAssets = context.agents?.find((a) =>
+      a.id === payload.agent.id
+    );
     const perAgentResolve = agentForAssets?.assetOptions?.resolveInLLM;
     const shouldResolve = perAgentResolve !== undefined
       ? perAgentResolve
@@ -355,7 +338,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     // Resolve target for agent's response (based on @mentions or queue)
     const responseTarget = resolveAgentResponseTarget(
       answer || "",
-      payload.agent.id ?? payload.agent.name,
+      {
+        id: payload.agent.id ?? null,
+        name: payload.agent.name,
+      },
       event,
       context.multiAgent?.enabled === true,
     );

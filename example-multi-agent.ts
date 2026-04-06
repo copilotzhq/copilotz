@@ -1,12 +1,12 @@
 /**
  * Example: Multi-Agent Conversation
- * 
+ *
  * Tests:
  * - @mentions routing between agents
  * - Persistent targets (subsequent messages go to same target)
  * - Agent persistent memory (update_my_memory tool)
  * - Agent-to-agent collaboration towards a goal
- * 
+ *
  * Run with: deno run -A --env example-multi-agent.ts
  */
 
@@ -14,7 +14,9 @@ import { createCopilotz } from "./index.ts";
 
 const OPENAI_API_KEY = Deno.env.get("DEFAULT_OPENAI_KEY");
 if (!OPENAI_API_KEY) {
-  console.error("❌ Error: DEFAULT_OPENAI_KEY environment variable is required");
+  console.error(
+    "❌ Error: DEFAULT_OPENAI_KEY environment variable is required",
+  );
   Deno.exit(1);
 }
 
@@ -30,22 +32,34 @@ async function main() {
         id: "researcher",
         name: "Researcher",
         role: "assistant",
-        instructions: `You are a research assistant. You find and verify information.
+        instructions:
+          `You are a research assistant. You find and verify information.
 When you learn something important about the user, use update_my_memory to remember it.
 Keep responses brief (1-2 sentences).
-When collaborating with Writer, @mention them to hand off.`,
-        llmOptions: { provider: "openai", model: "gpt-4o-mini", apiKey: OPENAI_API_KEY },
+When collaborating with Writer, @mention them to hand off.
+Never @mention yourself.`,
+        llmOptions: {
+          provider: "openai",
+          model: "gpt-4o-mini",
+          apiKey: OPENAI_API_KEY,
+        },
         allowedTools: ["update_my_memory"],
         allowedAgents: ["writer"],
       },
       {
         id: "writer",
         name: "Writer",
-        role: "assistant", 
-        instructions: `You are a creative writer. You craft clear, engaging content.
+        role: "assistant",
+        instructions:
+          `You are a creative writer. You craft clear, engaging content.
 Keep responses brief (1-2 sentences).
-When collaborating with Researcher, @mention them to hand off.`,
-        llmOptions: { provider: "openai", model: "gpt-4o-mini", apiKey: OPENAI_API_KEY },
+When collaborating with Researcher, @mention them to hand off.
+Never @mention yourself.`,
+        llmOptions: {
+          provider: "openai",
+          model: "gpt-4o-mini",
+          apiKey: OPENAI_API_KEY,
+        },
         allowedAgents: ["researcher"],
       },
     ],
@@ -71,7 +85,9 @@ When collaborating with Researcher, @mention them to hand off.`,
       },
       async (event) => {
         if (event.type === "TOOL_CALL") {
-          const payload = event.payload as { toolCall?: { tool?: { id: string; name?: string } } };
+          const payload = event.payload as {
+            toolCall?: { tool?: { id: string; name?: string } };
+          };
           const tool = payload.toolCall?.tool;
           if (tool?.id) {
             console.log(`  🔧 [${tool.name || tool.id}]`);
@@ -83,7 +99,10 @@ When collaborating with Researcher, @mention them to hand off.`,
     let currentAgent = "";
     for await (const event of result.events) {
       if (event.type === "TOKEN") {
-        const payload = event.payload as { token?: string; agent?: { id?: string; name: string } };
+        const payload = event.payload as {
+          token?: string;
+          agent?: { id?: string; name: string };
+        };
         if (payload.agent?.name && payload.agent.name !== currentAgent) {
           console.log(`\n\n\x1b[36m[${payload.agent.name}]\x1b[0m`);
           currentAgent = payload.agent.name;
@@ -113,8 +132,10 @@ When collaborating with Researcher, @mention them to hand off.`,
 
     // Test 4: Agent memory - Researcher should remember
     console.log("═══ Test 4: Agent memory ═══");
-    await chat("@Researcher, I'm really interested in European capitals. Remember that for me.");
-    
+    await chat(
+      "@Researcher, I'm really interested in European capitals. Remember that for me.",
+    );
+
     // Test 5: Verify memory persists
     console.log("═══ Test 5: Memory retrieval ═══");
     await chat("What do you know about my interests?");
@@ -123,14 +144,18 @@ When collaborating with Researcher, @mention them to hand off.`,
   // Test 6: Tool call flow test
   // Researcher has update_my_memory tool - test that tool results are processed
   console.log("═══ Test 6: Tool call flow ═══");
-  await chat("@Researcher, use your update_my_memory tool to store that my favorite city is Tokyo. Then confirm what you stored.");
+  await chat(
+    "@Researcher, use your update_my_memory tool to store that my favorite city is Tokyo. Then confirm what you stored.",
+  );
 
   // Test 7: Agent-to-agent collaboration
   // Agents should @mention each other to work together on a task
   console.log("═══ Test 7: Agent collaboration ═══");
-  await chat(`@Researcher and @Writer, work together to create a short travel guide for Rome. 
+  await chat(
+    `@Researcher and @Writer, work together to create a short travel guide for Rome. 
 Researcher: find 2 key facts. Writer: turn them into engaging prose. 
-Take turns, @mention each other, and when done, address me (@Alex) with the final result.`);
+Take turns, @mention each other, and when done, address me (@Alex) with the final result.`,
+  );
 
   await copilotz.shutdown();
   console.log("✨ Done!");

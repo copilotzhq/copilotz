@@ -53,6 +53,7 @@ import {
 
 import { processAssetsForNewMessage } from "./generators/asset-generator.ts";
 import { filterSkillsForAgent } from "@/utils/loaders/skill-loader.ts";
+import { extractMentionNames } from "@/utils/mentions.ts";
 
 // ============================================================================
 // Tool Result Batch Aggregation
@@ -215,14 +216,10 @@ function parseMentions(
   participants: string[] | null,
   agents: Agent[],
 ): string[] {
-  const mentionPattern = /(?<!\w)@([\w](?:[\w.-]*[\w])?)/g;
-  const matches = content.matchAll(mentionPattern);
-
   const resolved: string[] = [];
   const seen = new Set<string>();
 
-  for (const match of matches) {
-    const name = match[1]; // Remove @ prefix via regex capture
+  for (const name of extractMentionNames(content)) {
     const nameLower = name.toLowerCase();
 
     // Mentions are only valid for participants already declared on the thread.
@@ -1272,7 +1269,7 @@ export const messageProcessor: EventProcessor<
         participantTargets: {}, // Clear all persisted targets to force an explicit mention or user action
         agentTurnCount: 0,
       };
-      
+
       await ops.crud.threads?.update?.({ id: thread.id }, {
         metadata: updatedMetadata,
       });
@@ -1401,7 +1398,11 @@ export const messageProcessor: EventProcessor<
       // Filter skills for this agent and build compact index for system prompt
       const agentSkills = filterSkillsForAgent(context.skills ?? [], agent);
       const agentSkillIndex = agentSkills.length > 0
-        ? agentSkills.map((s) => ({ name: s.name, description: s.description, tags: s.tags }))
+        ? agentSkills.map((s) => ({
+          name: s.name,
+          description: s.description,
+          tags: s.tags,
+        }))
         : undefined;
 
       // Build LLM request (pass agent node for persistent memory injection)
@@ -1445,12 +1446,11 @@ export const messageProcessor: EventProcessor<
         : generatedHistory;
 
       // Select tools available to this agent
-      const allowedToolKeys: string[] =
-        Array.isArray(agent.allowedTools)
-          ? agent.allowedTools
-          : agent.allowedTools === null
-            ? []
-            : ctx.allTools.map((t) => t.key);
+      const allowedToolKeys: string[] = Array.isArray(agent.allowedTools)
+        ? agent.allowedTools
+        : agent.allowedTools === null
+        ? []
+        : ctx.allTools.map((t) => t.key);
       const agentTools: ExecutableTool[] = allowedToolKeys
         .map((key) => ctx.allTools.find((t) => t.key === key))
         .filter((t): t is ExecutableTool => Boolean(t));
@@ -1755,11 +1755,8 @@ function _discoverTargetAgentsForMessage(
   }
 
   // Mentions (preserve mention order)
-  const mentions = contextDetails.contentText.match(
-    /(?<!\w)@([\w](?:[\w.-]*[\w])?)/g,
-  );
-  if (mentions && mentions.length > 0) {
-    const names = mentions.map((m: string) => m.substring(1));
+  const names = extractMentionNames(contextDetails.contentText);
+  if (names.length > 0) {
     // Build in the order mentioned, unique by name
     const seen = new Set<string>();
     const orderedMentioned: Agent[] = [];

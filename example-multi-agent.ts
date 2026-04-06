@@ -36,7 +36,9 @@ async function main() {
           `You are a research assistant. You find and verify information.
 When you learn something important about the user, use update_my_memory to remember it.
 Keep responses brief (1-2 sentences).
-When collaborating with Writer, @mention them to hand off.
+Use @mentions only for explicit handoff, never as a casual reference.
+When collaborating with Writer, @mention them only if you want Writer to take the next turn.
+If you want to end the loop and return to the human, @mention the user and do not @mention any agent in that same reply.
 Never @mention yourself.`,
         llmOptions: {
           provider: "openai",
@@ -53,7 +55,9 @@ Never @mention yourself.`,
         instructions:
           `You are a creative writer. You craft clear, engaging content.
 Keep responses brief (1-2 sentences).
-When collaborating with Researcher, @mention them to hand off.
+Use @mentions only for explicit handoff, never as a casual reference.
+When collaborating with Researcher, @mention them only if you want Researcher to take the next turn.
+If you want to end the loop and return to the human, @mention the user and do not @mention any agent in that same reply.
 Never @mention yourself.`,
         llmOptions: {
           provider: "openai",

@@ -1,6 +1,7 @@
 import type { Agent, Thread } from "@/interfaces/index.ts";
 import type { KnowledgeNode } from "@/database/schemas/index.ts";
 import type { SkillIndexEntry } from "@/utils/loaders/skill-types.ts";
+import type { AgentsFileInstructions } from "@/utils/loaders/agents-file.ts";
 
 export interface LLMContextData {
     threadContext: string;
@@ -59,6 +60,7 @@ export function contextGenerator(
     userMetadata?: Record<string, unknown>,
     agentNode?: KnowledgeNode,  // Agent's participant node for persistent memory
     availableSkills?: SkillIndexEntry[],
+    agentsFileInstructions?: AgentsFileInstructions | null,
 ): LLMContextData {
     const directConversation = isDirectConversationThread(
         thread,
@@ -185,11 +187,21 @@ export function contextGenerator(
         ].join("\n")
         : "";
 
+    const agentsFileSection = agentsFileInstructions?.content
+        ? [
+            "## LOCAL AGENTS INSTRUCTIONS",
+            `Loaded from ${agentsFileInstructions.fileName} in ${agentsFileInstructions.cwd}.`,
+            "",
+            agentsFileInstructions.content,
+        ].join("\n")
+        : "";
+
     const systemPrompt = [
         threadContext,
         taskContext,
         agentContext,
         agentMemorySection,
+        agentsFileSection,
         skillsSection,
         metadataSection,
         userMetadataSection,

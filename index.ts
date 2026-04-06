@@ -33,6 +33,10 @@ import { mergeResourceArrays } from "@/utils/merge-resources.ts";
 import { listPublicAgents } from "@/utils/list-agents.ts";
 import type { Skill, SkillIndexEntry } from "@/utils/loaders/skill-types.ts";
 import {
+  loadAgentsFileInstructions,
+  type AgentsFileConfig,
+} from "@/utils/loaders/agents-file.ts";
+import {
   loadSkillFromUrl,
   loadSkillsFromDirectory,
   mergeSkills,
@@ -68,6 +72,7 @@ import type {
 } from "./interfaces/index.ts";
 
 import defaultBanner from "@/runtime/banner.ts";
+import { startInteractiveCli } from "@/runtime/cli.ts";
 
 export type {
   /** AI Agent configuration with LLM options and capabilities. */
@@ -339,6 +344,7 @@ export { default as loadResources } from "@/utils/loaders/resources.ts";
 
 /** Type for resources loaded from the file system. */
 export type { Resources } from "@/utils/loaders/resources.ts";
+export type { AgentsFileConfig, AgentsFileInstructions } from "@/utils/loaders/agents-file.ts";
 
 /**
  * Returns a simplified list of agents suitable for public API responses.
@@ -700,6 +706,12 @@ export interface CopilotzConfig {
     /** LLM options for the Copilotz agent. */
     llmOptions: import("@/connectors/llm/types.ts").ProviderConfig;
   };
+  /**
+   * Automatically load local agent instructions from an AGENTS.md-style file
+   * in the current working directory and append them to the active agent's prompt.
+   * Enabled by default.
+   */
+  agentsFile?: boolean | AgentsFileConfig;
 }
 
 /**
@@ -1308,6 +1320,9 @@ export async function createCopilotz(
     const resolvedTools = options?.tools ?? baseConfig.tools;
 
     const assetStoreForRun = getAssetStoreForNamespace(resolvedNamespace);
+    const agentsFileInstructions = await loadAgentsFileInstructions(
+      config.agentsFile,
+    );
 
     const ctx: ChatContext = {
       agents: resolvedAgents,
@@ -1346,6 +1361,7 @@ export async function createCopilotz(
       namespace: resolvedNamespace,
       // Collections: scoped if namespace is set, otherwise raw manager
       collections: resolvedCollections,
+      agentsFileInstructions,
       // Sender of the current message (available to processors and tools)
       sender: normalizedMessage.sender
         ? {
@@ -1396,229 +1412,34 @@ export async function createCopilotz(
           banner?: string | null;
           quitCommand?: string;
           threadExternalId?: string;
-        })
-        | string,
+      })
+      | string,
       onEvent?: UnifiedOnEvent,
-    ) => {
-      let quitCommand = "quit";
-      let banner: string | null = typeof defaultBanner === "string"
-        ? defaultBanner
-        : null;
-      let threadExternalId = crypto.randomUUID().slice(0, 24);
-      let sessionSender: MessagePayload["sender"] | undefined = {
-        type: "user",
-        name: "user",
-      };
-      let sessionParticipants: string[] | undefined = undefined;
-
-      if (initialMessage && typeof initialMessage === "object") {
-        if (
-          typeof (initialMessage as { quitCommand?: string }).quitCommand ===
-            "string"
-        ) {
-          quitCommand = (initialMessage as { quitCommand?: string })
-            .quitCommand as string;
-        }
-        const maybeBanner =
-          (initialMessage as { banner?: string | null }).banner;
-        if (typeof maybeBanner === "string" || maybeBanner === null) {
-          banner = maybeBanner;
-        }
-        const maybeThreadExternalId =
-          (initialMessage as { threadExternalId?: string }).threadExternalId;
-        if (
-          typeof maybeThreadExternalId === "string" &&
-          maybeThreadExternalId.trim().length > 0
-        ) {
-          threadExternalId = maybeThreadExternalId;
-        } else {
-          // Fallback to the thread.externalId inside the initial MessagePayload if present
-          const maybeMsg = initialMessage as unknown as MessagePayload;
-          const fromThread = (maybeMsg && typeof maybeMsg === "object")
-            ? (maybeMsg.thread as { externalId?: string } | undefined)
-            : undefined;
-          if (
-            fromThread && typeof fromThread.externalId === "string" &&
-            fromThread.externalId.trim().length > 0
-          ) {
-            threadExternalId = fromThread.externalId;
+    ) =>
+      startInteractiveCli({
+        performRun: (message, unifiedOnEvent, runOptions) =>
+          performRun(message, unifiedOnEvent, runOptions),
+        initialMessage,
+        onEvent,
+        agents: baseConfig.agents.map((agent) => ({
+          id: typeof agent.id === "string" ? agent.id : undefined,
+          name: agent.name,
+          role: agent.role,
+        })),
+        tools: baseConfig.tools?.map((tool) => ({
+          id: typeof tool.id === "string" ? tool.id : undefined,
+          key: tool.key,
+          name: tool.name,
+        })),
+        banner: typeof defaultBanner === "string" ? defaultBanner : null,
+        cwd: (() => {
+          try {
+            return Deno.cwd();
+          } catch {
+            return undefined;
           }
-        }
-        // Capture sender and participants for subsequent messages
-        const maybeMsg = initialMessage as unknown as MessagePayload;
-        if (maybeMsg?.sender && typeof maybeMsg.sender === "object") {
-          sessionSender = {
-            id: maybeMsg.sender.id ?? undefined,
-            externalId: maybeMsg.sender.externalId ?? null,
-            type: maybeMsg.sender.type ?? "user",
-            name: maybeMsg.sender.name ?? null,
-            identifierType: maybeMsg.sender.identifierType ?? undefined,
-            metadata: (maybeMsg.sender.metadata &&
-                typeof maybeMsg.sender.metadata === "object")
-              ? maybeMsg.sender.metadata as Record<string, unknown>
-              : null,
-          };
-        }
-        const fromParticipants =
-          (initialMessage as { thread?: { participants?: string[] } }).thread
-            ?.participants;
-        if (Array.isArray(fromParticipants) && fromParticipants.length > 0) {
-          sessionParticipants = fromParticipants.slice();
-        }
-      }
-
-      let stopped = false;
-
-      const closed = (async () => {
-        if (banner) console.log(banner);
-
-        let isThinking = false;
-        let currentAgent = "";
-
-        const unifiedOnEvent: UnifiedOnEvent = async (ev) => {
-          const e = ev as unknown as {
-            type?: string;
-            payload?: {
-              token?: string;
-              isComplete?: boolean;
-              isReasoning?: boolean;
-              agent?: { id?: string | null; name?: string };
-            };
-          };
-          if (e?.type === "TOKEN" && e?.payload) {
-            const token = e.payload.token ?? "";
-            const done = Boolean(e.payload.isComplete);
-            const isReasoning = Boolean(e.payload.isReasoning);
-            const agentName = e.payload.agent?.name ?? null;
-
-            if (!done) {
-              const anyGlobal = globalThis as unknown as {
-                Deno?: {
-                  stdout?: { writeSync?: (data: Uint8Array) => unknown };
-                };
-                process?: { stdout?: { write?: (chunk: string) => unknown } };
-              };
-
-              let toWrite = "";
-              // Print agent label when the speaking agent changes
-              if (agentName && agentName !== currentAgent) {
-                if (currentAgent) toWrite += "\n\n";
-                toWrite += `\x1b[36m[${agentName}]\x1b[0m\n`;
-                currentAgent = agentName;
-              }
-              if (isReasoning && !isThinking) {
-                toWrite += "💭 ";
-                isThinking = true;
-              } else if (!isReasoning && isThinking) {
-                toWrite += "\n\n";
-                isThinking = false;
-              }
-              toWrite += token;
-
-              if (toWrite) {
-                const bytes = new TextEncoder().encode(toWrite);
-                if (anyGlobal?.Deno?.stdout?.writeSync) {
-                  anyGlobal.Deno.stdout.writeSync(bytes);
-                } else if (anyGlobal?.process?.stdout?.write) {
-                  anyGlobal.process.stdout.write(toWrite);
-                } else {
-                  // Fallback when raw stdout writing isn't available
-                  console.log(toWrite);
-                }
-              }
-            } else {
-              if (isThinking) {
-                isThinking = false;
-                console.log("\n");
-              }
-              console.log("");
-            }
-          }
-          if (typeof onEvent === "function" && ev.type !== "TOKEN") {
-            return await onEvent(ev);
-          } else if (typeof onEvent === "function") {
-            // TOKEN returns ignored (read-only)
-            await Promise.resolve(onEvent(ev)).catch(() => undefined);
-          }
-          return undefined;
-        };
-
-        const send = async (message: string | MessagePayload) => {
-          const outboundMessage = typeof message === "string"
-            ? {
-              content: message,
-              sender: sessionSender ?? { type: "user", name: "user" },
-              thread: sessionParticipants
-                ? {
-                  externalId: threadExternalId,
-                  participants: sessionParticipants,
-                }
-                : { externalId: threadExternalId },
-            } as MessagePayload
-            : (() => {
-              const messageThread = message.thread ?? undefined;
-              const participants = Array.isArray(messageThread?.participants) &&
-                  messageThread.participants.length > 0
-                ? messageThread.participants
-                : sessionParticipants;
-
-              return {
-                ...message,
-                sender: message.sender ?? sessionSender ??
-                  { type: "user", name: "user" },
-                thread: {
-                  ...(messageThread ?? {}),
-                  externalId: threadExternalId,
-                  ...(participants ? { participants } : {}),
-                },
-              } as MessagePayload;
-            })();
-
-          const handle = await performRun(
-            outboundMessage,
-            unifiedOnEvent,
-            { stream: true, ackMode: "onComplete" },
-          );
-          for await (const _ of handle.events) { /* drain */ }
-          await handle.done;
-        };
-
-        if (
-          typeof initialMessage === "string" && initialMessage.trim().length > 0
-        ) {
-          await send(initialMessage);
-        } else if (initialMessage && typeof initialMessage === "object") {
-          const { banner: _b, quitCommand: _q, threadExternalId: _t, ...rest } =
-            initialMessage as Record<string, unknown>;
-          await send(rest as MessagePayload);
-        }
-
-        while (!stopped) {
-          const anyGlobal = globalThis as unknown as {
-            prompt?: (msg?: string) => string | null | undefined;
-          };
-          const q = ((typeof anyGlobal.prompt === "function"
-            ? anyGlobal.prompt("Message: ")
-            : "") ?? "").trim();
-          if (!q || q.toLowerCase() === quitCommand) {
-            console.log("👋 Ending session. Goodbye!");
-            break;
-          }
-          console.log("\n🔬 Thinking...\n");
-          await send(q);
-          console.log(
-            "\n------------------------------------------------------------\n",
-          );
-        }
-      })();
-
-      return {
-        stop: () => {
-          stopped = true;
-        },
-        closed,
-      };
-    },
+        })(),
+      }),
     shutdown: async () => {
       if (managedDb) {
         if (fromCache) {

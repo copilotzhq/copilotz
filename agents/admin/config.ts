@@ -11,5 +11,9 @@ export default {
         "write_file",
         "list_directory",
         "search_files",
+        "search_code",
+        "apply_patch",
+        "show_file_diff",
+        "restore_file_version",
     ],
 } as Partial<Agent>;

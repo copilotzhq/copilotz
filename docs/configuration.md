@@ -30,6 +30,10 @@ const copilotz = await createCopilotz({
   
   // Skills
   skills: [...],
+  agentsFile: {
+    enabled: true,           // Default: true
+    fileName: "AGENTS.md",   // Default: AGENTS.md
+  },
   
   // Copilotz development agent
   copilotzAgent: { llmOptions: { ... } },
@@ -97,6 +101,21 @@ resources: {
 ```
 
 See [Resource Loaders](./loaders.md) for the expected directory structure.
+
+## Local AGENTS Instructions
+
+Copilotz can automatically load an `AGENTS.md`-style instruction file from the
+current working directory and append it to the active agent's prompt at run
+time. This is enabled by default.
+
+```typescript
+agentsFile: {
+  enabled: true,
+  fileName: "AGENTS.md",
+}
+```
+
+Set `agentsFile: false` to disable it entirely.
 
 ## Agents
 

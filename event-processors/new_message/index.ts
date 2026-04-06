@@ -1414,6 +1414,7 @@ export const messageProcessor: EventProcessor<
         ctx.userMetadata,
         ctx.agentNode,
         agentSkillIndex,
+        context.agentsFileInstructions,
       );
 
       // Generate history with target context for multi-agent awareness

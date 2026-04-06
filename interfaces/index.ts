@@ -129,6 +129,7 @@ export type {
 } from "@/event-processors/index.ts";
 
 import type { AssetConfig, AssetStore } from "@/utils/assets.ts";
+import type { AgentsFileInstructions } from "@/utils/loaders/agents-file.ts";
 
 /**
  * Payload passed to the agent LLM options resolver function.
@@ -518,6 +519,8 @@ export interface ChatContext {
   embeddingConfig?: EmbeddingConfig;
   /** Optional namespace prefix for multi-tenancy isolation. */
   namespacePrefix?: string;
+  /** Optional AGENTS.md instructions loaded from the current working directory. */
+  agentsFileInstructions?: AgentsFileInstructions | null;
   /**
    * Resolved namespace for this run.
    * Priority: RunOptions.namespace > CopilotzConfig.namespace > undefined

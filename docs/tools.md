@@ -27,7 +27,7 @@ LLM continues conversation
 
 ## Native Tools
 
-Copilotz includes 24 built-in tools. Enable them per-agent with `allowedTools`:
+Copilotz includes 28 built-in tools. Enable them per-agent with `allowedTools`:
 
 ```typescript
 const agent = {
@@ -46,6 +46,10 @@ const agent = {
 | `write_file` | Write content to a file (creates parent directories) |
 | `list_directory` | List files and folders in a directory |
 | `search_files` | Search for files matching a pattern |
+| `search_code` | Search file contents with line-level matches |
+| `apply_patch` | Apply targeted text or line-based edits with snapshots |
+| `show_file_diff` | Compare the current file to the latest captured snapshot |
+| `restore_file_version` | Restore a file from a captured snapshot |
 
 ### HTTP & Network
 

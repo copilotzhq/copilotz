@@ -11,6 +11,10 @@ import list_directory from "./list_directory.ts";
 import verbal_pause from "./verbal_pause.ts";
 import get_current_time from "./get_current_time.ts";
 import search_files from "./search_files.ts";
+import search_code from "./search_code.ts";
+import apply_patch from "./apply_patch.ts";
+import show_file_diff from "./show_file_diff.ts";
+import restore_file_version from "./restore_file_version.ts";
 import fetch_text from "./fetch_text.ts";
 import run_command from "./run_command.ts";
 import wait from "./wait.ts";
@@ -33,7 +37,7 @@ import read_skill_resource from "./read_skill_resource.ts";
  * 
  * Includes tools for:
  * - Thread and task management (create_thread, end_thread, create_task)
- * - File operations (read_file, write_file, list_directory, search_files)
+ * - File operations (read_file, write_file, list_directory, search_files, search_code, apply_patch, show_file_diff, restore_file_version)
  * - HTTP and asset handling (http_request, fetch_text, save_asset, fetch_asset)
  * - RAG operations (search_knowledge, ingest_document, list_namespaces, delete_document)
  * - Utility tools (ask_question, verbal_pause, get_current_time, wait, run_command)
@@ -50,6 +54,10 @@ export const nativeTools: { [key: string]: NewTool } = {
     verbal_pause,
     get_current_time,
     search_files,
+    search_code,
+    apply_patch,
+    show_file_diff,
+    restore_file_version,
     fetch_text,
     run_command,
     wait,

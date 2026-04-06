@@ -17,6 +17,7 @@ import show_file_diff from "./show_file_diff.ts";
 import restore_file_version from "./restore_file_version.ts";
 import fetch_text from "./fetch_text.ts";
 import run_command from "./run_command.ts";
+import persistent_terminal from "./persistent_terminal.ts";
 import wait from "./wait.ts";
 import save_asset from "./save_asset.ts";
 import fetch_asset from "./fetch_asset.ts";
@@ -60,6 +61,7 @@ export const nativeTools: { [key: string]: NewTool } = {
     restore_file_version,
     fetch_text,
     run_command,
+    persistent_terminal,
     wait,
     save_asset,
     fetch_asset,

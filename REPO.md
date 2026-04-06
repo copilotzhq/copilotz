@@ -15,6 +15,8 @@ entrypoints:
   - runtime/index.ts
   - utils/loaders/resources.ts
   - database/index.ts
+  - server/index.ts
+  - server/channels/index.ts
   - create/mod.ts
 status: active
 ---
@@ -36,6 +38,8 @@ Shared framework repo used by clients for agent execution, event processing, mem
 - Event processors and native tools: `event-processors/`
 - Database schema, migrations, collections: `database/`
 - Connectors for LLM, embeddings, storage, HTTP: `connectors/`
+- Server helpers (framework-independent): `server/` (exported as `./server`)
+- Channel handlers (web, WhatsApp, Zendesk): `server/channels/` (exported as `./server/channels`, `./server/channels/web`, `./server/channels/whatsapp`, `./server/channels/zendesk`)
 - Project scaffolding CLI: `create/` (exported as `./create`, used by `deno run -Ar jsr:@copilotz/copilotz/create`)
 
 ## Warnings

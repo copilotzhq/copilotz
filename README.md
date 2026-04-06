@@ -50,6 +50,7 @@ Copilotz is the full-stack framework for AI applications. Everything you need to
 | Background Jobs | Event queue with persistent workers and custom processors |
 | Multi-tenancy | Schema isolation + namespace partitioning |
 | Database | PostgreSQL (production) or PGLite (development/embedded) |
+| Channels | Web (SSE), WhatsApp, and Zendesk — import and go |
 | Streaming | Real-time token streaming with async iterables |
 
 **One framework. One dependency. Production-ready.**
@@ -271,6 +272,38 @@ Type-safe data storage on top of the knowledge graph with JSON Schema validation
 ### RAG Pipeline
 Document ingestion → chunking → embeddings → semantic search. Works out of the box.
 
+### Channels
+Pre-built channel handlers for Web (SSE), WhatsApp Cloud API, and Zendesk Sunshine. Every channel is a single function with the same signature — framework-independent, no Oxian/Express/Hono lock-in.
+
+```typescript
+import { whatsappChannel } from "@copilotz/copilotz/server/channels/whatsapp";
+
+// That's it. Wire to any framework:
+const res = await whatsappChannel(
+  { method: "POST", url, headers, body, rawBody },
+  copilotz,
+);
+```
+
+Config defaults to env vars (`WHATSAPP_*`, `ZENDESK_*`) or pass explicit config as a third argument. Available channels:
+
+```typescript
+import { webChannel } from "@copilotz/copilotz/server/channels/web";
+import { whatsappChannel } from "@copilotz/copilotz/server/channels/whatsapp";
+import { zendeskChannel } from "@copilotz/copilotz/server/channels/zendesk";
+```
+
+**Web** returns an async iterable of events for you to stream (SSE, WebSocket, etc.):
+
+```typescript
+const res = await webChannel(req, copilotz);
+for await (const { event, data } of res.events!) {
+  sse.send(data, { event });
+}
+```
+
+**WhatsApp** and **Zendesk** handle the full lifecycle internally — verify the webhook, parse the payload, run the agent, and push responses back to the platform API.
+
 ### Streaming
 Real-time token streaming with callbacks and async iterables.
 
@@ -302,6 +335,7 @@ Automatic extraction and storage of images, files, and media from tool outputs. 
 - [Assets](./docs/assets.md) — File and media storage
 - [Loaders](./docs/loaders.md) — Load resources from filesystem
 - [Server Helpers](./docs/server.md) — Framework-independent handler factories
+- [Channels](./docs/channels.md) — Web, WhatsApp, and Zendesk channel handlers
 - [API Reference](./docs/api-reference.md) — Complete API documentation
 
 ---

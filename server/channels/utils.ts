@@ -35,7 +35,8 @@ export function parseDataUrl(
 
   const mimeType = matches[1];
   const binaryString = atob(matches[2]);
-  const bytes = new Uint8Array(binaryString.length);
+  const buffer = new ArrayBuffer(binaryString.length);
+  const bytes = new Uint8Array(buffer);
   for (let i = 0; i < binaryString.length; i++) {
     bytes[i] = binaryString.charCodeAt(i);
   }
@@ -109,7 +110,8 @@ export async function verifyHmacSha256(
     false,
     ["sign"],
   );
-  const signatureBuffer = await crypto.subtle.sign("HMAC", key, body);
+  const bodyBuffer = body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
+  const signatureBuffer = await crypto.subtle.sign("HMAC", key, bodyBuffer);
   const computedHash = Array.from(new Uint8Array(signatureBuffer))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");

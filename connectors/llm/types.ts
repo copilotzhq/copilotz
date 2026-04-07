@@ -148,6 +148,11 @@ export interface ChatRequest {
   answer?: string; // For mock responses
   tools?: ToolDefinition[]; // Tool definitions for standardized tool calling
   tool_call_id?: string;
+  /**
+   * Custom XML-like block tags to extract and remove from assistant output.
+   * Example: ["route_to"] extracts `<route_to>writer</route_to>`.
+   */
+  extractTags?: string[];
 }
 
 // Unified Tool Invocation payload mapping executions end-to-end
@@ -181,6 +186,7 @@ export interface ChatResponse {
   provider?: ProviderName;
   model?: string;
   toolCalls?: ToolInvocation[];
+  extractedTags?: Record<string, string[]>;
   metadata?: {
     provider?: ProviderName;
     timestamp: string;
@@ -214,6 +220,8 @@ export interface ProcessStreamOptions {
   format?: "sse" | "jsonl";
   /** Transform the accumulated raw response before returning (e.g. strip wrapper tags). */
   postProcess?: (raw: string) => string;
+  /** Additional block tags to hide from visible streaming output while preserving raw content. */
+  extractedBlockTags?: string[];
   /** Local stop sequences enforced client-side across all providers. */
   localStopSequences?: string[];
   /** Called when a local stop sequence is matched. */

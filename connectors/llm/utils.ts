@@ -29,6 +29,28 @@ const INTERNAL_LITERAL_CONTROL_TAGS = [
   NO_RESPONSE_EMPTY_BLOCK_TAG,
 ];
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeStructuredTagNames(tagNames: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const candidate of tagNames) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (!/^[a-z][a-z0-9_-]*$/i.test(trimmed)) continue;
+
+    const lower = trimmed.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    normalized.push(trimmed);
+  }
+
+  return normalized;
+}
+
 /**
  * Formats chat messages with instructions and applies length limits
  */
@@ -474,11 +496,11 @@ export async function processStream(
   const localStopState: LocalStopState = { pending: "" };
   let stoppedByLocalStop = false;
   const filterState: {
-    inside: boolean;
+    activeTag: string | null;
     pending: string;
     controlPending: string;
   } = {
-    inside: false,
+    activeTag: null,
     pending: "",
     controlPending: "",
   };
@@ -486,7 +508,11 @@ export async function processStream(
   const appendVisibleContent = (text: string) => {
     if (!text) return;
     fullResponse += text;
-    const filtered = filterToolCallTokensStreaming(text, filterState);
+    const filtered = filterTaggedControlTokensStreaming(
+      text,
+      filterState,
+      options?.extractedBlockTags ?? [],
+    );
     if (filtered) onChunk(filtered);
   };
 
@@ -588,21 +614,59 @@ export function filterToolCallTokensStreaming(
   input: string,
   state: { inside: boolean; pending: string; controlPending?: string },
 ): string {
-  const startTag = "<function_calls>";
-  const endTag = "</function_calls>";
+  const nextState = {
+    activeTag: state.inside ? "function_calls" : null,
+    pending: state.pending,
+    controlPending: state.controlPending ?? "",
+  };
+  const filtered = filterTaggedControlTokensStreaming(input, nextState, []);
+  state.inside = nextState.activeTag === "function_calls";
+  state.pending = nextState.pending;
+  state.controlPending = nextState.controlPending;
+  return filtered;
+}
+
+export function filterTaggedControlTokensStreaming(
+  input: string,
+  state: { activeTag: string | null; pending: string; controlPending?: string },
+  extractedBlockTags: string[],
+): string {
+  const structuredTags = normalizeStructuredTagNames([
+    "function_calls",
+    ...extractedBlockTags,
+  ]).map((name) => ({
+    name,
+    startTag: `<${name}>`,
+    endTag: `</${name}>`,
+  }));
 
   let s = state.pending + input;
   state.pending = "";
   let output = "";
 
-  // Process iteratively removing balanced blocks
   while (s.length > 0) {
-    if (!state.inside) {
-      const idx = s.indexOf(startTag);
-      if (idx === -1) {
-        // No start tag in this chunk
-        // Keep a trailing overlap as pending to detect a tag split across tokens
-        const overlap = suffixPrefix(s, startTag);
+    if (!state.activeTag) {
+      let nextMatch:
+        | { index: number; tagName: string; tagLength: number }
+        | null = null;
+
+      for (const tag of structuredTags) {
+        const index = s.indexOf(tag.startTag);
+        if (index === -1) continue;
+        if (!nextMatch || index < nextMatch.index) {
+          nextMatch = {
+            index,
+            tagName: tag.name,
+            tagLength: tag.startTag.length,
+          };
+        }
+      }
+
+      if (!nextMatch) {
+        let overlap = 0;
+        for (const tag of structuredTags) {
+          overlap = Math.max(overlap, suffixPrefix(s, tag.startTag));
+        }
         if (overlap > 0) {
           output += s.slice(0, s.length - overlap);
           state.pending = s.slice(s.length - overlap);
@@ -611,22 +675,24 @@ export function filterToolCallTokensStreaming(
         }
         s = "";
       } else {
-        // Output before tag, then enter inside
-        output += s.slice(0, idx);
-        s = s.slice(idx + startTag.length);
-        state.inside = true;
+        output += s.slice(0, nextMatch.index);
+        s = s.slice(nextMatch.index + nextMatch.tagLength);
+        state.activeTag = nextMatch.tagName;
       }
     } else {
-      const endIdx = s.indexOf(endTag);
+      const activeTag = structuredTags.find((tag) => tag.name === state.activeTag);
+      if (!activeTag) {
+        state.activeTag = null;
+        continue;
+      }
+      const endIdx = s.indexOf(activeTag.endTag);
       if (endIdx === -1) {
-        // Entire remainder is inside the tag; keep overlap to catch end tag
-        const overlap = suffixPrefix(s, endTag);
+        const overlap = suffixPrefix(s, activeTag.endTag);
         state.pending = s.slice(s.length - overlap);
         s = "";
       } else {
-        // Skip content inside and consume end tag, exit inside
-        s = s.slice(endIdx + endTag.length);
-        state.inside = false;
+        s = s.slice(endIdx + activeTag.endTag.length);
+        state.activeTag = null;
       }
     }
   }
@@ -820,6 +886,34 @@ export function parseInternalControlTagsFromResponse(
     .trim();
 
   return { cleanResponse, suppressResponse };
+}
+
+export function parseTaggedBlocksFromResponse(
+  response: string,
+  tagNames: string[],
+): { cleanResponse: string; extractedTags: Record<string, string[]> } {
+  const extractedTags: Record<string, string[]> = {};
+  let cleanResponse = response;
+
+  for (const tagName of normalizeStructuredTagNames(tagNames)) {
+    const pattern = new RegExp(
+      `<${escapeRegex(tagName)}>([\\s\\S]*?)<\\/${escapeRegex(tagName)}>`,
+      "gi",
+    );
+    const values: string[] = [];
+
+    cleanResponse = cleanResponse.replace(pattern, (_match, inner: string) => {
+      const value = typeof inner === "string" ? inner.trim() : "";
+      if (value.length > 0) values.push(value);
+      return "";
+    });
+
+    if (values.length > 0) {
+      extractedTags[tagName] = values;
+    }
+  }
+
+  return { cleanResponse: cleanResponse.trim(), extractedTags };
 }
 
 /**

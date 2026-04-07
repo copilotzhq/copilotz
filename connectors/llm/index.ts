@@ -15,6 +15,7 @@ import {
   formatMessages,
   getLocalStopSequences,
   parseInternalControlTagsFromResponse,
+  parseTaggedBlocksFromResponse,
   parseToolCallsFromResponse,
   processStream,
   withDefaultStopSequences,
@@ -216,6 +217,7 @@ export async function chat(
         {
           ...providerAPI.streamOptions,
           config: attemptConfig,
+          extractedBlockTags: request.extractTags,
           localStopSequences,
           onLocalStop: () => abortController.abort(),
         },
@@ -223,10 +225,19 @@ export async function chat(
 
       let cleanResponse = streamResult.content;
       let toolCalls: ToolInvocation[] = [];
+      let extractedTags: Record<string, string[]> = {};
       {
         const parsed = parseToolCallsFromResponse(streamResult.content);
         cleanResponse = parsed.cleanResponse;
         toolCalls = parsed.tool_calls;
+      }
+      {
+        const parsed = parseTaggedBlocksFromResponse(
+          cleanResponse,
+          request.extractTags ?? [],
+        );
+        cleanResponse = parsed.cleanResponse;
+        extractedTags = parsed.extractedTags;
       }
       {
         const parsed = parseInternalControlTagsFromResponse(cleanResponse);
@@ -241,6 +252,7 @@ export async function chat(
         provider: attemptProvider,
         model: attemptConfig.model,
         ...(toolCalls.length > 0 && { toolCalls }),
+        ...(Object.keys(extractedTags).length > 0 && { extractedTags }),
       };
 
       const responseWithMetadata = {

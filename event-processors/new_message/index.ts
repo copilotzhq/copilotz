@@ -1055,18 +1055,11 @@ export const messageProcessor: EventProcessor<
         if (!isComplete) {
           // Not all results are in yet - skip routing, don't trigger LLM
           // The message is already persisted, so it will be in history
-          console.log(
-            `[NEW_MESSAGE] Batch ${batchInfo.batchId}: ${batch.results.length}/${batch.batchSize} results received, waiting for more...`,
-          );
           return {
             producedEvents: entityExtractEvents as unknown as NewEvent[],
           };
         }
 
-        // All results are in! Clear the batch and proceed with aggregated context
-        console.log(
-          `[NEW_MESSAGE] Batch ${batchInfo.batchId}: All ${batch.batchSize} results received, proceeding with LLM call`,
-        );
         await clearCompletedBatch(ops, thread, batchInfo.batchId);
 
         // The aggregated results are now in the message history (each was persisted)
@@ -1197,8 +1190,18 @@ export const messageProcessor: EventProcessor<
       : [];
 
     let targetResolution: TargetResolution | null;
+    const userMentionTargets = (
+        messageContext.senderType === "user" &&
+        context.multiAgent?.enabled === true
+      )
+      ? parseMentions(
+        messageContext.contentText,
+        thread.participants ?? null,
+        availableAgents,
+      )
+      : [];
 
-    if (metadataTargetId) {
+    if (metadataTargetId && userMentionTargets.length === 0) {
       const resolvedMetadataTarget = resolveThreadParticipantTarget(
         metadataTargetId,
         thread,

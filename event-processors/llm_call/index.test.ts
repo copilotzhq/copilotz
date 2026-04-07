@@ -2,9 +2,9 @@ import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import { resolveAgentResponseTarget } from "./index.ts";
 
-Deno.test("resolveAgentResponseTarget ignores self mentions and falls back to sender", () => {
+Deno.test("resolveAgentResponseTarget ignores self routes and falls back to sender", () => {
   const result = resolveAgentResponseTarget(
-    "@Researcher I can take it from here.",
+    ["researcher"],
     {
       id: "researcher",
       name: "Researcher",
@@ -24,9 +24,9 @@ Deno.test("resolveAgentResponseTarget ignores self mentions and falls back to se
   });
 });
 
-Deno.test("resolveAgentResponseTarget routes to other mentioned agents", () => {
+Deno.test("resolveAgentResponseTarget routes to explicit route targets", () => {
   const result = resolveAgentResponseTarget(
-    "@Writer please take this next.",
+    ["Writer"],
     {
       id: "researcher",
       name: "Researcher",
@@ -46,9 +46,9 @@ Deno.test("resolveAgentResponseTarget routes to other mentioned agents", () => {
   });
 });
 
-Deno.test("resolveAgentResponseTarget skips self mention and keeps the next valid mention", () => {
+Deno.test("resolveAgentResponseTarget skips self route and keeps the next valid target", () => {
   const result = resolveAgentResponseTarget(
-    "@Researcher looping back to @Writer for the draft.",
+    ["Researcher", "Writer"],
     {
       id: "researcher",
       name: "Researcher",
@@ -70,7 +70,7 @@ Deno.test("resolveAgentResponseTarget skips self mention and keeps the next vali
 
 Deno.test("resolveAgentResponseTarget preserves upstream return path on explicit handoff", () => {
   const result = resolveAgentResponseTarget(
-    "@Assistant I finished my part.",
+    ["Assistant"],
     {
       id: "copilotz",
       name: "Copilotz",
@@ -92,7 +92,7 @@ Deno.test("resolveAgentResponseTarget preserves upstream return path on explicit
 
 Deno.test("resolveAgentResponseTarget preserves queued targets from inbound routing", () => {
   const result = resolveAgentResponseTarget(
-    "@Researcher I am still thinking.",
+    ["Researcher"],
     {
       id: "researcher",
       name: "Researcher",
@@ -114,7 +114,7 @@ Deno.test("resolveAgentResponseTarget preserves queued targets from inbound rout
 
 Deno.test("resolveAgentResponseTarget falls back to source sender when multi-agent is disabled", () => {
   const result = resolveAgentResponseTarget(
-    "@Writer please take this next.",
+    ["Writer"],
     {
       id: "researcher",
       name: "Researcher",

@@ -17,10 +17,8 @@ import type {
 } from "@/interfaces/index.ts";
 import { resolveAssetRefsInMessages } from "@/utils/assets.ts";
 import { filterToolCallTokensStreaming } from "@/connectors/llm/utils.ts";
-import {
-  buildMentionTargetRoute,
-  extractMentionNames,
-} from "@/utils/mentions.ts";
+import { buildMentionTargetRoute } from "@/utils/mentions.ts";
+import type { Agent, Thread } from "@/interfaces/index.ts";
 
 export type { ChatMessage };
 
@@ -31,7 +29,7 @@ const escapeRegex = (string: string): string =>
   string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export function resolveAgentResponseTarget(
-  response: string,
+  routeTargets: string[],
   agent: { id?: string | null; name?: string | null },
   sourceEvent: Event,
   multiAgentEnabled: boolean,
@@ -58,11 +56,12 @@ export function resolveAgentResponseTarget(
       .map((value) => value.toLowerCase()),
   );
 
-  const mentions = extractMentionNames(response).filter((mention) =>
-    !selfIdentifiers.has(mention.toLowerCase())
+  const normalizedRouteTargets = routeTargets.filter((target) =>
+    typeof target === "string" && target.trim().length > 0 &&
+    !selfIdentifiers.has(target.trim().toLowerCase())
   );
 
-  const mentionRoute = buildMentionTargetRoute(mentions, {
+  const mentionRoute = buildMentionTargetRoute(normalizedRouteTargets, {
     returnTarget: sourceSenderId,
     fallbackQueue: sourceTargetQueue,
   });
@@ -79,6 +78,82 @@ export function resolveAgentResponseTarget(
     targetId: sourceSenderId,
     targetQueue: [],
   };
+}
+
+function resolveAgentRouteTargets(
+  extractedTags: Record<string, string[]> | undefined,
+  currentAgent: { id?: string | null; name?: string | null },
+  senderAgent: Agent | undefined,
+  thread: Thread,
+  availableAgents: Agent[],
+): string[] {
+  const rawTargets = Array.isArray(extractedTags?.route_to)
+    ? extractedTags.route_to
+    : [];
+  if (rawTargets.length === 0) return [];
+
+  const participants = Array.isArray(thread.participants)
+    ? thread.participants.filter((value): value is string =>
+      typeof value === "string" && value.trim().length > 0
+    )
+    : [];
+  const selfIdentifiers = new Set(
+    [currentAgent.id, currentAgent.name]
+      .filter((value): value is string =>
+        typeof value === "string" && value.trim().length > 0
+      )
+      .map((value) => value.toLowerCase()),
+  );
+  const allowedAgents = Array.isArray(senderAgent?.allowedAgents) &&
+      senderAgent.allowedAgents.length > 0
+    ? new Set(senderAgent.allowedAgents.map((value) => value.toLowerCase()))
+    : null;
+  const resolved: string[] = [];
+  const seen = new Set<string>();
+
+  for (const rawTarget of rawTargets) {
+    const candidate = rawTarget.trim();
+    if (candidate.length === 0) continue;
+
+    const matchedAgent = availableAgents.find((availableAgent) =>
+      (typeof availableAgent.id === "string" &&
+        availableAgent.id.toLowerCase() === candidate.toLowerCase()) ||
+      (typeof availableAgent.name === "string" &&
+        availableAgent.name.toLowerCase() === candidate.toLowerCase())
+    );
+    if (!matchedAgent) continue;
+
+    const canonicalId = (matchedAgent.id ?? matchedAgent.name) as string;
+    const canonicalLower = canonicalId.toLowerCase();
+    if (selfIdentifiers.has(canonicalLower)) continue;
+
+    const isParticipant = participants.some((participant) => {
+      const participantLower = participant.toLowerCase();
+      return participantLower === canonicalLower ||
+        (typeof matchedAgent.id === "string" &&
+          participantLower === matchedAgent.id.toLowerCase()) ||
+        (typeof matchedAgent.name === "string" &&
+          participantLower === matchedAgent.name.toLowerCase());
+    });
+    if (!isParticipant) continue;
+
+    if (
+      allowedAgents &&
+      !allowedAgents.has(canonicalLower) &&
+      !(typeof matchedAgent.id === "string" &&
+        allowedAgents.has(matchedAgent.id.toLowerCase())) &&
+      !(typeof matchedAgent.name === "string" &&
+        allowedAgents.has(matchedAgent.name.toLowerCase()))
+    ) {
+      continue;
+    }
+
+    if (seen.has(canonicalLower)) continue;
+    resolved.push(canonicalId);
+    seen.add(canonicalLower);
+  }
+
+  return resolved;
 }
 
 export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
@@ -253,6 +328,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       {
         messages: resolvedMessages,
         tools: payload.tools,
+        extractTags: ["route_to"],
       } as ChatRequest,
       configForCall,
       envVars,
@@ -286,11 +362,18 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     const toolCalls: ToolInvocation[] | undefined = ("toolCalls" in llmResponse)
       ? (llmResponse as unknown as { toolCalls?: ToolInvocation[] }).toolCalls
       : undefined;
+    const extractedTags: Record<string, string[]> | undefined =
+      ("extractedTags" in llmResponse)
+        ? (llmResponse as unknown as {
+          extractedTags?: Record<string, string[]>;
+        }).extractedTags
+        : undefined;
 
     if (Deno.env.get("COPILOTZ_DEBUG") === "1") {
       console.log("answer", answer);
       console.log("reasoning", reasoning);
       console.log("toolCalls", toolCalls);
+      console.log("extractedTags", extractedTags);
     }
 
     if (!answer && !toolCalls) {
@@ -337,9 +420,19 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       })
       : undefined;
 
-    // Resolve target for agent's response (based on @mentions or queue)
+    // Resolve target for agent's response (based on explicit route tags or queue)
+    const routeTargets = resolveAgentRouteTargets(
+      extractedTags,
+      {
+        id: payload.agent.id ?? null,
+        name: payload.agent.name,
+      },
+      agentForCall,
+      deps.thread,
+      context.agents ?? [],
+    );
     const responseTarget = resolveAgentResponseTarget(
-      answer || "",
+      routeTargets,
       {
         id: payload.agent.id ?? null,
         name: payload.agent.name,

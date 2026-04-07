@@ -158,3 +158,54 @@ Deno.test("chat does not fall back on primary auth failures", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+Deno.test("chat extracts custom tags and hides them from streamed output", async () => {
+  const originalFetch = globalThis.fetch;
+  const streamedChunks: string[] = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+
+    if (!url.includes("api.openai.com")) {
+      throw new Error(`Unexpected fetch url: ${url}`);
+    }
+
+    return new Response(
+      createSSEStream([
+        'data: {"choices":[{"delta":{"content":"Working with the draft.<route_to>writer"}}]}\n',
+        'data: {"choices":[{"delta":{"content":"</route_to>"}}]}\n',
+        "data: [DONE]\n",
+        "\n",
+      ]),
+      {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      },
+    );
+  }) as typeof fetch;
+
+  try {
+    const request: ChatRequest = {
+      messages: [{ role: "user", content: "Route this" }],
+      extractTags: ["route_to"],
+    };
+    const config: ProviderConfig = {
+      provider: "openai",
+      model: "gpt-5-mini",
+      apiKey: "openai-key",
+    };
+
+    const response = await chat(
+      request,
+      config,
+      {},
+      (chunk) => streamedChunks.push(chunk),
+    );
+
+    assertEquals(response.answer, "Working with the draft.");
+    assertEquals(response.extractedTags, { route_to: ["writer"] });
+    assertEquals(streamedChunks.join(""), "Working with the draft.");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

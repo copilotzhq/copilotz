@@ -1,14 +1,12 @@
 import type { NewTool } from "@/interfaces/index.ts";
 
-import ask_question from "./ask_question.ts";
+import delegate from "./delegate.ts";
 import create_thread from "./create_thread.ts";
 import end_thread from "./end_thread.ts";
-import create_task from "./create_task.ts";
 import http_request from "./http_request.ts";
 import read_file from "./read_file.ts";
 import write_file from "./write_file.ts";
 import list_directory from "./list_directory.ts";
-import verbal_pause from "./verbal_pause.ts";
 import get_current_time from "./get_current_time.ts";
 import search_files from "./search_files.ts";
 import search_code from "./search_code.ts";
@@ -37,22 +35,20 @@ import read_skill_resource from "./read_skill_resource.ts";
  * Registry of all built-in native tools available to agents.
  * 
  * Includes tools for:
- * - Thread and task management (create_thread, end_thread, create_task)
+ * - Thread management (create_thread, end_thread, delegate)
  * - File operations (read_file, write_file, list_directory, search_files, search_code, apply_patch, show_file_diff, restore_file_version)
  * - HTTP and asset handling (http_request, fetch_text, save_asset, fetch_asset)
  * - RAG operations (search_knowledge, ingest_document, list_namespaces, delete_document)
- * - Utility tools (ask_question, verbal_pause, get_current_time, wait, run_command)
+ * - Utility tools (delegate, get_current_time, wait, run_command)
  */
 export const nativeTools: { [key: string]: NewTool } = {
-    ask_question,
+    delegate,
     create_thread,
     end_thread,
-    create_task,
     http_request,
     read_file,
     write_file,
     list_directory,
-    verbal_pause,
     get_current_time,
     search_files,
     search_code,

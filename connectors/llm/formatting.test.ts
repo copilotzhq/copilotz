@@ -156,6 +156,32 @@ Deno.test("formatMessages does not append a continuation cue when the last messa
   assertEquals(formatted[1].content, "E agora?");
 });
 
+Deno.test("formatMessages rehydrates hidden route tags from assistant metadata", () => {
+  const messages: ChatMessage[] = [
+    {
+      role: "assistant",
+      senderId: "planner",
+      content: "",
+      metadata: {
+        routing: {
+          routeTo: ["writer"],
+        },
+      },
+    },
+    {
+      role: "user",
+      senderId: "writer",
+      content: "[planner]: Please take over.",
+    },
+  ];
+
+  const formatted = formatMessages({ messages });
+
+  assertEquals(formatted.length, 2);
+  assertEquals(formatted[0].role, "assistant");
+  assertEquals(formatted[0].content, "<route_to>writer</route_to>");
+});
+
 Deno.test("withDefaultStopSequences preserves caller stops without adding defaults", () => {
   const config = withDefaultStopSequences({
     stop: ["DONE"],
@@ -343,4 +369,30 @@ Deno.test("historyGenerator keeps raw assistant tool calls private to the callin
   assertEquals(sharedHistory.length, 1);
   assertEquals(sharedHistory[0].role, "user");
   assertEquals(sharedHistory[0].toolCalls, undefined);
+});
+
+Deno.test("historyGenerator preserves assistant routing metadata for formatter rehydration", () => {
+  const history = historyGenerator(
+    [
+      {
+        senderId: "planner",
+        senderType: "agent",
+        content: "",
+        metadata: {
+          routing: {
+            routeTo: ["writer"],
+          },
+        },
+      },
+    ] as any,
+    { id: "planner", name: "planner" } as any,
+  );
+
+  assertEquals(history.length, 1);
+  assertEquals(history[0].role, "assistant");
+  assertEquals(history[0].metadata, {
+    routing: {
+      routeTo: ["writer"],
+    },
+  });
 });

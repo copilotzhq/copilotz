@@ -117,7 +117,11 @@ export function contextGenerator(
       "- Your own messages appear without prefix",
       "- Do not use @mentions for routing. Agent-to-agent handoff only happens through explicit route tags",
       "- To hand off the next turn to another agent in this same thread, include exactly <route_to>agent-id</route_to>",
+      "- To ask another agent something in this same thread and then resume after their answer, include exactly <ask_to>agent-id</ask_to> somewhere in your message",
+      "- The <ask_to> tag only names the next agent; the rest of your visible message becomes what that agent sees and responds to next",
+      "- After that agent replies, their reply routes back to you so you can continue",
       "- Prefer a single <route_to> tag per response",
+      "- Prefer a single <ask_to> block per response",
       "- Never route to yourself",
       "- Do not use @mentions for casual reference, examples, summaries, or quotes",
       "- If you only want to refer to someone, write their name without @",
@@ -132,7 +136,7 @@ export function contextGenerator(
           "Other available agents (not in current thread):",
           `- ${availableAgentsInfo}`,
           "",
-          "NOTE: You can communicate with these agents using tools like 'ask_question' for quick queries or 'create_thread' for longer discussions.",
+          "NOTE: You can communicate with these agents using tools like 'delegate' for focused offloaded work or 'create_thread' for longer discussions.",
         ]
         : []),
     ].filter(Boolean).join("\n");

@@ -23,6 +23,9 @@ type StoredAttachment = {
 
 type MessageMetadata = Record<string, unknown> & {
   attachments?: StoredAttachment[];
+  routing?: {
+    routeTo?: string[];
+  };
 };
 
 const toDataUrl = (
@@ -415,6 +418,7 @@ export function historyGenerator(
       content: finalContent,
       role: role,
       senderId: msg.senderId || undefined,
+      metadata: metadata,
       tool_call_id: (msg as unknown as { toolCallId?: string }).toolCallId ||
         undefined,
       ...(toolCalls ? { toolCalls } : {}),

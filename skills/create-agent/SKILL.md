@@ -48,10 +48,10 @@ import type { Agent } from "copilotz";
 
 export default {
     llmOptions: {
-        provider: "openai",       // "openai", "anthropic", "gemini", "groq", "deepseek", "ollama"
-        model: "gpt-4o-mini",
-        temperature: 0.7,
-        maxTokens: 4096,
+        provider: "gemini",       // "openai", "anthropic", "gemini", "groq", "deepseek", "ollama"
+        model: "gemini-3.1-flash-lite",
+        temperature: 1,
+        maxTokens: 10000,
         // apiKey: Deno.env.get("OPENAI_KEY"),  // Override env var
     },
     allowedTools: ["*"],          // Or specific: ["search_knowledge", "http_request"]

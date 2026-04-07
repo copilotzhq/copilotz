@@ -154,6 +154,15 @@ function prependTextToContent(
   ];
 }
 
+function prependBlocksToContent(
+  blocks: string[],
+  content: ChatMessage["content"],
+): ChatMessage["content"] {
+  const normalizedBlocks = blocks.filter((block) => block.trim().length > 0);
+  if (normalizedBlocks.length === 0) return content;
+  return prependTextToContent(normalizedBlocks.join("\n"), content);
+}
+
 function contentToText(content: ChatMessage["content"]): string {
   if (typeof content === "string") return content;
 
@@ -163,17 +172,65 @@ function contentToText(content: ChatMessage["content"]): string {
     .join("");
 }
 
-function materializeAssistantToolCalls(message: ChatMessage): ChatMessage {
+function extractRouteTargetsFromMetadata(
+  metadata: ChatMessage["metadata"],
+): string[] {
+  if (!metadata || typeof metadata !== "object") return [];
+
+  const routing = (metadata as { routing?: unknown }).routing;
+  if (!routing || typeof routing !== "object") return [];
+
+  const routeTo = (routing as { routeTo?: unknown }).routeTo;
+  if (!Array.isArray(routeTo)) return [];
+
+  const seen = new Set<string>();
+  const targets: string[] = [];
+
+  for (const candidate of routeTo) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (trimmed.length === 0) continue;
+    const lower = trimmed.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    targets.push(trimmed);
+  }
+
+  return targets;
+}
+
+export function buildRouteToBlock(routeTargets: string[]): string {
+  const normalizedTargets = extractRouteTargetsFromMetadata({
+    routing: { routeTo: routeTargets },
+  });
+
+  return normalizedTargets
+    .map((target) => `<route_to>${target}</route_to>`)
+    .join("\n");
+}
+
+function materializeAssistantControlBlocks(message: ChatMessage): ChatMessage {
   const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
-  if (message.role !== "assistant" || toolCalls.length === 0) {
+  const routeTargets = extractRouteTargetsFromMetadata(message.metadata);
+
+  if (
+    message.role !== "assistant" ||
+    (toolCalls.length === 0 && routeTargets.length === 0)
+  ) {
     return message;
   }
 
   try {
-    const block = buildFunctionCallsBlock(toolCalls);
+    const blocks: string[] = [];
+    if (routeTargets.length > 0) {
+      blocks.push(buildRouteToBlock(routeTargets));
+    }
+    if (toolCalls.length > 0) {
+      blocks.push(buildFunctionCallsBlock(toolCalls));
+    }
     return {
       ...message,
-      content: prependTextToContent(block, message.content),
+      content: prependBlocksToContent(blocks, message.content),
       toolCalls: undefined,
       tool_call_id: undefined,
     };
@@ -208,7 +265,7 @@ function materializeToolResults(message: ChatMessage): ChatMessage {
 
 function materializeHistoryMessage(message: ChatMessage): ChatMessage {
   if (message.role === "assistant") {
-    return materializeAssistantToolCalls(message);
+    return materializeAssistantControlBlocks(message);
   }
 
   if (message.role === "tool" || message.role === "tool_result") {

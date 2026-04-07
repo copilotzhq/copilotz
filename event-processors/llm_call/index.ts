@@ -80,6 +80,27 @@ export function resolveAgentResponseTarget(
   };
 }
 
+export function shouldEmitAgentMessage(
+  answer: string | undefined,
+  toolCalls: ToolInvocation[] | undefined,
+  routeTargets: string[],
+  askTargets: string[],
+): boolean {
+  return Boolean(
+    (typeof answer === "string" && answer.length > 0) ||
+      (Array.isArray(toolCalls) && toolCalls.length > 0) ||
+      routeTargets.length > 0 ||
+      askTargets.length > 0,
+  );
+}
+
+function resolveAgentIdentity(
+  agent: { id?: string | null; name?: string | null },
+): string | null {
+  const value = agent.id ?? agent.name;
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
 function resolveAgentRouteTargets(
   extractedTags: Record<string, string[]> | undefined,
   currentAgent: { id?: string | null; name?: string | null },
@@ -154,6 +175,48 @@ function resolveAgentRouteTargets(
   }
 
   return resolved;
+}
+
+function resolveAgentAskTargets(
+  extractedTags: Record<string, string[]> | undefined,
+  currentAgent: { id?: string | null; name?: string | null },
+  senderAgent: Agent | undefined,
+  thread: Thread,
+  availableAgents: Agent[],
+): string[] {
+  const rawTargets = Array.isArray(extractedTags?.ask_to)
+    ? extractedTags.ask_to
+    : [];
+  if (rawTargets.length === 0) return [];
+
+  return resolveAgentRouteTargets(
+    { route_to: rawTargets },
+    currentAgent,
+    senderAgent,
+    thread,
+    availableAgents,
+  );
+}
+
+function buildAskTargetRoute(
+  askTargetId: string,
+  currentAgent: { id?: string | null; name?: string | null },
+  sourceEvent: Event,
+): { targetId: string; targetQueue: string[] } {
+  const eventMetadata = sourceEvent.metadata as Record<string, unknown> | null;
+  const sourceTargetQueue = (eventMetadata?.targetQueue as string[] | null) ??
+    [];
+  const sourceSenderId =
+    (eventMetadata?.sourceMessageSenderId as string | null) ?? null;
+  const currentAgentId = resolveAgentIdentity(currentAgent);
+
+  return buildMentionTargetRoute([askTargetId], {
+    returnTarget: currentAgentId,
+    fallbackQueue: [
+      ...(typeof sourceSenderId === "string" ? [sourceSenderId] : []),
+      ...sourceTargetQueue,
+    ],
+  }) ?? { targetId: askTargetId, targetQueue: [] };
 }
 
 export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
@@ -328,7 +391,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       {
         messages: resolvedMessages,
         tools: payload.tools,
-        extractTags: ["route_to"],
+        extractTags: ["route_to", "ask_to"],
       } as ChatRequest,
       configForCall,
       envVars,
@@ -374,10 +437,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       console.log("reasoning", reasoning);
       console.log("toolCalls", toolCalls);
       console.log("extractedTags", extractedTags);
-    }
-
-    if (!answer && !toolCalls) {
-      return { producedEvents: [] };
     }
 
     if (answer) {
@@ -431,15 +490,37 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       deps.thread,
       context.agents ?? [],
     );
-    const responseTarget = resolveAgentResponseTarget(
-      routeTargets,
+    const askTargets = resolveAgentAskTargets(
+      extractedTags,
       {
         id: payload.agent.id ?? null,
         name: payload.agent.name,
       },
-      event,
-      context.multiAgent?.enabled === true,
+      agentForCall,
+      deps.thread,
+      context.agents ?? [],
     );
+    if (!shouldEmitAgentMessage(answer, toolCalls, routeTargets, askTargets)) {
+      return { producedEvents: [] };
+    }
+    const responseTarget = askTargets.length > 0
+      ? buildAskTargetRoute(
+        askTargets[0],
+        {
+          id: payload.agent.id ?? null,
+          name: payload.agent.name,
+        },
+        event,
+      )
+      : resolveAgentResponseTarget(
+        routeTargets,
+        {
+          id: payload.agent.id ?? null,
+          name: payload.agent.name,
+        },
+        event,
+        context.multiAgent?.enabled === true,
+      );
 
     const newMessagePayload: MessagePayload = {
       content: answer || "",
@@ -456,6 +537,23 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     const messageMetadata: Record<string, unknown> = {
       targetId: responseTarget.targetId,
       targetQueue: responseTarget.targetQueue,
+      ...(routeTargets.length > 0
+        ? {
+          routing: {
+            routeTo: routeTargets,
+          },
+        }
+        : {}),
+      ...(askTargets.length > 0
+        ? {
+          routing: {
+            ...(routeTargets.length > 0
+              ? { routeTo: routeTargets }
+              : {}),
+            askTo: askTargets,
+          },
+        }
+        : {}),
     };
 
     // Enqueue a NEW_MESSAGE event with target routing info

@@ -27,6 +27,8 @@ export interface ChatMessage {
   content: string | ChatContentPart[];
   /** Internal sender identity used for history-aware message normalization. */
   senderId?: string;
+  /** Internal metadata used to reconstruct hidden control blocks for model-facing history. */
+  metadata?: Record<string, unknown>;
   tool_call_id?: string;
   // Prefer passing tool calls explicitly for assistant messages
   toolCalls?: ToolInvocation[];

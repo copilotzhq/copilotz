@@ -782,11 +782,21 @@ export const messageProcessor: EventProcessor<
 
     const messageContext = getMessageContext(payload);
 
-    const baseMetadata =
-      (isRecord(payload.metadata) ? payload.metadata : {}) as Record<
-        string,
-        unknown
-      >;
+    const baseMetadata = {
+      ...(isRecord(payload.metadata) ? payload.metadata : {}),
+      ...(
+        event.metadata && typeof event.metadata === "object" &&
+            !Array.isArray(event.metadata)
+          ? Object.fromEntries(
+            Object.entries(event.metadata as Record<string, unknown>).filter(
+              ([key]) =>
+                key === "routing" || key === "visibility" ||
+                key === "internalConversation",
+            ),
+          )
+          : {}
+      ),
+    } as Record<string, unknown>;
 
     const { messageMetadata, toolCallMetadata, contentOverride } =
       await processAssetsForNewMessage({
@@ -1561,6 +1571,14 @@ export const messageProcessor: EventProcessor<
         targetId: targetResolution.targetId,
         targetQueue: responseTargetQueue,
         sourceMessageSenderId: originalSenderId,
+        ...(isRecord(messageMetadata) &&
+            typeof messageMetadata.visibility === "string"
+          ? { visibility: messageMetadata.visibility }
+          : {}),
+        ...(isRecord(messageMetadata) &&
+            isRecord(messageMetadata.internalConversation)
+          ? { internalConversation: messageMetadata.internalConversation }
+          : {}),
       };
 
       producedEvents.push({

@@ -1,6 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import { resolveAgentResponseTarget } from "./index.ts";
+import { resolveAgentResponseTarget, shouldEmitAgentMessage } from "./index.ts";
 
 Deno.test("resolveAgentResponseTarget ignores self routes and falls back to sender", () => {
   const result = resolveAgentResponseTarget(
@@ -132,4 +132,24 @@ Deno.test("resolveAgentResponseTarget falls back to source sender when multi-age
     targetId: "alex",
     targetQueue: [],
   });
+});
+
+Deno.test("shouldEmitAgentMessage treats route-only replies as actionable", () => {
+  assertEquals(
+    shouldEmitAgentMessage("", undefined, ["writer"], []),
+    true,
+  );
+  assertEquals(
+    shouldEmitAgentMessage(
+      "",
+      undefined,
+      [],
+      ["writer"],
+    ),
+    true,
+  );
+  assertEquals(
+    shouldEmitAgentMessage("", undefined, [], []),
+    false,
+  );
 });

@@ -2,31 +2,31 @@ import { createCopilotz } from "@/index.ts";
 import type { Agent, Message } from "@/interfaces/index.ts";
 import type { ToolExecutionContext } from "../index.ts";
 
-interface AskQuestionParams {
-    question: string;
+interface DelegateParams {
+    task: string;
     targetAgent: string;
     timeout?: number;
 }
 
 export default {
-    key: "ask_question",
-    name: "Ask Question",
-    description: "Ask a specific question to another agent and get a single answer. Creates a temporary thread that closes after receiving the response.",
+    key: "delegate",
+    name: "Delegate",
+    description: "Delegate a focused subtask to another agent in a separate thread and wait for that agent's final answer.",
     inputSchema: {
         type: "object",
         properties: {
-            question: { type: "string", minLength: 1, description: "The question to ask." },
-            targetAgent: { type: "string", minLength: 1, description: "The name of the agent to ask the question to." },
-            timeout: { type: "number", description: "Maximum time to wait for answer in seconds (default: 30)." },
+            task: { type: "string", minLength: 1, description: "The focused task or request to delegate." },
+            targetAgent: { type: "string", minLength: 1, description: "The name or id of the agent to delegate the task to." },
+            timeout: { type: "number", description: "Maximum time to wait for the delegated answer in seconds (default: 30)." },
         },
-        required: ["question", "targetAgent"],
+        required: ["task", "targetAgent"],
     },
-    execute: async ({ question, targetAgent, timeout = 30 }: AskQuestionParams, context?: ToolExecutionContext) => {
-        const normalizedQuestion = typeof question === "string" ? question.trim() : "";
+    execute: async ({ task, targetAgent, timeout = 30 }: DelegateParams, context?: ToolExecutionContext) => {
+        const normalizedTask = typeof task === "string" ? task.trim() : "";
         const normalizedTargetAgent = typeof targetAgent === "string" ? targetAgent.trim() : "";
 
-        if (!normalizedQuestion) {
-            throw new Error("Question is required and cannot be empty");
+        if (!normalizedTask) {
+            throw new Error("Task is required and cannot be empty");
         }
 
         if (!normalizedTargetAgent) {
@@ -37,7 +37,7 @@ export default {
         const ops = context?.db?.ops;
 
         if (!context?.senderId) {
-            throw new Error("Sender ID is required to ask questions");
+            throw new Error("Sender ID is required to delegate work");
         }
 
         // Check if target agent exists in available agents
@@ -48,8 +48,8 @@ export default {
             throw new Error(`Target agent "${normalizedTargetAgent}" not found in available agents: ${availableAgents.map((a: Agent) => a.name).join(', ')}`);
         }
 
-        // Create a temporary thread for the question
-        const questionThreadId = crypto.randomUUID();
+        // Create a temporary thread for the delegated task
+        const delegatedThreadId = crypto.randomUUID();
 
         const copilotz = await createCopilotz({
             agents: [targetAgentConfig],
@@ -63,15 +63,15 @@ export default {
 
         try {
             await copilotz.run({
-                content: normalizedQuestion,
+                content: normalizedTask,
                 sender: {
                     type: (context.senderType ?? "user") as "agent" | "user" | "tool" | "system",
                     id: context.senderId,
                     name: context.senderId ?? null,
                 },
                 thread: {
-                    id: questionThreadId,
-                    name: `Question from ${context.senderId}`,
+                    id: delegatedThreadId,
+                    name: `Delegated task from ${context.senderId}`,
                     participants: [normalizedTargetAgent],
                 },
             });
@@ -83,7 +83,7 @@ export default {
 
             while (Date.now() - startTime < timeoutMs) {
                 // Get message history for the question thread
-                const messages = await ops?.getMessageHistory(questionThreadId, normalizedTargetAgent, 10);
+                const messages = await ops?.getMessageHistory(delegatedThreadId, normalizedTargetAgent, 10);
 
                 // Look for a response from the target agent (excluding the initial question)
                 const targetAgentResponse = messages?.find((msg: Message) =>
@@ -102,12 +102,12 @@ export default {
                 await new Promise(resolve => setTimeout(resolve, 500));
             }
 
-            // Archive the question thread
+            // Archive the delegated sub-thread
             const summary = answer
-                ? `Question: "${normalizedQuestion}" - Answer: "${answer?.substring(0, 100)}${answer?.length > 100 ? '...' : ''}"`
-                : `Question: "${normalizedQuestion}" - No answer received (timeout)`;
+                ? `Delegated task: "${normalizedTask}" - Answer: "${answer?.substring(0, 100)}${answer?.length > 100 ? '...' : ''}"`
+                : `Delegated task: "${normalizedTask}" - No answer received (timeout)`;
 
-            await ops?.archiveThread(questionThreadId, summary);
+            await ops?.archiveThread(delegatedThreadId, summary);
 
             if (!answer) {
                 throw new Error(`No answer received from ${normalizedTargetAgent} within ${timeout} seconds`);
@@ -115,17 +115,17 @@ export default {
 
             return {
                 success: true,
-                question: normalizedQuestion,
+                task: normalizedTask,
                 answer,
                 targetAgent: normalizedTargetAgent,
-                threadId: questionThreadId,
+                threadId: delegatedThreadId,
             };
 
         } catch (error) {
             return {
                 success: false,
                 error: error instanceof Error ? error.message : String(error),
-                question: normalizedQuestion,
+                task: normalizedTask,
                 targetAgent: normalizedTargetAgent,
             };
         } finally {

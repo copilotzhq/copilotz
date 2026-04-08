@@ -7,6 +7,10 @@
 
 import type { Copilotz } from "@/index.ts";
 import type { Message } from "@/database/schemas/index.ts";
+import type {
+  MessageHistoryPage,
+  MessageHistoryPageOptions,
+} from "@/database/operations/index.ts";
 
 /** Handlers returned by {@link createMessageHandlers}. */
 export interface MessageHandlers {
@@ -23,6 +27,10 @@ export interface MessageHandlers {
     threadId: string,
     limit?: number,
   ) => Promise<Message[]>;
+  listPageFromGraph: (
+    threadId: string,
+    options?: MessageHistoryPageOptions,
+  ) => Promise<MessageHistoryPage>;
   deleteForThread: (threadId: string) => Promise<void>;
 }
 
@@ -36,6 +44,8 @@ export function createMessageHandlers(copilotz: Copilotz): MessageHandlers {
       ops.getMessageHistory(threadId, userId, limit),
     listFromGraph: (threadId, limit) =>
       ops.getMessageHistoryFromGraph(threadId, limit),
+    listPageFromGraph: (threadId, options) =>
+      ops.getMessageHistoryPageFromGraph(threadId, options),
     deleteForThread: (threadId) => ops.deleteMessagesForThread(threadId),
   };
 }

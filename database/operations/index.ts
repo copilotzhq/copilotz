@@ -81,6 +81,22 @@ export interface NamespaceStats {
   lastUpdated: Date | null;
 }
 
+export interface MessageHistoryPageOptions {
+  limit?: number;
+  before?: string | null;
+}
+
+export interface MessageHistoryPageInfo {
+  hasMoreBefore: boolean;
+  oldestMessageId: string | null;
+  newestMessageId: string | null;
+}
+
+export interface MessageHistoryPage {
+  data: Message[];
+  pageInfo: MessageHistoryPageInfo;
+}
+
 // ============================================
 // KNOWLEDGE GRAPH TYPES
 // ============================================
@@ -342,6 +358,10 @@ export interface DatabaseOperations {
     threadId: string,
     limit?: number,
   ) => Promise<Message[]>;
+  getMessageHistoryPageFromGraph: (
+    threadId: string,
+    options?: MessageHistoryPageOptions,
+  ) => Promise<MessageHistoryPage>;
   // Get the last message node in a thread
   getLastMessageNode: (threadId: string) => Promise<KnowledgeNode | undefined>;
 
@@ -971,6 +991,54 @@ export function createOperations(
     }
   };
 
+  const nodeToMessage = (node: KnowledgeNode): Message => {
+    const data = (node.data ?? {}) as Record<string, unknown>;
+    const rawNode = node as KnowledgeNode & {
+      created_at?: Date | string | null;
+      updated_at?: Date | string | null;
+    };
+    return {
+      id: (data.messageId ?? node.id) as string,
+      threadId: node.namespace,
+      senderId: data.senderId as string,
+      senderType: data.senderType as Message["senderType"],
+      senderUserId: data.senderUserId as string | null,
+      externalId: data.externalId as string | null,
+      content: node.content,
+      toolCallId: data.toolCallId as string | null,
+      toolCalls: data.toolCalls as Message["toolCalls"],
+      reasoning: (data.reasoning as string | null) ?? null,
+      metadata: data.metadata as Message["metadata"],
+      createdAt: (rawNode.created_at ?? node.createdAt) as Date | string,
+      updatedAt: (rawNode.updated_at ?? node.updatedAt) as Date | string,
+    } as Message;
+  };
+
+  const emptyMessageHistoryPage = (): MessageHistoryPage => ({
+    data: [],
+    pageInfo: {
+      hasMoreBefore: false,
+      oldestMessageId: null,
+      newestMessageId: null,
+    },
+  });
+
+  const getPageEdgeMessageIds = (
+    data: Message[],
+  ): Pick<MessageHistoryPageInfo, "oldestMessageId" | "newestMessageId"> => {
+    const firstMessage = data[0];
+    const lastMessage = data.length > 0 ? data[data.length - 1] : undefined;
+
+    return {
+      oldestMessageId: typeof firstMessage?.id === "string"
+        ? firstMessage.id
+        : null,
+      newestMessageId: typeof lastMessage?.id === "string"
+        ? lastMessage.id
+        : null,
+    };
+  };
+
   // ============================================
   // MESSAGE AS NODE OPERATIONS
   // ============================================
@@ -1065,34 +1133,153 @@ export function createOperations(
     threadId: string,
     limit = 50,
   ): Promise<Message[]> => {
-    // Query message nodes ordered by creation time
-    const result = await db.query<KnowledgeNode>(
-      `SELECT * FROM "nodes"
-       WHERE "namespace" = $1 AND "type" = 'message'
-       ORDER BY "created_at" ASC
-       LIMIT $2`,
-      [threadId, limit],
-    );
+    const page = await getMessageHistoryPageFromGraph(threadId, { limit });
+    return page.data;
+  };
 
-    // Transform nodes back to Message format
-    return result.rows.map((node) => {
-      const data = (node.data ?? {}) as Record<string, unknown>;
+  const getMessageHistoryPageFromGraph = async (
+    threadId: string,
+    options?: MessageHistoryPageOptions,
+  ): Promise<MessageHistoryPage> => {
+    const limit = typeof options?.limit === "number" && options.limit > 0
+      ? Math.floor(options.limit)
+      : 50;
+    const before = typeof options?.before === "string" && options.before.length > 0
+      ? options.before
+      : null;
+
+    try {
+      type MessageNodeRow = KnowledgeNode & { messageKey?: string };
+      const limitPlusOne = limit + 1;
+
+      if (before) {
+        const cursorResult = await db.query<MessageNodeRow>(
+          `SELECT *, COALESCE("data"->>'messageId', "id") AS "messageKey"
+           FROM "nodes"
+           WHERE "namespace" = $1
+             AND "type" = 'message'
+             AND (COALESCE("data"->>'messageId', "id") = $2 OR "id" = $2)
+           LIMIT 1`,
+          [threadId, before],
+        );
+        const cursor = cursorResult.rows[0];
+        if (!cursor) {
+          return emptyMessageHistoryPage();
+        }
+        const cursorCreatedAt = (
+          cursor as MessageNodeRow & { created_at?: Date | string | null }
+        ).created_at ?? cursor.createdAt;
+        if (!cursorCreatedAt) {
+          return emptyMessageHistoryPage();
+        }
+
+        const result = await db.query<MessageNodeRow>(
+          `SELECT *, COALESCE("data"->>'messageId', "id") AS "messageKey"
+           FROM "nodes"
+           WHERE "namespace" = $1
+             AND "type" = 'message'
+             AND (
+               "created_at" < $2
+               OR ("created_at" = $2 AND "id" < $3)
+             )
+           ORDER BY "created_at" DESC, "id" DESC
+           LIMIT $4`,
+          [threadId, cursorCreatedAt, cursor.id, limitPlusOne],
+        );
+
+        const hasMoreBefore = result.rows.length > limit;
+        const rows = result.rows.slice(0, limit).reverse();
+        const data = rows.map(nodeToMessage);
+
+        return {
+          data,
+          pageInfo: {
+            hasMoreBefore,
+            ...getPageEdgeMessageIds(data),
+          },
+        };
+      }
+
+      const result = await db.query<KnowledgeNode>(
+        `SELECT * FROM "nodes"
+         WHERE "namespace" = $1 AND "type" = 'message'
+         ORDER BY "created_at" DESC, "id" DESC
+         LIMIT $2`,
+        [threadId, limitPlusOne],
+      );
+
+      const hasMoreBefore = result.rows.length > limit;
+      const rows = result.rows.slice(0, limit).reverse();
+      const data = rows.map(nodeToMessage);
+
       return {
-        id: (data.messageId ?? node.id) as string,
-        threadId: node.namespace,
-        senderId: data.senderId as string,
-        senderType: data.senderType as Message["senderType"],
-        senderUserId: data.senderUserId as string | null,
-        externalId: data.externalId as string | null,
-        content: node.content,
-        toolCallId: data.toolCallId as string | null,
-        toolCalls: data.toolCalls as Message["toolCalls"],
-        reasoning: (data.reasoning as string | null) ?? null,
-        metadata: data.metadata as Message["metadata"],
-        createdAt: node.createdAt,
-        updatedAt: node.updatedAt,
-      } as Message;
-    });
+        data,
+        pageInfo: {
+          hasMoreBefore,
+          ...getPageEdgeMessageIds(data),
+        },
+      };
+    } catch (error) {
+      const pgError = error as { code?: string };
+      if (pgError?.code !== "42P01") {
+        throw error;
+      }
+
+      const limitPlusOne = limit + 1;
+
+      if (before) {
+        const cursorResult = await db.query<Message>(
+          `SELECT * FROM "messages"
+           WHERE "threadId" = $1 AND "id" = $2
+           LIMIT 1`,
+          [threadId, before],
+        );
+        const cursor = cursorResult.rows[0];
+        if (!cursor) {
+          return emptyMessageHistoryPage();
+        }
+
+        const result = await db.query<Message>(
+          `SELECT * FROM "messages"
+           WHERE "threadId" = $1
+             AND (
+               "createdAt" < $2
+               OR ("createdAt" = $2 AND "id" < $3)
+             )
+           ORDER BY "createdAt" DESC, "id" DESC
+           LIMIT $4`,
+          [threadId, cursor.createdAt, cursor.id, limitPlusOne],
+        );
+
+        const hasMoreBefore = result.rows.length > limit;
+        const data = result.rows.slice(0, limit).reverse() as Message[];
+        return {
+          data,
+          pageInfo: {
+            hasMoreBefore,
+            ...getPageEdgeMessageIds(data),
+          },
+        };
+      }
+
+      const result = await db.query<Message>(
+        `SELECT * FROM "messages"
+         WHERE "threadId" = $1
+         ORDER BY "createdAt" DESC, "id" DESC
+         LIMIT $2`,
+        [threadId, limitPlusOne],
+      );
+
+      const hasMoreBefore = result.rows.length > limit;
+      const data = result.rows.slice(0, limit).reverse() as Message[];
+      return {
+        data,
+        pageInfo: {
+          hasMoreBefore,
+          ...getPageEdgeMessageIds(data),
+        },
+      };
+    }
   };
 
   // ============================================
@@ -2195,6 +2382,7 @@ export function createOperations(
     // Message as node operations
     createMessageNode,
     getMessageHistoryFromGraph,
+    getMessageHistoryPageFromGraph,
     getLastMessageNode,
     // Chunk as node operations
     searchChunksFromGraph,

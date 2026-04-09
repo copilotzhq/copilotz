@@ -9,6 +9,7 @@ interface SearchCodeParams {
   includeHidden?: boolean;
   maxResults?: number;
   maxMatchesPerFile?: number;
+  maxDepth?: number;
 }
 
 export default {
@@ -57,6 +58,11 @@ export default {
         description: "Maximum number of matches returned per file.",
         default: 20,
       },
+      maxDepth: {
+        type: "number",
+        description: "Maximum directory recursion depth.",
+        default: 10,
+      },
     },
     required: ["query"],
   },
@@ -69,6 +75,7 @@ export default {
     includeHidden = false,
     maxResults = 25,
     maxMatchesPerFile = 20,
+    maxDepth = 10,
   }: SearchCodeParams) => {
     return await searchWorkspaceCode({
       query,
@@ -79,6 +86,7 @@ export default {
       includeHidden,
       maxResults,
       maxMatchesPerFile,
+      maxDepth,
     });
   },
 };

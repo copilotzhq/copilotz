@@ -53,6 +53,8 @@ export interface DiffHunk {
   endLineAfter: number;
   before: string[];
   after: string[];
+  contextBefore: string[];
+  contextAfter: string[];
 }
 
 type DenoLike = {
@@ -270,7 +272,22 @@ function escapeRegex(source: string): string {
   return source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function globToRegex(pattern: string): RegExp {
+const MAX_REGEX_PATTERN_LENGTH = 500;
+
+function validateRegexPattern(pattern: string): void {
+  if (pattern.length > MAX_REGEX_PATTERN_LENGTH) {
+    throw new Error(
+      `Regex pattern exceeds maximum length of ${MAX_REGEX_PATTERN_LENGTH} characters.`,
+    );
+  }
+  if (/([+*]|\{\d+,?\d*\})\s*\)\s*([+*?]|\{\d+,?\d*\})/.test(pattern)) {
+    throw new Error(
+      "Regex pattern contains nested quantifiers which can cause catastrophic backtracking.",
+    );
+  }
+}
+
+export function globToRegex(pattern: string): RegExp {
   const source = pattern
     .split("*")
     .map((segment) => segment.split("?").map(escapeRegex).join("."))
@@ -372,6 +389,7 @@ export async function searchWorkspaceCode(options: {
   includeHidden?: boolean;
   maxResults?: number;
   maxMatchesPerFile?: number;
+  maxDepth?: number;
 }): Promise<{
   directory: string;
   query: string;
@@ -380,6 +398,9 @@ export async function searchWorkspaceCode(options: {
 }> {
   const denoNs = getDeno();
   const directory = resolveWorkspacePath(options.directory ?? ".");
+  if (options.isRegex) {
+    validateRegexPattern(options.query);
+  }
   const regex = options.isRegex
     ? new RegExp(
       options.query,
@@ -394,16 +415,19 @@ export async function searchWorkspaceCode(options: {
     : null;
   const maxResults = Math.max(1, options.maxResults ?? 25);
   const maxMatchesPerFile = Math.max(1, options.maxMatchesPerFile ?? 20);
+  const maxDepth = Math.max(0, options.maxDepth ?? 10);
   const results: SearchCodeResult[] = [];
 
-  const visit = async (absolutePath: string): Promise<void> => {
+  const visit = async (absolutePath: string, depth: number): Promise<void> => {
     if (results.length >= maxResults) return;
     for await (const entry of denoNs.readDir!(absolutePath)) {
       if (!options.includeHidden && entry.name.startsWith(".")) continue;
       const childPath = resolve(absolutePath, entry.name);
       const child = resolveWorkspacePath(childPath);
       if (entry.isDirectory) {
-        await visit(child.resolvedPath);
+        if (depth < maxDepth) {
+          await visit(child.resolvedPath, depth + 1);
+        }
         if (results.length >= maxResults) return;
         continue;
       }
@@ -449,7 +473,7 @@ export async function searchWorkspaceCode(options: {
     }
   };
 
-  await visit(directory.resolvedPath);
+  await visit(directory.resolvedPath, 0);
 
   return {
     directory: directory.resolvedPath,
@@ -475,21 +499,6 @@ function ensureAnchorOnce(
   return first;
 }
 
-function applyLineReplace(
-  content: string,
-  startLine: number,
-  endLine: number,
-  replacement: string,
-): string {
-  const lines = content.split(/\r?\n/);
-  const safeStart = clampLine(startLine, 1);
-  const safeEnd = Math.max(safeStart, clampLine(endLine, safeStart));
-  const before = lines.slice(0, safeStart - 1);
-  const after = lines.slice(safeEnd);
-  const replacementLines = replacement.split(/\r?\n/);
-  return [...before, ...replacementLines, ...after].join("\n");
-}
-
 export type PatchOperation =
   | {
     type: "replace";
@@ -506,17 +515,6 @@ export type PatchOperation =
     type: "insert_after";
     anchor: string;
     content: string;
-  }
-  | {
-    type: "replace_lines";
-    startLine: number;
-    endLine: number;
-    content: string;
-  }
-  | {
-    type: "delete_lines";
-    startLine: number;
-    endLine: number;
   };
 
 export async function applyWorkspacePatch(
@@ -562,24 +560,6 @@ export async function applyWorkspacePatch(
         const index = ensureAnchorOnce(content, operation.anchor, "insert_after");
         const insertAt = index + operation.anchor.length;
         content = `${content.slice(0, insertAt)}${operation.content}${content.slice(insertAt)}`;
-        break;
-      }
-      case "replace_lines": {
-        content = applyLineReplace(
-          content,
-          operation.startLine,
-          operation.endLine,
-          operation.content,
-        );
-        break;
-      }
-      case "delete_lines": {
-        content = applyLineReplace(
-          content,
-          operation.startLine,
-          operation.endLine,
-          "",
-        );
         break;
       }
       default:
@@ -682,14 +662,21 @@ function diffLines(before: string[], after: string[]): DiffOp[] {
   return ops;
 }
 
-function buildDiffHunks(beforeText: string, afterText: string): DiffHunk[] {
+const DIFF_CONTEXT_LINES = 3;
+const MAX_DIFF_CHANGED_LINES = 500;
+
+function buildDiffHunks(
+  beforeText: string,
+  afterText: string,
+  maxChangedLines = MAX_DIFF_CHANGED_LINES,
+): { hunks: DiffHunk[]; truncated: boolean } {
   const before = beforeText.split(/\r?\n/);
   const after = afterText.split(/\r?\n/);
   const ops = diffLines(before, after);
-  const hunks: DiffHunk[] = [];
+  const rawHunks: Omit<DiffHunk, "contextBefore" | "contextAfter">[] = [];
   let beforeLine = 1;
   let afterLine = 1;
-  let current: DiffHunk | null = null;
+  let current: Omit<DiffHunk, "contextBefore" | "contextAfter"> | null = null;
 
   const flush = () => {
     if (!current) return;
@@ -702,7 +689,7 @@ function buildDiffHunks(beforeText: string, afterText: string): DiffHunk[] {
     } else {
       current.type = "replace";
     }
-    hunks.push(current);
+    rawHunks.push(current);
     current = null;
   };
 
@@ -738,7 +725,39 @@ function buildDiffHunks(beforeText: string, afterText: string): DiffHunk[] {
   }
 
   flush();
-  return hunks;
+
+  let totalChanged = 0;
+  let truncated = false;
+  const hunks: DiffHunk[] = [];
+
+  for (let idx = 0; idx < rawHunks.length; idx++) {
+    const h = rawHunks[idx]!;
+    totalChanged += h.before.length + h.after.length;
+    if (totalChanged > maxChangedLines) {
+      truncated = true;
+      break;
+    }
+
+    const ctxStart = Math.max(
+      0,
+      h.startLineBefore - 1 - DIFF_CONTEXT_LINES,
+      idx > 0 ? rawHunks[idx - 1]!.endLineBefore : 0,
+    );
+    const contextBefore = before.slice(ctxStart, h.startLineBefore - 1);
+
+    const ctxEnd = Math.min(
+      before.length,
+      h.endLineBefore + DIFF_CONTEXT_LINES,
+      idx < rawHunks.length - 1
+        ? rawHunks[idx + 1]!.startLineBefore - 1
+        : before.length,
+    );
+    const contextAfter = before.slice(h.endLineBefore, ctxEnd);
+
+    hunks.push({ ...h, contextBefore, contextAfter });
+  }
+
+  return { hunks, truncated };
 }
 
 export async function getWorkspaceFileDiff(
@@ -749,6 +768,7 @@ export async function getWorkspaceFileDiff(
   relativePath: string;
   snapshotId: string;
   changed: boolean;
+  truncated: boolean;
   beforeLabel: string;
   afterLabel: string;
   hunks: DiffHunk[];
@@ -767,13 +787,14 @@ export async function getWorkspaceFileDiff(
   }
 
   const current = await readWorkspaceFile(inputPath);
-  const hunks = buildDiffHunks(snapshot.content, current.content);
+  const { hunks, truncated } = buildDiffHunks(snapshot.content, current.content);
 
   return {
     path: file.resolvedPath,
     relativePath: file.relativePath,
     snapshotId: snapshot.id,
     changed: snapshot.content !== current.content,
+    truncated,
     beforeLabel: snapshot.label ?? `snapshot ${snapshot.id}`,
     afterLabel: "current",
     hunks,
@@ -822,10 +843,6 @@ export function summarizePatchOperations(operations: PatchOperation[]): string {
         return `insert before "${operation.anchor.slice(0, 40)}"`;
       case "insert_after":
         return `insert after "${operation.anchor.slice(0, 40)}"`;
-      case "replace_lines":
-        return `replace lines ${operation.startLine}-${operation.endLine}`;
-      case "delete_lines":
-        return `delete lines ${operation.startLine}-${operation.endLine}`;
       default:
         return "unknown operation";
     }

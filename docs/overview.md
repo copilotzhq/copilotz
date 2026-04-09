@@ -125,7 +125,7 @@ await copilotz.collections.customer.find({ plan: "pro" });
 
 ### Tools
 
-Tools let your agents interact with the world. Copilotz includes 24 native tools and can generate more from OpenAPI specs and MCP servers.
+Tools let your agents interact with the world. Copilotz includes 27 native tools and can generate more from OpenAPI specs and MCP servers.
 
 **Native tools include:**
 - File operations: `read_file`, `write_file`, `list_directory`, `search_files`

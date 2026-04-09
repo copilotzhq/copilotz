@@ -13,7 +13,7 @@ export default {
   key: "apply_patch",
   name: "Apply Patch",
   description:
-    "Apply targeted text or line-based edits to a file while capturing a restorable snapshot first.",
+    "Apply targeted text edits to a file while capturing a restorable snapshot first. All operations use text-anchored matching (substring, not line-number based).",
   inputSchema: {
     type: "object",
     properties: {
@@ -25,27 +25,60 @@ export default {
         type: "array",
         description: "Ordered patch operations to apply.",
         items: {
-          type: "object",
-          properties: {
-            type: {
-              type: "string",
-              enum: [
-                "replace",
-                "insert_before",
-                "insert_after",
-                "replace_lines",
-                "delete_lines",
-              ],
+          oneOf: [
+            {
+              type: "object",
+              description:
+                "Replace a unique substring with new text. The oldText must appear exactly once unless replaceAll is true.",
+              properties: {
+                type: { type: "string", const: "replace" },
+                oldText: {
+                  type: "string",
+                  description: "Unique substring to find (any portion of the file, not limited to full lines).",
+                },
+                newText: { type: "string", description: "Replacement text." },
+                replaceAll: {
+                  type: "boolean",
+                  description: "If true, replace every occurrence of oldText.",
+                },
+              },
+              required: ["type", "oldText", "newText"],
             },
-            oldText: { type: "string" },
-            newText: { type: "string" },
-            replaceAll: { type: "boolean" },
-            anchor: { type: "string" },
-            content: { type: "string" },
-            startLine: { type: "number" },
-            endLine: { type: "number" },
-          },
-          required: ["type"],
+            {
+              type: "object",
+              description:
+                "Insert content immediately before a unique anchor substring.",
+              properties: {
+                type: { type: "string", const: "insert_before" },
+                anchor: {
+                  type: "string",
+                  description: "Unique substring to locate the insertion point.",
+                },
+                content: {
+                  type: "string",
+                  description: "Text to insert before the anchor.",
+                },
+              },
+              required: ["type", "anchor", "content"],
+            },
+            {
+              type: "object",
+              description:
+                "Insert content immediately after a unique anchor substring.",
+              properties: {
+                type: { type: "string", const: "insert_after" },
+                anchor: {
+                  type: "string",
+                  description: "Unique substring to locate the insertion point.",
+                },
+                content: {
+                  type: "string",
+                  description: "Text to insert after the anchor.",
+                },
+              },
+              required: ["type", "anchor", "content"],
+            },
+          ],
         },
       },
     },

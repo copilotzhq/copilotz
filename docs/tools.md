@@ -27,7 +27,7 @@ LLM continues conversation
 
 ## Native Tools
 
-Copilotz includes 28 built-in tools. Enable them per-agent with `allowedTools`:
+Copilotz includes 27 built-in tools. Enable them per-agent with `allowedTools`:
 
 ```typescript
 const agent = {
@@ -47,9 +47,34 @@ const agent = {
 | `list_directory` | List files and folders in a directory |
 | `search_files` | Search for files matching a pattern |
 | `search_code` | Search file contents with line-level matches |
-| `apply_patch` | Apply targeted text or line-based edits with snapshots |
+| `apply_patch` | Apply targeted text-anchored edits (replace, insert before/after) with snapshots |
 | `show_file_diff` | Compare the current file to the latest captured snapshot |
 | `restore_file_version` | Restore a file from a captured snapshot |
+
+#### `apply_patch` — Text-Anchored Editing
+
+All `apply_patch` operations use **substring matching** (`indexOf`), not line numbers. This means anchors and targets can be any unique portion of the file content — they work regardless of line boundaries, making them robust against large single-line content (e.g. minified code, long prose).
+
+Available operations:
+
+| Operation | Required fields | Behavior |
+|-----------|----------------|----------|
+| `replace` | `oldText`, `newText` | Find a unique substring and replace it. Set `replaceAll: true` to replace every occurrence. |
+| `insert_before` | `anchor`, `content` | Insert `content` immediately before a unique anchor substring. |
+| `insert_after` | `anchor`, `content` | Insert `content` immediately after a unique anchor substring. |
+
+A restorable snapshot is captured before any edits are applied. Use `show_file_diff` to review changes and `restore_file_version` to roll back.
+
+```typescript
+// Example: replace + insert_after in a single call
+apply_patch({
+  path: "src/config.ts",
+  operations: [
+    { type: "replace", oldText: 'timeout: 5000', newText: 'timeout: 10000' },
+    { type: "insert_after", anchor: "import { Config }", content: "\nimport { Logger } from './logger';" },
+  ],
+});
+```
 
 ### HTTP & Network
 
@@ -67,14 +92,13 @@ const agent = {
 | `list_namespaces` | List all knowledge namespaces with document counts |
 | `delete_document` | Remove a document from the knowledge base |
 
-### Thread & Task Management
+### Thread & Multi-Agent
 
 | Tool | Description |
 |------|-------------|
 | `create_thread` | Create a new conversation thread |
 | `end_thread` | Archive a thread with a summary |
-| `create_task` | Create a goal-oriented task |
-| `ask_question` | Ask another agent a question and wait for response |
+| `delegate` | Delegate a focused subtask to another agent in a separate thread and wait for the answer |
 
 ### Agent Memory
 
@@ -94,9 +118,19 @@ const agent = {
 | Tool | Description |
 |------|-------------|
 | `run_command` | Execute a system command (with security checks) |
+| `persistent_terminal` | Persistent bash session that maintains state (cwd, variables) between executions |
 | `get_current_time` | Get current time in various formats and timezones |
 | `wait` | Pause for a specified duration (0.1-60 seconds) |
-| `verbal_pause` | Create a conversational pause for emphasis |
+
+### Skills
+
+Skill tools allow agents to discover and load SKILL.md-based instructions at runtime. See [Skills](./skills.md) for full documentation.
+
+| Tool | Description |
+|------|-------------|
+| `list_skills` | List all available skills with names and descriptions |
+| `load_skill` | Load the full instructions of a specific skill by name |
+| `read_skill_resource` | Read a supporting file from a skill's references directory |
 
 ## Agent Memory Tool
 

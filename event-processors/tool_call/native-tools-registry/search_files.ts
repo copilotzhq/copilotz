@@ -1,12 +1,13 @@
+import { globToRegex, listWorkspaceDirectory } from "./fs-utils.ts";
+
 interface SearchFilesParams {
   directory?: string;
   pattern: string;
   recursive?: boolean;
   includeHidden?: boolean;
   maxDepth?: number;
+  maxResults?: number;
 }
-
-import { listWorkspaceDirectory } from "./fs-utils.ts";
 
 export default {
   key: "search_files",
@@ -22,12 +23,13 @@ export default {
       },
       pattern: {
         type: "string",
-        description: "File name pattern to search for (supports * wildcards).",
+        description:
+          "File name pattern to search for (supports * and ? wildcards).",
       },
       recursive: {
         type: "boolean",
         description: "Search subdirectories recursively.",
-        default: false,
+        default: true,
       },
       includeHidden: {
         type: "boolean",
@@ -39,30 +41,38 @@ export default {
         description: "Maximum recursion depth when recursive is enabled.",
         default: 5,
       },
+      maxResults: {
+        type: "number",
+        description: "Maximum number of matching files to return.",
+        default: 50,
+      },
     },
     required: ["pattern"],
   },
   execute: async ({
     directory = ".",
     pattern,
-    recursive = false,
+    recursive = true,
     includeHidden = false,
     maxDepth = 5,
+    maxResults = 50,
   }: SearchFilesParams) => {
     try {
-      const source = pattern
-        .split("*")
-        .map((segment) => segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replaceAll("\\?", "."))
-        .join(".*");
-      const regex = new RegExp(`^${source}$`, "i");
+      const regex = globToRegex(pattern);
       const listing = await listWorkspaceDirectory(directory, {
         recursive,
         showHidden: includeHidden,
         maxDepth,
       });
-      const results = listing.entries.filter((entry) =>
-        entry.type === "file" && regex.test(entry.name)
-      );
+
+      const limit = Math.max(1, maxResults);
+      const results = [];
+      for (const entry of listing.entries) {
+        if (entry.type === "file" && regex.test(entry.name)) {
+          results.push(entry);
+          if (results.length >= limit) break;
+        }
+      }
 
       return {
         directory: listing.path,
@@ -70,6 +80,7 @@ export default {
         recursive,
         results,
         count: results.length,
+        truncated: results.length >= limit,
       };
     } catch (error) {
       throw new Error(`File search failed: ${(error as Error).message}`);

@@ -45,7 +45,7 @@ Copilotz is the full-stack framework for AI applications. Everything you need to
 | Memory | Knowledge graph that remembers users, conversations, and entities |
 | RAG | Document ingestion, chunking, embeddings, and semantic search |
 | Skills | SKILL.md-based instructions with progressive disclosure and a bundled admin agent |
-| Tools | 24 native tools + OpenAPI integration + MCP support |
+| Tools | 27 native tools + OpenAPI integration + MCP support |
 | Assets | Automatic extraction, storage, and LLM resolution of images and files |
 | Background Jobs | Event queue with persistent workers and custom processors |
 | Multi-tenancy | Schema isolation + namespace partitioning |
@@ -181,7 +181,7 @@ await copilotz.run({ content: "I work at Acme Corp as a senior engineer" });
 
 ### Tools That Do Things
 
-24 built-in tools for file operations, HTTP requests, RAG, agent memory, and more. Plus automatic tool generation from OpenAPI specs and MCP servers.
+27 built-in tools for file operations, HTTP requests, RAG, agent memory, and more. Plus automatic tool generation from OpenAPI specs and MCP servers.
 
 ```typescript
 const copilotz = await createCopilotz({

@@ -346,7 +346,7 @@ You now have a working AI agent with memory and streaming. Explore further:
 
 - [Overview](./overview.md) — Understand the architecture
 - [Agents](./agents.md) — Multi-agent systems and configuration
-- [Tools](./tools.md) — All 23 native tools and custom tools
+- [Tools](./tools.md) — All 27 native tools and custom tools
 - [RAG](./rag.md) — Document ingestion and semantic search
 - [Server Helpers](./server.md) — Framework-independent API handlers
 - [Configuration](./configuration.md) — Full configuration reference

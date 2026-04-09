@@ -14,7 +14,6 @@
  * @module
  */
 
-export { webChannel } from "./web.ts";
 export { whatsappChannel } from "./whatsapp.ts";
 export type { WhatsAppConfig } from "./whatsapp.ts";
 export { zendeskChannel } from "./zendesk.ts";

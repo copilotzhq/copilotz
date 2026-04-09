@@ -186,6 +186,8 @@ Copilotz ships with a bundled development agent — a framework assistant that u
 const copilotz = await createCopilotz({
   copilotzAgent: {
     llmOptions: { provider: "openai", model: "gpt-4o" },
+    allowedTools: ["persistent_terminal"],
+    instructions: "Use the terminal for repo exploration and edits.",
   },
   agents: [{
     id: "assistant",
@@ -200,14 +202,17 @@ const copilotz = await createCopilotz({
 
 The Copilotz agent is added alongside your existing agents. It has access to all skills and file tools (`list_skills`, `load_skill`, `read_skill_resource`, `read_file`, `write_file`, `list_directory`, `search_files`).
 
-### Custom Name
+### Overrides
 
-Override the agent's name (default: `"copilotz"`):
+Override the bundled agent defaults just like a normal agent:
 
 ```typescript
 copilotzAgent: {
-  name: "dev-assistant",
+  id: "dev-assistant",
+  name: "Dev Assistant",
   llmOptions: { provider: "anthropic", model: "claude-sonnet-4-5-20241022" },
+  allowedTools: ["persistent_terminal"],
+  instructions: "Only use the terminal unless explicitly told otherwise.",
 }
 ```
 

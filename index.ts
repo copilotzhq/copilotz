@@ -388,6 +388,13 @@ export type APIConfig = NewAPI;
 /** Alias for MCPServer type, used in configuration. */
 export type MCPServerConfig = NewMCPServer;
 
+type CopilotzAgentOverrides =
+  & Omit<Partial<AgentConfig>, "llmOptions">
+  & {
+    /** LLM options for the Copilotz agent. */
+    llmOptions: import("@/connectors/llm/types.ts").ProviderConfig;
+  };
+
 type NormalizedCopilotzConfig =
   & Omit<CopilotzConfig, "agents" | "tools" | "apis" | "mcpServers">
   & {
@@ -695,17 +702,24 @@ export interface CopilotzConfig {
    *
    * @example
    * ```ts
-   * copilotzAgent: { llmOptions: { provider: "openai", model: "gpt-4o" } }
-   * // or with custom name
-   * copilotzAgent: { name: "dev", llmOptions: { provider: "openai", model: "gpt-4o" } }
+   * copilotzAgent: {
+   *   llmOptions: { provider: "openai", model: "gpt-4o" },
+   *   allowedTools: ["persistent_terminal"],
+   *   instructions: "Only use the terminal unless asked otherwise.",
+   * }
+   * // or with custom id/name
+   * copilotzAgent: {
+   *   id: "dev",
+   *   name: "Dev Assistant",
+   *   llmOptions: { provider: "openai", model: "gpt-4o" },
+   * }
    * ```
+   *
+   * The bundled admin agent config acts as the default layer. Any fields you
+   * provide here override those defaults, including `allowedTools`,
+   * `instructions`, `allowedSkills`, and other normal agent properties.
    */
-  copilotzAgent?: {
-    /** Override the agent's name/id. Default: "copilotz" */
-    name?: string;
-    /** LLM options for the Copilotz agent. */
-    llmOptions: import("@/connectors/llm/types.ts").ProviderConfig;
-  };
+  copilotzAgent?: CopilotzAgentOverrides;
   /**
    * Automatically load local agent instructions from an AGENTS.md-style file
    * in the current working directory and append them to the active agent's prompt.
@@ -1106,12 +1120,16 @@ export async function createCopilotz(
       logInit("loadAdminAgent", startedAt, {
         instructionLength: instructions.length,
       });
+      const resolvedCopilotzAgentId = config.copilotzAgent.id ??
+        config.copilotzAgent.name ?? "copilotz";
+      const resolvedCopilotzAgentName = config.copilotzAgent.name ??
+        config.copilotzAgent.id ?? "copilotz";
       const copilotzAgent = {
-        id: config.copilotzAgent.name ?? "copilotz",
-        name: config.copilotzAgent.name ?? "copilotz",
-        role: "assistant",
-        instructions,
         ...agentConfigBase,
+        ...config.copilotzAgent,
+        id: resolvedCopilotzAgentId,
+        name: resolvedCopilotzAgentName,
+        instructions: config.copilotzAgent.instructions ?? instructions,
         llmOptions: config.copilotzAgent.llmOptions,
       } as AgentConfig;
       // Only add if not already overridden by user

@@ -238,16 +238,20 @@ Enable the bundled Copilotz development agent — a framework assistant with acc
 ```typescript
 copilotzAgent: {
   llmOptions: { provider: "openai", model: "gpt-4o" },
+  allowedTools: ["persistent_terminal"],
+  instructions: "Operate only through the persistent terminal.",
 }
 
-// Or with a custom name
+// Or override any normal agent fields
 copilotzAgent: {
-  name: "dev-assistant",
+  id: "dev-assistant",
+  name: "Dev Assistant",
   llmOptions: { provider: "anthropic", model: "claude-sonnet-4-5-20241022" },
+  allowedSkills: ["create-agent"],
 }
 ```
 
-The Copilotz agent is added alongside your existing agents. If you define an agent with the same ID (`"copilotz"` by default), your definition takes precedence.
+The Copilotz agent is added alongside your existing agents. Bundled admin defaults are applied first, and any fields you provide in `copilotzAgent` override them. If you define an agent with the same ID (`"copilotz"` by default), your explicit agent definition still takes precedence.
 
 ## Custom Tools
 

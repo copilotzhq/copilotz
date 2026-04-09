@@ -111,20 +111,21 @@ export default {
                 handle.cancel();
             }
 
-            const summary = answer
-                ? `Delegated task: "${normalizedTask}" - Answer: "${answer.substring(0, 100)}${answer.length > 100 ? '...' : ''}"`
+            const finalAnswer = answer as string | null;
+            const summary = finalAnswer
+                ? `Delegated task: "${normalizedTask}" - Answer: "${finalAnswer.substring(0, 100)}${finalAnswer.length > 100 ? '...' : ''}"`
                 : `Delegated task: "${normalizedTask}" - No answer received (timeout)`;
 
             await ops?.archiveThread(delegatedThreadId, summary);
 
-            if (!answer) {
+            if (!finalAnswer) {
                 throw new Error(`No answer received from ${normalizedTargetAgent} within ${timeout} seconds`);
             }
 
             return {
                 success: true,
                 task: normalizedTask,
-                answer,
+                answer: finalAnswer,
                 targetAgent: normalizedTargetAgent,
                 threadId: delegatedThreadId,
             };

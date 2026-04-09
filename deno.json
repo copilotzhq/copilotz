@@ -7,7 +7,6 @@
     ".": "./index.ts",
     "./server": "./server/index.ts",
     "./server/channels": "./server/channels/index.ts",
-    "./server/channels/web": "./server/channels/web.ts",
     "./server/channels/whatsapp": "./server/channels/whatsapp.ts",
     "./server/channels/zendesk": "./server/channels/zendesk.ts",
     "./create": "./create/mod.ts"

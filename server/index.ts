@@ -51,7 +51,7 @@ export type { GraphHandlers, GraphSearchOptions } from "./graph.ts";
 export { createRestHandlers, parseQueryParams, parseSort } from "./rest.ts";
 export type { RestHandlers, RestListOptions } from "./rest.ts";
 
-export { webChannel, whatsappChannel, zendeskChannel } from "./channels/index.ts";
+export { whatsappChannel, zendeskChannel } from "./channels/index.ts";
 export type { WhatsAppConfig } from "./channels/whatsapp.ts";
 export type { ZendeskConfig } from "./channels/zendesk.ts";
 export type {

@@ -28,6 +28,9 @@ export type { ThreadHandlers } from "./threads.ts";
 export { createMessageHandlers } from "./messages.ts";
 export type { MessageHandlers } from "./messages.ts";
 
+export { createAdminHandlers } from "./admin.ts";
+export type { AdminHandlers } from "./admin.ts";
+
 export { createEventHandlers } from "./events.ts";
 export type { EventHandlers } from "./events.ts";
 

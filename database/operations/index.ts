@@ -97,6 +97,132 @@ export interface MessageHistoryPage {
   pageInfo: MessageHistoryPageInfo;
 }
 
+export interface AdminOverviewOptions {
+  namespace?: string;
+  from?: Date | string | null;
+  to?: Date | string | null;
+}
+
+export interface AdminActivityOptions extends AdminOverviewOptions {
+  interval?: "hour" | "day";
+}
+
+export interface AdminThreadListOptions {
+  namespace?: string;
+  search?: string;
+  status?: Thread["status"] | "all";
+  limit?: number;
+  offset?: number;
+}
+
+export interface AdminParticipantListOptions {
+  namespace?: string;
+  search?: string;
+  participantType?: "human" | "agent" | "all";
+  limit?: number;
+  offset?: number;
+}
+
+export interface AdminConfiguredAgent {
+  id: string;
+  name: string;
+  description?: string | null;
+}
+
+export interface AdminAgentListOptions {
+  namespace?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+  configuredAgents?: AdminConfiguredAgent[];
+}
+
+export interface AdminOverview {
+  threadTotals: {
+    total: number;
+    active: number;
+    archived: number;
+  };
+  queueTotals: {
+    total: number;
+    pending: number;
+    processing: number;
+    completed: number;
+    failed: number;
+    expired: number;
+    overwritten: number;
+  };
+  messageTotals: {
+    total: number;
+    toolCallMessages: number;
+  };
+  participantTotals: {
+    total: number;
+    humans: number;
+    agents: number;
+  };
+  llmTotals: {
+    totalCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+    reasoningTokens: number;
+    cacheReadInputTokens: number;
+    cacheCreationInputTokens: number;
+    totalTokens: number;
+  };
+}
+
+export interface AdminActivityPoint {
+  bucket: string;
+  messageCount: number;
+  llmCallCount: number;
+  toolCallMessageCount: number;
+  totalTokens: number;
+}
+
+export interface AdminThreadSummary {
+  threadId: string;
+  name: string;
+  status: string;
+  summary: string | null;
+  participantIds: string[];
+  messageCount: number;
+  lastActivityAt: string | null;
+  lastMessagePreview: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface AdminParticipantSummary {
+  externalId: string;
+  displayName: string;
+  participantType: "human" | "agent";
+  namespace: string;
+  isGlobal: boolean;
+  messageCount: number;
+  threadCount: number;
+  lastActivityAt: string | null;
+}
+
+export interface AdminAgentSummary {
+  agentId: string;
+  displayName: string;
+  description: string | null;
+  isConfigured: boolean;
+  namespace: string;
+  isGlobal: boolean;
+  messageCount: number;
+  llmCallCount: number;
+  toolCallMessageCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  totalTokens: number;
+  lastActivityAt: string | null;
+}
+
 // ============================================
 // KNOWLEDGE GRAPH TYPES
 // ============================================
@@ -194,6 +320,19 @@ export interface DatabaseOperations {
     userId: string,
     limit?: number,
   ) => Promise<Message[]>;
+  getAdminOverview: (options?: AdminOverviewOptions) => Promise<AdminOverview>;
+  getAdminActivitySeries: (
+    options?: AdminActivityOptions,
+  ) => Promise<AdminActivityPoint[]>;
+  listAdminThreads: (
+    options?: AdminThreadListOptions,
+  ) => Promise<AdminThreadSummary[]>;
+  listAdminParticipants: (
+    options?: AdminParticipantListOptions,
+  ) => Promise<AdminParticipantSummary[]>;
+  listAdminAgents: (
+    options?: AdminAgentListOptions,
+  ) => Promise<AdminAgentSummary[]>;
   getThreadsForParticipant: (
     participantId: string,
     options?: {
@@ -1282,6 +1421,785 @@ export function createOperations(
     }
   };
 
+  const toAdminIso = (value: unknown): string | null => {
+    if (!value) return null;
+    if (value instanceof Date) return value.toISOString();
+    if (typeof value === "string") {
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? null : date.toISOString();
+    }
+    return null;
+  };
+
+  const toAdminNumber = (value: unknown): number => {
+    const numeric = typeof value === "number" ? value : Number(value ?? 0);
+    return Number.isFinite(numeric) ? numeric : 0;
+  };
+
+  const normalizeAdminSearch = (
+    value: string | undefined,
+  ): string | null => {
+    const trimmed = value?.trim();
+    return trimmed ? `%${trimmed.toLowerCase()}%` : null;
+  };
+
+  const normalizeAdminLimit = (value: number | undefined, fallback = 25) => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      return fallback;
+    }
+    return Math.floor(value);
+  };
+
+  const normalizeAdminOffset = (value: number | undefined) => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      return 0;
+    }
+    return Math.floor(value);
+  };
+
+  const normalizeAdminInterval = (
+    value: AdminActivityOptions["interval"],
+  ): "hour" | "day" => value === "hour" ? "hour" : "day";
+
+  const pushTimeRangeFilters = (
+    params: unknown[],
+    filters: string[],
+    column: string,
+    options?: AdminOverviewOptions,
+  ) => {
+    const from = toIsoString(options?.from ?? null);
+    if (from) {
+      params.push(from);
+      filters.push(`${column} >= $${params.length}`);
+    }
+
+    const to = toIsoString(options?.to ?? null);
+    if (to) {
+      params.push(to);
+      filters.push(`${column} <= $${params.length}`);
+    }
+  };
+
+  const pushThreadNamespaceFilter = (
+    params: unknown[],
+    filters: string[],
+    threadIdExpression: string,
+    namespace?: string,
+  ) => {
+    if (!namespace) return;
+    params.push(namespace);
+    filters.push(
+      `EXISTS (
+        SELECT 1
+        FROM "events" AS "scope_events"
+        WHERE "scope_events"."threadId" = ${threadIdExpression}
+          AND "scope_events"."namespace" = $${params.length}
+      )`,
+    );
+  };
+
+  const pushScopedThreadNodeFilter = (
+    params: unknown[],
+    filters: string[],
+    nodeNamespaceExpression: string,
+    namespace?: string,
+  ) => {
+    if (!namespace) return;
+    params.push(namespace);
+    filters.push(
+      `${nodeNamespaceExpression} IN (
+        SELECT DISTINCT "threadId"
+        FROM "events"
+        WHERE "namespace" = $${params.length}
+      )`,
+    );
+  };
+
+  const getAdminOverview = async (
+    options?: AdminOverviewOptions,
+  ): Promise<AdminOverview> => {
+    const threadParams: unknown[] = [];
+    const threadFilters: string[] = [];
+    pushThreadNamespaceFilter(threadParams, threadFilters, `t."id"`, options?.namespace);
+    pushTimeRangeFilters(threadParams, threadFilters, `t."createdAt"`, options);
+    const threadWhere = threadFilters.length > 0
+      ? `WHERE ${threadFilters.join(" AND ")}`
+      : "";
+
+    const threadResult = await db.query<{
+      total: number;
+      active: number;
+      archived: number;
+    }>(
+      `SELECT
+         COUNT(*)::int AS "total",
+         COUNT(*) FILTER (WHERE t."status" = 'active')::int AS "active",
+         COUNT(*) FILTER (WHERE t."status" = 'archived')::int AS "archived"
+       FROM "threads" AS t
+       ${threadWhere}`,
+      threadParams,
+    );
+
+    const queueParams: unknown[] = [];
+    const queueFilters: string[] = [];
+    if (options?.namespace) {
+      queueParams.push(options.namespace);
+      queueFilters.push(`"namespace" = $${queueParams.length}`);
+    }
+    pushTimeRangeFilters(queueParams, queueFilters, `"createdAt"`, options);
+    const queueWhere = queueFilters.length > 0
+      ? `WHERE ${queueFilters.join(" AND ")}`
+      : "";
+
+    const queueResult = await db.query<{
+      total: number;
+      pending: number;
+      processing: number;
+      completed: number;
+      failed: number;
+      expired: number;
+      overwritten: number;
+    }>(
+      `SELECT
+         COUNT(*)::int AS "total",
+         COUNT(*) FILTER (WHERE "status" = 'pending')::int AS "pending",
+         COUNT(*) FILTER (WHERE "status" = 'processing')::int AS "processing",
+         COUNT(*) FILTER (WHERE "status" = 'completed')::int AS "completed",
+         COUNT(*) FILTER (WHERE "status" = 'failed')::int AS "failed",
+         COUNT(*) FILTER (WHERE "status" = 'expired')::int AS "expired",
+         COUNT(*) FILTER (WHERE "status" = 'overwritten')::int AS "overwritten"
+       FROM "events"
+       ${queueWhere}`,
+      queueParams,
+    );
+
+    const messageParams: unknown[] = [];
+    const messageFilters = [`"type" = 'message'`];
+    pushScopedThreadNodeFilter(
+      messageParams,
+      messageFilters,
+      `"namespace"`,
+      options?.namespace,
+    );
+    pushTimeRangeFilters(messageParams, messageFilters, `"created_at"`, options);
+    const messageWhere = `WHERE ${messageFilters.join(" AND ")}`;
+
+    const messageResult = await db.query<{
+      total: number;
+      toolCallMessages: number;
+    }>(
+      `SELECT
+         COUNT(*)::int AS "total",
+         COUNT(*) FILTER (
+           WHERE (
+             ("data"->'toolCalls' IS NOT NULL AND jsonb_typeof("data"->'toolCalls') = 'array' AND jsonb_array_length("data"->'toolCalls') > 0)
+             OR COALESCE("data"->>'toolCallId', '') <> ''
+           )
+         )::int AS "toolCallMessages"
+       FROM "nodes"
+       ${messageWhere}`,
+      messageParams,
+    );
+
+    const participantParams: unknown[] = [];
+    const participantFilters = [`"type" = 'user'`];
+    if (options?.namespace) {
+      participantParams.push(options.namespace);
+      participantFilters.push(
+        `("namespace" = $${participantParams.length} OR "namespace" = 'global')`,
+      );
+    }
+    const participantWhere = `WHERE ${participantFilters.join(" AND ")}`;
+
+    const participantResult = await db.query<{
+      total: number;
+      humans: number;
+      agents: number;
+    }>(
+      `SELECT
+         COUNT(*)::int AS "total",
+         COUNT(*) FILTER (
+           WHERE COALESCE("data"->>'participantType', 'human') = 'human'
+         )::int AS "humans",
+         COUNT(*) FILTER (
+           WHERE COALESCE("data"->>'participantType', 'human') = 'agent'
+         )::int AS "agents"
+       FROM "nodes"
+       ${participantWhere}`,
+      participantParams,
+    );
+
+    const usageParams: unknown[] = [];
+    const usageFilters = [`"type" = 'llm_usage'`];
+    pushScopedThreadNodeFilter(
+      usageParams,
+      usageFilters,
+      `"namespace"`,
+      options?.namespace,
+    );
+    pushTimeRangeFilters(usageParams, usageFilters, `"created_at"`, options);
+    const usageWhere = `WHERE ${usageFilters.join(" AND ")}`;
+
+    const usageResult = await db.query<{
+      totalCalls: number;
+      inputTokens: number;
+      outputTokens: number;
+      reasoningTokens: number;
+      cacheReadInputTokens: number;
+      cacheCreationInputTokens: number;
+      totalTokens: number;
+    }>(
+      `SELECT
+         COUNT(*)::int AS "totalCalls",
+         COALESCE(SUM(COALESCE(NULLIF("data"->>'inputTokens', '')::bigint, 0)), 0)::bigint AS "inputTokens",
+         COALESCE(SUM(COALESCE(NULLIF("data"->>'outputTokens', '')::bigint, 0)), 0)::bigint AS "outputTokens",
+         COALESCE(SUM(COALESCE(NULLIF("data"->>'reasoningTokens', '')::bigint, 0)), 0)::bigint AS "reasoningTokens",
+         COALESCE(SUM(COALESCE(NULLIF("data"->>'cacheReadInputTokens', '')::bigint, 0)), 0)::bigint AS "cacheReadInputTokens",
+         COALESCE(SUM(COALESCE(NULLIF("data"->>'cacheCreationInputTokens', '')::bigint, 0)), 0)::bigint AS "cacheCreationInputTokens",
+         COALESCE(SUM(COALESCE(NULLIF("data"->>'totalTokens', '')::bigint, 0)), 0)::bigint AS "totalTokens"
+       FROM "nodes"
+       ${usageWhere}`,
+      usageParams,
+    );
+
+    const threadTotals = threadResult.rows[0] ?? {
+      total: 0,
+      active: 0,
+      archived: 0,
+    };
+    const queueTotals = queueResult.rows[0] ?? {
+      total: 0,
+      pending: 0,
+      processing: 0,
+      completed: 0,
+      failed: 0,
+      expired: 0,
+      overwritten: 0,
+    };
+    const messageTotals = messageResult.rows[0] ?? {
+      total: 0,
+      toolCallMessages: 0,
+    };
+    const participantTotals = participantResult.rows[0] ?? {
+      total: 0,
+      humans: 0,
+      agents: 0,
+    };
+    const llmTotals = usageResult.rows[0] ?? {
+      totalCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      totalTokens: 0,
+    };
+
+    return {
+      threadTotals: {
+        total: toAdminNumber(threadTotals.total),
+        active: toAdminNumber(threadTotals.active),
+        archived: toAdminNumber(threadTotals.archived),
+      },
+      queueTotals: {
+        total: toAdminNumber(queueTotals.total),
+        pending: toAdminNumber(queueTotals.pending),
+        processing: toAdminNumber(queueTotals.processing),
+        completed: toAdminNumber(queueTotals.completed),
+        failed: toAdminNumber(queueTotals.failed),
+        expired: toAdminNumber(queueTotals.expired),
+        overwritten: toAdminNumber(queueTotals.overwritten),
+      },
+      messageTotals: {
+        total: toAdminNumber(messageTotals.total),
+        toolCallMessages: toAdminNumber(messageTotals.toolCallMessages),
+      },
+      participantTotals: {
+        total: toAdminNumber(participantTotals.total),
+        humans: toAdminNumber(participantTotals.humans),
+        agents: toAdminNumber(participantTotals.agents),
+      },
+      llmTotals: {
+        totalCalls: toAdminNumber(llmTotals.totalCalls),
+        inputTokens: toAdminNumber(llmTotals.inputTokens),
+        outputTokens: toAdminNumber(llmTotals.outputTokens),
+        reasoningTokens: toAdminNumber(llmTotals.reasoningTokens),
+        cacheReadInputTokens: toAdminNumber(llmTotals.cacheReadInputTokens),
+        cacheCreationInputTokens: toAdminNumber(llmTotals.cacheCreationInputTokens),
+        totalTokens: toAdminNumber(llmTotals.totalTokens),
+      },
+    };
+  };
+
+  const getAdminActivitySeries = async (
+    options?: AdminActivityOptions,
+  ): Promise<AdminActivityPoint[]> => {
+    const interval = normalizeAdminInterval(options?.interval);
+    const params: unknown[] = [];
+    const messageFilters = [`"type" = 'message'`];
+    pushScopedThreadNodeFilter(params, messageFilters, `"namespace"`, options?.namespace);
+    pushTimeRangeFilters(params, messageFilters, `"created_at"`, options);
+    const messageWhere = `WHERE ${messageFilters.join(" AND ")}`;
+
+    const usageFilters = [`"type" = 'llm_usage'`];
+    pushScopedThreadNodeFilter(params, usageFilters, `"namespace"`, options?.namespace);
+    pushTimeRangeFilters(params, usageFilters, `"created_at"`, options);
+    const usageWhere = `WHERE ${usageFilters.join(" AND ")}`;
+
+    const seriesResult = await db.query<{
+      bucket: Date | string;
+      messageCount: number;
+      toolCallMessageCount: number;
+      llmCallCount: number;
+      totalTokens: number;
+    }>(
+      `WITH "message_series" AS (
+         SELECT
+           DATE_TRUNC('${interval}', "created_at") AS "bucket",
+           COUNT(*)::int AS "messageCount",
+           COUNT(*) FILTER (
+             WHERE (
+               ("data"->'toolCalls' IS NOT NULL AND jsonb_typeof("data"->'toolCalls') = 'array' AND jsonb_array_length("data"->'toolCalls') > 0)
+               OR COALESCE("data"->>'toolCallId', '') <> ''
+             )
+           )::int AS "toolCallMessageCount"
+         FROM "nodes"
+         ${messageWhere}
+         GROUP BY 1
+       ),
+       "usage_series" AS (
+         SELECT
+           DATE_TRUNC('${interval}', "created_at") AS "bucket",
+           COUNT(*)::int AS "llmCallCount",
+           COALESCE(SUM(COALESCE(NULLIF("data"->>'totalTokens', '')::bigint, 0)), 0)::bigint AS "totalTokens"
+         FROM "nodes"
+         ${usageWhere}
+         GROUP BY 1
+       ),
+       "all_buckets" AS (
+         SELECT "bucket" FROM "message_series"
+         UNION
+         SELECT "bucket" FROM "usage_series"
+       )
+       SELECT
+         "all_buckets"."bucket" AS "bucket",
+         COALESCE("message_series"."messageCount", 0)::int AS "messageCount",
+         COALESCE("message_series"."toolCallMessageCount", 0)::int AS "toolCallMessageCount",
+         COALESCE("usage_series"."llmCallCount", 0)::int AS "llmCallCount",
+         COALESCE("usage_series"."totalTokens", 0)::bigint AS "totalTokens"
+       FROM "all_buckets"
+       LEFT JOIN "message_series" ON "message_series"."bucket" = "all_buckets"."bucket"
+       LEFT JOIN "usage_series" ON "usage_series"."bucket" = "all_buckets"."bucket"
+       ORDER BY "all_buckets"."bucket" ASC`,
+      params,
+    );
+
+    return seriesResult.rows.map((row) => ({
+      bucket: toAdminIso(row.bucket) ?? new Date(row.bucket).toISOString(),
+      messageCount: toAdminNumber(row.messageCount),
+      llmCallCount: toAdminNumber(row.llmCallCount),
+      toolCallMessageCount: toAdminNumber(row.toolCallMessageCount),
+      totalTokens: toAdminNumber(row.totalTokens),
+    }));
+  };
+
+  const listAdminThreads = async (
+    options?: AdminThreadListOptions,
+  ): Promise<AdminThreadSummary[]> => {
+    const params: unknown[] = [];
+    const filters: string[] = [];
+    pushThreadNamespaceFilter(params, filters, `t."id"`, options?.namespace);
+
+    if (options?.status && options.status !== "all") {
+      params.push(options.status);
+      filters.push(`t."status" = $${params.length}`);
+    }
+
+    const search = normalizeAdminSearch(options?.search);
+    if (search) {
+      params.push(search);
+      filters.push(
+        `(
+          LOWER(COALESCE(t."name", '')) LIKE $${params.length}
+          OR LOWER(COALESCE(t."summary", '')) LIKE $${params.length}
+          OR LOWER(COALESCE(t."externalId", '')) LIKE $${params.length}
+          OR LOWER(t."id") LIKE $${params.length}
+        )`,
+      );
+    }
+
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+    const limit = normalizeAdminLimit(options?.limit);
+    const offset = normalizeAdminOffset(options?.offset);
+    params.push(limit);
+    const limitIndex = params.length;
+    params.push(offset);
+    const offsetIndex = params.length;
+
+    const result = await db.query<{
+      threadId: string;
+      name: string;
+      status: string;
+      summary: string | null;
+      participantIds: string[] | null;
+      messageCount: number;
+      lastActivityAt: Date | string | null;
+      lastMessagePreview: string | null;
+      createdAt: Date | string | null;
+      updatedAt: Date | string | null;
+    }>(
+      `SELECT
+         t."id" AS "threadId",
+         t."name" AS "name",
+         t."status" AS "status",
+         t."summary" AS "summary",
+         t."participants" AS "participantIds",
+         COALESCE("message_stats"."messageCount", 0)::int AS "messageCount",
+         "message_stats"."lastActivityAt" AS "lastActivityAt",
+         "message_stats"."lastMessagePreview" AS "lastMessagePreview",
+         t."createdAt" AS "createdAt",
+         t."updatedAt" AS "updatedAt"
+       FROM "threads" AS t
+       LEFT JOIN LATERAL (
+         SELECT
+           COUNT(*)::int AS "messageCount",
+           MAX(m."created_at") AS "lastActivityAt",
+           (
+             ARRAY_AGG(LEFT(COALESCE(m."content", ''), 280) ORDER BY m."created_at" DESC)
+           )[1] AS "lastMessagePreview"
+         FROM "nodes" AS m
+         WHERE m."type" = 'message'
+           AND m."namespace" = t."id"
+       ) AS "message_stats" ON TRUE
+       ${whereClause}
+       ORDER BY COALESCE("message_stats"."lastActivityAt", t."updatedAt") DESC, t."updatedAt" DESC
+       LIMIT $${limitIndex}
+       OFFSET $${offsetIndex}`,
+      params,
+    );
+
+    return result.rows.map((row) => ({
+      threadId: row.threadId,
+      name: row.name,
+      status: row.status,
+      summary: row.summary ?? null,
+      participantIds: Array.isArray(row.participantIds) ? row.participantIds : [],
+      messageCount: toAdminNumber(row.messageCount),
+      lastActivityAt: toAdminIso(row.lastActivityAt),
+      lastMessagePreview: row.lastMessagePreview ?? null,
+      createdAt: toAdminIso(row.createdAt),
+      updatedAt: toAdminIso(row.updatedAt),
+    }));
+  };
+
+  const listAdminParticipants = async (
+    options?: AdminParticipantListOptions,
+  ): Promise<AdminParticipantSummary[]> => {
+    const params: unknown[] = [];
+    const participantFilters = [`n."type" = 'user'`];
+
+    if (options?.namespace) {
+      params.push(options.namespace);
+      participantFilters.push(
+        `(n."namespace" = $${params.length} OR n."namespace" = 'global')`,
+      );
+    }
+
+    if (options?.participantType && options.participantType !== "all") {
+      params.push(options.participantType);
+      participantFilters.push(
+        `COALESCE(n."data"->>'participantType', 'human') = $${params.length}`,
+      );
+    }
+
+    const search = normalizeAdminSearch(options?.search);
+    if (search) {
+      params.push(search);
+      participantFilters.push(
+        `(
+          LOWER(COALESCE(n."data"->>'externalId', n."source_id", n."id")) LIKE $${params.length}
+          OR LOWER(COALESCE(n."data"->>'name', n."name", '')) LIKE $${params.length}
+        )`,
+      );
+    }
+
+    const limit = normalizeAdminLimit(options?.limit);
+    const offset = normalizeAdminOffset(options?.offset);
+    params.push(limit);
+    const limitIndex = params.length;
+    params.push(offset);
+    const offsetIndex = params.length;
+
+    const messageStatsScope: string[] = [`m."type" = 'message'`];
+    if (options?.namespace) {
+      params.push(options.namespace);
+      messageStatsScope.push(
+        `m."namespace" IN (
+          SELECT DISTINCT "threadId"
+          FROM "events"
+          WHERE "namespace" = $${params.length}
+        )`,
+      );
+    }
+
+    const result = await db.query<{
+      externalId: string;
+      displayName: string;
+      participantType: "human" | "agent";
+      namespace: string;
+      isGlobal: boolean;
+      messageCount: number;
+      threadCount: number;
+      lastActivityAt: Date | string | null;
+      updatedAt: Date | string | null;
+    }>(
+      `WITH "message_stats" AS (
+         SELECT
+           COALESCE(m."data"->>'senderId', '') AS "externalId",
+           COUNT(*)::int AS "messageCount",
+           COUNT(DISTINCT m."namespace")::int AS "threadCount",
+           MAX(m."created_at") AS "lastActivityAt"
+         FROM "nodes" AS m
+         WHERE ${messageStatsScope.join(" AND ")}
+         GROUP BY 1
+       )
+       SELECT
+         COALESCE(n."data"->>'externalId', n."source_id", n."id") AS "externalId",
+         COALESCE(n."data"->>'name', n."name", COALESCE(n."data"->>'externalId', n."source_id", n."id")) AS "displayName",
+         COALESCE(n."data"->>'participantType', 'human') AS "participantType",
+         n."namespace" AS "namespace",
+         COALESCE((n."data"->>'isGlobal')::boolean, n."namespace" = 'global') AS "isGlobal",
+         COALESCE("message_stats"."messageCount", 0)::int AS "messageCount",
+         COALESCE("message_stats"."threadCount", 0)::int AS "threadCount",
+         "message_stats"."lastActivityAt" AS "lastActivityAt",
+         n."updated_at" AS "updatedAt"
+       FROM "nodes" AS n
+       LEFT JOIN "message_stats"
+         ON "message_stats"."externalId" = COALESCE(n."data"->>'externalId', n."source_id", n."id")
+       WHERE ${participantFilters.join(" AND ")}
+       ORDER BY "message_stats"."lastActivityAt" DESC NULLS LAST, "displayName" ASC
+       LIMIT $${limitIndex}
+       OFFSET $${offsetIndex}`,
+      params,
+    );
+
+    return result.rows.map((row) => ({
+      externalId: row.externalId,
+      displayName: row.displayName,
+      participantType: row.participantType === "agent" ? "agent" : "human",
+      namespace: row.namespace,
+      isGlobal: Boolean(row.isGlobal),
+      messageCount: toAdminNumber(row.messageCount),
+      threadCount: toAdminNumber(row.threadCount),
+      lastActivityAt: toAdminIso(row.lastActivityAt),
+    }));
+  };
+
+  const listAdminAgents = async (
+    options?: AdminAgentListOptions,
+  ): Promise<AdminAgentSummary[]> => {
+    const params: unknown[] = [];
+    const filters = [
+      `n."type" = 'user'`,
+      `COALESCE(n."data"->>'participantType', 'human') = 'agent'`,
+    ];
+
+    if (options?.namespace) {
+      params.push(options.namespace);
+      filters.push(
+        `(n."namespace" = $${params.length} OR n."namespace" = 'global')`,
+      );
+    }
+
+    const search = normalizeAdminSearch(options?.search);
+    if (search) {
+      params.push(search);
+      filters.push(
+        `(
+          LOWER(COALESCE(n."data"->>'externalId', n."source_id", n."id")) LIKE $${params.length}
+          OR LOWER(COALESCE(n."data"->>'name', n."name", '')) LIKE $${params.length}
+          OR LOWER(COALESCE(n."data"->>'agentId', '')) LIKE $${params.length}
+        )`,
+      );
+    }
+
+    const messageStatsScope: string[] = [`m."type" = 'message'`];
+    const usageStatsScope: string[] = [`u."type" = 'llm_usage'`];
+    if (options?.namespace) {
+      params.push(options.namespace);
+      const namespaceIndex = params.length;
+      messageStatsScope.push(
+        `m."namespace" IN (
+          SELECT DISTINCT "threadId"
+          FROM "events"
+          WHERE "namespace" = $${namespaceIndex}
+        )`,
+      );
+      usageStatsScope.push(
+        `u."namespace" IN (
+          SELECT DISTINCT "threadId"
+          FROM "events"
+          WHERE "namespace" = $${namespaceIndex}
+        )`,
+      );
+    }
+
+    const result = await db.query<{
+      agentId: string;
+      displayName: string;
+      namespace: string;
+      isGlobal: boolean;
+      messageCount: number;
+      toolCallMessageCount: number;
+      llmCallCount: number;
+      inputTokens: number;
+      outputTokens: number;
+      reasoningTokens: number;
+      cacheReadInputTokens: number;
+      cacheCreationInputTokens: number;
+      totalTokens: number;
+      lastActivityAt: Date | string | null;
+      updatedAt: Date | string | null;
+    }>(
+      `WITH "message_stats" AS (
+         SELECT
+           COALESCE(m."data"->>'senderId', '') AS "agentId",
+           COUNT(*)::int AS "messageCount",
+           COUNT(*) FILTER (
+             WHERE (
+               ("data"->'toolCalls' IS NOT NULL AND jsonb_typeof("data"->'toolCalls') = 'array' AND jsonb_array_length("data"->'toolCalls') > 0)
+               OR COALESCE("data"->>'toolCallId', '') <> ''
+             )
+           )::int AS "toolCallMessageCount",
+           MAX(m."created_at") AS "lastActivityAt"
+         FROM "nodes" AS m
+         WHERE ${messageStatsScope.join(" AND ")}
+         GROUP BY 1
+       ),
+       "usage_stats" AS (
+         SELECT
+           COALESCE(u."data"->>'agentId', '') AS "agentId",
+           COUNT(*)::int AS "llmCallCount",
+           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'inputTokens', '')::bigint, 0)), 0)::bigint AS "inputTokens",
+           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'outputTokens', '')::bigint, 0)), 0)::bigint AS "outputTokens",
+           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'reasoningTokens', '')::bigint, 0)), 0)::bigint AS "reasoningTokens",
+           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'cacheReadInputTokens', '')::bigint, 0)), 0)::bigint AS "cacheReadInputTokens",
+           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'cacheCreationInputTokens', '')::bigint, 0)), 0)::bigint AS "cacheCreationInputTokens",
+           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'totalTokens', '')::bigint, 0)), 0)::bigint AS "totalTokens",
+           MAX(u."created_at") AS "lastActivityAt"
+         FROM "nodes" AS u
+         WHERE ${usageStatsScope.join(" AND ")}
+         GROUP BY 1
+       )
+       SELECT
+         COALESCE(n."data"->>'agentId', n."data"->>'externalId', n."source_id", n."id") AS "agentId",
+         COALESCE(n."data"->>'name', n."name", COALESCE(n."data"->>'agentId', n."data"->>'externalId', n."source_id", n."id")) AS "displayName",
+         n."namespace" AS "namespace",
+         COALESCE((n."data"->>'isGlobal')::boolean, n."namespace" = 'global') AS "isGlobal",
+         COALESCE("message_stats"."messageCount", 0)::int AS "messageCount",
+         COALESCE("message_stats"."toolCallMessageCount", 0)::int AS "toolCallMessageCount",
+         COALESCE("usage_stats"."llmCallCount", 0)::int AS "llmCallCount",
+         COALESCE("usage_stats"."inputTokens", 0)::bigint AS "inputTokens",
+         COALESCE("usage_stats"."outputTokens", 0)::bigint AS "outputTokens",
+         COALESCE("usage_stats"."reasoningTokens", 0)::bigint AS "reasoningTokens",
+         COALESCE("usage_stats"."cacheReadInputTokens", 0)::bigint AS "cacheReadInputTokens",
+         COALESCE("usage_stats"."cacheCreationInputTokens", 0)::bigint AS "cacheCreationInputTokens",
+         COALESCE("usage_stats"."totalTokens", 0)::bigint AS "totalTokens",
+         COALESCE(
+           GREATEST(
+             "message_stats"."lastActivityAt",
+             "usage_stats"."lastActivityAt"
+           ),
+           "message_stats"."lastActivityAt",
+           "usage_stats"."lastActivityAt"
+         ) AS "lastActivityAt",
+         n."updated_at" AS "updatedAt"
+       FROM "nodes" AS n
+       LEFT JOIN "message_stats"
+         ON "message_stats"."agentId" = COALESCE(n."data"->>'agentId', n."data"->>'externalId', n."source_id", n."id")
+       LEFT JOIN "usage_stats"
+         ON "usage_stats"."agentId" = COALESCE(n."data"->>'agentId', n."data"->>'externalId', n."source_id", n."id")
+       WHERE ${filters.join(" AND ")}
+       ORDER BY "lastActivityAt" DESC, "displayName" ASC`,
+      params,
+    );
+
+    const configuredAgents = (options?.configuredAgents ?? []).filter((agent) =>
+      typeof agent.id === "string" && agent.id.length > 0
+    );
+    const configuredById = new Map(
+      configuredAgents.map((agent) => [agent.id, agent]),
+    );
+
+    const merged = new Map<string, AdminAgentSummary>();
+
+    for (const row of result.rows) {
+      const configured = configuredById.get(row.agentId);
+      merged.set(row.agentId, {
+        agentId: row.agentId,
+        displayName: configured?.name ?? row.displayName,
+        description: configured?.description ?? null,
+        isConfigured: Boolean(configured),
+        namespace: row.namespace,
+        isGlobal: Boolean(row.isGlobal),
+        messageCount: toAdminNumber(row.messageCount),
+        llmCallCount: toAdminNumber(row.llmCallCount),
+        toolCallMessageCount: toAdminNumber(row.toolCallMessageCount),
+        inputTokens: toAdminNumber(row.inputTokens),
+        outputTokens: toAdminNumber(row.outputTokens),
+        reasoningTokens: toAdminNumber(row.reasoningTokens),
+        cacheReadInputTokens: toAdminNumber(row.cacheReadInputTokens),
+        cacheCreationInputTokens: toAdminNumber(row.cacheCreationInputTokens),
+        totalTokens: toAdminNumber(row.totalTokens),
+        lastActivityAt: toAdminIso(row.lastActivityAt),
+      });
+    }
+
+    for (const configured of configuredAgents) {
+      if (merged.has(configured.id)) continue;
+      if (search) {
+        const haystack = `${configured.id} ${configured.name} ${
+          configured.description ?? ""
+        }`.toLowerCase();
+        if (!haystack.includes(search.replaceAll("%", ""))) {
+          continue;
+        }
+      }
+      merged.set(configured.id, {
+        agentId: configured.id,
+        displayName: configured.name,
+        description: configured.description ?? null,
+        isConfigured: true,
+        namespace: options?.namespace ?? "global",
+        isGlobal: !options?.namespace,
+        messageCount: 0,
+        llmCallCount: 0,
+        toolCallMessageCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        totalTokens: 0,
+        lastActivityAt: null,
+      });
+    }
+
+    const limit = normalizeAdminLimit(options?.limit);
+    const offset = normalizeAdminOffset(options?.offset);
+
+    return Array.from(merged.values())
+      .sort((left, right) => {
+        const leftTs = left.lastActivityAt ? new Date(left.lastActivityAt).getTime() : 0;
+        const rightTs = right.lastActivityAt
+          ? new Date(right.lastActivityAt).getTime()
+          : 0;
+        if (rightTs !== leftTs) return rightTs - leftTs;
+        return left.displayName.localeCompare(right.displayName);
+      })
+      .slice(offset, offset + limit);
+  };
+
   // ============================================
   // CHUNK AS NODE OPERATIONS
   // ============================================
@@ -2357,6 +3275,11 @@ export function createOperations(
     getThreadWorkerLeaseConfig,
     recoverThreadProcessingQueueItems,
     getMessageHistory,
+    getAdminOverview,
+    getAdminActivitySeries,
+    listAdminThreads,
+    listAdminParticipants,
+    listAdminAgents,
     getThreadsForParticipant,
     getMessagesForThread,
     deleteMessagesForThread,

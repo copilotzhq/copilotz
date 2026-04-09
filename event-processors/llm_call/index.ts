@@ -4,6 +4,7 @@ import type {
   ChatRequest,
   ChatResponse,
   ProviderConfig,
+  TokenUsage,
   ToolInvocation,
 } from "@/connectors/llm/types.ts";
 import type {
@@ -399,6 +400,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     );
 
     const llmResponse = response as unknown as ChatResponse;
+    let usageNodeId: string | null = null;
 
     // finalize stream
     if (streamCallback) {
@@ -431,6 +433,42 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           extractedTags?: Record<string, string[]>;
         }).extractedTags
         : undefined;
+    const usage: TokenUsage | undefined = ("usage" in llmResponse)
+      ? (llmResponse as unknown as { usage?: TokenUsage }).usage
+      : undefined;
+
+    if (usage) {
+      try {
+        const usageNode = await deps.db.ops.createNode({
+          namespace: threadId,
+          type: "llm_usage",
+          name: `${usage.status}:${llmResponse.provider ?? "unknown"}:${
+            llmResponse.model ?? "unknown"
+          }`,
+          data: {
+            threadId,
+            eventId: typeof event.id === "string" ? event.id : null,
+            agentId: payload.agent.id ?? payload.agent.name,
+            provider: llmResponse.provider ?? null,
+            model: llmResponse.model ?? null,
+            inputTokens: usage.inputTokens ?? null,
+            outputTokens: usage.outputTokens ?? null,
+            reasoningTokens: usage.reasoningTokens ?? null,
+            cacheReadInputTokens: usage.cacheReadInputTokens ?? null,
+            cacheCreationInputTokens: usage.cacheCreationInputTokens ?? null,
+            totalTokens: usage.totalTokens ?? null,
+            source: usage.source,
+            status: usage.status,
+            rawUsage: usage.rawUsage ?? null,
+          },
+          sourceType: "event",
+          sourceId: typeof event.id === "string" ? event.id : threadId,
+        });
+        usageNodeId = usageNode.id as string;
+      } catch (error) {
+        console.warn("[LLM_CALL] Failed to persist llm_usage node:", error);
+      }
+    }
 
     if (Deno.env.get("COPILOTZ_DEBUG") === "1") {
       console.log("answer", answer);
@@ -537,6 +575,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     const messageMetadata: Record<string, unknown> = {
       targetId: responseTarget.targetId,
       targetQueue: responseTarget.targetQueue,
+      ...(usageNodeId ? { usageNodeId } : {}),
       ...(routeTargets.length > 0
         ? {
           routing: {

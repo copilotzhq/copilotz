@@ -1,4 +1,24 @@
-import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart, ExtractedPart } from '../types.ts';
+import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart, ExtractedPart, ProviderUsageUpdate } from '../types.ts';
+
+function extractDeepSeekUsage(data: any): ProviderUsageUpdate | null {
+  const usage = data?.usage;
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) return null;
+
+  return {
+    inputTokens: typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined,
+    outputTokens: typeof usage.completion_tokens === "number" ? usage.completion_tokens : undefined,
+    reasoningTokens:
+      typeof usage.completion_tokens_details?.reasoning_tokens === "number"
+        ? usage.completion_tokens_details.reasoning_tokens
+        : undefined,
+    cacheReadInputTokens:
+      typeof usage.prompt_cache_hit_tokens === "number"
+        ? usage.prompt_cache_hit_tokens
+        : undefined,
+    totalTokens: typeof usage.total_tokens === "number" ? usage.total_tokens : undefined,
+    rawUsage: usage as Record<string, unknown>,
+  };
+}
 
 export const deepseekProvider: ProviderFactory = (config: ProviderConfig) => {
   return {
@@ -26,6 +46,7 @@ export const deepseekProvider: ProviderFactory = (config: ProviderConfig) => {
         model: config.model || 'deepseek-chat',
         messages: dsMessages,
         stream: true,
+        stream_options: { include_usage: true },
         temperature: config.temperature || 0,
         max_tokens: config.maxTokens || 1000,
         top_p: config.topP,
@@ -42,6 +63,8 @@ export const deepseekProvider: ProviderFactory = (config: ProviderConfig) => {
       const content = data?.choices?.[0]?.delta?.content;
       if (!content) return null;
       return [{ text: content }];
-    }
+    },
+
+    extractUsage: extractDeepSeekUsage,
   };
-}; 
+};

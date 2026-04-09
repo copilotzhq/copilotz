@@ -1,4 +1,4 @@
-import type { ChatMessage, ProviderConfig, ProviderFactory, ExtractedPart } from "../types.ts";
+import type { ChatMessage, ProviderConfig, ProviderFactory, ExtractedPart, ProviderUsageUpdate } from "../types.ts";
 
 interface GeminiPart {
   text?: string;
@@ -278,6 +278,32 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
       }
 
       return parts.length > 0 ? parts : null;
+    },
+
+    extractUsage: (data: any): ProviderUsageUpdate | null => {
+      const usage = data?.usageMetadata;
+      if (!usage || typeof usage !== "object" || Array.isArray(usage)) {
+        return null;
+      }
+
+      return {
+        inputTokens: typeof usage.promptTokenCount === "number"
+          ? usage.promptTokenCount
+          : undefined,
+        outputTokens: typeof usage.candidatesTokenCount === "number"
+          ? usage.candidatesTokenCount
+          : undefined,
+        reasoningTokens: typeof usage.thoughtsTokenCount === "number"
+          ? usage.thoughtsTokenCount
+          : undefined,
+        cacheReadInputTokens: typeof usage.cachedContentTokenCount === "number"
+          ? usage.cachedContentTokenCount
+          : undefined,
+        totalTokens: typeof usage.totalTokenCount === "number"
+          ? usage.totalTokenCount
+          : undefined,
+        rawUsage: usage as Record<string, unknown>,
+      };
     },
   };
 };

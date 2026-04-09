@@ -4,6 +4,7 @@ import type {
   ProviderConfig,
   ProviderFactory,
   ExtractedPart,
+  ProviderUsageUpdate,
 } from "../types.ts";
 
 type MiniMaxRole = "system" | "user" | "assistant";
@@ -53,6 +54,28 @@ function stripOutputTags(text: string): string {
  */
 function stripOutputTagsFinal(text: string): string {
   return stripOutputTags(text).trim();
+}
+
+function extractMiniMaxUsage(data: any): ProviderUsageUpdate | null {
+  const usage = data?.usage;
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) return null;
+
+  return {
+    inputTokens: typeof usage.prompt_tokens === "number"
+      ? usage.prompt_tokens
+      : undefined,
+    outputTokens: typeof usage.completion_tokens === "number"
+      ? usage.completion_tokens
+      : undefined,
+    reasoningTokens:
+      typeof usage.completion_tokens_details?.reasoning_tokens === "number"
+        ? usage.completion_tokens_details.reasoning_tokens
+        : undefined,
+    totalTokens: typeof usage.total_tokens === "number"
+      ? usage.total_tokens
+      : undefined,
+    rawUsage: usage as Record<string, unknown>,
+  };
 }
 
 export const minimaxProvider: ProviderFactory = (config: ProviderConfig) => {
@@ -108,9 +131,10 @@ export const minimaxProvider: ProviderFactory = (config: ProviderConfig) => {
       return parts.length > 0 ? parts : null;
     },
 
+    extractUsage: extractMiniMaxUsage,
+
     streamOptions: {
       postProcess: stripOutputTagsFinal,
     },
   };
 };
-

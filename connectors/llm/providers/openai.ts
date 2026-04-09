@@ -1,4 +1,24 @@
-import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart, ExtractedPart } from '../types.ts';
+import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart, ExtractedPart, ProviderUsageUpdate } from '../types.ts';
+
+function extractOpenAIUsage(data: any): ProviderUsageUpdate | null {
+  const usage = data?.usage;
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) return null;
+
+  return {
+    inputTokens: typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined,
+    outputTokens: typeof usage.completion_tokens === "number" ? usage.completion_tokens : undefined,
+    reasoningTokens:
+      typeof usage.completion_tokens_details?.reasoning_tokens === "number"
+        ? usage.completion_tokens_details.reasoning_tokens
+        : undefined,
+    cacheReadInputTokens:
+      typeof usage.prompt_tokens_details?.cached_tokens === "number"
+        ? usage.prompt_tokens_details.cached_tokens
+        : undefined,
+    totalTokens: typeof usage.total_tokens === "number" ? usage.total_tokens : undefined,
+    rawUsage: usage as Record<string, unknown>,
+  };
+}
 
 export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
   return {
@@ -40,6 +60,7 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
         model: modelName,
         messages: openaiMessages,
         stream: true,
+        stream_options: { include_usage: true },
         temperature: config.temperature || 1,
         top_p: config.topP,
         presence_penalty: config.presencePenalty,
@@ -79,5 +100,7 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
 
       return parts.length > 0 ? parts : null;
     },
+
+    extractUsage: extractOpenAIUsage,
   };
 };

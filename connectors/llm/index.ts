@@ -12,6 +12,7 @@ import { getProvider } from "./providers/index.ts";
 import {
   countTokens,
   createMockResponse,
+  estimateUsage,
   formatMessages,
   getLocalStopSequences,
   parseInternalControlTagsFromResponse,
@@ -21,6 +22,7 @@ import {
   withDefaultStopSequences,
 } from "./utils.ts";
 import { streamPost, type StreamResponse } from "../request/index.ts";
+import type { ProviderUsageUpdate, TokenUsage } from "./types.ts";
 
 const DEFAULT_FALLBACK_REASONS: ProviderFallbackReason[] = [
   "timeout",
@@ -118,6 +120,59 @@ function shouldAttemptFallback(
     : DEFAULT_FALLBACK_REASONS;
 
   return allowedReasons.includes(reason);
+}
+
+function normalizeProviderUsage(
+  usage: ProviderUsageUpdate | undefined,
+  status: TokenUsage["status"],
+): TokenUsage | null {
+  if (!usage) return null;
+
+  const inputTokens = typeof usage.inputTokens === "number"
+    ? usage.inputTokens
+    : undefined;
+  const outputTokens = typeof usage.outputTokens === "number"
+    ? usage.outputTokens
+    : undefined;
+  const reasoningTokens = typeof usage.reasoningTokens === "number"
+    ? usage.reasoningTokens
+    : undefined;
+  const cacheReadInputTokens = typeof usage.cacheReadInputTokens === "number"
+    ? usage.cacheReadInputTokens
+    : undefined;
+  const cacheCreationInputTokens =
+    typeof usage.cacheCreationInputTokens === "number"
+      ? usage.cacheCreationInputTokens
+      : undefined;
+  const totalTokens = typeof usage.totalTokens === "number"
+    ? usage.totalTokens
+    : (inputTokens !== undefined && outputTokens !== undefined)
+      ? inputTokens + outputTokens
+      : undefined;
+
+  if (
+    inputTokens === undefined &&
+    outputTokens === undefined &&
+    reasoningTokens === undefined &&
+    cacheReadInputTokens === undefined &&
+    cacheCreationInputTokens === undefined &&
+    totalTokens === undefined &&
+    !usage.rawUsage
+  ) {
+    return null;
+  }
+
+  return {
+    inputTokens,
+    outputTokens,
+    reasoningTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    totalTokens,
+    source: "provider",
+    status,
+    rawUsage: usage.rawUsage ?? null,
+  };
 }
 
 /**
@@ -218,6 +273,7 @@ export async function chat(
           ...providerAPI.streamOptions,
           config: attemptConfig,
           extractedBlockTags: request.extractTags,
+          extractUsage: providerAPI.extractUsage,
           localStopSequences,
           onLocalStop: () => abortController.abort(),
         },
@@ -244,11 +300,20 @@ export async function chat(
         cleanResponse = parsed.cleanResponse;
       }
 
+      const usageStatus: TokenUsage["status"] = streamResult.stoppedByLocalStop
+        ? "aborted"
+        : "completed";
+      const usage = normalizeProviderUsage(streamResult.usage, usageStatus) ??
+        await estimateUsage(messages, streamResult.content, usageStatus);
+      const totalTokens = usage.totalTokens ??
+        await countTokens(messages, streamResult.content);
+
       const chatResponse: ChatResponse = {
         prompt: messages,
         answer: cleanResponse,
         ...(streamResult.reasoning && { reasoning: streamResult.reasoning }),
-        tokens: await countTokens(messages, streamResult.content),
+        tokens: totalTokens,
+        usage,
         provider: attemptProvider,
         model: attemptConfig.model,
         ...(toolCalls.length > 0 && { toolCalls }),

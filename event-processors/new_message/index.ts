@@ -853,6 +853,13 @@ export const messageProcessor: EventProcessor<
       incomingMsg,
       context.namespace,
     );
+    const usageNodeId = event.metadata &&
+        typeof event.metadata === "object" &&
+        !Array.isArray(event.metadata) &&
+        typeof (event.metadata as Record<string, unknown>).usageNodeId ===
+          "string"
+      ? (event.metadata as Record<string, unknown>).usageNodeId as string
+      : null;
 
     // Emit ENTITY_EXTRACT event for agents with entity extraction enabled
     // Events go to a background child thread to avoid blocking main thread processing
@@ -921,7 +928,7 @@ export const messageProcessor: EventProcessor<
     let messageNodeId: string | null = null;
     let backgroundThreadId: string | null = null;
 
-    if (configGroups.size > 0) {
+    if (configGroups.size > 0 || usageNodeId) {
       try {
         const messageNodes = await ops.getNodesByNamespace(threadId, "message");
         const messageNode = messageNodes.find((n) => {
@@ -930,28 +937,41 @@ export const messageProcessor: EventProcessor<
         });
         messageNodeId = messageNode?.id as string ?? null;
 
+        if (messageNodeId && usageNodeId) {
+          await ops.createEdge({
+            sourceNodeId: messageNodeId,
+            targetNodeId: usageNodeId,
+            type: "HAS_LLM_USAGE",
+          });
+        }
+
         // Get or create a background child thread for entity extraction
         // This prevents blocking the main thread's event queue
-        const bgThreadExternalId = `${threadId}:background`;
-        const existingBgThread = await ops.getThreadByExternalId(
-          bgThreadExternalId,
-        );
-        if (existingBgThread) {
-          backgroundThreadId = existingBgThread.id as string;
-        } else {
-          const bgThread = await ops.findOrCreateThread(undefined, {
-            name: "Background Processing",
-            description: `Background worker thread for ${threadId}`,
-            participants: [],
-            externalId: bgThreadExternalId,
-            parentThreadId: threadId,
-            status: "active",
-            mode: "immediate",
-          });
-          backgroundThreadId = bgThread.id as string;
+        if (configGroups.size > 0) {
+          const bgThreadExternalId = `${threadId}:background`;
+          const existingBgThread = await ops.getThreadByExternalId(
+            bgThreadExternalId,
+          );
+          if (existingBgThread) {
+            backgroundThreadId = existingBgThread.id as string;
+          } else {
+            const bgThread = await ops.findOrCreateThread(undefined, {
+              name: "Background Processing",
+              description: `Background worker thread for ${threadId}`,
+              participants: [],
+              externalId: bgThreadExternalId,
+              parentThreadId: threadId,
+              status: "active",
+              mode: "immediate",
+            });
+            backgroundThreadId = bgThread.id as string;
+          }
         }
       } catch (err) {
-        console.warn(`[NEW_MESSAGE] Failed to setup entity extraction:`, err);
+        console.warn(
+          `[NEW_MESSAGE] Failed to setup message node follow-up work:`,
+          err,
+        );
       }
     }
 

@@ -7,8 +7,10 @@ import type {
   ChatResponse,
   ExtractedPart,
   ProcessStreamOptions,
+  ProviderUsageUpdate,
   ProviderConfig,
   StreamCallback,
+  TokenUsage,
   ToolDefinition,
   ToolInvocation,
 } from "./types.ts";
@@ -28,6 +30,7 @@ const INTERNAL_LITERAL_CONTROL_TAGS = [
   NO_RESPONSE_SELF_CLOSING_TAG,
   NO_RESPONSE_EMPTY_BLOCK_TAG,
 ];
+let tokenizerBasePromise: Promise<Record<string, unknown>> | null = null;
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -459,20 +462,73 @@ export async function countTokens(
   response: string,
 ): Promise<number> {
   try {
-    const base = await fetch("https://tiktoken.pages.dev/js/o200k_base.json", {
-      cache: "force-cache",
-    }).then((res) => res.json());
-    const encoding = new Tiktoken(base);
-    const allContent = messages.map((m) => m.content).join(" ") + response;
-    const tokens = encoding.encode(allContent);
-    // const tokens= [1,2];
-    return tokens.length;
+    const allContent = messages.map((m) => contentToText(m.content)).join(" ") +
+      response;
+    return await countTextTokens(allContent);
   } catch (error) {
     console.warn("Token counting failed:", error);
     // Fallback to approximate count (4 chars per token)
-    const totalText = messages.map((m) => m.content).join(" ") + response;
+    const totalText = messages.map((m) => contentToText(m.content)).join(" ") +
+      response;
     return Math.ceil(totalText.length / 4);
   }
+}
+
+export async function estimateUsage(
+  messages: ChatMessage[],
+  response: string,
+  status: TokenUsage["status"],
+): Promise<TokenUsage> {
+  try {
+    const inputText = messages.map((m) => contentToText(m.content)).join(" ");
+    const outputText = response;
+    const totalText = inputText + outputText;
+    const [inputTokens, outputTokens, totalTokens] = await Promise.all([
+      countTextTokens(inputText),
+      countTextTokens(outputText),
+      countTextTokens(totalText),
+    ]);
+
+    return {
+      inputTokens,
+      outputTokens,
+      totalTokens,
+      source: "estimated",
+      status,
+      rawUsage: null,
+    };
+  } catch (error) {
+    console.warn("Usage estimation failed:", error);
+    return {
+      inputTokens: Math.ceil(messages.map((m) => contentToText(m.content)).join(" ").length / 4),
+      outputTokens: Math.ceil(response.length / 4),
+      totalTokens: Math.ceil(
+        (messages.map((m) => contentToText(m.content)).join(" ").length +
+          response.length) / 4,
+      ),
+      source: "estimated",
+      status,
+      rawUsage: null,
+    };
+  }
+}
+
+async function countTextTokens(text: string): Promise<number> {
+  const base = await getTokenizerBase();
+  const encoding = new Tiktoken(
+    base as unknown as ConstructorParameters<typeof Tiktoken>[0],
+  );
+  const tokens = encoding.encode(text);
+  return tokens.length;
+}
+
+async function getTokenizerBase(): Promise<Record<string, unknown>> {
+  if (!tokenizerBasePromise) {
+    tokenizerBasePromise = fetch("https://tiktoken.pages.dev/js/o200k_base.json", {
+      cache: "force-cache",
+    }).then((res) => res.json());
+  }
+  return await tokenizerBasePromise;
 }
 
 /**
@@ -538,7 +594,12 @@ export async function processStream(
   onChunk: StreamCallback,
   extractContent: (data: any) => ExtractedPart[] | null,
   options?: ProcessStreamOptions,
-): Promise<{ content: string; reasoning: string }> {
+): Promise<{
+  content: string;
+  reasoning: string;
+  usage?: ProviderUsageUpdate;
+  stoppedByLocalStop: boolean;
+}> {
   const decoder = new TextDecoder("utf-8");
   const format = options?.format ?? "sse";
   const config = options?.config;
@@ -560,6 +621,22 @@ export async function processStream(
     activeTag: null,
     pending: "",
     controlPending: "",
+  };
+  let usage: ProviderUsageUpdate | undefined;
+
+  const mergeUsage = (update: ProviderUsageUpdate | null | undefined) => {
+    if (!update) return;
+    usage = {
+      inputTokens: update.inputTokens ?? usage?.inputTokens,
+      outputTokens: update.outputTokens ?? usage?.outputTokens,
+      reasoningTokens: update.reasoningTokens ?? usage?.reasoningTokens,
+      cacheReadInputTokens: update.cacheReadInputTokens ??
+        usage?.cacheReadInputTokens,
+      cacheCreationInputTokens: update.cacheCreationInputTokens ??
+        usage?.cacheCreationInputTokens,
+      totalTokens: update.totalTokens ?? usage?.totalTokens,
+      rawUsage: update.rawUsage ?? usage?.rawUsage ?? null,
+    };
   };
 
   const appendVisibleContent = (text: string) => {
@@ -614,6 +691,7 @@ export async function processStream(
           for (const line of buffer.split("\n")) {
             const data = parseLine(line, format);
             if (data) {
+              mergeUsage(options?.extractUsage?.(data));
               const parts = extractContent(data);
               if (parts) {
                 const shouldStop = handleParts(parts);
@@ -635,6 +713,7 @@ export async function processStream(
       for (const line of lines) {
         const data = parseLine(line, format);
         if (data) {
+          mergeUsage(options?.extractUsage?.(data));
           const parts = extractContent(data);
           if (parts) {
             const shouldStop = handleParts(parts);
@@ -664,7 +743,12 @@ export async function processStream(
     fullResponse = options.postProcess(fullResponse);
   }
 
-  return { content: fullResponse, reasoning: reasoningResponse };
+  return {
+    content: fullResponse,
+    reasoning: reasoningResponse,
+    ...(usage ? { usage } : {}),
+    stoppedByLocalStop,
+  };
 }
 
 export function filterToolCallTokensStreaming(

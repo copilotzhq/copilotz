@@ -1,4 +1,4 @@
-import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart, ExtractedPart } from '../types.ts';
+import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart, ExtractedPart, ProviderUsageUpdate } from '../types.ts';
 
 const EFFORT_BUDGET_MAP: Record<string, number> = {
   minimal: 1024,
@@ -117,6 +117,39 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
       }
 
       return parts.length > 0 ? parts : null;
+    },
+
+    extractUsage: (data: any): ProviderUsageUpdate | null => {
+      const usage = data?.type === "message_start"
+        ? data?.message?.usage
+        : data?.usage;
+      if (!usage || typeof usage !== "object" || Array.isArray(usage)) {
+        return null;
+      }
+
+      const inputTokens = typeof usage.input_tokens === "number"
+        ? usage.input_tokens
+        : undefined;
+      const outputTokens = typeof usage.output_tokens === "number"
+        ? usage.output_tokens
+        : undefined;
+
+      return {
+        inputTokens,
+        outputTokens,
+        cacheReadInputTokens:
+          typeof usage.cache_read_input_tokens === "number"
+            ? usage.cache_read_input_tokens
+            : undefined,
+        cacheCreationInputTokens:
+          typeof usage.cache_creation_input_tokens === "number"
+            ? usage.cache_creation_input_tokens
+            : undefined,
+        totalTokens: inputTokens !== undefined && outputTokens !== undefined
+          ? inputTokens + outputTokens
+          : undefined,
+        rawUsage: usage as Record<string, unknown>,
+      };
     },
   };
 };

@@ -185,6 +185,7 @@ export interface ChatResponse {
   answer: string;
   reasoning?: string;
   tokens: number;
+  usage?: TokenUsage;
   provider?: ProviderName;
   model?: string;
   toolCalls?: ToolInvocation[];
@@ -215,6 +216,21 @@ export interface ExtractedPart {
   isReasoning?: boolean;
 }
 
+export interface ProviderUsageUpdate {
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  totalTokens?: number;
+  rawUsage?: Record<string, unknown> | null;
+}
+
+export interface TokenUsage extends ProviderUsageUpdate {
+  source: "provider" | "estimated";
+  status: "completed" | "aborted";
+}
+
 // Options for the shared processStream in utils.ts
 export interface ProcessStreamOptions {
   config?: ProviderConfig;
@@ -228,6 +244,8 @@ export interface ProcessStreamOptions {
   localStopSequences?: string[];
   /** Called when a local stop sequence is matched. */
   onLocalStop?: (matchedStop: string) => void;
+  /** Extract provider-reported usage from a parsed SSE or JSONL event. */
+  extractUsage?: (data: any) => ProviderUsageUpdate | null;
 }
 
 // Provider API interface with multimodal support
@@ -237,6 +255,8 @@ export interface ProviderAPI {
   body: (messages: ChatMessage[], config: ProviderConfig) => any;
   /** Extract content/reasoning parts from a single parsed SSE or JSONL event. */
   extractContent: (data: any) => ExtractedPart[] | null;
+  /** Extract usage from a single parsed SSE or JSONL event when the provider exposes it. */
+  extractUsage?: (data: any) => ProviderUsageUpdate | null;
   transformMessages?: (messages: ChatMessage[]) => any;
   /** Options passed to the shared processStream (format, config, postProcess). */
   streamOptions?: Omit<ProcessStreamOptions, "config">;

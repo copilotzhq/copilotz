@@ -52,6 +52,7 @@ Copilotz is the full-stack framework for AI applications. Everything you need to
 | Database | PostgreSQL (production) or PGLite (development/embedded) |
 | Channels | Web (SSE), WhatsApp, and Zendesk — import and go |
 | Streaming | Real-time token streaming with async iterables |
+| Usage & Cost | Provider-native token usage tracking plus optional OpenRouter-based cost estimation |
 
 **One framework. One dependency. Production-ready.**
 
@@ -121,6 +122,15 @@ const copilotz = await createCopilotz({
   stream: true,
 });
 ```
+
+### Usage and Cost Tracking
+
+Copilotz records provider-native LLM usage when the upstream provider exposes it, and can estimate per-call cost using OpenRouter model pricing.
+
+- Cost estimation is enabled by default with `llmOptions.estimateCost !== false`
+- Use `llmOptions.pricingModelId` to override the OpenRouter model id when automatic mapping is not enough
+- Cost is only estimated when usage came from the provider, not from Copilotz's rough fallback token heuristic
+- Admin overview and admin agent summaries aggregate both token and cost totals from persisted `llm_usage` nodes
 
 See the [copilotz-starter](https://github.com/copilotzhq/starter) template for a complete example.
 

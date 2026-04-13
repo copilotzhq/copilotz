@@ -25,6 +25,12 @@ Deno.test("createAdminHandlers delegates directly to admin ops and forwards conf
       cacheReadInputTokens: 0,
       cacheCreationInputTokens: 0,
       totalTokens: 0,
+      inputCostUsd: 0,
+      outputCostUsd: 0,
+      reasoningCostUsd: 0,
+      cacheReadInputCostUsd: 0,
+      cacheCreationInputCostUsd: 0,
+      totalCostUsd: 0,
     },
   };
 

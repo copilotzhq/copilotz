@@ -147,6 +147,12 @@ async function seedAdminFixtures() {
       cacheReadInputTokens: 10,
       cacheCreationInputTokens: 2,
       totalTokens: 177,
+      inputCostUsd: 0.0012,
+      outputCostUsd: 0.00045,
+      reasoningCostUsd: 0.00012,
+      cacheReadInputCostUsd: 0.00001,
+      cacheCreationInputCostUsd: 0.000004,
+      totalCostUsd: 0.001784,
       status: "success",
     },
     sourceType: "event",
@@ -167,6 +173,12 @@ async function seedAdminFixtures() {
       cacheReadInputTokens: 0,
       cacheCreationInputTokens: 0,
       totalTokens: 95,
+      inputCostUsd: 0.0006,
+      outputCostUsd: 0.0003,
+      reasoningCostUsd: 0.00005,
+      cacheReadInputCostUsd: 0,
+      cacheCreationInputCostUsd: 0,
+      totalCostUsd: 0.00095,
       status: "success",
     },
     sourceType: "event",
@@ -235,6 +247,12 @@ Deno.test("admin overview returns zeroed metrics for an empty database", async (
       cacheReadInputTokens: 0,
       cacheCreationInputTokens: 0,
       totalTokens: 0,
+      inputCostUsd: 0,
+      outputCostUsd: 0,
+      reasoningCostUsd: 0,
+      cacheReadInputCostUsd: 0,
+      cacheCreationInputCostUsd: 0,
+      totalCostUsd: 0,
     },
   });
 });
@@ -251,6 +269,7 @@ Deno.test("admin overview aggregates threads, events, messages, participants, an
   assertEquals(allOverview.participantTotals, { total: 5, humans: 2, agents: 3 });
   assertEquals(allOverview.llmTotals.totalCalls, 2);
   assertEquals(allOverview.llmTotals.totalTokens, 272);
+  assertEquals(allOverview.llmTotals.totalCostUsd, 0.002734);
 
   const alphaOverview = await db.ops.getAdminOverview({
     namespace: "tenant-alpha",
@@ -261,6 +280,7 @@ Deno.test("admin overview aggregates threads, events, messages, participants, an
   assertEquals(alphaOverview.participantTotals, { total: 3, humans: 1, agents: 2 });
   assertEquals(alphaOverview.llmTotals.totalCalls, 1);
   assertEquals(alphaOverview.llmTotals.totalTokens, 177);
+  assertEquals(alphaOverview.llmTotals.totalCostUsd, 0.001784);
 });
 
 Deno.test("admin activity series buckets message and usage data by interval", async () => {
@@ -397,6 +417,12 @@ Deno.test("admin agent list merges graph metrics with configured agents", async 
     cacheReadInputTokens: 10,
     cacheCreationInputTokens: 2,
     totalTokens: 177,
+    inputCostUsd: 0.0012,
+    outputCostUsd: 0.00045,
+    reasoningCostUsd: 0.00012,
+    cacheReadInputCostUsd: 0.00001,
+    cacheCreationInputCostUsd: 0.000004,
+    totalCostUsd: 0.001784,
     lastActivityAt: "2026-01-10T11:40:00.000Z",
   });
   assert(

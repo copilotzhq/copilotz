@@ -133,6 +133,8 @@ agents: [{
     apiKey: "sk-...",           // Override env variable
     baseUrl: "...",             // Custom endpoint
     outputReasoning: false,     // Default true; whether to emit reasoning tokens ("thinking") during stream
+    estimateCost: true,         // Default true; estimate cost from OpenRouter pricing when native usage exists
+    pricingModelId: "openai/gpt-4o-mini", // Optional explicit OpenRouter model id override
   },
   allowedTools: ["*"],          // Tool whitelist
   allowedAgents: ["other"],     // Agent communication whitelist
@@ -149,6 +151,28 @@ agents: [{
   },
 }]
 ```
+
+### Cost Estimation
+
+Copilotz can estimate LLM call cost using OpenRouter's model pricing catalog.
+
+```typescript
+llmOptions: {
+  provider: "openai",
+  model: "gpt-5-mini",
+  estimateCost: true,                // Default: true
+  pricingModelId: "openai/gpt-5-mini", // Optional override when auto-mapping is not enough
+}
+```
+
+Behavior:
+
+- Cost estimation is enabled by default for LLM calls
+- Set `estimateCost: false` to opt out for an agent
+- Copilotz fetches and caches the OpenRouter models catalog lazily
+- Failures in pricing lookup never fail the LLM request; cost is simply omitted and a warning is logged
+- Cost is only estimated when the provider returned native usage data
+- When Copilotz falls back to its rough token heuristic, usage is still recorded but cost is not estimated
 
 ## Database
 

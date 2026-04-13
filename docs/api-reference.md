@@ -758,7 +758,24 @@ interface Edge {
   properties?: Record<string, any>;
   createdAt: string;
 }
+
+interface ProviderConfig {
+  provider: "openai" | "anthropic" | "gemini" | "groq" | "deepseek" | "ollama" | "minimax" | "xai";
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  outputReasoning?: boolean;
+  estimateCost?: boolean;
+  pricingModelId?: string;
+}
 ```
+
+### Usage and Cost Notes
+
+- Provider-native usage is preferred whenever the provider exposes token accounting
+- If native usage is unavailable, Copilotz falls back to a rough character-based token estimate
+- Cost estimation is enabled by default and uses OpenRouter pricing data
+- Cost is only estimated when usage came from the provider, not from the rough fallback heuristic
 
 ---
 
@@ -769,6 +786,7 @@ domain-specific helpers. Import from the `copilotz/server` entrypoint.
 
 ```typescript
 import {
+  createAdminHandlers,
   createAssetHandlers,
   createCollectionHandlers,
   createEventHandlers,
@@ -781,6 +799,7 @@ import {
 } from "copilotz/server";
 
 import type {
+  AdminHandlers,
   AssetHandlers,
   CollectionHandlers,
   EventHandlers,

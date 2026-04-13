@@ -61,6 +61,8 @@ llmOptions: {
   maxTokens: 4096,              // Max response length
   apiKey: "sk-...",             // Optional: override env variable
   outputReasoning: false,       // Default true; whether to emit reasoning tokens ("thinking") during stream
+  estimateCost: true,           // Default true; estimate cost from OpenRouter pricing when usage is native
+  pricingModelId: "openai/gpt-4o-mini", // Optional explicit OpenRouter model id
 }
 ```
 
@@ -127,6 +129,15 @@ const agent = {
 ```
 
 Fallbacks only run when the primary attempt fails before any visible streamed output is emitted.
+
+### Usage and Cost Metadata
+
+Copilotz records LLM usage metadata per call and can estimate cost from OpenRouter pricing:
+
+- `estimateCost` defaults to `true`
+- `pricingModelId` lets you override the OpenRouter model id for providers or local models that need explicit mapping
+- Cost estimation only runs when the provider returned native usage data
+- If the provider does not expose usage, Copilotz records an approximate token count and skips cost estimation
 
 ## Tool Permissions
 

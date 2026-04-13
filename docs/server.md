@@ -9,6 +9,7 @@ These helpers wrap `copilotz.ops` and `copilotz.collections` into domain-specifi
 ```typescript
 import { createCopilotz } from "copilotz";
 import {
+  createAdminHandlers,
   createThreadHandlers,
   createMessageHandlers,
   createEventHandlers,
@@ -30,6 +31,7 @@ const events = createEventHandlers(copilotz);
 const assets = createAssetHandlers(copilotz);
 const collections = createCollectionHandlers(copilotz);
 const rest = createRestHandlers(copilotz);
+const admin = createAdminHandlers(copilotz);
 ```
 
 ## Handler Families
@@ -170,6 +172,25 @@ const created = await rest.create("messages", { content: "Hello", threadId: "thr
 const updated = await rest.update("threads", "thread-abc", { status: "archived" });
 await rest.delete("threads", "thread-abc");
 ```
+
+### Admin
+
+Read framework-level operational metrics and summaries.
+
+```typescript
+const admin = createAdminHandlers(copilotz);
+
+const overview = await admin.getOverview({ namespace: "tenant-acme" });
+const activity = await admin.getActivitySeries({ interval: "day" });
+const agents = await admin.listAgents({ search: "support" });
+```
+
+Admin overview and agent summaries include aggregated LLM usage totals:
+
+- token totals: input, output, reasoning, cache-read, cache-write, total
+- cost totals: input, output, reasoning, cache-read, cache-write, total
+
+These values are aggregated from persisted `llm_usage` nodes and only include cost for calls where Copilotz had provider-native usage data.
 
 ### Standalone Utilities
 

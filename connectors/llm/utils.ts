@@ -1,5 +1,3 @@
-import { Tiktoken } from "js-tiktoken";
-
 import type {
   ChatContentPart,
   ChatMessage,
@@ -30,7 +28,7 @@ const INTERNAL_LITERAL_CONTROL_TAGS = [
   NO_RESPONSE_SELF_CLOSING_TAG,
   NO_RESPONSE_EMPTY_BLOCK_TAG,
 ];
-let tokenizerBasePromise: Promise<Record<string, unknown>> | null = null;
+const APPROX_CHARS_PER_TOKEN = 4;
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -455,23 +453,15 @@ function limitMessageLength(
 }
 
 /**
- * Counts tokens in messages and response using tiktoken
+ * Counts tokens in messages and response using a lightweight character-based approximation.
  */
 export async function countTokens(
   messages: ChatMessage[],
   response: string,
 ): Promise<number> {
-  try {
-    const allContent = messages.map((m) => contentToText(m.content)).join(" ") +
-      response;
-    return await countTextTokens(allContent);
-  } catch (error) {
-    console.warn("Token counting failed:", error);
-    // Fallback to approximate count (4 chars per token)
-    const totalText = messages.map((m) => contentToText(m.content)).join(" ") +
-      response;
-    return Math.ceil(totalText.length / 4);
-  }
+  const totalText = messages.map((m) => contentToText(m.content)).join(" ") +
+    response;
+  return approximateTokenCount(totalText);
 }
 
 export async function estimateUsage(
@@ -479,56 +469,23 @@ export async function estimateUsage(
   response: string,
   status: TokenUsage["status"],
 ): Promise<TokenUsage> {
-  try {
-    const inputText = messages.map((m) => contentToText(m.content)).join(" ");
-    const outputText = response;
-    const totalText = inputText + outputText;
-    const [inputTokens, outputTokens, totalTokens] = await Promise.all([
-      countTextTokens(inputText),
-      countTextTokens(outputText),
-      countTextTokens(totalText),
-    ]);
+  const inputText = messages.map((m) => contentToText(m.content)).join(" ");
+  const outputText = response;
+  const totalText = inputText + outputText;
 
-    return {
-      inputTokens,
-      outputTokens,
-      totalTokens,
-      source: "estimated",
-      status,
-      rawUsage: null,
-    };
-  } catch (error) {
-    console.warn("Usage estimation failed:", error);
-    return {
-      inputTokens: Math.ceil(messages.map((m) => contentToText(m.content)).join(" ").length / 4),
-      outputTokens: Math.ceil(response.length / 4),
-      totalTokens: Math.ceil(
-        (messages.map((m) => contentToText(m.content)).join(" ").length +
-          response.length) / 4,
-      ),
-      source: "estimated",
-      status,
-      rawUsage: null,
-    };
-  }
+  return {
+    inputTokens: approximateTokenCount(inputText),
+    outputTokens: approximateTokenCount(outputText),
+    totalTokens: approximateTokenCount(totalText),
+    source: "estimated",
+    status,
+    rawUsage: null,
+  };
 }
 
-async function countTextTokens(text: string): Promise<number> {
-  const base = await getTokenizerBase();
-  const encoding = new Tiktoken(
-    base as unknown as ConstructorParameters<typeof Tiktoken>[0],
-  );
-  const tokens = encoding.encode(text);
-  return tokens.length;
-}
-
-async function getTokenizerBase(): Promise<Record<string, unknown>> {
-  if (!tokenizerBasePromise) {
-    tokenizerBasePromise = fetch("https://tiktoken.pages.dev/js/o200k_base.json", {
-      cache: "force-cache",
-    }).then((res) => res.json());
-  }
-  return await tokenizerBasePromise;
+function approximateTokenCount(text: string): number {
+  if (!text) return 0;
+  return Math.ceil(text.length / APPROX_CHARS_PER_TOKEN);
 }
 
 /**

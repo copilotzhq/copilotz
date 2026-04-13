@@ -1,8 +1,8 @@
 /**
  * Text Chunker Utility
- * 
+ *
  * Splits text into chunks for embedding and retrieval.
- * Uses tiktoken for accurate token counting.
+ * Uses lightweight token approximation for sizing decisions.
  */
 
 /**
@@ -407,4 +407,3 @@ export async function hashContentSHA256(content: string): Promise<string> {
     return hashContent(content);
   }
 }
-

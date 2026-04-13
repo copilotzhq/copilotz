@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.28.0",
+  "version": "0.28.1",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -35,7 +35,6 @@
     "omnipg": "jsr:@oxian/ominipg@0.5.10",
     "zod": "npm:zod@3.24.8",
     "yaml": "npm:yaml@2.8.0",
-    "js-tiktoken": "npm:js-tiktoken@1.0.21/lite",
     "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client",
     "ulid": "jsr:@std/ulid@1.0.0",
     "json-schema-to-ts": "npm:json-schema-to-ts@3.1.1"

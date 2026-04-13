@@ -1,5 +1,6 @@
 import { chat } from "@/connectors/llm/index.ts";
 import type {
+  CostBreakdown,
   ChatMessage,
   ChatRequest,
   ChatResponse,
@@ -436,6 +437,9 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     const usage: TokenUsage | undefined = ("usage" in llmResponse)
       ? (llmResponse as unknown as { usage?: TokenUsage }).usage
       : undefined;
+    const cost: CostBreakdown | undefined = ("cost" in llmResponse)
+      ? (llmResponse as unknown as { cost?: CostBreakdown }).cost
+      : undefined;
 
     if (usage) {
       try {
@@ -457,6 +461,15 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             cacheReadInputTokens: usage.cacheReadInputTokens ?? null,
             cacheCreationInputTokens: usage.cacheCreationInputTokens ?? null,
             totalTokens: usage.totalTokens ?? null,
+            inputCostUsd: cost?.inputCostUsd ?? null,
+            outputCostUsd: cost?.outputCostUsd ?? null,
+            reasoningCostUsd: cost?.reasoningCostUsd ?? null,
+            cacheReadInputCostUsd: cost?.cacheReadInputCostUsd ?? null,
+            cacheCreationInputCostUsd: cost?.cacheCreationInputCostUsd ?? null,
+            totalCostUsd: cost?.totalCostUsd ?? null,
+            pricingModelId: cost?.pricingModelId ?? null,
+            pricingSource: cost?.source ?? null,
+            pricingCurrency: cost?.currency ?? null,
             source: usage.source,
             status: usage.status,
             rawUsage: usage.rawUsage ?? null,

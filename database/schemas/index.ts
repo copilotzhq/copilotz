@@ -331,6 +331,8 @@ const schemaDefinition = {
             responseType: { type: "string", enum: ["text", "json"] },
             stream: { type: "boolean" },
             outputReasoning: { type: "boolean" },
+            estimateCost: { type: "boolean" },
+            pricingModelId: { type: "string" },
             topP: { type: "number" },
             topK: { type: "number" },
             presencePenalty: { type: "number" },

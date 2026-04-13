@@ -9,6 +9,7 @@ import type {
   ToolInvocation,
 } from "./types.ts";
 import { getProvider } from "./providers/index.ts";
+import { estimateUsageCost } from "./pricing.ts";
 import {
   countTokens,
   createMockResponse,
@@ -305,6 +306,7 @@ export async function chat(
         : "completed";
       const usage = normalizeProviderUsage(streamResult.usage, usageStatus) ??
         await estimateUsage(messages, streamResult.content, usageStatus);
+      const cost = await estimateUsageCost(attemptConfig, usage ?? undefined);
       const totalTokens = usage.totalTokens ??
         await countTokens(messages, streamResult.content);
 
@@ -314,6 +316,7 @@ export async function chat(
         ...(streamResult.reasoning && { reasoning: streamResult.reasoning }),
         tokens: totalTokens,
         usage,
+        ...(cost ? { cost } : {}),
         provider: attemptProvider,
         model: attemptConfig.model,
         ...(toolCalls.length > 0 && { toolCalls }),

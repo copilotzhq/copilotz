@@ -59,6 +59,8 @@ export interface ProviderConfigBase {
   responseType?: "text" | "json";
   stream?: boolean;
   outputReasoning?: boolean; // Whether to output thinking/reasoning tokens during stream (default true)
+  estimateCost?: boolean; // Whether to estimate cost using OpenRouter pricing data (default true)
+  pricingModelId?: string; // Explicit OpenRouter model id override for cost estimation
 
   // Advanced sampling parameters
   topP?: number;
@@ -186,6 +188,7 @@ export interface ChatResponse {
   reasoning?: string;
   tokens: number;
   usage?: TokenUsage;
+  cost?: CostBreakdown;
   provider?: ProviderName;
   model?: string;
   toolCalls?: ToolInvocation[];
@@ -229,6 +232,18 @@ export interface ProviderUsageUpdate {
 export interface TokenUsage extends ProviderUsageUpdate {
   source: "provider" | "estimated";
   status: "completed" | "aborted";
+}
+
+export interface CostBreakdown {
+  source: "openrouter";
+  currency: "USD";
+  pricingModelId: string;
+  inputCostUsd?: number;
+  outputCostUsd?: number;
+  reasoningCostUsd?: number;
+  cacheReadInputCostUsd?: number;
+  cacheCreationInputCostUsd?: number;
+  totalCostUsd: number;
 }
 
 // Options for the shared processStream in utils.ts

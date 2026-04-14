@@ -860,19 +860,30 @@ export function detectAssetFromValue(value: unknown): DetectedAsset | null {
 	return null;
 }
 
-export async function normalizeOutputToAssetRefs(value: unknown, store?: AssetStore): Promise<{ normalized: unknown; created: Array<{ ref: AssetRef; mime: string; kind: DetectedAsset["kind"] }> }> {
-	if (!store) return { normalized: value, created: [] };
+export type AssetSaveError = { mime: string; kind: DetectedAsset["kind"]; error: string };
+
+export async function normalizeOutputToAssetRefs(value: unknown, store?: AssetStore): Promise<{ normalized: unknown; created: Array<{ ref: AssetRef; mime: string; kind: DetectedAsset["kind"] }>; errors: AssetSaveError[] }> {
+	if (!store) return { normalized: value, created: [], errors: [] };
 
 	const created: Array<{ ref: AssetRef; mime: string; kind: DetectedAsset["kind"] }> = [];
+	const errors: AssetSaveError[] = [];
 
 	const visit = async (node: unknown): Promise<unknown> => {
 		const single = detectAssetFromValue(node);
 		if (single) {
-			const { assetId } = await store.save(single.bytes, single.mime);
-			const ref = buildAssetRefForStore(store, assetId);
-			created.push({ ref, mime: single.mime, kind: single.kind });
-			// Replace with a compact ref object
-			return { assetRef: ref, mimeType: single.mime, kind: single.kind };
+			try {
+				const { assetId } = await store.save(single.bytes, single.mime);
+				const ref = buildAssetRefForStore(store, assetId);
+				created.push({ ref, mime: single.mime, kind: single.kind });
+				return { assetRef: ref, mimeType: single.mime, kind: single.kind };
+			} catch (err) {
+				const errMsg = err instanceof Error ? err.message : String(err);
+				console.warn(
+					`[copilotz:assets] Failed to save ${single.kind} asset (${single.mime}, ${single.bytes.byteLength} bytes): ${errMsg}`,
+				);
+				errors.push({ mime: single.mime, kind: single.kind, error: errMsg });
+				return { mimeType: single.mime, kind: single.kind, error: "asset_save_failed" };
+			}
 		}
 
 		if (Array.isArray(node)) {
@@ -891,7 +902,7 @@ export async function normalizeOutputToAssetRefs(value: unknown, store?: AssetSt
 	};
 
 	const normalized = await visit(value);
-	return { normalized, created };
+	return { normalized, created, errors };
 }
 
 // -----------------------------------------------------------------------------

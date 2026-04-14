@@ -185,10 +185,11 @@ const activity = await admin.getActivitySeries({ interval: "day" });
 const agents = await admin.listAgents({ search: "support" });
 ```
 
-Admin overview and agent summaries include aggregated LLM usage totals:
+Admin overview, activity buckets, and agent summaries include aggregated LLM usage totals:
 
 - token totals: input, output, reasoning, cache-read, cache-write, total
 - cost totals: input, output, reasoning, cache-read, cache-write, total
+- call totals: `totalCalls` on overview/activity, `llmCallCount` on agent summaries
 
 These values are aggregated from persisted `llm_usage` nodes and only include cost for calls where Copilotz had provider-native usage data.
 

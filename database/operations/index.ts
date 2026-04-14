@@ -137,6 +137,25 @@ export interface AdminAgentListOptions {
   configuredAgents?: AdminConfiguredAgent[];
 }
 
+export interface AdminUsageBreakdown {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  totalTokens: number;
+  inputCostUsd: number;
+  outputCostUsd: number;
+  reasoningCostUsd: number;
+  cacheReadInputCostUsd: number;
+  cacheCreationInputCostUsd: number;
+  totalCostUsd: number;
+}
+
+export interface AdminUsageTotals extends AdminUsageBreakdown {
+  totalCalls: number;
+}
+
 export interface AdminOverview {
   threadTotals: {
     total: number;
@@ -161,29 +180,14 @@ export interface AdminOverview {
     humans: number;
     agents: number;
   };
-  llmTotals: {
-    totalCalls: number;
-    inputTokens: number;
-    outputTokens: number;
-    reasoningTokens: number;
-    cacheReadInputTokens: number;
-    cacheCreationInputTokens: number;
-    totalTokens: number;
-    inputCostUsd: number;
-    outputCostUsd: number;
-    reasoningCostUsd: number;
-    cacheReadInputCostUsd: number;
-    cacheCreationInputCostUsd: number;
-    totalCostUsd: number;
-  };
+  llmTotals: AdminUsageTotals;
 }
 
-export interface AdminActivityPoint {
+export interface AdminActivityPoint extends AdminUsageTotals {
   bucket: string;
   messageCount: number;
-  llmCallCount: number;
   toolCallMessageCount: number;
-  totalTokens: number;
+  llmCallCount: number;
 }
 
 export interface AdminThreadSummary {
@@ -220,20 +224,88 @@ export interface AdminAgentSummary {
   messageCount: number;
   llmCallCount: number;
   toolCallMessageCount: number;
-  inputTokens: number;
-  outputTokens: number;
-  reasoningTokens: number;
-  cacheReadInputTokens: number;
-  cacheCreationInputTokens: number;
-  totalTokens: number;
-  inputCostUsd: number;
-  outputCostUsd: number;
-  reasoningCostUsd: number;
-  cacheReadInputCostUsd: number;
-  cacheCreationInputCostUsd: number;
-  totalCostUsd: number;
+  inputTokens: AdminUsageBreakdown["inputTokens"];
+  outputTokens: AdminUsageBreakdown["outputTokens"];
+  reasoningTokens: AdminUsageBreakdown["reasoningTokens"];
+  cacheReadInputTokens: AdminUsageBreakdown["cacheReadInputTokens"];
+  cacheCreationInputTokens: AdminUsageBreakdown["cacheCreationInputTokens"];
+  totalTokens: AdminUsageBreakdown["totalTokens"];
+  inputCostUsd: AdminUsageBreakdown["inputCostUsd"];
+  outputCostUsd: AdminUsageBreakdown["outputCostUsd"];
+  reasoningCostUsd: AdminUsageBreakdown["reasoningCostUsd"];
+  cacheReadInputCostUsd: AdminUsageBreakdown["cacheReadInputCostUsd"];
+  cacheCreationInputCostUsd: AdminUsageBreakdown["cacheCreationInputCostUsd"];
+  totalCostUsd: AdminUsageBreakdown["totalCostUsd"];
   lastActivityAt: string | null;
 }
+
+const ADMIN_USAGE_BREAKDOWN_FIELDS = [
+  { key: "inputTokens", inputKey: "inputTokens", inputCast: "bigint", outputCast: "bigint" },
+  { key: "outputTokens", inputKey: "outputTokens", inputCast: "bigint", outputCast: "bigint" },
+  {
+    key: "reasoningTokens",
+    inputKey: "reasoningTokens",
+    inputCast: "bigint",
+    outputCast: "bigint",
+  },
+  {
+    key: "cacheReadInputTokens",
+    inputKey: "cacheReadInputTokens",
+    inputCast: "bigint",
+    outputCast: "bigint",
+  },
+  {
+    key: "cacheCreationInputTokens",
+    inputKey: "cacheCreationInputTokens",
+    inputCast: "bigint",
+    outputCast: "bigint",
+  },
+  { key: "totalTokens", inputKey: "totalTokens", inputCast: "bigint", outputCast: "bigint" },
+  { key: "inputCostUsd", inputKey: "inputCostUsd", inputCast: "numeric", outputCast: "float8" },
+  {
+    key: "outputCostUsd",
+    inputKey: "outputCostUsd",
+    inputCast: "numeric",
+    outputCast: "float8",
+  },
+  {
+    key: "reasoningCostUsd",
+    inputKey: "reasoningCostUsd",
+    inputCast: "numeric",
+    outputCast: "float8",
+  },
+  {
+    key: "cacheReadInputCostUsd",
+    inputKey: "cacheReadInputCostUsd",
+    inputCast: "numeric",
+    outputCast: "float8",
+  },
+  {
+    key: "cacheCreationInputCostUsd",
+    inputKey: "cacheCreationInputCostUsd",
+    inputCast: "numeric",
+    outputCast: "float8",
+  },
+  {
+    key: "totalCostUsd",
+    inputKey: "totalCostUsd",
+    inputCast: "numeric",
+    outputCast: "float8",
+  },
+] as const satisfies ReadonlyArray<{
+  key: keyof AdminUsageBreakdown;
+  inputKey: keyof AdminUsageBreakdown;
+  inputCast: "bigint" | "numeric";
+  outputCast: "bigint" | "float8";
+}>;
+
+type AdminUsageBreakdownRow = {
+  [Field in keyof AdminUsageBreakdown]: number;
+};
+
+type AdminUsageTotalsRow = AdminUsageBreakdownRow & {
+  totalCalls: number;
+};
 
 // ============================================
 // KNOWLEDGE GRAPH TYPES
@@ -1448,6 +1520,56 @@ export function createOperations(
     return Number.isFinite(numeric) ? numeric : 0;
   };
 
+  const buildAdminUsageSumSelects = (dataColumn: string): string =>
+    ADMIN_USAGE_BREAKDOWN_FIELDS.map((field) =>
+      `COALESCE(SUM(COALESCE(NULLIF(${dataColumn}->>'${field.inputKey}', '')::${field.inputCast}, 0)), 0)::${field.outputCast} AS "${field.key}"`
+    ).join(",\n         ");
+
+  const createEmptyAdminUsageBreakdown = (): AdminUsageBreakdown => ({
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    totalTokens: 0,
+    inputCostUsd: 0,
+    outputCostUsd: 0,
+    reasoningCostUsd: 0,
+    cacheReadInputCostUsd: 0,
+    cacheCreationInputCostUsd: 0,
+    totalCostUsd: 0,
+  });
+
+  const toAdminUsageBreakdown = (
+    value?: Partial<Record<keyof AdminUsageBreakdown, unknown>> | null,
+  ): AdminUsageBreakdown => ({
+    inputTokens: toAdminNumber(value?.inputTokens),
+    outputTokens: toAdminNumber(value?.outputTokens),
+    reasoningTokens: toAdminNumber(value?.reasoningTokens),
+    cacheReadInputTokens: toAdminNumber(value?.cacheReadInputTokens),
+    cacheCreationInputTokens: toAdminNumber(value?.cacheCreationInputTokens),
+    totalTokens: toAdminNumber(value?.totalTokens),
+    inputCostUsd: toAdminNumber(value?.inputCostUsd),
+    outputCostUsd: toAdminNumber(value?.outputCostUsd),
+    reasoningCostUsd: toAdminNumber(value?.reasoningCostUsd),
+    cacheReadInputCostUsd: toAdminNumber(value?.cacheReadInputCostUsd),
+    cacheCreationInputCostUsd: toAdminNumber(value?.cacheCreationInputCostUsd),
+    totalCostUsd: toAdminNumber(value?.totalCostUsd),
+  });
+
+  const createEmptyAdminUsageTotals = (): AdminUsageTotals => ({
+    totalCalls: 0,
+    ...createEmptyAdminUsageBreakdown(),
+  });
+
+  const toAdminUsageTotals = (
+    value?: Partial<Record<keyof AdminUsageTotals, unknown>> | null,
+    callCountKey: keyof AdminUsageTotals = "totalCalls",
+  ): AdminUsageTotals => ({
+    totalCalls: toAdminNumber(value?.[callCountKey]),
+    ...toAdminUsageBreakdown(value),
+  });
+
   const normalizeAdminSearch = (
     value: string | undefined,
   ): string | null => {
@@ -1652,35 +1774,10 @@ export function createOperations(
     pushTimeRangeFilters(usageParams, usageFilters, `"created_at"`, options);
     const usageWhere = `WHERE ${usageFilters.join(" AND ")}`;
 
-    const usageResult = await db.query<{
-      totalCalls: number;
-      inputTokens: number;
-      outputTokens: number;
-      reasoningTokens: number;
-      cacheReadInputTokens: number;
-      cacheCreationInputTokens: number;
-      totalTokens: number;
-      inputCostUsd: number;
-      outputCostUsd: number;
-      reasoningCostUsd: number;
-      cacheReadInputCostUsd: number;
-      cacheCreationInputCostUsd: number;
-      totalCostUsd: number;
-    }>(
+    const usageResult = await db.query<AdminUsageTotalsRow>(
       `SELECT
          COUNT(*)::int AS "totalCalls",
-         COALESCE(SUM(COALESCE(NULLIF("data"->>'inputTokens', '')::bigint, 0)), 0)::bigint AS "inputTokens",
-         COALESCE(SUM(COALESCE(NULLIF("data"->>'outputTokens', '')::bigint, 0)), 0)::bigint AS "outputTokens",
-         COALESCE(SUM(COALESCE(NULLIF("data"->>'reasoningTokens', '')::bigint, 0)), 0)::bigint AS "reasoningTokens",
-         COALESCE(SUM(COALESCE(NULLIF("data"->>'cacheReadInputTokens', '')::bigint, 0)), 0)::bigint AS "cacheReadInputTokens",
-         COALESCE(SUM(COALESCE(NULLIF("data"->>'cacheCreationInputTokens', '')::bigint, 0)), 0)::bigint AS "cacheCreationInputTokens",
-         COALESCE(SUM(COALESCE(NULLIF("data"->>'totalTokens', '')::bigint, 0)), 0)::bigint AS "totalTokens",
-         COALESCE(SUM(COALESCE(NULLIF("data"->>'inputCostUsd', '')::numeric, 0)), 0)::float8 AS "inputCostUsd",
-         COALESCE(SUM(COALESCE(NULLIF("data"->>'outputCostUsd', '')::numeric, 0)), 0)::float8 AS "outputCostUsd",
-         COALESCE(SUM(COALESCE(NULLIF("data"->>'reasoningCostUsd', '')::numeric, 0)), 0)::float8 AS "reasoningCostUsd",
-         COALESCE(SUM(COALESCE(NULLIF("data"->>'cacheReadInputCostUsd', '')::numeric, 0)), 0)::float8 AS "cacheReadInputCostUsd",
-         COALESCE(SUM(COALESCE(NULLIF("data"->>'cacheCreationInputCostUsd', '')::numeric, 0)), 0)::float8 AS "cacheCreationInputCostUsd",
-         COALESCE(SUM(COALESCE(NULLIF("data"->>'totalCostUsd', '')::numeric, 0)), 0)::float8 AS "totalCostUsd"
+         ${buildAdminUsageSumSelects(`"data"`)}
        FROM "nodes"
        ${usageWhere}`,
       usageParams,
@@ -1709,21 +1806,7 @@ export function createOperations(
       humans: 0,
       agents: 0,
     };
-    const llmTotals = usageResult.rows[0] ?? {
-      totalCalls: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      reasoningTokens: 0,
-      cacheReadInputTokens: 0,
-      cacheCreationInputTokens: 0,
-      totalTokens: 0,
-      inputCostUsd: 0,
-      outputCostUsd: 0,
-      reasoningCostUsd: 0,
-      cacheReadInputCostUsd: 0,
-      cacheCreationInputCostUsd: 0,
-      totalCostUsd: 0,
-    };
+    const llmTotals = usageResult.rows[0] ?? createEmptyAdminUsageTotals();
 
     return {
       threadTotals: {
@@ -1749,21 +1832,7 @@ export function createOperations(
         humans: toAdminNumber(participantTotals.humans),
         agents: toAdminNumber(participantTotals.agents),
       },
-      llmTotals: {
-        totalCalls: toAdminNumber(llmTotals.totalCalls),
-        inputTokens: toAdminNumber(llmTotals.inputTokens),
-        outputTokens: toAdminNumber(llmTotals.outputTokens),
-        reasoningTokens: toAdminNumber(llmTotals.reasoningTokens),
-        cacheReadInputTokens: toAdminNumber(llmTotals.cacheReadInputTokens),
-        cacheCreationInputTokens: toAdminNumber(llmTotals.cacheCreationInputTokens),
-        totalTokens: toAdminNumber(llmTotals.totalTokens),
-        inputCostUsd: toAdminNumber(llmTotals.inputCostUsd),
-        outputCostUsd: toAdminNumber(llmTotals.outputCostUsd),
-        reasoningCostUsd: toAdminNumber(llmTotals.reasoningCostUsd),
-        cacheReadInputCostUsd: toAdminNumber(llmTotals.cacheReadInputCostUsd),
-        cacheCreationInputCostUsd: toAdminNumber(llmTotals.cacheCreationInputCostUsd),
-        totalCostUsd: toAdminNumber(llmTotals.totalCostUsd),
-      },
+      llmTotals: toAdminUsageTotals(llmTotals),
     };
   };
 
@@ -1786,9 +1855,7 @@ export function createOperations(
       bucket: Date | string;
       messageCount: number;
       toolCallMessageCount: number;
-      llmCallCount: number;
-      totalTokens: number;
-    }>(
+    } & AdminUsageTotalsRow>(
       `WITH "message_series" AS (
          SELECT
            DATE_TRUNC('${interval}', "created_at") AS "bucket",
@@ -1806,8 +1873,8 @@ export function createOperations(
        "usage_series" AS (
          SELECT
            DATE_TRUNC('${interval}', "created_at") AS "bucket",
-           COUNT(*)::int AS "llmCallCount",
-           COALESCE(SUM(COALESCE(NULLIF("data"->>'totalTokens', '')::bigint, 0)), 0)::bigint AS "totalTokens"
+           COUNT(*)::int AS "totalCalls",
+           ${buildAdminUsageSumSelects(`"data"`)}
          FROM "nodes"
          ${usageWhere}
          GROUP BY 1
@@ -1821,8 +1888,10 @@ export function createOperations(
          "all_buckets"."bucket" AS "bucket",
          COALESCE("message_series"."messageCount", 0)::int AS "messageCount",
          COALESCE("message_series"."toolCallMessageCount", 0)::int AS "toolCallMessageCount",
-         COALESCE("usage_series"."llmCallCount", 0)::int AS "llmCallCount",
-         COALESCE("usage_series"."totalTokens", 0)::bigint AS "totalTokens"
+         COALESCE("usage_series"."totalCalls", 0)::int AS "totalCalls",
+         ${ADMIN_USAGE_BREAKDOWN_FIELDS.map((field) =>
+           `COALESCE("usage_series"."${field.key}", 0)::${field.outputCast} AS "${field.key}"`
+         ).join(",\n         ")}
        FROM "all_buckets"
        LEFT JOIN "message_series" ON "message_series"."bucket" = "all_buckets"."bucket"
        LEFT JOIN "usage_series" ON "usage_series"."bucket" = "all_buckets"."bucket"
@@ -1833,9 +1902,9 @@ export function createOperations(
     return seriesResult.rows.map((row) => ({
       bucket: toAdminIso(row.bucket) ?? new Date(row.bucket).toISOString(),
       messageCount: toAdminNumber(row.messageCount),
-      llmCallCount: toAdminNumber(row.llmCallCount),
       toolCallMessageCount: toAdminNumber(row.toolCallMessageCount),
-      totalTokens: toAdminNumber(row.totalTokens),
+      llmCallCount: toAdminNumber(row.totalCalls),
+      ...toAdminUsageTotals(row),
     }));
   };
 
@@ -2088,21 +2157,9 @@ export function createOperations(
       messageCount: number;
       toolCallMessageCount: number;
       llmCallCount: number;
-      inputTokens: number;
-      outputTokens: number;
-      reasoningTokens: number;
-      cacheReadInputTokens: number;
-      cacheCreationInputTokens: number;
-      totalTokens: number;
-      inputCostUsd: number;
-      outputCostUsd: number;
-      reasoningCostUsd: number;
-      cacheReadInputCostUsd: number;
-      cacheCreationInputCostUsd: number;
-      totalCostUsd: number;
       lastActivityAt: Date | string | null;
       updatedAt: Date | string | null;
-    }>(
+    } & AdminUsageBreakdownRow>(
       `WITH "message_stats" AS (
          SELECT
            COALESCE(m."data"->>'senderId', '') AS "agentId",
@@ -2122,18 +2179,7 @@ export function createOperations(
          SELECT
            COALESCE(u."data"->>'agentId', '') AS "agentId",
            COUNT(*)::int AS "llmCallCount",
-           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'inputTokens', '')::bigint, 0)), 0)::bigint AS "inputTokens",
-           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'outputTokens', '')::bigint, 0)), 0)::bigint AS "outputTokens",
-           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'reasoningTokens', '')::bigint, 0)), 0)::bigint AS "reasoningTokens",
-           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'cacheReadInputTokens', '')::bigint, 0)), 0)::bigint AS "cacheReadInputTokens",
-           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'cacheCreationInputTokens', '')::bigint, 0)), 0)::bigint AS "cacheCreationInputTokens",
-           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'totalTokens', '')::bigint, 0)), 0)::bigint AS "totalTokens",
-           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'inputCostUsd', '')::numeric, 0)), 0)::float8 AS "inputCostUsd",
-           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'outputCostUsd', '')::numeric, 0)), 0)::float8 AS "outputCostUsd",
-           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'reasoningCostUsd', '')::numeric, 0)), 0)::float8 AS "reasoningCostUsd",
-           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'cacheReadInputCostUsd', '')::numeric, 0)), 0)::float8 AS "cacheReadInputCostUsd",
-           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'cacheCreationInputCostUsd', '')::numeric, 0)), 0)::float8 AS "cacheCreationInputCostUsd",
-           COALESCE(SUM(COALESCE(NULLIF(u."data"->>'totalCostUsd', '')::numeric, 0)), 0)::float8 AS "totalCostUsd",
+           ${buildAdminUsageSumSelects(`u."data"`)},
            MAX(u."created_at") AS "lastActivityAt"
          FROM "nodes" AS u
          WHERE ${usageStatsScope.join(" AND ")}
@@ -2147,18 +2193,9 @@ export function createOperations(
          COALESCE("message_stats"."messageCount", 0)::int AS "messageCount",
          COALESCE("message_stats"."toolCallMessageCount", 0)::int AS "toolCallMessageCount",
          COALESCE("usage_stats"."llmCallCount", 0)::int AS "llmCallCount",
-         COALESCE("usage_stats"."inputTokens", 0)::bigint AS "inputTokens",
-         COALESCE("usage_stats"."outputTokens", 0)::bigint AS "outputTokens",
-         COALESCE("usage_stats"."reasoningTokens", 0)::bigint AS "reasoningTokens",
-         COALESCE("usage_stats"."cacheReadInputTokens", 0)::bigint AS "cacheReadInputTokens",
-         COALESCE("usage_stats"."cacheCreationInputTokens", 0)::bigint AS "cacheCreationInputTokens",
-         COALESCE("usage_stats"."totalTokens", 0)::bigint AS "totalTokens",
-         COALESCE("usage_stats"."inputCostUsd", 0)::float8 AS "inputCostUsd",
-         COALESCE("usage_stats"."outputCostUsd", 0)::float8 AS "outputCostUsd",
-         COALESCE("usage_stats"."reasoningCostUsd", 0)::float8 AS "reasoningCostUsd",
-         COALESCE("usage_stats"."cacheReadInputCostUsd", 0)::float8 AS "cacheReadInputCostUsd",
-         COALESCE("usage_stats"."cacheCreationInputCostUsd", 0)::float8 AS "cacheCreationInputCostUsd",
-         COALESCE("usage_stats"."totalCostUsd", 0)::float8 AS "totalCostUsd",
+         ${ADMIN_USAGE_BREAKDOWN_FIELDS.map((field) =>
+           `COALESCE("usage_stats"."${field.key}", 0)::${field.outputCast} AS "${field.key}"`
+         ).join(",\n         ")},
          COALESCE(
            GREATEST(
              "message_stats"."lastActivityAt",
@@ -2199,18 +2236,7 @@ export function createOperations(
         messageCount: toAdminNumber(row.messageCount),
         llmCallCount: toAdminNumber(row.llmCallCount),
         toolCallMessageCount: toAdminNumber(row.toolCallMessageCount),
-        inputTokens: toAdminNumber(row.inputTokens),
-        outputTokens: toAdminNumber(row.outputTokens),
-        reasoningTokens: toAdminNumber(row.reasoningTokens),
-        cacheReadInputTokens: toAdminNumber(row.cacheReadInputTokens),
-        cacheCreationInputTokens: toAdminNumber(row.cacheCreationInputTokens),
-        totalTokens: toAdminNumber(row.totalTokens),
-        inputCostUsd: toAdminNumber(row.inputCostUsd),
-        outputCostUsd: toAdminNumber(row.outputCostUsd),
-        reasoningCostUsd: toAdminNumber(row.reasoningCostUsd),
-        cacheReadInputCostUsd: toAdminNumber(row.cacheReadInputCostUsd),
-        cacheCreationInputCostUsd: toAdminNumber(row.cacheCreationInputCostUsd),
-        totalCostUsd: toAdminNumber(row.totalCostUsd),
+        ...toAdminUsageBreakdown(row),
         lastActivityAt: toAdminIso(row.lastActivityAt),
       });
     }
@@ -2235,18 +2261,7 @@ export function createOperations(
         messageCount: 0,
         llmCallCount: 0,
         toolCallMessageCount: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        reasoningTokens: 0,
-        cacheReadInputTokens: 0,
-        cacheCreationInputTokens: 0,
-        totalTokens: 0,
-        inputCostUsd: 0,
-        outputCostUsd: 0,
-        reasoningCostUsd: 0,
-        cacheReadInputCostUsd: 0,
-        cacheCreationInputCostUsd: 0,
-        totalCostUsd: 0,
+        ...createEmptyAdminUsageBreakdown(),
         lastActivityAt: null,
       });
     }

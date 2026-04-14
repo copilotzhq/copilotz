@@ -9,6 +9,7 @@ import {
     buildAssetRefForStore,
     bytesToBase64,
     type AssetStore,
+    type AssetSaveError,
 } from "@/utils/assets.ts";
 
 type AttachmentKind = "image" | "audio" | "file";
@@ -401,10 +402,32 @@ export async function processAssetsForNewMessage(args: {
                         kind: c.kind === "image" || c.kind === "audio" || c.kind === "file" ? c.kind : "file",
                     });
                 }
-            } catch (err) {
-                if (shouldDebugAssets()) {
-                    console.warn("[assets] normalize tool output failed:", err);
+                if (normalized.errors.length > 0) {
+                    const toolMeta = entry as { tool?: { name?: string }; id?: string };
+                    console.warn(
+                        `[copilotz:assets] ${normalized.errors.length} asset(s) failed to save in tool "${toolMeta.tool?.name ?? "unknown"}" output. ` +
+                        `Data URLs for failed assets were stripped to prevent LLM context bloat. ` +
+                        `Errors: ${normalized.errors.map((e: AssetSaveError) => `${e.kind}/${e.mime}: ${e.error}`).join("; ")}`,
+                    );
+                    for (const saveErr of normalized.errors) {
+                        await emitAssetError({
+                            context,
+                            event,
+                            threadId,
+                            senderType,
+                            toolCallMetadata: toolCallEntries,
+                            info: { error: new Error(saveErr.error), source: "tool_output", kind: saveErr.kind === "image" || saveErr.kind === "audio" ? saveErr.kind : "file", mime: saveErr.mime },
+                        });
+                    }
                 }
+            } catch (err) {
+                const toolMeta = entry as { tool?: { name?: string }; id?: string };
+                console.warn(
+                    `[copilotz:assets] Tool output normalization failed entirely for tool "${toolMeta.tool?.name ?? "unknown"}". ` +
+                    `Falling back to sanitized output (data URLs stripped). ` +
+                    `Error: ${err instanceof Error ? err.message : String(err)}`,
+                );
+                (entry as { output?: unknown }).output = sanitizeGeneratedAssetsInValue(maybeOutput);
                 await emitAssetError({
                     context,
                     event,
@@ -413,7 +436,6 @@ export async function processAssetsForNewMessage(args: {
                     toolCallMetadata: toolCallEntries,
                     info: { error: err, source: "tool_output" },
                 });
-                // ignore normalization errors, keep raw output
             }
         }
     }

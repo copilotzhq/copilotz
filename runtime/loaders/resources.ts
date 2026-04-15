@@ -352,7 +352,12 @@ async function loadProcessorsByManifest(
 
 /**
  * Generic loader for extensible resource types (llm, embeddings, storage, collections, etc.).
- * Tries three conventions in order:
+ *
+ * First tries a barrel file at `<type>/mod.ts` — a single import that exports
+ * all resources by name. This avoids per-name speculative imports, which is
+ * critical for remote URLs where each miss is an HTTP 404 roundtrip.
+ *
+ * If no barrel file exists, falls back to per-name convention probing:
  *   1. Directory with `config.ts` + `adapter.ts` (provider pattern)
  *   2. Single `<name>.ts` file (collection pattern)
  *   3. Directory with `index.ts`
@@ -362,6 +367,17 @@ async function loadGenericByManifest(
   resourceType: string,
   names: string[],
 ): Promise<unknown[]> {
+  // Fast path: try barrel file that exports all resources for this type
+  const barrelUrl = joinUrl(baseUrl, resourceType, "mod.ts");
+  const barrel = await importModuleSafe(barrelUrl);
+  if (barrel && typeof barrel === "object") {
+    const barrelMap = barrel as Record<string, unknown>;
+    return names
+      .map((name) => barrelMap[name] ?? null)
+      .filter((r) => r !== null);
+  }
+
+  // Slow path: per-name convention probing (fine for local, costly for remote)
   const settled = await Promise.all(names.map(async (name) => {
     const resourceUrl = joinUrl(baseUrl, resourceType, name);
 

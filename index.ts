@@ -1037,7 +1037,6 @@ export async function createCopilotz(
   let resolvedProcessors = [
     ...(userResources?.processors ?? []),
     ...(config.processors ?? []),
-    ...(bundledResources.processors ?? []),
   ];
   logInit("mergeResources", startedAt);
 

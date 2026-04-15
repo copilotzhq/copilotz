@@ -5,6 +5,7 @@
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
+    "./server": "./server/index.ts",
     "./create": "./create/mod.ts"
   },  
   "unstable": [

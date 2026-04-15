@@ -1,7 +1,7 @@
 import type { CopilotzDb } from "@/database/index.ts";
-import type { ChatContext, Event, NewEvent, NewUnknownEvent, ContentStreamData, MessagePayload, TokenEventPayload, Agent, Tool } from "@/interfaces/index.ts";
+import type { ChatContext, Event, NewEvent, NewUnknownEvent, ContentStreamData, MessagePayload, TokenEventPayload, Agent, Tool } from "@/types/index.ts";
 import type { EventBase } from "@/database/schemas/index.ts";
-import { startThreadEventWorker } from "@/event-processors/index.ts";
+import { startThreadEventWorker } from "@/runtime/event-engine.ts";
 import { normalizeInboundRunMessage } from "@/utils/inbound-message.ts";
 import { ulid } from "ulid";
 

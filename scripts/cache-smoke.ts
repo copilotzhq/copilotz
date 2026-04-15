@@ -4,8 +4,8 @@
  * Usage:
  *   deno run -A --env-file=../../clients/mobizap/.env scripts/cache-smoke.ts
  */
-import { chat } from "../connectors/llm/index.ts";
-import type { ProviderName } from "../connectors/llm/types.ts";
+import { chat } from "../runtime/llm/index.ts";
+import type { ProviderName } from "../runtime/llm/types.ts";
 
 const env = Deno.env.toObject();
 const provider = (Deno.args[0] || "openai") as ProviderName;

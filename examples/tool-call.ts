@@ -9,10 +9,10 @@
  */
 import process from "node:process";
 import { createCopilotz } from "../index.ts";
-import type { ToolInvocation } from "../connectors/llm/types.ts";
+import type { ToolInvocation } from "../runtime/llm/types.ts";
 
 // 1. Read the API key
-const API_KEY = Deno.env.get("API_KEY") || Deno.env.get("DEFAULT_OPENAI_KEY") || Deno.env.get("OPENAI_API_KEY");
+const API_KEY = Deno.env.get("API_KEY") || Deno.env.get("MINIMAX_KEY") || Deno.env.get("DEFAULT_OPENAI_KEY") || Deno.env.get("OPENAI_API_KEY");
 if (!API_KEY) {
   console.error(
     "❌  API_KEY is not set.\n   Run with: deno run -A --env examples/tool-call.ts",
@@ -31,7 +31,7 @@ const copilotz = await createCopilotz({
       llmOptions: { 
         provider: "minimax", 
         model: "MiniMax-M2.7", 
-        apiKey: API_KEY 
+        apiKey: API_KEY,
       },
       allowedTools: ["get_current_time"],
     },
@@ -81,12 +81,22 @@ const result = await copilotz.run(
 
 // 4. Stream response to terminal
 process.stdout.write("🤖 Assistant: ");
+let isThinking = false;
 for await (const event of result.events) {
   if (event.type === "TOKEN") {
-    const payload = event.payload as { token?: string };
-    if (payload.token) {
-      await Deno.stdout.write(new TextEncoder().encode(payload.token));
+    const payload = event.payload as { token?: string; isReasoning?: boolean };
+    const token = payload.token ?? "";
+    const isReasoning = !!payload.isReasoning;
+
+    if (isReasoning && !isThinking) {
+      await Deno.stdout.write(new TextEncoder().encode("💭 "));
+      isThinking = true;
+    } else if (!isReasoning && isThinking) {
+      await Deno.stdout.write(new TextEncoder().encode("\n\n"));
+      isThinking = false;
     }
+
+    await Deno.stdout.write(new TextEncoder().encode(token));
   }
 }
 

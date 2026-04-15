@@ -1,4 +1,4 @@
-import type { MessagePayload } from "@/interfaces/index.ts";
+import type { MessagePayload } from "@/types/index.ts";
 
 type RawInboundToolCall = {
   id?: unknown;

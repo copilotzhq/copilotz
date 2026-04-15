@@ -28,12 +28,13 @@ Deno.test("normalizeInboundToolCalls accepts tool_calls function payloads", () =
 
   assertEquals(toolCalls, [{
     id: "call_1",
-    name: "create_thread",
+    tool: { id: "create_thread", name: "create_thread" },
     args: { name: "Test" },
   }]);
 });
 
 Deno.test("normalizeInboundToolCalls falls back to metadata.toolCalls", () => {
+  // deno-lint-ignore no-explicit-any
   const toolCalls = normalizeInboundToolCalls({
     content: "",
     sender: { type: "user", name: "User" },
@@ -43,11 +44,11 @@ Deno.test("normalizeInboundToolCalls falls back to metadata.toolCalls", () => {
         args: JSON.stringify({ section: "profile" }),
       }],
     },
-  });
+  } as any);
 
   assertEquals(toolCalls, [{
     id: null,
-    name: "save_user_context",
+    tool: { id: "save_user_context", name: "save_user_context" },
     args: { section: "profile" },
   }]);
 });
@@ -66,7 +67,7 @@ Deno.test("normalizeInboundRunMessage normalizes tool calls for run()", () => {
 
   assertEquals(message.toolCalls, [{
     id: null,
-    name: "write_file",
+    tool: { id: "write_file", name: "write_file" },
     args: { path: "notes.txt" },
   }]);
 });

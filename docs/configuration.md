@@ -58,7 +58,6 @@ const copilotz = await createCopilotz({
   queueTTL: 3600000,
   namespace: "default",
   threadMetadata: { ... },
-  activeTaskId: "task-id",
 });
 ```
 
@@ -597,7 +596,6 @@ threadMetadata: {                     // Metadata for new threads
   source: "api",
   version: "1.0",
 },
-activeTaskId: "task-123",             // Default task context
 ```
 
 ---

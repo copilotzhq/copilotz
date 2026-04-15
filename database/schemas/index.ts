@@ -46,12 +46,12 @@ export interface EntityExtractPayload {
   };
 }
 
-const UUID_SCHEMA: JsonSchema = {
+const ULID_SCHEMA: JsonSchema = {
   type: "string",
 };
 
-const READONLY_UUID_SCHEMA: JsonSchema = {
-  ...UUID_SCHEMA,
+const READONLY_ULID_SCHEMA: JsonSchema = {
+  ...ULID_SCHEMA,
   readOnly: true,
 };
 
@@ -289,387 +289,6 @@ export function generateId(): string {
 }
 
 const schemaDefinition = {
-  agents: {
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      $defs: {
-        ProviderName: {
-          type: "string",
-          enum: [
-            "openai",
-            "anthropic",
-            "gemini",
-            "groq",
-            "deepseek",
-            "ollama",
-            "minimax",
-            "xai",
-          ],
-        },
-        ProviderFallbackReason: {
-          type: "string",
-          enum: [
-            "timeout",
-            "network",
-            "rate_limit",
-            "server_error",
-            "provider_error",
-          ],
-        },
-        ProviderConfigBase: {
-          type: "object",
-          additionalProperties: true,
-          properties: {
-            provider: { $ref: "#/$defs/ProviderName" },
-            apiKey: { type: "string" },
-            model: { type: "string" },
-            temperature: { type: "number" },
-            maxTokens: { type: "number" },
-            maxCompletionTokens: { type: "number" },
-            maxLength: { type: "number" },
-            responseType: { type: "string", enum: ["text", "json"] },
-            stream: { type: "boolean" },
-            outputReasoning: { type: "boolean" },
-            estimateCost: { type: "boolean" },
-            pricingModelId: { type: "string" },
-            topP: { type: "number" },
-            topK: { type: "number" },
-            presencePenalty: { type: "number" },
-            frequencyPenalty: { type: "number" },
-            stop: {
-              anyOf: [
-                { type: "string" },
-                { type: "array", items: { type: "string" } },
-              ],
-            },
-            stopSequences: {
-              type: "array",
-              items: { type: "string" },
-            },
-            seed: { type: "number" },
-            baseUrl: { type: "string" },
-            candidateCount: { type: "number" }, // Gemini
-            responseMimeType: { type: "string" }, // Gemini JSON format
-            repeatPenalty: { type: "number" }, // Ollama
-            numCtx: { type: "number" }, // Ollama context window
-            metadata: { type: "object" }, // Anthropic
-            reasoningEffort: {
-              type: "string",
-              enum: ["minimal", "low", "medium", "high"], // OpenAI reasoning models
-            },
-            user: { type: "string" }, // OpenAI user identifier
-            verbosity: {
-              type: "string",
-              enum: ["none", "low", "medium", "high"], // OpenAI reasoning
-            },
-          },
-        },
-        ProviderFallbackConfig: {
-          allOf: [
-            { $ref: "#/$defs/ProviderConfigBase" },
-            {
-              type: "object",
-              properties: {
-                provider: { $ref: "#/$defs/ProviderName" },
-              },
-              required: ["provider"],
-            },
-          ],
-        },
-        ProviderConfig: {
-          allOf: [
-            { $ref: "#/$defs/ProviderConfigBase" },
-            {
-              type: "object",
-              additionalProperties: true,
-              properties: {
-                fallbacks: {
-                  type: "array",
-                  items: { $ref: "#/$defs/ProviderFallbackConfig" },
-                },
-                fallbackOn: {
-                  type: "array",
-                  items: { $ref: "#/$defs/ProviderFallbackReason" },
-                },
-              },
-            },
-          ],
-        },
-      },
-      properties: {
-        id: READONLY_UUID_SCHEMA,
-        name: { type: "string", minLength: 1 },
-        externalId: { type: ["string", "null"], maxLength: 255 },
-        role: { type: "string" },
-        personality: { type: ["string", "null"] },
-        instructions: { type: ["string", "null"] },
-        description: { type: ["string", "null"] },
-        allowedAgents: {
-          type: ["array", "null"],
-          items: { type: "string" },
-        },
-        allowedTools: {
-          type: ["array", "null"],
-          items: { type: "string" },
-        },
-        llmOptions: {
-          anyOf: [
-            { $ref: "#/$defs/ProviderConfig" },
-            { type: "null" },
-          ],
-        },
-        metadata: { type: ["object", "null"] },
-        createdAt: { type: "string", format: "date-time" },
-        updatedAt: { type: "string", format: "date-time" },
-      },
-      required: ["id", "name", "role"],
-    },
-    keys: [{ property: "id" }],
-    timestamps: {
-      createdAt: "createdAt",
-      updatedAt: "updatedAt",
-    },
-    defaults: {
-      id: generateId,
-    },
-  },
-  apis: {
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        id: READONLY_UUID_SCHEMA,
-        name: { type: "string", minLength: 1 },
-        externalId: { type: ["string", "null"], maxLength: 255 },
-        description: { type: ["string", "null"] },
-        openApiSchema: {
-          anyOf: [
-            { type: "object" },
-            { type: "string" },
-            { type: "null" },
-          ],
-        },
-        baseUrl: { type: ["string", "null"] },
-        headers: {
-          type: ["object", "null"],
-          additionalProperties: { type: "string" },
-        },
-        auth: {
-          anyOf: [
-            {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                type: { const: "apiKey" },
-                in: { type: "string", enum: ["header", "query"] },
-                name: { type: "string" },
-                key: { type: "string" },
-              },
-              required: ["type", "in", "name", "key"],
-            },
-            {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                type: { const: "bearer" },
-                scheme: { type: "string" },
-                token: { type: "string" },
-              },
-              required: ["type", "token"],
-            },
-            {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                type: { const: "basic" },
-                username: { type: "string" },
-                password: { type: "string" },
-              },
-              required: ["type", "username", "password"],
-            },
-            {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                type: { const: "custom" },
-                headers: {
-                  type: ["object", "null"],
-                  additionalProperties: { type: "string" },
-                },
-                queryParams: {
-                  type: ["object", "null"],
-                  additionalProperties: {
-                    type: ["string", "number", "boolean"],
-                  },
-                },
-              },
-              required: ["type"],
-            },
-            {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                type: { const: "dynamic" },
-                authEndpoint: {
-                  type: "object",
-                  additionalProperties: false,
-                  properties: {
-                    url: { type: "string" },
-                    method: { type: "string" },
-                    headers: {
-                      type: ["object", "null"],
-                      additionalProperties: { type: "string" },
-                    },
-                    body: JSON_ANY_SCHEMA,
-                    credentials: JSON_ANY_SCHEMA,
-                  },
-                  required: ["url"],
-                },
-                tokenExtraction: {
-                  type: "object",
-                  additionalProperties: false,
-                  properties: {
-                    path: { type: "string" },
-                    type: { type: "string", enum: ["bearer", "apiKey"] },
-                    prefix: { type: ["string", "null"] },
-                    headerName: { type: ["string", "null"] },
-                  },
-                  required: ["path", "type"],
-                },
-                cache: {
-                  type: ["object", "null"],
-                  additionalProperties: false,
-                  properties: {
-                    enabled: { type: "boolean" },
-                    duration: { type: "integer" },
-                  },
-                },
-                refreshConfig: {
-                  type: ["object", "null"],
-                  additionalProperties: false,
-                  properties: {
-                    refreshEndpoint: { type: ["string", "null"] },
-                    refreshBeforeExpiry: { type: ["integer", "null"] },
-                    refreshPath: { type: ["string", "null"] },
-                    expiryPath: { type: ["string", "null"] },
-                  },
-                },
-              },
-              required: ["type", "authEndpoint", "tokenExtraction"],
-            },
-            { type: "null" },
-          ],
-        },
-        timeout: { type: ["integer", "null"] },
-        includeResponseHeaders: { type: ["boolean", "null"] },
-        metadata: {
-          type: ["object", "null"],
-          additionalProperties: true,
-        },
-        createdAt: { type: "string", format: "date-time" },
-        updatedAt: { type: "string", format: "date-time" },
-      },
-      required: ["id", "name"],
-    },
-    keys: [{ property: "id" }],
-    timestamps: {
-      createdAt: "createdAt",
-      updatedAt: "updatedAt",
-    },
-    defaults: {
-      id: generateId,
-    },
-  },
-  mcpServers: {
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        id: READONLY_UUID_SCHEMA,
-        name: { type: "string", minLength: 1 },
-        externalId: { type: ["string", "null"], maxLength: 255 },
-        description: { type: ["string", "null"] },
-        transport: { type: ["object", "null"] },
-        capabilities: { type: ["object", "null"] },
-        env: { type: ["object", "null"] },
-        metadata: { type: ["object", "null"] },
-        createdAt: { type: "string", format: "date-time" },
-        updatedAt: { type: "string", format: "date-time" },
-      },
-      required: ["id", "name"],
-    },
-    keys: [{ property: "id" }],
-    timestamps: {
-      createdAt: "createdAt",
-      updatedAt: "updatedAt",
-    },
-    defaults: {
-      id: generateId,
-    },
-  },
-  messages: {
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        id: READONLY_UUID_SCHEMA,
-        threadId: { $ref: "#/$defs/threads/properties/id" },
-        senderUserId: {
-          anyOf: [
-            UUID_SCHEMA,
-            { type: "null" },
-          ],
-        },
-        senderId: { type: "string" },
-        senderType: {
-          type: "string",
-          enum: ["agent", "user", "system", "tool"],
-        },
-        // NEW: Multi-agent conversation routing fields
-        targetId: {
-          type: ["string", "null"],
-          description:
-            "Primary recipient of this message (participant ID or agent ID)",
-        },
-        targetQueue: {
-          type: ["array", "null"],
-          items: { type: "string" },
-          description:
-            "Remaining targets in queue for multi-@mention scenarios",
-        },
-        thread: {
-          readOnly: true,
-          anyOf: [
-            { $ref: "#/$defs/threads" },
-            { type: "null" },
-          ],
-        },
-        externalId: { type: ["string", "null"], maxLength: 255 },
-        content: { type: ["string", "null"] },
-        toolCallId: { type: ["string", "null"], maxLength: 255 },
-        toolCalls: { type: ["array", "null"], items: JSON_ANY_SCHEMA },
-        reasoning: { type: ["string", "null"] },
-        metadata: { type: ["object", "null"] },
-        createdAt: { type: "string", format: "date-time" },
-        updatedAt: { type: "string", format: "date-time" },
-      },
-      required: [
-        "id",
-        "threadId",
-        "senderId",
-        "senderType",
-      ],
-    },
-    keys: [{ property: "id" }],
-    timestamps: {
-      createdAt: "createdAt",
-      updatedAt: "updatedAt",
-    },
-    defaults: {
-      id: generateId,
-    },
-  },
   events: {
     schema: {
       type: "object",
@@ -808,7 +427,7 @@ const schemaDefinition = {
         },
       },
       properties: {
-        id: READONLY_UUID_SCHEMA,
+        id: READONLY_ULID_SCHEMA,
         threadId: { $ref: "#/$defs/threads/properties/id" },
         eventType: {
           type: "string",
@@ -823,7 +442,7 @@ const schemaDefinition = {
         },
         parentEventId: {
           anyOf: [
-            UUID_SCHEMA,
+            ULID_SCHEMA,
             { type: "null" },
           ],
         },
@@ -914,39 +533,12 @@ const schemaDefinition = {
       id: generateId,
     },
   },
-  tasks: {
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        id: READONLY_UUID_SCHEMA,
-        name: { type: "string", minLength: 1 },
-        externalId: { type: ["string", "null"], maxLength: 255 },
-        goal: { type: "string" },
-        successCriteria: { type: ["string", "null"] },
-        status: { type: "string", default: "pending" },
-        notes: { type: ["string", "null"] },
-        metadata: { type: ["object", "null"] },
-        createdAt: { type: "string", format: "date-time" },
-        updatedAt: { type: "string", format: "date-time" },
-      },
-      required: ["id", "name", "goal", "status"],
-    },
-    keys: [{ property: "id" }],
-    timestamps: {
-      createdAt: "createdAt",
-      updatedAt: "updatedAt",
-    },
-    defaults: {
-      id: generateId,
-    },
-  },
   threads: {
     schema: {
       type: "object",
       additionalProperties: false,
       properties: {
-        id: READONLY_UUID_SCHEMA,
+        id: READONLY_ULID_SCHEMA,
         name: { type: "string", minLength: 1 },
         externalId: { type: ["string", "null"], maxLength: 255 },
         description: { type: ["string", "null"] },
@@ -962,7 +554,7 @@ const schemaDefinition = {
         workerLeaseExpiresAt: { type: ["string", "null"], format: "date-time" },
         parentThreadId: {
           anyOf: [
-            UUID_SCHEMA,
+            ULID_SCHEMA,
             { type: "null" },
           ],
         },
@@ -988,140 +580,6 @@ const schemaDefinition = {
       id: generateId,
     },
   },
-  tools: {
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        id: READONLY_UUID_SCHEMA,
-        key: { type: "string", minLength: 1 },
-        name: { type: "string", minLength: 1 },
-        externalId: { type: ["string", "null"], maxLength: 255 },
-        description: { type: "string" },
-        inputSchema: { type: ["object", "null"] },
-        outputSchema: { type: ["object", "null"] },
-        metadata: { type: ["object", "null"] },
-        createdAt: { type: "string", format: "date-time" },
-        updatedAt: { type: "string", format: "date-time" },
-      },
-      required: ["id", "key", "name", "description"],
-    },
-    keys: [{ property: "id" }],
-    timestamps: {
-      createdAt: "createdAt",
-      updatedAt: "updatedAt",
-    },
-    defaults: {
-      id: generateId,
-    },
-  },
-  users: {
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        id: READONLY_UUID_SCHEMA,
-        name: { type: ["string", "null"], maxLength: 255 },
-        email: { type: ["string", "null"], maxLength: 255 },
-        externalId: { type: ["string", "null"], maxLength: 255 },
-        metadata: { type: ["object", "null"] },
-        createdAt: { type: "string", format: "date-time" },
-        updatedAt: { type: "string", format: "date-time" },
-      },
-      required: ["id"],
-    },
-    keys: [{ property: "id" }],
-    timestamps: {
-      createdAt: "createdAt",
-      updatedAt: "updatedAt",
-    },
-    defaults: {
-      id: generateId,
-    },
-  },
-  // RAG (Retrieval-Augmented Generation) schemas
-  documents: {
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        id: READONLY_UUID_SCHEMA,
-        namespace: {
-          type: "string",
-          minLength: 1,
-          default: "default",
-        },
-        externalId: { type: ["string", "null"], maxLength: 255 },
-        sourceType: {
-          type: "string",
-          enum: ["url", "file", "text", "asset"],
-        },
-        sourceUri: { type: ["string", "null"] },
-        title: { type: ["string", "null"] },
-        mimeType: { type: ["string", "null"], maxLength: 128 },
-        contentHash: { type: "string", maxLength: 128 },
-        assetId: { type: ["string", "null"], maxLength: 255 },
-        status: {
-          type: "string",
-          enum: ["pending", "processing", "indexed", "failed"],
-          default: "pending",
-        },
-        chunkCount: { type: ["integer", "null"] },
-        errorMessage: { type: ["string", "null"] },
-        metadata: { type: ["object", "null"] },
-        createdAt: { type: "string", format: "date-time" },
-        updatedAt: { type: "string", format: "date-time" },
-      },
-      required: ["id", "namespace", "sourceType", "contentHash", "status"],
-    },
-    keys: [{ property: "id" }],
-    timestamps: {
-      createdAt: "createdAt",
-      updatedAt: "updatedAt",
-    },
-    defaults: {
-      id: generateId,
-      namespace: () => "default",
-      status: () => "pending",
-    },
-  },
-  documentChunks: {
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        id: READONLY_UUID_SCHEMA,
-        documentId: UUID_SCHEMA,
-        namespace: {
-          type: "string",
-          minLength: 1,
-        },
-        chunkIndex: { type: "integer" },
-        content: { type: "string" },
-        tokenCount: { type: ["integer", "null"] },
-        // Embedding stored as JSON array of floats
-        // PostgreSQL migration will use vector type
-        embedding: {
-          type: ["array", "null"],
-          items: { type: "number" },
-        },
-        startPosition: { type: ["integer", "null"] },
-        endPosition: { type: ["integer", "null"] },
-        metadata: { type: ["object", "null"] },
-        createdAt: { type: "string", format: "date-time" },
-        updatedAt: { type: "string", format: "date-time" },
-      },
-      required: ["id", "documentId", "namespace", "chunkIndex", "content"],
-    },
-    keys: [{ property: "id" }],
-    timestamps: {
-      createdAt: "createdAt",
-      updatedAt: "updatedAt",
-    },
-    defaults: {
-      id: generateId,
-    },
-  },
   // ============================================
   // KNOWLEDGE GRAPH SCHEMAS
   // ============================================
@@ -1132,7 +590,7 @@ const schemaDefinition = {
       type: "object",
       additionalProperties: false,
       properties: {
-        id: READONLY_UUID_SCHEMA,
+        id: READONLY_ULID_SCHEMA,
         namespace: {
           type: "string",
           minLength: 1,
@@ -1192,7 +650,7 @@ const schemaDefinition = {
       type: "object",
       additionalProperties: false,
       properties: {
-        id: READONLY_UUID_SCHEMA,
+        id: READONLY_ULID_SCHEMA,
         sourceNodeId: {
           type: "string",
           description: "ID of the source node",
@@ -1233,75 +691,21 @@ type SchemaInternal = ReturnType<typeof defineSchema<typeof schemaDefinition>>;
 
 const schemaInternal: SchemaInternal = defineSchema(schemaDefinition);
 
-const agents = schemaInternal.agents;
-const apis = schemaInternal.apis;
-const mcpServers = schemaInternal.mcpServers;
-const messages = schemaInternal.messages;
 const events = schemaInternal.events;
 const queue = events;
-const tasks = schemaInternal.tasks;
 const threads = schemaInternal.threads;
-const tools = schemaInternal.tools;
-const users = schemaInternal.users;
-const documents = schemaInternal.documents;
-const documentChunks = schemaInternal.documentChunks;
 const nodes = schemaInternal.nodes;
 const edges = schemaInternal.edges;
-
-/** AI Agent entity with configuration for LLM interactions and capabilities. */
-export type Agent = typeof agents.$inferSelect;
-/** Input type for creating a new Agent. */
-export type NewAgent = typeof agents.$inferInsert;
-
-/** API configuration for connecting to external REST APIs via OpenAPI. */
-export type API = typeof apis.$inferSelect;
-/** Input type for creating a new API configuration. */
-export type NewAPI = typeof apis.$inferInsert;
-
-/** MCP (Model Context Protocol) server configuration. */
-export type MCPServer = typeof mcpServers.$inferSelect;
-/** Input type for creating a new MCP server configuration. */
-export type NewMCPServer = typeof mcpServers.$inferInsert;
-
-/** Individual message within a conversation thread. */
-export type Message = typeof messages.$inferSelect;
-/** Input type for creating a new Message. */
-export type NewMessage = typeof messages.$inferInsert;
 
 /** Queue item in the event processing system. */
 export type Queue = typeof queue.$inferSelect;
 /** Input type for creating a new Queue item. */
 export type NewQueue = Record<string, unknown>;
 
-/** Task entity for goal-oriented agent workflows. */
-export type Task = typeof tasks.$inferSelect;
-/** Input type for creating a new Task. */
-export type NewTask = typeof tasks.$inferInsert;
-
 /** Conversation thread containing messages between users and agents. */
 export type Thread = typeof threads.$inferSelect;
 /** Input type for creating a new Thread. */
 export type NewThread = typeof threads.$inferInsert;
-
-/** Tool definition with input/output schemas for agent capabilities. */
-export type Tool = typeof tools.$inferSelect;
-/** Input type for creating a new Tool. */
-export type NewTool = typeof tools.$inferInsert;
-
-/** User entity representing a conversation participant. */
-export type User = typeof users.$inferSelect;
-/** Input type for creating a new User. */
-export type NewUser = typeof users.$inferInsert;
-
-/** Document stored in the RAG knowledge base. */
-export type Document = typeof documents.$inferSelect;
-/** Input type for creating a new Document. */
-export type NewDocument = typeof documents.$inferInsert;
-
-/** Chunk of a document with embedding vector for similarity search. */
-export type DocumentChunk = typeof documentChunks.$inferSelect;
-/** Input type for creating a new DocumentChunk. */
-export type NewDocumentChunk = typeof documentChunks.$inferInsert;
 
 /**
  * Knowledge graph node: can represent chunks, entities, concepts, decisions, etc.

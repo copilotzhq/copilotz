@@ -6,7 +6,7 @@
  */
 
 import type { Copilotz } from "@/index.ts";
-import type { Message } from "@/database/schemas/index.ts";
+import type { Message } from "@/types/index.ts";
 import type {
   MessageHistoryPage,
   MessageHistoryPageOptions,

@@ -73,7 +73,7 @@ async function resolveSearchEmbedding(
     );
   }
 
-  const { embedOne } = await import("@/connectors/embeddings/index.ts");
+  const { embedOne } = await import("@/runtime/embeddings/index.ts");
   return await embedOne(options.query, embeddingConfig);
 }
 

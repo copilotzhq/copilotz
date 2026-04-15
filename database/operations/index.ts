@@ -1,22 +1,21 @@
 import type {
-  Document,
-  DocumentChunk,
   KnowledgeEdge,
   KnowledgeNode,
+  NewKnowledgeEdge,
+  NewKnowledgeNode,
+  NewQueue,
+  NewThread,
+  Queue,
+  Thread,
+} from "../schemas/index.ts";
+import type {
+  Document,
+  DocumentChunk,
   Message,
   NewDocument,
   NewDocumentChunk,
-  NewKnowledgeEdge,
-  NewKnowledgeNode,
   NewMessage,
-  NewQueue,
-  NewTask,
-  NewThread,
-  Queue,
-  Task,
-  Thread,
-  User,
-} from "../schemas/index.ts";
+} from "@/types/index.ts";
 import type { DbInstance } from "../index.ts";
 import { ulid } from "ulid";
 
@@ -27,7 +26,6 @@ type MessageInsert =
   & Omit<NewMessage, "id">
   & { id?: string };
 type ThreadInsert = NewThread;
-type TaskInsert = NewTask;
 
 export interface QueueEventInput {
   eventType: Queue["eventType"];
@@ -450,10 +448,6 @@ export interface DatabaseOperations {
     message: MessageInsert,
     namespace?: string,
   ) => Promise<Message>;
-  getTaskById: (taskId: string) => Promise<Task | undefined>;
-  createTask: (taskData: TaskInsert) => Promise<Task>;
-  /** @deprecated Use getUserNode instead for graph-based users with namespace support */
-  getUserByExternalId: (externalId: string) => Promise<User | undefined>;
   archiveThread: (threadId: string, summary: string) => Promise<Thread | null>;
   /** Return pending NEW_MESSAGE queue events in this thread (excluding current), oldest first. */
   peekCoalescableCandidates: (
@@ -1057,44 +1051,18 @@ export function createOperations(
     message: MessageInsert,
     namespace?: string,
   ): Promise<Message> => {
-    // Generate consistent ID for both stores
     const messageId = message.id ?? ulid();
     const messageWithId = { ...message, id: messageId };
 
-    // Dual-write: Create in messages table (legacy)
-    const created = await crud.messages.create({
-      id: messageId,
-      threadId: message.threadId,
-      senderId: message.senderId,
-      senderType: message.senderType,
-      senderUserId: message.senderUserId ?? undefined,
-      externalId: message.externalId ?? undefined,
-      content: message.content ?? undefined,
-      toolCallId: message.toolCallId ?? undefined,
-      toolCalls: message.toolCalls ?? undefined,
-      reasoning:
-        ((message as Record<string, unknown>).reasoning as string | null) ??
-          undefined,
-      metadata: message.metadata ?? undefined,
-    });
+    const threadIdStr = message.threadId as string;
+    const lastMessage = await getLastMessageNode(threadIdStr);
+    const messageNode = await createMessageNode(
+      messageWithId,
+      lastMessage?.id as string | undefined,
+      namespace,
+    );
 
-    // Dual-write: Create as node in graph (new source of truth)
-    try {
-      // Find previous message to create REPLIED_BY edge
-      const threadIdStr = message.threadId as string;
-      const lastMessage = await getLastMessageNode(threadIdStr);
-      // Pass namespace for SENT_BY edge creation (user → message)
-      await createMessageNode(
-        messageWithId,
-        lastMessage?.id as string | undefined,
-        namespace,
-      );
-    } catch (error) {
-      // Log but don't fail - messages table write succeeded
-      console.warn("[createMessage] Failed to create message node:", error);
-    }
-
-    return created as Message;
+    return nodeToMessage(messageNode);
   };
 
   const getMessageHistory = async (
@@ -1160,58 +1128,16 @@ export function createOperations(
     return result;
   };
 
-  // Helper: Get messages from legacy messages table (fallback when nodes table doesn't exist)
-  const getMessagesFromLegacyTable = async (
-    threadId: string,
-  ): Promise<Message[]> => {
-    const messages = await crud.messages.find(
-      { threadId },
-      { orderBy: { createdAt: "asc" } },
-    ) as Message[];
-
-    return messages;
-  };
-
-  // Helper: Get messages from graph for a specific thread (no limit, for hierarchy traversal)
   const getMessagesFromGraphForThread = async (
     threadId: string,
   ): Promise<Message[]> => {
-    try {
-      const result = await db.query<Record<string, unknown>>(
-        `SELECT * FROM "nodes"
-         WHERE "namespace" = $1 AND "type" = 'message'
-         ORDER BY "created_at" ASC`,
-        [threadId],
-      );
-
-      return result.rows.map((node) => {
-        const data = (node.data ?? {}) as Record<string, unknown>;
-        return {
-          id: (data.messageId ?? node.id) as string,
-          threadId: node.namespace as string,
-          senderId: data.senderId as string,
-          senderType: data.senderType as Message["senderType"],
-          senderUserId: data.senderUserId as string | null,
-          externalId: data.externalId as string | null,
-          content: node.content as string,
-          toolCallId: data.toolCallId as string | null,
-          toolCalls: data.toolCalls as Message["toolCalls"],
-          metadata: data.metadata as Message["metadata"],
-          createdAt: node.created_at as Date ?? node.createdAt as Date,
-          updatedAt: node.updated_at as Date ?? node.updatedAt as Date,
-        } as Message;
-      });
-    } catch (error) {
-      // Fallback to legacy messages table if nodes table doesn't exist (42P01 = undefined_table)
-      const pgError = error as { code?: string };
-      if (pgError?.code === "42P01") {
-        console.warn(
-          "[getMessagesFromGraphForThread] nodes table does not exist, falling back to messages table",
-        );
-        return getMessagesFromLegacyTable(threadId);
-      }
-      throw error;
-    }
+    const result = await db.query<KnowledgeNode>(
+      `SELECT * FROM "nodes"
+       WHERE "namespace" = $1 AND "type" = 'message'
+       ORDER BY "created_at" ASC`,
+      [threadId],
+    );
+    return result.rows.map(nodeToMessage);
   };
 
   const nodeToMessage = (node: KnowledgeNode): Message => {
@@ -1269,24 +1195,14 @@ export function createOperations(
   const getLastMessageNode = async (
     threadId: string,
   ): Promise<KnowledgeNode | undefined> => {
-    try {
-      const result = await db.query<KnowledgeNode>(
-        `SELECT * FROM "nodes" 
-         WHERE "namespace" = $1 AND "type" = 'message'
-         ORDER BY "created_at" DESC
-         LIMIT 1`,
-        [threadId],
-      );
-      return result.rows[0];
-    } catch (error) {
-      // Return undefined if nodes table doesn't exist (42P01 = undefined_table)
-      // This allows createMessage to still work without graph edges
-      const pgError = error as { code?: string };
-      if (pgError?.code === "42P01") {
-        return undefined;
-      }
-      throw error;
-    }
+    const result = await db.query<KnowledgeNode>(
+      `SELECT * FROM "nodes" 
+       WHERE "namespace" = $1 AND "type" = 'message'
+       ORDER BY "created_at" DESC
+       LIMIT 1`,
+      [threadId],
+    );
+    return result.rows[0];
   };
 
   const createMessageNode = async (
@@ -1371,64 +1287,42 @@ export function createOperations(
       ? options.before
       : null;
 
-    try {
-      type MessageNodeRow = KnowledgeNode & { messageKey?: string };
-      const limitPlusOne = limit + 1;
+    type MessageNodeRow = KnowledgeNode & { messageKey?: string };
+    const limitPlusOne = limit + 1;
 
-      if (before) {
-        const cursorResult = await db.query<MessageNodeRow>(
-          `SELECT *, COALESCE("data"->>'messageId', "id") AS "messageKey"
-           FROM "nodes"
-           WHERE "namespace" = $1
-             AND "type" = 'message'
-             AND (COALESCE("data"->>'messageId', "id") = $2 OR "id" = $2)
-           LIMIT 1`,
-          [threadId, before],
-        );
-        const cursor = cursorResult.rows[0];
-        if (!cursor) {
-          return emptyMessageHistoryPage();
-        }
-        const cursorCreatedAt = (
-          cursor as MessageNodeRow & { created_at?: Date | string | null }
-        ).created_at ?? cursor.createdAt;
-        if (!cursorCreatedAt) {
-          return emptyMessageHistoryPage();
-        }
-
-        const result = await db.query<MessageNodeRow>(
-          `SELECT *, COALESCE("data"->>'messageId', "id") AS "messageKey"
-           FROM "nodes"
-           WHERE "namespace" = $1
-             AND "type" = 'message'
-             AND (
-               "created_at" < $2
-               OR ("created_at" = $2 AND "id" < $3)
-             )
-           ORDER BY "created_at" DESC, "id" DESC
-           LIMIT $4`,
-          [threadId, cursorCreatedAt, cursor.id, limitPlusOne],
-        );
-
-        const hasMoreBefore = result.rows.length > limit;
-        const rows = result.rows.slice(0, limit).reverse();
-        const data = rows.map(nodeToMessage);
-
-        return {
-          data,
-          pageInfo: {
-            hasMoreBefore,
-            ...getPageEdgeMessageIds(data),
-          },
-        };
+    if (before) {
+      const cursorResult = await db.query<MessageNodeRow>(
+        `SELECT *, COALESCE("data"->>'messageId', "id") AS "messageKey"
+         FROM "nodes"
+         WHERE "namespace" = $1
+           AND "type" = 'message'
+           AND (COALESCE("data"->>'messageId', "id") = $2 OR "id" = $2)
+         LIMIT 1`,
+        [threadId, before],
+      );
+      const cursor = cursorResult.rows[0];
+      if (!cursor) {
+        return emptyMessageHistoryPage();
+      }
+      const cursorCreatedAt = (
+        cursor as MessageNodeRow & { created_at?: Date | string | null }
+      ).created_at ?? cursor.createdAt;
+      if (!cursorCreatedAt) {
+        return emptyMessageHistoryPage();
       }
 
-      const result = await db.query<KnowledgeNode>(
-        `SELECT * FROM "nodes"
-         WHERE "namespace" = $1 AND "type" = 'message'
+      const result = await db.query<MessageNodeRow>(
+        `SELECT *, COALESCE("data"->>'messageId', "id") AS "messageKey"
+         FROM "nodes"
+         WHERE "namespace" = $1
+           AND "type" = 'message'
+           AND (
+             "created_at" < $2
+             OR ("created_at" = $2 AND "id" < $3)
+           )
          ORDER BY "created_at" DESC, "id" DESC
-         LIMIT $2`,
-        [threadId, limitPlusOne],
+         LIMIT $4`,
+        [threadId, cursorCreatedAt, cursor.id, limitPlusOne],
       );
 
       const hasMoreBefore = result.rows.length > limit;
@@ -1442,67 +1336,27 @@ export function createOperations(
           ...getPageEdgeMessageIds(data),
         },
       };
-    } catch (error) {
-      const pgError = error as { code?: string };
-      if (pgError?.code !== "42P01") {
-        throw error;
-      }
-
-      const limitPlusOne = limit + 1;
-
-      if (before) {
-        const cursorResult = await db.query<Message>(
-          `SELECT * FROM "messages"
-           WHERE "threadId" = $1 AND "id" = $2
-           LIMIT 1`,
-          [threadId, before],
-        );
-        const cursor = cursorResult.rows[0];
-        if (!cursor) {
-          return emptyMessageHistoryPage();
-        }
-
-        const result = await db.query<Message>(
-          `SELECT * FROM "messages"
-           WHERE "threadId" = $1
-             AND (
-               "createdAt" < $2
-               OR ("createdAt" = $2 AND "id" < $3)
-             )
-           ORDER BY "createdAt" DESC, "id" DESC
-           LIMIT $4`,
-          [threadId, cursor.createdAt, cursor.id, limitPlusOne],
-        );
-
-        const hasMoreBefore = result.rows.length > limit;
-        const data = result.rows.slice(0, limit).reverse() as Message[];
-        return {
-          data,
-          pageInfo: {
-            hasMoreBefore,
-            ...getPageEdgeMessageIds(data),
-          },
-        };
-      }
-
-      const result = await db.query<Message>(
-        `SELECT * FROM "messages"
-         WHERE "threadId" = $1
-         ORDER BY "createdAt" DESC, "id" DESC
-         LIMIT $2`,
-        [threadId, limitPlusOne],
-      );
-
-      const hasMoreBefore = result.rows.length > limit;
-      const data = result.rows.slice(0, limit).reverse() as Message[];
-      return {
-        data,
-        pageInfo: {
-          hasMoreBefore,
-          ...getPageEdgeMessageIds(data),
-        },
-      };
     }
+
+    const result = await db.query<KnowledgeNode>(
+      `SELECT * FROM "nodes"
+       WHERE "namespace" = $1 AND "type" = 'message'
+       ORDER BY "created_at" DESC, "id" DESC
+       LIMIT $2`,
+      [threadId, limitPlusOne],
+    );
+
+    const hasMoreBefore = result.rows.length > limit;
+    const rows = result.rows.slice(0, limit).reverse();
+    const data = rows.map(nodeToMessage);
+
+    return {
+      data,
+      pageInfo: {
+        hasMoreBefore,
+        ...getPageEdgeMessageIds(data),
+      },
+    };
   };
 
   const toAdminIso = (value: unknown): string | null => {
@@ -2415,49 +2269,30 @@ export function createOperations(
       order?: "asc" | "desc";
     },
   ): Promise<Message[]> => {
-    const order = options?.order === "desc" ? "desc" : "asc";
-    const messages = await crud.messages.find({ threadId }, {
-      limit: options?.limit,
-      offset: options?.offset,
-      sort: [["createdAt", order]],
-    });
-    return messages as Message[];
+    const order = options?.order === "desc" ? "DESC" : "ASC";
+    const params: unknown[] = [threadId];
+    let limitClause = "";
+    let offsetClause = "";
+    if (typeof options?.limit === "number") {
+      params.push(options.limit);
+      limitClause = `LIMIT $${params.length}`;
+    }
+    if (typeof options?.offset === "number") {
+      params.push(options.offset);
+      offsetClause = `OFFSET $${params.length}`;
+    }
+    const result = await db.query<KnowledgeNode>(
+      `SELECT * FROM "nodes"
+       WHERE "namespace" = $1 AND "type" = 'message'
+       ORDER BY "created_at" ${order}
+       ${limitClause} ${offsetClause}`.trim(),
+      params,
+    );
+    return result.rows.map(nodeToMessage);
   };
 
   const deleteMessagesForThread = async (threadId: string): Promise<void> => {
-    await crud.messages.deleteMany({ threadId });
-    try {
-      await deleteNodesBySource("thread", threadId);
-    } catch (error) {
-      const pgError = error as { code?: string };
-      if (pgError?.code !== "42P01") {
-        throw error;
-      }
-    }
-  };
-
-  const getTaskById = async (taskId: string): Promise<Task | undefined> => {
-    const task = await crud.tasks.findOne({ id: taskId }) as Task | null;
-    return task ?? undefined;
-  };
-
-  const createTask = async (taskData: TaskInsert): Promise<Task> => {
-    return await crud.tasks.create({
-      name: taskData.name,
-      externalId: taskData.externalId ?? null,
-      goal: taskData.goal,
-      successCriteria: taskData.successCriteria ?? null,
-      status: taskData.status ?? "pending",
-      notes: taskData.notes ?? null,
-      metadata: taskData.metadata ?? null,
-    }) as Task;
-  };
-
-  const getUserByExternalId = async (
-    externalId: string,
-  ): Promise<User | undefined> => {
-    const user = await crud.users.findOne({ externalId }) as User | null;
-    return user ?? undefined;
+    await deleteNodesBySource("thread", threadId);
   };
 
   const peekCoalescableCandidates = async (
@@ -2605,25 +2440,6 @@ export function createOperations(
       sourceId: externalId,
     });
 
-    // Also write to legacy users table for backwards compatibility (humans only)
-    if (participantType === "human") {
-      try {
-        const existingLegacy = await crud.users.findOne({ externalId }) as
-          | User
-          | null;
-        if (!existingLegacy) {
-          await crud.users.create({
-            name: data.name ?? null,
-            email: data.email ?? null,
-            externalId,
-            metadata: data.metadata ?? null,
-          });
-        }
-      } catch {
-        // Ignore legacy write failures
-      }
-    }
-
     return participantNode;
   };
 
@@ -2701,42 +2517,76 @@ export function createOperations(
     return result.rows.map(mapNodeRow);
   };
 
-  // RAG Operations
+  // RAG Operations (graph-only)
+
+  const nodeToDocument = (node: KnowledgeNode): Document => {
+    const data = (node.data ?? {}) as Record<string, unknown>;
+    return {
+      id: node.id as string,
+      namespace: node.namespace,
+      externalId: (data.externalId as string | null) ?? null,
+      sourceType: (data.sourceType as Document["sourceType"]) ?? "text",
+      sourceUri: (data.sourceUri as string | null) ?? null,
+      title: (data.title as string | null) ?? null,
+      mimeType: (data.mimeType as string | null) ?? null,
+      contentHash: (data.contentHash as string) ?? "",
+      assetId: (data.assetId as string | null) ?? null,
+      status: (data.status as Document["status"]) ?? "pending",
+      chunkCount: (data.chunkCount as number | null) ?? null,
+      errorMessage: (data.errorMessage as string | null) ?? null,
+      metadata: (data.metadata as Record<string, unknown> | null) ?? null,
+      createdAt: node.createdAt as string | undefined,
+      updatedAt: node.updatedAt as string | undefined,
+    };
+  };
 
   const createDocument = async (
     doc: Omit<NewDocument, "id"> & { id?: string },
   ): Promise<Document> => {
-    const created = await crud.documents.create({
+    const docNode = await createNode({
+      id: doc.id,
       namespace: doc.namespace ?? "default",
-      externalId: doc.externalId ?? null,
-      sourceType: doc.sourceType,
-      sourceUri: doc.sourceUri ?? null,
-      title: doc.title ?? null,
-      mimeType: doc.mimeType ?? null,
-      contentHash: doc.contentHash,
-      assetId: doc.assetId ?? null,
-      status: doc.status ?? "pending",
-      chunkCount: doc.chunkCount ?? null,
-      errorMessage: doc.errorMessage ?? null,
-      metadata: doc.metadata ?? null,
+      type: "document",
+      name: doc.title ?? doc.sourceUri ?? doc.contentHash ?? "untitled",
+      data: {
+        externalId: doc.externalId ?? null,
+        sourceType: doc.sourceType,
+        sourceUri: doc.sourceUri ?? null,
+        title: doc.title ?? null,
+        mimeType: doc.mimeType ?? null,
+        contentHash: doc.contentHash,
+        assetId: doc.assetId ?? null,
+        status: doc.status ?? "pending",
+        chunkCount: doc.chunkCount ?? null,
+        errorMessage: doc.errorMessage ?? null,
+        metadata: doc.metadata ?? null,
+      },
+      sourceType: "document",
+      sourceId: null,
     });
-    return created as Document;
+    return nodeToDocument(docNode);
   };
 
   const getDocumentById = async (id: string): Promise<Document | undefined> => {
-    const doc = await crud.documents.findOne({ id }) as Document | null;
-    return doc ?? undefined;
+    const node = await getNodeById(id);
+    if (!node || node.type !== "document") return undefined;
+    return nodeToDocument(node);
   };
 
   const getDocumentByHash = async (
     hash: string,
     namespace: string,
   ): Promise<Document | undefined> => {
-    const doc = await crud.documents.findOne({
-      contentHash: hash,
-      namespace,
-    }) as Document | null;
-    return doc ?? undefined;
+    const result = await db.query<KnowledgeNode>(
+      `SELECT * FROM "nodes"
+       WHERE "type" = 'document'
+         AND "namespace" = $1
+         AND "data"->>'contentHash' = $2
+       LIMIT 1`,
+      [namespace, hash],
+    );
+    const node = result.rows[0];
+    return node ? nodeToDocument(node) : undefined;
   };
 
   const updateDocumentStatus = async (
@@ -2745,28 +2595,28 @@ export function createOperations(
     errorMessage?: string,
     chunkCount?: number,
   ): Promise<void> => {
-    const updates: Partial<Document> = { status };
+    const node = await getNodeById(id);
+    if (!node) return;
+    const data = { ...(node.data as Record<string, unknown> ?? {}), status };
     if (errorMessage !== undefined) {
-      updates.errorMessage = errorMessage;
+      (data as Record<string, unknown>).errorMessage = errorMessage;
     }
     if (chunkCount !== undefined) {
-      updates.chunkCount = chunkCount;
+      (data as Record<string, unknown>).chunkCount = chunkCount;
     }
-    await crud.documents.update({ id }, updates);
+    await updateNode(id, { data });
   };
 
   const deleteDocument = async (id: string): Promise<void> => {
-    // Chunks are deleted via CASCADE in the database
-    await crud.documents.delete({ id });
+    // Delete chunk nodes linked to this document, then delete the document node
+    await deleteNodesBySource("document", id);
+    await deleteNode(id);
   };
 
   const deleteChunksByDocumentId = async (
     documentId: string,
   ): Promise<void> => {
-    await db.query(
-      `DELETE FROM "document_chunks" WHERE "documentId" = $1`,
-      [documentId],
-    );
+    await deleteNodesBySource("document", documentId);
   };
 
   const createChunks = async (
@@ -2776,43 +2626,38 @@ export function createOperations(
 
     const created: DocumentChunk[] = [];
     for (const chunk of chunks) {
-      // For vector embedding, we need to use raw SQL since omnipg may not handle vector type directly
-      if (chunk.embedding && Array.isArray(chunk.embedding)) {
-        const embeddingStr = `[${chunk.embedding.join(",")}]`;
-        const result = await db.query<DocumentChunk>(
-          `INSERT INTO "document_chunks" 
-           ("id", "documentId", "namespace", "chunkIndex", "content", "tokenCount", "embedding", "startPosition", "endPosition", "metadata", "createdAt")
-           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6::vector, $7, $8, $9, NOW())
-           RETURNING *`,
-          [
-            chunk.documentId,
-            chunk.namespace,
-            chunk.chunkIndex,
-            chunk.content,
-            chunk.tokenCount ?? null,
-            embeddingStr,
-            chunk.startPosition ?? null,
-            chunk.endPosition ?? null,
-            chunk.metadata ? JSON.stringify(chunk.metadata) : null,
-          ],
-        );
-        if (result.rows[0]) {
-          created.push(result.rows[0]);
-        }
-      } else {
-        const c = await crud.documentChunks.create({
+      const chunkNode = await createNode({
+        id: chunk.id,
+        namespace: chunk.namespace,
+        type: "chunk",
+        name: `${chunk.documentId}:${chunk.chunkIndex}`,
+        content: chunk.content,
+        embedding: chunk.embedding ?? null,
+        data: {
           documentId: chunk.documentId,
-          namespace: chunk.namespace,
           chunkIndex: chunk.chunkIndex,
-          content: chunk.content,
           tokenCount: chunk.tokenCount ?? null,
-          embedding: null,
           startPosition: chunk.startPosition ?? null,
           endPosition: chunk.endPosition ?? null,
           metadata: chunk.metadata ?? null,
-        });
-        created.push(c as DocumentChunk);
-      }
+        },
+        sourceType: "document",
+        sourceId: chunk.documentId,
+      });
+      created.push({
+        id: chunkNode.id as string,
+        documentId: chunk.documentId,
+        namespace: chunk.namespace,
+        chunkIndex: chunk.chunkIndex,
+        content: chunk.content,
+        tokenCount: chunk.tokenCount ?? null,
+        embedding: chunk.embedding ?? null,
+        startPosition: chunk.startPosition ?? null,
+        endPosition: chunk.endPosition ?? null,
+        metadata: chunk.metadata ?? null,
+        createdAt: chunkNode.createdAt as string | undefined,
+        updatedAt: chunkNode.updatedAt as string | undefined,
+      });
     }
     return created;
   };
@@ -2820,94 +2665,7 @@ export function createOperations(
   const searchChunks = async (
     options: ChunkSearchOptions,
   ): Promise<ChunkSearchResult[]> => {
-    if (!options.embedding || options.embedding.length === 0) {
-      return [];
-    }
-
-    const embeddingStr = `[${options.embedding.join(",")}]`;
-    const limit = options.limit ?? 5;
-    const threshold = options.threshold ?? 0.0;
-    const namespaces = options.namespaces ?? [];
-
-    const params: unknown[] = [embeddingStr, threshold, limit];
-    let namespaceClause = "";
-
-    if (namespaces.length > 0) {
-      namespaceClause = `AND dc."namespace" = ANY($4::text[])`;
-      params.push(namespaces);
-    }
-
-    let documentFilterClause = "";
-    if (options.documentFilters) {
-      const filters = options.documentFilters;
-      if (filters.sourceType) {
-        params.push(filters.sourceType);
-        documentFilterClause += ` AND d."sourceType" = $${params.length}`;
-      }
-      if (filters.mimeType) {
-        params.push(filters.mimeType);
-        documentFilterClause += ` AND d."mimeType" = $${params.length}`;
-      }
-      if (filters.status) {
-        params.push(filters.status);
-        documentFilterClause += ` AND d."status" = $${params.length}`;
-      }
-    }
-
-    const result = await db.query<{
-      id: string;
-      content: string;
-      namespace: string;
-      chunkIndex: number;
-      similarity: number;
-      tokenCount: number | null;
-      metadata: Record<string, unknown> | null;
-      documentId: string;
-      documentTitle: string | null;
-      documentSourceUri: string | null;
-      documentSourceType: string;
-      documentMimeType: string | null;
-    }>(
-      `SELECT 
-        dc."id",
-        dc."content",
-        dc."namespace",
-        dc."chunkIndex",
-        1 - (dc."embedding" <=> $1::vector) as similarity,
-        dc."tokenCount",
-        dc."metadata",
-        d."id" as "documentId",
-        d."title" as "documentTitle",
-        d."sourceUri" as "documentSourceUri",
-        d."sourceType" as "documentSourceType",
-        d."mimeType" as "documentMimeType"
-      FROM "document_chunks" dc
-      JOIN "documents" d ON dc."documentId" = d."id"
-      WHERE dc."embedding" IS NOT NULL
-        AND 1 - (dc."embedding" <=> $1::vector) > $2
-        ${namespaceClause}
-        ${documentFilterClause}
-      ORDER BY dc."embedding" <=> $1::vector
-      LIMIT $3`,
-      params,
-    );
-
-    return result.rows.map((row) => ({
-      id: row.id,
-      content: row.content,
-      namespace: row.namespace,
-      chunkIndex: row.chunkIndex,
-      similarity: row.similarity,
-      tokenCount: row.tokenCount,
-      metadata: row.metadata,
-      document: {
-        id: row.documentId,
-        title: row.documentTitle,
-        sourceUri: row.documentSourceUri,
-        sourceType: row.documentSourceType,
-        mimeType: row.documentMimeType,
-      },
-    }));
+    return searchChunksFromGraph(options);
   };
 
   const getNamespaceStats = async (): Promise<NamespaceStats[]> => {
@@ -2918,14 +2676,14 @@ export function createOperations(
       lastUpdated: Date | null;
     }>(
       `SELECT 
-        d."namespace",
-        COUNT(DISTINCT d."id") as "documentCount",
-        COUNT(dc."id") as "chunkCount",
-        MAX(d."updatedAt") as "lastUpdated"
-      FROM "documents" d
-      LEFT JOIN "document_chunks" dc ON d."id" = dc."documentId"
-      GROUP BY d."namespace"
-      ORDER BY d."namespace"`,
+        n."namespace",
+        COUNT(DISTINCT CASE WHEN n."type" = 'document' THEN n."id" END) as "documentCount",
+        COUNT(DISTINCT CASE WHEN n."type" = 'chunk' THEN n."id" END) as "chunkCount",
+        MAX(n."updated_at") as "lastUpdated"
+      FROM "nodes" n
+      WHERE n."type" IN ('document', 'chunk')
+      GROUP BY n."namespace"
+      ORDER BY n."namespace"`,
     );
 
     return result.rows.map((row) => ({
@@ -3370,9 +3128,6 @@ export function createOperations(
     updateThread,
     deleteThread,
     createMessage,
-    getTaskById,
-    createTask,
-    getUserByExternalId,
     archiveThread,
     peekCoalescableCandidates,
     claimAndCompleteEventsBatch,

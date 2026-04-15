@@ -5,8 +5,8 @@
  *   deno run -A --env-file=../../clients/mobizap/.env scripts/usage-smoke.ts minimax
  *   deno run -A --env-file=../../clients/mobizap/.env scripts/usage-smoke.ts openai
  */
-import { chat } from "../connectors/llm/index.ts";
-import type { ProviderName } from "../connectors/llm/types.ts";
+import { chat } from "../runtime/llm/index.ts";
+import type { ProviderName } from "../runtime/llm/types.ts";
 
 const provider = (Deno.args[0] || "minimax") as ProviderName;
 const env = Deno.env.toObject();

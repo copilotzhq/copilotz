@@ -9,10 +9,10 @@
  */
 export const generateKnowledgeGraphMigrations = (): string => `
 -- ============================================
--- KNOWLEDGE GRAPH TABLES
+-- GRAPH (NODES AND EDGES) TABLES
 -- ============================================
 
--- Unified nodes table: chunks, entities, concepts, decisions, etc.
+-- Unified nodes table.
 CREATE TABLE IF NOT EXISTS "nodes" (
   "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   "namespace" TEXT NOT NULL,

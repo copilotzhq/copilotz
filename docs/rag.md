@@ -1,6 +1,8 @@
 # RAG (Retrieval-Augmented Generation)
 
-RAG lets your AI access external knowledge. Ingest documents, and your agents can search and reference them in conversations. Copilotz handles the entire pipeline: fetching, chunking, embedding, storing, and retrieving.
+RAG lets your AI access external knowledge. Ingest documents, and your agents can search and reference them in conversations. Copilotz handles fetching, chunking, embedding, storing, and retrieving.
+
+**Storage model:** RAG content lives in the **`nodes`** and **`edges`** tables. A **`document` node** holds source metadata (URI, hash, status, title, …). Each **`chunk` node** holds embedded text; **`NEXT_CHUNK`** edges preserve order. There are no legacy `documents` or `document_chunks` relational tables.
 
 ## How RAG Works
 
@@ -14,16 +16,16 @@ Document (URL, file, or text)        User question
     Fetch content                    Generate embedding
          │                                  │
          ▼                                  ▼
-    Chunk into pieces                Search vector database
+    Chunk into pieces                Search chunk nodes
          │                                  │
          ▼                                  ▼
     Generate embeddings              Get relevant chunks
          │                                  │
          ▼                                  ▼
-    Store in knowledge graph         Inject into LLM context
-         │                                  │
-         ▼                                  ▼
-    Build chunk relationships        Agent answers with context
+    Persist document + chunk         Inject into LLM context
+    nodes (+ edges)                  │
+         │                           ▼
+         ▼                    Agent answers with context
 ```
 
 ## Configuration
@@ -92,7 +94,7 @@ const agent = {
 
 ### Programmatic Ingestion
 
-Ingest documents directly via the API:
+Ingest documents directly via the event queue:
 
 ```typescript
 // From URL
@@ -150,22 +152,29 @@ const agent = {
 
 ### Programmatic Search
 
-Search the knowledge base directly:
+Search runs over **`chunk` nodes** using a **query embedding** (the `search_knowledge` tool does this with your configured embedder). `searchChunks` delegates to `searchChunksFromGraph`.
 
 ```typescript
-// Search chunks
-const results = await copilotz.ops.searchChunks({
-  query: "How do I configure authentication?",
-  namespace: "docs",
+// Obtain `embedding: number[]` from your embedding provider (the built-in
+// `search_knowledge` tool does this using `rag.embedding` from config).
+const embeddingVector: number[] = await yourEmbedder(
+  "How do I configure authentication?",
+);
+
+const results = await copilotz.ops.searchChunksFromGraph({
+  embedding: embeddingVector,
+  namespaces: ["docs"],
   limit: 5,
   threshold: 0.7,
+  documentFilters: { status: "indexed" },
 });
 
-// Search from knowledge graph
-const graphResults = await copilotz.ops.searchChunksFromGraph({
-  query: "authentication setup",
-  namespace: "docs",
+// Same underlying implementation
+const same = await copilotz.ops.searchChunks({
+  embedding: embeddingVector,
+  namespaces: ["docs"],
   limit: 5,
+  threshold: 0.7,
 });
 ```
 
@@ -190,9 +199,9 @@ const agent = {
   },
 };
 
-// List all namespaces
+// Aggregate counts from document + chunk nodes per namespace
 const stats = await copilotz.ops.getNamespaceStats();
-// { "product-docs": { documentCount: 50, chunkCount: 1200 }, ... }
+// e.g. [{ namespace: "product-docs", documentCount: 50, chunkCount: 1200, lastUpdated }, ...]
 ```
 
 ### Dynamic Namespace Resolution
@@ -228,7 +237,7 @@ const agent = {
 };
 ```
 
-Extracted entities become nodes in the knowledge graph:
+Extracted entities become **`entity` nodes** in the graph:
 
 ```
 Message: "I talked to Sarah from Acme Corp about the Q4 deal"
@@ -243,26 +252,27 @@ Message: "I talked to Sarah from Acme Corp about the Q4 deal"
 
 Entities are deduplicated across conversations using semantic similarity and LLM confirmation.
 
-## Document Lifecycle
+## Document lifecycle (graph-backed)
 
-### Check Document Status
+Helpers return a **`Document` view** backed by a **`document` node** (`id` is the node id).
 
-```typescript
-const doc = await copilotz.ops.getDocumentById(documentId);
-// doc.status: "pending", "processing", "completed", "failed"
-```
-
-### Delete Documents
+### Check document status
 
 ```typescript
-// By ID
-await copilotz.ops.deleteDocument(documentId);
-
-// Using tool
-// Agent can call delete_document with namespace and source
+const doc = await copilotz.ops.getDocumentById(documentNodeId);
+// doc.status: "pending", "processing", "indexed", "failed"
 ```
 
-### Force Re-ingestion
+### Delete documents
+
+```typescript
+// Removes the document node and chunk nodes linked via source (see deleteNodesBySource)
+await copilotz.ops.deleteDocument(documentNodeId);
+
+// Or via tool: delete_document with namespace / source identifiers
+```
+
+### Force re-ingestion
 
 ```typescript
 await copilotz.run({
@@ -275,23 +285,32 @@ await copilotz.run({
 });
 ```
 
-## Knowledge Graph Integration
+## Knowledge graph integration
 
-RAG data lives in the knowledge graph, enabling rich queries:
+Use edges and traversal to go beyond flat similarity search:
 
 ```typescript
-// Get chunks for a document
-const chunks = await copilotz.ops.getEdgesForNode(documentId, "out", ["NEXT_CHUNK"]);
+// Ordered chunks for one document (document id = document node id)
+const chunkEdges = await copilotz.ops.getEdgesForNode(
+  documentNodeId,
+  "out",
+  ["NEXT_CHUNK"],
+);
 
-// Find documents mentioning an entity
-const edges = await copilotz.ops.getEdgesForNode(entityId, "in", ["MENTIONS"]);
+// What mentions this entity?
+const mentions = await copilotz.ops.getEdgesForNode(entityId, "in", ["MENTIONS"]);
 
-// Traverse from user to mentioned entities to related documents
-const related = await copilotz.ops.traverseGraph(userId, ["MENTIONS", "RELATED_TO"], 3);
+// Broader exploration
+const related = await copilotz.ops.traverseGraph(
+  startNodeId,
+  ["MENTIONS", "RELATED_TO"],
+  3,
+);
 ```
 
 ## Next Steps
 
-- [Database](./database.md) — Understanding the knowledge graph
+- [Database](./database.md) — Threads, events, and graph overview
+- [Tables structure](./tables-structure.md) — Column reference for `nodes` / `edges`
 - [Collections](./collections.md) — Structured data on top of the graph
 - [Agents](./agents.md) — Configuring per-agent RAG options

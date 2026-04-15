@@ -1,15 +1,12 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.28.4",
+  "version": "0.29.0",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
-    "./server": "./server/index.ts",
-    "./server/channels": "./server/channels/index.ts",
-    "./server/channels/whatsapp": "./server/channels/whatsapp.ts",
-    "./server/channels/zendesk": "./server/channels/zendesk.ts",
-    "./create": "./create/mod.ts"
+    "./create": "./create/mod.ts",
+    "./resources/*": "./resources/*"
   },  
   "unstable": [
     "bare-node-builtins",
@@ -27,17 +24,17 @@
     "raw-imports"
   ],
   "imports": {
-    "@std/path": "jsr:@std/path@1",
     "@/": "./",
+    "@std/path": "jsr:@std/path@1",
     "@bradenmacdonald/s3-lite-client": "jsr:@bradenmacdonald/s3-lite-client@^0.9.4",
     "ajv": "npm:ajv@8.17.1",
     "ajv-formats": "npm:ajv-formats@3.0.1",
-    "omnipg": "jsr:@oxian/ominipg@0.5.10",
-    "zod": "npm:zod@3.24.8",
-    "yaml": "npm:yaml@2.8.0",
+    "json-schema-to-ts": "npm:json-schema-to-ts@3.1.1",
     "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client",
+    "omnipg": "jsr:@oxian/ominipg@0.5.10",
     "ulid": "jsr:@std/ulid@1.0.0",
-    "json-schema-to-ts": "npm:json-schema-to-ts@3.1.1"
+    "yaml": "npm:yaml@2.8.0",
+    "zod": "npm:zod@3.24.8"
   },
   "lock": false
 }

@@ -252,49 +252,45 @@ await copilotz.ops.getThreadsForParticipant(
 await copilotz.ops.archiveThread(threadId: string, summary: string): Promise<void>
 ```
 
-#### Message Operations
+#### Message operations (graph-backed)
+
+Messages persist as **`nodes` with `type: "message"`** (plus edges). Prefer graph APIs:
 
 ```typescript
-// Get message history
+// Message history (ordered from graph)
+await copilotz.ops.getMessageHistoryFromGraph(
+  threadId: string,
+  limit?: number
+): Promise<Message[]>
+
+// Optional: includes parent threads when the user is in participants (still reads graph nodes)
 await copilotz.ops.getMessageHistory(
   threadId: string,
   userId: string,
   limit?: number
 ): Promise<Message[]>
 
-// Get messages from graph
-await copilotz.ops.getMessageHistoryFromGraph(
-  threadId: string,
-  limit?: number
-): Promise<Message[]>
-
-// Create a message
+// Create a message (writes a message node + edges)
 await copilotz.ops.createMessage(
   message: MessageInput,
   namespace?: string
 ): Promise<Message>
 
-// Get last message node
+// Last message node in a thread
 await copilotz.ops.getLastMessageNode(threadId: string): Promise<Node | null>
 ```
 
-#### User Operations
+#### Participant / user nodes
+
+Participants are graph nodes (not relational `users` rows). Prefer participant APIs; legacy names may still delegate to the same storage:
 
 ```typescript
-// Upsert a user node
-await copilotz.ops.upsertUserNode(
-  externalId: string,
-  namespace: string | null,
-  data: { name?: string; metadata?: Record<string, any> }
-): Promise<Node>
+await copilotz.ops.upsertParticipantNode(externalId, kind, namespace, data)
+await copilotz.ops.getParticipantNode(externalId, namespace?)
 
-// Get a user node
-await copilotz.ops.getUserNode(
-  externalId: string,
-  namespace?: string
-): Promise<Node | null>
-
-// Get all user nodes by external ID
+// Legacy aliases (deprecated in types; same graph)
+await copilotz.ops.upsertUserNode(externalId, namespace, data): Promise<Node>
+await copilotz.ops.getUserNode(externalId, namespace?): Promise<Node | null>
 await copilotz.ops.getUserNodesByExternalId(externalId: string): Promise<Node[]>
 ```
 
@@ -323,129 +319,81 @@ await copilotz.ops.updateQueueItemStatus(
 ): Promise<void>
 ```
 
-#### RAG Operations
+#### RAG operations (document + chunk nodes)
+
+RAG does **not** use separate `documents` / `document_chunks` tables. Ingestion stores a **`document` node** (metadata in `data`) and **`chunk` nodes** with embeddings; helpers below map to those nodes.
 
 ```typescript
-// Create a document
+// Create / read document metadata (backed by type "document" nodes)
 await copilotz.ops.createDocument(doc: {
   source: string;
   namespace: string;
   metadata?: Record<string, any>;
 }): Promise<Document>
 
-// Get document by ID
 await copilotz.ops.getDocumentById(id: string): Promise<Document | null>
-
-// Get document by content hash
 await copilotz.ops.getDocumentByHash(hash: string, namespace: string): Promise<Document | null>
 
-// Update document status
 await copilotz.ops.updateDocumentStatus(
   id: string,
-  status: "pending" | "processing" | "completed" | "failed",
+  status: "pending" | "processing" | "indexed" | "failed",
   errorMessage?: string,
   chunkCount?: number
 ): Promise<void>
 
-// Delete document
 await copilotz.ops.deleteDocument(id: string): Promise<void>
 
-// Search chunks
-await copilotz.ops.searchChunks(options: {
-  query: string;
-  namespace?: string;
+// Chunk search over `chunk` nodes (requires an embedding vector; embed NL queries first — see `search_knowledge` tool)
+await copilotz.ops.searchChunksFromGraph(options: {
+  embedding: number[];
+  namespaces?: string[];
   limit?: number;
   threshold?: number;
-}): Promise<Chunk[]>
+  documentFilters?: { sourceType?: string; mimeType?: string; status?: string };
+}): Promise<ChunkSearchResult[]>
 
-// Search chunks from graph
-await copilotz.ops.searchChunksFromGraph(options: {
-  query: string;
-  namespace?: string;
-  limit?: number;
-}): Promise<Chunk[]>
+await copilotz.ops.searchChunks(options: ChunkSearchOptions): Promise<ChunkSearchResult[]>
 
-// Get namespace stats
-await copilotz.ops.getNamespaceStats(): Promise<Record<string, {
-  documentCount: number;
-  chunkCount: number;
-}>>
+// Per-namespace counts of document vs chunk nodes
+await copilotz.ops.getNamespaceStats(): Promise<NamespaceStats[]>
 ```
 
-#### Graph Operations
+#### Graph operations (`nodes` + `edges` tables)
 
 ```typescript
-// Create a node
-await copilotz.ops.createNode(node: {
-  type: string;
-  namespace: string;
-  properties: Record<string, any>;
-  embedding?: number[];
-}): Promise<Node>
+// Create a node (type, namespace, name, content, data, embedding, sourceType, sourceId, …)
+await copilotz.ops.createNode(node): Promise<KnowledgeNode>
+await copilotz.ops.createNodes(nodes): Promise<KnowledgeNode[]>
 
-// Create multiple nodes
-await copilotz.ops.createNodes(nodes: NodeInput[]): Promise<Node[]>
+await copilotz.ops.getNodeById(id: string): Promise<KnowledgeNode | undefined>
+await copilotz.ops.getNodesByNamespace(namespace: string, type?: string): Promise<KnowledgeNode[]>
 
-// Get node by ID
-await copilotz.ops.getNodeById(id: string): Promise<Node | null>
-
-// Get nodes by namespace
-await copilotz.ops.getNodesByNamespace(
-  namespace: string,
-  type?: string
-): Promise<Node[]>
-
-// Update a node
-await copilotz.ops.updateNode(
-  id: string,
-  updates: Partial<Node>
-): Promise<Node>
-
-// Delete a node
+await copilotz.ops.updateNode(id: string, updates): Promise<KnowledgeNode | undefined>
 await copilotz.ops.deleteNode(id: string): Promise<void>
+await copilotz.ops.deleteNodesBySource(sourceType: string, sourceId: string): Promise<void>
 
-// Create an edge
-await copilotz.ops.createEdge(edge: {
-  sourceId: string;
-  targetId: string;
-  type: string;
-  properties?: Record<string, any>;
-}): Promise<Edge>
+// Edges (sourceNodeId, targetNodeId, type, data, weight, …)
+await copilotz.ops.createEdge(edge): Promise<KnowledgeEdge>
+await copilotz.ops.createEdges(edges): Promise<KnowledgeEdge[]>
 
-// Create multiple edges
-await copilotz.ops.createEdges(edges: EdgeInput[]): Promise<Edge[]>
-
-// Get edges for a node
 await copilotz.ops.getEdgesForNode(
   nodeId: string,
   direction?: "in" | "out" | "both",
   types?: string[]
-): Promise<Edge[]>
+): Promise<KnowledgeEdge[]>
 
-// Delete an edge
 await copilotz.ops.deleteEdge(id: string): Promise<void>
+await copilotz.ops.deleteEdgesForNode(nodeId: string): Promise<void>
 
-// Search nodes by embedding
-await copilotz.ops.searchNodes(options: {
-  query: string;
-  namespace?: string;
-  type?: string;
-  limit?: number;
-  threshold?: number;
-}): Promise<Node[]>
+await copilotz.ops.searchNodes(options: GraphQueryOptions): Promise<GraphQueryResult[]>
 
-// Traverse the graph
 await copilotz.ops.traverseGraph(
   startNodeId: string,
   edgeTypes?: string[],
   maxDepth?: number
-): Promise<{ nodes: Node[]; edges: Edge[] }>
+): Promise<{ nodes: KnowledgeNode[]; edges: KnowledgeEdge[] }>
 
-// Find related nodes
-await copilotz.ops.findRelatedNodes(
-  nodeId: string,
-  depth?: number
-): Promise<Node[]>
+await copilotz.ops.findRelatedNodes(nodeId: string, depth?: number): Promise<KnowledgeNode[]>
 ```
 
 ---
@@ -740,23 +688,28 @@ interface StreamEvent {
   traceId?: string;
 }
 
-interface Node {
+interface KnowledgeNode {
   id: string;
   type: string;
   namespace: string;
-  properties: Record<string, any>;
-  embedding?: number[];
-  createdAt: string;
-  updatedAt: string;
+  name?: string | null;
+  content?: string | null;
+  data?: Record<string, any> | null;
+  embedding?: number[] | null;
+  sourceType?: string | null;
+  sourceId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
-interface Edge {
+interface KnowledgeEdge {
   id: string;
-  sourceId: string;
-  targetId: string;
+  sourceNodeId: string;
+  targetNodeId: string;
   type: string;
-  properties?: Record<string, any>;
-  createdAt: string;
+  data?: Record<string, any> | null;
+  weight?: number | null;
+  createdAt?: string;
 }
 
 interface ProviderConfig {
@@ -881,7 +834,7 @@ Returns `ParticipantHandlers`:
 
 ### createRestHandlers(copilotz)
 
-Returns `RestHandlers` — generic CRUD over `copilotz.ops.crud` tables:
+Returns `RestHandlers` — thin generic CRUD over **`copilotz.ops.crud`**, which only exposes the four persisted resources: **`threads`**, **`events`**, **`nodes`**, and **`edges`**. Prefer `copilotz.ops` helpers for messages, RAG, and queue semantics instead of raw graph rows when possible.
 
 | Method             | Signature                                   |
 | ------------------ | ------------------------------------------- |

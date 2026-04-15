@@ -152,7 +152,8 @@ Deno.test("Type inference - types match runtime behavior", async () => {
     name: "Alice",
     plan: "pro",
     tags: ["vip"],
-  }) as Customer;
+    // deno-lint-ignore no-explicit-any
+  } as any) as Customer;
   
   // Now TypeScript knows `created` has these properties
   assertEquals(typeof created.id, "string");

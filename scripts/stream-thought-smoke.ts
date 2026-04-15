@@ -9,8 +9,8 @@
  * Env: OPENAI_API_KEY, GEMINI_API_KEY, MINIMAX_API_KEY (or MINIMAX per chat() merge — use *_API_KEY).
  * Optional: OPENAI_THOUGHT_MODEL (default gpt-5-mini), GEMINI_THOUGHT_MODEL (default gemini-2.5-flash).
  */
-import { chat } from "../connectors/llm/index.ts";
-import type { ProviderName } from "../connectors/llm/types.ts";
+import { chat } from "../runtime/llm/index.ts";
+import type { ProviderName } from "../runtime/llm/types.ts";
 
 const provider = (Deno.args[0] || "openai") as ProviderName;
 const env = Deno.env.toObject();

@@ -1,26 +1,20 @@
 # Tables Structure
 
-This document describes the database tables used by Copilotz. The framework uses PostgreSQL (or PGLite) with a combination of relational tables and a knowledge graph.
+This document describes the database tables used by Copilotz. The framework uses PostgreSQL (or PGLite) with **four persisted tables** per schema: threads, events (queue), nodes, and edges.
 
 ## Overview
 
-Copilotz maintains two types of storage:
-
-1. **Relational Tables** — For core operational data (threads, events, documents)
-2. **Knowledge Graph** — For interconnected data (nodes and edges)
+All conversational content, RAG material, users, entities, and custom collection records live in the **knowledge graph** (`nodes` + `edges`). **Threads** hold conversation metadata and grouping. **Events** are the durable work queue that drives processing.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Relational Tables                         │
+│  threads          │  events (queue)                          │
+│  Conversation     │  NEW_MESSAGE, LLM_CALL, RAG_INGEST, …    │
+│  metadata         │  status, payload, priority, TTL, …       │
 ├─────────────────────────────────────────────────────────────┤
-│  threads     │  events      │  documents                    │
-│  (active)    │  (queue)     │  (RAG metadata)               │
-├─────────────────────────────────────────────────────────────┤
-│                    Knowledge Graph                           │
-├─────────────────────────────────────────────────────────────┤
-│  nodes                      │  edges                         │
-│  (messages, chunks, users,  │  (relationships between       │
-│   entities, collections)    │   all node types)             │
+│  nodes                              │  edges                 │
+│  message, chunk, document, user,    │  REPLIED_BY, SENT_BY, │
+│  entity, collection:*, …            │  NEXT_CHUNK, MENTIONS, …│
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -30,12 +24,12 @@ Copilotz maintains two types of storage:
 
 ### threads
 
-Conversation threads that group messages together.
+Conversation threads: metadata, participants, hierarchy, and lifecycle (`active` / `archived`).
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | UUID | Primary key |
-| `name` | TEXT | Optional thread name |
+| `name` | TEXT | Thread name |
 | `externalId` | TEXT | External system identifier |
 | `description` | TEXT | Thread description |
 | `participants` | JSONB | Array of participant IDs |
@@ -76,7 +70,7 @@ await copilotz.ops.archiveThread(threadId, "Resolved: customer happy");
 
 ### events
 
-The event queue that powers Copilotz's event-driven architecture. Every action flows through this queue.
+The event queue powers Copilotz's event-driven architecture. Every action flows through this table.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -100,10 +94,10 @@ The event queue that powers Copilotz's event-driven architecture. Every action f
 ```typescript
 // Add an event to the queue
 await copilotz.ops.addToQueue(threadId, {
-  type: "CUSTOM_EVENT",
+  eventType: "CUSTOM_EVENT",
   payload: { data: "..." },
   priority: 100,
-  ttl: 60000,
+  ttlMs: 60000,
 });
 
 // Get currently processing event
@@ -118,69 +112,11 @@ await copilotz.ops.updateQueueItemStatus(eventId, "completed");
 
 ---
 
-### documents
-
-Metadata for documents ingested into the RAG pipeline.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | UUID | Primary key |
-| `namespace` | TEXT | RAG namespace |
-| `externalId` | TEXT | External identifier |
-| `sourceType` | TEXT | `url`, `file`, `text` |
-| `sourceUri` | TEXT | Source location |
-| `title` | TEXT | Document title |
-| `mimeType` | TEXT | Content type |
-| `contentHash` | TEXT | SHA256 of content (deduplication) |
-| `assetId` | TEXT | Associated asset ID |
-| `status` | TEXT | `pending`, `processing`, `indexed`, `failed` |
-| `chunkCount` | INTEGER | Number of chunks created |
-| `errorMessage` | TEXT | Error details if failed |
-| `metadata` | JSONB | Custom metadata |
-| `createdAt` | TIMESTAMP | Creation time |
-| `updatedAt` | TIMESTAMP | Last update time |
-
-**Access:**
-
-```typescript
-// Create a document
-const doc = await copilotz.ops.createDocument({
-  source: "https://example.com/article.html",
-  namespace: "docs",
-  metadata: { category: "tutorials" },
-});
-
-// Get document by ID
-const doc = await copilotz.ops.getDocumentById(documentId);
-
-// Get document by content hash (for deduplication)
-const existing = await copilotz.ops.getDocumentByHash(hash, namespace);
-
-// Update document status
-await copilotz.ops.updateDocumentStatus(
-  documentId,
-  "indexed",
-  null,      // errorMessage
-  15         // chunkCount
-);
-
-// Delete document (cascades to chunks)
-await copilotz.ops.deleteDocument(documentId);
-
-// Get namespace statistics
-const stats = await copilotz.ops.getNamespaceStats();
-// { "docs": { documentCount: 10, chunkCount: 500 }, ... }
-```
-
----
-
 ## Knowledge Graph Tables
-
-The knowledge graph is the primary storage layer for interconnected data. All messages, chunks, users, entities, and custom collections live here.
 
 ### nodes
 
-Unified storage for all graph nodes.
+Unified storage for every graph node: messages, RAG documents and chunks, users, entities, and `collection:*` records.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -198,13 +134,16 @@ Unified storage for all graph nodes.
 
 **Built-in node types:**
 
-| Type | Description | Created By |
-|------|-------------|------------|
-| `message` | Conversation messages | NEW_MESSAGE processor |
-| `chunk` | Document chunks with embeddings | RAG_INGEST processor |
-| `user` | User entities | Auto-upsert from messages |
-| `entity` | Extracted entities | ENTITY_EXTRACT processor |
-| `collection:*` | Custom collection records | Collections API |
+| Type | Description | Typical producer |
+|------|-------------|------------------|
+| `message` | Conversation turns | NEW_MESSAGE / message pipeline |
+| `document` | Ingested source metadata (URI, hash, status, title, …) | RAG_INGEST |
+| `chunk` | Embedded text segments for retrieval | RAG_INGEST |
+| `user` | End-user identity (often `data.externalId`) | Message / participant upserts |
+| `entity` | Extracted entities | ENTITY_EXTRACT |
+| `collection:*` | Collection-backed records | Collections API |
+
+**RAG note:** There is no separate `documents` or `document_chunks` table. Ingestion creates a `document` node plus `chunk` nodes (and edges such as `NEXT_CHUNK`). High-level helpers like `createDocument`, `getDocumentById`, and `searchChunks` read and write these nodes.
 
 **Access:**
 
@@ -235,9 +174,9 @@ await copilotz.ops.updateNode(nodeId, {
 // Delete a node
 await copilotz.ops.deleteNode(nodeId);
 
-// Semantic search
+// Semantic search over stored embeddings (pass a vector; use chunk search + embedder for NL queries)
 const results = await copilotz.ops.searchNodes({
-  query: "technology companies in San Francisco",
+  embedding: embeddingVector,
   nodeTypes: ["entity"],
   namespaces: ["tenant:acme"],
   limit: 10,
@@ -279,8 +218,8 @@ Relationships between nodes.
 ```typescript
 // Create an edge
 await copilotz.ops.createEdge({
-  sourceId: messageId,
-  targetId: entityId,
+  sourceNodeId: messageId,
+  targetNodeId: entityId,
   type: "MENTIONS",
   data: { confidence: 0.95 },
 });
@@ -312,52 +251,23 @@ const related = await copilotz.ops.findRelatedNodes(nodeId, 2);
 
 ---
 
-## Deprecated Tables
+## Messages and participants
 
-The following tables exist for backward compatibility but are being migrated to the knowledge graph:
-
-### messages (Deprecated)
-
-> **Use knowledge graph nodes instead.** Messages are now stored as nodes with `type: "message"`. The `messages` table is maintained for backward compatibility but new code should use the graph.
+Messages are **`nodes` with `type: "message"`**, linked with edges (for example `REPLIED_BY`, `SENT_BY`). Use graph-oriented APIs:
 
 ```typescript
-// Old way (deprecated)
-const messages = await copilotz.ops.crud.messages.find({ threadId });
-
-// New way (recommended)
 const history = await copilotz.ops.getMessageHistoryFromGraph(threadId, 50);
+const last = await copilotz.ops.getLastMessageNode(threadId);
+await copilotz.ops.createMessage(messageInput, namespace);
 ```
 
-### users (Deprecated)
-
-> **Use knowledge graph nodes instead.** Users are now stored as nodes with `type: "user"`. This enables graph-based queries and namespace scoping.
-
-```typescript
-// Old way (deprecated)
-const user = await copilotz.ops.getUserByExternalId(externalId);
-
-// New way (recommended)
-const user = await copilotz.ops.getUserNode(externalId, namespace);
-await copilotz.ops.upsertUserNode(externalId, namespace, { name: "Alex" });
-```
-
-### document_chunks (Deprecated)
-
-> **Use knowledge graph nodes instead.** Chunks are now stored as nodes with `type: "chunk"`. This enables unified semantic search across all node types.
-
-```typescript
-// Old way (deprecated)
-const chunks = await copilotz.ops.searchChunks({ query, namespace });
-
-// New way (recommended)
-const chunks = await copilotz.ops.searchChunksFromGraph({ query, namespace });
-```
+Participants (humans and agents) are represented as graph nodes; use `upsertParticipantNode` / `getParticipantNode` (or legacy `upsertUserNode` / `getUserNode` where still exposed).
 
 ---
 
 ## Schema Isolation
 
-For multi-tenant applications, each PostgreSQL schema contains a complete copy of all tables:
+For multi-tenant applications, each PostgreSQL schema contains the same four tables (`threads`, `events`, `nodes`, `edges`):
 
 ```typescript
 // Provision a tenant schema

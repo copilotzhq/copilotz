@@ -6,7 +6,7 @@ import type {
   Event,
   NewEvent,
   NewUnknownEvent,
-} from "@/interfaces/index.ts";
+} from "@/types/index.ts";
 import type { UnifiedOnEvent } from "@/runtime/index.ts";
 
 type CliPerformRun = (

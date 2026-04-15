@@ -5,8 +5,8 @@
  */
 
 import type { Copilotz } from "@/index.ts";
-import { parseAssetRef } from "@/utils/assets.ts";
-import type { ParsedAssetRef } from "@/utils/assets.ts";
+import { parseAssetRef } from "@/runtime/storage/assets.ts";
+import type { ParsedAssetRef } from "@/runtime/storage/assets.ts";
 
 /** Handlers returned by {@link createAssetHandlers}. */
 export interface AssetHandlers {

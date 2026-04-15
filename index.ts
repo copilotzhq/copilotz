@@ -27,22 +27,20 @@ import {
   hasRunInput,
   normalizeInboundRunMessage,
 } from "@/utils/inbound-message.ts";
-import loadResources from "@/utils/loaders/resources.ts";
-import type { Resources } from "@/utils/loaders/resources.ts";
+import loadResources from "@/runtime/loaders/resources.ts";
+import type { Resources } from "@/runtime/loaders/resources.ts";
 import { mergeResourceArrays } from "@/utils/merge-resources.ts";
 import { listPublicAgents } from "@/utils/list-agents.ts";
-import type { Skill, SkillIndexEntry } from "@/utils/loaders/skill-types.ts";
+import type { Skill, SkillIndexEntry } from "@/runtime/loaders/skill-types.ts";
 import {
   loadAgentsFileInstructions,
   type AgentsFileConfig,
-} from "@/utils/loaders/agents-file.ts";
+} from "@/runtime/loaders/agents-file.ts";
 import {
   loadSkillFromUrl,
-  loadSkillsFromDirectory,
   mergeSkills,
-} from "@/utils/loaders/skill-loader.ts";
-import { loadBundledSkills } from "@/skills/index.ts";
-import { loadAdminAgent } from "@/agents/admin/index.ts";
+} from "@/runtime/loaders/skill-loader.ts";
+import { setDefaultProcessors } from "@/runtime/event-engine.ts";
 
 import type {
   Agent,
@@ -69,7 +67,7 @@ import type {
   ToolHistoryVisibility,
   ToolResultProjector,
   ToolResultProjectorContext,
-} from "./interfaces/index.ts";
+} from "@/types/index.ts";
 
 import defaultBanner from "@/runtime/banner.ts";
 import { startInteractiveCli } from "@/runtime/cli.ts";
@@ -139,22 +137,16 @@ export type {
   NewMessage,
   /** Specific NEW_MESSAGE event type with typed payload. */
   NewMessageEvent,
-  /** Input type for creating a new Task. */
-  NewTask,
   /** Input type for creating a new Thread. */
   NewThread,
   /** Input type for creating a new Tool. */
   NewTool,
-  /** Input type for creating a new User. */
-  NewUser,
   /** Dependencies injected into event processors. */
   ProcessorDeps,
   /** Configuration for RAG (Retrieval-Augmented Generation). */
   RagConfig,
   /** Configuration for similarity-based retrieval. */
   RetrievalConfig,
-  /** Task definition for goal-oriented agent workflows. */
-  Task,
   /** Conversation thread containing messages between users and agents. */
   Thread,
   /** Thread metadata interface for multi-agent conversation state. */
@@ -177,9 +169,7 @@ export type {
   ToolResultProjector,
   /** Context passed to tool result projector callbacks. */
   ToolResultProjectorContext,
-  /** User entity representing a conversation participant. */
-  User,
-} from "@/interfaces/index.ts";
+} from "@/types/index.ts";
 
 /**
  * Returns a record of all built-in native tools available to agents.
@@ -187,7 +177,7 @@ export type {
  *
  * @returns Record of tool names to tool definitions
  */
-export { getNativeTools } from "@/event-processors/tool_call/native-tools-registry/index.ts";
+export { getNativeTools } from "@/resources/tools/_registry.ts";
 
 /**
  * Creates a new database connection for Copilotz.
@@ -294,13 +284,13 @@ export type {
  * @param type - The event type to handle (e.g., "NEW_MESSAGE", "TOOL_CALL")
  * @param processor - The processor implementation
  */
-export { registerEventProcessor } from "@/event-processors/index.ts";
+export { registerEventProcessor } from "@/runtime/event-engine.ts";
 
 /**
  * Resolves a namespace based on scope and optional prefix.
  * Use for multi-tenancy and entity scope resolution.
  */
-export { resolveNamespace } from "@/interfaces/index.ts";
+export { resolveNamespace } from "@/types/index.ts";
 
 /**
  * Asset utilities and stores.
@@ -313,19 +303,19 @@ export {
   getDataUrlForRef,
   isAssetRef,
   parseAssetRef,
-} from "@/utils/assets.ts";
+} from "@/runtime/storage/assets.ts";
 
 /** Event emitted from the streaming event queue. */
 export type { StreamEvent } from "@/runtime/index.ts";
 
-import type { AssetConfig, AssetStore } from "@/utils/assets.ts";
+import type { AssetConfig, AssetStore } from "@/runtime/storage/assets.ts";
 import {
   bytesToBase64,
   createAssetStoreForNamespace,
   createMemoryAssetStore,
   resolveAssetIdForStore,
   resolveAssetNamespace,
-} from "@/utils/assets.ts";
+} from "@/runtime/storage/assets.ts";
 
 /** Type representing all database schemas. */
 export type DbSchemas = typeof schema;
@@ -340,11 +330,11 @@ export type DbCrud = OminipgWithCrud<DbSchemas>["crud"];
  * @param options - Options including the path to the resources directory
  * @returns Loaded resources ready to pass to createCopilotz
  */
-export { default as loadResources } from "@/utils/loaders/resources.ts";
+export { default as loadResources } from "@/runtime/loaders/resources.ts";
 
 /** Type for resources loaded from the file system. */
-export type { Resources } from "@/utils/loaders/resources.ts";
-export type { AgentsFileConfig, AgentsFileInstructions } from "@/utils/loaders/agents-file.ts";
+export type { Resources, ResourceManifest } from "@/runtime/loaders/resources.ts";
+export type { AgentsFileConfig, AgentsFileInstructions } from "@/runtime/loaders/agents-file.ts";
 
 /**
  * Returns a simplified list of agents suitable for public API responses.
@@ -359,12 +349,12 @@ export { mergeResourceArrays } from "@/utils/merge-resources.ts";
 /**
  * Skill type representing a loaded skill definition.
  */
-export type { Skill, SkillIndexEntry } from "@/utils/loaders/skill-types.ts";
+export type { Skill, SkillIndexEntry } from "@/runtime/loaders/skill-types.ts";
 
 /**
  * Filter skills based on an agent's allowedSkills configuration.
  */
-export { filterSkillsForAgent } from "@/utils/loaders/skill-loader.ts";
+export { filterSkillsForAgent } from "@/runtime/loaders/skill-loader.ts";
 
 /**
  * Union type representing all possible events in the Copilotz event system.
@@ -388,13 +378,6 @@ export type APIConfig = NewAPI;
 /** Alias for MCPServer type, used in configuration. */
 export type MCPServerConfig = NewMCPServer;
 
-type CopilotzAgentOverrides =
-  & Omit<Partial<AgentConfig>, "llmOptions">
-  & {
-    /** LLM options for the Copilotz agent. */
-    llmOptions: import("@/connectors/llm/types.ts").ProviderConfig;
-  };
-
 type NormalizedCopilotzConfig =
   & Omit<CopilotzConfig, "agents" | "tools" | "apis" | "mcpServers">
   & {
@@ -402,72 +385,32 @@ type NormalizedCopilotzConfig =
     tools?: Tool[];
     apis?: API[];
     mcpServers?: MCPServer[];
-    skills?: import("@/utils/loaders/skill-types.ts").Skill[];
+    skills?: import("@/runtime/loaders/skill-types.ts").Skill[];
     customProcessorsByType?: ChatContext["customProcessors"];
   };
 
 function normalizeAgent(agent: AgentConfig): Agent {
-  const now = new Date().toISOString();
-  return {
-    ...agent,
-    createdAt:
-      ("createdAt" in agent && agent.createdAt
-        ? agent.createdAt
-        : now) as Agent["createdAt"],
-    updatedAt:
-      ("updatedAt" in agent && agent.updatedAt
-        ? agent.updatedAt
-        : now) as Agent["updatedAt"],
-  };
+  return agent as Agent;
 }
 
 function normalizeTool(tool: ToolConfig): Tool {
-  const now = new Date().toISOString();
   return {
     ...tool,
     id: ("id" in tool && tool.id ? tool.id : tool.key) as Tool["id"],
-    createdAt:
-      ("createdAt" in tool && tool.createdAt ? tool.createdAt : now) as Tool[
-        "createdAt"
-      ],
-    updatedAt:
-      ("updatedAt" in tool && tool.updatedAt ? tool.updatedAt : now) as Tool[
-        "updatedAt"
-      ],
   };
 }
 
 function normalizeApi(api: APIConfig): API {
-  const now = new Date().toISOString();
   return {
     ...api,
     id: ("id" in api && api.id ? api.id : api.name) as API["id"],
-    createdAt:
-      ("createdAt" in api && api.createdAt ? api.createdAt : now) as API[
-        "createdAt"
-      ],
-    updatedAt:
-      ("updatedAt" in api && api.updatedAt ? api.updatedAt : now) as API[
-        "updatedAt"
-      ],
   };
 }
 
 function normalizeMcpServer(server: MCPServerConfig): MCPServer {
-  const now = new Date().toISOString();
   return {
     ...server,
-    id: ("id" in server && server.id ? server.id : server.name) as MCPServer[
-      "id"
-    ],
-    createdAt:
-      ("createdAt" in server && server.createdAt
-        ? server.createdAt
-        : now) as MCPServer["createdAt"],
-    updatedAt:
-      ("updatedAt" in server && server.updatedAt
-        ? server.updatedAt
-        : now) as MCPServer["updatedAt"],
+    id: ("id" in server && server.id ? server.id : server.name) as MCPServer["id"],
   };
 }
 
@@ -521,8 +464,23 @@ export interface CopilotzConfig {
    * ```
    */
   resources?: {
-    /** Path to the resources directory (relative to cwd or absolute). Default: "resources" */
-    path?: string;
+    /**
+     * Path(s) to resource directories or remote packages.
+     * Accepts a single path or an array of paths. Each path can be:
+     * - A local directory (relative to cwd or absolute)
+     * - A remote specifier (`jsr:`, `npm:`, `https://`)
+     *
+     * Remote packages require a `manifest.ts` at their root.
+     * Local directories use `readDir` discovery, or manifest-guided loading
+     * if `manifest.ts` exists.
+     *
+     * @example
+     * ```ts
+     * resources: { path: "./resources" }
+     * resources: { path: ["./resources", "jsr:@copilotz/browser-session@^1.0.0"] }
+     * ```
+     */
+    path?: string | string[];
     /** Enable live reload of file-based resources during development. Reserved for future use. */
     watch?: boolean;
   };
@@ -547,8 +505,6 @@ export interface CopilotzConfig {
   staleProcessingThresholdMs?: number;
   /** Whether to enable streaming mode for real-time token output. */
   stream?: boolean;
-  /** Optional active task ID for task-oriented workflows. */
-  activeTaskId?: string;
   /**
    * Default namespace for collections and data isolation.
    * Can be overridden per-run via RunOptions.namespace.
@@ -696,30 +652,40 @@ export interface CopilotzConfig {
     }
   >;
   /**
-   * Enable the bundled Copilotz development agent.
-   * This agent can create and configure other agents, tools, APIs, and resources
-   * using the built-in framework skills.
+   * Base agent configuration applied to all agents.
+   * Every loaded agent inherits from this; agent-specific fields override.
+   *
+   * - Scalars (model, provider, role): agent-specific wins, falls back to base
+   * - `llmOptions`: deep-merge — base provides defaults, agent overrides specific fields
+   * - Arrays (`allowedTools`): agent-specific replaces entirely (no merge)
    *
    * @example
    * ```ts
-   * copilotzAgent: {
-   *   llmOptions: { provider: "openai", model: "gpt-4o" },
-   *   allowedTools: ["persistent_terminal"],
-   *   instructions: "Only use the terminal unless asked otherwise.",
-   * }
-   * // or with custom id/name
-   * copilotzAgent: {
-   *   id: "dev",
-   *   name: "Dev Assistant",
-   *   llmOptions: { provider: "openai", model: "gpt-4o" },
+   * agent: {
+   *   llmOptions: { provider: "openai", model: "gpt-4o", apiKey: "..." },
    * }
    * ```
-   *
-   * The bundled admin agent config acts as the default layer. Any fields you
-   * provide here override those defaults, including `allowedTools`,
-   * `instructions`, `allowedSkills`, and other normal agent properties.
    */
-  copilotzAgent?: CopilotzAgentOverrides;
+  agent?: Partial<AgentConfig>;
+  /**
+   * Filter callback to include/exclude resources after loading and merging.
+   * Runs before normalization. Return `false` to exclude a resource.
+   *
+   * @param resource - The resource object with at least id/name
+   * @param type - Resource type: "agent", "tool", "api", "mcpServer", "processor", "skill"
+   *
+   * @example
+   * ```ts
+   * filterResources: (resource, type) => {
+   *   if (type === "agent" && resource.name === "copilotz") return false;
+   *   return true;
+   * }
+   * ```
+   */
+  filterResources?: (
+    resource: { id?: string; name?: string; [key: string]: unknown },
+    type: string,
+  ) => boolean;
   /**
    * Automatically load local agent instructions from an AGENTS.md-style file
    * in the current working directory and append them to the active agent's prompt.
@@ -997,48 +963,33 @@ export async function createCopilotz(
     });
   };
 
-  // ---- Phase 1: Resolve resources (file-loaded + explicit merge) ----
-  let resolvedAgents: AgentConfig[] = config.agents ?? [];
-  let resolvedTools: ToolConfig[] | undefined = config.tools;
-  let resolvedApis: APIConfig[] | undefined = config.apis;
-  let resolvedMcpServers: MCPServerConfig[] | undefined = config.mcpServers;
-  let resolvedProcessors = config.processors;
-  let loadedResources: Resources | undefined;
+  // ---- Phase 1: Load bundled + user resources via unified resource loader ----
+  let startedAt = performance.now();
 
+  // 1a. Load bundled resources from the library's own resources/ directory
+  const bundledResourcesUrl = new URL("./resources/", import.meta.url).href;
+  const bundledResources = await loadResources({ path: bundledResourcesUrl });
+  logInit("loadBundledResources", startedAt, {
+    agents: bundledResources.agents?.length ?? 0,
+    tools: bundledResources.tools?.length ?? 0,
+    processors: bundledResources.processors?.length ?? 0,
+    skills: bundledResources.skills?.length ?? 0,
+  });
+
+  // 1b. Load user resources (if path provided)
+  let userResources: Resources | undefined;
   if (config.resources?.path) {
-    const startedAt = performance.now();
-    const loaded = await loadResources({ path: config.resources.path });
-    logInit("loadResources", startedAt, {
+    startedAt = performance.now();
+    userResources = await loadResources({ path: config.resources.path });
+    logInit("loadUserResources", startedAt, {
       path: config.resources.path,
-      agents: loaded.agents?.length ?? 0,
-      tools: loaded.tools?.length ?? 0,
-      apis: loaded.apis?.length ?? 0,
-      mcpServers: loaded.mcpServers?.length ?? 0,
-      skills: loaded.skills?.length ?? 0,
-      processors: loaded.processors?.length ?? 0,
+      agents: userResources.agents?.length ?? 0,
+      tools: userResources.tools?.length ?? 0,
+      apis: userResources.apis?.length ?? 0,
+      mcpServers: userResources.mcpServers?.length ?? 0,
+      skills: userResources.skills?.length ?? 0,
+      processors: userResources.processors?.length ?? 0,
     });
-    loadedResources = loaded;
-    resolvedAgents = mergeResourceArrays<AgentConfig>(
-      loaded.agents ?? [],
-      config.agents,
-    );
-    resolvedTools = mergeResourceArrays<ToolConfig>(
-      loaded.tools as ToolConfig[] ?? [],
-      config.tools,
-    );
-    resolvedApis = mergeResourceArrays<APIConfig>(
-      loaded.apis as APIConfig[] ?? [],
-      config.apis,
-    );
-    resolvedMcpServers = mergeResourceArrays<MCPServerConfig>(
-      loaded.mcpServers as MCPServerConfig[] ?? [],
-      config.mcpServers,
-    );
-    // Processors: append explicit after loaded (no ID-based dedup for processors)
-    resolvedProcessors = [
-      ...(loaded.processors ?? []),
-      ...(config.processors ?? []),
-    ];
 
     if (config.resources.watch) {
       console.warn(
@@ -1047,24 +998,66 @@ export async function createCopilotz(
     }
   }
 
-  // ---- Phase 1b: Resolve skills (bundled + user + project + explicit) ----
-  let startedAt = performance.now();
-  const bundledSkills = await loadBundledSkills();
-  logInit("loadBundledSkills", startedAt, { skills: bundledSkills.length });
-
-  const homeDir = Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE") ?? "";
+  // 1c. Merge resources: user/config win on ID collision over bundled.
+  //     User-defined resources appear first (higher priority for routing).
+  //     Bundled resources fill in non-colliding entries after.
   startedAt = performance.now();
-  const userSkills = homeDir
-    ? await loadSkillsFromDirectory(homeDir + "/.copilotz/skills/", "user")
-    : [];
-  logInit("loadUserSkills", startedAt, {
-    homeDir: homeDir ? "present" : "missing",
-    skills: userSkills.length,
-  });
+  let resolvedAgents = mergeResourceArrays<AgentConfig>(
+    bundledResources.agents ?? [],
+    mergeResourceArrays<AgentConfig>(
+      userResources?.agents ?? [],
+      config.agents,
+    ),
+    { prioritize: "explicit" },
+  );
+  let resolvedTools = mergeResourceArrays<ToolConfig>(
+    bundledResources.tools as ToolConfig[] ?? [],
+    mergeResourceArrays<ToolConfig>(
+      userResources?.tools as ToolConfig[] ?? [],
+      config.tools,
+    ),
+    { prioritize: "explicit" },
+  );
+  let resolvedApis = mergeResourceArrays<APIConfig>(
+    bundledResources.apis as APIConfig[] ?? [],
+    mergeResourceArrays<APIConfig>(
+      userResources?.apis as APIConfig[] ?? [],
+      config.apis,
+    ),
+    { prioritize: "explicit" },
+  );
+  let resolvedMcpServers = mergeResourceArrays<MCPServerConfig>(
+    bundledResources.mcpServers as MCPServerConfig[] ?? [],
+    mergeResourceArrays<MCPServerConfig>(
+      userResources?.mcpServers as MCPServerConfig[] ?? [],
+      config.mcpServers,
+    ),
+    { prioritize: "explicit" },
+  );
+  let resolvedProcessors = [
+    ...(userResources?.processors ?? []),
+    ...(config.processors ?? []),
+    ...(bundledResources.processors ?? []),
+  ];
+  logInit("mergeResources", startedAt);
 
-  const projectSkills = loadedResources?.skills ?? [];
+  // 1d. Wire loaded default processors into the event engine
+  if (bundledResources.processors?.length) {
+    const defaultProcessorMap: Record<
+      string,
+      EventProcessor<unknown, ProcessorDeps>
+    > = {};
+    for (const p of bundledResources.processors) {
+      const key = (p as { eventType?: string }).eventType?.toUpperCase();
+      if (key) defaultProcessorMap[key] = p as EventProcessor<unknown, ProcessorDeps>;
+    }
+    setDefaultProcessors(defaultProcessorMap);
+  }
 
-  // Load remote/explicit skills from config
+  // 1e. Resolve skills (bundled + project + explicit)
+  const bundledSkills = bundledResources.skills ?? [];
+  const projectSkills = userResources?.skills ?? [];
+
   startedAt = performance.now();
   const explicitSkills: Skill[] = [];
   if (config.skills) {
@@ -1099,12 +1092,9 @@ export async function createCopilotz(
     loaded: explicitSkills.length,
   });
 
-  // Merge: project > explicit > user > bundled (first wins on name collision)
-  startedAt = performance.now();
-  const allSkills = mergeSkills(
+  let allSkills = mergeSkills(
     projectSkills,
     explicitSkills,
-    userSkills,
     bundledSkills,
   );
   logInit("mergeSkills", startedAt, {
@@ -1112,36 +1102,30 @@ export async function createCopilotz(
     projectSkills: projectSkills.length,
   });
 
-  // ---- Phase 1c: Resolve copilotz agent ----
-  if (config.copilotzAgent) {
-    try {
-      startedAt = performance.now();
-      const { instructions, config: agentConfigBase } = await loadAdminAgent();
-      logInit("loadAdminAgent", startedAt, {
-        instructionLength: instructions.length,
-      });
-      const resolvedCopilotzAgentId = config.copilotzAgent.id ??
-        config.copilotzAgent.name ?? "copilotz";
-      const resolvedCopilotzAgentName = config.copilotzAgent.name ??
-        config.copilotzAgent.id ?? "copilotz";
-      const copilotzAgent = {
-        ...agentConfigBase,
-        ...config.copilotzAgent,
-        id: resolvedCopilotzAgentId,
-        name: resolvedCopilotzAgentName,
-        instructions: config.copilotzAgent.instructions ?? instructions,
-        llmOptions: config.copilotzAgent.llmOptions,
-      } as AgentConfig;
-      // Only add if not already overridden by user
-      const alreadyDefined = resolvedAgents.some(
-        (a) => (a.id ?? a.name) === copilotzAgent.id,
-      );
-      if (!alreadyDefined) {
-        resolvedAgents.push(copilotzAgent);
-      }
-    } catch (err) {
-      console.warn("[copilotz] Failed to load bundled copilotz agent:", err);
-    }
+  // 1f. Apply filterResources callback
+  if (config.filterResources) {
+    const filter = config.filterResources;
+    const asFilterable = (r: unknown) =>
+      r as { id?: string; name?: string; [key: string]: unknown };
+    resolvedAgents = resolvedAgents.filter((r) => filter(asFilterable(r), "agent"));
+    resolvedTools = resolvedTools.filter((r) => filter(asFilterable(r), "tool"));
+    resolvedApis = resolvedApis.filter((r) => filter(asFilterable(r), "api"));
+    resolvedMcpServers = resolvedMcpServers.filter((r) => filter(asFilterable(r), "mcpServer"));
+    resolvedProcessors = resolvedProcessors.filter((r) => filter(asFilterable(r), "processor"));
+    allSkills = allSkills.filter((r) => filter(asFilterable(r), "skill"));
+    logInit("filterResources", startedAt);
+  }
+
+  // 1g. Apply agent base config (only when explicitly provided)
+  if (config.agent) {
+    const base = config.agent;
+    resolvedAgents = resolvedAgents.map((agent) => ({
+      ...base,
+      ...agent,
+      llmOptions: agent.llmOptions
+        ? { ...base.llmOptions, ...agent.llmOptions }
+        : base.llmOptions,
+    } as AgentConfig));
   }
 
   if (resolvedAgents.length === 0) {
@@ -1275,7 +1259,7 @@ export async function createCopilotz(
     const collectionEmbeddingFn = config.rag?.embedding
       ? async (text: string): Promise<number[]> => {
         // Import embedding connector dynamically to avoid circular deps
-        const { embed } = await import("@/connectors/embeddings/index.ts");
+        const { embed } = await import("@/runtime/embeddings/index.ts");
         const result = await embed([text], config.rag!.embedding);
         return result.embeddings[0] ?? [];
       }
@@ -1355,7 +1339,6 @@ export async function createCopilotz(
       threadMetadata: baseConfig.threadMetadata,
       queueTTL: baseConfig.queueTTL,
       stream: options?.stream ?? baseConfig.stream ?? false,
-      activeTaskId: baseConfig.activeTaskId,
       customProcessors: baseConfig.customProcessorsByType,
       assetStore: assetStoreForRun,
       assetConfig: normalizedAssetConfig,

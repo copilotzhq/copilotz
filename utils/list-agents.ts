@@ -4,7 +4,7 @@
  * @module
  */
 
-import type { Agent } from "@/interfaces/index.ts";
+import type { Agent } from "@/types/index.ts";
 
 /**
  * Returns a simplified list of agents suitable for public API responses.

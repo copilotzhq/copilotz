@@ -1,6 +1,6 @@
 # Database
 
-Copilotz uses PostgreSQL as its data layer, with PGLite available for development and embedded use cases. The database stores events, threads, documents, and a knowledge graph that connects everything.
+Copilotz uses PostgreSQL as its data layer, with PGLite available for development and embedded use cases. Each provisioned schema has **four tables**: **`threads`**, **`events`** (the queue), **`nodes`**, and **`edges`**. Messages, RAG payloads, users, entities, and collection records are all graph **nodes**; relationships are **edges**.
 
 > For detailed schema documentation, see [Tables Structure](./tables-structure.md).
 
@@ -81,8 +81,8 @@ This is what makes Copilotz different from a simple chat database. Everything is
 |------|-------------|
 | `user` | A user in the system |
 | `message` | A conversation message |
-| `document` | An ingested document |
-| `chunk` | A piece of a document |
+| `document` | RAG source metadata (URI, hash, status, title, …) — not a separate SQL table |
+| `chunk` | An embedded segment of a document for retrieval |
 | `entity` | An extracted entity (person, company, concept) |
 | `collection:*` | Custom collection records |
 
@@ -104,22 +104,24 @@ This is what makes Copilotz different from a simple chat database. Everything is
 const node = await copilotz.ops.createNode({
   type: "entity",
   namespace: "default",
-  properties: { name: "Acme Corp", type: "organization" },
+  name: "Acme Corp",
+  data: { entityType: "organization" },
 });
 
 // Create an edge
 await copilotz.ops.createEdge({
-  sourceId: messageId,
-  targetId: node.id,
+  sourceNodeId: messageId,
+  targetNodeId: node.id,
   type: "MENTIONS",
 });
 
-// Search nodes by embedding
+// Search nodes by embedding (supply a vector; natural-language helpers use chunk search / your embedder)
 const results = await copilotz.ops.searchNodes({
-  query: "technology companies",
-  namespace: "default",
-  type: "entity",
+  embedding: embeddingVector,
+  namespaces: ["default"],
+  nodeTypes: ["entity"],
   limit: 10,
+  minSimilarity: 0.7,
 });
 
 // Traverse the graph
@@ -146,7 +148,7 @@ Copilotz supports two levels of data isolation:
 PostgreSQL schemas provide complete database-level separation:
 
 ```typescript
-// Each tenant gets their own schema with all tables
+// Each tenant gets their own schema (threads, events, nodes, edges)
 await copilotz.schema.provision("tenant_acme");
 
 // Run operations in a tenant's schema
@@ -261,7 +263,7 @@ const allUsers = await copilotz.ops.getUserNodesByExternalId("external-id");
 ```typescript
 // Add to queue
 await copilotz.ops.addToQueue(threadId, {
-  type: "CUSTOM_EVENT",
+  eventType: "CUSTOM_EVENT",
   payload: { ... },
 });
 
@@ -272,25 +274,27 @@ const item = await copilotz.ops.getProcessingQueueItem(threadId);
 await copilotz.ops.updateQueueItemStatus(queueId, "completed");
 ```
 
-### RAG Operations
+### RAG operations (document + chunk nodes)
+
+High-level RAG helpers read and write **`document` and `chunk` nodes**; they are not separate relational tables.
 
 ```typescript
-// Create a document
+// Register document metadata (creates a document node)
 const doc = await copilotz.ops.createDocument({
   source: "https://...",
   namespace: "docs",
 });
 
-// Search chunks
-const chunks = await copilotz.ops.searchChunks({
-  query: "authentication setup",
-  namespace: "docs",
+// Vector search over chunk nodes (supply an embedding; searchChunks delegates here)
+const chunks = await copilotz.ops.searchChunksFromGraph({
+  embedding: embeddingVector,
+  namespaces: ["docs"],
   limit: 5,
+  threshold: 0.7,
 });
 
-// Get namespace stats
+// Count document vs chunk nodes per namespace
 const stats = await copilotz.ops.getNamespaceStats();
-// { "docs": { documentCount: 10, chunkCount: 500 } }
 ```
 
 ## Reusing a Database Instance

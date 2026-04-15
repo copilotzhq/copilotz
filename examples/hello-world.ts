@@ -15,7 +15,7 @@ import { createCopilotz } from "../index.ts";
 // ---------------------------------------------------------------------------
 // 1. Read the MiniMax API key from the environment
 // ---------------------------------------------------------------------------
-const API_KEY = Deno.env.get("API_KEY");
+const API_KEY = Deno.env.get("API_KEY") || Deno.env.get("MINIMAX_KEY");
 if (!API_KEY) {
   console.error(
     "❌  API_KEY is not set.\n   Run with: API_KEY=<key> deno run -A --env examples/hello-world.ts",

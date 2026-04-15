@@ -5,7 +5,7 @@
  *   deno run -A --env-file=../../clients/mobizap/.env scripts/gemini-explicit-cache-smoke.ts
  *   deno run -A --env-file=../../clients/mobizap/.env scripts/gemini-explicit-cache-smoke.ts gemini-3.1-flash-lite-preview
  */
-import { request } from "../connectors/request/index.ts";
+import { request } from "@/runtime/http.ts";
 
 const env = Deno.env.toObject();
 const apiKey = env.GEMINI_API_KEY || env.GEMINI_KEY;

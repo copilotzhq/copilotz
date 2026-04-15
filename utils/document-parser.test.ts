@@ -13,8 +13,8 @@ import {
   buildAssetRefForStore,
   createMemoryAssetStore,
   resolveAssetRefsInMessages,
-} from "@/utils/assets.ts";
-import type { ChatMessage } from "@/connectors/llm/types.ts";
+} from "@/runtime/storage/assets.ts";
+import type { ChatMessage } from "@/runtime/llm/types.ts";
 
 function writeUInt16(target: Uint8Array, offset: number, value: number): void {
   target[offset] = value & 0xFF;

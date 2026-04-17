@@ -22,6 +22,9 @@ if (!API_KEY) {
 
 // 2. Create Copilotz instance
 const copilotz = await createCopilotz({
+  resources: {
+    imports: ["tools.get_current_time"],
+  },
   agents: [
     {
       id: "timekeeper",

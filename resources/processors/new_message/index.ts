@@ -4,7 +4,6 @@ import type { EventProcessor, NewEvent } from "@/types/index.ts";
 // Import Tools
 import { generateAllApiTools } from "@/resources/processors/tool_call/generators/api-generator.ts";
 import { generateAllMcpTools } from "@/resources/processors/tool_call/generators/mcp-generator.ts";
-import { getNativeTools } from "@/resources/tools/_registry.ts";
 
 // Import Agent Interfaces
 import type {
@@ -1492,6 +1491,7 @@ export const messageProcessor: EventProcessor<
             query: messageContext.contentText,
             ops,
             embeddingConfig: context.embeddingConfig,
+            embeddingProviders: context.embeddingProviders,
             threadId,
             userId,
           });
@@ -1659,10 +1659,7 @@ async function buildProcessingContext(
     throw new Error("No agents provided in context for this session");
   }
 
-  const nativeToolsArray = Object.values(getNativeTools())
-    .map(toExecutableTool)
-    .filter((tool): tool is ExecutableTool => Boolean(tool));
-  const userTools = (context.tools || [])
+  const loadedTools = (context.tools || [])
     .map(toExecutableTool)
     .filter((tool): tool is ExecutableTool => Boolean(tool));
   const apiTools = context.apis ? generateAllApiTools(context.apis) : [];
@@ -1670,8 +1667,7 @@ async function buildProcessingContext(
     ? await generateAllMcpTools(context.mcpServers)
     : [];
   const allTools: ExecutableTool[] = [
-    ...nativeToolsArray,
-    ...userTools,
+    ...loadedTools,
     ...apiTools,
     ...mcpTools,
   ];

@@ -7,11 +7,10 @@
 
 import type { 
   EmbeddingConfig, 
-  EmbeddingRequest, 
   EmbeddingResponse,
-  EmbeddingProviderName,
+  EmbeddingProviderFactory,
+  EmbeddingProviderRegistry,
 } from "@/runtime/embeddings/types.ts";
-import { getEmbeddingProvider, getEmbeddingProviderDefaults } from "@/runtime/embeddings/registry.ts";
 import { post, type RequestResponse } from "@/runtime/http.ts";
 
 export type { 
@@ -29,6 +28,29 @@ export {
   isEmbeddingProviderAvailable,
   getEmbeddingProviderDefaults,
 } from "@/runtime/embeddings/registry.ts";
+
+let defaultEmbeddingRegistryPromise:
+  Promise<typeof import("@/runtime/embeddings/registry.ts")> | undefined;
+
+async function getEmbeddingRegistryModule(
+  registry?: EmbeddingProviderRegistry,
+): Promise<{
+  registry: EmbeddingProviderRegistry;
+  defaults: Record<string, { model: string; dimensions: number; apiKeyEnv: string }>;
+}> {
+  if (registry) {
+    const mod = await import("@/runtime/embeddings/registry.ts");
+    return { registry, defaults: mod.getEmbeddingProviderDefaults() };
+  }
+  if (!defaultEmbeddingRegistryPromise) {
+    defaultEmbeddingRegistryPromise = import("@/runtime/embeddings/registry.ts");
+  }
+  const mod = await defaultEmbeddingRegistryPromise;
+  return {
+    registry: mod.embeddingProviders,
+    defaults: mod.getEmbeddingProviderDefaults(),
+  };
+}
 
 /**
  * Get environment variable (runtime-agnostic)
@@ -88,7 +110,8 @@ function truncateToTokenLimit(text: string, maxTokens: number): string {
 export async function embed(
   texts: string[],
   config: EmbeddingConfig,
-  env: Record<string, string> = {}
+  env: Record<string, string> = {},
+  providerRegistry?: EmbeddingProviderRegistry,
 ): Promise<EmbeddingResponse> {
   if (!texts.length) {
     return {
@@ -103,7 +126,10 @@ export async function embed(
   const truncatedTexts = texts.map(text => truncateToTokenLimit(text, maxInputTokens));
 
   const provider = config.provider;
-  const defaults = getEmbeddingProviderDefaults()[provider];
+  const { registry, defaults: defaultConfigMap } = await getEmbeddingRegistryModule(
+    providerRegistry,
+  );
+  const defaults = defaultConfigMap[provider];
 
   // Merge configuration with defaults and environment
   const mergedConfig: EmbeddingConfig = {
@@ -118,7 +144,14 @@ export async function embed(
   };
 
   // Get provider API
-  const providerFactory = getEmbeddingProvider(provider);
+  const providerFactory = registry[provider] as EmbeddingProviderFactory | undefined;
+  if (!providerFactory) {
+    throw new Error(
+      `Embedding provider '${provider}' is not supported. Available providers: ${
+        Object.keys(registry).join(", ")
+      }`,
+    );
+  }
   const providerAPI = providerFactory(mergedConfig);
 
   // Process in batches if needed
@@ -178,9 +211,10 @@ export async function embed(
 export async function embedOne(
   text: string,
   config: EmbeddingConfig,
-  env: Record<string, string> = {}
+  env: Record<string, string> = {},
+  providerRegistry?: EmbeddingProviderRegistry,
 ): Promise<number[]> {
-  const response = await embed([text], config, env);
+  const response = await embed([text], config, env, providerRegistry);
   if (!response.embeddings.length) {
     throw new Error("No embedding generated");
   }

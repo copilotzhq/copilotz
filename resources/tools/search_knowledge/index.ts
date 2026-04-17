@@ -63,7 +63,12 @@ export default {
       searchNamespaces = agentRagOptions?.namespaces ?? ["default"];
     }
 
-    const embeddingResponse = await embed([query], embeddingConfig);
+    const embeddingResponse = await embed(
+      [query],
+      embeddingConfig,
+      {},
+      context?.embeddingProviders,
+    );
     if (!embeddingResponse.embeddings.length) {
       throw new Error("Failed to generate embedding for query");
     }

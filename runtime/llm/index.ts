@@ -8,7 +8,6 @@ import type {
   StreamCallback,
   ToolInvocation,
 } from "@/runtime/llm/types.ts";
-import { getProvider } from "@/runtime/llm/registry.ts";
 import { estimateUsageCost } from "@/runtime/llm/pricing.ts";
 import { resolveProviderApiKey } from "@/runtime/llm/config.ts";
 import {
@@ -24,7 +23,11 @@ import {
   withDefaultStopSequences,
 } from "@/runtime/llm/utils.ts";
 import { streamPost, type StreamResponse } from "@/runtime/http.ts";
-import type { ProviderUsageUpdate, TokenUsage } from "@/runtime/llm/types.ts";
+import type {
+  ProviderRegistry,
+  ProviderUsageUpdate,
+  TokenUsage,
+} from "@/runtime/llm/types.ts";
 
 const DEFAULT_FALLBACK_REASONS: ProviderFallbackReason[] = [
   "timeout",
@@ -33,6 +36,19 @@ const DEFAULT_FALLBACK_REASONS: ProviderFallbackReason[] = [
   "server_error",
   "provider_error",
 ];
+
+let defaultProviderRegistryPromise: Promise<ProviderRegistry> | undefined;
+
+async function getProviderRegistry(
+  registry?: ProviderRegistry,
+): Promise<ProviderRegistry> {
+  if (registry) return registry;
+  if (!defaultProviderRegistryPromise) {
+    defaultProviderRegistryPromise = import("@/runtime/llm/registry.ts")
+      .then((mod) => mod.providers);
+  }
+  return await defaultProviderRegistryPromise;
+}
 
 function buildAttemptConfig(
   baseConfig: ProviderConfig,
@@ -178,6 +194,7 @@ export async function chat(
   config: ProviderConfig,
   env: Record<string, string> = {},
   stream?: StreamCallback,
+  providerRegistry?: ProviderRegistry,
 ): Promise<ChatResponse> {
   // Handle mock responses
   if (request.answer) {
@@ -211,11 +228,19 @@ export async function chat(
   ];
 
   let lastError: unknown = null;
+  const registry = await getProviderRegistry(providerRegistry);
 
   for (let index = 0; index < attemptConfigs.length; index++) {
     const attemptConfig = attemptConfigs[index];
     const attemptProvider = attemptConfig.provider!;
-    const providerFactory = getProvider(attemptProvider);
+    const providerFactory = registry[attemptProvider];
+    if (!providerFactory) {
+      throw new Error(
+        `Provider '${attemptProvider}' is not supported. Available providers: ${
+          Object.keys(registry).join(", ")
+        }`,
+      );
+    }
     const providerAPI = providerFactory(attemptConfig);
     const localStopSequences = getLocalStopSequences(attemptConfig);
     const requestConfig = {

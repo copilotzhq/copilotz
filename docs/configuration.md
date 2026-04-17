@@ -13,9 +13,12 @@ const copilotz = await createCopilotz({
   // Agents (required unless resources.path is set)
   agents: [...],
   
-  // File-based resources (loads agents, tools, APIs, processors from directory)
+  // File-based resources and bundled presets
   resources: {
     path: "./resources",
+    preset: ["core", "code"],
+    imports: ["channels.whatsapp", "tools.read_file"],
+    filterResources: (resource, type) => true,
     watch: false,            // Reserved for future use
   },
   
@@ -63,7 +66,7 @@ const copilotz = await createCopilotz({
 
 ## Resources
 
-Load agents, tools, APIs, and processors from a directory structure instead of (or in addition to) defining them inline. When `resources.path` is set, `createCopilotz` automatically calls `loadResources` internally and merges the results with any explicit config.
+Load agents, tools, APIs, processors, providers, and other resources from a directory structure instead of (or in addition to) defining them inline. When `resources.path` is set, `createCopilotz` automatically calls `loadResources` internally and merges the results with any explicit config.
 
 ```typescript
 // File-based only — agents loaded from resources/agents/
@@ -73,9 +76,13 @@ const copilotz = await createCopilotz({
   stream: true,
 });
 
-// Mixed — file-loaded resources + explicit overrides
+// Mixed — bundled core + code tools + selected file-loaded resources
 const copilotz = await createCopilotz({
-  resources: { path: "./resources" },
+  resources: {
+    path: "./resources",
+    preset: ["core", "code"],
+    imports: ["channels.whatsapp", "tools.read_file"],
+  },
   tools: [myExtraTool],           // Appended to file-loaded tools
   agents: [{ id: "assistant" }],  // Replaces file-loaded "assistant" (ID collision)
   dbConfig: { url: Deno.env.get("DATABASE_URL") },
@@ -94,10 +101,21 @@ When both `resources.path` and explicit arrays are provided:
 
 ```typescript
 resources: {
-  path: "./resources",   // Path to resources directory (relative to cwd or absolute)
-  watch: false,          // Reserved for future live-reload support
+  path: "./resources",           // Path to resources directory (relative to cwd or absolute)
+  preset: ["core"],              // Bundled presets; built-ins default to ["core"]
+  imports: ["tools.read_file"],  // Pre-load selectors (dot notation)
+  filterResources: (resource, type) => true, // Only post-load filter hook
+  watch: false,                  // Reserved for future live-reload support
 }
 ```
+
+### Presets and Imports
+
+- `preset` loads named bundled groups such as `core`, `rag`, `admin`, and `code`
+- bundled/native resources always include `core`, even if you only pass additional presets such as `["code"]`
+- `imports` narrows loading with dot notation like `channels`, `channels.whatsapp`, or `tools.read_file`
+- Presets and imports are additive unions
+- `resources.filterResources` runs after loading and merging; there is no top-level `filterResources` anymore
 
 See [Resource Loaders](./loaders.md) for the expected directory structure.
 

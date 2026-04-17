@@ -1,8 +1,6 @@
 import { generateAllApiTools } from "./generators/api-generator.ts";
 import { generateAllMcpTools } from "./generators/mcp-generator.ts";
 
-import { getNativeTools } from "@/resources/tools/_registry.ts";
-
 import type {
   Agent,
   ChatContext,
@@ -162,9 +160,6 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
         ) ?? null;
 
       // Build tools
-      const nativeToolsArray = Object.values(getNativeTools()).filter(
-        hasExecute,
-      );
       const userTools = (context.tools || []).filter(hasExecute);
       const apiTools = context.apis
         ? generateAllApiTools(context.apis).filter(hasExecute)
@@ -173,7 +168,6 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
         ? (await generateAllMcpTools(context.mcpServers)).filter(hasExecute)
         : [];
       const allTools: ExecutableTool[] = [
-        ...nativeToolsArray,
         ...userTools,
         ...apiTools,
         ...mcpTools,

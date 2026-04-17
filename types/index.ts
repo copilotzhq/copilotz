@@ -690,6 +690,18 @@ export interface ChatContext {
   ragConfig?: RagConfig;
   /** Embedding configuration. */
   embeddingConfig?: EmbeddingConfig;
+  /** Available LLM providers keyed by provider name. */
+  llmProviders?: Record<
+    string,
+    import("@/runtime/llm/types.ts").ProviderFactory
+  >;
+  /** Available embedding providers keyed by provider name. */
+  embeddingProviders?: Record<
+    string,
+    import("@/runtime/embeddings/types.ts").EmbeddingProviderFactory
+  >;
+  /** Available asset storage backend names. */
+  storageBackends?: string[];
   /** Security-related runtime hooks. */
   security?: {
     /**

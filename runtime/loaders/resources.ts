@@ -8,6 +8,8 @@
  */
 
 import type { AgentConfig, APIConfig, MCPServer, ToolConfig } from "@/index.ts";
+import type { ProviderFactory } from "@/runtime/llm/types.ts";
+import type { EmbeddingProviderFactory } from "@/runtime/embeddings/types.ts";
 import {
   type ChannelEntry,
   type EgressAdapter,
@@ -61,7 +63,29 @@ export type FeatureEntry = {
  */
 export interface ResourceManifest {
   provides: Partial<Record<string, string[]>>;
+  presets?: Record<string, string[]>;
 }
+
+export interface ResourceLoadOptions {
+  path: string | string[];
+  preset?: string[];
+  imports?: string[];
+}
+
+export type LoadedLlmProvider = {
+  name: string;
+  factory: ProviderFactory;
+};
+
+export type LoadedEmbeddingProvider = {
+  name: string;
+  factory: EmbeddingProviderFactory;
+};
+
+export type LoadedStorageAdapter = {
+  name: string;
+  module: Record<string, unknown>;
+};
 
 /**
  * Resources loaded from one or more paths.
@@ -85,6 +109,12 @@ export type Resources = {
   features?: FeatureEntry[];
   /** Array of loaded channels with optional ingress/egress adapters. */
   channels?: ChannelEntry[];
+  /** Array of loaded LLM providers. */
+  llm?: LoadedLlmProvider[];
+  /** Array of loaded embedding providers. */
+  embeddings?: LoadedEmbeddingProvider[];
+  /** Array of loaded storage adapters. */
+  storage?: LoadedStorageAdapter[];
   /** Extensible: marketplace packages can contribute arbitrary resource types. */
   [key: string]: unknown;
 };
@@ -99,7 +129,127 @@ const KNOWN_RESOURCE_TYPES = [
   "mcpServers",
   "features",
   "channels",
+  "llm",
+  "embeddings",
+  "storage",
 ] as const;
+
+type ResourceImportSelection = {
+  hasExplicitSelection: boolean;
+  all: Set<string>;
+  named: Map<string, Set<string>>;
+};
+
+function mergeNamedResources<T extends { name: string }>(
+  existing: T[] | undefined,
+  incoming: T[] | undefined,
+): T[] | undefined {
+  if (!incoming?.length) return existing;
+  if (!existing?.length) return [...incoming];
+
+  const merged = [...existing];
+  const seen = new Set(existing.map((item) => item.name));
+  for (const item of incoming) {
+    if (!seen.has(item.name)) {
+      merged.push(item);
+      seen.add(item.name);
+    }
+  }
+  return merged;
+}
+
+function expandPresetImports(
+  manifest: ResourceManifest,
+  presetNames: string[],
+): string[] {
+  const manifestPresets = manifest.presets ?? {};
+  const expanded: string[] = [];
+  for (const presetName of presetNames) {
+    const imports = manifestPresets[presetName];
+    if (Array.isArray(imports)) {
+      expanded.push(...imports);
+    } else if (isInitDebugEnabled()) {
+      console.warn(
+        `[copilotz:resources] Unknown preset "${presetName}" in manifest selection`,
+      );
+    }
+  }
+  return expanded;
+}
+
+function parseImportSelection(
+  imports: string[] | undefined,
+): ResourceImportSelection {
+  const normalized = (imports ?? []).filter((value) =>
+    typeof value === "string" && value.length > 0
+  );
+  const selection: ResourceImportSelection = {
+    hasExplicitSelection: normalized.length > 0,
+    all: new Set<string>(),
+    named: new Map<string, Set<string>>(),
+  };
+
+  for (const entry of normalized) {
+    const parts = entry.split(".").filter(Boolean);
+    if (parts.length === 0 || parts.length > 2) {
+      if (isInitDebugEnabled()) {
+        console.warn(
+          `[copilotz:resources] Ignoring invalid import selector "${entry}"`,
+        );
+      }
+      continue;
+    }
+    const [type, name] = parts;
+    if (!name) {
+      selection.all.add(type);
+      selection.named.delete(type);
+      continue;
+    }
+    if (selection.all.has(type)) continue;
+    const existing = selection.named.get(type) ?? new Set<string>();
+    existing.add(name);
+    selection.named.set(type, existing);
+  }
+
+  return selection;
+}
+
+function getSelectedNames(
+  type: string,
+  names: string[],
+  selection?: ResourceImportSelection,
+): string[] {
+  if (!selection?.hasExplicitSelection) return [...names];
+  if (selection.all.has(type)) return [...names];
+  const selected = selection.named.get(type);
+  if (!selected?.size) return [];
+  return names.filter((name) => selected.has(name));
+}
+
+function resolveManifestProvides(
+  manifest: ResourceManifest,
+  options?: Pick<ResourceLoadOptions, "preset" | "imports">,
+): Partial<Record<string, string[]>> {
+  const presetImports = expandPresetImports(manifest, options?.preset ?? []);
+  const selection = parseImportSelection([
+    ...presetImports,
+    ...(options?.imports ?? []),
+  ]);
+
+  if (!selection.hasExplicitSelection) {
+    return manifest.provides;
+  }
+
+  const resolved: Partial<Record<string, string[]>> = {};
+  for (const [type, names] of Object.entries(manifest.provides)) {
+    if (!Array.isArray(names) || names.length === 0) continue;
+    const selected = getSelectedNames(type, names, selection);
+    if (selected.length > 0) {
+      resolved[type] = selected;
+    }
+  }
+  return resolved;
+}
 
 // ---- Configuration --------------------------------------------------------
 
@@ -287,21 +437,41 @@ async function loadToolsByManifest(
 ): Promise<ToolConfig[]> {
   const settled = await Promise.all(
     names.filter((n) => !n.startsWith("_")).map(async (name) => {
-      const toolUrl = joinUrl(baseUrl, "tools", name);
-      const [config, execute] = await Promise.all([
-        importModuleSafe(joinUrl(toolUrl, "config.ts")),
-        importModuleSafe(joinUrl(toolUrl, "execute.ts")),
-      ]);
-      if (!config || !execute) return null;
-      return {
-        id: name,
-        name,
-        ...(config as object),
-        execute,
-      } as ToolConfig;
+      return await loadToolModule(baseUrl, name);
     }),
   );
   return settled.filter((r): r is ToolConfig => r !== null);
+}
+
+async function loadToolModule(
+  baseUrl: string,
+  name: string,
+): Promise<ToolConfig | null> {
+  const toolUrl = joinUrl(baseUrl, "tools", name);
+  const [config, execute, indexMod] = await Promise.all([
+    importModuleSafe(joinUrl(toolUrl, "config.ts")),
+    importModuleSafe(joinUrl(toolUrl, "execute.ts")),
+    importModuleSafe(joinUrl(toolUrl, "index.ts")),
+  ]);
+
+  if (config && execute) {
+    return {
+      id: name,
+      name,
+      ...(config as object),
+      execute,
+    } as ToolConfig;
+  }
+
+  if (indexMod && typeof indexMod === "object") {
+    return {
+      id: name,
+      name,
+      ...(indexMod as object),
+    } as ToolConfig;
+  }
+
+  return null;
 }
 
 async function loadApisByManifest(
@@ -370,6 +540,22 @@ async function loadProcessorsByManifest(
   return settled.filter((r): r is ProcessorEntry => r !== null);
 }
 
+async function loadMcpServersByManifest(
+  baseUrl: string,
+  names: string[],
+): Promise<MCPServer[]> {
+  const settled = await Promise.all(names.map(async (name) => {
+    const mod = await importModuleSafe(joinUrl(baseUrl, "mcpServers", name, "index.ts")) ??
+      await importModuleSafe(joinUrl(baseUrl, "mcpServers", name + ".ts"));
+    if (!mod || typeof mod !== "object") return null;
+    return {
+      name,
+      ...(mod as object),
+    } as MCPServer;
+  }));
+  return settled.filter((r): r is MCPServer => r !== null);
+}
+
 /**
  * Generic loader for extensible resource types (llm, embeddings, storage, collections, etc.).
  *
@@ -428,6 +614,65 @@ async function loadGenericByManifest(
     return null;
   }));
   return settled.filter((r) => r !== null);
+}
+
+async function loadNamedGenericByManifest<T>(
+  baseUrl: string,
+  resourceType: string,
+  names: string[],
+  isValid?: (value: unknown) => value is T,
+): Promise<Array<{ name: string; value: T }>> {
+  const barrelUrl = joinUrl(baseUrl, resourceType, "mod.ts");
+  const barrel = await importModuleSafe(barrelUrl);
+  if (barrel && typeof barrel === "object") {
+    const barrelMap = barrel as Record<string, unknown>;
+    return names.flatMap((name) => {
+      const value = barrelMap[name];
+      if (
+        typeof value === "undefined" ||
+        value === null ||
+        (isValid && !isValid(value))
+      ) {
+        return [];
+      }
+      return [{ name, value: value as T }];
+    });
+  }
+
+  const settled = await Promise.all(names.map(async (name) => {
+    const resourceUrl = joinUrl(baseUrl, resourceType, name);
+    const [config, adapter, singleMod, indexMod] = await Promise.all([
+      importModuleSafe(joinUrl(resourceUrl, "config.ts")),
+      importModuleSafe(joinUrl(resourceUrl, "adapter.ts")),
+      importModuleSafe(resourceUrl + ".ts"),
+      importModuleSafe(joinUrl(resourceUrl, "index.ts")),
+    ]);
+
+    let value: unknown = null;
+    if (config || adapter) {
+      value = {
+        ...(config && typeof config === "object" ? config : {}),
+        ...(adapter && typeof adapter === "object" ? adapter : {}),
+      };
+    } else if (singleMod) {
+      value = singleMod;
+    } else if (indexMod) {
+      value = indexMod;
+    }
+
+    if (
+      value === null ||
+      typeof value === "undefined" ||
+      (isValid && !isValid(value))
+    ) {
+      return null;
+    }
+    return { name, value: value as T };
+  }));
+
+  return settled.filter((entry): entry is { name: string; value: T } =>
+    entry !== null
+  );
 }
 
 // ---- Feature loading ------------------------------------------------------
@@ -612,8 +857,9 @@ async function loadFromManifest(
   baseUrl: string,
   manifest: ResourceManifest,
   logPhase: LogPhase,
+  options?: Pick<ResourceLoadOptions, "preset" | "imports">,
 ): Promise<Resources> {
-  const { provides } = manifest;
+  const provides = resolveManifestProvides(manifest, options);
   const resources: Resources = { agents: [] };
 
   const timed = async <T>(
@@ -664,6 +910,17 @@ async function loadFromManifest(
     );
   }
 
+  if (provides.mcpServers?.length) {
+    tasks.push(
+      timed(
+        "mcpServers",
+        () => loadMcpServersByManifest(baseUrl, provides.mcpServers!),
+      ).then((r) => {
+        resources.mcpServers = r;
+      }),
+    );
+  }
+
   if (provides.processors?.length) {
     tasks.push(
       timed(
@@ -681,7 +938,7 @@ async function loadFromManifest(
         const skillsUrl = joinUrl(baseUrl, "skills");
         const skillsPath =
           decodeURIComponent(skillsUrl.replace("file://", "")) + "/";
-        return loadSkillsFromDirectory(skillsPath, "project");
+        return loadSkillsFromDirectory(skillsPath, "project", provides.skills);
       }).then((r) => {
         resources.skills = r;
       }),
@@ -711,6 +968,55 @@ async function loadFromManifest(
     );
   }
 
+  if (provides.llm?.length) {
+    tasks.push(
+      timed("llm", async () => {
+        const providers = await loadNamedGenericByManifest<ProviderFactory>(
+          baseUrl,
+          "llm",
+          provides.llm!,
+          (value): value is ProviderFactory => typeof value === "function",
+        );
+        return providers.map(({ name, value }) => ({ name, factory: value }));
+      }).then((r) => {
+        resources.llm = r;
+      }),
+    );
+  }
+
+  if (provides.embeddings?.length) {
+    tasks.push(
+      timed("embeddings", async () => {
+        const providers = await loadNamedGenericByManifest<EmbeddingProviderFactory>(
+          baseUrl,
+          "embeddings",
+          provides.embeddings!,
+          (value): value is EmbeddingProviderFactory => typeof value === "function",
+        );
+        return providers.map(({ name, value }) => ({ name, factory: value }));
+      }).then((r) => {
+        resources.embeddings = r;
+      }),
+    );
+  }
+
+  if (provides.storage?.length) {
+    tasks.push(
+      timed("storage", async () => {
+        const providers = await loadNamedGenericByManifest<Record<string, unknown>>(
+          baseUrl,
+          "storage",
+          provides.storage!,
+          (value): value is Record<string, unknown> =>
+            typeof value === "object" && value !== null,
+        );
+        return providers.map(({ name, value }) => ({ name, module: value }));
+      }).then((r) => {
+        resources.storage = r;
+      }),
+    );
+  }
+
   for (const [type, names] of genericEntries) {
     tasks.push(
       timed(type, () => loadGenericByManifest(baseUrl, type, names!))
@@ -730,8 +1036,16 @@ async function loadFromManifest(
 async function loadFromDirectory(
   baseUrl: string,
   logPhase: LogPhase,
+  options?: Pick<ResourceLoadOptions, "imports">,
 ): Promise<Resources> {
   const resources: Resources = { agents: [] };
+  const selection = parseImportSelection(options?.imports);
+  const shouldLoadCategory = (type: string): boolean =>
+    !selection.hasExplicitSelection ||
+    selection.all.has(type) ||
+    selection.named.has(type);
+  const filterNames = (type: string, names: string[]): string[] =>
+    getSelectedNames(type, names, selection);
 
   const collectEntries = async (url: string): Promise<Deno.DirEntry[]> => {
     const entries: Deno.DirEntry[] = [];
@@ -743,12 +1057,18 @@ async function loadFromDirectory(
   const tasks: Promise<void>[] = [];
 
   // ---- Agents ----
-  tasks.push((async () => {
+  if (shouldLoadCategory("agents")) tasks.push((async () => {
     const s = performance.now();
     const agentsUrl = joinUrl(baseUrl, "agents");
     const entries = await collectEntries(agentsUrl);
+    const allowedNames = new Set(
+      filterNames(
+        "agents",
+        entries.filter((e) => e.isDirectory).map((entry) => entry.name),
+      ),
+    );
     const agents = await Promise.all(
-      entries.filter((e) => e.isDirectory).map(async (entry) => {
+      entries.filter((e) => e.isDirectory && allowedNames.has(e.name)).map(async (entry) => {
         const agentUrl = joinUrl(agentsUrl, entry.name);
         const [instructions, config] = await Promise.all([
           loadText(joinUrl(agentUrl, "instructions.md")),
@@ -770,12 +1090,18 @@ async function loadFromDirectory(
   })());
 
   // ---- APIs ----
-  tasks.push((async () => {
+  if (shouldLoadCategory("apis")) tasks.push((async () => {
     const s = performance.now();
     const apisUrl = joinUrl(baseUrl, "apis");
     const entries = await collectEntries(apisUrl);
+    const allowedNames = new Set(
+      filterNames(
+        "apis",
+        entries.filter((e) => e.isDirectory).map((entry) => entry.name),
+      ),
+    );
     const apis = await Promise.all(
-      entries.filter((e) => e.isDirectory).map(async (entry) => {
+      entries.filter((e) => e.isDirectory && allowedNames.has(e.name)).map(async (entry) => {
         const apiUrl = joinUrl(apisUrl, entry.name);
         const [config, openApiSchema] = await Promise.all([
           importModuleSafe(joinUrl(apiUrl, "config.ts")) as Promise<
@@ -799,38 +1125,39 @@ async function loadFromDirectory(
   })());
 
   // ---- Tools ----
-  tasks.push((async () => {
+  if (shouldLoadCategory("tools")) tasks.push((async () => {
     const s = performance.now();
     const toolsUrl = joinUrl(baseUrl, "tools");
     const entries = await collectEntries(toolsUrl);
+    const allowedNames = new Set(
+      filterNames(
+        "tools",
+        entries
+          .filter((e) => e.isDirectory && !e.name.startsWith("_"))
+          .map((entry) => entry.name),
+      ),
+    );
     const tools = await Promise.all(
       entries
-        .filter((e) => e.isDirectory && !e.name.startsWith("_"))
-        .map(async (entry) => {
-          const toolUrl = joinUrl(toolsUrl, entry.name);
-          const [config, execute] = await Promise.all([
-            importModuleSafe(joinUrl(toolUrl, "config.ts")),
-            importModuleSafe(joinUrl(toolUrl, "execute.ts")),
-          ]);
-          if (!config || !execute) return null;
-          return {
-            id: entry.name,
-            name: entry.name,
-            ...(config as object),
-            execute,
-          } as ToolConfig;
-        }),
+        .filter((e) => e.isDirectory && !e.name.startsWith("_") && allowedNames.has(e.name))
+        .map(async (entry) => await loadToolModule(baseUrl, entry.name)),
     );
     resources.tools = tools.filter((t): t is ToolConfig => t !== null);
     logPhase("tools", s, { count: resources.tools.length });
   })());
 
   // ---- Processors ----
-  tasks.push((async () => {
+  if (shouldLoadCategory("processors")) tasks.push((async () => {
     const s = performance.now();
     const processorsUrl = joinUrl(baseUrl, "processors");
     try {
       const evtDirs = await collectEntries(processorsUrl);
+      const allowedEventTypes = new Set(
+        filterNames(
+          "processors",
+          evtDirs.filter((e) => e.isDirectory).map((entry) => entry.name),
+        ),
+      );
 
       type Discovered = {
         shouldProcess: (
@@ -846,7 +1173,7 @@ async function loadFromDirectory(
       };
 
       const allProcessors = await Promise.all(
-        evtDirs.filter((e) => e.isDirectory).map(async (evtDir) => {
+        evtDirs.filter((e) => e.isDirectory && allowedEventTypes.has(e.name)).map(async (evtDir) => {
           const eventTypeKey = evtDir.name.toUpperCase();
           const dirUrl = joinUrl(processorsUrl, evtDir.name);
           const files = await collectEntries(dirUrl);
@@ -923,30 +1250,105 @@ async function loadFromDirectory(
   })());
 
   // ---- Skills ----
-  tasks.push((async () => {
+  if (shouldLoadCategory("skills")) tasks.push((async () => {
     const skillsPath = joinUrl(baseUrl, "skills").replace("file://", "") + "/";
     const s = performance.now();
-    resources.skills = await loadSkillsFromDirectory(skillsPath, "project");
+    const names = selection.hasExplicitSelection
+      ? Array.from(selection.all.has("skills") ? [] : (selection.named.get("skills") ?? []))
+      : undefined;
+    resources.skills = await loadSkillsFromDirectory(
+      skillsPath,
+      "project",
+      selection.all.has("skills") ? undefined : names,
+    );
     logPhase("skills", s, { count: resources.skills?.length ?? 0 });
   })());
 
   // ---- Features ----
-  tasks.push((async () => {
+  if (shouldLoadCategory("features")) tasks.push((async () => {
     const s = performance.now();
-    resources.features = await loadFeaturesFromDirectory(baseUrl);
+    const names = selection.all.has("features")
+      ? undefined
+      : selection.hasExplicitSelection
+      ? Array.from(selection.named.get("features") ?? [])
+      : undefined;
+    resources.features = await loadFeaturesFromDirectory(baseUrl, names);
     logPhase("features", s, { count: resources.features?.length ?? 0 });
   })());
 
   // ---- Channels ----
-  tasks.push((async () => {
+  if (shouldLoadCategory("channels")) tasks.push((async () => {
     const s = performance.now();
+    const names = selection.all.has("channels")
+      ? undefined
+      : selection.hasExplicitSelection
+      ? Array.from(selection.named.get("channels") ?? [])
+      : undefined;
     resources.channels = await loadChannelsFromDirectory(
       baseUrl,
+      names,
     );
     logPhase("channels", s, {
       count: resources.channels?.length ?? 0,
     });
   })());
+
+  const loadNamedGenericFromDirectory = async <T>(
+    type: string,
+    mapper: (name: string, value: T) => unknown,
+    isValid?: (value: unknown) => value is T,
+  ) => {
+    if (!shouldLoadCategory(type)) return;
+    tasks.push((async () => {
+      const s = performance.now();
+      const typeUrl = joinUrl(baseUrl, type);
+      const entries = await collectEntries(typeUrl);
+      const discovered = entries
+        .filter((entry) =>
+          (entry.isDirectory || entry.name.endsWith(".ts")) &&
+          entry.name !== "mod.ts" &&
+          !entry.name.startsWith("_")
+        )
+        .map((entry) => entry.name.replace(/\.ts$/, ""));
+      const names = filterNames(type, discovered);
+      const loaded = await loadNamedGenericByManifest<T>(
+        baseUrl,
+        type,
+        names,
+        isValid,
+      );
+      (resources as Record<string, unknown>)[type] = loaded.map(({ name, value }) =>
+        mapper(name, value)
+      );
+      logPhase(type, s, { count: loaded.length });
+    })());
+  };
+
+  await loadNamedGenericFromDirectory<MCPServer>(
+    "mcpServers",
+    (_name, value) => value,
+    (value): value is MCPServer => typeof value === "object" && value !== null,
+  );
+  await loadNamedGenericFromDirectory<ProviderFactory>(
+    "llm",
+    (name, value) => ({ name, factory: value }),
+    (value): value is ProviderFactory => typeof value === "function",
+  );
+  await loadNamedGenericFromDirectory<EmbeddingProviderFactory>(
+    "embeddings",
+    (name, value) => ({ name, factory: value }),
+    (value): value is EmbeddingProviderFactory => typeof value === "function",
+  );
+  await loadNamedGenericFromDirectory<Record<string, unknown>>(
+    "storage",
+    (name, value) => ({ name, module: value }),
+    (value): value is Record<string, unknown> =>
+      typeof value === "object" && value !== null,
+  );
+  await loadNamedGenericFromDirectory<unknown>(
+    "collections",
+    (_name, value) => value,
+  );
 
   await Promise.all(tasks);
 
@@ -959,6 +1361,7 @@ async function loadResourcePath(
   baseUrl: string,
   originalPath: string,
   debug: boolean,
+  options?: Pick<ResourceLoadOptions, "preset" | "imports">,
 ): Promise<Resources> {
   const logPhase: LogPhase = (phase, startedAt, extra) => {
     if (!debug) return;
@@ -976,7 +1379,7 @@ async function loadResourcePath(
   logPhase("manifest", mStartedAt, { found: !!manifest });
 
   if (manifest) {
-    return await loadFromManifest(baseUrl, manifest, logPhase);
+    return await loadFromManifest(baseUrl, manifest, logPhase, options);
   }
 
   if (isRemoteSpecifier(originalPath)) {
@@ -987,7 +1390,7 @@ async function loadResourcePath(
   }
 
   // Local path without manifest: fall back to readDir-based discovery
-  return await loadFromDirectory(baseUrl, logPhase);
+  return await loadFromDirectory(baseUrl, logPhase, { imports: options?.imports });
 }
 
 // ---- Merge helper ---------------------------------------------------------
@@ -1009,6 +1412,9 @@ function mergeResources(target: Resources, source: Resources): void {
   if (source.mcpServers?.length) {
     target.mcpServers = [...(target.mcpServers ?? []), ...source.mcpServers];
   }
+  target.llm = mergeNamedResources(target.llm, source.llm);
+  target.embeddings = mergeNamedResources(target.embeddings, source.embeddings);
+  target.storage = mergeNamedResources(target.storage, source.storage);
   if (source.features?.length) {
     const existing = target.features ?? [];
     const existingNames = new Set(existing.map((f) => f.name));
@@ -1069,7 +1475,7 @@ function mergeResources(target: Resources, source: Resources): void {
  * ```
  */
 const loadResources = async (
-  { path }: { path: string | string[] } = { path: "resources" },
+  { path, preset, imports }: ResourceLoadOptions = { path: "resources" },
 ): Promise<Resources> => {
   const debug = isInitDebugEnabled();
   const totalStartedAt = performance.now();
@@ -1082,7 +1488,10 @@ const loadResources = async (
   // Single path: load directly (no merge overhead)
   if (paths.length === 1) {
     const baseUrl = toBaseUrl(paths[0]);
-    const result = await loadResourcePath(baseUrl, paths[0], debug);
+    const result = await loadResourcePath(baseUrl, paths[0], debug, {
+      preset,
+      imports,
+    });
     if (debug) {
       console.log("[copilotz:resources]", {
         phase: "total",
@@ -1100,7 +1509,9 @@ const loadResources = async (
   // Multiple paths: load all in parallel, then merge
   const merged: Resources = { agents: [] };
   const allLoaded = await Promise.all(
-    paths.map((p) => loadResourcePath(toBaseUrl(p), p, debug)),
+    paths.map((p) =>
+      loadResourcePath(toBaseUrl(p), p, debug, { preset, imports })
+    ),
   );
   for (const loaded of allLoaded) {
     mergeResources(merged, loaded);

@@ -445,6 +445,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       configForCall,
       envVars,
       streamCallback,
+      context.llmProviders,
     );
 
     const llmResponse = response as unknown as ChatResponse;

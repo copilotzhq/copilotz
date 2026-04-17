@@ -276,14 +276,18 @@ inline base64/data URLs returned by their tool calls before persistence.
 ### Everything Is a Resource
 
 Agents, tools, processors, LLM providers, embeddings, storage backends — they're
-all resources loaded through the same system. Override any built-in or add your
-own:
+all resources loaded through the same system. Use presets/imports to decide what
+loads, then override anything you need:
 
 ```typescript
 const copilotz = await createCopilotz({
-  resources: { path: "./resources" },
-  llm: { "my-llm": myCustomProvider }, // custom LLM adapter
-  embeddings: { "my-emb": myEmbeddings }, // custom embeddings
+  resources: {
+    path: "./resources",
+    preset: ["core", "code"],
+    imports: ["channels.whatsapp", "tools.fetch_asset"],
+    filterResources: (resource, type) =>
+      !(type === "tool" && resource.id === "persistent_terminal"),
+  },
   processors: [{ // custom event processor
     eventType: "NEW_MESSAGE",
     shouldProcess: (event) => event.payload.needsApproval,

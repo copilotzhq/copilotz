@@ -142,7 +142,12 @@ export const ragIngestProcessor: EventProcessor<RagIngestPayload, ProcessorDeps>
         const batch = chunks.slice(i, i + batchSize);
         const texts = batch.map((c) => c.content);
 
-        const embeddingResponse = await embed(texts, embeddingConfig);
+        const embeddingResponse = await embed(
+          texts,
+          embeddingConfig,
+          {},
+          context.embeddingProviders,
+        );
 
         for (let j = 0; j < batch.length; j++) {
           const chunk = batch[j];

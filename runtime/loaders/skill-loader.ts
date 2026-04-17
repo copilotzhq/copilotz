@@ -23,6 +23,7 @@ import { parseSkillMarkdown } from "./skill-parser.ts";
 export async function loadSkillsFromDirectory(
     dirPath: string,
     source: "project" | "user" | "bundled",
+    filterNames?: string[],
 ): Promise<Skill[]> {
     const skills: Skill[] = [];
 
@@ -36,6 +37,7 @@ export async function loadSkillsFromDirectory(
 
     for await (const entry of Deno.readDir(dirPath)) {
         if (!entry.isDirectory) continue;
+        if (filterNames && !filterNames.includes(entry.name)) continue;
 
         const skillDir = dirPath.endsWith("/") ? dirPath + entry.name : dirPath + "/" + entry.name;
         const skillMdPath = skillDir + "/SKILL.md";

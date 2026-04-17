@@ -23,7 +23,13 @@ import {
   normalizeInboundRunMessage,
 } from "@/utils/inbound-message.ts";
 import loadResources from "@/runtime/loaders/resources.ts";
-import type { FeatureEntry, Resources } from "@/runtime/loaders/resources.ts";
+import type {
+  FeatureEntry,
+  LoadedEmbeddingProvider,
+  LoadedLlmProvider,
+  LoadedStorageAdapter,
+  Resources,
+} from "@/runtime/loaders/resources.ts";
 import { type ChannelEntry, mergeChannelEntries } from "@/server/channels.ts";
 import { mergeResourceArrays } from "@/utils/merge-resources.ts";
 import type { Skill } from "@/runtime/loaders/skill-types.ts";
@@ -504,6 +510,29 @@ export interface CopilotzConfig {
      * ```
      */
     path?: string | string[];
+    /**
+     * Named preset groups to load before applying explicit imports.
+     * Bundled/native resources default to `["core"]`; user resource paths only
+     * use presets when explicitly provided.
+     */
+    preset?: string[];
+    /**
+     * Dot-notation selectors used to pre-load only specific resources.
+     *
+     * @example
+     * ```ts
+     * imports: ["channels", "tools.read_file", "channels.whatsapp"]
+     * ```
+     */
+    imports?: string[];
+    /**
+     * Filter callback to include/exclude resources after loading and merging.
+     * Runs before normalization. Return `false` to exclude a resource.
+     */
+    filterResources?: (
+      resource: { id?: string; name?: string; [key: string]: unknown },
+      type: string,
+    ) => boolean;
     /** Enable live reload of file-based resources during development. Reserved for future use. */
     watch?: boolean;
   };
@@ -700,25 +729,6 @@ export interface CopilotzConfig {
    * ```
    */
   agent?: Partial<AgentConfig>;
-  /**
-   * Filter callback to include/exclude resources after loading and merging.
-   * Runs before normalization. Return `false` to exclude a resource.
-   *
-   * @param resource - The resource object with at least id/name
-   * @param type - Resource type: "agent", "tool", "api", "mcpServer", "processor", "skill"
-   *
-   * @example
-   * ```ts
-   * filterResources: (resource, type) => {
-   *   if (type === "agent" && resource.name === "copilotz") return false;
-   *   return true;
-   * }
-   * ```
-   */
-  filterResources?: (
-    resource: { id?: string; name?: string; [key: string]: unknown },
-    type: string,
-  ) => boolean;
   /**
    * Automatically load local agent instructions from an AGENTS.md-style file
    * in the current working directory and append them to the active agent's prompt.
@@ -997,7 +1007,15 @@ export async function createCopilotz(
 
   // 1a. Load bundled resources from the library's own resources/ directory
   const bundledResourcesUrl = new URL("./resources/", import.meta.url).href;
-  const bundledResources = await loadResources({ path: bundledResourcesUrl });
+  const bundledPresets = Array.from(
+    new Set(["core", ...(config.resources?.preset ?? [])]),
+  );
+  const bundledImports = config.resources?.imports;
+  const bundledResources = await loadResources({
+    path: bundledResourcesUrl,
+    preset: bundledPresets,
+    imports: bundledImports,
+  });
   logInit("loadBundledResources", startedAt, {
     agents: bundledResources.agents?.length ?? 0,
     tools: bundledResources.tools?.length ?? 0,
@@ -1009,7 +1027,11 @@ export async function createCopilotz(
   let userResources: Resources | undefined;
   if (config.resources?.path) {
     startedAt = performance.now();
-    userResources = await loadResources({ path: config.resources.path });
+    userResources = await loadResources({
+      path: config.resources.path,
+      preset: config.resources.preset,
+      imports: config.resources.imports,
+    });
     logInit("loadUserResources", startedAt, {
       path: config.resources.path,
       agents: userResources.agents?.length ?? 0,
@@ -1083,13 +1105,39 @@ export async function createCopilotz(
       featuresByName.set(f.name, f);
     }
   }
-  const mergedFeatures = [...featuresByName.values()];
+  let mergedFeatures = [...featuresByName.values()];
 
   // 1e. Resolve channels (user/config first, bundled last — first wins per side)
-  const mergedChannels = mergeChannelEntries(
+  let mergedChannels = mergeChannelEntries(
     userResources?.channels,
     config.channels,
     bundledResources.channels,
+  );
+  const mergeNamed = <T extends { name: string }>(
+    bundled: T[] | undefined,
+    user: T[] | undefined,
+  ): T[] => {
+    const merged: T[] = [];
+    const seen = new Set<string>();
+    for (const entry of [...(user ?? []), ...(bundled ?? [])]) {
+      if (!seen.has(entry.name)) {
+        merged.push(entry);
+        seen.add(entry.name);
+      }
+    }
+    return merged;
+  };
+  let resolvedLlmProviders = mergeNamed<LoadedLlmProvider>(
+    bundledResources.llm,
+    userResources?.llm,
+  );
+  let resolvedEmbeddingProviders = mergeNamed<LoadedEmbeddingProvider>(
+    bundledResources.embeddings,
+    userResources?.embeddings,
+  );
+  let resolvedStorageAdapters = mergeNamed<LoadedStorageAdapter>(
+    bundledResources.storage,
+    userResources?.storage,
   );
 
   logInit("mergeResources", startedAt);
@@ -1143,8 +1191,9 @@ export async function createCopilotz(
   });
 
   // 1f. Apply filterResources callback
-  if (config.filterResources) {
-    const filter = config.filterResources;
+  const resourceFilter = config.resources?.filterResources;
+  if (resourceFilter) {
+    const filter = resourceFilter;
     const asFilterable = (r: unknown) =>
       r as { id?: string; name?: string; [key: string]: unknown };
     resolvedAgents = resolvedAgents.filter((r) =>
@@ -1161,6 +1210,21 @@ export async function createCopilotz(
       filter(asFilterable(r), "processor")
     );
     allSkills = allSkills.filter((r) => filter(asFilterable(r), "skill"));
+    mergedFeatures = mergedFeatures.filter((r) =>
+      filter(asFilterable(r), "feature")
+    );
+    mergedChannels = mergedChannels.filter((r) =>
+      filter(asFilterable(r), "channel")
+    );
+    resolvedLlmProviders = resolvedLlmProviders.filter((r) =>
+      filter(asFilterable(r), "llm")
+    );
+    resolvedEmbeddingProviders = resolvedEmbeddingProviders.filter((r) =>
+      filter(asFilterable(r), "embedding")
+    );
+    resolvedStorageAdapters = resolvedStorageAdapters.filter((r) =>
+      filter(asFilterable(r), "storage")
+    );
     logInit("filterResources", startedAt);
   }
 
@@ -1189,6 +1253,13 @@ export async function createCopilotz(
   const normalizedTools = resolvedTools?.map(normalizeTool);
   const normalizedApis = resolvedApis?.map(normalizeApi);
   const normalizedMcpServers = resolvedMcpServers?.map(normalizeMcpServer);
+  const llmProviderRegistry = Object.fromEntries(
+    resolvedLlmProviders.map((entry) => [entry.name, entry.factory]),
+  );
+  const embeddingProviderRegistry = Object.fromEntries(
+    resolvedEmbeddingProviders.map((entry) => [entry.name, entry.factory]),
+  );
+  const availableStorageBackends = resolvedStorageAdapters.map((entry) => entry.name);
 
   const baseConfig: NormalizedCopilotzConfig = {
     ...config,
@@ -1269,6 +1340,17 @@ export async function createCopilotz(
   let normalizedAssetConfig: AssetConfig | undefined = undefined;
   if (config.assets?.config) {
     const srcConfig = config.assets.config;
+    if (
+      srcConfig.backend &&
+      srcConfig.backend !== "memory" &&
+      srcConfig.backend !== "passthrough" &&
+      !availableStorageBackends.includes(srcConfig.backend)
+    ) {
+      throw new Error(
+        `Asset storage backend "${srcConfig.backend}" is not loaded. ` +
+          `Add it via resources.preset/resources.imports before using it.`,
+      );
+    }
     normalizedAssetConfig = {
       inlineThresholdBytes: srcConfig.inlineThresholdBytes,
       resolveInLLM: srcConfig.backend === "passthrough"
@@ -1310,7 +1392,12 @@ export async function createCopilotz(
       ? async (text: string): Promise<number[]> => {
         // Import embedding connector dynamically to avoid circular deps
         const { embed } = await import("@/runtime/embeddings/index.ts");
-        const result = await embed([text], config.rag!.embedding);
+        const result = await embed(
+          [text],
+          config.rag!.embedding,
+          {},
+          embeddingProviderRegistry,
+        );
         return result.embeddings[0] ?? [];
       }
       : undefined;
@@ -1406,6 +1493,9 @@ export async function createCopilotz(
         }
         : undefined,
       embeddingConfig: config.rag?.embedding,
+      llmProviders: llmProviderRegistry,
+      embeddingProviders: embeddingProviderRegistry,
+      storageBackends: availableStorageBackends,
       security: baseConfig.security,
       // Resolved namespace for this run
       namespace: resolvedNamespace,

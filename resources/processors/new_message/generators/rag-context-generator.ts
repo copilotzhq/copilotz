@@ -27,6 +27,7 @@ export interface RagContextOptions {
     query: string;
     ops: DatabaseOperations;
     embeddingConfig?: EmbeddingConfig;
+    embeddingProviders?: import("@/types/index.ts").ChatContext["embeddingProviders"];
     threadId?: string;
     userId?: string;
 }
@@ -89,7 +90,15 @@ function estimateTokens(text: string): number {
 export async function generateRagContext(
     options: RagContextOptions
 ): Promise<RagContextResult> {
-    const { agent, query, ops, embeddingConfig, threadId, userId } = options;
+    const {
+        agent,
+        query,
+        ops,
+        embeddingConfig,
+        embeddingProviders,
+        threadId,
+        userId,
+    } = options;
     const ragOptions = agent.ragOptions;
 
     // Return empty if RAG is disabled or not in auto mode
@@ -109,7 +118,12 @@ export async function generateRagContext(
 
     try {
         // Generate embedding for the query
-        const embeddingResult = await embed([query], embeddingConfig);
+        const embeddingResult = await embed(
+            [query],
+            embeddingConfig,
+            {},
+            embeddingProviders,
+        );
 
         if (!embeddingResult.embeddings || embeddingResult.embeddings.length === 0) {
             console.warn(`[rag-context] Failed to generate embedding for query`);

@@ -6,7 +6,7 @@ Everything in Copilotz is a **resource**. Agents, tools, APIs, processors, LLM p
 
 When `createCopilotz` initializes, it loads resources from three layers:
 
-1. **Built-in** — ships with the library (OpenAI adapter, filesystem storage, default processors, etc.)
+1. **Built-in** — ships with the library, but now loads through presets/imports instead of loading every native resource by default
 2. **User directory** — loaded from `resources.path` if provided
 3. **Inline config** — passed directly via `createCopilotz({ tools: [...], processors: [...] })`
 
@@ -36,19 +36,27 @@ const copilotz = await createCopilotz({
 
 ## Built-in Resources
 
-Copilotz ships with a complete set of defaults so everything works out of the box:
+Copilotz ships with manifest-driven bundled presets. The default bundled preset is `core`:
 
-**LLM providers:** OpenAI, Anthropic, Gemini, Groq, DeepSeek, Ollama, MiniMax
+- `core` — bundled `copilotz` agent, `web` channel, core processors, bundled skills, `persistent_terminal`, `update_my_memory`, LLM providers, storage backends
+- `rag` — embeddings, RAG tools/processors, and RAG collections
+- `admin` — admin feature endpoints
+- `code` — code-editing and workspace tooling
 
-**Embeddings:** OpenAI (`text-embedding-3-small`)
+Use additional presets or explicit imports when you want more than `core`:
 
-**Storage:** Filesystem (`fs`), Amazon S3 (`s3`)
+```typescript
+const copilotz = await createCopilotz({
+  resources: {
+    preset: ["core", "code"],
+    imports: ["channels.whatsapp", "tools.fetch_asset"],
+  },
+  dbConfig: { url: ":memory:" },
+});
+```
 
-**Collections:** `participant`, `message`, `chunk`, `document`, `llm_usage`
-
-**Processors:** `new_message`, `llm_call`, `tool_call`, `rag_ingest`, `entity_extract`
-
-**Tools:** 27 built-in tools for file ops, HTTP, RAG, memory, skills, and more
+For bundled/native resources, `core` is implicit. Passing `preset: ["code"]`
+loads the same bundled base as `["core", "code"]`.
 
 ## Overriding Built-in Resources
 
@@ -102,10 +110,23 @@ export default {
     llm: ["my-provider"],
     // Any key from the resource types table
   },
+  presets: {
+    core: ["agents.my-agent", "tools.my-tool"],
+  },
 };
 ```
 
-When `loadResources` encounters a `manifest.ts`, it uses the declared lists to selectively load only the resources that are provided, rather than scanning the whole directory.
+When `loadResources` encounters a `manifest.ts`, it uses the declared lists to selectively load only the resources that are requested by `preset + imports`, rather than scanning the whole directory.
+
+## Import Selectors
+
+The import grammar is intentionally small and uniform:
+
+- `tools` loads every tool declared by the manifest
+- `tools.read_file` loads one tool
+- the same pattern applies to `agents`, `processors`, `channels`, `features`, `skills`, `collections`, `llm`, `embeddings`, and `storage`
+
+There are no wildcards or negation operators in this refactor.
 
 ## File-Based Loading
 

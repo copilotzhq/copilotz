@@ -4,13 +4,17 @@ Resource loaders let you organize agents, tools, APIs, processors, skills, and m
 
 ## Recommended: Built-in Resource Loading
 
-The simplest way to use file-based resources is via the `resources.path` option in `createCopilotz`. This loads and merges everything automatically:
+The simplest way to use file-based resources is via the `resources.path` option in `createCopilotz`. This loads and merges everything automatically, while bundled/native resources come from presets:
 
 ```typescript
 import { createCopilotz } from "@copilotz/copilotz";
 
 const copilotz = await createCopilotz({
-  resources: { path: "./resources" },
+  resources: {
+    path: "./resources",
+    preset: ["core", "code"],
+    imports: ["channels.whatsapp"],
+  },
   dbConfig: { url: Deno.env.get("DATABASE_URL") },
 });
 ```
@@ -73,7 +77,10 @@ If you need more control over the loaded resources before passing them to `creat
 import { loadResources, createCopilotz } from "@copilotz/copilotz";
 
 // Load resources from directory
-const resources = await loadResources({ path: "./resources" });
+const resources = await loadResources({
+  path: "./resources",
+  imports: ["agents", "tools.read_file", "channels.whatsapp"],
+});
 
 // Inspect or transform before passing to createCopilotz
 console.log(`Loaded ${resources.agents.length} agents`);
@@ -88,6 +95,15 @@ const copilotz = await createCopilotz({
 ```
 
 > **Tip**: For most projects, `resources.path` in `createCopilotz` is simpler and handles the merge automatically. Use `loadResources()` when you need to inspect, filter, or transform resources before initialization.
+
+## Presets and Imports
+
+`loadResources()` and `createCopilotz({ resources: ... })` support the same two selectors:
+
+- `preset`: named import groups declared by a manifest
+- `imports`: dot-notation selectors such as `tools`, `tools.read_file`, `channels`, `channels.whatsapp`
+
+Selectors are additive. For bundled resources, `createCopilotz` always includes `core`, so `preset: ["code"]` behaves like `["core", "code"]`.
 
 ## Agent Files
 
@@ -149,7 +165,7 @@ export default config;
 
 ## Tool Files
 
-### config.ts (Required)
+### config.ts (Preferred)
 
 Tool definition:
 
@@ -196,7 +212,7 @@ export default config;
 
 `historyPolicy` is especially useful in loader-based projects because it lives in `config.ts`, so you can keep the projector callback in code.
 
-### execute.ts (Required)
+### execute.ts (Preferred)
 
 Tool implementation:
 
@@ -228,6 +244,35 @@ export default async function execute(
   };
 }
 ```
+
+### index.ts (Supported Fallback)
+
+Tools can also be packaged as a single `index.ts` that exports the full tool
+object, including `execute`:
+
+```typescript
+export default {
+  key: "analyze-sentiment",
+  name: "Analyze Sentiment",
+  description: "Analyze the sentiment of text",
+  inputSchema: {
+    type: "object",
+    properties: {
+      text: { type: "string" },
+    },
+    required: ["text"],
+  },
+  async execute(input, context) {
+    return {
+      sentiment: "positive",
+      confidence: 0.98,
+    };
+  },
+};
+```
+
+When both formats are present, Copilotz prefers `config.ts` + `execute.ts` and
+falls back to `index.ts` only when the split files are absent.
 
 ## API Files
 
@@ -367,7 +412,9 @@ Skills loaded from the resources directory use progressive disclosure: only name
 
 ```typescript
 const resources = await loadResources({
-  path: "./resources",     // string or string[] for multiple directories
+  path: "./resources",               // string or string[] for multiple directories
+  preset: ["core", "rag"],          // optional manifest-defined preset names
+  imports: ["tools.read_file"],     // optional dot-notation selectors
 });
 ```
 
@@ -377,7 +424,12 @@ The recommended way to combine file-loaded and inline resources is via `resource
 
 ```typescript
 const copilotz = await createCopilotz({
-  resources: { path: "./resources" },
+  resources: {
+    path: "./resources",
+    preset: ["core", "code"],
+    filterResources: (resource, type) =>
+      !(type === "tool" && resource.id === "persistent_terminal"),
+  },
 
   // Explicit items are merged with file-loaded ones:
   // - Appended by default

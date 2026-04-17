@@ -162,7 +162,10 @@ export const entityExtractProcessor: EventProcessor<EntityExtractPayload, Proces
       
       const extractionResult = await chat(
         { messages: [{ role: "user", content: extractionPrompt }] },
-        { ...llmConfig, stream: false }
+        { ...llmConfig, stream: false },
+        {},
+        undefined,
+        context.llmProviders,
       );
 
       const extractionText = extractionResult.answer;
@@ -186,6 +189,8 @@ export const entityExtractProcessor: EventProcessor<EntityExtractPayload, Proces
           sourceContext,
           similarityThreshold,
           autoMergeThreshold,
+          llmProviders: context.llmProviders,
+          embeddingProviders: context.embeddingProviders,
         });
       }
 
@@ -208,6 +213,8 @@ interface ProcessEntityContext {
   sourceContext?: EntityExtractPayload["sourceContext"];
   similarityThreshold: number;
   autoMergeThreshold: number;
+  llmProviders?: ChatContext["llmProviders"];
+  embeddingProviders?: ChatContext["embeddingProviders"];
 }
 
 /**
@@ -230,6 +237,8 @@ async function processEntity(
     sourceContext,
     similarityThreshold,
     autoMergeThreshold,
+    llmProviders,
+    embeddingProviders,
   } = ctx;
 
   // Generate embedding for the entity name + description
@@ -237,7 +246,12 @@ async function processEntity(
     ? `${entity.name}: ${entity.description}`
     : entity.name;
   
-  const embeddingResult = await embed([textToEmbed], embeddingConfig);
+  const embeddingResult = await embed(
+    [textToEmbed],
+    embeddingConfig,
+    {},
+    embeddingProviders,
+  );
   const embedding = embeddingResult.embeddings[0];
 
   if (!embedding) {
@@ -290,7 +304,8 @@ async function processEntity(
         entity,
         matchedNode.name ?? "Unknown",
         matchedNode.type,
-        llmConfig
+        llmConfig,
+        llmProviders,
       );
 
       if (shouldMerge) {
@@ -373,14 +388,18 @@ async function confirmMerge(
   newEntity: ExtractedEntity,
   existingName: string,
   existingType: string,
-  llmConfig: ProviderConfig
+  llmConfig: ProviderConfig,
+  llmProviders?: ChatContext["llmProviders"],
 ): Promise<boolean> {
   try {
     const prompt = buildMergeConfirmPrompt(newEntity, existingName, existingType);
     
     const result = await chat(
       { messages: [{ role: "user", content: prompt }] },
-      { ...llmConfig, stream: false }
+      { ...llmConfig, stream: false },
+      {},
+      undefined,
+      llmProviders,
     );
 
     const parsed = parseJsonResponse<{ same: boolean }>(result.answer);

@@ -26,7 +26,6 @@ import {
   mergeResourceArrays,
   provisionTenantSchema,
   // Event processing
-  registerEventProcessor,
   relation,
   // Utilities
   resolveNamespace,
@@ -68,7 +67,6 @@ Run an agent conversation.
 ```typescript
 const result = await copilotz.run(
   message: MessageInput,
-  onEvent?: (event: StreamEvent) => void,
   options?: RunOptions
 ): Promise<RunHandle>
 ```
@@ -78,7 +76,6 @@ const result = await copilotz.run(
 | Name      | Type           | Description                      |
 | --------- | -------------- | -------------------------------- |
 | `message` | `MessageInput` | The message to process           |
-| `onEvent` | `function`     | Optional callback for each event |
 | `options` | `RunOptions`   | Optional run configuration       |
 
 **MessageInput:**
@@ -132,6 +129,8 @@ const result = await copilotz.run(
 for await (const event of result.events) {
   if (event.type === "TOKEN") {
     process.stdout.write(event.payload.token);
+  } else if (event.type === "TOOL_RESULT" || event.type === "LLM_RESULT") {
+    console.log("Lifecycle event:", event.type, event.payload);
   }
 }
 
@@ -147,8 +146,7 @@ stdout, and maintains conversation state.
 
 ```typescript
 const session = copilotz.start(
-  initialMessage?: string | StartOptions,
-  onEvent?: (event: StreamEvent) => void
+  initialMessage?: string | StartOptions
 ): SessionHandle
 ```
 
@@ -226,6 +224,14 @@ await copilotz.shutdown(): Promise<void>
 ### copilotz.ops
 
 Database operations API.
+
+#### Raw Query
+
+```typescript
+await copilotz.ops.query<T>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>
+```
+
+Execute arbitrary SQL against the database. Primarily used by features that need direct data access (e.g., the admin feature uses this for aggregation queries).
 
 #### Thread Operations
 
@@ -739,27 +745,24 @@ domain-specific helpers. Import from the `copilotz/server` entrypoint.
 
 ```typescript
 import {
-  createAdminHandlers,
   createAssetHandlers,
   createCollectionHandlers,
   createEventHandlers,
   createMessageHandlers,
   createParticipantHandlers,
-  createRestHandlers,
   createThreadHandlers,
-  parseQueryParams,
-  parseSort,
+  withApp,
 } from "copilotz/server";
 
 import type {
-  AdminHandlers,
+  AppRequest,
+  AppResponse,
   AssetHandlers,
   CollectionHandlers,
+  CopilotzApp,
   EventHandlers,
   MessageHandlers,
   ParticipantHandlers,
-  RestHandlers,
-  RestListOptions,
   ThreadHandlers,
 } from "copilotz/server";
 ```
@@ -832,28 +835,16 @@ Returns `ParticipantHandlers`:
 | `get`    | `(externalId, options?) → Promise<Record<string, unknown> \| null>`  |
 | `update` | `(externalId, updates, options?) → Promise<Record<string, unknown>>` |
 
-### createRestHandlers(copilotz)
+### withApp(copilotz)
 
-Returns `RestHandlers` — thin generic CRUD over **`copilotz.ops.crud`**, which only exposes the four persisted resources: **`threads`**, **`events`**, **`nodes`**, and **`edges`**. Prefer `copilotz.ops` helpers for messages, RAG, and queue semantics instead of raw graph rows when possible.
+Returns the same instance with an `.app: CopilotzApp` property attached. Aggregates all handler factories, provides a pattern-based route table, and exposes a universal `handle()` dispatcher.
 
-| Method             | Signature                                   |
-| ------------------ | ------------------------------------------- |
-| `list`             | `(resource, options?) → Promise<unknown[]>` |
-| `getById`          | `(resource, id) → Promise<unknown>`         |
-| `create`           | `(resource, body) → Promise<unknown>`       |
-| `update`           | `(resource, id, data) → Promise<unknown>`   |
-| `delete`           | `(resource, id) → Promise<unknown>`         |
-| `parseQueryParams` | `(searchParams) → RestListOptions`          |
-
-### parseQueryParams(searchParams)
-
-Standalone utility to parse URL `SearchParams` into `RestListOptions` (limit,
-offset, sort, fields, filters).
-
-### parseSort(sortParam)
-
-Parse a sort string like `"name:asc,-createdAt"` into
-`Array<{ field, direction }>`.
+```typescript
+const extended = withApp(copilotz);
+extended.app.handle({ resource: "threads", method: "GET", path: [id] });
+extended.app.threads.getById(id);
+extended.app.resources(); // list all registered resources
+```
 
 See [Server Helpers](./server.md) for usage examples and framework wiring.
 

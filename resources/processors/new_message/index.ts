@@ -36,10 +36,12 @@ type Operations = ProcessorDeps["db"]["ops"];
 
 import type {
   ChatMessage,
-  ProviderConfig,
+  LLMConfig,
+  LLMRuntimeConfig,
   ToolDefinition,
   ToolInvocation,
 } from "@/runtime/llm/types.ts";
+import { toLLMConfig } from "@/runtime/llm/config.ts";
 
 import type { NewMessageEventPayload } from "@/database/schemas/index.ts";
 
@@ -807,6 +809,7 @@ export const messageProcessor: EventProcessor<
         context,
         event,
         threadId,
+        emitToStream: deps.emitToStream,
       });
 
     let toolCallId: string | null = null;
@@ -1524,7 +1527,7 @@ export const messageProcessor: EventProcessor<
         tools: llmTools,
       } as AgentLlmOptionsResolverArgs["payload"];
 
-      let providerConfig: ProviderConfig = {};
+      let providerConfig: LLMRuntimeConfig = {};
       const agentLlmOptions = agent.llmOptions;
       if (agentLlmOptions) {
         if (typeof agentLlmOptions === "function") {
@@ -1550,11 +1553,12 @@ export const messageProcessor: EventProcessor<
         }
       }
 
-      resolverPayload.config = providerConfig;
+      const llmConfig = toLLMConfig(providerConfig);
+      resolverPayload.config = llmConfig;
 
       const llmPayload = {
         ...resolverPayload,
-        config: providerConfig as unknown as Record<string, unknown>,
+        config: llmConfig as LLMConfig,
       } as LlmCallEventPayload;
 
       // Include target queue in LLM_CALL metadata for agent response routing

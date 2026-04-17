@@ -2,8 +2,8 @@
  * Event processing system for Copilotz.
  *
  * This module provides the event queue processing infrastructure,
- * including built-in processors for messages, LLM calls, tool calls,
- * and RAG ingestion, as well as extension points for custom processors.
+ * including a unified processor pipeline and extension points for
+ * custom processors.
  *
  * @module
  */
@@ -13,22 +13,23 @@ import { type CopilotzDb, createDatabase } from "@/database/index.ts";
 import type {
   Event,
   LlmCallEventPayload,
+  LlmResultEventPayload,
   MessagePayload,
   NewEvent,
   NewUnknownEvent,
   Thread,
   TokenEventPayload,
   ToolCallEventPayload,
+  ToolResultEventPayload,
 } from "@/types/index.ts";
 
 
 type EventType = Event["type"];
 
-import type { LLMCallPayload, LLMResultPayload } from "@/resources/processors/llm_call/index.ts";
+import type { LLMCallPayload } from "@/resources/processors/llm_call/index.ts";
 import type {
   ToolCallPayload,
   ToolExecutionContext,
-  ToolResultPayload,
 } from "@/resources/processors/tool_call/index.ts";
 import type { ChatContext } from "@/types/index.ts";
 
@@ -40,7 +41,7 @@ export type {
   /** Payload for LLM call events. */
   LLMCallPayload,
   /** Payload for LLM call results. */
-  LLMResultPayload,
+  LlmResultEventPayload as LLMResultPayload,
   /** Payload for tool call events. */
   ToolCallPayload,
   /** Context passed to tool execution. */
@@ -48,7 +49,7 @@ export type {
   /** Function signature for tool execution. */
   ToolExecutor,
   /** Payload for tool call results. */
-  ToolResultPayload,
+  ToolResultEventPayload as ToolResultPayload,
 };
 
 /**
@@ -61,79 +62,23 @@ export interface ProcessResult {
 
 /**
  * Dependencies injected into event processors.
- * Provides access to database, current thread, and chat context.
+ * Provides access to database, current thread, chat context, and stream emission.
  */
 export type ProcessorDeps = {
   /** Database instance for data operations. */
   db: CopilotzDb;
   /** Current conversation thread. */
   thread: Thread;
-  /** Chat context with configuration and callbacks. */
+  /** Chat context with configuration. */
   context: ChatContext;
+  /** Push an ephemeral event (e.g. TOKEN, ASSET_CREATED) directly to the client stream. */
+  emitToStream: (event: Event) => void;
 };
 
 type Operations = CopilotzDb["ops"];
 
-type EventProcessors = Record<
-  EventType,
-  EventProcessor<unknown, ProcessorDeps>
->;
-
 function castPayload<T>(payload: unknown): T {
   return payload as T;
-}
-
-// Processor registry — populated at init by setDefaultProcessors()
-const tokenProcessor: EventProcessor<unknown, ProcessorDeps> = {
-  shouldProcess: () => false,
-  process: () => ({ producedEvents: [] }),
-};
-
-const processors: Record<string, EventProcessor<unknown, ProcessorDeps>> = {
-  TOKEN: tokenProcessor,
-};
-
-/**
- * Populate the default processor registry from loaded resources.
- * Called once during createCopilotz initialization.
- */
-export function setDefaultProcessors(
-  defaults: Record<string, EventProcessor<unknown, ProcessorDeps>>,
-): void {
-  for (const [type, processor] of Object.entries(defaults)) {
-    if (!(type in processors)) {
-      processors[type] = processor;
-    }
-  }
-}
-
-/**
- * Registers a custom event processor for a specific event type.
- *
- * Use this to extend Copilotz with custom event handling logic.
- * Registered processors will be used instead of built-in processors
- * for the specified event type.
- *
- * @param type - The event type to handle (e.g., "NEW_MESSAGE", "TOOL_CALL", "CUSTOM_EVENT")
- * @param processor - The processor implementation
- *
- * @example
- * ```ts
- * registerEventProcessor("MY_CUSTOM_EVENT", {
- *   shouldProcess: (event) => event.type === "MY_CUSTOM_EVENT",
- *   process: async (event, deps) => {
- *     // Handle the custom event
- *     return { producedEvents: [] };
- *   }
- * });
- * ```
- */
-export function registerEventProcessor<TPayload = unknown>(
-  type: string,
-  processor: EventProcessor<TPayload, ProcessorDeps>,
-): void {
-  (processors as Record<string, EventProcessor<unknown, ProcessorDeps>>)[type] =
-    processor as unknown as EventProcessor<unknown, ProcessorDeps>;
 }
 
 // Public API
@@ -174,20 +119,18 @@ export async function startThreadEventWorker(
   db: CopilotzDb,
   threadId: string,
   context: ChatContext,
+  emitToStream: (event: Event) => void,
 ): Promise<void> {
   const workerContext: WorkerContext = {
-    callbacks: {
-      onEvent: context.callbacks?.onEvent,
-      onStreamPush: context.callbacks?.onStreamPush,
-    },
-    customProcessors: context.customProcessors,
+    processors: context.processors ?? {},
+    emitToStream,
+    stream: context.stream ?? true,
   };
 
   await startEventWorker(
     db,
     threadId,
     workerContext,
-    processors,
     async (ops: Operations, event: Event) => {
       const { threadId } = event;
       if (typeof threadId !== "string") {
@@ -196,7 +139,7 @@ export async function startThreadEventWorker(
 
       const thread = await ops.getThreadById(threadId);
       if (!thread) throw new Error(`Thread not found: ${threadId}`);
-      return { ops, db, thread, context } as ProcessorDeps;
+      return { ops, db, thread, context, emitToStream } as ProcessorDeps;
     },
   );
 }
@@ -204,37 +147,62 @@ export async function startThreadEventWorker(
 /**
  * Interface for custom event processors.
  *
- * Implement this interface to create custom event handlers that can
- * intercept and process events in the Copilotz event queue.
+ * Processors are executed in priority order (user/config first, built-in last)
+ * for the matching event type. The first processor whose `process` returns
+ * a `producedEvents` array wins — subsequent processors are skipped.
+ *
+ * ### Return semantics for `process`
+ *
+ * | Return value                       | Behavior                                        |
+ * |------------------------------------|-------------------------------------------------|
+ * | `{ producedEvents: [event, ...] }` | **Claim** — enqueue events, skip remaining processors |
+ * | `{ producedEvents: [] }`           | **Swallow** — claim without producing anything  |
+ * | `void` / `undefined`               | **Pass** — fall through to the next processor   |
  *
  * @typeParam TPayload - The expected payload type for events this processor handles
  * @typeParam TDeps - The dependencies type (usually ProcessorDeps)
  *
  * @example
  * ```ts
- * const myProcessor: EventProcessor<MyPayload, ProcessorDeps> = {
- *   shouldProcess: (event) => event.type === "MY_EVENT",
+ * // Override: produce new events, prevent built-in from running
+ * const override: EventProcessor<MyPayload, ProcessorDeps> = {
+ *   shouldProcess: (event) => event.payload.custom === true,
  *   process: async (event, deps) => {
- *     const payload = event.payload as MyPayload;
- *     // Process the event...
- *     return { producedEvents: [{ type: "RESULT", payload: {...} }] };
- *   }
+ *     return { producedEvents: [{ type: "RESULT", ... }] };
+ *   },
+ * };
+ *
+ * // Swallow: handle the event, prevent built-in, produce nothing
+ * const swallow: EventProcessor<MyPayload, ProcessorDeps> = {
+ *   shouldProcess: () => true,
+ *   process: async (event, deps) => {
+ *     console.log("Handled:", event.type);
+ *     return { producedEvents: [] };
+ *   },
+ * };
+ *
+ * // Pass: let the next processor (or built-in) handle it
+ * const observer: EventProcessor<MyPayload, ProcessorDeps> = {
+ *   shouldProcess: () => true,
+ *   process: async (event, deps) => {
+ *     console.log("Observed:", event.type);
+ *     // returning void falls through
+ *   },
  * };
  * ```
  */
 export interface EventProcessor<TPayload = unknown, TDeps = unknown> {
   /**
    * Determines if this processor should handle the given event.
-   * @param event - The event to check
-   * @param deps - Processor dependencies
-   * @returns True if this processor should process the event
+   * Return `false` to skip this processor entirely (next processor runs).
    */
   shouldProcess: (event: Event, deps: TDeps) => boolean | Promise<boolean>;
   /**
-   * Processes the event and optionally produces new events.
-   * @param event - The event to process
-   * @param deps - Processor dependencies
-   * @returns Optional object containing new events to enqueue
+   * Processes the event.
+   *
+   * - Return `{ producedEvents: [...] }` to claim the event and enqueue new events.
+   * - Return `{ producedEvents: [] }` to claim without producing (swallow).
+   * - Return `void` / `undefined` to pass through to the next processor.
    */
   process: (
     event: Event,
@@ -246,35 +214,18 @@ export interface EventProcessor<TPayload = unknown, TDeps = unknown> {
 }
 
 /**
- * Possible responses from an onEvent callback.
- */
-export type OnEventResponse =
-  | void
-  | { event: Event }
-  | { producedEvents: Array<NewEvent | NewUnknownEvent> }
-  | { drop: true };
-
-/**
- * Context for the event worker, containing callbacks and custom processors.
+ * Context for the event worker, containing processors and stream emission.
  */
 export interface WorkerContext {
-  /** Callback functions for event handling. */
-  callbacks?: {
-    /** Called for each event, can produce new events. */
-    onEvent?: (
-      ev: Event,
-    ) =>
-      | Promise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void>
-      | { producedEvents?: Array<NewEvent | NewUnknownEvent> }
-      | void;
-    /** Called after processing to push events to the client stream. Only called if the event was not replaced by a custom processor. */
-    onStreamPush?: (ev: Event) => void;
-  };
-  /** Custom processors organized by event type. */
-  customProcessors?: Record<
+  /** Processors organized by event type, ordered by priority. */
+  processors: Record<
     string,
     Array<EventProcessor<unknown, ProcessorDeps>>
   >;
+  /** Push an ephemeral event directly to the client stream. */
+  emitToStream: (event: Event) => void;
+  /** Whether streaming is enabled. */
+  stream: boolean;
   /**
    * Minimum event priority to process. Events below this priority are skipped and left for background processing.
    * Default: 0 (skips negative-priority events like ENTITY_EXTRACT)
@@ -287,7 +238,6 @@ export async function startEventWorker(
   db: CopilotzDb,
   threadId: string,
   context: WorkerContext,
-  processors: Record<string, EventProcessor<unknown, ProcessorDeps>>,
   buildDeps: (
     ops: Operations,
     event: Event,
@@ -327,13 +277,9 @@ export async function startEventWorker(
       });
   }, heartbeatMs);
 
-  // Default: skip negative-priority events (background events like ENTITY_EXTRACT)
-  // Set minPriority to -Infinity to process all events including background
   const minPriority = context.minPriority ?? 0;
 
   try {
-    // Crash recovery: if we were able to acquire the thread lease, reset any stuck
-    // "processing" queue items so the thread can make forward progress immediately.
     const recovered = await ops.recoverThreadProcessingQueueItems(threadId);
     if (recovered > 0) {
       console.warn(
@@ -401,6 +347,20 @@ export async function startEventWorker(
             payload: castPayload<LlmCallEventPayload>(next.payload),
           };
           break;
+        case "TOOL_RESULT":
+          event = {
+            ...baseEvent,
+            type: "TOOL_RESULT",
+            payload: castPayload<ToolResultEventPayload>(next.payload),
+          };
+          break;
+        case "LLM_RESULT":
+          event = {
+            ...baseEvent,
+            type: "LLM_RESULT",
+            payload: castPayload<LlmResultEventPayload>(next.payload),
+          };
+          break;
         case "TOKEN":
           event = {
             ...baseEvent,
@@ -409,7 +369,6 @@ export async function startEventWorker(
           };
           break;
         default:
-          // Pass through unknown/custom event types; allow callback or custom processor to handle them
           event = {
             ...baseEvent,
             type: eventType,
@@ -421,7 +380,6 @@ export async function startEventWorker(
       if (
         typeof shouldAcceptEvent === "function" && !shouldAcceptEvent(event)
       ) {
-        // Let another domain worker process this event
         break;
       }
 
@@ -430,73 +388,33 @@ export async function startEventWorker(
       await ops.updateQueueItemStatus(queueId, "processing");
 
       try {
+        context.emitToStream(event);
+      } catch { /* ignore stream push errors */ }
+
+      try {
         const deps: ProcessorDeps = (await buildDeps(
           ops,
           event,
           context,
         )) as ProcessorDeps;
 
-        const processor = processors[event.type];
-
-        // Buckets to respect override semantics
-        const preEvents: Array<NewEvent | NewUnknownEvent> = [];
         let finalEvents: Array<NewEvent | NewUnknownEvent> = [];
 
-        // 1) onEvent callback with override semantics
-        const handler = context?.callbacks?.onEvent;
-        let overriddenByOnEvent = false;
-        if (handler) {
+        const processorList = context.processors[event.type] ?? [];
+        for (const p of processorList) {
           try {
-            const res = await handler(event);
-            if (
-              res &&
-              (res as {
-                producedEvents?: Array<NewEvent | NewUnknownEvent>;
-              }).producedEvents
-            ) {
-              finalEvents = (res as {
-                producedEvents?: Array<NewEvent | NewUnknownEvent>;
-              }).producedEvents as Array<NewEvent | NewUnknownEvent>;
-              overriddenByOnEvent = true;
+            const ok = await p.shouldProcess(event, deps);
+            if (!ok) continue;
+            const res = await p.process(event, deps);
+            if (res?.producedEvents) {
+              finalEvents = res.producedEvents;
+              break;
             }
-          } catch (_err) { /* ignore user callback errors */ }
-        }
-
-        // 2) Custom processors by event type (only if not overridden). Stop on first production.
-        let replacedByCustomProcessor = false;
-        if (!overriddenByOnEvent && context?.customProcessors) {
-          const list = context.customProcessors[event.type] ?? [];
-          for (const p of list) {
-            try {
-              const ok = await p.shouldProcess(event, deps);
-              if (!ok) continue;
-              const res = await p.process(event, deps);
-              if (res?.producedEvents && res.producedEvents.length > 0) {
-                finalEvents = res.producedEvents;
-                replacedByCustomProcessor = true;
-                // Stop at first production
-                break;
-              }
-            } catch (_err) {
-              // Ignore custom processor errors; move to next
-            }
+          } catch (_err) {
+            // Ignore processor errors; try next processor in priority order
           }
         }
 
-        // 3) Default processor path (only if not overridden and nothing produced by custom)
-        if (
-          !overriddenByOnEvent && finalEvents.length === 0 && processor
-        ) {
-          const ok = await processor.shouldProcess(event, deps);
-          if (ok) {
-            const res = await processor.process(event, deps);
-            if (res?.producedEvents) finalEvents = res.producedEvents;
-          }
-        }
-
-        const allToEnqueue = [...preEvents, ...finalEvents];
-
-        // Track threads that need background workers
         const backgroundThreadIds = new Set<string>();
 
         if (leaseLost) {
@@ -505,38 +423,26 @@ export async function startEventWorker(
           );
         }
 
-        if (allToEnqueue.length > 0) {
-          for (const e of allToEnqueue) {
+        if (finalEvents.length > 0) {
+          for (const e of finalEvents) {
             await enqueueEvent(db, e);
 
-            // If event is for a different thread, mark it for background processing
             if (e.threadId !== threadId) {
               backgroundThreadIds.add(e.threadId);
             }
           }
         }
 
-        // Fire-and-forget: start background workers for child threads
         for (const bgThreadId of backgroundThreadIds) {
           startBackgroundWorker(
             db,
             bgThreadId,
             context,
-            processors,
             buildDeps,
           );
         }
 
-        // Push to stream only if not replaced by onEvent callback or custom processor
-        const wasReplaced = overriddenByOnEvent || replacedByCustomProcessor;
-        if (!wasReplaced && context?.callbacks?.onStreamPush) {
-          try {
-            context.callbacks.onStreamPush(event);
-          } catch { /* ignore stream push errors */ }
-        }
-
-        const finalStatus = overriddenByOnEvent ? "overwritten" : "completed";
-        await ops.updateQueueItemStatus(queueId, finalStatus);
+        await ops.updateQueueItemStatus(queueId, "completed");
       } catch (err) {
         console.error("Event worker failed:", err);
         await ops.updateQueueItemStatus(queueId, "failed");
@@ -560,30 +466,24 @@ export function startBackgroundWorker(
   db: CopilotzDb,
   backgroundThreadId: string,
   context: WorkerContext,
-  processors: Record<string, EventProcessor<unknown, ProcessorDeps>>,
   buildDeps: (
     ops: Operations,
     event: Event,
     context: WorkerContext,
   ) => Promise<ProcessorDeps> | ProcessorDeps,
 ): void {
-  // Fire-and-forget: process background thread events asynchronously
   Promise.resolve().then(async () => {
+    const noop = () => {};
     const backgroundContext: WorkerContext = {
       ...context,
-      minPriority: -Infinity, // Process all events in background thread
-      // Don't push to stream for background events
-      callbacks: {
-        ...context.callbacks,
-        onStreamPush: undefined,
-      },
+      minPriority: -Infinity,
+      emitToStream: noop,
     };
 
     await startEventWorker(
       db,
       backgroundThreadId,
       backgroundContext,
-      processors,
       buildDeps,
     );
   }).catch((err) => {

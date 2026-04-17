@@ -430,7 +430,7 @@ const copilotz = await createCopilotz({
 Override or extend agents for a specific run:
 
 ```typescript
-await copilotz.run(message, onEvent, {
+await copilotz.run(message, {
   agents: [
     {
       id: "support-agent",

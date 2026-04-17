@@ -12,6 +12,7 @@ import type {
   NewEvent,
   ProcessorDeps,
   Tool,
+  ToolResultEventPayload,
   ToolHistoryVisibility,
 } from "@/types/index.ts";
 import type { ExecutableTool } from "./types.ts";
@@ -34,11 +35,23 @@ export interface ToolCallPayload {
 
 export interface ToolResultPayload {
   agent: { id?: string; name: string }; // agent that requested the tool
-  callId: string;
+  toolCallId: string;
+  tool: { id: string; name?: string | null };
+  args: unknown;
+  status: "completed" | "failed" | "cancelled";
   output?: unknown;
+  projectedOutput?: unknown;
   error?: unknown;
   // Optional convenience content (already formatted) for logs/messages
-  content?: string;
+  content?: string | null;
+  historyVisibility?: ToolHistoryVisibility;
+  batchId?: string | null;
+  batchSize?: number | null;
+  batchIndex?: number | null;
+  startedAt?: string;
+  finishedAt: string;
+  durationMs?: number | null;
+  resultMessageId?: string | null;
 }
 
 export interface ToolExecutionContext extends ChatContext {
@@ -202,9 +215,11 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       const call = payload.toolCall;
       const callId = call.id || `${call.tool.id}_${Date.now()}`;
 
-      // Schedule a follow-up message event to let the agent continue after tool result
+      // Emit a terminal tool result event; a dedicated tool_result processor
+      // turns it into the persisted/history NEW_MESSAGE artifact.
       const output = result.output;
       const error = result.error;
+      const finishedAt = new Date().toISOString();
 
       let content: string;
       if (error) {
@@ -227,39 +242,31 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       const batchSize = call.batchSize ?? null;
       const batchIndex = call.batchIndex ?? null;
 
-      // Enqueue a MESSAGE event
+      const toolResultPayload: ToolResultEventPayload = {
+        agent: { id: payload.agent.id, name: payload.agent.name },
+        toolCallId: callId,
+        tool: { id: call.tool.id, name: call.tool.name },
+        args: call.args,
+        status: error ? "failed" : "completed",
+        ...(typeof output !== "undefined" ? { output } : {}),
+        ...(typeof result.projectedOutput !== "undefined"
+          ? { projectedOutput: result.projectedOutput }
+          : {}),
+        ...(typeof error !== "undefined" ? { error } : {}),
+        content,
+        historyVisibility: result.historyVisibility ??
+          DEFAULT_TOOL_HISTORY_VISIBILITY,
+        batchId,
+        batchSize,
+        batchIndex,
+        finishedAt,
+      };
+
       const producedEvents: NewEvent[] = [
         {
           threadId,
-          type: "NEW_MESSAGE",
-          payload: {
-            content,
-            sender: {
-              type: "tool",
-              id: payload.senderId,
-              name: payload.senderId,
-            },
-            metadata: {
-              toolCalls: [
-                {
-                  id: callId,
-                  tool: { id: call.tool.id, name: call.tool.name },
-                  args: call.args,
-                  output,
-                  status: error ? "failed" : "completed",
-                  visibility: result.historyVisibility ??
-                    DEFAULT_TOOL_HISTORY_VISIBILITY,
-                  ...(typeof result.projectedOutput !== "undefined"
-                    ? { projectedOutput: result.projectedOutput }
-                    : {}),
-                },
-              ],
-              // Include batch info for aggregation in NEW_MESSAGE processor
-              batchId,
-              batchSize,
-              batchIndex,
-            },
-          },
+          type: "TOOL_RESULT",
+          payload: toolResultPayload,
           parentEventId: typeof event.id === "string" ? event.id : undefined,
           traceId: typeof event.traceId === "string"
             ? event.traceId

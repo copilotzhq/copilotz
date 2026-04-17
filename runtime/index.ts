@@ -1,9 +1,9 @@
 import type { CopilotzDb } from "@/database/index.ts";
-import type { ChatContext, Event, NewEvent, NewUnknownEvent, ContentStreamData, MessagePayload, TokenEventPayload, Agent, Tool } from "@/types/index.ts";
+import type { ChatContext, Event, MessagePayload, Agent, Tool } from "@/types/index.ts";
 import type { EventBase } from "@/database/schemas/index.ts";
 import { startThreadEventWorker } from "@/runtime/event-engine.ts";
+import { redactEventForStream } from "@/runtime/stream-redaction.ts";
 import { normalizeInboundRunMessage } from "@/utils/inbound-message.ts";
-import { ulid } from "ulid";
 
 /**
  * Ensure all agents in context have participant nodes.
@@ -31,8 +31,6 @@ async function ensureAgentParticipants(
         }
     }
 }
-
-type MaybePromise<T> = T | Promise<T>;
 
 const USER_UPSERT_DEBOUNCE_MS = 60_000;
 const userUpsertCache = new Map<string, number>();
@@ -97,7 +95,7 @@ export type RunOptions = {
      * 
      * @example
      * ```ts
-     * await copilotz.run(message, onEvent, { schema: 'tenant_abc' });
+     * await copilotz.run(message, { schema: 'tenant_abc' });
      * ```
      */
     schema?: string;
@@ -136,12 +134,6 @@ export type RunHandle = {
     /** Function to cancel the run. */
     cancel: () => void;
 };
-
-/**
- * Unified event callback type for handling events during a run.
- * Return producedEvents to inject new events into the queue.
- */
-export type UnifiedOnEvent = (event: Event) => MaybePromise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void>;
 
 class AsyncQueue<T> implements AsyncIterable<T> {
     private buffer: T[] = [];
@@ -198,10 +190,6 @@ class AsyncQueue<T> implements AsyncIterable<T> {
 
 function _nowIso(): string {
     return new Date().toISOString();
-}
-
-function toEventId(): string {
-    return ulid();
 }
 
 function buildUserKey(sender: MessagePayload["sender"]): string {
@@ -282,14 +270,13 @@ export async function runThread(
     db: CopilotzDb,
     baseContext: ChatContext,
     message: MessagePayload,
-    externalOnEvent?: UnifiedOnEvent,
     options?: RunOptions,
 ): Promise<RunHandle> {
     const inboundMessage = normalizeInboundRunMessage(
         message as MessagePayload & { tool_calls?: unknown },
     );
     const ops = db.ops;
-    const stream = options?.stream ?? baseContext.stream ?? false;
+    const stream = options?.stream ?? baseContext.stream ?? true;
     const queue = new AsyncQueue<StreamEvent>();
     const doneResolve = (() => {
         let resolve!: () => void;
@@ -403,67 +390,11 @@ export async function runThread(
         // swallow to not impact main flow
     }
 
-    // Called after processing completes, only if event was not replaced by custom processor
-    const onStreamPush = (ev: Event): void => {
+    const emitToStream = (ev: Event): void => {
         if (cancelled) return;
         try {
-            queue.push(ev);
+            queue.push(redactEventForStream(ev));
         } catch { /* ignore */ }
-    };
-
-    // Compose callbacks
-    const wrappedOnEvent = async (ev: Event): Promise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void> => {
-        if (cancelled) return;
-
-        // NOTE: We do not push normal queued events here (they may be replaced by custom processors).
-        // However, some events are *ephemeral* (not enqueued), and must be pushed immediately to reach the stream.
-        // Today this is used for ASSET_CREATED.
-        const evType = (ev as unknown as { type?: string })?.type;
-        if (evType === "ASSET_CREATED" || evType === "ASSET_ERROR") {
-            onStreamPush(ev);
-        }
-
-        if (typeof externalOnEvent === "function" && ev.type !== "TOKEN") {
-            try {
-                const res = await externalOnEvent(ev);
-                if (res && (res as { producedEvents?: Array<NewEvent | NewUnknownEvent> }).producedEvents) {
-                    return { producedEvents: (res as { producedEvents?: Array<NewEvent | NewUnknownEvent> }).producedEvents };
-                }
-            } catch { /* ignore user callback errors */ }
-        }
-    };
-
-    const wrappedOnContentStream = (data: ContentStreamData) => {
-        if (cancelled) return;
-        const tokenPayload: TokenEventPayload = {
-            threadId,
-            agent: data.agent,
-            token: data.token,
-            isComplete: !!data.isComplete,
-            isReasoning: data.isReasoning,
-        };
-        const tokenEvent: Event = {
-            id: toEventId(),
-            threadId,
-            type: "TOKEN",
-            payload: tokenPayload,
-            parentEventId: null,
-            traceId: null,
-            priority: null,
-            metadata: null,
-            ttlMs: null,
-            expiresAt: null,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-            status: data.isComplete ? "completed" : "processing",
-        };
-        onStreamPush(tokenEvent);
-        if (typeof externalOnEvent === "function") {
-            // fire-and-forget; ignore any override attempt for tokens
-            Promise.resolve()
-                .then(() => externalOnEvent(tokenEvent))
-                .catch(() => undefined);
-        }
     };
 
     const initialEventMetadata = buildInitialRoutingMetadata(
@@ -481,17 +412,12 @@ export async function runThread(
     const contextForWorker: ChatContext = {
         ...baseContext,
         stream,
-        callbacks: {
-            onEvent: wrappedOnEvent,
-            onContentStream: wrappedOnContentStream,
-            onStreamPush,
-        },
     };
 
     // Start and wire completion
     Promise.resolve()
         .then(async () => {
-            await startThreadEventWorker(db, threadId!, contextForWorker);
+            await startThreadEventWorker(db, threadId!, contextForWorker, emitToStream);
         })
         .then(() => {
             queue.close();

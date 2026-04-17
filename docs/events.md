@@ -30,9 +30,11 @@ User message → NEW_MESSAGE event → Queue → Processor → LLM_CALL event �
 
 | Event | Description | Persisted |
 |-------|-------------|-----------|
-| `NEW_MESSAGE` | A message entered the system | Yes |
-| `LLM_CALL` | Time to call an LLM | Yes |
+| `NEW_MESSAGE` | A persisted message/history artifact entered the system | Yes |
+| `LLM_CALL` | Time to call an LLM (safe persisted config only) | Yes |
+| `LLM_RESULT` | Terminal state for one LLM execution | Yes |
 | `TOOL_CALL` | Execute a tool | Yes |
+| `TOOL_RESULT` | Terminal state for one tool execution | Yes |
 | `TOKEN` | A streaming token | No |
 
 ### Background Events
@@ -64,9 +66,18 @@ Here's what happens when you call `copilotz.run()`:
 ┌─────────────────────────────────────────────────────────────┐
 │                     LLM_CALL Event                          │
 │  - Context built (history, tools, RAG chunks)               │
+│  - Safe `LLMConfig` persisted and streamed                   │
 │  - LLM called                                               │
 │  - TOKEN events streamed (if streaming)                     │
-│  - Tool calls extracted from response                       │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    LLM_RESULT Event                         │
+│  - Final answer / reasoning summarized                      │
+│  - Tool calls normalized                                    │
+│  - Usage / timing attached                                  │
+│  - Follow-up NEW_MESSAGE artifact emitted                   │
 └─────────────────────────────────────────────────────────────┘
                               │
             ┌─────────────────┴─────────────────┐
@@ -74,16 +85,18 @@ Here's what happens when you call `copilotz.run()`:
             ▼                                   ▼
 ┌───────────────────────┐           ┌───────────────────────┐
 │     TOOL_CALL (1)     │           │     TOOL_CALL (2)     │
-│  - Tool executed      │           │  - Tool executed      │
-│  - Result returned    │           │  - Result returned    │
+│  - Tool execution     │           │  - Tool execution     │
+│    requested          │           │    requested          │
 └───────────────────────┘           └───────────────────────┘
             │                                   │
             └─────────────────┬─────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    NEW_MESSAGE (tool results)               │
-│  - Tool results sent back to LLM                            │
+│                   TOOL_RESULT Event(s)                      │
+│  - Output/error captured                                    │
+│  - Batch metadata tracked                                   │
+│  - Follow-up NEW_MESSAGE artifact emitted                   │
 │  - Cycle continues until final response                     │
 └─────────────────────────────────────────────────────────────┘
                               │
@@ -125,6 +138,13 @@ Notes:
 - Copilotz emits `TOOL_CALL` events from these assistant messages before target resolution
 - This allows agent follow-up messages from custom processors to directly continue the tool chain
 
+## Event Taxonomy
+
+- Lifecycle events: `LLM_CALL`, `LLM_RESULT`, `TOOL_CALL`, `TOOL_RESULT`
+- Progress events: `TOKEN`
+- History/artifact events: `NEW_MESSAGE`
+- Background/domain events like `RAG_INGEST` and `ENTITY_EXTRACT` remain outside the paired lifecycle model in this refactor
+
 ## Listening to Events
 
 ### Callback Function
@@ -140,7 +160,13 @@ const result = await copilotz.run(
         console.log(event.payload.token);
         break;
       case "TOOL_CALL":
-        console.log(`Calling tool: ${event.payload.toolName}`);
+        console.log(`Calling tool: ${event.payload.toolCall.tool.id}`);
+        break;
+      case "TOOL_RESULT":
+        console.log(`Tool finished: ${event.payload.toolCallId}`);
+        break;
+      case "LLM_RESULT":
+        console.log(`LLM finished: ${event.payload.llmCallId}`);
         break;
       case "NEW_MESSAGE":
         console.log(`Message from: ${event.payload.sender?.name}`);
@@ -167,24 +193,19 @@ for await (const event of result.events) {
 }
 ```
 
-### Global Callbacks
+### Consuming Events
 
-Set callbacks at the config level for all runs:
+Consume events from the `result.events` async iterator returned by `copilotz.run()`:
 
 ```typescript
-const copilotz = await createCopilotz({
-  agents: [...],
-  callbacks: {
-    onEvent: async (event) => {
-      // Log all events
-      console.log(`Event: ${event.type}`, event.payload);
-    },
-    onContentStream: async (data) => {
-      // Handle streaming tokens
-      console.log(data.token);
-    },
-  },
-});
+const result = await copilotz.run({ content: "Hello" }, { stream: true });
+for await (const event of result.events) {
+  if (event.type === "TOKEN") {
+    process.stdout.write(event.payload.token);
+  } else {
+    console.log(`Event: ${event.type}`, event.payload);
+  }
+}
 ```
 
 ## Custom Processors
@@ -197,14 +218,13 @@ const copilotz = await createCopilotz({
   processors: [{
     eventType: "NEW_MESSAGE",
     shouldProcess: (event, deps) => {
-      // Only process messages that need approval
       return event.payload.metadata?.needsApproval === true;
     },
     process: async (event, deps) => {
-      // Custom processing logic
       const approved = await checkApproval(event.payload);
       
       if (!approved) {
+        // Override: produce a system message instead of the default flow
         return { 
           producedEvents: [{
             type: "NEW_MESSAGE",
@@ -216,8 +236,7 @@ const copilotz = await createCopilotz({
         };
       }
       
-      // Let default processor handle it
-      return { producedEvents: [] };
+      // Pass: return void to let the built-in processor handle it
     },
   }],
 });
@@ -229,7 +248,7 @@ const copilotz = await createCopilotz({
 interface EventProcessor {
   eventType: string;
   shouldProcess: (event: Event, deps: ProcessorDeps) => boolean | Promise<boolean>;
-  process: (event: Event, deps: ProcessorDeps) => Promise<ProcessorResult>;
+  process: (event: Event, deps: ProcessorDeps) => Promise<ProcessorResult | void>;
 }
 
 interface ProcessorResult {
@@ -237,11 +256,29 @@ interface ProcessorResult {
 }
 ```
 
+### Return Semantics
+
+The return value of `process` controls how the processor pipeline behaves:
+
+| Return value                       | Behavior                                                     |
+|------------------------------------|--------------------------------------------------------------|
+| `{ producedEvents: [event, ...] }` | **Claim** — enqueue events, skip remaining processors        |
+| `{ producedEvents: [] }`           | **Swallow** — claim without producing, skip remaining processors |
+| `void` / `undefined`               | **Pass** — fall through to the next processor in priority order |
+
+This means you can:
+- **Override** a built-in processor by returning `{ producedEvents: [...] }`.
+- **Suppress** an event entirely by returning `{ producedEvents: [] }` (no events produced, built-in won't run).
+- **Observe** an event without interfering by returning `void` (built-in still runs after).
+
 ### Processing Order
 
-1. `onEvent` callback is called first
-2. Custom processors matching the event type
-3. Default built-in processor (if not overridden)
+Processors are executed in priority order for the matching event type:
+
+1. User-provided processors (from `createCopilotz({ processors: [...] })`)
+2. Built-in processors (NEW_MESSAGE, LLM_CALL, TOOL_CALL, etc.)
+
+The first processor to return `{ producedEvents }` (even an empty array) claims the event. If no processor claims it, the event is marked completed with no side effects.
 
 ## Event Queue
 

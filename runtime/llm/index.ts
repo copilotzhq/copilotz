@@ -10,6 +10,7 @@ import type {
 } from "@/runtime/llm/types.ts";
 import { getProvider } from "@/runtime/llm/registry.ts";
 import { estimateUsageCost } from "@/runtime/llm/pricing.ts";
+import { resolveProviderApiKey } from "@/runtime/llm/config.ts";
 import {
   countTokens,
   createMockResponse,
@@ -33,21 +34,6 @@ const DEFAULT_FALLBACK_REASONS: ProviderFallbackReason[] = [
   "provider_error",
 ];
 
-function resolveApiKey(
-  config: ProviderConfig,
-  env: Record<string, string>,
-): string | undefined {
-  const provider = config.provider;
-  if (!provider) {
-    return config.apiKey || env.OPENAI_API_KEY;
-  }
-
-  return config.apiKey ||
-    env[`${provider.toUpperCase()}_API_KEY`] ||
-    env[`${provider.toUpperCase()}_KEY`] ||
-    env.OPENAI_API_KEY;
-}
-
 function buildAttemptConfig(
   baseConfig: ProviderConfig,
   env: Record<string, string>,
@@ -60,7 +46,7 @@ function buildAttemptConfig(
     fallbackOn: undefined,
   } as ProviderConfig;
 
-  candidate.apiKey = resolveApiKey(candidate, env);
+  candidate.apiKey = resolveProviderApiKey(candidate, env);
   return withDefaultStopSequences(candidate);
 }
 

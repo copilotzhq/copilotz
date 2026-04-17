@@ -4,19 +4,25 @@ import type {
   ChatMessage,
   ChatRequest,
   ChatResponse,
+  LLMConfig,
+  LLMRuntimeConfig,
   ProviderConfig,
   TokenUsage,
   ToolInvocation,
 } from "@/runtime/llm/types.ts";
+import { mergeLLMRuntimeConfig, toLLMConfig } from "@/runtime/llm/config.ts";
 import type {
-  ContentStreamData,
+  AgentLlmOptionsResolverArgs,
   Event,
   EventProcessor,
   LlmCallEventPayload,
+  LlmResultEventPayload,
   MessagePayload,
   NewEvent,
   ProcessorDeps,
+  TokenEventPayload,
 } from "@/types/index.ts";
+import { ulid } from "ulid";
 import { resolveAssetRefsInMessages } from "@/runtime/storage/assets.ts";
 import { filterToolCallTokensStreaming } from "@/runtime/llm/utils.ts";
 import { buildMentionTargetRoute } from "@/utils/mentions.ts";
@@ -25,7 +31,7 @@ import type { Agent, Thread } from "@/types/index.ts";
 export type { ChatMessage };
 
 export type LLMCallPayload = LlmCallEventPayload;
-export type LLMResultPayload = LlmCallEventPayload;
+export type LLMResultPayload = LlmResultEventPayload;
 
 const escapeRegex = (string: string): string =>
   string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -232,8 +238,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         throw new Error("Invalid thread id for LLM call event");
       })();
 
-    const producedEvents: NewEvent[] = [];
-
     // Get context from dependencies
     const context = deps.context;
 
@@ -250,28 +254,42 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       controlPending: "",
     };
 
+    const buildTokenEvent = (token: string, isComplete: boolean, isReasoning?: boolean): Event => {
+      const tokenPayload: TokenEventPayload = {
+        threadId,
+        agent: {
+          id: payload.agent.id ?? undefined,
+          name: payload.agent.name,
+        },
+        token,
+        isComplete,
+        isReasoning,
+      };
+      return {
+        id: ulid(),
+        threadId,
+        type: "TOKEN",
+        payload: tokenPayload,
+        parentEventId: null,
+        traceId: null,
+        priority: null,
+        metadata: null,
+        ttlMs: null,
+        expiresAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        status: isComplete ? "completed" : "processing",
+      };
+    };
+
     const streamCallback =
-      (context.stream && (context.callbacks?.onContentStream))
+      (context.stream && deps.emitToStream)
         ? (token: string, options?: { isReasoning?: boolean }) => {
-          if (context.callbacks?.onContentStream) {
-            // Don't filter reasoning tokens — they're internal thoughts,
-            // not user-facing content, and may legitimately discuss tools.
             const filtered = options?.isReasoning
               ? token
               : filterToolCallTokensStreaming(token, toolCallFilterState);
 
-            const callbackData: ContentStreamData = {
-              threadId,
-              agent: {
-                id: payload.agent.id ?? undefined,
-                name: payload.agent.name,
-              },
-              token: filtered,
-              isComplete: false,
-              isReasoning: options?.isReasoning,
-            };
-            context.callbacks.onContentStream(callbackData);
-          }
+            deps.emitToStream(buildTokenEvent(filtered, false, options?.isReasoning));
         }
         : undefined;
 
@@ -371,21 +389,50 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     })();
 
     const agentForCall = context.agents?.find((a) => a.id === payload.agent.id);
-    let finalConfig: ProviderConfig | undefined = payload.config;
+    const persistedConfig = (payload.config ?? {}) as LLMConfig;
 
-    if (!finalConfig && agentForCall) {
-      const agentLlmOptions = agentForCall.llmOptions;
-      if (agentLlmOptions && typeof agentLlmOptions !== "function") {
-        finalConfig = agentLlmOptions;
+    let agentRuntimeConfig: LLMRuntimeConfig | undefined;
+    if (agentForCall?.llmOptions) {
+      if (typeof agentForCall.llmOptions === "function") {
+        const runtimePayload = {
+          agent: { id: payload.agent.id ?? undefined, name: payload.agent.name },
+          messages: payload.messages as ChatMessage[],
+          tools: payload.tools,
+          config: persistedConfig,
+        } as AgentLlmOptionsResolverArgs["payload"];
+        const resolved = await agentForCall.llmOptions({
+          payload: runtimePayload,
+          sourceEvent: event,
+          deps,
+        });
+        if (resolved && typeof resolved === "object") {
+          agentRuntimeConfig = resolved;
+        }
+      } else {
+        agentRuntimeConfig = agentForCall.llmOptions;
       }
     }
 
-    const configForCall: ProviderConfig = finalConfig ?? {};
+    const securityRuntimeConfig =
+      await context.security?.resolveLLMRuntimeConfig?.({
+        provider: persistedConfig.provider,
+        model: persistedConfig.model,
+        agent: { id: payload.agent.id ?? undefined, name: payload.agent.name },
+        config: persistedConfig,
+        sourceEvent: event,
+        deps,
+      });
+
+    const configForCall: ProviderConfig = mergeLLMRuntimeConfig(
+      persistedConfig,
+      agentRuntimeConfig,
+      securityRuntimeConfig,
+    );
 
     if (Deno.env.get("COPILOTZ_DEBUG") === "1") {
       console.log("shouldResolve", shouldResolve);
       console.log("hasAssetStore", !!context.assetStore);
-      console.log("configForCall", configForCall);
+      console.log("configForCall", toLLMConfig(configForCall));
       console.log("resolvedMessages", resolvedMessages);
     }
 
@@ -404,18 +451,8 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     let usageNodeId: string | null = null;
 
     // finalize stream
-    if (streamCallback) {
-      if (context.callbacks?.onContentStream) {
-        context.callbacks.onContentStream({
-          threadId,
-          agent: {
-            id: payload.agent.id ?? undefined,
-            name: payload.agent.name,
-          },
-          token: "",
-          isComplete: true,
-        } as ContentStreamData);
-      }
+    if (streamCallback && deps.emitToStream) {
+      deps.emitToStream(buildTokenEvent("", true));
     }
 
     // Clean response
@@ -573,22 +610,31 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         context.multiAgent?.enabled === true,
       );
 
-    const newMessagePayload: MessagePayload = {
-      content: answer || "",
-      sender: {
+    const llmResultPayload: LlmResultEventPayload = {
+      llmCallId: typeof event.id === "string" ? event.id : ulid(),
+      agent: {
         id: payload.agent.id ?? undefined,
-        type: "agent",
         name: payload.agent.name,
       },
-      toolCalls: normalizedToolCalls,
-      ...(reasoning && { reasoning }),
+      provider: llmResponse.provider ?? null,
+      model: llmResponse.model ?? null,
+      status: "completed",
+      finishReason: Array.isArray(normalizedToolCalls) && normalizedToolCalls.length > 0
+        ? "tool_calls"
+        : "stop",
+      answer: answer ?? null,
+      reasoning: reasoning ?? null,
+      toolCalls: normalizedToolCalls ?? null,
+      extractedTags: extractedTags ?? null,
+      ...(usage ? { usage } : {}),
+      ...(cost ? { cost } : {}),
+      ...(usageNodeId ? { usageNodeId } : {}),
+      finishedAt: new Date().toISOString(),
     };
 
-    // Include target info in message metadata for routing
-    const messageMetadata: Record<string, unknown> = {
+    const resultMetadata: Record<string, unknown> = {
       targetId: responseTarget.targetId,
       targetQueue: responseTarget.targetQueue,
-      ...(usageNodeId ? { usageNodeId } : {}),
       ...(routeTargets.length > 0
         ? {
           routing: {
@@ -608,16 +654,15 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         : {}),
     };
 
-    // Enqueue a NEW_MESSAGE event with target routing info
-    producedEvents.push({
+    const producedEvents: NewEvent[] = [{
       threadId,
-      type: "NEW_MESSAGE",
-      payload: newMessagePayload,
+      type: "LLM_RESULT",
+      payload: llmResultPayload,
       parentEventId: typeof event.id === "string" ? event.id : undefined,
       traceId: typeof event.traceId === "string" ? event.traceId : undefined,
       priority: typeof event.priority === "number" ? event.priority : undefined,
-      metadata: messageMetadata,
-    });
+      metadata: resultMetadata,
+    }];
 
     return { producedEvents };
   },

@@ -30,7 +30,6 @@ function createTestEvent(): Event {
 
 function createTestContext(options?: {
   persistGeneratedAssets?: boolean;
-  onEvent?: (event: Event) => void | Promise<void>;
 }): ChatContext {
   return {
     agents: [
@@ -45,13 +44,6 @@ function createTestContext(options?: {
       },
     ],
     assetStore: createMemoryAssetStore(),
-    callbacks: options?.onEvent
-      ? {
-        onEvent: async (event: Event) => {
-          await options.onEvent?.(event);
-        },
-      }
-      : undefined,
   } as unknown as ChatContext;
 }
 
@@ -71,13 +63,12 @@ Deno.test("processAssetsForNewMessage persists generated agent attachments by de
     baseMetadata: {},
     senderId: "artist",
     senderType: "agent",
-    context: createTestContext({
-      onEvent: (event) => {
-        emittedEvents.push(event);
-      },
-    }),
+    context: createTestContext(),
     event: createTestEvent(),
     threadId: "thread-1",
+    emitToStream: (event) => {
+      emittedEvents.push(event);
+    },
   });
 
   const attachments = (result.messageMetadata?.attachments ?? []) as Array<Record<string, unknown>>;
@@ -105,14 +96,12 @@ Deno.test("processAssetsForNewMessage skips persisting direct agent attachments 
     baseMetadata: {},
     senderId: "artist",
     senderType: "agent",
-    context: createTestContext({
-      persistGeneratedAssets: false,
-      onEvent: (event) => {
-        emittedEvents.push(event);
-      },
-    }),
+    context: createTestContext({ persistGeneratedAssets: false }),
     event: createTestEvent(),
     threadId: "thread-1",
+    emitToStream: (event) => {
+      emittedEvents.push(event);
+    },
   });
 
   const attachments = (result.messageMetadata?.attachments ?? []) as Array<Record<string, unknown>>;
@@ -146,14 +135,12 @@ Deno.test("processAssetsForNewMessage sanitizes tool-generated assets when produ
     },
     senderId: "artist",
     senderType: "tool",
-    context: createTestContext({
-      persistGeneratedAssets: false,
-      onEvent: (event) => {
-        emittedEvents.push(event);
-      },
-    }),
+    context: createTestContext({ persistGeneratedAssets: false }),
     event: createTestEvent(),
     threadId: "thread-1",
+    emitToStream: (event) => {
+      emittedEvents.push(event);
+    },
   });
 
   const toolCalls = (result.messageMetadata?.toolCalls ?? []) as Array<Record<string, unknown>>;

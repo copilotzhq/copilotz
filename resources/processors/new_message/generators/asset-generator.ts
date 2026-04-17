@@ -202,15 +202,16 @@ async function normalizeAttachments(
 }
 
 async function emitAssetError(args: {
-    context: ChatContext;
+    emitToStream?: (event: Event) => void;
     event: Event;
     threadId: string;
     senderType: "agent" | "user" | "tool" | "system";
     toolCallMetadata: unknown[];
     info: AssetErrorInfo;
+    namespace?: string;
 }): Promise<void> {
-    const { context, event, threadId, senderType, toolCallMetadata, info } = args;
-    if (!context.callbacks?.onEvent) return;
+    const { emitToStream, event, threadId, senderType, toolCallMetadata, info } = args;
+    if (!emitToStream) return;
 
     const by =
         senderType === "tool" ? "tool" :
@@ -236,10 +237,10 @@ async function emitAssetError(args: {
         by,
         ...(toolMeta?.name ? { tool: toolMeta.name } : {}),
         ...(toolMeta?.id ? { toolCallId: toolMeta.id } : {}),
-        ...(context.namespace ? { namespace: context.namespace } : {}),
+        ...(args.namespace ? { namespace: args.namespace } : {}),
     };
 
-    await context.callbacks.onEvent({
+    emitToStream({
         id: crypto.randomUUID(),
         threadId,
         type: "ASSET_ERROR" as unknown as Event["type"],
@@ -348,8 +349,9 @@ export async function processAssetsForNewMessage(args: {
     context: ChatContext;
     event: Event;
     threadId: string;
+    emitToStream?: (event: Event) => void;
 }): Promise<AssetProcessingResult> {
-    const { payload, baseMetadata, senderId, senderType, context, event, threadId } = args;
+    const { payload, baseMetadata, senderId, senderType, context, event, threadId, emitToStream } = args;
 
     const derivedAttachments = extractAttachmentsFromContent(payload.content);
     const existingRaw = (baseMetadata as { attachments?: unknown }).attachments;
@@ -372,7 +374,7 @@ export async function processAssetsForNewMessage(args: {
     );
     const store = persistGeneratedAssets ? context.assetStore : undefined;
     const onAttachmentError = (info: AssetErrorInfo) =>
-        emitAssetError({ context, event, threadId, senderType, toolCallMetadata: [], info });
+        emitAssetError({ emitToStream, event, threadId, senderType, toolCallMetadata: [], info, namespace: context.namespace });
     const { normalized: normalizedAttachments, created: createdFromAttachments } =
         await normalizeAttachments(mergedAttachments, store, onAttachmentError);
 
@@ -411,12 +413,13 @@ export async function processAssetsForNewMessage(args: {
                     );
                     for (const saveErr of normalized.errors) {
                         await emitAssetError({
-                            context,
+                            emitToStream,
                             event,
                             threadId,
                             senderType,
                             toolCallMetadata: toolCallEntries,
                             info: { error: new Error(saveErr.error), source: "tool_output", kind: saveErr.kind === "image" || saveErr.kind === "audio" ? saveErr.kind : "file", mime: saveErr.mime },
+                            namespace: context.namespace,
                         });
                     }
                 }
@@ -429,12 +432,13 @@ export async function processAssetsForNewMessage(args: {
                 );
                 (entry as { output?: unknown }).output = sanitizeGeneratedAssetsInValue(maybeOutput);
                 await emitAssetError({
-                    context,
+                    emitToStream,
                     event,
                     threadId,
                     senderType,
                     toolCallMetadata: toolCallEntries,
                     info: { error: err, source: "tool_output" },
+                    namespace: context.namespace,
                 });
             }
         }
@@ -489,7 +493,7 @@ export async function processAssetsForNewMessage(args: {
     for (const c of createdFromAttachments) newlyCreatedRefs.add(c.ref);
     for (const c of createdFromToolOutputs) newlyCreatedRefs.add(c.ref);
 
-    if (newlyCreatedRefs.size > 0 && context.callbacks?.onEvent && store) {
+    if (newlyCreatedRefs.size > 0 && emitToStream && store) {
         for (const ref of newlyCreatedRefs) {
             try {
                 const id = resolveAssetIdForStore(ref, store);
@@ -510,7 +514,7 @@ export async function processAssetsForNewMessage(args: {
                     ? (toolCallMetadata[0] as { id?: string; name?: string })
                     : undefined;
 
-                await context.callbacks.onEvent({
+                emitToStream({
                     id: crypto.randomUUID(),
                     threadId,
                     type: "ASSET_CREATED" as unknown as Event["type"],

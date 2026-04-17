@@ -28,9 +28,6 @@ export type { ThreadHandlers } from "./threads.ts";
 export { createMessageHandlers } from "./messages.ts";
 export type { MessageHandlers } from "./messages.ts";
 
-export { createAdminHandlers } from "./admin.ts";
-export type { AdminHandlers } from "./admin.ts";
-
 export { createEventHandlers } from "./events.ts";
 export type { EventHandlers } from "./events.ts";
 
@@ -51,9 +48,6 @@ export type {
 export { createGraphHandlers } from "./graph.ts";
 export type { GraphHandlers, GraphSearchOptions } from "./graph.ts";
 
-export { createRestHandlers, parseQueryParams, parseSort } from "./rest.ts";
-export type { RestHandlers, RestListOptions } from "./rest.ts";
-
 export { whatsappChannel, zendeskChannel } from "./channels/index.ts";
 export type { WhatsAppConfig } from "./channels/whatsapp.ts";
 export type { ZendeskConfig } from "./channels/zendesk.ts";
@@ -70,3 +64,15 @@ export {
   timingSafeEqual,
   verifyHmacSha256,
 } from "./channels/utils.ts";
+
+export { withApp } from "./app.ts";
+export type {
+  CopilotzApp,
+  AppRequest,
+  AppResponse,
+  AgentHandlers,
+  ChannelContext,
+  ChannelHandler,
+  ChannelHandlers,
+  ResourceDescriptor,
+} from "./app.ts";

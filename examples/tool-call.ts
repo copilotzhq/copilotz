@@ -36,53 +36,48 @@ const copilotz = await createCopilotz({
       allowedTools: ["get_current_time"],
     },
   ],
-  // Enable streaming to observe tokens
-  stream: true,
 });
 
 console.log("👤 User: What time is it right now?\n");
 
-// 3. Run and observe events
-const result = await copilotz.run(
-  {
-    content: "What time is it right now?",
-    sender: { type: "user", name: "User" },
-  },
-  (event) => {
-    // -------------------------------------------------------------------------
-    // VERIFICATION: Check the new ToolInvocation structure
-    // -------------------------------------------------------------------------
-    if (event.type === "TOOL_CALL") {
-      const toolCall = (event.payload as { toolCall: ToolInvocation }).toolCall;
-      
-      console.log("\n\x1b[33m[TOOL_CALL Event Payload]\x1b[0m");
-      console.log(`Interface: ToolInvocation`);
-      console.log(`ID:        ${toolCall.id}`);
-      console.log(`Tool ID:   ${toolCall.tool.id}`);
-      console.log(`Tool Name: ${toolCall.tool.name || '(none)'}`);
-      console.log(`Arguments: ${typeof toolCall.args === 'string' ? toolCall.args : JSON.stringify(toolCall.args)}`);
-      console.log("--------------------------\n");
-    }
+// 3. Run and consume events from the iterator
+const result = await copilotz.run({
+  content: "What time is it right now?",
+  sender: { type: "user", name: "User" },
+});
 
-    if (event.type === "NEW_MESSAGE") {
-        const payload = event.payload as { sender?: { type: string }, metadata?: { toolCalls?: ToolInvocation[] } };
-        if (payload.sender?.type === "tool") {
-            console.log("\x1b[32m[TOOL_RESULT (via NEW_MESSAGE metadata)]\x1b[0m");
-            const meta = payload.metadata?.toolCalls?.[0];
-            if (meta) {
-                console.log(`Status:    ${meta.status}`);
-                console.log(`Output:    ${JSON.stringify(meta.output)}`);
-                console.log("--------------------------\n");
-            }
-        }
-    }
-  }
-);
-
-// 4. Stream response to terminal
 process.stdout.write("🤖 Assistant: ");
 let isThinking = false;
+
 for await (const event of result.events) {
+  // Inspect TOOL_CALL events to verify the ToolInvocation structure
+  if (event.type === "TOOL_CALL") {
+    const toolCall = (event.payload as { toolCall: ToolInvocation }).toolCall;
+    
+    console.log("\n\x1b[33m[TOOL_CALL Event Payload]\x1b[0m");
+    console.log(`Interface: ToolInvocation`);
+    console.log(`ID:        ${toolCall.id}`);
+    console.log(`Tool ID:   ${toolCall.tool.id}`);
+    console.log(`Tool Name: ${toolCall.tool.name || '(none)'}`);
+    console.log(`Arguments: ${typeof toolCall.args === 'string' ? toolCall.args : JSON.stringify(toolCall.args)}`);
+    console.log("--------------------------\n");
+  }
+
+  // Inspect tool result messages
+  if (event.type === "NEW_MESSAGE") {
+    const payload = event.payload as { sender?: { type: string }, metadata?: { toolCalls?: ToolInvocation[] } };
+    if (payload.sender?.type === "tool") {
+      console.log("\x1b[32m[TOOL_RESULT (via NEW_MESSAGE metadata)]\x1b[0m");
+      const meta = payload.metadata?.toolCalls?.[0];
+      if (meta) {
+        console.log(`Status:    ${meta.status}`);
+        console.log(`Output:    ${JSON.stringify(meta.output)}`);
+        console.log("--------------------------\n");
+      }
+    }
+  }
+
+  // Stream tokens to terminal
   if (event.type === "TOKEN") {
     const payload = event.payload as { token?: string; isReasoning?: boolean };
     const token = payload.token ?? "";
@@ -100,10 +95,8 @@ for await (const event of result.events) {
   }
 }
 
-// Wait for full execution
 await result.done;
 
 console.log("\n\n✅ Done!");
 
-// 5. Shutdown
 await copilotz.shutdown();

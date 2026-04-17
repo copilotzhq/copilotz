@@ -129,7 +129,6 @@ agents: [{
     model: "gpt-4o-mini",
     temperature: 0.7,
     maxTokens: 4096,
-    apiKey: "sk-...",           // Override env variable
     baseUrl: "...",             // Custom endpoint
     outputReasoning: false,     // Default true; whether to emit reasoning tokens ("thinking") during stream
     estimateCost: true,         // Default true; estimate cost from OpenRouter pricing when native usage exists
@@ -150,6 +149,11 @@ agents: [{
   },
 }]
 ```
+
+`llmOptions` is persisted as an `LLMConfig`, so only non-secret fields should
+be treated as durable configuration. Runtime-only fields such as API keys
+should come from environment variables, agent runtime config, or the
+`security.resolveLLMRuntimeConfig` hook described below.
 
 ### Cost Estimation
 
@@ -407,29 +411,6 @@ processors: [{
 }]
 ```
 
-## Callbacks
-
-```typescript
-callbacks: {
-  // Called for every event
-  onEvent: async (event) => {
-    console.log(`Event: ${event.type}`);
-    // Can return { producedEvents: [...] } to inject events
-  },
-  
-  // Called for streaming tokens
-  onContentStream: async (data) => {
-    // data: { threadId, agentName, token, isComplete }
-    process.stdout.write(data.token);
-  },
-  
-  // Called after processing to push to client
-  onStreamPush: async (event) => {
-    // Push event to client stream
-  },
-}
-```
-
 ## History Transform
 
 Use `historyTransform` to filter or rewrite the generated message history before it is sent to the LLM.
@@ -605,7 +586,7 @@ threadMetadata: {                     // Metadata for new threads
 Options passed to `copilotz.run()`:
 
 ```typescript
-await copilotz.run(message, onEvent, {
+await copilotz.run(message, {
   stream: true,                    // Enable streaming for this run
   ackMode: "immediate",            // "immediate" or "onComplete"
   signal: abortController.signal,  // AbortSignal for cancellation
@@ -669,8 +650,47 @@ LLM provider keys can be set via environment variables:
 | Groq | `GROQ_API_KEY` |
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | Ollama | `OLLAMA_API_KEY` (or use `baseUrl`) |
+| Any provider fallback | `LLM_API_KEY` |
 
-The library checks `${PROVIDER}_API_KEY` first, then falls back to `OPENAI_API_KEY`.
+The library checks `${PROVIDER}_API_KEY` first, then falls back to `LLM_API_KEY`.
+
+## Runtime Secret Resolution
+
+Use `security.resolveLLMRuntimeConfig` when your runtime needs to inject secrets
+or other execution-time overrides without persisting them in `LLM_CALL` events.
+
+```typescript
+const copilotz = await createCopilotz({
+  agents: [{
+    id: "assistant",
+    name: "Assistant",
+    role: "assistant",
+    llmOptions: {
+      provider: "openai",
+      model: "gpt-4o-mini",
+    },
+  }],
+  security: {
+    resolveLLMRuntimeConfig: async ({ provider, agent, config }) => {
+      if (provider === "openai" && agent.name === "Assistant") {
+        return {
+          apiKey: Deno.env.get("OPENAI_API_KEY"),
+        };
+      }
+
+      return {
+        apiKey: Deno.env.get("LLM_API_KEY"),
+      };
+    },
+  },
+});
+```
+
+Resolution model:
+
+- `LLMConfig`: persisted and streamed safe config
+- `LLMRuntimeConfig`: execution-time config used for the provider call
+- built-in env lookup still works even if no security hook is provided
 
 ---
 

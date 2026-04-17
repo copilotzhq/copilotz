@@ -8,30 +8,26 @@ These helpers wrap `copilotz.ops` and `copilotz.collections` into domain-specifi
 
 ```typescript
 import { createCopilotz } from "copilotz";
-import {
-  createAdminHandlers,
-  createThreadHandlers,
-  createMessageHandlers,
-  createEventHandlers,
-  createAssetHandlers,
-  createCollectionHandlers,
-  createRestHandlers,
-} from "copilotz/server";
+import { withApp } from "copilotz/server";
 
-const copilotz = await createCopilotz({
+const copilotz = withApp(await createCopilotz({
   resources: { path: "./resources" },
   dbConfig: { url: Deno.env.get("DATABASE_URL") },
-  stream: true,
-});
+}));
 
-// Create handler objects once
-const threads = createThreadHandlers(copilotz);
-const messages = createMessageHandlers(copilotz);
-const events = createEventHandlers(copilotz);
-const assets = createAssetHandlers(copilotz);
-const collections = createCollectionHandlers(copilotz);
-const rest = createRestHandlers(copilotz);
-const admin = createAdminHandlers(copilotz);
+// All handlers are available via copilotz.app
+copilotz.app.threads    // ThreadHandlers
+copilotz.app.messages   // MessageHandlers
+copilotz.app.events     // EventHandlers
+copilotz.app.assets     // AssetHandlers
+copilotz.app.collections // CollectionHandlers
+copilotz.app.graph      // GraphHandlers
+copilotz.app.participants // ParticipantHandlers
+copilotz.app.agents     // AgentHandlers
+copilotz.app.channels   // ChannelHandlers
+
+// Or use the universal dispatcher
+await copilotz.app.handle({ resource: "threads", method: "GET", path: [], query: { participantId: "p-1" } });
 ```
 
 ## Handler Families
@@ -109,6 +105,15 @@ const pending = await events.getNextPending("thread-abc", "default");
 await events.updateStatus("event-id", "completed");
 ```
 
+Queued and streamed event types now include explicit lifecycle/result pairs for
+executors:
+
+- `LLM_CALL` / `LLM_RESULT`
+- `TOOL_CALL` / `TOOL_RESULT`
+
+`NEW_MESSAGE` remains the persisted/history artifact event and `TOKEN` remains
+ephemeral stream-only progress output.
+
 ### Assets
 
 Retrieve stored assets.
@@ -137,12 +142,19 @@ const collections = createCollectionHandlers(copilotz);
 // List available collections
 const names = collections.listCollections(); // ["customer", "ticket"]
 
-// CRUD
+// CRUD — via handler
 const items = await collections.list("customer", {
   namespace: "tenant:acme",
   filter: { plan: "enterprise" },
   limit: 10,
   sort: [{ field: "name", direction: "asc" }],
+});
+
+// Via the API dispatcher (query params)
+// GET /collections/customer?filter={"plan":"enterprise"}&sort=name:asc,createdAt:desc&limit=10
+await copilotz.app.handle({
+  resource: "collections", method: "GET", path: ["customer"],
+  query: { filter: '{"plan":"enterprise"}', sort: "name:asc,createdAt:desc", limit: "10" },
 });
 
 const item = await collections.getById("customer", "cust-123");
@@ -154,35 +166,15 @@ await collections.delete("customer", "cust-123");
 const results = await collections.search("customer", "enterprise plan", { limit: 5 });
 ```
 
-### REST (Generic CRUD)
+### Admin (Feature)
 
-Low-level access to internal database tables via `ops.crud`. For application data, prefer Collections.
-
-```typescript
-const rest = createRestHandlers(copilotz);
-
-// Parse query params from a URL
-const options = rest.parseQueryParams(new URL(request.url).searchParams);
-// → { limit: 20, offset: 0, sort: [...], filters: { status: "active" } }
-
-// CRUD on any internal resource
-const items = await rest.list("threads", options);
-const item = await rest.getById("threads", "thread-abc");
-const created = await rest.create("messages", { content: "Hello", threadId: "thread-abc" });
-const updated = await rest.update("threads", "thread-abc", { status: "archived" });
-await rest.delete("threads", "thread-abc");
-```
-
-### Admin
-
-Read framework-level operational metrics and summaries.
+Admin is shipped as a built-in **feature** (`resources/features/admin/`), so it is
+accessible via the dispatcher at `/features/admin/<action>`:
 
 ```typescript
-const admin = createAdminHandlers(copilotz);
-
-const overview = await admin.getOverview({ namespace: "tenant-acme" });
-const activity = await admin.getActivitySeries({ interval: "day" });
-const agents = await admin.listAgents({ search: "support" });
+await copilotz.app.handle({ resource: "features", method: "GET", path: ["admin", "overview"], query: { namespace: "tenant-acme" } });
+await copilotz.app.handle({ resource: "features", method: "GET", path: ["admin", "activity"], query: { interval: "day" } });
+await copilotz.app.handle({ resource: "features", method: "GET", path: ["admin", "agents"], query: { search: "support" } });
 ```
 
 Admin overview, activity buckets, and agent summaries include aggregated LLM usage totals:
@@ -193,80 +185,110 @@ Admin overview, activity buckets, and agent summaries include aggregated LLM usa
 
 These values are aggregated from persisted `llm_usage` nodes and only include cost for calls where Copilotz had provider-native usage data.
 
-### Standalone Utilities
+## Response Contract
 
-`parseQueryParams` and `parseSort` are also exported as standalone functions:
+`copilotz.app.handle(request)` returns an `AppResponse`:
 
 ```typescript
-import { parseQueryParams, parseSort } from "copilotz/server";
-
-// Parse URL query params
-const options = parseQueryParams(url.searchParams);
-
-// Parse sort string: "name:asc,-createdAt" → [{ field: "name", direction: "asc" }, { field: "createdAt", direction: "desc" }]
-const sort = parseSort("name:asc,-createdAt");
+interface AppResponse {
+  status: number;
+  data?: unknown;                 // primary payload
+  pageInfo?: MessageHistoryPageInfo; // set only by paginated endpoints
+}
 ```
+
+HTTP adapters (see the examples below) must serialize this as a uniform
+envelope so frontends always read the body the same way:
+
+```json
+{ "data": <payload>, "pageInfo"?: { ... } }
+```
+
+Currently only `GET /threads/:id/messages` populates `pageInfo` (with
+`{ hasMoreBefore, oldestMessageId, newestMessageId }`). Every other route
+returns just `{ "data": <payload> }`.
 
 ## Wiring to a Framework
 
 ### Oxian (file-based routing)
 
-The `copilotz-starter` template demonstrates this pattern. Each route file imports `copilotz` from `dependencies.ts` and creates handlers inline:
+The `copilotz-starter` template uses a single catch-all route that delegates to `copilotz.app.handle()`:
 
 ```typescript
-// api/v1/threads/index.ts
+// api/v1/[...path].ts — handles all /v1/* requests
 import type { Dependencies } from "@/api/dependencies.ts";
-import { createThreadHandlers } from "copilotz/server";
 
-export const GET = async (req: Request, deps: Dependencies) => {
-  const threads = createThreadHandlers(deps.copilotz);
-  const participantId = new URL(req.url).searchParams.get("participantId");
-  if (!participantId) return new Response("participantId required", { status: 400 });
-  return Response.json(await threads.list(participantId));
+const handler = async (data: { path?: string[] }, context: { dependencies: Dependencies; request: Request }) => {
+  const { copilotz } = context.dependencies;
+  const [resource, ...path] = data.path ?? [];
+  const url = new URL(context.request.url);
+
+  const result = await copilotz.app.handle({
+    resource,
+    method: context.request.method,
+    path,
+    query: Object.fromEntries(url.searchParams),
+    body: await context.request.body,
+  });
+
+  if (result.status === 204) return { status: 204 };
+
+  // Uniform HTTP envelope: `{ data, pageInfo? }`.
+  // Paginated routes (e.g. `GET /threads/:id/messages`) set `pageInfo`; all
+  // other routes only emit `data`.
+  const body: Record<string, unknown> = { data: result.data };
+  if (result.pageInfo !== undefined) body.pageInfo = result.pageInfo;
+  context.response.send(body, { status: result.status });
 };
 
-export const POST = async (req: Request, deps: Dependencies) => {
-  const threads = createThreadHandlers(deps.copilotz);
-  const body = await req.json();
-  const thread = await threads.findOrCreate(body.threadId, body);
-  return Response.json(thread, { status: 201 });
-};
+export const GET = handler;
+export const POST = handler;
+export const PUT = handler;
+export const PATCH = handler;
+export const DELETE = handler;
 ```
 
-### Hono
+### Deno.serve
 
 ```typescript
-import { Hono } from "hono";
-import { createThreadHandlers } from "copilotz/server";
+import { createCopilotz } from "copilotz";
+import { withApp } from "copilotz/server";
 
-const app = new Hono();
+const copilotz = withApp(await createCopilotz({ /* ... */ }));
 
-app.get("/v1/threads", async (c) => {
-  const threads = createThreadHandlers(copilotz);
-  const participantId = c.req.query("participantId");
-  return c.json(await threads.list(participantId));
-});
+Deno.serve(async (req) => {
+  const url = new URL(req.url);
+  const [, resource, ...path] = url.pathname.split("/").filter(Boolean);
 
-app.post("/v1/threads", async (c) => {
-  const threads = createThreadHandlers(copilotz);
-  const body = await c.req.json();
-  return c.json(await threads.findOrCreate(body.threadId, body), 201);
+  try {
+    const result = await copilotz.app.handle({
+      resource,
+      method: req.method,
+      path,
+      query: Object.fromEntries(url.searchParams),
+      body: req.method !== "GET" ? await req.json() : undefined,
+    });
+    if (result.status === 204) return new Response(null, { status: 204 });
+    // Uniform HTTP envelope: `{ data, pageInfo? }`.
+    const body: Record<string, unknown> = { data: result.data };
+    if (result.pageInfo !== undefined) body.pageInfo = result.pageInfo;
+    return Response.json(body, { status: result.status });
+  } catch (err) {
+    return Response.json({ error: err.message }, { status: err.status ?? 500 });
+  }
 });
 ```
 
-### Express
+### Individual handler factories
+
+For fine-grained control, individual factories are still exported:
 
 ```typescript
-import express from "express";
-import { createThreadHandlers } from "copilotz/server";
+import { createThreadHandlers, createCollectionHandlers } from "copilotz/server";
 
-const app = express();
-
-app.get("/v1/threads", async (req, res) => {
-  const threads = createThreadHandlers(copilotz);
-  const list = await threads.list(req.query.participantId);
-  res.json(list);
-});
+const threads = createThreadHandlers(copilotz);
+const collections = createCollectionHandlers(copilotz);
+await threads.list(participantId, { status: "active" });
 ```
 
 ## Next Steps

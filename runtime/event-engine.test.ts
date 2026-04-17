@@ -57,24 +57,32 @@ Deno.test("startEventWorker keeps polling when conditional lease release fails",
     ops,
   };
 
+  const emittedEvents: unknown[] = [];
+
   await startEventWorker(
     fakeDb as never,
     threadId,
-    {},
     {
-      NEW_MESSAGE: {
-        shouldProcess: () => true,
-        process: async (event) => {
-          processedEventIds.push(event.id as string);
-          return { producedEvents: [] };
-        },
+      processors: {
+        NEW_MESSAGE: [
+          {
+            shouldProcess: () => true,
+            process: async (event: import("@/types/index.ts").Event) => {
+              processedEventIds.push(event.id as string);
+              return { producedEvents: [] };
+            },
+          },
+        ],
       },
+      emitToStream: (ev: unknown) => { emittedEvents.push(ev); },
+      stream: false,
     },
     async () =>
       ({
         db: fakeDb,
         thread: { id: threadId },
         context: {},
+        emitToStream: () => {},
       }) as never,
   );
 
@@ -89,4 +97,82 @@ Deno.test("startEventWorker keeps polling when conditional lease release fails",
   assertEquals(nextCalls, 3);
   assertEquals(conditionalReleaseCalls, 2);
   assertEquals(blindReleaseCalls, 0);
+});
+
+Deno.test("startEventWorker emits queued event before processor execution", async () => {
+  const threadId = "thread-emit-first";
+  const queuedEvent = {
+    id: "event-emit-first",
+    threadId,
+    eventType: "TOOL_CALL",
+    payload: { toolCall: { id: "tool-1" } },
+    parentEventId: null,
+    traceId: null,
+    priority: 0,
+    metadata: null,
+    ttlMs: null,
+    expiresAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    status: "pending",
+  };
+
+  let nextCalls = 0;
+  const emittedEvents: Array<{ id?: string; type?: string }> = [];
+  const observations: string[] = [];
+
+  const ops = {
+    getThreadWorkerLeaseConfig: () => ({
+      leaseMs: 60_000,
+      heartbeatMs: 60_000,
+    }),
+    acquireThreadWorkerLease: async () => true,
+    renewThreadWorkerLease: async () => true,
+    recoverThreadProcessingQueueItems: async () => 0,
+    getNextPendingQueueItem: async () => {
+      nextCalls += 1;
+      return nextCalls === 1 ? queuedEvent : undefined;
+    },
+    updateQueueItemStatus: async () => {},
+    releaseThreadWorkerLeaseIfNoPendingWork: async () => true,
+    releaseThreadWorkerLease: async () => {},
+  };
+
+  const fakeDb = { ops };
+
+  await startEventWorker(
+    fakeDb as never,
+    threadId,
+    {
+      processors: {
+        TOOL_CALL: [
+          {
+            shouldProcess: () => true,
+            process: async (event: import("@/types/index.ts").Event) => {
+              observations.push(
+                emittedEvents.some((emitted) => emitted.id === event.id && emitted.type === "TOOL_CALL")
+                  ? "emitted-before-process"
+                  : "missing-before-process",
+              );
+              return { producedEvents: [] };
+            },
+          },
+        ],
+      },
+      emitToStream: (ev: import("@/types/index.ts").Event) => {
+        emittedEvents.push({ id: ev.id as string | undefined, type: ev.type });
+      },
+      stream: true,
+    },
+    async () =>
+      ({
+        db: fakeDb,
+        thread: { id: threadId },
+        context: {},
+        emitToStream: () => {},
+      }) as never,
+  );
+
+  assertEquals(observations, ["emitted-before-process"]);
+  assertEquals(emittedEvents, [{ id: "event-emit-first", type: "TOOL_CALL" }]);
 });

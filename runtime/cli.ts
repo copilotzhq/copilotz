@@ -4,14 +4,10 @@ import { stdin, stdout } from "node:process";
 import type {
   MessagePayload,
   Event,
-  NewEvent,
-  NewUnknownEvent,
 } from "@/types/index.ts";
-import type { UnifiedOnEvent } from "@/runtime/index.ts";
 
 type CliPerformRun = (
   message: MessagePayload,
-  onEvent?: UnifiedOnEvent,
   options?: { stream?: boolean; ackMode?: "immediate" | "onComplete" },
 ) => Promise<{
   threadId: string;
@@ -34,7 +30,6 @@ export interface InteractiveCliOptions {
       threadExternalId?: string;
     })
     | string;
-  onEvent?: UnifiedOnEvent;
   agents?: CliAgent[];
   tools?: Array<{ id?: string; key?: string; name?: string }>;
   banner?: string | null;
@@ -458,18 +453,6 @@ class CopilotzInteractiveCli {
     }
   }
 
-  private async forwardEvent(event: Event): Promise<
-    { producedEvents?: Array<NewEvent | NewUnknownEvent> } | void
-  > {
-    this.renderEvent(event);
-    if (typeof this.options.onEvent === "function" && event.type !== "TOKEN") {
-      return await this.options.onEvent(event);
-    }
-    if (typeof this.options.onEvent === "function") {
-      await Promise.resolve(this.options.onEvent(event)).catch(() => undefined);
-    }
-  }
-
   private async send(message: string | MessagePayload): Promise<void> {
     const outbound = this.buildOutboundMessage(message);
     const text = typeof outbound.content === "string"
@@ -486,14 +469,13 @@ class CopilotzInteractiveCli {
 
     const handle = await this.options.performRun(
       outbound,
-      (event) => this.forwardEvent(event),
       { stream: true, ackMode: "onComplete" },
     );
     this.activeThreadId = handle.threadId;
     this.history[this.history.length - 1]!.threadId = handle.threadId;
 
-    for await (const _ of handle.events) {
-      // Drain the stream; rendering happens in onEvent callbacks.
+    for await (const event of handle.events) {
+      this.renderEvent(event as Event);
     }
     await handle.done;
     this.printLine(color("─".repeat(60), "dim"));

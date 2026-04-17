@@ -1,4 +1,4 @@
-import { createCopilotz } from "@/index.ts";
+import { runThread } from "@/runtime/index.ts";
 import type { Agent } from "@/types/index.ts";
 import type { ToolExecutionContext } from "@/resources/processors/tool_call/index.ts";
 
@@ -44,10 +44,13 @@ export default {
             throw new Error("Target agent is required and cannot be empty");
         }
 
-        const ops = context?.db?.ops;
-
         if (!context?.senderId) {
             throw new Error("Sender ID is required to delegate work");
+        }
+
+        const db = context.db ?? context.dbInstance;
+        if (!db) {
+            throw new Error("Database instance is required for delegation");
         }
 
         const availableAgents = context.agents || [];
@@ -59,30 +62,25 @@ export default {
 
         const delegatedThreadId = crypto.randomUUID();
 
-        const copilotz = await createCopilotz({
-            agents: [targetAgentConfig],
-            tools: context.tools || [],
-            apis: context.apis,
-            mcpServers: context.mcpServers,
-            callbacks: context.callbacks,
-            dbInstance: context?.db,
-            stream: true,
-        });
-
         try {
-            const handle = await copilotz.run({
-                content: normalizedTask,
-                sender: {
-                    type: (context.senderType ?? "user") as "agent" | "user" | "tool" | "system",
-                    id: context.senderId,
-                    name: context.senderId ?? null,
+            const handle = await runThread(
+                db,
+                { ...context, agents: [targetAgentConfig] },
+                {
+                    content: normalizedTask,
+                    sender: {
+                        type: (context.senderType ?? "user") as "agent" | "user" | "tool" | "system",
+                        id: context.senderId,
+                        name: context.senderId ?? null,
+                    },
+                    thread: {
+                        id: delegatedThreadId,
+                        name: `Delegated task from ${context.senderId}`,
+                        participants: [normalizedTargetAgent],
+                    },
                 },
-                thread: {
-                    id: delegatedThreadId,
-                    name: `Delegated task from ${context.senderId}`,
-                    participants: [normalizedTargetAgent],
-                },
-            });
+                { stream: true },
+            );
 
             let answer: string | null = null;
 
@@ -116,7 +114,7 @@ export default {
                 ? `Delegated task: "${normalizedTask}" - Answer: "${finalAnswer.substring(0, 100)}${finalAnswer.length > 100 ? '...' : ''}"`
                 : `Delegated task: "${normalizedTask}" - No answer received (timeout)`;
 
-            await ops?.archiveThread(delegatedThreadId, summary);
+            await db.ops?.archiveThread(delegatedThreadId, summary);
 
             if (!finalAnswer) {
                 throw new Error(`No answer received from ${normalizedTargetAgent} within ${timeout} seconds`);
@@ -137,8 +135,6 @@ export default {
                 task: normalizedTask,
                 targetAgent: normalizedTargetAgent,
             };
-        } finally {
-            await copilotz.shutdown().catch(() => undefined);
         }
     },
 };

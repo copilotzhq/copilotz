@@ -118,6 +118,19 @@ export interface ProviderConfigBase {
   verbosity?: "none" | "low" | "medium" | "high"; // OpenAI reasoning models (o3, o4)
 }
 
+export type LLMConfigBase = Omit<ProviderConfigBase, "apiKey">;
+
+export type LLMFallbackConfig =
+  & Omit<LLMConfigBase, "provider">
+  & { provider: ProviderName };
+
+export interface LLMConfig extends LLMConfigBase {
+  /** Ordered fallback models/providers to try when the primary attempt fails before any visible streaming output. */
+  fallbacks?: LLMFallbackConfig[];
+  /** Error classes that are allowed to trigger a fallback attempt. */
+  fallbackOn?: ProviderFallbackReason[];
+}
+
 export type ProviderFallbackConfig =
   & Omit<ProviderConfigBase, "provider">
   & { provider: ProviderName };
@@ -129,6 +142,8 @@ export interface ProviderConfig extends ProviderConfigBase {
   /** Error classes that are allowed to trigger a fallback attempt. */
   fallbackOn?: ProviderFallbackReason[];
 }
+
+export type LLMRuntimeConfig = ProviderConfig;
 
 // Tool definition for standardized tool calling
 export interface ToolDefinition {

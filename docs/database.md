@@ -152,7 +152,7 @@ PostgreSQL schemas provide complete database-level separation:
 await copilotz.schema.provision("tenant_acme");
 
 // Run operations in a tenant's schema
-await copilotz.run(message, onEvent, { schema: "tenant_acme" });
+await copilotz.run(message, { schema: "tenant_acme" });
 ```
 
 Schema operations:
@@ -180,7 +180,7 @@ Namespaces provide logical partitioning within a schema:
 
 ```typescript
 // Operations scoped to a namespace
-await copilotz.run(message, onEvent, { namespace: "workspace:123" });
+await copilotz.run(message, { namespace: "workspace:123" });
 
 // Collections scoped to a namespace
 const scoped = copilotz.collections.withNamespace("workspace:123");
@@ -200,7 +200,7 @@ const scoped = copilotz.collections.withNamespace("workspace:123");
 You can combine both:
 
 ```typescript
-await copilotz.run(message, onEvent, { 
+await copilotz.run(message, { 
   schema: "tenant_acme",       // Hard isolation
   namespace: "project:456",    // Logical partition
 });

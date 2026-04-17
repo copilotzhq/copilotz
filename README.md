@@ -52,6 +52,7 @@ Copilotz is the full-stack framework for AI applications. Everything you need to
 | Database | PostgreSQL (production) or PGLite (development/embedded) |
 | Channels | Web (SSE), WhatsApp, and Zendesk — import and go |
 | Streaming | Real-time token streaming with async iterables |
+| Collections | Persist application-specific data via copiloz native Collections API |
 | Usage & Cost | Provider-native token usage tracking plus optional OpenRouter-based cost estimation |
 
 **One framework. One dependency. Production-ready.**
@@ -109,6 +110,10 @@ copilotz.start({ banner: "🤖 Chat with your AI! Type 'quit' to exit.\n" });
 
 Run it: `OPENAI_API_KEY=your-key deno run --allow-net --allow-env chat.ts`
 
+`llmOptions` is persisted as safe `LLMConfig`. If you need to inject secrets or
+runtime-only provider overrides without persisting them in `LLM_CALL` events,
+use `security.resolveLLMRuntimeConfig` in `createCopilotz()`.
+
 ### File-Based Resources
 
 Organize agents, tools, and APIs in a directory structure — no giant config objects:
@@ -119,7 +124,6 @@ import { createCopilotz } from "@copilotz/copilotz";
 const copilotz = await createCopilotz({
   resources: { path: "./resources" },  // Loads agents/, tools/, apis/ automatically
   dbConfig: { url: Deno.env.get("DATABASE_URL") },
-  stream: true,
 });
 ```
 
@@ -213,7 +217,7 @@ Schema-level isolation for hard boundaries. Namespace-level isolation for logica
 
 ```typescript
 // Each customer gets complete isolation
-await copilotz.run(message, onEvent, { 
+await copilotz.run(message, { 
   schema: "tenant_acme",      // PostgreSQL schema
   namespace: "workspace:123", // Logical partition
 });
@@ -245,26 +249,28 @@ Need finer control? Agents can opt out of persisting assets they generate via
 `assetOptions.produce.persistGeneratedAssets = false`, which also sanitizes
 inline base64/data URLs returned by their tool calls before persistence.
 
-### Production Infrastructure, Not Prototypes
+### Everything Is a Resource
 
-Event-driven architecture with persistent queues. Background workers for heavy processing. Custom processors for your business logic. This is infrastructure you'd build anyway — already built.
+Agents, tools, processors, LLM providers, embeddings, storage backends — they're all resources loaded through the same system. Override any built-in or add your own:
 
 ```typescript
-// Events are persisted and recoverable
-// Background jobs process RAG ingestion, entity extraction
-// Custom processors extend the pipeline
 const copilotz = await createCopilotz({
-  // ...
-  processors: [{
+  resources: { path: "./resources" },
+  llm: { "my-llm": myCustomProvider },       // custom LLM adapter
+  embeddings: { "my-emb": myEmbeddings },     // custom embeddings
+  processors: [{                              // custom event processor
     eventType: "NEW_MESSAGE",
     shouldProcess: (event) => event.payload.needsApproval,
     process: async (event, deps) => {
-      // Your custom logic here
       return { producedEvents: [] };
     },
   }],
 });
 ```
+
+### Production Infrastructure, Not Prototypes
+
+Event-driven architecture with persistent queues. Background workers for heavy processing. Custom processors for your business logic. This is infrastructure you'd build anyway — already built.
 
 ---
 
@@ -298,19 +304,10 @@ const res = await whatsappChannel(
 Config defaults to env vars (`WHATSAPP_*`, `ZENDESK_*`) or pass explicit config as a third argument. Available channels:
 
 ```typescript
-import { webChannel } from "@copilotz/copilotz/server/channels/web";
 import { whatsappChannel } from "@copilotz/copilotz/server/channels/whatsapp";
 import { zendeskChannel } from "@copilotz/copilotz/server/channels/zendesk";
 ```
 
-**Web** returns an async iterable of events for you to stream (SSE, WebSocket, etc.):
-
-```typescript
-const res = await webChannel(req, copilotz);
-for await (const { event, data } of res.events!) {
-  sse.send(data, { event });
-}
-```
 
 **WhatsApp** and **Zendesk** handle the full lifecycle internally — verify the webhook, parse the payload, run the agent, and push responses back to the platform API.
 
@@ -339,11 +336,17 @@ Automatic extraction and storage of images, files, and media from tool outputs. 
 - [Collections](./docs/collections.md) — Type-safe data storage
 - [RAG](./docs/rag.md) — Document ingestion and semantic search
 
+**Resources & Extensibility**
+- [Resources](./docs/resources.md) — How the resource system works
+- [LLM Providers](./docs/llm-providers.md) — Built-in and custom LLM adapters
+- [Embeddings](./docs/embeddings.md) — Custom embedding providers
+- [Storage](./docs/storage.md) — Asset storage backends
+- [Loaders](./docs/loaders.md) — Load resources from filesystem
+
 **Advanced**
 - [Skills](./docs/skills.md) — SKILL.md format, discovery, and admin agent
 - [Configuration](./docs/configuration.md) — Full configuration reference
 - [Assets](./docs/assets.md) — File and media storage
-- [Loaders](./docs/loaders.md) — Load resources from filesystem
 - [Server Helpers](./docs/server.md) — Framework-independent handler factories
 - [Channels](./docs/channels.md) — Web, WhatsApp, and Zendesk channel handlers
 - [API Reference](./docs/api-reference.md) — Complete API documentation

@@ -26,6 +26,18 @@ type ProcessorEntry = EventProcessor<unknown, ProcessorDeps> & {
   id?: string;
 };
 
+/** A loaded feature with named action handlers. */
+export type FeatureEntry = {
+  name: string;
+  actions: Record<string, (request: unknown, copilotz: unknown) => Promise<unknown>>;
+};
+
+/** A loaded channel handler. */
+export type ChannelEntry = {
+  name: string;
+  handler: (ctx: unknown, copilotz: unknown) => Promise<unknown>;
+};
+
 /**
  * Manifest declaring which resources a directory or package provides.
  * Placed at the root as `manifest.ts` (default export).
@@ -66,6 +78,10 @@ export type Resources = {
   skills?: Skill[];
   /** Array of loaded custom event processors. */
   processors?: ProcessorEntry[];
+  /** Array of loaded feature handlers. */
+  features?: FeatureEntry[];
+  /** Array of loaded channel handlers. */
+  channels?: ChannelEntry[];
   /** Extensible: marketplace packages can contribute arbitrary resource types. */
   [key: string]: unknown;
 };
@@ -78,6 +94,8 @@ const KNOWN_RESOURCE_TYPES = [
   "processors",
   "skills",
   "mcpServers",
+  "features",
+  "channels",
 ] as const;
 
 // ---- Configuration --------------------------------------------------------
@@ -410,6 +428,141 @@ async function loadGenericByManifest(
   return settled.filter((r) => r !== null);
 }
 
+// ---- Feature loading ------------------------------------------------------
+
+/**
+ * Load feature handlers from a features/ directory.
+ * Each subdirectory is a feature; each .ts file inside exports a default handler.
+ * When `filterNames` is provided (manifest mode), only those features are loaded.
+ */
+async function loadFeaturesFromDirectory(
+  baseUrl: string,
+  filterNames?: string[],
+): Promise<FeatureEntry[]> {
+  const featuresUrl = joinUrl(baseUrl, "features");
+  let entries: Deno.DirEntry[];
+  try {
+    entries = [];
+    for await (const entry of readDir(featuresUrl)) entries.push(entry);
+  } catch {
+    return [];
+  }
+
+  const featureDirs = entries.filter((e) =>
+    e.isDirectory && (!filterNames || filterNames.includes(e.name))
+  );
+
+  const features = await Promise.all(
+    featureDirs.map(async (dir) => {
+      const featureUrl = joinUrl(featuresUrl, dir.name);
+      let files: Deno.DirEntry[];
+      try {
+        files = [];
+        for await (const f of readDir(featureUrl)) files.push(f);
+      } catch {
+        return null;
+      }
+
+      const actions: FeatureEntry["actions"] = {};
+      await Promise.all(
+        files
+          .filter((f) => f.isFile && f.name.endsWith(".ts") && f.name !== "manifest.ts" && !f.name.startsWith("_"))
+          .map(async (file) => {
+            try {
+              const mod = await import(joinUrl(featureUrl, file.name));
+              const handler = mod?.default;
+              if (typeof handler === "function") {
+                actions[file.name.replace(/\.ts$/, "")] = handler;
+              }
+            } catch (err) {
+              console.warn(
+                `[copilotz:resources] Failed to load feature action: ${dir.name}/${file.name}`,
+                err,
+              );
+            }
+          }),
+      );
+
+      if (Object.keys(actions).length === 0) return null;
+      return { name: dir.name, actions } as FeatureEntry;
+    }),
+  );
+
+  return features.filter((f): f is FeatureEntry => f !== null);
+}
+
+// ---- Channel loading ------------------------------------------------------
+
+/**
+ * Load channel handlers from a channels/ directory.
+ * Each .ts file exports a default handler function: (ctx, copilotz) => Promise<unknown>.
+ * When `filterNames` is provided (manifest mode), only those channels are loaded.
+ */
+async function loadChannelsFromDirectory(
+  baseUrl: string,
+  filterNames?: string[],
+): Promise<ChannelEntry[]> {
+  const channelsUrl = joinUrl(baseUrl, "channels");
+  const entries: Deno.DirEntry[] = [];
+  try {
+    for await (const entry of readDir(channelsUrl)) entries.push(entry);
+  } catch {
+    return [];
+  }
+
+  const channelFiles = entries.filter((e) =>
+    e.isFile && e.name.endsWith(".ts") && e.name !== "manifest.ts" &&
+    e.name !== "mod.ts" && e.name !== "index.ts" && e.name !== "types.ts" &&
+    e.name !== "utils.ts" &&
+    (!filterNames || filterNames.includes(e.name.replace(/\.ts$/, "")))
+  );
+
+  const channels = await Promise.all(
+    channelFiles.map(async (file) => {
+      try {
+        const mod = await import(joinUrl(channelsUrl, file.name));
+        const handler = mod?.default;
+        if (typeof handler === "function") {
+          return { name: file.name.replace(/\.ts$/, ""), handler } as ChannelEntry;
+        }
+      } catch (err) {
+        console.warn(
+          `[copilotz:resources] Failed to load channel: ${file.name}`,
+          err,
+        );
+      }
+      return null;
+    }),
+  );
+
+  return channels.filter((c): c is ChannelEntry => c !== null);
+}
+
+/**
+ * Manifest-driven channel loader. Imports `channels/<name>.ts` by URL for each
+ * declared channel — works for both local (`file://`) and remote
+ * (`jsr:`, `npm:`, `https://`) base URLs, since it doesn't rely on `readDir`.
+ */
+async function loadChannelsByManifest(
+  baseUrl: string,
+  names: string[],
+): Promise<ChannelEntry[]> {
+  const channelsUrl = joinUrl(baseUrl, "channels");
+  const settled = await Promise.all(
+    names.map(async (name) => {
+      const mod = await importModuleSafe(joinUrl(channelsUrl, `${name}.ts`));
+      if (typeof mod === "function") {
+        return {
+          name,
+          handler: mod as ChannelEntry["handler"],
+        } as ChannelEntry;
+      }
+      return null;
+    }),
+  );
+  return settled.filter((c): c is ChannelEntry => c !== null);
+}
+
 // ---- Manifest-driven full load --------------------------------------------
 
 async function loadFromManifest(
@@ -478,6 +631,22 @@ async function loadFromManifest(
           decodeURIComponent(skillsUrl.replace("file://", "")) + "/";
         return loadSkillsFromDirectory(skillsPath, "project");
       }).then((r) => { resources.skills = r; }),
+    );
+  }
+
+  if (provides.features?.length && baseUrl.startsWith("file://")) {
+    tasks.push(
+      timed("features", () =>
+        loadFeaturesFromDirectory(baseUrl, provides.features!),
+      ).then((r) => { resources.features = r; }),
+    );
+  }
+
+  if (provides.channels?.length) {
+    tasks.push(
+      timed("channels", () =>
+        loadChannelsByManifest(baseUrl, provides.channels!),
+      ).then((r) => { resources.channels = r; }),
     );
   }
 
@@ -701,6 +870,20 @@ async function loadFromDirectory(
     logPhase("skills", s, { count: resources.skills?.length ?? 0 });
   })());
 
+  // ---- Features ----
+  tasks.push((async () => {
+    const s = performance.now();
+    resources.features = await loadFeaturesFromDirectory(baseUrl);
+    logPhase("features", s, { count: resources.features?.length ?? 0 });
+  })());
+
+  // ---- Channels ----
+  tasks.push((async () => {
+    const s = performance.now();
+    resources.channels = await loadChannelsFromDirectory(baseUrl);
+    logPhase("channels", s, { count: resources.channels?.length ?? 0 });
+  })());
+
   await Promise.all(tasks);
 
   return resources;
@@ -761,6 +944,30 @@ function mergeResources(target: Resources, source: Resources): void {
   }
   if (source.mcpServers?.length) {
     target.mcpServers = [...(target.mcpServers ?? []), ...source.mcpServers];
+  }
+  if (source.features?.length) {
+    const existing = target.features ?? [];
+    const existingNames = new Set(existing.map((f) => f.name));
+    for (const feature of source.features) {
+      if (existingNames.has(feature.name)) {
+        const idx = existing.findIndex((f) => f.name === feature.name);
+        existing[idx] = { ...existing[idx], actions: { ...existing[idx].actions, ...feature.actions } };
+      } else {
+        existing.push(feature);
+      }
+    }
+    target.features = existing;
+  }
+  if (source.channels?.length) {
+    const existing = target.channels ?? [];
+    const existingNames = new Set(existing.map((c) => c.name));
+    for (const channel of source.channels) {
+      if (!existingNames.has(channel.name)) {
+        existing.push(channel);
+        existingNames.add(channel.name);
+      }
+    }
+    target.channels = existing;
   }
   // Merge extensible resource types
   for (const [key, value] of Object.entries(source)) {

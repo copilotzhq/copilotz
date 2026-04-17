@@ -1,4 +1,4 @@
-import { createCopilotz } from "@/index.ts";
+import { runThread } from "@/runtime/index.ts";
 import type { ToolExecutionContext } from "@/resources/processors/tool_call/index.ts";
 
 interface CreateThreadParams {
@@ -36,49 +36,45 @@ export default {
         required: ["name", "participants"],
     },
     execute: async ({ name, participants, initialMessage, mode = "immediate", description, summary }: CreateThreadParams, context?: ToolExecutionContext) => {
-        const threadId = crypto.randomUUID();
-        
-        const initMessage = {
-            content: initialMessage || `Started thread: ${name}`,
-            sender: {
-                type: (context?.senderType ?? "system") as "agent" | "user" | "tool" | "system",
-                id: context?.senderId ?? "system",
-                name: context?.senderId ?? "system",
-            },
-            thread: {
-                id: threadId,
-                name,
-                participants,
-            },
-        };
-
-        const baseConfig = {
-            agents: context?.agents || [],
-            tools: context?.tools || [],
-            apis: context?.apis,
-            mcpServers: context?.mcpServers,
-            callbacks: context?.callbacks,
-            stream: context?.stream,
-            dbInstance: context?.db,
-        };
-
-        const copilotz = await createCopilotz(baseConfig);
-
-        try {
-            const result = await copilotz.run(initMessage);
-
-            return {
-                threadId,
-                name,
-                participants,
-                mode,
-                description,
-                summary,
-                queueId: result.queueId,
-                status: result.status,
-            };
-        } finally {
-            await copilotz.shutdown().catch(() => undefined);
+        const db = context?.db ?? context?.dbInstance;
+        if (!db) {
+            throw new Error("Database instance is required to create a thread");
         }
+
+        const threadId = crypto.randomUUID();
+
+        const result = await runThread(
+            db,
+            {
+                ...context,
+                agents: context?.agents || [],
+                tools: context?.tools || [],
+            },
+            {
+                content: initialMessage || `Started thread: ${name}`,
+                sender: {
+                    type: (context?.senderType ?? "system") as "agent" | "user" | "tool" | "system",
+                    id: context?.senderId ?? "system",
+                    name: context?.senderId ?? "system",
+                },
+                thread: {
+                    id: threadId,
+                    name,
+                    participants,
+                },
+            },
+            { stream: context?.stream ?? false },
+        );
+
+        return {
+            threadId,
+            name,
+            participants,
+            mode,
+            description,
+            summary,
+            queueId: result.queueId,
+            status: result.status,
+        };
     },
 }

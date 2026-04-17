@@ -9,7 +9,8 @@
 
 import type {
   ChatMessage,
-  ProviderConfig,
+  LLMConfig,
+  LLMRuntimeConfig,
   ToolDefinition,
   ToolInvocation,
 } from "@/runtime/llm/types.ts";
@@ -19,6 +20,8 @@ import type {
   KnowledgeNode,
   LlmCallEvent,
   LlmCallEventPayload,
+  LlmResultEvent,
+  LlmResultEventPayload,
   MessagePayload,
   NewEvent,
   NewMessageEvent,
@@ -29,6 +32,8 @@ import type {
   TokenEventPayload,
   ToolCallEvent,
   ToolCallEventPayload,
+  ToolResultEvent,
+  ToolResultEventPayload,
 } from "@/database/schemas/index.ts";
 
 export type {
@@ -40,6 +45,10 @@ export type {
   LlmCallEvent,
   /** Payload for LLM call events. */
   LlmCallEventPayload,
+  /** Specific LLM_RESULT event with typed payload. */
+  LlmResultEvent,
+  /** Payload for LLM result events. */
+  LlmResultEventPayload,
   /** Payload structure for incoming messages. */
   MessagePayload,
   /** Input type for creating a new Event. */
@@ -60,6 +69,10 @@ export type {
   ToolCallEvent,
   /** Payload for tool call events. */
   ToolCallEventPayload,
+  /** Specific TOOL_RESULT event with typed payload. */
+  ToolResultEvent,
+  /** Payload for tool result events. */
+  ToolResultEventPayload,
 };
 
 import type {
@@ -110,8 +123,8 @@ export interface AgentLlmOptionsResolverPayload {
   messages: ChatMessage[];
   /** Array of tool definitions available for the call. */
   tools: ToolDefinition[];
-  /** Current provider configuration (may be modified). */
-  config?: ProviderConfig;
+  /** Current persisted LLM configuration (safe to store/stream). */
+  config?: LLMConfig;
 }
 
 /**
@@ -135,7 +148,23 @@ export interface AgentLlmOptionsResolverArgs {
  */
 export type AgentLlmOptionsResolver = (
   args: AgentLlmOptionsResolverArgs,
-) => ProviderConfig | Promise<ProviderConfig>;
+) => LLMRuntimeConfig | Promise<LLMRuntimeConfig>;
+
+export interface ResolveLLMRuntimeConfigArgs {
+  provider?: string;
+  model?: string;
+  agent: {
+    id?: string;
+    name: string;
+  };
+  config?: LLMConfig;
+  sourceEvent: Event;
+  deps: ProcessorDeps;
+}
+
+export type ResolveLLMRuntimeConfig = (
+  args: ResolveLLMRuntimeConfigArgs,
+) => Partial<LLMRuntimeConfig> | Promise<Partial<LLMRuntimeConfig> | undefined> | undefined;
 
 export type ToolHistoryVisibility =
   | "requester_only"
@@ -464,7 +493,7 @@ export interface Agent {
   createdAt?: string | Date;
   updatedAt?: string | Date;
   /** LLM provider configuration or dynamic resolver function. */
-  llmOptions?: ProviderConfig | AgentLlmOptionsResolver;
+  llmOptions?: LLMRuntimeConfig | AgentLlmOptionsResolver;
   /** RAG options for this agent. */
   ragOptions?: AgentRagOptions;
   /** Optional per-agent asset behavior. */
@@ -583,10 +612,8 @@ export interface ChatContext {
   mcpServers?: MCPServer[];
   /** Available skills loaded from project/user/bundled/remote sources. */
   skills?: import("@/runtime/loaders/skill-types.ts").Skill[];
-  /** Whether streaming is enabled. */
+  /** Whether streaming is enabled. Default: true. */
   stream?: boolean;
-  /** Callbacks for handling events. */
-  callbacks?: ChatCallbacks;
   /** Database instance. */
   dbInstance?: CopilotzDb;
   /** Database configuration. */
@@ -599,8 +626,8 @@ export interface ChatContext {
   userMetadata?: Record<string, unknown>;
   /** Hook for rewriting generated message history before the LLM call. */
   historyTransform?: HistoryTransform;
-  /** Custom event processors by event type. */
-  customProcessors?: Record<
+  /** Event processors by event type, ordered by priority. */
+  processors?: Record<
     string,
     Array<EventProcessor<unknown, ProcessorDeps>>
   >;
@@ -614,6 +641,15 @@ export interface ChatContext {
   ragConfig?: RagConfig;
   /** Embedding configuration. */
   embeddingConfig?: EmbeddingConfig;
+  /** Security-related runtime hooks. */
+  security?: {
+    /**
+     * Resolve runtime-only LLM configuration, such as API keys, just before
+     * the provider call is made. Returned values are never persisted by the
+     * runtime unless custom code does so explicitly.
+     */
+    resolveLLMRuntimeConfig?: ResolveLLMRuntimeConfig;
+  };
   /** Optional namespace prefix for multi-tenancy isolation. */
   namespacePrefix?: string;
   /** Optional AGENTS.md instructions loaded from the current working directory. */
@@ -737,57 +773,6 @@ export function resolveNamespace(
     case "global":
       return `${base}global`;
   }
-}
-
-/**
- * Callback functions for handling chat events.
- * These callbacks allow intercepting and modifying the chat pipeline behavior.
- */
-export interface ChatCallbacks {
-  /**
-   * Called when streaming content tokens.
-   * @param data - The token data being streamed
-   */
-  onContentStream?: (
-    data: ContentStreamData,
-  ) => void | Promise<void> | ContentStreamData;
-  /**
-   * Called for each event in the queue. Return producedEvents to inject new events.
-   * @param event - The event being processed
-   */
-  onEvent?: (
-    event: Event,
-  ) =>
-    | Promise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void>
-    | { producedEvents?: Array<NewEvent | NewUnknownEvent> }
-    | void;
-  /**
-   * Called after processing to push events to the client stream.
-   * Only called if the event was not replaced by a custom processor.
-   * @param event - The event to push to the stream
-   */
-  onStreamPush?: (event: Event) => void;
-}
-
-/**
- * Data structure for streaming content tokens during LLM response generation.
- */
-export interface ContentStreamData {
-  /** The thread ID this token belongs to. */
-  threadId: string;
-  /** Details of the agent generating the content. */
-  agent: {
-    /** Optional ID of the agent generating the content. */
-    id?: string;
-    /** Name of the agent generating the content. */
-    name: string;
-  };
-  /** The token string being streamed. */
-  token: string;
-  /** Whether this is the final token (stream complete). */
-  isComplete: boolean;
-  /** Optional flag indicating if the token is part of a reasoning chain (e.g. "thoughts"). */
-  isReasoning?: boolean;
 }
 
 /**

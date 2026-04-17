@@ -1,6 +1,6 @@
 # Resource Loaders
 
-Resource loaders let you organize agents, tools, APIs, and processors in a filesystem structure. This is useful for larger projects where configuration-as-code becomes unwieldy.
+Resource loaders let you organize agents, tools, APIs, processors, skills, and more in a filesystem structure. This is useful for larger projects where configuration-as-code becomes unwieldy.
 
 ## Recommended: Built-in Resource Loading
 
@@ -12,7 +12,6 @@ import { createCopilotz } from "@copilotz/copilotz";
 const copilotz = await createCopilotz({
   resources: { path: "./resources" },
   dbConfig: { url: Deno.env.get("DATABASE_URL") },
-  stream: true,
 });
 ```
 
@@ -24,7 +23,7 @@ As your AI application grows, managing everything in a single config object gets
 - Agents have long instruction prompts
 - Custom tools have complex logic
 - Multiple API integrations need organization
-- Event processors need testing independently
+- Processors and skills need testing independently
 
 Loaders let you organize resources in a clean directory structure with proper separation of concerns.
 
@@ -53,11 +52,17 @@ resources/
 │   └── stripe/
 │       ├── openApiSchema.json
 │       └── config.ts
-└── event-processors/
-    ├── NEW_MESSAGE/
-    │   └── processor.ts         # Custom processor
-    └── CUSTOM_EVENT/
-        └── processor.ts
+├── processors/
+│   ├── NEW_MESSAGE/
+│   │   └── processor.ts         # Custom processor
+│   └── CUSTOM_EVENT/
+│       └── processor.ts
+└── skills/
+    ├── my-skill/
+    │   ├── SKILL.md              # Skill instructions (required)
+    │   └── references/           # Optional reference files
+    └── another-skill/
+        └── SKILL.md
 ```
 
 ## Low-Level Usage with `loadResources()`
@@ -291,6 +296,8 @@ export default config;
 
 ## Processor Files
 
+Place processor directories under `processors/` named by event type (e.g. `processors/NEW_MESSAGE/processor.ts`).
+
 ### processor.ts (Required)
 
 Custom event processor:
@@ -302,17 +309,16 @@ const processor: EventProcessor = {
   eventType: "NEW_MESSAGE",
   
   shouldProcess: (event, deps: ProcessorDeps) => {
-    // Only process messages with specific metadata
     return event.payload.metadata?.requiresModeration === true;
   },
   
   process: async (event, deps: ProcessorDeps) => {
     const { db, thread, context } = deps;
     
-    // Your custom processing logic
     const isAppropriate = await moderateContent(event.payload.content);
     
     if (!isAppropriate) {
+      // Claim: replace the event with a system message
       return {
         producedEvents: [{
           type: "NEW_MESSAGE",
@@ -324,20 +330,44 @@ const processor: EventProcessor = {
       };
     }
     
-    // Let default processor handle it
-    return { producedEvents: [] };
+    // Pass: let the next processor (built-in) handle it
+    return;
   },
 };
 
 export default processor;
 ```
 
+### Return semantics
+
+Processors are executed in priority order (user-defined first, built-in last). The first processor whose `process` returns a `producedEvents` array claims the event:
+
+| Return value | Behavior |
+|---|---|
+| `{ producedEvents: [event, ...] }` | **Claim** — enqueue events, skip remaining processors |
+| `{ producedEvents: [] }` | **Swallow** — claim without producing anything |
+| `void` / `undefined` | **Pass** — fall through to the next processor |
+
+This lets you override, suppress, or observe any built-in behavior. See [Events — Return Semantics](./events.md#return-semantics) for more detail.
+
+## Skill Files
+
+Place skill directories under `skills/`. Each directory must contain a `SKILL.md` file and optionally a `references/` folder:
+
+```
+resources/skills/my-skill/
+├── SKILL.md                # Frontmatter (name, description) + instructions body
+└── references/             # Optional reference files the skill can load
+    └── example.json
+```
+
+Skills loaded from the resources directory use progressive disclosure: only names and descriptions are sent to the LLM initially; full instructions are fetched on-demand via the `load_skill` tool. See [Skills](./skills.md) for the full format.
+
 ## Loading Options
 
 ```typescript
 const resources = await loadResources({
-  path: "./resources",
-  // Future options...
+  path: "./resources",     // string or string[] for multiple directories
 });
 ```
 
@@ -386,7 +416,7 @@ const copilotz = await createCopilotz({
 4. **Testing** — Import and test processors independently:
 
 ```typescript
-import processor from "./resources/event-processors/NEW_MESSAGE/processor.ts";
+import processor from "./resources/processors/NEW_MESSAGE/processor.ts";
 
 Deno.test("processor filters flagged messages", async () => {
   const event = { payload: { metadata: { requiresModeration: true } } };
@@ -402,3 +432,4 @@ Deno.test("processor filters flagged messages", async () => {
 - [Agents](./agents.md) — Agent configuration options
 - [Tools](./tools.md) — Creating custom tools
 - [Events](./events.md) — Custom event processors
+- [Resources](./resources.md) — Customizing LLM providers, storage, embeddings, and more

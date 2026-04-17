@@ -37,7 +37,9 @@ export default {
     processors: [
       "new_message",
       "llm_call",
+      "llm_result",
       "tool_call",
+      "tool_result",
       "rag_ingest",
       "entity_extract",
     ],
@@ -53,6 +55,8 @@ export default {
     embeddings: ["openai"],
     storage: ["fs", "s3"],
     collections: ["participant", "message", "chunk", "document", "llm_usage"],
+    channels: ["web", "whatsapp", "zendesk"],
+    features: ["admin"],
     skills: [
       "add-api-integration",
       "add-processor",

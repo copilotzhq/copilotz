@@ -43,8 +43,6 @@ const copilotz = await createCopilotz({
   ],
   // PGLite in-memory database — no external DB needed
   dbConfig: { url: ":memory:" },
-  // Enable streaming so we can receive TOKEN events
-  stream: true,
 });
 
 // ---------------------------------------------------------------------------

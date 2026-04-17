@@ -399,6 +399,47 @@ const schemaDefinition = {
           },
           required: ["agent", "senderId", "senderType", "toolCall"],
         },
+        ToolResultEventPayload: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            agent: {
+              type: "object",
+              properties: {
+                id: { type: ["string", "null"] },
+                name: { type: "string" },
+              },
+              required: ["name"],
+            },
+            toolCallId: { type: "string" },
+            tool: {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                name: { type: ["string", "null"] },
+              },
+              required: ["id"],
+            },
+            args: JSON_ANY_SCHEMA,
+            status: {
+              type: "string",
+              enum: ["completed", "failed", "cancelled"],
+            },
+            output: JSON_ANY_SCHEMA,
+            projectedOutput: JSON_ANY_SCHEMA,
+            error: JSON_ANY_SCHEMA,
+            content: { type: ["string", "null"] },
+            historyVisibility: { type: ["string", "null"] },
+            batchId: { type: ["string", "null"] },
+            batchSize: { type: ["number", "null"] },
+            batchIndex: { type: ["number", "null"] },
+            startedAt: { type: ["string", "null"], format: "date-time" },
+            finishedAt: { type: "string", format: "date-time" },
+            durationMs: { type: ["number", "null"] },
+            resultMessageId: { type: ["string", "null"] },
+          },
+          required: ["agent", "toolCallId", "tool", "status", "finishedAt"],
+        },
         NewMessageEventPayload: NewMessageEventPayloadSchema,
         LlmCallEventPayload: {
           type: "object",
@@ -424,6 +465,49 @@ const schemaDefinition = {
             config: { type: "object" },
           },
           required: ["agent", "messages", "tools", "config"],
+        },
+        LlmResultEventPayload: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            llmCallId: { type: "string" },
+            agent: {
+              type: "object",
+              properties: {
+                id: { type: ["string", "null"] },
+                name: { type: "string" },
+              },
+              required: ["name"],
+            },
+            provider: { type: ["string", "null"] },
+            model: { type: ["string", "null"] },
+            status: {
+              type: "string",
+              enum: ["completed", "failed", "cancelled"],
+            },
+            finishReason: { type: ["string", "null"] },
+            answer: { type: ["string", "null"] },
+            reasoning: { type: ["string", "null"] },
+            toolCalls: {
+              type: ["array", "null"],
+              items: ToolInvocationSchema,
+            },
+            extractedTags: {
+              type: ["object", "null"],
+              additionalProperties: {
+                type: "array",
+                items: { type: "string" },
+              },
+            },
+            usage: JSON_ANY_SCHEMA,
+            cost: JSON_ANY_SCHEMA,
+            usageNodeId: { type: ["string", "null"] },
+            resultMessageId: { type: ["string", "null"] },
+            startedAt: { type: ["string", "null"], format: "date-time" },
+            finishedAt: { type: "string", format: "date-time" },
+            durationMs: { type: ["number", "null"] },
+          },
+          required: ["llmCallId", "agent", "status", "finishedAt"],
         },
       },
       properties: {
@@ -514,6 +598,26 @@ const schemaDefinition = {
         },
         {
           if: {
+            properties: { eventType: { const: "TOOL_RESULT" } },
+          },
+          then: {
+            properties: {
+              payload: { $ref: "#/$defs/ToolResultEventPayload" },
+            },
+          },
+        },
+        {
+          if: {
+            properties: { eventType: { const: "LLM_RESULT" } },
+          },
+          then: {
+            properties: {
+              payload: { $ref: "#/$defs/LlmResultEventPayload" },
+            },
+          },
+        },
+        {
+          if: {
             properties: { eventType: { const: "TOKEN" } },
           },
           then: {
@@ -580,11 +684,6 @@ const schemaDefinition = {
       id: generateId,
     },
   },
-  // ============================================
-  // KNOWLEDGE GRAPH SCHEMAS
-  // ============================================
-  // Unified knowledge graph: nodes can be chunks, entities, concepts, decisions, etc.
-  // This generalizes RAG into a full graph-based knowledge system.
   nodes: {
     schema: {
       type: "object",
@@ -737,6 +836,14 @@ export type ToolCallEventPayload = FromSchema<
 export type LlmCallEventPayload = FromSchema<
   typeof schemaDefinition.events.schema.$defs.LlmCallEventPayload
 >;
+/** Payload structure for tool result events, containing terminal tool execution state. */
+export type ToolResultEventPayload = FromSchema<
+  typeof schemaDefinition.events.schema.$defs.ToolResultEventPayload
+>;
+/** Payload structure for LLM result events, containing terminal LLM execution state. */
+export type LlmResultEventPayload = FromSchema<
+  typeof schemaDefinition.events.schema.$defs.LlmResultEventPayload
+>;
 /** Payload structure for streaming token events during LLM response generation. */
 export type TokenEventPayload = FromSchema<
   typeof schemaDefinition.events.schema.$defs.TokenEventPayload
@@ -746,6 +853,8 @@ export type EventPayloadMapBase = {
   NEW_MESSAGE: MessagePayload;
   TOOL_CALL: ToolCallEventPayload;
   LLM_CALL: LlmCallEventPayload;
+  TOOL_RESULT: ToolResultEventPayload;
+  LLM_RESULT: LlmResultEventPayload;
   TOKEN: TokenEventPayload;
 };
 
@@ -781,6 +890,18 @@ export type ToolCallEvent = EventBase & {
 export type LlmCallEvent = EventBase & {
   type: "LLM_CALL";
   payload: LlmCallEventPayload;
+};
+
+/** Specific event type for TOOL_RESULT events with typed payload. */
+export type ToolResultEvent = EventBase & {
+  type: "TOOL_RESULT";
+  payload: ToolResultEventPayload;
+};
+
+/** Specific event type for LLM_RESULT events with typed payload. */
+export type LlmResultEvent = EventBase & {
+  type: "LLM_RESULT";
+  payload: LlmResultEventPayload;
 };
 
 /** Specific event type for TOKEN events with typed payload. */

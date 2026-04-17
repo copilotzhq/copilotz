@@ -16,7 +16,6 @@ import {
   type RunHandle,
   type RunOptions,
   runThread,
-  type UnifiedOnEvent,
 } from "@/runtime/index.ts";
 import type {
   CollectionCrud,
@@ -28,10 +27,9 @@ import {
   normalizeInboundRunMessage,
 } from "@/utils/inbound-message.ts";
 import loadResources from "@/runtime/loaders/resources.ts";
-import type { Resources } from "@/runtime/loaders/resources.ts";
+import type { Resources, FeatureEntry, ChannelEntry } from "@/runtime/loaders/resources.ts";
 import { mergeResourceArrays } from "@/utils/merge-resources.ts";
-import { listPublicAgents } from "@/utils/list-agents.ts";
-import type { Skill, SkillIndexEntry } from "@/runtime/loaders/skill-types.ts";
+import type { Skill } from "@/runtime/loaders/skill-types.ts";
 import {
   loadAgentsFileInstructions,
   type AgentsFileConfig,
@@ -40,18 +38,14 @@ import {
   loadSkillFromUrl,
   mergeSkills,
 } from "@/runtime/loaders/skill-loader.ts";
-import { setDefaultProcessors } from "@/runtime/event-engine.ts";
-
 import type {
   Agent,
   API,
-  ChatCallbacks,
   ChatContext,
   CopilotzDb,
   DatabaseConfig,
   EventProcessor,
   HistoryTransform,
-  HistoryTransformArgs,
   LlmCallEventPayload,
   MCPServer,
   MessagePayload,
@@ -59,14 +53,10 @@ import type {
   NewMCPServer,
   NewTool,
   ProcessorDeps,
+  ResolveLLMRuntimeConfig,
   TokenEventPayload,
   Tool,
   ToolCallEventPayload,
-  ToolHistoryPolicy,
-  ToolHistoryPolicyConfig,
-  ToolHistoryVisibility,
-  ToolResultProjector,
-  ToolResultProjectorContext,
 } from "@/types/index.ts";
 
 import defaultBanner from "@/runtime/banner.ts";
@@ -79,14 +69,10 @@ export type {
   AgentRagOptions,
   /** API configuration for connecting to external REST APIs via OpenAPI. */
   API,
-  /** Callback functions for handling chat events. */
-  ChatCallbacks,
   /** Context object passed through the chat pipeline. */
   ChatContext,
   /** Configuration for document chunking strategies. */
   ChunkingConfig,
-  /** Data structure for streaming content tokens. */
-  ContentStreamData,
   /** Database instance with CRUD operations and custom ops. */
   CopilotzDb,
   /** Configuration options for the database connection. */
@@ -143,6 +129,8 @@ export type {
   NewTool,
   /** Dependencies injected into event processors. */
   ProcessorDeps,
+  /** Runtime hook for resolving LLM execution config. */
+  ResolveLLMRuntimeConfig,
   /** Configuration for RAG (Retrieval-Augmented Generation). */
   RagConfig,
   /** Configuration for similarity-based retrieval. */
@@ -278,15 +266,6 @@ export type {
 } from "@/database/collections/types.ts";
 
 /**
- * Registers a custom event processor for handling specific event types.
- * Use this to extend Copilotz with custom event handling logic.
- *
- * @param type - The event type to handle (e.g., "NEW_MESSAGE", "TOOL_CALL")
- * @param processor - The processor implementation
- */
-export { registerEventProcessor } from "@/runtime/event-engine.ts";
-
-/**
  * Resolves a namespace based on scope and optional prefix.
  * Use for multi-tenancy and entity scope resolution.
  */
@@ -307,6 +286,10 @@ export {
 
 /** Event emitted from the streaming event queue. */
 export type { StreamEvent } from "@/runtime/index.ts";
+export type {
+  LLMConfig,
+  LLMRuntimeConfig,
+} from "@/runtime/llm/index.ts";
 
 import type { AssetConfig, AssetStore } from "@/runtime/storage/assets.ts";
 import {
@@ -333,7 +316,7 @@ export type DbCrud = OminipgWithCrud<DbSchemas>["crud"];
 export { default as loadResources } from "@/runtime/loaders/resources.ts";
 
 /** Type for resources loaded from the file system. */
-export type { Resources, ResourceManifest } from "@/runtime/loaders/resources.ts";
+export type { Resources, ResourceManifest, FeatureEntry } from "@/runtime/loaders/resources.ts";
 export type { AgentsFileConfig, AgentsFileInstructions } from "@/runtime/loaders/agents-file.ts";
 
 /**
@@ -364,6 +347,8 @@ export type CopilotzEvent =
   | { type: "NEW_MESSAGE"; payload: MessagePayload }
   | { type: "TOOL_CALL"; payload: ToolCallEventPayload }
   | { type: "LLM_CALL"; payload: LlmCallEventPayload }
+  | { type: "TOOL_RESULT"; payload: import("@/types/index.ts").ToolResultEventPayload }
+  | { type: "LLM_RESULT"; payload: import("@/types/index.ts").LlmResultEventPayload }
   | { type: "TOKEN"; payload: TokenEventPayload };
 
 /** Alias for Agent type, used in configuration. */
@@ -386,7 +371,7 @@ type NormalizedCopilotzConfig =
     apis?: API[];
     mcpServers?: MCPServer[];
     skills?: import("@/runtime/loaders/skill-types.ts").Skill[];
-    customProcessorsByType?: ChatContext["customProcessors"];
+    processorsByType?: ChatContext["processors"];
   };
 
 function normalizeAgent(agent: AgentConfig): Agent {
@@ -451,6 +436,16 @@ export interface CopilotzConfig {
     })
   >;
   /**
+   * Optional feature handlers for application-level business logic.
+   * Each feature has a name and a set of action handlers accessible via `/features/:name/:action`.
+   */
+  features?: FeatureEntry[];
+  /**
+   * Optional channel handlers for inbound messaging integrations.
+   * Each channel has a name and a handler function accessible via `/channels/:name`.
+   */
+  channels?: ChannelEntry[];
+  /**
    * Load resources (agents, tools, APIs, processors) from a directory structure.
    * When set, `createCopilotz` internally calls `loadResources` and merges results
    * with any explicitly provided resource arrays.
@@ -484,8 +479,6 @@ export interface CopilotzConfig {
     /** Enable live reload of file-based resources during development. Reserved for future use. */
     watch?: boolean;
   };
-  /** Optional callbacks for handling events during execution. */
-  callbacks?: ChatCallbacks;
   /** Optional hook for rewriting generated message history before the LLM call. */
   historyTransform?: HistoryTransform;
   /** Optional database configuration. Defaults to in-memory PGlite. */
@@ -652,6 +645,18 @@ export interface CopilotzConfig {
     }
   >;
   /**
+   * Security-related runtime hooks.
+   * Use these to inject secrets or other runtime-only configuration without
+   * persisting them in events or streaming them to clients.
+   */
+  security?: {
+    /**
+     * Resolve runtime-only LLM configuration, such as API keys, immediately
+     * before an LLM provider call is made.
+     */
+    resolveLLMRuntimeConfig?: ResolveLLMRuntimeConfig;
+  };
+  /**
    * Base agent configuration applied to all agents.
    * Every loaded agent inherits from this; agent-specific fields override.
    *
@@ -752,19 +757,16 @@ export interface Copilotz {
   /**
    * Runs a message through the agent pipeline.
    * @param message - The message payload to process
-   * @param onEvent - Optional callback for handling events
    * @param options - Optional run configuration
    * @returns Promise resolving to the run result with event stream
    */
   run(
     message: MessagePayload,
-    onEvent?: UnifiedOnEvent,
     options?: RunOptions,
   ): Promise<CopilotzRunResult>;
   /**
    * Starts an interactive CLI session.
    * @param initialMessage - Optional initial message or configuration
-   * @param onEvent - Optional callback for handling events
    * @returns Controller for managing the session
    */
   start(
@@ -775,7 +777,6 @@ export interface Copilotz {
         threadExternalId?: string;
       })
       | string,
-    onEvent?: UnifiedOnEvent,
   ): CopilotzCliController;
   /** Shuts down the instance and releases resources. */
   shutdown(): Promise<void>;
@@ -835,7 +836,7 @@ export interface Copilotz {
    * }
    *
    * // Run with a specific schema
-   * await copilotz.run(message, onEvent, { schema: 'tenant_abc' });
+   * await copilotz.run(message, { schema: 'tenant_abc' });
    *
    * // Drop a tenant schema (WARNING: deletes all data!)
    * await copilotz.schema.drop('tenant_abc');
@@ -1035,23 +1036,42 @@ export async function createCopilotz(
     { prioritize: "explicit" },
   );
   let resolvedProcessors = [
+    // User/config processors first (higher priority), built-in last
     ...(userResources?.processors ?? []),
     ...(config.processors ?? []),
+    ...(bundledResources.processors ?? []),
   ];
-  logInit("mergeResources", startedAt);
 
-  // 1d. Wire loaded default processors into the event engine
-  if (bundledResources.processors?.length) {
-    const defaultProcessorMap: Record<
-      string,
-      EventProcessor<unknown, ProcessorDeps>
-    > = {};
-    for (const p of bundledResources.processors) {
-      const key = (p as { eventType?: string }).eventType?.toUpperCase();
-      if (key) defaultProcessorMap[key] = p as EventProcessor<unknown, ProcessorDeps>;
+  // 1d. Resolve features (user/config first, bundled last — merge on name)
+  const resolvedFeatures = [
+    ...(userResources?.features ?? []),
+    ...(config.features ?? []),
+    ...(bundledResources.features ?? []),
+  ];
+  // Deduplicate by name (first wins)
+  const featuresByName = new Map<string, (typeof resolvedFeatures)[0]>();
+  for (const f of resolvedFeatures) {
+    if (!featuresByName.has(f.name)) {
+      featuresByName.set(f.name, f);
     }
-    setDefaultProcessors(defaultProcessorMap);
   }
+  const mergedFeatures = [...featuresByName.values()];
+
+  // 1e. Resolve channels (user/config first, bundled last — first wins on name)
+  const resolvedChannels = [
+    ...(userResources?.channels ?? []),
+    ...(config.channels ?? []),
+    ...(bundledResources.channels ?? []),
+  ];
+  const channelsByName = new Map<string, (typeof resolvedChannels)[0]>();
+  for (const c of resolvedChannels) {
+    if (!channelsByName.has(c.name)) {
+      channelsByName.set(c.name, c);
+    }
+  }
+  const mergedChannels = [...channelsByName.values()];
+
+  logInit("mergeResources", startedAt);
 
   // 1e. Resolve skills (bundled + project + explicit)
   const bundledSkills = bundledResources.skills ?? [];
@@ -1148,6 +1168,8 @@ export async function createCopilotz(
     apis: normalizedApis,
     mcpServers: normalizedMcpServers,
     skills: allSkills,
+    features: mergedFeatures,
+    channels: mergedChannels,
   };
   logInit("normalizeResources", startedAt, {
     agents: normalizedAgents.length,
@@ -1191,7 +1213,7 @@ export async function createCopilotz(
   }
   const baseOps = baseDb.ops;
 
-  // Prepare custom processors map (order preserved; highest priority first in provided array)
+  // Build unified processor map (order preserved: user/config first, built-in last)
   if (Array.isArray(resolvedProcessors) && resolvedProcessors.length > 0) {
     const byType: Record<
       string,
@@ -1211,7 +1233,7 @@ export async function createCopilotz(
       if (!byType[key]) byType[key] = [];
       byType[key].push(p as EventProcessor<unknown, ProcessorDeps>);
     }
-    baseConfig.customProcessorsByType = byType;
+    baseConfig.processorsByType = byType;
   }
 
   // Normalize asset config: passthrough backend implies resolveInLLM: false
@@ -1291,7 +1313,6 @@ export async function createCopilotz(
 
   const performRun = async (
     message: MessagePayload,
-    onEvent?: UnifiedOnEvent,
     options?: RunOptions,
   ): Promise<CopilotzRunResult> => {
     const normalizedMessage = normalizeInboundRunMessage(message);
@@ -1331,14 +1352,13 @@ export async function createCopilotz(
       apis: baseConfig.apis,
       mcpServers: baseConfig.mcpServers,
       skills: baseConfig.skills,
-      callbacks: baseConfig.callbacks,
       historyTransform: baseConfig.historyTransform,
       dbConfig: baseConfig.dbConfig,
       dbInstance: baseDb,
       threadMetadata: baseConfig.threadMetadata,
       queueTTL: baseConfig.queueTTL,
-      stream: options?.stream ?? baseConfig.stream ?? false,
-      customProcessors: baseConfig.customProcessorsByType,
+      stream: options?.stream ?? baseConfig.stream ?? true,
+      processors: baseConfig.processorsByType,
       assetStore: assetStoreForRun,
       assetConfig: normalizedAssetConfig,
       resolveAsset: async (ref: string) => {
@@ -1357,6 +1377,7 @@ export async function createCopilotz(
         }
         : undefined,
       embeddingConfig: config.rag?.embedding,
+      security: baseConfig.security,
       // Resolved namespace for this run
       namespace: resolvedNamespace,
       // Collections: scoped if namespace is set, otherwise raw manager
@@ -1391,13 +1412,12 @@ export async function createCopilotz(
           baseDb,
           ctx,
           normalizedMessage,
-          onEvent,
           options,
         );
       });
     }
 
-    return await runThread(baseDb, ctx, normalizedMessage, onEvent, options);
+    return await runThread(baseDb, ctx, normalizedMessage, options);
   };
 
   const copilotz = {
@@ -1414,13 +1434,11 @@ export async function createCopilotz(
           threadExternalId?: string;
       })
       | string,
-      onEvent?: UnifiedOnEvent,
     ) =>
       startInteractiveCli({
-        performRun: (message, unifiedOnEvent, runOptions) =>
-          performRun(message, unifiedOnEvent, runOptions),
+        performRun: (message, runOptions) =>
+          performRun(message, runOptions),
         initialMessage,
-        onEvent,
         agents: baseConfig.agents.map((agent) => ({
           id: typeof agent.id === "string" ? agent.id : undefined,
           name: agent.name,

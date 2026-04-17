@@ -23,7 +23,6 @@ import type {
   ToolResultEventPayload,
 } from "@/types/index.ts";
 
-
 type EventType = Event["type"];
 
 import type { LLMCallPayload } from "@/resources/processors/llm_call/index.ts";
@@ -33,7 +32,10 @@ import type {
 } from "@/resources/processors/tool_call/index.ts";
 import type { ChatContext } from "@/types/index.ts";
 
-import type { ExecutableTool, ToolExecutor } from "@/resources/processors/tool_call/types.ts";
+import type {
+  ExecutableTool,
+  ToolExecutor,
+} from "@/resources/processors/tool_call/types.ts";
 
 export type {
   /** Tool with an execute function. */
@@ -257,6 +259,15 @@ export async function startEventWorker(
 
   let leaseLost = false;
   let leaseReleased = false;
+  const assertLeaseOwnership = async (): Promise<void> => {
+    const ownsLease = await ops.isThreadWorkerLeaseOwner(threadId, workerId);
+    if (!ownsLease) {
+      leaseLost = true;
+      throw new Error(
+        `Thread lease lost for thread ${threadId}; aborting worker progress.`,
+      );
+    }
+  };
   const heartbeatTimer = setInterval(() => {
     Promise.resolve()
       .then(() => ops.renewThreadWorkerLease(threadId, workerId))
@@ -385,6 +396,7 @@ export async function startEventWorker(
 
       const queueId = typeof next.id === "string" ? next.id : String(next.id);
 
+      await assertLeaseOwnership();
       await ops.updateQueueItemStatus(queueId, "processing");
 
       try {
@@ -417,11 +429,7 @@ export async function startEventWorker(
 
         const backgroundThreadIds = new Set<string>();
 
-        if (leaseLost) {
-          throw new Error(
-            "Thread lease lost; aborting before enqueueing produced events",
-          );
-        }
+        await assertLeaseOwnership();
 
         if (finalEvents.length > 0) {
           for (const e of finalEvents) {
@@ -445,7 +453,9 @@ export async function startEventWorker(
         await ops.updateQueueItemStatus(queueId, "completed");
       } catch (err) {
         console.error("Event worker failed:", err);
-        await ops.updateQueueItemStatus(queueId, "failed");
+        if (!leaseLost) {
+          await ops.updateQueueItemStatus(queueId, "failed");
+        }
         break;
       }
     }

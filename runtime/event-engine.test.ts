@@ -34,6 +34,7 @@ Deno.test("startEventWorker keeps polling when conditional lease release fails",
     }),
     acquireThreadWorkerLease: async () => true,
     renewThreadWorkerLease: async () => true,
+    isThreadWorkerLeaseOwner: async () => true,
     recoverThreadProcessingQueueItems: async () => 0,
     getNextPendingQueueItem: async () => {
       nextCalls += 1;
@@ -74,7 +75,9 @@ Deno.test("startEventWorker keeps polling when conditional lease release fails",
           },
         ],
       },
-      emitToStream: (ev: unknown) => { emittedEvents.push(ev); },
+      emitToStream: (ev: unknown) => {
+        emittedEvents.push(ev);
+      },
       stream: false,
     },
     async () =>
@@ -128,6 +131,7 @@ Deno.test("startEventWorker emits queued event before processor execution", asyn
     }),
     acquireThreadWorkerLease: async () => true,
     renewThreadWorkerLease: async () => true,
+    isThreadWorkerLeaseOwner: async () => true,
     recoverThreadProcessingQueueItems: async () => 0,
     getNextPendingQueueItem: async () => {
       nextCalls += 1;
@@ -150,7 +154,9 @@ Deno.test("startEventWorker emits queued event before processor execution", asyn
             shouldProcess: () => true,
             process: async (event: import("@/types/index.ts").Event) => {
               observations.push(
-                emittedEvents.some((emitted) => emitted.id === event.id && emitted.type === "TOOL_CALL")
+                emittedEvents.some((emitted) =>
+                    emitted.id === event.id && emitted.type === "TOOL_CALL"
+                  )
                   ? "emitted-before-process"
                   : "missing-before-process",
               );

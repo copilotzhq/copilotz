@@ -141,6 +141,7 @@ export interface DatabaseOperations {
   crud: DbInstance["crud"];
   query: DbInstance["query"];
   addToQueue: (threadId: string, event: QueueEventInput) => Promise<NewQueue>;
+  getQueueItemById: (queueId: string) => Promise<Queue | undefined>;
   getProcessingQueueItem: (
     threadId: string,
     minPriority?: number,
@@ -167,6 +168,11 @@ export interface DatabaseOperations {
     threadId: string,
     workerId: string,
   ) => Promise<boolean>;
+  /** Check whether the worker still owns an active lease for the thread. */
+  isThreadWorkerLeaseOwner: (
+    threadId: string,
+    workerId: string,
+  ) => Promise<boolean>;
   /** Release a thread worker lease (best-effort; only affects the current lease owner). */
   releaseThreadWorkerLease: (
     threadId: string,
@@ -183,10 +189,7 @@ export interface DatabaseOperations {
   ) => Promise<boolean>;
   /** Get effective thread worker lease configuration. */
   getThreadWorkerLeaseConfig: () => { leaseMs: number; heartbeatMs: number };
-  /**
-   * Crash recovery: reset any "processing" queue items for a thread back to "pending".
-   * This should only be used by a worker that successfully acquired the thread lease.
-   */
+  /** Crash recovery: reset stale "processing" queue items for a thread back to "pending". */
   recoverThreadProcessingQueueItems: (threadId: string) => Promise<number>;
   getMessageHistory: (
     threadId: string,
@@ -501,39 +504,53 @@ export function createOperations(
     return newQueueItem;
   };
 
-  const getProcessingQueueItem = async (
-    threadId: string,
-    minPriority?: number,
+  const getQueueItemById = async (
+    queueId: string,
   ): Promise<Queue | undefined> => {
-    // Recovery mechanism: Reset stale "processing" events that have been stuck for too long
-    // This handles server crashes where events were left in "processing" state
-    const staleThreshold = new Date(Date.now() - STALE_PROCESSING_THRESHOLD_MS);
+    const item = await crud.events.findOne({ id: queueId }) as Queue | null;
+    return item ?? undefined;
+  };
 
-    // Find processing events older than threshold
-    const staleEvents = await crud.events.find({
+  const recoverStaleProcessingQueueItems = async (
+    threadId: string,
+  ): Promise<number> => {
+    const staleThreshold = new Date(Date.now() - STALE_PROCESSING_THRESHOLD_MS);
+    const processingEvents = await crud.events.find({
       threadId,
       status: "processing",
     });
 
-    for (const event of staleEvents) {
+    let recovered = 0;
+    for (const event of processingEvents) {
       const updatedAt = typeof event.updatedAt === "string"
         ? new Date(event.updatedAt)
         : event.updatedAt;
 
-      if (updatedAt && updatedAt < staleThreshold) {
-        // Reset stale event to pending so it can be retried
-        await crud.events.update(
-          { id: event.id },
-          {
-            status: "pending",
-            updatedAt: new Date(),
-          },
-        );
-        console.warn(
-          `[recovery] Reset stale processing event ${event.id} in thread ${threadId} (stuck since ${updatedAt.toISOString()})`,
-        );
+      if (!updatedAt || updatedAt >= staleThreshold) {
+        continue;
       }
+
+      await crud.events.update(
+        { id: event.id },
+        {
+          status: "pending",
+          updatedAt: new Date(),
+        },
+      );
+      recovered += 1;
+      console.warn(
+        `[recovery] Reset stale processing event ${event.id} in thread ${threadId} (stuck since ${updatedAt.toISOString()})`,
+      );
     }
+
+    return recovered;
+  };
+
+  const getProcessingQueueItem = async (
+    threadId: string,
+    minPriority?: number,
+  ): Promise<Queue | undefined> => {
+    await recoverStaleProcessingQueueItems(threadId);
 
     // Now check for any remaining processing events at or above minPriority
     const processingEvents = await crud.events.find({
@@ -669,6 +686,26 @@ export function createOperations(
     return result.rows.length > 0;
   };
 
+  const isThreadWorkerLeaseOwner = async (
+    threadId: string,
+    workerId: string,
+  ): Promise<boolean> => {
+    const result = await db.query<{ ownsLease: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1
+         FROM "threads"
+         WHERE "id" = $1
+           AND "workerLockedBy" = $2
+           AND (
+             "workerLeaseExpiresAt" IS NULL
+             OR "workerLeaseExpiresAt" >= NOW()
+           )
+       ) AS "ownsLease"`,
+      [threadId, workerId],
+    );
+    return Boolean(result.rows[0]?.ownsLease);
+  };
+
   const releaseThreadWorkerLease = async (
     threadId: string,
     workerId: string,
@@ -721,15 +758,7 @@ export function createOperations(
   const recoverThreadProcessingQueueItems = async (
     threadId: string,
   ): Promise<number> => {
-    const result = await db.query<{ id: string }>(
-      `UPDATE "events"
-       SET "status" = 'pending',
-           "updatedAt" = NOW()
-       WHERE "threadId" = $1 AND "status" = 'processing'
-       RETURNING "id"`,
-      [threadId],
-    );
-    return result.rows.length;
+    return await recoverStaleProcessingQueueItems(threadId);
   };
 
   const getThreadById = async (
@@ -1061,9 +1090,10 @@ export function createOperations(
     const limit = typeof options?.limit === "number" && options.limit > 0
       ? Math.floor(options.limit)
       : 50;
-    const before = typeof options?.before === "string" && options.before.length > 0
-      ? options.before
-      : null;
+    const before =
+      typeof options?.before === "string" && options.before.length > 0
+        ? options.before
+        : null;
 
     type MessageNodeRow = KnowledgeNode & { messageKey?: string };
     const limitPlusOne = limit + 1;
@@ -2107,11 +2137,13 @@ export function createOperations(
     crud,
     query: db.query.bind(db),
     addToQueue,
+    getQueueItemById,
     getProcessingQueueItem,
     getNextPendingQueueItem,
     updateQueueItemStatus,
     acquireThreadWorkerLease,
     renewThreadWorkerLease,
+    isThreadWorkerLeaseOwner,
     releaseThreadWorkerLease,
     releaseThreadWorkerLeaseIfNoPendingWork,
     getThreadWorkerLeaseConfig,

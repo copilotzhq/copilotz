@@ -1,5 +1,11 @@
 import type { CopilotzDb } from "@/database/index.ts";
-import type { ChatContext, Event, MessagePayload, Agent, Tool } from "@/types/index.ts";
+import type {
+  Agent,
+  ChatContext,
+  Event,
+  MessagePayload,
+  Tool,
+} from "@/types/index.ts";
 import type { EventBase } from "@/database/schemas/index.ts";
 import { startThreadEventWorker } from "@/runtime/event-engine.ts";
 import { redactEventForStream } from "@/runtime/stream-redaction.ts";
@@ -11,430 +17,516 @@ import { normalizeInboundRunMessage } from "@/utils/inbound-message.ts";
  * Agent nodes enable cross-thread memory and identity.
  */
 async function ensureAgentParticipants(
-    ops: CopilotzDb["ops"],
-    agents: Agent[],
-    namespace?: string | null
+  ops: CopilotzDb["ops"],
+  agents: Agent[],
+  namespace?: string | null,
 ): Promise<void> {
-    for (const agent of agents) {
-        const externalId = (agent.id ?? agent.name) as string;
-        if (!externalId) continue;
-        
-        try {
-            await ops.upsertParticipantNode(externalId, "agent", namespace ?? null, {
-                name: agent.name,
-                agentId: (agent.id ?? agent.name) as string,
-                metadata: null,  // Start empty, agent can update via tool
-            });
-        } catch (err) {
-            // Log but don't break the flow - agent node creation is best-effort
-            console.warn(`[ensureAgentParticipants] Failed to upsert agent node for "${agent.name}":`, err);
-        }
+  for (const agent of agents) {
+    const externalId = (agent.id ?? agent.name) as string;
+    if (!externalId) continue;
+
+    try {
+      await ops.upsertParticipantNode(externalId, "agent", namespace ?? null, {
+        name: agent.name,
+        agentId: (agent.id ?? agent.name) as string,
+        metadata: null, // Start empty, agent can update via tool
+      });
+    } catch (err) {
+      // Log but don't break the flow - agent node creation is best-effort
+      console.warn(
+        `[ensureAgentParticipants] Failed to upsert agent node for "${agent.name}":`,
+        err,
+      );
     }
+  }
 }
 
 const USER_UPSERT_DEBOUNCE_MS = 60_000;
 const userUpsertCache = new Map<string, number>();
 
 function buildInitialRoutingMetadata(
-    messageMetadata: Record<string, unknown> | null,
-    message: MessagePayload,
+  messageMetadata: Record<string, unknown> | null,
+  message: MessagePayload,
 ): Record<string, unknown> | null {
-    const configuredQueue = Array.isArray(message.targetQueue)
-        ? message.targetQueue.filter((value): value is string =>
-            typeof value === "string" && value.trim().length > 0
-        )
-        : [];
-    const configuredTarget = typeof message.target === "string" &&
-            message.target.trim().length > 0
-        ? message.target
-        : null;
+  const configuredQueue = Array.isArray(message.targetQueue)
+    ? message.targetQueue.filter((value): value is string =>
+      typeof value === "string" && value.trim().length > 0
+    )
+    : [];
+  const configuredTarget = typeof message.target === "string" &&
+      message.target.trim().length > 0
+    ? message.target
+    : null;
 
-    let targetId = configuredTarget;
-    let targetQueue = configuredQueue;
+  let targetId = configuredTarget;
+  let targetQueue = configuredQueue;
 
-    if (!targetId && configuredQueue.length > 0) {
-        targetId = configuredQueue[0] ?? null;
-        targetQueue = configuredQueue.slice(1);
-    }
+  if (!targetId && configuredQueue.length > 0) {
+    targetId = configuredQueue[0] ?? null;
+    targetQueue = configuredQueue.slice(1);
+  }
 
-    if (!targetId && targetQueue.length === 0) {
-        return messageMetadata;
-    }
+  if (!targetId && targetQueue.length === 0) {
+    return messageMetadata;
+  }
 
-    return {
-        ...(messageMetadata ?? {}),
-        ...(targetId ? { targetId } : {}),
-        targetQueue,
-    };
+  return {
+    ...(messageMetadata ?? {}),
+    ...(targetId ? { targetId } : {}),
+    targetQueue,
+  };
 }
 
 /**
  * Options for running a message through Copilotz.
  */
 export type RunOptions = {
-    /** Whether to enable streaming mode for real-time token output. */
-    stream?: boolean;
-    /** When to acknowledge the message: immediately or after processing completes. */
-    ackMode?: "immediate" | "onComplete";
-    /** AbortSignal for cancelling the run. */
-    signal?: AbortSignal;
-    /** Time-to-live for queue items in milliseconds. */
-    queueTTL?: number;
-    /** 
-     * Namespace for this run. Overrides the default namespace from config.
-     * Used for multi-tenancy isolation of collections and data within a schema.
-     */
-    namespace?: string;
-    /**
-     * PostgreSQL schema for this run. Overrides the default schema from dbConfig.
-     * Used for multi-tenant schema-level isolation (one schema per tenant).
-     * 
-     * @remarks
-     * When set, all database queries will execute in the specified schema.
-     * If autoProvisionSchema is enabled, the schema will be created if it doesn't exist.
-     * 
-     * @example
-     * ```ts
-     * await copilotz.run(message, { schema: 'tenant_abc' });
-     * ```
-     */
-    schema?: string;
-    /**
-     * Agents for this run. Overrides/extends the agents from config.
-     * Useful for loading agents dynamically from a database.
-     */
-    agents?: Agent[];
-    /**
-     * Tools for this run. Overrides/extends the tools from config.
-     * Useful for loading tools dynamically from a database.
-     */
-    tools?: Tool[];
+  /** Whether to enable streaming mode for real-time token output. */
+  stream?: boolean;
+  /** When to acknowledge the message: immediately or after processing completes. */
+  ackMode?: "immediate" | "onComplete";
+  /** AbortSignal for cancelling the run. */
+  signal?: AbortSignal;
+  /** Time-to-live for queue items in milliseconds. */
+  queueTTL?: number;
+  /**
+   * Namespace for this run. Overrides the default namespace from config.
+   * Used for multi-tenancy isolation of collections and data within a schema.
+   */
+  namespace?: string;
+  /**
+   * PostgreSQL schema for this run. Overrides the default schema from dbConfig.
+   * Used for multi-tenant schema-level isolation (one schema per tenant).
+   *
+   * @remarks
+   * When set, all database queries will execute in the specified schema.
+   * If autoProvisionSchema is enabled, the schema will be created if it doesn't exist.
+   *
+   * @example
+   * ```ts
+   * await copilotz.run(message, { schema: 'tenant_abc' });
+   * ```
+   */
+  schema?: string;
+  /**
+   * Agents for this run. Overrides/extends the agents from config.
+   * Useful for loading agents dynamically from a database.
+   */
+  agents?: Agent[];
+  /**
+   * Tools for this run. Overrides/extends the tools from config.
+   * Useful for loading tools dynamically from a database.
+   */
+  tools?: Tool[];
 };
 
 /**
  * Event emitted from the streaming event queue.
  * Can be a typed Event or a custom event with string type and payload.
  */
-export type StreamEvent = Event | (EventBase & { type: string; payload: Record<string, unknown> });
+export type StreamEvent =
+  | Event
+  | (EventBase & { type: string; payload: Record<string, unknown> });
 
 /**
  * Handle returned from running a message, providing access to results and streaming.
  */
 export type RunHandle = {
-    /** ID of the queue item. */
-    queueId: string;
-    /** ID of the conversation thread. */
-    threadId: string;
-    /** Current status of the run. */
-    status: "queued";
-    /** Async iterable of events for streaming. */
-    events: AsyncIterable<StreamEvent>;
-    /** Promise that resolves when processing is complete. */
-    done: Promise<void>;
-    /** Function to cancel the run. */
-    cancel: () => void;
+  /** ID of the queue item. */
+  queueId: string;
+  /** ID of the conversation thread. */
+  threadId: string;
+  /** Current status of the run. */
+  status: "queued";
+  /** Async iterable of events for streaming. */
+  events: AsyncIterable<StreamEvent>;
+  /** Promise that resolves when processing is complete. */
+  done: Promise<void>;
+  /** Function to cancel the run. */
+  cancel: () => void;
 };
 
 class AsyncQueue<T> implements AsyncIterable<T> {
-    private buffer: T[] = [];
-    private resolvers: Array<(value: IteratorResult<T>) => void> = [];
-    private closed = false;
-    private errorValue: unknown | null = null;
+  private buffer: T[] = [];
+  private resolvers: Array<(value: IteratorResult<T>) => void> = [];
+  private closed = false;
+  private errorValue: unknown | null = null;
 
-    push(item: T): void {
-        if (this.closed || this.errorValue) return;
-        if (this.resolvers.length > 0) {
-            const resolve = this.resolvers.shift()!;
-            resolve({ value: item, done: false });
-        } else {
-            this.buffer.push(item);
+  push(item: T): void {
+    if (this.closed || this.errorValue) return;
+    if (this.resolvers.length > 0) {
+      const resolve = this.resolvers.shift()!;
+      resolve({ value: item, done: false });
+    } else {
+      this.buffer.push(item);
+    }
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    while (this.resolvers.length > 0) {
+      const resolve = this.resolvers.shift()!;
+      resolve({ value: undefined as unknown as T, done: true });
+    }
+  }
+
+  error(err: unknown): void {
+    if (this.closed) return;
+    this.errorValue = err ?? new Error("AsyncQueue error");
+    while (this.resolvers.length > 0) {
+      const resolve = this.resolvers.shift()!;
+      resolve({ value: undefined as unknown as T, done: true });
+    }
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<T> {
+    return {
+      next: () => {
+        if (this.errorValue) {
+          return Promise.reject(this.errorValue);
         }
-    }
-
-    close(): void {
-        if (this.closed) return;
-        this.closed = true;
-        while (this.resolvers.length > 0) {
-            const resolve = this.resolvers.shift()!;
-            resolve({ value: undefined as unknown as T, done: true });
+        if (this.buffer.length > 0) {
+          const value = this.buffer.shift()!;
+          return Promise.resolve({ value, done: false });
         }
-    }
-
-    error(err: unknown): void {
-        if (this.closed) return;
-        this.errorValue = err ?? new Error("AsyncQueue error");
-        while (this.resolvers.length > 0) {
-            const resolve = this.resolvers.shift()!;
-            resolve({ value: undefined as unknown as T, done: true });
+        if (this.closed) {
+          return Promise.resolve({
+            value: undefined as unknown as T,
+            done: true,
+          });
         }
-    }
-
-    [Symbol.asyncIterator](): AsyncIterator<T> {
-        return {
-            next: () => {
-                if (this.errorValue) {
-                    return Promise.reject(this.errorValue);
-                }
-                if (this.buffer.length > 0) {
-                    const value = this.buffer.shift()!;
-                    return Promise.resolve({ value, done: false });
-                }
-                if (this.closed) {
-                    return Promise.resolve({ value: undefined as unknown as T, done: true });
-                }
-                return new Promise<IteratorResult<T>>((resolve) => this.resolvers.push(resolve));
-            },
-        };
-    }
+        return new Promise<IteratorResult<T>>((resolve) =>
+          this.resolvers.push(resolve)
+        );
+      },
+    };
+  }
 }
 
 function _nowIso(): string {
-    return new Date().toISOString();
+  return new Date().toISOString();
+}
+
+async function waitForQueueItemTerminalState(
+  ops: CopilotzDb["ops"],
+  queueId: string,
+  options?: { isCancelled?: () => boolean; pollIntervalMs?: number },
+): Promise<void> {
+  const pollIntervalMs = options?.pollIntervalMs ?? 100;
+
+  while (!options?.isCancelled?.()) {
+    const item = await ops.getQueueItemById(queueId);
+    if (!item) {
+      throw new Error(`Queue item not found: ${queueId}`);
+    }
+
+    if (item.status === "completed") {
+      return;
+    }
+
+    if (item.status === "failed") {
+      throw new Error(`Queue item failed: ${queueId}`);
+    }
+
+    if (item.status === "expired") {
+      throw new Error(`Queue item expired: ${queueId}`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
 }
 
 function buildUserKey(sender: MessagePayload["sender"]): string {
-    if (!sender) return "anonymous";
-    const metadata = sender.metadata && typeof sender.metadata === "object"
-        ? sender.metadata as Record<string, unknown>
-        : undefined;
-    const email = metadata && typeof metadata.email === "string"
-        ? metadata.email
-        : "";
-    return sender.externalId ?? sender.id ?? email ?? sender.name ?? "anonymous";
+  if (!sender) return "anonymous";
+  const metadata = sender.metadata && typeof sender.metadata === "object"
+    ? sender.metadata as Record<string, unknown>
+    : undefined;
+  const email = metadata && typeof metadata.email === "string"
+    ? metadata.email
+    : "";
+  return sender.externalId ?? sender.id ?? email ?? sender.name ?? "anonymous";
 }
 
 function buildParticipantIdentity(sender: MessagePayload["sender"]): string {
-    if (!sender) return "anonymous";
-    const metadata = sender.metadata && typeof sender.metadata === "object"
-        ? sender.metadata as Record<string, unknown>
-        : undefined;
-    const email = metadata && typeof metadata.email === "string"
-        ? metadata.email
-        : "";
-    return sender.id ?? sender.externalId ?? email ?? sender.name ?? "anonymous";
+  if (!sender) return "anonymous";
+  const metadata = sender.metadata && typeof sender.metadata === "object"
+    ? sender.metadata as Record<string, unknown>
+    : undefined;
+  const email = metadata && typeof metadata.email === "string"
+    ? metadata.email
+    : "";
+  return sender.id ?? sender.externalId ?? email ?? sender.name ?? "anonymous";
 }
 
 /**
  * Upsert a user into the graph.
- * 
+ *
  * @param ops - Database operations
  * @param sender - Message sender info
  * @param namespace - Namespace for scoped users (null for global users)
  */
 export async function upsertUser(
-    ops: CopilotzDb["ops"], 
-    sender: MessagePayload["sender"],
-    namespace?: string | null
+  ops: CopilotzDb["ops"],
+  sender: MessagePayload["sender"],
+  namespace?: string | null,
 ): Promise<void> {
-    if (!sender || sender.type !== "user") return;
-    
-    // Need externalId for graph-based user storage
-    const externalId = sender.externalId ?? sender.id;
-    if (!externalId) return;
+  if (!sender || sender.type !== "user") return;
 
-    const key = buildUserKey(sender) + (namespace ?? "");
-    const last = userUpsertCache.get(key) ?? 0;
-    if (Date.now() - last < USER_UPSERT_DEBOUNCE_MS) return;
+  // Need externalId for graph-based user storage
+  const externalId = sender.externalId ?? sender.id;
+  if (!externalId) return;
 
-    try {
-        const metadata = sender.metadata && typeof sender.metadata === "object"
-            ? sender.metadata as Record<string, unknown>
-            : undefined;
-        const email = metadata && typeof metadata.email === "string"
-            ? metadata.email
-            : null;
+  const key = buildUserKey(sender) + (namespace ?? "");
+  const last = userUpsertCache.get(key) ?? 0;
+  if (Date.now() - last < USER_UPSERT_DEBOUNCE_MS) return;
 
-        // Build userData object, only including metadata when actually present.
-        // This prevents null from overwriting existing metadata in upsertUserNode.
-        const userData: { name?: string | null; email?: string | null; metadata?: Record<string, unknown> } = {
-            name: sender.name ?? null,
-            email,
-        };
-        if (metadata !== undefined) {
-            userData.metadata = metadata;
-        }
+  try {
+    const metadata = sender.metadata && typeof sender.metadata === "object"
+      ? sender.metadata as Record<string, unknown>
+      : undefined;
+    const email = metadata && typeof metadata.email === "string"
+      ? metadata.email
+      : null;
 
-        // Use graph-based user storage with upsert
-        await ops.upsertUserNode(externalId, namespace ?? null, userData);
-    } catch (_err) {
-        // Ignore user upsert failures to avoid breaking the run flow
-    } finally {
-        userUpsertCache.set(key, Date.now());
+    // Build userData object, only including metadata when actually present.
+    // This prevents null from overwriting existing metadata in upsertUserNode.
+    const userData: {
+      name?: string | null;
+      email?: string | null;
+      metadata?: Record<string, unknown>;
+    } = {
+      name: sender.name ?? null,
+      email,
+    };
+    if (metadata !== undefined) {
+      userData.metadata = metadata;
     }
+
+    // Use graph-based user storage with upsert
+    await ops.upsertUserNode(externalId, namespace ?? null, userData);
+  } catch (_err) {
+    // Ignore user upsert failures to avoid breaking the run flow
+  } finally {
+    userUpsertCache.set(key, Date.now());
+  }
 }
 
 /** @deprecated Use upsertUser instead */
 export const upserUser = upsertUser;
 
 export async function runThread(
-    db: CopilotzDb,
-    baseContext: ChatContext,
-    message: MessagePayload,
-    options?: RunOptions,
+  db: CopilotzDb,
+  baseContext: ChatContext,
+  message: MessagePayload,
+  options?: RunOptions,
 ): Promise<RunHandle> {
-    const inboundMessage = normalizeInboundRunMessage(
-        message as MessagePayload & { tool_calls?: unknown },
-    );
-    const ops = db.ops;
-    const stream = options?.stream ?? baseContext.stream ?? true;
-    const queue = new AsyncQueue<StreamEvent>();
-    const doneResolve = (() => {
-        let resolve!: () => void;
-        let reject!: (err: unknown) => void;
-        const p = new Promise<void>((res, rej) => { resolve = res; reject = rej; });
-        return { promise: p, resolve, reject };
-    })();
-
-    let cancelled = false;
-    const cancel = () => { cancelled = true; queue.close(); };
-    if (options?.signal) {
-        if (options.signal.aborted) cancel();
-        options.signal.addEventListener("abort", cancel, { once: true });
-    }
-
-    // Resolve thread
-    const sender = inboundMessage.sender;
-    const threadRef = inboundMessage.thread ?? undefined;
-    let threadId: string | undefined = (threadRef?.id ?? undefined) || undefined;
-    if (!threadId && threadRef?.externalId) {
-        const existingByExt = await ops.getThreadByExternalId(threadRef.externalId);
-        if (existingByExt?.id) threadId = existingByExt.id as string;
-    }
-    // If still undefined, let the DB assign a ULID on creation
-
-    // Participants: prefer provided; else, use existing thread participants if available; else, from configured agents
-    let baseParticipants: string[] = [];
-    if (Array.isArray(threadRef?.participants) && threadRef?.participants.length) {
-        baseParticipants = threadRef.participants;
-    } else {
-        try {
-            const existingThread = threadId ? await ops.getThreadById(threadId) : undefined;
-            if (existingThread && Array.isArray(existingThread.participants) && existingThread.participants.length > 0) {
-                baseParticipants = existingThread.participants as string[];
-            } else {
-                baseParticipants = (baseContext.agents ?? []).map((a) => a.name).filter(Boolean);
-            }
-        } catch {
-            baseParticipants = (baseContext.agents ?? []).map((a) => a.name).filter(Boolean);
-        }
-    }
-    const senderCanonical = buildParticipantIdentity(sender);
-    const participants = Array.from(new Set([senderCanonical, ...baseParticipants]));
-
-    // Auto-populate userExternalId in thread metadata for user context lookup
-    const senderExternalId = sender?.externalId ?? sender?.id;
-    const threadMetadataWithUser = senderExternalId && sender?.type === "user"
-        ? { ...((threadRef?.metadata ?? {}) as Record<string, unknown>), userExternalId: senderExternalId }
-        : threadRef?.metadata ?? undefined;
-
-    const ensuredThread = await ops.findOrCreateThread(threadId, {
-        name: threadRef?.name ?? "Main Thread",
-        description: threadRef?.description ?? undefined,
-        participants,
-        externalId: threadRef?.externalId ?? undefined,
-        parentThreadId: undefined,
-        metadata: threadMetadataWithUser,
-        status: "active",
-        mode: "immediate",
+  const inboundMessage = normalizeInboundRunMessage(
+    message as MessagePayload & { tool_calls?: unknown },
+  );
+  const ops = db.ops;
+  const stream = options?.stream ?? baseContext.stream ?? true;
+  const queue = new AsyncQueue<StreamEvent>();
+  const doneResolve = (() => {
+    let resolve!: () => void;
+    let reject!: (err: unknown) => void;
+    const p = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
     });
-    threadId = ensuredThread.id as string;
+    return { promise: p, resolve, reject };
+  })();
 
-    const normalizedSender: MessagePayload["sender"] = {
-        id: inboundMessage.sender?.id ?? inboundMessage.sender?.externalId ?? inboundMessage.sender?.name ?? undefined,
-        externalId: inboundMessage.sender?.externalId ?? null,
-        type: inboundMessage.sender?.type ?? "user",
-        name: inboundMessage.sender?.name ?? inboundMessage.sender?.id ?? inboundMessage.sender?.externalId ?? null,
-        identifierType: inboundMessage.sender?.identifierType ?? undefined,
-        metadata: inboundMessage.sender?.metadata && typeof inboundMessage.sender.metadata === "object"
-            ? inboundMessage.sender.metadata as Record<string, unknown>
-            : null,
-    };
+  let cancelled = false;
+  const cancel = () => {
+    cancelled = true;
+    queue.close();
+  };
+  if (options?.signal) {
+    if (options.signal.aborted) cancel();
+    options.signal.addEventListener("abort", cancel, { once: true });
+  }
 
-    const normalizedThread: MessagePayload["thread"] = {
-        ...(inboundMessage.thread ?? {}),
-        externalId: inboundMessage.thread?.externalId ?? threadRef?.externalId ?? undefined,
-    };
+  // Resolve thread
+  const sender = inboundMessage.sender;
+  const threadRef = inboundMessage.thread ?? undefined;
+  let threadId: string | undefined = (threadRef?.id ?? undefined) || undefined;
+  if (!threadId && threadRef?.externalId) {
+    const existingByExt = await ops.getThreadByExternalId(threadRef.externalId);
+    if (existingByExt?.id) threadId = existingByExt.id as string;
+  }
+  // If still undefined, let the DB assign a ULID on creation
 
-    const normalizedToolCalls: MessagePayload["toolCalls"] = inboundMessage.toolCalls ?? null;
-
-    const normalizedMetadata = inboundMessage.metadata && typeof inboundMessage.metadata === "object"
-        ? inboundMessage.metadata as Record<string, unknown>
-        : inboundMessage.metadata ?? null;
-
-    const normalizedMessage: MessagePayload = {
-        ...inboundMessage,
-        sender: normalizedSender,
-        thread: normalizedThread,
-        toolCalls: normalizedToolCalls,
-        target: typeof inboundMessage.target === "string" && inboundMessage.target.trim().length > 0
-            ? inboundMessage.target
-            : null,
-        targetQueue: Array.isArray(inboundMessage.targetQueue)
-            ? inboundMessage.targetQueue
-                .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-            : null,
-        metadata: normalizedMetadata,
-    };
-
-    // Best-effort upsert user sender (with namespace for scoped users)
+  // Participants: prefer provided; else, use existing thread participants if available; else, from configured agents
+  let baseParticipants: string[] = [];
+  if (
+    Array.isArray(threadRef?.participants) && threadRef?.participants.length
+  ) {
+    baseParticipants = threadRef.participants;
+  } else {
     try {
-        await upsertUser(ops, normalizedSender, baseContext.namespace);
-    } catch (_err) {
-        // swallow to not impact main flow
+      const existingThread = threadId
+        ? await ops.getThreadById(threadId)
+        : undefined;
+      if (
+        existingThread && Array.isArray(existingThread.participants) &&
+        existingThread.participants.length > 0
+      ) {
+        baseParticipants = existingThread.participants as string[];
+      } else {
+        baseParticipants = (baseContext.agents ?? []).map((a) => a.name).filter(
+          Boolean,
+        );
+      }
+    } catch {
+      baseParticipants = (baseContext.agents ?? []).map((a) => a.name).filter(
+        Boolean,
+      );
     }
+  }
+  const senderCanonical = buildParticipantIdentity(sender);
+  const participants = Array.from(
+    new Set([senderCanonical, ...baseParticipants]),
+  );
 
-    // Best-effort ensure agent participants exist (for multi-agent conversation support)
-    try {
-        await ensureAgentParticipants(ops, baseContext.agents ?? [], baseContext.namespace);
-    } catch (_err) {
-        // swallow to not impact main flow
+  // Auto-populate userExternalId in thread metadata for user context lookup
+  const senderExternalId = sender?.externalId ?? sender?.id;
+  const threadMetadataWithUser = senderExternalId && sender?.type === "user"
+    ? {
+      ...((threadRef?.metadata ?? {}) as Record<string, unknown>),
+      userExternalId: senderExternalId,
     }
+    : threadRef?.metadata ?? undefined;
 
-    const emitToStream = (ev: Event): void => {
-        if (cancelled) return;
-        try {
-            queue.push(redactEventForStream(ev));
-        } catch { /* ignore */ }
-    };
+  const ensuredThread = await ops.findOrCreateThread(threadId, {
+    name: threadRef?.name ?? "Main Thread",
+    description: threadRef?.description ?? undefined,
+    participants,
+    externalId: threadRef?.externalId ?? undefined,
+    parentThreadId: undefined,
+    metadata: threadMetadataWithUser,
+    status: "active",
+    mode: "immediate",
+  });
+  threadId = ensuredThread.id as string;
 
-    const initialEventMetadata = buildInitialRoutingMetadata(
-        normalizedMetadata,
-        normalizedMessage,
+  const normalizedSender: MessagePayload["sender"] = {
+    id: inboundMessage.sender?.id ?? inboundMessage.sender?.externalId ??
+      inboundMessage.sender?.name ?? undefined,
+    externalId: inboundMessage.sender?.externalId ?? null,
+    type: inboundMessage.sender?.type ?? "user",
+    name: inboundMessage.sender?.name ?? inboundMessage.sender?.id ??
+      inboundMessage.sender?.externalId ?? null,
+    identifierType: inboundMessage.sender?.identifierType ?? undefined,
+    metadata: inboundMessage.sender?.metadata &&
+        typeof inboundMessage.sender.metadata === "object"
+      ? inboundMessage.sender.metadata as Record<string, unknown>
+      : null,
+  };
+
+  const normalizedThread: MessagePayload["thread"] = {
+    ...(inboundMessage.thread ?? {}),
+    externalId: inboundMessage.thread?.externalId ?? threadRef?.externalId ??
+      undefined,
+  };
+
+  const normalizedToolCalls: MessagePayload["toolCalls"] =
+    inboundMessage.toolCalls ?? null;
+
+  const normalizedMetadata =
+    inboundMessage.metadata && typeof inboundMessage.metadata === "object"
+      ? inboundMessage.metadata as Record<string, unknown>
+      : inboundMessage.metadata ?? null;
+
+  const normalizedMessage: MessagePayload = {
+    ...inboundMessage,
+    sender: normalizedSender,
+    thread: normalizedThread,
+    toolCalls: normalizedToolCalls,
+    target: typeof inboundMessage.target === "string" &&
+        inboundMessage.target.trim().length > 0
+      ? inboundMessage.target
+      : null,
+    targetQueue: Array.isArray(inboundMessage.targetQueue)
+      ? inboundMessage.targetQueue
+        .filter((value): value is string =>
+          typeof value === "string" && value.trim().length > 0
+        )
+      : null,
+    metadata: normalizedMetadata,
+  };
+
+  // Best-effort upsert user sender (with namespace for scoped users)
+  try {
+    await upsertUser(ops, normalizedSender, baseContext.namespace);
+  } catch (_err) {
+    // swallow to not impact main flow
+  }
+
+  // Best-effort ensure agent participants exist (for multi-agent conversation support)
+  try {
+    await ensureAgentParticipants(
+      ops,
+      baseContext.agents ?? [],
+      baseContext.namespace,
     );
+  } catch (_err) {
+    // swallow to not impact main flow
+  }
 
-    const newQueueItem = await ops.addToQueue(threadId, {
-        eventType: "NEW_MESSAGE",
-        payload: normalizedMessage,
-        ttlMs: options?.queueTTL,
-        metadata: initialEventMetadata ?? undefined,
+  const emitToStream = (ev: Event): void => {
+    if (cancelled) return;
+    try {
+      queue.push(redactEventForStream(ev));
+    } catch { /* ignore */ }
+  };
+
+  const initialEventMetadata = buildInitialRoutingMetadata(
+    normalizedMetadata,
+    normalizedMessage,
+  );
+
+  const newQueueItem = await ops.addToQueue(threadId, {
+    eventType: "NEW_MESSAGE",
+    payload: normalizedMessage,
+    ttlMs: options?.queueTTL,
+    metadata: initialEventMetadata ?? undefined,
+  });
+
+  const contextForWorker: ChatContext = {
+    ...baseContext,
+    stream,
+  };
+
+  // Start and wire completion
+  Promise.resolve()
+    .then(async () => {
+      await startThreadEventWorker(
+        db,
+        threadId!,
+        contextForWorker,
+        emitToStream,
+      );
+      await waitForQueueItemTerminalState(ops, String(newQueueItem.id), {
+        isCancelled: () => cancelled,
+      });
+    })
+    .then(() => {
+      queue.close();
+      doneResolve.resolve();
+    })
+    .catch((err) => {
+      queue.error(err);
+      doneResolve.reject(err);
     });
 
-    const contextForWorker: ChatContext = {
-        ...baseContext,
-        stream,
-    };
-
-    // Start and wire completion
-    Promise.resolve()
-        .then(async () => {
-            await startThreadEventWorker(db, threadId!, contextForWorker, emitToStream);
-        })
-        .then(() => {
-            queue.close();
-            doneResolve.resolve();
-        })
-        .catch((err) => {
-            queue.error(err);
-            doneResolve.reject(err);
-        });
-
-    const handle: RunHandle = {
-        queueId: String(newQueueItem.id),
-        threadId: threadId!,
-        status: "queued",
-        events: queue,
-        done: doneResolve.promise,
-        cancel,
-    };
-    return handle;
+  const handle: RunHandle = {
+    queueId: String(newQueueItem.id),
+    threadId: threadId!,
+    status: "queued",
+    events: queue,
+    done: doneResolve.promise,
+    cancel,
+  };
+  return handle;
 }

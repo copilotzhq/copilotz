@@ -27,6 +27,7 @@ import type {
   NewMessageEvent,
   NewThread,
   NewUnknownEvent,
+  RagIngestPayload,
   Thread,
   TokenEvent,
   TokenEventPayload,
@@ -59,6 +60,8 @@ export type {
   NewThread,
   /** Generic event type for custom event processors. */
   NewUnknownEvent,
+  /** Payload for RAG ingestion background events. */
+  RagIngestPayload,
   /** Thread entity representing a conversation. */
   Thread,
   /** Specific TOKEN event with typed payload. */
@@ -89,6 +92,52 @@ export type {
   /** Low-level database instance from Ominipg. */
   DbInstance,
 };
+
+export interface AssetCreatedEventPayload {
+  /** The persisted asset ID. */
+  assetId: string;
+  /** Canonical asset reference, usually `asset://<id>`. */
+  ref: string;
+  /** MIME type of the stored asset. */
+  mime?: string;
+  /** Who produced the asset. */
+  by: "tool" | "agent" | "user" | "system";
+  /** Tool name when the asset came from a tool call. */
+  tool?: string;
+  /** Tool call ID when the asset came from a tool call. */
+  toolCallId?: string;
+  /** Full base64 payload for passthrough/client-managed storage flows. */
+  base64?: string;
+  /** Full data URL for passthrough/client-managed storage flows. */
+  dataUrl?: string;
+}
+
+export interface AssetErrorEventPayload {
+  /** Normalized error details from the asset pipeline. */
+  error: {
+    message: string;
+    code?: string;
+    statusCode?: number;
+  };
+  /** Which asset pipeline stage failed. */
+  source: "attachments" | "tool_output";
+  /** Asset kind when known. */
+  kind?: "image" | "audio" | "file";
+  /** MIME type when known. */
+  mime?: string;
+  /** Original file name when known. */
+  fileName?: string;
+  /** Original byte size when known. */
+  size?: number;
+  /** Who initiated the asset creation attempt. */
+  by: "tool" | "agent" | "user" | "system";
+  /** Tool name when the failure came from a tool output. */
+  tool?: string;
+  /** Tool call ID when the failure came from a tool output. */
+  toolCallId?: string;
+  /** Resolved namespace when available. */
+  namespace?: string;
+}
 
 import type {
   EventProcessor,

@@ -10,8 +10,19 @@
 
 import type { Copilotz } from "@/index.ts";
 import { listPublicAgents } from "@/utils/list-agents.ts";
-import type { FeatureEntry, ChannelEntry } from "@/runtime/loaders/resources.ts";
+import type { FeatureEntry } from "@/runtime/loaders/resources.ts";
 import type { MessageHistoryPageInfo } from "@/database/operations/index.ts";
+import { createChannelHandlers } from "./channels.ts";
+import type {
+  ChannelAdapterRequest,
+  ChannelHandlers,
+  ChannelRouteSpec,
+  IngressEnvelope,
+} from "./channels.ts";
+import {
+  getSerializableThreadMetadata,
+  mergeThreadMetadata,
+} from "@/runtime/thread-metadata.ts";
 
 import { createThreadHandlers } from "./threads.ts";
 import type { ThreadHandlers } from "./threads.ts";
@@ -39,6 +50,7 @@ export interface AppRequest {
   query?: Record<string, string | string[]>;
   body?: unknown;
   headers?: Record<string, string>;
+  rawBody?: Uint8Array;
   callback?: (event: unknown) => void;
 }
 
@@ -60,17 +72,6 @@ export interface AppResponse {
 export interface AgentHandlers {
   list: () => unknown[];
 }
-
-export interface ChannelContext {
-  method: string;
-  headers: Record<string, string>;
-  body: unknown;
-  callback?: (event: unknown) => void;
-}
-
-export type ChannelHandler = (ctx: ChannelContext) => Promise<unknown>;
-
-export type ChannelHandlers = Record<string, ChannelHandler>;
 
 export interface ResourceDescriptor {
   name: string;
@@ -121,6 +122,7 @@ interface RouteContext {
   query: Record<string, unknown>;
   body: unknown;
   headers: Record<string, string>;
+  rawBody?: Uint8Array;
   callback?: (event: unknown) => void;
   method: string;
 }
@@ -159,13 +161,20 @@ function buildRoutes(): Route[] {
   return [
     // ---- agents ----
     {
-      resource: "agents", method: "GET", pattern: [],
-      action: async (ctx) => ({ status: 200, data: ctx.handlers.agents.list() }),
+      resource: "agents",
+      method: "GET",
+      pattern: [],
+      action: async (ctx) => ({
+        status: 200,
+        data: ctx.handlers.agents.list(),
+      }),
     },
 
     // ---- assets ----
     {
-      resource: "assets", method: "GET", pattern: [":id"],
+      resource: "assets",
+      method: "GET",
+      pattern: [":id"],
       action: async (ctx, p) => {
         const format = ctx.query.format as string || "dataUrl";
         if (format === "base64") {
@@ -179,14 +188,18 @@ function buildRoutes(): Route[] {
 
     // ---- participants ----
     {
-      resource: "participants", method: "GET", pattern: [":id"],
+      resource: "participants",
+      method: "GET",
+      pattern: [":id"],
       action: async (ctx, p) => ({
         status: 200,
         data: await ctx.handlers.participants.get(p.id),
       }),
     },
     {
-      resource: "participants", method: "PUT", pattern: [":id"],
+      resource: "participants",
+      method: "PUT",
+      pattern: [":id"],
       action: async (ctx, p) => {
         const body = ctx.body as Record<string, unknown>;
         const replaceMemories = ctx.query.replaceMemories;
@@ -204,14 +217,25 @@ function buildRoutes(): Route[] {
 
     // ---- threads ----
     {
-      resource: "threads", method: "GET", pattern: [],
+      resource: "threads",
+      method: "GET",
+      pattern: [],
       action: async (ctx) => {
         const participantId = ctx.query.participantId as string;
-        if (!participantId) throw { status: 400, message: "participantId query parameter is required" };
+        if (!participantId) {
+          throw {
+            status: 400,
+            message: "participantId query parameter is required",
+          };
+        }
         return {
           status: 200,
           data: await ctx.handlers.threads.list(participantId, {
-            status: asEnum(ctx.query.status as string, ["active", "archived", "all"]),
+            status: asEnum(ctx.query.status as string, [
+              "active",
+              "archived",
+              "all",
+            ]),
             limit: asNumber(ctx.query.limit),
             offset: asNumber(ctx.query.offset),
             order: asEnum(ctx.query.order as string, ["asc", "desc"]),
@@ -220,7 +244,9 @@ function buildRoutes(): Route[] {
       },
     },
     {
-      resource: "threads", method: "POST", pattern: [],
+      resource: "threads",
+      method: "POST",
+      pattern: [],
       action: async (ctx) => {
         const body = ctx.body as Record<string, unknown>;
         return {
@@ -233,7 +259,9 @@ function buildRoutes(): Route[] {
       },
     },
     {
-      resource: "threads", method: "GET", pattern: [":id"],
+      resource: "threads",
+      method: "GET",
+      pattern: [":id"],
       action: async (ctx, p) => {
         const thread = await ctx.handlers.threads.getById(p.id);
         if (!thread) throw { status: 404, message: "Thread not found" };
@@ -241,34 +269,48 @@ function buildRoutes(): Route[] {
       },
     },
     {
-      resource: "threads", method: "PATCH", pattern: [":id"],
+      resource: "threads",
+      method: "PATCH",
+      pattern: [":id"],
       action: async (ctx, p) => {
-        const updated = await ctx.handlers.threads.update(p.id, ctx.body as Record<string, unknown>);
+        const updated = await ctx.handlers.threads.update(
+          p.id,
+          ctx.body as Record<string, unknown>,
+        );
         if (!updated) throw { status: 404, message: "Thread not found" };
         return { status: 200, data: updated };
       },
     },
     {
-      resource: "threads", method: "DELETE", pattern: [":id"],
+      resource: "threads",
+      method: "DELETE",
+      pattern: [":id"],
       action: async (ctx, p) => {
         await ctx.handlers.threads.delete(p.id);
         return { status: 204 };
       },
     },
     {
-      resource: "threads", method: "POST", pattern: [":id"],
+      resource: "threads",
+      method: "POST",
+      pattern: [":id"],
       action: async (ctx, p) => {
         const body = ctx.body as Record<string, unknown>;
         return {
           status: 200,
-          data: await (ctx.handlers.threads as any).archive(p.id, (body.summary as string) ?? ""),
+          data: await (ctx.handlers.threads as any).archive(
+            p.id,
+            (body.summary as string) ?? "",
+          ),
         };
       },
     },
 
     // ---- threads/:id/messages ----
     {
-      resource: "threads", method: "GET", pattern: [":id", "messages"],
+      resource: "threads",
+      method: "GET",
+      pattern: [":id", "messages"],
       action: async (ctx, p) => {
         const limit = asNumber(ctx.query.limit);
         const before = ctx.query.before as string | undefined;
@@ -288,7 +330,9 @@ function buildRoutes(): Route[] {
       },
     },
     {
-      resource: "threads", method: "DELETE", pattern: [":id", "messages"],
+      resource: "threads",
+      method: "DELETE",
+      pattern: [":id", "messages"],
       action: async (ctx, p) => {
         await ctx.handlers.messages.deleteForThread(p.id);
         return { status: 204 };
@@ -297,7 +341,9 @@ function buildRoutes(): Route[] {
 
     // ---- threads/:id/events ----
     {
-      resource: "threads", method: "GET", pattern: [":id", "events"],
+      resource: "threads",
+      method: "GET",
+      pattern: [":id", "events"],
       action: async (ctx, p) => {
         const h = ctx.handlers.events;
         if (ctx.query.status === "processing") {
@@ -307,7 +353,9 @@ function buildRoutes(): Route[] {
       },
     },
     {
-      resource: "threads", method: "POST", pattern: [":id", "events"],
+      resource: "threads",
+      method: "POST",
+      pattern: [":id", "events"],
       action: async (ctx, p) => ({
         status: 201,
         data: await ctx.handlers.events.enqueue(p.id, ctx.body as any),
@@ -316,14 +364,18 @@ function buildRoutes(): Route[] {
 
     // ---- collections ----
     {
-      resource: "collections", method: "GET", pattern: [],
+      resource: "collections",
+      method: "GET",
+      pattern: [],
       action: async (ctx) => ({
         status: 200,
         data: ctx.handlers.collections.listCollections(),
       }),
     },
     {
-      resource: "collections", method: "GET", pattern: [":collection"],
+      resource: "collections",
+      method: "GET",
+      pattern: [":collection"],
       action: async (ctx, p) => {
         const q = ctx.query.q as string | undefined;
         const namespace = ctx.query.namespace as string | undefined;
@@ -349,7 +401,9 @@ function buildRoutes(): Route[] {
       },
     },
     {
-      resource: "collections", method: "POST", pattern: [":collection"],
+      resource: "collections",
+      method: "POST",
+      pattern: [":collection"],
       action: async (ctx, p) => ({
         status: 201,
         data: await ctx.handlers.collections.create(
@@ -360,28 +414,41 @@ function buildRoutes(): Route[] {
       }),
     },
     {
-      resource: "collections", method: "GET", pattern: [":collection", ":id"],
+      resource: "collections",
+      method: "GET",
+      pattern: [":collection", ":id"],
       action: async (ctx, p) => {
-        const result = await ctx.handlers.collections.getById(p.collection, p.id, {
-          namespace: ctx.query.namespace as string | undefined,
-        });
-        if (!result) throw { status: 404, message: `${p.collection} not found` };
+        const result = await ctx.handlers.collections.getById(
+          p.collection,
+          p.id,
+          {
+            namespace: ctx.query.namespace as string | undefined,
+          },
+        );
+        if (!result) {
+          throw { status: 404, message: `${p.collection} not found` };
+        }
         return { status: 200, data: result };
       },
     },
     {
-      resource: "collections", method: "PUT", pattern: [":collection", ":id"],
+      resource: "collections",
+      method: "PUT",
+      pattern: [":collection", ":id"],
       action: async (ctx, p) => ({
         status: 200,
         data: await ctx.handlers.collections.update(
-          p.collection, p.id,
+          p.collection,
+          p.id,
           ctx.body as Record<string, unknown>,
           { namespace: ctx.query.namespace as string | undefined },
         ),
       }),
     },
     {
-      resource: "collections", method: "DELETE", pattern: [":collection", ":id"],
+      resource: "collections",
+      method: "DELETE",
+      pattern: [":collection", ":id"],
       action: async (ctx, p) => {
         await ctx.handlers.collections.delete(p.collection, p.id, {
           namespace: ctx.query.namespace as string | undefined,
@@ -392,14 +459,18 @@ function buildRoutes(): Route[] {
 
     // ---- graph ----
     {
-      resource: "graph", method: "POST", pattern: ["search"],
+      resource: "graph",
+      method: "POST",
+      pattern: ["search"],
       action: async (ctx) => ({
         status: 200,
         data: await ctx.handlers.graph.search(ctx.body as any),
       }),
     },
     {
-      resource: "graph", method: "GET", pattern: ["nodes", ":id"],
+      resource: "graph",
+      method: "GET",
+      pattern: ["nodes", ":id"],
       action: async (ctx, p) => {
         const node = await ctx.handlers.graph.getNodeById(p.id);
         if (!node) throw { status: 404, message: "Node not found" };
@@ -407,7 +478,9 @@ function buildRoutes(): Route[] {
       },
     },
     {
-      resource: "graph", method: "PATCH", pattern: ["nodes", ":id"],
+      resource: "graph",
+      method: "PATCH",
+      pattern: ["nodes", ":id"],
       action: async (ctx, p) => {
         const node = await ctx.handlers.graph.updateNode(p.id, ctx.body as any);
         if (!node) throw { status: 404, message: "Node not found" };
@@ -415,19 +488,29 @@ function buildRoutes(): Route[] {
       },
     },
     {
-      resource: "graph", method: "DELETE", pattern: ["nodes", ":id"],
+      resource: "graph",
+      method: "DELETE",
+      pattern: ["nodes", ":id"],
       action: async (ctx, p) => {
         await ctx.handlers.graph.deleteNode(p.id);
         return { status: 204 };
       },
     },
     {
-      resource: "graph", method: "GET", pattern: ["nodes", ":id", "edges"],
+      resource: "graph",
+      method: "GET",
+      pattern: ["nodes", ":id", "edges"],
       action: async (ctx, p) => {
-        const direction = asEnum(ctx.query.direction as string, ["in", "out", "both"]);
+        const direction = asEnum(ctx.query.direction as string, [
+          "in",
+          "out",
+          "both",
+        ]);
         const types = Array.isArray(ctx.query.type)
           ? ctx.query.type as string[]
-          : ctx.query.type ? [ctx.query.type as string] : undefined;
+          : ctx.query.type
+          ? [ctx.query.type as string]
+          : undefined;
         return {
           status: 200,
           data: await ctx.handlers.graph.getEdges(p.id, { direction, types }),
@@ -435,7 +518,9 @@ function buildRoutes(): Route[] {
       },
     },
     {
-      resource: "graph", method: "GET", pattern: ["nodes", ":id", "related"],
+      resource: "graph",
+      method: "GET",
+      pattern: ["nodes", ":id", "related"],
       action: async (ctx, p) => ({
         status: 200,
         data: await ctx.handlers.graph.findRelated(p.id, {
@@ -444,7 +529,9 @@ function buildRoutes(): Route[] {
       }),
     },
     {
-      resource: "graph", method: "GET", pattern: ["namespaces", ":namespace", "nodes"],
+      resource: "graph",
+      method: "GET",
+      pattern: ["namespaces", ":namespace", "nodes"],
       action: async (ctx, p) => ({
         status: 200,
         data: await ctx.handlers.graph.listNodes(p.namespace, {
@@ -455,18 +542,24 @@ function buildRoutes(): Route[] {
 
     // ---- channels ----
     {
-      resource: "channels", method: "POST", pattern: [":type"],
-      action: async (ctx, p) => {
-        const handler = ctx.handlers.channels[p.type];
-        if (!handler) throw { status: 404, message: `Unknown channel type: ${p.type}` };
-        const result = await handler({
-          method: ctx.method,
-          headers: ctx.headers,
-          body: ctx.body,
-          callback: ctx.callback,
-        });
-        return { status: 200, data: result };
-      },
+      resource: "channels",
+      method: "*",
+      pattern: [":ingress"],
+      action: async (ctx, p) =>
+        await handleChannelRoute(ctx, {
+          ingress: p.ingress,
+          egress: p.ingress,
+        }),
+    },
+    {
+      resource: "channels",
+      method: "*",
+      pattern: [":ingress", "to", ":egress"],
+      action: async (ctx, p) =>
+        await handleChannelRoute(ctx, {
+          ingress: p.ingress,
+          egress: p.egress,
+        }),
     },
   ];
 }
@@ -481,7 +574,10 @@ function asNumber(val: unknown): number | undefined {
   return Number.isNaN(n) ? undefined : n;
 }
 
-function asEnum<T extends string>(val: string | undefined, allowed: T[]): T | undefined {
+function asEnum<T extends string>(
+  val: string | undefined,
+  allowed: T[],
+): T | undefined {
   if (!val) return undefined;
   return allowed.includes(val as T) ? (val as T) : undefined;
 }
@@ -491,36 +587,163 @@ function parseJsonParam(val: unknown): Record<string, unknown> | undefined {
   if (!val || typeof val !== "string") return undefined;
   try {
     const parsed = JSON.parse(val);
-    return typeof parsed === "object" && parsed && !Array.isArray(parsed) ? parsed : undefined;
+    return typeof parsed === "object" && parsed && !Array.isArray(parsed)
+      ? parsed
+      : undefined;
   } catch {
     return undefined;
   }
 }
 
 /** Parse a sort query param like "name:asc,createdAt:desc" into a sort array. */
-function parseSortParam(val: unknown): Array<{ field: string; direction: "asc" | "desc" }> | undefined {
+function parseSortParam(
+  val: unknown,
+): Array<{ field: string; direction: "asc" | "desc" }> | undefined {
   if (!val || typeof val !== "string") return undefined;
   const parts = val.split(",").map((s) => s.trim()).filter(Boolean);
   if (parts.length === 0) return undefined;
   return parts.map((part) => {
     const [field, dir] = part.split(":");
-    return { field, direction: dir === "desc" ? "desc" as const : "asc" as const };
+    return {
+      field,
+      direction: dir === "desc" ? "desc" as const : "asc" as const,
+    };
   });
 }
 
-// ---------------------------------------------------------------------------
-// Channel handler builder
-// ---------------------------------------------------------------------------
-
-function buildChannelHandlers(copilotz: Copilotz): ChannelHandlers {
-  const channels = (copilotz.config as any).channels as ChannelEntry[] | undefined;
-  const handlers: ChannelHandlers = {};
-  if (channels?.length) {
-    for (const channel of channels) {
-      handlers[channel.name] = (ctx: ChannelContext) => channel.handler(ctx, copilotz);
-    }
+async function handleChannelRoute(
+  ctx: RouteContext,
+  route: ChannelRouteSpec,
+): Promise<AppResponse> {
+  const ingress = ctx.handlers.channels.getIngress(route.ingress);
+  if (!ingress) {
+    throw {
+      status: 404,
+      message: `Unknown ingress channel: ${route.ingress}`,
+    };
   }
-  return handlers;
+
+  const egress = ctx.handlers.channels.getEgress(route.egress);
+  if (!egress) {
+    throw {
+      status: 404,
+      message: `Unknown egress channel: ${route.egress}`,
+    };
+  }
+
+  const ingressRequest: ChannelAdapterRequest = {
+    method: ctx.method,
+    headers: ctx.headers,
+    query: ctx.query,
+    body: ctx.body,
+    rawBody: ctx.rawBody,
+    callback: ctx.callback,
+    route,
+  };
+
+  const ingressResult = await ingress.handle(ingressRequest, ctx.copilotz);
+  const envelopes = ingressResult.messages ?? [];
+
+  if (envelopes.length === 0) {
+    return {
+      status: ingressResult.status ?? 200,
+      data: ingressResult.response ?? { status: "ok" },
+    };
+  }
+
+  const deliverEnvelope = async (envelope: IngressEnvelope): Promise<void> => {
+    const message = applyThreadMetadataPatch(envelope);
+    const thread = await resolveThreadForMessage(ctx.copilotz, message);
+    const effectiveMetadata = mergeThreadMetadata(
+      thread?.metadata,
+      message.thread?.metadata,
+    );
+    egress.validateThreadContext?.({
+      metadata: getSerializableThreadMetadata(effectiveMetadata),
+    });
+
+    const handle = await ctx.copilotz.run(message);
+    const ensuredThread = await ctx.copilotz.ops.getThreadById(handle.threadId);
+    await egress.deliver({
+      route,
+      callback: ctx.callback,
+      handle,
+      thread: ensuredThread,
+      message,
+      copilotz: ctx.copilotz,
+    });
+  };
+
+  if (egress.requestBound) {
+    if (egress.requiresCallback && !ctx.callback) {
+      throw {
+        status: 400,
+        message: `Egress channel "${route.egress}" requires a callback`,
+      };
+    }
+    if (envelopes.length !== 1) {
+      throw {
+        status: 400,
+        message:
+          `Request-bound egress channel "${route.egress}" supports exactly one message per request`,
+      };
+    }
+
+    await deliverEnvelope(envelopes[0]);
+    return {
+      status: ingressResult.status ?? 200,
+      data: ingressResult.response ?? { status: "ok" },
+    };
+  }
+
+  for (const envelope of envelopes) {
+    Promise.resolve()
+      .then(() => deliverEnvelope(envelope))
+      .catch((error) => {
+        console.error("[channels] Detached egress delivery failed:", error);
+      });
+  }
+
+  return {
+    status: ingressResult.status ?? ingress.detachedResponseStatus ?? 200,
+    data: ingressResult.response ?? {
+      status: "accepted",
+      accepted: envelopes.length,
+      route,
+    },
+  };
+}
+
+function applyThreadMetadataPatch(envelope: IngressEnvelope) {
+  const baseMessage = envelope.message;
+  const mergedMetadata = mergeThreadMetadata(
+    baseMessage.thread?.metadata,
+    envelope.threadMetadataPatch,
+  );
+  return {
+    ...baseMessage,
+    thread: {
+      ...(baseMessage.thread ?? {}),
+      metadata: getSerializableThreadMetadata(mergedMetadata),
+    },
+  };
+}
+
+async function resolveThreadForMessage(
+  copilotz: Copilotz,
+  message: IngressEnvelope["message"],
+) {
+  const threadId = message.thread?.id;
+  if (typeof threadId === "string" && threadId.length > 0) {
+    return await copilotz.ops.getThreadById(threadId);
+  }
+
+  const externalId = message.thread?.externalId;
+  if (typeof externalId === "string" && externalId.length > 0) {
+    return await copilotz.ops.getThreadByExternalId(externalId);
+  }
+
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -529,7 +752,9 @@ function buildChannelHandlers(copilotz: Copilotz): ChannelHandlers {
 
 const APP_KEY = Symbol.for("copilotz.app");
 
-export function withApp<T extends Copilotz>(copilotz: T): T & { app: CopilotzApp } {
+export function withApp<T extends Copilotz>(
+  copilotz: T,
+): T & { app: CopilotzApp } {
   const existing = (copilotz as any)[APP_KEY];
   if (existing) return copilotz as T & { app: CopilotzApp };
 
@@ -544,13 +769,15 @@ export function withApp<T extends Copilotz>(copilotz: T): T & { app: CopilotzApp
     agents: {
       list: () => listPublicAgents(copilotz.config.agents ?? []),
     } as AgentHandlers,
-    channels: buildChannelHandlers(copilotz),
+    channels: createChannelHandlers(copilotz),
   };
 
   const routes = buildRoutes();
 
   // Register dynamic feature routes
-  const features = (copilotz.config as any).features as FeatureEntry[] | undefined;
+  const features = (copilotz.config as any).features as
+    | FeatureEntry[]
+    | undefined;
   if (features?.length) {
     for (const feature of features) {
       for (const [actionName, handler] of Object.entries(feature.actions)) {
@@ -565,6 +792,7 @@ export function withApp<T extends Copilotz>(copilotz: T): T & { app: CopilotzApp
                 body: ctx.body,
                 query: ctx.query,
                 headers: ctx.headers,
+                rawBody: ctx.rawBody,
                 callback: ctx.callback,
               },
               ctx.copilotz,
@@ -583,11 +811,23 @@ export function withApp<T extends Copilotz>(copilotz: T): T & { app: CopilotzApp
   const app: CopilotzApp = {
     ...handlers,
     handle: async (request: AppRequest): Promise<AppResponse> => {
-      const { resource, method, path, query, body, headers, callback } = request;
+      const {
+        resource,
+        method,
+        path,
+        query,
+        body,
+        headers,
+        rawBody,
+        callback,
+      } = request;
 
       const matched = matchRoute(routes, resource, method, path);
       if (!matched) {
-        throw { status: 404, message: `No route for ${method} /${resource}/${path.join("/")}` };
+        throw {
+          status: 404,
+          message: `No route for ${method} /${resource}/${path.join("/")}`,
+        };
       }
 
       const ctx: RouteContext = {
@@ -596,6 +836,7 @@ export function withApp<T extends Copilotz>(copilotz: T): T & { app: CopilotzApp
         query: (query ?? {}) as Record<string, unknown>,
         body: body,
         headers: headers ?? {},
+        rawBody,
         callback,
         method,
       };

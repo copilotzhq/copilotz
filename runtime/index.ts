@@ -9,6 +9,11 @@ import type {
 import type { EventBase } from "@/database/schemas/index.ts";
 import { startThreadEventWorker } from "@/runtime/event-engine.ts";
 import { redactEventForStream } from "@/runtime/stream-redaction.ts";
+import {
+  getSerializableThreadMetadata,
+  mergeThreadMetadata,
+  setRuntimeThreadMetadata,
+} from "@/runtime/thread-metadata.ts";
 import { normalizeInboundRunMessage } from "@/utils/inbound-message.ts";
 
 /**
@@ -351,9 +356,13 @@ export async function runThread(
   const sender = inboundMessage.sender;
   const threadRef = inboundMessage.thread ?? undefined;
   let threadId: string | undefined = (threadRef?.id ?? undefined) || undefined;
+  let existingThread = undefined;
   if (!threadId && threadRef?.externalId) {
     const existingByExt = await ops.getThreadByExternalId(threadRef.externalId);
-    if (existingByExt?.id) threadId = existingByExt.id as string;
+    if (existingByExt?.id) {
+      threadId = existingByExt.id as string;
+      existingThread = existingByExt;
+    }
   }
   // If still undefined, let the DB assign a ULID on creation
 
@@ -365,9 +374,9 @@ export async function runThread(
     baseParticipants = threadRef.participants;
   } else {
     try {
-      const existingThread = threadId
+      existingThread = existingThread ?? (threadId
         ? await ops.getThreadById(threadId)
-        : undefined;
+        : undefined);
       if (
         existingThread && Array.isArray(existingThread.participants) &&
         existingThread.participants.length > 0
@@ -389,14 +398,17 @@ export async function runThread(
     new Set([senderCanonical, ...baseParticipants]),
   );
 
-  // Auto-populate userExternalId in thread metadata for user context lookup
+  // Auto-populate runtime userExternalId while preserving public/system metadata boundaries.
   const senderExternalId = sender?.externalId ?? sender?.id;
-  const threadMetadataWithUser = senderExternalId && sender?.type === "user"
-    ? {
-      ...((threadRef?.metadata ?? {}) as Record<string, unknown>),
+  let mergedThreadMetadata = mergeThreadMetadata(
+    mergeThreadMetadata(baseContext.threadMetadata, existingThread?.metadata),
+    threadRef?.metadata,
+  );
+  if (senderExternalId && sender?.type === "user") {
+    mergedThreadMetadata = setRuntimeThreadMetadata(mergedThreadMetadata, {
       userExternalId: senderExternalId,
-    }
-    : threadRef?.metadata ?? undefined;
+    });
+  }
 
   const ensuredThread = await ops.findOrCreateThread(threadId, {
     name: threadRef?.name ?? "Main Thread",
@@ -404,7 +416,7 @@ export async function runThread(
     participants,
     externalId: threadRef?.externalId ?? undefined,
     parentThreadId: undefined,
-    metadata: threadMetadataWithUser,
+    metadata: getSerializableThreadMetadata(mergedThreadMetadata),
     status: "active",
     mode: "immediate",
   });

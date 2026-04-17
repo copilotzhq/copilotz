@@ -17,7 +17,6 @@ import type {
   NewMessage,
   ProcessorDeps,
   Thread,
-  ThreadMetadata,
   ToolCallEventPayload,
 } from "@/types/index.ts";
 import { resolveNamespace } from "@/types/index.ts";
@@ -56,6 +55,12 @@ import {
 import { processAssetsForNewMessage } from "./generators/asset-generator.ts";
 import { filterSkillsForAgent } from "@/runtime/loaders/skill-loader.ts";
 import {
+  getPublicThreadMetadata,
+  getRuntimeThreadMetadata,
+  getSerializableThreadMetadata,
+  setRuntimeThreadMetadata,
+} from "@/runtime/thread-metadata.ts";
+import {
   buildMentionTargetRoute,
   extractMentionNames,
 } from "@/utils/mentions.ts";
@@ -92,8 +97,8 @@ type PendingBatches = Record<string, PendingBatch>;
  * Get pending batches from thread metadata
  */
 function getPendingBatches(thread: Thread): PendingBatches {
-  const metadata = thread.metadata as Record<string, unknown> | null;
-  const pendingBatches = metadata?.pendingToolBatches;
+  const metadata = getRuntimeThreadMetadata(thread.metadata);
+  const pendingBatches = metadata.pendingToolBatches;
   if (pendingBatches && typeof pendingBatches === "object") {
     return pendingBatches as PendingBatches;
   }
@@ -143,15 +148,12 @@ async function storeToolResultInBatch(
   // Add new result
   batch.results.push(result);
 
-  // Update thread metadata
-  const currentMetadata = (thread.metadata ?? {}) as Record<string, unknown>;
-  const updatedMetadata = {
-    ...currentMetadata,
+  const updatedMetadata = setRuntimeThreadMetadata(thread.metadata, {
     pendingToolBatches: pendingBatches,
-  };
+  });
 
   await ops.crud.threads?.update?.({ id: thread.id }, {
-    metadata: updatedMetadata,
+    metadata: getSerializableThreadMetadata(updatedMetadata),
   });
 
   // Also update local thread object
@@ -174,16 +176,14 @@ async function clearCompletedBatch(
   const pendingBatches = getPendingBatches(thread);
   delete pendingBatches[batchId];
 
-  const currentMetadata = (thread.metadata ?? {}) as Record<string, unknown>;
-  const updatedMetadata = {
-    ...currentMetadata,
+  const updatedMetadata = setRuntimeThreadMetadata(thread.metadata, {
     pendingToolBatches: Object.keys(pendingBatches).length > 0
       ? pendingBatches
       : undefined,
-  };
+  });
 
   await ops.crud.threads?.update?.({ id: thread.id }, {
-    metadata: updatedMetadata,
+    metadata: getSerializableThreadMetadata(updatedMetadata),
   });
   (thread as { metadata: unknown }).metadata = updatedMetadata;
 }
@@ -263,19 +263,18 @@ async function updateParticipantTarget(
   senderId: string,
   targetId: string,
 ): Promise<void> {
-  const metadata = (thread.metadata ?? {}) as ThreadMetadata;
+  const metadata = getRuntimeThreadMetadata(thread.metadata);
   const participantTargets = metadata.participantTargets ?? {};
 
-  const updatedMetadata: ThreadMetadata = {
-    ...metadata,
+  const updatedMetadata = setRuntimeThreadMetadata(thread.metadata, {
     participantTargets: {
       ...participantTargets,
       [senderId]: targetId,
     },
-  };
+  });
 
   await ops.crud.threads?.update?.({ id: thread.id }, {
-    metadata: updatedMetadata,
+    metadata: getSerializableThreadMetadata(updatedMetadata),
   });
 
   // Update local thread object for subsequent operations in same request
@@ -333,11 +332,8 @@ function resolveThreadParticipantTarget(
     return matchedParticipant;
   }
 
-  const threadMetadata =
-    (thread.metadata && typeof thread.metadata === "object")
-      ? thread.metadata as { userExternalId?: unknown }
-      : null;
-  const metadataUserExternalId = threadMetadata?.userExternalId;
+  const runtimeMetadata = getRuntimeThreadMetadata(thread.metadata);
+  const metadataUserExternalId = runtimeMetadata.userExternalId;
   if (
     typeof metadataUserExternalId === "string" &&
     metadataUserExternalId.toLowerCase() === targetLower
@@ -446,18 +442,17 @@ async function checkAndUpdateAgentTurns(
   availableAgents: Agent[],
   maxAgentTurns: number = 5,
 ): Promise<AgentTurnCheckResult> {
-  const metadata = (thread.metadata ?? {}) as ThreadMetadata;
+  const metadata = getRuntimeThreadMetadata(thread.metadata);
   const configuredMax = metadata.maxAgentTurns ?? maxAgentTurns;
 
   if (senderType === "user") {
     // User message resets counter
     if (metadata.agentTurnCount && metadata.agentTurnCount > 0) {
-      const updatedMetadata: ThreadMetadata = {
-        ...metadata,
+      const updatedMetadata = setRuntimeThreadMetadata(thread.metadata, {
         agentTurnCount: 0,
-      };
+      });
       await ops.crud.threads?.update?.({ id: thread.id }, {
-        metadata: updatedMetadata,
+        metadata: getSerializableThreadMetadata(updatedMetadata),
       });
       (thread as { metadata: unknown }).metadata = updatedMetadata;
     }
@@ -484,12 +479,11 @@ async function checkAndUpdateAgentTurns(
         );
 
         // Reset counter
-        const updatedMetadata: ThreadMetadata = {
-          ...metadata,
+        const updatedMetadata = setRuntimeThreadMetadata(thread.metadata, {
           agentTurnCount: 0,
-        };
+        });
         await ops.crud.threads?.update?.({ id: thread.id }, {
-          metadata: updatedMetadata,
+          metadata: getSerializableThreadMetadata(updatedMetadata),
         });
         (thread as { metadata: unknown }).metadata = updatedMetadata;
 
@@ -497,23 +491,21 @@ async function checkAndUpdateAgentTurns(
       }
 
       // Update counter
-      const updatedMetadata: ThreadMetadata = {
-        ...metadata,
+      const updatedMetadata = setRuntimeThreadMetadata(thread.metadata, {
         agentTurnCount: newCount,
-      };
+      });
       await ops.crud.threads?.update?.({ id: thread.id }, {
-        metadata: updatedMetadata,
+        metadata: getSerializableThreadMetadata(updatedMetadata),
       });
       (thread as { metadata: unknown }).metadata = updatedMetadata;
     } else {
       // Target is user, reset counter
       if (metadata.agentTurnCount && metadata.agentTurnCount > 0) {
-        const updatedMetadata: ThreadMetadata = {
-          ...metadata,
+        const updatedMetadata = setRuntimeThreadMetadata(thread.metadata, {
           agentTurnCount: 0,
-        };
+        });
         await ops.crud.threads?.update?.({ id: thread.id }, {
-          metadata: updatedMetadata,
+          metadata: getSerializableThreadMetadata(updatedMetadata),
         });
         (thread as { metadata: unknown }).metadata = updatedMetadata;
       }
@@ -538,7 +530,7 @@ async function discoverTargetForMessage(
   availableAgents: Agent[],
   ops: Operations,
 ): Promise<TargetResolution | null> {
-  const metadata = (thread.metadata ?? {}) as ThreadMetadata;
+  const metadata = getRuntimeThreadMetadata(thread.metadata);
   const participantTargets = metadata.participantTargets ?? {};
 
   // 1. Tool results → route back to requesting agent (unchanged behavior)
@@ -1293,14 +1285,13 @@ export const messageProcessor: EventProcessor<
       };
 
       // Persist the forced user target to break the agent loop for future messages
-      const updatedMetadata = {
-        ...(thread.metadata as Record<string, unknown> ?? {}),
+      const updatedMetadata = setRuntimeThreadMetadata(thread.metadata, {
         participantTargets: {}, // Clear all persisted targets to force an explicit mention or user action
         agentTurnCount: 0,
-      };
+      });
 
       await ops.crud.threads?.update?.({ id: thread.id }, {
-        metadata: updatedMetadata,
+        metadata: getSerializableThreadMetadata(updatedMetadata),
       });
       (thread as unknown as { metadata: unknown }).metadata = updatedMetadata;
 
@@ -1493,8 +1484,8 @@ export const messageProcessor: EventProcessor<
       if (agent.ragOptions?.mode === "auto" && context.embeddingConfig) {
         try {
           // Get user ID from thread metadata if available
-          const threadMeta = thread.metadata as Record<string, unknown> | null;
-          const userId = threadMeta?.userExternalId as string | undefined;
+          const threadMeta = getRuntimeThreadMetadata(thread.metadata);
+          const userId = threadMeta.userExternalId as string | undefined;
 
           const ragResult = await generateRagContext({
             agent,
@@ -1571,7 +1562,7 @@ export const messageProcessor: EventProcessor<
           originalSenderId = replyToParticipantId;
         } else {
           // Tool response - find who the agent was originally talking to
-          const threadMeta = (thread.metadata ?? {}) as ThreadMetadata;
+          const threadMeta = getRuntimeThreadMetadata(thread.metadata);
           const agentTarget = threadMeta.participantTargets
             ?.[messageContext.senderId];
           if (agentTarget) {
@@ -1686,19 +1677,18 @@ async function buildProcessingContext(
   ];
 
   let userMetadata = context.userMetadata;
-  const threadMetadata = thread.metadata && typeof thread.metadata === "object"
-    ? (thread.metadata as Record<string, unknown>)
-    : undefined;
+  const publicThreadMetadata = getPublicThreadMetadata(thread.metadata);
+  const runtimeThreadMetadata = getRuntimeThreadMetadata(thread.metadata);
 
-  if (!userMetadata && threadMetadata) {
-    const stored = threadMetadata.userContext;
+  if (!userMetadata && publicThreadMetadata) {
+    const stored = publicThreadMetadata.userContext;
     if (stored && typeof stored === "object") {
       userMetadata = stored as Record<string, unknown>;
     }
   }
 
-  if (!userMetadata && threadMetadata?.userExternalId) {
-    const externalId = threadMetadata.userExternalId as string;
+  if (!userMetadata && runtimeThreadMetadata.userExternalId) {
+    const externalId = runtimeThreadMetadata.userExternalId as string;
     try {
       // Use graph-based user lookup with namespace support
       const userNode = await ops.getUserNode(externalId, context.namespace);

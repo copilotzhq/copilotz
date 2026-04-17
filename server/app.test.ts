@@ -11,6 +11,12 @@ import type { AppRequest } from "./app.ts";
 
 function createMockCopilotz() {
   const calls: { method: string; args: unknown[] }[] = [];
+  const deliveries: {
+    route: { ingress: string; egress: string };
+    threadId?: string;
+    message: unknown;
+    events: string[];
+  }[] = [];
 
   const record = (method: string, ...args: unknown[]) => {
     calls.push({ method, args });
@@ -23,7 +29,21 @@ function createMockCopilotz() {
     },
     getThreadById: async (id: string) => {
       record("getThreadById", id);
-      return id === "not-found" ? undefined : { id, name: "Test Thread" };
+      if (id === "not-found") return undefined;
+      if (id === "zd-thread") {
+        return {
+          id,
+          name: "Zendesk Thread",
+          metadata: {
+            system: {
+              channels: {
+                zendesk: { conversationId: "conv-1" },
+              },
+            },
+          },
+        };
+      }
+      return { id, name: "Test Thread" };
     },
     getThreadByExternalId: async (eid: string) => {
       record("getThreadByExternalId", eid);
@@ -159,7 +179,12 @@ function createMockCopilotz() {
     collections: mockCollections,
     config: {
       agents: [
-        { id: "agent-1", name: "Helper", description: "A test agent", public: true },
+        {
+          id: "agent-1",
+          name: "Helper",
+          description: "A test agent",
+          public: true,
+        },
       ],
       features: [
         {
@@ -192,44 +217,114 @@ function createMockCopilotz() {
       channels: [
         {
           name: "web",
-          handler: async (ctx: any, c: any) => {
-            if (!ctx.callback) throw { status: 400, message: "Web channel requires a callback for streaming" };
-            const controller = await c.run(ctx.body);
-            for await (const event of controller.events) {
-              ctx.callback(event);
-            }
-            return { status: "ok" };
+          ingress: {
+            detachedResponseStatus: 202,
+            async handle(ctx: any) {
+              return {
+                messages: [{ message: ctx.body }],
+              };
+            },
+          },
+        },
+        {
+          name: "web",
+          egress: {
+            requestBound: true,
+            requiresCallback: true,
+            async deliver(ctx: any) {
+              if (!ctx.callback) {
+                throw {
+                  status: 400,
+                  message: "Web egress requires a callback for streaming",
+                };
+              }
+              for await (const event of ctx.handle.events) {
+                ctx.callback(event);
+              }
+            },
+          },
+        },
+        {
+          name: "zendesk",
+          egress: {
+            async deliver(ctx: any) {
+              const events: string[] = [];
+              for await (const event of ctx.handle.events) {
+                events.push(event.type);
+              }
+              deliveries.push({
+                route: ctx.route,
+                threadId: ctx.thread?.id,
+                message: ctx.message,
+                events,
+              });
+              record("zendesk.deliver", ctx.route, ctx.thread, ctx.message);
+            },
           },
         },
       ],
     },
     run: async (msg: unknown) => {
       record("run", msg);
+      const threadId = typeof msg === "object" && msg !== null &&
+          "thread" in msg &&
+          typeof (msg as { thread?: { id?: unknown } }).thread?.id === "string"
+        ? (msg as { thread: { id: string } }).thread.id
+        : "run-thread";
       return {
+        threadId,
         events: (async function* () {
-          yield { type: "TOKEN", data: { text: "hello" } };
-          yield { type: "NEW_MESSAGE", data: { content: "hello world" } };
+          yield { type: "TOKEN", payload: { text: "hello" } };
+          yield {
+            type: "NEW_MESSAGE",
+            payload: {
+              sender: { type: "agent" },
+              content: "hello world",
+            },
+          };
         })(),
       };
     },
     schema: {},
   };
 
-  return { copilotz, calls };
+  return { copilotz, calls, deliveries };
 }
 
 // ---------------------------------------------------------------------------
-// HTTP helper — Deno.serve adapter that pipes to handle()
+// HTTP helper — in-memory request adapter that pipes to handle()
 // ---------------------------------------------------------------------------
 
 function createServer(copilotz: ReturnType<typeof withApp>) {
-  const server = Deno.serve({ port: 0, onListen() {} }, async (req) => {
+  const request = async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const req = input instanceof Request
+      ? input
+      : new Request(String(input), init);
     const url = new URL(req.url);
-    const segments = url.pathname.replace(/^\/v1\//, "").split("/").filter(Boolean);
+    const segments = url.pathname.replace(/^\/v1\//, "").split("/").filter(
+      Boolean,
+    );
     const [resource, ...path] = segments;
 
     if (!resource) {
       return Response.json({ error: "Resource required" }, { status: 400 });
+    }
+
+    let body: unknown;
+    let rawBody: Uint8Array | undefined;
+    if (req.method !== "GET" && req.method !== "DELETE") {
+      const rawText = await req.text();
+      rawBody = new TextEncoder().encode(rawText);
+      if (rawText) {
+        try {
+          body = JSON.parse(rawText);
+        } catch {
+          body = rawText;
+        }
+      }
     }
 
     const appReq: AppRequest = {
@@ -237,31 +332,33 @@ function createServer(copilotz: ReturnType<typeof withApp>) {
       method: req.method as AppRequest["method"],
       path,
       query: Object.fromEntries(url.searchParams),
-      body: req.method !== "GET" && req.method !== "DELETE"
-        ? await req.json().catch(() => undefined)
-        : undefined,
+      body,
       headers: Object.fromEntries(req.headers),
+      rawBody,
     };
 
-    // SSE callback for channels
-    if (resource === "channels") {
-      const body = appReq.body;
-      const { readable, writable } = new TransformStream();
-      const writer = writable.getWriter();
-      const encoder = new TextEncoder();
+    // SSE callback for request-bound web egress
+    if (resource === "channels" && path.length === 1 && path[0] === "web") {
+      let streamBody = "";
 
       appReq.callback = (event: unknown) => {
         const e = event as { type?: string };
-        writer.write(
-          encoder.encode(`event: ${e.type ?? "message"}\ndata: ${JSON.stringify(event)}\n\n`),
-        );
+        streamBody += `event: ${e.type ?? "message"}\ndata: ${
+          JSON.stringify(event)
+        }\n\n`;
       };
-
-      copilotz.app.handle({ ...appReq, body }).then(() => writer.close()).catch(() => writer.close());
-
-      return new Response(readable, {
-        headers: { "content-type": "text/event-stream" },
-      });
+      try {
+        await copilotz.app.handle(appReq);
+        return new Response(streamBody, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      } catch (err: any) {
+        const status = err?.status ?? 500;
+        return Response.json(
+          { error: err?.message ?? "Internal error" },
+          { status },
+        );
+      }
     }
 
     try {
@@ -278,12 +375,26 @@ function createServer(copilotz: ReturnType<typeof withApp>) {
         { status },
       );
     }
-  });
+  };
 
-  const addr = server.addr;
-  const base = `http://localhost:${addr.port}/v1`;
+  return {
+    server: { shutdown: async () => {} },
+    base: "http://localhost/v1",
+    request,
+  };
+}
 
-  return { server, base };
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 1000,
+): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("Timed out waiting for async condition");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -291,10 +402,11 @@ function createServer(copilotz: ReturnType<typeof withApp>) {
 // ---------------------------------------------------------------------------
 
 Deno.test("withApp — handle() routes and Deno.serve integration", async (t) => {
-  const { copilotz } = createMockCopilotz();
+  const { copilotz, deliveries } = createMockCopilotz();
   // deno-lint-ignore no-explicit-any
   const extended = withApp(copilotz as any);
-  const { server, base } = createServer(extended);
+  const { server, base, request } = createServer(extended);
+  const fetch = request;
 
   try {
     // -- agents --
@@ -390,12 +502,17 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
       assertEquals(data.status, "pending");
     });
 
-    await t.step("GET /threads/:id/events?status=processing returns processing event", async () => {
-      const res = await fetch(`${base}/threads/t-100/events?status=processing`);
-      assertEquals(res.status, 200);
-      const { data } = await res.json();
-      assertEquals(data.status, "processing");
-    });
+    await t.step(
+      "GET /threads/:id/events?status=processing returns processing event",
+      async () => {
+        const res = await fetch(
+          `${base}/threads/t-100/events?status=processing`,
+        );
+        assertEquals(res.status, 200);
+        const { data } = await res.json();
+        assertEquals(data.status, "processing");
+      },
+    );
 
     await t.step("POST /threads/:id/events enqueues event", async () => {
       const res = await fetch(`${base}/threads/t-100/events`, {
@@ -439,10 +556,13 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
       assertEquals(data.totalThreads, 42);
     });
 
-    await t.step("GET /features/admin/threads returns thread list", async () => {
-      const res = await fetch(`${base}/features/admin/threads?limit=5`);
-      assertEquals(res.status, 200);
-    });
+    await t.step(
+      "GET /features/admin/threads returns thread list",
+      async () => {
+        const res = await fetch(`${base}/features/admin/threads?limit=5`);
+        assertEquals(res.status, 200);
+      },
+    );
 
     await t.step("GET /features/admin/activity returns activity", async () => {
       const res = await fetch(`${base}/features/admin/activity?interval=day`);
@@ -475,24 +595,30 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
     });
 
     // -- features --
-    await t.step("POST /features/echo/ping invokes feature handler", async () => {
-      const res = await fetch(`${base}/features/echo/ping`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ hello: "world" }),
-      });
-      assertEquals(res.status, 200);
-      const { data } = await res.json();
-      assertEquals(data.pong, true);
-      assertEquals(data.received.hello, "world");
-    });
+    await t.step(
+      "POST /features/echo/ping invokes feature handler",
+      async () => {
+        const res = await fetch(`${base}/features/echo/ping`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ hello: "world" }),
+        });
+        assertEquals(res.status, 200);
+        const { data } = await res.json();
+        assertEquals(data.pong, true);
+        assertEquals(data.received.hello, "world");
+      },
+    );
 
-    await t.step("GET /features/echo/ping also works (method wildcard)", async () => {
-      const res = await fetch(`${base}/features/echo/ping`);
-      assertEquals(res.status, 200);
-      const { data } = await res.json();
-      assertEquals(data.pong, true);
-    });
+    await t.step(
+      "GET /features/echo/ping also works (method wildcard)",
+      async () => {
+        const res = await fetch(`${base}/features/echo/ping`);
+        assertEquals(res.status, 200);
+        const { data } = await res.json();
+        assertEquals(data.pong, true);
+      },
+    );
 
     // -- 404 --
     await t.step("GET /nonexistent returns 404", async () => {
@@ -522,7 +648,9 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
         .split("\n\n")
         .filter(Boolean)
         .map((block) => {
-          const dataLine = block.split("\n").find((l) => l.startsWith("data: "));
+          const dataLine = block.split("\n").find((l) =>
+            l.startsWith("data: ")
+          );
           return dataLine ? JSON.parse(dataLine.slice(6)) : null;
         })
         .filter(Boolean);
@@ -531,6 +659,34 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
       assertEquals(events[0].type, "TOKEN");
       assertEquals(events[1].type, "NEW_MESSAGE");
     });
+
+    await t.step(
+      "POST /channels/web/to/zendesk accepts detached delivery",
+      async () => {
+        const res = await fetch(`${base}/channels/web/to/zendesk`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            content: "hi from web",
+            thread: { id: "zd-thread" },
+          }),
+        });
+        assertEquals(res.status, 202);
+        const { data } = await res.json();
+        assertEquals(data.status, "accepted");
+        assertEquals(data.accepted, 1);
+        assertEquals(data.route.ingress, "web");
+        assertEquals(data.route.egress, "zendesk");
+
+        await waitFor(() => deliveries.length === 1);
+        assertEquals(deliveries[0].route, {
+          ingress: "web",
+          egress: "zendesk",
+        });
+        assertEquals(deliveries[0].threadId, "zd-thread");
+        assertEquals(deliveries[0].events, ["TOKEN", "NEW_MESSAGE"]);
+      },
+    );
 
     // -- resources() introspection --
     await t.step("resources() lists all registered resources", () => {

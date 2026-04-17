@@ -1,4 +1,5 @@
 import type { NewTool } from "@/types/index.ts";
+import { getPublicThreadMetadata } from "@/runtime/thread-metadata.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -109,7 +110,7 @@ async function resolveProject(explicit?: string, context?: ToolContext): Promise
 	try {
 		const thread = await context.db.ops.getThreadById(context.threadId);
 		if (!thread) return context.threadId;
-		const meta = thread.metadata as Record<string, unknown> | null;
+		const meta = getPublicThreadMetadata(thread.metadata);
 		if (typeof meta?.project === "string" && meta.project.length > 0) {
 			return meta.project;
 		}

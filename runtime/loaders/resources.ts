@@ -8,6 +8,12 @@
  */
 
 import type { AgentConfig, APIConfig, MCPServer, ToolConfig } from "@/index.ts";
+import {
+  type ChannelEntry,
+  type EgressAdapter,
+  type IngressAdapter,
+  mergeChannelEntries,
+} from "@/server/channels.ts";
 import type {
   Event,
   EventProcessor,
@@ -29,13 +35,10 @@ type ProcessorEntry = EventProcessor<unknown, ProcessorDeps> & {
 /** A loaded feature with named action handlers. */
 export type FeatureEntry = {
   name: string;
-  actions: Record<string, (request: unknown, copilotz: unknown) => Promise<unknown>>;
-};
-
-/** A loaded channel handler. */
-export type ChannelEntry = {
-  name: string;
-  handler: (ctx: unknown, copilotz: unknown) => Promise<unknown>;
+  actions: Record<
+    string,
+    (request: unknown, copilotz: unknown) => Promise<unknown>
+  >;
 };
 
 /**
@@ -80,7 +83,7 @@ export type Resources = {
   processors?: ProcessorEntry[];
   /** Array of loaded feature handlers. */
   features?: FeatureEntry[];
-  /** Array of loaded channel handlers. */
+  /** Array of loaded channels with optional ingress/egress adapters. */
   channels?: ChannelEntry[];
   /** Extensible: marketplace packages can contribute arbitrary resource types. */
   [key: string]: unknown;
@@ -224,8 +227,7 @@ const asProcess = (
       typeof result === "object" && result &&
       "producedEvents" in (result as Record<string, unknown>)
     ) {
-      const produced =
-        (result as { producedEvents?: unknown }).producedEvents;
+      const produced = (result as { producedEvents?: unknown }).producedEvents;
       if (Array.isArray(produced)) {
         return {
           producedEvents: produced as Array<NewEvent | NewUnknownEvent>,
@@ -466,7 +468,10 @@ async function loadFeaturesFromDirectory(
       const actions: FeatureEntry["actions"] = {};
       await Promise.all(
         files
-          .filter((f) => f.isFile && f.name.endsWith(".ts") && f.name !== "manifest.ts" && !f.name.startsWith("_"))
+          .filter((f) =>
+            f.isFile && f.name.endsWith(".ts") && f.name !== "manifest.ts" &&
+            !f.name.startsWith("_")
+          )
           .map(async (file) => {
             try {
               const mod = await import(joinUrl(featureUrl, file.name));
@@ -494,9 +499,8 @@ async function loadFeaturesFromDirectory(
 // ---- Channel loading ------------------------------------------------------
 
 /**
- * Load channel handlers from a channels/ directory.
- * Each .ts file exports a default handler function: (ctx, copilotz) => Promise<unknown>.
- * When `filterNames` is provided (manifest mode), only those channels are loaded.
+ * Load channels from channel folders under `channels/<name>/{ingress,egress}.ts`.
+ * Each adapter file exports a default adapter object.
  */
 async function loadChannelsFromDirectory(
   baseUrl: string,
@@ -510,36 +514,38 @@ async function loadChannelsFromDirectory(
     return [];
   }
 
-  const channelFiles = entries.filter((e) =>
-    e.isFile && e.name.endsWith(".ts") && e.name !== "manifest.ts" &&
-    e.name !== "mod.ts" && e.name !== "index.ts" && e.name !== "types.ts" &&
-    e.name !== "utils.ts" &&
-    (!filterNames || filterNames.includes(e.name.replace(/\.ts$/, "")))
-  );
-
   const channels = await Promise.all(
-    channelFiles.map(async (file) => {
+    entries.filter((entry) =>
+      entry.isDirectory &&
+      (!filterNames || filterNames.includes(entry.name))
+    ).map(async (entry) => {
       try {
-        const mod = await import(joinUrl(channelsUrl, file.name));
-        const handler = mod?.default;
-        if (typeof handler === "function") {
-          return { name: file.name.replace(/\.ts$/, ""), handler } as ChannelEntry;
-        }
+        const [ingressMod, egressMod] = await Promise.all([
+          importModuleSafe(joinUrl(channelsUrl, entry.name, "ingress.ts")),
+          importModuleSafe(joinUrl(channelsUrl, entry.name, "egress.ts")),
+        ]);
+        return toChannelEntry(entry.name, ingressMod, egressMod);
       } catch (err) {
-        console.warn(
-          `[copilotz:resources] Failed to load channel: ${file.name}`,
-          err,
-        );
+        if (isInitDebugEnabled()) {
+          console.warn(
+            `[copilotz:resources] Failed to load channel: ${entry.name}`,
+            err,
+          );
+        }
       }
       return null;
     }),
   );
 
-  return channels.filter((c): c is ChannelEntry => c !== null);
+  const loaded: ChannelEntry[] = [];
+  for (const entry of channels) {
+    if (entry !== null) loaded.push(entry);
+  }
+  return loaded;
 }
 
 /**
- * Manifest-driven channel loader. Imports `channels/<name>.ts` by URL for each
+ * Manifest-driven channel loader. Imports `channels/<name>/{ingress,egress}.ts` by URL for each
  * declared channel — works for both local (`file://`) and remote
  * (`jsr:`, `npm:`, `https://`) base URLs, since it doesn't rely on `readDir`.
  */
@@ -547,20 +553,57 @@ async function loadChannelsByManifest(
   baseUrl: string,
   names: string[],
 ): Promise<ChannelEntry[]> {
-  const channelsUrl = joinUrl(baseUrl, "channels");
   const settled = await Promise.all(
     names.map(async (name) => {
-      const mod = await importModuleSafe(joinUrl(channelsUrl, `${name}.ts`));
-      if (typeof mod === "function") {
-        return {
-          name,
-          handler: mod as ChannelEntry["handler"],
-        } as ChannelEntry;
-      }
-      return null;
+      const [ingressMod, egressMod] = await Promise.all([
+        importModuleSafe(joinUrl(baseUrl, "channels", name, "ingress.ts")),
+        importModuleSafe(joinUrl(baseUrl, "channels", name, "egress.ts")),
+      ]);
+      return toChannelEntry(name, ingressMod, egressMod);
     }),
   );
-  return settled.filter((c): c is ChannelEntry => c !== null);
+  const loaded: ChannelEntry[] = [];
+  for (const entry of settled) {
+    if (entry !== null) loaded.push(entry);
+  }
+  return loaded;
+}
+
+function asIngressAdapter(
+  mod: unknown,
+): IngressAdapter | undefined {
+  if (
+    !mod || typeof mod !== "object" || typeof (mod as {
+        handle?: unknown;
+      }).handle !== "function"
+  ) {
+    return undefined;
+  }
+  return mod as IngressAdapter;
+}
+
+function asEgressAdapter(
+  mod: unknown,
+): EgressAdapter | undefined {
+  if (
+    !mod || typeof mod !== "object" || typeof (mod as {
+        deliver?: unknown;
+      }).deliver !== "function"
+  ) {
+    return undefined;
+  }
+  return mod as EgressAdapter;
+}
+
+function toChannelEntry(
+  name: string,
+  ingressMod: unknown,
+  egressMod: unknown,
+): ChannelEntry | null {
+  const ingress = asIngressAdapter(ingressMod);
+  const egress = asEgressAdapter(egressMod);
+  if (!ingress && !egress) return null;
+  return { name, ingress, egress };
 }
 
 // ---- Manifest-driven full load --------------------------------------------
@@ -597,29 +640,38 @@ async function loadFromManifest(
   if (provides.agents?.length) {
     tasks.push(
       timed("agents", () => loadAgentsByManifest(baseUrl, provides.agents!))
-        .then((r) => { resources.agents = r; }),
+        .then((r) => {
+          resources.agents = r;
+        }),
     );
   }
 
   if (provides.tools?.length) {
     tasks.push(
       timed("tools", () => loadToolsByManifest(baseUrl, provides.tools!))
-        .then((r) => { resources.tools = r; }),
+        .then((r) => {
+          resources.tools = r;
+        }),
     );
   }
 
   if (provides.apis?.length) {
     tasks.push(
       timed("apis", () => loadApisByManifest(baseUrl, provides.apis!))
-        .then((r) => { resources.apis = r; }),
+        .then((r) => {
+          resources.apis = r;
+        }),
     );
   }
 
   if (provides.processors?.length) {
     tasks.push(
-      timed("processors", () =>
-        loadProcessorsByManifest(baseUrl, provides.processors!),
-      ).then((r) => { resources.processors = r; }),
+      timed(
+        "processors",
+        () => loadProcessorsByManifest(baseUrl, provides.processors!),
+      ).then((r) => {
+        resources.processors = r;
+      }),
     );
   }
 
@@ -630,23 +682,32 @@ async function loadFromManifest(
         const skillsPath =
           decodeURIComponent(skillsUrl.replace("file://", "")) + "/";
         return loadSkillsFromDirectory(skillsPath, "project");
-      }).then((r) => { resources.skills = r; }),
+      }).then((r) => {
+        resources.skills = r;
+      }),
     );
   }
 
   if (provides.features?.length && baseUrl.startsWith("file://")) {
     tasks.push(
-      timed("features", () =>
-        loadFeaturesFromDirectory(baseUrl, provides.features!),
-      ).then((r) => { resources.features = r; }),
+      timed(
+        "features",
+        () => loadFeaturesFromDirectory(baseUrl, provides.features!),
+      ).then((r) => {
+        resources.features = r;
+      }),
     );
   }
 
   if (provides.channels?.length) {
     tasks.push(
       timed("channels", () =>
-        loadChannelsByManifest(baseUrl, provides.channels!),
-      ).then((r) => { resources.channels = r; }),
+        loadChannelsByManifest(
+          baseUrl,
+          provides.channels!,
+        )).then((r) => {
+          resources.channels = r;
+        }),
     );
   }
 
@@ -863,8 +924,7 @@ async function loadFromDirectory(
 
   // ---- Skills ----
   tasks.push((async () => {
-    const skillsPath =
-      joinUrl(baseUrl, "skills").replace("file://", "") + "/";
+    const skillsPath = joinUrl(baseUrl, "skills").replace("file://", "") + "/";
     const s = performance.now();
     resources.skills = await loadSkillsFromDirectory(skillsPath, "project");
     logPhase("skills", s, { count: resources.skills?.length ?? 0 });
@@ -880,8 +940,12 @@ async function loadFromDirectory(
   // ---- Channels ----
   tasks.push((async () => {
     const s = performance.now();
-    resources.channels = await loadChannelsFromDirectory(baseUrl);
-    logPhase("channels", s, { count: resources.channels?.length ?? 0 });
+    resources.channels = await loadChannelsFromDirectory(
+      baseUrl,
+    );
+    logPhase("channels", s, {
+      count: resources.channels?.length ?? 0,
+    });
   })());
 
   await Promise.all(tasks);
@@ -951,7 +1015,10 @@ function mergeResources(target: Resources, source: Resources): void {
     for (const feature of source.features) {
       if (existingNames.has(feature.name)) {
         const idx = existing.findIndex((f) => f.name === feature.name);
-        existing[idx] = { ...existing[idx], actions: { ...existing[idx].actions, ...feature.actions } };
+        existing[idx] = {
+          ...existing[idx],
+          actions: { ...existing[idx].actions, ...feature.actions },
+        };
       } else {
         existing.push(feature);
       }
@@ -959,15 +1026,7 @@ function mergeResources(target: Resources, source: Resources): void {
     target.features = existing;
   }
   if (source.channels?.length) {
-    const existing = target.channels ?? [];
-    const existingNames = new Set(existing.map((c) => c.name));
-    for (const channel of source.channels) {
-      if (!existingNames.has(channel.name)) {
-        existing.push(channel);
-        existingNames.add(channel.name);
-      }
-    }
-    target.channels = existing;
+    target.channels = mergeChannelEntries(target.channels, source.channels);
   }
   // Merge extensible resource types
   for (const [key, value] of Object.entries(source)) {

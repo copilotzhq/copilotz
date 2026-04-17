@@ -16,14 +16,15 @@ entrypoints:
   - utils/loaders/resources.ts
   - database/index.ts
   - server/index.ts
-  - server/channels/index.ts
+  - server/channels.ts
   - create/mod.ts
 status: active
 ---
 
 ## Purpose
 
-Shared framework repo used by clients for agent execution, event processing, memory, RAG, assets, and database operations.
+Shared framework repo used by clients for agent execution, event processing,
+memory, RAG, assets, and database operations.
 
 ## Read These First
 
@@ -39,10 +40,16 @@ Shared framework repo used by clients for agent execution, event processing, mem
 - Database schema, migrations, collections: `database/`
 - Connectors for LLM, embeddings, storage, HTTP: `connectors/`
 - Server helpers (framework-independent): `server/` (exported as `./server`)
-- Channel handlers (web, WhatsApp, Zendesk): `server/channels/` (exported as `./server/channels`, `./server/channels/web`, `./server/channels/whatsapp`, `./server/channels/zendesk`)
-- Project scaffolding CLI: `create/` (exported as `./create`, used by `deno run -Ar jsr:@copilotz/copilotz/create`)
+- Transport route API facade (web, WhatsApp, Zendesk): `server/channels.ts`
+  (exported as `./server/channels`)
+- Built-in transport adapter implementations: `resources/channels/<channel>/`
+  with `ingress.ts` and `egress.ts` per channel
+- Project scaffolding CLI: `create/` (exported as `./create`, used by
+  `deno run -Ar jsr:@copilotz/copilotz/create`)
 
 ## Warnings
 
-- Clients usually reference published JSR versions, not the local workspace copy.
-- Namespace and schema isolation are core behavior; changes here can affect multi-tenant data semantics.
+- Clients usually reference published JSR versions, not the local workspace
+  copy.
+- Namespace and schema isolation are core behavior; changes here can affect
+  multi-tenant data semantics.

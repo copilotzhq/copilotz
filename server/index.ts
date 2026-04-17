@@ -48,31 +48,14 @@ export type {
 export { createGraphHandlers } from "./graph.ts";
 export type { GraphHandlers, GraphSearchOptions } from "./graph.ts";
 
-export { whatsappChannel, zendeskChannel } from "./channels/index.ts";
-export type { WhatsAppConfig } from "./channels/whatsapp.ts";
-export type { ZendeskConfig } from "./channels/zendesk.ts";
-export type {
-  ChannelEvent,
-  ChannelRequest,
-  ChannelResponse,
-} from "./channels/types.ts";
-export {
-  blobToBase64,
-  extractText,
-  parseDataUrl,
-  splitString,
-  timingSafeEqual,
-  verifyHmacSha256,
-} from "./channels/utils.ts";
+export { createChannelHandlers } from "./channels.ts";
+export type { ChannelHandlers } from "./channels.ts";
 
 export { withApp } from "./app.ts";
 export type {
-  CopilotzApp,
+  AgentHandlers,
   AppRequest,
   AppResponse,
-  AgentHandlers,
-  ChannelContext,
-  ChannelHandler,
-  ChannelHandlers,
+  CopilotzApp,
   ResourceDescriptor,
 } from "./app.ts";

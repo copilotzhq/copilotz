@@ -2,6 +2,7 @@ import type { Agent, Thread } from "@/types/index.ts";
 import type { KnowledgeNode } from "@/database/schemas/index.ts";
 import type { SkillIndexEntry } from "@/runtime/loaders/skill-types.ts";
 import type { AgentsFileInstructions } from "@/runtime/loaders/agents-file.ts";
+import { getPublicThreadMetadata } from "@/runtime/thread-metadata.ts";
 
 export interface LLMContextData {
   threadContext: string;
@@ -150,8 +151,9 @@ export function contextGenerator(
   const currentDate = new Date().toLocaleString();
   const dateContext = `Current date and time: ${currentDate}`;
 
-  const threadMetadata = thread.metadata && typeof thread.metadata === "object"
-    ? JSON.stringify(thread.metadata, null, 2)
+  const publicThreadMetadata = getPublicThreadMetadata(thread.metadata);
+  const threadMetadata = Object.keys(publicThreadMetadata).length > 0
+    ? JSON.stringify(publicThreadMetadata, null, 2)
     : null;
 
   const metadataSection = threadMetadata

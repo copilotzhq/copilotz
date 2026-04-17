@@ -12,11 +12,7 @@ import {
   withSchema,
 } from "@/database/index.ts";
 import type { OminipgWithCrud } from "omnipg";
-import {
-  type RunHandle,
-  type RunOptions,
-  runThread,
-} from "@/runtime/index.ts";
+import { type RunHandle, type RunOptions, runThread } from "@/runtime/index.ts";
 import type {
   CollectionCrud,
   CollectionDefinition,
@@ -27,12 +23,13 @@ import {
   normalizeInboundRunMessage,
 } from "@/utils/inbound-message.ts";
 import loadResources from "@/runtime/loaders/resources.ts";
-import type { Resources, FeatureEntry, ChannelEntry } from "@/runtime/loaders/resources.ts";
+import type { FeatureEntry, Resources } from "@/runtime/loaders/resources.ts";
+import { type ChannelEntry, mergeChannelEntries } from "@/server/channels.ts";
 import { mergeResourceArrays } from "@/utils/merge-resources.ts";
 import type { Skill } from "@/runtime/loaders/skill-types.ts";
 import {
-  loadAgentsFileInstructions,
   type AgentsFileConfig,
+  loadAgentsFileInstructions,
 } from "@/runtime/loaders/agents-file.ts";
 import {
   loadSkillFromUrl,
@@ -41,6 +38,8 @@ import {
 import type {
   Agent,
   API,
+  AssetCreatedEventPayload,
+  AssetErrorEventPayload,
   ChatContext,
   CopilotzDb,
   DatabaseConfig,
@@ -53,6 +52,7 @@ import type {
   NewMCPServer,
   NewTool,
   ProcessorDeps,
+  RagIngestPayload,
   ResolveLLMRuntimeConfig,
   TokenEventPayload,
   Tool,
@@ -69,6 +69,10 @@ export type {
   AgentRagOptions,
   /** API configuration for connecting to external REST APIs via OpenAPI. */
   API,
+  /** Payload for asset creation stream events. */
+  AssetCreatedEventPayload,
+  /** Payload for asset pipeline error stream events. */
+  AssetErrorEventPayload,
   /** Context object passed through the chat pipeline. */
   ChatContext,
   /** Configuration for document chunking strategies. */
@@ -129,10 +133,12 @@ export type {
   NewTool,
   /** Dependencies injected into event processors. */
   ProcessorDeps,
-  /** Runtime hook for resolving LLM execution config. */
-  ResolveLLMRuntimeConfig,
   /** Configuration for RAG (Retrieval-Augmented Generation). */
   RagConfig,
+  /** Payload for background RAG ingestion events. */
+  RagIngestPayload,
+  /** Runtime hook for resolving LLM execution config. */
+  ResolveLLMRuntimeConfig,
   /** Configuration for similarity-based retrieval. */
   RetrievalConfig,
   /** Conversation thread containing messages between users and agents. */
@@ -158,6 +164,16 @@ export type {
   /** Context passed to tool result projector callbacks. */
   ToolResultProjectorContext,
 } from "@/types/index.ts";
+export type {
+  ChannelAdapterRequest,
+  ChannelEntry,
+  ChannelRouteSpec,
+  EgressAdapter,
+  EgressDeliveryContext,
+  IngressAdapter,
+  IngressEnvelope,
+  IngressResult,
+} from "@/server/channels.ts";
 
 /**
  * Returns a record of all built-in native tools available to agents.
@@ -286,10 +302,7 @@ export {
 
 /** Event emitted from the streaming event queue. */
 export type { StreamEvent } from "@/runtime/index.ts";
-export type {
-  LLMConfig,
-  LLMRuntimeConfig,
-} from "@/runtime/llm/index.ts";
+export type { LLMConfig, LLMRuntimeConfig } from "@/runtime/llm/index.ts";
 
 import type { AssetConfig, AssetStore } from "@/runtime/storage/assets.ts";
 import {
@@ -316,8 +329,15 @@ export type DbCrud = OminipgWithCrud<DbSchemas>["crud"];
 export { default as loadResources } from "@/runtime/loaders/resources.ts";
 
 /** Type for resources loaded from the file system. */
-export type { Resources, ResourceManifest, FeatureEntry } from "@/runtime/loaders/resources.ts";
-export type { AgentsFileConfig, AgentsFileInstructions } from "@/runtime/loaders/agents-file.ts";
+export type {
+  FeatureEntry,
+  ResourceManifest,
+  Resources,
+} from "@/runtime/loaders/resources.ts";
+export type {
+  AgentsFileConfig,
+  AgentsFileInstructions,
+} from "@/runtime/loaders/agents-file.ts";
 
 /**
  * Returns a simplified list of agents suitable for public API responses.
@@ -347,8 +367,17 @@ export type CopilotzEvent =
   | { type: "NEW_MESSAGE"; payload: MessagePayload }
   | { type: "TOOL_CALL"; payload: ToolCallEventPayload }
   | { type: "LLM_CALL"; payload: LlmCallEventPayload }
-  | { type: "TOOL_RESULT"; payload: import("@/types/index.ts").ToolResultEventPayload }
-  | { type: "LLM_RESULT"; payload: import("@/types/index.ts").LlmResultEventPayload }
+  | {
+    type: "TOOL_RESULT";
+    payload: import("@/types/index.ts").ToolResultEventPayload;
+  }
+  | {
+    type: "LLM_RESULT";
+    payload: import("@/types/index.ts").LlmResultEventPayload;
+  }
+  | { type: "RAG_INGEST"; payload: RagIngestPayload }
+  | { type: "ASSET_CREATED"; payload: AssetCreatedEventPayload }
+  | { type: "ASSET_ERROR"; payload: AssetErrorEventPayload }
   | { type: "TOKEN"; payload: TokenEventPayload };
 
 /** Alias for Agent type, used in configuration. */
@@ -395,7 +424,9 @@ function normalizeApi(api: APIConfig): API {
 function normalizeMcpServer(server: MCPServerConfig): MCPServer {
   return {
     ...server,
-    id: ("id" in server && server.id ? server.id : server.name) as MCPServer["id"],
+    id: ("id" in server && server.id ? server.id : server.name) as MCPServer[
+      "id"
+    ],
   };
 }
 
@@ -440,10 +471,7 @@ export interface CopilotzConfig {
    * Each feature has a name and a set of action handlers accessible via `/features/:name/:action`.
    */
   features?: FeatureEntry[];
-  /**
-   * Optional channel handlers for inbound messaging integrations.
-   * Each channel has a name and a handler function accessible via `/channels/:name`.
-   */
+  /** Optional channel adapters addressable via `/channels/:ingress(/to/:egress)`. */
   channels?: ChannelEntry[];
   /**
    * Load resources (agents, tools, APIs, processors) from a directory structure.
@@ -1057,23 +1085,16 @@ export async function createCopilotz(
   }
   const mergedFeatures = [...featuresByName.values()];
 
-  // 1e. Resolve channels (user/config first, bundled last — first wins on name)
-  const resolvedChannels = [
-    ...(userResources?.channels ?? []),
-    ...(config.channels ?? []),
-    ...(bundledResources.channels ?? []),
-  ];
-  const channelsByName = new Map<string, (typeof resolvedChannels)[0]>();
-  for (const c of resolvedChannels) {
-    if (!channelsByName.has(c.name)) {
-      channelsByName.set(c.name, c);
-    }
-  }
-  const mergedChannels = [...channelsByName.values()];
+  // 1e. Resolve channels (user/config first, bundled last — first wins per side)
+  const mergedChannels = mergeChannelEntries(
+    userResources?.channels,
+    config.channels,
+    bundledResources.channels,
+  );
 
   logInit("mergeResources", startedAt);
 
-  // 1e. Resolve skills (bundled + project + explicit)
+  // 1g. Resolve skills (bundled + project + explicit)
   const bundledSkills = bundledResources.skills ?? [];
   const projectSkills = userResources?.skills ?? [];
 
@@ -1126,11 +1147,19 @@ export async function createCopilotz(
     const filter = config.filterResources;
     const asFilterable = (r: unknown) =>
       r as { id?: string; name?: string; [key: string]: unknown };
-    resolvedAgents = resolvedAgents.filter((r) => filter(asFilterable(r), "agent"));
-    resolvedTools = resolvedTools.filter((r) => filter(asFilterable(r), "tool"));
+    resolvedAgents = resolvedAgents.filter((r) =>
+      filter(asFilterable(r), "agent")
+    );
+    resolvedTools = resolvedTools.filter((r) =>
+      filter(asFilterable(r), "tool")
+    );
     resolvedApis = resolvedApis.filter((r) => filter(asFilterable(r), "api"));
-    resolvedMcpServers = resolvedMcpServers.filter((r) => filter(asFilterable(r), "mcpServer"));
-    resolvedProcessors = resolvedProcessors.filter((r) => filter(asFilterable(r), "processor"));
+    resolvedMcpServers = resolvedMcpServers.filter((r) =>
+      filter(asFilterable(r), "mcpServer")
+    );
+    resolvedProcessors = resolvedProcessors.filter((r) =>
+      filter(asFilterable(r), "processor")
+    );
     allSkills = allSkills.filter((r) => filter(asFilterable(r), "skill"));
     logInit("filterResources", startedAt);
   }
@@ -1432,12 +1461,11 @@ export async function createCopilotz(
           banner?: string | null;
           quitCommand?: string;
           threadExternalId?: string;
-      })
-      | string,
+        })
+        | string,
     ) =>
       startInteractiveCli({
-        performRun: (message, runOptions) =>
-          performRun(message, runOptions),
+        performRun: (message, runOptions) => performRun(message, runOptions),
         initialMessage,
         agents: baseConfig.agents.map((agent) => ({
           id: typeof agent.id === "string" ? agent.id : undefined,

@@ -1,8 +1,12 @@
 # Server Helpers
 
-Framework-independent handler factories for building APIs on top of Copilotz. Import from `copilotz/server`.
+Framework-independent handler factories for building APIs on top of Copilotz.
+Import from `copilotz/server`.
 
-These helpers wrap `copilotz.ops` and `copilotz.collections` into domain-specific objects that return plain data — no framework types, no request/response objects. Wire them to any web framework (Oxian, Hono, Express, Fastify, etc.).
+These helpers wrap `copilotz.ops` and `copilotz.collections` into
+domain-specific objects that return plain data — no framework types, no
+request/response objects. Wire them to any web framework (Oxian, Hono, Express,
+Fastify, etc.).
 
 ## Setup
 
@@ -10,24 +14,58 @@ These helpers wrap `copilotz.ops` and `copilotz.collections` into domain-specifi
 import { createCopilotz } from "copilotz";
 import { withApp } from "copilotz/server";
 
-const copilotz = withApp(await createCopilotz({
-  resources: { path: "./resources" },
-  dbConfig: { url: Deno.env.get("DATABASE_URL") },
-}));
+const copilotz = withApp(
+  await createCopilotz({
+    resources: { path: "./resources" },
+    dbConfig: { url: Deno.env.get("DATABASE_URL") },
+  }),
+);
 
 // All handlers are available via copilotz.app
-copilotz.app.threads    // ThreadHandlers
-copilotz.app.messages   // MessageHandlers
-copilotz.app.events     // EventHandlers
-copilotz.app.assets     // AssetHandlers
-copilotz.app.collections // CollectionHandlers
-copilotz.app.graph      // GraphHandlers
-copilotz.app.participants // ParticipantHandlers
-copilotz.app.agents     // AgentHandlers
-copilotz.app.channels   // ChannelHandlers
+copilotz.app.threads; // ThreadHandlers
+copilotz.app.messages; // MessageHandlers
+copilotz.app.events; // EventHandlers
+copilotz.app.assets; // AssetHandlers
+copilotz.app.collections; // CollectionHandlers
+copilotz.app.graph; // GraphHandlers
+copilotz.app.participants; // ParticipantHandlers
+copilotz.app.agents; // AgentHandlers
+copilotz.app.channels; // ChannelHandlers
+
+// Access individual adapters by channel name
+copilotz.app.channels.list(); // ChannelEntry[]
+copilotz.app.channels.getIngress("whatsapp"); // IngressAdapter | undefined
+copilotz.app.channels.getEgress("zendesk"); // EgressAdapter | undefined
 
 // Or use the universal dispatcher
-await copilotz.app.handle({ resource: "threads", method: "GET", path: [], query: { participantId: "p-1" } });
+await copilotz.app.handle({
+  resource: "threads",
+  method: "GET",
+  path: [],
+  query: { participantId: "p-1" },
+});
+```
+
+Channel transport routes are dispatched through the same `handle()` interface.
+The ingress and egress sides are addressed independently, so you can mix
+channels freely:
+
+```typescript
+// Same channel for both sides
+await copilotz.app.handle({
+  resource: "channels",
+  method: "POST",
+  path: ["web"],
+  body: { content: "Hello", sender: { type: "user" } },
+});
+
+// Cross-channel: receive via WhatsApp, reply via Zendesk
+await copilotz.app.handle({
+  resource: "channels",
+  method: "POST",
+  path: ["whatsapp", "to", "zendesk"],
+  body: { /* WhatsApp webhook payload */ },
+});
 ```
 
 ## Handler Families
@@ -125,7 +163,9 @@ const assets = createAssetHandlers(copilotz);
 const { base64, mime } = await assets.getBase64("asset-id");
 
 // Get as data URL (for embedding in HTML/LLM)
-const { dataUrl, mime: mimeType } = await assets.getDataUrl("asset://ns/asset-id");
+const { dataUrl, mime: mimeType } = await assets.getDataUrl(
+  "asset://ns/asset-id",
+);
 
 // Parse an asset:// reference
 const parsed = assets.parseRef("asset://namespace/id");
@@ -153,37 +193,68 @@ const items = await collections.list("customer", {
 // Via the API dispatcher (query params)
 // GET /collections/customer?filter={"plan":"enterprise"}&sort=name:asc,createdAt:desc&limit=10
 await copilotz.app.handle({
-  resource: "collections", method: "GET", path: ["customer"],
-  query: { filter: '{"plan":"enterprise"}', sort: "name:asc,createdAt:desc", limit: "10" },
+  resource: "collections",
+  method: "GET",
+  path: ["customer"],
+  query: {
+    filter: '{"plan":"enterprise"}',
+    sort: "name:asc,createdAt:desc",
+    limit: "10",
+  },
 });
 
 const item = await collections.getById("customer", "cust-123");
-const created = await collections.create("customer", { name: "Acme", plan: "enterprise" });
-const updated = await collections.update("customer", "cust-123", { plan: "pro" });
+const created = await collections.create("customer", {
+  name: "Acme",
+  plan: "enterprise",
+});
+const updated = await collections.update("customer", "cust-123", {
+  plan: "pro",
+});
 await collections.delete("customer", "cust-123");
 
 // Semantic search
-const results = await collections.search("customer", "enterprise plan", { limit: 5 });
+const results = await collections.search("customer", "enterprise plan", {
+  limit: 5,
+});
 ```
 
 ### Admin (Feature)
 
-Admin is shipped as a built-in **feature** (`resources/features/admin/`), so it is
-accessible via the dispatcher at `/features/admin/<action>`:
+Admin is shipped as a built-in **feature** (`resources/features/admin/`), so it
+is accessible via the dispatcher at `/features/admin/<action>`:
 
 ```typescript
-await copilotz.app.handle({ resource: "features", method: "GET", path: ["admin", "overview"], query: { namespace: "tenant-acme" } });
-await copilotz.app.handle({ resource: "features", method: "GET", path: ["admin", "activity"], query: { interval: "day" } });
-await copilotz.app.handle({ resource: "features", method: "GET", path: ["admin", "agents"], query: { search: "support" } });
+await copilotz.app.handle({
+  resource: "features",
+  method: "GET",
+  path: ["admin", "overview"],
+  query: { namespace: "tenant-acme" },
+});
+await copilotz.app.handle({
+  resource: "features",
+  method: "GET",
+  path: ["admin", "activity"],
+  query: { interval: "day" },
+});
+await copilotz.app.handle({
+  resource: "features",
+  method: "GET",
+  path: ["admin", "agents"],
+  query: { search: "support" },
+});
 ```
 
-Admin overview, activity buckets, and agent summaries include aggregated LLM usage totals:
+Admin overview, activity buckets, and agent summaries include aggregated LLM
+usage totals:
 
 - token totals: input, output, reasoning, cache-read, cache-write, total
 - cost totals: input, output, reasoning, cache-read, cache-write, total
-- call totals: `totalCalls` on overview/activity, `llmCallCount` on agent summaries
+- call totals: `totalCalls` on overview/activity, `llmCallCount` on agent
+  summaries
 
-These values are aggregated from persisted `llm_usage` nodes and only include cost for calls where Copilotz had provider-native usage data.
+These values are aggregated from persisted `llm_usage` nodes and only include
+cost for calls where Copilotz had provider-native usage data.
 
 ## Response Contract
 
@@ -192,13 +263,13 @@ These values are aggregated from persisted `llm_usage` nodes and only include co
 ```typescript
 interface AppResponse {
   status: number;
-  data?: unknown;                 // primary payload
+  data?: unknown; // primary payload
   pageInfo?: MessageHistoryPageInfo; // set only by paginated endpoints
 }
 ```
 
-HTTP adapters (see the examples below) must serialize this as a uniform
-envelope so frontends always read the body the same way:
+HTTP adapters (see the examples below) must serialize this as a uniform envelope
+so frontends always read the body the same way:
 
 ```json
 { "data": <payload>, "pageInfo"?: { ... } }
@@ -212,13 +283,17 @@ returns just `{ "data": <payload> }`.
 
 ### Oxian (file-based routing)
 
-The `copilotz-starter` template uses a single catch-all route that delegates to `copilotz.app.handle()`:
+The `copilotz-starter` template uses a single catch-all route that delegates to
+`copilotz.app.handle()`:
 
 ```typescript
 // api/v1/[...path].ts — handles all /v1/* requests
 import type { Dependencies } from "@/api/dependencies.ts";
 
-const handler = async (data: { path?: string[] }, context: { dependencies: Dependencies; request: Request }) => {
+const handler = async (
+  data: { path?: string[] },
+  context: { dependencies: Dependencies; request: Request },
+) => {
   const { copilotz } = context.dependencies;
   const [resource, ...path] = data.path ?? [];
   const url = new URL(context.request.url);
@@ -254,7 +329,7 @@ export const DELETE = handler;
 import { createCopilotz } from "copilotz";
 import { withApp } from "copilotz/server";
 
-const copilotz = withApp(await createCopilotz({ /* ... */ }));
+const copilotz = withApp(await createCopilotz({/* ... */}));
 
 Deno.serve(async (req) => {
   const url = new URL(req.url);
@@ -284,7 +359,10 @@ Deno.serve(async (req) => {
 For fine-grained control, individual factories are still exported:
 
 ```typescript
-import { createThreadHandlers, createCollectionHandlers } from "copilotz/server";
+import {
+  createCollectionHandlers,
+  createThreadHandlers,
+} from "copilotz/server";
 
 const threads = createThreadHandlers(copilotz);
 const collections = createCollectionHandlers(copilotz);

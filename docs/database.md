@@ -242,20 +242,17 @@ const lastMessage = await copilotz.ops.getLastMessageNode(threadId);
 
 ### User Operations
 
-Users are stored in the knowledge graph as nodes with namespace scoping:
+Participants are stored in the knowledge graph as nodes with namespace scoping:
 
 ```typescript
-// Upsert a user node
-await copilotz.ops.upsertUserNode("external-id", "tenant:acme", {
+// Upsert a human participant node
+await copilotz.ops.upsertParticipantNode("external-id", "human", "tenant:acme", {
   name: "Alex",
   email: "alex@acme.com",
 });
 
-// Get a user node (checks namespace, falls back to global)
-const user = await copilotz.ops.getUserNode("external-id", "tenant:acme");
-
-// Get all user nodes for an external ID
-const allUsers = await copilotz.ops.getUserNodesByExternalId("external-id");
+// Get a participant node (checks namespace, falls back to global)
+const participant = await copilotz.ops.getParticipantNode("external-id", "tenant:acme");
 ```
 
 ### Queue Operations

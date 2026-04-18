@@ -11,6 +11,7 @@ import type {
   MessageHistoryPage,
   MessageHistoryPageOptions,
 } from "@/database/operations/index.ts";
+import { createMessageService } from "@/runtime/collections/native.ts";
 
 /** Handlers returned by {@link createMessageHandlers}. */
 export interface MessageHandlers {
@@ -35,17 +36,20 @@ export interface MessageHandlers {
 }
 
 export function createMessageHandlers(copilotz: Copilotz): MessageHandlers {
-  const { ops } = copilotz;
+  const service = createMessageService({
+    collections: copilotz.collections,
+    ops: copilotz.ops,
+  });
 
   return {
     listForThread: (threadId, options) =>
-      ops.getMessagesForThread(threadId, options),
+      service.listForThread(threadId, options),
     getHistory: (threadId, userId, limit) =>
-      ops.getMessageHistory(threadId, userId, limit),
+      service.getHistory(threadId, userId, limit),
     listFromGraph: (threadId, limit) =>
-      ops.getMessageHistoryFromGraph(threadId, limit),
+      service.listHistory(threadId, limit),
     listPageFromGraph: (threadId, options) =>
-      ops.getMessageHistoryPageFromGraph(threadId, options),
-    deleteForThread: (threadId) => ops.deleteMessagesForThread(threadId),
+      service.listHistoryPage(threadId, options),
+    deleteForThread: (threadId) => service.deleteForThread(threadId),
   };
 }

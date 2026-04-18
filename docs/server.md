@@ -28,9 +28,11 @@ copilotz.app.events; // EventHandlers
 copilotz.app.assets; // AssetHandlers
 copilotz.app.collections; // CollectionHandlers
 copilotz.app.graph; // GraphHandlers
-copilotz.app.participants; // ParticipantHandlers
 copilotz.app.agents; // AgentHandlers
 copilotz.app.channels; // ChannelHandlers
+
+// Participants are exposed as the `participant` collection (`GET/PUT /collections/participant/...`).
+// For programmatic access without HTTP, import `createParticipantHandlers` from `copilotz/server`.
 
 // Access individual adapters by channel name
 copilotz.app.channels.list(); // ChannelEntry[]
@@ -264,9 +266,12 @@ cost for calls where Copilotz had provider-native usage data.
 interface AppResponse {
   status: number;
   data?: unknown; // primary payload
-  pageInfo?: MessageHistoryPageInfo; // set only by paginated endpoints
+  pageInfo?: MessageHistoryPageInfo | CollectionPageInfo;
 }
 ```
+
+`CollectionPageInfo` applies to cursor-paged collection list routes when the
+underlying collection uses `findPage` (see [Collections](./collections.md)).
 
 HTTP adapters (see the examples below) must serialize this as a uniform envelope
 so frontends always read the body the same way:
@@ -275,9 +280,11 @@ so frontends always read the body the same way:
 { "data": <payload>, "pageInfo"?: { ... } }
 ```
 
-Currently only `GET /threads/:id/messages` populates `pageInfo` (with
-`{ hasMoreBefore, oldestMessageId, newestMessageId }`). Every other route
-returns just `{ "data": <payload> }`.
+`GET /threads/:id/messages` populates `pageInfo` with
+`{ hasMoreBefore, oldestMessageId, newestMessageId }`. Cursor-based
+`GET /collections/:collection` responses (when `before` / `after` are used and
+the collection supports `findPage`) include collection pagination metadata.
+Other routes return only `{ "data": <payload> }`.
 
 ## Wiring to a Framework
 

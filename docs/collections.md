@@ -423,9 +423,9 @@ const thread = await copilotz.ops.findOrCreateThread(threadId, { metadata: {...}
 const history = await copilotz.ops.getMessageHistory(threadId, userId, 50);
 await copilotz.ops.archiveThread(threadId, "Resolved successfully");
 
-// User operations (graph-based)
-await copilotz.ops.upsertUserNode("external-123", "tenant:acme", { name: "Alex" });
-const user = await copilotz.ops.getUserNode("external-123", "tenant:acme");
+// Participant operations (graph-based)
+await copilotz.ops.upsertParticipantNode("external-123", "human", "tenant:acme", { name: "Alex" });
+const participant = await copilotz.ops.getParticipantNode("external-123", "tenant:acme");
 
 // Graph operations
 const nodes = await copilotz.ops.searchNodes({

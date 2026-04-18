@@ -74,6 +74,9 @@ export default {
     core: [
       "agents.copilotz",
       "channels.web",
+      "collections.participant",
+      "collections.message",
+      "collections.llm_usage",
       "tools.list_skills",
       "tools.load_skill",
       "tools.read_skill_resource",

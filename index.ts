@@ -1085,6 +1085,16 @@ export async function createCopilotz(
     ),
     { prioritize: "explicit" },
   );
+  let resolvedCollections = mergeResourceArrays<
+    CollectionDefinition
+  >(
+    (bundledResources.collections as CollectionDefinition[] | undefined) ?? [],
+    mergeResourceArrays<CollectionDefinition>(
+      (userResources?.collections as CollectionDefinition[] | undefined) ?? [],
+      config.collections,
+    ),
+    { prioritize: "explicit" },
+  );
   let resolvedProcessors = [
     // User/config processors first (higher priority), built-in last
     ...(userResources?.processors ?? []),
@@ -1225,6 +1235,9 @@ export async function createCopilotz(
     resolvedStorageAdapters = resolvedStorageAdapters.filter((r) =>
       filter(asFilterable(r), "storage")
     );
+    resolvedCollections = resolvedCollections.filter((r) =>
+      filter(asFilterable(r), "collection")
+    );
     logInit("filterResources", startedAt);
   }
 
@@ -1267,6 +1280,7 @@ export async function createCopilotz(
     tools: normalizedTools,
     apis: normalizedApis,
     mcpServers: normalizedMcpServers,
+    collections: resolvedCollections,
     skills: allSkills,
     features: mergedFeatures,
     channels: mergedChannels,
@@ -1386,7 +1400,7 @@ export async function createCopilotz(
   // Initialize collections if defined
   startedAt = performance.now();
   let collectionsManager: CollectionsManager | undefined = undefined;
-  if (config.collections && config.collections.length > 0) {
+  if (resolvedCollections.length > 0) {
     // Create embedding function for collections search
     const collectionEmbeddingFn = config.rag?.embedding
       ? async (text: string): Promise<number[]> => {
@@ -1405,7 +1419,7 @@ export async function createCopilotz(
     // Create collections manager
     collectionsManager = createCollectionsManager(
       baseDb,
-      config.collections,
+      resolvedCollections,
       {
         embeddingFn: collectionEmbeddingFn,
         autoIndex: config.collectionsConfig?.autoIndex ?? true,
@@ -1415,7 +1429,7 @@ export async function createCopilotz(
 
     // Auto-create indexes if enabled
     if (config.collectionsConfig?.autoIndex !== false) {
-      createCollectionIndexes(baseDb, config.collections).catch(
+      createCollectionIndexes(baseDb, resolvedCollections).catch(
         (error: unknown) => {
           console.warn("[collections] Failed to create indexes:", error);
         },
@@ -1423,7 +1437,7 @@ export async function createCopilotz(
     }
   }
   logInit("initializeCollections", startedAt, {
-    collections: config.collections?.length ?? 0,
+    collections: resolvedCollections.length,
     hasManager: Boolean(collectionsManager),
   });
 

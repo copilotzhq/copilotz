@@ -261,7 +261,7 @@ const last = await copilotz.ops.getLastMessageNode(threadId);
 await copilotz.ops.createMessage(messageInput, namespace);
 ```
 
-Participants (humans and agents) are represented as graph nodes; use `upsertParticipantNode` / `getParticipantNode` (or legacy `upsertUserNode` / `getUserNode` where still exposed).
+Participants (humans and agents) are represented as graph nodes; use `upsertParticipantNode` / `getParticipantNode`.
 
 ---
 

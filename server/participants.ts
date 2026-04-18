@@ -8,6 +8,7 @@
  */
 
 import type { Copilotz } from "@/index.ts";
+import { createParticipantService } from "@/runtime/collections/native.ts";
 
 export type ParticipantData = Record<string, unknown>;
 
@@ -52,12 +53,6 @@ function deepMergeReplaceArrays(
   return result;
 }
 
-function getParticipantMetadata(
-  node: Awaited<ReturnType<Copilotz["ops"]["getParticipantNode"]>>,
-) {
-  return ((node?.data?.metadata ?? node?.data) ?? {}) as ParticipantData;
-}
-
 export interface ParticipantHandlers {
   get: (
     externalId: string,
@@ -73,22 +68,25 @@ export interface ParticipantHandlers {
 export function createParticipantHandlers(
   copilotz: Copilotz,
 ): ParticipantHandlers {
-  const { ops } = copilotz;
+  const service = createParticipantService({
+    collections: copilotz.collections,
+    ops: copilotz.ops,
+  });
 
   return {
     get: async (externalId, options = {}) => {
-      const participantNode = await ops.getParticipantNode(
+      const participant = await service.get(
         externalId,
         options.namespace ?? null,
       );
-      if (!participantNode) return null;
-      return getParticipantMetadata(participantNode);
+      if (!participant) return null;
+      return participant as ParticipantData;
     },
 
     update: async (externalId, updates, options = {}) => {
       const namespace = options.namespace ?? null;
-      const current = await ops.getParticipantNode(externalId, namespace);
-      const currentMetadata = getParticipantMetadata(current);
+      const current = await service.get(externalId, namespace);
+      const currentMetadata = (current?.metadata ?? {}) as ParticipantData;
       const next = deepMergeReplaceArrays(currentMetadata, updates);
 
       for (const key of options.replaceKeys ?? []) {
@@ -99,21 +97,19 @@ export function createParticipantHandlers(
 
       next.updatedAt = new Date().toISOString();
 
-      await ops.upsertParticipantNode(
+      const participant = await service.upsert(
         externalId,
         options.participantType ?? "human",
         namespace,
         {
           ...(options.name !== undefined ? { name: options.name } : {}),
           ...(options.email !== undefined ? { email: options.email } : {}),
-          ...(options.agentId !== undefined
-            ? { agentId: options.agentId }
-            : {}),
+          ...(options.agentId !== undefined ? { agentId: options.agentId } : {}),
           metadata: next,
         },
       );
 
-      return next;
+      return participant as ParticipantData;
     },
   };
 }

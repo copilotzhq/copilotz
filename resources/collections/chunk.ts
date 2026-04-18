@@ -12,6 +12,11 @@ export default defineCollection({
       documentId: { type: "string" },
       chunkIndex: { type: "number" },
       content: { type: ["string", "null"] },
+      tokenCount: { type: ["number", "null"] },
+      embedding: { type: ["array", "null"] },
+      startPosition: { type: ["number", "null"] },
+      endPosition: { type: ["number", "null"] },
+      metadata: { type: ["object", "null"] },
     },
     required: ["documentId"],
   } as const,
@@ -22,5 +27,9 @@ export default defineCollection({
   ],
   relations: {
     nextChunk: relation.hasOne("chunk", "chunkIndex", "NEXT_CHUNK"),
+  },
+  search: {
+    enabled: true,
+    fields: ["content"],
   },
 });

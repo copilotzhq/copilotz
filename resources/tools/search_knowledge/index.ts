@@ -1,5 +1,5 @@
 import type { ToolExecutionContext } from "@/resources/processors/tool_call/index.ts";
-import { embed } from "@/runtime/embeddings/index.ts";
+import { createRagDataServices } from "@/runtime/collections/native.ts";
 
 interface SearchKnowledgeParams {
   query: string;
@@ -49,6 +49,10 @@ export default {
     if (!ops) {
       throw new Error("Database operations not available in context");
     }
+    const ragData = createRagDataServices({
+      collections: context?.collections,
+      ops,
+    });
 
     const embeddingConfig = context?.embeddingConfig;
     if (!embeddingConfig) {
@@ -63,20 +67,8 @@ export default {
       searchNamespaces = agentRagOptions?.namespaces ?? ["default"];
     }
 
-    const embeddingResponse = await embed(
-      [query],
-      embeddingConfig,
-      {},
-      context?.embeddingProviders,
-    );
-    if (!embeddingResponse.embeddings.length) {
-      throw new Error("Failed to generate embedding for query");
-    }
-
-    const queryEmbedding = embeddingResponse.embeddings[0];
-
-    const results = await ops.searchChunks({
-      embedding: queryEmbedding,
+    const results = await ragData.searchChunks({
+      query,
       namespaces: searchNamespaces,
       limit,
       threshold,

@@ -33,10 +33,14 @@
  */
 
 import type { JsonSchema } from "omnipg";
+import type { FromSchema } from "json-schema-to-ts";
 import type {
   CollectionDefinition,
   CollectionInput,
   CollectionCrud,
+  CollectionMethodContext,
+  CollectionMethodFactory,
+  CollectionMethodMap,
   ScopedCollectionCrud,
   CollectionsMap,
   ScopedCollectionsMap,
@@ -58,6 +62,9 @@ export type {
   CollectionDefinition,
   CollectionInput,
   CollectionCrud,
+  CollectionMethodContext,
+  CollectionMethodFactory,
+  CollectionMethodMap,
   ScopedCollectionCrud,
   CollectionsMap,
   ScopedCollectionsMap,
@@ -135,9 +142,17 @@ export { createCollectionsManager, createScopedCollections } from "./manager.ts"
  * type Customer = typeof customers.$inferSelect;
  * ```
  */
-export function defineCollection<S extends JsonSchema>(
+export function defineCollection<
+  S extends JsonSchema,
+>(
   config: CollectionInput<S>,
-): CollectionDefinition<S> {
+): CollectionDefinition<
+  S,
+  S extends JsonSchema ? FromSchema<S> : Record<string, unknown>,
+  S extends JsonSchema
+    ? Omit<FromSchema<S>, "id" | "createdAt" | "updatedAt"> & { id?: string }
+    : Record<string, unknown>
+> {
   // Validate required fields
   if (!config.name || typeof config.name !== "string") {
     throw new Error("Collection name is required");
@@ -161,7 +176,13 @@ export function defineCollection<S extends JsonSchema>(
 
   // The $inferSelect and $inferInsert are phantom types for TypeScript
   // They don't exist at runtime
-  return normalized as unknown as CollectionDefinition<S>;
+  return normalized as unknown as CollectionDefinition<
+    S,
+    S extends JsonSchema ? FromSchema<S> : Record<string, unknown>,
+    S extends JsonSchema
+      ? Omit<FromSchema<S>, "id" | "createdAt" | "updatedAt"> & { id?: string }
+      : Record<string, unknown>
+  >;
 }
 
 /**
@@ -245,4 +266,3 @@ export const index = {
     where,
   }),
 };
-

@@ -277,45 +277,13 @@ export interface DatabaseOperations {
     namespace?: string | null,
   ) => Promise<KnowledgeNode | undefined>;
 
-  // ============================================
-  // USER AS NODE OPERATIONS (Legacy - use Participant ops)
-  // ============================================
-
   /**
-   * @deprecated Use upsertParticipantNode(externalId, "human", ...) instead
-   * Find or create a user node in the graph.
-   * - Global users: namespace = null (can access all namespaces)
-   * - Scoped users: namespace = "tenantA" (only access specific namespace)
-   *
-   * @param externalId - External user identifier (from auth system)
-   * @param namespace - Namespace scope (null for global users)
-   * @param userData - User data to create/update
+   * Compatibility helper for one-off migrations from legacy graph-backed user
+   * nodes into the participant collection. Does not read the collection layer.
    */
-  upsertUserNode: (
-    externalId: string,
-    namespace: string | null,
-    userData: {
-      name?: string | null;
-      email?: string | null;
-      metadata?: Record<string, unknown> | null;
-    },
-  ) => Promise<KnowledgeNode>;
-
-  /**
-   * @deprecated Use getParticipantNode() instead
-   * Get a user node by external ID and namespace.
-   * Also checks for global users (namespace = null) as fallback.
-   */
-  getUserNode: (
-    externalId: string,
-    namespace?: string | null,
-  ) => Promise<KnowledgeNode | undefined>;
-
-  /**
-   * Get all user nodes for an external ID (across namespaces).
-   * Useful for users with access to multiple namespaces.
-   */
-  getUserNodesByExternalId: (externalId: string) => Promise<KnowledgeNode[]>;
+  listLegacyParticipantGraphNodes: (
+    options?: { namespace?: string; limit?: number },
+  ) => Promise<KnowledgeNode[]>;
 
   // RAG operations (legacy - use graph operations for new code)
   createDocument: (
@@ -1055,14 +1023,13 @@ export function createOperations(
       });
     }
 
-    // Create SENT_BY edge from user node to message (if sender is a user with externalId)
+    // Create SENT_BY edge from participant node to message (if sender is a user with externalId)
     if (senderType === "user" && senderId) {
       try {
-        // Try to find the user node using the run's namespace (falls back to global)
-        const userNode = await getUserNode(senderId, namespace);
-        if (userNode) {
+        const participantNode = await getParticipantNode(senderId, namespace);
+        if (participantNode) {
           await createEdge({
-            sourceNodeId: userNode.id as string,
+            sourceNodeId: participantNode.id as string,
             targetNodeId: messageNode.id as string,
             type: "SENT_BY",
           });
@@ -1510,41 +1477,26 @@ export function createOperations(
     return undefined;
   };
 
-  // ============================================
-  // USER AS NODE OPERATIONS (Legacy - delegates to participant ops)
-  // ============================================
-
-  /** @deprecated Use upsertParticipantNode(externalId, "human", ...) instead */
-  const upsertUserNode = async (
-    externalId: string,
-    namespace: string | null,
-    userData: {
-      name?: string | null;
-      email?: string | null;
-      metadata?: Record<string, unknown> | null;
-    },
-  ): Promise<KnowledgeNode> => {
-    // Delegate to new method with participantType: "human"
-    return upsertParticipantNode(externalId, "human", namespace, userData);
-  };
-
-  /** @deprecated Use getParticipantNode() instead */
-  const getUserNode = async (
-    externalId: string,
-    namespace?: string | null,
-  ): Promise<KnowledgeNode | undefined> => {
-    return getParticipantNode(externalId, namespace);
-  };
-
-  const getUserNodesByExternalId = async (
-    externalId: string,
+  const listLegacyParticipantGraphNodes = async (
+    options?: { namespace?: string; limit?: number },
   ): Promise<KnowledgeNode[]> => {
+    const cap = Math.min(Math.max(options?.limit ?? 50_000, 1), 100_000);
+    if (options?.namespace) {
+      const result = await db.query<KnowledgeNode>(
+        `SELECT * FROM "nodes"
+         WHERE "type" = 'user' AND "namespace" = $1
+         ORDER BY "created_at" ASC
+         LIMIT $2`,
+        [options.namespace, cap],
+      );
+      return result.rows.map(mapNodeRow);
+    }
     const result = await db.query<KnowledgeNode>(
-      `SELECT * FROM "nodes" 
-       WHERE "type" = 'user' 
-       AND "data"->>'externalId' = $1
-       ORDER BY "created_at" ASC`,
-      [externalId],
+      `SELECT * FROM "nodes"
+       WHERE "type" = 'user'
+       ORDER BY "namespace", "created_at" ASC
+       LIMIT $1`,
+      [cap],
     );
     return result.rows.map(mapNodeRow);
   };
@@ -2164,10 +2116,7 @@ export function createOperations(
     // Participant node operations (unified users & agents)
     upsertParticipantNode,
     getParticipantNode,
-    // User as node operations (legacy - delegates to participant ops)
-    upsertUserNode,
-    getUserNode,
-    getUserNodesByExternalId,
+    listLegacyParticipantGraphNodes,
     // Message as node operations
     createMessageNode,
     getMessageHistoryFromGraph,

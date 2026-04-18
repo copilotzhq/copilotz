@@ -9,6 +9,7 @@
  */
 
 import type {
+  ChatContext,
   Event,
   EventProcessor,
   NewEvent,

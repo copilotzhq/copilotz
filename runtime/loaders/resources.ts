@@ -7,7 +7,13 @@
  * @module
  */
 
-import type { AgentConfig, APIConfig, MCPServer, ToolConfig } from "@/index.ts";
+import type {
+  AgentConfig,
+  APIConfig,
+  CollectionDefinition,
+  MCPServer,
+  ToolConfig,
+} from "@/index.ts";
 import type { ProviderFactory } from "@/runtime/llm/types.ts";
 import type { EmbeddingProviderFactory } from "@/runtime/embeddings/types.ts";
 import {
@@ -115,6 +121,8 @@ export type Resources = {
   embeddings?: LoadedEmbeddingProvider[];
   /** Array of loaded storage adapters. */
   storage?: LoadedStorageAdapter[];
+  /** Array of loaded collection definitions. */
+  collections?: CollectionDefinition[];
   /** Extensible: marketplace packages can contribute arbitrary resource types. */
   [key: string]: unknown;
 };
@@ -132,6 +140,7 @@ const KNOWN_RESOURCE_TYPES = [
   "llm",
   "embeddings",
   "storage",
+  "collections",
 ] as const;
 
 type ResourceImportSelection = {
@@ -1415,6 +1424,7 @@ function mergeResources(target: Resources, source: Resources): void {
   target.llm = mergeNamedResources(target.llm, source.llm);
   target.embeddings = mergeNamedResources(target.embeddings, source.embeddings);
   target.storage = mergeNamedResources(target.storage, source.storage);
+  target.collections = mergeNamedResources(target.collections, source.collections);
   if (source.features?.length) {
     const existing = target.features ?? [];
     const existingNames = new Set(existing.map((f) => f.name));

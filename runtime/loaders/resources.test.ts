@@ -229,3 +229,44 @@ Deno.test("loadResources accepts index.ts tool modules as a fallback format", as
     await Deno.remove(tempDir, { recursive: true });
   }
 });
+
+Deno.test("loadResources merges collections across multiple resource paths", async () => {
+  const firstDir = await Deno.makeTempDir();
+  const secondDir = await Deno.makeTempDir();
+
+  try {
+    await writeFixtureFile(
+      `${firstDir}/collections/userProfile.ts`,
+      `export default {
+        name: "userProfile",
+        schema: { type: "object", properties: { id: { type: "string" } } },
+        keys: [{ property: "id" }],
+      };`,
+    );
+    await writeFixtureFile(
+      `${secondDir}/tools/extra/config.ts`,
+      `export default {
+        key: "extra",
+        name: "extra",
+        description: "extra",
+        inputSchema: { type: "object", properties: {} },
+      };`,
+    );
+    await writeFixtureFile(
+      `${secondDir}/tools/extra/execute.ts`,
+      `export default async () => "ok";`,
+    );
+
+    const resources = await loadResources({
+      path: [firstDir, secondDir],
+    });
+
+    assertEquals(resources.collections?.map((collection) => collection.name), [
+      "userProfile",
+    ]);
+    assertEquals(resources.tools?.map((tool) => tool.key), ["extra"]);
+  } finally {
+    await Deno.remove(firstDir, { recursive: true });
+    await Deno.remove(secondDir, { recursive: true });
+  }
+});

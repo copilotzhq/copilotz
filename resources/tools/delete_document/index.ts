@@ -1,4 +1,5 @@
 import type { ToolExecutionContext } from "@/resources/processors/tool_call/index.ts";
+import { createRagDataServices } from "@/runtime/collections/native.ts";
 
 interface DeleteDocumentParams {
   documentId?: string;
@@ -43,6 +44,10 @@ export default {
     if (!ops) {
       throw new Error("Database operations not available in context");
     }
+    const ragData = createRagDataServices({
+      collections: context?.collections,
+      ops,
+    });
 
     if (!documentId && !sourceUri) {
       throw new Error("Either documentId or sourceUri must be provided");
@@ -51,20 +56,15 @@ export default {
     let docToDelete: DocumentRecord | undefined;
 
     if (documentId) {
-      docToDelete = await ops.getDocumentById(documentId) as DocumentRecord | undefined;
+      docToDelete = await ragData.getDocumentById(documentId, namespace) as DocumentRecord | undefined;
     } else if (sourceUri) {
-      const nodes = await ops.getNodesByNamespace(namespace);
-      const match = nodes.find((n: { type: string; data?: Record<string, unknown> | null }) =>
+      const docs = await ops.getNodesByNamespace(namespace);
+      const match = docs.find((n: { type: string; data?: Record<string, unknown> | null }) =>
         n.type === "document" &&
         (n.data as Record<string, unknown> | null)?.sourceUri === sourceUri
       );
       if (match) {
-        docToDelete = {
-          id: match.id as string,
-          title: (match.data as Record<string, unknown> | null)?.title as string | null,
-          sourceUri: sourceUri,
-          namespace: match.namespace,
-        };
+        docToDelete = await ragData.getDocumentById(match.id as string, namespace) as DocumentRecord | undefined;
       }
     }
 
@@ -81,7 +81,7 @@ export default {
     const docTitle = docToDelete.title || docToDelete.sourceUri || docId;
     const docNamespace = docToDelete.namespace;
 
-    await ops.deleteDocument(docId);
+    await ragData.deleteDocument(docId, docNamespace);
 
     return {
       success: true,

@@ -8,7 +8,7 @@
 
 import type { Agent, AgentRagOptions, EmbeddingConfig } from "@/types/index.ts";
 import type { DatabaseOperations } from "@/database/operations/index.ts";
-import { embed } from "@/runtime/embeddings/index.ts";
+import { createRagDataServices } from "@/runtime/collections/native.ts";
 
 export interface RagContextResult {
     context: string;
@@ -26,6 +26,7 @@ export interface RagContextOptions {
     agent: Agent;
     query: string;
     ops: DatabaseOperations;
+    collections?: import("@/types/index.ts").ChatContext["collections"];
     embeddingConfig?: EmbeddingConfig;
     embeddingProviders?: import("@/types/index.ts").ChatContext["embeddingProviders"];
     threadId?: string;
@@ -94,6 +95,7 @@ export async function generateRagContext(
         agent,
         query,
         ops,
+        collections,
         embeddingConfig,
         embeddingProviders,
         threadId,
@@ -117,31 +119,14 @@ export async function generateRagContext(
     const limit = ragOptions.autoInjectLimit ?? 5;
 
     try {
-        // Generate embedding for the query
-        const embeddingResult = await embed(
-            [query],
-            embeddingConfig,
-            {},
-            embeddingProviders,
-        );
-
-        if (!embeddingResult.embeddings || embeddingResult.embeddings.length === 0) {
-            console.warn(`[rag-context] Failed to generate embedding for query`);
-            return { context: "", chunks: [], tokenEstimate: 0 };
-        }
-
-        const queryEmbedding = embeddingResult.embeddings[0];
-        if (!queryEmbedding) {
-            return { context: "", chunks: [], tokenEstimate: 0 };
-        }
-
+        const ragData = createRagDataServices({ collections, ops });
         // Search for relevant chunks across all namespaces
         const allResults: RagContextResult["chunks"] = [];
 
         for (const namespace of namespaces) {
-            const results = await ops.searchChunks({
+            const results = await ragData.searchChunks({
                 namespaces: [namespace],
-                embedding: queryEmbedding,
+                query,
                 limit,
                 threshold: 0.5, // Configurable threshold
             });

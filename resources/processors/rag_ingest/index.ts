@@ -19,6 +19,7 @@ import type { RagIngestPayload } from "@/database/schemas/index.ts";
 import { fetchDocument, preprocessContent } from "@/utils/document-fetcher.ts";
 import { chunkText, hashContentSHA256 } from "@/utils/chunker.ts";
 import { embed } from "@/runtime/embeddings/index.ts";
+import { createRagDataServices } from "@/runtime/collections/native.ts";
 
 export type { RagIngestPayload };
 
@@ -46,6 +47,10 @@ export const ragIngestProcessor: EventProcessor<RagIngestPayload, ProcessorDeps>
   process: async (event: Event, deps: ProcessorDeps) => {
     const { db, thread, context } = deps;
     const ops = db.ops;
+    const ragData = createRagDataServices({
+      collections: context.collections,
+      ops,
+    });
     const payload = (event as unknown as { payload: RagIngestPayload }).payload;
 
     const eventThreadId = (event as unknown as { threadId?: string }).threadId;
@@ -86,7 +91,7 @@ export const ragIngestProcessor: EventProcessor<RagIngestPayload, ProcessorDeps>
 
       // Check for existing document with same hash
       if (!forceReindex) {
-        const existing = await ops.getDocumentByHash(contentHash, namespace) as DocumentRecord | undefined;
+        const existing = await ragData.getDocumentByHash(contentHash, namespace) as DocumentRecord | undefined;
         if (existing && existing.status === "indexed") {
           return createSuccessResponse(threadId, event, "RAG",
             `Document "${title}" already indexed (hash: ${contentHash.slice(0, 8)}...).`,
@@ -95,12 +100,12 @@ export const ragIngestProcessor: EventProcessor<RagIngestPayload, ProcessorDeps>
 
         // If existing but failed, delete and reindex
         if (existing) {
-          await ops.deleteDocument(existing.id);
+          await ragData.deleteDocument(existing.id, namespace);
         }
       }
 
       // Step 4: Create document record
-      const document = await ops.createDocument({
+      const document = await ragData.createDocument({
         namespace,
         sourceType: fetchedDoc.sourceType,
         sourceUri: fetchedDoc.sourceUri,
@@ -122,7 +127,7 @@ export const ragIngestProcessor: EventProcessor<RagIngestPayload, ProcessorDeps>
       });
 
       if (chunks.length === 0) {
-        await ops.updateDocumentStatus(document.id, "failed", "No content to index");
+        await ragData.updateDocumentStatus(document.id, namespace, "failed", "No content to index");
         return createErrorResponse(threadId, event, "RAG",
           `Document "${title}" has no content to index.`);
       }
@@ -169,7 +174,7 @@ export const ragIngestProcessor: EventProcessor<RagIngestPayload, ProcessorDeps>
       }
 
       // Step 7: Store chunks as graph nodes with embeddings
-      const createdChunks = await ops.createChunks(
+      const createdChunks = await ragData.createChunks(
         allChunksWithEmbeddings.map((chunk) => ({
           documentId: document.id,
           namespace,
@@ -193,7 +198,7 @@ export const ragIngestProcessor: EventProcessor<RagIngestPayload, ProcessorDeps>
       }
 
       // Step 8: Update document status
-      await ops.updateDocumentStatus(document.id, "indexed", undefined, chunks.length);
+      await ragData.updateDocumentStatus(document.id, namespace, "indexed", undefined, chunks.length);
 
       return createSuccessResponse(threadId, event, "RAG",
         `Successfully indexed "${title}" (${chunks.length} chunks) into namespace "${namespace}".`,

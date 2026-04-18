@@ -12,6 +12,7 @@ import type { Copilotz } from "@/index.ts";
 import { listPublicAgents } from "@/utils/list-agents.ts";
 import type { FeatureEntry } from "@/runtime/loaders/resources.ts";
 import type { MessageHistoryPageInfo } from "@/database/operations/index.ts";
+import type { CollectionPageInfo } from "@/database/collections/types.ts";
 import { createChannelHandlers } from "./channels.ts";
 import type {
   ChannelAdapterRequest,
@@ -32,8 +33,6 @@ import { createCollectionHandlers } from "./collections.ts";
 import type { CollectionHandlers } from "./collections.ts";
 import { createAssetHandlers } from "./assets.ts";
 import type { AssetHandlers } from "./assets.ts";
-import { createParticipantHandlers } from "./participants.ts";
-import type { ParticipantHandlers } from "./participants.ts";
 import { createGraphHandlers } from "./graph.ts";
 import type { GraphHandlers } from "./graph.ts";
 import { createEventHandlers } from "./events.ts";
@@ -66,7 +65,7 @@ export interface AppResponse {
   status: number;
   data?: unknown;
   /** Only set by paginated endpoints (e.g. `GET /threads/:id/messages`). */
-  pageInfo?: MessageHistoryPageInfo;
+  pageInfo?: MessageHistoryPageInfo | CollectionPageInfo;
 }
 
 export interface AgentHandlers {
@@ -83,7 +82,6 @@ export interface CopilotzApp {
   messages: MessageHandlers;
   collections: CollectionHandlers;
   assets: AssetHandlers;
-  participants: ParticipantHandlers;
   graph: GraphHandlers;
   events: EventHandlers;
   agents: AgentHandlers;
@@ -112,7 +110,6 @@ interface RouteContext {
     messages: MessageHandlers;
     collections: CollectionHandlers;
     assets: AssetHandlers;
-    participants: ParticipantHandlers;
     graph: GraphHandlers;
     events: EventHandlers;
     agents: AgentHandlers;
@@ -183,35 +180,6 @@ function buildRoutes(): Route[] {
         }
         const result = await ctx.handlers.assets.getDataUrl(p.id);
         return { status: 200, data: { assetId: p.id, ...result } };
-      },
-    },
-
-    // ---- participants ----
-    {
-      resource: "participants",
-      method: "GET",
-      pattern: [":id"],
-      action: async (ctx, p) => ({
-        status: 200,
-        data: await ctx.handlers.participants.get(p.id),
-      }),
-    },
-    {
-      resource: "participants",
-      method: "PUT",
-      pattern: [":id"],
-      action: async (ctx, p) => {
-        const body = ctx.body as Record<string, unknown>;
-        const replaceMemories = ctx.query.replaceMemories;
-        return {
-          status: 200,
-          data: await ctx.handlers.participants.update(p.id, body, {
-            replaceKeys: replaceMemories === "true" || replaceMemories === true
-              ? ["memories"]
-              : [],
-            participantType: "human",
-          }),
-        };
       },
     },
 
@@ -385,18 +353,26 @@ function buildRoutes(): Route[] {
             data: await ctx.handlers.collections.search(p.collection, q, {
               namespace,
               limit: asNumber(ctx.query.limit),
+              threshold: asNumber(ctx.query.threshold),
+              filter: parseJsonParam(ctx.query.filter),
+              populate: parseListParam(ctx.query.populate),
             }),
           };
         }
-        return {
-          status: 200,
-          data: await ctx.handlers.collections.list(p.collection, {
+        const result = await ctx.handlers.collections.list(p.collection, {
             namespace,
             filter: parseJsonParam(ctx.query.filter),
             limit: asNumber(ctx.query.limit),
             offset: asNumber(ctx.query.offset),
+            before: typeof ctx.query.before === "string" ? ctx.query.before : undefined,
+            after: typeof ctx.query.after === "string" ? ctx.query.after : undefined,
             sort: parseSortParam(ctx.query.sort),
-          }),
+            populate: parseListParam(ctx.query.populate),
+          });
+        return {
+          status: 200,
+          data: result.data,
+          ...(result.pageInfo ? { pageInfo: result.pageInfo } : {}),
         };
       },
     },
@@ -423,6 +399,7 @@ function buildRoutes(): Route[] {
           p.id,
           {
             namespace: ctx.query.namespace as string | undefined,
+            populate: parseListParam(ctx.query.populate),
           },
         );
         if (!result) {
@@ -598,17 +575,23 @@ function parseJsonParam(val: unknown): Record<string, unknown> | undefined {
 /** Parse a sort query param like "name:asc,createdAt:desc" into a sort array. */
 function parseSortParam(
   val: unknown,
-): Array<{ field: string; direction: "asc" | "desc" }> | undefined {
+): Array<[string, "asc" | "desc"]> | undefined {
   if (!val || typeof val !== "string") return undefined;
   const parts = val.split(",").map((s) => s.trim()).filter(Boolean);
   if (parts.length === 0) return undefined;
   return parts.map((part) => {
     const [field, dir] = part.split(":");
-    return {
+    return [
       field,
-      direction: dir === "desc" ? "desc" as const : "asc" as const,
-    };
+      dir === "desc" ? "desc" as const : "asc" as const,
+    ];
   });
+}
+
+function parseListParam(val: unknown): string[] | undefined {
+  if (!val || typeof val !== "string") return undefined;
+  const parts = val.split(",").map((s) => s.trim()).filter(Boolean);
+  return parts.length > 0 ? parts : undefined;
 }
 
 async function handleChannelRoute(
@@ -763,7 +746,6 @@ export function withApp<T extends Copilotz>(
     messages: createMessageHandlers(copilotz),
     collections: createCollectionHandlers(copilotz),
     assets: createAssetHandlers(copilotz),
-    participants: createParticipantHandlers(copilotz),
     graph: createGraphHandlers(copilotz),
     events: createEventHandlers(copilotz),
     agents: {

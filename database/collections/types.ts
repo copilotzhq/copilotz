@@ -72,6 +72,29 @@ export interface HookContext {
   userId?: string;
 }
 
+export type CollectionMethodMap = Record<
+  string,
+  (...args: any[]) => unknown | Promise<unknown>
+>;
+
+export interface CollectionMethodContext<
+  TSelect = unknown,
+  TInsert = unknown,
+> {
+  collection: ScopedCollectionCrud<TSelect, TInsert> & CollectionMethodMap;
+  collections: Record<string, unknown>;
+  rootCollections: Record<string, unknown>;
+  namespace: string;
+  ops: unknown;
+}
+
+export type CollectionMethodFactory<
+  TSelect = unknown,
+  TInsert = unknown,
+> = (
+  context: CollectionMethodContext<TSelect, TInsert>,
+) => CollectionMethodMap;
+
 // ============================================
 // COLLECTION DEFINITION
 // ============================================
@@ -127,18 +150,23 @@ export interface CollectionDefinition<
   search?: SearchConfig;
   /** Lifecycle hooks */
   hooks?: CollectionHooks<TSelect>;
+  /** Optional custom methods bound to the scoped collection instance. */
+  methods?: CollectionMethodFactory<TSelect, TInsert>;
 
   // Type inference markers (phantom types - not used at runtime)
   readonly $inferSelect: TSelect;
   readonly $inferInsert: TInsert;
+  readonly $inferMethods: CollectionMethodMap;
 }
 
 /**
  * Input type for defineCollection (without phantom types).
  */
 export type CollectionInput<S extends JsonSchema = JsonSchema> = Omit<
-  CollectionDefinition<S>,
-  "$inferSelect" | "$inferInsert"
+  CollectionDefinition<S, S extends JsonSchema ? FromSchema<S> : Record<string, unknown>, S extends JsonSchema
+    ? Omit<FromSchema<S>, "id" | "createdAt" | "updatedAt"> & { id?: string }
+    : Record<string, unknown>>,
+  "$inferSelect" | "$inferInsert" | "$inferMethods"
 >;
 
 // ============================================
@@ -204,6 +232,30 @@ export type WhereFilter<T> = {
 export type SortOrder<T> = Array<[keyof T | string, "asc" | "desc"]>;
 
 /**
+ * Cursor-based pagination metadata for collection queries.
+ */
+export interface CollectionPageInfo {
+  /** Whether there are more records before this page. */
+  hasMoreBefore: boolean;
+  /** Whether there are more records after this page. */
+  hasMoreAfter: boolean;
+  /** Cursor value for the first record in the page. */
+  startCursor: string | null;
+  /** Cursor value for the last record in the page. */
+  endCursor: string | null;
+  /** Field used to resolve cursors for this page. */
+  cursorField: string;
+}
+
+/**
+ * Paginated collection result.
+ */
+export interface CollectionPage<T> {
+  data: T[];
+  pageInfo: CollectionPageInfo;
+}
+
+/**
  * Query options for find operations.
  */
 export interface QueryOptions<T = unknown> {
@@ -217,6 +269,18 @@ export interface QueryOptions<T = unknown> {
   sort?: SortOrder<T>;
   /** Relations to populate (dot notation for nested) */
   populate?: string[];
+}
+
+/**
+ * Cursor-based query options for findPage operations.
+ */
+export interface PageOptions<T = unknown> extends QueryOptions<T> {
+  /** Page backwards from this cursor value. */
+  before?: string;
+  /** Page forwards from this cursor value. */
+  after?: string;
+  /** Field used to resolve cursor values; defaults to `id`. */
+  cursorField?: keyof T | string;
 }
 
 /**
@@ -263,6 +327,14 @@ export interface CollectionCrud<TSelect, TInsert> {
     filter?: WhereFilter<TSelect>,
     options?: QueryOptions<TSelect>,
   ): Promise<TSelect[]>;
+
+  /**
+   * Find a single page of records using cursor-based pagination.
+   */
+  findPage(
+    filter?: WhereFilter<TSelect>,
+    options?: PageOptions<TSelect>,
+  ): Promise<CollectionPage<TSelect>>;
 
   /**
    * Find a single record matching filter.
@@ -366,6 +438,10 @@ export interface ScopedCollectionCrud<TSelect, TInsert> {
     filter?: WhereFilter<TSelect>,
     options?: Omit<QueryOptions<TSelect>, "namespace">,
   ): Promise<TSelect[]>;
+  findPage(
+    filter?: WhereFilter<TSelect>,
+    options?: Omit<PageOptions<TSelect>, "namespace">,
+  ): Promise<CollectionPage<TSelect>>;
   findOne(
     filter: WhereFilter<TSelect>,
     options?: { populate?: string[] },
@@ -397,6 +473,19 @@ export interface ScopedCollectionCrud<TSelect, TInsert> {
   ): Promise<Array<TSelect & { _similarity: number }>>;
 }
 
+export type ScopedCollectionWithMethods<
+  TSelect,
+  TInsert,
+  TMethods extends CollectionMethodMap = CollectionMethodMap,
+> = ScopedCollectionCrud<TSelect, TInsert> & TMethods;
+
+export type CollectionMethodsOf<TDefinition> =
+  TDefinition extends { methods?: (...args: any[]) => infer TMethods }
+    ? TMethods extends CollectionMethodMap
+      ? TMethods
+      : Record<string, never>
+    : Record<string, never>;
+
 // ============================================
 // COLLECTIONS MAP TYPES
 // ============================================
@@ -418,9 +507,10 @@ export type CollectionsMap<T extends readonly CollectionDefinition[]> = {
  * Map of collection names to their scoped CRUD interfaces.
  */
 export type ScopedCollectionsMap<T extends readonly CollectionDefinition[]> = {
-  [K in T[number] as K["name"]]: ScopedCollectionCrud<
+  [K in T[number] as K["name"]]: ScopedCollectionWithMethods<
     K["$inferSelect"],
-    K["$inferInsert"]
+    K["$inferInsert"],
+    CollectionMethodsOf<K>
   >;
 };
 
@@ -441,4 +531,3 @@ export interface CollectionsConfig {
   /** Default namespace for operations */
   defaultNamespace?: string;
 }
-

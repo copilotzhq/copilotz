@@ -9,13 +9,16 @@
 import { ulid } from "ulid";
 import type { DbInstance } from "../index.ts";
 import type {
+  CollectionPage,
   CollectionDefinition,
   CollectionCrud,
   WhereFilter,
+  PageOptions,
   QueryOptions,
   SearchOptions,
   RelationDefinition,
   HookContext,
+  SortOrder,
 } from "./types.ts";
 
 // ============================================
@@ -56,6 +59,113 @@ interface QueryBuilderResult {
   clause: string;
   params: unknown[];
   paramIndex: number;
+}
+
+type NormalizedSortOrder = Array<[string, "asc" | "desc"]>;
+
+function isCreatedAtField(field: string): boolean {
+  return field === "createdAt" || field === "created_at";
+}
+
+function isUpdatedAtField(field: string): boolean {
+  return field === "updatedAt" || field === "updated_at";
+}
+
+function getFieldValueExpression(field: string): string {
+  if (field === "id") return `"id"`;
+  if (isCreatedAtField(field)) return `"created_at"`;
+  if (isUpdatedAtField(field)) return `"updated_at"`;
+  if (field.includes(".")) {
+    const parts = field.split(".");
+    return `"data"${
+      parts.slice(0, -1).map((part) => `->'${part}'`).join("")
+    }->>'${parts[parts.length - 1]}'`;
+  }
+  return `"data"->>'${field}'`;
+}
+
+function getFieldJsonExpression(field: string): string {
+  if (field.includes(".")) {
+    return `"data"${field.split(".").map((part) => `->'${part}'`).join("")}`;
+  }
+  return `"data"->'${field}'`;
+}
+
+function normalizeSortOrder<T>(
+  sort?: SortOrder<T>,
+): NormalizedSortOrder {
+  const normalized = (sort?.map(([field, direction]) => [
+    String(field),
+    direction,
+  ]) ?? [["createdAt", "desc"]]) as NormalizedSortOrder;
+  if (!normalized.some(([field]) => field === "id")) {
+    normalized.push(["id", normalized[0]?.[1] ?? "desc"]);
+  }
+  return normalized;
+}
+
+function getCursorFieldValue(
+  record: Record<string, unknown>,
+  field: string,
+): string | null {
+  const value = record[field];
+  if (value instanceof Date) return value.toISOString();
+  if (value === null || typeof value === "undefined") return null;
+  return String(value);
+}
+
+function createEmptyPage(cursorField: string): CollectionPage<never> {
+  return {
+    data: [],
+    pageInfo: {
+      hasMoreBefore: false,
+      hasMoreAfter: false,
+      startCursor: null,
+      endCursor: null,
+      cursorField,
+    },
+  };
+}
+
+function buildCursorClause(
+  sort: NormalizedSortOrder,
+  cursorRecord: Record<string, unknown>,
+  direction: "before" | "after",
+  startParamIndex: number,
+): { clause: string; params: unknown[]; paramIndex: number } {
+  const params: unknown[] = [];
+  const branches: string[] = [];
+  let paramIdx = startParamIndex;
+
+  for (let i = 0; i < sort.length; i++) {
+    const equalityParts: string[] = [];
+    for (let j = 0; j < i; j++) {
+      const [prevField] = sort[j];
+      equalityParts.push(`${getFieldValueExpression(prevField)} = $${paramIdx}`);
+      params.push(cursorRecord[prevField] ?? null);
+      paramIdx++;
+    }
+
+    const [field, order] = sort[i];
+    // Keyset pagination must match ORDER BY: after ASC seeks larger keys; after DESC seeks smaller.
+    const operator = direction === "after"
+      ? order === "asc" ? ">" : "<"
+      : order === "asc" ? "<" : ">";
+    const comparison = `${getFieldValueExpression(field)} ${operator} $${paramIdx}`;
+    params.push(cursorRecord[field] ?? null);
+    paramIdx++;
+    branches.push(
+      equalityParts.length > 0
+        ? `(${equalityParts.join(" AND ")} AND ${comparison})`
+        : `(${comparison})`,
+    );
+  }
+
+  return {
+    clause: branches.length > 0 ? `(${branches.join(" OR ")})` : "",
+    params,
+    paramIndex: paramIdx,
+  };
 }
 
 /**
@@ -117,12 +227,9 @@ function buildDataFilter<T>(
     }
 
     // Handle field conditions
-    const jsonPath = key.includes(".")
-      ? `"data"${key.split(".").map((p) => `->'${p}'`).join("")}`
-      : `"data"->>'${key}'`;
-    const jsonPathValue = key.includes(".")
-      ? `"data"${key.split(".").slice(0, -1).map((p) => `->'${p}'`).join("")}->>'${key.split(".").pop()}'`
-      : `"data"->>'${key}'`;
+    const jsonPath = getFieldJsonExpression(key);
+    const jsonPathValue = getFieldValueExpression(key);
+    const isTimestampField = isCreatedAtField(key) || isUpdatedAtField(key);
 
     if (typeof value === "object" && value !== null && !Array.isArray(value)) {
       // Handle operators
@@ -130,69 +237,113 @@ function buildDataFilter<T>(
       for (const [op, opValue] of Object.entries(operators)) {
         if (opValue === undefined) continue;
 
+        const scalarExpr = jsonPathValue;
+
         switch (op) {
           case "$eq":
-            conditions.push(`${jsonPath} = $${paramIdx}`);
-            params.push(opValue);
-            paramIdx++;
+            if (opValue === null) {
+              conditions.push(
+                `("data"->'${key}' IS NULL OR "data"->'${key}' = 'null'::jsonb)`,
+              );
+            } else if (typeof opValue === "object" && !Array.isArray(opValue)) {
+              conditions.push(`${jsonPath} = $${paramIdx}::jsonb`);
+              params.push(JSON.stringify(opValue));
+              paramIdx++;
+            } else {
+              conditions.push(`${scalarExpr} = $${paramIdx}`);
+              params.push(String(opValue));
+              paramIdx++;
+            }
             break;
           case "$ne":
-            conditions.push(`${jsonPath} != $${paramIdx}`);
-            params.push(opValue);
-            paramIdx++;
+            if (opValue === null) {
+              conditions.push(
+                `NOT ("data"->'${key}' IS NULL OR "data"->'${key}' = 'null'::jsonb)`,
+              );
+            } else if (typeof opValue === "object" && !Array.isArray(opValue)) {
+              conditions.push(`${jsonPath} != $${paramIdx}::jsonb`);
+              params.push(JSON.stringify(opValue));
+              paramIdx++;
+            } else {
+              conditions.push(`${scalarExpr} != $${paramIdx}`);
+              params.push(String(opValue));
+              paramIdx++;
+            }
             break;
           case "$in":
-            conditions.push(`${jsonPath} = ANY($${paramIdx})`);
-            params.push(opValue);
+            if (!Array.isArray(opValue)) {
+              throw new Error(`$in value for "${key}" must be an array`);
+            }
+            conditions.push(`${scalarExpr} = ANY($${paramIdx}::text[])`);
+            params.push(opValue.map((v) => String(v)));
             paramIdx++;
             break;
           case "$nin":
-            conditions.push(`NOT (${jsonPath} = ANY($${paramIdx}))`);
-            params.push(opValue);
+            if (!Array.isArray(opValue)) {
+              throw new Error(`$nin value for "${key}" must be an array`);
+            }
+            conditions.push(`NOT (${scalarExpr} = ANY($${paramIdx}::text[]))`);
+            params.push(opValue.map((v) => String(v)));
             paramIdx++;
             break;
           case "$gt":
-            conditions.push(`(${jsonPath})::numeric > $${paramIdx}`);
+            conditions.push(
+              isTimestampField
+                ? `${jsonPathValue} > $${paramIdx}::timestamptz`
+                : `(${jsonPath})::numeric > $${paramIdx}`,
+            );
             params.push(opValue);
             paramIdx++;
             break;
           case "$gte":
-            conditions.push(`(${jsonPath})::numeric >= $${paramIdx}`);
+            conditions.push(
+              isTimestampField
+                ? `${jsonPathValue} >= $${paramIdx}::timestamptz`
+                : `(${jsonPath})::numeric >= $${paramIdx}`,
+            );
             params.push(opValue);
             paramIdx++;
             break;
           case "$lt":
-            conditions.push(`(${jsonPath})::numeric < $${paramIdx}`);
+            conditions.push(
+              isTimestampField
+                ? `${jsonPathValue} < $${paramIdx}::timestamptz`
+                : `(${jsonPath})::numeric < $${paramIdx}`,
+            );
             params.push(opValue);
             paramIdx++;
             break;
           case "$lte":
-            conditions.push(`(${jsonPath})::numeric <= $${paramIdx}`);
+            conditions.push(
+              isTimestampField
+                ? `${jsonPathValue} <= $${paramIdx}::timestamptz`
+                : `(${jsonPath})::numeric <= $${paramIdx}`,
+            );
             params.push(opValue);
             paramIdx++;
             break;
           case "$like":
-            conditions.push(`${jsonPath} LIKE $${paramIdx}`);
+            conditions.push(`${scalarExpr} LIKE $${paramIdx}`);
             params.push(opValue);
             paramIdx++;
             break;
           case "$ilike":
-            conditions.push(`${jsonPath} ILIKE $${paramIdx}`);
+            conditions.push(`${scalarExpr} ILIKE $${paramIdx}`);
             params.push(opValue);
             paramIdx++;
             break;
           case "$regex":
-            conditions.push(`${jsonPath} ~ $${paramIdx}`);
+            conditions.push(`${scalarExpr} ~ $${paramIdx}`);
             params.push(opValue);
             paramIdx++;
             break;
           case "$startsWith":
-            conditions.push(`${jsonPath} LIKE $${paramIdx}`);
+            conditions.push(`${scalarExpr} LIKE $${paramIdx}`);
             params.push(`${opValue}%`);
             paramIdx++;
             break;
           case "$endsWith":
-            conditions.push(`${jsonPath} LIKE $${paramIdx}`);
+            conditions.push(`${scalarExpr} LIKE $${paramIdx}`);
             params.push(`%${opValue}`);
             paramIdx++;
             break;
@@ -266,17 +417,14 @@ function buildWhereClause<T>(
   };
 }
 
-function buildOrderClause<T>(sort?: Array<[keyof T | string, "asc" | "desc"]>): string {
-  if (!sort?.length) {
-    return 'ORDER BY "created_at" DESC';
-  }
-
-  const sortParts = sort.map(([field, dir]) => {
+function buildOrderClause(sort?: NormalizedSortOrder): string {
+  const normalized = normalizeSortOrder(sort);
+  const sortParts = normalized.map(([field, dir]) => {
     const direction = dir.toUpperCase();
-    if (field === "createdAt" || field === "created_at") {
+    if (isCreatedAtField(field)) {
       return `"created_at" ${direction}`;
     }
-    if (field === "updatedAt" || field === "updated_at") {
+    if (isUpdatedAtField(field)) {
       return `"updated_at" ${direction}`;
     }
     if (field === "id") {
@@ -296,6 +444,10 @@ function mapNodeToRecord<T>(node: NodeRow): T {
   const data = node.data ?? {};
   return {
     id: node.id,
+    namespace: node.namespace,
+    content: node.content,
+    sourceType: node.source_type,
+    sourceId: node.source_id,
     ...data,
     createdAt: node.created_at,
     updatedAt: node.updated_at,
@@ -575,7 +727,7 @@ export function createCollectionCrud<TSelect, TInsert>(
         name,
       );
 
-      const orderClause = buildOrderClause(options?.sort);
+      const orderClause = buildOrderClause(normalizeSortOrder(options?.sort));
 
       let limitClause = "";
       let paramIdx = paramIndex;
@@ -603,6 +755,128 @@ export function createCollectionCrud<TSelect, TInsert>(
       }
 
       return records;
+    },
+
+    // ========================================
+    // FIND PAGE
+    // ========================================
+    async findPage(
+      filter: WhereFilter<TSelect> = {},
+      options?: PageOptions<TSelect>,
+    ): Promise<CollectionPage<TSelect>> {
+      if (!options?.namespace) {
+        throw new Error("namespace is required");
+      }
+
+      const cursorField = String(options.cursorField ?? "id");
+      const sort = normalizeSortOrder(options.sort);
+      const pageKeyField = sort.some(([field]) => field === cursorField)
+        ? cursorField
+        : sort[0]?.[0] ?? cursorField;
+      const limit = typeof options.limit === "number" && options.limit > 0
+        ? Math.floor(options.limit)
+        : 50;
+      const direction = typeof options.before === "string" && options.before.length > 0
+        ? "before"
+        : typeof options.after === "string" && options.after.length > 0
+        ? "after"
+        : null;
+      const cursorValue = direction === "before"
+        ? options.before!
+        : direction === "after"
+        ? options.after!
+        : null;
+
+      const { clause, params, paramIndex } = buildWhereClause(
+        filter,
+        options.namespace,
+        name,
+      );
+      let nextParamIndex = paramIndex;
+      let cursorClause = "";
+
+      if (direction && cursorValue) {
+        const cursorFilters: Record<string, unknown>[] = [{ [cursorField]: cursorValue }];
+        if (cursorField !== "id") {
+          cursorFilters.push({ id: cursorValue });
+        }
+        const cursorRecord = await this.findOne(
+          {
+            $and: [
+              filter,
+              {
+                $or: cursorFilters,
+              },
+            ],
+          } as WhereFilter<TSelect>,
+          { namespace: options.namespace },
+        );
+        if (!cursorRecord) {
+          return createEmptyPage(cursorField) as CollectionPage<TSelect>;
+        }
+
+        const cursorRecordValue = cursorRecord as Record<string, unknown>;
+        const cursorContext = Object.fromEntries(
+          sort.map(([field]) => [field, cursorRecordValue[field] ?? null]),
+        );
+        const builtCursor = buildCursorClause(
+          sort,
+          cursorContext,
+          direction,
+          nextParamIndex,
+        );
+        cursorClause = builtCursor.clause ? `AND ${builtCursor.clause}` : "";
+        params.push(...builtCursor.params);
+        nextParamIndex = builtCursor.paramIndex;
+      }
+
+      params.push(limit + 1);
+      const result = await db.query<NodeRow>(
+        `SELECT * FROM "nodes"
+         WHERE ${clause}
+         ${cursorClause}
+         ${buildOrderClause(sort)}
+         LIMIT $${nextParamIndex}`,
+        params,
+      );
+
+      const hasExtra = result.rows.length > limit;
+      const rows = result.rows.slice(0, limit);
+      let records = rows.map(mapNodeToRecord<TSelect>);
+
+      if (options.populate?.length) {
+        records = await populateRelations(records, options.populate, options.namespace);
+      }
+
+      return {
+        data: records,
+        pageInfo: {
+          hasMoreBefore: direction === "before"
+            ? hasExtra
+            : direction === "after"
+            ? true
+            : (sort[0]?.[1] ?? "desc") === "desc"
+            ? hasExtra
+            : false,
+          hasMoreAfter: direction === "after"
+            ? hasExtra
+            : direction === "before"
+            ? true
+            : (sort[0]?.[1] ?? "desc") === "asc"
+            ? hasExtra
+            : false,
+          startCursor: records.length > 0
+            ? getCursorFieldValue(records[0] as Record<string, unknown>, pageKeyField)
+            : null,
+          endCursor: records.length > 0
+            ? getCursorFieldValue(
+              records[records.length - 1] as Record<string, unknown>,
+              pageKeyField,
+            )
+            : null,
+          cursorField,
+        },
+      };
     },
 
     // ========================================

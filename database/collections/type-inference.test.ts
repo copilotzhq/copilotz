@@ -71,6 +71,19 @@ const orders = defineCollection({
   },
 });
 
+const peopleWithMethods = defineCollection({
+  name: "person",
+  schema: customerSchema,
+  methods: ({ collection, namespace }) => ({
+    async findByEmail(email: string) {
+      return await collection.findOne({ email });
+    },
+    currentNamespace() {
+      return namespace;
+    },
+  }),
+});
+
 // ============================================
 // STEP 3: Infer types from collection definitions
 // ============================================
@@ -201,3 +214,25 @@ console.log("Type inference examples:", {
 export { customers, orders };
 export type { Customer, Order, NewCustomer, NewOrder };
 
+Deno.test("Type inference - collection methods are exposed on scoped collections", async () => {
+  const db = await createDatabase({ url: ":memory:" });
+  const manager = createCollectionsManager(db, [peopleWithMethods] as const);
+  const scoped = manager.withNamespace("type-ns") as unknown as {
+    person: {
+      create(data: NewCustomer): Promise<Customer>;
+      findByEmail(email: string): Promise<Customer | null>;
+      currentNamespace(): string;
+    };
+  };
+
+  const created = await scoped.person.create({
+    email: "typed@example.com",
+    plan: "free",
+  });
+  const found = await scoped.person.findByEmail("typed@example.com");
+
+  assertEquals(scoped.person.currentNamespace(), "type-ns");
+  assertEquals(found?.id, created.id);
+
+  await db.query('DELETE FROM "nodes" WHERE 1=1');
+});

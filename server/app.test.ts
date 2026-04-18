@@ -168,9 +168,34 @@ function createMockCopilotz() {
   };
 
   const mockCollections = {
-    getCollectionNames: () => ["customers", "orders"],
-    hasCollection: (name: string) => ["customers", "orders"].includes(name),
-    withNamespace: () => ({}),
+    getCollectionNames: () => ["customers", "orders", "participant"],
+    hasCollection: (name: string) => ["customers", "orders", "participant"].includes(name),
+    withNamespace: () => ({
+      participant: {
+        findOne: async (filter: Record<string, unknown>) => {
+          record("collections.participant.findOne", filter);
+          if (filter.externalId === "not-found") return null;
+          return {
+            id: "participant-1",
+            externalId: filter.externalId,
+            participantType: "human",
+            name: "Alice",
+            metadata: { name: "Alice" },
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        },
+        update: async (filter: Record<string, unknown>, data: Record<string, unknown>) => {
+          record("collections.participant.update", filter, data);
+          return {
+            id: "participant-1",
+            externalId: filter.externalId,
+            participantType: "human",
+            ...data,
+          };
+        },
+      },
+    }),
   };
 
   const copilotz = {
@@ -178,6 +203,11 @@ function createMockCopilotz() {
     assets: mockAssets,
     collections: mockCollections,
     config: {
+      collections: [
+        { name: "customers", keys: [{ property: "id" }] },
+        { name: "orders", keys: [{ property: "id" }] },
+        { name: "participant", keys: [{ property: "externalId" }] },
+      ],
       agents: [
         {
           id: "agent-1",
@@ -523,16 +553,16 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
       assertEquals(res.status, 201);
     });
 
-    // -- participants --
-    await t.step("GET /participants/:id returns participant", async () => {
-      const res = await fetch(`${base}/participants/user-1`);
+    // -- participant via collections --
+    await t.step("GET /collections/participant/:id returns participant", async () => {
+      const res = await fetch(`${base}/collections/participant/user-1?namespace=global`);
       assertEquals(res.status, 200);
       const { data } = await res.json();
       assertEquals(data.name, "Alice");
     });
 
-    await t.step("PUT /participants/:id updates participant", async () => {
-      const res = await fetch(`${base}/participants/user-1`, {
+    await t.step("PUT /collections/participant/:id updates participant", async () => {
+      const res = await fetch(`${base}/collections/participant/user-1?namespace=global`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ age: 30 }),
@@ -540,12 +570,17 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
       assertEquals(res.status, 200);
     });
 
+    await t.step("GET /participants/:id is removed", async () => {
+      const res = await fetch(`${base}/participants/user-1`);
+      assertEquals(res.status, 404);
+    });
+
     // -- collections --
     await t.step("GET /collections returns collection names", async () => {
       const res = await fetch(`${base}/collections`);
       assertEquals(res.status, 200);
       const { data } = await res.json();
-      assertEquals(data, ["customers", "orders"]);
+      assertEquals(data, ["customers", "orders", "participant"]);
     });
 
     // -- admin (via features) --

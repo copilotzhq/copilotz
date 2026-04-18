@@ -27,6 +27,7 @@ import { resolveAssetRefsInMessages } from "@/runtime/storage/assets.ts";
 import { filterToolCallTokensStreaming } from "@/runtime/llm/utils.ts";
 import { buildMentionTargetRoute } from "@/utils/mentions.ts";
 import type { Agent, Thread } from "@/types/index.ts";
+import { createLlmUsageService } from "@/runtime/collections/native.ts";
 
 export type { ChatMessage };
 
@@ -450,6 +451,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
 
     const llmResponse = response as unknown as ChatResponse;
     let usageNodeId: string | null = null;
+    const llmUsageService = createLlmUsageService({
+      collections: deps.context.collections,
+      ops: deps.db.ops,
+    });
 
     // finalize stream
     if (streamCallback && deps.emitToStream) {
@@ -481,41 +486,19 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
 
     if (usage) {
       try {
-        const usageNode = await deps.db.ops.createNode({
-          namespace: threadId,
-          type: "llm_usage",
-          name: `${usage.status}:${llmResponse.provider ?? "unknown"}:${
-            llmResponse.model ?? "unknown"
-          }`,
-          data: {
-            threadId,
-            eventId: typeof event.id === "string" ? event.id : null,
-            agentId: payload.agent.id ?? payload.agent.name,
-            provider: llmResponse.provider ?? null,
-            model: llmResponse.model ?? null,
-            inputTokens: usage.inputTokens ?? null,
-            outputTokens: usage.outputTokens ?? null,
-            reasoningTokens: usage.reasoningTokens ?? null,
-            cacheReadInputTokens: usage.cacheReadInputTokens ?? null,
-            cacheCreationInputTokens: usage.cacheCreationInputTokens ?? null,
-            totalTokens: usage.totalTokens ?? null,
+        usageNodeId = await llmUsageService.createUsageRecord({
+          threadId,
+          eventId: typeof event.id === "string" ? event.id : null,
+          agentId: (payload.agent.id ?? payload.agent.name) as string | null,
+          provider: llmResponse.provider ?? null,
+          model: llmResponse.model ?? null,
+          usage,
+          cost: {
             inputCostUsd: cost?.inputCostUsd ?? null,
             outputCostUsd: cost?.outputCostUsd ?? null,
-            reasoningCostUsd: cost?.reasoningCostUsd ?? null,
-            cacheReadInputCostUsd: cost?.cacheReadInputCostUsd ?? null,
-            cacheCreationInputCostUsd: cost?.cacheCreationInputCostUsd ?? null,
             totalCostUsd: cost?.totalCostUsd ?? null,
-            pricingModelId: cost?.pricingModelId ?? null,
-            pricingSource: cost?.source ?? null,
-            pricingCurrency: cost?.currency ?? null,
-            source: usage.source,
-            status: usage.status,
-            rawUsage: usage.rawUsage ?? null,
           },
-          sourceType: "event",
-          sourceId: typeof event.id === "string" ? event.id : threadId,
         });
-        usageNodeId = usageNode.id as string;
       } catch (error) {
         console.warn("[LLM_CALL] Failed to persist llm_usage node:", error);
       }

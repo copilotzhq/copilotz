@@ -288,16 +288,11 @@ await copilotz.ops.getLastMessageNode(threadId: string): Promise<Node | null>
 
 #### Participant / user nodes
 
-Participants are graph nodes (not relational `users` rows). Prefer participant APIs; legacy names may still delegate to the same storage:
+Participants are graph nodes (not relational `users` rows). Use participant APIs:
 
 ```typescript
 await copilotz.ops.upsertParticipantNode(externalId, kind, namespace, data)
 await copilotz.ops.getParticipantNode(externalId, namespace?)
-
-// Legacy aliases (deprecated in types; same graph)
-await copilotz.ops.upsertUserNode(externalId, namespace, data): Promise<Node>
-await copilotz.ops.getUserNode(externalId, namespace?): Promise<Node | null>
-await copilotz.ops.getUserNodesByExternalId(externalId: string): Promise<Node[]>
 ```
 
 #### Queue Operations
@@ -828,7 +823,10 @@ Returns `CollectionHandlers`:
 
 ### createParticipantHandlers(copilotz)
 
-Returns `ParticipantHandlers`:
+Returns `ParticipantHandlers` backed by the `participant` collection when
+collections are configured, with a fallback to graph-node operations. There is
+no dedicated `/participants` HTTP resource; use `collections/participant` (see
+[Collections](./collections.md)) or wire these handlers yourself.
 
 | Method   | Signature                                                            |
 | -------- | -------------------------------------------------------------------- |

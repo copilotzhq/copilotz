@@ -23,6 +23,10 @@ import type {
   EntityExtractPayload,
   KnowledgeNode,
 } from "@/database/schemas/index.ts";
+import {
+  createMessageService,
+  createParticipantService,
+} from "@/runtime/collections/native.ts";
 
 // Import tool types from their source
 import type {
@@ -764,6 +768,10 @@ export const messageProcessor: EventProcessor<
   process: async (event: Event, deps: ProcessorDeps) => {
     const { db, thread, context } = deps;
     const ops = db.ops;
+    const messageService = createMessageService({
+      collections: context.collections,
+      ops,
+    });
 
     const payload = event.payload as NewMessageEventPayload;
 
@@ -843,7 +851,7 @@ export const messageProcessor: EventProcessor<
 
     // Persist incoming message before processing
     // Pass namespace for SENT_BY edge creation (user → message)
-    const createdMessage = await ops.createMessage(
+    const createdMessage = await messageService.create(
       incomingMsg,
       context.namespace,
     );
@@ -1379,7 +1387,7 @@ export const messageProcessor: EventProcessor<
         }
 
         // Persist absorbed message — id omitted so createMessage generates a ULID
-        await ops.createMessage({
+        await messageService.create({
           threadId,
           senderId: candidateCtx.senderId,
           senderType: candidateCtx.senderType,
@@ -1490,6 +1498,7 @@ export const messageProcessor: EventProcessor<
             agent,
             query: messageContext.contentText,
             ops,
+            collections: context.collections,
             embeddingConfig: context.embeddingConfig,
             embeddingProviders: context.embeddingProviders,
             threadId,
@@ -1652,7 +1661,15 @@ async function buildProcessingContext(
   const thread: Thread | undefined = await ops.getThreadById(threadId);
   if (!thread) throw new Error(`Thread not found: ${threadId}`);
 
-  const chatHistory = await ops.getMessageHistory(threadId, senderIdForHistory);
+  const messageService = createMessageService({
+    collections: context.collections,
+    ops,
+  });
+  const participantService = createParticipantService({
+    collections: context.collections,
+    ops,
+  });
+  const chatHistory = await messageService.getHistory(threadId, senderIdForHistory);
 
   const availableAgents = context.agents || [];
   if (availableAgents.length === 0) {
@@ -1686,11 +1703,9 @@ async function buildProcessingContext(
   if (!userMetadata && runtimeThreadMetadata.userExternalId) {
     const externalId = runtimeThreadMetadata.userExternalId as string;
     try {
-      // Use graph-based user lookup with namespace support
-      const userNode = await ops.getUserNode(externalId, context.namespace);
-      const userData = userNode?.data as Record<string, unknown> | undefined;
-      if (userData?.metadata && typeof userData.metadata === "object") {
-        userMetadata = userData.metadata as Record<string, unknown>;
+      const participant = await participantService.get(externalId, context.namespace ?? null);
+      if (participant?.metadata && typeof participant.metadata === "object") {
+        userMetadata = participant.metadata as Record<string, unknown>;
       }
     } catch (error) {
       console.warn(
@@ -1708,10 +1723,28 @@ async function buildProcessingContext(
   let agentNode: KnowledgeNode | undefined = undefined;
   if (targetAgentId) {
     try {
-      agentNode = await ops.getParticipantNode(
+      const participant = await participantService.get(
         targetAgentId,
         context.namespace,
       );
+      if (participant) {
+        agentNode = {
+          id: participant.id,
+          namespace: participant.namespace ?? context.namespace ?? "global",
+          type: "participant",
+          name: participant.name ?? targetAgentId,
+          content: null,
+          embedding: null,
+          data: {
+            ...participant,
+            metadata: participant.metadata ?? null,
+          },
+          sourceType: "participant",
+          sourceId: participant.externalId,
+          createdAt: participant.createdAt as Date | undefined,
+          updatedAt: participant.updatedAt as Date | undefined,
+        } as KnowledgeNode;
+      }
     } catch {
       // Ignore errors - agent node might not exist
     }

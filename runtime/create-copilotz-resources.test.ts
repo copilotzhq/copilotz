@@ -2,7 +2,8 @@ import {
   assert,
   assertEquals,
   assertRejects,
-} from "https://deno.land/std@0.208.0/assert/mod.ts";
+} from "@std/assert";
+import { join } from "@std/path";
 
 import { createCopilotz } from "@/index.ts";
 
@@ -71,6 +72,50 @@ Deno.test("createCopilotz applies resources.filterResources after loading", asyn
     assert(toolKeys.includes("update_my_memory"));
   } finally {
     await copilotz.shutdown();
+  }
+});
+
+Deno.test("createCopilotz initializes collections loaded from resources.path", async () => {
+  const tempDir = await Deno.makeTempDir();
+  const resourcesDir = join(tempDir, "resources");
+  const collectionsDir = join(resourcesDir, "collections");
+  const copilotzEntryUrl = new URL("../index.ts", import.meta.url).href;
+
+  try {
+    await Deno.mkdir(collectionsDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(collectionsDir, "userProfile.ts"),
+      `import { defineCollection } from "${copilotzEntryUrl}";
+
+export default defineCollection({
+  name: "userProfile",
+  schema: {
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      fullName: { type: "string" }
+    }
+  },
+  keys: [{ property: "id" }],
+  indexes: ["id"],
+});
+`,
+    );
+
+    const copilotz = await createCopilotz({
+      dbConfig: { url: ":memory:" },
+      resources: { path: [resourcesDir] },
+      collectionsConfig: { autoIndex: false },
+    });
+
+    try {
+      assert(copilotz.collections);
+      assertEquals(copilotz.collections?.getCollectionNames(), ["userProfile"]);
+    } finally {
+      await copilotz.shutdown();
+    }
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
   }
 });
 

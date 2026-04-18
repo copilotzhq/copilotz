@@ -16,39 +16,6 @@ import {
 } from "@/runtime/thread-metadata.ts";
 import { normalizeInboundRunMessage } from "@/utils/inbound-message.ts";
 
-/**
- * Ensure all agents in context have participant nodes.
- * Called once per runThread to create/update agent nodes in the knowledge graph.
- * Agent nodes enable cross-thread memory and identity.
- */
-async function ensureAgentParticipants(
-  ops: CopilotzDb["ops"],
-  agents: Agent[],
-  namespace?: string | null,
-): Promise<void> {
-  for (const agent of agents) {
-    const externalId = (agent.id ?? agent.name) as string;
-    if (!externalId) continue;
-
-    try {
-      await ops.upsertParticipantNode(externalId, "agent", namespace ?? null, {
-        name: agent.name,
-        agentId: (agent.id ?? agent.name) as string,
-        metadata: null, // Start empty, agent can update via tool
-      });
-    } catch (err) {
-      // Log but don't break the flow - agent node creation is best-effort
-      console.warn(
-        `[ensureAgentParticipants] Failed to upsert agent node for "${agent.name}":`,
-        err,
-      );
-    }
-  }
-}
-
-const USER_UPSERT_DEBOUNCE_MS = 60_000;
-const userUpsertCache = new Map<string, number>();
-
 function buildInitialRoutingMetadata(
   messageMetadata: Record<string, unknown> | null,
   message: MessagePayload,
@@ -242,17 +209,6 @@ async function waitForQueueItemTerminalState(
   }
 }
 
-function buildUserKey(sender: MessagePayload["sender"]): string {
-  if (!sender) return "anonymous";
-  const metadata = sender.metadata && typeof sender.metadata === "object"
-    ? sender.metadata as Record<string, unknown>
-    : undefined;
-  const email = metadata && typeof metadata.email === "string"
-    ? metadata.email
-    : "";
-  return sender.externalId ?? sender.id ?? email ?? sender.name ?? "anonymous";
-}
-
 function buildParticipantIdentity(sender: MessagePayload["sender"]): string {
   if (!sender) return "anonymous";
   const metadata = sender.metadata && typeof sender.metadata === "object"
@@ -263,62 +219,6 @@ function buildParticipantIdentity(sender: MessagePayload["sender"]): string {
     : "";
   return sender.id ?? sender.externalId ?? email ?? sender.name ?? "anonymous";
 }
-
-/**
- * Upsert a user into the graph.
- *
- * @param ops - Database operations
- * @param sender - Message sender info
- * @param namespace - Namespace for scoped users (null for global users)
- */
-export async function upsertUser(
-  ops: CopilotzDb["ops"],
-  sender: MessagePayload["sender"],
-  namespace?: string | null,
-): Promise<void> {
-  if (!sender || sender.type !== "user") return;
-
-  // Need externalId for graph-based user storage
-  const externalId = sender.externalId ?? sender.id;
-  if (!externalId) return;
-
-  const key = buildUserKey(sender) + (namespace ?? "");
-  const last = userUpsertCache.get(key) ?? 0;
-  if (Date.now() - last < USER_UPSERT_DEBOUNCE_MS) return;
-
-  try {
-    const metadata = sender.metadata && typeof sender.metadata === "object"
-      ? sender.metadata as Record<string, unknown>
-      : undefined;
-    const email = metadata && typeof metadata.email === "string"
-      ? metadata.email
-      : null;
-
-    // Build userData object, only including metadata when actually present.
-    // This prevents null from overwriting existing metadata in upsertUserNode.
-    const userData: {
-      name?: string | null;
-      email?: string | null;
-      metadata?: Record<string, unknown>;
-    } = {
-      name: sender.name ?? null,
-      email,
-    };
-    if (metadata !== undefined) {
-      userData.metadata = metadata;
-    }
-
-    // Use graph-based user storage with upsert
-    await ops.upsertUserNode(externalId, namespace ?? null, userData);
-  } catch (_err) {
-    // Ignore user upsert failures to avoid breaking the run flow
-  } finally {
-    userUpsertCache.set(key, Date.now());
-  }
-}
-
-/** @deprecated Use upsertUser instead */
-export const upserUser = upsertUser;
 
 export async function runThread(
   db: CopilotzDb,
@@ -467,24 +367,6 @@ export async function runThread(
       : null,
     metadata: normalizedMetadata,
   };
-
-  // Best-effort upsert user sender (with namespace for scoped users)
-  try {
-    await upsertUser(ops, normalizedSender, baseContext.namespace);
-  } catch (_err) {
-    // swallow to not impact main flow
-  }
-
-  // Best-effort ensure agent participants exist (for multi-agent conversation support)
-  try {
-    await ensureAgentParticipants(
-      ops,
-      baseContext.agents ?? [],
-      baseContext.namespace,
-    );
-  } catch (_err) {
-    // swallow to not impact main flow
-  }
 
   const emitToStream = (ev: Event): void => {
     if (cancelled) return;

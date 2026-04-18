@@ -116,6 +116,9 @@ const orders = defineCollection({
   },
 });
 
+const methodCustomerSchema = customerSchema;
+const methodOrderSchema = orderSchema;
+
 // ============================================
 // TEST HELPER
 // ============================================
@@ -129,6 +132,13 @@ interface TestManager {
   };
   getCollectionNames: () => string[];
   hasCollection: (name: string) => boolean;
+}
+
+interface PersonCollection extends ScopedCollectionCrud<Customer, Partial<Customer>> {
+  findByEmail(email: string): Promise<Customer | null>;
+  countOrdersForEmail(email: string): Promise<number>;
+  findInOtherNamespace(targetNamespace: string, email: string): Promise<Customer | null>;
+  currentNamespace(): string;
 }
 
 async function withTestDb(
@@ -192,6 +202,71 @@ Deno.test("createCollectionsManager - creates manager with collections", async (
     assertEquals(manager.hasCollection("customer"), true);
     assertEquals(manager.hasCollection("nonexistent"), false);
   });
+});
+
+Deno.test("collections methods bind to scoped instances and sibling collections", async () => {
+  const people = defineCollection({
+    name: "person",
+    schema: methodCustomerSchema,
+    methods: ({ collection, collections, rootCollections, namespace }) => ({
+      async findByEmail(email: string) {
+        return await collection.findOne({ email });
+      },
+      async countOrdersForEmail(email: string) {
+        const person = await collection.findOne({ email });
+        if (!person) return 0;
+        return await (collections as {
+          order: ScopedCollectionCrud<Order, Partial<Order>>;
+        }).order.count({ customerId: person.id });
+      },
+      async findInOtherNamespace(targetNamespace: string, email: string) {
+        return await (rootCollections as {
+          withNamespace: (namespace: string) => {
+            person: ScopedCollectionCrud<Customer, Partial<Customer>>;
+          };
+        }).withNamespace(targetNamespace).person.findOne({ email });
+      },
+      currentNamespace() {
+        return namespace;
+      },
+    }),
+  });
+
+  const orderCopies = defineCollection({
+    name: "order",
+    schema: methodOrderSchema,
+  });
+
+  const db = await createDatabase({ url: ":memory:" });
+  const manager = createCollectionsManager(db, [people, orderCopies] as const) as unknown as {
+    withNamespace: (namespace: string) => {
+      person: PersonCollection;
+      order: ScopedCollectionCrud<Order, Partial<Order>>;
+    };
+  };
+  const primary = manager.withNamespace("ns:primary");
+  const secondary = manager.withNamespace("ns:secondary");
+
+  try {
+    const customer = await primary.person.create({ email: "scope@example.com" });
+    await primary.order.create({
+      customerId: customer.id,
+      total: 10,
+      status: "paid",
+    });
+    await secondary.person.create({ email: "elsewhere@example.com" });
+
+    assertEquals(await primary.person.currentNamespace(), "ns:primary");
+    assertEquals((await primary.person.findByEmail("scope@example.com"))?.id, customer.id);
+    assertEquals(await primary.person.countOrdersForEmail("scope@example.com"), 1);
+    assertEquals(
+      (await primary.person.findInOtherNamespace("ns:secondary", "elsewhere@example.com"))?.email,
+      "elsewhere@example.com",
+    );
+  } finally {
+    await db.query('DELETE FROM "nodes" WHERE 1=1');
+    await db.query('DELETE FROM "edges" WHERE 1=1');
+  }
 });
 
 Deno.test("CRUD - create single record", async () => {
@@ -379,6 +454,44 @@ Deno.test("CRUD - find with sort", async () => {
     assertEquals(sorted[0].email, "a@example.com");
     assertEquals(sorted[1].email, "b@example.com");
     assertEquals(sorted[2].email, "c@example.com");
+  });
+});
+
+Deno.test("CRUD - findPage supports cursor pagination", async () => {
+  await withTestDb(async (_db, manager) => {
+    const scoped = manager.withNamespace(TEST_NAMESPACE);
+
+    await scoped.customer.createMany([
+      { email: "a@example.com" },
+      { email: "b@example.com" },
+      { email: "c@example.com" },
+      { email: "d@example.com" },
+      { email: "e@example.com" },
+    ]);
+
+    const page1 = await scoped.customer.findPage({}, {
+      limit: 2,
+      sort: [["email", "asc"]],
+      cursorField: "email",
+    });
+    assertEquals(page1.data.map((item) => item.email), [
+      "a@example.com",
+      "b@example.com",
+    ]);
+    assertEquals(page1.pageInfo.hasMoreAfter, true);
+    assertEquals(page1.pageInfo.endCursor, "b@example.com");
+
+    const page2 = await scoped.customer.findPage({}, {
+      limit: 2,
+      sort: [["email", "asc"]],
+      cursorField: "email",
+      after: page1.pageInfo.endCursor ?? undefined,
+    });
+    assertEquals(page2.data.map((item) => item.email), [
+      "c@example.com",
+      "d@example.com",
+    ]);
+    assertEquals(page2.pageInfo.hasMoreBefore, true);
   });
 });
 
@@ -679,4 +792,3 @@ Deno.test("Explicit namespace - works without withNamespace", async () => {
 });
 
 console.log("All collection tests defined. Run with: deno test --allow-all database/collections/collections.test.ts");
-

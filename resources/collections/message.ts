@@ -10,6 +10,7 @@ export default defineCollection({
     properties: {
       id: { type: "string" },
       messageId: { type: "string" },
+      content: { type: ["string", "null"] },
       senderId: { type: ["string", "null"] },
       senderType: {
         type: ["string", "null"],
@@ -24,6 +25,7 @@ export default defineCollection({
     },
     required: ["messageId"],
   } as const,
+  keys: [{ property: "messageId" }],
   timestamps: { createdAt: "createdAt", updatedAt: "updatedAt" },
   indexes: [
     "messageId",

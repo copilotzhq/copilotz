@@ -9,10 +9,15 @@
 
 import type { DbInstance } from "../index.ts";
 import type {
+  CollectionPage,
   CollectionDefinition,
   CollectionCrud,
+  CollectionMethodMap,
+  CollectionMethodsOf,
+  ScopedCollectionWithMethods,
   ScopedCollectionCrud,
   CollectionsConfig,
+  PageOptions,
   QueryOptions,
   SearchOptions,
 } from "./types.ts";
@@ -27,10 +32,10 @@ import { createCollectionCrud } from "./crud.ts";
  */
 type RawCollectionsMap = Record<string, CollectionCrud<unknown, unknown>>;
 
-/**
- * Scoped collections map (internal use).
- */
-type RawScopedCollectionsMap = Record<string, ScopedCollectionCrud<unknown, unknown>>;
+type RawScopedCollectionsWithMethodsMap = Record<
+  string,
+  ScopedCollectionCrud<unknown, unknown> & Record<string, unknown>
+>;
 
 /**
  * Collections manager interface.
@@ -56,8 +61,13 @@ export interface CollectionsManager<T extends readonly CollectionDefinition[]> {
 export function createScopedCollections(
   collections: RawCollectionsMap,
   namespace: string,
-): RawScopedCollectionsMap {
-  const scoped: RawScopedCollectionsMap = {};
+  definitions?: readonly CollectionDefinition[],
+  rootManager?: {
+    withNamespace: (namespace: string) => RawScopedCollectionsWithMethodsMap;
+  },
+  ops?: unknown,
+): RawScopedCollectionsWithMethodsMap {
+  const scoped: RawScopedCollectionsWithMethodsMap = {};
 
   for (const [name, crud] of Object.entries(collections)) {
     scoped[name] = {
@@ -67,6 +77,9 @@ export function createScopedCollections(
       
       find: (filter, opts) =>
         crud.find(filter, { ...opts, namespace } as QueryOptions<unknown>),
+
+      findPage: (filter, opts) =>
+        crud.findPage(filter, { ...opts, namespace } as PageOptions<unknown>),
       
       findOne: (filter, opts) =>
         crud.findOne(filter, { ...opts, namespace }),
@@ -111,6 +124,23 @@ export function createScopedCollections(
     };
   }
 
+  if (definitions?.length && rootManager && ops) {
+    for (const definition of definitions) {
+      if (typeof definition.methods !== "function") continue;
+      const scopedCollection = scoped[definition.name];
+      if (!scopedCollection) continue;
+      const boundMethods = definition.methods({
+        collection: scopedCollection as ScopedCollectionCrud<unknown, unknown> &
+          CollectionMethodMap,
+        collections: scoped as Record<string, unknown>,
+        rootCollections: rootManager as Record<string, unknown>,
+        namespace,
+        ops,
+      });
+      Object.assign(scopedCollection, boundMethods);
+    }
+  }
+
   return scoped;
 }
 
@@ -144,7 +174,6 @@ export function createScopedCollections(
  * await scoped.customer.create(data);
  * ```
  */
-// deno-lint-ignore no-explicit-any
 export function createCollectionsManager<T extends readonly CollectionDefinition<any, any, any>[]>(
   db: DbInstance,
   definitions: T,
@@ -154,7 +183,11 @@ export function createCollectionsManager<T extends readonly CollectionDefinition
 } & {
   /** Get scoped client with namespace pre-applied */
   withNamespace: (namespace: string) => {
-    [K in T[number] as K["name"]]: ScopedCollectionCrud<K["$inferSelect"], K["$inferInsert"]>;
+    [K in T[number] as K["name"]]: ScopedCollectionWithMethods<
+      K["$inferSelect"],
+      K["$inferInsert"],
+      CollectionMethodsOf<K>
+    >;
   };
   /** List all registered collection names */
   getCollectionNames: () => string[];
@@ -180,7 +213,15 @@ export function createCollectionsManager<T extends readonly CollectionDefinition
      * Get a scoped client with namespace pre-applied to all operations.
      */
     withNamespace: (namespace: string) => {
-      return createScopedCollections(collections, namespace);
+      return createScopedCollections(
+        collections,
+        namespace,
+        definitions,
+        manager as unknown as {
+          withNamespace: (namespace: string) => RawScopedCollectionsWithMethodsMap;
+        },
+        (db as { ops?: unknown }).ops,
+      );
     },
 
     /**
@@ -198,11 +239,15 @@ export function createCollectionsManager<T extends readonly CollectionDefinition
     },
   };
 
-  return manager as {
+  return manager as unknown as {
     [K in T[number] as K["name"]]: CollectionCrud<K["$inferSelect"], K["$inferInsert"]>;
   } & {
     withNamespace: (namespace: string) => {
-      [K in T[number] as K["name"]]: ScopedCollectionCrud<K["$inferSelect"], K["$inferInsert"]>;
+      [K in T[number] as K["name"]]: ScopedCollectionWithMethods<
+        K["$inferSelect"],
+        K["$inferInsert"],
+        CollectionMethodsOf<K>
+      >;
     };
     getCollectionNames: () => string[];
     hasCollection: (name: string) => boolean;
@@ -306,4 +351,3 @@ export async function createCollectionIndexes(
     }
   }
 }
-

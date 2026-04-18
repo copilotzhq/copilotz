@@ -39,4 +39,48 @@ export default defineCollection({
   relations: {
     sentMessages: relation.hasMany("message", "senderId", "SENT_BY"),
   },
+  methods: ({ collection, rootCollections, namespace }) => ({
+    async getByExternalId(externalId: string) {
+      return await collection.findOne({ externalId });
+    },
+
+    async resolveByExternalId(externalId: string) {
+      const local = await collection.findOne({ externalId });
+      if (local || namespace === "global") return local;
+      const globalParticipant = (rootCollections as {
+        withNamespace: (namespace: string) => {
+          participant?: typeof collection;
+        };
+      }).withNamespace("global").participant;
+      if (!globalParticipant || typeof globalParticipant.findOne !== "function") {
+        return null;
+      }
+      return await globalParticipant.findOne({ externalId });
+    },
+
+    async upsertIdentity(input: {
+      id?: string;
+      externalId: string;
+      participantType: "human" | "agent";
+      name?: string | null;
+      email?: string | null;
+      agentId?: string | null;
+      metadata?: Record<string, unknown> | null;
+      isGlobal?: boolean | null;
+    }) {
+      return await collection.upsert(
+        { externalId: input.externalId },
+        {
+          ...(input.id ? { id: input.id } : {}),
+          externalId: input.externalId,
+          participantType: input.participantType,
+          name: input.name ?? null,
+          email: input.email ?? null,
+          agentId: input.agentId ?? null,
+          metadata: input.metadata ?? null,
+          isGlobal: input.isGlobal ?? (namespace === "global"),
+        },
+      );
+    },
+  }),
 });

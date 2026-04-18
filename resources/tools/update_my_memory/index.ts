@@ -3,6 +3,13 @@
  * Allows agents to store important learnings or preferences that persist across conversations.
  */
 
+import { createParticipantService } from "@/runtime/collections/native.ts";
+import type {
+  CollectionsManager,
+  CopilotzDb,
+  ScopedCollectionsManager,
+} from "@/types/index.ts";
+
 interface UpdateMyMemoryParams {
     key: string;
     value: string;
@@ -12,6 +19,7 @@ interface UpdateMyMemoryParams {
 interface ToolContext {
     senderId?: string;
     namespace?: string;
+    collections?: CollectionsManager | ScopedCollectionsManager;
     db?: {
         ops: {
             getParticipantNode: (externalId: string, namespace?: string | null) => Promise<unknown | undefined>;
@@ -65,18 +73,20 @@ export default {
         }
         
         try {
-            const agentNode = await ops.getParticipantNode(agentId, context?.namespace);
-            
-            if (!agentNode) {
+            const participantService = createParticipantService({
+                collections: context?.collections,
+                ops: ops as CopilotzDb["ops"],
+            });
+            const agentParticipant = await participantService.get(agentId, context?.namespace ?? null);
+
+            if (!agentParticipant) {
                 return { 
                     success: false, 
                     error: `Agent node not found for "${agentId}". Memory update skipped.` 
                 };
             }
-            
-            const nodeWithId = agentNode as { id: string; data: Record<string, unknown> };
-            const data = nodeWithId.data ?? {};
-            const metadata = (data.metadata ?? {}) as Record<string, unknown>;
+
+            const metadata = { ...((agentParticipant.metadata ?? {}) as Record<string, unknown>) };
             
             if (operation === "set") {
                 metadata[key] = value;
@@ -92,10 +102,18 @@ export default {
             } else if (operation === "remove") {
                 delete metadata[key];
             }
-            
-            await ops.updateNode(nodeWithId.id, { 
-                data: { ...data, metadata } 
-            });
+
+            await participantService.upsert(
+                agentId,
+                (agentParticipant.participantType ?? "agent") as "human" | "agent",
+                context?.namespace ?? null,
+                {
+                    name: (agentParticipant.name ?? null) as string | null,
+                    email: (agentParticipant.email ?? null) as string | null,
+                    agentId: (agentParticipant.agentId ?? agentId) as string | null,
+                    metadata,
+                },
+            );
             
             return { 
                 success: true, 

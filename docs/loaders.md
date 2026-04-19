@@ -61,6 +61,9 @@ resources/
 │   │   └── processor.ts         # Custom processor
 │   └── CUSTOM_EVENT/
 │       └── processor.ts
+├── collections/
+│   ├── my-collection/
+│   │   └── index.ts          # Collection definition
 └── skills/
     ├── my-skill/
     │   ├── SKILL.md              # Skill instructions (required)

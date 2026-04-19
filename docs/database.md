@@ -79,7 +79,7 @@ This is what makes Copilotz different from a simple chat database. Everything is
 
 | Type | Description |
 |------|-------------|
-| `user` | A user in the system |
+| `participant` | A human or agent in the system |
 | `message` | A conversation message |
 | `document` | RAG source metadata (URI, hash, status, title, …) — not a separate SQL table |
 | `chunk` | An embedded segment of a document for retrieval |
@@ -90,7 +90,7 @@ This is what makes Copilotz different from a simple chat database. Everything is
 
 | Type | Description |
 |------|-------------|
-| `SENT_BY` | Message → User |
+| `SENT_BY` | Message → Participant |
 | `MENTIONS` | Message → Entity |
 | `NEXT_CHUNK` | Chunk → Chunk (document order) |
 | `RELATED_TO` | Entity → Entity |
@@ -240,19 +240,21 @@ const messages = await copilotz.ops.getMessageHistoryFromGraph(threadId, 50);
 const lastMessage = await copilotz.ops.getLastMessageNode(threadId);
 ```
 
-### User Operations
+### Participant Operations
 
-Participants are stored in the knowledge graph as nodes with namespace scoping:
+Participants (humans and agents) are managed via the built-in `participant` collection:
 
 ```typescript
-// Upsert a human participant node
-await copilotz.ops.upsertParticipantNode("external-id", "human", "tenant:acme", {
-  name: "Alex",
-  email: "alex@acme.com",
-});
+// Resolve a participant (checks namespace, falls back to global)
+const participants = copilotz.collections.withNamespace("tenant:acme").participant;
+const participant = await participants.resolveByExternalId("external-id");
 
-// Get a participant node (checks namespace, falls back to global)
-const participant = await copilotz.ops.getParticipantNode("external-id", "tenant:acme");
+// Upsert an identity
+await participants.upsertIdentity({
+  externalId: "external-id",
+  participantType: "human",
+  name: "Alex",
+});
 ```
 
 ### Queue Operations

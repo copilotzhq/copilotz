@@ -72,6 +72,24 @@ Deno.test("normalizeInboundRunMessage normalizes tool calls for run()", () => {
   }]);
 });
 
+Deno.test("normalizeInboundRunMessage preserves already-normalized tool calls", () => {
+  const message = normalizeInboundRunMessage({
+    content: "   ",
+    sender: { type: "agent", name: "Agent" },
+    toolCalls: [{
+      id: "call_1",
+      tool: { id: "write_file", name: "write_file" },
+      args: { path: "notes.txt" },
+    }],
+  } as never);
+
+  assertEquals(message.toolCalls, [{
+    id: "call_1",
+    tool: { id: "write_file", name: "write_file" },
+    args: { path: "notes.txt" },
+  }]);
+});
+
 Deno.test("hasRunInput allows tool-call-only messages", () => {
   const normalized = normalizeInboundRunMessage({
     content: "   ",

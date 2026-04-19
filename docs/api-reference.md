@@ -288,9 +288,10 @@ await copilotz.ops.getLastMessageNode(threadId: string): Promise<Node | null>
 
 #### Participant / user nodes
 
-Participants are graph nodes (not relational `users` rows). Use participant APIs:
+> **Deprecated**: Use the built-in `participant` collection via `copilotz.collections.participant` for all identity management.
 
 ```typescript
+// Deprecated graph-node accessors
 await copilotz.ops.upsertParticipantNode(externalId, kind, namespace, data)
 await copilotz.ops.getParticipantNode(externalId, namespace?)
 ```
@@ -823,10 +824,10 @@ Returns `CollectionHandlers`:
 
 ### createParticipantHandlers(copilotz)
 
-Returns `ParticipantHandlers` backed by the `participant` collection when
-collections are configured, with a fallback to graph-node operations. There is
-no dedicated `/participants` HTTP resource; use `collections/participant` (see
-[Collections](./collections.md)) or wire these handlers yourself.
+Returns `ParticipantHandlers` backed by the built-in `participant` collection.
+There is no dedicated `/participants` HTTP resource by default; use
+`collections/participant` (see [Collections](./collections.md)) or wire these
+handlers yourself.
 
 | Method   | Signature                                                            |
 | -------- | -------------------------------------------------------------------- |

@@ -486,9 +486,16 @@ export const processToolCalls = async (
 // Create Ajv instance - using type assertions due to npm module import compatibility
 const createAjv = () => {
   // deno-lint-ignore no-explicit-any
-  const instance = new (Ajv as any)();
+  const instance = new (Ajv as any)({
+    strict: false,
+    allErrors: true,
+  });
   // deno-lint-ignore no-explicit-any
   (addFormats as any)(instance);
+
+  // Register x-ui as a known no-op keyword to support frontend rendering hints
+  instance.addKeyword("x-ui");
+
   return instance;
 };
 const ajv = createAjv();

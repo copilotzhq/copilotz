@@ -3,7 +3,6 @@
  * Allows agents to store important learnings or preferences that persist across conversations.
  */
 
-import { createParticipantService } from "@/runtime/collections/native.ts";
 import type {
   CollectionsManager,
   CopilotzDb,
@@ -67,17 +66,13 @@ export default {
             return { success: false, error: "Agent context not available" };
         }
         
-        const ops = context?.db?.ops;
-        if (!ops) {
-            return { success: false, error: "Database not available" };
+        const participantCollection = (context?.collections as any)?.withNamespace(context?.namespace ?? "global")?.participant;
+        if (!participantCollection || typeof participantCollection.resolveByExternalId !== "function") {
+            return { success: false, error: "Participant collection not available" };
         }
         
         try {
-            const participantService = createParticipantService({
-                collections: context?.collections,
-                ops: ops as CopilotzDb["ops"],
-            });
-            const agentParticipant = await participantService.get(agentId, context?.namespace ?? null);
+            const agentParticipant = await participantCollection.resolveByExternalId(agentId);
 
             if (!agentParticipant) {
                 return { 
@@ -103,17 +98,14 @@ export default {
                 delete metadata[key];
             }
 
-            await participantService.upsert(
-                agentId,
-                (agentParticipant.participantType ?? "agent") as "human" | "agent",
-                context?.namespace ?? null,
-                {
-                    name: (agentParticipant.name ?? null) as string | null,
-                    email: (agentParticipant.email ?? null) as string | null,
-                    agentId: (agentParticipant.agentId ?? agentId) as string | null,
-                    metadata,
-                },
-            );
+            await participantCollection.upsertIdentity({
+                externalId: agentId,
+                participantType: (agentParticipant.participantType ?? "agent") as "human" | "agent",
+                name: (agentParticipant.name ?? null) as string | null,
+                email: (agentParticipant.email ?? null) as string | null,
+                agentId: (agentParticipant.agentId ?? agentId) as string | null,
+                metadata,
+            });
             
             return { 
                 success: true, 

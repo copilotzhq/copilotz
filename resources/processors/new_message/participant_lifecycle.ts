@@ -1,16 +1,37 @@
 import type { Event, EventProcessor, ProcessorDeps } from "@/types/index.ts";
 import type { NewMessageEventPayload } from "@/database/schemas/index.ts";
-import {
-  createParticipantService,
-  hasParticipantCollection,
-} from "@/runtime/collections/native.ts";
+import { hasParticipantCollection } from "@/runtime/collections/native.ts";
 
 export const priority = 100;
 
-function buildSenderExternalId(payload: NewMessageEventPayload): string | null {
+function buildSenderIdentity(payload: NewMessageEventPayload): {
+  externalId: string;
+  participantType: "human" | "agent";
+  agentId?: string | null;
+} | null {
   const sender = payload.sender;
-  if (!sender || sender.type !== "user") return null;
-  return sender.externalId ?? sender.id ?? null;
+  if (!sender) return null;
+
+  if (sender.type === "user") {
+    const externalId = sender.externalId ?? sender.id ?? sender.name ?? null;
+    return externalId
+      ? { externalId, participantType: "human" }
+      : null;
+  }
+
+  if (sender.type === "agent" || sender.type === "tool") {
+    // Tool results carry the requesting agent's identity in sender.id/name
+    const externalId = sender.id ?? sender.name ?? sender.externalId ?? null;
+    return externalId
+      ? {
+        externalId,
+        participantType: "agent",
+        agentId: sender.id ?? sender.name ?? null,
+      }
+      : null;
+  }
+
+  return null;
 }
 
 export const participantLifecycleProcessor: EventProcessor<
@@ -21,46 +42,48 @@ export const participantLifecycleProcessor: EventProcessor<
   process: async (event: Event, deps: ProcessorDeps) => {
     if (!hasParticipantCollection(deps.context.collections)) return;
 
-    const payload = event.payload as NewMessageEventPayload;
-    const participantService = createParticipantService({
-      collections: deps.context.collections,
-      ops: deps.db.ops,
-    });
+    const participantCollection = (deps.context.collections as any)?.participant;
+    if (!participantCollection || typeof participantCollection.upsertIdentity !== "function") return;
 
-    const senderExternalId = buildSenderExternalId(payload);
-    if (senderExternalId) {
+    const payload = event.payload as NewMessageEventPayload;
+
+    let senderRecord: any = null;
+
+    const senderIdentity = buildSenderIdentity(payload);
+    if (senderIdentity) {
       const metadata = payload.sender?.metadata &&
           typeof payload.sender.metadata === "object"
         ? payload.sender.metadata as Record<string, unknown>
         : undefined;
-      const email = typeof metadata?.email === "string" ? metadata.email : null;
+      const email = senderIdentity.participantType === "human" &&
+          typeof metadata?.email === "string"
+        ? metadata.email
+        : null;
 
-      await participantService.upsert(
-        senderExternalId,
-        "human",
-        deps.context.namespace ?? null,
-        {
-          name: payload.sender?.name ?? null,
-          email,
-          ...(metadata !== undefined ? { metadata } : {}),
-        },
-      );
+      senderRecord = await participantCollection.upsertIdentity({
+        externalId: senderIdentity.externalId,
+        participantType: senderIdentity.participantType,
+        name: payload.sender?.name ?? null,
+        email,
+        agentId: senderIdentity.agentId ?? null,
+        ...(metadata !== undefined ? { metadata } : {}),
+      });
     }
 
     for (const agent of deps.context.agents ?? []) {
       const externalId = agent.id ?? agent.name;
       if (!externalId) continue;
-      await participantService.upsert(
+      
+      await participantCollection.upsertIdentity({
         externalId,
-        "agent",
-        deps.context.namespace ?? null,
-        {
-          name: agent.name,
-          agentId: agent.id ?? agent.name,
-          metadata: null,
-        },
-      );
+        participantType: "agent",
+        name: agent.name,
+        agentId: agent.id ?? agent.name,
+        metadata: null,
+      });
     }
+
+    return senderRecord;
   },
 };
 

@@ -4,6 +4,10 @@ type RawInboundToolCall = {
   id?: unknown;
   name?: unknown;
   args?: unknown;
+  tool?: {
+    id?: unknown;
+    name?: unknown;
+  };
   function?: {
     name?: unknown;
     arguments?: unknown;
@@ -56,6 +60,27 @@ export function normalizeInboundToolCalls(
     }
 
     const rawCall = call as RawInboundToolCall;
+    const normalizedToolId =
+      typeof rawCall.tool?.id === "string" && rawCall.tool.id.trim().length > 0
+        ? rawCall.tool.id
+        : typeof rawCall.tool?.name === "string" &&
+            rawCall.tool.name.trim().length > 0
+        ? rawCall.tool.name
+        : null;
+    const normalizedToolName =
+      typeof rawCall.tool?.name === "string" &&
+          rawCall.tool.name.trim().length > 0
+        ? rawCall.tool.name
+        : normalizedToolId;
+
+    if (normalizedToolId) {
+      return [{
+        id: typeof rawCall.id === "string" ? rawCall.id : null,
+        tool: { id: normalizedToolId, name: normalizedToolName },
+        args: parseInboundToolArgs(rawCall.args),
+      }];
+    }
+
     const name = typeof rawCall.name === "string" && rawCall.name.trim().length > 0
       ? rawCall.name
       : typeof rawCall.function?.name === "string" &&

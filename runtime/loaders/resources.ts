@@ -32,6 +32,8 @@ import type {
 import type { Skill } from "@/runtime/loaders/skill-types.ts";
 import { loadSkillsFromDirectory } from "@/runtime/loaders/skill-loader.ts";
 
+import { fromFileUrl, resolve } from "jsr:@std/path@^1.0.0";
+
 // ---- Types ----------------------------------------------------------------
 
 type ProcessorEntry = EventProcessor<unknown, ProcessorDeps> & {
@@ -283,7 +285,8 @@ function isRemoteSpecifier(path: string): boolean {
 /** Normalise any path into a URL string usable with `import()` and `fetch()`. */
 function toBaseUrl(path: string): string {
   if (isRemoteSpecifier(path) || path.startsWith("file://")) return path;
-  const abs = path.startsWith("/") ? path : Deno.cwd() + "/" + path;
+  const cwd = Deno.cwd();
+  const abs = resolve(cwd, path);
   return "file://" + abs;
 }
 
@@ -577,6 +580,17 @@ async function loadMcpServersByManifest(
  *   2. Single `<name>.ts` file (collection pattern)
  *   3. Directory with `index.ts`
  */
+function resolveResourceFromModule(mod: unknown, name: string): unknown {
+  if (!mod || typeof mod !== "object") return mod;
+  const m = mod as Record<string, unknown>;
+  if (m.default) return m.default;
+  if (m[name]) return m[name];
+  // If it's a module object with only one export, and it's not 'default' or 'name', 
+  // we might still want it, but usually the convention is default or name.
+  // We'll return the module object itself as a fallback if it looks like a resource
+  return mod;
+}
+
 async function loadGenericByManifest(
   baseUrl: string,
   resourceType: string,
@@ -609,16 +623,16 @@ async function loadGenericByManifest(
       return {
         id: name,
         name,
-        ...(config && typeof config === "object" ? config : {}),
-        ...(adapter && typeof adapter === "object" ? adapter : {}),
+        ...(config && typeof config === "object" ? resolveResourceFromModule(config, name) as any : {}),
+        ...(adapter && typeof adapter === "object" ? resolveResourceFromModule(adapter, name) as any : {}),
       };
     }
 
     // 2. Single file: <type>/<name>.ts
-    if (singleMod) return singleMod;
+    if (singleMod) return resolveResourceFromModule(singleMod, name);
 
     // 3. Directory with index.ts
-    if (indexMod) return indexMod;
+    if (indexMod) return resolveResourceFromModule(indexMod, name);
 
     return null;
   }));
@@ -658,15 +672,19 @@ async function loadNamedGenericByManifest<T>(
     ]);
 
     let value: unknown = null;
+
+    // 1. config.ts + adapter.ts (provider pattern)
     if (config || adapter) {
       value = {
-        ...(config && typeof config === "object" ? config : {}),
-        ...(adapter && typeof adapter === "object" ? adapter : {}),
+        id: name,
+        name,
+        ...(config && typeof config === "object" ? resolveResourceFromModule(config, name) as any : {}),
+        ...(adapter && typeof adapter === "object" ? resolveResourceFromModule(adapter, name) as any : {}),
       };
     } else if (singleMod) {
-      value = singleMod;
+      value = resolveResourceFromModule(singleMod, name);
     } else if (indexMod) {
-      value = indexMod;
+      value = resolveResourceFromModule(indexMod, name);
     }
 
     if (
@@ -1026,6 +1044,16 @@ async function loadFromManifest(
     );
   }
 
+  if (provides.collections?.length) {
+    tasks.push(
+      timed("collections", () =>
+        loadGenericByManifest(baseUrl, "collections", provides.collections!),
+      ).then((r) => {
+        resources.collections = r as CollectionDefinition[];
+      }),
+    );
+  }
+
   for (const [type, names] of genericEntries) {
     tasks.push(
       timed(type, () => loadGenericByManifest(baseUrl, type, names!))
@@ -1058,7 +1086,14 @@ async function loadFromDirectory(
 
   const collectEntries = async (url: string): Promise<Deno.DirEntry[]> => {
     const entries: Deno.DirEntry[] = [];
-    for await (const entry of readDir(url)) entries.push(entry);
+    const path = url.startsWith("file://")
+      ? fromFileUrl(url)
+      : url;
+    try {
+      for await (const entry of readDir(path)) entries.push(entry);
+    } catch (_err) {
+      // Directory might not exist, which is fine for optional resource types
+    }
     return entries;
   };
 
@@ -1300,10 +1335,35 @@ async function loadFromDirectory(
     logPhase("channels", s, {
       count: resources.channels?.length ?? 0,
     });
+    })());
+
+  // ---- Collections ----
+  if (shouldLoadCategory("collections")) tasks.push((async () => {
+    const s = performance.now();
+    const collectionsUrl = joinUrl(baseUrl, "collections");
+    const entries = await collectEntries(collectionsUrl);
+    const discovered = entries
+      .filter((entry) =>
+        (entry.isDirectory || entry.name.endsWith(".ts")) &&
+        entry.name !== "mod.ts" &&
+        !entry.name.startsWith("_")
+      )
+      .map((entry) => entry.name.replace(/\.ts$/, ""));
+    
+    const names = filterNames("collections", discovered);
+    const loaded = await loadNamedGenericByManifest<CollectionDefinition>(
+      baseUrl,
+      "collections",
+      names,
+      (value): value is CollectionDefinition =>
+        typeof value === "object" && value !== null && "name" in value &&
+        "schema" in value,
+    );
+    resources.collections = loaded.map(({ value }) => value);
+    logPhase("collections", s, { count: resources.collections.length });
   })());
 
-  const loadNamedGenericFromDirectory = async <T>(
-    type: string,
+    const loadNamedGenericFromDirectory = async <T>(    type: string,
     mapper: (name: string, value: T) => unknown,
     isValid?: (value: unknown) => value is T,
   ) => {
@@ -1320,13 +1380,11 @@ async function loadFromDirectory(
         )
         .map((entry) => entry.name.replace(/\.ts$/, ""));
       const names = filterNames(type, discovered);
-      const loaded = await loadNamedGenericByManifest<T>(
-        baseUrl,
+      const loaded = await loadNamedGenericByManifest<T>(        baseUrl,
         type,
         names,
         isValid,
-      );
-      (resources as Record<string, unknown>)[type] = loaded.map(({ name, value }) =>
+      );      (resources as Record<string, unknown>)[type] = loaded.map(({ name, value }) =>
         mapper(name, value)
       );
       logPhase(type, s, { count: loaded.length });
@@ -1353,10 +1411,6 @@ async function loadFromDirectory(
     (name, value) => ({ name, module: value }),
     (value): value is Record<string, unknown> =>
       typeof value === "object" && value !== null,
-  );
-  await loadNamedGenericFromDirectory<unknown>(
-    "collections",
-    (_name, value) => value,
   );
 
   await Promise.all(tasks);

@@ -82,8 +82,11 @@ export interface CollectionMethodContext<
   TInsert = unknown,
 > {
   collection: ScopedCollectionCrud<TSelect, TInsert> & CollectionMethodMap;
-  collections: Record<string, unknown>;
-  rootCollections: Record<string, unknown>;
+  manager: Record<string, any>;
+  collections: Record<string, any>;
+  rootCollections: {
+    withNamespace: (namespace: string) => Record<string, any>;
+  } & Record<string, any>;
   namespace: string;
   ops: unknown;
 }

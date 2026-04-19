@@ -1,8 +1,8 @@
 import {
-  createCollectionIndexes,
   createCollectionsManager,
   createDatabase,
   dropTenantSchema,
+  generateCollectionIndexes,
   listTenantSchemas,
   migrations,
   provisionTenantSchema,
@@ -159,6 +159,8 @@ export type {
   ToolCallEvent,
   /** Payload structure for tool call events. */
   ToolCallEventPayload,
+  /** Context passed to custom tool `execute` handlers (db, threadId, collections, etc.). */
+  ToolExecutionContext,
   /** Runtime tool history policy with optional projector callback. */
   ToolHistoryPolicy,
   /** Declarative history policy for tools. */
@@ -1095,6 +1097,7 @@ export async function createCopilotz(
     ),
     { prioritize: "explicit" },
   );
+
   let resolvedProcessors = [
     // User/config processors first (higher priority), built-in last
     ...(userResources?.processors ?? []),
@@ -1306,8 +1309,16 @@ export async function createCopilotz(
     managedDb = cached.db;
     fromCache = true;
   } else {
+    const indexStatements: string[] = [];
+    if (config.collectionsConfig?.autoIndex !== false) {
+      for (const def of resolvedCollections) {
+        indexStatements.push(...generateCollectionIndexes(def));
+      }
+    }
+
     managedDb = await createDatabase({
       ...config.dbConfig,
+      schemaSQL: [...(config.dbConfig?.schemaSQL || []), ...indexStatements],
       staleProcessingThresholdMs: config.staleProcessingThresholdMs ??
         config.dbConfig?.staleProcessingThresholdMs,
     });
@@ -1426,15 +1437,6 @@ export async function createCopilotz(
         validateOnWrite: config.collectionsConfig?.validateOnWrite ?? false,
       },
     ) as unknown as CollectionsManager;
-
-    // Auto-create indexes if enabled
-    if (config.collectionsConfig?.autoIndex !== false) {
-      createCollectionIndexes(baseDb, resolvedCollections).catch(
-        (error: unknown) => {
-          console.warn("[collections] Failed to create indexes:", error);
-        },
-      );
-    }
   }
   logInit("initializeCollections", startedAt, {
     collections: resolvedCollections.length,
@@ -1458,10 +1460,10 @@ export async function createCopilotz(
     // Resolve namespace: RunOptions > CopilotzConfig > undefined
     const resolvedNamespace = options?.namespace ?? config.namespace;
 
-    // Resolve collections: scoped if namespace is set, otherwise raw manager
-    const resolvedCollections = (resolvedNamespace && collectionsManager)
-      ? collectionsManager.withNamespace(resolvedNamespace)
-      : collectionsManager;
+    // Resolve collections: scoped with namespace (defaulting to "global" if none provided)
+    const resolvedCollections = collectionsManager
+      ? collectionsManager.withNamespace(resolvedNamespace ?? "global")
+      : undefined;
 
     // Resolve agents: RunOptions > CopilotzConfig
     // If RunOptions provides agents, they completely override config agents

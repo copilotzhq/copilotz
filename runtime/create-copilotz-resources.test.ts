@@ -110,7 +110,7 @@ export default defineCollection({
 
     try {
       assert(copilotz.collections);
-      assertEquals(copilotz.collections?.getCollectionNames(), ["userProfile"]);
+      assert(copilotz.collections?.getCollectionNames().includes("userProfile"));
     } finally {
       await copilotz.shutdown();
     }

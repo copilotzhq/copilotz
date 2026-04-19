@@ -366,7 +366,7 @@ export async function createDatabase(
     pgliteExtensions: isPgLite
       ? config?.pgliteExtensions || ["uuid_ossp", "pg_trgm", "vector"]
       : [],
-    schemaSQL: [...config?.schemaSQL || [], ...splitSQLStatements(migrations)],
+    schemaSQL: [...splitSQLStatements(migrations), ...(config?.schemaSQL || [])],
     useWorker: isPgLite ? config?.useWorker || false : false,
     logMetrics: config?.logMetrics,
     schemas: config?.schemas,
@@ -426,7 +426,6 @@ export {
 } from "./collections/index.ts";
 
 export {
-  createCollectionIndexes,
   generateCollectionIndexes,
 } from "./collections/manager.ts";
 

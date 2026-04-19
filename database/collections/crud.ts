@@ -688,7 +688,7 @@ export function createCollectionCrud<TSelect, TInsert>(
       }
 
       // Run afterCreate hook
-      if (hooks?.afterCreate) {
+      if (record && hooks?.afterCreate) {
         await hooks.afterCreate(record, createHookContext(options.namespace));
       }
 
@@ -1049,11 +1049,7 @@ export function createCollectionCrud<TSelect, TInsert>(
       filter: WhereFilter<TSelect> = {},
       options?: { namespace: string },
     ): Promise<number> {
-      if (!options?.namespace) {
-        throw new Error("namespace is required");
-      }
-
-      const { clause, params } = buildWhereClause(filter, options.namespace, name);
+      const { clause, params } = buildWhereClause(filter, options!.namespace, name);
 
       const result = await db.query<{ count: string }>(
         `SELECT COUNT(*) as count FROM "nodes" WHERE ${clause}`,

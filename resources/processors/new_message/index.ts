@@ -25,7 +25,6 @@ import type {
 } from "@/database/schemas/index.ts";
 import {
   createMessageService,
-  createParticipantService,
 } from "@/runtime/collections/native.ts";
 
 // Import tool types from their source
@@ -395,12 +394,21 @@ function discoverSingleAgentTargetForMessage(
   availableAgents: Agent[],
 ): TargetResolution | null {
   if (messageContext.senderType === "tool" && messageContext.senderId) {
+    // Try exact match first, then case-insensitive
+    const senderIdLower = messageContext.senderId.toLowerCase();
+    const senderNameLower = messageContext.senderName?.toLowerCase();
     const agent = availableAgents.find((a) =>
       a.id === messageContext.senderId || a.name === messageContext.senderName
+    ) ?? availableAgents.find((a) =>
+      (typeof a.id === "string" && a.id.toLowerCase() === senderIdLower) ||
+      (typeof a.name === "string" && a.name.toLowerCase() === (senderNameLower ?? senderIdLower))
     );
-    return agent
-      ? { targetId: (agent.id ?? agent.name) as string, targetQueue: [] }
-      : null;
+    if (agent) {
+      return { targetId: (agent.id ?? agent.name) as string, targetQueue: [] };
+    }
+    // Agent not found — fall through to default participant routing
+    // This handles cases where the sender ID doesn't match any configured agent
+    // (e.g., chat adapter sent "assistant" but actual agent is "estrategista")
   }
 
   const senderNameLower = messageContext.senderName?.toLowerCase();
@@ -536,14 +544,21 @@ async function discoverTargetForMessage(
   const metadata = getRuntimeThreadMetadata(thread.metadata);
   const participantTargets = metadata.participantTargets ?? {};
 
-  // 1. Tool results → route back to requesting agent (unchanged behavior)
+  // 1. Tool results → route back to requesting agent
   if (messageContext.senderType === "tool" && messageContext.senderId) {
+    // Try exact match first, then case-insensitive
+    const toolSenderIdLower = messageContext.senderId.toLowerCase();
+    const toolSenderNameLower = messageContext.senderName?.toLowerCase();
     const agent = availableAgents.find((a) =>
       a.id === messageContext.senderId || a.name === messageContext.senderName
+    ) ?? availableAgents.find((a) =>
+      (typeof a.id === "string" && a.id.toLowerCase() === toolSenderIdLower) ||
+      (typeof a.name === "string" && a.name.toLowerCase() === (toolSenderNameLower ?? toolSenderIdLower))
     );
-    return agent
-      ? { targetId: (agent.id ?? agent.name) as string, targetQueue: [] }
-      : null;
+    if (agent) {
+      return { targetId: (agent.id ?? agent.name) as string, targetQueue: [] };
+    }
+    // Agent not found — fall through to default routing (mentions, persisted, participant)
   }
 
   // 2. Parse @mentions from content
@@ -760,12 +775,18 @@ function getMessageContext(payload: MessagePayload): MessageContextDetails {
   };
 }
 
+// Import Participant Lifecycle logic
+import { process as ensureParticipants } from "./participant_lifecycle.ts";
+
 export const messageProcessor: EventProcessor<
   NewMessageEventPayload,
   ProcessorDeps
 > = {
   shouldProcess: () => true,
   process: async (event: Event, deps: ProcessorDeps) => {
+    // 1. Ensure participants exist (Identity Lifecycle Side-effect)
+    const senderIdentity = await ensureParticipants(event, deps);
+
     const { db, thread, context } = deps;
     const ops = db.ops;
     const messageService = createMessageService({
@@ -838,9 +859,13 @@ export const messageProcessor: EventProcessor<
       ? contentOverride
       : messageContext.contentText;
 
+    // Resolve senderId for storage: prefer the resolved participant node ID
+    // so that collection-level relations (SENT_BY edge) can be created.
+    const storageSenderId = (senderIdentity as any)?.id ?? messageContext.senderId;
+
     const incomingMsg = {
       threadId,
-      senderId: messageContext.senderId,
+      senderId: storageSenderId,
       senderType: messageContext.senderType,
       content: persistedContent,
       toolCallId: toolCallId,
@@ -1665,10 +1690,7 @@ async function buildProcessingContext(
     collections: context.collections,
     ops,
   });
-  const participantService = createParticipantService({
-    collections: context.collections,
-    ops,
-  });
+  const participantCollection = (context.collections as any)?.withNamespace(context.namespace ?? "global").participant;
   const chatHistory = await messageService.getHistory(threadId, senderIdForHistory);
 
   const availableAgents = context.agents || [];
@@ -1703,9 +1725,11 @@ async function buildProcessingContext(
   if (!userMetadata && runtimeThreadMetadata.userExternalId) {
     const externalId = runtimeThreadMetadata.userExternalId as string;
     try {
-      const participant = await participantService.get(externalId, context.namespace ?? null);
-      if (participant?.metadata && typeof participant.metadata === "object") {
-        userMetadata = participant.metadata as Record<string, unknown>;
+      if (participantCollection && typeof (participantCollection as any).resolveByExternalId === "function") {
+        const participant = await (participantCollection as any).resolveByExternalId(externalId);
+        if (participant?.metadata && typeof participant.metadata === "object") {
+          userMetadata = participant.metadata as Record<string, unknown>;
+        }
       }
     } catch (error) {
       console.warn(
@@ -1723,27 +1747,26 @@ async function buildProcessingContext(
   let agentNode: KnowledgeNode | undefined = undefined;
   if (targetAgentId) {
     try {
-      const participant = await participantService.get(
-        targetAgentId,
-        context.namespace,
-      );
-      if (participant) {
-        agentNode = {
-          id: participant.id,
-          namespace: participant.namespace ?? context.namespace ?? "global",
-          type: "participant",
-          name: participant.name ?? targetAgentId,
-          content: null,
-          embedding: null,
-          data: {
-            ...participant,
-            metadata: participant.metadata ?? null,
-          },
-          sourceType: "participant",
-          sourceId: participant.externalId,
-          createdAt: participant.createdAt as Date | undefined,
-          updatedAt: participant.updatedAt as Date | undefined,
-        } as KnowledgeNode;
+      if (participantCollection && typeof (participantCollection as any).resolveByExternalId === "function") {
+        const participant = await (participantCollection as any).resolveByExternalId(targetAgentId);
+        if (participant) {
+          agentNode = {
+            id: participant.id,
+            namespace: participant.namespace ?? context.namespace ?? "global",
+            type: "participant",
+            name: participant.name ?? targetAgentId,
+            content: null,
+            embedding: null,
+            data: {
+              ...participant,
+              metadata: participant.metadata ?? null,
+            },
+            sourceType: "participant",
+            sourceId: participant.externalId,
+            createdAt: participant.createdAt as Date | undefined,
+            updatedAt: participant.updatedAt as Date | undefined,
+          } as KnowledgeNode;
+        }
       }
     } catch {
       // Ignore errors - agent node might not exist

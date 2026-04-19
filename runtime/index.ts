@@ -283,14 +283,14 @@ export async function runThread(
       ) {
         baseParticipants = existingThread.participants as string[];
       } else {
-        baseParticipants = (baseContext.agents ?? []).map((a) => a.name).filter(
+        baseParticipants = (baseContext.agents ?? []).map((a) => a.id ?? a.name).filter(
           Boolean,
-        );
+        ) as string[];
       }
     } catch {
-      baseParticipants = (baseContext.agents ?? []).map((a) => a.name).filter(
+      baseParticipants = (baseContext.agents ?? []).map((a) => a.id ?? a.name).filter(
         Boolean,
-      );
+      ) as string[];
     }
   }
   const senderCanonical = buildParticipantIdentity(sender);

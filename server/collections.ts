@@ -87,13 +87,12 @@ export function createCollectionHandlers(copilotz: Copilotz): CollectionHandlers
         namespace?: string,
     ): Record<string, unknown> => {
         if (!manager) throw new Error("Collections not configured");
-        const coll = namespace
-            ? manager.withNamespace(namespace)[collectionName]
-            : manager[collectionName];
+        const effectiveNamespace = namespace || (copilotz as any).config?.namespace || "global";
+        const coll = manager.withNamespace(effectiveNamespace)[collectionName];
         if (!coll || typeof coll !== "object") {
             throw new Error(`Collection '${collectionName}' not found`);
         }
-        return coll as Record<string, unknown>;
+        return coll as unknown as Record<string, unknown>;
     };
 
     const getRouteFilter = (

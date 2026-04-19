@@ -8,7 +8,6 @@
  */
 
 import type { Copilotz } from "@/index.ts";
-import { createParticipantService } from "@/runtime/collections/native.ts";
 
 export type ParticipantData = Record<string, unknown>;
 
@@ -68,24 +67,25 @@ export interface ParticipantHandlers {
 export function createParticipantHandlers(
   copilotz: Copilotz,
 ): ParticipantHandlers {
-  const service = createParticipantService({
-    collections: copilotz.collections,
-    ops: copilotz.ops,
-  });
-
   return {
     get: async (externalId, options = {}) => {
-      const participant = await service.get(
-        externalId,
-        options.namespace ?? null,
-      );
+      const namespace = options.namespace ?? "global";
+      const participantCollection = copilotz.collections?.withNamespace(namespace).participant;
+      if (!participantCollection || typeof (participantCollection as any).resolveByExternalId !== "function") return null;
+
+      const participant = await (participantCollection as any).resolveByExternalId(externalId);
       if (!participant) return null;
       return participant as ParticipantData;
     },
 
     update: async (externalId, updates, options = {}) => {
-      const namespace = options.namespace ?? null;
-      const current = await service.get(externalId, namespace);
+      const namespace = options.namespace ?? "global";
+      const participantCollection = copilotz.collections?.withNamespace(namespace).participant;
+      if (!participantCollection || typeof (participantCollection as any).resolveByExternalId !== "function") {
+        throw new Error("Participant collection is not available");
+      }
+
+      const current = await (participantCollection as any).resolveByExternalId(externalId);
       const currentMetadata = (current?.metadata ?? {}) as ParticipantData;
       const next = deepMergeReplaceArrays(currentMetadata, updates);
 
@@ -97,17 +97,14 @@ export function createParticipantHandlers(
 
       next.updatedAt = new Date().toISOString();
 
-      const participant = await service.upsert(
+      const participant = await (participantCollection as any).upsertIdentity({
         externalId,
-        options.participantType ?? "human",
-        namespace,
-        {
-          ...(options.name !== undefined ? { name: options.name } : {}),
-          ...(options.email !== undefined ? { email: options.email } : {}),
-          ...(options.agentId !== undefined ? { agentId: options.agentId } : {}),
-          metadata: next,
-        },
-      );
+        participantType: options.participantType ?? "human",
+        ...(options.name !== undefined ? { name: options.name } : {}),
+        ...(options.email !== undefined ? { email: options.email } : {}),
+        ...(options.agentId !== undefined ? { agentId: options.agentId } : {}),
+        metadata: next,
+      });
 
       return participant as ParticipantData;
     },

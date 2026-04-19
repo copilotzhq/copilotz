@@ -244,6 +244,7 @@ export interface DatabaseOperations {
   // ============================================
 
   /**
+   * @deprecated Use `copilotz.collections.participant.upsertIdentity` instead.
    * Find or create a participant node in the graph (human or agent).
    * This is the preferred method for creating participant nodes.
    *
@@ -268,6 +269,7 @@ export interface DatabaseOperations {
   ) => Promise<KnowledgeNode>;
 
   /**
+   * @deprecated Use `copilotz.collections.participant.resolveByExternalId` instead.
    * Get a participant node by externalId.
    * Works for both humans and agents.
    * Also checks for global participants (namespace = "global") as fallback.
@@ -278,6 +280,7 @@ export interface DatabaseOperations {
   ) => Promise<KnowledgeNode | undefined>;
 
   /**
+   * @deprecated Use `copilotz.collections.participant` for participant management.
    * Compatibility helper for one-off migrations from legacy graph-backed user
    * nodes into the participant collection. Does not read the collection layer.
    */

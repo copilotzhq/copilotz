@@ -273,84 +273,6 @@ function historyPageInfo(messages: Message[], hasMoreBefore: boolean): MessageHi
   };
 }
 
-export function createParticipantService(
-  deps: {
-    collections?: CollectionAccessor;
-    ops: CopilotzDb["ops"];
-  },
-) {
-  const { collections } = deps;
-
-  return {
-    async get(externalId: string, namespace?: string | null): Promise<ParticipantRecord | null> {
-      const collectionNamespace = namespace ?? "global";
-      const scoped = getParticipantCollection(collections, collectionNamespace);
-      if (!scoped) return null;
-      if (typeof scoped.resolveByExternalId === "function") {
-        return await scoped.resolveByExternalId(externalId);
-      }
-      const local = typeof scoped.getByExternalId === "function"
-        ? await scoped.getByExternalId(externalId)
-        : await scoped.findOne({ externalId });
-      if (local) return local;
-      if (namespace) {
-        const globalScoped = getParticipantCollection(collections, "global");
-        const globalRecord = globalScoped
-          ? typeof globalScoped.getByExternalId === "function"
-            ? await globalScoped.getByExternalId(externalId)
-            : await globalScoped.findOne({ externalId })
-          : null;
-        if (globalRecord) return globalRecord;
-      }
-      return null;
-    },
-
-    async upsert(
-      externalId: string,
-      participantType: "human" | "agent",
-      namespace: string | null,
-      data: {
-        name?: string | null;
-        email?: string | null;
-        agentId?: string | null;
-        metadata?: Record<string, unknown> | null;
-      },
-    ): Promise<ParticipantRecord> {
-      const collectionNamespace = namespace ?? "global";
-      const scoped = getParticipantCollection(collections, collectionNamespace);
-      if (!scoped) {
-        throw new Error("Participant collection is not available");
-      }
-
-      const current = await this.get(externalId, namespace);
-      const currentMetadata = current?.metadata ?? {};
-      const nextMetadata = data.metadata === undefined
-        ? current?.metadata ?? null
-        : deepMergeReplaceArrays(
-          currentMetadata as Record<string, unknown>,
-          data.metadata ?? {},
-        );
-
-      const input = {
-        ...(current?.id ? { id: current.id } : {}),
-        externalId,
-        participantType,
-        name: data.name !== undefined ? data.name : current?.name ?? null,
-        email: data.email !== undefined ? data.email : current?.email ?? null,
-        agentId: data.agentId !== undefined ? data.agentId : current?.agentId ?? null,
-        metadata: nextMetadata,
-        isGlobal: namespace === null,
-      };
-
-      if (typeof scoped.upsertIdentity === "function") {
-        return await scoped.upsertIdentity(input);
-      }
-
-      return await scoped.upsert({ externalId }, input);
-    },
-  };
-}
-
 export function createMessageService(
   deps: { collections?: CollectionAccessor; ops: CopilotzDb["ops"] },
 ) {
@@ -394,14 +316,16 @@ export function createMessageService(
       }
 
       if (message.senderType === "user" && message.senderId) {
-        const participantService = createParticipantService(deps);
-        const participant = await participantService.get(message.senderId, namespace ?? null);
-        if (participant?.id) {
-          await ops.createEdge({
-            sourceNodeId: participant.id,
-            targetNodeId: created.id,
-            type: "SENT_BY",
-          });
+        const participantScoped = getParticipantCollection(deps.collections, namespace ?? "global");
+        if (participantScoped && typeof participantScoped.resolveByExternalId === "function") {
+          const participant = await participantScoped.resolveByExternalId(message.senderId);
+          if (participant?.id) {
+            await ops.createEdge({
+              sourceNodeId: participant.id,
+              targetNodeId: created.id,
+              type: "SENT_BY",
+            });
+          }
         }
       }
 

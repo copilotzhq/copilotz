@@ -132,8 +132,11 @@ export function createScopedCollections(
       const boundMethods = definition.methods({
         collection: scopedCollection as ScopedCollectionCrud<unknown, unknown> &
           CollectionMethodMap,
-        collections: scoped as Record<string, unknown>,
-        rootCollections: rootManager as Record<string, unknown>,
+        manager: scoped as Record<string, any>,
+        collections: scoped as Record<string, any>,
+        rootCollections: rootManager as {
+          withNamespace: (namespace: string) => Record<string, any>;
+        } & Record<string, any>,
         namespace,
         ops,
       });
@@ -141,7 +144,15 @@ export function createScopedCollections(
     }
   }
 
-  return scoped;
+  // Include manager helpers in the scoped object
+  const managerHelpers = {
+    withNamespace: (newNamespace: string) =>
+      createScopedCollections(collections, newNamespace, definitions, rootManager, ops),
+    getCollectionNames: () => definitions?.map((d) => d.name) ?? [],
+    hasCollection: (name: string) => scoped[name] !== undefined,
+  };
+
+  return Object.assign(scoped, managerHelpers) as any;
 }
 
 // ============================================
@@ -277,16 +288,12 @@ export function generateCollectionIndexes(definition: CollectionDefinition): str
     if (typeof indexDef === "string") {
       // Simple field index
       indexName = `idx_${name}_${indexDef}`;
-      indexSql = `CREATE INDEX IF NOT EXISTS "${indexName}" 
-        ON "nodes" (("data"->>'${indexDef}')) 
-        WHERE "type" = '${name}'`;
+      indexSql = `CREATE INDEX IF NOT EXISTS "${indexName}" ON "nodes" (("data"->>'${indexDef}')) WHERE "type" = '${name}'`;
     } else if (Array.isArray(indexDef)) {
       // Composite index
       indexName = `idx_${name}_${indexDef.join("_")}`;
       const columns = indexDef.map((f) => `("data"->>'${f}')`).join(", ");
-      indexSql = `CREATE INDEX IF NOT EXISTS "${indexName}" 
-        ON "nodes" (${columns}) 
-        WHERE "type" = '${name}'`;
+      indexSql = `CREATE INDEX IF NOT EXISTS "${indexName}" ON "nodes" (${columns}) WHERE "type" = '${name}'`;
     } else {
       // Complex index definition
       const fields = Array.isArray(indexDef.fields)
@@ -299,14 +306,10 @@ export function generateCollectionIndexes(definition: CollectionDefinition): str
 
       if (indexType === "gin") {
         const column = `("data"->'${fields[0]}')`;
-        indexSql = `CREATE ${unique} INDEX IF NOT EXISTS "${indexName}" 
-          ON "nodes" USING gin (${column}) 
-          WHERE "type" = '${name}'`;
+        indexSql = `CREATE ${unique} INDEX IF NOT EXISTS "${indexName}" ON "nodes" USING gin (${column}) WHERE "type" = '${name}'`;
       } else if (indexType === "gist") {
         const column = `("data"->>'${fields[0]}')`;
-        indexSql = `CREATE ${unique} INDEX IF NOT EXISTS "${indexName}" 
-          ON "nodes" USING gist (${column} gist_trgm_ops) 
-          WHERE "type" = '${name}'`;
+        indexSql = `CREATE ${unique} INDEX IF NOT EXISTS "${indexName}" ON "nodes" USING gist (${column} gist_trgm_ops) WHERE "type" = '${name}'`;
       } else {
         const columns = fields.map((f) => `("data"->>'${f}')`).join(", ");
         let whereClause = `WHERE "type" = '${name}'`;
@@ -318,9 +321,7 @@ export function generateCollectionIndexes(definition: CollectionDefinition): str
           whereClause += ` AND ${conditions}`;
         }
 
-        indexSql = `CREATE ${unique} INDEX IF NOT EXISTS "${indexName}" 
-          ON "nodes" (${columns}) 
-          ${whereClause}`;
+        indexSql = `CREATE ${unique} INDEX IF NOT EXISTS "${indexName}" ON "nodes" (${columns}) ${whereClause}`;
       }
     }
 
@@ -330,24 +331,3 @@ export function generateCollectionIndexes(definition: CollectionDefinition): str
   return statements;
 }
 
-/**
- * Creates indexes for all collections.
- * 
- * @param db - Database instance
- * @param definitions - Array of collection definitions
- */
-export async function createCollectionIndexes(
-  db: DbInstance,
-  definitions: readonly CollectionDefinition[],
-): Promise<void> {
-  for (const definition of definitions) {
-    const statements = generateCollectionIndexes(definition);
-    for (const sql of statements) {
-      try {
-        await db.query(sql);
-      } catch (error) {
-        console.warn(`Failed to create index for ${definition.name}:`, error);
-      }
-    }
-  }
-}

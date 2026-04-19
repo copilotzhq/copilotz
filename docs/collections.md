@@ -43,6 +43,16 @@ const customer = defineCollection({
     account: relation.belongsTo("account", "accountId"),
     tickets: relation.hasMany("ticket", "customerId"),
   },
+  // Custom late-bound methods
+  methods: ({ collection, manager, rootCollections, namespace }) => ({
+    async getProCustomers() {
+      return await collection.find({ plan: "pro" });
+    },
+    async getGlobalUser(externalId: string) {
+      // Access other namespaces (e.g. for shared identities)
+      return await rootCollections.withNamespace("global").participant.findOne({ externalId });
+    }
+  })
 });
 ```
 
@@ -94,6 +104,30 @@ relations: {
 ```
 
 Relations create edges in the knowledge graph, enabling graph traversal.
+
+## Custom Methods
+
+You can extend collections with custom logic using the `methods` property. Unlike hooks, which run automatically, methods are called manually on the collection instance.
+
+The `methods` property is a **factory callback** that receives a context object:
+
+| Property | Description |
+|----------|-------------|
+| `collection` | The current namespace-bound collection instance |
+| `manager` | Sibling collections in the same namespace |
+| `rootCollections` | Access to other namespaces (e.g. `rootCollections.withNamespace("global")`) |
+| `namespace` | The current active namespace string |
+| `ops` | Low-level database operations |
+
+Methods are "late-bound" to the scoped collection:
+
+```typescript
+const copilotz = await createCopilotz({ ... });
+
+// Using on a scoped collection
+const tenant = copilotz.collections.withNamespace("tenant:123");
+const pros = await tenant.customer.getProCustomers();
+```
 
 ## Registering Collections
 
@@ -323,7 +357,7 @@ The knowledge graph (`nodes` table) stores these built-in node types:
 |-----------|---------|------------|
 | `message` | Conversation messages | `NEW_MESSAGE` processor |
 | `chunk` | Document chunks with embeddings | `RAG_INGEST` processor |
-| `user` | User entities | Message processing (auto-upsert) |
+| `participant`| Humans and Agents | `NEW_MESSAGE` processor (auto-upsert) |
 | `entity` | Extracted entities (people, orgs, concepts) | `ENTITY_EXTRACT` processor |
 
 **Message nodes:**
@@ -357,16 +391,16 @@ The knowledge graph (`nodes` table) stores these built-in node types:
 }
 ```
 
-**User nodes:**
+**Participant nodes:**
 ```typescript
 {
-  type: "user",
-  namespace: null,              // null = global user
+  type: "participant",
+  namespace: "tenant:123",      // Scoped to tenant (see Identity Widening)
   name: "Alex",
   data: {
     externalId: "user-123",
+    participantType: "human",   // "human" or "agent"
     email: "alex@acme.com",
-    isGlobal: true,
     metadata: {...},
   },
 }
@@ -386,6 +420,17 @@ The knowledge graph (`nodes` table) stores these built-in node types:
 }
 ```
 
+### Identity Namespace Widening
+
+The built-in `participant` collection implements **Identity Namespace Widening**. 
+
+When you perform an operation on a participant using a thread-level namespace (e.g., `tenant:1:thread:A`), the collection automatically strips the `:thread:` suffix and stores/resolves the identity at the parent level (`tenant:1`). 
+
+This ensures that:
+1. Users are recognized across multiple threads within the same tenant.
+2. Agents share persistent memory across all conversations in that tenant.
+3. You don't have duplicate identities for the same actor.
+
 ### Knowledge Graph Edge Types
 
 Edges connect nodes in the graph:
@@ -393,7 +438,7 @@ Edges connect nodes in the graph:
 | Edge Type | From → To | Purpose |
 |-----------|-----------|---------|
 | `REPLIED_BY` | Message → Message | Conversation flow |
-| `SENT_BY` | User → Message | Message authorship |
+| `SENT_BY` | Participant → Message | Message authorship |
 | `MENTIONS` | Message/Chunk → Entity | Entity references |
 | `RELATED_TO` | Entity → Entity | Entity relationships |
 | `NEXT_CHUNK` | Chunk → Chunk | Document order |
@@ -415,17 +460,17 @@ const related = await copilotz.ops.traverseGraph(entityId, ["MENTIONS", "RELATED
 
 ### Accessing Built-in Data
 
-Use `copilotz.ops` for high-level operations:
+Use the `collections` API for high-level operations on participants and messages:
 
 ```typescript
+// Participant operations (Recommended)
+const participants = copilotz.collections.withNamespace("tenant:1").participant;
+const user = await participants.resolveByExternalId("user-123");
+
 // Thread operations
 const thread = await copilotz.ops.findOrCreateThread(threadId, { metadata: {...} });
 const history = await copilotz.ops.getMessageHistory(threadId, userId, 50);
 await copilotz.ops.archiveThread(threadId, "Resolved successfully");
-
-// Participant operations (graph-based)
-await copilotz.ops.upsertParticipantNode("external-123", "human", "tenant:acme", { name: "Alex" });
-const participant = await copilotz.ops.getParticipantNode("external-123", "tenant:acme");
 
 // Graph operations
 const nodes = await copilotz.ops.searchNodes({
@@ -433,7 +478,7 @@ const nodes = await copilotz.ops.searchNodes({
   nodeTypes: ["entity"],
   namespace: "tenant:acme",
 });
-
+```
 // RAG operations
 const stats = await copilotz.ops.getNamespaceStats();
 // { "docs": { documentCount: 10, chunkCount: 500 } }

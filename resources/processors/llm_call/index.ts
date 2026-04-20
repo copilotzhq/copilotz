@@ -1,9 +1,9 @@
 import { chat } from "@/runtime/llm/index.ts";
 import type {
-  CostBreakdown,
   ChatMessage,
   ChatRequest,
   ChatResponse,
+  CostBreakdown,
   LLMConfig,
   LLMRuntimeConfig,
   ProviderConfig,
@@ -100,6 +100,25 @@ export function shouldEmitAgentMessage(
       (Array.isArray(toolCalls) && toolCalls.length > 0) ||
       routeTargets.length > 0 ||
       askTargets.length > 0,
+  );
+}
+
+export function assertAgentLLMConfig(
+  agent: { id?: string | null; name?: string | null },
+  config: Partial<LLMRuntimeConfig> | undefined,
+): void {
+  const missing: string[] = [];
+  if (!config?.provider) missing.push("provider");
+  if (!config?.model) missing.push("model");
+  if (missing.length === 0) return;
+
+  const agentLabel = agent.name ?? agent.id ?? "unknown";
+  throw new Error(
+    `Agent "${agentLabel}" is missing required llmOptions (${
+      missing.join(", ")
+    }). ` +
+      `Configure llmOptions on that agent, or provide shared defaults with ` +
+      `createCopilotz({ agent: { llmOptions: { provider, model, ... } } }).`,
   );
 }
 
@@ -255,7 +274,11 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       controlPending: "",
     };
 
-    const buildTokenEvent = (token: string, isComplete: boolean, isReasoning?: boolean): Event => {
+    const buildTokenEvent = (
+      token: string,
+      isComplete: boolean,
+      isReasoning?: boolean,
+    ): Event => {
       const tokenPayload: TokenEventPayload = {
         threadId,
         agent: {
@@ -283,16 +306,17 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       };
     };
 
-    const streamCallback =
-      (context.stream && deps.emitToStream)
-        ? (token: string, options?: { isReasoning?: boolean }) => {
-            const filtered = options?.isReasoning
-              ? token
-              : filterToolCallTokensStreaming(token, toolCallFilterState);
+    const streamCallback = (context.stream && deps.emitToStream)
+      ? (token: string, options?: { isReasoning?: boolean }) => {
+        const filtered = options?.isReasoning
+          ? token
+          : filterToolCallTokensStreaming(token, toolCallFilterState);
 
-            deps.emitToStream(buildTokenEvent(filtered, false, options?.isReasoning));
-        }
-        : undefined;
+        deps.emitToStream(
+          buildTokenEvent(filtered, false, options?.isReasoning),
+        );
+      }
+      : undefined;
 
     const envVars: Record<string, string> = (() => {
       try {
@@ -396,7 +420,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     if (agentForCall?.llmOptions) {
       if (typeof agentForCall.llmOptions === "function") {
         const runtimePayload = {
-          agent: { id: payload.agent.id ?? undefined, name: payload.agent.name },
+          agent: {
+            id: payload.agent.id ?? undefined,
+            name: payload.agent.name,
+          },
           messages: payload.messages as ChatMessage[],
           tools: payload.tools,
           config: persistedConfig,
@@ -414,8 +441,8 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       }
     }
 
-    const securityRuntimeConfig =
-      await context.security?.resolveLLMRuntimeConfig?.({
+    const securityRuntimeConfig = await context.security
+      ?.resolveLLMRuntimeConfig?.({
         provider: persistedConfig.provider,
         model: persistedConfig.model,
         agent: { id: payload.agent.id ?? undefined, name: payload.agent.name },
@@ -428,6 +455,11 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       persistedConfig,
       agentRuntimeConfig,
       securityRuntimeConfig,
+    );
+
+    assertAgentLLMConfig(
+      { id: payload.agent.id ?? null, name: payload.agent.name },
+      configForCall,
     );
 
     if (Deno.env.get("COPILOTZ_DEBUG") === "1") {
@@ -603,9 +635,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       provider: llmResponse.provider ?? null,
       model: llmResponse.model ?? null,
       status: "completed",
-      finishReason: Array.isArray(normalizedToolCalls) && normalizedToolCalls.length > 0
-        ? "tool_calls"
-        : "stop",
+      finishReason:
+        Array.isArray(normalizedToolCalls) && normalizedToolCalls.length > 0
+          ? "tool_calls"
+          : "stop",
       answer: answer ?? null,
       reasoning: reasoning ?? null,
       toolCalls: normalizedToolCalls ?? null,
@@ -629,9 +662,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       ...(askTargets.length > 0
         ? {
           routing: {
-            ...(routeTargets.length > 0
-              ? { routeTo: routeTargets }
-              : {}),
+            ...(routeTargets.length > 0 ? { routeTo: routeTargets } : {}),
             askTo: askTargets,
           },
         }

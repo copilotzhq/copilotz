@@ -1,6 +1,13 @@
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertThrows,
+} from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import { resolveAgentResponseTarget, shouldEmitAgentMessage } from "./index.ts";
+import {
+  assertAgentLLMConfig,
+  resolveAgentResponseTarget,
+  shouldEmitAgentMessage,
+} from "./index.ts";
 
 Deno.test("resolveAgentResponseTarget ignores self routes and falls back to sender", () => {
   const result = resolveAgentResponseTarget(
@@ -151,5 +158,33 @@ Deno.test("shouldEmitAgentMessage treats route-only replies as actionable", () =
   assertEquals(
     shouldEmitAgentMessage("", undefined, [], []),
     false,
+  );
+});
+
+Deno.test("assertAgentLLMConfig throws a helpful error when provider/model are missing", () => {
+  assertThrows(
+    () =>
+      assertAgentLLMConfig(
+        {
+          id: "copilotz",
+          name: "copilotz",
+        },
+        {},
+      ),
+    Error,
+    'Agent "copilotz" is missing required llmOptions (provider, model).',
+  );
+});
+
+Deno.test("assertAgentLLMConfig accepts a complete provider/model pair", () => {
+  assertAgentLLMConfig(
+    {
+      id: "copilotz",
+      name: "copilotz",
+    },
+    {
+      provider: "openai",
+      model: "gpt-5-mini",
+    },
   );
 });

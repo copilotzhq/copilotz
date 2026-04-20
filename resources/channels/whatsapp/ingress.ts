@@ -17,10 +17,9 @@ import {
 export function createWhatsAppIngressAdapter(
   config?: Partial<WhatsAppConfig>,
 ): IngressAdapter {
-  const cfg = resolveWhatsAppConfig(config);
-
   return {
     async handle(request) {
+      const cfg = resolveWhatsAppConfig(config, request.context);
       if (request.method === "GET") {
         const query = request.query ?? {};
         const mode = query["hub.mode"] as string | undefined;

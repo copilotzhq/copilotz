@@ -13,8 +13,6 @@ import {
 export function createZendeskEgressAdapter(
   config?: Partial<ZendeskConfig>,
 ): EgressAdapter {
-  const cfg = resolveZendeskConfig(config);
-
   return {
     async validateThreadContext(thread) {
       const channelContext = getChannelContext(thread?.metadata, "zendesk");
@@ -30,6 +28,7 @@ export function createZendeskEgressAdapter(
       }
     },
     async deliver(context) {
+      const cfg = resolveZendeskConfig(config, context.context);
       const channelContext = getChannelContext(
         context.thread?.metadata,
         "zendesk",

@@ -51,6 +51,7 @@ export interface AppRequest {
   headers?: Record<string, string>;
   rawBody?: Uint8Array;
   callback?: (event: unknown) => void;
+  context?: Record<string, unknown>;
 }
 
 /**
@@ -121,6 +122,7 @@ interface RouteContext {
   headers: Record<string, string>;
   rawBody?: Uint8Array;
   callback?: (event: unknown) => void;
+  context?: Record<string, unknown>;
   method: string;
 }
 
@@ -360,15 +362,19 @@ function buildRoutes(): Route[] {
           };
         }
         const result = await ctx.handlers.collections.list(p.collection, {
-            namespace,
-            filter: parseJsonParam(ctx.query.filter),
-            limit: asNumber(ctx.query.limit),
-            offset: asNumber(ctx.query.offset),
-            before: typeof ctx.query.before === "string" ? ctx.query.before : undefined,
-            after: typeof ctx.query.after === "string" ? ctx.query.after : undefined,
-            sort: parseSortParam(ctx.query.sort),
-            populate: parseListParam(ctx.query.populate),
-          });
+          namespace,
+          filter: parseJsonParam(ctx.query.filter),
+          limit: asNumber(ctx.query.limit),
+          offset: asNumber(ctx.query.offset),
+          before: typeof ctx.query.before === "string"
+            ? ctx.query.before
+            : undefined,
+          after: typeof ctx.query.after === "string"
+            ? ctx.query.after
+            : undefined,
+          sort: parseSortParam(ctx.query.sort),
+          populate: parseListParam(ctx.query.populate),
+        });
         return {
           status: 200,
           data: result.data,
@@ -621,6 +627,7 @@ async function handleChannelRoute(
     body: ctx.body,
     rawBody: ctx.rawBody,
     callback: ctx.callback,
+    context: ctx.context,
     route,
   };
 
@@ -650,6 +657,7 @@ async function handleChannelRoute(
     await egress.deliver({
       route,
       callback: ctx.callback,
+      context: ctx.context,
       handle,
       thread: ensuredThread,
       message,
@@ -762,7 +770,11 @@ export function withApp<T extends Copilotz>(
     | undefined;
   if (features?.length) {
     for (const feature of features) {
-      for (const [actionName, handler] of Object.entries(feature.actions)) {
+      const actions = feature.actions as Record<
+        string,
+        (request: Record<string, unknown>, copilotz: Copilotz) => unknown
+      >;
+      for (const [actionName, handler] of Object.entries(actions)) {
         routes.push({
           resource: "features",
           method: "*",
@@ -776,6 +788,7 @@ export function withApp<T extends Copilotz>(
                 headers: ctx.headers,
                 rawBody: ctx.rawBody,
                 callback: ctx.callback,
+                context: ctx.context,
               },
               ctx.copilotz,
             );
@@ -802,6 +815,7 @@ export function withApp<T extends Copilotz>(
         headers,
         rawBody,
         callback,
+        context,
       } = request;
 
       const matched = matchRoute(routes, resource, method, path);
@@ -820,6 +834,7 @@ export function withApp<T extends Copilotz>(
         headers: headers ?? {},
         rawBody,
         callback,
+        context,
         method,
       };
 

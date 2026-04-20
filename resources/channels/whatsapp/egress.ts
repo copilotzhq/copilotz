@@ -12,8 +12,6 @@ import {
 export function createWhatsAppEgressAdapter(
   config?: Partial<WhatsAppConfig>,
 ): EgressAdapter {
-  const cfg = resolveWhatsAppConfig(config);
-
   return {
     async validateThreadContext(thread) {
       const channelContext = getChannelContext(thread?.metadata, "whatsapp");
@@ -29,6 +27,7 @@ export function createWhatsAppEgressAdapter(
       }
     },
     async deliver(context) {
+      const cfg = resolveWhatsAppConfig(config, context.context);
       const channelContext = getChannelContext(
         context.thread?.metadata,
         "whatsapp",

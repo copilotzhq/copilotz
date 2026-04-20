@@ -16,6 +16,7 @@ function createMockCopilotz() {
     threadId?: string;
     message: unknown;
     events: string[];
+    context?: unknown;
   }[] = [];
 
   const record = (method: string, ...args: unknown[]) => {
@@ -169,7 +170,8 @@ function createMockCopilotz() {
 
   const mockCollections = {
     getCollectionNames: () => ["customers", "orders", "participant"],
-    hasCollection: (name: string) => ["customers", "orders", "participant"].includes(name),
+    hasCollection: (name: string) =>
+      ["customers", "orders", "participant"].includes(name),
     withNamespace: () => ({
       participant: {
         findOne: async (filter: Record<string, unknown>) => {
@@ -185,7 +187,10 @@ function createMockCopilotz() {
             updatedAt: new Date().toISOString(),
           };
         },
-        update: async (filter: Record<string, unknown>, data: Record<string, unknown>) => {
+        update: async (
+          filter: Record<string, unknown>,
+          data: Record<string, unknown>,
+        ) => {
           record("collections.participant.update", filter, data);
           return {
             id: "participant-1",
@@ -222,7 +227,11 @@ function createMockCopilotz() {
           actions: {
             ping: async (req: any) => ({
               status: 200,
-              data: { pong: true, received: req.body },
+              data: {
+                pong: true,
+                received: req.body,
+                context: req.context ?? null,
+              },
             }),
           },
         },
@@ -287,8 +296,26 @@ function createMockCopilotz() {
                 threadId: ctx.thread?.id,
                 message: ctx.message,
                 events,
+                context: ctx.context ?? null,
               });
               record("zendesk.deliver", ctx.route, ctx.thread, ctx.message);
+            },
+          },
+        },
+        {
+          name: "inspect",
+          ingress: {
+            async handle(ctx: any) {
+              return {
+                status: 200,
+                response: { context: ctx.context ?? null },
+                messages: [],
+              };
+            },
+          },
+          egress: {
+            async deliver() {
+              // no-op
             },
           },
         },
@@ -554,21 +581,32 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
     });
 
     // -- participant via collections --
-    await t.step("GET /collections/participant/:id returns participant", async () => {
-      const res = await fetch(`${base}/collections/participant/user-1?namespace=global`);
-      assertEquals(res.status, 200);
-      const { data } = await res.json();
-      assertEquals(data.name, "Alice");
-    });
+    await t.step(
+      "GET /collections/participant/:id returns participant",
+      async () => {
+        const res = await fetch(
+          `${base}/collections/participant/user-1?namespace=global`,
+        );
+        assertEquals(res.status, 200);
+        const { data } = await res.json();
+        assertEquals(data.name, "Alice");
+      },
+    );
 
-    await t.step("PUT /collections/participant/:id updates participant", async () => {
-      const res = await fetch(`${base}/collections/participant/user-1?namespace=global`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ age: 30 }),
-      });
-      assertEquals(res.status, 200);
-    });
+    await t.step(
+      "PUT /collections/participant/:id updates participant",
+      async () => {
+        const res = await fetch(
+          `${base}/collections/participant/user-1?namespace=global`,
+          {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ age: 30 }),
+          },
+        );
+        assertEquals(res.status, 200);
+      },
+    );
 
     await t.step("GET /participants/:id is removed", async () => {
       const res = await fetch(`${base}/participants/user-1`);
@@ -642,6 +680,87 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
         const { data } = await res.json();
         assertEquals(data.pong, true);
         assertEquals(data.received.hello, "world");
+        assertEquals(data.context, null);
+      },
+    );
+
+    await t.step(
+      "POST /features/echo/ping passes optional request context to feature handlers",
+      async () => {
+        const { copilotz } = createMockCopilotz();
+        withApp(copilotz as any);
+
+        const result = await (copilotz as any).app.handle({
+          resource: "features",
+          method: "POST",
+          path: ["echo", "ping"],
+          body: { ok: true },
+          context: {
+            auth: { sub: "user-1", role: "admin" },
+          },
+        });
+
+        assertEquals(result.status, 200);
+        assertEquals(result.data, {
+          pong: true,
+          received: { ok: true },
+          context: {
+            auth: { sub: "user-1", role: "admin" },
+          },
+        });
+      },
+    );
+
+    await t.step(
+      "POST /channels/inspect passes optional request context to channel adapters",
+      async () => {
+        const { copilotz } = createMockCopilotz();
+        withApp(copilotz as any);
+
+        const result = await (copilotz as any).app.handle({
+          resource: "channels",
+          method: "POST",
+          path: ["inspect"],
+          body: { ok: true },
+          context: {
+            auth: { sub: "user-1", role: "admin" },
+          },
+        });
+
+        assertEquals(result.status, 200);
+        assertEquals(result.data, {
+          context: {
+            auth: { sub: "user-1", role: "admin" },
+          },
+        });
+      },
+    );
+
+    await t.step(
+      "POST /channels/web/to/zendesk passes optional request context to egress adapters",
+      async () => {
+        const { copilotz, deliveries } = createMockCopilotz();
+        withApp(copilotz as any);
+
+        await (copilotz as any).app.handle({
+          resource: "channels",
+          method: "POST",
+          path: ["web", "to", "zendesk"],
+          body: {
+            content: "hi from web",
+            thread: { id: "zd-thread" },
+          },
+          context: {
+            auth: { sub: "user-1", role: "admin" },
+            channels: { zendesk: { appId: "test-app" } },
+          },
+        });
+
+        await waitFor(() => deliveries.length === 1);
+        assertEquals(deliveries[0].context, {
+          auth: { sub: "user-1", role: "admin" },
+          channels: { zendesk: { appId: "test-app" } },
+        });
       },
     );
 

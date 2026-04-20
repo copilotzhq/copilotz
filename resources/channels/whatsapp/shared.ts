@@ -9,6 +9,8 @@ export type WhatsAppConfig = {
   graphApiVersion?: string;
 };
 
+type ChannelRuntimeContext = Record<string, unknown> | undefined;
+
 export type WhatsAppWebhookEntry = {
   id: string;
   changes?: Array<{
@@ -37,16 +39,32 @@ export type WhatsAppWebhookPayload = {
 
 export function resolveWhatsAppConfig(
   config?: Partial<WhatsAppConfig>,
+  context?: ChannelRuntimeContext,
 ): WhatsAppConfig {
+  const contextConfig = getWhatsAppContextConfig(context);
   return {
-    accessToken: config?.accessToken || Deno.env.get("WHATSAPP_ACCESS_TOKEN") ||
-      "",
-    phoneId: config?.phoneId || Deno.env.get("WHATSAPP_PHONE_ID") || "",
-    appSecret: config?.appSecret || Deno.env.get("WHATSAPP_APP_SECRET") || "",
-    webhookVerifyToken: config?.webhookVerifyToken ||
+    accessToken: contextConfig?.accessToken || config?.accessToken ||
+      Deno.env.get("WHATSAPP_ACCESS_TOKEN") || "",
+    phoneId: contextConfig?.phoneId || config?.phoneId ||
+      Deno.env.get("WHATSAPP_PHONE_ID") || "",
+    appSecret: contextConfig?.appSecret || config?.appSecret ||
+      Deno.env.get("WHATSAPP_APP_SECRET") || "",
+    webhookVerifyToken: contextConfig?.webhookVerifyToken ||
+      config?.webhookVerifyToken ||
       Deno.env.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN") || "",
-    graphApiVersion: config?.graphApiVersion || "v19.0",
+    graphApiVersion: contextConfig?.graphApiVersion ||
+      config?.graphApiVersion || "v19.0",
   };
+}
+
+function getWhatsAppContextConfig(
+  context?: ChannelRuntimeContext,
+): Partial<WhatsAppConfig> | undefined {
+  const channels = context?.channels;
+  if (!channels || typeof channels !== "object") return undefined;
+  const whatsapp = (channels as Record<string, unknown>).whatsapp;
+  if (!whatsapp || typeof whatsapp !== "object") return undefined;
+  return whatsapp as Partial<WhatsAppConfig>;
 }
 
 export function getWhatsAppHeaderValue(

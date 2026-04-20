@@ -30,7 +30,12 @@ import type {
   LoadedStorageAdapter,
   Resources,
 } from "@/runtime/loaders/resources.ts";
-import { type ChannelEntry, mergeChannelEntries } from "@/server/channels.ts";
+import {
+  type ChannelEntry,
+  type ChannelOverrides,
+  decorateChannelEntries,
+  mergeChannelEntries,
+} from "@/server/channels.ts";
 import { mergeResourceArrays } from "@/utils/merge-resources.ts";
 import type { Skill } from "@/runtime/loaders/skill-types.ts";
 import {
@@ -174,7 +179,13 @@ export type {
 } from "@/types/index.ts";
 export type {
   ChannelAdapterRequest,
+  ChannelEgressOverrides,
   ChannelEntry,
+  ChannelIngressOverrides,
+  ChannelOverrideArgs,
+  ChannelOverrideCallback,
+  ChannelOverrides,
+  ChannelOverridesEntry,
   ChannelRouteSpec,
   EgressAdapter,
   EgressDeliveryContext,
@@ -535,6 +546,14 @@ export interface CopilotzConfig {
       resource: { id?: string; name?: string; [key: string]: unknown },
       type: string,
     ) => boolean;
+    /**
+     * Optional resource-specific decorators applied after loading and merging.
+     * Override callbacks receive both the original input and the default output.
+     * Return `void` to keep the default behavior, or return a replacement output.
+     */
+    overrides?: {
+      channels?: ChannelOverrides;
+    };
     /** Enable live reload of file-based resources during development. Reserved for future use. */
     watch?: boolean;
   };
@@ -1032,7 +1051,6 @@ export async function createCopilotz(
     userResources = await loadResources({
       path: config.resources.path,
       preset: config.resources.preset,
-      imports: config.resources.imports,
     });
     logInit("loadUserResources", startedAt, {
       path: config.resources.path,
@@ -1244,6 +1262,11 @@ export async function createCopilotz(
     logInit("filterResources", startedAt);
   }
 
+  mergedChannels = decorateChannelEntries(
+    mergedChannels,
+    config.resources?.overrides?.channels,
+  ) ?? mergedChannels;
+
   // 1g. Apply agent base config (only when explicitly provided)
   if (config.agent) {
     const base = config.agent;
@@ -1275,7 +1298,9 @@ export async function createCopilotz(
   const embeddingProviderRegistry = Object.fromEntries(
     resolvedEmbeddingProviders.map((entry) => [entry.name, entry.factory]),
   );
-  const availableStorageBackends = resolvedStorageAdapters.map((entry) => entry.name);
+  const availableStorageBackends = resolvedStorageAdapters.map((entry) =>
+    entry.name
+  );
 
   const baseConfig: NormalizedCopilotzConfig = {
     ...config,

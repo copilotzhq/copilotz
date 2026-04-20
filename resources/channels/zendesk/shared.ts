@@ -9,6 +9,8 @@ export type ZendeskConfig = {
   businessLogo: string | null;
 };
 
+type ChannelRuntimeContext = Record<string, unknown> | undefined;
+
 export type ZendeskWebhookPayload = {
   app?: { id: string };
   webhook?: { id: string };
@@ -72,18 +74,33 @@ type ZendeskOutboundMessage = {
 
 export function resolveZendeskConfig(
   config?: Partial<ZendeskConfig>,
+  context?: ChannelRuntimeContext,
 ): ZendeskConfig {
+  const contextConfig = getZendeskContextConfig(context);
   return {
-    appId: config?.appId || Deno.env.get("ZENDESK_APP_ID") || "",
-    apiKey: config?.apiKey || Deno.env.get("ZENDESK_API_KEY") || "",
-    apiSecret: config?.apiSecret || Deno.env.get("ZENDESK_API_SECRET") || "",
-    webhookSecret: config?.webhookSecret ||
+    appId: contextConfig?.appId || config?.appId ||
+      Deno.env.get("ZENDESK_APP_ID") || "",
+    apiKey: contextConfig?.apiKey || config?.apiKey ||
+      Deno.env.get("ZENDESK_API_KEY") || "",
+    apiSecret: contextConfig?.apiSecret || config?.apiSecret ||
+      Deno.env.get("ZENDESK_API_SECRET") || "",
+    webhookSecret: contextConfig?.webhookSecret || config?.webhookSecret ||
       Deno.env.get("ZENDESK_WEBHOOK_SECRET") || "",
-    businessName: config?.businessName ||
+    businessName: contextConfig?.businessName || config?.businessName ||
       Deno.env.get("ZENDESK_BUSINESS_NAME") || "Business",
-    businessLogo: config?.businessLogo ??
+    businessLogo: contextConfig?.businessLogo ?? config?.businessLogo ??
       Deno.env.get("ZENDESK_BUSINESS_LOGO") ?? null,
   };
+}
+
+function getZendeskContextConfig(
+  context?: ChannelRuntimeContext,
+): Partial<ZendeskConfig> | undefined {
+  const channels = context?.channels;
+  if (!channels || typeof channels !== "object") return undefined;
+  const zendesk = (channels as Record<string, unknown>).zendesk;
+  if (!zendesk || typeof zendesk !== "object") return undefined;
+  return zendesk as Partial<ZendeskConfig>;
 }
 
 export function getZendeskHeaderValue(

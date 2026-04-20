@@ -19,10 +19,9 @@ import {
 export function createZendeskIngressAdapter(
   config?: Partial<ZendeskConfig>,
 ): IngressAdapter {
-  const cfg = resolveZendeskConfig(config);
-
   return {
     async handle(request) {
+      const cfg = resolveZendeskConfig(config, request.context);
       if (request.method === "GET") {
         return { status: 200, response: "ok", messages: [] };
       }

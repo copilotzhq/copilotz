@@ -13,6 +13,7 @@ Key fields include:
 - `query`
 - `body`
 - `headers`
+- optional `context` for server-derived execution data
 
 ## AppResponse
 

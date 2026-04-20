@@ -1,8 +1,4 @@
-import {
-  assert,
-  assertEquals,
-  assertRejects,
-} from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { join } from "@std/path";
 
 import { createCopilotz } from "@/index.ts";
@@ -75,6 +71,59 @@ Deno.test("createCopilotz applies resources.filterResources after loading", asyn
   }
 });
 
+Deno.test("createCopilotz keeps loading user features from resources.path when imports select bundled resources", async () => {
+  const tempDir = await Deno.makeTempDir();
+  const resourcesDir = join(tempDir, "resources");
+  const featuresDir = join(resourcesDir, "features", "auth");
+
+  try {
+    await Deno.mkdir(featuresDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(featuresDir, "google.ts"),
+      `export default async function googleFeature(request) {
+  return {
+    data: {
+      method: request.method ?? "GET",
+      ok: true,
+    },
+  };
+}
+`,
+    );
+
+    const copilotz = await createCopilotz({
+      dbConfig: { url: ":memory:" },
+      agents: [{
+        id: "test-agent",
+        name: "Test Agent",
+        role: "Test Agent",
+        instructions: "Handle the test message.",
+        llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+      }],
+      resources: {
+        path: [resourcesDir],
+        imports: ["channels"],
+      },
+    });
+
+    try {
+      const featureNames = (copilotz.config.features ?? []).map((feature) =>
+        feature.name
+      );
+      const channelNames = (copilotz.config.channels ?? []).map((channel) =>
+        channel.name
+      );
+
+      assert(featureNames.includes("auth"));
+      assert(channelNames.includes("web"));
+    } finally {
+      await copilotz.shutdown();
+    }
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
 Deno.test("createCopilotz initializes collections loaded from resources.path", async () => {
   const tempDir = await Deno.makeTempDir();
   const resourcesDir = join(tempDir, "resources");
@@ -110,7 +159,9 @@ export default defineCollection({
 
     try {
       assert(copilotz.collections);
-      assert(copilotz.collections?.getCollectionNames().includes("userProfile"));
+      assert(
+        copilotz.collections?.getCollectionNames().includes("userProfile"),
+      );
     } finally {
       await copilotz.shutdown();
     }

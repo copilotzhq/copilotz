@@ -215,9 +215,25 @@ function buildParticipantIdentity(sender: MessagePayload["sender"]): string {
     ? sender.metadata as Record<string, unknown>
     : undefined;
   const email = metadata && typeof metadata.email === "string"
-    ? metadata.email
+    ? metadata.email.trim()
     : "";
-  return sender.id ?? sender.externalId ?? email ?? sender.name ?? "anonymous";
+  const candidates = [
+    sender.id,
+    sender.externalId,
+    email,
+    sender.name,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string") {
+      const trimmed = candidate.trim();
+      if (trimmed.length > 0) {
+        return trimmed;
+      }
+    }
+  }
+
+  return "anonymous";
 }
 
 export async function runThread(
@@ -299,7 +315,7 @@ export async function runThread(
   );
 
   // Auto-populate runtime userExternalId while preserving public/system metadata boundaries.
-  const senderExternalId = sender?.externalId ?? sender?.id;
+  const senderExternalId = sender?.externalId ?? sender?.id ?? senderCanonical;
   let mergedThreadMetadata = mergeThreadMetadata(
     mergeThreadMetadata(baseContext.threadMetadata, existingThread?.metadata),
     threadRef?.metadata,

@@ -299,14 +299,25 @@ interface AgentTurnCheckResult {
   userToTarget?: string;
 }
 
-function resolveThreadParticipantTarget(
+function isHumanAliasTarget(targetId: string): boolean {
+  const normalized = targetId.trim().toLowerCase();
+  return normalized === "user" || normalized === "anonymous";
+}
+
+export function resolveThreadParticipantTarget(
   targetId: string,
   thread: Thread,
   availableAgents: Agent[],
 ): string | null {
-  const targetLower = targetId.toLowerCase();
+  const normalizedTargetId = targetId.trim();
+  if (normalizedTargetId.length === 0) return null;
+
+  const targetLower = normalizedTargetId.toLowerCase();
   const participants = Array.isArray(thread.participants)
-    ? thread.participants.filter((p): p is string => typeof p === "string")
+    ? thread.participants
+      .filter((p): p is string => typeof p === "string")
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0)
     : [];
 
   const matchedAgent = availableAgents.find((a) =>
@@ -350,6 +361,22 @@ function resolveThreadParticipantTarget(
     );
     if (legacyUserParticipant) {
       return legacyUserParticipant;
+    }
+    return normalizedTargetId;
+  }
+
+  if (isHumanAliasTarget(normalizedTargetId)) {
+    const humanParticipants = participants.filter((participant) =>
+      !availableAgents.some((agent) =>
+        (typeof agent.id === "string" &&
+          agent.id.toLowerCase() === participant.toLowerCase()) ||
+        (typeof agent.name === "string" &&
+          agent.name.toLowerCase() === participant.toLowerCase())
+      )
+    );
+
+    if (humanParticipants.length === 1) {
+      return normalizedTargetId;
     }
   }
 
@@ -859,19 +886,39 @@ export const messageProcessor: EventProcessor<
       ? contentOverride
       : messageContext.contentText;
 
-    // Resolve senderId for storage: prefer the resolved participant node ID
-    // so that collection-level relations (SENT_BY edge) can be created.
-    const storageSenderId = (senderIdentity as any)?.id ?? messageContext.senderId;
+    // Keep senderId bound to the participant node id when available so
+    // collection relations (for example SENT_BY) continue to work. Store the
+    // conversational identity separately in metadata for prompt/history use.
+    const senderExternalId = typeof (senderIdentity as { externalId?: unknown } | null)
+          ?.externalId === "string"
+      ? ((senderIdentity as { externalId: string }).externalId).trim()
+      : "";
+    const senderParticipantId = typeof (senderIdentity as { id?: unknown } | null)
+          ?.id === "string"
+      ? (senderIdentity as { id: string }).id
+      : null;
+    const storageSenderId = senderParticipantId
+      ? senderParticipantId
+      : messageContext.senderId;
+    const persistedMessageMetadata = {
+      ...(messageMetadata ?? {}),
+      senderExternalId: senderExternalId.length > 0
+        ? senderExternalId
+        : messageContext.senderId,
+      senderDisplayName: messageContext.senderName,
+      ...(senderParticipantId ? { senderParticipantId } : {}),
+    };
 
     const incomingMsg = {
       threadId,
       senderId: storageSenderId,
       senderType: messageContext.senderType,
+      senderUserId: senderParticipantId,
       content: persistedContent,
       toolCallId: toolCallId,
       toolCalls: payload.toolCalls ?? null,
       reasoning: payload.reasoning ?? null,
-      metadata: messageMetadata,
+      metadata: persistedMessageMetadata,
     };
 
     // Persist incoming message before processing
@@ -1690,7 +1737,18 @@ async function buildProcessingContext(
     collections: context.collections,
     ops,
   });
-  const participantCollection = (context.collections as any)?.withNamespace(context.namespace ?? "global").participant;
+  const participantCollection = (() => {
+    const collections = context.collections as
+      | { withNamespace?: (namespace: string) => Record<string, unknown> }
+      | Record<string, unknown>
+      | undefined;
+    if (!collections) return undefined;
+    if (typeof collections.withNamespace === "function") {
+      return collections.withNamespace(context.namespace ?? "global")
+        ?.participant;
+    }
+    return collections.participant;
+  })();
   const chatHistory = await messageService.getHistory(threadId, senderIdForHistory);
 
   const availableAgents = context.agents || [];

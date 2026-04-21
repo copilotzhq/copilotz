@@ -769,7 +769,13 @@ export function createOperations(
 
     const normalizeParticipants = (participants?: string[] | null) => {
       if (!Array.isArray(participants)) return participants ?? null;
-      return Array.from(new Set(participants));
+      const normalized = participants
+        .filter((participant): participant is string =>
+          typeof participant === "string"
+        )
+        .map((participant) => participant.trim())
+        .filter((participant) => participant.length > 0);
+      return Array.from(new Set(normalized));
     };
 
     if (!existing) {

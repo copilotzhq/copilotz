@@ -26,6 +26,9 @@ type MessageMetadata = Record<string, unknown> & {
   routing?: {
     routeTo?: string[];
   };
+  senderDisplayName?: string;
+  senderExternalId?: string;
+  senderParticipantId?: string;
 };
 
 const toDataUrl = (
@@ -212,9 +215,41 @@ type ParsedToolCall = ToolInvocation & {
 function matchesAgentIdentity(
   agent: Agent,
   senderId: string | null | undefined,
+  metadata?: MessageMetadata,
 ): boolean {
-  if (!senderId) return false;
-  return senderId === agent.id || senderId === agent.name;
+  const candidates = [
+    senderId,
+    metadata?.senderExternalId,
+    metadata?.senderDisplayName,
+  ].filter((value): value is string =>
+    typeof value === "string" && value.trim().length > 0
+  );
+
+  return candidates.some((candidate) =>
+    candidate === agent.id || candidate === agent.name
+  );
+}
+
+function resolveSpeakerLabel(
+  msg: NewMessage,
+  metadata?: MessageMetadata,
+): string {
+  const candidates = [
+    metadata?.senderDisplayName,
+    metadata?.senderExternalId,
+    msg.senderId,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string") {
+      const trimmed = candidate.trim();
+      if (trimmed.length > 0) {
+        return trimmed;
+      }
+    }
+  }
+
+  return "unknown";
 }
 
 function stripParsedToolCall(call: ParsedToolCall): ToolInvocation {
@@ -245,7 +280,12 @@ export function historyGenerator(
     // IMPORTANT: Check senderType FIRST to correctly identify tool results
     // Tool results have senderId set to the requesting agent's ID, but senderType is "tool"
     const isToolResult = msg.senderType === "tool";
-    const isRequestingAgent = matchesAgentIdentity(currentAgent, msg.senderId);
+    const metadata = (msg.metadata ?? undefined) as MessageMetadata | undefined;
+    const isRequestingAgent = matchesAgentIdentity(
+      currentAgent,
+      msg.senderId,
+      metadata,
+    );
     const isCurrentAgent = !isToolResult && (
       isRequestingAgent
     );
@@ -256,8 +296,6 @@ export function historyGenerator(
       : isCurrentAgent
       ? "assistant"
       : (msg.senderType === "agent" ? "user" : msg.senderType);
-
-    const metadata = (msg.metadata ?? undefined) as MessageMetadata | undefined;
 
     const rawToolCalls = (msg as unknown as { toolCalls?: unknown }).toolCalls;
     const metadataToolCalls = Array.isArray(metadata?.toolCalls)
@@ -278,7 +316,7 @@ export function historyGenerator(
       !directConversation && !isCurrentAgent && msg.senderType !== "system"
       && !isToolResult
     ) {
-      const senderName = msg.senderId ?? "unknown";
+      const senderName = resolveSpeakerLabel(msg, metadata);
       content = `[${senderName}]: ${content}`;
     }
 

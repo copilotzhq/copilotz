@@ -36,11 +36,29 @@ const copilotz = await createCopilotz({
       llmOptions: {
         provider: "minimax",
         model: "MiniMax-M2.7",
-        apiKey: API_KEY,
+        // apiKey: API_KEY,
         outputReasoning: false,
       },
     },
   ],
+  security: {
+    resolveLLMRuntimeConfig: async ({ provider, agent, config }) => {
+      console.log("provider", provider);
+      console.log("agent", agent);
+      console.log("config", config);
+      switch (provider) {
+        case "minimax":
+          console.log("minimax resolveLLmRuntimeConfig", API_KEY);
+          return {
+            apiKey: API_KEY,
+          };
+        default:
+          return {
+            apiKey: Deno.env.get("LLM_API_KEY"),
+          };
+      }
+    },
+  },
   // PGLite in-memory database — no external DB needed
   dbConfig: { url: ":memory:" },
 });
@@ -61,7 +79,7 @@ let isThinking = false;
 
 for await (const event of result.events) {
   if (event.type === "TOKEN") {
-    const payload = event.payload as { token?: string, isReasoning?: boolean };
+    const payload = event.payload as { token?: string; isReasoning?: boolean };
     const token = payload.token ?? "";
     const isReasoning = !!payload.isReasoning;
 

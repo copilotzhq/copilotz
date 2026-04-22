@@ -36,19 +36,14 @@ const copilotz = await createCopilotz({
       llmOptions: {
         provider: "minimax",
         model: "MiniMax-M2.7",
-        // apiKey: API_KEY,
         outputReasoning: false,
       },
     },
   ],
   security: {
     resolveLLMRuntimeConfig: async ({ provider, agent, config }) => {
-      console.log("provider", provider);
-      console.log("agent", agent);
-      console.log("config", config);
       switch (provider) {
         case "minimax":
-          console.log("minimax resolveLLmRuntimeConfig", API_KEY);
           return {
             apiKey: API_KEY,
           };

@@ -1,10 +1,14 @@
 # Tools
 
-Tools let your agents interact with the world beyond conversation. Read files, make HTTP requests, search your knowledge base, or call external APIs — all through a unified interface.
+Tools let your agents interact with the world beyond conversation. Read files,
+make HTTP requests, search your knowledge base, or call external APIs — all
+through a unified interface.
 
 ## How Tools Work
 
-When an agent needs to do something, it tells the LLM which tools are available. The LLM decides which tool to call and with what arguments. Copilotz executes the tool and feeds the result back to the LLM.
+When an agent needs to do something, it tells the LLM which tools are available.
+The LLM decides which tool to call and with what arguments. Copilotz executes
+the tool and feeds the result back to the LLM.
 
 ```
 Agent receives message
@@ -40,101 +44,112 @@ const agent = {
 
 ### File Operations
 
-| Tool | Description |
-|------|-------------|
-| `read_file` | Read contents of a file |
-| `write_file` | Write content to a file (creates parent directories) |
-| `list_directory` | List files and folders in a directory |
-| `search_files` | Search for files matching a pattern |
-| `search_code` | Search file contents with line-level matches |
-| `apply_patch` | Apply targeted text-anchored edits (replace, insert before/after) with snapshots |
-| `show_file_diff` | Compare the current file to the latest captured snapshot |
-| `restore_file_version` | Restore a file from a captured snapshot |
+| Tool                   | Description                                                                      |
+| ---------------------- | -------------------------------------------------------------------------------- |
+| `read_file`            | Read contents of a file                                                          |
+| `write_file`           | Write content to a file (creates parent directories)                             |
+| `list_directory`       | List files and folders in a directory                                            |
+| `search_files`         | Search for files matching a pattern                                              |
+| `search_code`          | Search file contents with line-level matches                                     |
+| `apply_patch`          | Apply targeted text-anchored edits (replace, insert before/after) with snapshots |
+| `show_file_diff`       | Compare the current file to the latest captured snapshot                         |
+| `restore_file_version` | Restore a file from a captured snapshot                                          |
 
 #### `apply_patch` — Text-Anchored Editing
 
-All `apply_patch` operations use **substring matching** (`indexOf`), not line numbers. This means anchors and targets can be any unique portion of the file content — they work regardless of line boundaries, making them robust against large single-line content (e.g. minified code, long prose).
+All `apply_patch` operations use **substring matching** (`indexOf`), not line
+numbers. This means anchors and targets can be any unique portion of the file
+content — they work regardless of line boundaries, making them robust against
+large single-line content (e.g. minified code, long prose).
 
 Available operations:
 
-| Operation | Required fields | Behavior |
-|-----------|----------------|----------|
-| `replace` | `oldText`, `newText` | Find a unique substring and replace it. Set `replaceAll: true` to replace every occurrence. |
-| `insert_before` | `anchor`, `content` | Insert `content` immediately before a unique anchor substring. |
-| `insert_after` | `anchor`, `content` | Insert `content` immediately after a unique anchor substring. |
+| Operation       | Required fields      | Behavior                                                                                    |
+| --------------- | -------------------- | ------------------------------------------------------------------------------------------- |
+| `replace`       | `oldText`, `newText` | Find a unique substring and replace it. Set `replaceAll: true` to replace every occurrence. |
+| `insert_before` | `anchor`, `content`  | Insert `content` immediately before a unique anchor substring.                              |
+| `insert_after`  | `anchor`, `content`  | Insert `content` immediately after a unique anchor substring.                               |
 
-A restorable snapshot is captured before any edits are applied. Use `show_file_diff` to review changes and `restore_file_version` to roll back.
+A restorable snapshot is captured before any edits are applied. Use
+`show_file_diff` to review changes and `restore_file_version` to roll back.
 
 ```typescript
 // Example: replace + insert_after in a single call
 apply_patch({
   path: "src/config.ts",
   operations: [
-    { type: "replace", oldText: 'timeout: 5000', newText: 'timeout: 10000' },
-    { type: "insert_after", anchor: "import { Config }", content: "\nimport { Logger } from './logger';" },
+    { type: "replace", oldText: "timeout: 5000", newText: "timeout: 10000" },
+    {
+      type: "insert_after",
+      anchor: "import { Config }",
+      content: "\nimport { Logger } from './logger';",
+    },
   ],
 });
 ```
 
 ### HTTP & Network
 
-| Tool | Description |
-|------|-------------|
+| Tool           | Description                                                            |
+| -------------- | ---------------------------------------------------------------------- |
 | `http_request` | Full HTTP client (GET, POST, PUT, PATCH, DELETE) with headers and body |
-| `fetch_text` | Simple URL fetch that returns text content |
+| `fetch_text`   | Simple URL fetch that returns text content                             |
 
 ### RAG & Knowledge
 
-| Tool | Description |
-|------|-------------|
-| `search_knowledge` | Semantic search across your knowledge base |
-| `ingest_document` | Add a document to the knowledge base (URL, file, or raw text) |
-| `list_namespaces` | List all knowledge namespaces with document counts |
-| `delete_document` | Remove a document from the knowledge base |
+| Tool               | Description                                                   |
+| ------------------ | ------------------------------------------------------------- |
+| `search_knowledge` | Semantic search across your knowledge base                    |
+| `ingest_document`  | Add a document to the knowledge base (URL, file, or raw text) |
+| `list_namespaces`  | List all knowledge namespaces with document counts            |
+| `delete_document`  | Remove a document from the knowledge base                     |
 
 ### Thread & Multi-Agent
 
-| Tool | Description |
-|------|-------------|
-| `create_thread` | Create a new conversation thread |
-| `end_thread` | Archive a thread with a summary |
-| `delegate` | Delegate a focused subtask to another agent in a separate thread and wait for the answer |
+| Tool            | Description                                                                              |
+| --------------- | ---------------------------------------------------------------------------------------- |
+| `create_thread` | Create a new conversation thread                                                         |
+| `end_thread`    | Archive a thread with a summary                                                          |
+| `delegate`      | Delegate a focused subtask to another agent in a separate thread and wait for the answer |
 
 ### Agent Memory
 
-| Tool | Description |
-|------|-------------|
+| Tool               | Description                                                         |
+| ------------------ | ------------------------------------------------------------------- |
 | `update_my_memory` | Store persistent learnings (preferences, expertise, working memory) |
 
 ### Assets
 
-| Tool | Description |
-|------|-------------|
-| `save_asset` | Store a file/image in the asset store, returns `asset://` reference |
-| `fetch_asset` | Retrieve an asset as base64 or data URL |
+| Tool          | Description                                                         |
+| ------------- | ------------------------------------------------------------------- |
+| `save_asset`  | Store a file/image in the asset store, returns `asset://` reference |
+| `fetch_asset` | Retrieve an asset as base64 or data URL                             |
 
 ### System & Utilities
 
-| Tool | Description |
-|------|-------------|
-| `run_command` | Execute a system command (with security checks) |
-| `persistent_terminal` | Persistent bash session that maintains state (cwd, variables) between executions |
-| `get_current_time` | Get current time in various formats and timezones |
-| `wait` | Pause for a specified duration (0.1-60 seconds) |
+| Tool                  | Description                                                                                                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `run_command`         | Execute a system command (with security checks)                                                                                                                                |
+| `persistent_terminal` | Persistent bash session that maintains state (cwd, variables) between executions; defaults to the current project/runtime root unless an isolated workspace base is configured |
+| `get_current_time`    | Get current time in various formats and timezones                                                                                                                              |
+| `wait`                | Pause for a specified duration (0.1-60 seconds)                                                                                                                                |
 
 ### Skills
 
-Skill tools allow agents to discover and load SKILL.md-based instructions at runtime. See [Skills](./skills.md) for full documentation.
+Skill tools allow agents to discover and load SKILL.md-based instructions at
+runtime. See [Skills](./skills.md) for full documentation.
 
-| Tool | Description |
-|------|-------------|
-| `list_skills` | List all available skills with names and descriptions |
-| `load_skill` | Load the full instructions of a specific skill by name |
+| Tool                  | Description                                                |
+| --------------------- | ---------------------------------------------------------- |
+| `list_skills`         | List all available skills with names and descriptions      |
+| `load_skill`          | Load the full instructions of a specific skill by name     |
 | `read_skill_resource` | Read a supporting file from a skill's references directory |
 
 ## Agent Memory Tool
 
-The `update_my_memory` tool allows agents to store persistent learnings that survive across conversations. This is useful for building agents that learn user preferences or accumulate expertise over time.
+The `update_my_memory` tool allows agents to store persistent learnings that
+survive across conversations. This is useful for building agents that learn user
+preferences or accumulate expertise over time.
 
 ```typescript
 const agent = {
@@ -147,23 +162,31 @@ const agent = {
 
 ### Memory Keys
 
-| Key | Purpose |
-|-----|---------|
-| `workingMemory` | Short-term context for the current task |
-| `expertise` | Skills and knowledge the agent has learned |
-| `learnedPreferences` | User preferences discovered over time |
+| Key                  | Purpose                                    |
+| -------------------- | ------------------------------------------ |
+| `workingMemory`      | Short-term context for the current task    |
+| `expertise`          | Skills and knowledge the agent has learned |
+| `learnedPreferences` | User preferences discovered over time      |
 
 ### Operations
 
 ```typescript
 // Set a value (replaces existing)
-update_my_memory({ key: "workingMemory", value: "Working on Q4 report", operation: "set" })
+update_my_memory({
+  key: "workingMemory",
+  value: "Working on Q4 report",
+  operation: "set",
+});
 
 // Append to existing (comma-separated)
-update_my_memory({ key: "learnedPreferences", value: "Prefers bullet points", operation: "append" })
+update_my_memory({
+  key: "learnedPreferences",
+  value: "Prefers bullet points",
+  operation: "append",
+});
 
 // Remove a specific value or clear the key
-update_my_memory({ key: "expertise", value: "Python", operation: "remove" })
+update_my_memory({ key: "expertise", value: "Python", operation: "remove" });
 ```
 
 ### How It Works
@@ -171,7 +194,8 @@ update_my_memory({ key: "expertise", value: "Python", operation: "remove" })
 1. Agent decides to remember something important
 2. Calls `update_my_memory` with key, value, and operation
 3. Memory is stored in the agent's participant node in the knowledge graph
-4. On future conversations, memory is automatically injected into the system prompt
+4. On future conversations, memory is automatically injected into the system
+   prompt
 
 See [Agents](./agents.md#agent-persistent-memory) for more details.
 
@@ -188,7 +212,11 @@ const weatherTool = {
     type: "object",
     properties: {
       city: { type: "string", description: "City name" },
-      units: { type: "string", enum: ["celsius", "fahrenheit"], default: "celsius" },
+      units: {
+        type: "string",
+        enum: ["celsius", "fahrenheit"],
+        default: "celsius",
+      },
     },
     required: ["city"],
   },
@@ -210,21 +238,25 @@ const copilotz = await createCopilotz({
 
 ### Tool History Visibility
 
-In multi-agent conversations, tool results do not need to be shared with every agent in the same way. You can control that with `historyPolicy` on code-defined tools.
+In multi-agent conversations, tool results do not need to be shared with every
+agent in the same way. You can control that with `historyPolicy` on code-defined
+tools.
 
 Supported modes:
 
-| `visibility` | Behavior |
-|---|---|
+| `visibility`     | Behavior                                                                       |
+| ---------------- | ------------------------------------------------------------------------------ |
 | `requester_only` | Only the agent that called the tool sees the result in later generated history |
-| `public_result` | Other agents see a shared result, optionally projected into a simpler summary |
-| `public_full` | Other agents see the full raw tool result |
+| `public_result`  | Other agents see a shared result, optionally projected into a simpler summary  |
+| `public_full`    | Other agents see the full raw tool result                                      |
 
 Notes:
 
 - This is currently a runtime feature for code-defined resources.
 - `projector` is optional and only matters for `public_result`.
-- Raw tool-call arguments from one agent are not exposed to other agents in generated history; other agents see the message text plus whatever result visibility allows.
+- Raw tool-call arguments from one agent are not exposed to other agents in
+  generated history; other agents see the message text plus whatever result
+  visibility allows.
 
 ```typescript
 const checkRouteTool = {
@@ -244,10 +276,15 @@ const checkRouteTool = {
     visibility: "public_result",
     projector: (args, output, context) => {
       const input = args as { origin: string; destination: string };
-      const result = output as { origin?: { name?: string }; destination?: { name?: string } };
+      const result = output as {
+        origin?: { name?: string };
+        destination?: { name?: string };
+      };
 
       return {
-        summary: `Route resolved: ${result.origin?.name ?? input.origin} -> ${result.destination?.name ?? input.destination}`,
+        summary: `Route resolved: ${result.origin?.name ?? input.origin} -> ${
+          result.destination?.name ?? input.destination
+        }`,
         tool: context.toolName,
       };
     },
@@ -265,7 +302,8 @@ const checkRouteTool = {
 
 ## OpenAPI Tools
 
-Generate tools automatically from OpenAPI 3.0 specifications. Each API operation becomes a callable tool.
+Generate tools automatically from OpenAPI 3.0 specifications. Each API operation
+becomes a callable tool.
 
 ```typescript
 // Import or define your OpenAPI schema
@@ -279,8 +317,18 @@ const githubSchema = {
         operationId: "getRepository",
         summary: "Get a repository",
         parameters: [
-          { name: "owner", in: "path", required: true, schema: { type: "string" } },
-          { name: "repo", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "owner",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "repo",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
       },
     },
@@ -309,7 +357,9 @@ const copilotz = await createCopilotz({
         visibility: "public_result",
         projector: (_args, output) => {
           const repo = output as { full_name?: string; private?: boolean };
-          return `Repository loaded: ${repo.full_name} (${repo.private ? "private" : "public"})`;
+          return `Repository loaded: ${repo.full_name} (${
+            repo.private ? "private" : "public"
+          })`;
         },
       },
     },
@@ -317,9 +367,12 @@ const copilotz = await createCopilotz({
 });
 ```
 
-> **Note:** `openApiSchema` accepts an object or a JSON/YAML string. To load from a file, use [`loadResources()`](./loaders.md) or import the file yourself.
+> **Note:** `openApiSchema` accepts an object or a JSON/YAML string. To load
+> from a file, use [`loadResources()`](./loaders.md) or import the file
+> yourself.
 >
-> `toolPolicies` are keyed by `operationId` when present. If an operation has no `operationId`, Copilotz falls back to the generated tool key.
+> `toolPolicies` are keyed by `operationId` when present. If an operation has no
+> `operationId`, Copilotz falls back to the generated tool key.
 
 ### Authentication Options
 
@@ -345,7 +398,8 @@ auth: {
 
 ## MCP Tools
 
-Integrate with Model Context Protocol servers. Tools from MCP servers appear alongside native tools.
+Integrate with Model Context Protocol servers. Tools from MCP servers appear
+alongside native tools.
 
 ```typescript
 const copilotz = await createCopilotz({
@@ -373,7 +427,9 @@ const copilotz = await createCopilotz({
         visibility: "public_result",
         projector: (_args, output) => {
           const result = output as { entries?: Array<{ name?: string }> };
-          return `Directory listing completed (${result.entries?.length ?? 0} entries).`;
+          return `Directory listing completed (${
+            result.entries?.length ?? 0
+          } entries).`;
         },
       },
     },
@@ -381,7 +437,8 @@ const copilotz = await createCopilotz({
 });
 ```
 
-For MCP tools, per-tool overrides can be keyed by either the generated Copilotz tool key (`serverName_toolName`) or the original MCP tool name.
+For MCP tools, per-tool overrides can be keyed by either the generated Copilotz
+tool key (`serverName_toolName`) or the original MCP tool name.
 
 ## Tool Permissions
 
@@ -389,13 +446,13 @@ Control which tools each agent can access:
 
 ```typescript
 // Explicit whitelist
-allowedTools: ["read_file", "search_knowledge"]
+allowedTools: ["read_file", "search_knowledge"];
 
 // All tools
-allowedTools: ["*"]
+allowedTools: ["*"];
 
 // All native tools plus specific custom tools
-allowedTools: ["*native*", "my_custom_tool"]
+allowedTools: ["*native*", "my_custom_tool"];
 ```
 
 ## Tool Execution Context
@@ -414,7 +471,7 @@ const tool = {
     // - schema: Current schema
     // - db: Database access
     // - assets: Asset store access
-    
+
     const { threadId, namespace } = context;
     // Use context to scope operations
   },

@@ -53,7 +53,7 @@ export interface ProviderConfigBase {
   // Token limits
   maxTokens?: number;
   maxCompletionTokens?: number;
-  maxLength?: number; // For message truncation
+  limitEstimatedInputTokens?: number; // Approximate input/history budget using rough token estimation
 
   // Response format
   responseType?: "text" | "json";

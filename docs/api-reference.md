@@ -73,10 +73,10 @@ const result = await copilotz.run(
 
 **Parameters:**
 
-| Name      | Type           | Description                      |
-| --------- | -------------- | -------------------------------- |
-| `message` | `MessageInput` | The message to process           |
-| `options` | `RunOptions`   | Optional run configuration       |
+| Name      | Type           | Description                |
+| --------- | -------------- | -------------------------- |
+| `message` | `MessageInput` | The message to process     |
+| `options` | `RunOptions`   | Optional run configuration |
 
 **MessageInput:**
 
@@ -231,7 +231,8 @@ Database operations API.
 await copilotz.ops.query<T>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>
 ```
 
-Execute arbitrary SQL against the database. Primarily used by features that need direct data access (e.g., the admin feature uses this for aggregation queries).
+Execute arbitrary SQL against the database. Primarily used by features that need
+direct data access (e.g., the admin feature uses this for aggregation queries).
 
 #### Thread Operations
 
@@ -260,7 +261,8 @@ await copilotz.ops.archiveThread(threadId: string, summary: string): Promise<voi
 
 #### Message operations (graph-backed)
 
-Messages persist as **`nodes` with `type: "message"`** (plus edges). Prefer graph APIs:
+Messages persist as **`nodes` with `type: "message"`** (plus edges). Prefer
+graph APIs:
 
 ```typescript
 // Message history (ordered from graph)
@@ -288,7 +290,8 @@ await copilotz.ops.getLastMessageNode(threadId: string): Promise<Node | null>
 
 #### Participant / user nodes
 
-> **Deprecated**: Use the built-in `participant` collection via `copilotz.collections.participant` for all identity management.
+> **Deprecated**: Use the built-in `participant` collection via
+> `copilotz.collections.participant` for all identity management.
 
 ```typescript
 // Deprecated graph-node accessors
@@ -323,7 +326,9 @@ await copilotz.ops.updateQueueItemStatus(
 
 #### RAG operations (document + chunk nodes)
 
-RAG does **not** use separate `documents` / `document_chunks` tables. Ingestion stores a **`document` node** (metadata in `data`) and **`chunk` nodes** with embeddings; helpers below map to those nodes.
+RAG does **not** use separate `documents` / `document_chunks` tables. Ingestion
+stores a **`document` node** (metadata in `data`) and **`chunk` nodes** with
+embeddings; helpers below map to those nodes.
 
 ```typescript
 // Create / read document metadata (backed by type "document" nodes)
@@ -715,10 +720,19 @@ interface KnowledgeEdge {
 }
 
 interface ProviderConfig {
-  provider: "openai" | "anthropic" | "gemini" | "groq" | "deepseek" | "ollama" | "minimax" | "xai";
+  provider:
+    | "openai"
+    | "anthropic"
+    | "gemini"
+    | "groq"
+    | "deepseek"
+    | "ollama"
+    | "minimax"
+    | "xai";
   model?: string;
   temperature?: number;
   maxTokens?: number;
+  limitEstimatedInputTokens?: number;
   outputReasoning?: boolean;
   estimateCost?: boolean;
   pricingModelId?: string;
@@ -727,10 +741,13 @@ interface ProviderConfig {
 
 ### Usage and Cost Notes
 
-- Provider-native usage is preferred whenever the provider exposes token accounting
-- If native usage is unavailable, Copilotz falls back to a rough character-based token estimate
+- Provider-native usage is preferred whenever the provider exposes token
+  accounting
+- If native usage is unavailable, Copilotz falls back to a rough character-based
+  token estimate
 - Cost estimation is enabled by default and uses OpenRouter pricing data
-- Cost is only estimated when usage came from the provider, not from the rough fallback heuristic
+- Cost is only estimated when usage came from the provider, not from the rough
+  fallback heuristic
 
 ---
 
@@ -836,7 +853,9 @@ handlers yourself.
 
 ### withApp(copilotz)
 
-Returns the same instance with an `.app: CopilotzApp` property attached. Aggregates all handler factories, provides a pattern-based route table, and exposes a universal `handle()` dispatcher.
+Returns the same instance with an `.app: CopilotzApp` property attached.
+Aggregates all handler factories, provides a pattern-based route table, and
+exposes a universal `handle()` dispatcher.
 
 ```typescript
 const extended = withApp(copilotz);
@@ -852,7 +871,7 @@ See [Server Helpers](./server.md) for usage examples and framework wiring.
 ## Next Steps
 
 - [Configuration](./configuration.md) — Full configuration options
-- [Skills](./skills.md) — SKILL.md format, discovery, and admin agent
+- [Skills](./skills.md) — SKILL.md format, discovery, and the native assistant
 - [Database](./database.md) — Database operations details
 - [Collections](./collections.md) — Collection CRUD reference
 - [Server Helpers](./server.md) — Framework-independent handler factories

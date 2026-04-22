@@ -5,8 +5,8 @@ import type {
   ChatResponse,
   ExtractedPart,
   ProcessStreamOptions,
-  ProviderUsageUpdate,
   ProviderConfig,
+  ProviderUsageUpdate,
   StreamCallback,
   TokenUsage,
   ToolDefinition,
@@ -53,7 +53,7 @@ function normalizeStructuredTagNames(tagNames: string[]): string[] {
 }
 
 /**
- * Formats chat messages with instructions and applies length limits
+ * Formats chat messages with instructions and applies estimated input limits.
  */
 export function formatMessages(
   { messages, instructions, config, tools }: ChatRequest,
@@ -82,11 +82,16 @@ export function formatMessages(
     ...messages.filter((m) => m.role !== "system"),
   ];
 
-  // Apply length limit if specified
-  if (config?.maxLength) {
-    formattedMessages = limitMessageLength(
+  const systemEstimatedTokens = systemContent
+    ? approximateTokenCount(systemContent)
+    : 0;
+
+  // Apply estimated input budget if specified. We preserve the system prompt and
+  // trim only the remaining history budget.
+  if (config?.limitEstimatedInputTokens) {
+    formattedMessages = limitMessageEstimatedInputTokens(
       formattedMessages,
-      config.maxLength - (systemContent?.length || 0),
+      config.limitEstimatedInputTokens - systemEstimatedTokens,
     );
   }
 
@@ -252,7 +257,10 @@ function materializeToolResults(message: ChatMessage): ChatMessage {
   try {
     return {
       ...message,
-      content: buildFunctionResultsBlock(toolCalls, contentToText(message.content)),
+      content: buildFunctionResultsBlock(
+        toolCalls,
+        contentToText(message.content),
+      ),
       toolCalls: undefined,
       tool_call_id: undefined,
     };
@@ -419,30 +427,40 @@ function applyLocalStopSequences(
 /**
  * Limits the total character length of messages, keeping the most recent ones
  */
-function limitMessageLength(
+function limitMessageEstimatedInputTokens(
   messages: ChatMessage[],
-  limit: number,
+  limitTokens: number,
 ): ChatMessage[] {
+  if (limitTokens <= 0) {
+    return messages.filter((message) => message.role === "system");
+  }
+
   const result: ChatMessage[] = [];
-  let totalLength = 0;
+  let totalTokens = 0;
 
   // Process messages from newest to oldest
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (!message.content) continue;
-
-    const messageLength = message.content.length;
-
-    if (totalLength + messageLength <= limit) {
+    if (message.role === "system") {
       result.unshift(message);
-      totalLength += messageLength;
+      continue;
+    }
+
+    const messageText = contentToText(message.content);
+    const messageTokens = approximateTokenCount(messageText);
+
+    if (totalTokens + messageTokens <= limitTokens) {
+      result.unshift(message);
+      totalTokens += messageTokens;
     } else {
-      // Truncate the message to fit remaining space
-      const remainingSpace = limit - totalLength;
-      if (remainingSpace > 0) {
+      // Truncate text messages to fit the remaining estimated token budget.
+      const remainingTokens = limitTokens - totalTokens;
+      if (remainingTokens > 0 && typeof message.content === "string") {
+        const remainingChars = remainingTokens * APPROX_CHARS_PER_TOKEN;
         result.unshift({
           ...message,
-          content: message.content.slice(-remainingSpace),
+          content: message.content.slice(-remainingChars),
         });
       }
       break;
@@ -778,7 +796,9 @@ export function filterTaggedControlTokensStreaming(
         state.activeTag = nextMatch.tagName;
       }
     } else {
-      const activeTag = structuredTags.find((tag) => tag.name === state.activeTag);
+      const activeTag = structuredTags.find((tag) =>
+        tag.name === state.activeTag
+      );
       if (!activeTag) {
         state.activeTag = null;
         continue;
@@ -969,7 +989,8 @@ export function parseInternalControlTagsFromResponse(
   let cleanResponse = response;
   let suppressResponse = false;
 
-  const noResponsePattern = /<no_response\s*\/>|<no_response>\s*<\/no_response>/g;
+  const noResponsePattern =
+    /<no_response\s*\/>|<no_response>\s*<\/no_response>/g;
   const hasNoResponse = noResponsePattern.test(cleanResponse);
   noResponsePattern.lastIndex = 0;
   if (hasNoResponse) {
@@ -980,7 +1001,10 @@ export function parseInternalControlTagsFromResponse(
   cleanResponse = cleanResponse
     .replace(/<function_results>[\s\S]*?(?:<\/function_results>|$)/g, "")
     .replace(/<continue_after_tool_results\s*\/>/g, "")
-    .replace(/<continue_after_tool_results>[\s\S]*?<\/continue_after_tool_results>/g, "")
+    .replace(
+      /<continue_after_tool_results>[\s\S]*?<\/continue_after_tool_results>/g,
+      "",
+    )
     .trim();
 
   return { cleanResponse, suppressResponse };

@@ -1,6 +1,8 @@
 # Agents
 
-Agents are the actors in your AI application. Each agent is a configured AI persona with its own instructions, model, tools, and permissions. Copilotz supports multi-agent systems where agents can communicate and collaborate.
+Agents are the actors in your AI application. Each agent is a configured AI
+persona with its own instructions, model, tools, and permissions. Copilotz
+supports multi-agent systems where agents can communicate and collaborate.
 
 ## What is an Agent?
 
@@ -8,7 +10,8 @@ Think of an agent as a specialized team member:
 
 - **A support agent** knows your product and helps customers
 - **A research agent** searches documents and summarizes findings
-- **An escalation agent** handles complex issues that require human-like judgment
+- **An escalation agent** handles complex issues that require human-like
+  judgment
 
 Each agent has a role, capabilities, and boundaries.
 
@@ -16,15 +19,15 @@ Each agent has a role, capabilities, and boundaries.
 
 ```typescript
 const agent = {
-  id: "support-agent",           // Unique identifier
-  name: "Support",               // Display name
-  role: "assistant",             // "assistant", "system", or "user"
+  id: "support-agent", // Unique identifier
+  name: "Support", // Display name
+  role: "assistant", // "assistant", "system", or "user"
   instructions: `You are a customer support agent for Acme Corp.
     Be friendly, helpful, and concise.
     If you don't know something, say so.`,
-  llmOptions: { 
-    provider: "openai", 
-    model: "gpt-4o-mini" 
+  llmOptions: {
+    provider: "openai",
+    model: "gpt-4o-mini",
   },
   allowedTools: ["search_knowledge", "create_ticket"],
 };
@@ -32,22 +35,22 @@ const agent = {
 
 ### Required Fields
 
-| Field | Description |
-|-------|-------------|
-| `id` | Unique identifier for the agent |
-| `name` | Display name (used in conversations) |
-| `role` | Usually "assistant" for AI agents |
+| Field        | Description                          |
+| ------------ | ------------------------------------ |
+| `id`         | Unique identifier for the agent      |
+| `name`       | Display name (used in conversations) |
+| `role`       | Usually "assistant" for AI agents    |
 | `llmOptions` | LLM provider and model configuration |
 
 ### Optional Fields
 
-| Field | Description |
-|-------|-------------|
-| `instructions` | System prompt defining behavior |
-| `allowedTools` | Tools this agent can use |
-| `allowedAgents` | Other agents this agent can communicate with |
-| `ragOptions` | Knowledge base configuration |
-| `assetOptions` | Controls how this agent handles generated assets |
+| Field           | Description                                      |
+| --------------- | ------------------------------------------------ |
+| `instructions`  | System prompt defining behavior                  |
+| `allowedTools`  | Tools this agent can use                         |
+| `allowedAgents` | Other agents this agent can communicate with     |
+| `ragOptions`    | Knowledge base configuration                     |
+| `assetOptions`  | Controls how this agent handles generated assets |
 
 ## LLM Configuration
 
@@ -59,6 +62,7 @@ llmOptions: {
   model: "gpt-4o-mini",        // Model name
   temperature: 0.7,             // Creativity (0-2)
   maxTokens: 4096,              // Max response length
+  limitEstimatedInputTokens: 12000, // Approximate input/history budget (1 token ~= 4 chars)
   apiKey: "sk-...",             // Optional: override env variable
   outputReasoning: false,       // Default true; whether to emit reasoning tokens ("thinking") during stream
   estimateCost: true,           // Default true; estimate cost from OpenRouter pricing when usage is native
@@ -68,15 +72,15 @@ llmOptions: {
 
 ### Supported Providers
 
-| Provider | Example Models |
-|----------|----------------|
-| `openai` | `gpt-4o`, `gpt-4o-mini` |
+| Provider    | Example Models                                      |
+| ----------- | --------------------------------------------------- |
+| `openai`    | `gpt-4o`, `gpt-4o-mini`                             |
 | `anthropic` | `claude-3-haiku-20240307`, `claude-3-opus-20240229` |
-| `gemini` | `gemini-2.0-flash-lite-preview-02-05` |
-| `groq` | `llama3-8b-8192`, `mixtral-8x7b-32768` |
-| `deepseek` | `deepseek-chat` |
-| `ollama` | `llama3.2`, `mistral` (local) |
-| `minimax` | `M2-her` |
+| `gemini`    | `gemini-2.0-flash-lite-preview-02-05`               |
+| `groq`      | `llama3-8b-8192`, `mixtral-8x7b-32768`              |
+| `deepseek`  | `deepseek-chat`                                     |
+| `ollama`    | `llama3.2`, `mistral` (local)                       |
+| `minimax`   | `M2-her`                                            |
 
 ### Dynamic Configuration
 
@@ -88,7 +92,7 @@ import type { AgentLlmOptionsResolver } from "@copilotz/copilotz";
 const llmOptions: AgentLlmOptionsResolver = async ({ payload, context }) => {
   // Use a better model for complex queries
   const isComplex = payload.messages.length > 10;
-  
+
   return {
     provider: "openai",
     model: isComplex ? "gpt-4o" : "gpt-4o-mini",
@@ -123,21 +127,31 @@ const agent = {
         apiKey: Deno.env.get("OPENAI_API_KEY"),
       },
     ],
-    fallbackOn: ["timeout", "rate_limit", "server_error", "network", "provider_error"],
+    fallbackOn: [
+      "timeout",
+      "rate_limit",
+      "server_error",
+      "network",
+      "provider_error",
+    ],
   },
 };
 ```
 
-Fallbacks only run when the primary attempt fails before any visible streamed output is emitted.
+Fallbacks only run when the primary attempt fails before any visible streamed
+output is emitted.
 
 ### Usage and Cost Metadata
 
-Copilotz records LLM usage metadata per call and can estimate cost from OpenRouter pricing:
+Copilotz records LLM usage metadata per call and can estimate cost from
+OpenRouter pricing:
 
 - `estimateCost` defaults to `true`
-- `pricingModelId` lets you override the OpenRouter model id for providers or local models that need explicit mapping
+- `pricingModelId` lets you override the OpenRouter model id for providers or
+  local models that need explicit mapping
 - Cost estimation only runs when the provider returned native usage data
-- If the provider does not expose usage, Copilotz records an approximate token count and skips cost estimation
+- If the provider does not expose usage, Copilotz records an approximate token
+  count and skips cost estimation
 
 ## Tool Permissions
 
@@ -145,18 +159,19 @@ Control which tools each agent can access:
 
 ```typescript
 // Specific tools only
-allowedTools: ["read_file", "search_knowledge"]
+allowedTools: ["read_file", "search_knowledge"];
 
 // All tools
-allowedTools: ["*"]
+allowedTools: ["*"];
 
 // No tools
-allowedTools: []
+allowedTools: [];
 ```
 
 ## Asset Behavior
 
-Agents can opt out of persisting assets they generate directly or through their tool calls:
+Agents can opt out of persisting assets they generate directly or through their
+tool calls:
 
 ```typescript
 const agent = {
@@ -181,7 +196,8 @@ When `persistGeneratedAssets` is `false`:
 - tool outputs with inline base64/data URLs are sanitized before persistence
 - Copilotz does not emit `ASSET_CREATED` for those generated blobs
 
-This only applies to assets produced by that agent or by tools it invoked. Existing `asset://` refs and external `http(s)` URLs are left unchanged.
+This only applies to assets produced by that agent or by tools it invoked.
+Existing `asset://` refs and external `http(s)` URLs are left unchanged.
 
 See [Tools](./tools.md) for the full list of native tools.
 
@@ -196,7 +212,8 @@ const agents = [
   {
     id: "coordinator",
     name: "Coordinator",
-    instructions: "You coordinate between specialized agents. Use @Researcher for facts.",
+    instructions:
+      "You coordinate between specialized agents. Use @Researcher for facts.",
     allowedAgents: ["researcher", "writer"],
     // ...
   },
@@ -216,17 +233,19 @@ const agents = [
 ];
 ```
 
-When the Coordinator says "@Researcher, what are the latest stats?", Copilotz routes the message to the Researcher agent.
+When the Coordinator says "@Researcher, what are the latest stats?", Copilotz
+routes the message to the Researcher agent.
 
 ### Persistent Targets
 
-Once an agent addresses someone via @mention, that target becomes their "default" for subsequent messages — no need to repeat @mentions for every turn.
+Once an agent addresses someone via @mention, that target becomes their
+"default" for subsequent messages — no need to repeat @mentions for every turn.
 
 ```typescript
 // User: "@Researcher, I need info on climate change"
 // Researcher responds and is now the user's target
 
-// User: "What about renewable energy?"  
+// User: "What about renewable energy?"
 // Routes to Researcher automatically (persistent target)
 
 // User: "@Writer, draft a summary"
@@ -237,7 +256,8 @@ Targets are stored in thread metadata and persist across the conversation.
 
 ### Participant Identity
 
-For routing to stay stable across runs, thread participants should use canonical identities such as `sender.id` or `sender.externalId`, not display names.
+For routing to stay stable across runs, thread participants should use canonical
+identities such as `sender.id` or `sender.externalId`, not display names.
 
 Recommended pattern for custom adapters:
 
@@ -250,7 +270,8 @@ sender: {
 }
 ```
 
-Using names as thread participant identifiers can break target resolution for agent replies and assistant-initiated tool chains.
+Using names as thread participant identifiers can break target resolution for
+agent replies and assistant-initiated tool chains.
 
 ### Multi-Mention Queue
 
@@ -264,7 +285,9 @@ When multiple agents are mentioned, they respond in order:
 
 ### Loop Prevention
 
-To prevent infinite agent-to-agent conversations, Copilotz tracks consecutive agent turns and forces the conversation back to a human after a configurable limit.
+To prevent infinite agent-to-agent conversations, Copilotz tracks consecutive
+agent turns and forces the conversation back to a human after a configurable
+limit.
 
 ```typescript
 const copilotz = await createCopilotz({
@@ -276,7 +299,8 @@ const copilotz = await createCopilotz({
 });
 ```
 
-When the limit is reached, the next response is directed to the original human user rather than another agent.
+When the limit is reached, the next response is directed to the original human
+user rather than another agent.
 
 ### Ask Question Tool
 
@@ -294,6 +318,7 @@ const agent = {
 ```
 
 The `ask_question` tool:
+
 1. Creates a temporary thread
 2. Sends the question to the target agent
 3. Waits for the response
@@ -301,7 +326,8 @@ The `ask_question` tool:
 
 ## Agent Persistent Memory
 
-Agents can store learnings that persist across conversations using the `update_my_memory` tool.
+Agents can store learnings that persist across conversations using the
+`update_my_memory` tool.
 
 ```typescript
 const agent = {
@@ -316,11 +342,11 @@ const agent = {
 
 Agents can store three types of memory:
 
-| Type | Description |
-|------|-------------|
-| `workingMemory` | Short-term facts for the current context |
-| `expertise` | Accumulated knowledge and skills |
-| `learnedPreferences` | User preferences discovered over time |
+| Type                 | Description                              |
+| -------------------- | ---------------------------------------- |
+| `workingMemory`      | Short-term facts for the current context |
+| `expertise`          | Accumulated knowledge and skills         |
+| `learnedPreferences` | User preferences discovered over time    |
 
 ### Using the Memory Tool
 
@@ -332,13 +358,15 @@ The agent calls the `update_my_memory` tool to persist information:
 ```
 
 Operations:
+
 - `set` — Replace the value for a key
 - `append` — Add to existing value (comma-separated)
 - `remove` — Remove a value or clear the key
 
 ### Memory in Context
 
-Agent memory is automatically injected into the system prompt, so the agent "remembers" learnings from previous conversations:
+Agent memory is automatically injected into the system prompt, so the agent
+"remembers" learnings from previous conversations:
 
 ```
 YOUR PERSISTENT MEMORY:
@@ -349,13 +377,15 @@ YOUR PERSISTENT MEMORY:
 
 ### Unified Participant Nodes
 
-Both users and agents are stored as participant nodes in the knowledge graph with a `participantType` field:
+Both users and agents are stored as participant nodes in the knowledge graph
+with a `participantType` field:
 
-| Field | Values |
-|-------|--------|
+| Field             | Values                 |
+| ----------------- | ---------------------- |
 | `participantType` | `"human"` or `"agent"` |
 
-This enables agents to have persistent memory just like users have profiles, and allows the same graph queries across all participants.
+This enables agents to have persistent memory just like users have profiles, and
+allows the same graph queries across all participants.
 
 ## RAG Configuration
 
@@ -365,13 +395,13 @@ Configure how each agent interacts with the knowledge base:
 const agent = {
   id: "docs-agent",
   ragOptions: {
-    mode: "auto",              // "auto", "tool", or "disabled"
+    mode: "auto", // "auto", "tool", or "disabled"
     namespaces: ["docs", "faq"], // Which namespaces to search
-    ingestNamespace: "docs",   // Where to store ingested docs
-    autoInjectLimit: 4,        // Max chunks to inject (auto mode)
+    ingestNamespace: "docs", // Where to store ingested docs
+    autoInjectLimit: 4, // Max chunks to inject (auto mode)
     entityExtraction: {
       enabled: true,
-      namespace: "thread",     // "thread", "agent", or "global"
+      namespace: "thread", // "thread", "agent", or "global"
     },
   },
   // ...
@@ -380,11 +410,11 @@ const agent = {
 
 ### RAG Modes
 
-| Mode | Behavior |
-|------|----------|
-| `auto` | Relevant chunks automatically injected into prompt |
-| `tool` | Agent explicitly calls `search_knowledge` tool |
-| `disabled` | No RAG for this agent |
+| Mode       | Behavior                                           |
+| ---------- | -------------------------------------------------- |
+| `auto`     | Relevant chunks automatically injected into prompt |
+| `tool`     | Agent explicitly calls `search_knowledge` tool     |
+| `disabled` | No RAG for this agent                              |
 
 ## Multiple Agents Example
 

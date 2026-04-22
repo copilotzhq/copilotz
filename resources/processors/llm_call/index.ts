@@ -76,15 +76,23 @@ export function resolveAgentResponseTarget(
   });
   if (mentionRoute) return mentionRoute;
 
+  // Default in multi-agent mode: return to the delegating sender first and
+  // preserve the upstream queue behind that reply path.
+  if (typeof sourceSenderId === "string" && sourceSenderId.trim().length > 0) {
+    return {
+      targetId: sourceSenderId,
+      targetQueue: sourceTargetQueue,
+    };
+  }
+
   if (sourceTargetQueue.length > 0) {
     const nextTarget = sourceTargetQueue[0];
     const remainingQueue = sourceTargetQueue.slice(1);
     return { targetId: nextTarget, targetQueue: remainingQueue };
   }
 
-  // Default: respond to whoever sent the message (via source metadata)
   return {
-    targetId: sourceSenderId,
+    targetId: null,
     targetQueue: [],
   };
 }

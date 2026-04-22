@@ -15,7 +15,7 @@ resources/skills/<skill-name>/
 Use a skill when you need reusable instructions or workflows that can be loaded
 progressively.
 
-Recommended use case: reusable instruction bundles  
+Recommended use case: reusable instruction bundles\
 Most common mistaken alternative: duplicating long instructions in every agent
 
 ## How Copilotz Consumes It
@@ -28,6 +28,9 @@ Most common mistaken alternative: duplicating long instructions in every agent
 
 The built-in skill directories under `resources/skills/` are the canonical
 reference.
+
+The bundled catalog includes both resource implementation skills and
+execution-centered workflow skills.
 
 ## Public Surface
 

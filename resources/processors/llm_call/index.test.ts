@@ -114,8 +114,30 @@ Deno.test("resolveAgentResponseTarget preserves queued targets from inbound rout
   );
 
   assertEquals(result, {
-    targetId: "writer",
-    targetQueue: ["alex"],
+    targetId: "alex",
+    targetQueue: ["writer", "alex"],
+  });
+});
+
+Deno.test("resolveAgentResponseTarget returns delegated specialists to the delegating agent before the upstream queue", () => {
+  const result = resolveAgentResponseTarget(
+    [],
+    {
+      id: "reviewer",
+      name: "reviewer",
+    },
+    {
+      metadata: {
+        sourceMessageSenderId: "generalist-genius",
+        targetQueue: ["User"],
+      },
+    } as never,
+    true,
+  );
+
+  assertEquals(result, {
+    targetId: "generalist-genius",
+    targetQueue: ["User"],
   });
 });
 

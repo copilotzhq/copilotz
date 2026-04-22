@@ -38,7 +38,7 @@ const copilotz = await createCopilotz({
     fileName: "AGENTS.md",   // Default: AGENTS.md
   },
   
-  // Copilotz development agent
+  // Copilotz native assistant
   copilotzAgent: { llmOptions: { ... } },
   
   // Processing
@@ -66,7 +66,10 @@ const copilotz = await createCopilotz({
 
 ## Resources
 
-Load agents, tools, APIs, processors, providers, and other resources from a directory structure instead of (or in addition to) defining them inline. When `resources.path` is set, `createCopilotz` automatically calls `loadResources` internally and merges the results with any explicit config.
+Load agents, tools, APIs, processors, providers, and other resources from a
+directory structure instead of (or in addition to) defining them inline. When
+`resources.path` is set, `createCopilotz` automatically calls `loadResources`
+internally and merges the results with any explicit config.
 
 ```typescript
 // File-based only — agents loaded from resources/agents/
@@ -83,8 +86,8 @@ const copilotz = await createCopilotz({
     preset: ["core", "code"],
     imports: ["channels.whatsapp", "tools.read_file"],
   },
-  tools: [myExtraTool],           // Appended to file-loaded tools
-  agents: [{ id: "assistant" }],  // Replaces file-loaded "assistant" (ID collision)
+  tools: [myExtraTool], // Appended to file-loaded tools
+  agents: [{ id: "assistant" }], // Replaces file-loaded "assistant" (ID collision)
   dbConfig: { url: Deno.env.get("DATABASE_URL") },
 });
 ```
@@ -94,7 +97,8 @@ const copilotz = await createCopilotz({
 When both `resources.path` and explicit arrays are provided:
 
 - **Append**: Explicit items are added after file-loaded ones
-- **Override on ID collision**: If an explicit item has the same `id` (or `key`/`name`) as a file-loaded one, the explicit item wins
+- **Override on ID collision**: If an explicit item has the same `id` (or
+  `key`/`name`) as a file-loaded one, the explicit item wins
 - **Processors**: Always appended (no ID-based dedup)
 
 ### Options
@@ -112,10 +116,13 @@ resources: {
 ### Presets and Imports
 
 - `preset` loads named bundled groups such as `core`, `rag`, `admin`, and `code`
-- bundled/native resources always include `core`, even if you only pass additional presets such as `["code"]`
-- `imports` narrows loading with dot notation like `channels`, `channels.whatsapp`, or `tools.read_file`
+- bundled/native resources always include `core`, even if you only pass
+  additional presets such as `["code"]`
+- `imports` narrows loading with dot notation like `channels`,
+  `channels.whatsapp`, or `tools.read_file`
 - Presets and imports are additive unions
-- `resources.filterResources` runs after loading and merging; there is no top-level `filterResources` anymore
+- `resources.filterResources` runs after loading and merging; there is no
+  top-level `filterResources` anymore
 
 See [Resource Loaders](./loaders.md) for the expected directory structure.
 
@@ -138,40 +145,45 @@ Set `agentsFile: false` to disable it entirely.
 
 ```typescript
 agents: [{
-  id: "assistant",              // Unique identifier (required)
-  name: "Assistant",            // Display name (required)
-  role: "assistant",            // "assistant", "system", or "user" (required)
-  instructions: "Be helpful.",  // System prompt
-  llmOptions: {                 // LLM configuration (required)
+  id: "assistant", // Unique identifier (required)
+  name: "Assistant", // Display name (required)
+  role: "assistant", // "assistant", "system", or "user" (required)
+  instructions: "Be helpful.", // System prompt
+  llmOptions: { // LLM configuration (required)
     provider: "openai",
     model: "gpt-4o-mini",
     temperature: 0.7,
-    maxTokens: 4096,
-    baseUrl: "...",             // Custom endpoint
-    outputReasoning: false,     // Default true; whether to emit reasoning tokens ("thinking") during stream
-    estimateCost: true,         // Default true; estimate cost from OpenRouter pricing when native usage exists
+    maxTokens: 4096, // Max response length
+    limitEstimatedInputTokens: 12000, // Approximate input/history budget (1 token ~= 4 chars)
+    baseUrl: "...", // Custom endpoint
+    outputReasoning: false, // Default true; whether to emit reasoning tokens ("thinking") during stream
+    estimateCost: true, // Default true; estimate cost from OpenRouter pricing when native usage exists
     pricingModelId: "openai/gpt-4o-mini", // Optional explicit OpenRouter model id override
   },
-  allowedTools: ["*"],          // Tool whitelist
-  allowedAgents: ["other"],     // Agent communication whitelist
-  ragOptions: {                 // Per-agent RAG settings
+  allowedTools: ["*"], // Tool whitelist
+  allowedAgents: ["other"], // Agent communication whitelist
+  ragOptions: { // Per-agent RAG settings
     mode: "auto",
     namespaces: ["docs"],
     autoInjectLimit: 4,
     entityExtraction: { enabled: true },
   },
-  assetOptions: {               // Per-agent asset generation settings
+  assetOptions: { // Per-agent asset generation settings
     produce: {
       persistGeneratedAssets: true,
     },
   },
-}]
+}];
 ```
 
-`llmOptions` is persisted as an `LLMConfig`, so only non-secret fields should
-be treated as durable configuration. Runtime-only fields such as API keys
-should come from environment variables, agent runtime config, or the
+`llmOptions` is persisted as an `LLMConfig`, so only non-secret fields should be
+treated as durable configuration. Runtime-only fields such as API keys should
+come from environment variables, agent runtime config, or the
 `security.resolveLLMRuntimeConfig` hook described below.
+
+`limitEstimatedInputTokens` limits the prompt history using Copilotz's rough
+token estimator (`1 token ~= 4 characters`). It is an approximate input budget,
+not a model-specific tokenizer count.
 
 ### Cost Estimation
 
@@ -191,9 +203,11 @@ Behavior:
 - Cost estimation is enabled by default for LLM calls
 - Set `estimateCost: false` to opt out for an agent
 - Copilotz fetches and caches the OpenRouter models catalog lazily
-- Failures in pricing lookup never fail the LLM request; cost is simply omitted and a warning is logged
+- Failures in pricing lookup never fail the LLM request; cost is simply omitted
+  and a warning is logged
 - Cost is only estimated when the provider returned native usage data
-- When Copilotz falls back to its rough token heuristic, usage is still recorded but cost is not estimated
+- When Copilotz falls back to its rough token heuristic, usage is still recorded
+  but cost is not estimated
 
 ## Database
 
@@ -226,7 +240,8 @@ dbInstance: existingDatabase
 
 ### Crash Recovery
 
-The `staleProcessingThresholdMs` option provides automatic recovery from server crashes:
+The `staleProcessingThresholdMs` option provides automatic recovery from server
+crashes:
 
 ```typescript
 dbConfig: {
@@ -243,42 +258,49 @@ const copilotz = await createCopilotz({
 ```
 
 **How it works:**
-- Events stuck in `"processing"` status longer than the threshold are automatically reset to `"pending"`
+
+- Events stuck in `"processing"` status longer than the threshold are
+  automatically reset to `"pending"`
 - This prevents permanent deadlocks when the server crashes mid-processing
 - Default: 5 minutes (300000ms)
 - Set lower for faster recovery, higher for long-running operations
 
 **When to adjust:**
+
 - **Lower (1-2 min)**: Fast recovery, but may reset legitimately slow operations
 - **Higher (10-15 min)**: For operations that genuinely take a long time
 - **Default (5 min)**: Good balance for most use cases
 
 ## Skills
 
-Load remote or inline skills in addition to skills discovered from `resources/skills/`, `~/.copilotz/skills/`, and bundled skills.
+Load remote or inline skills in addition to skills discovered from
+`resources/skills/`, `~/.copilotz/skills/`, and bundled skills.
 
 ```typescript
 skills: [
   // Remote skill from URL
   "https://example.com/skills/my-skill/SKILL.md",
-  
+
   // Remote skill with explicit URL
   { url: "https://example.com/skills/other/SKILL.md" },
-  
+
   // Inline skill
   {
     name: "custom-workflow",
     description: "Guide through the custom workflow.",
     content: "# Custom Workflow\n\nStep-by-step instructions...",
   },
-]
+];
 ```
 
-Skills are merged with precedence: project > explicit > user > bundled. See [Skills](./skills.md) for the full SKILL.md format, discovery system, and native tools.
+Skills are merged with precedence: project > explicit > user > bundled. See
+[Skills](./skills.md) for the full SKILL.md format, discovery system, and native
+tools.
 
 ## Copilotz Agent
 
-Enable the bundled Copilotz development agent — a framework assistant with access to all skills and file tools:
+Enable the bundled Copilotz assistant — a general-purpose Copilotz-native helper
+with access to the bundled skills and file tools:
 
 ```typescript
 copilotzAgent: {
@@ -296,7 +318,10 @@ copilotzAgent: {
 }
 ```
 
-The Copilotz agent is added alongside your existing agents. Bundled admin defaults are applied first, and any fields you provide in `copilotzAgent` override them. If you define an agent with the same ID (`"copilotz"` by default), your explicit agent definition still takes precedence.
+The Copilotz agent is added alongside your existing agents. Bundled admin
+defaults are applied first, and any fields you provide in `copilotzAgent`
+override them. If you define an agent with the same ID (`"copilotz"` by
+default), your explicit agent definition still takes precedence.
 
 ## Custom Tools
 
@@ -332,7 +357,7 @@ tools: [{
       return `Weather loaded for ${city}: ${weather.temperature}°, ${weather.conditions}`;
     },
   },
-}]
+}];
 ```
 
 `historyPolicy.visibility` supports:
@@ -341,7 +366,8 @@ tools: [{
 - `public_result`
 - `public_full`
 
-Use `projector` with `public_result` when other agents should see a compact business-level outcome instead of the raw tool payload.
+Use `projector` with `public_result` when other agents should see a compact
+business-level outcome instead of the raw tool payload.
 
 ## OpenAPI Integrations
 
@@ -349,8 +375,8 @@ Use `projector` with `public_result` when other agents should see a compact busi
 apis: [{
   id: "github",
   name: "GitHub API",
-  openApiSchema: myOpenApiSchema,      // Object or JSON/YAML string (NOT a file path)
-  baseUrl: "https://api.github.com",   // Override spec base URL
+  openApiSchema: myOpenApiSchema, // Object or JSON/YAML string (NOT a file path)
+  baseUrl: "https://api.github.com", // Override spec base URL
   auth: {
     type: "bearer",
     token: process.env.GITHUB_TOKEN,
@@ -371,12 +397,14 @@ apis: [{
   // auth: { type: "apiKey", key: "X-API-Key", value: "...", in: "header" }
   // auth: { type: "basic", username: "...", password: "..." }
   // auth: { type: "dynamic", authEndpoint: "...", tokenPath: "..." }
-}]
+}];
 ```
 
-> **Note:** To load OpenAPI specs from files, use [`loadResources()`](./loaders.md) or import the file yourself.
+> **Note:** To load OpenAPI specs from files, use
+> [`loadResources()`](./loaders.md) or import the file yourself.
 >
-> `toolPolicies` are keyed by the generated tool key, usually the OpenAPI `operationId`.
+> `toolPolicies` are keyed by the generated tool key, usually the OpenAPI
+> `operationId`.
 
 ## MCP Servers
 
@@ -408,7 +436,8 @@ mcpServers: [{
 }]
 ```
 
-For MCP servers, overrides can be keyed by either the generated Copilotz tool key (`serverName_toolName`) or the original MCP tool name.
+For MCP servers, overrides can be keyed by either the generated Copilotz tool
+key (`serverName_toolName`) or the original MCP tool name.
 
 ## Custom Processors
 
@@ -431,7 +460,8 @@ processors: [{
 
 ## History Transform
 
-Use `historyTransform` to filter or rewrite the generated message history before it is sent to the LLM.
+Use `historyTransform` to filter or rewrite the generated message history before
+it is sent to the LLM.
 
 ```typescript
 const copilotz = await createCopilotz({
@@ -451,13 +481,16 @@ const copilotz = await createCopilotz({
 
 ### History Transform Semantics
 
-- Runs after Copilotz generates chat history and before the system prompt is added
+- Runs after Copilotz generates chat history and before the system prompt is
+  added
 - Receives both normalized `messages` and aligned `rawHistory`
 - Must return the final `ChatMessage[]` to send as history
 - May be async
 - Does not receive or modify the agent system prompt
 
-Use this hook for redaction, age-based filtering, attachment stripping, or tenant-specific history rules. If you need to change instructions, do that in the agent configuration instead.
+Use this hook for redaction, age-based filtering, attachment stripping, or
+tenant-specific history rules. If you need to change instructions, do that in
+the agent configuration instead.
 
 ## RAG Configuration
 
@@ -567,13 +600,16 @@ const copilotz = await createCopilotz({
 ```
 
 **How it works:**
+
 - Each consecutive agent turn increments a counter in thread metadata
-- When the counter reaches `maxAgentTurns`, the next message targets the original human user
+- When the counter reaches `maxAgentTurns`, the next message targets the
+  original human user
 - Human messages reset the counter to 0
 
 ### Target Context in History
 
-When `includeTargetContext` is true (default), chat history includes addressing info:
+When `includeTargetContext` is true (default), chat history includes addressing
+info:
 
 ```
 [User]: @Researcher, what's the data on climate change?
@@ -628,7 +664,8 @@ await copilotz.run(message, {
 
 ### Programmatic Routing
 
-Use `target` and `targetQueue` to route messages programmatically without relying on @mentions:
+Use `target` and `targetQueue` to route messages programmatically without
+relying on @mentions:
 
 ```typescript
 // Route directly to a specific agent
@@ -638,7 +675,7 @@ await copilotz.run(
     sender: { type: "user", name: "Alex" },
     target: "data-processor",
   },
-  onEvent
+  onEvent,
 );
 
 // Route to multiple agents in sequence
@@ -648,11 +685,12 @@ await copilotz.run(
     sender: { type: "user", name: "Alex" },
     targetQueue: ["reviewer", "approver"],
   },
-  onEvent
+  onEvent,
 );
 ```
 
-When `targetQueue` is provided without `target`, the first item in the queue becomes the primary target and the remaining items stay queued.
+When `targetQueue` is provided without `target`, the first item in the queue
+becomes the primary target and the remaining items stay queued.
 
 ---
 
@@ -660,17 +698,18 @@ When `targetQueue` is provided without `target`, the first item in the queue bec
 
 LLM provider keys can be set via environment variables:
 
-| Provider | Environment Variable |
-|----------|---------------------|
-| OpenAI | `OPENAI_API_KEY` |
-| Anthropic | `ANTHROPIC_API_KEY` |
-| Gemini | `GEMINI_API_KEY` |
-| Groq | `GROQ_API_KEY` |
-| DeepSeek | `DEEPSEEK_API_KEY` |
-| Ollama | `OLLAMA_API_KEY` (or use `baseUrl`) |
-| Any provider fallback | `LLM_API_KEY` |
+| Provider              | Environment Variable                |
+| --------------------- | ----------------------------------- |
+| OpenAI                | `OPENAI_API_KEY`                    |
+| Anthropic             | `ANTHROPIC_API_KEY`                 |
+| Gemini                | `GEMINI_API_KEY`                    |
+| Groq                  | `GROQ_API_KEY`                      |
+| DeepSeek              | `DEEPSEEK_API_KEY`                  |
+| Ollama                | `OLLAMA_API_KEY` (or use `baseUrl`) |
+| Any provider fallback | `LLM_API_KEY`                       |
 
-The library checks `${PROVIDER}_API_KEY` first, then falls back to `LLM_API_KEY`.
+The library checks `${PROVIDER}_API_KEY` first, then falls back to
+`LLM_API_KEY`.
 
 ## Runtime Secret Resolution
 
@@ -715,7 +754,12 @@ Resolution model:
 ## Complete Example
 
 ```typescript
-import { createCopilotz, defineCollection, index, relation } from "@copilotz/copilotz";
+import {
+  createCopilotz,
+  defineCollection,
+  index,
+  relation,
+} from "@copilotz/copilotz";
 
 // Define collections
 const customer = defineCollection({
@@ -743,27 +787,27 @@ const copilotz = await createCopilotz({
     allowedTools: ["search_knowledge", "http_request"],
     ragOptions: { mode: "auto", namespaces: ["docs", "faq"] },
   }],
-  
+
   dbConfig: {
     url: process.env.DATABASE_URL || ":memory:",
     autoProvisionSchema: true,
   },
-  
+
   rag: {
     embedding: { provider: "openai", model: "text-embedding-3-small" },
     chunking: { strategy: "fixed", chunkSize: 512 },
     retrieval: { defaultLimit: 5, similarityThreshold: 0.7 },
   },
-  
+
   collections: [customer],
   collectionsConfig: { autoIndex: true },
-  
+
   callbacks: {
     onEvent: async (event) => {
       console.log(`[${event.type}]`, event.payload);
     },
   },
-  
+
   stream: true,
   namespace: "default",
 });
@@ -776,7 +820,7 @@ const result = await copilotz.run(
       process.stdout.write(event.payload.token);
     }
   },
-  { namespace: "workspace:123" }
+  { namespace: "workspace:123" },
 );
 
 await result.done;
@@ -786,6 +830,6 @@ await copilotz.shutdown();
 ## Next Steps
 
 - [Getting Started](./getting-started.md) — Quick start guide
-- [Skills](./skills.md) — SKILL.md format, discovery, and admin agent
+- [Skills](./skills.md) — SKILL.md format, discovery, and the native assistant
 - [Agents](./agents.md) — Agent configuration details
 - [API Reference](./api-reference.md) — Full API documentation

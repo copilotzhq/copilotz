@@ -23,9 +23,7 @@ import type {
   EntityExtractPayload,
   KnowledgeNode,
 } from "@/database/schemas/index.ts";
-import {
-  createMessageService,
-} from "@/runtime/collections/native.ts";
+import { createMessageService } from "@/runtime/collections/native.ts";
 
 // Import tool types from their source
 import type {
@@ -50,10 +48,10 @@ import type { NewMessageEventPayload } from "@/database/schemas/index.ts";
 import {
   contextGenerator,
   generateRagContext,
-  historyGenerator,
   getUserExternalId,
-  resolveParticipantCollection,
+  historyGenerator,
   type LLMContextData,
+  resolveParticipantCollection,
 } from "@/runtime/memory/index.ts";
 
 import { processAssetsForNewMessage } from "./generators/asset-generator.ts";
@@ -429,7 +427,8 @@ function discoverSingleAgentTargetForMessage(
       a.id === messageContext.senderId || a.name === messageContext.senderName
     ) ?? availableAgents.find((a) =>
       (typeof a.id === "string" && a.id.toLowerCase() === senderIdLower) ||
-      (typeof a.name === "string" && a.name.toLowerCase() === (senderNameLower ?? senderIdLower))
+      (typeof a.name === "string" &&
+        a.name.toLowerCase() === (senderNameLower ?? senderIdLower))
     );
     if (agent) {
       return { targetId: (agent.id ?? agent.name) as string, targetQueue: [] };
@@ -581,7 +580,8 @@ async function discoverTargetForMessage(
       a.id === messageContext.senderId || a.name === messageContext.senderName
     ) ?? availableAgents.find((a) =>
       (typeof a.id === "string" && a.id.toLowerCase() === toolSenderIdLower) ||
-      (typeof a.name === "string" && a.name.toLowerCase() === (toolSenderNameLower ?? toolSenderIdLower))
+      (typeof a.name === "string" &&
+        a.name.toLowerCase() === (toolSenderNameLower ?? toolSenderIdLower))
     );
     if (agent) {
       return { targetId: (agent.id ?? agent.name) as string, targetQueue: [] };
@@ -803,6 +803,24 @@ function getMessageContext(payload: MessagePayload): MessageContextDetails {
   };
 }
 
+function resolveStoredSender(
+  senderIdentity: { id?: unknown; externalId?: unknown } | null | undefined,
+  fallbackSenderId: string,
+) {
+  const senderExternalId = typeof senderIdentity?.externalId === "string"
+    ? senderIdentity.externalId.trim()
+    : "";
+  const senderParticipantId = typeof senderIdentity?.id === "string"
+    ? senderIdentity.id
+    : null;
+
+  return {
+    senderExternalId,
+    senderParticipantId,
+    storageSenderId: senderParticipantId ?? fallbackSenderId,
+  };
+}
+
 // Import Participant Lifecycle logic
 import { process as ensureParticipants } from "./participant_lifecycle.ts";
 
@@ -836,7 +854,7 @@ export const messageProcessor: EventProcessor<
       ...(isRecord(payload.metadata) ? payload.metadata : {}),
       ...(
         event.metadata && typeof event.metadata === "object" &&
-            !Array.isArray(event.metadata)
+          !Array.isArray(event.metadata)
           ? Object.fromEntries(
             Object.entries(event.metadata as Record<string, unknown>).filter(
               ([key]) =>
@@ -890,17 +908,14 @@ export const messageProcessor: EventProcessor<
     // Keep senderId bound to the participant node id when available so
     // collection relations (for example SENT_BY) continue to work. Store the
     // conversational identity separately in metadata for prompt/history use.
-    const senderExternalId = typeof (senderIdentity as { externalId?: unknown } | null)
-          ?.externalId === "string"
-      ? ((senderIdentity as { externalId: string }).externalId).trim()
-      : "";
-    const senderParticipantId = typeof (senderIdentity as { id?: unknown } | null)
-          ?.id === "string"
-      ? (senderIdentity as { id: string }).id
-      : null;
-    const storageSenderId = senderParticipantId
-      ? senderParticipantId
-      : messageContext.senderId;
+    const {
+      senderExternalId,
+      senderParticipantId,
+      storageSenderId,
+    } = resolveStoredSender(
+      senderIdentity as { id?: unknown; externalId?: unknown } | null,
+      messageContext.senderId,
+    );
     const persistedMessageMetadata = {
       ...(messageMetadata ?? {}),
       senderExternalId: senderExternalId.length > 0
@@ -1460,14 +1475,41 @@ export const messageProcessor: EventProcessor<
         }
 
         // Persist absorbed message — id omitted so createMessage generates a ULID
+        const candidateSenderIdentity = await ensureParticipants(
+          {
+            ...candidate,
+            type: "NEW_MESSAGE",
+          } as unknown as Event,
+          deps,
+        ) as { id?: unknown; externalId?: unknown } | null;
+        const {
+          senderExternalId: candidateSenderExternalId,
+          senderParticipantId: candidateSenderParticipantId,
+          storageSenderId: candidateStorageSenderId,
+        } = resolveStoredSender(
+          candidateSenderIdentity,
+          candidateCtx.senderId,
+        );
+
         await messageService.create({
           threadId,
-          senderId: candidateCtx.senderId,
+          senderId: candidateStorageSenderId,
           senderType: candidateCtx.senderType,
+          senderUserId: candidateSenderParticipantId ?? undefined,
           content: candidateCtx.contentText,
           toolCallId: candToolCallId ?? undefined,
           toolCalls: candidatePayload.toolCalls ?? null,
-          metadata: candidateMeta,
+          metadata: {
+            ...(candidateMeta ?? {}),
+            senderExternalId: candidateSenderExternalId.length > 0
+              ? candidateSenderExternalId
+              : candidateCtx.senderId,
+            senderDisplayName: candidatePayload.sender?.name ??
+              candidateCtx.senderId,
+            ...(candidateSenderParticipantId
+              ? { senderParticipantId: candidateSenderParticipantId }
+              : {}),
+          },
         }, context.namespace);
       }
 
@@ -1737,7 +1779,10 @@ async function buildProcessingContext(
     ops,
   });
   const participantCollection = resolveParticipantCollection(context);
-  const chatHistory = await messageService.getHistory(threadId, senderIdForHistory);
+  const chatHistory = await messageService.getHistory(
+    threadId,
+    senderIdForHistory,
+  );
 
   const availableAgents = context.agents || [];
   if (availableAgents.length === 0) {
@@ -1771,8 +1816,12 @@ async function buildProcessingContext(
   if (!userMetadata && userExternalId) {
     const externalId = userExternalId;
     try {
-      if (participantCollection && typeof (participantCollection as any).resolveByExternalId === "function") {
-        const participant = await (participantCollection as any).resolveByExternalId(externalId);
+      if (
+        participantCollection &&
+        typeof (participantCollection as any).resolveByExternalId === "function"
+      ) {
+        const participant = await (participantCollection as any)
+          .resolveByExternalId(externalId);
         if (participant?.metadata && typeof participant.metadata === "object") {
           userMetadata = participant.metadata as Record<string, unknown>;
         }
@@ -1793,8 +1842,12 @@ async function buildProcessingContext(
   let agentNode: KnowledgeNode | undefined = undefined;
   if (targetAgentId) {
     try {
-      if (participantCollection && typeof (participantCollection as any).resolveByExternalId === "function") {
-        const participant = await (participantCollection as any).resolveByExternalId(targetAgentId);
+      if (
+        participantCollection &&
+        typeof (participantCollection as any).resolveByExternalId === "function"
+      ) {
+        const participant = await (participantCollection as any)
+          .resolveByExternalId(targetAgentId);
         if (participant) {
           agentNode = {
             id: participant.id,

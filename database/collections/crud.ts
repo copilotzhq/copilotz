@@ -1,24 +1,24 @@
 /**
  * CRUD operations implementation for collections.
- * 
+ *
  * Maps collection operations to the underlying graph structure (nodes + edges).
- * 
+ *
  * @module
  */
 
 import { ulid } from "ulid";
 import type { DbInstance } from "../index.ts";
 import type {
-  CollectionPage,
-  CollectionDefinition,
   CollectionCrud,
-  WhereFilter,
+  CollectionDefinition,
+  CollectionPage,
+  HookContext,
   PageOptions,
   QueryOptions,
-  SearchOptions,
   RelationDefinition,
-  HookContext,
+  SearchOptions,
   SortOrder,
+  WhereFilter,
 } from "./types.ts";
 
 // ============================================
@@ -141,7 +141,9 @@ function buildCursorClause(
     const equalityParts: string[] = [];
     for (let j = 0; j < i; j++) {
       const [prevField] = sort[j];
-      equalityParts.push(`${getFieldValueExpression(prevField)} = $${paramIdx}`);
+      equalityParts.push(
+        `${getFieldValueExpression(prevField)} = $${paramIdx}`,
+      );
       params.push(cursorRecord[prevField] ?? null);
       paramIdx++;
     }
@@ -150,8 +152,12 @@ function buildCursorClause(
     // Keyset pagination must match ORDER BY: after ASC seeks larger keys; after DESC seeks smaller.
     const operator = direction === "after"
       ? order === "asc" ? ">" : "<"
-      : order === "asc" ? "<" : ">";
-    const comparison = `${getFieldValueExpression(field)} ${operator} $${paramIdx}`;
+      : order === "asc"
+      ? "<"
+      : ">";
+    const comparison = `${
+      getFieldValueExpression(field)
+    } ${operator} $${paramIdx}`;
     params.push(cursorRecord[field] ?? null);
     paramIdx++;
     branches.push(
@@ -187,7 +193,10 @@ function buildDataFilter<T>(
     if (key === "$and" && Array.isArray(value)) {
       const subConditions: string[] = [];
       for (const subFilter of value) {
-        const sub = buildDataFilter<T>(subFilter as Record<string, unknown>, paramIdx);
+        const sub = buildDataFilter<T>(
+          subFilter as Record<string, unknown>,
+          paramIdx,
+        );
         if (sub.conditions.length > 0) {
           subConditions.push(`(${sub.conditions.join(" AND ")})`);
         }
@@ -203,7 +212,10 @@ function buildDataFilter<T>(
     if (key === "$or" && Array.isArray(value)) {
       const subConditions: string[] = [];
       for (const subFilter of value) {
-        const sub = buildDataFilter<T>(subFilter as Record<string, unknown>, paramIdx);
+        const sub = buildDataFilter<T>(
+          subFilter as Record<string, unknown>,
+          paramIdx,
+        );
         if (sub.conditions.length > 0) {
           subConditions.push(`(${sub.conditions.join(" AND ")})`);
         }
@@ -217,7 +229,10 @@ function buildDataFilter<T>(
     }
 
     if (key === "$not" && typeof value === "object" && value !== null) {
-      const sub = buildDataFilter<T>(value as Record<string, unknown>, paramIdx);
+      const sub = buildDataFilter<T>(
+        value as Record<string, unknown>,
+        paramIdx,
+      );
       if (sub.conditions.length > 0) {
         conditions.push(`NOT (${sub.conditions.join(" AND ")})`);
       }
@@ -359,9 +374,13 @@ function buildDataFilter<T>(
             break;
           case "$isEmpty":
             if (opValue) {
-              conditions.push(`(${jsonPathValue} IS NULL OR ${jsonPathValue} = '')`);
+              conditions.push(
+                `(${jsonPathValue} IS NULL OR ${jsonPathValue} = '')`,
+              );
             } else {
-              conditions.push(`${jsonPathValue} IS NOT NULL AND ${jsonPathValue} != ''`);
+              conditions.push(
+                `${jsonPathValue} IS NOT NULL AND ${jsonPathValue} != ''`,
+              );
             }
             break;
           case "$exists":
@@ -376,7 +395,9 @@ function buildDataFilter<T>(
     } else {
       // Simple equality
       if (value === null) {
-        conditions.push(`("data"->'${key}' IS NULL OR "data"->'${key}' = 'null'::jsonb)`);
+        conditions.push(
+          `("data"->'${key}' IS NULL OR "data"->'${key}' = 'null'::jsonb)`,
+        );
       } else if (Array.isArray(value)) {
         conditions.push(`"data"->'${key}' = $${paramIdx}::jsonb`);
         params.push(JSON.stringify(value));
@@ -406,7 +427,10 @@ function buildWhereClause<T>(
   const paramIdx = startParamIndex + 2;
 
   // Build data filter conditions
-  const dataResult = buildDataFilter<T>(filter as Record<string, unknown>, paramIdx);
+  const dataResult = buildDataFilter<T>(
+    filter as Record<string, unknown>,
+    paramIdx,
+  );
   conditions.push(...dataResult.conditions);
   params.push(...dataResult.params);
 
@@ -443,12 +467,12 @@ function buildOrderClause(sort?: NormalizedSortOrder): string {
 function mapNodeToRecord<T>(node: NodeRow): T {
   const data = node.data ?? {};
   return {
+    ...data,
     id: node.id,
     namespace: node.namespace,
     content: node.content,
     sourceType: node.source_type,
     sourceId: node.source_id,
-    ...data,
     createdAt: node.created_at,
     updatedAt: node.updated_at,
   } as T;
@@ -472,7 +496,9 @@ export function createCollectionCrud<TSelect, TInsert>(
   // Helpers
   // ----------------------------------------
 
-  const applyDefaults = (data: Record<string, unknown>): Record<string, unknown> => {
+  const applyDefaults = (
+    data: Record<string, unknown>,
+  ): Record<string, unknown> => {
     const result = { ...data };
     if (defaults) {
       for (const [key, value] of Object.entries(defaults)) {
@@ -510,7 +536,9 @@ export function createCollectionCrud<TSelect, TInsert>(
       .map((f) => {
         const value = data[f];
         if (typeof value === "string") return value;
-        if (typeof value === "object" && value !== null) return JSON.stringify(value);
+        if (typeof value === "object" && value !== null) {
+          return JSON.stringify(value);
+        }
         return String(value ?? "");
       })
       .filter(Boolean)
@@ -531,7 +559,10 @@ export function createCollectionCrud<TSelect, TInsert>(
       .join(" ") || null;
   };
 
-  const getEdgeType = (_relationName: string, relation: RelationDefinition): string => {
+  const getEdgeType = (
+    _relationName: string,
+    relation: RelationDefinition,
+  ): string => {
     if (relation.edgeType) return relation.edgeType;
     return `HAS_${relation.collection.toUpperCase()}`;
   };
@@ -545,7 +576,9 @@ export function createCollectionCrud<TSelect, TInsert>(
     populatePaths: string[],
     namespace: string,
   ): Promise<TSelect[]> => {
-    if (!populatePaths.length || !relations) return await Promise.resolve(records);
+    if (!populatePaths.length || !relations) {
+      return await Promise.resolve(records);
+    }
 
     for (const record of records) {
       for (const path of populatePaths) {
@@ -574,7 +607,11 @@ export function createCollectionCrud<TSelect, TInsert>(
           if (result.rows[0]) {
             let related = mapNodeToRecord<TSelect>(result.rows[0]);
             if (nestedPath && relations) {
-              const arr = await populateRelations([related], [nestedPath], namespace);
+              const arr = await populateRelations(
+                [related],
+                [nestedPath],
+                namespace,
+              );
               related = arr[0];
             }
             recordAny[relationName] = related;
@@ -602,7 +639,9 @@ export function createCollectionCrud<TSelect, TInsert>(
             let relatedRecords = nodeResult.rows.map(mapNodeToRecord<TSelect>);
 
             if (nestedPath && relations) {
-              relatedRecords = await populateRelations(relatedRecords, [nestedPath], namespace);
+              relatedRecords = await populateRelations(relatedRecords, [
+                nestedPath,
+              ], namespace);
             }
 
             if (relation.type === "hasOne") {
@@ -638,12 +677,20 @@ export function createCollectionCrud<TSelect, TInsert>(
     // ========================================
     // CREATE
     // ========================================
-    async create(data: TInsert, options: { namespace: string }): Promise<TSelect> {
-      let processedData = applyTimestamps(applyDefaults(data as Record<string, unknown>));
+    async create(
+      data: TInsert,
+      options: { namespace: string },
+    ): Promise<TSelect> {
+      let processedData = applyTimestamps(
+        applyDefaults(data as Record<string, unknown>),
+      );
 
       // Run beforeCreate hook
       if (hooks?.beforeCreate) {
-        processedData = await hooks.beforeCreate(processedData, createHookContext(options.namespace));
+        processedData = await hooks.beforeCreate(
+          processedData,
+          createHookContext(options.namespace),
+        );
       }
 
       const embedding = await generateEmbedding(processedData);
@@ -672,7 +719,9 @@ export function createCollectionCrud<TSelect, TInsert>(
       if (relations) {
         for (const [_relationName, relation] of Object.entries(relations)) {
           if (relation.type === "belongsTo") {
-            const foreignKeyValue = processedData[relation.foreignKey] as string | undefined;
+            const foreignKeyValue = processedData[relation.foreignKey] as
+              | string
+              | undefined;
             if (foreignKeyValue) {
               // Create reverse edge from parent to this record
               const reverseEdgeType = `HAS_${name.toUpperCase()}`;
@@ -751,7 +800,11 @@ export function createCollectionCrud<TSelect, TInsert>(
       let records = result.rows.map(mapNodeToRecord<TSelect>);
 
       if (options?.populate?.length) {
-        records = await populateRelations(records, options.populate, options.namespace);
+        records = await populateRelations(
+          records,
+          options.populate,
+          options.namespace,
+        );
       }
 
       return records;
@@ -776,11 +829,12 @@ export function createCollectionCrud<TSelect, TInsert>(
       const limit = typeof options.limit === "number" && options.limit > 0
         ? Math.floor(options.limit)
         : 50;
-      const direction = typeof options.before === "string" && options.before.length > 0
-        ? "before"
-        : typeof options.after === "string" && options.after.length > 0
-        ? "after"
-        : null;
+      const direction =
+        typeof options.before === "string" && options.before.length > 0
+          ? "before"
+          : typeof options.after === "string" && options.after.length > 0
+          ? "after"
+          : null;
       const cursorValue = direction === "before"
         ? options.before!
         : direction === "after"
@@ -796,7 +850,9 @@ export function createCollectionCrud<TSelect, TInsert>(
       let cursorClause = "";
 
       if (direction && cursorValue) {
-        const cursorFilters: Record<string, unknown>[] = [{ [cursorField]: cursorValue }];
+        const cursorFilters: Record<string, unknown>[] = [{
+          [cursorField]: cursorValue,
+        }];
         if (cursorField !== "id") {
           cursorFilters.push({ id: cursorValue });
         }
@@ -845,7 +901,11 @@ export function createCollectionCrud<TSelect, TInsert>(
       let records = rows.map(mapNodeToRecord<TSelect>);
 
       if (options.populate?.length) {
-        records = await populateRelations(records, options.populate, options.namespace);
+        records = await populateRelations(
+          records,
+          options.populate,
+          options.namespace,
+        );
       }
 
       return {
@@ -866,7 +926,10 @@ export function createCollectionCrud<TSelect, TInsert>(
             ? hasExtra
             : false,
           startCursor: records.length > 0
-            ? getCursorFieldValue(records[0] as Record<string, unknown>, pageKeyField)
+            ? getCursorFieldValue(
+              records[0] as Record<string, unknown>,
+              pageKeyField,
+            )
             : null,
           endCursor: records.length > 0
             ? getCursorFieldValue(
@@ -886,7 +949,10 @@ export function createCollectionCrud<TSelect, TInsert>(
       filter: WhereFilter<TSelect>,
       options?: Omit<QueryOptions<TSelect>, "limit" | "offset">,
     ): Promise<TSelect | null> {
-      const results = await this.find(filter, { ...options, limit: 1 } as QueryOptions<TSelect>);
+      const results = await this.find(
+        filter,
+        { ...options, limit: 1 } as QueryOptions<TSelect>,
+      );
       return results[0] ?? null;
     },
 
@@ -907,7 +973,11 @@ export function createCollectionCrud<TSelect, TInsert>(
       let records = [mapNodeToRecord<TSelect>(result.rows[0])];
 
       if (options.populate?.length) {
-        records = await populateRelations(records, options.populate, options.namespace);
+        records = await populateRelations(
+          records,
+          options.populate,
+          options.namespace,
+        );
       }
 
       return records[0];
@@ -929,7 +999,10 @@ export function createCollectionCrud<TSelect, TInsert>(
 
       // Run beforeUpdate hook
       if (hooks?.beforeUpdate) {
-        updatedData = await hooks.beforeUpdate(updatedData, createHookContext(options.namespace));
+        updatedData = await hooks.beforeUpdate(
+          updatedData,
+          createHookContext(options.namespace),
+        );
       }
 
       const embedding = await generateEmbedding(updatedData);
@@ -955,7 +1028,9 @@ export function createCollectionCrud<TSelect, TInsert>(
         ],
       );
 
-      const record = result.rows[0] ? mapNodeToRecord<TSelect>(result.rows[0]) : null;
+      const record = result.rows[0]
+        ? mapNodeToRecord<TSelect>(result.rows[0])
+        : null;
 
       // Run afterUpdate hook
       if (record && hooks?.afterUpdate) {
@@ -978,7 +1053,11 @@ export function createCollectionCrud<TSelect, TInsert>(
 
       for (const record of records) {
         const recordAny = record as Record<string, unknown>;
-        await this.update({ id: recordAny.id } as WhereFilter<TSelect>, data, options);
+        await this.update(
+          { id: recordAny.id } as WhereFilter<TSelect>,
+          data,
+          options,
+        );
         updated++;
       }
 
@@ -994,10 +1073,17 @@ export function createCollectionCrud<TSelect, TInsert>(
     ): Promise<{ deleted: number }> {
       // Run beforeDelete hook
       if (hooks?.beforeDelete) {
-        await hooks.beforeDelete(filter as Record<string, unknown>, createHookContext(options.namespace));
+        await hooks.beforeDelete(
+          filter as Record<string, unknown>,
+          createHookContext(options.namespace),
+        );
       }
 
-      const { clause, params } = buildWhereClause(filter, options.namespace, name);
+      const { clause, params } = buildWhereClause(
+        filter,
+        options.namespace,
+        name,
+      );
 
       const result = await db.query<{ count?: string }>(
         `WITH deleted AS (DELETE FROM "nodes" WHERE ${clause} RETURNING 1) SELECT COUNT(*) as count FROM deleted`,
@@ -1036,7 +1122,11 @@ export function createCollectionCrud<TSelect, TInsert>(
 
       if (existing) {
         const existingAny = existing as Record<string, unknown>;
-        return (await this.update({ id: existingAny.id } as WhereFilter<TSelect>, data as Partial<TInsert>, options))!;
+        return (await this.update(
+          { id: existingAny.id } as WhereFilter<TSelect>,
+          data as Partial<TInsert>,
+          options,
+        ))!;
       }
 
       return this.create(data, options);
@@ -1049,7 +1139,11 @@ export function createCollectionCrud<TSelect, TInsert>(
       filter: WhereFilter<TSelect> = {},
       options?: { namespace: string },
     ): Promise<number> {
-      const { clause, params } = buildWhereClause(filter, options!.namespace, name);
+      const { clause, params } = buildWhereClause(
+        filter,
+        options!.namespace,
+        name,
+      );
 
       const result = await db.query<{ count: string }>(
         `SELECT COUNT(*) as count FROM "nodes" WHERE ${clause}`,
@@ -1164,7 +1258,14 @@ export function createCollectionCrud<TSelect, TInsert>(
            AND 1 - ("embedding" <=> $1::vector) > $5
          ORDER BY "embedding" <=> $1::vector
          LIMIT $6`,
-        [`[${embedding.join(",")}]`, options.namespace, name, id, threshold, limit],
+        [
+          `[${embedding.join(",")}]`,
+          options.namespace,
+          name,
+          id,
+          threshold,
+          limit,
+        ],
       );
 
       return result.rows.map((row) => ({
@@ -1176,4 +1277,3 @@ export function createCollectionCrud<TSelect, TInsert>(
 
   return crud;
 }
-

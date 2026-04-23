@@ -26,13 +26,22 @@ import type {
   ScopedCollectionsManager,
 } from "@/types/index.ts";
 
-type CollectionAccessor = CollectionsManager | ScopedCollectionsManager | undefined;
+type CollectionAccessor =
+  | CollectionsManager
+  | ScopedCollectionsManager
+  | undefined;
 
 type ScopedCollectionLike<TRecord> = {
   create: (data: Record<string, unknown>) => Promise<TRecord>;
   createMany?: (data: Record<string, unknown>[]) => Promise<TRecord[]>;
-  find: (filter?: Record<string, unknown>, options?: Record<string, unknown>) => Promise<TRecord[]>;
-  findOne: (filter: Record<string, unknown>, options?: Record<string, unknown>) => Promise<TRecord | null>;
+  find: (
+    filter?: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ) => Promise<TRecord[]>;
+  findOne: (
+    filter: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ) => Promise<TRecord | null>;
   findPage?: (
     filter?: Record<string, unknown>,
     options?: Record<string, unknown>,
@@ -46,10 +55,18 @@ type ScopedCollectionLike<TRecord> = {
       cursorField: string;
     };
   }>;
-  update: (filter: Record<string, unknown>, data: Record<string, unknown>) => Promise<TRecord | null>;
-  upsert: (filter: Record<string, unknown>, data: Record<string, unknown>) => Promise<TRecord>;
+  update: (
+    filter: Record<string, unknown>,
+    data: Record<string, unknown>,
+  ) => Promise<TRecord | null>;
+  upsert: (
+    filter: Record<string, unknown>,
+    data: Record<string, unknown>,
+  ) => Promise<TRecord>;
   delete: (filter: Record<string, unknown>) => Promise<{ deleted: number }>;
-  deleteMany?: (filter: Record<string, unknown>) => Promise<{ deleted: number }>;
+  deleteMany?: (
+    filter: Record<string, unknown>,
+  ) => Promise<{ deleted: number }>;
   search?: (
     query: string,
     options?: Record<string, unknown>,
@@ -72,7 +89,9 @@ interface ParticipantRecord extends Record<string, unknown> {
 
 type ParticipantCollectionMethods = {
   getByExternalId?: (externalId: string) => Promise<ParticipantRecord | null>;
-  resolveByExternalId?: (externalId: string) => Promise<ParticipantRecord | null>;
+  resolveByExternalId?: (
+    externalId: string,
+  ) => Promise<ParticipantRecord | null>;
   upsertIdentity?: (input: {
     id?: string;
     externalId: string;
@@ -141,9 +160,14 @@ function getScopedCollection<TRecord>(
   namespace?: string,
 ): ScopedCollectionLike<TRecord> | undefined {
   if (!collections) return undefined;
-  const maybeManager = collections as CollectionsManager & Record<string, unknown>;
+  const maybeManager = collections as
+    & CollectionsManager
+    & Record<string, unknown>;
   if (namespace && typeof maybeManager.withNamespace === "function") {
-    const scoped = maybeManager.withNamespace(namespace) as Record<string, unknown>;
+    const scoped = maybeManager.withNamespace(namespace) as Record<
+      string,
+      unknown
+    >;
     return scoped[collectionName] as ScopedCollectionLike<TRecord> | undefined;
   }
   return (collections as Record<string, unknown>)[collectionName] as
@@ -154,17 +178,25 @@ function getScopedCollection<TRecord>(
 function getParticipantCollection(
   collections: CollectionAccessor,
   namespace?: string | null,
-): (ScopedCollectionLike<ParticipantRecord> & ParticipantCollectionMethods) | undefined {
+):
+  | (ScopedCollectionLike<ParticipantRecord> & ParticipantCollectionMethods)
+  | undefined {
   return getScopedCollection<ParticipantRecord>(
     collections,
     "participant",
     namespace ?? "global",
-  ) as (ScopedCollectionLike<ParticipantRecord> & ParticipantCollectionMethods) | undefined;
+  ) as
+    | (ScopedCollectionLike<ParticipantRecord> & ParticipantCollectionMethods)
+    | undefined;
 }
 
-export function hasParticipantCollection(collections?: CollectionAccessor): boolean {
+export function hasParticipantCollection(
+  collections?: CollectionAccessor,
+): boolean {
   if (!collections) return false;
-  const maybeManager = collections as CollectionsManager & Record<string, unknown>;
+  const maybeManager = collections as
+    & CollectionsManager
+    & Record<string, unknown>;
   if (typeof maybeManager.hasCollection === "function") {
     return maybeManager.hasCollection("participant");
   }
@@ -185,9 +217,10 @@ function normalizeMessage(record: MessageRecord): Message {
     reasoning: (record.reasoning ?? null) as string | null,
     metadata: (record.metadata ?? null) as Message["metadata"],
     createdAt: (record.createdAt ?? new Date().toISOString()) as string | Date,
-    updatedAt: (record.updatedAt ?? record.createdAt ?? new Date().toISOString()) as
-      | string
-      | Date,
+    updatedAt:
+      (record.updatedAt ?? record.createdAt ?? new Date().toISOString()) as
+        | string
+        | Date,
   };
 }
 
@@ -265,7 +298,10 @@ function emptyHistoryPage(): MessageHistoryPage {
   };
 }
 
-function historyPageInfo(messages: Message[], hasMoreBefore: boolean): MessageHistoryPageInfo {
+function historyPageInfo(
+  messages: Message[],
+  hasMoreBefore: boolean,
+): MessageHistoryPageInfo {
   return {
     hasMoreBefore,
     oldestMessageId: messages[0]?.id ?? null,
@@ -283,12 +319,40 @@ export function createMessageService(
       message: Omit<NewMessage, "id"> & { id?: string },
       namespace?: string,
     ): Promise<Message> {
-      const scoped = getScopedCollection<MessageRecord>(collections, "message", message.threadId);
+      const scoped = getScopedCollection<MessageRecord>(
+        collections,
+        "message",
+        message.threadId,
+      );
       if (!scoped) {
         return await ops.createMessage(message, namespace);
       }
 
       const messageId = message.id ?? ulid();
+      let resolvedSenderId = message.senderId ?? null;
+      let resolvedSenderUserId = message.senderUserId ?? null;
+      let resolvedParticipantId: string | null = null;
+
+      if (message.senderType === "user" && message.senderId) {
+        const participantScoped = getParticipantCollection(
+          deps.collections,
+          namespace ?? "global",
+        );
+        if (
+          participantScoped &&
+          typeof participantScoped.resolveByExternalId === "function"
+        ) {
+          const participant = await participantScoped.resolveByExternalId(
+            message.senderId,
+          );
+          if (participant?.id) {
+            resolvedParticipantId = participant.id;
+            resolvedSenderId = participant.id;
+            resolvedSenderUserId = participant.id;
+          }
+        }
+      }
+
       const previous = await scoped.findOne(
         {},
         { limit: 1, sort: [["createdAt", "desc"], ["id", "desc"]] },
@@ -296,9 +360,9 @@ export function createMessageService(
       const created = await scoped.create({
         id: messageId,
         messageId,
-        senderId: message.senderId,
+        senderId: resolvedSenderId,
         senderType: message.senderType,
-        senderUserId: message.senderUserId ?? null,
+        senderUserId: resolvedSenderUserId,
         externalId: message.externalId ?? null,
         content: message.content ?? null,
         toolCallId: message.toolCallId ?? null,
@@ -315,18 +379,12 @@ export function createMessageService(
         });
       }
 
-      if (message.senderType === "user" && message.senderId) {
-        const participantScoped = getParticipantCollection(deps.collections, namespace ?? "global");
-        if (participantScoped && typeof participantScoped.resolveByExternalId === "function") {
-          const participant = await participantScoped.resolveByExternalId(message.senderId);
-          if (participant?.id) {
-            await ops.createEdge({
-              sourceNodeId: participant.id,
-              targetNodeId: created.id,
-              type: "SENT_BY",
-            });
-          }
-        }
+      if (resolvedParticipantId) {
+        await ops.createEdge({
+          sourceNodeId: resolvedParticipantId,
+          targetNodeId: created.id,
+          type: "SENT_BY",
+        });
       }
 
       return normalizeMessage(created);
@@ -336,7 +394,11 @@ export function createMessageService(
       threadId: string,
       options?: { limit?: number; offset?: number; order?: "asc" | "desc" },
     ): Promise<Message[]> {
-      const scoped = getScopedCollection<MessageRecord>(collections, "message", threadId);
+      const scoped = getScopedCollection<MessageRecord>(
+        collections,
+        "message",
+        threadId,
+      );
       if (!scoped) {
         return await ops.getMessagesForThread(threadId, options);
       }
@@ -357,7 +419,11 @@ export function createMessageService(
       threadId: string,
       options?: MessageHistoryPageOptions,
     ): Promise<MessageHistoryPage> {
-      const scoped = getScopedCollection<MessageRecord>(collections, "message", threadId);
+      const scoped = getScopedCollection<MessageRecord>(
+        collections,
+        "message",
+        threadId,
+      );
       if (!scoped?.findPage) {
         return await ops.getMessageHistoryPageFromGraph(threadId, options);
       }
@@ -396,9 +462,15 @@ export function createMessageService(
         const thread = await ops.getThreadById(currentThreadId);
         if (!thread) break;
         const participants = Array.isArray(thread.participants)
-          ? thread.participants.filter((value): value is string => typeof value === "string")
+          ? thread.participants.filter((value): value is string =>
+            typeof value === "string"
+          )
           : [];
-        if (!participants.some((participant) => participant.toLowerCase() === userId.toLowerCase())) {
+        if (
+          !participants.some((participant) =>
+            participant.toLowerCase() === userId.toLowerCase()
+          )
+        ) {
           break;
         }
 
@@ -424,7 +496,11 @@ export function createMessageService(
     },
 
     async deleteForThread(threadId: string): Promise<void> {
-      const scoped = getScopedCollection<MessageRecord>(collections, "message", threadId);
+      const scoped = getScopedCollection<MessageRecord>(
+        collections,
+        "message",
+        threadId,
+      );
       if (!scoped) {
         await ops.deleteMessagesForThread(threadId);
         return;
@@ -447,7 +523,9 @@ export function createRagDataServices(
   const { collections, ops } = deps;
 
   return {
-    async createDocument(doc: Omit<NewDocument, "id"> & { id?: string }): Promise<Document> {
+    async createDocument(
+      doc: Omit<NewDocument, "id"> & { id?: string },
+    ): Promise<Document> {
       const scoped = getScopedCollection<DocumentRecord>(
         collections,
         "document",
@@ -456,27 +534,36 @@ export function createRagDataServices(
       if (!scoped) {
         return await ops.createDocument(doc);
       }
-      return normalizeDocument(await scoped.create({
-        ...(doc.id ? { id: doc.id } : {}),
-        externalId: doc.externalId ?? null,
-        sourceType: doc.sourceType,
-        sourceUri: doc.sourceUri ?? null,
-        title: doc.title ?? null,
-        mimeType: doc.mimeType ?? null,
-        contentHash: doc.contentHash,
-        assetId: doc.assetId ?? null,
-        status: doc.status ?? "pending",
-        chunkCount: doc.chunkCount ?? null,
-        errorMessage: doc.errorMessage ?? null,
-        metadata: doc.metadata ?? null,
-      }));
+      return normalizeDocument(
+        await scoped.create({
+          ...(doc.id ? { id: doc.id } : {}),
+          externalId: doc.externalId ?? null,
+          sourceType: doc.sourceType,
+          sourceUri: doc.sourceUri ?? null,
+          title: doc.title ?? null,
+          mimeType: doc.mimeType ?? null,
+          contentHash: doc.contentHash,
+          assetId: doc.assetId ?? null,
+          status: doc.status ?? "pending",
+          chunkCount: doc.chunkCount ?? null,
+          errorMessage: doc.errorMessage ?? null,
+          metadata: doc.metadata ?? null,
+        }),
+      );
     },
 
-    async getDocumentById(id: string, namespace?: string): Promise<Document | undefined> {
+    async getDocumentById(
+      id: string,
+      namespace?: string,
+    ): Promise<Document | undefined> {
       if (!namespace) {
         return await ops.getDocumentById(id);
       }
-      const scoped = getScopedCollection<DocumentRecord>(collections, "document", namespace);
+      const scoped = getScopedCollection<DocumentRecord>(
+        collections,
+        "document",
+        namespace,
+      );
       if (!scoped) {
         return await ops.getDocumentById(id);
       }
@@ -484,8 +571,15 @@ export function createRagDataServices(
       return record ? normalizeDocument(record) : undefined;
     },
 
-    async getDocumentByHash(hash: string, namespace: string): Promise<Document | undefined> {
-      const scoped = getScopedCollection<DocumentRecord>(collections, "document", namespace);
+    async getDocumentByHash(
+      hash: string,
+      namespace: string,
+    ): Promise<Document | undefined> {
+      const scoped = getScopedCollection<DocumentRecord>(
+        collections,
+        "document",
+        namespace,
+      );
       if (!scoped) {
         return await ops.getDocumentByHash(hash, namespace);
       }
@@ -541,12 +635,19 @@ export function createRagDataServices(
       await scoped.delete({ id });
     },
 
-    async deleteChunksByDocumentId(documentId: string, namespace?: string): Promise<void> {
+    async deleteChunksByDocumentId(
+      documentId: string,
+      namespace?: string,
+    ): Promise<void> {
       if (!namespace) {
         await ops.deleteChunksByDocumentId(documentId);
         return;
       }
-      const scoped = getScopedCollection<ChunkRecord>(collections, "chunk", namespace);
+      const scoped = getScopedCollection<ChunkRecord>(
+        collections,
+        "chunk",
+        namespace,
+      );
       if (!scoped) {
         await ops.deleteChunksByDocumentId(documentId);
         return;
@@ -567,7 +668,11 @@ export function createRagDataServices(
       if (chunks.length === 0) return [];
       const created: DocumentChunk[] = [];
       for (const chunk of chunks) {
-        const scoped = getScopedCollection<ChunkRecord>(collections, "chunk", chunk.namespace);
+        const scoped = getScopedCollection<ChunkRecord>(
+          collections,
+          "chunk",
+          chunk.namespace,
+        );
         if (!scoped) {
           const legacy = await ops.createChunks([chunk]);
           created.push(...legacy);
@@ -589,14 +694,23 @@ export function createRagDataServices(
       return created;
     },
 
-    async searchChunks(options: ChunkSearchOptions): Promise<ChunkSearchResult[]> {
-      if (!options.query || !Array.isArray(options.namespaces) || options.namespaces.length === 0) {
+    async searchChunks(
+      options: ChunkSearchOptions,
+    ): Promise<ChunkSearchResult[]> {
+      if (
+        !options.query || !Array.isArray(options.namespaces) ||
+        options.namespaces.length === 0
+      ) {
         return await ops.searchChunks(options);
       }
 
       const allResults: Array<ChunkRecord & { _similarity: number }> = [];
       for (const namespace of options.namespaces) {
-        const scoped = getScopedCollection<ChunkRecord>(collections, "chunk", namespace);
+        const scoped = getScopedCollection<ChunkRecord>(
+          collections,
+          "chunk",
+          namespace,
+        );
         if (!scoped?.search) {
           return await ops.searchChunks(options);
         }
@@ -622,7 +736,10 @@ export function createRagDataServices(
         }
         const document = documentCache.get(record.documentId);
         if (options.documentFilters) {
-          if (options.documentFilters.status && document?.status !== options.documentFilters.status) {
+          if (
+            options.documentFilters.status &&
+            document?.status !== options.documentFilters.status
+          ) {
             continue;
           }
           if (
@@ -691,7 +808,9 @@ export function createLlmUsageService(
         const legacy = await ops.createNode({
           namespace: input.threadId,
           type: "llm_usage",
-          name: `${input.usage.status}:${input.provider ?? "unknown"}:${input.model ?? "unknown"}`,
+          name: `${input.usage.status}:${input.provider ?? "unknown"}:${
+            input.model ?? "unknown"
+          }`,
           data: {
             threadId: input.threadId,
             eventId: input.eventId,

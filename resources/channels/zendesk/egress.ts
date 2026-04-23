@@ -3,6 +3,7 @@ import { type EgressAdapter, extractText } from "@/server/channels.ts";
 import { getChannelContext } from "@/runtime/thread-metadata.ts";
 import {
   callZendeskSmoochAPI,
+  normalizeZendeskActionPayload,
   resolveZendeskConfig,
   sendZendeskActionMessage,
   sendZendeskTextMessage,
@@ -80,7 +81,8 @@ export function createZendeskEgressAdapter(
             break;
           }
           case "ACTION": {
-            const action = ep as Record<string, unknown>;
+            const action = normalizeZendeskActionPayload(ep);
+            if (!action) break;
             if (action.type === "reply_buttons") {
               await sendZendeskActionMessage(cfg, conversationId, action);
             }

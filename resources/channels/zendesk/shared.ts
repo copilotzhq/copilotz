@@ -159,6 +159,27 @@ export async function sendZendeskActionMessage(
   });
 }
 
+export function normalizeZendeskActionPayload(
+  payload: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const nestedAction = payload.action;
+  if (nestedAction && typeof nestedAction === "object") {
+    const action = nestedAction as Record<string, unknown>;
+    return {
+      ...action,
+      message: typeof payload.content === "string"
+        ? payload.content
+        : (typeof action.message === "string" ? action.message : ""),
+    };
+  }
+
+  return payload;
+}
+
 const MIME_TO_EXT: Record<string, string> = {
   "image/png": "png",
   "image/jpeg": "jpg",

@@ -466,11 +466,14 @@ function buildOrderClause(sort?: NormalizedSortOrder): string {
 
 function mapNodeToRecord<T>(node: NodeRow): T {
   const data = node.data ?? {};
+  const recordContent = node.content ??
+    (data as Record<string, unknown>).content ??
+    null;
   return {
     ...data,
     id: node.id,
     namespace: node.namespace,
-    content: node.content,
+    content: recordContent,
     sourceType: node.source_type,
     sourceId: node.source_id,
     createdAt: node.created_at,

@@ -38,6 +38,7 @@ Deno.test("collection-backed message create does not write graph edges", async (
   assertEquals(created.threadId, "thread-1");
   assertEquals(created.senderId, participant.id);
   assertEquals(created.senderType, "user");
+  assertEquals(created.content, "hello world");
 });
 
 Deno.test("collection-backed message create uses the real participant node id when legacy data.id differs", async () => {
@@ -98,4 +99,5 @@ Deno.test("collection-backed message create uses the real participant node id wh
 
   assertEquals(sentBy?.source_node_id, participantNodeId);
   assertEquals(sentBy?.target_node_id, created.id);
+  assertEquals(created.content, "hello from legacy participant");
 });

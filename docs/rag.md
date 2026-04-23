@@ -2,7 +2,11 @@
 
 RAG lets your AI access external knowledge. Ingest documents, and your agents can search and reference them in conversations. Copilotz handles fetching, chunking, embedding, storing, and retrieving.
 
-**Storage model:** RAG content lives in the **`nodes`** and **`edges`** tables. A **`document` node** holds source metadata (URI, hash, status, title, …). Each **`chunk` node** holds embedded text; **`NEXT_CHUNK`** edges preserve order. There are no legacy `documents` or `document_chunks` relational tables.
+Inside the runtime, this now sits behind the broader memory architecture as
+the retrieval-backed memory strategy. The public `rag` configuration and
+document tools remain unchanged in this pass.
+
+**Storage model:** RAG content lives in the **`nodes`** and **`edges`** tables. A **`document` node** holds source metadata (URI, hash, status, title, …). Each **`chunk` node** holds embedded text; **`NEXT_CHUNK`** edges preserve order. Retrieval uses the graph-backed document and chunk node model.
 
 ## How RAG Works
 

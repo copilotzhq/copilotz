@@ -11,6 +11,7 @@ maps to the application surface.
 - [Features](./features.md)
 - [Collections](./collections.md)
 - [Processors](./processors.md)
+- [Memory](./memory.md)
 - [Channels](./channels.md)
 - [LLM Providers](./llm.md)
 - [Embeddings Providers](./embeddings.md)

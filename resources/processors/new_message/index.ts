@@ -2,8 +2,8 @@
 import type { EventProcessor, NewEvent } from "@/types/index.ts";
 
 // Import Tools
-import { generateAllApiTools } from "@/resources/processors/tool_call/generators/api-generator.ts";
-import { generateAllMcpTools } from "@/resources/processors/tool_call/generators/mcp-generator.ts";
+import { generateAllApiTools } from "@/runtime/api/index.ts";
+import { generateAllMcpTools } from "@/runtime/mcp/index.ts";
 
 // Import Agent Interfaces
 import type {
@@ -51,8 +51,10 @@ import {
   contextGenerator,
   generateRagContext,
   historyGenerator,
+  getUserExternalId,
+  resolveParticipantCollection,
   type LLMContextData,
-} from "./generators/index.ts";
+} from "@/runtime/memory/index.ts";
 
 import { processAssetsForNewMessage } from "./generators/asset-generator.ts";
 import { filterSkillsForAgent } from "@/runtime/loaders/skill-loader.ts";
@@ -345,8 +347,7 @@ export function resolveThreadParticipantTarget(
     return matchedParticipant;
   }
 
-  const runtimeMetadata = getRuntimeThreadMetadata(thread.metadata);
-  const metadataUserExternalId = runtimeMetadata.userExternalId;
+  const metadataUserExternalId = getUserExternalId(thread.metadata);
   if (
     typeof metadataUserExternalId === "string" &&
     metadataUserExternalId.toLowerCase() === targetLower
@@ -1562,9 +1563,7 @@ export const messageProcessor: EventProcessor<
       // Auto-inject RAG context if agent has ragOptions.mode === "auto"
       if (agent.ragOptions?.mode === "auto" && context.embeddingConfig) {
         try {
-          // Get user ID from thread metadata if available
-          const threadMeta = getRuntimeThreadMetadata(thread.metadata);
-          const userId = threadMeta.userExternalId as string | undefined;
+          const userId = getUserExternalId(thread.metadata);
 
           const ragResult = await generateRagContext({
             agent,
@@ -1737,18 +1736,7 @@ async function buildProcessingContext(
     collections: context.collections,
     ops,
   });
-  const participantCollection = (() => {
-    const collections = context.collections as
-      | { withNamespace?: (namespace: string) => Record<string, unknown> }
-      | Record<string, unknown>
-      | undefined;
-    if (!collections) return undefined;
-    if (typeof collections.withNamespace === "function") {
-      return collections.withNamespace(context.namespace ?? "global")
-        ?.participant;
-    }
-    return collections.participant;
-  })();
+  const participantCollection = resolveParticipantCollection(context);
   const chatHistory = await messageService.getHistory(threadId, senderIdForHistory);
 
   const availableAgents = context.agents || [];
@@ -1771,7 +1759,7 @@ async function buildProcessingContext(
 
   let userMetadata = context.userMetadata;
   const publicThreadMetadata = getPublicThreadMetadata(thread.metadata);
-  const runtimeThreadMetadata = getRuntimeThreadMetadata(thread.metadata);
+  const userExternalId = getUserExternalId(thread.metadata);
 
   if (!userMetadata && publicThreadMetadata) {
     const stored = publicThreadMetadata.userContext;
@@ -1780,8 +1768,8 @@ async function buildProcessingContext(
     }
   }
 
-  if (!userMetadata && runtimeThreadMetadata.userExternalId) {
-    const externalId = runtimeThreadMetadata.userExternalId as string;
+  if (!userMetadata && userExternalId) {
+    const externalId = userExternalId;
     try {
       if (participantCollection && typeof (participantCollection as any).resolveByExternalId === "function") {
         const participant = await (participantCollection as any).resolveByExternalId(externalId);

@@ -142,6 +142,7 @@ export interface DatabaseOperations {
   query: DbInstance["query"];
   addToQueue: (threadId: string, event: QueueEventInput) => Promise<NewQueue>;
   getQueueItemById: (queueId: string) => Promise<Queue | undefined>;
+  getQueueItemsByTraceId: (traceId: string) => Promise<Queue[]>;
   getProcessingQueueItem: (
     threadId: string,
     minPriority?: number,
@@ -480,6 +481,13 @@ export function createOperations(
   ): Promise<Queue | undefined> => {
     const item = await crud.events.findOne({ id: queueId }) as Queue | null;
     return item ?? undefined;
+  };
+
+  const getQueueItemsByTraceId = async (
+    traceId: string,
+  ): Promise<Queue[]> => {
+    const items = await crud.events.find({ traceId }) as Queue[];
+    return items;
   };
 
   const recoverStaleProcessingQueueItems = async (
@@ -2099,6 +2107,7 @@ export function createOperations(
     query: db.query.bind(db),
     addToQueue,
     getQueueItemById,
+    getQueueItemsByTraceId,
     getProcessingQueueItem,
     getNextPendingQueueItem,
     updateQueueItemStatus,

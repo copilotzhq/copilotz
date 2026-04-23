@@ -26,6 +26,7 @@ Common resource types include:
 - features
 - collections
 - processors
+- memory
 - channels
 - llm providers
 - embeddings providers
@@ -41,6 +42,7 @@ Common resource types include:
 | `features` | app-facing backend actions | app dispatcher | `/features/:name/:action` |
 | `tools` | agent-callable actions | agent runtime | tool calls during runs |
 | `collections` | durable app data | collections manager and runtime | `/collections/:name` |
+| `memory` | contextual recall and identity-aware prompt assembly | memory runtime | prompt/context composition |
 | `agents` | orchestration and instructions | run engine | agent execution |
 | `processors` | background/event work | event engine | event lifecycle |
 | `channels` | ingress and egress | channel runtime | external transports |
@@ -56,6 +58,7 @@ resources/
   features/
   collections/
   processors/
+  memory/
   channels/
   llm/
   embeddings/

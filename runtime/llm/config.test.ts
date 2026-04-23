@@ -22,6 +22,7 @@ Deno.test("toLLMConfig removes apiKey from primary config and fallbacks", () => 
   });
 
   assertEquals(config, {
+    limitEstimatedInputTokens: 150000,
     provider: "openai",
     model: "gpt-4.1",
     temperature: 0.2,
@@ -32,6 +33,25 @@ Deno.test("toLLMConfig removes apiKey from primary config and fallbacks", () => 
       },
     ],
   });
+});
+
+Deno.test("toLLMConfig defaults limitEstimatedInputTokens to 150000", () => {
+  const config = toLLMConfig({
+    provider: "openai",
+    model: "gpt-4.1",
+  });
+
+  assertEquals(config.limitEstimatedInputTokens, 150000);
+});
+
+Deno.test("toLLMConfig preserves an explicit limitEstimatedInputTokens value", () => {
+  const config = toLLMConfig({
+    provider: "openai",
+    model: "gpt-4.1",
+    limitEstimatedInputTokens: 32000,
+  });
+
+  assertEquals(config.limitEstimatedInputTokens, 32000);
 });
 
 Deno.test("mergeLLMRuntimeConfig overlays runtime values on persisted config", () => {

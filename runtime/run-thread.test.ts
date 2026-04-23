@@ -1,7 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import { createCopilotz } from "@/index.ts";
-import { getRuntimeThreadMetadata } from "@/runtime/thread-metadata.ts";
+import { normalizeThreadMetadata } from "@/runtime/thread-metadata.ts";
 
 Deno.test("runThread keeps done pending for same-thread work queued behind an active worker", async () => {
   const copilotz = await createCopilotz({
@@ -68,6 +68,7 @@ Deno.test("runThread keeps done pending for same-thread work queued behind an ac
 });
 
 Deno.test("runThread normalizes blank thread participants and keeps a stable user identity", async () => {
+  const tempDir = await Deno.makeTempDir();
   const copilotz = await createCopilotz({
     agents: [{
       id: "reviewer",
@@ -81,7 +82,7 @@ Deno.test("runThread normalizes blank thread participants and keeps a stable use
       shouldProcess: () => true,
       process: async () => ({ producedEvents: [] }),
     }],
-    dbConfig: { url: ":memory:" },
+    dbConfig: { url: `file://${tempDir}/run-thread-identity.db` },
   });
 
   try {
@@ -94,7 +95,20 @@ Deno.test("runThread normalizes blank thread participants and keeps a stable use
       },
     });
 
-    await handle.done;
+    let timeoutId: number | undefined;
+    try {
+      await Promise.race([
+        handle.done,
+        new Promise((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error("runThread did not complete")),
+            5_000,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
 
     const thread = await copilotz.ops.getThreadByExternalId(
       "thread-identity-normalization",
@@ -102,9 +116,48 @@ Deno.test("runThread normalizes blank thread participants and keeps a stable use
 
     assertEquals(thread?.participants, ["User", "reviewer"]);
 
-    const runtimeMetadata = getRuntimeThreadMetadata(thread?.metadata);
-    assertEquals(runtimeMetadata.userExternalId, "User");
+    const normalized = normalizeThreadMetadata(thread?.metadata);
+    assertEquals(normalized.system?.memory?.identity?.userExternalId, "User");
   } finally {
     await copilotz.shutdown();
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("runThread defaults thread participants to explicit agents without injecting bundled agents", async () => {
+  const tempDir = await Deno.makeTempDir();
+  const copilotz = await createCopilotz({
+    agents: [{
+      id: "assistant",
+      name: "Assistant",
+      role: "assistant",
+      instructions: "Handle the test message.",
+      llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+    }],
+    processors: [{
+      eventType: "NEW_MESSAGE",
+      shouldProcess: () => true,
+      process: async () => ({ producedEvents: [] }),
+    }],
+    dbConfig: { url: `file://${tempDir}/run-thread-default-participants.db` },
+  });
+
+  try {
+    const handle = await copilotz.run({
+      content: "hello",
+      sender: { type: "user", name: "User" },
+      thread: { externalId: "default-participants-thread" },
+    });
+
+    await handle.done;
+
+    const thread = await copilotz.ops.getThreadByExternalId(
+      "default-participants-thread",
+    );
+
+    assertEquals(thread?.participants, ["User", "assistant"]);
+  } finally {
+    await copilotz.shutdown();
+    await Deno.remove(tempDir, { recursive: true });
   }
 });

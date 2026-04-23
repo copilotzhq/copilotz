@@ -1,5 +1,5 @@
-import { generateAllApiTools } from "./generators/api-generator.ts";
-import { generateAllMcpTools } from "./generators/mcp-generator.ts";
+import { generateAllApiTools } from "@/runtime/api/index.ts";
+import { generateAllMcpTools } from "@/runtime/mcp/index.ts";
 
 import type {
   Agent,
@@ -560,4 +560,3 @@ export const validateToolCall = (
 };
 
 export const { shouldProcess, process } = toolCallProcessor;
-

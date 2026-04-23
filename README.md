@@ -44,20 +44,20 @@ it, you're maintaining infrastructure instead of building your product.
 Copilotz is the full-stack framework for AI applications. Everything you need to
 ship production AI, in one package:
 
-| What You Need   | What Copilotz Gives You                                                                |
-| --------------- | -------------------------------------------------------------------------------------- |
-| Memory          | Knowledge graph that remembers users, conversations, and entities                      |
-| RAG             | Document ingestion, chunking, embeddings, and semantic search                          |
-| Skills          | SKILL.md-based instructions with progressive disclosure and a bundled native assistant |
-| Tools           | 27 native tools + OpenAPI integration + MCP support                                    |
-| Assets          | Automatic extraction, storage, and LLM resolution of images and files                  |
-| Background Jobs | Event queue with persistent workers and custom processors                              |
-| Multi-tenancy   | Schema isolation + namespace partitioning                                              |
-| Database        | PostgreSQL (production) or PGLite (development/embedded)                               |
-| Channels        | Web (SSE), WhatsApp, and Zendesk — import and go                                       |
-| Streaming       | Real-time token streaming with async iterables                                         |
-| Collections     | Persist application-specific data via copiloz native Collections API                   |
-| Usage & Cost    | Provider-native token usage tracking plus optional OpenRouter-based cost estimation    |
+| What You Need   | What Copilotz Gives You                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------ |
+| Memory          | Knowledge graph that remembers users, conversations, and entities                          |
+| RAG             | Document ingestion, chunking, embeddings, and semantic search                              |
+| Skills          | SKILL.md-based instructions with progressive disclosure and an importable native assistant |
+| Tools           | 27 native tools + OpenAPI integration + MCP support                                        |
+| Assets          | Automatic extraction, storage, and LLM resolution of images and files                      |
+| Background Jobs | Event queue with persistent workers and custom processors                                  |
+| Multi-tenancy   | Schema isolation + namespace partitioning                                                  |
+| Database        | PostgreSQL (production) or PGLite (development/embedded)                                   |
+| Channels        | Web (SSE), WhatsApp, and Zendesk — import and go                                           |
+| Streaming       | Real-time token streaming with async iterables                                             |
+| Collections     | Persist application-specific data via copiloz native Collections API                       |
+| Usage & Cost    | Provider-native token usage tracking plus optional OpenRouter-based cost estimation        |
 
 **One framework. One dependency. Production-ready.**
 
@@ -313,8 +313,9 @@ you'd build anyway — already built.
 SKILL.md files teach agents how to perform framework tasks and execution
 workflows. Progressive disclosure keeps prompts lean — only names and
 descriptions are loaded upfront; full instructions are fetched on-demand. A
-bundled native assistant uses these skills to help with general work and to
-build Copilotz projects interactively when needed.
+bundled native assistant can be enabled with
+`resources.imports: ["agents.copilotz"]` and uses these skills to help with
+general work and to build Copilotz projects interactively when needed.
 
 ### Agents
 

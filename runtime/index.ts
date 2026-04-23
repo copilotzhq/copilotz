@@ -12,6 +12,7 @@ import { redactEventForStream } from "@/runtime/stream-redaction.ts";
 import {
   getSerializableThreadMetadata,
   mergeThreadMetadata,
+  setMemoryThreadMetadata,
   setRuntimeThreadMetadata,
 } from "@/runtime/thread-metadata.ts";
 import { normalizeInboundRunMessage } from "@/utils/inbound-message.ts";
@@ -180,29 +181,38 @@ function _nowIso(): string {
   return new Date().toISOString();
 }
 
-async function waitForQueueItemTerminalState(
+async function waitForTraceTerminalState(
   ops: CopilotzDb["ops"],
-  queueId: string,
+  traceId: string,
   options?: { isCancelled?: () => boolean; pollIntervalMs?: number },
 ): Promise<void> {
   const pollIntervalMs = options?.pollIntervalMs ?? 100;
 
   while (!options?.isCancelled?.()) {
-    const item = await ops.getQueueItemById(queueId);
-    if (!item) {
-      throw new Error(`Queue item not found: ${queueId}`);
+    const items = await ops.getQueueItemsByTraceId(traceId);
+    if (items.length === 0) {
+      throw new Error(`Queue trace not found: ${traceId}`);
     }
 
-    if (item.status === "completed") {
+    const failedItem = items.find((item) => item.status === "failed");
+    if (failedItem) {
+      throw new Error(
+        `Queue trace failed: ${traceId} (event ${String(failedItem.id)})`,
+      );
+    }
+
+    const expiredItem = items.find((item) => item.status === "expired");
+    if (expiredItem) {
+      throw new Error(
+        `Queue trace expired: ${traceId} (event ${String(expiredItem.id)})`,
+      );
+    }
+
+    const hasActiveWork = items.some((item) =>
+      item.status === "pending" || item.status === "processing"
+    );
+    if (!hasActiveWork) {
       return;
-    }
-
-    if (item.status === "failed") {
-      throw new Error(`Queue item failed: ${queueId}`);
-    }
-
-    if (item.status === "expired") {
-      throw new Error(`Queue item expired: ${queueId}`);
     }
 
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
@@ -287,26 +297,32 @@ export async function runThread(
   if (
     Array.isArray(threadRef?.participants) && threadRef?.participants.length
   ) {
-    baseParticipants = threadRef.participants;
+    baseParticipants = threadRef.participants
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
   } else {
     try {
-      existingThread = existingThread ?? (threadId
-        ? await ops.getThreadById(threadId)
-        : undefined);
+      existingThread = existingThread ??
+        (threadId ? await ops.getThreadById(threadId) : undefined);
       if (
         existingThread && Array.isArray(existingThread.participants) &&
         existingThread.participants.length > 0
       ) {
-        baseParticipants = existingThread.participants as string[];
+        baseParticipants = (existingThread.participants as string[])
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0);
       } else {
-        baseParticipants = (baseContext.agents ?? []).map((a) => a.id ?? a.name).filter(
-          Boolean,
-        ) as string[];
+        baseParticipants = (baseContext.agents ?? []).map((a) => a.id ?? a.name)
+          .filter(
+            Boolean,
+          ) as string[];
       }
     } catch {
-      baseParticipants = (baseContext.agents ?? []).map((a) => a.id ?? a.name).filter(
-        Boolean,
-      ) as string[];
+      baseParticipants = (baseContext.agents ?? []).map((a) => a.id ?? a.name)
+        .filter(
+          Boolean,
+        ) as string[];
     }
   }
   const senderCanonical = buildParticipantIdentity(sender);
@@ -314,15 +330,17 @@ export async function runThread(
     new Set([senderCanonical, ...baseParticipants]),
   );
 
-  // Auto-populate runtime userExternalId while preserving public/system metadata boundaries.
+  // Auto-populate memory-owned user identity while preserving public/system metadata boundaries.
   const senderExternalId = sender?.externalId ?? sender?.id ?? senderCanonical;
   let mergedThreadMetadata = mergeThreadMetadata(
     mergeThreadMetadata(baseContext.threadMetadata, existingThread?.metadata),
     threadRef?.metadata,
   );
   if (senderExternalId && sender?.type === "user") {
-    mergedThreadMetadata = setRuntimeThreadMetadata(mergedThreadMetadata, {
-      userExternalId: senderExternalId,
+    mergedThreadMetadata = setMemoryThreadMetadata(mergedThreadMetadata, {
+      identity: {
+        userExternalId: senderExternalId,
+      },
     });
   }
 
@@ -395,10 +413,12 @@ export async function runThread(
     normalizedMetadata,
     normalizedMessage,
   );
+  const traceId = crypto.randomUUID();
 
   const newQueueItem = await ops.addToQueue(threadId, {
     eventType: "NEW_MESSAGE",
     payload: normalizedMessage,
+    traceId,
     ttlMs: options?.queueTTL,
     metadata: initialEventMetadata ?? undefined,
   });
@@ -417,7 +437,7 @@ export async function runThread(
         contextForWorker,
         emitToStream,
       );
-      await waitForQueueItemTerminalState(ops, String(newQueueItem.id), {
+      await waitForTraceTerminalState(ops, traceId, {
         isCancelled: () => cancelled,
       });
     })

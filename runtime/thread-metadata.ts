@@ -2,21 +2,32 @@ const LEGACY_RUNTIME_KEYS = new Set([
   "participantTargets",
   "agentTurnCount",
   "maxAgentTurns",
-  "userExternalId",
   "pendingToolBatches",
+]);
+
+const LEGACY_MEMORY_KEYS = new Set([
+  "userExternalId",
 ]);
 
 export interface RuntimeThreadMetadata {
   participantTargets?: Record<string, string>;
   agentTurnCount?: number;
   maxAgentTurns?: number;
-  userExternalId?: string;
   pendingToolBatches?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface MemoryThreadMetadata {
+  identity?: {
+    userExternalId?: string;
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 }
 
 export interface SystemThreadMetadata {
   runtime?: RuntimeThreadMetadata;
+  memory?: MemoryThreadMetadata;
   channels?: Record<string, Record<string, unknown>>;
   routing?: Record<string, unknown>;
   [key: string]: unknown;
@@ -61,13 +72,18 @@ export function normalizeThreadMetadata(
   raw: unknown,
 ): StructuredThreadMetadata {
   if (!isRecord(raw)) {
-    return { public: {}, system: { runtime: {}, channels: {}, routing: {} } };
+    return {
+      public: {},
+      system: { runtime: {}, memory: {}, channels: {}, routing: {} },
+    };
   }
 
   const topLevel = { ...raw };
   const publicMetadata = cloneRecord(topLevel.public);
   const systemMetadata = cloneRecord(topLevel.system);
   const runtimeMetadata = cloneRecord(systemMetadata.runtime);
+  const memoryMetadata = cloneRecord(systemMetadata.memory);
+  const memoryIdentity = cloneRecord(memoryMetadata.identity);
   const channelMetadata = cloneRecord(systemMetadata.channels);
   const routingMetadata = cloneRecord(systemMetadata.routing);
 
@@ -77,8 +93,21 @@ export function normalizeThreadMetadata(
       runtimeMetadata[key] = value;
       continue;
     }
+    if (LEGACY_MEMORY_KEYS.has(key)) {
+      memoryIdentity[key] = value;
+      continue;
+    }
     publicMetadata[key] = value;
   }
+
+  const legacyRuntimeUserExternalId = runtimeMetadata.userExternalId;
+  if (
+    typeof legacyRuntimeUserExternalId === "string" &&
+    typeof memoryIdentity.userExternalId !== "string"
+  ) {
+    memoryIdentity.userExternalId = legacyRuntimeUserExternalId;
+  }
+  delete runtimeMetadata.userExternalId;
 
   const normalizedChannels = Object.fromEntries(
     Object.entries(channelMetadata).map(([channel, value]) => [
@@ -92,10 +121,15 @@ export function normalizeThreadMetadata(
     system: removeUndefinedKeys({
       ...Object.fromEntries(
         Object.entries(systemMetadata).filter(([key]) =>
-          key !== "runtime" && key !== "channels" && key !== "routing"
+          key !== "runtime" && key !== "memory" && key !== "channels" &&
+          key !== "routing"
         ),
       ),
       runtime: removeUndefinedKeys(runtimeMetadata),
+      memory: removeUndefinedKeys({
+        ...memoryMetadata,
+        identity: removeUndefinedKeys(memoryIdentity),
+      }),
       channels: removeUndefinedKeys(normalizedChannels),
       routing: removeUndefinedKeys(routingMetadata),
     }),
@@ -115,6 +149,17 @@ export function mergeThreadMetadata(
       cloneRecord(normalizedBase.system?.runtime),
       cloneRecord(normalizedPatch.system?.runtime),
     ),
+    memory: (() => {
+      const baseMemory = cloneRecord(normalizedBase.system?.memory);
+      const patchMemory = cloneRecord(normalizedPatch.system?.memory);
+      return removeUndefinedKeys({
+        ...mergeRecord(baseMemory, patchMemory),
+        identity: mergeRecord(
+          cloneRecord(baseMemory.identity),
+          cloneRecord(patchMemory.identity),
+        ),
+      });
+    })(),
     channels: (() => {
       const baseChannels = cloneRecord(normalizedBase.system?.channels);
       const patchChannels = cloneRecord(normalizedPatch.system?.channels);
@@ -158,6 +203,12 @@ export function getRuntimeThreadMetadata(
   return cloneRecord(normalizeThreadMetadata(raw).system?.runtime) as RuntimeThreadMetadata;
 }
 
+export function getMemoryThreadMetadata(
+  raw: unknown,
+): MemoryThreadMetadata {
+  return cloneRecord(normalizeThreadMetadata(raw).system?.memory) as MemoryThreadMetadata;
+}
+
 export function setRuntimeThreadMetadata(
   raw: unknown,
   patch: Partial<RuntimeThreadMetadata>,
@@ -166,6 +217,18 @@ export function setRuntimeThreadMetadata(
   return mergeThreadMetadata(normalized, {
     system: {
       runtime: patch,
+    },
+  });
+}
+
+export function setMemoryThreadMetadata(
+  raw: unknown,
+  patch: Partial<MemoryThreadMetadata>,
+): StructuredThreadMetadata {
+  const normalized = normalizeThreadMetadata(raw);
+  return mergeThreadMetadata(normalized, {
+    system: {
+      memory: patch,
     },
   });
 }
@@ -199,25 +262,28 @@ export function getSerializableThreadMetadata(
   const normalized = normalizeThreadMetadata(raw);
   const hasPublic = Object.keys(normalized.public ?? {}).length > 0;
   const hasRuntime = Object.keys(normalized.system?.runtime ?? {}).length > 0;
+  const hasMemory = Object.keys(normalized.system?.memory ?? {}).length > 0;
   const hasChannels = Object.keys(normalized.system?.channels ?? {}).length > 0;
   const hasRouting = Object.keys(normalized.system?.routing ?? {}).length > 0;
   const hasOtherSystemKeys = Object.keys(
     removeUndefinedKeys({
       ...cloneRecord(normalized.system),
       runtime: undefined,
+      memory: undefined,
       channels: undefined,
       routing: undefined,
     }),
   ).length > 0;
 
-  if (!hasPublic && !hasRuntime && !hasChannels && !hasRouting &&
+  if (!hasPublic && !hasRuntime && !hasMemory && !hasChannels && !hasRouting &&
     !hasOtherSystemKeys) {
     return null;
   }
 
   return removeUndefinedKeys({
     public: hasPublic ? normalized.public : undefined,
-    system: hasRuntime || hasChannels || hasRouting || hasOtherSystemKeys
+    system: hasRuntime || hasMemory || hasChannels || hasRouting ||
+        hasOtherSystemKeys
       ? removeUndefinedKeys(normalized.system ?? {})
       : undefined,
   });

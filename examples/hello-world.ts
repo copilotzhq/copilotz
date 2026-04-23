@@ -91,9 +91,15 @@ for await (const event of result.events) {
 }
 
 // Wait for all background processing to finish
-await result.done;
-
-console.log("\n\n✅ Done!");
+try {
+  await result.done;
+  console.log("\n\n✅ Done!");
+} catch (error) {
+  console.error(
+    "\n\n❌ Run failed. Check your model credentials and network connectivity.",
+  );
+  throw error;
+}
 
 // ---------------------------------------------------------------------------
 // 4. Clean up

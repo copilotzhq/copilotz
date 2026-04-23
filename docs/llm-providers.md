@@ -117,17 +117,17 @@ export const myProvider: ProviderFactory = (config: ProviderConfig) => {
 
 The `config` object passed to your factory and methods contains:
 
-| Field                       | Description                                                             |
-| --------------------------- | ----------------------------------------------------------------------- |
-| `apiKey`                    | API key (from env or explicit config)                                   |
-| `model`                     | Model name                                                              |
-| `baseUrl`                   | Optional base URL override                                              |
-| `temperature`               | Sampling temperature                                                    |
-| `maxTokens`                 | Max tokens to generate                                                  |
-| `limitEstimatedInputTokens` | Approximate input/history budget using Copilotz's rough token estimator |
-| `stream`                    | Whether to stream the response                                          |
-| `tools`                     | Tool definitions (for function calling)                                 |
-| `toolChoice`                | Tool choice strategy                                                    |
+| Field                       | Description                                                                                    |
+| --------------------------- | ---------------------------------------------------------------------------------------------- |
+| `apiKey`                    | API key (from env or explicit config)                                                          |
+| `model`                     | Model name                                                                                     |
+| `baseUrl`                   | Optional base URL override                                                                     |
+| `temperature`               | Sampling temperature                                                                           |
+| `maxTokens`                 | Max tokens to generate                                                                         |
+| `limitEstimatedInputTokens` | Approximate input/history budget using Copilotz's rough token estimator (defaults to `150000`) |
+| `stream`                    | Whether to stream the response                                                                 |
+| `tools`                     | Tool definitions (for function calling)                                                        |
+| `toolChoice`                | Tool choice strategy                                                                           |
 
 Copilotz now distinguishes between:
 

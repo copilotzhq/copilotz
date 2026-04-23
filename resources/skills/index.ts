@@ -23,6 +23,7 @@ const BUNDLED_SKILL_DIRS = [
   "create-agent",
   "create-feature",
   "create-llm-provider",
+  "create-memory",
   "create-storage-adapter",
   "create-tool",
   "debug-runtime-issue",

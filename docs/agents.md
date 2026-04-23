@@ -62,7 +62,7 @@ llmOptions: {
   model: "gpt-4o-mini",        // Model name
   temperature: 0.7,             // Creativity (0-2)
   maxTokens: 4096,              // Max response length
-  limitEstimatedInputTokens: 12000, // Approximate input/history budget (1 token ~= 4 chars)
+  limitEstimatedInputTokens: 150000, // Default approximate input/history budget (1 token ~= 4 chars)
   apiKey: "sk-...",             // Optional: override env variable
   outputReasoning: false,       // Default true; whether to emit reasoning tokens ("thinking") during stream
   estimateCost: true,           // Default true; estimate cost from OpenRouter pricing when usage is native

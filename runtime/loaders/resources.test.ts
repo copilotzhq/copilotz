@@ -21,13 +21,14 @@ Deno.test("loadResources resolves presets plus imports from manifest selection",
         provides: {
           agents: ["assistant"],
           tools: ["core_tool", "extra_tool"],
+          memory: ["participant"],
           channels: ["web", "whatsapp"],
           llm: ["openai"],
           embeddings: ["openai"],
           storage: ["fs"],
         },
         presets: {
-          core: ["agents.assistant", "tools.core_tool", "llm"],
+          core: ["agents.assistant", "tools.core_tool", "memory.participant", "llm"],
         },
       };`,
     );
@@ -66,6 +67,15 @@ Deno.test("loadResources resolves presets plus imports from manifest selection",
     await writeFixtureFile(
       `${tempDir}/tools/extra_tool/execute.ts`,
       `export default async () => "extra";`,
+    );
+
+    await writeFixtureFile(
+      `${tempDir}/memory/mod.ts`,
+      `export const participant = {
+        name: "participant",
+        kind: "participant",
+        description: "participant memory",
+      };`,
     );
 
     await writeFixtureFile(
@@ -108,6 +118,8 @@ Deno.test("loadResources resolves presets plus imports from manifest selection",
 
     assertEquals(resources.agents.map((agent) => agent.name), ["assistant"]);
     assertEquals(resources.tools?.map((tool) => tool.key), ["core_tool"]);
+    assertEquals(resources.memory?.length ?? 0, 1);
+    assertEquals(resources.memory?.[0]?.name, "participant");
     assertEquals(resources.channels?.map((channel) => channel.name), [
       "whatsapp",
     ]);

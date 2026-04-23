@@ -42,6 +42,19 @@ function isDirectConversationThread(
     userParticipants.length === 1;
 }
 
+function participantMatchesAgent(
+  participant: string,
+  agent: Agent,
+): boolean {
+  const participantLower = participant.toLowerCase();
+  return (
+    (typeof agent.name === "string" &&
+      agent.name.toLowerCase() === participantLower) ||
+    (typeof agent.id === "string" &&
+      agent.id.toLowerCase() === participantLower)
+  );
+}
+
 /**
  * Agent memory extracted from the agent's participant node.
  */
@@ -70,9 +83,11 @@ export function contextGenerator(
 
   // Enhanced participant info with clear role indicators
   const participantInfo = thread.participants?.map((p: string) => {
-    const agentInfo = availableAgents.find((a: Agent) => a.name === p);
+    const agentInfo = availableAgents.find((a: Agent) =>
+      participantMatchesAgent(p, a)
+    );
     const isUser = !agentInfo;
-    const isSelf = p === agent.name;
+    const isSelf = participantMatchesAgent(p, agent);
     return [
       `- **${p}**${isSelf ? " (you)" : ""}`,
       agentInfo?.role
@@ -84,7 +99,9 @@ export function contextGenerator(
 
   const otherAvailableAgents = allSystemAgents.filter((a) =>
     a.name !== agent.name &&
-    !(thread.participants?.includes(a.name))
+    !(thread.participants?.some((participant) =>
+      participantMatchesAgent(participant, a)
+    ))
   );
 
   const availableAgentsInfo = otherAvailableAgents.length > 0

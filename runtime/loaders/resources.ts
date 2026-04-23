@@ -11,6 +11,7 @@ import type {
   AgentConfig,
   APIConfig,
   CollectionDefinition,
+  MemoryResource,
   MCPServer,
   ToolConfig,
 } from "@/index.ts";
@@ -109,6 +110,8 @@ export type Resources = {
   tools?: ToolConfig[];
   /** Array of loaded MCP server configurations. */
   mcpServers?: MCPServer[];
+  /** Array of loaded memory resources. */
+  memory?: MemoryResource[];
   /** Array of loaded skill definitions. */
   skills?: Skill[];
   /** Array of loaded custom event processors. */
@@ -137,6 +140,7 @@ const KNOWN_RESOURCE_TYPES = [
   "processors",
   "skills",
   "mcpServers",
+  "memory",
   "features",
   "channels",
   "llm",
@@ -568,6 +572,23 @@ async function loadMcpServersByManifest(
   return settled.filter((r): r is MCPServer => r !== null);
 }
 
+async function loadMemoryByManifest(
+  baseUrl: string,
+  names: string[],
+): Promise<MemoryResource[]> {
+  const loaded = await loadNamedGenericByManifest<MemoryResource>(
+    baseUrl,
+    "memory",
+    names,
+    (value): value is MemoryResource =>
+      typeof value === "object" && value !== null && "kind" in value,
+  );
+  return loaded.map(({ name, value }) => ({
+    name,
+    ...(value as object),
+  } as MemoryResource));
+}
+
 /**
  * Generic loader for extensible resource types (llm, embeddings, storage, collections, etc.).
  *
@@ -945,6 +966,15 @@ async function loadFromManifest(
       ).then((r) => {
         resources.mcpServers = r;
       }),
+    );
+  }
+
+  if (provides.memory?.length) {
+    tasks.push(
+      timed("memory", () => loadMemoryByManifest(baseUrl, provides.memory!))
+        .then((r) => {
+          resources.memory = r;
+        }),
     );
   }
 
@@ -1396,6 +1426,13 @@ async function loadFromDirectory(
     (_name, value) => value,
     (value): value is MCPServer => typeof value === "object" && value !== null,
   );
+  await loadNamedGenericFromDirectory<MemoryResource>(
+    "memory",
+    (_name, value) => value,
+    (value): value is MemoryResource =>
+      typeof value === "object" && value !== null &&
+      "name" in value && "kind" in value,
+  );
   await loadNamedGenericFromDirectory<ProviderFactory>(
     "llm",
     (name, value) => ({ name, factory: value }),
@@ -1474,6 +1511,9 @@ function mergeResources(target: Resources, source: Resources): void {
   }
   if (source.mcpServers?.length) {
     target.mcpServers = [...(target.mcpServers ?? []), ...source.mcpServers];
+  }
+  if (source.memory?.length) {
+    target.memory = mergeNamedResources(target.memory, source.memory);
   }
   target.llm = mergeNamedResources(target.llm, source.llm);
   target.embeddings = mergeNamedResources(target.embeddings, source.embeddings);

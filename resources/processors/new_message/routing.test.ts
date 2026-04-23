@@ -27,8 +27,10 @@ Deno.test("resolveThreadParticipantTarget preserves a user return target for leg
     participants: ["reviewer", "generalist-genius"],
     metadata: {
       system: {
-        runtime: {
-          userExternalId: "User",
+        memory: {
+          identity: {
+            userExternalId: "User",
+          },
         },
       },
     },

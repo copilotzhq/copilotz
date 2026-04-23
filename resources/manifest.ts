@@ -43,6 +43,7 @@ export default {
       "rag_ingest",
       "entity_extract",
     ],
+    memory: ["participant", "history", "retrieval"],
     llm: [
       "openai",
       "anthropic",
@@ -70,6 +71,7 @@ export default {
       "create-agent",
       "create-feature",
       "create-llm-provider",
+      "create-memory",
       "create-storage-adapter",
       "create-tool",
       "debug-runtime-issue",
@@ -85,11 +87,12 @@ export default {
   },
   presets: {
     core: [
-      "agents.copilotz",
       "channels.web",
       "collections.participant",
       "collections.message",
       "collections.llm_usage",
+      "memory.participant",
+      "memory.history",
       "tools.list_skills",
       "tools.load_skill",
       "tools.read_skill_resource",
@@ -108,6 +111,7 @@ export default {
       "embeddings.openai",
       "collections.document",
       "collections.chunk",
+      "memory.retrieval",
       "tools.search_knowledge",
       "tools.ingest_document",
       "tools.list_namespaces",

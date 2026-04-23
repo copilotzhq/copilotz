@@ -1,6 +1,6 @@
 # Resources
 
-Everything in Copilotz is a **resource**. Agents, tools, APIs, processors, LLM providers, embeddings, storage backends, collections, and skills are all loaded through the same system. You can override or extend any of them.
+Everything in Copilotz is a **resource**. Agents, tools, APIs, processors, memory resources, LLM providers, embeddings, storage backends, collections, and skills are all loaded through the same system. You can override or extend any of them.
 
 ## How It Works
 
@@ -28,6 +28,7 @@ const copilotz = await createCopilotz({
 | **Tools** | `tools/` | Functions the LLM can call | [Tools](./tools.md) |
 | **APIs** | `apis/` | OpenAPI specs auto-converted to tools | [Tools](./tools.md#api-integration) |
 | **Processors** | `processors/` | Custom event handlers for the processing pipeline | [Events](./events.md) |
+| **Memory** | `memory/` | Runtime context recall such as participant memory, history, and retrieval-backed injection | [Resources](./resources/memory.md) |
 | **Skills** | `skills/` | SKILL.md-based instructions with progressive disclosure | [Skills](./skills.md) |
 | **LLM providers** | `llm/` | Chat completion adapters (OpenAI, Anthropic, etc.) | [LLM Providers](./llm-providers.md) |
 | **Embeddings** | `embeddings/` | Text embedding adapters | [Embeddings](./embeddings.md) |
@@ -38,8 +39,8 @@ const copilotz = await createCopilotz({
 
 Copilotz ships with manifest-driven bundled presets. The default bundled preset is `core`:
 
-- `core` — bundled `copilotz` agent, `web` channel, core processors, bundled skills, `persistent_terminal`, `update_my_memory`, LLM providers, storage backends
-- `rag` — embeddings, RAG tools/processors, and RAG collections
+- `core` — bundled `copilotz` agent, `web` channel, core processors, bundled skills, `persistent_terminal`, `update_my_memory`, LLM providers, storage backends, and the default `participant` + `history` memory resources
+- `rag` — embeddings, graph-backed retrieval collections, retrieval memory, and RAG tools/processors
 - `admin` — admin feature endpoints
 - `code` — code-editing and workspace tooling
 

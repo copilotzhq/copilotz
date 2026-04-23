@@ -182,3 +182,79 @@ Deno.test("startEventWorker emits queued event before processor execution", asyn
   assertEquals(observations, ["emitted-before-process"]);
   assertEquals(emittedEvents, [{ id: "event-emit-first", type: "TOOL_CALL" }]);
 });
+
+Deno.test("startEventWorker marks the queue item failed when no processor recovers from an error", async () => {
+  const threadId = "thread-failure";
+  const queuedEvent = {
+    id: "event-failure",
+    threadId,
+    eventType: "NEW_MESSAGE",
+    payload: { content: "hello" },
+    parentEventId: null,
+    traceId: "trace-1",
+    priority: 0,
+    metadata: null,
+    ttlMs: null,
+    expiresAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    status: "pending",
+  };
+
+  let nextCalls = 0;
+  const statusUpdates: Array<{ id: string; status: string }> = [];
+
+  const ops = {
+    getThreadWorkerLeaseConfig: () => ({
+      leaseMs: 60_000,
+      heartbeatMs: 60_000,
+    }),
+    acquireThreadWorkerLease: async () => true,
+    renewThreadWorkerLease: async () => true,
+    isThreadWorkerLeaseOwner: async () => true,
+    recoverThreadProcessingQueueItems: async () => 0,
+    getNextPendingQueueItem: async () => {
+      nextCalls += 1;
+      return nextCalls === 1 ? queuedEvent : undefined;
+    },
+    updateQueueItemStatus: async (id: string, status: string) => {
+      statusUpdates.push({ id, status });
+    },
+    releaseThreadWorkerLeaseIfNoPendingWork: async () => true,
+    releaseThreadWorkerLease: async () => {},
+  };
+
+  const fakeDb = { ops };
+
+  await startEventWorker(
+    fakeDb as never,
+    threadId,
+    {
+      processors: {
+        NEW_MESSAGE: [{
+          shouldProcess: () => true,
+          process: async () => {
+            throw new Error("synthetic processor failure");
+          },
+        }],
+      },
+      emitToStream: () => {},
+      stream: false,
+    },
+    async () =>
+      ({
+        db: fakeDb,
+        thread: { id: threadId },
+        context: {},
+        emitToStream: () => {},
+      }) as never,
+  );
+
+  assertEquals(
+    statusUpdates,
+    [
+      { id: "event-failure", status: "processing" },
+      { id: "event-failure", status: "failed" },
+    ],
+  );
+});

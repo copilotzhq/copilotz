@@ -411,6 +411,7 @@ export async function startEventWorker(
         )) as ProcessorDeps;
 
         let finalEvents: Array<NewEvent | NewUnknownEvent> = [];
+        let lastProcessorError: unknown = null;
 
         const processorList = context.processors[event.type] ?? [];
         for (const p of processorList) {
@@ -420,11 +421,18 @@ export async function startEventWorker(
             const res = await p.process(event, deps);
             if (res?.producedEvents) {
               finalEvents = res.producedEvents;
+              lastProcessorError = null;
               break;
             }
-          } catch (_err) {
-            // Ignore processor errors; try next processor in priority order
+          } catch (err) {
+            // Allow later processors to recover, but if nobody claims the event
+            // we should fail the queue item instead of silently dropping the error.
+            lastProcessorError = err;
           }
+        }
+
+        if (lastProcessorError && finalEvents.length === 0) {
+          throw lastProcessorError;
         }
 
         const backgroundThreadIds = new Set<string>();

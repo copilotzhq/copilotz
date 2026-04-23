@@ -3,36 +3,29 @@ import { join } from "@std/path";
 
 import { createCopilotz } from "@/index.ts";
 
-Deno.test("createCopilotz loads the bundled core preset by default", async () => {
-  const copilotz = await createCopilotz({
-    dbConfig: { url: ":memory:" },
-  });
+const TEST_AGENT = {
+  id: "assistant",
+  name: "Assistant",
+  role: "assistant",
+  instructions: "Handle the test message.",
+  llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+} as const;
 
-  try {
-    const toolKeys = (copilotz.config.tools ?? []).map((tool) => tool.key);
-    const channelNames = (copilotz.config.channels ?? []).map((channel) =>
-      channel.name
-    );
-    const bundledAgent = (copilotz.config.agents ?? []).find((agent) =>
-      agent.name === "copilotz"
-    );
-
-    assert(toolKeys.includes("persistent_terminal"));
-    assert(toolKeys.includes("update_my_memory"));
-    assert(toolKeys.includes("list_skills"));
-    assert(toolKeys.includes("load_skill"));
-    assert(toolKeys.includes("read_skill_resource"));
-    assert(!toolKeys.includes("read_file"));
-    assertEquals(channelNames, ["web"]);
-    assertEquals(bundledAgent?.allowedTools, undefined);
-  } finally {
-    await copilotz.shutdown();
-  }
+Deno.test("createCopilotz core preset no longer auto-loads the bundled native agent", async () => {
+  await assertRejects(
+    () =>
+      createCopilotz({
+        dbConfig: { url: ":memory:" },
+      }),
+    Error,
+    "resources.imports: ['agents.copilotz']",
+  );
 });
 
 Deno.test("createCopilotz always includes bundled core when custom presets are provided", async () => {
   const copilotz = await createCopilotz({
     dbConfig: { url: ":memory:" },
+    agents: [TEST_AGENT],
     resources: {
       preset: ["code"],
     },
@@ -53,9 +46,44 @@ Deno.test("createCopilotz always includes bundled core when custom presets are p
   }
 });
 
+Deno.test("createCopilotz loads the bundled native agent only when explicitly imported", async () => {
+  const copilotz = await createCopilotz({
+    dbConfig: { url: ":memory:" },
+    resources: {
+      imports: ["agents.copilotz"],
+    },
+  });
+
+  try {
+    const toolKeys = (copilotz.config.tools ?? []).map((tool) => tool.key);
+    const channelNames = (copilotz.config.channels ?? []).map((channel) =>
+      channel.name
+    );
+    const memoryNames = (copilotz.config.memory ?? []).map((memory) =>
+      memory.name
+    );
+    const bundledAgent = (copilotz.config.agents ?? []).find((agent) =>
+      agent.name === "copilotz"
+    );
+
+    assert(toolKeys.includes("persistent_terminal"));
+    assert(toolKeys.includes("update_my_memory"));
+    assert(toolKeys.includes("list_skills"));
+    assert(toolKeys.includes("load_skill"));
+    assert(toolKeys.includes("read_skill_resource"));
+    assert(!toolKeys.includes("read_file"));
+    assertEquals(channelNames, ["web"]);
+    assertEquals(memoryNames.sort(), ["history", "participant"]);
+    assertEquals(bundledAgent?.allowedTools, undefined);
+  } finally {
+    await copilotz.shutdown();
+  }
+});
+
 Deno.test("createCopilotz applies resources.filterResources after loading", async () => {
   const copilotz = await createCopilotz({
     dbConfig: { url: ":memory:" },
+    agents: [TEST_AGENT],
     resources: {
       filterResources: (resource, type) =>
         !(type === "tool" && resource.id === "persistent_terminal"),
@@ -64,8 +92,12 @@ Deno.test("createCopilotz applies resources.filterResources after loading", asyn
 
   try {
     const toolKeys = (copilotz.config.tools ?? []).map((tool) => tool.key);
+    const memoryNames = (copilotz.config.memory ?? []).map((memory) =>
+      memory.name
+    );
     assert(!toolKeys.includes("persistent_terminal"));
     assert(toolKeys.includes("update_my_memory"));
+    assert(memoryNames.includes("participant"));
   } finally {
     await copilotz.shutdown();
   }
@@ -153,6 +185,7 @@ export default defineCollection({
 
     const copilotz = await createCopilotz({
       dbConfig: { url: ":memory:" },
+      agents: [TEST_AGENT],
       resources: { path: [resourcesDir] },
       collectionsConfig: { autoIndex: false },
     });
@@ -178,6 +211,7 @@ Deno.test("createCopilotz rejects asset backends that were filtered out", async 
       () =>
         createCopilotz({
           dbConfig: { url: ":memory:" },
+          agents: [TEST_AGENT],
           resources: {
             filterResources: (resource, type) =>
               !(type === "storage" && resource.name === "fs"),

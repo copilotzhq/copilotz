@@ -1,11 +1,9 @@
 /**
  * RAG (Retrieval-Augmented Generation) Migration
- * 
- * Creates tables for document storage and vector embeddings:
- * - documents: Source documents with metadata and status
- * - document_chunks: Chunked content with vector embeddings
- * 
- * Requires pgvector extension for vector similarity search.
+ *
+ * Keeps the vector extension available for graph-backed retrieval.
+ * Document and chunk content now live in graph nodes rather than dedicated
+ * relational tables.
  */
 
 export const generateRagMigrations = (): string => `

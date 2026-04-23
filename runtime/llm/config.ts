@@ -5,6 +5,8 @@ import type {
   ProviderFallbackConfig,
 } from "@/runtime/llm/types.ts";
 
+const DEFAULT_LIMIT_ESTIMATED_INPUT_TOKENS = 150_000;
+
 export function toLLMConfig(
   config?: Partial<LLMRuntimeConfig> | null,
 ): LLMConfig {
@@ -27,6 +29,10 @@ export function toLLMConfig(
     : undefined;
 
   return {
+    limitEstimatedInputTokens:
+      typeof rest.limitEstimatedInputTokens === "number"
+        ? rest.limitEstimatedInputTokens
+        : DEFAULT_LIMIT_ESTIMATED_INPUT_TOKENS,
     ...rest,
     ...(sanitizedFallbacks ? { fallbacks: sanitizedFallbacks } : {}),
   } as LLMConfig;
@@ -36,7 +42,11 @@ export function mergeLLMRuntimeConfig(
   baseConfig?: LLMConfig | null,
   ...runtimeConfigs: Array<Partial<LLMRuntimeConfig> | null | undefined>
 ): LLMRuntimeConfig {
-  return Object.assign({}, baseConfig ?? {}, ...runtimeConfigs) as LLMRuntimeConfig;
+  return Object.assign(
+    {},
+    baseConfig ?? {},
+    ...runtimeConfigs,
+  ) as LLMRuntimeConfig;
 }
 
 export function resolveProviderApiKey(

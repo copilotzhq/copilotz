@@ -626,6 +626,44 @@ export type NewDocumentChunk = Partial<DocumentChunk> &
   Pick<DocumentChunk, "documentId" | "namespace" | "chunkIndex" | "content">;
 
 /**
+ * Declarative memory resource loaded from `resources/memory/`.
+ * These resources describe which memory capabilities are available at runtime.
+ */
+export interface MemoryResource {
+  id?: string;
+  name: string;
+  kind: "participant" | "history" | "retrieval" | string;
+  description?: string | null;
+  enabled?: boolean;
+  metadata?: Record<string, unknown> | null;
+  config?: Record<string, unknown> | null;
+}
+
+export interface MemoryIdentityMetadata {
+  userExternalId?: string;
+  [key: string]: unknown;
+}
+
+export interface MemoryThreadMetadata {
+  identity?: MemoryIdentityMetadata;
+  [key: string]: unknown;
+}
+
+export interface MemoryContribution {
+  resource: string;
+  kind: string;
+  content: string;
+  tokenEstimate?: number;
+}
+
+export interface MemoryComposition {
+  systemPromptSections: string[];
+  contributions: MemoryContribution[];
+  history: ChatMessage[];
+  identity?: MemoryIdentityMetadata;
+}
+
+/**
  * Thread metadata interface for multi-agent conversation state.
  * Stored directly in thread.metadata for persistence.
  */
@@ -638,8 +676,6 @@ export interface ThreadMetadata {
   agentTurnCount?: number;
   /** Max agent turns config (per-thread override) */
   maxAgentTurns?: number;
-  /** User external ID for user context lookup */
-  userExternalId?: string;
   /** Pending tool batches for aggregation */
   pendingToolBatches?: Record<string, unknown>;
   /** Allow additional properties */
@@ -659,6 +695,8 @@ export interface ChatContext {
   apis?: API[];
   /** MCP server configurations. */
   mcpServers?: MCPServer[];
+  /** Loaded memory resources. */
+  memory?: MemoryResource[];
   /** Available skills loaded from project/user/bundled/remote sources. */
   skills?: import("@/runtime/loaders/skill-types.ts").Skill[];
   /** Whether streaming is enabled. Default: true. */

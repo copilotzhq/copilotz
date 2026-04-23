@@ -58,6 +58,7 @@ import type {
   HistoryTransform,
   LlmCallEventPayload,
   MCPServer,
+  MemoryResource,
   MessagePayload,
   NewAPI,
   NewMCPServer,
@@ -116,6 +117,8 @@ export type {
   LlmCallEventPayload,
   /** MCP (Model Context Protocol) server configuration. */
   MCPServer,
+  /** Declarative memory resource loaded from resources/memory. */
+  MemoryResource,
   /** Individual message within a conversation thread. */
   Message,
   /** Payload structure for incoming messages. */
@@ -412,12 +415,13 @@ export type APIConfig = NewAPI;
 export type MCPServerConfig = NewMCPServer;
 
 type NormalizedCopilotzConfig =
-  & Omit<CopilotzConfig, "agents" | "tools" | "apis" | "mcpServers">
+  & Omit<CopilotzConfig, "agents" | "tools" | "apis" | "mcpServers" | "memory">
   & {
     agents: Agent[];
     tools?: Tool[];
     apis?: API[];
     mcpServers?: MCPServer[];
+    memory?: MemoryResource[];
     skills?: import("@/runtime/loaders/skill-types.ts").Skill[];
     processorsByType?: ChatContext["processors"];
   };
@@ -477,6 +481,8 @@ export interface CopilotzConfig {
   apis?: APIConfig[];
   /** Optional array of MCP server configurations. */
   mcpServers?: MCPServerConfig[];
+  /** Optional array of declarative memory resources. */
+  memory?: MemoryResource[];
   /** Optional custom event processors to extend or override default behavior. */
   processors?: Array<
     (EventProcessor<unknown, ProcessorDeps> & {
@@ -1040,6 +1046,7 @@ export async function createCopilotz(
   logInit("loadBundledResources", startedAt, {
     agents: bundledResources.agents?.length ?? 0,
     tools: bundledResources.tools?.length ?? 0,
+    memory: bundledResources.memory?.length ?? 0,
     processors: bundledResources.processors?.length ?? 0,
     skills: bundledResources.skills?.length ?? 0,
   });
@@ -1057,6 +1064,7 @@ export async function createCopilotz(
       agents: userResources.agents?.length ?? 0,
       tools: userResources.tools?.length ?? 0,
       apis: userResources.apis?.length ?? 0,
+      memory: userResources.memory?.length ?? 0,
       mcpServers: userResources.mcpServers?.length ?? 0,
       skills: userResources.skills?.length ?? 0,
       processors: userResources.processors?.length ?? 0,
@@ -1170,6 +1178,10 @@ export async function createCopilotz(
     bundledResources.storage,
     userResources?.storage,
   );
+  let resolvedMemory = mergeNamed<MemoryResource>(
+    bundledResources.memory,
+    mergeNamed<MemoryResource>(userResources?.memory, config.memory),
+  );
 
   logInit("mergeResources", startedAt);
 
@@ -1237,6 +1249,9 @@ export async function createCopilotz(
     resolvedMcpServers = resolvedMcpServers.filter((r) =>
       filter(asFilterable(r), "mcpServer")
     );
+    resolvedMemory = resolvedMemory.filter((r) =>
+      filter(asFilterable(r), "memory")
+    );
     resolvedProcessors = resolvedProcessors.filter((r) =>
       filter(asFilterable(r), "processor")
     );
@@ -1282,7 +1297,7 @@ export async function createCopilotz(
   if (resolvedAgents.length === 0) {
     throw new Error(
       "createCopilotz requires at least one agent. " +
-        "Provide agents explicitly or via resources.path.",
+        "Provide agents explicitly, via resources.path, or import a bundled agent such as resources.imports: ['agents.copilotz'].",
     );
   }
 
@@ -1308,6 +1323,7 @@ export async function createCopilotz(
     tools: normalizedTools,
     apis: normalizedApis,
     mcpServers: normalizedMcpServers,
+    memory: resolvedMemory,
     collections: resolvedCollections,
     skills: allSkills,
     features: mergedFeatures,
@@ -1318,6 +1334,7 @@ export async function createCopilotz(
     tools: normalizedTools?.length ?? 0,
     apis: normalizedApis?.length ?? 0,
     mcpServers: normalizedMcpServers?.length ?? 0,
+    memory: resolvedMemory.length,
   });
 
   // ---- Phase 3: Resolve database (with connection caching) ----
@@ -1508,6 +1525,7 @@ export async function createCopilotz(
       tools: resolvedTools,
       apis: baseConfig.apis,
       mcpServers: baseConfig.mcpServers,
+      memory: baseConfig.memory,
       skills: baseConfig.skills,
       historyTransform: baseConfig.historyTransform,
       dbConfig: baseConfig.dbConfig,

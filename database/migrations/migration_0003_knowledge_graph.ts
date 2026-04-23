@@ -1,11 +1,8 @@
 /**
  * Knowledge Graph Migration
- * 
- * Creates unified nodes and edges tables that generalize RAG chunks
- * into a full knowledge graph structure.
- * 
- * The existing document_chunks table is kept for backward compatibility
- * but new ingestion will populate the nodes table instead.
+ *
+ * Creates the unified graph storage used for documents, chunks, messages,
+ * participants, entities, and collection-backed records.
  */
 export const generateKnowledgeGraphMigrations = (): string => `
 -- ============================================
@@ -83,4 +80,3 @@ CREATE TRIGGER "trigger_nodes_updated_at"
   FOR EACH ROW
   EXECUTE FUNCTION update_node_timestamp();
 `;
-

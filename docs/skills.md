@@ -193,15 +193,16 @@ skills.
 
 Copilotz ships with a bundled native assistant. It is meant to feel like a
 practical teammate first, with strong built-in support for building, debugging,
-and evolving Copilotz projects through the bundled skill catalog. Enable it with
-`copilotzAgent`:
+and evolving Copilotz projects through the bundled skill catalog. Import it
+explicitly with `resources.imports: ["agents.copilotz"]`:
 
 ```typescript
 const copilotz = await createCopilotz({
-  copilotzAgent: {
+  resources: {
+    imports: ["agents.copilotz"],
+  },
+  agent: {
     llmOptions: { provider: "openai", model: "gpt-4o" },
-    allowedTools: ["persistent_terminal"],
-    instructions: "Use the terminal for repo exploration and edits.",
   },
   agents: [{
     id: "assistant",
@@ -223,7 +224,7 @@ skills and file tools (`list_skills`, `load_skill`, `read_skill_resource`,
 Override the bundled agent defaults just like a normal agent:
 
 ```typescript
-copilotzAgent: {
+agent: {
   id: "dev-assistant",
   name: "Dev Assistant",
   llmOptions: { provider: "anthropic", model: "claude-sonnet-4-5-20241022" },
@@ -331,7 +332,7 @@ tags: [workflow, custom]
 
 ## Next Steps
 
-- [Configuration](./configuration.md) — Full `skills` and `copilotzAgent` config
-  options
+- [Configuration](./configuration.md) — Full `skills`, `agent`, and resource
+  import config options
 - [Loaders](./loaders.md) — Resource directory structure
 - [Tools](./tools.md) — Native tools reference

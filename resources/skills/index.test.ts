@@ -12,6 +12,7 @@ const RESOURCE_SKILL_COVERAGE = new Map<string, string>([
   ["processors.md", "add-processor"],
   ["channels.md", "create-channel"],
   ["llm.md", "create-llm-provider"],
+  ["memory.md", "create-memory"],
   ["embeddings.md", "create-embedding-provider"],
   ["storage.md", "create-storage-adapter"],
   ["apis.md", "add-api-integration"],

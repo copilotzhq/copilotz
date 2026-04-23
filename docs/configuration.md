@@ -38,8 +38,11 @@ const copilotz = await createCopilotz({
     fileName: "AGENTS.md",   // Default: AGENTS.md
   },
   
-  // Copilotz native assistant
-  copilotzAgent: { llmOptions: { ... } },
+  // Bundled native assistant (optional)
+  resources: {
+    imports: ["agents.copilotz"],
+  },
+  agent: { llmOptions: { ... } },
   
   // Processing
   processors: [...],
@@ -79,18 +82,23 @@ const copilotz = await createCopilotz({
   stream: true,
 });
 
-// Mixed — bundled core + code tools + selected file-loaded resources
+// Mixed — bundled core infrastructure + code tools + selected bundled/file-loaded resources
 const copilotz = await createCopilotz({
   resources: {
     path: "./resources",
     preset: ["core", "code"],
-    imports: ["channels.whatsapp", "tools.read_file"],
+    imports: ["agents.copilotz", "channels.whatsapp", "tools.read_file"],
   },
   tools: [myExtraTool], // Appended to file-loaded tools
   agents: [{ id: "assistant" }], // Replaces file-loaded "assistant" (ID collision)
   dbConfig: { url: Deno.env.get("DATABASE_URL") },
 });
 ```
+
+`core` loads bundled runtime infrastructure such as tools, processors, skills,
+providers, memory resources, and the default web channel. It does not
+automatically activate the bundled native assistant. Import that explicitly with
+`resources.imports: ["agents.copilotz"]` when you want it available.
 
 ### Merge Behavior
 
@@ -154,7 +162,7 @@ agents: [{
     model: "gpt-4o-mini",
     temperature: 0.7,
     maxTokens: 4096, // Max response length
-    limitEstimatedInputTokens: 12000, // Approximate input/history budget (1 token ~= 4 chars)
+    limitEstimatedInputTokens: 150000, // Default approximate input/history budget (1 token ~= 4 chars)
     baseUrl: "...", // Custom endpoint
     outputReasoning: false, // Default true; whether to emit reasoning tokens ("thinking") during stream
     estimateCost: true, // Default true; estimate cost from OpenRouter pricing when native usage exists
@@ -182,8 +190,8 @@ come from environment variables, agent runtime config, or the
 `security.resolveLLMRuntimeConfig` hook described below.
 
 `limitEstimatedInputTokens` limits the prompt history using Copilotz's rough
-token estimator (`1 token ~= 4 characters`). It is an approximate input budget,
-not a model-specific tokenizer count.
+token estimator (`1 token ~= 4 characters`). It defaults to `150000` and is an
+approximate input budget, not a model-specific tokenizer count.
 
 ### Cost Estimation
 
@@ -300,17 +308,20 @@ tools.
 ## Copilotz Agent
 
 Enable the bundled Copilotz assistant — a general-purpose Copilotz-native helper
-with access to the bundled skills and file tools:
+with access to the bundled skills and file tools — by importing it explicitly:
 
 ```typescript
-copilotzAgent: {
+resources: {
+  imports: ["agents.copilotz"],
+},
+agent: {
   llmOptions: { provider: "openai", model: "gpt-4o" },
   allowedTools: ["persistent_terminal"],
   instructions: "Operate only through the persistent terminal.",
 }
 
 // Or override any normal agent fields
-copilotzAgent: {
+agent: {
   id: "dev-assistant",
   name: "Dev Assistant",
   llmOptions: { provider: "anthropic", model: "claude-sonnet-4-5-20241022" },
@@ -318,10 +329,9 @@ copilotzAgent: {
 }
 ```
 
-The Copilotz agent is added alongside your existing agents. Bundled admin
-defaults are applied first, and any fields you provide in `copilotzAgent`
-override them. If you define an agent with the same ID (`"copilotz"` by
-default), your explicit agent definition still takes precedence.
+The Copilotz agent is not part of the `core` preset anymore. Import it when you
+want it available. Bundled defaults are applied first, and any fields you
+provide in `agent` override them.
 
 ## Custom Tools
 

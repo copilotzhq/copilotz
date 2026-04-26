@@ -40,79 +40,37 @@ import * as toolResultProcessor from "@/resources/processors/tool_result/index.t
 import * as llmProviders from "@/resources/llm/mod.ts";
 import * as storageAdapters from "@/resources/storage/mod.ts";
 
-// ---- Core: skills (static text imports) ------------------------------------
-import addApiIntegrationSkillRaw from "@/resources/skills/add-api-integration/SKILL.md" with {
-  type: "text",
-};
-import addProcessorSkillRaw from "@/resources/skills/add-processor/SKILL.md" with {
-  type: "text",
-};
-import advancedChatFeaturesSkillRaw from "@/resources/skills/advanced-chat-features/SKILL.md" with {
-  type: "text",
-};
-import buildCopilotzSystemSkillRaw from "@/resources/skills/build-copilotz-system/SKILL.md" with {
-  type: "text",
-};
-import configureChatUiSkillRaw from "@/resources/skills/configure-chat-ui/SKILL.md" with {
-  type: "text",
-};
-import configureMcpSkillRaw from "@/resources/skills/configure-mcp/SKILL.md" with {
-  type: "text",
-};
-import configureRagSkillRaw from "@/resources/skills/configure-rag/SKILL.md" with {
-  type: "text",
-};
-import createAgentSkillRaw from "@/resources/skills/create-agent/SKILL.md" with {
-  type: "text",
-};
-import createChannelSkillRaw from "@/resources/skills/create-channel/SKILL.md" with {
-  type: "text",
-};
-import createEmbeddingProviderSkillRaw from "@/resources/skills/create-embedding-provider/SKILL.md" with {
-  type: "text",
-};
-import createFeatureSkillRaw from "@/resources/skills/create-feature/SKILL.md" with {
-  type: "text",
-};
-import createLlmProviderSkillRaw from "@/resources/skills/create-llm-provider/SKILL.md" with {
-  type: "text",
-};
-import createMemorySkillRaw from "@/resources/skills/create-memory/SKILL.md" with {
-  type: "text",
-};
-import createStorageAdapterSkillRaw from "@/resources/skills/create-storage-adapter/SKILL.md" with {
-  type: "text",
-};
-import createToolSkillRaw from "@/resources/skills/create-tool/SKILL.md" with {
-  type: "text",
-};
-import debugRuntimeIssueSkillRaw from "@/resources/skills/debug-runtime-issue/SKILL.md" with {
-  type: "text",
-};
-import exploreCodebaseSkillRaw from "@/resources/skills/explore-codebase/SKILL.md" with {
-  type: "text",
-};
-import implementFeatureSkillRaw from "@/resources/skills/implement-feature/SKILL.md" with {
-  type: "text",
-};
-import integrateExternalServiceSkillRaw from "@/resources/skills/integrate-external-service/SKILL.md" with {
-  type: "text",
-};
-import multiAgentSetupSkillRaw from "@/resources/skills/multi-agent-setup/SKILL.md" with {
-  type: "text",
-};
-import refactorResourceArchitectureSkillRaw from "@/resources/skills/refactor-resource-architecture/SKILL.md" with {
-  type: "text",
-};
-import reviewCopilotzProjectSkillRaw from "@/resources/skills/review-copilotz-project/SKILL.md" with {
-  type: "text",
-};
-import shipChatExperienceSkillRaw from "@/resources/skills/ship-chat-experience/SKILL.md" with {
-  type: "text",
-};
-import setupCollectionSkillRaw from "@/resources/skills/setup-collection/SKILL.md" with {
-  type: "text",
-};
+// ---- Core: skills (generated JS modules; stable imports) -------------------
+import addApiIntegrationSkillDataUrl from "@/resources/skills/add-api-integration/SKILL.js";
+import addProcessorSkillDataUrl from "@/resources/skills/add-processor/SKILL.js";
+import advancedChatFeaturesSkillDataUrl from "@/resources/skills/advanced-chat-features/SKILL.js";
+import buildCopilotzSystemSkillDataUrl from "@/resources/skills/build-copilotz-system/SKILL.js";
+import configureChatUiSkillDataUrl from "@/resources/skills/configure-chat-ui/SKILL.js";
+import configureMcpSkillDataUrl from "@/resources/skills/configure-mcp/SKILL.js";
+import configureRagSkillDataUrl from "@/resources/skills/configure-rag/SKILL.js";
+import createAgentSkillDataUrl from "@/resources/skills/create-agent/SKILL.js";
+import createChannelSkillDataUrl from "@/resources/skills/create-channel/SKILL.js";
+import createEmbeddingProviderSkillDataUrl from "@/resources/skills/create-embedding-provider/SKILL.js";
+import createFeatureSkillDataUrl from "@/resources/skills/create-feature/SKILL.js";
+import createLlmProviderSkillDataUrl from "@/resources/skills/create-llm-provider/SKILL.js";
+import createMemorySkillDataUrl from "@/resources/skills/create-memory/SKILL.js";
+import createStorageAdapterSkillDataUrl from "@/resources/skills/create-storage-adapter/SKILL.js";
+import createToolSkillDataUrl from "@/resources/skills/create-tool/SKILL.js";
+import debugRuntimeIssueSkillDataUrl from "@/resources/skills/debug-runtime-issue/SKILL.js";
+import exploreCodebaseSkillDataUrl from "@/resources/skills/explore-codebase/SKILL.js";
+import implementFeatureSkillDataUrl from "@/resources/skills/implement-feature/SKILL.js";
+import integrateExternalServiceSkillDataUrl from "@/resources/skills/integrate-external-service/SKILL.js";
+import multiAgentSetupSkillDataUrl from "@/resources/skills/multi-agent-setup/SKILL.js";
+import refactorResourceArchitectureSkillDataUrl from "@/resources/skills/refactor-resource-architecture/SKILL.js";
+import reviewCopilotzProjectSkillDataUrl from "@/resources/skills/review-copilotz-project/SKILL.js";
+import shipChatExperienceSkillDataUrl from "@/resources/skills/ship-chat-experience/SKILL.js";
+import setupCollectionSkillDataUrl from "@/resources/skills/setup-collection/SKILL.js";
+
+function decodeBase64DataUrl(dataUrl: string): string {
+  const idx = dataUrl.indexOf(",");
+  const b64 = idx >= 0 ? dataUrl.slice(idx + 1) : dataUrl;
+  return atob(b64);
+}
 
 function parseBundledSkill(dirName: string, raw: string): Skill {
   const { frontmatter, body } = parseSkillMarkdown(raw);
@@ -200,8 +158,18 @@ function toProcessorEntry(
     throw new Error(`Invalid processor module for ${eventType}`);
   }
   return {
-    shouldProcess: asShouldProcess(maybeShouldProcess as any),
-    process: asProcess(maybeProcess as any),
+    shouldProcess: asShouldProcess(
+      maybeShouldProcess as (
+        event: unknown,
+        deps?: unknown,
+      ) => boolean | Promise<boolean>,
+    ),
+    process: asProcess(
+      maybeProcess as (
+        event: unknown,
+        deps?: unknown,
+      ) => unknown | Promise<unknown>,
+    ),
     eventType: eventType.toUpperCase(),
     priority: typeof mod.priority === "number" ? mod.priority : 0,
   };
@@ -216,30 +184,102 @@ const coreTools = [
 ] as const;
 
 const coreSkills: Skill[] = [
-  parseBundledSkill("add-api-integration", addApiIntegrationSkillRaw),
-  parseBundledSkill("add-processor", addProcessorSkillRaw),
-  parseBundledSkill("advanced-chat-features", advancedChatFeaturesSkillRaw),
-  parseBundledSkill("build-copilotz-system", buildCopilotzSystemSkillRaw),
-  parseBundledSkill("configure-chat-ui", configureChatUiSkillRaw),
-  parseBundledSkill("configure-mcp", configureMcpSkillRaw),
-  parseBundledSkill("configure-rag", configureRagSkillRaw),
-  parseBundledSkill("create-channel", createChannelSkillRaw),
-  parseBundledSkill("create-embedding-provider", createEmbeddingProviderSkillRaw),
-  parseBundledSkill("create-agent", createAgentSkillRaw),
-  parseBundledSkill("create-feature", createFeatureSkillRaw),
-  parseBundledSkill("create-llm-provider", createLlmProviderSkillRaw),
-  parseBundledSkill("create-memory", createMemorySkillRaw),
-  parseBundledSkill("create-storage-adapter", createStorageAdapterSkillRaw),
-  parseBundledSkill("create-tool", createToolSkillRaw),
-  parseBundledSkill("debug-runtime-issue", debugRuntimeIssueSkillRaw),
-  parseBundledSkill("explore-codebase", exploreCodebaseSkillRaw),
-  parseBundledSkill("implement-feature", implementFeatureSkillRaw),
-  parseBundledSkill("integrate-external-service", integrateExternalServiceSkillRaw),
-  parseBundledSkill("multi-agent-setup", multiAgentSetupSkillRaw),
-  parseBundledSkill("refactor-resource-architecture", refactorResourceArchitectureSkillRaw),
-  parseBundledSkill("review-copilotz-project", reviewCopilotzProjectSkillRaw),
-  parseBundledSkill("ship-chat-experience", shipChatExperienceSkillRaw),
-  parseBundledSkill("setup-collection", setupCollectionSkillRaw),
+  parseBundledSkill(
+    "add-api-integration",
+    decodeBase64DataUrl(addApiIntegrationSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "add-processor",
+    decodeBase64DataUrl(addProcessorSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "advanced-chat-features",
+    decodeBase64DataUrl(advancedChatFeaturesSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "build-copilotz-system",
+    decodeBase64DataUrl(buildCopilotzSystemSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "configure-chat-ui",
+    decodeBase64DataUrl(configureChatUiSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "configure-mcp",
+    decodeBase64DataUrl(configureMcpSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "configure-rag",
+    decodeBase64DataUrl(configureRagSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "create-channel",
+    decodeBase64DataUrl(createChannelSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "create-embedding-provider",
+    decodeBase64DataUrl(createEmbeddingProviderSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "create-agent",
+    decodeBase64DataUrl(createAgentSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "create-feature",
+    decodeBase64DataUrl(createFeatureSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "create-llm-provider",
+    decodeBase64DataUrl(createLlmProviderSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "create-memory",
+    decodeBase64DataUrl(createMemorySkillDataUrl),
+  ),
+  parseBundledSkill(
+    "create-storage-adapter",
+    decodeBase64DataUrl(createStorageAdapterSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "create-tool",
+    decodeBase64DataUrl(createToolSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "debug-runtime-issue",
+    decodeBase64DataUrl(debugRuntimeIssueSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "explore-codebase",
+    decodeBase64DataUrl(exploreCodebaseSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "implement-feature",
+    decodeBase64DataUrl(implementFeatureSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "integrate-external-service",
+    decodeBase64DataUrl(integrateExternalServiceSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "multi-agent-setup",
+    decodeBase64DataUrl(multiAgentSetupSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "refactor-resource-architecture",
+    decodeBase64DataUrl(refactorResourceArchitectureSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "review-copilotz-project",
+    decodeBase64DataUrl(reviewCopilotzProjectSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "ship-chat-experience",
+    decodeBase64DataUrl(shipChatExperienceSkillDataUrl),
+  ),
+  parseBundledSkill(
+    "setup-collection",
+    decodeBase64DataUrl(setupCollectionSkillDataUrl),
+  ),
 ];
 
 function buildCoreTools(): ToolConfig[] {
@@ -280,11 +320,11 @@ function buildCoreMemory(): MemoryResource[] {
 
 function buildCoreProcessors(): ProcessorEntry[] {
   return [
-    toProcessorEntry("new_message", newMessageProcessor as any),
-    toProcessorEntry("llm_call", llmCallProcessor as any),
-    toProcessorEntry("llm_result", llmResultProcessor as any),
-    toProcessorEntry("tool_call", toolCallProcessor as any),
-    toProcessorEntry("tool_result", toolResultProcessor as any),
+    toProcessorEntry("new_message", newMessageProcessor as Record<string, unknown>),
+    toProcessorEntry("llm_call", llmCallProcessor as Record<string, unknown>),
+    toProcessorEntry("llm_result", llmResultProcessor as Record<string, unknown>),
+    toProcessorEntry("tool_call", toolCallProcessor as Record<string, unknown>),
+    toProcessorEntry("tool_result", toolResultProcessor as Record<string, unknown>),
   ];
 }
 

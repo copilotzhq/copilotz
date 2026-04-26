@@ -46,6 +46,7 @@ import {
   loadSkillFromUrl,
   mergeSkills,
 } from "@/runtime/loaders/skill-loader.ts";
+import { coreResources } from "@/resources/core.ts";
 import type {
   Agent,
   API,
@@ -1035,14 +1036,75 @@ export async function createCopilotz(
   // 1a. Load bundled resources from the library's own resources/ directory
   const bundledResourcesUrl = new URL("./resources/", import.meta.url).href;
   const bundledPresets = Array.from(
-    new Set(["core", ...(config.resources?.preset ?? [])]),
+    new Set([...(config.resources?.preset ?? []).filter((p) => p !== "core")]),
   );
+  // When core is loaded statically, we must avoid the manifest-loader default
+  // behavior of loading *everything* when no preset/imports selection is provided.
   const bundledImports = config.resources?.imports;
-  const bundledResources = await loadResources({
+  const effectiveBundledImports = (bundledPresets.length === 0 &&
+      (!bundledImports || bundledImports.length === 0))
+    ? ["tools.__none__"]
+    : bundledImports;
+  const dynamicallyLoadedBundledResources = await loadResources({
     path: bundledResourcesUrl,
     preset: bundledPresets,
-    imports: bundledImports,
+    imports: effectiveBundledImports,
   });
+  const bundledResources: Resources = {
+    ...dynamicallyLoadedBundledResources,
+    agents: [
+      ...(coreResources.agents ?? []),
+      ...(dynamicallyLoadedBundledResources.agents ?? []),
+    ],
+    tools: [
+      ...(coreResources.tools ?? []),
+      ...(dynamicallyLoadedBundledResources.tools ?? []),
+    ],
+    apis: [
+      ...(coreResources.apis ?? []),
+      ...(dynamicallyLoadedBundledResources.apis ?? []),
+    ],
+    mcpServers: [
+      ...(coreResources.mcpServers ?? []),
+      ...(dynamicallyLoadedBundledResources.mcpServers ?? []),
+    ],
+    memory: [
+      ...(coreResources.memory ?? []),
+      ...(dynamicallyLoadedBundledResources.memory ?? []),
+    ],
+    processors: [
+      ...(coreResources.processors ?? []),
+      ...(dynamicallyLoadedBundledResources.processors ?? []),
+    ],
+    features: [
+      ...(coreResources.features ?? []),
+      ...(dynamicallyLoadedBundledResources.features ?? []),
+    ],
+    channels: [
+      ...(coreResources.channels ?? []),
+      ...(dynamicallyLoadedBundledResources.channels ?? []),
+    ],
+    llm: [
+      ...(coreResources.llm ?? []),
+      ...(dynamicallyLoadedBundledResources.llm ?? []),
+    ],
+    embeddings: [
+      ...(coreResources.embeddings ?? []),
+      ...(dynamicallyLoadedBundledResources.embeddings ?? []),
+    ],
+    storage: [
+      ...(coreResources.storage ?? []),
+      ...(dynamicallyLoadedBundledResources.storage ?? []),
+    ],
+    collections: [
+      ...(coreResources.collections ?? []),
+      ...(dynamicallyLoadedBundledResources.collections ?? []),
+    ],
+    skills: [
+      ...(coreResources.skills ?? []),
+      ...(dynamicallyLoadedBundledResources.skills ?? []),
+    ],
+  };
   logInit("loadBundledResources", startedAt, {
     agents: bundledResources.agents?.length ?? 0,
     tools: bundledResources.tools?.length ?? 0,

@@ -56,7 +56,7 @@ export default {
     embeddings: ["openai"],
     storage: ["fs", "s3"],
     collections: ["participant", "message", "chunk", "document", "llm_usage"],
-    channels: ["web", "whatsapp", "zendesk"],
+    channels: ["web", "whatsapp", "zendesk", "discord", "telegram"],
     features: ["admin"],
     skills: [
       "add-api-integration",

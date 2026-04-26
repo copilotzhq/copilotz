@@ -335,9 +335,10 @@ box.
 
 ### Channels
 
-Pre-built ingress and egress adapters for Web (SSE), WhatsApp Cloud API, and
-Zendesk Sunshine. The route model is `ingress -> runtime -> egress`, so you can
-keep same-channel flows or mix transports like `/channels/web/to/zendesk`.
+Pre-built ingress and egress adapters for Web (SSE), WhatsApp Cloud API,
+Zendesk Sunshine, Discord (Interactions), and Telegram (Bot API). The route
+model is `ingress -> runtime -> egress`, so you can keep same-channel flows or
+mix transports like `/channels/web/to/zendesk`.
 
 ```typescript
 import { withApp } from "@copilotz/copilotz/server";
@@ -363,12 +364,16 @@ import {
   whatsappIngressAdapter,
   zendeskEgressAdapter,
   zendeskIngressAdapter,
+  discordEgressAdapter,
+  discordIngressAdapter,
+  telegramEgressAdapter,
+  telegramIngressAdapter,
 } from "@copilotz/copilotz/server/channels";
 ```
 
-**WhatsApp** and **Zendesk** adapters handle the full lifecycle internally —
-verify the webhook, parse the payload, run the agent, and push responses back to
-the platform API.
+**WhatsApp**, **Zendesk**, **Discord**, and **Telegram** adapters handle the
+full lifecycle internally — verify the webhook, parse the payload, run the
+agent, and push responses back to the platform API.
 
 ### Streaming
 
@@ -404,6 +409,7 @@ Seamless resolution for vision LLMs.
 **Resources & Extensibility**
 
 - [Resources](./docs/resources.md) — How the resource system works
+- [Channels Setup](./docs/channels-setup.md) — Set up Discord, Telegram, WhatsApp, etc.
 - [LLM Providers](./docs/llm-providers.md) — Built-in and custom LLM adapters
 - [Embeddings](./docs/embeddings.md) — Custom embedding providers
 - [Storage](./docs/storage.md) — Asset storage backends

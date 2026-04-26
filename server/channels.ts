@@ -234,6 +234,18 @@ export async function blobToBase64(blob: Blob): Promise<string> {
   return btoa(binary);
 }
 
+export function dataUrlToBlob(dataUrl: string): Blob {
+  const parts = dataUrl.split(",");
+  const mime = parts[0].match(/:(.*?);/)?.[1] || "application/octet-stream";
+  const bstr = atob(parts[1]);
+  let n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  while (n--) {
+    u8arr[n] = bstr.charCodeAt(n);
+  }
+  return new Blob([u8arr], { type: mime });
+}
+
 export function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let result = 0;
@@ -310,3 +322,17 @@ export function toAsyncIterable(
 ): AsyncIterable<unknown> {
   return events as AsyncIterable<unknown>;
 }
+
+// ---- Built-in Channel Adapters -------------------------------------------
+
+export { whatsappIngressAdapter } from "@/resources/channels/whatsapp/ingress.ts";
+export { whatsappEgressAdapter } from "@/resources/channels/whatsapp/egress.ts";
+
+export { zendeskIngressAdapter } from "@/resources/channels/zendesk/ingress.ts";
+export { zendeskEgressAdapter } from "@/resources/channels/zendesk/egress.ts";
+
+export { discordIngressAdapter } from "@/resources/channels/discord/ingress.ts";
+export { discordEgressAdapter } from "@/resources/channels/discord/egress.ts";
+
+export { telegramIngressAdapter } from "@/resources/channels/telegram/ingress.ts";
+export { telegramEgressAdapter } from "@/resources/channels/telegram/egress.ts";

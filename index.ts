@@ -1045,6 +1045,7 @@ export async function createCopilotz(
       (!bundledImports || bundledImports.length === 0))
     ? ["tools.__none__"]
     : bundledImports;
+
   const dynamicallyLoadedBundledResources = await loadResources({
     path: bundledResourcesUrl,
     preset: bundledPresets,

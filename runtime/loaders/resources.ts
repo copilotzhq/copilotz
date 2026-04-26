@@ -33,7 +33,7 @@ import type {
 import type { Skill } from "@/runtime/loaders/skill-types.ts";
 import { loadSkillsFromDirectory } from "@/runtime/loaders/skill-loader.ts";
 
-import { fromFileUrl, resolve } from "jsr:@std/path@^1.0.0";
+import { fromFileUrl, resolve } from "@std/path";
 
 // ---- Types ----------------------------------------------------------------
 

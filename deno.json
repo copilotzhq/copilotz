@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.34.7",
+  "version": "0.34.8",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -35,7 +35,10 @@
     "omnipg": "jsr:@oxian/ominipg@0.5.10",
     "ulid": "jsr:@std/ulid@1.0.0",
     "yaml": "npm:yaml@2.8.0",
-    "zod": "npm:zod@3.24.8"
+    "zod": "npm:zod@3.23.8"
+  },
+  "tasks": {
+    "gen:skills": "deno run -A scripts/generate-skill-js.ts"
   },
   "lock": false
 }

@@ -1,5 +1,6 @@
 import { generateAllApiTools } from "@/runtime/api/index.ts";
 import { generateAllMcpTools } from "@/runtime/mcp/index.ts";
+import { getUserExternalId } from "@/runtime/memory/identity.ts";
 
 import type {
   Agent,
@@ -56,6 +57,8 @@ export interface ToolExecutionContext extends ChatContext {
   senderId?: string;
   senderType?: "user" | "agent" | "tool" | "system";
   threadId?: string;
+  /** The external ID of the human user in this conversation. Resolved from thread metadata by the framework. */
+  userExternalId?: string;
   agents?: Agent[];
   db?: CopilotzDb;
   embeddingConfig?: {
@@ -125,7 +128,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
   {
     shouldProcess: () => true,
     process: async (event: Event, deps: ProcessorDeps) => {
-      const { db, thread: _thread, context } = deps;
+      const { db, thread, context } = deps;
       assertToolCallPayload(event.payload);
       const payload = event.payload;
 
@@ -183,6 +186,9 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
         allowedKeys.map((key: string) => allTools.find((t) => t.key === key))
           .filter(hasExecute) || [];
 
+      // Resolve the human user's external ID from normalized thread metadata
+      const resolvedUserExternalId = getUserExternalId(thread?.metadata) ?? undefined;
+
       const results = await processToolCalls(
         [payload.toolCall],
         agentTools,
@@ -192,6 +198,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
             (agent ? (agent.id ?? agent.name) : payload.senderId) as string,
           senderType: "agent",
           threadId,
+          userExternalId: resolvedUserExternalId,
           agents: availableAgents,
           tools: allTools,
           db,

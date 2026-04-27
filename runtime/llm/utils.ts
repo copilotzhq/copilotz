@@ -14,7 +14,10 @@ import type {
 } from "@/runtime/llm/types.ts";
 
 const TOOL_RESULTS_CONTINUATION_CUE = "<continue_after_tool_results/>";
-const LOCAL_DEFAULT_STOP_SEQUENCES = ["<function_results>"];
+const LOCAL_DEFAULT_STOP_SEQUENCES = [
+  "<function_results>",
+  "</function_results>",
+];
 const TOOL_RESULTS_CONTINUATION_BLOCK = `<continue_after_tool_results>
 Continue based on the function results above.
 Do not repeat the previous assistant message.
@@ -935,7 +938,6 @@ export function parseToolCallsFromResponse(
   //    then synthetically append the closing tag to allow the standard parser to run.
   const startTag = "<function_calls>";
   const endTag = "</function_calls>";
-
   const hasStart = response.includes(startTag);
   const hasEnd = response.includes(endTag);
 
@@ -949,6 +951,7 @@ export function parseToolCallsFromResponse(
         // Reconstruct a closed block to be parsed by the standard path
         const rebuilt = response.slice(0, startIdx) + startTag + after + endTag;
         response = rebuilt;
+        cleanResponse = rebuilt;
       }
     }
   }

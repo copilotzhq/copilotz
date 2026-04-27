@@ -1,6 +1,10 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import { formatMessages } from "./utils.ts";
+import {
+  formatMessages,
+  getLocalStopSequences,
+  parseToolCallsFromResponse,
+} from "./utils.ts";
 
 Deno.test("formatMessages limits non-system history using estimated input tokens", () => {
   const formatted = formatMessages({
@@ -70,5 +74,26 @@ Deno.test("formatMessages trims the oldest included text message to fit the rema
       { role: "user", content: "5678" },
       { role: "assistant", content: "abcdefghijkl" },
     ],
+  );
+});
+
+Deno.test("getLocalStopSequences stops both function results tag forms", () => {
+  assertEquals(
+    getLocalStopSequences(),
+    ["<function_results>", "</function_results>"],
+  );
+});
+
+Deno.test("parseToolCallsFromResponse strips incomplete function calls after local stop", () => {
+  const parsed = parseToolCallsFromResponse(
+    '<function_calls>\n{"name":"saveThreadContext","arguments":{"threadData":{"step":"Direção Criativa"}}}\n',
+  );
+
+  assertEquals(parsed.cleanResponse, "");
+  assertEquals(parsed.tool_calls.length, 1);
+  assertEquals(parsed.tool_calls[0].tool.id, "saveThreadContext");
+  assertEquals(
+    JSON.parse(parsed.tool_calls[0].args as string),
+    { threadData: { step: "Direção Criativa" } },
   );
 });

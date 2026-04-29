@@ -18,6 +18,9 @@ interface ToolContext {
   senderId?: string;
   threadId?: string;
   namespace?: string;
+  onCancel?: (cb: () => void) => () => void;
+  cancelled?: boolean;
+  cancelReason?: string;
   db?: {
     ops: {
       getThreadById: (id: string) => Promise<
@@ -310,12 +313,12 @@ async function ensureSession(
 async function readOutputUntil(
   session: SessionRecord,
   uuid: string,
-  timeoutMs: number,
+  timeoutMs?: number,
 ): Promise<{ output: string; exitCode: number | null }> {
   const markerPrefix = `__COPILOTZ_END_${uuid}__:`;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = typeof timeoutMs === "number" ? Date.now() + timeoutMs : null;
 
-  while (Date.now() <= deadline) {
+  while (deadline === null || Date.now() <= deadline) {
     const idx = session.outputBuffer.indexOf(markerPrefix);
     if (idx !== -1) {
       const lineEnd = session.outputBuffer.indexOf("\n", idx);
@@ -336,7 +339,10 @@ async function readOutputUntil(
     await sleep(25);
   }
 
-  throw new Error(`Command timed out after ${timeoutMs / 1000} seconds`);
+  if (typeof timeoutMs === "number") {
+    throw new Error(`Command timed out after ${timeoutMs / 1000} seconds`);
+  }
+  throw new Error("Command timed out");
 }
 
 // ---------------------------------------------------------------------------
@@ -404,7 +410,7 @@ const persistentTerminalTool: NewTool = {
       action,
       command,
       cwd,
-      timeout = 30,
+      timeout,
       scope = "agent",
       project: explicitProject,
     }: PersistentTerminalParams,
@@ -501,6 +507,15 @@ const persistentTerminalTool: NewTool = {
       throw new Error("'command' is required when action is 'run'.");
     }
 
+    const unsubscribeCancel = context?.onCancel?.(() => {
+      // Close session on cancellation so the read loop stops promptly.
+      // This keeps cancellation semantics consistent with other tools.
+      closeSession(key).catch(() => undefined);
+    });
+    if (context?.cancelled) {
+      closeSession(key).catch(() => undefined);
+    }
+
     const session = await ensureSession(
       key,
       workspaceRoot,
@@ -525,29 +540,26 @@ const persistentTerminalTool: NewTool = {
 
     try {
       await session.writer.write(textEncoder.encode(fullCommand));
-      const result = await readOutputUntil(session, uuid, timeout * 1000);
+      const timeoutMs = typeof timeout === "number" ? timeout * 1000 : undefined;
+      const result = await readOutputUntil(session, uuid, timeoutMs);
       return {
-        success: true,
-        sessionKey: key,
-        scope,
-        namespace,
-        project,
-        agentId,
-        workspaceRoot: session.workspaceRoot,
-        command,
         output: result.output,
         exitCode: result.exitCode,
-        commandSucceeded: result.exitCode === 0,
       };
     } catch (error) {
       const message = (error as Error).message;
       if (message.includes("timed out") || message.includes("timeout")) {
         await closeSession(key);
+        const timeoutText = typeof timeout === "number"
+          ? `${timeout}s`
+          : "the configured timeout";
         throw new Error(
-          `Command timed out after ${timeout}s. Terminal session was closed. Restart with action='restart' to continue.`,
+          `Command timed out after ${timeoutText}. Terminal session was closed. Restart with action='restart' to continue.`,
         );
       }
       throw new Error(`Terminal execution failed: ${message}`);
+    } finally {
+      unsubscribeCancel?.();
     }
   },
 };

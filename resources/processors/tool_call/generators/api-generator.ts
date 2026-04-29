@@ -437,9 +437,13 @@ function createApiExecutor(
 ) {
   return async (
     args: unknown,
-    _context?: unknown,
+    context?: unknown,
   ) => {
     try {
+      const cancelCtx = context as {
+        onCancel?: (cb: () => void) => () => void;
+        cancelled?: boolean;
+      } | undefined;
       const params = (args && typeof args === "object")
         ? args as Record<string, unknown>
         : {};
@@ -519,17 +523,19 @@ function createApiExecutor(
         }
       }
 
-      // Set timeout
+      // Set cancellation / timeout
       const controller = new AbortController();
-      const timeoutId = setTimeout(
-        () => controller.abort(),
-        (apiConfig.timeout || 30) * 1000,
-      );
+      const unsubscribe = cancelCtx?.onCancel?.(() => controller.abort());
+      const timeoutId = typeof apiConfig.timeout === "number" && apiConfig.timeout > 0
+        ? setTimeout(() => controller.abort(), apiConfig.timeout * 1000)
+        : undefined;
       requestOptions.signal = controller.signal;
+      if (cancelCtx?.cancelled) controller.abort();
 
       // Make the request
       const response = await fetch(url, requestOptions);
-      clearTimeout(timeoutId);
+      if (timeoutId) clearTimeout(timeoutId);
+      unsubscribe?.();
 
       // Parse response
       const contentType = response.headers.get("content-type") || "";
@@ -564,7 +570,9 @@ function createApiExecutor(
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         throw new Error(
-          `Request timeout after ${apiConfig.timeout || 30} seconds`,
+          typeof apiConfig.timeout === "number"
+            ? `Request timeout after ${apiConfig.timeout} seconds`
+            : `Request cancelled`,
         );
       }
       throw error;

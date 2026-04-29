@@ -39,7 +39,10 @@ export default {
         },
         required: ["url"],
     },
-    execute: async ({ url, method = "GET", headers = {}, body, timeout = 30 }: HttpRequestParams) => {
+    execute: async (
+        { url, method = "GET", headers = {}, body, timeout }: HttpRequestParams,
+        context?: { onCancel?: (cb: () => void) => () => void; cancelled?: boolean },
+    ) => {
         try {
             // Validate URL
             new URL(url);
@@ -55,9 +58,13 @@ export default {
                 requestHeaders["Content-Type"] = "application/json";
             }
             
-            // Create abort controller for timeout
+            // Create abort controller (framework cancels via context.onCancel)
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), timeout * 1000);
+            const unsubscribe = context?.onCancel?.(() => controller.abort());
+            const timeoutId = typeof timeout === "number" && timeout > 0
+                ? setTimeout(() => controller.abort(), timeout * 1000)
+                : undefined;
+            if (context?.cancelled) controller.abort();
             
             const startTime = Date.now();
             const response = await fetch(url, {
@@ -67,7 +74,8 @@ export default {
                 signal: controller.signal
             });
             
-            clearTimeout(timeoutId);
+            if (timeoutId) clearTimeout(timeoutId);
+            unsubscribe?.();
             
             // Get response content
             const contentType = response.headers.get("content-type") || "";
@@ -89,7 +97,11 @@ export default {
             };
         } catch (error) {
             if ((error as Error).name === "AbortError") {
-                throw new Error(`Request timeout after ${timeout} seconds`);
+                throw new Error(
+                    typeof timeout === "number"
+                        ? `Request timeout after ${timeout} seconds`
+                        : `Request cancelled`,
+                );
             }
             throw new Error(`HTTP request failed: ${(error as Error).message}`);
         }

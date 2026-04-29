@@ -8,6 +8,7 @@ interface WriteFileParams {
 
 import {
   ensureSnapshot,
+  listSnapshots,
   readWorkspaceFile,
   writeWorkspaceFile,
 } from "@/resources/tools/_shared/fs-utils.ts";
@@ -16,17 +17,13 @@ export default {
   key: "write_file",
   name: "Write File",
   description:
-    "Write or append UTF-8 text inside the current workspace, capturing a restorable snapshot before edits.",
+    "Write or append UTF-8 text inside the current workspace, capturing a restorable snapshot before edits. " +
+    "Use apply_patch instead when modifying an existing file.",
   inputSchema: {
     type: "object",
     properties: {
       path: { type: "string", description: "Path to the file to write." },
       content: { type: "string", description: "Content to write to the file." },
-      encoding: {
-        type: "string",
-        description: "Text encoding (always utf8 for text files).",
-        default: "utf8",
-      },
       createDirs: {
         type: "boolean",
         description: "Create parent directories if they don't exist.",
@@ -48,6 +45,13 @@ export default {
     append = false,
   }: WriteFileParams) => {
     try {
+      // Warn if overwriting an existing file that was not read in this session.
+      // listSnapshots returns snapshots accumulated during this session (from reads/prior writes).
+      // If none exist yet, the agent hasn't touched this file — check after write whether
+      // the file actually existed on disk (snapshotId will be non-null if it did).
+      const priorSnapshots = listSnapshots(path);
+      const hadPriorSnapshot = priorSnapshots.length > 0;
+
       let nextContent = content;
       if (append) {
         await ensureSnapshot(path, "append");
@@ -66,11 +70,19 @@ export default {
         snapshotLabel: append ? "append" : "write_file",
       });
 
+      // snapshotId is non-null when the file existed on disk before the write
+      const fileExistedOnDisk = written.snapshotId !== null;
+      const overwroteUnread = fileExistedOnDisk && !hadPriorSnapshot && !append;
+
       return {
-        ...written,
-        encoding: "utf8",
-        created: createDirs,
+        relativePath: written.relativePath,
+        snapshotId: written.snapshotId,
+        created: !fileExistedOnDisk,
         appended: append,
+        ...(overwroteUnread && {
+          warning:
+            "This file was not read before writing. Its previous content has been replaced. Use restore_file_version to undo if needed.",
+        }),
       };
     } catch (error) {
       throw new Error(`Failed to write file: ${(error as Error).message}`);

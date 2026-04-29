@@ -68,6 +68,17 @@ export interface ToolExecutionContext extends ChatContext {
     baseUrl?: string;
     dimensions?: number;
   };
+  /**
+   * Register a callback that will be invoked if the framework cancels
+   * the current tool execution (e.g. due to timeout).
+   *
+   * @returns unsubscribe function
+   */
+  onCancel?: (cb: () => void) => () => void;
+  /** Whether the current tool execution has been cancelled. */
+  cancelled?: boolean;
+  /** Optional cancellation reason (e.g. "timeout"). */
+  cancelReason?: string;
   // Collections is inherited from ChatContext, but we re-declare for clarity
   // collections?: CollectionsManager;
 }
@@ -75,11 +86,68 @@ export interface ToolExecutionContext extends ChatContext {
 type ProcessedToolCallResult = {
   tool_call_id?: string;
   name: string;
+  status?: "completed" | "failed" | "cancelled";
   output?: unknown;
   error?: unknown;
   historyVisibility?: ToolHistoryVisibility;
   projectedOutput?: unknown;
 };
+
+type ToolCancelReason = "timeout" | "abort" | string;
+
+function createToolCancellation() {
+  let cancelled = false;
+  let reason: ToolCancelReason | undefined = undefined;
+  const callbacks = new Set<() => void>();
+
+  const onCancel = (cb: () => void): (() => void) => {
+    if (cancelled) {
+      try {
+        cb();
+      } catch { /* ignore */ }
+      return () => {};
+    }
+    callbacks.add(cb);
+    return () => callbacks.delete(cb);
+  };
+
+  const cancel = (r: ToolCancelReason): void => {
+    if (cancelled) return;
+    cancelled = true;
+    reason = r;
+    for (const cb of Array.from(callbacks)) {
+      try {
+        cb();
+      } catch { /* ignore */ }
+    }
+    callbacks.clear();
+  };
+
+  return {
+    get cancelled() {
+      return cancelled;
+    },
+    get reason() {
+      return reason;
+    },
+    onCancel,
+    cancel,
+  };
+}
+
+function resolveToolTimeoutMs(
+  toolKey: string,
+  context: ToolExecutionContext,
+): number | undefined {
+  const overrides = context.toolExecutionTimeoutsMs;
+  if (
+    overrides && typeof overrides === "object" &&
+    Object.prototype.hasOwnProperty.call(overrides, toolKey)
+  ) {
+    return overrides[toolKey];
+  }
+  return context.toolExecutionTimeoutMs;
+}
 
 function assertToolCallPayload(
   payload: unknown,
@@ -248,7 +316,8 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
         toolCallId: callId,
         tool: { id: call.tool.id, name: call.tool.name },
         args: call.args,
-        status: error ? "failed" : "completed",
+        status: result.status ??
+          (error ? "failed" : "completed"),
         ...(typeof output !== "undefined" ? { output } : {}),
         ...(typeof result.projectedOutput !== "undefined"
           ? { projectedOutput: result.projectedOutput }
@@ -446,8 +515,43 @@ export const processToolCalls = async (
       }
 
       // Execute the tool
+      const cancellation = createToolCancellation();
+      const timeoutMs = resolveToolTimeoutMs(name, context);
+
+      const toolContext: ToolExecutionContext = {
+        ...context,
+        onCancel: cancellation.onCancel,
+        cancelled: false,
+        cancelReason: undefined,
+      };
+
+      const cancelWithContext = (reason: ToolCancelReason) => {
+        toolContext.cancelled = true;
+        toolContext.cancelReason = reason;
+        cancellation.cancel(reason);
+      };
+
+      let timer: number | undefined = undefined;
+      if (
+        typeof timeoutMs === "number" && Number.isFinite(timeoutMs) &&
+        timeoutMs > 0
+      ) {
+        timer = setTimeout(() => cancelWithContext("timeout"), timeoutMs) as unknown as number;
+      }
+
+      const cancelPromise = new Promise<never>((_, reject) => {
+        toolContext.onCancel?.(() => {
+          const r = toolContext.cancelReason ?? "cancelled";
+          reject(new Error(`Tool execution cancelled (${r})`));
+        });
+      });
+
       try {
-        const output = await tool.execute(args, context);
+        const execPromise = Promise.resolve().then(() =>
+          tool.execute(args, toolContext)
+        );
+        const output = await Promise.race([execPromise, cancelPromise]);
+
         const { visibility, projectedOutput } = await projectToolResultForHistory(
           tool,
           args,
@@ -458,31 +562,42 @@ export const processToolCalls = async (
         return {
           tool_call_id: toolCall.id,
           name,
+          status: "completed",
           output,
           historyVisibility: visibility,
           ...(typeof projectedOutput !== "undefined"
             ? { projectedOutput }
             : {}),
-        };
+        } satisfies ProcessedToolCallResult;
       } catch (error) {
-        const errorMessage = `EXECUTION ERROR: ${
-          error instanceof Error ? error.message : String(error)
-        }`;
+        const isTimeout = Boolean(
+          cancellation.cancelled && cancellation.reason === "timeout",
+        );
+        const errorMessage = isTimeout
+          ? `EXECUTION CANCELLED: Tool execution timed out after ${Math.round((timeoutMs ?? 0) / 1000)}s`
+          : `EXECUTION ERROR: ${
+            error instanceof Error ? error.message : String(error)
+          }`;
+
         const { visibility, projectedOutput } = await projectToolResultForHistory(
           tool,
           args,
           undefined,
           errorMessage,
         );
+
         return {
           tool_call_id: toolCall.id,
           name,
+          status: isTimeout ? "cancelled" : "failed",
           error: errorMessage,
           historyVisibility: visibility,
           ...(typeof projectedOutput !== "undefined"
             ? { projectedOutput }
             : {}),
-        };
+        } satisfies ProcessedToolCallResult;
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     }),
   );

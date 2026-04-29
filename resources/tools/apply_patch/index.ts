@@ -13,7 +13,9 @@ export default {
   key: "apply_patch",
   name: "Apply Patch",
   description:
-    "Apply targeted text edits to a file while capturing a restorable snapshot first. All operations use text-anchored matching (substring, not line-number based).",
+    "Apply targeted text edits to a file while capturing a restorable snapshot first. " +
+    "All operations use text-anchored matching — not line numbers. " +
+    "Always read the file first so your anchor text is current.",
   inputSchema: {
     type: "object",
     properties: {
@@ -25,60 +27,42 @@ export default {
         type: "array",
         description: "Ordered patch operations to apply.",
         items: {
-          oneOf: [
-            {
-              type: "object",
-              description:
-                "Replace a unique substring with new text. The oldText must appear exactly once unless replaceAll is true.",
-              properties: {
-                type: { type: "string", const: "replace" },
-                oldText: {
-                  type: "string",
-                  description: "Unique substring to find (any portion of the file, not limited to full lines).",
-                },
-                newText: { type: "string", description: "Replacement text." },
-                replaceAll: {
-                  type: "boolean",
-                  description: "If true, replace every occurrence of oldText.",
-                },
-              },
-              required: ["type", "oldText", "newText"],
+          type: "object",
+          description:
+            "A patch operation. Set 'type' to one of: 'replace', 'insert_before', 'insert_after'.\n" +
+            "- replace: requires 'oldText' (unique substring to find) and 'newText' (replacement). " +
+            "Set 'replaceAll: true' to replace every occurrence.\n" +
+            "- insert_before: requires 'anchor' (unique substring) and 'content' (text to insert before it).\n" +
+            "- insert_after: requires 'anchor' (unique substring) and 'content' (text to insert after it).\n" +
+            "If the target text is not found, use search_code to locate the exact string first.",
+          properties: {
+            type: {
+              type: "string",
+              enum: ["replace", "insert_before", "insert_after"],
+              description: "Operation type.",
             },
-            {
-              type: "object",
-              description:
-                "Insert content immediately before a unique anchor substring.",
-              properties: {
-                type: { type: "string", const: "insert_before" },
-                anchor: {
-                  type: "string",
-                  description: "Unique substring to locate the insertion point.",
-                },
-                content: {
-                  type: "string",
-                  description: "Text to insert before the anchor.",
-                },
-              },
-              required: ["type", "anchor", "content"],
+            oldText: {
+              type: "string",
+              description: "For 'replace': the unique substring to find. Must appear exactly once unless replaceAll is true.",
             },
-            {
-              type: "object",
-              description:
-                "Insert content immediately after a unique anchor substring.",
-              properties: {
-                type: { type: "string", const: "insert_after" },
-                anchor: {
-                  type: "string",
-                  description: "Unique substring to locate the insertion point.",
-                },
-                content: {
-                  type: "string",
-                  description: "Text to insert after the anchor.",
-                },
-              },
-              required: ["type", "anchor", "content"],
+            newText: {
+              type: "string",
+              description: "For 'replace': the replacement text.",
             },
-          ],
+            replaceAll: {
+              type: "boolean",
+              description: "For 'replace': if true, replace every occurrence of oldText.",
+            },
+            anchor: {
+              type: "string",
+              description: "For 'insert_before'/'insert_after': the unique substring that marks the insertion point.",
+            },
+            content: {
+              type: "string",
+              description: "For 'insert_before'/'insert_after': the text to insert.",
+            },
+          },
+          required: ["type"],
         },
       },
     },
@@ -87,7 +71,9 @@ export default {
   execute: async ({ path, operations }: ApplyPatchParams) => {
     const result = await applyWorkspacePatch(path, operations);
     return {
-      ...result,
+      relativePath: result.relativePath,
+      snapshotId: result.snapshotId,
+      applied: result.applied,
       summary: summarizePatchOperations(operations),
     };
   },

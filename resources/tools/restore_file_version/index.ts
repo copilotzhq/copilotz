@@ -25,6 +25,10 @@ export default {
     required: ["path"],
   },
   execute: async ({ path, snapshotId }: RestoreFileVersionParams) => {
-    return await restoreWorkspaceFileVersion(path, snapshotId);
+    const result = await restoreWorkspaceFileVersion(path, snapshotId);
+    return {
+      relativePath: result.relativePath,
+      restoredFromSnapshotId: result.restoredFromSnapshotId,
+    };
   },
 };

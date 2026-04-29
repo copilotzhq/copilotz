@@ -709,6 +709,20 @@ export interface ChatContext {
   threadMetadata?: Record<string, unknown>;
   /** TTL for queue items in milliseconds. */
   queueTTL?: number;
+  /**
+   * Default maximum wall-clock time for a single tool execution (in milliseconds).
+   *
+   * - Default (when omitted at createCopilotz): 300_000 (5 minutes)
+   * - `undefined`: disable the framework timeout
+   */
+  toolExecutionTimeoutMs?: number | undefined;
+  /**
+   * Per-tool execution timeout overrides (in milliseconds), keyed by tool key.
+   *
+   * If a key is present, it takes precedence over `toolExecutionTimeoutMs`.
+   * A value of `undefined` disables the framework timeout for that tool key.
+   */
+  toolExecutionTimeoutsMs?: Record<string, number | undefined>;
   /** User metadata. */
   userMetadata?: Record<string, unknown>;
   /** Hook for rewriting generated message history before the LLM call. */

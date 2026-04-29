@@ -7,12 +7,16 @@ interface SearchFilesParams {
   includeHidden?: boolean;
   maxDepth?: number;
   maxResults?: number;
+  excludePatterns?: string[];
+  includeAll?: boolean;
 }
 
 export default {
   key: "search_files",
   name: "Search Files",
-  description: "Search for files by name pattern in the current workspace.",
+  description:
+    "Search for files by name pattern in the current workspace. " +
+    "Common noise directories (node_modules, .git, dist, etc.) are excluded by default.",
   inputSchema: {
     type: "object",
     properties: {
@@ -23,8 +27,7 @@ export default {
       },
       pattern: {
         type: "string",
-        description:
-          "File name pattern to search for (supports * and ? wildcards).",
+        description: "File name pattern to search for (supports * and ? wildcards).",
       },
       recursive: {
         type: "boolean",
@@ -46,6 +49,16 @@ export default {
         description: "Maximum number of matching files to return.",
         default: 50,
       },
+      excludePatterns: {
+        type: "array",
+        items: { type: "string" },
+        description: "Additional directory names to exclude (exact match).",
+      },
+      includeAll: {
+        type: "boolean",
+        description: "Disable default directory exclusions and search everything.",
+        default: false,
+      },
     },
     required: ["pattern"],
   },
@@ -56,6 +69,8 @@ export default {
     includeHidden = false,
     maxDepth = 5,
     maxResults = 50,
+    excludePatterns = [],
+    includeAll = false,
   }: SearchFilesParams) => {
     try {
       const regex = globToRegex(pattern);
@@ -63,24 +78,30 @@ export default {
         recursive,
         showHidden: includeHidden,
         maxDepth,
+        excludePatterns,
+        includeAll,
       });
 
       const limit = Math.max(1, maxResults);
       const results = [];
       for (const entry of listing.entries) {
         if (entry.type === "file" && regex.test(entry.name)) {
-          results.push(entry);
+          results.push({ name: entry.name, relativePath: entry.relativePath });
           if (results.length >= limit) break;
         }
       }
 
+      const truncated = results.length >= limit;
+
       return {
-        directory: listing.path,
+        directory: listing.relativePath,
         pattern,
-        recursive,
         results,
         count: results.length,
-        truncated: results.length >= limit,
+        truncated,
+        ...(truncated && {
+          suggestion: "Results were truncated. Narrow the search with a more specific directory or reduce maxDepth.",
+        }),
       };
     } catch (error) {
       throw new Error(`File search failed: ${(error as Error).message}`);

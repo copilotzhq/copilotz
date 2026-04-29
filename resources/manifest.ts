@@ -4,7 +4,7 @@
  */
 export default {
   provides: {
-    agents: ["copilotz"],
+    agents: ["copilotz", "west", "north", "east", "south"],
     tools: [
       "delegate",
       "create_thread",
@@ -134,6 +134,37 @@ export default {
       "tools.fetch_text",
       "tools.run_command",
       "tools.wait",
+      "tools.http_request",
+      "tools.get_current_time",
+    ],
+    "skunk-works": [
+      // Agents (west first = default routing target)
+      "agents.west",
+      "agents.north",
+      "agents.east",
+      "agents.south",
+      // Tools
+      "tools.delegate",
+      "tools.create_thread",
+      "tools.end_thread",
+      "tools.fetch_text",
+      "tools.http_request",
+      "tools.get_current_time",
+      "tools.read_file",
+      "tools.write_file",
+      "tools.apply_patch",
+      "tools.show_file_diff",
+      "tools.restore_file_version",
+      "tools.list_directory",
+      "tools.search_files",
+      "tools.search_code",
+      "tools.run_command",
+      "tools.wait",
+      "tools.persistent_terminal",
+      "tools.list_skills",
+      "tools.load_skill",
+      "tools.read_skill_resource",
+      "tools.update_my_memory",
     ],
   },
 };

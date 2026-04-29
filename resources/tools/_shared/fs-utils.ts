@@ -39,9 +39,9 @@ export interface SearchCodeResult {
   relativePath: string;
   matches: Array<{
     line: number;
-    column: number;
+    column?: number;
     text: string;
-    match: string;
+    match?: string;
   }>;
 }
 
@@ -83,6 +83,22 @@ type FileVersionStore = Map<string, FileSnapshot[]>;
 const GLOBAL_SNAPSHOT_KEY = "__copilotz_file_snapshots__";
 const MAX_SNAPSHOTS_PER_FILE = 20;
 const BINARY_BYTE_LIMIT = 200_000;
+
+const DEFAULT_EXCLUDE_DIRS = new Set([
+  "node_modules", ".git", "dist", "build", ".deno", "__pycache__",
+  ".next", ".cache", "coverage", ".turbo", ".svelte-kit", "out",
+  ".output", ".nuxt", ".vite", ".parcel-cache", ".webpack",
+]);
+
+function isExcludedDir(
+  name: string,
+  extraExcludes: string[],
+  includeAll: boolean,
+): boolean {
+  if (includeAll) return false;
+  if (DEFAULT_EXCLUDE_DIRS.has(name)) return true;
+  return extraExcludes.includes(name);
+}
 
 function getDeno(): DenoLike {
   const denoNs = (globalThis as unknown as { Deno?: DenoLike }).Deno;
@@ -297,7 +313,14 @@ export function globToRegex(pattern: string): RegExp {
 
 export async function listWorkspaceDirectory(
   inputPath = ".",
-  options: { recursive?: boolean; showHidden?: boolean; maxDepth?: number } = {},
+  options: {
+    recursive?: boolean;
+    showHidden?: boolean;
+    maxDepth?: number;
+    excludePatterns?: string[];
+    includeAll?: boolean;
+    details?: boolean;
+  } = {},
 ): Promise<{
   path: string;
   relativePath: string;
@@ -319,16 +342,20 @@ export async function listWorkspaceDirectory(
     size?: number;
   }> = [];
   const maxDepth = Math.max(0, options.maxDepth ?? 3);
+  const extraExcludes = options.excludePatterns ?? [];
+  const includeAll = options.includeAll ?? false;
+  const details = options.details ?? false;
 
   const visit = async (absolutePath: string, depth: number): Promise<void> => {
     for await (const entry of denoNs.readDir!(absolutePath)) {
       if (!options.showHidden && entry.name.startsWith(".")) continue;
+      if (entry.isDirectory && isExcludedDir(entry.name, extraExcludes, includeAll)) continue;
       const childPath = resolve(absolutePath, entry.name);
       const child = resolveWorkspacePath(childPath);
       const type = entry.isDirectory ? "directory" : "file";
       let size: number | undefined;
 
-      if (type === "file" && denoNs.stat) {
+      if (details && type === "file" && denoNs.stat) {
         try {
           const stat = await denoNs.stat(child.resolvedPath);
           size = stat.size;
@@ -390,11 +417,16 @@ export async function searchWorkspaceCode(options: {
   maxResults?: number;
   maxMatchesPerFile?: number;
   maxDepth?: number;
+  excludePatterns?: string[];
+  includeAll?: boolean;
+  includeColumn?: boolean;
+  includeMatch?: boolean;
 }): Promise<{
   directory: string;
   query: string;
-  regex: string;
   results: SearchCodeResult[];
+  truncated: boolean;
+  suggestion?: string;
 }> {
   const denoNs = getDeno();
   const directory = resolveWorkspacePath(options.directory ?? ".");
@@ -402,33 +434,29 @@ export async function searchWorkspaceCode(options: {
     validateRegexPattern(options.query);
   }
   const regex = options.isRegex
-    ? new RegExp(
-      options.query,
-      options.caseSensitive ? "g" : "gi",
-    )
-    : new RegExp(
-      escapeRegex(options.query),
-      options.caseSensitive ? "g" : "gi",
-    );
-  const filePattern = options.filePattern
-    ? globToRegex(options.filePattern)
-    : null;
-  const maxResults = Math.max(1, options.maxResults ?? 25);
-  const maxMatchesPerFile = Math.max(1, options.maxMatchesPerFile ?? 20);
-  const maxDepth = Math.max(0, options.maxDepth ?? 10);
+    ? new RegExp(options.query, options.caseSensitive ? "g" : "gi")
+    : new RegExp(escapeRegex(options.query), options.caseSensitive ? "g" : "gi");
+  const filePattern = options.filePattern ? globToRegex(options.filePattern) : null;
+  const maxResults = Math.max(1, options.maxResults ?? 15);
+  const maxMatchesPerFile = Math.max(1, options.maxMatchesPerFile ?? 10);
+  const maxDepth = Math.max(0, options.maxDepth ?? 5);
+  const extraExcludes = options.excludePatterns ?? [];
+  const includeAll = options.includeAll ?? false;
+  const includeColumn = options.includeColumn ?? false;
+  const includeMatch = options.includeMatch ?? false;
   const results: SearchCodeResult[] = [];
+  let truncated = false;
 
   const visit = async (absolutePath: string, depth: number): Promise<void> => {
-    if (results.length >= maxResults) return;
+    if (truncated) return;
     for await (const entry of denoNs.readDir!(absolutePath)) {
       if (!options.includeHidden && entry.name.startsWith(".")) continue;
       const childPath = resolve(absolutePath, entry.name);
       const child = resolveWorkspacePath(childPath);
       if (entry.isDirectory) {
-        if (depth < maxDepth) {
-          await visit(child.resolvedPath, depth + 1);
-        }
-        if (results.length >= maxResults) return;
+        if (isExcludedDir(entry.name, extraExcludes, includeAll)) continue;
+        if (depth < maxDepth) await visit(child.resolvedPath, depth + 1);
+        if (truncated) return;
         continue;
       }
       if (filePattern && !filePattern.test(entry.name)) continue;
@@ -446,40 +474,38 @@ export async function searchWorkspaceCode(options: {
       for (let index = 0; index < lines.length; index++) {
         const line = lines[index] ?? "";
         regex.lastIndex = 0;
-        let match: RegExpExecArray | null;
-        while ((match = regex.exec(line)) !== null) {
-          matches.push({
-            line: index + 1,
-            column: match.index + 1,
-            text: line,
-            match: match[0] ?? "",
-          });
+        let m: RegExpExecArray | null;
+        while ((m = regex.exec(line)) !== null) {
+          const entry: SearchCodeResult["matches"][number] = { line: index + 1, text: line };
+          if (includeColumn) entry.column = m.index + 1;
+          if (includeMatch) entry.match = m[0] ?? "";
+          matches.push(entry);
           if (matches.length >= maxMatchesPerFile) break;
-          if (match.index === regex.lastIndex) {
-            regex.lastIndex += 1;
-          }
+          if (m.index === regex.lastIndex) regex.lastIndex += 1;
         }
         if (matches.length >= maxMatchesPerFile) break;
       }
 
       if (matches.length > 0) {
-        results.push({
-          path: child.resolvedPath,
-          relativePath: child.relativePath,
-          matches,
-        });
+        results.push({ path: child.resolvedPath, relativePath: child.relativePath, matches });
+        if (results.length >= maxResults) {
+          truncated = true;
+          return;
+        }
       }
-      if (results.length >= maxResults) return;
     }
   };
 
   await visit(directory.resolvedPath, 0);
 
   return {
-    directory: directory.resolvedPath,
+    directory: directory.relativePath,
     query: options.query,
-    regex: regex.source,
     results,
+    truncated,
+    suggestion: truncated
+      ? "Results were truncated. Narrow the search with a more specific directory or filePattern, or increase maxResults."
+      : undefined,
   };
 }
 
@@ -490,11 +516,15 @@ function ensureAnchorOnce(
 ): number {
   const first = content.indexOf(anchor);
   if (first === -1) {
-    throw new Error(`${operationName}: anchor not found`);
+    throw new Error(
+      `${operationName}: anchor not found in file. Use search_code to confirm the exact anchor string before retrying.`,
+    );
   }
   const second = content.indexOf(anchor, first + anchor.length);
   if (second !== -1) {
-    throw new Error(`${operationName}: anchor matched more than once`);
+    throw new Error(
+      `${operationName}: anchor matched more than once. Make the anchor more specific.`,
+    );
   }
   return first;
 }
@@ -522,11 +552,9 @@ export async function applyWorkspacePatch(
   operations: PatchOperation[],
   snapshotLabel = "apply_patch",
 ): Promise<{
-  path: string;
   relativePath: string;
   snapshotId: string | null;
   applied: number;
-  size: number;
 }> {
   if (!Array.isArray(operations) || operations.length === 0) {
     throw new Error("At least one patch operation is required");
@@ -541,10 +569,14 @@ export async function applyWorkspacePatch(
       case "replace": {
         const count = content.split(operation.oldText).length - 1;
         if (count === 0) {
-          throw new Error("replace: target text not found");
+          throw new Error(
+            "replace: oldText not found in file. The file may have changed since you read it. Use search_code to locate the exact string before retrying.",
+          );
         }
         if (!operation.replaceAll && count > 1) {
-          throw new Error("replace: target text matched more than once");
+          throw new Error(
+            `replace: oldText matched ${count} times. Make it more specific or set replaceAll: true.`,
+          );
         }
         content = operation.replaceAll
           ? content.split(operation.oldText).join(operation.newText)
@@ -573,11 +605,9 @@ export async function applyWorkspacePatch(
   });
 
   return {
-    path: written.path,
     relativePath: written.relativePath,
     snapshotId: written.snapshotId ?? snapshot?.id ?? null,
     applied: operations.length,
-    size: written.size,
   };
 }
 

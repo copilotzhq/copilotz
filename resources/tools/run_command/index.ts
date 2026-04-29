@@ -34,7 +34,10 @@ export default {
         },
         required: ["command"],
     },
-    execute: async ({ command, args = [], cwd = ".", timeout = 30 }: RunCommandParams) => {
+    execute: async (
+        { command, args = [], cwd = ".", timeout }: RunCommandParams,
+        context?: { onCancel?: (cb: () => void) => () => void; cancelled?: boolean },
+    ) => {
         try {
             // Security check - block dangerous commands
             const dangerousCommands = ["rm", "del", "format", "mkfs", "dd", "fdisk"];
@@ -47,7 +50,7 @@ export default {
                 throw new Error("Directory traversal not allowed in cwd");
             }
             
-            // Create command with timeout
+            // Create command (cancellation is handled by killing the spawned process)
             const denoNs = (globalThis as unknown as { Deno?: { Command?: new (cmd: string, opts: { args?: string[]; cwd?: string; stdout?: "piped" | "inherit" | "null"; stderr?: "piped" | "inherit" | "null" }) => { output: () => Promise<{ code: number; success: boolean; stdout: Uint8Array; stderr: Uint8Array }> } } }).Deno;
             if (!denoNs?.Command) {
                 throw new Error("run_command tool requires Deno runtime");
@@ -58,20 +61,80 @@ export default {
                 stdout: "piped",
                 stderr: "piped",
             });
-            
-            // Set up timeout
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error(`Command timeout after ${timeout} seconds`)), timeout * 1000);
+
+            // Use spawn() so we can kill the child on cancellation/timeout
+            // deno-lint-ignore no-explicit-any
+            const child = (cmd as any).spawn?.() as Deno.ChildProcess;
+            if (!child) {
+                // Fallback for older runtimes
+                const result = await cmd.output();
+                const stdout = new TextDecoder().decode(result.stdout);
+                const stderr = new TextDecoder().decode(result.stderr);
+                return {
+                    command,
+                    args,
+                    cwd,
+                    stdout,
+                    stderr,
+                    exitCode: result.code,
+                    success: result.success,
+                };
+            }
+
+            const killChild = (signal?: Deno.Signal) => {
+                try {
+                    child.kill(signal);
+                } catch {
+                    /* ignore */
+                }
+            };
+
+            const unsubscribe = context?.onCancel?.(() => {
+                killChild("SIGTERM");
+                setTimeout(() => killChild("SIGKILL"), 500);
             });
-            
-            // Execute command with timeout
-            const result = await Promise.race([
-                cmd.output(),
-                timeoutPromise
-            ]) as unknown as { code: number; success: boolean; stdout: Uint8Array; stderr: Uint8Array };
-            
-            const stdout = new TextDecoder().decode(result.stdout);
-            const stderr = new TextDecoder().decode(result.stderr);
+
+            if (context?.cancelled) {
+                killChild("SIGTERM");
+                setTimeout(() => killChild("SIGKILL"), 500);
+            }
+
+            const timeoutMs = typeof timeout === "number" && timeout > 0 ? timeout * 1000 : undefined;
+            const timeoutPromise = typeof timeoutMs === "number"
+                ? new Promise<never>((_, reject) => {
+                    const id = setTimeout(() => {
+                        killChild("SIGTERM");
+                        setTimeout(() => killChild("SIGKILL"), 500);
+                        reject(new Error(`Command timeout after ${timeout} seconds`));
+                    }, timeoutMs);
+                    // Ensure we clear if the process ends first
+                    child.status.finally(() => clearTimeout(id)).catch(() => clearTimeout(id));
+                })
+                : null;
+
+            const statusPromise = child.status;
+            const stdoutPromise = child.stdout
+                ? new Response(child.stdout).arrayBuffer().then((b) => new Uint8Array(b))
+                : Promise.resolve(new Uint8Array());
+            const stderrPromise = child.stderr
+                ? new Response(child.stderr).arrayBuffer().then((b) => new Uint8Array(b))
+                : Promise.resolve(new Uint8Array());
+
+            const result = (timeoutPromise
+                ? await Promise.race([
+                    Promise.all([statusPromise, stdoutPromise, stderrPromise]),
+                    timeoutPromise,
+                ])
+                : await Promise.all([statusPromise, stdoutPromise, stderrPromise])) as unknown as [
+                { code: number; success: boolean },
+                Uint8Array,
+                Uint8Array,
+            ];
+
+            const status = result[0];
+            const stdout = new TextDecoder().decode(result[1]);
+            const stderr = new TextDecoder().decode(result[2]);
+            unsubscribe?.();
             
             return {
                 command,
@@ -79,8 +142,8 @@ export default {
                 cwd,
                 stdout,
                 stderr,
-                exitCode: result.code,
-                success: result.success,
+                exitCode: status.code,
+                success: status.success,
             };
         } catch (error) {
             if ((error as Error).message.includes("timeout")) {

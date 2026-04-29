@@ -575,6 +575,24 @@ export interface CopilotzConfig {
   /** Optional TTL (time-to-live) in milliseconds for queue items. */
   queueTTL?: number;
   /**
+   * Default maximum wall-clock time for a single tool execution (in milliseconds).
+   *
+   * - Default (when omitted): 300_000 (5 minutes)
+   * - Set the property explicitly to `undefined` to disable the framework timeout.
+   *
+   * @remarks
+   * The framework enforces this timeout in the tool-call processor. Individual
+   * tools may also enforce stricter limits unless configured otherwise.
+   */
+  toolExecutionTimeoutMs?: number | undefined;
+  /**
+   * Per-tool execution timeout overrides (in milliseconds), keyed by tool key.
+   *
+   * - If a key is present, it takes precedence over `toolExecutionTimeoutMs`
+   * - A value of `undefined` disables the framework timeout for that tool key
+   */
+  toolExecutionTimeoutsMs?: Record<string, number | undefined>;
+  /**
    * Stale processing event threshold in milliseconds.
    * Events stuck in "processing" status longer than this will be reset to "pending" on next check.
    * This provides crash recovery for events that were being processed when the server crashed.
@@ -1583,6 +1601,18 @@ export async function createCopilotz(
       config.agentsFile,
     );
 
+    // Tool execution timeouts:
+    // - default is 5 minutes when omitted
+    // - explicit `toolExecutionTimeoutMs: undefined` disables the timeout
+    const toolExecutionTimeoutMs =
+      ("toolExecutionTimeoutMs" in config)
+        ? config.toolExecutionTimeoutMs
+        : 300_000;
+    const toolExecutionTimeoutsMs =
+      ("toolExecutionTimeoutsMs" in config && config.toolExecutionTimeoutsMs)
+        ? config.toolExecutionTimeoutsMs
+        : undefined;
+
     const ctx: ChatContext = {
       agents: resolvedAgents,
       tools: resolvedTools,
@@ -1624,6 +1654,8 @@ export async function createCopilotz(
       // Collections: scoped if namespace is set, otherwise raw manager
       collections: resolvedCollections,
       agentsFileInstructions,
+      toolExecutionTimeoutMs,
+      toolExecutionTimeoutsMs,
       // Sender of the current message (available to processors and tools)
       sender: normalizedMessage.sender
         ? {

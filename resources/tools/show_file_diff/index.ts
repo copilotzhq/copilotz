@@ -25,6 +25,15 @@ export default {
     required: ["path"],
   },
   execute: async ({ path, snapshotId }: ShowFileDiffParams) => {
-    return await getWorkspaceFileDiff(path, snapshotId);
+    const result = await getWorkspaceFileDiff(path, snapshotId);
+    return {
+      relativePath: result.relativePath,
+      snapshotId: result.snapshotId,
+      changed: result.changed,
+      truncated: result.truncated,
+      beforeLabel: result.beforeLabel,
+      afterLabel: result.afterLabel,
+      hunks: result.hunks,
+    };
   },
 };

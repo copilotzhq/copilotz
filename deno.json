@@ -35,6 +35,7 @@
     "json-schema-to-ts": "npm:json-schema-to-ts@3.1.1",
     "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client",
     "omnipg": "jsr:@oxian/ominipg@0.6.1",
+    "omnipg/auto": "jsr:@oxian/ominipg@0.6.1/auto",
     "omnipg/pglite": "jsr:@oxian/ominipg@0.6.1/pglite",
     "omnipg/pg": "jsr:@oxian/ominipg@0.6.1/pg",
     "omnipg/worker": "https://jsr.io/@oxian/ominipg/0.6.1/src/worker/index.ts",
@@ -46,5 +47,6 @@
     "gen:skills": "deno run -A scripts/generate-skill-js.ts",
     "compile:cli": "deno run -A scripts/compile-cli.ts"
   },
+  "links": ["../../lib/ominipg"],
   "lock": false
 }

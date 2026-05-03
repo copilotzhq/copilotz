@@ -10,6 +10,7 @@
 
 import { Ominipg } from "omnipg";
 import type { OminipgWithCrud } from "omnipg";
+import { resolveAutoProviders } from "omnipg/auto";
 
 import { splitSQLStatements } from "./migrations/utils.ts";
 import { schema as baseSchema } from "./schemas/index.ts";
@@ -28,7 +29,6 @@ import {
   ensureSchemaProvisioned,
   validateSchemaName,
 } from "./schema-provisioning.ts";
-import { createPGliteProvider } from "omnipg/pglite";
 
 // Keep Ominipg's PGlite worker graph visible to `deno compile`.
 const embedOminipgWorkerForDenoCompile = () => import("omnipg/worker");
@@ -161,16 +161,15 @@ const createDbInstance = async (
 ): Promise<CopilotzDb> => {
   if (debug) console.log(`[db] creating Ominipg: ${cacheKey}`);
   const schemas = finalConfig.schemas ?? baseSchema;
-  const isPgLite = isPGliteUrl(finalConfig.url ?? ":memory:");
-  const pgProvider = !isPgLite || finalConfig.syncUrl
-    ? (await import("omnipg/pg")).createPgProvider()
-    : undefined;
+  const providers = resolveAutoProviders({
+    url: finalConfig.url,
+    syncUrl: finalConfig.syncUrl,
+  });
 
   const dbInstance = await Ominipg.connect({
     url: finalConfig.url,
     syncUrl: finalConfig.syncUrl,
-    pgProvider,
-    pgliteProvider: isPgLite ? createPGliteProvider() : undefined,
+    ...providers,
     schemas,
     pgliteExtensions: finalConfig.pgliteExtensions,
     schemaSQL: finalConfig.schemaSQL,

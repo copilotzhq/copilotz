@@ -28,6 +28,11 @@ import {
   ensureSchemaProvisioned,
   validateSchemaName,
 } from "./schema-provisioning.ts";
+import { createPGliteProvider } from "omnipg/pglite";
+
+// Keep Ominipg's PGlite worker graph visible to `deno compile`.
+const embedOminipgWorkerForDenoCompile = () => import("omnipg/worker");
+void embedOminipgWorkerForDenoCompile;
 
 /** SQL migration statements for setting up the database schema. */
 const migrations: string = generateMigrations() + "\n" +
@@ -144,6 +149,11 @@ function getEnvVar(key: string): string | undefined {
   return undefined;
 }
 
+function isPGliteUrl(url: string): boolean {
+  return url.startsWith(":") || url.startsWith("file:") ||
+    url.startsWith("pglite:");
+}
+
 const createDbInstance = async (
   finalConfig: DatabaseConfig,
   debug: boolean,
@@ -151,10 +161,16 @@ const createDbInstance = async (
 ): Promise<CopilotzDb> => {
   if (debug) console.log(`[db] creating Ominipg: ${cacheKey}`);
   const schemas = finalConfig.schemas ?? baseSchema;
+  const isPgLite = isPGliteUrl(finalConfig.url ?? ":memory:");
+  const pgProvider = !isPgLite || finalConfig.syncUrl
+    ? (await import("omnipg/pg")).createPgProvider()
+    : undefined;
 
   const dbInstance = await Ominipg.connect({
     url: finalConfig.url,
     syncUrl: finalConfig.syncUrl,
+    pgProvider,
+    pgliteProvider: isPgLite ? createPGliteProvider() : undefined,
     schemas,
     pgliteExtensions: finalConfig.pgliteExtensions,
     schemaSQL: finalConfig.schemaSQL,
@@ -355,10 +371,8 @@ function getSchemaCacheToken(schemaCandidate: unknown): string {
 export async function createDatabase(
   config?: DatabaseConfig,
 ): Promise<CopilotzDb> {
-  const isPgLite = !config?.url || config?.url.startsWith(":") ||
-    config?.url.startsWith("file:") || config?.url.startsWith("pglite:");
-
   const url = config?.url || getEnvVar("DATABASE_URL") || ":memory:";
+  const isPgLite = isPGliteUrl(url);
 
   const finalConfig: DatabaseConfig = {
     url,
@@ -366,7 +380,10 @@ export async function createDatabase(
     pgliteExtensions: isPgLite
       ? config?.pgliteExtensions || ["uuid_ossp", "pg_trgm", "vector"]
       : [],
-    schemaSQL: [...splitSQLStatements(migrations), ...(config?.schemaSQL || [])],
+    schemaSQL: [
+      ...splitSQLStatements(migrations),
+      ...(config?.schemaSQL || []),
+    ],
     useWorker: isPgLite ? config?.useWorker || false : false,
     logMetrics: config?.logMetrics,
     schemas: config?.schemas,
@@ -425,9 +442,7 @@ export {
   relation,
 } from "./collections/index.ts";
 
-export {
-  generateCollectionIndexes,
-} from "./collections/manager.ts";
+export { generateCollectionIndexes } from "./collections/manager.ts";
 
 export type {
   CollectionCrud,

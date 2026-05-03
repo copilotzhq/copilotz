@@ -1,10 +1,7 @@
 import { createInterface, type Interface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 
-import type {
-  MessagePayload,
-  Event,
-} from "@/types/index.ts";
+import type { Event, MessagePayload } from "@/types/index.ts";
 
 type CliPerformRun = (
   message: MessagePayload,
@@ -81,7 +78,9 @@ function extractToolArgs(event: Event): string {
 class CopilotzInteractiveCli {
   private readonly rl: Interface;
   private stopped = false;
-  private readonly history: Array<{ input: string; threadId: string; at: string }> = [];
+  private readonly history: Array<
+    { input: string; threadId: string; at: string }
+  > = [];
   private quitCommand = "quit";
   private banner: string | null;
   private threadExternalId = crypto.randomUUID().slice(0, 24);
@@ -130,7 +129,10 @@ class CopilotzInteractiveCli {
     if (typeof initialMessage.quitCommand === "string") {
       this.quitCommand = initialMessage.quitCommand;
     }
-    if (typeof initialMessage.banner === "string" || initialMessage.banner === null) {
+    if (
+      typeof initialMessage.banner === "string" ||
+      initialMessage.banner === null
+    ) {
       this.banner = initialMessage.banner;
     }
     if (
@@ -152,11 +154,10 @@ class CopilotzInteractiveCli {
         type: initialMessage.sender.type ?? "user",
         name: initialMessage.sender.name ?? null,
         identifierType: initialMessage.sender.identifierType ?? undefined,
-        metadata:
-          initialMessage.sender.metadata &&
+        metadata: initialMessage.sender.metadata &&
             typeof initialMessage.sender.metadata === "object"
-            ? initialMessage.sender.metadata as Record<string, unknown>
-            : null,
+          ? initialMessage.sender.metadata as Record<string, unknown>
+          : null,
       };
     }
 
@@ -180,19 +181,29 @@ class CopilotzInteractiveCli {
     this.renderSessionHeader();
 
     const { initialMessage } = this.options;
-    if (typeof initialMessage === "string" && initialMessage.trim().length > 0) {
+    if (
+      typeof initialMessage === "string" && initialMessage.trim().length > 0
+    ) {
       await this.send(initialMessage);
     } else if (initialMessage && typeof initialMessage === "object") {
-      const { banner: _banner, quitCommand: _quit, threadExternalId: _threadExternalId, ...rest } =
-        initialMessage;
-      await this.send(rest as MessagePayload);
+      const {
+        banner: _banner,
+        quitCommand: _quit,
+        threadExternalId: _threadExternalId,
+        ...rest
+      } = initialMessage;
+      if (hasMessagePayload(rest)) {
+        await this.send(rest as MessagePayload);
+      }
     }
 
     while (!this.stopped) {
-      const input = (await this.rl.question(color("copilotz> ", "cyan"))).trim();
+      const input = (await this.rl.question(color("copilotz> ", "cyan")))
+        .trim();
       if (!input) continue;
       if (input.toLowerCase() === this.quitCommand || input === "/exit") {
         this.printLine(color("Ending session. Goodbye.", "dim"));
+        this.stopped = true;
         break;
       }
       if (input.startsWith("/")) {
@@ -202,7 +213,7 @@ class CopilotzInteractiveCli {
       await this.send(input);
     }
 
-    this.rl.close();
+    this.stop();
   }
 
   private renderSessionHeader(): void {
@@ -210,7 +221,9 @@ class CopilotzInteractiveCli {
       color("Copilotz Interactive Session", "bold"),
       `${color("cwd", "dim")}: ${this.options.cwd ?? Deno.cwd()}`,
       `${color("thread", "dim")}: ${this.threadExternalId}`,
-      `${color("commands", "dim")}: /help /agents /tools /history /status /compose /clear /exit`,
+      `${
+        color("commands", "dim")
+      }: /help /agents /tools /history /status /compose /clear /exit`,
       "",
     ];
     this.printLine(lines.join("\n"));
@@ -350,7 +363,9 @@ class CopilotzInteractiveCli {
     return null;
   }
 
-  private buildOutboundMessage(message: string | MessagePayload): MessagePayload {
+  private buildOutboundMessage(
+    message: string | MessagePayload,
+  ): MessagePayload {
     if (typeof message === "string") {
       return {
         content: message,
@@ -371,7 +386,8 @@ class CopilotzInteractiveCli {
 
     return {
       ...message,
-      sender: message.sender ?? this.sessionSender ?? { type: "user", name: "user" },
+      sender: message.sender ?? this.sessionSender ??
+        { type: "user", name: "user" },
       thread: {
         ...(message.thread ?? {}),
         externalId: this.threadExternalId,
@@ -440,14 +456,18 @@ class CopilotzInteractiveCli {
     if (event.type === "LLM_CALL") {
       const payload = event.payload as Record<string, unknown> | null;
       const agent = payload?.agent as Record<string, unknown> | undefined;
-      const agentName = typeof agent?.name === "string" ? agent.name : "assistant";
+      const agentName = typeof agent?.name === "string"
+        ? agent.name
+        : "assistant";
       this.printLine(color(`thinking… ${agentName}`, "dim"));
       return;
     }
 
     if (event.type === "TOOL_CALL") {
       this.printLine(
-        `${color("tool>", "yellow")} ${extractToolName(event)} ${color(extractToolArgs(event), "dim")}`,
+        `${color("tool>", "yellow")} ${extractToolName(event)} ${
+          color(extractToolArgs(event), "dim")
+        }`,
       );
       return;
     }
@@ -484,6 +504,18 @@ class CopilotzInteractiveCli {
   private printLine(line: string): void {
     stdout.write(`${line}\n`);
   }
+}
+
+function hasMessagePayload(value: Record<string, unknown>): boolean {
+  if (typeof value.content === "string" && value.content.trim().length > 0) {
+    return true;
+  }
+  if (Array.isArray(value.content) && value.content.length > 0) return true;
+  if (Array.isArray(value.toolCalls) && value.toolCalls.length > 0) return true;
+  if (Array.isArray(value.attachments) && value.attachments.length > 0) {
+    return true;
+  }
+  return false;
 }
 
 export function startInteractiveCli(options: InteractiveCliOptions): {

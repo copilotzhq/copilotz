@@ -121,6 +121,25 @@ Run it: `OPENAI_API_KEY=your-key deno run --allow-net --allow-env chat.ts`
 runtime-only provider overrides without persisting them in `LLM_CALL` events,
 use `security.resolveLLMRuntimeConfig` in `createCopilotz()`.
 
+### Compile a CLI
+
+Generate and compile a terminal Copilotz app with:
+
+```bash
+deno run -A jsr:@copilotz/copilotz/scripts/compile-cli \
+  --resources ./resources \
+  --imports agents.copilotz \
+  --out ./copilotz-cli
+```
+
+The helper writes a local `scripts/ascii-logo.ts`, generates
+`.copilotz/cli-entry.ts`, defaults PGlite storage to
+`file://~/.copilotz/<namespace>.db`, and builds a `copilotz.start(...)` CLI that
+exits cleanly after `quit`.
+
+For frontend/native desktop packaging with `deno compile` and WebView, see
+[Compile Copilotz Apps with Deno](./docs/playbooks/compile-copilotz-apps.md).
+
 ### File-Based Resources
 
 Organize agents, tools, and APIs in a directory structure — no giant config
@@ -335,10 +354,10 @@ box.
 
 ### Channels
 
-Pre-built ingress and egress adapters for Web (SSE), WhatsApp Cloud API,
-Zendesk Sunshine, Discord (Interactions), and Telegram (Bot API). The route
-model is `ingress -> runtime -> egress`, so you can keep same-channel flows or
-mix transports like `/channels/web/to/zendesk`.
+Pre-built ingress and egress adapters for Web (SSE), WhatsApp Cloud API, Zendesk
+Sunshine, Discord (Interactions), and Telegram (Bot API). The route model is
+`ingress -> runtime -> egress`, so you can keep same-channel flows or mix
+transports like `/channels/web/to/zendesk`.
 
 ```typescript
 import { withApp } from "@copilotz/copilotz/server";
@@ -360,14 +379,14 @@ also exportable directly:
 
 ```typescript
 import {
-  whatsappEgressAdapter,
-  whatsappIngressAdapter,
-  zendeskEgressAdapter,
-  zendeskIngressAdapter,
   discordEgressAdapter,
   discordIngressAdapter,
   telegramEgressAdapter,
   telegramIngressAdapter,
+  whatsappEgressAdapter,
+  whatsappIngressAdapter,
+  zendeskEgressAdapter,
+  zendeskIngressAdapter,
 } from "@copilotz/copilotz/server/channels";
 ```
 
@@ -409,7 +428,8 @@ Seamless resolution for vision LLMs.
 **Resources & Extensibility**
 
 - [Resources](./docs/resources.md) — How the resource system works
-- [Channels Setup](./docs/channels-setup.md) — Set up Discord, Telegram, WhatsApp, etc.
+- [Channels Setup](./docs/channels-setup.md) — Set up Discord, Telegram,
+  WhatsApp, etc.
 - [LLM Providers](./docs/llm-providers.md) — Built-in and custom LLM adapters
 - [Embeddings](./docs/embeddings.md) — Custom embedding providers
 - [Storage](./docs/storage.md) — Asset storage backends

@@ -11,7 +11,29 @@ import type {
 } from "@/types/index.ts";
 import type { ProviderFactory } from "@/runtime/llm/types.ts";
 import type { Resources } from "@/runtime/loaders/resources.ts";
-import type { CollectionDefinition, ToolConfig } from "@/index.ts";
+import type { AgentConfig, CollectionDefinition, ToolConfig } from "@/index.ts";
+
+// ---- Bundled agents (static imports for deno compile) ----------------------
+import copilotzAgentConfig from "@/resources/agents/copilotz/config.ts";
+import copilotzAgentInstructions from "@/resources/agents/copilotz/instructions.md" with {
+  type: "text",
+};
+import eastAgentConfig from "@/resources/agents/east/config.ts";
+import eastAgentInstructions from "@/resources/agents/east/instructions.md" with {
+  type: "text",
+};
+import northAgentConfig from "@/resources/agents/north/config.ts";
+import northAgentInstructions from "@/resources/agents/north/instructions.md" with {
+  type: "text",
+};
+import southAgentConfig from "@/resources/agents/south/config.ts";
+import southAgentInstructions from "@/resources/agents/south/instructions.md" with {
+  type: "text",
+};
+import westAgentConfig from "@/resources/agents/west/config.ts";
+import westAgentInstructions from "@/resources/agents/west/instructions.md" with {
+  type: "text",
+};
 
 // ---- Core: channels.web ----------------------------------------------------
 import webIngressAdapter from "@/resources/channels/web/ingress.ts";
@@ -295,6 +317,31 @@ function buildCoreTools(): ToolConfig[] {
   });
 }
 
+function buildBundledAgent(
+  id: string,
+  instructions: string,
+  config: Record<string, unknown>,
+): AgentConfig {
+  return {
+    id,
+    name: id,
+    instructions,
+    ...config,
+  } as AgentConfig;
+}
+
+export const bundledAgents: Record<string, AgentConfig> = {
+  copilotz: buildBundledAgent(
+    "copilotz",
+    copilotzAgentInstructions,
+    copilotzAgentConfig,
+  ),
+  east: buildBundledAgent("east", eastAgentInstructions, eastAgentConfig),
+  north: buildBundledAgent("north", northAgentInstructions, northAgentConfig),
+  south: buildBundledAgent("south", southAgentInstructions, southAgentConfig),
+  west: buildBundledAgent("west", westAgentInstructions, westAgentConfig),
+};
+
 function buildCoreChannels(): ChannelEntry[] {
   return [{
     name: "web",
@@ -353,4 +400,3 @@ export const coreResources: Resources = {
   llm: buildCoreLlm(),
   storage: buildCoreStorage(),
 };
-

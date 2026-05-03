@@ -46,7 +46,7 @@ import {
   loadSkillFromUrl,
   mergeSkills,
 } from "@/runtime/loaders/skill-loader.ts";
-import { coreResources } from "@/resources/core.ts";
+import { bundledAgents, coreResources } from "@/resources/core.ts";
 import type {
   Agent,
   API,
@@ -452,6 +452,35 @@ function normalizeMcpServer(server: MCPServerConfig): MCPServer {
       "id"
     ],
   };
+}
+
+const BUNDLED_AGENT_PRESETS: Record<string, string[]> = {
+  "skunk-works": ["west", "north", "east", "south"],
+};
+
+function resolveBundledAgentImports(
+  resources: CopilotzConfig["resources"] | undefined,
+): AgentConfig[] {
+  const selected = new Set<string>();
+  for (const preset of resources?.preset ?? []) {
+    for (const agentId of BUNDLED_AGENT_PRESETS[preset] ?? []) {
+      selected.add(agentId);
+    }
+  }
+
+  for (const entry of resources?.imports ?? []) {
+    if (entry === "agents") {
+      for (const agentId of Object.keys(bundledAgents)) selected.add(agentId);
+      continue;
+    }
+    const match = /^agents\.([^.\s]+)$/.exec(entry);
+    if (match) selected.add(match[1]);
+  }
+
+  return [...selected].flatMap((agentId) => {
+    const agent = bundledAgents[agentId];
+    return agent ? [agent] : [];
+  });
 }
 
 /**
@@ -1069,12 +1098,20 @@ export async function createCopilotz(
     preset: bundledPresets,
     imports: effectiveBundledImports,
   });
+  const staticallyLoadedBundledAgents = resolveBundledAgentImports(
+    config.resources,
+  );
   const bundledResources: Resources = {
     ...dynamicallyLoadedBundledResources,
-    agents: [
-      ...(coreResources.agents ?? []),
-      ...(dynamicallyLoadedBundledResources.agents ?? []),
-    ],
+    agents: mergeResourceArrays<AgentConfig>(
+      coreResources.agents ?? [],
+      mergeResourceArrays<AgentConfig>(
+        dynamicallyLoadedBundledResources.agents ?? [],
+        staticallyLoadedBundledAgents,
+        { prioritize: "explicit" },
+      ),
+      { prioritize: "explicit" },
+    ),
     tools: [
       ...(coreResources.tools ?? []),
       ...(dynamicallyLoadedBundledResources.tools ?? []),

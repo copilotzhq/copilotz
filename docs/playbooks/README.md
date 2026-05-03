@@ -18,6 +18,7 @@ mapping, and validation path.
 - [Connect a React UI](./connect-a-react-ui.md)
 - [Serve Copilotz with Oxian](./serve-copilotz-with-oxian.md)
 - [Serve Copilotz with deno.serve](./serve-copilotz-with-deno-serve.md)
+- [Compile Copilotz Apps with Deno](./compile-copilotz-apps.md)
 
 ## How to Use a Playbook
 

@@ -6,8 +6,10 @@
   "exports": {
     ".": "./index.ts",
     "./server": "./server/index.ts",
-    "./create": "./create/mod.ts"
-  },  
+    "./create": "./create/mod.ts",
+    "./scripts/ascii-logo": "./scripts/ascii-logo.ts",
+    "./scripts/compile-cli": "./scripts/compile-cli.ts"
+  },
   "unstable": [
     "bare-node-builtins",
     "detect-cjs",
@@ -32,13 +34,17 @@
     "ajv-formats": "npm:ajv-formats@3.0.1",
     "json-schema-to-ts": "npm:json-schema-to-ts@3.1.1",
     "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client",
-    "omnipg": "jsr:@oxian/ominipg@0.5.10",
+    "omnipg": "jsr:@oxian/ominipg@0.6.1",
+    "omnipg/pglite": "jsr:@oxian/ominipg@0.6.1/pglite",
+    "omnipg/pg": "jsr:@oxian/ominipg@0.6.1/pg",
+    "omnipg/worker": "https://jsr.io/@oxian/ominipg/0.6.1/src/worker/index.ts",
     "ulid": "jsr:@std/ulid@1.0.0",
     "yaml": "npm:yaml@2.8.0",
     "zod": "npm:zod@3.23.8"
   },
   "tasks": {
-    "gen:skills": "deno run -A scripts/generate-skill-js.ts"
+    "gen:skills": "deno run -A scripts/generate-skill-js.ts",
+    "compile:cli": "deno run -A scripts/compile-cli.ts"
   },
   "lock": false
 }

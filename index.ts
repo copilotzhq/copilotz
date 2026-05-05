@@ -2,14 +2,18 @@ import {
   createCollectionsManager,
   createDatabase,
   dropTenantSchema,
+  dumpDatabaseDataDir,
   generateCollectionIndexes,
   listTenantSchemas,
+  loadDatabaseDataDirSnapshot,
   migrations,
+  prepareDatabase,
   provisionTenantSchema,
   schema,
   schemaExists,
   warmSchemaCache,
   withSchema,
+  writeDatabaseDataDirSnapshot,
 } from "@/database/index.ts";
 import type { OminipgWithCrud } from "omnipg";
 import { type RunHandle, type RunOptions, runThread } from "@/runtime/index.ts";
@@ -59,6 +63,7 @@ import type {
   ChatContext,
   CopilotzDb,
   DatabaseConfig,
+  DatabaseSnapshotFileOptions,
   EventProcessor,
   HistoryTransform,
   LlmCallEventPayload,
@@ -68,6 +73,7 @@ import type {
   NewAPI,
   NewMCPServer,
   NewTool,
+  PGliteConfig,
   ProcessorDeps,
   RagIngestPayload,
   ResolveLLMRuntimeConfig,
@@ -98,6 +104,8 @@ export type {
   CopilotzDb,
   /** Configuration options for the database connection. */
   DatabaseConfig,
+  /** File paths used when saving a PGlite data directory snapshot. */
+  DatabaseSnapshotFileOptions,
   /** Low-level database instance type from Ominipg. */
   DbInstance,
   /** Document stored in the RAG knowledge base. */
@@ -150,6 +158,8 @@ export type {
   NewThread,
   /** Input type for creating a new Tool. */
   NewTool,
+  /** Advanced PGlite runtime options forwarded through Ominipg. */
+  PGliteConfig,
   /** Dependencies injected into event processors. */
   ProcessorDeps,
   /** Configuration for RAG (Retrieval-Augmented Generation). */
@@ -214,7 +224,13 @@ export { getNativeTools } from "@/resources/tools/_registry.ts";
  * Creates a new database connection for Copilotz.
  * Supports PostgreSQL, PGlite (in-memory), and file-based databases.
  */
-export { createDatabase };
+export {
+  createDatabase,
+  dumpDatabaseDataDir,
+  loadDatabaseDataDirSnapshot,
+  prepareDatabase,
+  writeDatabaseDataDirSnapshot,
+};
 
 /** Database schema definitions used by Copilotz. */
 export { schema };
@@ -378,7 +394,10 @@ export type {
   ResourceListInput,
   ResourceListResolver,
 } from "@/utils/merge-resources.ts";
-export { mergeResourceArrays, resolveResourceList } from "@/utils/merge-resources.ts";
+export {
+  mergeResourceArrays,
+  resolveResourceList,
+} from "@/utils/merge-resources.ts";
 
 /**
  * Skill type representing a loaded skill definition.
@@ -895,6 +914,8 @@ export interface CopilotzCliController {
 export interface Copilotz {
   /** The frozen configuration used to create this instance. */
   readonly config: Readonly<NormalizedCopilotzConfig>;
+  /** Database connection used by this instance. */
+  readonly db: CopilotzDb;
   /** Database operations for direct data access. */
   readonly ops: CopilotzDb["ops"];
   /**
@@ -1669,10 +1690,9 @@ export async function createCopilotz(
     // Tool execution timeouts:
     // - default is 5 minutes when omitted
     // - explicit `toolExecutionTimeoutMs: undefined` disables the timeout
-    const toolExecutionTimeoutMs =
-      ("toolExecutionTimeoutMs" in config)
-        ? config.toolExecutionTimeoutMs
-        : 300_000;
+    const toolExecutionTimeoutMs = ("toolExecutionTimeoutMs" in config)
+      ? config.toolExecutionTimeoutMs
+      : 300_000;
     const toolExecutionTimeoutsMs =
       ("toolExecutionTimeoutsMs" in config && config.toolExecutionTimeoutsMs)
         ? config.toolExecutionTimeoutsMs
@@ -1761,6 +1781,7 @@ export async function createCopilotz(
 
   const copilotz = {
     config: Object.freeze({ ...baseConfig }),
+    db: baseDb,
     get ops() {
       return baseOps;
     },

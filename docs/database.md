@@ -1,8 +1,13 @@
 # Database
 
-Copilotz uses PostgreSQL as its data layer, with PGLite available for development and embedded use cases. Each provisioned schema has **four tables**: **`threads`**, **`events`** (the queue), **`nodes`**, and **`edges`**. Messages, RAG payloads, users, entities, and collection records are all graph **nodes**; relationships are **edges**.
+Copilotz uses PostgreSQL as its data layer, with PGLite available for
+development and embedded use cases. Each provisioned schema has **four tables**:
+**`threads`**, **`events`** (the queue), **`nodes`**, and **`edges`**. Messages,
+RAG payloads, users, entities, and collection records are all graph **nodes**;
+relationships are **edges**.
 
-> For detailed schema documentation, see [Tables Structure](./tables-structure.md).
+> For detailed schema documentation, see
+> [Tables Structure](./tables-structure.md).
 
 ## Database Options
 
@@ -25,13 +30,18 @@ PGLite is a WebAssembly build of PostgreSQL that runs anywhere:
 
 ```typescript
 // In-memory (fast, ephemeral)
-dbConfig: { url: ":memory:" }
+dbConfig: {
+  url: ":memory:",
+}
 
 // File-based (persistent)
-dbConfig: { url: "file:./data/copilotz.db" }
+dbConfig: {
+  url: "file:./data/copilotz.db",
+}
 ```
 
 PGLite is great for:
+
 - Local development
 - Tests
 - Embedded applications
@@ -58,7 +68,8 @@ dbConfig: {
 
 ## The Knowledge Graph
 
-This is what makes Copilotz different from a simple chat database. Everything is connected in a graph:
+This is what makes Copilotz different from a simple chat database. Everything is
+connected in a graph:
 
 ```
                     ┌─────────────────┐
@@ -77,25 +88,25 @@ This is what makes Copilotz different from a simple chat database. Everything is
 
 ### Node Types
 
-| Type | Description |
-|------|-------------|
-| `participant` | A human or agent in the system |
-| `message` | A conversation message |
-| `document` | RAG source metadata (URI, hash, status, title, …) — not a separate SQL table |
-| `chunk` | An embedded segment of a document for retrieval |
-| `entity` | An extracted entity (person, company, concept) |
-| `collection:*` | Custom collection records |
+| Type           | Description                                                                  |
+| -------------- | ---------------------------------------------------------------------------- |
+| `participant`  | A human or agent in the system                                               |
+| `message`      | A conversation message                                                       |
+| `document`     | RAG source metadata (URI, hash, status, title, …) — not a separate SQL table |
+| `chunk`        | An embedded segment of a document for retrieval                              |
+| `entity`       | An extracted entity (person, company, concept)                               |
+| `collection:*` | Custom collection records                                                    |
 
 ### Edge Types
 
-| Type | Description |
-|------|-------------|
-| `SENT_BY` | Message → Participant |
-| `MENTIONS` | Message → Entity |
+| Type         | Description                    |
+| ------------ | ------------------------------ |
+| `SENT_BY`    | Message → Participant          |
+| `MENTIONS`   | Message → Entity               |
 | `NEXT_CHUNK` | Chunk → Chunk (document order) |
-| `RELATED_TO` | Entity → Entity |
-| `BELONGS_TO` | Collection relations |
-| `HAS_MANY` | Collection relations |
+| `RELATED_TO` | Entity → Entity                |
+| `BELONGS_TO` | Collection relations           |
+| `HAS_MANY`   | Collection relations           |
 
 ### Graph Operations
 
@@ -128,14 +139,14 @@ const results = await copilotz.ops.searchNodes({
 const related = await copilotz.ops.traverseGraph(
   nodeId,
   ["MENTIONS", "RELATED_TO"],
-  3  // Max depth
+  3, // Max depth
 );
 
 // Get edges for a node
 const edges = await copilotz.ops.getEdgesForNode(
   nodeId,
-  "out",  // "in", "out", or "both"
-  ["MENTIONS"]
+  "out", // "in", "out", or "both"
+  ["MENTIONS"],
 );
 ```
 
@@ -188,21 +199,21 @@ const scoped = copilotz.collections.withNamespace("workspace:123");
 
 ### When to Use Which
 
-| Use Case | Schema | Namespace |
-|----------|--------|-----------|
-| Complete data isolation | ✓ | |
-| Regulatory compliance | ✓ | |
-| Large tenants with many users | ✓ | |
-| Workspaces within a tenant | | ✓ |
-| Projects or folders | | ✓ |
-| Lightweight partitioning | | ✓ |
+| Use Case                      | Schema | Namespace |
+| ----------------------------- | ------ | --------- |
+| Complete data isolation       | ✓      |           |
+| Regulatory compliance         | ✓      |           |
+| Large tenants with many users | ✓      |           |
+| Workspaces within a tenant    |        | ✓         |
+| Projects or folders           |        | ✓         |
+| Lightweight partitioning      |        | ✓         |
 
 You can combine both:
 
 ```typescript
-await copilotz.run(message, { 
-  schema: "tenant_acme",       // Hard isolation
-  namespace: "project:456",    // Logical partition
+await copilotz.run(message, {
+  schema: "tenant_acme", // Hard isolation
+  namespace: "project:456", // Logical partition
 });
 ```
 
@@ -242,11 +253,13 @@ const lastMessage = await copilotz.ops.getLastMessageNode(threadId);
 
 ### Participant Operations
 
-Participants (humans and agents) are managed via the built-in `participant` collection:
+Participants (humans and agents) are managed via the built-in `participant`
+collection:
 
 ```typescript
 // Resolve a participant (checks namespace, falls back to global)
-const participants = copilotz.collections.withNamespace("tenant:acme").participant;
+const participants =
+  copilotz.collections.withNamespace("tenant:acme").participant;
 const participant = await participants.resolveByExternalId("external-id");
 
 // Upsert an identity
@@ -275,7 +288,8 @@ await copilotz.ops.updateQueueItemStatus(queueId, "completed");
 
 ### RAG operations (document + chunk nodes)
 
-High-level RAG helpers read and write **`document` and `chunk` nodes**; they are not separate relational tables.
+High-level RAG helpers read and write **`document` and `chunk` nodes**; they are
+not separate relational tables.
 
 ```typescript
 // Register document metadata (creates a document node)
@@ -319,6 +333,81 @@ const copilotz2 = await createCopilotz({
   dbInstance: db,
 });
 ```
+
+## PGlite Memory Profile
+
+Copilotz uses Ominipg's low-memory PGlite profile by default for PGlite
+connections, including restored snapshots. You can opt back into upstream PGlite
+defaults or pass advanced PGlite options directly:
+
+```typescript
+const db = await createDatabase({
+  url: ":memory:",
+  pgliteMemoryProfile: "default",
+});
+
+const snapshot = await fetch("https://storage.example/db.tar.gz")
+  .then((res) => res.blob());
+
+const restoredDb = await createDatabase({
+  url: "file:///tmp/copilotz.db",
+  pgliteConfig: {
+    loadDataDir: snapshot,
+    relaxedDurability: true,
+  },
+});
+```
+
+For file-backed PGlite databases, prepare the database in a setup process before
+the memory-sensitive runtime starts:
+
+```typescript
+import { prepareDatabase } from "@copilotz/copilotz";
+
+await prepareDatabase({
+  url: "file:///tmp/copilotz.db",
+});
+```
+
+This initializes the database and applies Copilotz migrations, so the runtime
+can open an existing `file://` database instead of paying PGlite's first-run
+init memory spike.
+
+## PGlite Snapshots
+
+For single-instance ephemeral deployments, restore a snapshot from durable
+storage before creating Copilotz and write a fresh snapshot during shutdown:
+
+```typescript
+import {
+  createCopilotz,
+  loadDatabaseDataDirSnapshot,
+  writeDatabaseDataDirSnapshot,
+} from "@copilotz/copilotz";
+
+const snapshotPath = "/data/copilotz.pglite.tar.gz";
+const snapshot = await loadDatabaseDataDirSnapshot(snapshotPath);
+
+const copilotz = await createCopilotz({
+  agents: [...],
+  dbConfig: {
+    url: "file:///tmp/copilotz.db",
+    pgliteConfig: snapshot ? { loadDataDir: snapshot } : undefined,
+  },
+});
+
+Deno.addSignalListener("SIGTERM", () => {
+  void (async () => {
+    await writeDatabaseDataDirSnapshot(copilotz.db, { path: snapshotPath });
+    await copilotz.shutdown();
+    Deno.exit(0);
+  })();
+});
+```
+
+On Cloud Run, keep the live PGlite database on `/tmp` and store the compressed
+snapshot on the durable `/data` mount. This keeps normal database I/O off the
+FUSE mount while still preserving state across instance restarts.
 
 ## Next Steps
 

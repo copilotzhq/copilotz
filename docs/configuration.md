@@ -238,6 +238,12 @@ dbConfig: {
     "pg_trgm",
     "vector",
   ],
+  pgliteMemoryProfile: "low-memory", // Default for PGLite
+  pgliteConfig: {              // Advanced PGLite options
+    initialMemory: 16 * 1024 * 1024,
+    relaxedDurability: true,
+    // loadDataDir: snapshotBlob,
+  },
   schemaSQL: "CREATE TABLE ...",  // Extra init SQL
   useWorker: false,             // PGLite worker mode
   logMetrics: false,            // Performance logging

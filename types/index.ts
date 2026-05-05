@@ -81,7 +81,9 @@ export type {
 import type {
   CopilotzDb,
   DatabaseConfig,
+  DatabaseSnapshotFileOptions,
   DbInstance,
+  PGliteConfig,
 } from "@/database/index.ts";
 
 export type {
@@ -89,8 +91,12 @@ export type {
   CopilotzDb,
   /** Configuration options for database connection. */
   DatabaseConfig,
+  /** File paths used when saving a PGlite data directory snapshot. */
+  DatabaseSnapshotFileOptions,
   /** Low-level database instance from Ominipg. */
   DbInstance,
+  /** Advanced PGlite runtime options forwarded through Ominipg. */
+  PGliteConfig,
 };
 
 export interface AssetCreatedEventPayload {
@@ -139,10 +145,7 @@ export interface AssetErrorEventPayload {
   namespace?: string;
 }
 
-import type {
-  EventProcessor,
-  ProcessorDeps,
-} from "@/runtime/event-engine.ts";
+import type { EventProcessor, ProcessorDeps } from "@/runtime/event-engine.ts";
 
 export type {
   /** Interface for custom event processors. */
@@ -213,7 +216,10 @@ export interface ResolveLLMRuntimeConfigArgs {
 
 export type ResolveLLMRuntimeConfig = (
   args: ResolveLLMRuntimeConfigArgs,
-) => Partial<LLMRuntimeConfig> | Promise<Partial<LLMRuntimeConfig> | undefined> | undefined;
+) =>
+  | Partial<LLMRuntimeConfig>
+  | Promise<Partial<LLMRuntimeConfig> | undefined>
+  | undefined;
 
 export type ToolHistoryVisibility =
   | "requester_only"
@@ -265,7 +271,9 @@ export interface Tool {
 }
 
 /** Input type for creating a new Tool. */
-export type NewTool = Partial<Tool> & Pick<Tool, "key" | "name" | "description">;
+export type NewTool =
+  & Partial<Tool>
+  & Pick<Tool, "key" | "name" | "description">;
 
 /** Auth configuration for API connections. */
 export type APIAuth =
@@ -579,8 +587,9 @@ export interface Message {
 }
 
 /** Input type for creating a new Message. */
-export type NewMessage = Partial<Message> &
-  Pick<Message, "threadId" | "senderId" | "senderType">;
+export type NewMessage =
+  & Partial<Message>
+  & Pick<Message, "threadId" | "senderId" | "senderType">;
 
 /** Document stored in the RAG knowledge base. */
 export interface Document {
@@ -602,8 +611,9 @@ export interface Document {
 }
 
 /** Input type for creating a new Document. */
-export type NewDocument = Partial<Document> &
-  Pick<Document, "sourceType" | "contentHash">;
+export type NewDocument =
+  & Partial<Document>
+  & Pick<Document, "sourceType" | "contentHash">;
 
 /** Chunk of a document with embedding vector for similarity search. */
 export interface DocumentChunk {
@@ -622,8 +632,9 @@ export interface DocumentChunk {
 }
 
 /** Input type for creating a new DocumentChunk. */
-export type NewDocumentChunk = Partial<DocumentChunk> &
-  Pick<DocumentChunk, "documentId" | "namespace" | "chunkIndex" | "content">;
+export type NewDocumentChunk =
+  & Partial<DocumentChunk>
+  & Pick<DocumentChunk, "documentId" | "namespace" | "chunkIndex" | "content">;
 
 /**
  * Declarative memory resource loaded from `resources/memory/`.

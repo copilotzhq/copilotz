@@ -11,6 +11,8 @@
 import { Ominipg } from "omnipg";
 import type { OminipgWithCrud } from "omnipg";
 import { resolveAutoProviders } from "omnipg/auto";
+import type { PGliteConfig } from "omnipg/pglite";
+import { dirname } from "@std/path";
 
 import { splitSQLStatements } from "./migrations/utils.ts";
 import { schema as baseSchema } from "./schemas/index.ts";
@@ -74,6 +76,21 @@ export interface DatabaseConfig {
   syncUrl?: string;
   /** PGlite extensions to load. Default: ["uuid_ossp", "pg_trgm", "vector"]. */
   pgliteExtensions?: string[];
+  /**
+   * PGlite runtime configuration forwarded to Ominipg.
+   *
+   * Use this for advanced PGlite options such as `loadDataDir`,
+   * `initialMemory`, `relaxedDurability`, or custom `startParams`.
+   */
+  pgliteConfig?: PGliteConfig;
+  /**
+   * Built-in PGlite memory tuning profile.
+   *
+   * Defaults to "low-memory" for PGlite. Set to "default" to let PGlite use
+   * its upstream defaults. A custom `pgliteConfig.startParams` also disables
+   * the built-in profile.
+   */
+  pgliteMemoryProfile?: "default" | "low-memory";
   /** Additional SQL statements to run during initialization. */
   schemaSQL?: string[];
   /** Whether to use a web worker for PGlite. Default: false. */
@@ -133,6 +150,13 @@ export type DbInstance = OminipgWithCrud<typeof baseSchema>;
  */
 export type CopilotzDb = DbInstance & { ops: Operations };
 
+export interface DatabaseSnapshotFileOptions {
+  /** Final snapshot path, e.g. `/data/copilotz.pglite.tar.gz`. */
+  path: string;
+  /** Optional temporary write path. Defaults to a sibling of `path`. */
+  tempPath?: string;
+}
+
 function getEnvVar(key: string): string | undefined {
   try {
     const anyGlobal = globalThis as unknown as {
@@ -154,6 +178,25 @@ function isPGliteUrl(url: string): boolean {
     url.startsWith("pglite:");
 }
 
+function defaultPGliteExtensions(isPgLite: boolean): string[] {
+  return isPgLite ? ["uuid_ossp", "pg_trgm", "vector"] : [];
+}
+
+function resolvePGliteConfig(
+  config: DatabaseConfig | undefined,
+  isPgLite: boolean,
+): PGliteConfig | undefined {
+  if (!isPgLite) return undefined;
+  return config?.pgliteConfig;
+}
+
+function createSchemaSQL(config?: DatabaseConfig): string[] {
+  return [
+    ...splitSQLStatements(migrations),
+    ...(config?.schemaSQL || []),
+  ];
+}
+
 const createDbInstance = async (
   finalConfig: DatabaseConfig,
   debug: boolean,
@@ -172,9 +215,11 @@ const createDbInstance = async (
     ...providers,
     schemas,
     pgliteExtensions: finalConfig.pgliteExtensions,
+    pgliteConfig: finalConfig.pgliteConfig,
     schemaSQL: finalConfig.schemaSQL,
     useWorker: finalConfig.useWorker,
     logMetrics: finalConfig.logMetrics,
+    pgliteMemoryProfile: finalConfig.pgliteMemoryProfile,
   });
 
   // Wrap db.query with schema-aware logic
@@ -297,8 +342,8 @@ const connect: Connect = async (
 };
 
 const GLOBAL_CACHE_KEY = "__copilotz_db_cache__";
-const GLOBAL_SCHEMA_ID_MAP_KEY = "__copilotz_db_schema_id_map__";
-const GLOBAL_SCHEMA_ID_COUNTER_KEY = "__copilotz_db_schema_id_counter__";
+const GLOBAL_OBJECT_ID_MAP_KEY = "__copilotz_db_object_id_map__";
+const GLOBAL_OBJECT_ID_COUNTER_KEY = "__copilotz_db_object_id_counter__";
 const existingCache =
   (globalThis as Record<string, unknown>)[GLOBAL_CACHE_KEY] as
     | Map<string, Promise<CopilotzDb>>
@@ -308,37 +353,48 @@ const globalCache: Map<string, Promise<CopilotzDb>> = existingCache ??
 (globalThis as Record<string, unknown>)[GLOBAL_CACHE_KEY] = globalCache;
 
 const existingSchemaIdMap =
-  (globalThis as Record<string, unknown>)[GLOBAL_SCHEMA_ID_MAP_KEY] as
+  (globalThis as Record<string, unknown>)[GLOBAL_OBJECT_ID_MAP_KEY] as
     | WeakMap<object, number>
     | undefined;
 const schemaIdMap: WeakMap<object, number> = existingSchemaIdMap ??
   new WeakMap();
-(globalThis as Record<string, unknown>)[GLOBAL_SCHEMA_ID_MAP_KEY] = schemaIdMap;
+(globalThis as Record<string, unknown>)[GLOBAL_OBJECT_ID_MAP_KEY] = schemaIdMap;
 
-function getSchemaCacheToken(schemaCandidate: unknown): string {
+function getObjectCacheToken(
+  cacheName: string,
+  objectCandidate: unknown,
+): string {
   if (
-    !schemaCandidate ||
-    (typeof schemaCandidate !== "object" &&
-      typeof schemaCandidate !== "function")
+    !objectCandidate ||
+    (typeof objectCandidate !== "object" &&
+      typeof objectCandidate !== "function")
   ) {
-    return "schema:none";
+    return `${cacheName}:none`;
   }
 
-  const schemaObject = schemaCandidate as object;
-  const existingId = schemaIdMap.get(schemaObject);
+  const cacheObject = objectCandidate as object;
+  const existingId = schemaIdMap.get(cacheObject);
   if (typeof existingId === "number") {
-    return `schema:${existingId}`;
+    return `${cacheName}:${existingId}`;
   }
 
   const globals = globalThis as Record<string, unknown>;
-  const lastId = typeof globals[GLOBAL_SCHEMA_ID_COUNTER_KEY] === "number"
-    ? globals[GLOBAL_SCHEMA_ID_COUNTER_KEY] as number
+  const lastId = typeof globals[GLOBAL_OBJECT_ID_COUNTER_KEY] === "number"
+    ? globals[GLOBAL_OBJECT_ID_COUNTER_KEY] as number
     : 0;
   const nextId = lastId + 1;
-  globals[GLOBAL_SCHEMA_ID_COUNTER_KEY] = nextId;
-  schemaIdMap.set(schemaObject, nextId);
+  globals[GLOBAL_OBJECT_ID_COUNTER_KEY] = nextId;
+  schemaIdMap.set(cacheObject, nextId);
 
-  return `schema:${nextId}`;
+  return `${cacheName}:${nextId}`;
+}
+
+function getSchemaCacheToken(schemaCandidate: unknown): string {
+  return getObjectCacheToken("schema", schemaCandidate);
+}
+
+function getPGliteConfigCacheToken(configCandidate: unknown): string {
+  return getObjectCacheToken("pgliteConfig", configCandidate);
 }
 
 /**
@@ -376,13 +432,11 @@ export async function createDatabase(
   const finalConfig: DatabaseConfig = {
     url,
     syncUrl: config?.syncUrl || getEnvVar("SYNC_DATABASE_URL"),
-    pgliteExtensions: isPgLite
-      ? config?.pgliteExtensions || ["uuid_ossp", "pg_trgm", "vector"]
-      : [],
-    schemaSQL: [
-      ...splitSQLStatements(migrations),
-      ...(config?.schemaSQL || []),
-    ],
+    pgliteExtensions: config?.pgliteExtensions ??
+      defaultPGliteExtensions(isPgLite),
+    pgliteConfig: resolvePGliteConfig(config, isPgLite),
+    pgliteMemoryProfile: config?.pgliteMemoryProfile,
+    schemaSQL: createSchemaSQL(config),
     useWorker: isPgLite ? config?.useWorker || false : false,
     logMetrics: config?.logMetrics,
     schemas: config?.schemas,
@@ -393,9 +447,12 @@ export async function createDatabase(
 
   const cacheSchema = finalConfig.schemas ?? baseSchema;
   const schemaCacheToken = getSchemaCacheToken(cacheSchema);
+  const pgliteConfigCacheToken = getPGliteConfigCacheToken(
+    finalConfig.pgliteConfig,
+  );
   const cacheKey = `${finalConfig.url}|${
     finalConfig.syncUrl || ""
-  }|${schemaCacheToken}`;
+  }|${schemaCacheToken}|${pgliteConfigCacheToken}`;
   const debug = getEnvVar("COPILOTZ_DB_DEBUG") === "1";
   if (debug) {
     console.log(
@@ -418,8 +475,103 @@ export async function createDatabase(
   return await connectPromise;
 }
 
+/**
+ * Prepares a file-backed PGlite database and closes it immediately.
+ *
+ * Use this in a setup step for ephemeral runtimes so the process that handles
+ * requests can open an already-initialized `file://` database with a much
+ * smaller first-connection memory spike.
+ */
+export async function prepareDatabase(config?: DatabaseConfig): Promise<void> {
+  const url = config?.url || getEnvVar("DATABASE_URL") || ":memory:";
+  if (!url.startsWith("file://")) {
+    throw new Error("prepareDatabase() requires a file:// PGlite URL.");
+  }
+  if (config?.syncUrl || getEnvVar("SYNC_DATABASE_URL")) {
+    throw new Error("prepareDatabase() does not support syncUrl.");
+  }
+
+  const providers = resolveAutoProviders({ url });
+
+  await Ominipg.prepare({
+    url,
+    ...providers,
+    schemas: config?.schemas ?? baseSchema,
+    pgliteExtensions: config?.pgliteExtensions ??
+      defaultPGliteExtensions(true),
+    pgliteConfig: config?.pgliteConfig,
+    pgliteMemoryProfile: config?.pgliteMemoryProfile,
+    schemaSQL: createSchemaSQL(config),
+    useWorker: false,
+    logMetrics: config?.logMetrics,
+  });
+}
+
+/**
+ * Dumps the active PGlite data directory from a Copilotz database.
+ */
+export async function dumpDatabaseDataDir(db: CopilotzDb): Promise<Blob> {
+  return await db.dumpDataDir();
+}
+
+/**
+ * Loads a PGlite data directory snapshot Blob from disk.
+ *
+ * Returns `undefined` when the snapshot does not exist, making it convenient to
+ * boot a fresh database on first deployment and restore on later boots.
+ */
+export async function loadDatabaseDataDirSnapshot(
+  path: string,
+): Promise<Blob | undefined> {
+  try {
+    const data = await Deno.readFile(path);
+    return new Blob([data], { type: "application/gzip" });
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) return undefined;
+    throw err;
+  }
+}
+
+/**
+ * Dumps a Copilotz PGlite database and writes the snapshot to disk.
+ */
+export async function writeDatabaseDataDirSnapshot(
+  db: CopilotzDb,
+  options: DatabaseSnapshotFileOptions,
+): Promise<void> {
+  const dataDir = await dumpDatabaseDataDir(db);
+  await writeBlobSnapshot(dataDir, options);
+}
+
+async function writeBlobSnapshot(
+  blob: Blob,
+  options: DatabaseSnapshotFileOptions,
+): Promise<void> {
+  const tempPath = options.tempPath ??
+    `${options.path}.${crypto.randomUUID()}.tmp`;
+  await Deno.mkdir(dirname(options.path), { recursive: true });
+  await Deno.mkdir(dirname(tempPath), { recursive: true });
+
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  await Deno.writeFile(tempPath, bytes);
+  try {
+    await Deno.rename(tempPath, options.path);
+  } catch (err) {
+    try {
+      await Deno.writeFile(options.path, bytes);
+      await Deno.remove(tempPath);
+      return;
+    } catch {
+      // Keep the original rename/write error; cleanup failures are secondary.
+    }
+    throw err;
+  }
+}
+
 /** Database schema definitions for all Copilotz entities. */
 export { baseSchema as schema };
+
+export type { PGliteConfig };
 
 /** SQL migration statements for setting up the database schema. */
 export { migrations };

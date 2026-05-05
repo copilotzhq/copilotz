@@ -387,6 +387,7 @@ const copilotz = await createCopilotz({
       enabled: true,
       path: "/data/copilotz.pglite.tar.gz",
       shutdownSignals: true,
+      snapshotIntervalMs: 300_000,
     },
   },
 });
@@ -396,7 +397,8 @@ const copilotz = await createCopilotz({
 `createCopilotz().shutdown()` writes a fresh snapshot before closing the managed
 database. If the snapshot is missing, Copilotz starts with a fresh database by
 default. Set `shutdownSignals: true` when the process should snapshot and exit
-on `SIGTERM` or `SIGINT`.
+on `SIGTERM` or `SIGINT`. Set `snapshotIntervalMs` for best-effort periodic full
+snapshots while the instance is running.
 
 On Cloud Run, keep the live PGlite database on `/tmp` and store the compressed
 snapshot on the durable `/data` mount. This keeps normal database I/O off the

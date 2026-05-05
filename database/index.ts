@@ -179,6 +179,13 @@ export interface DatabaseRestoreConfig extends DatabaseSnapshotFileOptions {
    */
   snapshotOnShutdown?: boolean;
   /**
+   * Periodically dump a full PGlite snapshot while the instance is running.
+   *
+   * Disabled by default. This is a best-effort interval and is most reliable
+   * when Cloud Run CPU is allocated outside request handling.
+   */
+  snapshotIntervalMs?: number;
+  /**
    * Remove the target `file://` database path before loading the snapshot.
    *
    * PGlite cannot load a data-dir tarball into an existing database. Defaults

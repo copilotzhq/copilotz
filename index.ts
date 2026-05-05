@@ -1783,6 +1783,33 @@ export async function createCopilotz(
     return await runThread(baseDb, ctx, normalizedMessage, options);
   };
 
+  let snapshotInProgress = false;
+  const writeManagedSnapshot = async () => {
+    const restore = config.dbConfig?.restore;
+    if (!managedDb || !restore?.enabled) return;
+    if (snapshotInProgress) return;
+    snapshotInProgress = true;
+    try {
+      await writeDatabaseDataDirSnapshot(managedDb, {
+        path: restore.path,
+        tempPath: restore.tempPath,
+      });
+    } finally {
+      snapshotInProgress = false;
+    }
+  };
+
+  const snapshotIntervalMs = config.dbConfig?.restore?.snapshotIntervalMs;
+  const snapshotIntervalId =
+    managedDb && typeof snapshotIntervalMs === "number" &&
+      snapshotIntervalMs > 0
+      ? setInterval(() => {
+        void writeManagedSnapshot().catch((error) => {
+          console.error("[copilotz] periodic snapshot failed", error);
+        });
+      }, snapshotIntervalMs)
+      : undefined;
+
   let shuttingDown = false;
   const copilotz = {
     config: Object.freeze({ ...baseConfig }),
@@ -1825,6 +1852,9 @@ export async function createCopilotz(
     shutdown: async () => {
       if (shuttingDown) return;
       shuttingDown = true;
+      if (snapshotIntervalId) {
+        clearInterval(snapshotIntervalId);
+      }
       if (managedDb) {
         if (fromCache) {
           const cached = _dbConnectionCache.get(dbCacheKey);
@@ -1839,10 +1869,7 @@ export async function createCopilotz(
         }
         const restore = config.dbConfig?.restore;
         if (restore?.enabled && restore.snapshotOnShutdown !== false) {
-          await writeDatabaseDataDirSnapshot(managedDb, {
-            path: restore.path,
-            tempPath: restore.tempPath,
-          });
+          await writeManagedSnapshot();
         }
         const resource = managedDb as unknown as {
           close?: () => Promise<void> | void;

@@ -248,6 +248,7 @@ dbConfig: {
     enabled: true,
     path: "/data/copilotz.pglite.tar.gz",
     shutdownSignals: true,
+    snapshotIntervalMs: 300000,
   },
   schemaSQL: "CREATE TABLE ...",  // Extra init SQL
   useWorker: false,             // PGLite worker mode

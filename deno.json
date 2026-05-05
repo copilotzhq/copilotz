@@ -42,9 +42,6 @@
     "yaml": "npm:yaml@2.8.0",
     "zod": "npm:zod@3.23.8"
   },
-  "links": [
-    "../ominipg/"
-  ],
   "tasks": {
     "gen:skills": "deno run -A scripts/generate-skill-js.ts",
     "compile:cli": "deno run -A scripts/compile-cli.ts"

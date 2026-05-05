@@ -27,6 +27,7 @@ import update_my_memory from "@/resources/tools/update_my_memory/index.ts";
 import list_skills from "@/resources/tools/list_skills/index.ts";
 import load_skill from "@/resources/tools/load_skill/index.ts";
 import read_skill_resource from "@/resources/tools/read_skill_resource/index.ts";
+import read_tool_result from "@/resources/tools/read_tool_result/index.ts";
 
 export const nativeTools: { [key: string]: NewTool } = {
     delegate,
@@ -56,6 +57,7 @@ export const nativeTools: { [key: string]: NewTool } = {
     list_skills,
     load_skill,
     read_skill_resource,
+    read_tool_result,
 };
 
 export function getNativeTools(): { [key: string]: NewTool } {

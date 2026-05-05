@@ -9,7 +9,7 @@ import type {
   ToolInvocation,
 } from "@/runtime/llm/types.ts";
 import { estimateUsageCost } from "@/runtime/llm/pricing.ts";
-import { resolveProviderApiKey } from "@/runtime/llm/config.ts";
+import { resolveProviderApiKey, toLLMConfig } from "@/runtime/llm/config.ts";
 import {
   countTokens,
   createMockResponse,
@@ -214,10 +214,14 @@ export async function chat(
     throw new Error("No LLM provider configured for chat request");
   }
 
-  // Format messages
+  // Format messages — merge provider `config` into the request so
+  // `limitEstimatedInputTokens` (and any future ChatRequest-scoped options)
+  // apply. `llm_call` passes LLM options only via the second argument, so
+  // `request.config` is often undefined.
   const messages = formatMessages({
     ...request,
     messages: request.messages,
+    config: toLLMConfig(baseConfig),
   });
 
   const attemptConfigs = [

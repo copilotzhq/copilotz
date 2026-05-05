@@ -256,39 +256,16 @@ function parseMentions(
 }
 
 /**
- * Update a participant's target in thread metadata.
- * This persists the "current conversation target" for routing without @mentions.
- */
-async function updateParticipantTarget(
-  ops: Operations,
-  thread: Thread,
-  senderId: string,
-  targetId: string,
-): Promise<void> {
-  const metadata = getRuntimeThreadMetadata(thread.metadata);
-  const participantTargets = metadata.participantTargets ?? {};
-
-  const updatedMetadata = setRuntimeThreadMetadata(thread.metadata, {
-    participantTargets: {
-      ...participantTargets,
-      [senderId]: targetId,
-    },
-  });
-
-  await ops.crud.threads?.update?.({ id: thread.id }, {
-    metadata: getSerializableThreadMetadata(updatedMetadata),
-  });
-
-  // Update local thread object for subsequent operations in same request
-  (thread as { metadata: unknown }).metadata = updatedMetadata;
-}
-
-/**
- * Target resolution result from discoverTargetForMessage.
+ * Target resolution result used when enqueueing an LLM_CALL.
  */
 interface TargetResolution {
   targetId: string;
   targetQueue: string[];
+}
+
+export interface ToolReplyRoutingMetadata extends Record<string, unknown> {
+  replyToParticipantId: string;
+  replyToTargetQueue: string[];
 }
 
 /**
@@ -302,6 +279,20 @@ interface AgentTurnCheckResult {
 function isHumanAliasTarget(targetId: string): boolean {
   const normalized = targetId.trim().toLowerCase();
   return normalized === "user" || normalized === "anonymous";
+}
+
+function normalizeRoutingTarget(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
+function normalizeRoutingQueue(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map(normalizeRoutingTarget).filter((item): item is string =>
+      item !== null
+    )
+    : [];
 }
 
 export function resolveThreadParticipantTarget(
@@ -382,6 +373,408 @@ export function resolveThreadParticipantTarget(
   return null;
 }
 
+export interface RoutingIntent {
+  routeTo: string[];
+  askTo: string[];
+}
+
+export type NextTurn =
+  | { kind: "agent"; targetId: string; targetQueue: string[] }
+  | { kind: "human"; targetId: string }
+  | { kind: "stop" };
+
+export interface ResolveNextTurnInput {
+  sender: {
+    id: string;
+    name?: string | null;
+    type: "agent" | "user" | "tool" | "system";
+  };
+  thread: Thread;
+  availableAgents: Agent[];
+  inbound?: {
+    targetId?: string | null;
+    targetQueue?: string[] | null;
+    replyToParticipantId?: string | null;
+    replyToTargetQueue?: string[] | null;
+  };
+  routingIntent?: Partial<RoutingIntent> | null;
+  userMentionTargets?: string[];
+  multiAgentEnabled?: boolean;
+}
+
+function resolveAgentParticipant(
+  targetId: string,
+  availableAgents: Agent[],
+): string | null {
+  const targetLower = targetId.trim().toLowerCase();
+  if (targetLower.length === 0) return null;
+  const matchedAgent = availableAgents.find((agent) =>
+    (typeof agent.id === "string" &&
+      agent.id.toLowerCase() === targetLower) ||
+    (typeof agent.name === "string" &&
+      agent.name.toLowerCase() === targetLower)
+  );
+  return matchedAgent ? (matchedAgent.id ?? matchedAgent.name) as string : null;
+}
+
+function resolveHumanParticipant(
+  targetId: string,
+  thread: Thread,
+  availableAgents: Agent[],
+): string | null {
+  const resolved = resolveThreadParticipantTarget(
+    targetId,
+    thread,
+    availableAgents,
+  );
+  const participants = Array.isArray(thread.participants)
+    ? thread.participants.filter((participant): participant is string =>
+      typeof participant === "string" && participant.trim().length > 0
+    )
+    : [];
+  const humanParticipants = participants.filter((participant) =>
+    !resolveAgentParticipant(participant, availableAgents)
+  );
+
+  if (resolved && !resolveAgentParticipant(resolved, availableAgents)) {
+    if (isHumanAliasTarget(resolved) && humanParticipants.length === 1) {
+      return humanParticipants[0];
+    }
+    return resolved;
+  }
+
+  if (isHumanAliasTarget(targetId) && humanParticipants.length === 1) {
+    return humanParticipants[0];
+  }
+
+  return null;
+}
+
+function resolveParticipantTurn(
+  targetId: string | null | undefined,
+  targetQueue: string[],
+  thread: Thread,
+  availableAgents: Agent[],
+): NextTurn {
+  if (typeof targetId !== "string" || targetId.trim().length === 0) {
+    return { kind: "stop" };
+  }
+
+  const resolvedTarget = resolveThreadParticipantTarget(
+    targetId,
+    thread,
+    availableAgents,
+  );
+  if (!resolvedTarget) return { kind: "stop" };
+
+  const agentTarget = resolveAgentParticipant(resolvedTarget, availableAgents);
+  if (agentTarget) {
+    return { kind: "agent", targetId: agentTarget, targetQueue };
+  }
+
+  const humanTarget = resolveHumanParticipant(
+    resolvedTarget,
+    thread,
+    availableAgents,
+  );
+  return humanTarget
+    ? { kind: "human", targetId: humanTarget }
+    : { kind: "stop" };
+}
+
+function normalizeRoutingIntent(value: unknown): RoutingIntent {
+  const record = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const normalize = (candidate: unknown): string[] =>
+    Array.isArray(candidate)
+      ? candidate.filter((item): item is string =>
+        typeof item === "string" && item.trim().length > 0
+      ).map((item) => item.trim())
+      : [];
+
+  return {
+    routeTo: normalize(record.routeTo),
+    askTo: normalize(record.askTo),
+  };
+}
+
+function normalizeParticipantQueue(
+  value: unknown,
+  thread: Thread,
+  availableAgents: Agent[],
+): string[] {
+  return normalizeRoutingQueue(value)
+    .map((candidate) =>
+      resolveThreadParticipantTarget(candidate, thread, availableAgents)
+    )
+    .filter((candidate): candidate is string => candidate !== null);
+}
+
+function consumeCurrentFromQueue(
+  targetQueue: string[],
+  currentTargetId: string | null | undefined,
+): string[] {
+  if (
+    typeof currentTargetId !== "string" || currentTargetId.trim().length === 0
+  ) {
+    return targetQueue;
+  }
+
+  const currentLower = currentTargetId.trim().toLowerCase();
+  let firstUnconsumed = 0;
+  while (
+    firstUnconsumed < targetQueue.length &&
+    targetQueue[firstUnconsumed].trim().toLowerCase() === currentLower
+  ) {
+    firstUnconsumed++;
+  }
+
+  return targetQueue.slice(firstUnconsumed);
+}
+
+function prependQueueTarget(targetQueue: string[], targetId: string): string[] {
+  const targetLower = targetId.trim().toLowerCase();
+  if (targetLower.length === 0) return targetQueue;
+  if (targetQueue[0]?.trim().toLowerCase() === targetLower) return targetQueue;
+  return [targetId, ...targetQueue];
+}
+
+function resolvePersistedUserTarget(
+  senderId: string,
+  thread: Thread,
+  availableAgents: Agent[],
+): string | null {
+  const metadata = getRuntimeThreadMetadata(thread.metadata);
+  const persistedTarget = metadata.participantTargets?.[senderId];
+  if (typeof persistedTarget !== "string") return null;
+
+  const resolved = resolveAgentParticipant(persistedTarget, availableAgents);
+  return resolved;
+}
+
+function resolveSenderAgent(
+  sender: ResolveNextTurnInput["sender"],
+  availableAgents: Agent[],
+): Agent | null {
+  if (sender.type !== "agent") return null;
+  const senderIdLower = sender.id.trim().toLowerCase();
+  const senderNameLower = sender.name?.trim().toLowerCase();
+
+  return availableAgents.find((agent) =>
+    (typeof agent.id === "string" &&
+      agent.id.toLowerCase() === senderIdLower) ||
+    (typeof agent.name === "string" &&
+      agent.name.toLowerCase() === senderIdLower) ||
+    (typeof senderNameLower === "string" &&
+      typeof agent.id === "string" &&
+      agent.id.toLowerCase() === senderNameLower) ||
+    (typeof senderNameLower === "string" &&
+      typeof agent.name === "string" &&
+      agent.name.toLowerCase() === senderNameLower)
+  ) ?? null;
+}
+
+function isAllowedExplicitRoutingTarget(
+  input: ResolveNextTurnInput,
+  targetId: string,
+): boolean {
+  const resolvedTarget = resolveThreadParticipantTarget(
+    targetId,
+    input.thread,
+    input.availableAgents,
+  );
+  if (!resolvedTarget) return false;
+
+  const targetAgent = resolveAgentParticipant(
+    resolvedTarget,
+    input.availableAgents,
+  );
+  if (!targetAgent) return true;
+
+  const senderAgent = resolveSenderAgent(input.sender, input.availableAgents);
+  const allowedAgents = senderAgent?.allowedAgents;
+  if (!Array.isArray(allowedAgents) || allowedAgents.length === 0) return true;
+
+  const allowed = new Set(
+    allowedAgents.map((candidate) => candidate.trim().toLowerCase()),
+  );
+  if (allowed.has(targetAgent.toLowerCase())) return true;
+
+  const matchedTargetAgent = input.availableAgents.find((agent) =>
+    agent.id === targetAgent || agent.name === targetAgent
+  );
+
+  return Boolean(
+    (typeof matchedTargetAgent?.id === "string" &&
+      allowed.has(matchedTargetAgent.id.toLowerCase())) ||
+      (typeof matchedTargetAgent?.name === "string" &&
+        allowed.has(matchedTargetAgent.name.toLowerCase())),
+  );
+}
+
+function firstAllowedExplicitRoutingTarget(
+  input: ResolveNextTurnInput,
+  targets: string[],
+): string | null {
+  return targets.find((target) =>
+    isAllowedExplicitRoutingTarget(input, target)
+  ) ?? null;
+}
+
+export function resolveNextTurn(input: ResolveNextTurnInput): NextTurn {
+  if (input.multiAgentEnabled === false) {
+    const directTarget = input.inbound?.targetId ??
+      input.userMentionTargets?.[0] ??
+      null;
+    return resolveParticipantTurn(
+      directTarget,
+      [],
+      input.thread,
+      input.availableAgents,
+    );
+  }
+
+  if (input.sender.type === "tool") {
+    const replyTarget = input.inbound?.replyToParticipantId ?? input.sender.id;
+    const replyQueue = normalizeParticipantQueue(
+      input.inbound?.replyToTargetQueue ?? [],
+      input.thread,
+      input.availableAgents,
+    );
+    return resolveParticipantTurn(
+      replyTarget,
+      replyQueue,
+      input.thread,
+      input.availableAgents,
+    );
+  }
+
+  const inboundTargetId = input.inbound?.targetId ?? null;
+  const inboundQueue = normalizeParticipantQueue(
+    input.inbound?.targetQueue ?? [],
+    input.thread,
+    input.availableAgents,
+  );
+  const baseQueue = consumeCurrentFromQueue(inboundQueue, inboundTargetId);
+  const routingIntent = {
+    routeTo: input.routingIntent?.routeTo ?? [],
+    askTo: input.routingIntent?.askTo ?? [],
+  };
+
+  const askTarget = firstAllowedExplicitRoutingTarget(
+    input,
+    routingIntent.askTo,
+  );
+  if (askTarget) {
+    const askQueue = prependQueueTarget(baseQueue, input.sender.id);
+    return resolveParticipantTurn(
+      askTarget,
+      askQueue,
+      input.thread,
+      input.availableAgents,
+    );
+  }
+
+  const routeTarget = firstAllowedExplicitRoutingTarget(
+    input,
+    routingIntent.routeTo,
+  );
+  if (routeTarget) {
+    return resolveParticipantTurn(
+      routeTarget,
+      baseQueue,
+      input.thread,
+      input.availableAgents,
+    );
+  }
+
+  if (input.sender.type === "user" && input.userMentionTargets?.length) {
+    const mentionRoute = buildMentionTargetRoute(input.userMentionTargets, {
+      returnTarget: input.sender.id,
+    });
+    if (mentionRoute) {
+      return resolveParticipantTurn(
+        mentionRoute.targetId,
+        mentionRoute.targetQueue,
+        input.thread,
+        input.availableAgents,
+      );
+    }
+  }
+
+  if (input.sender.type === "user" && inboundTargetId) {
+    return resolveParticipantTurn(
+      inboundTargetId,
+      baseQueue,
+      input.thread,
+      input.availableAgents,
+    );
+  }
+
+  if (input.sender.type === "user") {
+    const persistedTarget = resolvePersistedUserTarget(
+      input.sender.id,
+      input.thread,
+      input.availableAgents,
+    );
+    if (persistedTarget) {
+      return resolveParticipantTurn(
+        persistedTarget,
+        [],
+        input.thread,
+        input.availableAgents,
+      );
+    }
+
+    const senderLower = input.sender.id.trim().toLowerCase();
+    const defaultAgentParticipant = Array.isArray(input.thread.participants)
+      ? input.thread.participants.find((participant) => {
+        const participantLower = participant.trim().toLowerCase();
+        return participantLower !== senderLower &&
+          Boolean(resolveAgentParticipant(participant, input.availableAgents));
+      })
+      : null;
+    if (defaultAgentParticipant) {
+      return resolveParticipantTurn(
+        defaultAgentParticipant,
+        [],
+        input.thread,
+        input.availableAgents,
+      );
+    }
+  }
+
+  if (baseQueue.length > 0) {
+    const [nextTarget, ...remainingQueue] = baseQueue;
+    return resolveParticipantTurn(
+      nextTarget,
+      remainingQueue,
+      input.thread,
+      input.availableAgents,
+    );
+  }
+
+  return { kind: "stop" };
+}
+
+export function buildToolReplyRoutingMetadata(
+  toolEmitterId: string,
+  nextTurn: NextTurn,
+): ToolReplyRoutingMetadata {
+  const emitterId = toolEmitterId.trim();
+  const replyToTargetQueue = nextTurn.kind === "agent"
+    ? prependQueueTarget(nextTurn.targetQueue, nextTurn.targetId)
+    : nextTurn.kind === "human"
+    ? [nextTurn.targetId]
+    : [];
+
+  return {
+    replyToParticipantId: emitterId,
+    replyToTargetQueue,
+  };
+}
+
 function isDirectConversationThread(
   thread: Thread,
   availableAgents: Agent[],
@@ -412,57 +805,6 @@ function isDirectConversationThread(
   return agentParticipantIds.size === 1 &&
     agentParticipantIds.has((currentAgent.id ?? currentAgent.name) as string) &&
     userParticipants.length === 1;
-}
-
-function discoverSingleAgentTargetForMessage(
-  messageContext: MessageContextDetails,
-  thread: Thread,
-  availableAgents: Agent[],
-): TargetResolution | null {
-  if (messageContext.senderType === "tool" && messageContext.senderId) {
-    // Try exact match first, then case-insensitive
-    const senderIdLower = messageContext.senderId.toLowerCase();
-    const senderNameLower = messageContext.senderName?.toLowerCase();
-    const agent = availableAgents.find((a) =>
-      a.id === messageContext.senderId || a.name === messageContext.senderName
-    ) ?? availableAgents.find((a) =>
-      (typeof a.id === "string" && a.id.toLowerCase() === senderIdLower) ||
-      (typeof a.name === "string" &&
-        a.name.toLowerCase() === (senderNameLower ?? senderIdLower))
-    );
-    if (agent) {
-      return { targetId: (agent.id ?? agent.name) as string, targetQueue: [] };
-    }
-    // Agent not found — fall through to default participant routing
-    // This handles cases where the sender ID doesn't match any configured agent
-    // (e.g., chat adapter sent "assistant" but actual agent is "estrategista")
-  }
-
-  const senderNameLower = messageContext.senderName?.toLowerCase();
-  const senderIdLower = messageContext.senderId?.toLowerCase();
-  const defaultTarget = thread.participants?.find((p) => {
-    const pLower = p.toLowerCase();
-    return pLower !== senderNameLower &&
-      pLower !== senderIdLower &&
-      availableAgents.some((a) =>
-        (typeof a.name === "string" && a.name.toLowerCase() === pLower) ||
-        (typeof a.id === "string" && a.id.toLowerCase() === pLower)
-      );
-  });
-
-  if (!defaultTarget) return null;
-
-  const defaultTargetLower = defaultTarget.toLowerCase();
-  const targetAgent = availableAgents.find((a) =>
-    (typeof a.name === "string" &&
-      a.name.toLowerCase() === defaultTargetLower) ||
-    (typeof a.id === "string" && a.id.toLowerCase() === defaultTargetLower)
-  );
-
-  return {
-    targetId: (targetAgent?.id ?? targetAgent?.name ?? defaultTarget) as string,
-    targetQueue: [],
-  };
 }
 
 /**
@@ -551,120 +893,6 @@ async function checkAndUpdateAgentTurns(
   }
 
   return { shouldForceUserTarget: false };
-}
-
-/**
- * Discover the target(s) for a message using the new multi-agent routing logic.
- *
- * Priority:
- * 1. Tool results → route back to requesting agent
- * 2. @mentions → route to mentioned agents (preserves order, builds queue)
- * 3. Persisted target → use sender's last target from thread metadata
- * 4. Default → first non-self participant
- */
-async function discoverTargetForMessage(
-  messageContext: MessageContextDetails,
-  thread: Thread,
-  availableAgents: Agent[],
-  ops: Operations,
-): Promise<TargetResolution | null> {
-  const metadata = getRuntimeThreadMetadata(thread.metadata);
-  const participantTargets = metadata.participantTargets ?? {};
-
-  // 1. Tool results → route back to requesting agent
-  if (messageContext.senderType === "tool" && messageContext.senderId) {
-    // Try exact match first, then case-insensitive
-    const toolSenderIdLower = messageContext.senderId.toLowerCase();
-    const toolSenderNameLower = messageContext.senderName?.toLowerCase();
-    const agent = availableAgents.find((a) =>
-      a.id === messageContext.senderId || a.name === messageContext.senderName
-    ) ?? availableAgents.find((a) =>
-      (typeof a.id === "string" && a.id.toLowerCase() === toolSenderIdLower) ||
-      (typeof a.name === "string" &&
-        a.name.toLowerCase() === (toolSenderNameLower ?? toolSenderIdLower))
-    );
-    if (agent) {
-      return { targetId: (agent.id ?? agent.name) as string, targetQueue: [] };
-    }
-    // Agent not found — fall through to default routing (mentions, persisted, participant)
-  }
-
-  // 2. Parse @mentions from content
-  const mentions = parseMentions(
-    messageContext.contentText,
-    thread.participants ?? null,
-    availableAgents,
-  );
-
-  if (mentions.length > 0) {
-    // Update sender's persistent target in thread metadata
-    await updateParticipantTarget(
-      ops,
-      thread,
-      messageContext.senderId,
-      mentions[0],
-    );
-
-    return buildMentionTargetRoute(mentions, {
-      returnTarget: messageContext.senderId,
-    });
-  }
-
-  // 3. Use sender's persisted target from thread metadata
-  const persistedTarget = participantTargets[messageContext.senderId];
-  if (persistedTarget) {
-    // Validate the target still exists as an agent (case-insensitive)
-    const persistedTargetLower = persistedTarget.toLowerCase();
-    const targetAgent = availableAgents.find((a) =>
-      (typeof a.id === "string" &&
-        a.id.toLowerCase() === persistedTargetLower) ||
-      (typeof a.name === "string" &&
-        a.name.toLowerCase() === persistedTargetLower)
-    );
-    if (targetAgent) {
-      return {
-        targetId: (targetAgent.id ?? targetAgent.name) as string,
-        targetQueue: [],
-      };
-    }
-  }
-
-  // 4. Default: First non-self participant (that is an agent) - case-insensitive
-  const senderNameLower = messageContext.senderName?.toLowerCase();
-  const senderIdLower = messageContext.senderId?.toLowerCase();
-  const defaultTarget = thread.participants?.find((p) => {
-    const pLower = p.toLowerCase();
-    return pLower !== senderNameLower &&
-      pLower !== senderIdLower &&
-      availableAgents.some((a) =>
-        (typeof a.name === "string" && a.name.toLowerCase() === pLower) ||
-        (typeof a.id === "string" && a.id.toLowerCase() === pLower)
-      );
-  });
-
-  if (defaultTarget) {
-    // Persist this as sender's default target
-    const defaultTargetLower = defaultTarget.toLowerCase();
-    const targetAgent = availableAgents.find((a) =>
-      (typeof a.name === "string" &&
-        a.name.toLowerCase() === defaultTargetLower) ||
-      (typeof a.id === "string" && a.id.toLowerCase() === defaultTargetLower)
-    );
-    await updateParticipantTarget(
-      ops,
-      thread,
-      messageContext.senderId,
-      (targetAgent?.id ?? targetAgent?.name ?? defaultTarget) as string,
-    );
-    return {
-      targetId:
-        (targetAgent?.id ?? targetAgent?.name ?? defaultTarget) as string,
-      targetQueue: [],
-    };
-  }
-
-  // 5. No valid target found
-  return null;
 }
 
 function toExecutableTool(tool: unknown): ExecutableTool | null {
@@ -1199,6 +1427,31 @@ export const messageProcessor: EventProcessor<
       : basePriority;
 
     const normalizedToolCalls = messageContext.toolCalls;
+    const eventMetadata = event.metadata &&
+        typeof event.metadata === "object" &&
+        !Array.isArray(event.metadata)
+      ? event.metadata as Record<string, unknown>
+      : {};
+    const routingIntent = normalizeRoutingIntent(eventMetadata.routing);
+    const inboundRouting = {
+      targetId: typeof eventMetadata.targetId === "string"
+        ? eventMetadata.targetId
+        : null,
+      targetQueue: Array.isArray(eventMetadata.targetQueue)
+        ? eventMetadata.targetQueue.filter((candidate): candidate is string =>
+          typeof candidate === "string"
+        )
+        : [],
+      replyToParticipantId:
+        typeof eventMetadata.replyToParticipantId === "string"
+          ? eventMetadata.replyToParticipantId
+          : null,
+      replyToTargetQueue: Array.isArray(eventMetadata.replyToTargetQueue)
+        ? eventMetadata.replyToTargetQueue.filter((
+          candidate,
+        ): candidate is string => typeof candidate === "string")
+        : [],
+    };
 
     // ====================================================================
     // Tool Call Processing (BEFORE target resolution)
@@ -1220,35 +1473,30 @@ export const messageProcessor: EventProcessor<
         id: messageContext.senderId,
         name: messageContext.senderName,
       };
-      const toolReplyMetadata = event.metadata &&
-          typeof event.metadata === "object" &&
-          !Array.isArray(event.metadata)
-        ? {
-          replyToParticipantId:
-            typeof (event.metadata as Record<string, unknown>).targetId ===
-                "string"
-              ? (event.metadata as Record<string, unknown>).targetId as string
-              : null,
-          replyToTargetQueue: Array.isArray(
-              (event.metadata as Record<string, unknown>).targetQueue,
-            )
-            ? (
-              (event.metadata as Record<string, unknown>)
-                .targetQueue as unknown[]
-            ).filter((candidate): candidate is string =>
-              typeof candidate === "string"
-            )
-            : [],
-        }
-        : { replyToParticipantId: null, replyToTargetQueue: [] as string[] };
+      const senderIdForTool =
+        (agentForToolCalls.id ?? agentForToolCalls.name) as string;
+      const nextTurnAfterTools = resolveNextTurn({
+        sender: {
+          id: senderIdForTool,
+          name: agentForToolCalls.name,
+          type: "agent",
+        },
+        thread,
+        availableAgents,
+        inbound: inboundRouting,
+        routingIntent,
+        multiAgentEnabled: context.multiAgent?.enabled === true,
+      });
+      const toolReplyMetadata = buildToolReplyRoutingMetadata(
+        senderIdForTool,
+        nextTurnAfterTools,
+      );
 
       normalizedToolCalls.forEach((call, i: number) => {
         const toolId = call.tool?.id || agentForToolCalls.name ||
           "unknown_tool";
         const toolName = call.tool?.name || toolId;
         const callId = call.id || `${toolId}_${i}`;
-        const senderIdForTool =
-          (agentForToolCalls.id ?? agentForToolCalls.name) as string;
         const argumentsString = typeof call.args === "string"
           ? call.args
           : JSON.stringify(call.args ?? {});
@@ -1295,21 +1543,6 @@ export const messageProcessor: EventProcessor<
       };
     }
 
-    // Check if event metadata already has target routing (from llm_call response)
-    const eventMetadata = event.metadata as Record<string, unknown> | null;
-    const metadataTargetId = eventMetadata?.targetId as string | null;
-    const metadataTargetQueue = eventMetadata?.targetQueue as string[] | null;
-    const replyToParticipantId = typeof eventMetadata?.replyToParticipantId ===
-        "string"
-      ? eventMetadata.replyToParticipantId
-      : null;
-    const replyToTargetQueue = Array.isArray(eventMetadata?.replyToTargetQueue)
-      ? eventMetadata.replyToTargetQueue.filter((
-        candidate,
-      ): candidate is string => typeof candidate === "string")
-      : [];
-
-    let targetResolution: TargetResolution | null;
     const userMentionTargets = (
         messageContext.senderType === "user" &&
         context.multiAgent?.enabled === true
@@ -1321,44 +1554,28 @@ export const messageProcessor: EventProcessor<
       )
       : [];
 
-    if (metadataTargetId && userMentionTargets.length === 0) {
-      const resolvedMetadataTarget = resolveThreadParticipantTarget(
-        metadataTargetId,
-        thread,
-        availableAgents,
-      );
+    const nextTurn = resolveNextTurn({
+      sender: {
+        id: messageContext.senderId,
+        name: messageContext.senderName,
+        type: messageContext.senderType,
+      },
+      thread,
+      availableAgents,
+      inbound: inboundRouting,
+      routingIntent,
+      userMentionTargets,
+      multiAgentEnabled: context.multiAgent?.enabled === true,
+    });
 
-      // Use target from event metadata (set by llm_call processor)
-      targetResolution = resolvedMetadataTarget
-        ? {
-          targetId: resolvedMetadataTarget,
-          targetQueue: (metadataTargetQueue ?? []).filter((candidate) =>
-            resolveThreadParticipantTarget(candidate, thread, availableAgents)
-          ),
-        }
-        : null;
-    } else if (context.multiAgent?.enabled === true) {
-      // Multi-agent mode enables delegation via @mentions and persisted targets.
-      targetResolution = await discoverTargetForMessage(
-        messageContext,
-        thread,
-        availableAgents,
-        ops,
-      );
-    } else {
-      // Single-agent mode only resolves the active agent participant and does not
-      // allow autonomous delegation based on plain-text agent output.
-      targetResolution = discoverSingleAgentTargetForMessage(
-        messageContext,
-        thread,
-        availableAgents,
-      );
-    }
-
-    // If no target resolved, skip routing (no agents to respond)
-    if (!targetResolution) {
+    if (nextTurn.kind !== "agent") {
       return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
     }
+
+    let targetResolution: TargetResolution = {
+      targetId: nextTurn.targetId,
+      targetQueue: nextTurn.targetQueue,
+    };
 
     // Check for loop prevention (agent-to-agent turn limit)
     const maxAgentTurns = context.multiAgent?.maxAgentTurns ?? 5;
@@ -1573,6 +1790,7 @@ export const messageProcessor: EventProcessor<
         {
           includeTargetContext: includeTargetContext && !directConversation,
           directConversation,
+          maxToolResultChars: context.toolResultHistoryMaxChars,
         },
       );
       const llmHistory: ChatMessage[] = context.historyTransform
@@ -1674,39 +1892,10 @@ export const messageProcessor: EventProcessor<
         config: llmConfig as LLMConfig,
       } as LlmCallEventPayload;
 
-      // Include target queue in LLM_CALL metadata for agent response routing
-      // For tool responses: use the agent's persisted target (who they were talking to)
-      // to avoid the agent targeting itself after responding
-      let originalSenderId = messageContext.senderId;
-      let responseTargetQueue = targetResolution.targetQueue;
-      if (messageContext.senderType === "tool") {
-        if (replyToParticipantId) {
-          originalSenderId = replyToParticipantId;
-        } else {
-          // Tool response - find who the agent was originally talking to
-          const threadMeta = getRuntimeThreadMetadata(thread.metadata);
-          const agentTarget = threadMeta.participantTargets
-            ?.[messageContext.senderId];
-          if (agentTarget) {
-            originalSenderId = agentTarget;
-          } else {
-            // Fallback: find a user in the thread participants
-            const userInThread = thread.participants?.find((p) =>
-              !availableAgents.some((a) => a.name === p || a.id === p)
-            );
-            if (userInThread) {
-              originalSenderId = userInThread;
-            }
-          }
-        }
-
-        responseTargetQueue = replyToTargetQueue;
-      }
-
       const llmEventMetadata = {
         targetId: targetResolution.targetId,
-        targetQueue: responseTargetQueue,
-        sourceMessageSenderId: originalSenderId,
+        targetQueue: targetResolution.targetQueue,
+        sourceMessageSenderId: messageContext.senderId,
         ...(isRecord(messageMetadata) &&
             typeof messageMetadata.visibility === "string"
           ? { visibility: messageMetadata.visibility }
@@ -1887,88 +2076,6 @@ async function buildProcessingContext(
     userMetadata?: Record<string, unknown>;
     agentNode?: KnowledgeNode;
   };
-}
-
-/** @deprecated Use discoverTargetForMessage instead - kept for backward compatibility */
-function _filterAllowedAgents(
-  contextDetails: MessageContextDetails,
-  targetAgents: Agent[],
-  availableAgents: Agent[],
-): Agent[] {
-  if (contextDetails.senderType !== "agent") return targetAgents;
-  const senderAgent = availableAgents.find((a) =>
-    a.name === contextDetails.senderName ||
-    a.id === contextDetails.senderId
-  );
-  if (!senderAgent) return targetAgents;
-  const allowed = Array.isArray(senderAgent.allowedAgents)
-    ? senderAgent.allowedAgents
-    : [];
-  if (allowed.length === 0) return targetAgents;
-  return targetAgents.filter((agent) => allowed.includes(agent.name));
-}
-
-/** @deprecated Use discoverTargetForMessage instead - kept for backward compatibility */
-function _discoverTargetAgentsForMessage(
-  contextDetails: MessageContextDetails,
-  thread: Thread,
-  availableAgents: Agent[],
-): Agent[] {
-  // Tool messages route back to the requesting agent by senderId
-  if (
-    (contextDetails.senderType === "tool" ||
-      contextDetails.toolCalls.length > 0) &&
-    contextDetails.senderId
-  ) {
-    const agent = availableAgents.find((a) =>
-      a.id === contextDetails.senderId || a.name === contextDetails.senderName
-    );
-    return agent ? [agent] : [];
-  }
-
-  // Mentions (preserve mention order)
-  const names = extractMentionNames(contextDetails.contentText);
-  if (names.length > 0) {
-    // Build in the order mentioned, unique by name
-    const seen = new Set<string>();
-    const orderedMentioned: Agent[] = [];
-    for (const name of names) {
-      if (seen.has(name)) continue;
-      const agent = availableAgents.find((a) => a.name === name);
-      if (agent) {
-        orderedMentioned.push(agent);
-        seen.add(name);
-      }
-    }
-    const allowedMentionedAgents = _filterAllowedAgents(
-      contextDetails,
-      orderedMentioned,
-      availableAgents,
-    );
-    if (allowedMentionedAgents.length > 0) {
-      return allowedMentionedAgents;
-    }
-    // Otherwise ignore unrecognized/disallowed mentions and continue to fallback logic below
-  }
-
-  // Default two-party fallback
-  if (thread.participants && thread.participants.length === 2) {
-    const otherParticipant: string | undefined = thread.participants.find((
-      p: string,
-    ) =>
-      p !== contextDetails.senderName &&
-      p !== contextDetails.senderId
-    );
-    if (otherParticipant) {
-      const otherAgent = availableAgents.find((a) =>
-        a.name === otherParticipant
-      );
-      if (otherAgent) return [otherAgent];
-    }
-  }
-
-  // Otherwise: no implicit target
-  return [];
 }
 
 export const { shouldProcess, process } = messageProcessor;

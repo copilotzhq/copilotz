@@ -203,6 +203,67 @@ export default defineCollection({
   }
 });
 
+Deno.test("createCopilotz agents async resolver receives preload and can patch", async () => {
+  const copilotz = await createCopilotz({
+    dbConfig: { url: ":memory:" },
+    resources: { imports: ["agents.copilotz"] },
+    agents: async (loaded) => {
+      assert(loaded.some((a) => a.id === "copilotz"));
+      return loaded.map((a) =>
+        a.id === "copilotz" ? { ...a, role: "callback-patched" } : a
+      );
+    },
+  });
+
+  try {
+    const agent = copilotz.config.agents?.find((a) => a.id === "copilotz");
+    assertEquals(agent?.role, "callback-patched");
+  } finally {
+    await copilotz.shutdown();
+  }
+});
+
+Deno.test("createCopilotz explicit agents array still merges on id over preload", async () => {
+  const copilotz = await createCopilotz({
+    dbConfig: { url: ":memory:" },
+    resources: { imports: ["agents.copilotz"] },
+    agents: [
+      {
+        id: "copilotz",
+        name: "copilotz",
+        role: "inline-override",
+        instructions: "Replaced instructions for merge test.",
+        llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+      },
+    ],
+  });
+
+  try {
+    const agent = copilotz.config.agents?.find((a) => a.id === "copilotz");
+    assertEquals(agent?.role, "inline-override");
+    assertEquals(
+      agent?.instructions,
+      "Replaced instructions for merge test.",
+    );
+  } finally {
+    await copilotz.shutdown();
+  }
+});
+
+Deno.test("createCopilotz agents resolver must return an array", async () => {
+  await assertRejects(
+    () =>
+      createCopilotz({
+        dbConfig: { url: ":memory:" },
+        resources: { imports: ["agents.copilotz"] },
+        agents: () =>
+          null as unknown as typeof TEST_AGENT[],
+      }),
+    TypeError,
+    "Resource list resolver must return an array",
+  );
+});
+
 Deno.test("createCopilotz rejects asset backends that were filtered out", async () => {
   const tempDir = await Deno.makeTempDir();
 

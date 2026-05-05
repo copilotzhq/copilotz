@@ -24,6 +24,7 @@ import {
   // Resource loading
   loadResources,
   mergeResourceArrays,
+  resolveResourceList,
   provisionTenantSchema,
   // Event processing
   relation,
@@ -544,6 +545,21 @@ const merged = mergeResourceArrays<T>(
   fileLoaded: T[],
   explicit: T[] | undefined
 ): T[]
+```
+
+### resolveResourceList()
+
+Used internally by `createCopilotz` for `agents`, `tools`, `apis`, `mcpServers`, and
+`collections`. Pass the preload array (`mergeResourceArrays(bundled, user, …)`)
+and either an explicit array (same merge semantics as above) or a callback
+`(loaded) => T[] | Promise<T[]>` to return the final list.
+
+```typescript
+import { mergeResourceArrays, resolveResourceList } from "@copilotz/copilotz";
+
+const agents = await resolveResourceList(preload, (loaded) =>
+  loaded.map((a) => (a.id === "copilotz" ? { ...a, role: "Patched" } : a)),
+);
 ```
 
 ### Resources type

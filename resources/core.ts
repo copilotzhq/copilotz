@@ -201,6 +201,7 @@ const coreTools = [
   "list_skills",
   "load_skill",
   "read_skill_resource",
+  "read_tool_result",
   "persistent_terminal",
   "update_my_memory",
 ] as const;

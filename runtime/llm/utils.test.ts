@@ -97,3 +97,35 @@ Deno.test("parseToolCallsFromResponse strips incomplete function calls after loc
     { threadData: { step: "Direção Criativa" } },
   );
 });
+
+Deno.test("formatMessages counts structured tool result output toward input limit", () => {
+  const hugeBody = "x".repeat(8000);
+  const formatted = formatMessages({
+    messages: [
+      { role: "user", content: "first" },
+      {
+        role: "tool",
+        content: "",
+        toolCalls: [{
+          id: "call_1",
+          tool: { id: "http_request" },
+          args: "{}",
+          output: { body: hugeBody },
+        }],
+      },
+    ],
+    config: {
+      limitEstimatedInputTokens: 500,
+    },
+  });
+
+  const assistantTurns = formatted.filter((m) => m.role === "assistant");
+  assertEquals(assistantTurns.length >= 1, true);
+  const toolWire = assistantTurns[assistantTurns.length - 1];
+  assertEquals(typeof toolWire.content, "string");
+  const wire = toolWire.content as string;
+  // Budget is 500 est. tokens → ~2000 chars; tail-slice may omit the opening
+  // `<function_results>` tag but must not retain the full tool JSON.
+  assertEquals(wire.length <= 2100, true);
+  assertEquals(wire.includes(hugeBody), false);
+});

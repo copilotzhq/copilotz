@@ -25,8 +25,6 @@ import type {
 import { ulid } from "ulid";
 import { resolveAssetRefsInMessages } from "@/runtime/storage/assets.ts";
 import { filterToolCallTokensStreaming } from "@/runtime/llm/utils.ts";
-import { buildMentionTargetRoute } from "@/utils/mentions.ts";
-import type { Agent, Thread } from "@/types/index.ts";
 import { createLlmUsageService } from "@/runtime/collections/native.ts";
 
 export type { ChatMessage };
@@ -36,66 +34,6 @@ export type LLMResultPayload = LlmResultEventPayload;
 
 const escapeRegex = (string: string): string =>
   string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-export function resolveAgentResponseTarget(
-  routeTargets: string[],
-  agent: { id?: string | null; name?: string | null },
-  sourceEvent: Event,
-  multiAgentEnabled: boolean,
-): { targetId: string | null; targetQueue: string[] } {
-  // Get source event metadata for target queue
-  const eventMetadata = sourceEvent.metadata as Record<string, unknown> | null;
-  const sourceTargetQueue = (eventMetadata?.targetQueue as string[] | null) ??
-    [];
-  const sourceSenderId =
-    (eventMetadata?.sourceMessageSenderId as string | null) ?? null;
-
-  if (!multiAgentEnabled) {
-    return {
-      targetId: sourceSenderId,
-      targetQueue: [],
-    };
-  }
-
-  const selfIdentifiers = new Set(
-    [agent.id, agent.name]
-      .filter((value): value is string =>
-        typeof value === "string" && value.trim().length > 0
-      )
-      .map((value) => value.toLowerCase()),
-  );
-
-  const normalizedRouteTargets = routeTargets.filter((target) =>
-    typeof target === "string" && target.trim().length > 0 &&
-    !selfIdentifiers.has(target.trim().toLowerCase())
-  );
-
-  const mentionRoute = buildMentionTargetRoute(normalizedRouteTargets, {
-    returnTarget: sourceSenderId,
-    fallbackQueue: sourceTargetQueue,
-  });
-  if (mentionRoute) return mentionRoute;
-
-  // Default in multi-agent mode: return to the delegating sender first and
-  // preserve the upstream queue behind that reply path.
-  if (typeof sourceSenderId === "string" && sourceSenderId.trim().length > 0) {
-    return {
-      targetId: sourceSenderId,
-      targetQueue: sourceTargetQueue,
-    };
-  }
-
-  if (sourceTargetQueue.length > 0) {
-    const nextTarget = sourceTargetQueue[0];
-    const remainingQueue = sourceTargetQueue.slice(1);
-    return { targetId: nextTarget, targetQueue: remainingQueue };
-  }
-
-  return {
-    targetId: null,
-    targetQueue: [],
-  };
-}
 
 export function shouldEmitAgentMessage(
   answer: string | undefined,
@@ -130,129 +68,12 @@ export function assertAgentLLMConfig(
   );
 }
 
-function resolveAgentIdentity(
-  agent: { id?: string | null; name?: string | null },
-): string | null {
-  const value = agent.id ?? agent.name;
-  return typeof value === "string" && value.trim().length > 0 ? value : null;
-}
-
-function resolveAgentRouteTargets(
-  extractedTags: Record<string, string[]> | undefined,
-  currentAgent: { id?: string | null; name?: string | null },
-  senderAgent: Agent | undefined,
-  thread: Thread,
-  availableAgents: Agent[],
-): string[] {
-  const rawTargets = Array.isArray(extractedTags?.route_to)
-    ? extractedTags.route_to
+function normalizeExtractedTagTargets(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((target): target is string =>
+      typeof target === "string" && target.trim().length > 0
+    ).map((target) => target.trim())
     : [];
-  if (rawTargets.length === 0) return [];
-
-  const participants = Array.isArray(thread.participants)
-    ? thread.participants.filter((value): value is string =>
-      typeof value === "string" && value.trim().length > 0
-    )
-    : [];
-  const selfIdentifiers = new Set(
-    [currentAgent.id, currentAgent.name]
-      .filter((value): value is string =>
-        typeof value === "string" && value.trim().length > 0
-      )
-      .map((value) => value.toLowerCase()),
-  );
-  const allowedAgents = Array.isArray(senderAgent?.allowedAgents) &&
-      senderAgent.allowedAgents.length > 0
-    ? new Set(senderAgent.allowedAgents.map((value) => value.toLowerCase()))
-    : null;
-  const resolved: string[] = [];
-  const seen = new Set<string>();
-
-  for (const rawTarget of rawTargets) {
-    const candidate = rawTarget.trim();
-    if (candidate.length === 0) continue;
-
-    const matchedAgent = availableAgents.find((availableAgent) =>
-      (typeof availableAgent.id === "string" &&
-        availableAgent.id.toLowerCase() === candidate.toLowerCase()) ||
-      (typeof availableAgent.name === "string" &&
-        availableAgent.name.toLowerCase() === candidate.toLowerCase())
-    );
-    if (!matchedAgent) continue;
-
-    const canonicalId = (matchedAgent.id ?? matchedAgent.name) as string;
-    const canonicalLower = canonicalId.toLowerCase();
-    if (selfIdentifiers.has(canonicalLower)) continue;
-
-    const isParticipant = participants.some((participant) => {
-      const participantLower = participant.toLowerCase();
-      return participantLower === canonicalLower ||
-        (typeof matchedAgent.id === "string" &&
-          participantLower === matchedAgent.id.toLowerCase()) ||
-        (typeof matchedAgent.name === "string" &&
-          participantLower === matchedAgent.name.toLowerCase());
-    });
-    if (!isParticipant) continue;
-
-    if (
-      allowedAgents &&
-      !allowedAgents.has(canonicalLower) &&
-      !(typeof matchedAgent.id === "string" &&
-        allowedAgents.has(matchedAgent.id.toLowerCase())) &&
-      !(typeof matchedAgent.name === "string" &&
-        allowedAgents.has(matchedAgent.name.toLowerCase()))
-    ) {
-      continue;
-    }
-
-    if (seen.has(canonicalLower)) continue;
-    resolved.push(canonicalId);
-    seen.add(canonicalLower);
-  }
-
-  return resolved;
-}
-
-function resolveAgentAskTargets(
-  extractedTags: Record<string, string[]> | undefined,
-  currentAgent: { id?: string | null; name?: string | null },
-  senderAgent: Agent | undefined,
-  thread: Thread,
-  availableAgents: Agent[],
-): string[] {
-  const rawTargets = Array.isArray(extractedTags?.ask_to)
-    ? extractedTags.ask_to
-    : [];
-  if (rawTargets.length === 0) return [];
-
-  return resolveAgentRouteTargets(
-    { route_to: rawTargets },
-    currentAgent,
-    senderAgent,
-    thread,
-    availableAgents,
-  );
-}
-
-function buildAskTargetRoute(
-  askTargetId: string,
-  currentAgent: { id?: string | null; name?: string | null },
-  sourceEvent: Event,
-): { targetId: string; targetQueue: string[] } {
-  const eventMetadata = sourceEvent.metadata as Record<string, unknown> | null;
-  const sourceTargetQueue = (eventMetadata?.targetQueue as string[] | null) ??
-    [];
-  const sourceSenderId =
-    (eventMetadata?.sourceMessageSenderId as string | null) ?? null;
-  const currentAgentId = resolveAgentIdentity(currentAgent);
-
-  return buildMentionTargetRoute([askTargetId], {
-    returnTarget: currentAgentId,
-    fallbackQueue: [
-      ...(typeof sourceSenderId === "string" ? [sourceSenderId] : []),
-      ...sourceTargetQueue,
-    ],
-  }) ?? { targetId: askTargetId, targetQueue: [] };
 }
 
 export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
@@ -272,6 +93,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     // Defense-in-depth: the shared processStream already filters
     // <function_calls> blocks, but we keep a second pass here in case
     // any slip through (e.g. non-standard provider integration).
+    // TODO: Revisit function-call block handling separately from routing.
     const toolCallFilterState: {
       inside: boolean;
       pending: string;
@@ -591,48 +413,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       })
       : undefined;
 
-    // Resolve target for agent's response (based on explicit route tags or queue)
-    const routeTargets = resolveAgentRouteTargets(
-      extractedTags,
-      {
-        id: payload.agent.id ?? null,
-        name: payload.agent.name,
-      },
-      agentForCall,
-      deps.thread,
-      context.agents ?? [],
+    const routeTargets = normalizeExtractedTagTargets(
+      extractedTags?.route_to,
     );
-    const askTargets = resolveAgentAskTargets(
-      extractedTags,
-      {
-        id: payload.agent.id ?? null,
-        name: payload.agent.name,
-      },
-      agentForCall,
-      deps.thread,
-      context.agents ?? [],
-    );
-    if (!shouldEmitAgentMessage(answer, toolCalls, routeTargets, askTargets)) {
-      return { producedEvents: [] };
-    }
-    const responseTarget = askTargets.length > 0
-      ? buildAskTargetRoute(
-        askTargets[0],
-        {
-          id: payload.agent.id ?? null,
-          name: payload.agent.name,
-        },
-        event,
-      )
-      : resolveAgentResponseTarget(
-        routeTargets,
-        {
-          id: payload.agent.id ?? null,
-          name: payload.agent.name,
-        },
-        event,
-        context.multiAgent?.enabled === true,
-      );
+    const askTargets = normalizeExtractedTagTargets(extractedTags?.ask_to);
 
     const llmResultPayload: LlmResultEventPayload = {
       llmCallId: typeof event.id === "string" ? event.id : ulid(),
@@ -657,9 +441,25 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       finishedAt: new Date().toISOString(),
     };
 
+    const eventMetadata = event.metadata &&
+        typeof event.metadata === "object" &&
+        !Array.isArray(event.metadata)
+      ? event.metadata as Record<string, unknown>
+      : {};
     const resultMetadata: Record<string, unknown> = {
-      targetId: responseTarget.targetId,
-      targetQueue: responseTarget.targetQueue,
+      ...(typeof eventMetadata.targetId === "string"
+        ? { targetId: eventMetadata.targetId }
+        : {}),
+      ...(Array.isArray(eventMetadata.targetQueue)
+        ? {
+          targetQueue: eventMetadata.targetQueue.filter((
+            target,
+          ): target is string => typeof target === "string"),
+        }
+        : {}),
+      ...(typeof eventMetadata.sourceMessageSenderId === "string"
+        ? { sourceMessageSenderId: eventMetadata.sourceMessageSenderId }
+        : {}),
       ...(routeTargets.length > 0
         ? {
           routing: {

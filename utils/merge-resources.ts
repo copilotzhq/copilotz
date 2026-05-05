@@ -54,3 +54,42 @@ export function mergeResourceArrays<T>(
         ? [...explicit, ...kept]
         : [...kept, ...explicit];
 }
+
+/**
+ * Callback that receives bundled + file-loaded resources (preload) and returns
+ * the final list for that type. May be async.
+ */
+export type ResourceListResolver<T> = (loaded: T[]) => T[] | Promise<T[]>;
+
+/** Explicit array, resolver callback, or omit to keep preload only. */
+export type ResourceListInput<T> =
+    | T[]
+    | ResourceListResolver<T>
+    | undefined;
+
+/**
+ * Applies explicit resource arrays or a resolver callback on top of preload
+ * (typically `mergeResourceArrays(bundled, user, { prioritize: "explicit" })`).
+ *
+ * - `undefined`: return preload unchanged
+ * - array: same as {@link mergeResourceArrays}(preload, array, explicit priority)
+ * - function: return value becomes the final list (full control)
+ */
+export async function resolveResourceList<T>(
+    preload: T[],
+    input: ResourceListInput<T>,
+): Promise<T[]> {
+    if (input === undefined) {
+        return preload;
+    }
+    if (typeof input === "function") {
+        const out = await input(preload);
+        if (!Array.isArray(out)) {
+            throw new TypeError(
+                `Resource list resolver must return an array; got ${typeof out}`,
+            );
+        }
+        return out;
+    }
+    return mergeResourceArrays(preload, input, { prioritize: "explicit" });
+}

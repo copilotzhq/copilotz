@@ -22,6 +22,10 @@ export const toolResultProcessor: EventProcessor<
         throw new Error("Invalid thread id for tool result event");
       })();
 
+    const toolResultQueueEventId = typeof event.id === "string"
+      ? event.id
+      : undefined;
+
     const newMessagePayload: MessagePayload = {
       content: payload.content ?? "",
       sender: {
@@ -30,6 +34,9 @@ export const toolResultProcessor: EventProcessor<
         name: payload.agent.name,
       },
       metadata: {
+        ...(toolResultQueueEventId
+          ? { toolResultQueueEventId }
+          : {}),
         toolCalls: [
           {
             id: payload.toolCallId,

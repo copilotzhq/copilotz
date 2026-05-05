@@ -29,6 +29,8 @@ type MessageMetadata = Record<string, unknown> & {
   senderDisplayName?: string;
   senderExternalId?: string;
   senderParticipantId?: string;
+  /** TOOL_RESULT queue row id (for read_tool_result after history truncation). */
+  toolResultQueueEventId?: string;
 };
 
 const toDataUrl = (
@@ -194,6 +196,72 @@ export interface HistoryGeneratorOptions {
   includeTargetContext?: boolean;
   /** Whether this is a simple direct user-agent conversation */
   directConversation?: boolean;
+  /**
+   * Cap each tool result `output` when building LLM-facing history (characters
+   * of JSON-serialized tool output, including truncation envelope).
+   * Default **10_000** is applied by the caller when unset; pass `0` via
+   * `createCopilotz({ toolResultHistoryMaxChars: 0 })` to disable per-result caps.
+   */
+  maxToolResultChars?: number;
+}
+
+const DEFAULT_MAX_TOOL_RESULT_CHARS = 10_000;
+
+function truncateToolOutputForHistory(
+  maxChars: number,
+  value: unknown,
+  toolResultQueueEventId?: string,
+): unknown {
+  if (maxChars < 48) {
+    return "[tool output truncated]";
+  }
+  let serialized: string;
+  try {
+    serialized = typeof value === "string" ? value : JSON.stringify(value);
+  } catch {
+    serialized = String(value);
+  }
+  if (serialized.length <= maxChars) return value;
+
+  const envelope = (preview: string) => ({
+    _copilotz_history_truncated: true as const,
+    preview,
+    originalSerializedLength: serialized.length,
+    ...(toolResultQueueEventId
+      ? { toolResultQueueEventId }
+      : {}),
+  });
+
+  let previewLen = Math.max(0, maxChars - 200);
+  while (previewLen > 0) {
+    const surrogate = envelope(serialized.slice(0, previewLen));
+    if (JSON.stringify(surrogate).length <= maxChars) return surrogate;
+    previewLen = Math.floor(previewLen * 0.88);
+  }
+  return envelope("");
+}
+
+function applyToolHistoryCharCap(
+  maxToolResultChars: number | undefined,
+  invocation: ToolInvocation,
+  toolResultQueueEventId?: string,
+): ToolInvocation {
+  if (
+    maxToolResultChars === undefined ||
+    maxToolResultChars <= 0 ||
+    !("output" in invocation) ||
+    invocation.output === undefined
+  ) {
+    return invocation;
+  }
+  return {
+    ...invocation,
+    output: truncateToolOutputForHistory(
+      maxToolResultChars,
+      invocation.output,
+      toolResultQueueEventId,
+    ),
+  };
 }
 
 /**
@@ -271,6 +339,10 @@ export function historyGenerator(
 ): ChatMessage[] {
   const includeTargetContext = options?.includeTargetContext ?? true;
   const directConversation = options?.directConversation === true;
+  const maxToolResultChars =
+    typeof options?.maxToolResultChars === "number"
+      ? options.maxToolResultChars
+      : DEFAULT_MAX_TOOL_RESULT_CHARS;
 
   return chatHistory.flatMap((msg, _i) => {
     // Current agent's messages = "assistant"
@@ -422,22 +494,34 @@ export function historyGenerator(
       })
       : [];
 
+    const toolResultQueueEventId =
+      typeof metadata?.toolResultQueueEventId === "string"
+        ? metadata.toolResultQueueEventId
+        : undefined;
+
     let toolCalls: ToolInvocation[] | undefined;
     if (isToolResult) {
       const visibleToolCalls = parsedToolCalls.flatMap((call) => {
         const visibility = call.visibility ?? "public_full";
 
         if (isRequestingAgent || visibility === "public_full") {
-          return [stripParsedToolCall(call)];
+          return [
+            applyToolHistoryCharCap(
+              maxToolResultChars,
+              stripParsedToolCall(call),
+              toolResultQueueEventId,
+            ),
+          ];
         }
 
         if (visibility === "public_result") {
-          return [{
+          const capped = applyToolHistoryCharCap(maxToolResultChars, {
             ...stripParsedToolCall(call),
             output: typeof call.projectedOutput !== "undefined"
               ? call.projectedOutput
               : null,
-          }];
+          }, toolResultQueueEventId);
+          return [capped];
         }
 
         return [];

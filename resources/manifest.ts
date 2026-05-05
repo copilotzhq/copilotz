@@ -33,6 +33,7 @@ export default {
       "list_skills",
       "load_skill",
       "read_skill_resource",
+      "read_tool_result",
     ],
     processors: [
       "new_message",
@@ -96,6 +97,7 @@ export default {
       "tools.list_skills",
       "tools.load_skill",
       "tools.read_skill_resource",
+      "tools.read_tool_result",
       "tools.persistent_terminal",
       "tools.update_my_memory",
       "processors.new_message",
@@ -135,6 +137,7 @@ export default {
       "tools.run_command",
       "tools.wait",
       "tools.http_request",
+      "tools.read_tool_result",
       "tools.get_current_time",
     ],
     "skunk-works": [
@@ -149,6 +152,7 @@ export default {
       "tools.end_thread",
       "tools.fetch_text",
       "tools.http_request",
+      "tools.read_tool_result",
       "tools.get_current_time",
       "tools.read_file",
       "tools.write_file",

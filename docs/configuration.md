@@ -107,6 +107,10 @@ When both `resources.path` and explicit arrays are provided:
 - **Append**: Explicit items are added after file-loaded ones
 - **Override on ID collision**: If an explicit item has the same `id` (or
   `key`/`name`) as a file-loaded one, the explicit item wins
+- **Resolver callbacks**: For `agents`, `tools`, `apis`, `mcpServers`, and
+  `collections`, you may pass a function `(loaded) => loaded[]` (or async)
+  instead of an array, where `loaded` is bundled resources merged with
+  `resources.path` for that type; the return value is the final list
 - **Processors**: Always appended (no ID-based dedup)
 
 ### Options

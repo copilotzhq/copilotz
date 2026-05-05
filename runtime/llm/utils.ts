@@ -89,32 +89,33 @@ export function formatMessages(
     ? approximateTokenCount(systemContent)
     : 0;
 
+  // Materialize first so tool I/O is embedded in `content` (function_results /
+  // function_calls blocks). The input limiter only inspects `content` (plus
+  // multimodal parts); it cannot see structured `toolCalls` on the wire.
+  let normalizedMessages = formattedMessages.map(materializeHistoryMessage);
+
   // Apply estimated input budget if specified. We preserve the system prompt and
   // trim only the remaining history budget.
   if (config?.limitEstimatedInputTokens) {
-    formattedMessages = limitMessageEstimatedInputTokens(
-      formattedMessages,
+    normalizedMessages = limitMessageEstimatedInputTokens(
+      normalizedMessages,
       config.limitEstimatedInputTokens - systemEstimatedTokens,
     );
   }
 
   // Ensure system message is first if it exists
-  if (systemContent && formattedMessages[0]?.role !== "system") {
-    formattedMessages = [
+  if (systemContent && normalizedMessages[0]?.role !== "system") {
+    normalizedMessages = [
       { role: "system", content: systemContent },
-      ...formattedMessages,
+      ...normalizedMessages,
     ];
   }
 
-  // Present tool results as assistant-side context, materialize each
-  // assistant message's own tool-call block into its own content, then
-  // collapse consecutive messages from the same sender to avoid provider
+  // Collapse consecutive messages from the same sender to avoid provider
   // errors with repeated assistant turns while preserving chronology.
-  const normalizedMessages = mergeConsecutiveMessages(
-    formattedMessages.map(materializeHistoryMessage),
-  );
+  const mergedMessages = mergeConsecutiveMessages(normalizedMessages);
 
-  return appendContinuationCueIfNeeded(normalizedMessages);
+  return appendContinuationCueIfNeeded(mergedMessages);
 }
 
 function isEmptyContent(content: ChatMessage["content"]): boolean {
@@ -179,6 +180,50 @@ function contentToText(content: ChatMessage["content"]): string {
     .filter((part) => part.type === "text")
     .map((part) => (part as Extract<ChatContentPart, { type: "text" }>).text)
     .join("");
+}
+
+/**
+ * Text used for rough input-token budgeting before sending to a provider.
+ * Includes multimodal inline base64 (so limits are not blind to huge images).
+ * Does not serialize `toolCalls`; use after {@link materializeHistoryMessage}
+ * so tool I/O lives in `content` (e.g. &lt;function_results&gt; blocks).
+ */
+function wirePayloadTextForTokenEstimate(content: ChatMessage["content"]): string {
+  if (typeof content === "string") return content;
+
+  const chunks: string[] = [];
+  for (const part of content) {
+    if (part.type === "text") {
+      chunks.push((part as Extract<ChatContentPart, { type: "text" }>).text);
+      continue;
+    }
+    if (part.type === "image_url" && part.image_url?.url) {
+      const url = part.image_url.url;
+      if (url.startsWith("data:")) {
+        const sep = ";base64,";
+        const idx = url.indexOf(sep);
+        chunks.push(idx === -1 ? url : url.slice(idx + sep.length));
+      } else {
+        chunks.push(url);
+      }
+      continue;
+    }
+    if (part.type === "input_audio" && part.input_audio?.data) {
+      chunks.push(part.input_audio.data);
+      continue;
+    }
+    if (part.type === "file" && part.file?.file_data) {
+      const fd = part.file.file_data;
+      if (fd.startsWith("data:")) {
+        const sep = ";base64,";
+        const idx = fd.indexOf(sep);
+        chunks.push(idx === -1 ? fd : fd.slice(idx + sep.length));
+      } else {
+        chunks.push(fd);
+      }
+    }
+  }
+  return chunks.join("\n");
 }
 
 function extractRouteTargetsFromMetadata(
@@ -450,7 +495,7 @@ function limitMessageEstimatedInputTokens(
       continue;
     }
 
-    const messageText = contentToText(message.content);
+    const messageText = wirePayloadTextForTokenEstimate(message.content);
     const messageTokens = approximateTokenCount(messageText);
 
     if (totalTokens + messageTokens <= limitTokens) {

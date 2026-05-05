@@ -36,7 +36,11 @@ import {
   decorateChannelEntries,
   mergeChannelEntries,
 } from "@/server/channels.ts";
-import { mergeResourceArrays } from "@/utils/merge-resources.ts";
+import {
+  mergeResourceArrays,
+  resolveResourceList,
+  type ResourceListInput,
+} from "@/utils/merge-resources.ts";
 import type { Skill } from "@/runtime/loaders/skill-types.ts";
 import {
   type AgentsFileConfig,
@@ -370,7 +374,11 @@ export { listPublicAgents } from "@/utils/list-agents.ts";
 /**
  * Merges two resource arrays with "append, explicit wins on ID collision" semantics.
  */
-export { mergeResourceArrays } from "@/utils/merge-resources.ts";
+export type {
+  ResourceListInput,
+  ResourceListResolver,
+} from "@/utils/merge-resources.ts";
+export { mergeResourceArrays, resolveResourceList } from "@/utils/merge-resources.ts";
 
 /**
  * Skill type representing a loaded skill definition.
@@ -415,14 +423,24 @@ export type APIConfig = NewAPI;
 /** Alias for MCPServer type, used in configuration. */
 export type MCPServerConfig = NewMCPServer;
 
-type NormalizedCopilotzConfig =
-  & Omit<CopilotzConfig, "agents" | "tools" | "apis" | "mcpServers" | "memory">
+/**
+ * Configuration after `createCopilotz` resolves resource loaders, list
+ * resolvers, and normalization. Arrays are always concrete (never resolver
+ * callbacks).
+ */
+export type NormalizedCopilotzConfig =
+  & Omit<
+    CopilotzConfig,
+    "agents" | "tools" | "apis" | "mcpServers" | "memory" | "collections"
+  >
   & {
     agents: Agent[];
     tools?: Tool[];
     apis?: API[];
     mcpServers?: MCPServer[];
     memory?: MemoryResource[];
+    // deno-lint-ignore no-explicit-any
+    collections?: CollectionDefinition<any, any, any>[];
     skills?: import("@/runtime/loaders/skill-types.ts").Skill[];
     processorsByType?: ChatContext["processors"];
   };
@@ -500,17 +518,22 @@ function resolveBundledAgentImports(
  */
 export interface CopilotzConfig {
   /**
-   * Array of agent configurations.
-   * Required unless `resources.path` is provided (agents will be loaded from files).
-   * When both are set, explicit agents are merged with file-loaded agents (explicit wins on ID collision).
+   * Agent configurations, or a resolver that receives bundled + `resources.path`
+   * agents and returns the final list. Arrays merge by id (explicit wins); a
+   * callback receives that preload and may patch, filter, or replace it entirely.
+   *
+   * Required unless `resources.path` provides agents or a bundled agent import
+   * supplies them.
    */
-  agents?: AgentConfig[];
-  /** Optional array of custom tool definitions. */
-  tools?: ToolConfig[];
-  /** Optional array of API configurations for external REST APIs. */
-  apis?: APIConfig[];
-  /** Optional array of MCP server configurations. */
-  mcpServers?: MCPServerConfig[];
+  agents?: ResourceListInput<AgentConfig>;
+  /**
+   * Tool definitions, or a resolver over bundled + file-loaded tools (preload).
+   */
+  tools?: ResourceListInput<ToolConfig>;
+  /** API configurations or a resolver over preload APIs. */
+  apis?: ResourceListInput<APIConfig>;
+  /** MCP server configurations or a resolver over preload servers. */
+  mcpServers?: ResourceListInput<MCPServerConfig>;
   /** Optional array of declarative memory resources. */
   memory?: MemoryResource[];
   /** Optional custom event processors to extend or override default behavior. */
@@ -622,6 +645,13 @@ export interface CopilotzConfig {
    */
   toolExecutionTimeoutsMs?: Record<string, number | undefined>;
   /**
+   * Maximum serialized size (characters) of each tool result `output` when
+   * building chat history for the LLM (envelope included). Default: **10_000**.
+   * Set to **0** to disable per-result caps (global `limitEstimatedInputTokens`
+   * in `llmOptions` still applies later).
+   */
+  toolResultHistoryMaxChars?: number;
+  /**
    * Stale processing event threshold in milliseconds.
    * Events stuck in "processing" status longer than this will be reset to "pending" on next check.
    * This provides crash recovery for events that were being processed when the server crashed.
@@ -724,7 +754,7 @@ export interface CopilotzConfig {
    * ```
    */
   // deno-lint-ignore no-explicit-any
-  collections?: CollectionDefinition<any, any, any>[];
+  collections?: ResourceListInput<CollectionDefinition<any, any, any>>;
   /** Configuration options for collections. */
   collectionsConfig?: {
     /** Auto-create indexes on startup. Default: true */
@@ -864,7 +894,7 @@ export interface CopilotzCliController {
  */
 export interface Copilotz {
   /** The frozen configuration used to create this instance. */
-  readonly config: Readonly<CopilotzConfig>;
+  readonly config: Readonly<NormalizedCopilotzConfig>;
   /** Database operations for direct data access. */
   readonly ops: CopilotzDb["ops"];
   /**
@@ -1199,47 +1229,45 @@ export async function createCopilotz(
   //     User-defined resources appear first (higher priority for routing).
   //     Bundled resources fill in non-colliding entries after.
   startedAt = performance.now();
-  let resolvedAgents = mergeResourceArrays<AgentConfig>(
+  const agentPreload = mergeResourceArrays<AgentConfig>(
     bundledResources.agents ?? [],
-    mergeResourceArrays<AgentConfig>(
-      userResources?.agents ?? [],
-      config.agents,
-    ),
+    userResources?.agents ?? [],
     { prioritize: "explicit" },
   );
-  let resolvedTools = mergeResourceArrays<ToolConfig>(
+  let resolvedAgents = await resolveResourceList(agentPreload, config.agents);
+
+  const toolPreload = mergeResourceArrays<ToolConfig>(
     bundledResources.tools as ToolConfig[] ?? [],
-    mergeResourceArrays<ToolConfig>(
-      userResources?.tools as ToolConfig[] ?? [],
-      config.tools,
-    ),
+    userResources?.tools as ToolConfig[] ?? [],
     { prioritize: "explicit" },
   );
-  let resolvedApis = mergeResourceArrays<APIConfig>(
+  let resolvedTools = await resolveResourceList(toolPreload, config.tools);
+
+  const apiPreload = mergeResourceArrays<APIConfig>(
     bundledResources.apis as APIConfig[] ?? [],
-    mergeResourceArrays<APIConfig>(
-      userResources?.apis as APIConfig[] ?? [],
-      config.apis,
-    ),
+    userResources?.apis as APIConfig[] ?? [],
     { prioritize: "explicit" },
   );
-  let resolvedMcpServers = mergeResourceArrays<MCPServerConfig>(
+  let resolvedApis = await resolveResourceList(apiPreload, config.apis);
+
+  const mcpPreload = mergeResourceArrays<MCPServerConfig>(
     bundledResources.mcpServers as MCPServerConfig[] ?? [],
-    mergeResourceArrays<MCPServerConfig>(
-      userResources?.mcpServers as MCPServerConfig[] ?? [],
-      config.mcpServers,
-    ),
+    userResources?.mcpServers as MCPServerConfig[] ?? [],
     { prioritize: "explicit" },
   );
-  let resolvedCollections = mergeResourceArrays<
-    CollectionDefinition
-  >(
+  let resolvedMcpServers = await resolveResourceList(
+    mcpPreload,
+    config.mcpServers,
+  );
+
+  const collectionPreload = mergeResourceArrays<CollectionDefinition>(
     (bundledResources.collections as CollectionDefinition[] | undefined) ?? [],
-    mergeResourceArrays<CollectionDefinition>(
-      (userResources?.collections as CollectionDefinition[] | undefined) ?? [],
-      config.collections,
-    ),
+    (userResources?.collections as CollectionDefinition[] | undefined) ?? [],
     { prioritize: "explicit" },
+  );
+  let resolvedCollections = await resolveResourceList(
+    collectionPreload,
+    config.collections,
   );
 
   let resolvedProcessors = [
@@ -1693,6 +1721,7 @@ export async function createCopilotz(
       agentsFileInstructions,
       toolExecutionTimeoutMs,
       toolExecutionTimeoutsMs,
+      toolResultHistoryMaxChars: config.toolResultHistoryMaxChars ?? 10_000,
       // Sender of the current message (available to processors and tools)
       sender: normalizedMessage.sender
         ? {

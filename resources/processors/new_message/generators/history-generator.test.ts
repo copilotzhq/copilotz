@@ -50,3 +50,87 @@ Deno.test("historyGenerator uses sender display names instead of graph ids in pr
     "[reviewer]: Good news — they just posted!",
   );
 });
+
+Deno.test("historyGenerator truncates large tool outputs when maxToolResultChars is set", () => {
+  const currentAgent: Agent = {
+    id: "agent-1",
+    name: "agent-1",
+    role: "assistant",
+    instructions: "Do work.",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  };
+
+  const huge = "y".repeat(500);
+  const chatHistory: NewMessage[] = [
+    {
+      id: "m-tool",
+      threadId: "t-1",
+      senderId: "agent-1",
+      senderType: "tool",
+      content: "",
+      metadata: {
+        toolResultQueueEventId: "queue-evt-1",
+        toolCalls: [{
+          id: "c1",
+          tool: { id: "http_request" },
+          args: "{}",
+          output: { body: huge },
+        }],
+      },
+    },
+  ];
+
+  const generated = historyGenerator(chatHistory, currentAgent, {
+    includeTargetContext: false,
+    maxToolResultChars: 120,
+  });
+
+  assertEquals(generated.length, 1);
+  assertEquals(generated[0]?.role, "tool");
+  const tc = generated[0]?.toolCalls?.[0];
+  assertEquals(typeof tc?.output, "object");
+  const out = tc?.output as Record<string, unknown>;
+  assertEquals(out._copilotz_history_truncated, true);
+  assertEquals(out.toolResultQueueEventId, "queue-evt-1");
+  assertEquals(typeof out.preview, "string");
+  assertEquals((out.preview as string).length < huge.length, true);
+});
+
+Deno.test("historyGenerator defaults tool output cap to 10_000 chars when maxToolResultChars omitted", () => {
+  const currentAgent: Agent = {
+    id: "agent-1",
+    name: "agent-1",
+    role: "assistant",
+    instructions: "Do work.",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  };
+
+  const huge = "z".repeat(15_000);
+  const chatHistory: NewMessage[] = [
+    {
+      id: "m-tool",
+      threadId: "t-1",
+      senderId: "agent-1",
+      senderType: "tool",
+      content: "",
+      metadata: {
+        toolCalls: [{
+          id: "c1",
+          tool: { id: "t" },
+          args: "{}",
+          output: { body: huge },
+        }],
+      },
+    },
+  ];
+
+  const generated = historyGenerator(chatHistory, currentAgent, {
+    includeTargetContext: false,
+  });
+  const out = generated[0]?.toolCalls?.[0]?.output as Record<string, unknown>;
+  assertEquals(out._copilotz_history_truncated, true);
+  assertEquals(
+    (out.preview as string).length < huge.length,
+    true,
+  );
+});

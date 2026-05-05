@@ -723,6 +723,13 @@ export interface ChatContext {
    * A value of `undefined` disables the framework timeout for that tool key.
    */
   toolExecutionTimeoutsMs?: Record<string, number | undefined>;
+  /**
+   * Max characters of JSON-serialized tool `output` per result in LLM history
+   * (envelope included). Default **10_000** from `createCopilotz`; set **0** on
+   * config to disable. Does not alter persisted messages — only history passed
+   * to the model (before `historyTransform` / `formatMessages`).
+   */
+  toolResultHistoryMaxChars?: number;
   /** User metadata. */
   userMetadata?: Record<string, unknown>;
   /** Hook for rewriting generated message history before the LLM call. */

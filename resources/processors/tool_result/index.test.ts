@@ -56,6 +56,10 @@ Deno.test("tool_result processor converts lifecycle payload to NEW_MESSAGE artif
     "batch-1",
   );
   assertEquals(
+    (produced.payload.metadata as Record<string, unknown>)?.toolResultQueueEventId,
+    "evt-tool-result",
+  );
+  assertEquals(
     ((produced.payload.metadata as Record<string, unknown>)?.toolCalls as Array<Record<string, unknown>>)[0],
     {
       id: "call-123",

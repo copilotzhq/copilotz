@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.35.0",
+  "version": "0.36.0",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -34,11 +34,9 @@
     "ajv-formats": "npm:ajv-formats@3.0.1",
     "json-schema-to-ts": "npm:json-schema-to-ts@3.1.1",
     "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client",
-    "omnipg": "jsr:@oxian/ominipg@0.6.1",
-    "omnipg/auto": "jsr:@oxian/ominipg@0.6.1/auto",
-    "omnipg/pglite": "jsr:@oxian/ominipg@0.6.1/pglite",
-    "omnipg/pg": "jsr:@oxian/ominipg@0.6.1/pg",
-    "omnipg/worker": "https://jsr.io/@oxian/ominipg/0.6.1/src/worker/index.ts",
+    "omnipg": "jsr:@oxian/ominipg@0.6.4",
+    "omnipg/auto": "jsr:@oxian/ominipg@0.6.4/auto",
+    "omnipg/worker": "jsr:@oxian/ominipg@0.6.4/worker",
     "ulid": "jsr:@std/ulid@1.0.0",
     "yaml": "npm:yaml@2.8.0",
     "zod": "npm:zod@3.23.8"
@@ -47,6 +45,5 @@
     "gen:skills": "deno run -A scripts/generate-skill-js.ts",
     "compile:cli": "deno run -A scripts/compile-cli.ts"
   },
-  "links": ["../../lib/ominipg"],
   "lock": false
 }

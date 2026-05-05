@@ -81,6 +81,7 @@ export type {
 import type {
   CopilotzDb,
   DatabaseConfig,
+  DatabaseRestoreConfig,
   DatabaseSnapshotFileOptions,
   DbInstance,
   PGliteConfig,
@@ -91,6 +92,8 @@ export type {
   CopilotzDb,
   /** Configuration options for database connection. */
   DatabaseConfig,
+  /** File-backed PGlite snapshot restore/dump configuration. */
+  DatabaseRestoreConfig,
   /** File paths used when saving a PGlite data directory snapshot. */
   DatabaseSnapshotFileOptions,
   /** Low-level database instance from Ominipg. */

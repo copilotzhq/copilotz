@@ -63,7 +63,6 @@ import type {
   ChatContext,
   CopilotzDb,
   DatabaseConfig,
-  DatabaseSnapshotFileOptions,
   EventProcessor,
   HistoryTransform,
   LlmCallEventPayload,
@@ -73,7 +72,6 @@ import type {
   NewAPI,
   NewMCPServer,
   NewTool,
-  PGliteConfig,
   ProcessorDeps,
   RagIngestPayload,
   ResolveLLMRuntimeConfig,
@@ -104,6 +102,8 @@ export type {
   CopilotzDb,
   /** Configuration options for the database connection. */
   DatabaseConfig,
+  /** File-backed PGlite snapshot restore/dump configuration. */
+  DatabaseRestoreConfig,
   /** File paths used when saving a PGlite data directory snapshot. */
   DatabaseSnapshotFileOptions,
   /** Low-level database instance type from Ominipg. */
@@ -1505,7 +1505,11 @@ export async function createCopilotz(
   });
 
   // ---- Phase 3: Resolve database (with connection caching) ----
-  const dbCacheKey = config.dbConfig?.url ?? ":memory:";
+  const dbCacheKey = (() => {
+    const url = config.dbConfig?.url ?? ":memory:";
+    const restore = config.dbConfig?.restore;
+    return restore?.enabled ? `${url}|restore:${restore.path}` : url;
+  })();
   let managedDb: CopilotzDb | undefined;
   let fromCache = false;
   startedAt = performance.now();
@@ -1779,6 +1783,7 @@ export async function createCopilotz(
     return await runThread(baseDb, ctx, normalizedMessage, options);
   };
 
+  let shuttingDown = false;
   const copilotz = {
     config: Object.freeze({ ...baseConfig }),
     db: baseDb,
@@ -1818,6 +1823,8 @@ export async function createCopilotz(
         })(),
       }),
     shutdown: async () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
       if (managedDb) {
         if (fromCache) {
           const cached = _dbConnectionCache.get(dbCacheKey);
@@ -1829,6 +1836,13 @@ export async function createCopilotz(
               return; // Other instances still using this connection
             }
           }
+        }
+        const restore = config.dbConfig?.restore;
+        if (restore?.enabled && restore.snapshotOnShutdown !== false) {
+          await writeDatabaseDataDirSnapshot(managedDb, {
+            path: restore.path,
+            tempPath: restore.tempPath,
+          });
         }
         const resource = managedDb as unknown as {
           close?: () => Promise<void> | void;
@@ -1871,6 +1885,32 @@ export async function createCopilotz(
       warmCache: () => warmSchemaCache(baseDb),
     },
   } satisfies Copilotz;
+
+  const shutdownSignals = config.dbConfig?.restore?.shutdownSignals;
+  const signals = shutdownSignals === true
+    ? ["SIGTERM", "SIGINT"] as const
+    : Array.isArray(shutdownSignals)
+    ? shutdownSignals
+    : [];
+  const onShutdownSignal = () => {
+    void (async () => {
+      try {
+        await copilotz.shutdown();
+        Deno.exit(0);
+      } catch (error) {
+        console.error("[copilotz] shutdown failed", error);
+        Deno.exit(1);
+      }
+    })();
+  };
+  for (const signal of signals) {
+    try {
+      Deno.addSignalListener(signal, onShutdownSignal);
+    } catch {
+      // Embedded runtimes may not expose signal listeners.
+    }
+  }
+
   logInit("createCopilotzTotal", initStartedAt);
   return copilotz;
 }

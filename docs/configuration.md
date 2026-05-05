@@ -244,6 +244,11 @@ dbConfig: {
     relaxedDurability: true,
     // loadDataDir: snapshotBlob,
   },
+  restore: {                   // File-backed PGLite snapshot restore/dump
+    enabled: true,
+    path: "/data/copilotz.pglite.tar.gz",
+    shutdownSignals: true,
+  },
   schemaSQL: "CREATE TABLE ...",  // Extra init SQL
   useWorker: false,             // PGLite worker mode
   logMetrics: false,            // Performance logging

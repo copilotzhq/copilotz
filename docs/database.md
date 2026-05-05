@@ -379,31 +379,24 @@ For single-instance ephemeral deployments, restore a snapshot from durable
 storage before creating Copilotz and write a fresh snapshot during shutdown:
 
 ```typescript
-import {
-  createCopilotz,
-  loadDatabaseDataDirSnapshot,
-  writeDatabaseDataDirSnapshot,
-} from "@copilotz/copilotz";
-
-const snapshotPath = "/data/copilotz.pglite.tar.gz";
-const snapshot = await loadDatabaseDataDirSnapshot(snapshotPath);
-
 const copilotz = await createCopilotz({
   agents: [...],
   dbConfig: {
     url: "file:///tmp/copilotz.db",
-    pgliteConfig: snapshot ? { loadDataDir: snapshot } : undefined,
+    restore: {
+      enabled: true,
+      path: "/data/copilotz.pglite.tar.gz",
+      shutdownSignals: true,
+    },
   },
 });
-
-Deno.addSignalListener("SIGTERM", () => {
-  void (async () => {
-    await writeDatabaseDataDirSnapshot(copilotz.db, { path: snapshotPath });
-    await copilotz.shutdown();
-    Deno.exit(0);
-  })();
-});
 ```
+
+`createDatabase()` loads the snapshot when present.
+`createCopilotz().shutdown()` writes a fresh snapshot before closing the managed
+database. If the snapshot is missing, Copilotz starts with a fresh database by
+default. Set `shutdownSignals: true` when the process should snapshot and exit
+on `SIGTERM` or `SIGINT`.
 
 On Cloud Run, keep the live PGlite database on `/tmp` and store the compressed
 snapshot on the durable `/data` mount. This keeps normal database I/O off the

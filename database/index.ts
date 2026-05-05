@@ -91,6 +91,14 @@ export interface DatabaseConfig {
    * the built-in profile.
    */
   pgliteMemoryProfile?: "default" | "low-memory";
+  /**
+   * File-backed PGlite snapshot restore/dump configuration.
+   *
+   * When enabled, `createDatabase()` loads `path` as PGlite `loadDataDir` if it
+   * exists. `createCopilotz()` also writes a fresh snapshot to `path` during
+   * shutdown for managed database instances.
+   */
+  restore?: DatabaseRestoreConfig;
   /** Additional SQL statements to run during initialization. */
   schemaSQL?: string[];
   /** Whether to use a web worker for PGlite. Default: false. */
@@ -157,6 +165,28 @@ export interface DatabaseSnapshotFileOptions {
   tempPath?: string;
 }
 
+export interface DatabaseRestoreConfig extends DatabaseSnapshotFileOptions {
+  /** Enables snapshot restore/dump behavior. */
+  enabled?: boolean;
+  /**
+   * Behavior when `path` does not exist.
+   * Defaults to "fresh", which starts a new database.
+   */
+  missing?: "fresh" | "error";
+  /**
+   * Whether `createCopilotz().shutdown()` should dump a fresh snapshot.
+   * Defaults to true.
+   */
+  snapshotOnShutdown?: boolean;
+  /**
+   * Install Deno signal handlers that call `copilotz.shutdown()` and exit.
+   *
+   * Useful on single-instance runtimes such as Cloud Run. Defaults to false.
+   * `true` installs handlers for SIGTERM and SIGINT.
+   */
+  shutdownSignals?: boolean | Array<"SIGTERM" | "SIGINT">;
+}
+
 function getEnvVar(key: string): string | undefined {
   try {
     const anyGlobal = globalThis as unknown as {
@@ -188,6 +218,54 @@ function resolvePGliteConfig(
 ): PGliteConfig | undefined {
   if (!isPgLite) return undefined;
   return config?.pgliteConfig;
+}
+
+function isRestoreEnabled(
+  restore: DatabaseRestoreConfig | undefined,
+): restore is DatabaseRestoreConfig {
+  return Boolean(restore?.enabled);
+}
+
+function ensureRestoreCompatible(
+  url: string,
+  config: DatabaseConfig | undefined,
+) {
+  if (!isRestoreEnabled(config?.restore)) return;
+  if (!url.startsWith("file://")) {
+    throw new Error("dbConfig.restore requires a file:// PGlite URL.");
+  }
+  if (config?.pgliteConfig?.loadDataDir) {
+    throw new Error(
+      "Use either dbConfig.restore or pgliteConfig.loadDataDir, not both.",
+    );
+  }
+}
+
+async function resolveRestorePGliteConfig(
+  url: string,
+  config: DatabaseConfig | undefined,
+  isPgLite: boolean,
+): Promise<PGliteConfig | undefined> {
+  const baseConfig = resolvePGliteConfig(config, isPgLite);
+  if (!isPgLite || !isRestoreEnabled(config?.restore)) {
+    return baseConfig;
+  }
+
+  ensureRestoreCompatible(url, config);
+  const snapshot = await loadDatabaseDataDirSnapshot(config.restore.path);
+  if (!snapshot) {
+    if ((config.restore.missing ?? "fresh") === "error") {
+      throw new Error(
+        `PGlite restore snapshot not found: ${config.restore.path}`,
+      );
+    }
+    return baseConfig;
+  }
+
+  return {
+    ...(baseConfig ?? {}),
+    loadDataDir: snapshot,
+  };
 }
 
 function createSchemaSQL(config?: DatabaseConfig): string[] {
@@ -397,6 +475,13 @@ function getPGliteConfigCacheToken(configCandidate: unknown): string {
   return getObjectCacheToken("pgliteConfig", configCandidate);
 }
 
+function getDatabasePGliteCacheToken(config: DatabaseConfig): string {
+  if (isRestoreEnabled(config.restore)) {
+    return `restore:${config.restore.path}`;
+  }
+  return getPGliteConfigCacheToken(config.pgliteConfig);
+}
+
 /**
  * Creates or retrieves a database connection for Copilotz.
  *
@@ -428,14 +513,16 @@ export async function createDatabase(
 ): Promise<CopilotzDb> {
   const url = config?.url || getEnvVar("DATABASE_URL") || ":memory:";
   const isPgLite = isPGliteUrl(url);
+  ensureRestoreCompatible(url, config);
 
   const finalConfig: DatabaseConfig = {
     url,
     syncUrl: config?.syncUrl || getEnvVar("SYNC_DATABASE_URL"),
     pgliteExtensions: config?.pgliteExtensions ??
       defaultPGliteExtensions(isPgLite),
-    pgliteConfig: resolvePGliteConfig(config, isPgLite),
+    pgliteConfig: await resolveRestorePGliteConfig(url, config, isPgLite),
     pgliteMemoryProfile: config?.pgliteMemoryProfile,
+    restore: config?.restore,
     schemaSQL: createSchemaSQL(config),
     useWorker: isPgLite ? config?.useWorker || false : false,
     logMetrics: config?.logMetrics,
@@ -447,9 +534,7 @@ export async function createDatabase(
 
   const cacheSchema = finalConfig.schemas ?? baseSchema;
   const schemaCacheToken = getSchemaCacheToken(cacheSchema);
-  const pgliteConfigCacheToken = getPGliteConfigCacheToken(
-    finalConfig.pgliteConfig,
-  );
+  const pgliteConfigCacheToken = getDatabasePGliteCacheToken(finalConfig);
   const cacheKey = `${finalConfig.url}|${
     finalConfig.syncUrl || ""
   }|${schemaCacheToken}|${pgliteConfigCacheToken}`;

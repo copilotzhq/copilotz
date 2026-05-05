@@ -389,9 +389,12 @@ tools: [{
 `historyPolicy.visibility` supports:
 
 - `requester_only`
+- `public_status` (default)
 - `public_result`
 - `public_full`
 
+Use `public_status` when other agents should only know the tool name and
+completion status.
 Use `projector` with `public_result` when other agents should see a compact
 business-level outcome instead of the raw tool payload.
 

@@ -34,7 +34,7 @@ Deno.test("projectToolResultForHistory applies tool projector for public_result 
   );
 });
 
-Deno.test("projectToolResultForHistory defaults visibility to public_full", async () => {
+Deno.test("projectToolResultForHistory defaults visibility to public_status", async () => {
   const result = await projectToolResultForHistory(
     {
       key: "start_session",
@@ -46,5 +46,6 @@ Deno.test("projectToolResultForHistory defaults visibility to public_full", asyn
   );
 
   assertEquals(result.visibility, DEFAULT_TOOL_HISTORY_VISIBILITY);
+  assertEquals(result.visibility, "public_status");
   assertEquals(result.projectedOutput, undefined);
 });

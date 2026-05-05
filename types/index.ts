@@ -226,6 +226,7 @@ export type ResolveLLMRuntimeConfig = (
 
 export type ToolHistoryVisibility =
   | "requester_only"
+  | "public_status"
   | "public_result"
   | "public_full";
 
@@ -298,7 +299,8 @@ export type APIAuth =
       credentials?: unknown;
     };
     tokenExtraction: {
-      path: string;
+      /** Dot path to extract from a JSON auth response. Omit to use the raw response body text as the token. */
+      path?: string | null;
       type: "bearer" | "apiKey";
       prefix?: string | null;
       headerName?: string | null;

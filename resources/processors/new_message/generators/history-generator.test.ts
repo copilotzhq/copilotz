@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import type { Agent, NewMessage } from "@/types/index.ts";
+import { formatMessages } from "@/runtime/llm/utils.ts";
 import { historyGenerator } from "./history-generator.ts";
 
 Deno.test("historyGenerator uses sender display names instead of graph ids in prefixes", () => {
@@ -112,7 +113,7 @@ Deno.test("historyGenerator defaults tool output cap to 10_000 chars when maxToo
       threadId: "t-1",
       senderId: "agent-1",
       senderType: "tool",
-      content: "",
+      content: JSON.stringify({ secret: "raw output" }),
       metadata: {
         toolCalls: [{
           id: "c1",
@@ -133,4 +134,101 @@ Deno.test("historyGenerator defaults tool output cap to 10_000 chars when maxToo
     (out.preview as string).length < huge.length,
     true,
   );
+});
+
+Deno.test("historyGenerator defaults peer tool result visibility to status only", () => {
+  const currentAgent: Agent = {
+    id: "reviewer",
+    name: "reviewer",
+    role: "assistant",
+    instructions: "Review work.",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  };
+
+  const chatHistory: NewMessage[] = [
+    {
+      id: "m-tool",
+      threadId: "t-1",
+      senderId: "researcher",
+      senderType: "tool",
+      content: "",
+      metadata: {
+        toolCalls: [{
+          id: "c1",
+          tool: { id: "search_web" },
+          args: JSON.stringify({ query: "private query" }),
+          output: { secret: "raw output" },
+          status: "completed",
+        }],
+      },
+    },
+  ];
+
+  const generated = historyGenerator(chatHistory, currentAgent, {
+    includeTargetContext: false,
+  });
+
+  assertEquals(generated.length, 1);
+  assertEquals(generated[0]?.role, "tool");
+  assertEquals(generated[0]?.toolCalls, [{
+    id: "c1",
+    tool: { id: "search_web" },
+    args: "{}",
+    status: "completed",
+  }]);
+  assertEquals(generated[0]?.content, "");
+
+  const formatted = formatMessages({ messages: generated });
+  assertEquals(formatted.length, 2);
+  assertEquals(formatted[0]?.content, [
+    "<function_results>",
+    JSON.stringify({
+      name: "search_web",
+      tool_call_id: "c1",
+      status: "completed",
+    }),
+    "</function_results>",
+  ].join("\n"));
+});
+
+Deno.test("historyGenerator keeps full default tool result for requesting agent", () => {
+  const currentAgent: Agent = {
+    id: "researcher",
+    name: "researcher",
+    role: "assistant",
+    instructions: "Research.",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  };
+
+  const chatHistory: NewMessage[] = [
+    {
+      id: "m-tool",
+      threadId: "t-1",
+      senderId: "researcher",
+      senderType: "tool",
+      content: "",
+      metadata: {
+        toolCalls: [{
+          id: "c1",
+          tool: { id: "search_web" },
+          args: JSON.stringify({ query: "private query" }),
+          output: { secret: "raw output" },
+          status: "completed",
+        }],
+      },
+    },
+  ];
+
+  const generated = historyGenerator(chatHistory, currentAgent, {
+    includeTargetContext: false,
+  });
+
+  assertEquals(generated.length, 1);
+  assertEquals(generated[0]?.toolCalls?.[0], {
+    id: "c1",
+    tool: { id: "search_web" },
+    args: JSON.stringify({ query: "private query" }),
+    output: { secret: "raw output" },
+    status: "completed",
+  });
 });

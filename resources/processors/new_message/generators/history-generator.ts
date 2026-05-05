@@ -332,6 +332,17 @@ function stripParsedToolCall(call: ParsedToolCall): ToolInvocation {
   };
 }
 
+function toPublicStatusToolCall(call: ParsedToolCall): ToolInvocation {
+  return {
+    id: call.id,
+    tool: call.tool,
+    args: "{}",
+    ...("status" in call && typeof call.status === "string"
+      ? { status: call.status }
+      : {}),
+  };
+}
+
 export function historyGenerator(
   chatHistory: NewMessage[],
   currentAgent: Agent,
@@ -500,9 +511,10 @@ export function historyGenerator(
         : undefined;
 
     let toolCalls: ToolInvocation[] | undefined;
+    let hideToolResultContent = false;
     if (isToolResult) {
       const visibleToolCalls = parsedToolCalls.flatMap((call) => {
-        const visibility = call.visibility ?? "public_full";
+        const visibility = call.visibility ?? "public_status";
 
         if (isRequestingAgent || visibility === "public_full") {
           return [
@@ -524,6 +536,11 @@ export function historyGenerator(
           return [capped];
         }
 
+        if (visibility === "public_status") {
+          hideToolResultContent = true;
+          return [toPublicStatusToolCall(call)];
+        }
+
         return [];
       });
 
@@ -537,7 +554,7 @@ export function historyGenerator(
     }
 
     return [{
-      content: finalContent,
+      content: hideToolResultContent ? "" : finalContent,
       role: role,
       senderId: msg.senderId || undefined,
       metadata: metadata,

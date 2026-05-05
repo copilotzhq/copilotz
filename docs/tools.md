@@ -247,6 +247,7 @@ Supported modes:
 | `visibility`     | Behavior                                                                       |
 | ---------------- | ------------------------------------------------------------------------------ |
 | `requester_only` | Only the agent that called the tool sees the result in later generated history |
+| `public_status`  | Other agents see the tool name and status only. This is the default            |
 | `public_result`  | Other agents see a shared result, optionally projected into a simpler summary  |
 | `public_full`    | Other agents see the full raw tool result                                      |
 

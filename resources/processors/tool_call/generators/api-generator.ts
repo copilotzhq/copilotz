@@ -240,18 +240,24 @@ async function callAuthEndpoint(
     );
   }
 
-  const authResponse = await response.json();
-  const token = extractValue(authResponse, authConfig.tokenExtraction.path);
+  const authResponse = authConfig.tokenExtraction.path
+    ? await response.json()
+    : undefined;
+  const token = authConfig.tokenExtraction.path
+    ? extractValue(authResponse, authConfig.tokenExtraction.path)
+    : (await response.text()).trim();
 
   if (!token) {
     throw new Error(
-      `Token not found at path: ${authConfig.tokenExtraction.path}`,
+      authConfig.tokenExtraction.path
+        ? `Token not found at path: ${authConfig.tokenExtraction.path}`
+        : "Token not found in response body",
     );
   }
 
   // Calculate expiry
   let expiry = Date.now() + (authConfig.cache?.duration || 3600) * 1000;
-  if (authConfig.refreshConfig?.expiryPath) {
+  if (authResponse && authConfig.refreshConfig?.expiryPath) {
     const expiryValue = extractValue(
       authResponse,
       authConfig.refreshConfig.expiryPath,
@@ -266,7 +272,9 @@ async function callAuthEndpoint(
 
   // Extract refresh token if configured
   const refreshToken = authConfig.refreshConfig?.refreshPath
-    ? extractValue(authResponse, authConfig.refreshConfig.refreshPath)
+    ? authResponse
+      ? extractValue(authResponse, authConfig.refreshConfig.refreshPath)
+      : undefined
     : undefined;
 
   console.log(
@@ -322,7 +330,7 @@ async function getDynamicToken(
         const refreshData = await refreshResponse.json();
         const newToken = extractValue(
           refreshData,
-          authConfig.tokenExtraction.path,
+          authConfig.tokenExtraction.path ?? "",
         );
         if (newToken) {
           const newCached: CachedToken = {

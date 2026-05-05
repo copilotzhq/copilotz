@@ -974,11 +974,14 @@ export function buildFunctionResultsBlock(
   const objects = toolResults.map((call) => {
     const obj: Record<string, unknown> = {
       name: call.tool.id,
-      output: normalizeToolResultOutput(
-        call,
-        toolResults.length === 1 ? fallbackContent : undefined,
-      ),
     };
+    const fallback = toolResults.length === 1 ? fallbackContent : undefined;
+    if (
+      typeof call.output !== "undefined" ||
+      (fallback && fallback.length > 0)
+    ) {
+      obj.output = normalizeToolResultOutput(call, fallback);
+    }
     if (call.id) obj.tool_call_id = call.id;
     if (call.status) obj.status = call.status;
     return JSON.stringify(obj);

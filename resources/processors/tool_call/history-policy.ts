@@ -5,7 +5,7 @@ import type {
 } from "@/types/index.ts";
 
 export const DEFAULT_TOOL_HISTORY_VISIBILITY: ToolHistoryVisibility =
-  "public_full";
+  "public_status";
 
 export interface HistoryPolicyCapableTool {
   key: string;

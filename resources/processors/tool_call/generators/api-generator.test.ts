@@ -111,3 +111,64 @@ Deno.test("API tool applies history policy overrides to generated tools", () => 
     },
   });
 });
+
+Deno.test("API dynamic auth uses raw response body when token path is omitted", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ url: string; headers: Record<string, string> }> = [];
+
+  globalThis.fetch = async (input, init: globalThis.RequestInit | undefined) => {
+    const url = String(input);
+    const headers = Object.fromEntries(
+      new Headers(init?.headers).entries(),
+    );
+    requests.push({ url, headers });
+
+    if (url.includes("metadata.google.internal")) {
+      return new Response("google-id-token\n", {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      });
+    }
+
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    const [tool] = generateApiTools(buildApiConfig({
+      headers: {
+        Authorization: "Bearer shared-secret",
+      },
+      auth: {
+        type: "dynamic",
+        authEndpoint: {
+          url:
+            "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=https://sandbox.example.run.app",
+          method: "GET",
+          headers: {
+            "Metadata-Flavor": "Google",
+          },
+        },
+        tokenExtraction: {
+          type: "apiKey",
+          headerName: "X-Serverless-Authorization",
+          prefix: "Bearer ",
+        },
+      },
+    }));
+
+    await tool.execute({});
+
+    assertEquals(requests.length, 2);
+    assertEquals(requests[0].headers["metadata-flavor"], "Google");
+    assertEquals(
+      requests[1].headers["x-serverless-authorization"],
+      "Bearer google-id-token",
+    );
+    assertEquals(requests[1].headers.authorization, "Bearer shared-secret");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

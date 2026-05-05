@@ -12,7 +12,7 @@ import { Ominipg } from "omnipg";
 import type { OminipgWithCrud } from "omnipg";
 import { resolveAutoProviders } from "omnipg/auto";
 import type { PGliteConfig } from "omnipg/pglite";
-import { dirname } from "@std/path";
+import { dirname, fromFileUrl } from "@std/path";
 
 import { splitSQLStatements } from "./migrations/utils.ts";
 import { schema as baseSchema } from "./schemas/index.ts";
@@ -179,6 +179,13 @@ export interface DatabaseRestoreConfig extends DatabaseSnapshotFileOptions {
    */
   snapshotOnShutdown?: boolean;
   /**
+   * Remove the target `file://` database path before loading the snapshot.
+   *
+   * PGlite cannot load a data-dir tarball into an existing database. Defaults
+   * to true because the `url` target should be ephemeral when restore is used.
+   */
+  clearTargetBeforeLoad?: boolean;
+  /**
    * Install Deno signal handlers that call `copilotz.shutdown()` and exit.
    *
    * Useful on single-instance runtimes such as Cloud Run. Defaults to false.
@@ -262,10 +269,30 @@ async function resolveRestorePGliteConfig(
     return baseConfig;
   }
 
+  if (config.restore.clearTargetBeforeLoad !== false) {
+    await clearRestoreTarget(url, config.restore.path);
+  }
+
   return {
     ...(baseConfig ?? {}),
     loadDataDir: snapshot,
   };
+}
+
+async function clearRestoreTarget(url: string, snapshotPath: string) {
+  const targetPath = fromFileUrl(url);
+  if (targetPath === snapshotPath) {
+    throw new Error(
+      "dbConfig.restore.path must be different from the file:// database URL.",
+    );
+  }
+
+  try {
+    await Deno.remove(targetPath, { recursive: true });
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) return;
+    throw err;
+  }
 }
 
 function createSchemaSQL(config?: DatabaseConfig): string[] {

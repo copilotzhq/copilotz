@@ -182,9 +182,28 @@ function contentToText(content: ChatMessage["content"]): string {
     .join("");
 }
 
+function mediaEstimateLabel(type: string, value: string, mime?: string): string {
+  if (value.startsWith("data:")) {
+    const markerIndex = value.indexOf(";base64,");
+    const mimeFromDataUrl = markerIndex === -1
+      ? ""
+      : value.slice(5, markerIndex);
+    return `[${type}:${mime ?? (mimeFromDataUrl || "inline")}]`;
+  }
+  return value;
+}
+
+function inlineMediaEstimateLabel(type: string, mime?: string): string {
+  return `[${type}:${mime ?? "inline"}]`;
+}
+
 /**
  * Text used for rough input-token budgeting before sending to a provider.
- * Includes multimodal inline base64 (so limits are not blind to huge images).
+ * Inline media is represented by a compact placeholder instead of raw base64:
+ * provider APIs bill media by their own modality rules, and counting transport
+ * base64 here can drop the entire newest multimodal message before it reaches
+ * the LLM.
+ *
  * Does not serialize `toolCalls`; use after {@link materializeHistoryMessage}
  * so tool I/O lives in `content` (e.g. &lt;function_results&gt; blocks).
  */
@@ -198,29 +217,28 @@ function wirePayloadTextForTokenEstimate(content: ChatMessage["content"]): strin
       continue;
     }
     if (part.type === "image_url" && part.image_url?.url) {
-      const url = part.image_url.url;
-      if (url.startsWith("data:")) {
-        const sep = ";base64,";
-        const idx = url.indexOf(sep);
-        chunks.push(idx === -1 ? url : url.slice(idx + sep.length));
-      } else {
-        chunks.push(url);
-      }
+      chunks.push(mediaEstimateLabel("image", part.image_url.url));
       continue;
     }
     if (part.type === "input_audio" && part.input_audio?.data) {
-      chunks.push(part.input_audio.data);
+      chunks.push(
+        inlineMediaEstimateLabel(
+          "audio",
+          part.input_audio.format
+            ? `audio/${part.input_audio.format}`
+            : undefined,
+        ),
+      );
       continue;
     }
     if (part.type === "file" && part.file?.file_data) {
-      const fd = part.file.file_data;
-      if (fd.startsWith("data:")) {
-        const sep = ";base64,";
-        const idx = fd.indexOf(sep);
-        chunks.push(idx === -1 ? fd : fd.slice(idx + sep.length));
-      } else {
-        chunks.push(fd);
-      }
+      chunks.push(
+        mediaEstimateLabel(
+          "file",
+          part.file.file_data,
+          part.file.mime_type,
+        ),
+      );
     }
   }
   return chunks.join("\n");

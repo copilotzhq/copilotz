@@ -77,6 +77,60 @@ Deno.test("formatMessages trims the oldest included text message to fit the rema
   );
 });
 
+Deno.test("formatMessages preserves inline data URL media under estimated input limits", () => {
+  const dataUrl = `data:image/png;base64,${"a".repeat(8000)}`;
+  const formatted = formatMessages({
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Please describe this image." },
+          { type: "image_url", image_url: { url: dataUrl } },
+        ],
+      },
+    ],
+    config: {
+      limitEstimatedInputTokens: 20,
+    },
+  });
+
+  assertEquals(formatted.length, 1);
+  assertEquals(formatted[0]?.role, "user");
+  assertEquals(Array.isArray(formatted[0]?.content), true);
+  const parts = formatted[0]?.content as Array<Record<string, unknown>>;
+  assertEquals(
+    (parts[1] as { image_url?: { url?: string } })?.image_url?.url,
+    dataUrl,
+  );
+});
+
+Deno.test("formatMessages preserves inline audio base64 under estimated input limits", () => {
+  const audio = "b".repeat(8000);
+  const formatted = formatMessages({
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Please transcribe this audio." },
+          { type: "input_audio", input_audio: { data: audio, format: "wav" } },
+        ],
+      },
+    ],
+    config: {
+      limitEstimatedInputTokens: 20,
+    },
+  });
+
+  assertEquals(formatted.length, 1);
+  assertEquals(formatted[0]?.role, "user");
+  assertEquals(Array.isArray(formatted[0]?.content), true);
+  const parts = formatted[0]?.content as Array<Record<string, unknown>>;
+  assertEquals(
+    (parts[1] as { input_audio?: { data?: string } })?.input_audio?.data,
+    audio,
+  );
+});
+
 Deno.test("getLocalStopSequences stops both function results tag forms", () => {
   assertEquals(
     getLocalStopSequences(),

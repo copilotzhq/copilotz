@@ -15,25 +15,15 @@ import type { AgentConfig, CollectionDefinition, ToolConfig } from "@/index.ts";
 
 // ---- Bundled agents (static imports for deno compile) ----------------------
 import copilotzAgentConfig from "@/resources/agents/copilotz/config.ts";
-import copilotzAgentInstructions from "@/resources/agents/copilotz/instructions.md" with {
-  type: "text",
-};
+import copilotzAgentInstructions from "@/resources/agents/copilotz/instructions.ts";
 import eastAgentConfig from "@/resources/agents/east/config.ts";
-import eastAgentInstructions from "@/resources/agents/east/instructions.md" with {
-  type: "text",
-};
+import eastAgentInstructions from "@/resources/agents/east/instructions.ts";
 import northAgentConfig from "@/resources/agents/north/config.ts";
-import northAgentInstructions from "@/resources/agents/north/instructions.md" with {
-  type: "text",
-};
+import northAgentInstructions from "@/resources/agents/north/instructions.ts";
 import southAgentConfig from "@/resources/agents/south/config.ts";
-import southAgentInstructions from "@/resources/agents/south/instructions.md" with {
-  type: "text",
-};
+import southAgentInstructions from "@/resources/agents/south/instructions.ts";
 import westAgentConfig from "@/resources/agents/west/config.ts";
-import westAgentInstructions from "@/resources/agents/west/instructions.md" with {
-  type: "text",
-};
+import westAgentInstructions from "@/resources/agents/west/instructions.ts";
 
 // ---- Core: channels.web ----------------------------------------------------
 import webIngressAdapter from "@/resources/channels/web/ingress.ts";
@@ -176,7 +166,10 @@ function toProcessorEntry(
 ): ProcessorEntry {
   const maybeShouldProcess = mod.shouldProcess;
   const maybeProcess = mod.process || mod.default;
-  if (typeof maybeShouldProcess !== "function" || typeof maybeProcess !== "function") {
+  if (
+    typeof maybeShouldProcess !== "function" ||
+    typeof maybeProcess !== "function"
+  ) {
     throw new Error(`Invalid processor module for ${eventType}`);
   }
   return {
@@ -368,11 +361,20 @@ function buildCoreMemory(): MemoryResource[] {
 
 function buildCoreProcessors(): ProcessorEntry[] {
   return [
-    toProcessorEntry("new_message", newMessageProcessor as Record<string, unknown>),
+    toProcessorEntry(
+      "new_message",
+      newMessageProcessor as Record<string, unknown>,
+    ),
     toProcessorEntry("llm_call", llmCallProcessor as Record<string, unknown>),
-    toProcessorEntry("llm_result", llmResultProcessor as Record<string, unknown>),
+    toProcessorEntry(
+      "llm_result",
+      llmResultProcessor as Record<string, unknown>,
+    ),
     toProcessorEntry("tool_call", toolCallProcessor as Record<string, unknown>),
-    toProcessorEntry("tool_result", toolResultProcessor as Record<string, unknown>),
+    toProcessorEntry(
+      "tool_result",
+      toolResultProcessor as Record<string, unknown>,
+    ),
   ];
 }
 
@@ -383,7 +385,9 @@ function buildCoreLlm(): Array<{ name: string; factory: ProviderFactory }> {
   }));
 }
 
-function buildCoreStorage(): Array<{ name: string; module: Record<string, unknown> }> {
+function buildCoreStorage(): Array<
+  { name: string; module: Record<string, unknown> }
+> {
   return Object.entries(storageAdapters).map(([name, module]) => ({
     name,
     module: module as Record<string, unknown>,

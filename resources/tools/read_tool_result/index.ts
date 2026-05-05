@@ -19,6 +19,12 @@ interface ReadToolResultParams {
   regex?: string;
 }
 
+interface QueueEventRow {
+  threadId?: unknown;
+  eventType?: unknown;
+  payload?: unknown;
+}
+
 function serializeToolOutput(output: unknown): string {
   if (output === null || output === undefined) return "";
   if (typeof output === "string") return output;
@@ -41,7 +47,8 @@ export default {
     properties: {
       queueEventId: {
         type: "string",
-        description: "TOOL_RESULT queue event id (from toolResultQueueEventId in history).",
+        description:
+          "TOOL_RESULT queue event id (from toolResultQueueEventId in history).",
       },
       offset: {
         type: "number",
@@ -58,7 +65,8 @@ export default {
       },
       regex: {
         type: "string",
-        description: "Optional pattern; returns an excerpt around the first match.",
+        description:
+          "Optional pattern; returns an excerpt around the first match.",
       },
     },
     required: ["queueEventId"],
@@ -70,18 +78,23 @@ export default {
       limit = 4000,
       regex,
     }: ReadToolResultParams,
-    context?: { threadId?: string; db?: { ops: { getQueueItemById: (id: string) => Promise<unknown> } } },
+    context?: {
+      threadId?: string;
+      db?: { ops: { getQueueItemById: (id: string) => Promise<unknown> } };
+    },
   ) => {
     const db = context?.db;
     const threadId = context?.threadId;
     if (!db?.ops?.getQueueItemById) {
-      throw new Error("read_tool_result requires a database-enabled Copilotz runtime.");
+      throw new Error(
+        "read_tool_result requires a database-enabled Copilotz runtime.",
+      );
     }
     if (typeof threadId !== "string" || threadId.length === 0) {
       throw new Error("read_tool_result requires an active thread id.");
     }
 
-    const row = await db.ops.getQueueItemById(queueEventId);
+    const row = await db.ops.getQueueItemById(queueEventId) as QueueEventRow;
     if (!row) {
       throw new Error(`No queue event found for id "${queueEventId}".`);
     }

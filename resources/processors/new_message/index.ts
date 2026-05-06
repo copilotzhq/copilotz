@@ -623,18 +623,6 @@ function firstAllowedExplicitRoutingTarget(
 }
 
 export function resolveNextTurn(input: ResolveNextTurnInput): NextTurn {
-  if (input.multiAgentEnabled === false) {
-    const directTarget = input.inbound?.targetId ??
-      input.userMentionTargets?.[0] ??
-      null;
-    return resolveParticipantTurn(
-      directTarget,
-      [],
-      input.thread,
-      input.availableAgents,
-    );
-  }
-
   if (input.sender.type === "tool") {
     const replyTarget = input.inbound?.replyToParticipantId ?? input.sender.id;
     const replyQueue = normalizeParticipantQueue(
@@ -645,6 +633,22 @@ export function resolveNextTurn(input: ResolveNextTurnInput): NextTurn {
     return resolveParticipantTurn(
       replyTarget,
       replyQueue,
+      input.thread,
+      input.availableAgents,
+    );
+  }
+
+  if (input.multiAgentEnabled === false) {
+    if (input.sender.type !== "user") {
+      return { kind: "stop" };
+    }
+
+    const directTarget = input.inbound?.targetId ??
+      input.userMentionTargets?.[0] ??
+      null;
+    return resolveParticipantTurn(
+      directTarget,
+      [],
       input.thread,
       input.availableAgents,
     );

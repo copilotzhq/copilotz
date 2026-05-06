@@ -220,6 +220,36 @@ Deno.test("resolveNextTurn honors persisted user targets only for user-originate
   );
 });
 
+Deno.test("resolveNextTurn does not self-route agent messages when multi-agent routing is disabled", () => {
+  assertEquals(
+    resolveNextTurn({
+      sender: { id: "north", name: "north", type: "agent" },
+      thread: thread(),
+      availableAgents: agents,
+      inbound: { targetId: "north", targetQueue: [] },
+      multiAgentEnabled: false,
+    }),
+    { kind: "stop" },
+  );
+});
+
+Deno.test("resolveNextTurn still routes tool results back to the requesting agent when multi-agent routing is disabled", () => {
+  assertEquals(
+    resolveNextTurn({
+      sender: { id: "north", name: "Tool result", type: "tool" },
+      thread: thread(),
+      availableAgents: agents,
+      inbound: { replyToParticipantId: "north", replyToTargetQueue: [] },
+      multiAgentEnabled: false,
+    }),
+    {
+      kind: "agent",
+      targetId: "north",
+      targetQueue: [],
+    },
+  );
+});
+
 Deno.test("buildToolReplyRoutingMetadata returns tool results to the emitter while preserving the deferred turn", () => {
   assertEquals(
     buildToolReplyRoutingMetadata("north", {

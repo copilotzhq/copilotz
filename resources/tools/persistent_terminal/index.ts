@@ -1,20 +1,28 @@
 import type { NewTool } from "@/types/index.ts";
 import { getPublicThreadMetadata } from "@/runtime/thread-metadata.ts";
+import { buildAssetRefForStore, resolveAssetIdForStore } from "@/runtime/storage/assets.ts";
+import type { ToolExecutionContext } from "@/resources/processors/tool_call/index.ts";
+import { dirname, isAbsolute, relative, resolve } from "@std/path";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 interface PersistentTerminalParams {
-  action: "run" | "info" | "restart" | "close" | "list";
+  action: "run" | "info" | "restart" | "close" | "list" | "upload_asset" | "export_file";
   command?: string;
   cwd?: string;
   timeout?: number;
   scope?: "agent" | "project" | "tenant";
   project?: string;
+  path?: string;
+  assetRef?: string;
+  ref?: string;
+  mimeType?: string;
+  overwrite?: boolean;
 }
 
-interface ToolContext {
+interface ToolContext extends Pick<ToolExecutionContext, "assetStore"> {
   senderId?: string;
   threadId?: string;
   namespace?: string;
@@ -55,6 +63,7 @@ interface SessionRecord {
 const sessions = new Map<string, SessionRecord>();
 const textEncoder = new TextEncoder();
 const MAX_OUTPUT_BUFFER_BYTES = 10 * 1024 * 1024;
+const DEFAULT_MAX_ARTIFACT_BYTES = 50 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -70,6 +79,16 @@ function sanitize(value: string): string {
 
 function shellQuote(value: string): string {
   return "'" + value.replace(/'/g, "'\"'\"'") + "'";
+}
+
+function getMaxArtifactBytes(): number {
+  // deno-lint-ignore no-explicit-any
+  const denoNs = (globalThis as any).Deno;
+  const raw = denoNs?.env?.get?.("COPILOTZ_MAX_ARTIFACT_BYTES");
+  const parsed = typeof raw === "string" ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_MAX_ARTIFACT_BYTES;
 }
 
 export function resolveBaseDir(): string {
@@ -142,6 +161,34 @@ export function buildSessionKey(
   return `${sanitize(namespace)}:${sanitize(scopedProject)}:${
     sanitize(scopedAgentId)
   }:${scope}`;
+}
+
+export function normalizeWorkspaceFilePath(requestedPath: string): string {
+  const normalized = requestedPath.replace(/\\/g, "/");
+  if (
+    !normalized ||
+    normalized === "." ||
+    normalized.endsWith("/") ||
+    normalized.includes("\0") ||
+    normalized.includes("~") ||
+    isAbsolute(normalized)
+  ) {
+    throw new Error("Workspace file path must be a relative file path.");
+  }
+  return normalized;
+}
+
+export function resolveWorkspaceFilePath(
+  workspaceRoot: string,
+  requestedPath: string,
+): string {
+  const root = resolve(workspaceRoot);
+  const target = resolve(root, normalizeWorkspaceFilePath(requestedPath));
+  const rel = relative(root, target);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error("Workspace file path escapes the terminal root.");
+  }
+  return target;
 }
 
 async function resolveProject(
@@ -361,11 +408,13 @@ const persistentTerminalTool: NewTool = {
     properties: {
       action: {
         type: "string",
-        enum: ["run", "info", "restart", "close", "list"],
+        enum: ["run", "info", "restart", "close", "list", "upload_asset", "export_file"],
         description:
           "'run': execute a command. 'info': show current session details. " +
           "'restart': kill and recreate the session. 'close': terminate the session. " +
-          "'list': show all active sessions for the current scope.",
+          "'list': show all active sessions for the current scope. " +
+          "'upload_asset': copy an asset into the workspace. " +
+          "'export_file': save a workspace file back to the asset store.",
       },
       command: {
         type: "string",
@@ -402,6 +451,31 @@ const persistentTerminalTool: NewTool = {
           "Overrides automatic resolution from thread metadata. " +
           "Use this to target a specific project workspace regardless of the current thread.",
       },
+      path: {
+        type: "string",
+        description:
+          "Relative file path inside the workspace for upload_asset/export_file. Must not escape the workspace.",
+      },
+      assetRef: {
+        type: "string",
+        description:
+          "Asset ref to copy into the workspace when action is upload_asset.",
+      },
+      ref: {
+        type: "string",
+        description:
+          "Alias for assetRef when action is upload_asset.",
+      },
+      mimeType: {
+        type: "string",
+        description:
+          "MIME type to use when exporting a workspace file as an asset. Defaults to application/octet-stream.",
+      },
+      overwrite: {
+        type: "boolean",
+        description:
+          "When false, upload_asset refuses to overwrite an existing workspace file. Defaults to false.",
+      },
     },
     required: ["action"],
   },
@@ -413,6 +487,11 @@ const persistentTerminalTool: NewTool = {
       timeout,
       scope = "agent",
       project: explicitProject,
+      path,
+      assetRef,
+      ref,
+      mimeType,
+      overwrite = false,
     }: PersistentTerminalParams,
     context?: ToolContext,
   ) => {
@@ -480,6 +559,70 @@ const persistentTerminalTool: NewTool = {
         agentId: scopedAgentId,
         workspaceRoot,
         startedAt: session?.startedAt ?? null,
+      };
+    }
+
+    // --- upload_asset ---
+    if (action === "upload_asset") {
+      if (!context?.assetStore) throw new Error("Asset store is not configured.");
+      const sourceRef = assetRef ?? ref;
+      if (!sourceRef) throw new Error("'assetRef' is required when action is 'upload_asset'.");
+      if (!path) throw new Error("'path' is required when action is 'upload_asset'.");
+
+      await ensureDir(workspaceRoot);
+      const targetPath = resolveWorkspaceFilePath(workspaceRoot, path);
+      const assetId = resolveAssetIdForStore(sourceRef, context.assetStore);
+      const { bytes, mime } = await context.assetStore.get(assetId);
+      const maxBytes = getMaxArtifactBytes();
+      if (bytes.byteLength > maxBytes) {
+        throw new Error(`Asset exceeds max artifact size of ${maxBytes} bytes.`);
+      }
+      if (!overwrite) {
+        try {
+          await Deno.stat(targetPath);
+          throw new Error(`Workspace file already exists: ${path}`);
+        } catch (error) {
+          if (!(error instanceof Deno.errors.NotFound)) throw error;
+        }
+      }
+
+      await ensureDir(dirname(targetPath));
+      await Deno.writeFile(targetPath, bytes);
+      return {
+        success: true,
+        action,
+        path: normalizeWorkspaceFilePath(path),
+        assetRef: buildAssetRefForStore(context.assetStore, assetId),
+        mimeType: mime,
+        size: bytes.byteLength,
+        workspaceRoot,
+      };
+    }
+
+    // --- export_file ---
+    if (action === "export_file") {
+      if (!context?.assetStore) throw new Error("Asset store is not configured.");
+      if (!path) throw new Error("'path' is required when action is 'export_file'.");
+
+      const sourcePath = resolveWorkspaceFilePath(workspaceRoot, path);
+      const info = await Deno.stat(sourcePath);
+      if (!info.isFile) throw new Error(`Workspace path is not a file: ${path}`);
+      const maxBytes = getMaxArtifactBytes();
+      if (info.size > maxBytes) {
+        throw new Error(`File exceeds max artifact size of ${maxBytes} bytes.`);
+      }
+
+      const bytes = await Deno.readFile(sourcePath);
+      const resolvedMime = mimeType ?? "application/octet-stream";
+      const { assetId } = await context.assetStore.save(bytes, resolvedMime);
+      return {
+        success: true,
+        action,
+        path: normalizeWorkspaceFilePath(path),
+        assetRef: buildAssetRefForStore(context.assetStore, assetId),
+        mimeType: resolvedMime,
+        size: bytes.byteLength,
+        workspaceRoot,
       };
     }
 

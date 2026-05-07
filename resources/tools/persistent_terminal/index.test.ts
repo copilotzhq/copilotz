@@ -3,7 +3,9 @@ import { assertEquals } from "@std/assert";
 import {
   buildSessionKey,
   buildWorkspaceRoot,
+  normalizeWorkspaceFilePath,
   resolveBaseDir,
+  resolveWorkspaceFilePath,
 } from "@/resources/tools/persistent_terminal/index.ts";
 
 Deno.test("persistent_terminal defaults its base dir to the current cwd", () => {
@@ -94,4 +96,29 @@ Deno.test("persistent_terminal shares project and tenant session keys across age
   assertEquals(agentKeyA === agentKeyB, false);
   assertEquals(projectKeyA, projectKeyB);
   assertEquals(tenantKeyA, tenantKeyB);
+});
+
+Deno.test("persistent_terminal resolves artifact paths inside the workspace", () => {
+  const root = "/tmp/copilotz-workspaces/tenant/project/agent";
+  assertEquals(
+    normalizeWorkspaceFilePath("inputs/brief.pdf"),
+    "inputs/brief.pdf",
+  );
+  assertEquals(
+    resolveWorkspaceFilePath(root, "outputs/report.txt"),
+    "/tmp/copilotz-workspaces/tenant/project/agent/outputs/report.txt",
+  );
+});
+
+Deno.test("persistent_terminal rejects artifact paths that escape the workspace", () => {
+  const root = "/tmp/copilotz-workspaces/tenant/project/agent";
+  for (const filePath of ["../secret.txt", "/tmp/secret.txt", "~/secret.txt", ""]) {
+    let rejected = false;
+    try {
+      resolveWorkspaceFilePath(root, filePath);
+    } catch {
+      rejected = true;
+    }
+    assertEquals(rejected, true);
+  }
 });

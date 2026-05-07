@@ -65,3 +65,67 @@ Deno.test("llm_result processor converts lifecycle payload to NEW_MESSAGE artifa
     usageNodeId: "usage-1",
   });
 });
+
+Deno.test("llm_result processor renders failed LLM results as assistant messages", async () => {
+  const result = await process(
+    {
+      id: "evt-llm-failed",
+      threadId: "thread-1",
+      type: "LLM_RESULT",
+      payload: {
+        llmCallId: "llm-123",
+        agent: { id: "researcher", name: "Researcher" },
+        provider: "anthropic",
+        model: "claude",
+        status: "failed",
+        finishReason: "error",
+        answer: "O modelo está temporariamente com limite de uso.",
+        reasoning: null,
+        toolCalls: null,
+        extractedTags: null,
+        error: {
+          message: "Request failed with status 429",
+          reason: "rate_limit",
+          provider: "anthropic",
+          model: "claude",
+          status: 429,
+          retryable: true,
+          fallbackAttempted: false,
+          fallbackCount: 0,
+          visibleStreamStarted: false,
+          attempts: [{
+            provider: "anthropic",
+            model: "claude",
+            reason: "rate_limit",
+            status: 429,
+            message: "Request failed with status 429",
+          }],
+        },
+        finishedAt: new Date().toISOString(),
+      },
+      parentEventId: null,
+      traceId: null,
+      priority: 1000,
+      metadata: {},
+      ttlMs: null,
+      expiresAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: "completed",
+    } as never,
+    {} as never,
+  );
+
+  assertExists(result);
+  if (!("producedEvents" in result) || !result.producedEvents) {
+    throw new Error("Expected producedEvents");
+  }
+  const produced = result.producedEvents[0] as {
+    type: string;
+    payload: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  };
+  assertEquals(produced.type, "NEW_MESSAGE");
+  assertEquals(produced.payload.content, "O modelo está temporariamente com limite de uso.");
+  assertEquals((produced.metadata?.llmError as Record<string, unknown>)?.reason, "rate_limit");
+});

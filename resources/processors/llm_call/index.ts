@@ -1,4 +1,4 @@
-import { chat } from "@/runtime/llm/index.ts";
+import { chat, classifyLLMError, LLMProviderError } from "@/runtime/llm/index.ts";
 import type {
   ChatMessage,
   ChatRequest,
@@ -74,6 +74,24 @@ function normalizeExtractedTagTargets(value: unknown): string[] {
       typeof target === "string" && target.trim().length > 0
     ).map((target) => target.trim())
     : [];
+}
+
+function getProviderFailureMessage(error: LLMProviderError): string {
+  if (error.reason === "rate_limit") {
+    return "O modelo está temporariamente com limite de uso. Tente novamente em alguns instantes.";
+  }
+  if (error.reason === "timeout") {
+    return "A resposta demorou mais que o esperado. Tente novamente em alguns instantes.";
+  }
+  return "O modelo ficou temporariamente indisponível. Tente novamente em alguns instantes.";
+}
+
+function isRetryableLLMReason(reason: string | null): boolean {
+  return reason === "rate_limit" ||
+    reason === "timeout" ||
+    reason === "network" ||
+    reason === "server_error" ||
+    reason === "provider_error";
 }
 
 export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
@@ -291,6 +309,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       { id: payload.agent.id ?? null, name: payload.agent.name },
       configForCall,
     );
+    const configuredProvider = configForCall.provider!;
 
     if (Deno.env.get("COPILOTZ_DEBUG") === "1") {
       console.log("shouldResolve", shouldResolve);
@@ -299,17 +318,117 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       console.log("resolvedMessages", resolvedMessages);
     }
 
-    const response = await chat(
-      {
-        messages: resolvedMessages,
-        tools: payload.tools,
-        extractTags: ["route_to", "ask_to"],
-      } as ChatRequest,
-      configForCall,
-      envVars,
-      streamCallback,
-      context.llmProviders,
-    );
+    const eventMetadata = event.metadata &&
+        typeof event.metadata === "object" &&
+        !Array.isArray(event.metadata)
+      ? event.metadata as Record<string, unknown>
+      : {};
+    const baseResultMetadata: Record<string, unknown> = {
+      ...(typeof eventMetadata.targetId === "string"
+        ? { targetId: eventMetadata.targetId }
+        : {}),
+      ...(Array.isArray(eventMetadata.targetQueue)
+        ? {
+          targetQueue: eventMetadata.targetQueue.filter((
+            target,
+          ): target is string => typeof target === "string"),
+        }
+        : {}),
+      ...(typeof eventMetadata.sourceMessageSenderId === "string"
+        ? { sourceMessageSenderId: eventMetadata.sourceMessageSenderId }
+        : {}),
+    };
+
+    let response: ChatResponse;
+    try {
+      response = await chat(
+        {
+          messages: resolvedMessages,
+          tools: payload.tools,
+          extractTags: ["route_to", "ask_to"],
+        } as ChatRequest,
+        configForCall,
+        envVars,
+        streamCallback,
+        context.llmProviders,
+      );
+    } catch (error) {
+      if (streamCallback && deps.emitToStream) {
+        deps.emitToStream(buildTokenEvent("", true));
+      }
+
+      const providerError = error instanceof LLMProviderError
+        ? error
+        : new LLMProviderError(error instanceof Error ? error.message : String(error), {
+          reason: classifyLLMError(error),
+          provider: configuredProvider,
+          model: configForCall.model,
+          status: typeof (error as { status?: unknown })?.status === "number"
+            ? (error as { status: number }).status
+            : undefined,
+          attempts: [{
+            provider: configuredProvider,
+            model: configForCall.model,
+            reason: classifyLLMError(error),
+            status: typeof (error as { status?: unknown })?.status === "number"
+              ? (error as { status: number }).status
+              : undefined,
+            message: error instanceof Error ? error.message : String(error),
+          }],
+          cause: error,
+        });
+
+      const friendlyAnswer = getProviderFailureMessage(providerError);
+      const failedPayload: LlmResultEventPayload = {
+        llmCallId: typeof event.id === "string" ? event.id : ulid(),
+        agent: {
+          id: payload.agent.id ?? undefined,
+          name: payload.agent.name,
+        },
+        provider: providerError.provider ?? configForCall.provider ?? null,
+        model: providerError.model ?? configForCall.model ?? null,
+        status: "failed",
+        finishReason: "error",
+        answer: friendlyAnswer,
+        reasoning: null,
+        toolCalls: null,
+        extractedTags: null,
+        error: {
+          message: providerError.message,
+          reason: providerError.reason,
+          provider: providerError.provider ?? null,
+          model: providerError.model ?? null,
+          status: providerError.status ?? null,
+          retryable: isRetryableLLMReason(providerError.reason),
+          fallbackAttempted: providerError.fallbackAttempted,
+          fallbackCount: Math.max(0, providerError.attempts.length - 1),
+          visibleStreamStarted: providerError.visibleStreamStarted,
+          attempts: providerError.attempts.map((attempt) => ({
+            provider: attempt.provider,
+            model: attempt.model ?? null,
+            reason: attempt.reason ?? null,
+            status: attempt.status ?? null,
+            message: attempt.message ?? null,
+          })),
+        },
+        finishedAt: new Date().toISOString(),
+      };
+
+      return {
+        producedEvents: [{
+          threadId,
+          type: "LLM_RESULT",
+          payload: failedPayload,
+          parentEventId: typeof event.id === "string" ? event.id : undefined,
+          traceId: typeof event.traceId === "string" ? event.traceId : undefined,
+          priority: typeof event.priority === "number" ? event.priority : undefined,
+          metadata: {
+            ...baseResultMetadata,
+            llmError: failedPayload.error,
+          },
+        }],
+      };
+    }
 
     const llmResponse = response as unknown as ChatResponse;
     let usageNodeId: string | null = null;
@@ -441,25 +560,8 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       finishedAt: new Date().toISOString(),
     };
 
-    const eventMetadata = event.metadata &&
-        typeof event.metadata === "object" &&
-        !Array.isArray(event.metadata)
-      ? event.metadata as Record<string, unknown>
-      : {};
     const resultMetadata: Record<string, unknown> = {
-      ...(typeof eventMetadata.targetId === "string"
-        ? { targetId: eventMetadata.targetId }
-        : {}),
-      ...(Array.isArray(eventMetadata.targetQueue)
-        ? {
-          targetQueue: eventMetadata.targetQueue.filter((
-            target,
-          ): target is string => typeof target === "string"),
-        }
-        : {}),
-      ...(typeof eventMetadata.sourceMessageSenderId === "string"
-        ? { sourceMessageSenderId: eventMetadata.sourceMessageSenderId }
-        : {}),
+      ...baseResultMetadata,
       ...(routeTargets.length > 0
         ? {
           routing: {

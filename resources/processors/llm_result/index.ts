@@ -22,8 +22,13 @@ export const llmResultProcessor: EventProcessor<
         throw new Error("Invalid thread id for LLM result event");
       })();
 
+    const errorAnswer = payload.status === "failed"
+      ? payload.answer ??
+        "O modelo ficou temporariamente indisponível. Tente novamente em alguns instantes."
+      : "";
+
     const newMessagePayload: MessagePayload = {
-      content: payload.answer ?? "",
+      content: payload.status === "failed" ? errorAnswer : payload.answer ?? "",
       sender: {
         id: payload.agent.id ?? undefined,
         type: "agent",
@@ -38,6 +43,9 @@ export const llmResultProcessor: EventProcessor<
         ? event.metadata as Record<string, unknown>
         : {}),
       ...(payload.usageNodeId ? { usageNodeId: payload.usageNodeId } : {}),
+      ...(payload.status === "failed" && payload.error
+        ? { llmError: payload.error }
+        : {}),
     };
 
     const producedEvents: NewEvent[] = [{

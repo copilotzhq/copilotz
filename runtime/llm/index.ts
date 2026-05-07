@@ -37,6 +37,51 @@ const DEFAULT_FALLBACK_REASONS: ProviderFallbackReason[] = [
   "provider_error",
 ];
 
+export type LLMProviderAttempt = {
+  provider: ProviderName;
+  model?: string;
+  reason?: ProviderFallbackReason | null;
+  status?: number;
+  message?: string;
+};
+
+export class LLMProviderError extends Error {
+  reason: ProviderFallbackReason | null;
+  provider: ProviderName;
+  model?: string;
+  status?: number;
+  attempts: LLMProviderAttempt[];
+  fallbackAttempted: boolean;
+  visibleStreamStarted: boolean;
+
+  constructor(
+    message: string,
+    options: {
+      reason: ProviderFallbackReason | null;
+      provider: ProviderName;
+      model?: string;
+      status?: number;
+      attempts?: LLMProviderAttempt[];
+      fallbackAttempted?: boolean;
+      visibleStreamStarted?: boolean;
+      cause?: unknown;
+    },
+  ) {
+    super(message);
+    this.name = "LLMProviderError";
+    this.reason = options.reason;
+    this.provider = options.provider;
+    this.model = options.model;
+    this.status = options.status;
+    this.attempts = options.attempts ?? [];
+    this.fallbackAttempted = options.fallbackAttempted ?? false;
+    this.visibleStreamStarted = options.visibleStreamStarted ?? false;
+    if (options.cause !== undefined) {
+      (this as Error & { cause?: unknown }).cause = options.cause;
+    }
+  }
+}
+
 let defaultProviderRegistryPromise: Promise<ProviderRegistry> | undefined;
 
 async function getProviderRegistry(
@@ -66,7 +111,7 @@ function buildAttemptConfig(
   return withDefaultStopSequences(candidate);
 }
 
-function classifyFallbackReason(error: unknown): ProviderFallbackReason | null {
+export function classifyLLMError(error: unknown): ProviderFallbackReason | null {
   const requestError = error as {
     status?: number;
     statusText?: string;
@@ -115,7 +160,7 @@ function shouldAttemptFallback(
   error: unknown,
   fallbackOn?: ProviderFallbackReason[],
 ): boolean {
-  const reason = classifyFallbackReason(error);
+  const reason = classifyLLMError(error);
   if (!reason) return false;
 
   const allowedReasons = Array.isArray(fallbackOn) && fallbackOn.length > 0
@@ -123,6 +168,15 @@ function shouldAttemptFallback(
     : DEFAULT_FALLBACK_REASONS;
 
   return allowedReasons.includes(reason);
+}
+
+function getErrorStatus(error: unknown): number | undefined {
+  const status = (error as { status?: unknown })?.status;
+  return typeof status === "number" ? status : undefined;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function normalizeProviderUsage(
@@ -232,6 +286,7 @@ export async function chat(
   ];
 
   let lastError: unknown = null;
+  const attempts: LLMProviderAttempt[] = [];
   const registry = await getProviderRegistry(providerRegistry);
 
   for (let index = 0; index < attemptConfigs.length; index++) {
@@ -350,6 +405,14 @@ export async function chat(
       return responseWithMetadata;
     } catch (error) {
       lastError = error;
+      const reason = classifyLLMError(error);
+      attempts.push({
+        provider: attemptProvider,
+        model: attemptConfig.model,
+        reason,
+        status: getErrorStatus(error),
+        message: getErrorMessage(error),
+      });
 
       const hasFallback = index < attemptConfigs.length - 1;
       if (
@@ -357,13 +420,31 @@ export async function chat(
         visibleStreamStarted ||
         !shouldAttemptFallback(error, baseConfig.fallbackOn)
       ) {
-        throw error;
+        throw new LLMProviderError(getErrorMessage(error), {
+          reason,
+          provider: attemptProvider,
+          model: attemptConfig.model,
+          status: getErrorStatus(error),
+          attempts,
+          fallbackAttempted: attempts.length > 1,
+          visibleStreamStarted,
+          cause: error,
+        });
       }
     }
   }
 
   if (lastError) {
-    throw lastError;
+    const lastAttempt = attempts[attempts.length - 1];
+    throw new LLMProviderError(getErrorMessage(lastError), {
+      reason: lastAttempt?.reason ?? classifyLLMError(lastError),
+      provider: lastAttempt?.provider ?? baseConfig.provider,
+      model: lastAttempt?.model ?? baseConfig.model,
+      status: lastAttempt?.status ?? getErrorStatus(lastError),
+      attempts,
+      fallbackAttempted: attempts.length > 1,
+      cause: lastError,
+    });
   }
   throw new Error("LLM chat exhausted all attempts without returning a response");
 }

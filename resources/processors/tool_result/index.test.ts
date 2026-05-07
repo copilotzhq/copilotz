@@ -72,3 +72,53 @@ Deno.test("tool_result processor converts lifecycle payload to NEW_MESSAGE artif
     },
   );
 });
+
+Deno.test("tool_result processor persists failed tool errors as output metadata", async () => {
+  const result = await process(
+    {
+      id: "evt-tool-result-failed",
+      threadId: "thread-1",
+      type: "TOOL_RESULT",
+      payload: {
+        agent: { id: "researcher", name: "Researcher" },
+        toolCallId: "call-failed",
+        tool: { id: "browser_session", name: "Browser Session" },
+        args: { sessionId: "main" },
+        status: "failed",
+        error: "EXECUTION ERROR: page crashed",
+        content: "tool error: EXECUTION ERROR: page crashed",
+        finishedAt: new Date().toISOString(),
+      },
+      parentEventId: null,
+      traceId: null,
+      priority: 1000,
+      metadata: null,
+      ttlMs: null,
+      expiresAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: "completed",
+    } as never,
+    {} as never,
+  );
+
+  assertExists(result);
+  if (!("producedEvents" in result) || !result.producedEvents) {
+    throw new Error("Expected producedEvents");
+  }
+  const produced = result.producedEvents[0] as {
+    payload: Record<string, unknown>;
+  };
+  const toolCall =
+    ((produced.payload.metadata as Record<string, unknown>)?.toolCalls as Array<
+      Record<string, unknown>
+    >)[0];
+
+  assertEquals(toolCall.status, "failed");
+  assertEquals(toolCall.error, "EXECUTION ERROR: page crashed");
+  assertEquals(toolCall.output, {
+    ok: false,
+    status: "failed",
+    error: "EXECUTION ERROR: page crashed",
+  });
+});

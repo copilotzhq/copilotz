@@ -9,6 +9,20 @@ import type {
 
 export type TOOLResultPayload = ToolResultEventPayload;
 
+function normalizeToolStatus(status: ToolResultEventPayload["status"]) {
+  return status === "cancelled" ? "failed" : status;
+}
+
+function buildFailureOutput(payload: ToolResultEventPayload) {
+  if (typeof payload.output !== "undefined") return payload.output;
+  if (typeof payload.error === "undefined") return undefined;
+  return {
+    ok: false,
+    status: normalizeToolStatus(payload.status),
+    error: payload.error,
+  };
+}
+
 export const toolResultProcessor: EventProcessor<
   TOOLResultPayload,
   ProcessorDeps
@@ -25,6 +39,7 @@ export const toolResultProcessor: EventProcessor<
     const toolResultQueueEventId = typeof event.id === "string"
       ? event.id
       : undefined;
+    const output = buildFailureOutput(payload);
 
     const newMessagePayload: MessagePayload = {
       content: payload.content ?? "",
@@ -45,8 +60,9 @@ export const toolResultProcessor: EventProcessor<
                 (payload.args && typeof payload.args === "object")
               ? payload.args as string | Record<string, unknown> | null
               : null,
-            ...(typeof payload.output !== "undefined" ? { output: payload.output } : {}),
-            status: payload.status === "cancelled" ? "failed" : payload.status,
+            ...(typeof output !== "undefined" ? { output } : {}),
+            ...(typeof payload.error !== "undefined" ? { error: payload.error } : {}),
+            status: normalizeToolStatus(payload.status),
             ...(typeof payload.historyVisibility === "string"
               ? { visibility: payload.historyVisibility }
               : {}),

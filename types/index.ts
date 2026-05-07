@@ -314,6 +314,36 @@ export type APIAuth =
     } | null;
   };
 
+export interface APIPrepareRequestInput {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  queryParams: URLSearchParams;
+  body?: unknown;
+}
+
+export interface APIPrepareRequestContext {
+  apiName: string;
+  toolKey: string;
+  threadId?: string;
+  senderId?: string;
+  senderType?: "user" | "agent" | "tool" | "system";
+  userExternalId?: string;
+  agent?: Agent | null;
+  namespacePrefix?: string;
+  userMetadata?: Record<string, unknown>;
+  threadMetadata?: Record<string, unknown>;
+  db?: CopilotzDb;
+}
+
+export type APIPrepareRequest = (
+  request: APIPrepareRequestInput,
+  context: APIPrepareRequestContext,
+) =>
+  | APIPrepareRequestInput
+  | Promise<APIPrepareRequestInput | undefined>
+  | undefined;
+
 /** API configuration for connecting to external REST APIs via OpenAPI. */
 export interface API {
   id: string;
@@ -326,6 +356,7 @@ export interface API {
   auth?: APIAuth | null;
   timeout?: number | null;
   includeResponseHeaders?: boolean | null;
+  prepareRequest?: APIPrepareRequest | null;
   metadata?: Record<string, unknown> | null;
   createdAt?: string | Date;
   updatedAt?: string | Date;

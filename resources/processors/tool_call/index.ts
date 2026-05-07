@@ -59,6 +59,8 @@ export interface ToolExecutionContext extends ChatContext {
   threadId?: string;
   /** The external ID of the human user in this conversation. Resolved from thread metadata by the framework. */
   userExternalId?: string;
+  /** Agent currently executing the tool, when available. */
+  agent?: Agent | null;
   agents?: Agent[];
   db?: CopilotzDb;
   embeddingConfig?: {
@@ -267,6 +269,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
           senderType: "agent",
           threadId,
           userExternalId: resolvedUserExternalId,
+          agent,
           agents: availableAgents,
           tools: allTools,
           db,
@@ -518,11 +521,12 @@ export const processToolCalls = async (
       const cancellation = createToolCancellation();
       const timeoutMs = resolveToolTimeoutMs(name, context);
 
-      const toolContext: ToolExecutionContext = {
-        ...context,
-        onCancel: cancellation.onCancel,
-        cancelled: false,
-        cancelReason: undefined,
+        const toolContext: ToolExecutionContext = {
+          ...context,
+          agent: context.agent ?? null,
+          onCancel: cancellation.onCancel,
+          cancelled: false,
+          cancelReason: undefined,
       };
 
       const cancelWithContext = (reason: ToolCancelReason) => {

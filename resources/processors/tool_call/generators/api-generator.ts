@@ -1,4 +1,10 @@
-import type { API } from "@/types/index.ts";
+import type {
+  Agent,
+  API,
+  APIPrepareRequestInput,
+  APIPrepareRequestContext,
+  CopilotzDb,
+} from "@/types/index.ts";
 import { parse as parseYaml } from "yaml";
 import type { ExecutableTool } from "../types.ts";
 
@@ -35,6 +41,20 @@ interface OpenAPISchema {
     schemas?: Record<string, any>;
   };
 }
+
+type ApiToolExecutionContext = {
+  onCancel?: (cb: () => void) => () => void;
+  cancelled?: boolean;
+  threadId?: string;
+  senderId?: string;
+  senderType?: "user" | "agent" | "tool" | "system";
+  userExternalId?: string;
+  agent?: Agent | null;
+  namespacePrefix?: string;
+  userMetadata?: Record<string, unknown>;
+  threadMetadata?: Record<string, unknown>;
+  db?: CopilotzDb;
+};
 
 /**
  * Converts OpenAPI parameter schema to JSON Schema for tool validation
@@ -435,6 +455,7 @@ function createApiExecutor(
   path: string,
   method: string,
   operation: OpenAPIOperation,
+  toolKey: string,
   baseUrl: string,
   parameterMetadata: {
     pathParams: Set<string>;
@@ -448,10 +469,7 @@ function createApiExecutor(
     context?: unknown,
   ) => {
     try {
-      const cancelCtx = context as {
-        onCancel?: (cb: () => void) => () => void;
-        cancelled?: boolean;
-      } | undefined;
+      const executionContext = context as ApiToolExecutionContext | undefined;
       const params = (args && typeof args === "object")
         ? args as Record<string, unknown>
         : {};
@@ -493,52 +511,84 @@ function createApiExecutor(
         apiConfig.name,
       );
 
-      // Add final query parameters to URL
-      if (queryParams.toString()) {
-        url += "?" + queryParams.toString();
-      }
-
-      // Build request options
-      const requestOptions: RequestInit = {
-        method: method.toUpperCase(),
-        headers,
-      };
+      const requestMethod = method.toUpperCase();
 
       // Add body for methods that support it
+      let requestBody: unknown;
       if (
-        ["POST", "PUT", "PATCH"].includes(method.toUpperCase()) &&
+        ["POST", "PUT", "PATCH", "DELETE"].includes(requestMethod) &&
         parameterMetadata.bodyParams.size > 0
       ) {
-        let requestBody: any;
-
         if (parameterMetadata.isObjectBody) {
           // Collect all body parameters into an object
           requestBody = {};
+          const objectBody = requestBody as Record<string, unknown>;
           parameterMetadata.bodyParams.forEach((key) => {
             if (params[key] !== undefined) {
-              requestBody[key] = params[key];
+              objectBody[key] = params[key];
             }
           });
         } else {
           // Use the 'body' parameter directly
           requestBody = params.body;
         }
+      }
 
-        if (requestBody !== undefined) {
-          requestOptions.body = typeof requestBody === "string"
-            ? requestBody
-            : JSON.stringify(requestBody);
-        }
+      let preparedRequest: APIPrepareRequestInput = {
+        url,
+        method: requestMethod,
+        headers,
+        queryParams,
+        body: requestBody,
+      };
+
+      if (apiConfig.prepareRequest) {
+        const prepareContext: APIPrepareRequestContext = {
+          apiName: apiConfig.name,
+          toolKey,
+          threadId: executionContext?.threadId,
+          senderId: executionContext?.senderId,
+          senderType: executionContext?.senderType,
+          userExternalId: executionContext?.userExternalId,
+          agent: executionContext?.agent ?? null,
+          namespacePrefix: executionContext?.namespacePrefix,
+          userMetadata: executionContext?.userMetadata,
+          threadMetadata: executionContext?.threadMetadata,
+          db: executionContext?.db,
+        };
+        preparedRequest =
+          (await apiConfig.prepareRequest(preparedRequest, prepareContext)) ??
+            preparedRequest;
+      }
+
+      // Add final query parameters to URL after prepareRequest has had a
+      // chance to mutate them.
+      url = preparedRequest.url;
+      const finalQueryParams = preparedRequest.queryParams;
+      if (finalQueryParams.toString()) {
+        url += (url.includes("?") ? "&" : "?") + finalQueryParams.toString();
+      }
+
+      // Build request options
+      const requestOptions: RequestInit = {
+        method: preparedRequest.method,
+        headers: preparedRequest.headers,
+      };
+
+      if (preparedRequest.body !== undefined) {
+        requestOptions.body = typeof preparedRequest.body === "string"
+          ? preparedRequest.body
+          : JSON.stringify(preparedRequest.body);
       }
 
       // Set cancellation / timeout
       const controller = new AbortController();
-      const unsubscribe = cancelCtx?.onCancel?.(() => controller.abort());
+      const unsubscribe = executionContext?.onCancel?.(() => controller.abort());
       const timeoutId = typeof apiConfig.timeout === "number" && apiConfig.timeout > 0
         ? setTimeout(() => controller.abort(), apiConfig.timeout * 1000)
         : undefined;
       requestOptions.signal = controller.signal;
-      if (cancelCtx?.cancelled) controller.abort();
+      if (executionContext?.cancelled) controller.abort();
 
       // Make the request
       const response = await fetch(url, requestOptions);
@@ -654,6 +704,7 @@ export function generateApiTools(apiConfig: API): ExecutableTool[] {
           path,
           method,
           op,
+          toolKey,
           baseUrl,
           parameterMetadata,
         ),

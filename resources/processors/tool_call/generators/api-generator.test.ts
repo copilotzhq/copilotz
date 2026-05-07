@@ -172,3 +172,110 @@ Deno.test("API dynamic auth uses raw response body when token path is omitted", 
     globalThis.fetch = originalFetch;
   }
 });
+
+Deno.test("API prepareRequest can inject trusted runtime context into request body", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured: { url: string; body: Record<string, unknown> } | undefined;
+
+  globalThis.fetch = async (input, init: globalThis.RequestInit | undefined) => {
+    captured = {
+      url: String(input),
+      body: JSON.parse(String(init?.body ?? "{}")),
+    };
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    const [tool] = generateApiTools(buildApiConfig({
+      openApiSchema: {
+        openapi: "3.0.0",
+        info: { title: "Prepared API", version: "1.0.0" },
+        paths: {
+          "/v1/browser-session": {
+            post: {
+              operationId: "browser_session",
+              requestBody: {
+                required: true,
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["sessionId", "actions"],
+                      properties: {
+                        sessionId: { type: "string" },
+                        scope: {
+                          type: "string",
+                          enum: ["agent", "thread"],
+                        },
+                        actions: {
+                          type: "array",
+                          items: { type: "object" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              responses: { "200": { description: "OK" } },
+            },
+          },
+        },
+      },
+      prepareRequest: (request, context) => {
+        const body = request.body as Record<string, unknown>;
+        const scope = body.scope === "thread" ? "thread" : "agent";
+        return {
+          ...request,
+          body: {
+            ...body,
+            scope: undefined,
+            sessionId: [
+              context.namespacePrefix ?? "default",
+              context.userExternalId ?? "anonymous",
+              context.threadId ?? "no-thread",
+              scope === "agent" ? context.senderId ?? "agent" : "thread",
+              body.sessionId,
+            ].join(":"),
+            actor: {
+              tenantId: context.namespacePrefix,
+              userId: context.userExternalId,
+              threadId: context.threadId,
+              agentId: context.senderId,
+            },
+          },
+        };
+      },
+    }));
+
+    await tool.execute(
+      {
+        sessionId: "main",
+        scope: "agent",
+        actions: [{ action: "read" }],
+      },
+      {
+        namespacePrefix: "compass",
+        userExternalId: "user-1",
+        threadId: "thread-1",
+        senderId: "east",
+        senderType: "agent",
+      },
+    );
+
+    assertEquals(captured?.url, "https://example.com/v1/browser-session");
+    assertObjectMatch(captured?.body ?? {}, {
+      sessionId: "compass:user-1:thread-1:east:main",
+      actor: {
+        tenantId: "compass",
+        userId: "user-1",
+        threadId: "thread-1",
+        agentId: "east",
+      },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

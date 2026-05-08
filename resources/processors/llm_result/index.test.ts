@@ -4,6 +4,7 @@ import {
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import { process } from "./index.ts";
+import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
 
 Deno.test("llm_result processor converts lifecycle payload to NEW_MESSAGE artifact", async () => {
   const result = await process(
@@ -53,12 +54,21 @@ Deno.test("llm_result processor converts lifecycle payload to NEW_MESSAGE artifa
     type: string;
     payload: Record<string, unknown>;
     metadata?: Record<string, unknown>;
+    priority?: number;
   };
   assertEquals(produced.type, "NEW_MESSAGE");
-  assertEquals((produced.payload.sender as Record<string, unknown>)?.type, "agent");
+  assertEquals(produced.priority, EVENT_PRIORITIES.SETTLEMENT);
+  assertEquals(
+    (produced.payload.sender as Record<string, unknown>)?.type,
+    "agent",
+  );
   assertEquals(produced.payload.content, "I will look that up.");
   assertEquals(produced.payload.reasoning, "Need to search first.");
-  assertEquals(((produced.payload.toolCalls as Array<Record<string, unknown>>) ?? [])[0]?.id, "call-1");
+  assertEquals(
+    ((produced.payload.toolCalls as Array<Record<string, unknown>>) ?? [])[0]
+      ?.id,
+    "call-1",
+  );
   assertEquals(produced.metadata, {
     targetId: "alex",
     targetQueue: [],
@@ -126,6 +136,12 @@ Deno.test("llm_result processor renders failed LLM results as assistant messages
     metadata?: Record<string, unknown>;
   };
   assertEquals(produced.type, "NEW_MESSAGE");
-  assertEquals(produced.payload.content, "O modelo está temporariamente com limite de uso.");
-  assertEquals((produced.metadata?.llmError as Record<string, unknown>)?.reason, "rate_limit");
+  assertEquals(
+    produced.payload.content,
+    "O modelo está temporariamente com limite de uso.",
+  );
+  assertEquals(
+    (produced.metadata?.llmError as Record<string, unknown>)?.reason,
+    "rate_limit",
+  );
 });

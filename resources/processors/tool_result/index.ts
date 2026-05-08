@@ -6,6 +6,7 @@ import type {
   ProcessorDeps,
   ToolResultEventPayload,
 } from "@/types/index.ts";
+import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
 
 export type TOOLResultPayload = ToolResultEventPayload;
 
@@ -49,9 +50,7 @@ export const toolResultProcessor: EventProcessor<
         name: payload.agent.name,
       },
       metadata: {
-        ...(toolResultQueueEventId
-          ? { toolResultQueueEventId }
-          : {}),
+        ...(toolResultQueueEventId ? { toolResultQueueEventId } : {}),
         toolCalls: [
           {
             id: payload.toolCallId,
@@ -61,7 +60,9 @@ export const toolResultProcessor: EventProcessor<
               ? payload.args as string | Record<string, unknown> | null
               : null,
             ...(typeof output !== "undefined" ? { output } : {}),
-            ...(typeof payload.error !== "undefined" ? { error: payload.error } : {}),
+            ...(typeof payload.error !== "undefined"
+              ? { error: payload.error }
+              : {}),
             status: normalizeToolStatus(payload.status),
             ...(typeof payload.historyVisibility === "string"
               ? { visibility: payload.historyVisibility }
@@ -72,8 +73,12 @@ export const toolResultProcessor: EventProcessor<
           },
         ],
         ...(payload.batchId ? { batchId: payload.batchId } : {}),
-        ...(typeof payload.batchSize === "number" ? { batchSize: payload.batchSize } : {}),
-        ...(typeof payload.batchIndex === "number" ? { batchIndex: payload.batchIndex } : {}),
+        ...(typeof payload.batchSize === "number"
+          ? { batchSize: payload.batchSize }
+          : {}),
+        ...(typeof payload.batchIndex === "number"
+          ? { batchIndex: payload.batchIndex }
+          : {}),
       },
     };
 
@@ -83,7 +88,7 @@ export const toolResultProcessor: EventProcessor<
       payload: newMessagePayload,
       parentEventId: typeof event.id === "string" ? event.id : undefined,
       traceId: typeof event.traceId === "string" ? event.traceId : undefined,
-      priority: typeof event.priority === "number" ? event.priority : undefined,
+      priority: EVENT_PRIORITIES.SETTLEMENT,
       metadata: event.metadata,
     }];
 

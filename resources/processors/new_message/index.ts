@@ -63,6 +63,10 @@ import {
   setRuntimeThreadMetadata,
 } from "@/runtime/thread-metadata.ts";
 import {
+  EVENT_PRIORITIES,
+  priorityForAgentLlmCall,
+} from "@/runtime/event-priority.ts";
+import {
   buildMentionTargetRoute,
   extractMentionNames,
 } from "@/utils/mentions.ts";
@@ -1423,13 +1427,6 @@ export const messageProcessor: EventProcessor<
     const availableAgents = context.agents || [];
     const producedEvents: NewEvent[] = [];
 
-    // Assign descending priorities per target to enforce strict serial-per-target
-    const basePriority = 1000;
-    // If this event already has a priority (continuation of a chain), keep it
-    const chainPriority = typeof event.priority === "number"
-      ? (event.priority as number)
-      : basePriority;
-
     const normalizedToolCalls = messageContext.toolCalls;
     const eventMetadata = event.metadata &&
         typeof event.metadata === "object" &&
@@ -1529,7 +1526,7 @@ export const messageProcessor: EventProcessor<
           traceId: typeof event.traceId === "string"
             ? event.traceId
             : undefined,
-          priority: chainPriority,
+          priority: EVENT_PRIORITIES.SETTLEMENT,
           metadata: toolReplyMetadata.replyToParticipantId ||
               toolReplyMetadata.replyToTargetQueue.length > 0
             ? toolReplyMetadata
@@ -1916,7 +1913,7 @@ export const messageProcessor: EventProcessor<
         payload: llmPayload,
         parentEventId: typeof event.id === "string" ? event.id : undefined,
         traceId: typeof event.traceId === "string" ? event.traceId : undefined,
-        priority: chainPriority,
+        priority: priorityForAgentLlmCall(payload),
         metadata: llmEventMetadata,
       });
     }

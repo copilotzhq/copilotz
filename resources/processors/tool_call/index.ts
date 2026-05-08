@@ -11,8 +11,8 @@ import type {
   NewEvent,
   ProcessorDeps,
   Tool,
-  ToolResultEventPayload,
   ToolHistoryVisibility,
+  ToolResultEventPayload,
 } from "@/types/index.ts";
 import type { ExecutableTool } from "./types.ts";
 import type { ToolInvocation } from "@/runtime/llm/types.ts";
@@ -20,6 +20,7 @@ import {
   DEFAULT_TOOL_HISTORY_VISIBILITY,
   projectToolResultForHistory,
 } from "./history-policy.ts";
+import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
 
 import Ajv from "npm:ajv@^8.17.1";
 import addFormats from "npm:ajv-formats@^3.0.1";
@@ -102,7 +103,7 @@ function createToolCancellation() {
   let reason: ToolCancelReason | undefined = undefined;
   const callbacks = new Set<() => void>();
 
-  const onCancel = (cb: () => void): (() => void) => {
+  const onCancel = (cb: () => void): () => void => {
     if (cancelled) {
       try {
         cb();
@@ -250,14 +251,15 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       const allowedKeys = agent && Array.isArray(agent.allowedTools)
         ? agent.allowedTools
         : agent?.allowedTools === null
-          ? []
-          : allTools.map((t) => t.key);
+        ? []
+        : allTools.map((t) => t.key);
       const agentTools =
         allowedKeys.map((key: string) => allTools.find((t) => t.key === key))
           .filter(hasExecute) || [];
 
       // Resolve the human user's external ID from normalized thread metadata
-      const resolvedUserExternalId = getUserExternalId(thread?.metadata) ?? undefined;
+      const resolvedUserExternalId = getUserExternalId(thread?.metadata) ??
+        undefined;
 
       const results = await processToolCalls(
         [payload.toolCall],
@@ -344,9 +346,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
           traceId: typeof event.traceId === "string"
             ? event.traceId
             : undefined,
-          priority: typeof event.priority === "number"
-            ? event.priority
-            : undefined,
+          priority: EVENT_PRIORITIES.SETTLEMENT,
           metadata: replyToParticipantId || replyToTargetQueue.length > 0
             ? {
               replyToParticipantId,
@@ -521,12 +521,12 @@ export const processToolCalls = async (
       const cancellation = createToolCancellation();
       const timeoutMs = resolveToolTimeoutMs(name, context);
 
-        const toolContext: ToolExecutionContext = {
-          ...context,
-          agent: context.agent ?? null,
-          onCancel: cancellation.onCancel,
-          cancelled: false,
-          cancelReason: undefined,
+      const toolContext: ToolExecutionContext = {
+        ...context,
+        agent: context.agent ?? null,
+        onCancel: cancellation.onCancel,
+        cancelled: false,
+        cancelReason: undefined,
       };
 
       const cancelWithContext = (reason: ToolCancelReason) => {
@@ -540,7 +540,10 @@ export const processToolCalls = async (
         typeof timeoutMs === "number" && Number.isFinite(timeoutMs) &&
         timeoutMs > 0
       ) {
-        timer = setTimeout(() => cancelWithContext("timeout"), timeoutMs) as unknown as number;
+        timer = setTimeout(
+          () => cancelWithContext("timeout"),
+          timeoutMs,
+        ) as unknown as number;
       }
 
       const cancelPromise = new Promise<never>((_, reject) => {
@@ -556,12 +559,13 @@ export const processToolCalls = async (
         );
         const output = await Promise.race([execPromise, cancelPromise]);
 
-        const { visibility, projectedOutput } = await projectToolResultForHistory(
-          tool,
-          args,
-          output,
-          undefined,
-        );
+        const { visibility, projectedOutput } =
+          await projectToolResultForHistory(
+            tool,
+            args,
+            output,
+            undefined,
+          );
 
         return {
           tool_call_id: toolCall.id,
@@ -578,17 +582,20 @@ export const processToolCalls = async (
           cancellation.cancelled && cancellation.reason === "timeout",
         );
         const errorMessage = isTimeout
-          ? `EXECUTION CANCELLED: Tool execution timed out after ${Math.round((timeoutMs ?? 0) / 1000)}s`
+          ? `EXECUTION CANCELLED: Tool execution timed out after ${
+            Math.round((timeoutMs ?? 0) / 1000)
+          }s`
           : `EXECUTION ERROR: ${
             error instanceof Error ? error.message : String(error)
           }`;
 
-        const { visibility, projectedOutput } = await projectToolResultForHistory(
-          tool,
-          args,
-          undefined,
-          errorMessage,
-        );
+        const { visibility, projectedOutput } =
+          await projectToolResultForHistory(
+            tool,
+            args,
+            undefined,
+            errorMessage,
+          );
 
         return {
           tool_call_id: toolCall.id,

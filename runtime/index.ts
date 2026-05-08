@@ -16,6 +16,7 @@ import {
   setRuntimeThreadMetadata,
 } from "@/runtime/thread-metadata.ts";
 import { normalizeInboundRunMessage } from "@/utils/inbound-message.ts";
+import { priorityForInboundMessage } from "@/runtime/event-priority.ts";
 
 function buildInitialRoutingMetadata(
   messageMetadata: Record<string, unknown> | null,
@@ -419,6 +420,7 @@ export async function runThread(
     eventType: "NEW_MESSAGE",
     payload: normalizedMessage,
     traceId,
+    priority: priorityForInboundMessage(normalizedMessage),
     ttlMs: options?.queueTTL,
     metadata: initialEventMetadata ?? undefined,
   });

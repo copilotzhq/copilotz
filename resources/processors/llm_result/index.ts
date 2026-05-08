@@ -1,11 +1,12 @@
 import type {
   Event,
   EventProcessor,
+  LlmResultEventPayload,
   MessagePayload,
   NewEvent,
   ProcessorDeps,
-  LlmResultEventPayload,
 } from "@/types/index.ts";
+import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
 
 export type LLMResultPayload = LlmResultEventPayload;
 
@@ -34,12 +35,15 @@ export const llmResultProcessor: EventProcessor<
         type: "agent",
         name: payload.agent.name,
       },
-      ...(Array.isArray(payload.toolCalls) ? { toolCalls: payload.toolCalls } : {}),
+      ...(Array.isArray(payload.toolCalls)
+        ? { toolCalls: payload.toolCalls }
+        : {}),
       ...(payload.reasoning ? { reasoning: payload.reasoning } : {}),
     };
 
     const metadata: Record<string, unknown> = {
-      ...(event.metadata && typeof event.metadata === "object" && !Array.isArray(event.metadata)
+      ...(event.metadata && typeof event.metadata === "object" &&
+          !Array.isArray(event.metadata)
         ? event.metadata as Record<string, unknown>
         : {}),
       ...(payload.usageNodeId ? { usageNodeId: payload.usageNodeId } : {}),
@@ -54,7 +58,7 @@ export const llmResultProcessor: EventProcessor<
       payload: newMessagePayload,
       parentEventId: typeof event.id === "string" ? event.id : undefined,
       traceId: typeof event.traceId === "string" ? event.traceId : undefined,
-      priority: typeof event.priority === "number" ? event.priority : undefined,
+      priority: EVENT_PRIORITIES.SETTLEMENT,
       metadata,
     }];
 

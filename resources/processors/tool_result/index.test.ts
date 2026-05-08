@@ -4,6 +4,7 @@ import {
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import { process } from "./index.ts";
+import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
 
 Deno.test("tool_result processor converts lifecycle payload to NEW_MESSAGE artifact", async () => {
   const result = await process(
@@ -47,20 +48,28 @@ Deno.test("tool_result processor converts lifecycle payload to NEW_MESSAGE artif
   const produced = result.producedEvents[0] as {
     type: string;
     payload: Record<string, unknown>;
+    priority?: number;
   };
   assertEquals(produced.type, "NEW_MESSAGE");
-  assertEquals((produced.payload.sender as Record<string, unknown>)?.type, "tool");
+  assertEquals(produced.priority, EVENT_PRIORITIES.SETTLEMENT);
+  assertEquals(
+    (produced.payload.sender as Record<string, unknown>)?.type,
+    "tool",
+  );
   assertEquals(produced.payload.content, "Search completed");
   assertEquals(
     (produced.payload.metadata as Record<string, unknown>)?.batchId,
     "batch-1",
   );
   assertEquals(
-    (produced.payload.metadata as Record<string, unknown>)?.toolResultQueueEventId,
+    (produced.payload.metadata as Record<string, unknown>)
+      ?.toolResultQueueEventId,
     "evt-tool-result",
   );
   assertEquals(
-    ((produced.payload.metadata as Record<string, unknown>)?.toolCalls as Array<Record<string, unknown>>)[0],
+    ((produced.payload.metadata as Record<string, unknown>)?.toolCalls as Array<
+      Record<string, unknown>
+    >)[0],
     {
       id: "call-123",
       tool: { id: "search_web", name: "Search Web" },

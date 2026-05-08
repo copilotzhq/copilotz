@@ -6,6 +6,7 @@ import {
 import { process } from "./index.ts";
 import type { Event, ProcessorDeps } from "@/types/index.ts";
 import type { ProviderRegistry } from "@/runtime/llm/types.ts";
+import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
 
 const registry: ProviderRegistry = {
   anthropic: () => ({
@@ -20,10 +21,12 @@ Deno.test("llm_call processor converts provider failures into failed LLM_RESULT 
   const originalFetch = globalThis.fetch;
   const emitted: Event[] = [];
   globalThis.fetch = () =>
-    Promise.resolve(new Response("rate limited", {
-      status: 429,
-      statusText: "Too Many Requests",
-    }));
+    Promise.resolve(
+      new Response("rate limited", {
+        status: 429,
+        statusText: "Too Many Requests",
+      }),
+    );
 
   try {
     const result = await process(
@@ -69,14 +72,22 @@ Deno.test("llm_call processor converts provider failures into failed LLM_RESULT 
       type: string;
       payload: Record<string, unknown>;
       metadata?: Record<string, unknown>;
+      priority?: number;
     };
     assertEquals(produced.type, "LLM_RESULT");
+    assertEquals(produced.priority, EVENT_PRIORITIES.SETTLEMENT);
     assertEquals(produced.payload.status, "failed");
     assertEquals(produced.payload.finishReason, "error");
-    assertEquals((produced.payload.error as Record<string, unknown>).reason, "rate_limit");
+    assertEquals(
+      (produced.payload.error as Record<string, unknown>).reason,
+      "rate_limit",
+    );
     assertEquals(produced.metadata?.targetId, "user-1");
     assertEquals(emitted.at(-1)?.type, "TOKEN");
-    assertEquals((emitted.at(-1)?.payload as Record<string, unknown>)?.isComplete, true);
+    assertEquals(
+      (emitted.at(-1)?.payload as Record<string, unknown>)?.isComplete,
+      true,
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

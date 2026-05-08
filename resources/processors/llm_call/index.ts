@@ -1,4 +1,8 @@
-import { chat, classifyLLMError, LLMProviderError } from "@/runtime/llm/index.ts";
+import {
+  chat,
+  classifyLLMError,
+  LLMProviderError,
+} from "@/runtime/llm/index.ts";
 import type {
   ChatMessage,
   ChatRequest,
@@ -26,6 +30,7 @@ import { ulid } from "ulid";
 import { resolveAssetRefsInMessages } from "@/runtime/storage/assets.ts";
 import { filterToolCallTokensStreaming } from "@/runtime/llm/utils.ts";
 import { createLlmUsageService } from "@/runtime/collections/native.ts";
+import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
 
 export type { ChatMessage };
 
@@ -359,24 +364,28 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
 
       const providerError = error instanceof LLMProviderError
         ? error
-        : new LLMProviderError(error instanceof Error ? error.message : String(error), {
-          reason: classifyLLMError(error),
-          provider: configuredProvider,
-          model: configForCall.model,
-          status: typeof (error as { status?: unknown })?.status === "number"
-            ? (error as { status: number }).status
-            : undefined,
-          attempts: [{
+        : new LLMProviderError(
+          error instanceof Error ? error.message : String(error),
+          {
+            reason: classifyLLMError(error),
             provider: configuredProvider,
             model: configForCall.model,
-            reason: classifyLLMError(error),
             status: typeof (error as { status?: unknown })?.status === "number"
               ? (error as { status: number }).status
               : undefined,
-            message: error instanceof Error ? error.message : String(error),
-          }],
-          cause: error,
-        });
+            attempts: [{
+              provider: configuredProvider,
+              model: configForCall.model,
+              reason: classifyLLMError(error),
+              status:
+                typeof (error as { status?: unknown })?.status === "number"
+                  ? (error as { status: number }).status
+                  : undefined,
+              message: error instanceof Error ? error.message : String(error),
+            }],
+            cause: error,
+          },
+        );
 
       const friendlyAnswer = getProviderFailureMessage(providerError);
       const failedPayload: LlmResultEventPayload = {
@@ -420,8 +429,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           type: "LLM_RESULT",
           payload: failedPayload,
           parentEventId: typeof event.id === "string" ? event.id : undefined,
-          traceId: typeof event.traceId === "string" ? event.traceId : undefined,
-          priority: typeof event.priority === "number" ? event.priority : undefined,
+          traceId: typeof event.traceId === "string"
+            ? event.traceId
+            : undefined,
+          priority: EVENT_PRIORITIES.SETTLEMENT,
           metadata: {
             ...baseResultMetadata,
             llmError: failedPayload.error,
@@ -585,7 +596,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       payload: llmResultPayload,
       parentEventId: typeof event.id === "string" ? event.id : undefined,
       traceId: typeof event.traceId === "string" ? event.traceId : undefined,
-      priority: typeof event.priority === "number" ? event.priority : undefined,
+      priority: EVENT_PRIORITIES.SETTLEMENT,
       metadata: resultMetadata,
     }];
 

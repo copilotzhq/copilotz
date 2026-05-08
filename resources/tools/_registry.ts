@@ -3,6 +3,7 @@ import type { NewTool } from "@/types/index.ts";
 import delegate from "@/resources/tools/delegate/index.ts";
 import create_thread from "@/resources/tools/create_thread/index.ts";
 import end_thread from "@/resources/tools/end_thread/index.ts";
+import web_search from "@/resources/tools/web_search/index.ts";
 import http_request from "@/resources/tools/http_request/index.ts";
 import read_file from "@/resources/tools/read_file/index.ts";
 import write_file from "@/resources/tools/write_file/index.ts";
@@ -30,36 +31,37 @@ import read_skill_resource from "@/resources/tools/read_skill_resource/index.ts"
 import read_tool_result from "@/resources/tools/read_tool_result/index.ts";
 
 export const nativeTools: { [key: string]: NewTool } = {
-    delegate,
-    create_thread,
-    end_thread,
-    http_request,
-    read_file,
-    write_file,
-    list_directory,
-    get_current_time,
-    search_files,
-    search_code,
-    apply_patch,
-    show_file_diff,
-    restore_file_version,
-    fetch_text,
-    run_command,
-    persistent_terminal,
-    wait,
-    save_asset,
-    fetch_asset,
-    search_knowledge,
-    ingest_document,
-    list_namespaces,
-    delete_document,
-    update_my_memory,
-    list_skills,
-    load_skill,
-    read_skill_resource,
-    read_tool_result,
+  delegate,
+  create_thread,
+  end_thread,
+  web_search,
+  http_request,
+  read_file,
+  write_file,
+  list_directory,
+  get_current_time,
+  search_files,
+  search_code,
+  apply_patch,
+  show_file_diff,
+  restore_file_version,
+  fetch_text,
+  run_command,
+  persistent_terminal,
+  wait,
+  save_asset,
+  fetch_asset,
+  search_knowledge,
+  ingest_document,
+  list_namespaces,
+  delete_document,
+  update_my_memory,
+  list_skills,
+  load_skill,
+  read_skill_resource,
+  read_tool_result,
 };
 
 export function getNativeTools(): { [key: string]: NewTool } {
-    return nativeTools;
+  return nativeTools;
 }

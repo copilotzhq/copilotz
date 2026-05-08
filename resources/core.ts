@@ -195,6 +195,9 @@ const coreTools = [
   "load_skill",
   "read_skill_resource",
   "read_tool_result",
+  "web_search",
+  "fetch_text",
+  "http_request",
   "persistent_terminal",
   "update_my_memory",
 ] as const;

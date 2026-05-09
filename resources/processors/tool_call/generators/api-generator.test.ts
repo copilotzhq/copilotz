@@ -116,7 +116,10 @@ Deno.test("API dynamic auth uses raw response body when token path is omitted", 
   const originalFetch = globalThis.fetch;
   const requests: Array<{ url: string; headers: Record<string, string> }> = [];
 
-  globalThis.fetch = async (input, init: globalThis.RequestInit | undefined) => {
+  globalThis.fetch = async (
+    input,
+    init: globalThis.RequestInit | undefined,
+  ) => {
     const url = String(input);
     const headers = Object.fromEntries(
       new Headers(init?.headers).entries(),
@@ -177,7 +180,10 @@ Deno.test("API prepareRequest can inject trusted runtime context into request bo
   const originalFetch = globalThis.fetch;
   let captured: { url: string; body: Record<string, unknown> } | undefined;
 
-  globalThis.fetch = async (input, init: globalThis.RequestInit | undefined) => {
+  globalThis.fetch = async (
+    input,
+    init: globalThis.RequestInit | undefined,
+  ) => {
     captured = {
       url: String(input),
       body: JSON.parse(String(init?.body ?? "{}")),
@@ -278,4 +284,180 @@ Deno.test("API prepareRequest can inject trusted runtime context into request bo
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+Deno.test("API generator resolves local OpenAPI component refs", () => {
+  const [tool] = generateApiTools(buildApiConfig({
+    openApiSchema: {
+      openapi: "3.0.0",
+      info: { title: "Component API", version: "1.0.0" },
+      paths: {
+        "/items/{itemId}": {
+          post: {
+            operationId: "createItem",
+            parameters: [
+              { "$ref": "#/components/parameters/ItemId" },
+            ],
+            requestBody: {
+              "$ref": "#/components/requestBodies/CreateItemBody",
+            },
+            responses: { "200": { description: "OK" } },
+          },
+        },
+      },
+      components: {
+        parameters: {
+          ItemId: {
+            name: "itemId",
+            in: "path",
+            required: true,
+            description: "Item identifier.",
+            schema: { type: "string" },
+          },
+        },
+        requestBodies: {
+          CreateItemBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { "$ref": "#/components/schemas/CreateItemRequest" },
+              },
+            },
+          },
+        },
+        schemas: {
+          CreateItemRequest: {
+            type: "object",
+            required: ["name", "tags"],
+            properties: {
+              name: { type: "string" },
+              owner: { "$ref": "#/components/schemas/UserRef" },
+              tags: {
+                type: "array",
+                items: { "$ref": "#/components/schemas/Tag" },
+              },
+            },
+          },
+          UserRef: {
+            type: "object",
+            required: ["id"],
+            properties: {
+              id: { type: "string" },
+            },
+          },
+          Tag: {
+            type: "object",
+            required: ["label"],
+            properties: {
+              label: { type: "string" },
+            },
+          },
+        },
+      },
+    },
+  }));
+
+  assertEquals(tool.key, "createItem");
+  assertObjectMatch(tool.inputSchema ?? {}, {
+    type: "object",
+    required: ["itemId", "name", "tags"],
+    properties: {
+      itemId: {
+        type: "string",
+        description: "Item identifier.",
+      },
+      name: { type: "string" },
+      owner: {
+        type: "object",
+        required: ["id"],
+      },
+      tags: {
+        type: "array",
+        items: {
+          type: "object",
+          required: ["label"],
+        },
+      },
+    },
+  });
+});
+
+Deno.test("API generator rejects unsupported remote OpenAPI refs", () => {
+  let error: unknown;
+
+  try {
+    generateApiTools(buildApiConfig({
+      openApiSchema: {
+        openapi: "3.0.0",
+        info: { title: "Remote Ref API", version: "1.0.0" },
+        paths: {
+          "/items": {
+            post: {
+              operationId: "createItem",
+              requestBody: {
+                content: {
+                  "application/json": {
+                    schema: {
+                      "$ref": "https://example.com/schemas/item.json",
+                    },
+                  },
+                },
+              },
+              responses: { "200": { description: "OK" } },
+            },
+          },
+        },
+      },
+    }));
+  } catch (caught) {
+    error = caught;
+  }
+
+  assertEquals(error instanceof Error, true);
+  assertEquals(
+    (error as Error).message.includes("Only local references"),
+    true,
+  );
+});
+
+Deno.test("API generator rejects circular OpenAPI refs", () => {
+  let error: unknown;
+
+  try {
+    generateApiTools(buildApiConfig({
+      openApiSchema: {
+        openapi: "3.0.0",
+        info: { title: "Circular Ref API", version: "1.0.0" },
+        paths: {
+          "/items": {
+            post: {
+              operationId: "createItem",
+              requestBody: {
+                content: {
+                  "application/json": {
+                    schema: { "$ref": "#/components/schemas/A" },
+                  },
+                },
+              },
+              responses: { "200": { description: "OK" } },
+            },
+          },
+        },
+        components: {
+          schemas: {
+            A: { "$ref": "#/components/schemas/B" },
+            B: { "$ref": "#/components/schemas/A" },
+          },
+        },
+      },
+    }));
+  } catch (caught) {
+    error = caught;
+  }
+
+  assertEquals(error instanceof Error, true);
+  assertEquals(
+    (error as Error).message.includes("Circular OpenAPI reference"),
+    true,
+  );
 });

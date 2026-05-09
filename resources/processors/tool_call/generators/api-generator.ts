@@ -1,8 +1,8 @@
 import type {
   Agent,
   API,
-  APIPrepareRequestInput,
   APIPrepareRequestContext,
+  APIPrepareRequestInput,
   CopilotzDb,
 } from "@/types/index.ts";
 import { parse as parseYaml } from "yaml";
@@ -39,6 +39,8 @@ interface OpenAPISchema {
   paths: Record<string, OpenAPIPath>;
   components?: {
     schemas?: Record<string, any>;
+    parameters?: Record<string, any>;
+    requestBodies?: Record<string, any>;
   };
 }
 
@@ -216,6 +218,73 @@ function normalizeOpenApiSchema(schema: any): OpenAPISchema {
   }
 
   return schema as OpenAPISchema;
+}
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function decodeJsonPointerSegment(segment: string): string {
+  return segment.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
+function resolveLocalJsonPointer(root: unknown, ref: string): unknown {
+  if (!ref.startsWith("#/")) {
+    throw new Error(
+      `Unsupported OpenAPI reference "${ref}". Only local references beginning with "#/" are supported.`,
+    );
+  }
+
+  return ref.slice(2).split("/").reduce((current, rawSegment) => {
+    if (current === undefined || current === null) return undefined;
+    const segment = decodeJsonPointerSegment(rawSegment);
+    return (current as Record<string, unknown>)[segment];
+  }, root);
+}
+
+function dereferenceOpenApiLocalRefs<T>(
+  value: T,
+  root: unknown = value,
+  seenRefs = new Set<string>(),
+): T {
+  if (Array.isArray(value)) {
+    return value.map((item) =>
+      dereferenceOpenApiLocalRefs(item, root, seenRefs)
+    ) as T;
+  }
+
+  if (!value || typeof value !== "object") return value;
+
+  const objectValue = value as Record<string, unknown>;
+  if (typeof objectValue.$ref === "string") {
+    const ref = objectValue.$ref;
+    if (seenRefs.has(ref)) {
+      throw new Error(`Circular OpenAPI reference detected: ${ref}`);
+    }
+
+    const resolved = resolveLocalJsonPointer(root, ref);
+    if (resolved === undefined) {
+      throw new Error(`Unable to resolve OpenAPI reference: ${ref}`);
+    }
+
+    const nextSeenRefs = new Set(seenRefs);
+    nextSeenRefs.add(ref);
+    const { $ref: _ref, ...overrides } = objectValue;
+    return dereferenceOpenApiLocalRefs(
+      {
+        ...cloneJson(resolved),
+        ...overrides,
+      },
+      root,
+      nextSeenRefs,
+    ) as T;
+  }
+
+  const dereferenced: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(objectValue)) {
+    dereferenced[key] = dereferenceOpenApiLocalRefs(child, root, seenRefs);
+  }
+  return dereferenced as T;
 }
 
 /**
@@ -583,10 +652,13 @@ function createApiExecutor(
 
       // Set cancellation / timeout
       const controller = new AbortController();
-      const unsubscribe = executionContext?.onCancel?.(() => controller.abort());
-      const timeoutId = typeof apiConfig.timeout === "number" && apiConfig.timeout > 0
-        ? setTimeout(() => controller.abort(), apiConfig.timeout * 1000)
-        : undefined;
+      const unsubscribe = executionContext?.onCancel?.(() =>
+        controller.abort()
+      );
+      const timeoutId =
+        typeof apiConfig.timeout === "number" && apiConfig.timeout > 0
+          ? setTimeout(() => controller.abort(), apiConfig.timeout * 1000)
+          : undefined;
       requestOptions.signal = controller.signal;
       if (executionContext?.cancelled) controller.abort();
 
@@ -643,7 +715,9 @@ function createApiExecutor(
  */
 export function generateApiTools(apiConfig: API): ExecutableTool[] {
   const tools: ExecutableTool[] = [];
-  const schema = normalizeOpenApiSchema(apiConfig.openApiSchema);
+  const schema = dereferenceOpenApiLocalRefs(
+    normalizeOpenApiSchema(apiConfig.openApiSchema),
+  );
 
   // Determine base URL
   const baseUrl = apiConfig.baseUrl ||

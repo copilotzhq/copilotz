@@ -1,14 +1,15 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.38.3",
+  "version": "0.39.0",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
     "./server": "./server/index.ts",
     "./create": "./create/mod.ts",
     "./scripts/ascii-logo": "./scripts/ascii-logo.ts",
-    "./scripts/compile-cli": "./scripts/compile-cli.ts"
+    "./scripts/compile-cli": "./scripts/compile-cli.ts",
+    "./scripts/migrate-tenant-namespace-graph": "./scripts/migrate-tenant-namespace-graph.ts"
   },
   "unstable": [
     "bare-node-builtins",

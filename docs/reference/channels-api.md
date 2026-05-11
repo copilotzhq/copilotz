@@ -11,8 +11,8 @@ transports.
 
 ## Recommended Use Case
 
-Use channels when Copilotz should integrate with a transport like web,
-WhatsApp, or Zendesk.
+Use channels when Copilotz should integrate with a transport like web, WhatsApp,
+or Zendesk.
 
 ## Common Mistaken Alternative
 

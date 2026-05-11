@@ -3,6 +3,7 @@
  * Holds metadata for ingested documents; chunks are linked via the chunk collection.
  */
 import { defineCollection, relation } from "@/database/collections/index.ts";
+import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 export default defineCollection({
   name: "document",
@@ -36,6 +37,6 @@ export default defineCollection({
     "status",
   ],
   relations: {
-    chunks: relation.hasMany("chunk", "documentId", "HAS_CHUNK"),
+    chunks: relation.hasMany("chunk", "documentId", GRAPH_EDGE.HAS_CHUNK),
   },
 });

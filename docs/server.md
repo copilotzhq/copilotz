@@ -66,7 +66,7 @@ await copilotz.app.handle({
   resource: "channels",
   method: "POST",
   path: ["whatsapp", "to", "zendesk"],
-  body: { /* WhatsApp webhook payload */ },
+  body: {/* WhatsApp webhook payload */},
 });
 ```
 

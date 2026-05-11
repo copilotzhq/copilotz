@@ -5,18 +5,21 @@
 Use this pattern when you want integration confidence across resource loading,
 runtime wiring, and app contracts.
 
-Recommended primitive: a real `createCopilotz(...)` instance plus `withApp(...)`  
+Recommended primitive: a real `createCopilotz(...)` instance plus
+`withApp(...)`\
 Most common mistaken alternative: testing only mocked handlers or only isolated
 functions
 
 ## Minimal Test Harness
 
 ```ts
-const copilotz = withApp(await createCopilotz({
-  dbConfig: { url: ":memory:" },
-  resources: { path: ["./resources"] },
-  namespace: "test-app",
-}));
+const copilotz = withApp(
+  await createCopilotz({
+    dbConfig: { url: ":memory:" },
+    resources: { path: ["./resources"] },
+    namespace: "test-app",
+  }),
+);
 ```
 
 ## Recommended Test Layers

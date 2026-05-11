@@ -208,6 +208,7 @@ function createMockCopilotz() {
     assets: mockAssets,
     collections: mockCollections,
     config: {
+      namespace: "tenant-test",
       collections: [
         { name: "customers", keys: [{ property: "id" }] },
         { name: "orders", keys: [{ property: "id" }] },
@@ -231,6 +232,7 @@ function createMockCopilotz() {
                 pong: true,
                 received: req.body,
                 context: req.context ?? null,
+                namespace: req.namespace ?? null,
               },
             }),
           },
@@ -585,7 +587,7 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
       "GET /collections/participant/:id returns participant",
       async () => {
         const res = await fetch(
-          `${base}/collections/participant/user-1?namespace=global`,
+          `${base}/collections/participant/user-1`,
         );
         assertEquals(res.status, 200);
         const { data } = await res.json();
@@ -597,7 +599,7 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
       "PUT /collections/participant/:id updates participant",
       async () => {
         const res = await fetch(
-          `${base}/collections/participant/user-1?namespace=global`,
+          `${base}/collections/participant/user-1`,
           {
             method: "PUT",
             headers: { "content-type": "application/json" },
@@ -650,8 +652,8 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
       assertEquals(data.id, "n-42");
     });
 
-    await t.step("GET /graph/namespaces/:ns/nodes returns nodes", async () => {
-      const res = await fetch(`${base}/graph/namespaces/test-ns/nodes`);
+    await t.step("GET /graph/nodes returns namespaced nodes", async () => {
+      const res = await fetch(`${base}/graph/nodes`);
       assertEquals(res.status, 200);
     });
 
@@ -681,6 +683,7 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
         assertEquals(data.pong, true);
         assertEquals(data.received.hello, "world");
         assertEquals(data.context, null);
+        assertEquals(data.namespace, "tenant-test");
       },
     );
 
@@ -707,7 +710,32 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
           context: {
             auth: { sub: "user-1", role: "admin" },
           },
+          namespace: "tenant-test",
         });
+      },
+    );
+
+    await t.step(
+      "withApp resolveNamespace supplies request namespace to feature handlers",
+      async () => {
+        const { copilotz } = createMockCopilotz();
+        delete (copilotz.config as { namespace?: string }).namespace;
+        withApp(copilotz as any, {
+          resolveNamespace: () => "tenant-resolved",
+        });
+
+        const result = await (copilotz as any).app.handle({
+          resource: "features",
+          method: "POST",
+          path: ["echo", "ping"],
+          body: { ok: true },
+        });
+
+        assertEquals(result.status, 200);
+        assertEquals(
+          (result.data as { namespace?: string }).namespace,
+          "tenant-resolved",
+        );
       },
     );
 

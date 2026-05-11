@@ -32,13 +32,13 @@ Use `thread.metadata` when:
 
 ## Recommended Choices
 
-| Need | Recommended Primitive | Most Common Mistake |
-| --- | --- | --- |
-| frontend button triggers backend action | `feature` | making it a `tool` first |
-| agent decides autonomously | `tool` | exposing only a custom route |
-| durable business record | `collection` | storing it in thread metadata |
-| persistent user profile | `participant.metadata` | inventing a separate profile store |
-| thread-local notes or temporary flags | `thread.metadata` | storing it in participant metadata |
+| Need                                    | Recommended Primitive  | Most Common Mistake                |
+| --------------------------------------- | ---------------------- | ---------------------------------- |
+| frontend button triggers backend action | `feature`              | making it a `tool` first           |
+| agent decides autonomously              | `tool`                 | exposing only a custom route       |
+| durable business record                 | `collection`           | storing it in thread metadata      |
+| persistent user profile                 | `participant.metadata` | inventing a separate profile store |
+| thread-local notes or temporary flags   | `thread.metadata`      | storing it in participant metadata |
 
 ## Recommended Use Case
 

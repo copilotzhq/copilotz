@@ -8,7 +8,7 @@ runtime components can use.
 Use an MCP server resource when you want Copilotz to integrate with an external
 tooling or context server through MCP.
 
-Recommended use case: external tool and context integration  
+Recommended use case: external tool and context integration\
 Most common mistaken alternative: treating every external capability as a custom
 feature endpoint
 

@@ -13,7 +13,7 @@ resources/features/<feature-name>/<action>.ts
 Use a feature when application code should call the behavior directly through an
 endpoint.
 
-Recommended use case: frontend-facing or service-facing backend action  
+Recommended use case: frontend-facing or service-facing backend action\
 Most common mistaken alternative: implementing app contracts as tools
 
 ## How Copilotz Consumes It

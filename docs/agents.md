@@ -396,12 +396,12 @@ const agent = {
   id: "docs-agent",
   ragOptions: {
     mode: "auto", // "auto", "tool", or "disabled"
-    namespaces: ["docs", "faq"], // Which namespaces to search
-    ingestNamespace: "docs", // Where to store ingested docs
+    scope: {
+      knowledgeSpaceIds: ["ks-docs", "ks-faq"],
+    },
     autoInjectLimit: 4, // Max chunks to inject (auto mode)
     entityExtraction: {
       enabled: true,
-      namespace: "thread", // "thread", "agent", or "global"
     },
   },
   // ...
@@ -440,7 +440,10 @@ const copilotz = await createCopilotz({
       instructions: "You handle technical support questions.",
       llmOptions: { provider: "openai", model: "gpt-4o" }, // Better model
       allowedTools: ["search_knowledge", "read_file"],
-      ragOptions: { mode: "auto", namespaces: ["tech-docs"] },
+      ragOptions: {
+        mode: "auto",
+        scope: { knowledgeSpaceIds: ["ks-tech-docs"] },
+      },
     },
     {
       id: "billing",
@@ -448,7 +451,10 @@ const copilotz = await createCopilotz({
       instructions: "You handle billing and account questions.",
       llmOptions: { provider: "openai", model: "gpt-4o-mini" },
       allowedTools: ["search_knowledge", "http_request"],
-      ragOptions: { mode: "auto", namespaces: ["billing-faq"] },
+      ragOptions: {
+        mode: "auto",
+        scope: { knowledgeSpaceIds: ["ks-billing-faq"] },
+      },
     },
   ],
   dbConfig: { url: ":memory:" },

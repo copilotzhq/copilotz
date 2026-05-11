@@ -96,23 +96,26 @@ Deno.test("API tool preserves dataUrl fields as structured output for asset extr
   const originalFetch = globalThis.fetch;
   const dataUrl = "data:image/png;base64,AQID";
   globalThis.fetch = async () =>
-    new Response(JSON.stringify({
-      data: {
-        results: [
-          {
-            action: "screenshot",
-            success: true,
-            mime: "image/png",
-            dataUrl,
-          },
-        ],
+    new Response(
+      JSON.stringify({
+        data: {
+          results: [
+            {
+              action: "screenshot",
+              success: true,
+              mime: "image/png",
+              dataUrl,
+            },
+          ],
+        },
+      }),
+      {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
       },
-    }), {
-      status: 200,
-      headers: {
-        "content-type": "application/json",
-      },
-    });
+    );
 
   try {
     const [tool] = generateApiTools(buildApiConfig());

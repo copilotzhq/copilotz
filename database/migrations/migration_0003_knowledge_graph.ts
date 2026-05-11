@@ -9,7 +9,9 @@ export const generateKnowledgeGraphMigrations = (): string => `
 -- GRAPH (NODES AND EDGES) TABLES
 -- ============================================
 
--- Unified nodes table.
+-- Unified tenant-partitioned nodes table. The namespace column is the
+-- tenant/application partition; thread, agent, document, and access
+-- relationships are modeled through edges.
 CREATE TABLE IF NOT EXISTS "nodes" (
   "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   "namespace" TEXT NOT NULL,
@@ -49,6 +51,7 @@ CREATE INDEX IF NOT EXISTS "idx_nodes_namespace" ON "nodes"("namespace");
 CREATE INDEX IF NOT EXISTS "idx_nodes_type" ON "nodes"("type");
 CREATE INDEX IF NOT EXISTS "idx_nodes_namespace_type" ON "nodes"("namespace", "type");
 CREATE INDEX IF NOT EXISTS "idx_nodes_source" ON "nodes"("source_type", "source_id");
+CREATE INDEX IF NOT EXISTS "idx_nodes_namespace_source" ON "nodes"("namespace", "source_type", "source_id");
 CREATE INDEX IF NOT EXISTS "idx_nodes_embedding" ON "nodes" USING ivfflat ("embedding" vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX IF NOT EXISTS "idx_nodes_name" ON "nodes"("name");
 CREATE INDEX IF NOT EXISTS "idx_nodes_data" ON "nodes" USING gin ("data");

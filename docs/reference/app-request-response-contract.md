@@ -13,7 +13,13 @@ Key fields include:
 - `query`
 - `body`
 - `headers`
-- optional `context` for server-derived execution data
+- optional `context` for server-derived execution data, including
+  `context.namespace` when the tenant/application namespace comes from auth or
+  request context
+
+Native app routes resolve the tenant namespace from `context.namespace`,
+`withApp(..., { resolveNamespace })`, or `CopilotzConfig.namespace`. Do not pass
+tenant namespace as a collection query parameter.
 
 ## AppResponse
 

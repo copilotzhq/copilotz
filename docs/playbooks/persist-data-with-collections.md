@@ -3,10 +3,9 @@
 ## When to Use This
 
 Use a `collection` when your app needs durable records with a typed schema,
-queryable CRUD behavior, and optional route exposure through the app
-dispatcher.
+queryable CRUD behavior, and optional route exposure through the app dispatcher.
 
-Recommended primitive: `collection`  
+Recommended primitive: `collection`\
 Most common mistaken alternative: storing durable records inside thread metadata
 
 ## Minimal Project Layout

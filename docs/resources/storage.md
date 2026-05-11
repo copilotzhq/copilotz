@@ -13,7 +13,7 @@ resources/storage/<adapter-name>/
 Use a storage adapter when asset bytes, media, or files need to persist outside
 regular collection records.
 
-Recommended use case: asset persistence  
+Recommended use case: asset persistence\
 Most common mistaken alternative: stuffing binary payloads directly into
 collection metadata
 

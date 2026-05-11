@@ -21,7 +21,8 @@ resources/agents/{agent-name}/
 
 ## Step 1: Create instructions.md
 
-Write the agent's system prompt in markdown. This becomes the agent's `instructions` field.
+Write the agent's system prompt in markdown. This becomes the agent's
+`instructions` field.
 
 ```markdown
 # Agent Name
@@ -41,56 +42,61 @@ You are a [role description].
 
 ## Step 2: Create config.ts
 
-Export a default object with agent configuration. The `instructions` field is automatically loaded from `instructions.md`.
+Export a default object with agent configuration. The `instructions` field is
+automatically loaded from `instructions.md`.
 
 ```typescript
 import type { Agent } from "copilotz";
 
 export default {
-    llmOptions: {
-        provider: "gemini",       // "openai", "anthropic", "gemini", "groq", "deepseek", "ollama"
-        model: "gemini-3.1-flash-lite",
-        temperature: 1,
-        maxTokens: 10000,
-        // apiKey: Deno.env.get("OPENAI_KEY"),  // Override env var
-    },
-    allowedTools: ["*"],          // Or specific: ["search_knowledge", "http_request"]
-    // allowedAgents: ["other-agent"],  // For multi-agent setups
-    // ragOptions: { mode: "auto", namespaces: ["docs"] },
+  llmOptions: {
+    provider: "gemini", // "openai", "anthropic", "gemini", "groq", "deepseek", "ollama"
+    model: "gemini-3.1-flash-lite",
+    temperature: 1,
+    maxTokens: 10000,
+    // apiKey: Deno.env.get("OPENAI_KEY"),  // Override env var
+  },
+  allowedTools: ["*"], // Or specific: ["search_knowledge", "http_request"]
+  // allowedAgents: ["other-agent"],  // For multi-agent setups
+  // ragOptions: { mode: "auto", scope: { knowledgeSpaceIds: ["ks-docs"] } },
 } as Agent;
 ```
 
 ## Key Configuration Options
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `llmOptions` | object | LLM provider config (required) |
-| `allowedTools` | string[] \| null | Tool whitelist. `null` = no tools, omit = all tools |
-| `allowedAgents` | string[] | Which other agents this one can communicate with |
-| `ragOptions` | object | RAG settings: `mode`, `namespaces`, `autoInjectLimit` |
-| `assetOptions` | object | Asset generation settings |
-| `description` | string | Public description (shown in agent listings) |
+| Field           | Type             | Description                                         |
+| --------------- | ---------------- | --------------------------------------------------- |
+| `llmOptions`    | object           | LLM provider config (required)                      |
+| `allowedTools`  | string[] \| null | Tool whitelist. `null` = no tools, omit = all tools |
+| `allowedAgents` | string[]         | Which other agents this one can communicate with    |
+| `ragOptions`    | object           | RAG settings: `mode`, `scope`, `autoInjectLimit`    |
+| `assetOptions`  | object           | Asset generation settings                           |
+| `description`   | string           | Public description (shown in agent listings)        |
 
 ## Common Patterns
 
 ### Agent with RAG
+
 ```typescript
 export default {
-    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
-    allowedTools: ["search_knowledge", "ingest_document"],
-    ragOptions: {
-        mode: "auto",
-        namespaces: ["docs", "faq"],
-        autoInjectLimit: 5,
+  llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  allowedTools: ["search_knowledge", "ingest_document"],
+  ragOptions: {
+    mode: "auto",
+    scope: {
+      knowledgeSpaceIds: ["ks-docs", "ks-faq"],
     },
+    autoInjectLimit: 5,
+  },
 } as Agent;
 ```
 
 ### Agent with API access
+
 ```typescript
 export default {
-    llmOptions: { provider: "anthropic", model: "claude-sonnet-4-5-20241022" },
-    allowedTools: ["http_request", "github_getRepository"],
+  llmOptions: { provider: "anthropic", model: "claude-sonnet-4-5-20241022" },
+  allowedTools: ["http_request", "github_getRepository"],
 } as Agent;
 ```
 

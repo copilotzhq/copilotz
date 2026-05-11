@@ -7,7 +7,8 @@ tags: [framework, data, collection]
 
 # Setup Collection
 
-Collections provide type-safe CRUD over the knowledge graph with JSON Schema validation.
+Collections provide type-safe CRUD over the knowledge graph with JSON Schema
+validation.
 
 ## Define a Collection
 
@@ -17,24 +18,24 @@ Collections are defined in code and passed to `createCopilotz`:
 import { defineCollection, index, relation } from "copilotz";
 
 const customer = defineCollection({
-    name: "customer",
-    schema: {
-        type: "object",
-        properties: {
-            id: { type: "string" },
-            email: { type: "string" },
-            name: { type: "string" },
-            plan: { type: "string", enum: ["free", "pro", "enterprise"] },
-        },
-        required: ["id", "email"],
-    } as const,
-    indexes: [
-        index.field("email"),
-        index.fulltext("name"),
-    ],
-    relations: {
-        tickets: relation.hasMany("ticket", "customerId"),
+  name: "customer",
+  schema: {
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      email: { type: "string" },
+      name: { type: "string" },
+      plan: { type: "string", enum: ["free", "pro", "enterprise"] },
     },
+    required: ["id", "email"],
+  } as const,
+  indexes: [
+    index.field("email"),
+    index.fulltext("name"),
+  ],
+  relations: {
+    tickets: relation.hasMany("ticket", "customerId"),
+  },
 });
 ```
 
@@ -56,7 +57,12 @@ const copilotz = await createCopilotz({
 
 ```typescript
 // Create
-await copilotz.collections.customer.create({ id: "1", email: "a@b.com", name: "Alice", plan: "pro" });
+await copilotz.collections.customer.create({
+  id: "1",
+  email: "a@b.com",
+  name: "Alice",
+  plan: "pro",
+});
 
 // Read
 const item = await copilotz.collections.customer.findOne({ id: "1" });
@@ -69,7 +75,9 @@ await copilotz.collections.customer.update({ id: "1" }, { plan: "enterprise" });
 await copilotz.collections.customer.delete({ id: "1" });
 
 // Search (semantic)
-const results = await copilotz.collections.customer.search("enterprise customers");
+const results = await copilotz.collections.customer.search(
+  "enterprise customers",
+);
 ```
 
 ## With Namespaces (Multi-tenancy)

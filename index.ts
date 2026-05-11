@@ -136,8 +136,6 @@ export type {
   Message,
   /** Payload structure for incoming messages. */
   MessagePayload,
-  /** Context for namespace resolution. */
-  NamespaceResolutionContext,
   /** Input type for creating a new Agent. */
   NewAgent,
   /** Input type for creating a new API configuration. */
@@ -323,12 +321,6 @@ export type {
   WhereFilter,
   WhereOperators,
 } from "@/database/collections/types.ts";
-
-/**
- * Resolves a namespace based on scope and optional prefix.
- * Use for multi-tenancy and entity scope resolution.
- */
-export { resolveNamespace } from "@/types/index.ts";
 
 /**
  * Asset utilities and stores.
@@ -736,8 +728,6 @@ export interface CopilotzConfig {
       /** Minimum similarity score threshold. */
       similarityThreshold?: number;
     };
-    /** Default namespace for document storage. */
-    defaultNamespace?: string;
     /** LLM configuration for background RAG tasks (entity extraction, summarization). */
     llmConfig?: {
       /** LLM provider name. */
@@ -1673,9 +1663,11 @@ export async function createCopilotz(
     // Resolve namespace: RunOptions > CopilotzConfig > undefined
     const resolvedNamespace = options?.namespace ?? config.namespace;
 
-    // Resolve collections: scoped with namespace (defaulting to "global" if none provided)
+    // Resolve collections: scoped only when a tenant namespace is provided.
     const resolvedCollections = collectionsManager
-      ? collectionsManager.withNamespace(resolvedNamespace ?? "global")
+      ? resolvedNamespace
+        ? collectionsManager.withNamespace(resolvedNamespace)
+        : collectionsManager
       : undefined;
 
     // Resolve agents: RunOptions > CopilotzConfig
@@ -1729,7 +1721,6 @@ export async function createCopilotz(
           embedding: config.rag.embedding,
           chunking: config.rag.chunking,
           retrieval: config.rag.retrieval,
-          defaultNamespace: config.rag.defaultNamespace,
           llmConfig: config.rag.llmConfig,
         }
         : undefined,

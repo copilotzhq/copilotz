@@ -1,6 +1,6 @@
 /**
  * RAG_INGEST Event Processor
- * 
+ *
  * Handles document ingestion pipeline:
  * 1. Fetch document content
  * 2. Preprocess and chunk
@@ -20,6 +20,7 @@ import { fetchDocument, preprocessContent } from "@/utils/document-fetcher.ts";
 import { chunkText, hashContentSHA256 } from "@/utils/chunker.ts";
 import { embed } from "@/runtime/embeddings/index.ts";
 import { createRagDataServices } from "@/runtime/collections/native.ts";
+import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 export type { RagIngestPayload };
 
@@ -36,7 +37,10 @@ function isRagIngestPayload(payload: unknown): payload is RagIngestPayload {
   return typeof p.source === "string";
 }
 
-export const ragIngestProcessor: EventProcessor<RagIngestPayload, ProcessorDeps> = {
+export const ragIngestProcessor: EventProcessor<
+  RagIngestPayload,
+  ProcessorDeps
+> = {
   shouldProcess: (event: Event) => {
     // RAG_INGEST is a custom event type
     const eventType = (event as unknown as { type: string }).type;
@@ -54,21 +58,37 @@ export const ragIngestProcessor: EventProcessor<RagIngestPayload, ProcessorDeps>
     const payload = (event as unknown as { payload: RagIngestPayload }).payload;
 
     const eventThreadId = (event as unknown as { threadId?: string }).threadId;
-    const threadId: string = typeof eventThreadId === "string" ? eventThreadId : String(thread.id);
+    const threadId: string = typeof eventThreadId === "string"
+      ? eventThreadId
+      : String(thread.id);
 
     const {
       source,
       title: providedTitle,
-      namespace = "default",
+      namespace: payloadNamespace,
       metadata = {},
       forceReindex = false,
     } = payload;
+    const namespace = payloadNamespace ?? context.namespace;
+    if (!namespace) {
+      return createErrorResponse(
+        threadId,
+        event,
+        "RAG",
+        "Tenant namespace not available for RAG ingestion.",
+      );
+    }
 
     // Get embedding config from context
-    const embeddingConfig = context.embeddingConfig ?? context.ragConfig?.embedding;
+    const embeddingConfig = context.embeddingConfig ??
+      context.ragConfig?.embedding;
     if (!embeddingConfig) {
-      return createErrorResponse(threadId, event, "RAG", 
-        "Embedding configuration not available. Ensure RAG is enabled in copilotz config.");
+      return createErrorResponse(
+        threadId,
+        event,
+        "RAG",
+        "Embedding configuration not available. Ensure RAG is enabled in copilotz config.",
+      );
     }
 
     // Get chunking config
@@ -84,18 +104,30 @@ export const ragIngestProcessor: EventProcessor<RagIngestPayload, ProcessorDeps>
       const title = providedTitle || fetchedDoc.title || "Untitled";
 
       // Step 2: Preprocess content
-      const processedContent = preprocessContent(fetchedDoc.content, fetchedDoc.mimeType);
+      const processedContent = preprocessContent(
+        fetchedDoc.content,
+        fetchedDoc.mimeType,
+      );
 
       // Step 3: Calculate hash for deduplication
       const contentHash = await hashContentSHA256(processedContent);
 
       // Check for existing document with same hash
       if (!forceReindex) {
-        const existing = await ragData.getDocumentByHash(contentHash, namespace) as DocumentRecord | undefined;
+        const existing = await ragData.getDocumentByHash(
+          contentHash,
+          namespace,
+        ) as DocumentRecord | undefined;
         if (existing && existing.status === "indexed") {
-          return createSuccessResponse(threadId, event, "RAG",
-            `Document "${title}" already indexed (hash: ${contentHash.slice(0, 8)}...).`,
-            { documentId: existing.id, status: "skipped" });
+          return createSuccessResponse(
+            threadId,
+            event,
+            "RAG",
+            `Document "${title}" already indexed (hash: ${
+              contentHash.slice(0, 8)
+            }...).`,
+            { documentId: existing.id, status: "skipped" },
+          );
         }
 
         // If existing but failed, delete and reindex
@@ -127,9 +159,18 @@ export const ragIngestProcessor: EventProcessor<RagIngestPayload, ProcessorDeps>
       });
 
       if (chunks.length === 0) {
-        await ragData.updateDocumentStatus(document.id, namespace, "failed", "No content to index");
-        return createErrorResponse(threadId, event, "RAG",
-          `Document "${title}" has no content to index.`);
+        await ragData.updateDocumentStatus(
+          document.id,
+          namespace,
+          "failed",
+          "No content to index",
+        );
+        return createErrorResponse(
+          threadId,
+          event,
+          "RAG",
+          `Document "${title}" has no content to index.`,
+        );
       }
 
       // Step 6: Generate embeddings (in batches)
@@ -157,7 +198,7 @@ export const ragIngestProcessor: EventProcessor<RagIngestPayload, ProcessorDeps>
         for (let j = 0; j < batch.length; j++) {
           const chunk = batch[j];
           const embedding = embeddingResponse.embeddings[j];
-          
+
           if (!embedding) {
             throw new Error(`Failed to generate embedding for chunk ${i + j}`);
           }
@@ -187,35 +228,52 @@ export const ragIngestProcessor: EventProcessor<RagIngestPayload, ProcessorDeps>
         })),
       );
 
-      // Create NEXT_CHUNK edges between sequential chunks
-      const sortedChunks = [...createdChunks].sort((a, b) => a.chunkIndex - b.chunkIndex);
+      // Link sequential chunks for provenance/navigation.
+      const sortedChunks = [...createdChunks].sort((a, b) =>
+        a.chunkIndex - b.chunkIndex
+      );
       for (let i = 0; i < sortedChunks.length - 1; i++) {
         await ops.createEdge({
           sourceNodeId: sortedChunks[i].id,
           targetNodeId: sortedChunks[i + 1].id,
-          type: "NEXT_CHUNK",
+          type: GRAPH_EDGE.DERIVED_FROM,
         });
       }
 
       // Step 8: Update document status
-      await ragData.updateDocumentStatus(document.id, namespace, "indexed", undefined, chunks.length);
+      await ragData.updateDocumentStatus(
+        document.id,
+        namespace,
+        "indexed",
+        undefined,
+        chunks.length,
+      );
 
-      return createSuccessResponse(threadId, event, "RAG",
-        `Successfully indexed "${title}" (${chunks.length} chunks) into namespace "${namespace}".`,
+      return createSuccessResponse(
+        threadId,
+        event,
+        "RAG",
+        `Successfully indexed "${title}" (${chunks.length} chunks).`,
         {
           documentId: document.id,
           title,
           namespace,
           chunks: chunks.length,
           status: "indexed",
-        });
-
+        },
+      );
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = error instanceof Error
+        ? error.message
+        : String(error);
       console.error("[RAG_INGEST] Error:", errorMessage);
 
-      return createErrorResponse(threadId, event, "RAG",
-        `Failed to ingest document: ${errorMessage}`);
+      return createErrorResponse(
+        threadId,
+        event,
+        "RAG",
+        `Failed to ingest document: ${errorMessage}`,
+      );
     }
   },
 };
@@ -240,8 +298,15 @@ function createSuccessResponse(
             ragResult: data,
           },
         },
-        parentEventId: typeof sourceEvent.id === "string" ? sourceEvent.id : undefined,
-        traceId: typeof sourceEvent.traceId === "string" ? sourceEvent.traceId : undefined,
+        parentEventId: typeof sourceEvent.id === "string"
+          ? sourceEvent.id
+          : undefined,
+        traceId: typeof sourceEvent.traceId === "string"
+          ? sourceEvent.traceId
+          : undefined,
+        namespace: typeof sourceEvent.namespace === "string"
+          ? sourceEvent.namespace
+          : undefined,
       },
     ],
   };
@@ -266,8 +331,15 @@ function createErrorResponse(
             error: true,
           },
         },
-        parentEventId: typeof sourceEvent.id === "string" ? sourceEvent.id : undefined,
-        traceId: typeof sourceEvent.traceId === "string" ? sourceEvent.traceId : undefined,
+        parentEventId: typeof sourceEvent.id === "string"
+          ? sourceEvent.id
+          : undefined,
+        traceId: typeof sourceEvent.traceId === "string"
+          ? sourceEvent.traceId
+          : undefined,
+        namespace: typeof sourceEvent.namespace === "string"
+          ? sourceEvent.namespace
+          : undefined,
       },
     ],
   };

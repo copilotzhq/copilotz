@@ -285,7 +285,10 @@ export async function runThread(
   let threadId: string | undefined = (threadRef?.id ?? undefined) || undefined;
   let existingThread = undefined;
   if (!threadId && threadRef?.externalId) {
-    const existingByExt = await ops.getThreadByExternalId(threadRef.externalId);
+    const existingByExt = await ops.getThreadByExternalId(
+      threadRef.externalId,
+      baseContext.namespace,
+    );
     if (existingByExt?.id) {
       threadId = existingByExt.id as string;
       existingThread = existingByExt;
@@ -347,6 +350,7 @@ export async function runThread(
 
   const ensuredThread = await ops.findOrCreateThread(threadId, {
     name: threadRef?.name ?? "Main Thread",
+    namespace: baseContext.namespace ?? null,
     description: threadRef?.description ?? undefined,
     participants,
     externalId: threadRef?.externalId ?? undefined,
@@ -423,6 +427,7 @@ export async function runThread(
     priority: priorityForInboundMessage(normalizedMessage),
     ttlMs: options?.queueTTL,
     metadata: initialEventMetadata ?? undefined,
+    namespace: baseContext.namespace,
   });
 
   const contextForWorker: ChatContext = {

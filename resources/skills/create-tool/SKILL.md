@@ -25,31 +25,31 @@ Define the tool's metadata and input/output schemas.
 import type { Tool } from "copilotz";
 
 const config: Omit<Tool, "execute"> = {
-    id: "my-tool",
-    name: "My Tool",
-    description: "What this tool does — be specific, the LLM reads this.",
-    inputSchema: {
-        type: "object",
-        properties: {
-            param1: {
-                type: "string",
-                description: "Description of param1",
-            },
-            param2: {
-                type: "number",
-                description: "Description of param2",
-                default: 10,
-            },
-        },
-        required: ["param1"],
+  id: "my-tool",
+  name: "My Tool",
+  description: "What this tool does — be specific, the LLM reads this.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      param1: {
+        type: "string",
+        description: "Description of param1",
+      },
+      param2: {
+        type: "number",
+        description: "Description of param2",
+        default: 10,
+      },
     },
-    // Optional: control how tool results appear in chat history
-    historyPolicy: {
-        visibility: "public_result",  // "requester_only" | "public_status" | "public_result" | "public_full"
-        projector: (input, output) => {
-            return `Tool completed for ${input.param1}`;
-        },
+    required: ["param1"],
+  },
+  // Optional: control how tool results appear in chat history
+  historyPolicy: {
+    visibility: "public_result", // "requester_only" | "public_status" | "public_result" | "public_full"
+    projector: (input, output) => {
+      return `Tool completed for ${input.param1}`;
     },
+  },
 };
 
 export default config;
@@ -57,27 +57,28 @@ export default config;
 
 ## Step 2: Create execute.ts
 
-Implement the tool logic. The function receives input params and a context object.
+Implement the tool logic. The function receives input params and a context
+object.
 
 ```typescript
 import type { ToolExecutionContext } from "copilotz";
 
 interface Input {
-    param1: string;
-    param2?: number;
+  param1: string;
+  param2?: number;
 }
 
 export default async function execute(
-    input: Input,
-    context: ToolExecutionContext,
+  input: Input,
+  context: ToolExecutionContext,
 ): Promise<unknown> {
-    const { param1, param2 = 10 } = input;
-    const { threadId, namespace, db } = context;
+  const { param1, param2 = 10 } = input;
+  const { threadId, namespace, db } = context;
 
-    // Your implementation here
-    const result = await doSomething(param1, param2);
+  // Your implementation here
+  const result = await doSomething(param1, param2);
 
-    return { success: true, data: result };
+  return { success: true, data: result };
 }
 ```
 
@@ -85,13 +86,13 @@ export default async function execute(
 
 The `ToolExecutionContext` provides:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `threadId` | string | Current conversation thread |
-| `namespace` | string | Active namespace for multi-tenancy |
-| `db` | CopilotzDb | Database instance |
-| `senderId` | string | Agent or user who triggered the tool |
-| `agents` | Agent[] | Available agents |
+| Field       | Type       | Description                          |
+| ----------- | ---------- | ------------------------------------ |
+| `threadId`  | string     | Current conversation thread          |
+| `namespace` | string     | Active namespace for multi-tenancy   |
+| `db`        | CopilotzDb | Database instance                    |
+| `senderId`  | string     | Agent or user who triggered the tool |
+| `agents`    | Agent[]    | Available agents                     |
 
 ## History Policy
 

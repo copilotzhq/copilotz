@@ -69,23 +69,40 @@ export function createParticipantHandlers(
 ): ParticipantHandlers {
   return {
     get: async (externalId, options = {}) => {
-      const namespace = options.namespace ?? "global";
-      const participantCollection = copilotz.collections?.withNamespace(namespace).participant;
-      if (!participantCollection || typeof (participantCollection as any).resolveByExternalId !== "function") return null;
+      const namespace = options.namespace ?? copilotz.config.namespace;
+      if (!namespace) return null;
+      const participantCollection = copilotz.collections?.withNamespace(
+        namespace,
+      ).participant;
+      if (
+        !participantCollection ||
+        typeof (participantCollection as any).resolveByExternalId !== "function"
+      ) return null;
 
-      const participant = await (participantCollection as any).resolveByExternalId(externalId);
+      const participant = await (participantCollection as any)
+        .resolveByExternalId(externalId);
       if (!participant) return null;
       return participant as ParticipantData;
     },
 
     update: async (externalId, updates, options = {}) => {
-      const namespace = options.namespace ?? "global";
-      const participantCollection = copilotz.collections?.withNamespace(namespace).participant;
-      if (!participantCollection || typeof (participantCollection as any).resolveByExternalId !== "function") {
+      const namespace = options.namespace ?? copilotz.config.namespace;
+      if (!namespace) {
+        throw new Error("Participant namespace is required");
+      }
+      const participantCollection = copilotz.collections?.withNamespace(
+        namespace,
+      ).participant;
+      if (
+        !participantCollection ||
+        typeof (participantCollection as any).resolveByExternalId !== "function"
+      ) {
         throw new Error("Participant collection is not available");
       }
 
-      const current = await (participantCollection as any).resolveByExternalId(externalId);
+      const current = await (participantCollection as any).resolveByExternalId(
+        externalId,
+      );
       const currentMetadata = (current?.metadata ?? {}) as ParticipantData;
       const next = deepMergeReplaceArrays(currentMetadata, updates);
 

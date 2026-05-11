@@ -25,13 +25,13 @@ export default async function (
 
   const params: unknown[] = [];
   const filters = [
-    `n."type" = 'user'`,
+    `n."type" = 'participant'`,
     `COALESCE(n."data"->>'participantType', 'human') = 'agent'`,
   ];
 
   if (namespace) {
     params.push(namespace);
-    filters.push(`(n."namespace" = $${params.length} OR n."namespace" = 'global')`);
+    filters.push(`n."namespace" = $${params.length}`);
   }
   if (search) {
     params.push(search);
@@ -47,15 +47,22 @@ export default async function (
   if (namespace) {
     params.push(namespace);
     const ni = params.length;
-    msgScope.push(`m."namespace" IN (SELECT DISTINCT "threadId" FROM "events" WHERE "namespace" = $${ni})`);
-    usageScope.push(`u."namespace" IN (SELECT DISTINCT "threadId" FROM "events" WHERE "namespace" = $${ni})`);
+    msgScope.push(`m."namespace" = $${ni}`);
+    usageScope.push(`u."namespace" = $${ni}`);
   }
 
-  const result = await q<{
-    agentId: string; displayName: string; namespace: string; isGlobal: boolean;
-    messageCount: number; toolCallMessageCount: number; llmCallCount: number;
-    lastActivityAt: Date | string | null;
-  } & Record<keyof AdminUsageBreakdown, number>>(
+  const result = await q<
+    {
+      agentId: string;
+      displayName: string;
+      namespace: string;
+      isGlobal: boolean;
+      messageCount: number;
+      toolCallMessageCount: number;
+      llmCallCount: number;
+      lastActivityAt: Date | string | null;
+    } & Record<keyof AdminUsageBreakdown, number>
+  >(
     `WITH "message_stats" AS (
        SELECT COALESCE(m."data"->>'senderId', '') AS "agentId",
          COUNT(*)::int AS "messageCount",
@@ -118,7 +125,8 @@ export default async function (
   for (const cfg of configuredAgents) {
     if (merged.has(cfg.id)) continue;
     if (search) {
-      const haystack = `${cfg.id} ${cfg.name} ${cfg.description ?? ""}`.toLowerCase();
+      const haystack = `${cfg.id} ${cfg.name} ${cfg.description ?? ""}`
+        .toLowerCase();
       if (!haystack.includes(search.replaceAll("%", ""))) continue;
     }
     merged.set(cfg.id, {
@@ -126,16 +134,20 @@ export default async function (
       displayName: cfg.name,
       description: cfg.description ?? null,
       isConfigured: true,
-      namespace: namespace ?? "global",
-      isGlobal: !namespace,
-      messageCount: 0, llmCallCount: 0, toolCallMessageCount: 0,
+      namespace: namespace ?? "",
+      isGlobal: false,
+      messageCount: 0,
+      llmCallCount: 0,
+      toolCallMessageCount: 0,
       ...emptyUsageBreakdown(),
       lastActivityAt: null,
     });
   }
 
   const limit = normalizeLimit(query.limit ? Number(query.limit) : undefined);
-  const offset = normalizeOffset(query.offset ? Number(query.offset) : undefined);
+  const offset = normalizeOffset(
+    query.offset ? Number(query.offset) : undefined,
+  );
 
   const data: AdminAgentSummary[] = Array.from(merged.values())
     .sort((a, b) => {

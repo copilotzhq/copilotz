@@ -9,6 +9,14 @@ instance.
 - dispatcher-backed resources and routes
 - a transport-independent app contract you can serve through Oxian or another
   HTTP layer
+- request namespace resolution through `context.namespace`,
+  `resolveNamespace(request)`, or the runtime `namespace` config
+
+```typescript
+const copilotz = withApp(runtime, {
+  resolveNamespace: (request) => request.context?.tenantId as string,
+});
+```
 
 ## Recommended Use Case
 

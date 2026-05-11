@@ -14,7 +14,7 @@ resources/embeddings/<provider-name>/
 Use an embeddings provider when Copilotz should generate vectors for documents,
 chunks, or retrieval workflows.
 
-Recommended use case: vector generation for RAG  
+Recommended use case: vector generation for RAG\
 Most common mistaken alternative: placing embedding logic inside random tools
 instead of the provider registry
 

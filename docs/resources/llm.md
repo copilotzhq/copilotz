@@ -13,7 +13,7 @@ resources/llm/<provider-name>/
 Use an LLM provider resource when you want Copilotz to execute calls through a
 named model backend.
 
-Recommended use case: runtime model integration  
+Recommended use case: runtime model integration\
 Most common mistaken alternative: hard-coding provider logic directly into
 application routes
 

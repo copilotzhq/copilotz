@@ -76,7 +76,7 @@ connected in a graph:
                     │     User        │
                     │  id: "alex"     │
                     └────────┬────────┘
-                             │ SENT_BY
+                             │ sent_by
                              ▼
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │    Thread       │◀────│    Message      │────▶│    Entity       │
@@ -99,14 +99,14 @@ connected in a graph:
 
 ### Edge Types
 
-| Type         | Description                    |
-| ------------ | ------------------------------ |
-| `SENT_BY`    | Message → Participant          |
-| `MENTIONS`   | Message → Entity               |
-| `NEXT_CHUNK` | Chunk → Chunk (document order) |
-| `RELATED_TO` | Entity → Entity                |
-| `BELONGS_TO` | Collection relations           |
-| `HAS_MANY`   | Collection relations           |
+| Type           | Description                    |
+| -------------- | ------------------------------ |
+| `sent_by`      | Message → Participant          |
+| `MENTIONS`     | Message → Entity               |
+| `derived_from` | Chunk → Chunk (document order) |
+| `RELATED_TO`   | Entity → Entity                |
+| `BELONGS_TO`   | Collection relations           |
+| `HAS_MANY`     | Collection relations           |
 
 ### Graph Operations
 
@@ -114,7 +114,7 @@ connected in a graph:
 // Create a node
 const node = await copilotz.ops.createNode({
   type: "entity",
-  namespace: "default",
+  namespace: "tenant-acme",
   name: "Acme Corp",
   data: { entityType: "organization" },
 });
@@ -123,13 +123,13 @@ const node = await copilotz.ops.createNode({
 await copilotz.ops.createEdge({
   sourceNodeId: messageId,
   targetNodeId: node.id,
-  type: "MENTIONS",
+  type: "mentions",
 });
 
 // Search nodes by embedding (supply a vector; natural-language helpers use chunk search / your embedder)
 const results = await copilotz.ops.searchNodes({
   embedding: embeddingVector,
-  namespaces: ["default"],
+  namespaces: ["tenant-acme"],
   nodeTypes: ["entity"],
   limit: 10,
   minSimilarity: 0.7,
@@ -295,18 +295,20 @@ not separate relational tables.
 // Register document metadata (creates a document node)
 const doc = await copilotz.ops.createDocument({
   source: "https://...",
-  namespace: "docs",
+  namespace: "tenant-acme",
+  metadata: { scope: { knowledgeSpaceIds: ["ks-docs"] } },
 });
 
 // Vector search over chunk nodes (supply an embedding; searchChunks delegates here)
 const chunks = await copilotz.ops.searchChunksFromGraph({
   embedding: embeddingVector,
-  namespaces: ["docs"],
+  namespace: "tenant-acme",
+  scope: { knowledgeSpaceIds: ["ks-docs"] },
   limit: 5,
   threshold: 0.7,
 });
 
-// Count document vs chunk nodes per namespace
+// Count document vs chunk nodes per tenant namespace
 const stats = await copilotz.ops.getNamespaceStats();
 ```
 

@@ -16,7 +16,7 @@ resources/channels/<channel-name>/
 Use a channel when Copilotz should receive or deliver messages through an
 external transport.
 
-Recommended use case: transport integration  
+Recommended use case: transport integration\
 Most common mistaken alternative: mixing external transport logic directly into
 tools or feature handlers
 

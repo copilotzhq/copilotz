@@ -21,7 +21,8 @@ import type {
 export interface GraphSearchOptions {
   query?: string;
   embedding?: number[];
-  namespaces?: string[];
+  /** Tenant/application namespace to search within. */
+  namespace?: string;
   nodeTypes?: string[];
   limit?: number;
   minSimilarity?: number;
@@ -109,7 +110,7 @@ export function createGraphHandlers(copilotz: Copilotz): GraphHandlers {
 
       return ops.searchNodes({
         embedding,
-        namespaces: options.namespaces,
+        namespaces: options.namespace ? [options.namespace] : undefined,
         nodeTypes: options.nodeTypes,
         limit: options.limit,
         minSimilarity: options.minSimilarity,

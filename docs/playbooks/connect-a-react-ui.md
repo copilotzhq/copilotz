@@ -5,7 +5,7 @@
 Use this pattern when your frontend should consume Copilotz threads, messages,
 participants, collections, or feature endpoints through a web UI.
 
-Recommended primitive: thin frontend services over Copilotz-backed routes  
+Recommended primitive: thin frontend services over Copilotz-backed routes\
 Most common mistaken alternative: leaking raw runtime concerns into UI
 components
 

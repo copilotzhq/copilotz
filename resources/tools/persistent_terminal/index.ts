@@ -1,6 +1,9 @@
 import type { NewTool } from "@/types/index.ts";
 import { getPublicThreadMetadata } from "@/runtime/thread-metadata.ts";
-import { buildAssetRefForStore, resolveAssetIdForStore } from "@/runtime/storage/assets.ts";
+import {
+  buildAssetRefForStore,
+  resolveAssetIdForStore,
+} from "@/runtime/storage/assets.ts";
 import type { ToolExecutionContext } from "@/resources/processors/tool_call/index.ts";
 import { dirname, isAbsolute, relative, resolve } from "@std/path";
 
@@ -9,7 +12,14 @@ import { dirname, isAbsolute, relative, resolve } from "@std/path";
 // ---------------------------------------------------------------------------
 
 interface PersistentTerminalParams {
-  action: "run" | "info" | "restart" | "close" | "list" | "upload_asset" | "export_file";
+  action:
+    | "run"
+    | "info"
+    | "restart"
+    | "close"
+    | "list"
+    | "upload_asset"
+    | "export_file";
   command?: string;
   cwd?: string;
   timeout?: number;
@@ -196,7 +206,9 @@ async function resolveProject(
   context?: ToolContext,
 ): Promise<string> {
   if (typeof explicit === "string" && explicit.length > 0) return explicit;
-  if (!context?.threadId || !context.db?.ops) return "default";
+  if (!context?.threadId || !context.db?.ops) {
+    return context?.namespace ?? "unknown";
+  }
   try {
     const thread = await context.db.ops.getThreadById(context.threadId);
     if (!thread) return context.threadId;
@@ -363,7 +375,9 @@ async function readOutputUntil(
   timeoutMs?: number,
 ): Promise<{ output: string; exitCode: number | null }> {
   const markerPrefix = `__COPILOTZ_END_${uuid}__:`;
-  const deadline = typeof timeoutMs === "number" ? Date.now() + timeoutMs : null;
+  const deadline = typeof timeoutMs === "number"
+    ? Date.now() + timeoutMs
+    : null;
 
   while (deadline === null || Date.now() <= deadline) {
     const idx = session.outputBuffer.indexOf(markerPrefix);
@@ -408,7 +422,15 @@ const persistentTerminalTool: NewTool = {
     properties: {
       action: {
         type: "string",
-        enum: ["run", "info", "restart", "close", "list", "upload_asset", "export_file"],
+        enum: [
+          "run",
+          "info",
+          "restart",
+          "close",
+          "list",
+          "upload_asset",
+          "export_file",
+        ],
         description:
           "'run': execute a command. 'info': show current session details. " +
           "'restart': kill and recreate the session. 'close': terminate the session. " +
@@ -463,8 +485,7 @@ const persistentTerminalTool: NewTool = {
       },
       ref: {
         type: "string",
-        description:
-          "Alias for assetRef when action is upload_asset.",
+        description: "Alias for assetRef when action is upload_asset.",
       },
       mimeType: {
         type: "string",
@@ -495,7 +516,10 @@ const persistentTerminalTool: NewTool = {
     }: PersistentTerminalParams,
     context?: ToolContext,
   ) => {
-    const namespace = context?.namespace ?? "default";
+    if (!context?.namespace) {
+      throw new Error("Tenant namespace not available in context");
+    }
+    const namespace = context.namespace;
     const agentId = context?.senderId ?? "anonymous";
     const project = await resolveProject(explicitProject, context);
     const scopedAgentId = resolveScopedAgentId(agentId, scope);
@@ -564,10 +588,18 @@ const persistentTerminalTool: NewTool = {
 
     // --- upload_asset ---
     if (action === "upload_asset") {
-      if (!context?.assetStore) throw new Error("Asset store is not configured.");
+      if (!context?.assetStore) {
+        throw new Error("Asset store is not configured.");
+      }
       const sourceRef = assetRef ?? ref;
-      if (!sourceRef) throw new Error("'assetRef' is required when action is 'upload_asset'.");
-      if (!path) throw new Error("'path' is required when action is 'upload_asset'.");
+      if (!sourceRef) {
+        throw new Error(
+          "'assetRef' is required when action is 'upload_asset'.",
+        );
+      }
+      if (!path) {
+        throw new Error("'path' is required when action is 'upload_asset'.");
+      }
 
       await ensureDir(workspaceRoot);
       const targetPath = resolveWorkspaceFilePath(workspaceRoot, path);
@@ -575,7 +607,9 @@ const persistentTerminalTool: NewTool = {
       const { bytes, mime } = await context.assetStore.get(assetId);
       const maxBytes = getMaxArtifactBytes();
       if (bytes.byteLength > maxBytes) {
-        throw new Error(`Asset exceeds max artifact size of ${maxBytes} bytes.`);
+        throw new Error(
+          `Asset exceeds max artifact size of ${maxBytes} bytes.`,
+        );
       }
       if (!overwrite) {
         try {
@@ -601,12 +635,18 @@ const persistentTerminalTool: NewTool = {
 
     // --- export_file ---
     if (action === "export_file") {
-      if (!context?.assetStore) throw new Error("Asset store is not configured.");
-      if (!path) throw new Error("'path' is required when action is 'export_file'.");
+      if (!context?.assetStore) {
+        throw new Error("Asset store is not configured.");
+      }
+      if (!path) {
+        throw new Error("'path' is required when action is 'export_file'.");
+      }
 
       const sourcePath = resolveWorkspaceFilePath(workspaceRoot, path);
       const info = await Deno.stat(sourcePath);
-      if (!info.isFile) throw new Error(`Workspace path is not a file: ${path}`);
+      if (!info.isFile) {
+        throw new Error(`Workspace path is not a file: ${path}`);
+      }
       const maxBytes = getMaxArtifactBytes();
       if (info.size > maxBytes) {
         throw new Error(`File exceeds max artifact size of ${maxBytes} bytes.`);
@@ -683,7 +723,9 @@ const persistentTerminalTool: NewTool = {
 
     try {
       await session.writer.write(textEncoder.encode(fullCommand));
-      const timeoutMs = typeof timeout === "number" ? timeout * 1000 : undefined;
+      const timeoutMs = typeof timeout === "number"
+        ? timeout * 1000
+        : undefined;
       const result = await readOutputUntil(session, uuid, timeoutMs);
       return {
         output: result.output,

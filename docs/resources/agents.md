@@ -14,7 +14,7 @@ resources/agents/<agent-name>/
 Use an agent resource when you need a named runtime actor with instructions,
 tool access, and execution identity.
 
-Recommended use case: define a reusable runtime actor  
+Recommended use case: define a reusable runtime actor\
 Most common mistaken alternative: putting all behavior in tools without an
 owning agent
 

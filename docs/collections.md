@@ -1,6 +1,8 @@
 # Collections
 
-Collections are type-safe data storage built on top of the knowledge graph. Define a schema, and you get CRUD operations, relations, semantic search, and lifecycle hooks — all with TypeScript inference.
+Collections are type-safe data storage built on top of the knowledge graph.
+Define a schema, and you get CRUD operations, relations, semantic search, and
+lifecycle hooks — all with TypeScript inference.
 
 ## Why Collections?
 
@@ -11,6 +13,7 @@ Your AI application needs to store more than just conversations:
 - **Product catalogs** with categories and relationships
 
 Collections give you:
+
 - **Type safety** — TypeScript knows your data shape
 - **Schema validation** — Catch errors before they hit the database
 - **Semantic search** — Find records by meaning, not just fields
@@ -20,7 +23,7 @@ Collections give you:
 ## Defining a Collection
 
 ```typescript
-import { defineCollection, relation, index } from "@copilotz/copilotz";
+import { defineCollection, index, relation } from "@copilotz/copilotz";
 
 const customer = defineCollection({
   name: "customer",
@@ -34,7 +37,7 @@ const customer = defineCollection({
       metadata: { type: "object" },
     },
     required: ["id", "email"],
-  } as const,  // Important: use 'as const' for type inference
+  } as const, // Important: use 'as const' for type inference
   indexes: [
     index.field("email"),
     index.field("plan"),
@@ -50,9 +53,11 @@ const customer = defineCollection({
     },
     async getGlobalUser(externalId: string) {
       // Access other namespaces (e.g. for shared identities)
-      return await rootCollections.withNamespace("global").participant.findOne({ externalId });
-    }
-  })
+      return await rootCollections.withNamespace("global").participant.findOne({
+        externalId,
+      });
+    },
+  }),
 });
 ```
 
@@ -80,10 +85,10 @@ Speed up queries with indexes:
 
 ```typescript
 indexes: [
-  index.field("email"),              // B-tree index on email
-  index.field("createdAt"),          // B-tree index on createdAt
-  index.fulltext("description"),     // Full-text search index
-]
+  index.field("email"), // B-tree index on email
+  index.field("createdAt"), // B-tree index on createdAt
+  index.fulltext("description"), // Full-text search index
+];
 ```
 
 ### Relations
@@ -107,17 +112,19 @@ Relations create edges in the knowledge graph, enabling graph traversal.
 
 ## Custom Methods
 
-You can extend collections with custom logic using the `methods` property. Unlike hooks, which run automatically, methods are called manually on the collection instance.
+You can extend collections with custom logic using the `methods` property.
+Unlike hooks, which run automatically, methods are called manually on the
+collection instance.
 
 The `methods` property is a **factory callback** that receives a context object:
 
-| Property | Description |
-|----------|-------------|
-| `collection` | The current namespace-bound collection instance |
-| `manager` | Sibling collections in the same namespace |
+| Property          | Description                                                                 |
+| ----------------- | --------------------------------------------------------------------------- |
+| `collection`      | The current namespace-bound collection instance                             |
+| `manager`         | Sibling collections in the same namespace                                   |
 | `rootCollections` | Access to other namespaces (e.g. `rootCollections.withNamespace("global")`) |
-| `namespace` | The current active namespace string |
-| `ops` | Low-level database operations |
+| `namespace`       | The current active namespace string                                         |
+| `ops`             | Low-level database operations                                               |
 
 Methods are "late-bound" to the scoped collection:
 
@@ -146,7 +153,8 @@ const copilotz = await createCopilotz({
 
 ## Using Collections
 
-All collection operations require a namespace. Use explicit namespaces or create a scoped manager.
+All collection operations require a namespace. Use explicit namespaces or create
+a scoped manager.
 
 ### Explicit Namespace
 
@@ -154,26 +162,26 @@ All collection operations require a namespace. Use explicit namespaces or create
 // Create
 await copilotz.collections.customer.create(
   { id: "c1", email: "alex@acme.com", name: "Alex", plan: "pro" },
-  { namespace: "tenant:acme" }
+  { namespace: "tenant:acme" },
 );
 
 // Read
 const customer = await copilotz.collections.customer.findById(
   "c1",
-  { namespace: "tenant:acme" }
+  { namespace: "tenant:acme" },
 );
 
 // Update
 await copilotz.collections.customer.update(
   { id: "c1" },
   { plan: "enterprise" },
-  { namespace: "tenant:acme" }
+  { namespace: "tenant:acme" },
 );
 
 // Delete
 await copilotz.collections.customer.delete(
   { id: "c1" },
-  { namespace: "tenant:acme" }
+  { namespace: "tenant:acme" },
 );
 ```
 
@@ -231,17 +239,17 @@ const customers = await collections.customer.find({
 
 ### Query Operators
 
-| Operator | Description |
-|----------|-------------|
-| `$eq` | Equal to |
-| `$ne` | Not equal to |
-| `$gt` | Greater than |
-| `$gte` | Greater than or equal |
-| `$lt` | Less than |
-| `$lte` | Less than or equal |
-| `$in` | In array |
-| `$nin` | Not in array |
-| `$like` | SQL LIKE pattern |
+| Operator | Description           |
+| -------- | --------------------- |
+| `$eq`    | Equal to              |
+| `$ne`    | Not equal to          |
+| `$gt`    | Greater than          |
+| `$gte`   | Greater than or equal |
+| `$lt`    | Less than             |
+| `$lte`   | Less than or equal    |
+| `$in`    | In array              |
+| `$nin`   | Not in array          |
+| `$like`  | SQL LIKE pattern      |
 | `$ilike` | Case-insensitive LIKE |
 
 ### Update
@@ -249,19 +257,19 @@ const customers = await collections.customer.find({
 ```typescript
 // Update matching filter
 await collections.customer.update(
-  { id: "c1" },           // Filter
-  { plan: "pro" }         // Updates
+  { id: "c1" }, // Filter
+  { plan: "pro" }, // Updates
 );
 
 // Update multiple
 await collections.customer.updateMany(
   { plan: "free" },
-  { plan: "legacy" }
+  { plan: "legacy" },
 );
 
 // Upsert (create or update)
 await collections.customer.upsert(
-  { id: "c1", email: "alex@acme.com", plan: "pro" }
+  { id: "c1", email: "alex@acme.com", plan: "pro" },
 );
 ```
 
@@ -345,22 +353,25 @@ const customer = defineCollection({
 
 ## Built-in Data Structures
 
-Copilotz uses its own internal data structures that you can access via `copilotz.ops`. Understanding these helps you build on top of the framework.
+Copilotz uses its own internal data structures that you can access via
+`copilotz.ops`. Understanding these helps you build on top of the framework.
 
-For detailed documentation of all database tables, see [Tables Structure](./tables-structure.md).
+For detailed documentation of all database tables, see
+[Tables Structure](./tables-structure.md).
 
 ### Knowledge Graph Node Types
 
 The knowledge graph (`nodes` table) stores these built-in node types:
 
-| Node Type | Purpose | Created By |
-|-----------|---------|------------|
-| `message` | Conversation messages | `NEW_MESSAGE` processor |
-| `chunk` | Document chunks with embeddings | `RAG_INGEST` processor |
-| `participant`| Humans and Agents | `NEW_MESSAGE` processor (auto-upsert) |
-| `entity` | Extracted entities (people, orgs, concepts) | `ENTITY_EXTRACT` processor |
+| Node Type     | Purpose                                     | Created By                            |
+| ------------- | ------------------------------------------- | ------------------------------------- |
+| `message`     | Conversation messages                       | `NEW_MESSAGE` processor               |
+| `chunk`       | Document chunks with embeddings             | `RAG_INGEST` processor                |
+| `participant` | Humans and Agents                           | `NEW_MESSAGE` processor (auto-upsert) |
+| `entity`      | Extracted entities (people, orgs, concepts) | `ENTITY_EXTRACT` processor            |
 
 **Message nodes:**
+
 ```typescript
 {
   type: "message",
@@ -377,10 +388,11 @@ The knowledge graph (`nodes` table) stores these built-in node types:
 ```
 
 **Chunk nodes:**
+
 ```typescript
 {
   type: "chunk",
-  namespace: "docs",            // RAG namespace
+  namespace: "tenant-acme",     // Tenant/application partition
   content: "Document text...",
   embedding: [0.1, 0.2, ...],   // Vector embedding
   data: {
@@ -392,6 +404,7 @@ The knowledge graph (`nodes` table) stores these built-in node types:
 ```
 
 **Participant nodes:**
+
 ```typescript
 {
   type: "participant",
@@ -407,6 +420,7 @@ The knowledge graph (`nodes` table) stores these built-in node types:
 ```
 
 **Entity nodes:**
+
 ```typescript
 {
   type: "entity",               // Or "person", "organization", "concept", etc.
@@ -422,11 +436,15 @@ The knowledge graph (`nodes` table) stores these built-in node types:
 
 ### Identity Namespace Widening
 
-The built-in `participant` collection implements **Identity Namespace Widening**. 
+The built-in `participant` collection implements **Identity Namespace
+Widening**.
 
-When you perform an operation on a participant using a thread-level namespace (e.g., `tenant:1:thread:A`), the collection automatically strips the `:thread:` suffix and stores/resolves the identity at the parent level (`tenant:1`). 
+When you perform an operation on a participant using a thread-level namespace
+(e.g., `tenant:1:thread:A`), the collection automatically strips the `:thread:`
+suffix and stores/resolves the identity at the parent level (`tenant:1`).
 
 This ensures that:
+
 1. Users are recognized across multiple threads within the same tenant.
 2. Agents share persistent memory across all conversations in that tenant.
 3. You don't have duplicate identities for the same actor.
@@ -435,32 +453,38 @@ This ensures that:
 
 Edges connect nodes in the graph:
 
-| Edge Type | From → To | Purpose |
-|-----------|-----------|---------|
-| `REPLIED_BY` | Message → Message | Conversation flow |
-| `SENT_BY` | Participant → Message | Message authorship |
-| `MENTIONS` | Message/Chunk → Entity | Entity references |
-| `RELATED_TO` | Entity → Entity | Entity relationships |
-| `NEXT_CHUNK` | Chunk → Chunk | Document order |
-| `BELONGS_TO` | Collection → Collection | Custom relations |
-| `HAS_MANY` | Collection → Collection | Custom relations |
+| Edge Type      | From → To               | Purpose              |
+| -------------- | ----------------------- | -------------------- |
+| `derived_from` | Message → Message       | Conversation flow    |
+| `sent_by`      | Participant → Message   | Message authorship   |
+| `MENTIONS`     | Message/Chunk → Entity  | Entity references    |
+| `RELATED_TO`   | Entity → Entity         | Entity relationships |
+| `derived_from` | Chunk → Chunk           | Document order       |
+| `BELONGS_TO`   | Collection → Collection | Custom relations     |
+| `HAS_MANY`     | Collection → Collection | Custom relations     |
 
 Query edges via `copilotz.ops`:
 
 ```typescript
 // Get all entities mentioned in a message
-const mentions = await copilotz.ops.getEdgesForNode(messageId, "out", ["MENTIONS"]);
+const mentions = await copilotz.ops.getEdgesForNode(messageId, "out", [
+  "MENTIONS",
+]);
 
 // Get all messages from a user
-const messages = await copilotz.ops.getEdgesForNode(userId, "out", ["SENT_BY"]);
+const messages = await copilotz.ops.getEdgesForNode(userId, "out", ["sent_by"]);
 
 // Traverse relationships
-const related = await copilotz.ops.traverseGraph(entityId, ["MENTIONS", "RELATED_TO"], 3);
+const related = await copilotz.ops.traverseGraph(entityId, [
+  "MENTIONS",
+  "RELATED_TO",
+], 3);
 ```
 
 ### Accessing Built-in Data
 
-Use the `collections` API for high-level operations on participants and messages:
+Use the `collections` API for high-level operations on participants and
+messages:
 
 ```typescript
 // Participant operations (Recommended)
@@ -479,45 +503,32 @@ const nodes = await copilotz.ops.searchNodes({
   namespace: "tenant:acme",
 });
 ```
-// RAG operations
-const stats = await copilotz.ops.getNamespaceStats();
-// { "docs": { documentCount: 10, chunkCount: 500 } }
-```
 
+// RAG operations const stats = await copilotz.ops.getNamespaceStats(); // {
+"docs": { documentCount: 10, chunkCount: 500 } }
+
+```
 ---
 
 ## Custom Collections in the Knowledge Graph
 
 When you define a custom collection, records become nodes in the knowledge graph:
-
-```
-┌─────────────────┐
-│    Customer     │
-│   id: "c1"      │
-│   email: ...    │
-└────────┬────────┘
-         │ BELONGS_TO
-         ▼
-┌─────────────────┐
-│    Account      │
-│   id: "a1"      │
-└────────┬────────┘
-         │ HAS_MANY
-         ▼
-┌─────────────────┐
-│    Ticket       │
-│   id: "t1"      │
-└─────────────────┘
 ```
 
+┌─────────────────┐ │ Customer │ │ id: "c1" │ │ email: ... │ └────────┬────────┘
+│ BELONGS_TO ▼ ┌─────────────────┐ │ Account │ │ id: "a1" │ └────────┬────────┘
+│ HAS_MANY ▼ ┌─────────────────┐ │ Ticket │ │ id: "t1" │ └─────────────────┘
+
+````
 This enables graph queries across collections:
 
 ```typescript
 // Find all entities related to a customer
 const related = await copilotz.ops.traverseGraph(customerId, ["BELONGS_TO", "HAS_MANY"], 2);
-```
+````
 
-Your custom collections live alongside the built-in node types, all queryable through the same graph API.
+Your custom collections live alongside the built-in node types, all queryable
+through the same graph API.
 
 ---
 

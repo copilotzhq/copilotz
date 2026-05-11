@@ -27,8 +27,8 @@ runtime and transport layer.
 
 ## Common Mistaken Alternative
 
-Do not think of Copilotz as only an LLM wrapper or only a chat framework. If
-you treat it as "just a model client plus some helpers," you will miss the core
+Do not think of Copilotz as only an LLM wrapper or only a chat framework. If you
+treat it as "just a model client plus some helpers," you will miss the core
 benefit: resources and runtime composition.
 
 ## Public Example

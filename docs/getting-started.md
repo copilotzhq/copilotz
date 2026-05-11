@@ -1,6 +1,7 @@
 # Getting Started
 
-Get Copilotz running in under 5 minutes. By the end of this guide, you'll have an AI agent that remembers conversations and streams responses.
+Get Copilotz running in under 5 minutes. By the end of this guide, you'll have
+an AI agent that remembers conversations and streams responses.
 
 ## Installation
 
@@ -58,7 +59,8 @@ Run it:
 OPENAI_API_KEY=your-key deno run --allow-net --allow-env chat.ts
 ```
 
-You'll get an interactive prompt where you can chat with your agent. Responses stream in real-time, and the agent remembers the conversation.
+You'll get an interactive prompt where you can chat with your agent. Responses
+stream in real-time, and the agent remembers the conversation.
 
 ### `start()` Options
 
@@ -66,16 +68,16 @@ You'll get an interactive prompt where you can chat with your agent. Responses s
 copilotz.start({
   // Optional banner message
   banner: "Welcome to my AI assistant!",
-  
+
   // Command to exit (default: "quit")
   quitCommand: "exit",
-  
+
   // Thread identifier for persistence
   threadExternalId: "session-123",
-  
+
   // Sender info
   sender: { type: "user", name: "Alex" },
-  
+
   // Initial message to send
   content: "Hello!",
 });
@@ -114,10 +116,11 @@ const copilotz = await createCopilotz({
     id: "assistant",
     name: "Assistant",
     role: "assistant",
-    instructions: "You are a friendly and helpful assistant. Remember details users share with you.",
-    llmOptions: { 
-      provider: "openai", 
-      model: "gpt-4o-mini" 
+    instructions:
+      "You are a friendly and helpful assistant. Remember details users share with you.",
+    llmOptions: {
+      provider: "openai",
+      model: "gpt-4o-mini",
     },
   }],
   dbConfig: { url: ":memory:" }, // In-memory database for quick start
@@ -156,9 +159,9 @@ For real-time UI updates, enable streaming:
 
 ```typescript
 const result = await copilotz.run(
-  { 
-    content: "Tell me a story about a robot", 
-    sender: { type: "user", name: "Alex" } 
+  {
+    content: "Tell me a story about a robot",
+    sender: { type: "user", name: "Alex" },
   },
   // Callback for each event
   (event) => {
@@ -167,7 +170,7 @@ const result = await copilotz.run(
       Deno.stdout.writeSync(new TextEncoder().encode(event.payload.token));
     }
   },
-  { stream: true }
+  { stream: true },
 );
 
 await result.done;
@@ -180,7 +183,7 @@ Or use the async iterator:
 const result = await copilotz.run(
   { content: "Tell me a story", sender: { type: "user", name: "Alex" } },
   undefined,
-  { stream: true }
+  { stream: true },
 );
 
 for await (const event of result.events) {
@@ -214,7 +217,8 @@ await copilotz.run({
 });
 ```
 
-If an agent or its tool calls may generate large inline images/files that should not be persisted, you can disable generated asset persistence per agent:
+If an agent or its tool calls may generate large inline images/files that should
+not be persisted, you can disable generated asset persistence per agent:
 
 ```typescript
 agents: [{
@@ -228,7 +232,7 @@ agents: [{
       persistGeneratedAssets: false,
     },
   },
-}]
+}];
 ```
 
 ## Enabling RAG
@@ -245,21 +249,21 @@ const copilotz = await createCopilotz({
     llmOptions: { provider: "openai", model: "gpt-4o-mini" },
     allowedTools: ["search_knowledge", "ingest_document"],
     ragOptions: {
-      mode: "auto",           // Auto-inject relevant context
-      namespaces: ["docs"],   // Search these namespaces
+      mode: "auto", // Auto-inject relevant context
+      scope: { knowledgeSpaceIds: ["ks-docs"] },
     },
   }],
   rag: {
     embedding: { provider: "openai", model: "text-embedding-3-small" },
     chunking: { strategy: "fixed", chunkSize: 512 },
-    defaultNamespace: "docs",
   },
   dbConfig: { url: ":memory:" },
 });
 
 // Ingest a document
 await copilotz.run({
-  content: "Please add this article to your knowledge: https://example.com/article",
+  content:
+    "Please add this article to your knowledge: https://example.com/article",
   sender: { type: "user", name: "Alex" },
 });
 
@@ -288,12 +292,15 @@ const copilotz = await createCopilotz({
 Or use PGLite with file persistence:
 
 ```typescript
-dbConfig: { url: "file:./data/copilotz.db" }
+dbConfig: {
+  url: "file:./data/copilotz.db";
+}
 ```
 
 ## File-Based Resources
 
-For larger projects, organize agents, tools, and APIs in a directory instead of inline config:
+For larger projects, organize agents, tools, and APIs in a directory instead of
+inline config:
 
 ```
 resources/
@@ -321,7 +328,9 @@ const copilotz = await createCopilotz({
 });
 ```
 
-No manual `loadResources()`, no spreading — everything is loaded and merged automatically. See [Resource Loaders](./loaders.md) for the full directory structure.
+No manual `loadResources()`, no spreading — everything is loaded and merged
+automatically. See [Resource Loaders](./loaders.md) for the full directory
+structure.
 
 ## Environment Variables
 

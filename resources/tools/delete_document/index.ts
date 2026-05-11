@@ -4,7 +4,6 @@ import { createRagDataServices } from "@/runtime/collections/native.ts";
 interface DeleteDocumentParams {
   documentId?: string;
   sourceUri?: string;
-  namespace?: string;
 }
 
 interface DocumentRecord {
@@ -17,7 +16,8 @@ interface DocumentRecord {
 export default {
   key: "delete_document",
   name: "Delete Document",
-  description: "Remove a document and its chunks from the knowledge base. Can delete by document ID or by source URI and namespace.",
+  description:
+    "Remove a document and its chunks from the tenant knowledge graph. Can delete by document ID or by source URI.",
   inputSchema: {
     type: "object",
     properties: {
@@ -27,17 +27,12 @@ export default {
       },
       sourceUri: {
         type: "string",
-        description: "The source URI of the document to delete (used with namespace).",
-      },
-      namespace: {
-        type: "string",
-        description: "The namespace of the document (required when using sourceUri).",
-        default: "default",
+        description: "The source URI of the document to delete.",
       },
     },
   },
   execute: async (
-    { documentId, sourceUri, namespace = "default" }: DeleteDocumentParams,
+    { documentId, sourceUri }: DeleteDocumentParams,
     context?: ToolExecutionContext,
   ) => {
     const ops = context?.db?.ops;
@@ -52,19 +47,30 @@ export default {
     if (!documentId && !sourceUri) {
       throw new Error("Either documentId or sourceUri must be provided");
     }
+    const namespace = context?.namespace;
+    if (!namespace) {
+      throw new Error("Tenant namespace not available in context");
+    }
 
     let docToDelete: DocumentRecord | undefined;
 
     if (documentId) {
-      docToDelete = await ragData.getDocumentById(documentId, namespace) as DocumentRecord | undefined;
+      docToDelete = await ragData.getDocumentById(documentId, namespace) as
+        | DocumentRecord
+        | undefined;
     } else if (sourceUri) {
       const docs = await ops.getNodesByNamespace(namespace);
-      const match = docs.find((n: { type: string; data?: Record<string, unknown> | null }) =>
+      const match = docs.find((
+        n: { type: string; data?: Record<string, unknown> | null },
+      ) =>
         n.type === "document" &&
         (n.data as Record<string, unknown> | null)?.sourceUri === sourceUri
       );
       if (match) {
-        docToDelete = await ragData.getDocumentById(match.id as string, namespace) as DocumentRecord | undefined;
+        docToDelete = await ragData.getDocumentById(
+          match.id as string,
+          namespace,
+        ) as DocumentRecord | undefined;
       }
     }
 
@@ -73,7 +79,7 @@ export default {
         success: false,
         message: documentId
           ? `Document with ID "${documentId}" not found.`
-          : `Document with source "${sourceUri}" in namespace "${namespace}" not found.`,
+          : `Document with source "${sourceUri}" not found.`,
       };
     }
 
@@ -85,7 +91,7 @@ export default {
 
     return {
       success: true,
-      message: `Document "${docTitle}" deleted from namespace "${docNamespace}".`,
+      message: `Document "${docTitle}" deleted.`,
       documentId: docId,
       title: docTitle,
       namespace: docNamespace,

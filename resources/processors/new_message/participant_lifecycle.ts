@@ -1,6 +1,7 @@
 import type { Event, EventProcessor, ProcessorDeps } from "@/types/index.ts";
 import type { NewMessageEventPayload } from "@/database/schemas/index.ts";
 import { hasParticipantCollection } from "@/runtime/collections/native.ts";
+import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 export const priority = 100;
 
@@ -14,9 +15,7 @@ function buildSenderIdentity(payload: NewMessageEventPayload): {
 
   if (sender.type === "user") {
     const externalId = sender.externalId ?? sender.id ?? sender.name ?? null;
-    return externalId
-      ? { externalId, participantType: "human" }
-      : null;
+    return externalId ? { externalId, participantType: "human" } : null;
   }
 
   if (sender.type === "agent" || sender.type === "tool") {
@@ -42,8 +41,12 @@ export const participantLifecycleProcessor: EventProcessor<
   process: async (event: Event, deps: ProcessorDeps) => {
     if (!hasParticipantCollection(deps.context.collections)) return;
 
-    const participantCollection = (deps.context.collections as any)?.participant;
-    if (!participantCollection || typeof participantCollection.upsertIdentity !== "function") return;
+    const participantCollection = (deps.context.collections as any)
+      ?.participant;
+    if (
+      !participantCollection ||
+      typeof participantCollection.upsertIdentity !== "function"
+    ) return;
 
     const payload = event.payload as NewMessageEventPayload;
 
@@ -68,19 +71,33 @@ export const participantLifecycleProcessor: EventProcessor<
         agentId: senderIdentity.agentId ?? null,
         ...(metadata !== undefined ? { metadata } : {}),
       });
+      if (senderRecord?.id && typeof deps.thread?.id === "string") {
+        await deps.db.ops.createEdge({
+          sourceNodeId: senderRecord.id,
+          targetNodeId: deps.thread.id,
+          type: GRAPH_EDGE.PARTICIPATES_IN,
+        }).catch(() => undefined);
+      }
     }
 
     for (const agent of deps.context.agents ?? []) {
       const externalId = agent.id ?? agent.name;
       if (!externalId) continue;
-      
-      await participantCollection.upsertIdentity({
+
+      const agentRecord = await participantCollection.upsertIdentity({
         externalId,
         participantType: "agent",
         name: agent.name,
         agentId: agent.id ?? agent.name,
         metadata: null,
       });
+      if (agentRecord?.id && typeof deps.thread?.id === "string") {
+        await deps.db.ops.createEdge({
+          sourceNodeId: agentRecord.id,
+          targetNodeId: deps.thread.id,
+          type: GRAPH_EDGE.PARTICIPATES_IN,
+        }).catch(() => undefined);
+      }
     }
 
     return senderRecord;

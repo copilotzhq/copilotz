@@ -12,6 +12,7 @@ export interface ThreadHandlers {
   list: (
     participantId: string,
     options?: {
+      namespace?: string;
       status?: "active" | "archived" | "all";
       limit?: number;
       offset?: number;

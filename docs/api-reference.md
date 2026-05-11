@@ -24,12 +24,11 @@ import {
   // Resource loading
   loadResources,
   mergeResourceArrays,
-  resolveResourceList,
   provisionTenantSchema,
   // Event processing
   relation,
+  resolveResourceList,
   // Utilities
-  resolveNamespace,
   schemaExists,
   warmSchemaCache,
   // Schema management
@@ -549,16 +548,19 @@ const merged = mergeResourceArrays<T>(
 
 ### resolveResourceList()
 
-Used internally by `createCopilotz` for `agents`, `tools`, `apis`, `mcpServers`, and
-`collections`. Pass the preload array (`mergeResourceArrays(bundled, user, …)`)
-and either an explicit array (same merge semantics as above) or a callback
-`(loaded) => T[] | Promise<T[]>` to return the final list.
+Used internally by `createCopilotz` for `agents`, `tools`, `apis`, `mcpServers`,
+and `collections`. Pass the preload array
+(`mergeResourceArrays(bundled, user, …)`) and either an explicit array (same
+merge semantics as above) or a callback `(loaded) => T[] | Promise<T[]>` to
+return the final list.
 
 ```typescript
 import { mergeResourceArrays, resolveResourceList } from "@copilotz/copilotz";
 
-const agents = await resolveResourceList(preload, (loaded) =>
-  loaded.map((a) => (a.id === "copilotz" ? { ...a, role: "Patched" } : a)),
+const agents = await resolveResourceList(
+  preload,
+  (loaded) =>
+    loaded.map((a) => (a.id === "copilotz" ? { ...a, role: "Patched" } : a)),
 );
 ```
 
@@ -649,20 +651,6 @@ Get all built-in tools.
 ```typescript
 const tools = getNativeTools(): Record<string, Tool>
 ```
-
-### resolveNamespace()
-
-Resolve namespace based on scope.
-
-```typescript
-const namespace = resolveNamespace(
-  scope: "thread" | "agent" | "global",
-  context: { threadId?: string; agentId?: string },
-  prefix?: string
-): string
-```
-
----
 
 ## Types
 

@@ -13,7 +13,7 @@ resources/processors/<processor-name>/
 Use a processor when work should happen as part of the event lifecycle instead
 of as a direct synchronous app call.
 
-Recommended use case: queued or background runtime behavior  
+Recommended use case: queued or background runtime behavior\
 Most common mistaken alternative: putting asynchronous orchestration only in
 custom route logic
 

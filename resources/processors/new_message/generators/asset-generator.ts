@@ -1,553 +1,694 @@
-import type { MessagePayload, ChatContext, Event } from "@/types/index.ts";
+import type { ChatContext, Event, MessagePayload } from "@/types/index.ts";
+import type { CopilotzDb } from "@/database/index.ts";
 
 import {
-    base64ToBytes,
-    parseDataUrl,
-    isDataUrl,
-    normalizeOutputToAssetRefs,
-    resolveAssetIdForStore,
-    buildAssetRefForStore,
-    bytesToBase64,
-    type AssetStore,
-    type AssetSaveError,
+  type AssetSaveError,
+  type AssetStore,
+  base64ToBytes,
+  buildAssetRefForStore,
+  bytesToBase64,
+  isDataUrl,
+  normalizeOutputToAssetRefs,
+  parseDataUrl,
+  resolveAssetIdForStore,
 } from "@/runtime/storage/assets.ts";
+import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 type AttachmentKind = "image" | "audio" | "file";
 
 type RawAttachment = {
-    kind: AttachmentKind;
-    data?: string;
-    dataUrl?: string;
-    mimeType?: string;
-    format?: string;
-    fileName?: string;
-    assetRef?: string;
+  kind: AttachmentKind;
+  data?: string;
+  dataUrl?: string;
+  mimeType?: string;
+  format?: string;
+  fileName?: string;
+  assetRef?: string;
 };
 
 type NormalizedAttachment = {
-    kind: AttachmentKind;
-    mimeType?: string;
-    format?: string;
-    fileName?: string;
-    assetRef?: string;
-    // For http(s) URLs we keep the original URL (not treated as an asset)
-    dataUrl?: string;
+  kind: AttachmentKind;
+  mimeType?: string;
+  format?: string;
+  fileName?: string;
+  assetRef?: string;
+  // For http(s) URLs we keep the original URL (not treated as an asset)
+  dataUrl?: string;
 };
 
 type CreatedAssetInfo = { ref: string; mime?: string; kind?: AttachmentKind };
 
 type AssetErrorInfo = {
-	error: unknown;
-	kind?: AttachmentKind;
-	mime?: string;
-	fileName?: string;
-	size?: number;
-	source: "attachments" | "tool_output";
+  error: unknown;
+  kind?: AttachmentKind;
+  mime?: string;
+  fileName?: string;
+  size?: number;
+  source: "attachments" | "tool_output";
 };
 
 function shouldDebugAssets(): boolean {
-    try {
-        const anyGlobal = globalThis as unknown as {
-            Deno?: { env?: { get?: (k: string) => string | undefined } };
-            process?: { env?: Record<string, string | undefined> };
-        };
-        const denoFlag = anyGlobal?.Deno?.env?.get?.("COPILOTZ_NEXT_DEBUG");
-        if (denoFlag === "1") return true;
-        const nodeFlag = anyGlobal?.process?.env?.COPILOTZ_NEXT_DEBUG;
-        return nodeFlag === "1";
-    } catch {
-        return false;
-    }
+  try {
+    const anyGlobal = globalThis as unknown as {
+      Deno?: { env?: { get?: (k: string) => string | undefined } };
+      process?: { env?: Record<string, string | undefined> };
+    };
+    const denoFlag = anyGlobal?.Deno?.env?.get?.("COPILOTZ_NEXT_DEBUG");
+    if (denoFlag === "1") return true;
+    const nodeFlag = anyGlobal?.process?.env?.COPILOTZ_NEXT_DEBUG;
+    return nodeFlag === "1";
+  } catch {
+    return false;
+  }
 }
 
-function extractAttachmentsFromContent(content: MessagePayload["content"]): RawAttachment[] {
-    const attachments: RawAttachment[] = [];
-    if (!Array.isArray(content)) return attachments;
+function extractAttachmentsFromContent(
+  content: MessagePayload["content"],
+): RawAttachment[] {
+  const attachments: RawAttachment[] = [];
+  if (!Array.isArray(content)) return attachments;
 
-    for (const part of content) {
-        if (!part || typeof part !== "object") continue;
-        const p = part as Record<string, unknown>;
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    const p = part as Record<string, unknown>;
 
-        const type = typeof p.type === "string" ? p.type : undefined;
-        switch (type) {
-            case "image": {
-                const mimeType = typeof p.mimeType === "string" ? p.mimeType : undefined;
-                if (typeof p.dataBase64 === "string") {
-                    attachments.push({ kind: "image", data: p.dataBase64, mimeType });
-                } else if (typeof p.url === "string") {
-                    attachments.push({ kind: "image", dataUrl: p.url, mimeType });
-                }
-                break;
-            }
-            case "audio": {
-                const mimeType = typeof p.mimeType === "string" ? p.mimeType : undefined;
-                const format = typeof p.format === "string" ? p.format : undefined;
-                if (typeof p.dataBase64 === "string") {
-                    attachments.push({ kind: "audio", data: p.dataBase64, mimeType, format });
-                } else if (typeof p.url === "string") {
-                    attachments.push({ kind: "audio", dataUrl: p.url, mimeType, format });
-                }
-                break;
-            }
-            case "file": {
-                const mimeType = typeof p.mimeType === "string" ? p.mimeType : undefined;
-                const fileName = typeof p.name === "string" ? p.name : undefined;
-                if (typeof p.dataBase64 === "string") {
-                    attachments.push({ kind: "file", data: p.dataBase64, mimeType, fileName });
-                } else if (typeof p.url === "string") {
-                    attachments.push({ kind: "file", dataUrl: p.url, mimeType, fileName });
-                }
-                break;
-            }
-            default:
-                break;
+    const type = typeof p.type === "string" ? p.type : undefined;
+    switch (type) {
+      case "image": {
+        const mimeType = typeof p.mimeType === "string"
+          ? p.mimeType
+          : undefined;
+        if (typeof p.dataBase64 === "string") {
+          attachments.push({ kind: "image", data: p.dataBase64, mimeType });
+        } else if (typeof p.url === "string") {
+          attachments.push({ kind: "image", dataUrl: p.url, mimeType });
         }
+        break;
+      }
+      case "audio": {
+        const mimeType = typeof p.mimeType === "string"
+          ? p.mimeType
+          : undefined;
+        const format = typeof p.format === "string" ? p.format : undefined;
+        if (typeof p.dataBase64 === "string") {
+          attachments.push({
+            kind: "audio",
+            data: p.dataBase64,
+            mimeType,
+            format,
+          });
+        } else if (typeof p.url === "string") {
+          attachments.push({ kind: "audio", dataUrl: p.url, mimeType, format });
+        }
+        break;
+      }
+      case "file": {
+        const mimeType = typeof p.mimeType === "string"
+          ? p.mimeType
+          : undefined;
+        const fileName = typeof p.name === "string" ? p.name : undefined;
+        if (typeof p.dataBase64 === "string") {
+          attachments.push({
+            kind: "file",
+            data: p.dataBase64,
+            mimeType,
+            fileName,
+          });
+        } else if (typeof p.url === "string") {
+          attachments.push({
+            kind: "file",
+            dataUrl: p.url,
+            mimeType,
+            fileName,
+          });
+        }
+        break;
+      }
+      default:
+        break;
     }
+  }
 
-    return attachments;
+  return attachments;
 }
 
 async function normalizeAttachments(
-    attachments: RawAttachment[],
-    store?: AssetStore,
-    onError?: (info: AssetErrorInfo) => void,
-): Promise<{ normalized: NormalizedAttachment[]; created: CreatedAssetInfo[] }> {
-    if (!attachments.length) return { normalized: [], created: [] };
+  attachments: RawAttachment[],
+  store?: AssetStore,
+  onError?: (info: AssetErrorInfo) => void,
+): Promise<
+  { normalized: NormalizedAttachment[]; created: CreatedAssetInfo[] }
+> {
+  if (!attachments.length) return { normalized: [], created: [] };
 
-    const normalized: NormalizedAttachment[] = [];
-    const created: CreatedAssetInfo[] = [];
+  const normalized: NormalizedAttachment[] = [];
+  const created: CreatedAssetInfo[] = [];
 
-    for (const att of attachments) {
-        // Already an asset ref: keep as-is (but drop raw data)
-        if (typeof att.assetRef === "string" && att.assetRef.startsWith("asset://")) {
-            normalized.push({
-                kind: att.kind,
-                mimeType: att.mimeType,
-                format: att.format,
-                fileName: att.fileName,
-                assetRef: att.assetRef,
-            });
-            continue;
-        }
-
-        // If we don't have a store, keep only lightweight info; avoid persisting large blobs when possible
-        if (!store) {
-            normalized.push({
-                kind: att.kind,
-                mimeType: att.mimeType,
-                format: att.format,
-                fileName: att.fileName,
-                dataUrl: att.dataUrl && !isDataUrl(att.dataUrl) ? att.dataUrl : undefined,
-            });
-            continue;
-        }
-
-        let bytes: Uint8Array | null = null;
-        let mime: string | undefined = att.mimeType;
-
-        if (att.data && att.mimeType) {
-            try {
-                bytes = base64ToBytes(att.data);
-            } catch {
-                bytes = null;
-            }
-        } else if (att.dataUrl && isDataUrl(att.dataUrl)) {
-            const parsed = parseDataUrl(att.dataUrl);
-            if (parsed) {
-                bytes = parsed.bytes;
-                mime = parsed.mime;
-            }
-        }
-
-        if (bytes && mime) {
-            try {
-                const { assetId } = await store.save(bytes, mime);
-                const ref = buildAssetRefForStore(store, assetId);
-                normalized.push({
-                    kind: att.kind,
-                    mimeType: mime,
-                    format: att.format,
-                    fileName: att.fileName,
-                    assetRef: ref,
-                });
-                created.push({ ref, mime, kind: att.kind });
-                continue;
-            } catch (err) {
-                if (shouldDebugAssets()) {
-                    console.warn("[assets] save failed (attachments):", err);
-                }
-                onError?.({
-                    error: err,
-                    kind: att.kind,
-                    mime,
-                    fileName: att.fileName,
-                    size: bytes?.byteLength,
-                    source: "attachments",
-                });
-                // fall through to non-asset path
-            }
-        }
-
-        // Fallback: keep only lightweight info and non-data: URLs
-        normalized.push({
-            kind: att.kind,
-            mimeType: att.mimeType,
-            format: att.format,
-            fileName: att.fileName,
-            dataUrl: att.dataUrl && !isDataUrl(att.dataUrl) ? att.dataUrl : undefined,
-        });
+  for (const att of attachments) {
+    // Already an asset ref: keep as-is (but drop raw data)
+    if (
+      typeof att.assetRef === "string" && att.assetRef.startsWith("asset://")
+    ) {
+      normalized.push({
+        kind: att.kind,
+        mimeType: att.mimeType,
+        format: att.format,
+        fileName: att.fileName,
+        assetRef: att.assetRef,
+      });
+      continue;
     }
 
-    return { normalized, created };
+    // If we don't have a store, keep only lightweight info; avoid persisting large blobs when possible
+    if (!store) {
+      normalized.push({
+        kind: att.kind,
+        mimeType: att.mimeType,
+        format: att.format,
+        fileName: att.fileName,
+        dataUrl: att.dataUrl && !isDataUrl(att.dataUrl)
+          ? att.dataUrl
+          : undefined,
+      });
+      continue;
+    }
+
+    let bytes: Uint8Array | null = null;
+    let mime: string | undefined = att.mimeType;
+
+    if (att.data && att.mimeType) {
+      try {
+        bytes = base64ToBytes(att.data);
+      } catch {
+        bytes = null;
+      }
+    } else if (att.dataUrl && isDataUrl(att.dataUrl)) {
+      const parsed = parseDataUrl(att.dataUrl);
+      if (parsed) {
+        bytes = parsed.bytes;
+        mime = parsed.mime;
+      }
+    }
+
+    if (bytes && mime) {
+      try {
+        const { assetId } = await store.save(bytes, mime);
+        const ref = buildAssetRefForStore(store, assetId);
+        normalized.push({
+          kind: att.kind,
+          mimeType: mime,
+          format: att.format,
+          fileName: att.fileName,
+          assetRef: ref,
+        });
+        created.push({ ref, mime, kind: att.kind });
+        continue;
+      } catch (err) {
+        if (shouldDebugAssets()) {
+          console.warn("[assets] save failed (attachments):", err);
+        }
+        onError?.({
+          error: err,
+          kind: att.kind,
+          mime,
+          fileName: att.fileName,
+          size: bytes?.byteLength,
+          source: "attachments",
+        });
+        // fall through to non-asset path
+      }
+    }
+
+    // Fallback: keep only lightweight info and non-data: URLs
+    normalized.push({
+      kind: att.kind,
+      mimeType: att.mimeType,
+      format: att.format,
+      fileName: att.fileName,
+      dataUrl: att.dataUrl && !isDataUrl(att.dataUrl) ? att.dataUrl : undefined,
+    });
+  }
+
+  return { normalized, created };
 }
 
 async function emitAssetError(args: {
-    emitToStream?: (event: Event) => void;
-    event: Event;
-    threadId: string;
-    senderType: "agent" | "user" | "tool" | "system";
-    toolCallMetadata: unknown[];
-    info: AssetErrorInfo;
-    namespace?: string;
+  emitToStream?: (event: Event) => void;
+  event: Event;
+  threadId: string;
+  senderType: "agent" | "user" | "tool" | "system";
+  toolCallMetadata: unknown[];
+  info: AssetErrorInfo;
+  namespace?: string;
 }): Promise<void> {
-    const { emitToStream, event, threadId, senderType, toolCallMetadata, info } = args;
-    if (!emitToStream) return;
+  const { emitToStream, event, threadId, senderType, toolCallMetadata, info } =
+    args;
+  if (!emitToStream) return;
 
-    const by =
-        senderType === "tool" ? "tool" :
-            senderType === "agent" ? "agent" :
-                senderType === "user" ? "user" : "system";
+  const by = senderType === "tool"
+    ? "tool"
+    : senderType === "agent"
+    ? "agent"
+    : senderType === "user"
+    ? "user"
+    : "system";
 
-    const toolMeta = toolCallMetadata[0] && typeof toolCallMetadata[0] === "object"
-        ? (toolCallMetadata[0] as { id?: string; name?: string })
-        : undefined;
+  const toolMeta =
+    toolCallMetadata[0] && typeof toolCallMetadata[0] === "object"
+      ? (toolCallMetadata[0] as { id?: string; name?: string })
+      : undefined;
 
-    const errorObj = info.error as Record<string, unknown> | undefined;
-    const payload = {
-        error: {
-            message: info.error instanceof Error ? info.error.message : String(info.error),
-            ...(errorObj?.code ? { code: String(errorObj.code) } : {}),
-            ...(typeof errorObj?.statusCode === "number" ? { statusCode: errorObj.statusCode } : {}),
-        },
-        source: info.source,
-        ...(info.kind ? { kind: info.kind } : {}),
-        ...(info.mime ? { mime: info.mime } : {}),
-        ...(info.fileName ? { fileName: info.fileName } : {}),
-        ...(typeof info.size === "number" ? { size: info.size } : {}),
-        by,
-        ...(toolMeta?.name ? { tool: toolMeta.name } : {}),
-        ...(toolMeta?.id ? { toolCallId: toolMeta.id } : {}),
-        ...(args.namespace ? { namespace: args.namespace } : {}),
-    };
+  const errorObj = info.error as Record<string, unknown> | undefined;
+  const payload = {
+    error: {
+      message: info.error instanceof Error
+        ? info.error.message
+        : String(info.error),
+      ...(errorObj?.code ? { code: String(errorObj.code) } : {}),
+      ...(typeof errorObj?.statusCode === "number"
+        ? { statusCode: errorObj.statusCode }
+        : {}),
+    },
+    source: info.source,
+    ...(info.kind ? { kind: info.kind } : {}),
+    ...(info.mime ? { mime: info.mime } : {}),
+    ...(info.fileName ? { fileName: info.fileName } : {}),
+    ...(typeof info.size === "number" ? { size: info.size } : {}),
+    by,
+    ...(toolMeta?.name ? { tool: toolMeta.name } : {}),
+    ...(toolMeta?.id ? { toolCallId: toolMeta.id } : {}),
+    ...(args.namespace ? { namespace: args.namespace } : {}),
+  };
 
-    emitToStream({
-        id: crypto.randomUUID(),
-        threadId,
-        type: "ASSET_ERROR" as unknown as Event["type"],
-        payload: payload as unknown as Event["payload"],
-        parentEventId: event.id as string,
-        traceId: event.traceId,
-        priority: null,
-        metadata: null,
-        ttlMs: null,
-        expiresAt: null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        status: "completed",
-    } as unknown as Event);
+  emitToStream({
+    id: crypto.randomUUID(),
+    threadId,
+    type: "ASSET_ERROR" as unknown as Event["type"],
+    payload: payload as unknown as Event["payload"],
+    parentEventId: event.id as string,
+    traceId: event.traceId,
+    priority: null,
+    metadata: null,
+    ttlMs: null,
+    expiresAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    status: "completed",
+  } as unknown as Event);
 }
 
 export interface AssetProcessingResult {
-    messageMetadata: Record<string, unknown> | null;
-    toolCallMetadata: unknown[];
-    contentOverride?: string;
+  messageMetadata: Record<string, unknown> | null;
+  toolCallMetadata: unknown[];
+  contentOverride?: string;
 }
 
 function findProducerAgent(
-    context: ChatContext,
-    senderType: "agent" | "user" | "tool" | "system",
-    senderId: string,
+  context: ChatContext,
+  senderType: "agent" | "user" | "tool" | "system",
+  senderId: string,
 ) {
-    if ((senderType !== "agent" && senderType !== "tool") || !senderId) {
-        return undefined;
-    }
-    return context.agents?.find((agent) => agent.id === senderId || agent.name === senderId);
+  if ((senderType !== "agent" && senderType !== "tool") || !senderId) {
+    return undefined;
+  }
+  return context.agents?.find((agent) =>
+    agent.id === senderId || agent.name === senderId
+  );
 }
 
 function shouldPersistGeneratedAssets(
-    context: ChatContext,
-    senderType: "agent" | "user" | "tool" | "system",
-    senderId: string,
+  context: ChatContext,
+  senderType: "agent" | "user" | "tool" | "system",
+  senderId: string,
 ): boolean {
-    const producerAgent = findProducerAgent(context, senderType, senderId);
-    return producerAgent?.assetOptions?.produce?.persistGeneratedAssets !== false;
+  const producerAgent = findProducerAgent(context, senderType, senderId);
+  return producerAgent?.assetOptions?.produce?.persistGeneratedAssets !== false;
 }
 
 function kindFromMime(mimeType?: string): AttachmentKind {
-    if (typeof mimeType === "string" && mimeType.startsWith("image/")) return "image";
-    if (typeof mimeType === "string" && mimeType.startsWith("audio/")) return "audio";
-    return "file";
+  if (typeof mimeType === "string" && mimeType.startsWith("image/")) {
+    return "image";
+  }
+  if (typeof mimeType === "string" && mimeType.startsWith("audio/")) {
+    return "audio";
+  }
+  return "file";
 }
 
 function sanitizeGeneratedAssetsInValue(value: unknown): unknown {
-    const visit = (node: unknown): unknown => {
-        if (typeof node === "string" && isDataUrl(node)) {
-            const parsed = parseDataUrl(node);
-            const mimeType = parsed?.mime ?? "application/octet-stream";
-            return { kind: kindFromMime(mimeType), mimeType };
+  const visit = (node: unknown): unknown => {
+    if (typeof node === "string" && isDataUrl(node)) {
+      const parsed = parseDataUrl(node);
+      const mimeType = parsed?.mime ?? "application/octet-stream";
+      return { kind: kindFromMime(mimeType), mimeType };
+    }
+
+    if (Array.isArray(node)) {
+      return node.map((item) => visit(item));
+    }
+
+    if (node && typeof node === "object") {
+      const record = node as Record<string, unknown>;
+      const mimeType = typeof record.mimeType === "string"
+        ? record.mimeType
+        : undefined;
+
+      if (typeof record.dataBase64 === "string") {
+        const sanitized: Record<string, unknown> = { ...record };
+        delete sanitized.dataBase64;
+        if (typeof sanitized.kind !== "string") {
+          sanitized.kind = kindFromMime(mimeType);
         }
+        return sanitized;
+      }
 
-        if (Array.isArray(node)) {
-            return node.map((item) => visit(item));
+      if (typeof record.dataUrl === "string" && isDataUrl(record.dataUrl)) {
+        const parsed = parseDataUrl(record.dataUrl);
+        const resolvedMimeType = parsed?.mime ?? mimeType ??
+          "application/octet-stream";
+        const sanitized: Record<string, unknown> = { ...record };
+        delete sanitized.dataUrl;
+        sanitized.mimeType = resolvedMimeType;
+        if (typeof sanitized.kind !== "string") {
+          sanitized.kind = kindFromMime(resolvedMimeType);
         }
+        return sanitized;
+      }
 
-        if (node && typeof node === "object") {
-            const record = node as Record<string, unknown>;
-            const mimeType = typeof record.mimeType === "string"
-                ? record.mimeType
-                : undefined;
+      const out: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(record)) {
+        out[key] = visit(value);
+      }
+      return out;
+    }
 
-            if (typeof record.dataBase64 === "string") {
-                const sanitized: Record<string, unknown> = { ...record };
-                delete sanitized.dataBase64;
-                if (typeof sanitized.kind !== "string") {
-                    sanitized.kind = kindFromMime(mimeType);
-                }
-                return sanitized;
-            }
+    return node;
+  };
 
-            if (typeof record.dataUrl === "string" && isDataUrl(record.dataUrl)) {
-                const parsed = parseDataUrl(record.dataUrl);
-                const resolvedMimeType = parsed?.mime ?? mimeType ?? "application/octet-stream";
-                const sanitized: Record<string, unknown> = { ...record };
-                delete sanitized.dataUrl;
-                sanitized.mimeType = resolvedMimeType;
-                if (typeof sanitized.kind !== "string") {
-                    sanitized.kind = kindFromMime(resolvedMimeType);
-                }
-                return sanitized;
-            }
-
-            const out: Record<string, unknown> = {};
-            for (const [key, value] of Object.entries(record)) {
-                out[key] = visit(value);
-            }
-            return out;
-        }
-
-        return node;
-    };
-
-    return visit(value);
+  return visit(value);
 }
 
 export async function processAssetsForNewMessage(args: {
-    payload: MessagePayload;
-    baseMetadata: Record<string, unknown>;
-    senderId: string;
-    senderType: "agent" | "user" | "tool" | "system";
-    context: ChatContext;
-    event: Event;
-    threadId: string;
-    emitToStream?: (event: Event) => void;
+  payload: MessagePayload;
+  baseMetadata: Record<string, unknown>;
+  senderId: string;
+  senderType: "agent" | "user" | "tool" | "system";
+  context: ChatContext;
+  ops?: CopilotzDb["ops"];
+  event: Event;
+  threadId: string;
+  emitToStream?: (event: Event) => void;
 }): Promise<AssetProcessingResult> {
-    const { payload, baseMetadata, senderId, senderType, context, event, threadId, emitToStream } = args;
+  const {
+    payload,
+    baseMetadata,
+    senderId,
+    senderType,
+    context,
+    ops,
+    event,
+    threadId,
+    emitToStream,
+  } = args;
 
-    const derivedAttachments = extractAttachmentsFromContent(payload.content);
-    const existingRaw = (baseMetadata as { attachments?: unknown }).attachments;
-    const existing = Array.isArray(existingRaw)
-        ? (existingRaw as RawAttachment[])
-        : [];
+  const derivedAttachments = extractAttachmentsFromContent(payload.content);
+  const existingRaw = (baseMetadata as { attachments?: unknown }).attachments;
+  const existing = Array.isArray(existingRaw)
+    ? (existingRaw as RawAttachment[])
+    : [];
 
-    // Deduplicate: when the same kind (e.g. "audio") appears in both content-derived
-    // and metadata attachments, prefer the content-derived version (it may already be
-    // converted to a more suitable format like WAV). This prevents the same user
-    // recording from producing two separate assets.
-    const derivedKinds = new Set(derivedAttachments.map((a) => a.kind));
-    const deduplicatedExisting = existing.filter((a) => !derivedKinds.has(a.kind));
-    const mergedAttachments = deduplicatedExisting.concat(derivedAttachments);
+  // Deduplicate: when the same kind (e.g. "audio") appears in both content-derived
+  // and metadata attachments, prefer the content-derived version (it may already be
+  // converted to a more suitable format like WAV). This prevents the same user
+  // recording from producing two separate assets.
+  const derivedKinds = new Set(derivedAttachments.map((a) => a.kind));
+  const deduplicatedExisting = existing.filter((a) =>
+    !derivedKinds.has(a.kind)
+  );
+  const mergedAttachments = deduplicatedExisting.concat(derivedAttachments);
 
-    const persistGeneratedAssets = shouldPersistGeneratedAssets(
-        context,
-        senderType,
-        senderId,
-    );
-    const store = persistGeneratedAssets ? context.assetStore : undefined;
-    const onAttachmentError = (info: AssetErrorInfo) =>
-        emitAssetError({ emitToStream, event, threadId, senderType, toolCallMetadata: [], info, namespace: context.namespace });
-    const { normalized: normalizedAttachments, created: createdFromAttachments } =
-        await normalizeAttachments(mergedAttachments, store, onAttachmentError);
+  const persistGeneratedAssets = shouldPersistGeneratedAssets(
+    context,
+    senderType,
+    senderId,
+  );
+  const store = persistGeneratedAssets ? context.assetStore : undefined;
+  const onAttachmentError = (info: AssetErrorInfo) =>
+    emitAssetError({
+      emitToStream,
+      event,
+      threadId,
+      senderType,
+      toolCallMetadata: [],
+      info,
+      namespace: context.namespace,
+    });
+  const { normalized: normalizedAttachments, created: createdFromAttachments } =
+    await normalizeAttachments(mergedAttachments, store, onAttachmentError);
 
-    // Normalize any toolCall outputs into asset refs as well
-    const toolCallEntries = Array.isArray((baseMetadata as { toolCalls?: unknown[] }).toolCalls)
-        ? ((baseMetadata as { toolCalls?: unknown[] }).toolCalls ?? [])
-        : [];
+  // Normalize any toolCall outputs into asset refs as well
+  const toolCallEntries =
+    Array.isArray((baseMetadata as { toolCalls?: unknown[] }).toolCalls)
+      ? ((baseMetadata as { toolCalls?: unknown[] }).toolCalls ?? [])
+      : [];
 
-    const createdFromToolOutputs: CreatedAssetInfo[] = [];
+  const createdFromToolOutputs: CreatedAssetInfo[] = [];
 
-    if (toolCallEntries.length > 0) {
-        for (const entry of toolCallEntries) {
-            if (!entry || typeof entry !== "object") continue;
-            const maybeOutput = (entry as { output?: unknown }).output;
-            if (typeof maybeOutput === "undefined") continue;
-            if (!store) {
-                (entry as { output?: unknown }).output = sanitizeGeneratedAssetsInValue(maybeOutput);
-                continue;
-            }
-            try {
-                const normalized = await normalizeOutputToAssetRefs(maybeOutput, store);
-                (entry as { output?: unknown }).output = normalized.normalized;
-                for (const c of normalized.created) {
-                    createdFromToolOutputs.push({
-                        ref: c.ref,
-                        mime: c.mime,
-                        kind: c.kind === "image" || c.kind === "audio" || c.kind === "file" ? c.kind : "file",
-                    });
-                }
-                if (normalized.errors.length > 0) {
-                    const toolMeta = entry as { tool?: { name?: string }; id?: string };
-                    console.warn(
-                        `[copilotz:assets] ${normalized.errors.length} asset(s) failed to save in tool "${toolMeta.tool?.name ?? "unknown"}" output. ` +
-                        `Data URLs for failed assets were stripped to prevent LLM context bloat. ` +
-                        `Errors: ${normalized.errors.map((e: AssetSaveError) => `${e.kind}/${e.mime}: ${e.error}`).join("; ")}`,
-                    );
-                    for (const saveErr of normalized.errors) {
-                        await emitAssetError({
-                            emitToStream,
-                            event,
-                            threadId,
-                            senderType,
-                            toolCallMetadata: toolCallEntries,
-                            info: { error: new Error(saveErr.error), source: "tool_output", kind: saveErr.kind === "image" || saveErr.kind === "audio" ? saveErr.kind : "file", mime: saveErr.mime },
-                            namespace: context.namespace,
-                        });
-                    }
-                }
-            } catch (err) {
-                const toolMeta = entry as { tool?: { name?: string }; id?: string };
-                console.warn(
-                    `[copilotz:assets] Tool output normalization failed entirely for tool "${toolMeta.tool?.name ?? "unknown"}". ` +
-                    `Falling back to sanitized output (data URLs stripped). ` +
-                    `Error: ${err instanceof Error ? err.message : String(err)}`,
-                );
-                (entry as { output?: unknown }).output = sanitizeGeneratedAssetsInValue(maybeOutput);
-                await emitAssetError({
-                    emitToStream,
-                    event,
-                    threadId,
-                    senderType,
-                    toolCallMetadata: toolCallEntries,
-                    info: { error: err, source: "tool_output" },
-                    namespace: context.namespace,
-                });
-            }
+  if (toolCallEntries.length > 0) {
+    for (const entry of toolCallEntries) {
+      if (!entry || typeof entry !== "object") continue;
+      const maybeOutput = (entry as { output?: unknown }).output;
+      if (typeof maybeOutput === "undefined") continue;
+      if (!store) {
+        (entry as { output?: unknown }).output = sanitizeGeneratedAssetsInValue(
+          maybeOutput,
+        );
+        continue;
+      }
+      try {
+        const normalized = await normalizeOutputToAssetRefs(maybeOutput, store);
+        (entry as { output?: unknown }).output = normalized.normalized;
+        for (const c of normalized.created) {
+          createdFromToolOutputs.push({
+            ref: c.ref,
+            mime: c.mime,
+            kind: c.kind === "image" || c.kind === "audio" || c.kind === "file"
+              ? c.kind
+              : "file",
+          });
         }
+        if (normalized.errors.length > 0) {
+          const toolMeta = entry as { tool?: { name?: string }; id?: string };
+          console.warn(
+            `[copilotz:assets] ${normalized.errors.length} asset(s) failed to save in tool "${
+              toolMeta.tool?.name ?? "unknown"
+            }" output. ` +
+              `Data URLs for failed assets were stripped to prevent LLM context bloat. ` +
+              `Errors: ${
+                normalized.errors.map((e: AssetSaveError) =>
+                  `${e.kind}/${e.mime}: ${e.error}`
+                ).join("; ")
+              }`,
+          );
+          for (const saveErr of normalized.errors) {
+            await emitAssetError({
+              emitToStream,
+              event,
+              threadId,
+              senderType,
+              toolCallMetadata: toolCallEntries,
+              info: {
+                error: new Error(saveErr.error),
+                source: "tool_output",
+                kind: saveErr.kind === "image" || saveErr.kind === "audio"
+                  ? saveErr.kind
+                  : "file",
+                mime: saveErr.mime,
+              },
+              namespace: context.namespace,
+            });
+          }
+        }
+      } catch (err) {
+        const toolMeta = entry as { tool?: { name?: string }; id?: string };
+        console.warn(
+          `[copilotz:assets] Tool output normalization failed entirely for tool "${
+            toolMeta.tool?.name ?? "unknown"
+          }". ` +
+            `Falling back to sanitized output (data URLs stripped). ` +
+            `Error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        (entry as { output?: unknown }).output = sanitizeGeneratedAssetsInValue(
+          maybeOutput,
+        );
+        await emitAssetError({
+          emitToStream,
+          event,
+          threadId,
+          senderType,
+          toolCallMetadata: toolCallEntries,
+          info: { error: err, source: "tool_output" },
+          namespace: context.namespace,
+        });
+      }
     }
+  }
 
-    // Merge attachments from content and tool outputs
-    const attachmentsFromToolOutputs: NormalizedAttachment[] = createdFromToolOutputs.map((c) => ({
-        kind: (c.kind ?? "file") as AttachmentKind,
-        mimeType: c.mime,
-        assetRef: c.ref,
+  // Merge attachments from content and tool outputs
+  const attachmentsFromToolOutputs: NormalizedAttachment[] =
+    createdFromToolOutputs.map((c) => ({
+      kind: (c.kind ?? "file") as AttachmentKind,
+      mimeType: c.mime,
+      assetRef: c.ref,
     }));
 
-    const finalAttachments: NormalizedAttachment[] = normalizedAttachments.concat(attachmentsFromToolOutputs);
+  const finalAttachments: NormalizedAttachment[] = normalizedAttachments.concat(
+    attachmentsFromToolOutputs,
+  );
 
-    const messageMetadata = {
-        ...baseMetadata,
-        ...(toolCallEntries.length ? { toolCalls: toolCallEntries } : {}),
-        ...(finalAttachments.length ? { attachments: finalAttachments } : {}),
-    } as Record<string, unknown> | null;
+  const messageMetadata = {
+    ...baseMetadata,
+    ...(toolCallEntries.length ? { toolCalls: toolCallEntries } : {}),
+    ...(finalAttachments.length ? { attachments: finalAttachments } : {}),
+  } as Record<string, unknown> | null;
 
-    const toolCallMetadata = Array.isArray((messageMetadata as { toolCalls?: unknown[] } | null)?.toolCalls)
-        ? ((messageMetadata as { toolCalls?: unknown[] }).toolCalls ?? [])
-        : [];
+  const toolCallMetadata = Array.isArray(
+      (messageMetadata as { toolCalls?: unknown[] } | null)?.toolCalls,
+    )
+    ? ((messageMetadata as { toolCalls?: unknown[] }).toolCalls ?? [])
+    : [];
 
-    let contentOverride: string | undefined = undefined;
-    if (senderType === "tool" && toolCallMetadata.length > 0) {
-        const outputs = toolCallMetadata
-            .map((entry) => {
-                if (entry && typeof entry === "object") {
-                    return (entry as { output?: unknown }).output;
-                }
-                return undefined;
-            })
-            .filter((output): output is unknown => typeof output !== "undefined");
-
-        if (outputs.length > 0) {
-            const representative = outputs.length === 1 ? outputs[0] : outputs;
-            if (typeof representative === "string") {
-                contentOverride = representative;
-            } else {
-                try {
-                    contentOverride = JSON.stringify(representative);
-                } catch {
-                    contentOverride = undefined;
-                }
-            }
+  let contentOverride: string | undefined = undefined;
+  if (senderType === "tool" && toolCallMetadata.length > 0) {
+    const outputs = toolCallMetadata
+      .map((entry) => {
+        if (entry && typeof entry === "object") {
+          return (entry as { output?: unknown }).output;
         }
-    }
+        return undefined;
+      })
+      .filter((output): output is unknown => typeof output !== "undefined");
 
-    // Emit ASSET_CREATED events for any newly created assets (from content or tool outputs)
-    const newlyCreatedRefs = new Set<string>();
-    for (const c of createdFromAttachments) newlyCreatedRefs.add(c.ref);
-    for (const c of createdFromToolOutputs) newlyCreatedRefs.add(c.ref);
-
-    if (newlyCreatedRefs.size > 0 && emitToStream && store) {
-        for (const ref of newlyCreatedRefs) {
-            try {
-                const id = resolveAssetIdForStore(ref, store);
-                let base64: string | undefined = undefined;
-                let mimeForEvent: string | undefined = undefined;
-                let dataUrl: string | undefined = undefined;
-                const { bytes, mime } = await store.get(id);
-                mimeForEvent = mime;
-                base64 = bytesToBase64(bytes);
-                dataUrl = base64 ? `data:${mime};base64,${base64}` : undefined;
-
-                const by =
-                    senderType === "tool" ? "tool" :
-                        senderType === "agent" ? "agent" :
-                            senderType === "user" ? "user" : "system";
-
-                const toolMeta = toolCallMetadata[0] && typeof toolCallMetadata[0] === "object"
-                    ? (toolCallMetadata[0] as { id?: string; name?: string })
-                    : undefined;
-
-                emitToStream({
-                    id: crypto.randomUUID(),
-                    threadId,
-                    type: "ASSET_CREATED" as unknown as Event["type"],
-                    payload: {
-                        assetId: id,
-                        ref,
-                        ...(mimeForEvent ? { mime: mimeForEvent } : {}),
-                        by,
-                        ...(toolMeta?.name ? { tool: toolMeta.name } : {}),
-                        ...(toolMeta?.id ? { toolCallId: toolMeta.id } : {}),
-                        ...(base64 ? { base64 } : {}),
-                        ...(dataUrl ? { dataUrl } : {}),
-                    } as unknown as Event["payload"],
-                    parentEventId: event.id as string,
-                    traceId: event.traceId,
-                    priority: null,
-                    metadata: null,
-                    ttlMs: null,
-                    expiresAt: null,
-                    createdAt: new Date(),
-                    updatedAt: new Date(),
-                    status: "completed",
-                } as unknown as Event);
-            } catch {
-                // ignore ASSET_CREATED emission errors
-            }
+    if (outputs.length > 0) {
+      const representative = outputs.length === 1 ? outputs[0] : outputs;
+      if (typeof representative === "string") {
+        contentOverride = representative;
+      } else {
+        try {
+          contentOverride = JSON.stringify(representative);
+        } catch {
+          contentOverride = undefined;
         }
+      }
     }
+  }
 
-    return {
-        messageMetadata,
-        toolCallMetadata,
-        contentOverride,
-    };
+  // Emit ASSET_CREATED events for any newly created assets (from content or tool outputs)
+  const newlyCreatedRefs = new Set<string>();
+  for (const c of createdFromAttachments) newlyCreatedRefs.add(c.ref);
+  for (const c of createdFromToolOutputs) newlyCreatedRefs.add(c.ref);
+
+  if (newlyCreatedRefs.size > 0 && store) {
+    for (const ref of newlyCreatedRefs) {
+      try {
+        const id = resolveAssetIdForStore(ref, store);
+        let mimeForEvent: string | undefined = undefined;
+        const { bytes, mime } = await store.get(id);
+        mimeForEvent = mime;
+
+        const by = senderType === "tool"
+          ? "tool"
+          : senderType === "agent"
+          ? "agent"
+          : senderType === "user"
+          ? "user"
+          : "system";
+
+        const toolMeta =
+          toolCallMetadata[0] && typeof toolCallMetadata[0] === "object"
+            ? (toolCallMetadata[0] as { id?: string; name?: string })
+            : undefined;
+
+        if (ops && context.namespace) {
+          const assetInfo = typeof store.info === "function"
+            ? await store.info(id).catch(() => undefined)
+            : undefined;
+          const existing = await ops.getNodeById(id);
+          if (!existing) {
+            await ops.createNode({
+              id,
+              namespace: context.namespace,
+              type: "asset",
+              name: id,
+              content: null,
+              data: {
+                assetId: id,
+                ref,
+                mime: mimeForEvent,
+                kind: kindFromMime(mimeForEvent),
+                size: assetInfo?.size ?? bytes.byteLength,
+                by,
+                ...(toolMeta?.name ? { tool: toolMeta.name } : {}),
+                ...(toolMeta?.id ? { toolCallId: toolMeta.id } : {}),
+              },
+              sourceType: "asset_store",
+              sourceId: id,
+            });
+          }
+          await ops.createEdge({
+            sourceNodeId: threadId,
+            targetNodeId: id,
+            type: GRAPH_EDGE.HAS_ASSET,
+          });
+          if (typeof toolMeta?.id === "string") {
+            const toolNode = await ops.getNodeById(toolMeta.id);
+            if (toolNode) {
+              await ops.createEdge({
+                sourceNodeId: toolMeta.id,
+                targetNodeId: id,
+                type: GRAPH_EDGE.CREATED_ASSET,
+              });
+            }
+          }
+        }
+
+        if (emitToStream) {
+          const base64 = bytesToBase64(bytes);
+          const dataUrl = base64 ? `data:${mime};base64,${base64}` : undefined;
+          emitToStream({
+            id: crypto.randomUUID(),
+            threadId,
+            type: "ASSET_CREATED" as unknown as Event["type"],
+            payload: {
+              assetId: id,
+              ref,
+              ...(mimeForEvent ? { mime: mimeForEvent } : {}),
+              by,
+              ...(toolMeta?.name ? { tool: toolMeta.name } : {}),
+              ...(toolMeta?.id ? { toolCallId: toolMeta.id } : {}),
+              ...(base64 ? { base64 } : {}),
+              ...(dataUrl ? { dataUrl } : {}),
+            } as unknown as Event["payload"],
+            parentEventId: event.id as string,
+            traceId: event.traceId,
+            priority: null,
+            metadata: null,
+            ttlMs: null,
+            expiresAt: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            status: "completed",
+          } as unknown as Event);
+        }
+      } catch {
+        // ignore asset graph persistence / ASSET_CREATED emission errors
+      }
+    }
+  }
+
+  return {
+    messageMetadata,
+    toolCallMetadata,
+    contentOverride,
+  };
 }
-

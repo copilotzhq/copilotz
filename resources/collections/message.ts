@@ -2,6 +2,7 @@
  * Message collection: conversation messages stored as graph nodes.
  */
 import { defineCollection, relation } from "@/database/collections/index.ts";
+import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 export default defineCollection({
   name: "message",
@@ -32,8 +33,8 @@ export default defineCollection({
     "senderId",
   ],
   relations: {
-    sender: relation.belongsTo("participant", "senderId", "SENT_BY"),
-    replies: relation.hasMany("message", "messageId", "REPLIED_BY"),
-    llmUsage: relation.hasOne("llm_usage", "eventId", "HAS_LLM_USAGE"),
+    sender: relation.belongsTo("participant", "senderId", GRAPH_EDGE.SENT_BY),
+    replies: relation.hasMany("message", "messageId", GRAPH_EDGE.DERIVED_FROM),
+    llmUsage: relation.hasOne("llm_usage", "eventId", GRAPH_EDGE.HAS_LLM_USAGE),
   },
 });

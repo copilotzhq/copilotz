@@ -12,7 +12,7 @@ resources/tools/<tool-name>/
 
 Use a tool when the model should decide whether and when to call an action.
 
-Recommended use case: agent-owned runtime action  
+Recommended use case: agent-owned runtime action\
 Most common mistaken alternative: using a feature endpoint for model-internal
 behavior
 

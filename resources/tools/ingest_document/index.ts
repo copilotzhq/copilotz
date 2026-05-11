@@ -3,38 +3,37 @@ import type { ToolExecutionContext } from "@/resources/processors/tool_call/inde
 interface IngestDocumentParams {
   source: string;
   title?: string;
-  namespace?: string;
   metadata?: Record<string, unknown>;
 }
 
 export default {
   key: "ingest_document",
   name: "Ingest Document",
-  description: "Add a document to the knowledge base for RAG retrieval. Supports URLs, file paths, or raw text (prefix with 'text:'). The document will be chunked, embedded, and stored for semantic search.",
+  description:
+    "Add a document to the knowledge base for RAG retrieval. Supports URLs, file paths, or raw text (prefix with 'text:'). The document will be chunked, embedded, and stored for semantic search.",
   inputSchema: {
     type: "object",
     properties: {
       source: {
         type: "string",
-        description: "URL (http/https), file path, or raw text (prefix with 'text:'). Examples: 'https://docs.example.com/guide', './docs/readme.md', 'text:This is the content to index.'",
+        description:
+          "URL (http/https), file path, or raw text (prefix with 'text:'). Examples: 'https://docs.example.com/guide', './docs/readme.md', 'text:This is the content to index.'",
       },
       title: {
         type: "string",
-        description: "Optional title for the document. If not provided, will be inferred from source.",
-      },
-      namespace: {
-        type: "string",
-        description: "Target namespace for the document. If not provided, uses agent's ingestNamespace or 'default'.",
+        description:
+          "Optional title for the document. If not provided, will be inferred from source.",
       },
       metadata: {
         type: "object",
-        description: "Optional metadata to attach to the document.",
+        description:
+          "Optional metadata to attach to the document. Use metadata.scope to link it to graph scopes such as threadId, agentId, or knowledgeSpaceIds.",
       },
     },
     required: ["source"],
   },
   execute: async (
-    { source, title, namespace, metadata }: IngestDocumentParams,
+    { source, title, metadata }: IngestDocumentParams,
     context?: ToolExecutionContext,
   ) => {
     const ops = context?.db?.ops;
@@ -47,19 +46,18 @@ export default {
       throw new Error("Thread ID not available in context");
     }
 
-    let targetNamespace = namespace;
+    const targetNamespace = context?.namespace;
     if (!targetNamespace) {
-      const senderId = context?.senderId;
-      const agent = context?.agents?.find((a) => a.id === senderId || a.name === senderId);
-      const agentRagOptions = agent?.ragOptions as { ingestNamespace?: string } | undefined;
-      targetNamespace = agentRagOptions?.ingestNamespace ?? "default";
+      throw new Error("Tenant namespace not available in context");
     }
 
     let docTitle = title;
     if (!docTitle) {
       if (source.startsWith("text:")) {
         docTitle = "Text Document";
-      } else if (source.startsWith("http://") || source.startsWith("https://")) {
+      } else if (
+        source.startsWith("http://") || source.startsWith("https://")
+      ) {
         try {
           const url = new URL(source);
           docTitle = url.pathname.split("/").pop() || url.hostname;
@@ -77,13 +75,24 @@ export default {
         source,
         title: docTitle,
         namespace: targetNamespace,
-        metadata: metadata ?? null,
+        metadata: {
+          ...(metadata ?? {}),
+          scope: {
+            threadId,
+            agentId: context?.senderId,
+            ...((metadata?.scope &&
+                typeof metadata.scope === "object")
+              ? metadata.scope as Record<string, unknown>
+              : {}),
+          },
+        },
       },
+      namespace: targetNamespace,
     });
 
     return {
       status: "queued",
-      message: `Document "${docTitle}" queued for ingestion into namespace "${targetNamespace}".`,
+      message: `Document "${docTitle}" queued for ingestion.`,
       source,
       title: docTitle,
       namespace: targetNamespace,

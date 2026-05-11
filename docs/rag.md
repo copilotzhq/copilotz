@@ -1,12 +1,16 @@
 # RAG (Retrieval-Augmented Generation)
 
-RAG lets your AI access external knowledge. Ingest documents, and your agents can search and reference them in conversations. Copilotz handles fetching, chunking, embedding, storing, and retrieving.
+RAG lets your AI access external knowledge. Ingest documents, and your agents
+can search and reference them in conversations. Copilotz handles fetching,
+chunking, embedding, storing, and retrieving.
 
-Inside the runtime, this now sits behind the broader memory architecture as
-the retrieval-backed memory strategy. The public `rag` configuration and
-document tools remain unchanged in this pass.
+Inside the runtime, RAG is the retrieval-backed memory strategy.
 
-**Storage model:** RAG content lives in the **`nodes`** and **`edges`** tables. A **`document` node** holds source metadata (URI, hash, status, title, …). Each **`chunk` node** holds embedded text; **`NEXT_CHUNK`** edges preserve order. Retrieval uses the graph-backed document and chunk node model.
+**Storage model:** RAG content lives in the **`nodes`** and **`edges`** tables.
+A **`document` node** holds source metadata (URI, hash, status, title, ...).
+Each **`chunk` node** holds embedded text. Documents and chunks are
+tenant-partitioned by `namespace`; searchable groups and access are modeled with
+graph edges.
 
 ## How RAG Works
 
@@ -53,7 +57,6 @@ const copilotz = await createCopilotz({
       defaultLimit: 5,           // Number of chunks to retrieve
       similarityThreshold: 0.7,  // Minimum similarity score (0-1)
     },
-    defaultNamespace: "docs",
   },
 });
 ```
@@ -73,11 +76,11 @@ embedding: { provider: "cohere", model: "embed-english-v3.0" }
 
 ### Chunking Strategies
 
-| Strategy | Best For | Description |
-|----------|----------|-------------|
-| `fixed` | General use | Splits into fixed-size chunks with overlap |
-| `paragraph` | Structured documents | Splits on paragraph boundaries |
-| `sentence` | Precise retrieval | Splits on sentence boundaries |
+| Strategy    | Best For             | Description                                |
+| ----------- | -------------------- | ------------------------------------------ |
+| `fixed`     | General use          | Splits into fixed-size chunks with overlap |
+| `paragraph` | Structured documents | Splits on paragraph boundaries             |
+| `sentence`  | Precise retrieval    | Splits on sentence boundaries              |
 
 ## Ingesting Documents
 
@@ -104,28 +107,33 @@ Ingest documents directly via the event queue:
 // From URL
 await copilotz.run({
   type: "RAG_INGEST",
+  thread: { id: threadId },
   payload: {
     source: "https://example.com/article.html",
-    namespace: "docs",
+    namespace: "tenant-acme",
+    metadata: { scope: { threadId } },
   },
 });
 
 // From file path
 await copilotz.run({
   type: "RAG_INGEST",
+  thread: { id: threadId },
   payload: {
     source: "file:///path/to/document.pdf",
-    namespace: "docs",
+    namespace: "tenant-acme",
+    metadata: { scope: { knowledgeSpaceIds: ["ks-product-docs"] } },
   },
 });
 
 // From raw text
 await copilotz.run({
   type: "RAG_INGEST",
+  thread: { id: threadId },
   payload: {
     source: "text://",
     content: "Your document content here...",
-    namespace: "docs",
+    namespace: "tenant-acme",
     metadata: { title: "My Document" },
   },
 });
@@ -141,22 +149,26 @@ Control how agents interact with the knowledge base:
 const agent = {
   id: "assistant",
   ragOptions: {
-    mode: "auto",              // "auto", "tool", or "disabled"
-    namespaces: ["docs"],      // Which namespaces to search
-    autoInjectLimit: 4,        // Max chunks to inject (auto mode)
+    mode: "auto", // "auto", "tool", or "disabled"
+    scope: {
+      knowledgeSpaceIds: ["ks-product-docs"],
+    },
+    autoInjectLimit: 4, // Max chunks to inject (auto mode)
   },
 };
 ```
 
-| Mode | Behavior |
-|------|----------|
-| `auto` | Relevant chunks are automatically injected into the prompt |
-| `tool` | Agent explicitly calls `search_knowledge` when needed |
-| `disabled` | No RAG for this agent |
+| Mode       | Behavior                                                   |
+| ---------- | ---------------------------------------------------------- |
+| `auto`     | Relevant chunks are automatically injected into the prompt |
+| `tool`     | Agent explicitly calls `search_knowledge` when needed      |
+| `disabled` | No RAG for this agent                                      |
 
 ### Programmatic Search
 
-Search runs over **`chunk` nodes** using a **query embedding** (the `search_knowledge` tool does this with your configured embedder). `searchChunks` delegates to `searchChunksFromGraph`.
+Search runs over **`chunk` nodes** using a **query embedding** (the
+`search_knowledge` tool does this with your configured embedder). `searchChunks`
+delegates to `searchChunksFromGraph`.
 
 ```typescript
 // Obtain `embedding: number[]` from your embedding provider (the built-in
@@ -167,7 +179,12 @@ const embeddingVector: number[] = await yourEmbedder(
 
 const results = await copilotz.ops.searchChunksFromGraph({
   embedding: embeddingVector,
-  namespaces: ["docs"],
+  namespace: "tenant-acme",
+  scope: {
+    threadId,
+    agentId: "assistant",
+    knowledgeSpaceIds: ["ks-product-docs"],
+  },
   limit: 5,
   threshold: 0.7,
   documentFilters: { status: "indexed" },
@@ -176,54 +193,36 @@ const results = await copilotz.ops.searchChunksFromGraph({
 // Same underlying implementation
 const same = await copilotz.ops.searchChunks({
   embedding: embeddingVector,
-  namespaces: ["docs"],
+  namespace: "tenant-acme",
+  scope: { threadId, agentId: "assistant" },
   limit: 5,
   threshold: 0.7,
 });
 ```
 
-## Namespaces
+## Namespaces And Scopes
 
-Namespaces partition your knowledge base. Use them to separate:
-- Different documentation sets
-- Per-customer knowledge
-- Different domains or topics
+`namespace` is the tenant/application partition. It is not a document bucket or
+a thread/agent scope.
+
+Use graph nodes and edges for searchable groups:
+
+- `knowledge_space` nodes group reusable knowledge.
+- `thread --has_document--> document` links thread-specific knowledge.
+- `agent --can_access--> knowledge_space` grants agent access.
+- `knowledge_space --has_document--> document` groups shared documents.
 
 ```typescript
-// Ingest to a namespace
-await copilotz.run({
-  type: "RAG_INGEST",
-  payload: { source: url, namespace: "product-docs" },
-});
-
-// Search a specific namespace
+// Search documents reachable from these graph roots within the tenant namespace.
 const agent = {
   ragOptions: {
-    namespaces: ["product-docs", "support-articles"],
-  },
-};
-
-// Aggregate counts from document + chunk nodes per namespace
-const stats = await copilotz.ops.getNamespaceStats();
-// e.g. [{ namespace: "product-docs", documentCount: 50, chunkCount: 1200, lastUpdated }, ...]
-```
-
-### Dynamic Namespace Resolution
-
-Resolve namespaces dynamically based on context:
-
-```typescript
-const copilotz = await createCopilotz({
-  rag: {
-    namespaceResolver: async ({ threadId, agentId, message }) => {
-      // Return namespace based on context
-      if (message.metadata?.customerId) {
-        return `customer:${message.metadata.customerId}`;
-      }
-      return "global";
+    scope: {
+      threadId,
+      agentId: "support-agent",
+      knowledgeSpaceIds: ["ks-support-articles"],
     },
   },
-});
+};
 ```
 
 ## Entity Extraction
@@ -235,7 +234,6 @@ const agent = {
   ragOptions: {
     entityExtraction: {
       enabled: true,
-      namespace: "thread",  // "thread", "agent", or "global"
     },
   },
 };
@@ -254,11 +252,13 @@ Message: "I talked to Sarah from Acme Corp about the Q4 deal"
          └─▶ Event: Q4 deal
 ```
 
-Entities are deduplicated across conversations using semantic similarity and LLM confirmation.
+Entities are deduplicated across conversations using semantic similarity and LLM
+confirmation.
 
 ## Document lifecycle (graph-backed)
 
-Helpers return a **`Document` view** backed by a **`document` node** (`id` is the node id).
+Helpers return a **`Document` view** backed by a **`document` node** (`id` is
+the node id).
 
 ### Check document status
 
@@ -273,7 +273,7 @@ const doc = await copilotz.ops.getDocumentById(documentNodeId);
 // Removes the document node and chunk nodes linked via source (see deleteNodesBySource)
 await copilotz.ops.deleteDocument(documentNodeId);
 
-// Or via tool: delete_document with namespace / source identifiers
+// Or via tool: delete_document with a document id or source URI
 ```
 
 ### Force re-ingestion
@@ -283,8 +283,8 @@ await copilotz.run({
   type: "RAG_INGEST",
   payload: {
     source: url,
-    namespace: "docs",
-    forceReindex: true,  // Re-process even if already ingested
+    namespace: "tenant-acme",
+    forceReindex: true, // Re-process even if already ingested
   },
 });
 ```
@@ -294,20 +294,22 @@ await copilotz.run({
 Use edges and traversal to go beyond flat similarity search:
 
 ```typescript
-// Ordered chunks for one document (document id = document node id)
+// Chunks for one document (document id = document node id)
 const chunkEdges = await copilotz.ops.getEdgesForNode(
   documentNodeId,
   "out",
-  ["NEXT_CHUNK"],
+  ["has_chunk"],
 );
 
 // What mentions this entity?
-const mentions = await copilotz.ops.getEdgesForNode(entityId, "in", ["MENTIONS"]);
+const mentions = await copilotz.ops.getEdgesForNode(entityId, "in", [
+  "mentions",
+]);
 
 // Broader exploration
 const related = await copilotz.ops.traverseGraph(
   startNodeId,
-  ["MENTIONS", "RELATED_TO"],
+  ["mentions", "derived_from"],
   3,
 );
 ```
@@ -315,6 +317,7 @@ const related = await copilotz.ops.traverseGraph(
 ## Next Steps
 
 - [Database](./database.md) — Threads, events, and graph overview
-- [Tables structure](./tables-structure.md) — Column reference for `nodes` / `edges`
+- [Tables structure](./tables-structure.md) — Column reference for `nodes` /
+  `edges`
 - [Collections](./collections.md) — Structured data on top of the graph
 - [Agents](./agents.md) — Configuring per-agent RAG options

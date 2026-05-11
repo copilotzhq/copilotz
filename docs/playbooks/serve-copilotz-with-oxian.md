@@ -5,7 +5,7 @@
 Use this pattern when you want the recommended public app path for Copilotz:
 resource-driven runtime plus thin Oxian route handling.
 
-Recommended primitive: `withApp(...)` behind Oxian routes  
+Recommended primitive: `withApp(...)` behind Oxian routes\
 Most common mistaken alternative: rebuilding Copilotz route dispatch manually in
 every route file
 

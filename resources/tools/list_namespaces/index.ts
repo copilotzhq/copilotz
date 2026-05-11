@@ -1,38 +1,45 @@
 import type { ToolExecutionContext } from "@/resources/processors/tool_call/index.ts";
 
 export default {
-  key: "list_namespaces",
-  name: "List Knowledge Namespaces",
-  description: "List all available knowledge base namespaces with document and chunk counts.",
+  key: "list_knowledge_spaces",
+  name: "List Knowledge Spaces",
+  description: "List knowledge_space nodes in the current tenant namespace.",
   inputSchema: {
     type: "object",
     properties: {},
   },
-  execute: async (_params: Record<string, never>, context?: ToolExecutionContext) => {
+  execute: async (
+    _params: Record<string, never>,
+    context?: ToolExecutionContext,
+  ) => {
     const ops = context?.db?.ops;
     if (!ops) {
       throw new Error("Database operations not available in context");
     }
 
-    const stats = await ops.getNamespaceStats();
+    const namespace = context?.namespace;
+    if (!namespace) {
+      throw new Error("Tenant namespace not available in context");
+    }
 
-    if (stats.length === 0) {
+    const spaces = await ops.getNodesByNamespace(namespace, "knowledge_space");
+
+    if (spaces.length === 0) {
       return {
-        namespaces: [],
-        message: "No knowledge namespaces found. Use ingest_document to add documents.",
+        knowledgeSpaces: [],
+        message: "No knowledge spaces found.",
       };
     }
 
     return {
-      namespaces: stats.map((s) => ({
-        namespace: s.namespace,
-        documents: s.documentCount,
-        chunks: s.chunkCount,
-        lastUpdated: s.lastUpdated?.toISOString() ?? null,
+      knowledgeSpaces: spaces.map((space) => ({
+        id: space.id,
+        name: space.name,
+        metadata: space.data ?? null,
+        createdAt: space.createdAt ?? null,
+        updatedAt: space.updatedAt ?? null,
       })),
-      totalNamespaces: stats.length,
-      totalDocuments: stats.reduce((sum, s) => sum + s.documentCount, 0),
-      totalChunks: stats.reduce((sum, s) => sum + s.chunkCount, 0),
+      totalKnowledgeSpaces: spaces.length,
     };
   },
 };

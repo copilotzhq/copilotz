@@ -1,4 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 import { createCollectionsManager } from "@/database/collections/index.ts";
 import { createDatabase } from "@/database/index.ts";
@@ -6,98 +7,144 @@ import messageCollection from "@/resources/collections/message.ts";
 import participantCollection from "@/resources/collections/participant.ts";
 import { createMessageService } from "@/runtime/collections/native.ts";
 
-Deno.test("collection-backed message create does not write graph edges", async () => {
-  const db = await createDatabase({ url: ":memory:" });
-  const manager = createCollectionsManager(db, [
-    participantCollection,
-    messageCollection,
-  ]);
+Deno.test({
+  name:
+    "message create writes tenant-scoped thread and participant graph edges",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({ url: ":memory:" });
+    const manager = createCollectionsManager(db, [
+      participantCollection,
+      messageCollection,
+    ]);
 
-  const participantCollectionScoped = manager.withNamespace("global")
-    .participant as any;
+    const namespace = "tenant-test";
+    const threadId = crypto.randomUUID();
+    await db.ops.findOrCreateThread(threadId, {
+      namespace,
+      name: "Test Thread",
+      participants: ["user-1"],
+    });
+    await db.ops.createNode({
+      namespace,
+      type: "participant",
+      name: "User 1",
+      data: {
+        externalId: "user-1",
+        participantType: "human",
+        name: "User 1",
+      },
+      sourceType: "user",
+      sourceId: "user-1",
+    });
 
-  const messageService = createMessageService({
-    collections: manager,
-    ops: db.ops,
-  });
+    const messageService = createMessageService({
+      collections: manager,
+      ops: db.ops,
+    });
 
-  const participant = await participantCollectionScoped.upsertIdentity({
-    externalId: "user-1",
-    participantType: "human",
-    name: "User 1",
-  });
+    const created = await messageService.create({
+      threadId,
+      senderId: "user-1",
+      senderType: "user",
+      content: "hello world",
+      metadata: {},
+    }, namespace);
 
-  const created = await messageService.create({
-    threadId: "thread-1",
-    senderId: participant.id,
-    senderType: "user",
-    content: "hello world",
-    metadata: {},
-  });
+    assertEquals(created.threadId, threadId);
+    assertEquals(created.senderId, "user-1");
+    assertEquals(created.senderType, "user");
+    assertEquals(created.content, "hello world");
+    const node = await db.ops.getNodeById(created.id);
+    assertEquals(node?.namespace, namespace);
+    assertEquals(node?.sourceType, "thread");
+    assertEquals(node?.sourceId, threadId);
 
-  assertEquals(created.threadId, "thread-1");
-  assertEquals(created.senderId, participant.id);
-  assertEquals(created.senderType, "user");
-  assertEquals(created.content, "hello world");
+    const edges = await db.query<{ type: string }>(
+      `SELECT "type" FROM "edges" WHERE "target_node_id" = $1 ORDER BY "type" ASC`,
+      [created.id],
+    );
+    assertEquals(edges.rows.map((edge) => edge.type), [
+      GRAPH_EDGE.HAS_MESSAGE,
+      GRAPH_EDGE.SENT_BY,
+    ]);
+  },
 });
 
-Deno.test("collection-backed message create uses the real participant node id when legacy data.id differs", async () => {
-  const db = await createDatabase({ url: ":memory:" });
-  const manager = createCollectionsManager(db, [
-    participantCollection,
-    messageCollection,
-  ]);
+Deno.test({
+  name:
+    "message create uses the real participant node id when legacy data.id differs",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({ url: ":memory:" });
+    const manager = createCollectionsManager(db, [
+      participantCollection,
+      messageCollection,
+    ]);
 
-  const messageService = createMessageService({
-    collections: manager,
-    ops: db.ops,
-  });
+    const messageService = createMessageService({
+      collections: manager,
+      ops: db.ops,
+    });
 
-  const participantNodeId = "01KPXLEGACYNODE000000000000";
-  await db.query(
-    `INSERT INTO "nodes" (
+    const namespace = "tenant-test";
+    const threadId = crypto.randomUUID();
+    await db.ops.findOrCreateThread(threadId, {
+      namespace,
+      name: "Legacy Thread",
+      participants: ["legacy-user"],
+    });
+
+    const participantNodeId = crypto.randomUUID();
+    await db.query(
+      `INSERT INTO "nodes" (
       "id", "namespace", "type", "name", "content", "data", "embedding", "created_at", "updated_at"
     ) VALUES (
       $1, $2, $3, $4, $5, $6, NULL, NOW(), NOW()
     )`,
-    [
-      participantNodeId,
-      "global",
-      "participant",
-      "Legacy User",
-      null,
-      {
-        id: "6762ca9364e2d4252a98dd97",
-        externalId: "legacy-user",
-        participantType: "human",
-        name: "Legacy User",
-      },
-    ],
-  );
+      [
+        participantNodeId,
+        namespace,
+        "participant",
+        "Legacy User",
+        null,
+        {
+          id: "6762ca9364e2d4252a98dd97",
+          externalId: "legacy-user",
+          participantType: "human",
+          name: "Legacy User",
+        },
+      ],
+    );
 
-  const created = await messageService.create({
-    threadId: "thread-legacy",
-    senderId: "legacy-user",
-    senderType: "user",
-    content: "hello from legacy participant",
-    metadata: {},
-  });
+    const created = await messageService.create({
+      threadId,
+      senderId: "legacy-user",
+      senderType: "user",
+      content: "hello from legacy participant",
+      metadata: {},
+    }, namespace);
 
-  const edges = await db.query<{
-    source_node_id: string;
-    target_node_id: string;
-    type: string;
-  }>(
-    `SELECT "source_node_id", "target_node_id", "type"
+    const edges = await db.query<{
+      source_node_id: string;
+      target_node_id: string;
+      type: string;
+    }>(
+      `SELECT "source_node_id", "target_node_id", "type"
        FROM "edges"
       WHERE "target_node_id" = $1
       ORDER BY "type" ASC`,
-    [created.id],
-  );
+      [created.id],
+    );
 
-  const sentBy = edges.rows.find((edge) => edge.type === "SENT_BY");
+    const sentBy = edges.rows.find((edge) => edge.type === GRAPH_EDGE.SENT_BY);
 
-  assertEquals(sentBy?.source_node_id, participantNodeId);
-  assertEquals(sentBy?.target_node_id, created.id);
-  assertEquals(created.content, "hello from legacy participant");
+    assertEquals(sentBy?.source_node_id, participantNodeId);
+    assertEquals(sentBy?.target_node_id, created.id);
+    assertEquals(created.content, "hello from legacy participant");
+  },
 });

@@ -5,7 +5,7 @@
 Use `thread.metadata` for conversation-scoped or run-scoped state that should
 not become part of the user's durable profile.
 
-Recommended primitive: `thread.metadata`  
+Recommended primitive: `thread.metadata`\
 Most common mistaken alternative: using thread metadata as a general persistence
 layer for long-lived user context
 

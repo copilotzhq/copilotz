@@ -127,6 +127,7 @@ export async function startThreadEventWorker(
     processors: context.processors ?? {},
     emitToStream,
     stream: context.stream ?? true,
+    namespace: context.namespace,
   };
 
   await startEventWorker(
@@ -233,6 +234,8 @@ export interface WorkerContext {
    * Default: 0 (skips negative-priority events like ENTITY_EXTRACT)
    */
   minPriority?: number;
+  /** Tenant namespace this worker is allowed to process. */
+  namespace?: string;
 }
 
 // Generic worker
@@ -303,7 +306,7 @@ export async function startEventWorker(
 
       const next = await ops.getNextPendingQueueItem(
         threadId,
-        undefined,
+        context.namespace,
         minPriority,
       );
 
@@ -441,7 +444,14 @@ export async function startEventWorker(
 
         if (finalEvents.length > 0) {
           for (const e of finalEvents) {
-            await enqueueEvent(db, e);
+            await enqueueEvent(
+              db,
+              {
+                ...e,
+                namespace: (e as { namespace?: string }).namespace ??
+                  context.namespace,
+              } as NewEvent | NewUnknownEvent,
+            );
 
             if (e.threadId !== threadId) {
               backgroundThreadIds.add(e.threadId);

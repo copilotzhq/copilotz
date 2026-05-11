@@ -1,6 +1,8 @@
 # Events
 
-Copilotz is event-driven. Every action — receiving a message, calling an LLM, executing a tool — is an event that flows through a processing pipeline. This architecture makes Copilotz observable, extensible, and reliable.
+Copilotz is event-driven. Every action — receiving a message, calling an LLM,
+executing a tool — is an event that flows through a processing pipeline. This
+architecture makes Copilotz observable, extensible, and reliable.
 
 ## Why Events?
 
@@ -18,31 +20,35 @@ User message → NEW_MESSAGE event → Queue → Processor → LLM_CALL event �
 
 **Why does this matter?**
 
-- **Persistence**: Events are stored in the database. If something fails, you can see exactly what happened.
+- **Persistence**: Events are stored in the database. If something fails, you
+  can see exactly what happened.
 - **Reliability**: Failed events can be retried. Nothing is lost.
-- **Observability**: Hook into any part of the pipeline for logging, analytics, or debugging.
-- **Extensibility**: Add custom processors to handle new event types or modify existing behavior.
-- **Background processing**: Heavy work (RAG ingestion, entity extraction) happens asynchronously.
+- **Observability**: Hook into any part of the pipeline for logging, analytics,
+  or debugging.
+- **Extensibility**: Add custom processors to handle new event types or modify
+  existing behavior.
+- **Background processing**: Heavy work (RAG ingestion, entity extraction)
+  happens asynchronously.
 
 ## Event Types
 
 ### Core Events
 
-| Event | Description | Persisted |
-|-------|-------------|-----------|
-| `NEW_MESSAGE` | A persisted message/history artifact entered the system | Yes |
-| `LLM_CALL` | Time to call an LLM (safe persisted config only) | Yes |
-| `LLM_RESULT` | Terminal state for one LLM execution | Yes |
-| `TOOL_CALL` | Execute a tool | Yes |
-| `TOOL_RESULT` | Terminal state for one tool execution | Yes |
-| `TOKEN` | A streaming token | No |
+| Event         | Description                                             | Persisted |
+| ------------- | ------------------------------------------------------- | --------- |
+| `NEW_MESSAGE` | A persisted message/history artifact entered the system | Yes       |
+| `LLM_CALL`    | Time to call an LLM (safe persisted config only)        | Yes       |
+| `LLM_RESULT`  | Terminal state for one LLM execution                    | Yes       |
+| `TOOL_CALL`   | Execute a tool                                          | Yes       |
+| `TOOL_RESULT` | Terminal state for one tool execution                   | Yes       |
+| `TOKEN`       | A streaming token                                       | No        |
 
 ### Background Events
 
-| Event | Description |
-|-------|-------------|
-| `RAG_INGEST` | Ingest a document into the knowledge base |
-| `ENTITY_EXTRACT` | Extract entities from content |
+| Event            | Description                               |
+| ---------------- | ----------------------------------------- |
+| `RAG_INGEST`     | Ingest a document into the knowledge base |
+| `ENTITY_EXTRACT` | Extract entities from content             |
 
 ## Event Flow
 
@@ -110,7 +116,8 @@ Here's what happens when you call `copilotz.run()`:
 
 ## Assistant-Initiated Tool Calls
 
-Custom processors and external adapters can trigger tool execution by emitting a `NEW_MESSAGE` event from an agent with top-level `toolCalls`.
+Custom processors and external adapters can trigger tool execution by emitting a
+`NEW_MESSAGE` event from an agent with top-level `toolCalls`.
 
 Canonical shape:
 
@@ -135,15 +142,18 @@ Notes:
 
 - Use top-level `payload.toolCalls`, not provider-native response formats
 - Use the normalized assistant shape `{ id, name, args }`
-- Copilotz emits `TOOL_CALL` events from these assistant messages before target resolution
-- This allows agent follow-up messages from custom processors to directly continue the tool chain
+- Copilotz emits `TOOL_CALL` events from these assistant messages before target
+  resolution
+- This allows agent follow-up messages from custom processors to directly
+  continue the tool chain
 
 ## Event Taxonomy
 
 - Lifecycle events: `LLM_CALL`, `LLM_RESULT`, `TOOL_CALL`, `TOOL_RESULT`
 - Progress events: `TOKEN`
 - History/artifact events: `NEW_MESSAGE`
-- Background/domain events like `RAG_INGEST` and `ENTITY_EXTRACT` remain outside the paired lifecycle model in this refactor
+- Background/domain events like `RAG_INGEST` and `ENTITY_EXTRACT` remain outside
+  the paired lifecycle model in this refactor
 
 ## Listening to Events
 
@@ -173,7 +183,7 @@ const result = await copilotz.run(
         break;
     }
   },
-  { stream: true }
+  { stream: true },
 );
 
 await result.done;
@@ -195,7 +205,8 @@ for await (const event of result.events) {
 
 ### Consuming Events
 
-Consume events from the `result.events` async iterator returned by `copilotz.run()`:
+Consume events from the `result.events` async iterator returned by
+`copilotz.run()`:
 
 ```typescript
 const result = await copilotz.run({ content: "Hello" }, { stream: true });
@@ -247,8 +258,14 @@ const copilotz = await createCopilotz({
 ```typescript
 interface EventProcessor {
   eventType: string;
-  shouldProcess: (event: Event, deps: ProcessorDeps) => boolean | Promise<boolean>;
-  process: (event: Event, deps: ProcessorDeps) => Promise<ProcessorResult | void>;
+  shouldProcess: (
+    event: Event,
+    deps: ProcessorDeps,
+  ) => boolean | Promise<boolean>;
+  process: (
+    event: Event,
+    deps: ProcessorDeps,
+  ) => Promise<ProcessorResult | void>;
 }
 
 interface ProcessorResult {
@@ -260,16 +277,19 @@ interface ProcessorResult {
 
 The return value of `process` controls how the processor pipeline behaves:
 
-| Return value                       | Behavior                                                     |
-|------------------------------------|--------------------------------------------------------------|
-| `{ producedEvents: [event, ...] }` | **Claim** — enqueue events, skip remaining processors        |
+| Return value                       | Behavior                                                         |
+| ---------------------------------- | ---------------------------------------------------------------- |
+| `{ producedEvents: [event, ...] }` | **Claim** — enqueue events, skip remaining processors            |
 | `{ producedEvents: [] }`           | **Swallow** — claim without producing, skip remaining processors |
-| `void` / `undefined`               | **Pass** — fall through to the next processor in priority order |
+| `void` / `undefined`               | **Pass** — fall through to the next processor in priority order  |
 
 This means you can:
+
 - **Override** a built-in processor by returning `{ producedEvents: [...] }`.
-- **Suppress** an event entirely by returning `{ producedEvents: [] }` (no events produced, built-in won't run).
-- **Observe** an event without interfering by returning `void` (built-in still runs after).
+- **Suppress** an event entirely by returning `{ producedEvents: [] }` (no
+  events produced, built-in won't run).
+- **Observe** an event without interfering by returning `void` (built-in still
+  runs after).
 
 ### Processing Order
 
@@ -278,7 +298,9 @@ Processors are executed in priority order for the matching event type:
 1. User-provided processors (from `createCopilotz({ processors: [...] })`)
 2. Built-in processors (NEW_MESSAGE, LLM_CALL, TOOL_CALL, etc.)
 
-The first processor to return `{ producedEvents }` (even an empty array) claims the event. If no processor claims it, the event is marked completed with no side effects.
+The first processor to return `{ producedEvents }` (even an empty array) claims
+the event. If no processor claims it, the event is marked completed with no side
+effects.
 
 ## Event Queue
 
@@ -333,13 +355,18 @@ const copilotz = await createCopilotz({
 ```
 
 **How it works:**
-- Events stuck in `"processing"` status for longer than the threshold are automatically reset to `"pending"`
-- This prevents permanent thread deadlocks when the server crashes while processing an event
+
+- Events stuck in `"processing"` status for longer than the threshold are
+  automatically reset to `"pending"`
+- This prevents permanent thread deadlocks when the server crashes while
+  processing an event
 - The next time the queue is checked, stale events are recovered and reprocessed
 
 **Configuration:**
+
 - Default: 5 minutes (300000ms)
-- Lower values (1-2 min): Faster recovery, but may reset legitimately slow operations
+- Lower values (1-2 min): Faster recovery, but may reset legitimately slow
+  operations
 - Higher values (10-15 min): For operations that genuinely take a long time
 
 See [Configuration](./configuration.md#crash-recovery) for more details.
@@ -374,13 +401,17 @@ Some events are processed asynchronously:
   type: "RAG_INGEST",
   payload: {
     source: "https://example.com/doc.pdf",
-    namespace: "docs",
-    metadata: { title: "My Document" },
+    namespace: "tenant-acme",
+    metadata: {
+      title: "My Document",
+      scope: { knowledgeSpaceIds: ["ks-docs"] },
+    },
   },
 }
 ```
 
 Processing:
+
 1. Fetch document content
 2. Chunk into pieces
 3. Generate embeddings
@@ -402,6 +433,7 @@ Processing:
 ```
 
 Processing:
+
 1. LLM extracts entities
 2. Check for duplicates (semantic similarity)
 3. Create or merge entity nodes

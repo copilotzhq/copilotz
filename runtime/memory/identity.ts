@@ -33,7 +33,8 @@ export function resolveParticipantCollection(
 
   if (!collections) return undefined;
   if (typeof collections.withNamespace === "function") {
-    return collections.withNamespace(context.namespace ?? "global")
+    if (!context.namespace) return undefined;
+    return collections.withNamespace(context.namespace)
       ?.participant as Record<string, unknown> | undefined;
   }
   return (collections as Record<string, unknown>).participant as

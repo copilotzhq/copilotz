@@ -1,10 +1,12 @@
 # Overview
 
-Copilotz is a full-stack framework for building AI applications. This document explains the core architecture and how the pieces fit together.
+Copilotz is a full-stack framework for building AI applications. This document
+explains the core architecture and how the pieces fit together.
 
 ## The Big Picture
 
-Most AI frameworks focus on one thing: calling an LLM. Copilotz handles the entire application stack:
+Most AI frameworks focus on one thing: calling an LLM. Copilotz handles the
+entire application stack:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -38,7 +40,9 @@ Agents are the actors in your AI application. Each agent has:
 - **RAG Settings**: How to use the knowledge base
 - **Persistent Memory**: Learnings that survive across conversations
 
-Agents can talk to each other using `@mentions`, maintain persistent targets for natural conversation flow, and collaborate on complex tasks. Loop prevention ensures agent-to-agent conversations don't run infinitely.
+Agents can talk to each other using `@mentions`, maintain persistent targets for
+natural conversation flow, and collaborate on complex tasks. Loop prevention
+ensures agent-to-agent conversations don't run infinitely.
 
 ```typescript
 const agent = {
@@ -58,15 +62,19 @@ const agent = {
 
 ### Events
 
-Everything in Copilotz is an event. When a user sends a message, it becomes a `NEW_MESSAGE` event. That event might produce an `LLM_CALL` event, which might produce `TOOL_CALL` events, and so on.
+Everything in Copilotz is an event. When a user sends a message, it becomes a
+`NEW_MESSAGE` event. That event might produce an `LLM_CALL` event, which might
+produce `TOOL_CALL` events, and so on.
 
 **Why events?**
+
 - **Persistence**: Events are stored in the database, so nothing is lost
 - **Observability**: You can see exactly what happened and when
 - **Extensibility**: Add custom processors to handle new event types
 - **Reliability**: Failed events can be retried
 
 Core event types:
+
 - `NEW_MESSAGE` — A message entered the system
 - `LLM_CALL` — Time to call an LLM
 - `TOOL_CALL` — Execute a tool
@@ -76,22 +84,26 @@ Core event types:
 
 ### Knowledge Graph
 
-This is what makes Copilotz different. Instead of just storing chat history, everything becomes nodes in a graph:
+This is what makes Copilotz different. Instead of just storing chat history,
+everything becomes nodes in a graph:
 
-- **Participants** (users and agents) are nodes with `participantType: "human" | "agent"`
+- **Participants** (users and agents) are nodes with
+  `participantType: "human" | "agent"`
 - **Messages** are nodes connected to participants and threads
 - **Documents** are nodes, with chunks as child nodes
-- **Entities** (people, companies, concepts) are nodes extracted from conversations
+- **Entities** (people, companies, concepts) are nodes extracted from
+  conversations
 - **Agent Memory** is stored as metadata on agent participant nodes
 
 The graph enables queries like:
+
 - "What entities has this user mentioned?"
 - "What documents are related to this topic?"
 - "What's the conversation history with context?"
 - "What has this agent learned across all conversations?"
 
 ```
-User:Alex ──SENT_BY──▶ Message:"I work at Acme"
+User:Alex ──sent_by──▶ Message:"I work at Acme"
                               │
                               ▼
                         Entity:Acme Corp
@@ -103,7 +115,8 @@ Agent:Assistant ──────▶ Memory: { learnedPreferences: "User prefer
 
 ### Collections
 
-Collections are a typed layer on top of the knowledge graph. Define a schema, and you get type-safe CRUD operations:
+Collections are a typed layer on top of the knowledge graph. Define a schema,
+and you get type-safe CRUD operations:
 
 ```typescript
 const customer = defineCollection({
@@ -125,12 +138,14 @@ await copilotz.collections.customer.find({ plan: "pro" });
 
 ### Tools
 
-Tools let your agents interact with the world. Copilotz includes 27 native tools and can generate more from OpenAPI specs and MCP servers.
+Tools let your agents interact with the world. Copilotz includes 27 native tools
+and can generate more from OpenAPI specs and MCP servers.
 
 **Native tools include:**
+
 - File operations: `read_file`, `write_file`, `list_directory`, `search_files`
 - HTTP: `http_request`, `fetch_text`
-- RAG: `search_knowledge`, `ingest_document`, `list_namespaces`
+- RAG: `search_knowledge`, `ingest_document`, `list_knowledge_spaces`
 - System: `run_command`, `get_current_time`, `wait`
 - Agent: `ask_question`, `create_thread`, `end_thread`, `update_my_memory`
 - Assets: `save_asset`, `fetch_asset`
@@ -140,11 +155,13 @@ Tools let your agents interact with the world. Copilotz includes 27 native tools
 Copilotz supports two levels of isolation:
 
 **Schema isolation** (PostgreSQL schemas):
+
 - Complete database-level separation
 - Each tenant has their own tables
 - Use for hard isolation requirements
 
 **Namespace isolation** (within a schema):
+
 - Logical partitioning of data
 - Faster and lighter than schemas
 - Use for workspaces, projects, or logical groups
@@ -157,9 +174,9 @@ await copilotz.run(message, callback, { schema: "tenant_acme" });
 await copilotz.run(message, callback, { namespace: "workspace:123" });
 
 // Both together
-await copilotz.run(message, callback, { 
-  schema: "tenant_acme", 
-  namespace: "project:456" 
+await copilotz.run(message, callback, {
+  schema: "tenant_acme",
+  namespace: "project:456",
 });
 ```
 

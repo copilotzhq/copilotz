@@ -18,7 +18,6 @@ import type {
   Thread,
   ToolCallEventPayload,
 } from "@/types/index.ts";
-import { resolveNamespace } from "@/types/index.ts";
 import type {
   EntityExtractPayload,
   KnowledgeNode,
@@ -70,6 +69,7 @@ import {
   buildMentionTargetRoute,
   extractMentionNames,
 } from "@/utils/mentions.ts";
+import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 // ============================================================================
 // Tool Result Batch Aggregation
@@ -158,7 +158,7 @@ async function storeToolResultInBatch(
     pendingToolBatches: pendingBatches,
   });
 
-  await ops.crud.threads?.update?.({ id: thread.id }, {
+  await ops.updateThread(thread.id as string, {
     metadata: getSerializableThreadMetadata(updatedMetadata),
   });
 
@@ -188,7 +188,7 @@ async function clearCompletedBatch(
       : undefined,
   });
 
-  await ops.crud.threads?.update?.({ id: thread.id }, {
+  await ops.updateThread(thread.id as string, {
     metadata: getSerializableThreadMetadata(updatedMetadata),
   });
   (thread as { metadata: unknown }).metadata = updatedMetadata;
@@ -839,7 +839,7 @@ async function checkAndUpdateAgentTurns(
       const updatedMetadata = setRuntimeThreadMetadata(thread.metadata, {
         agentTurnCount: 0,
       });
-      await ops.crud.threads?.update?.({ id: thread.id }, {
+      await ops.updateThread(thread.id as string, {
         metadata: getSerializableThreadMetadata(updatedMetadata),
       });
       (thread as { metadata: unknown }).metadata = updatedMetadata;
@@ -870,7 +870,7 @@ async function checkAndUpdateAgentTurns(
         const updatedMetadata = setRuntimeThreadMetadata(thread.metadata, {
           agentTurnCount: 0,
         });
-        await ops.crud.threads?.update?.({ id: thread.id }, {
+        await ops.updateThread(thread.id as string, {
           metadata: getSerializableThreadMetadata(updatedMetadata),
         });
         (thread as { metadata: unknown }).metadata = updatedMetadata;
@@ -882,7 +882,7 @@ async function checkAndUpdateAgentTurns(
       const updatedMetadata = setRuntimeThreadMetadata(thread.metadata, {
         agentTurnCount: newCount,
       });
-      await ops.crud.threads?.update?.({ id: thread.id }, {
+      await ops.updateThread(thread.id as string, {
         metadata: getSerializableThreadMetadata(updatedMetadata),
       });
       (thread as { metadata: unknown }).metadata = updatedMetadata;
@@ -892,7 +892,7 @@ async function checkAndUpdateAgentTurns(
         const updatedMetadata = setRuntimeThreadMetadata(thread.metadata, {
           agentTurnCount: 0,
         });
-        await ops.crud.threads?.update?.({ id: thread.id }, {
+        await ops.updateThread(thread.id as string, {
           metadata: getSerializableThreadMetadata(updatedMetadata),
         });
         (thread as { metadata: unknown }).metadata = updatedMetadata;
@@ -1109,6 +1109,7 @@ export const messageProcessor: EventProcessor<
         senderId: messageContext.senderId,
         senderType: messageContext.senderType,
         context,
+        ops,
         event,
         threadId,
         emitToStream: deps.emitToStream,
@@ -1142,7 +1143,7 @@ export const messageProcessor: EventProcessor<
       : messageContext.contentText;
 
     // Keep senderId bound to the participant node id when available so
-    // collection relations (for example SENT_BY) continue to work. Store the
+    // collection relations continue to work. Store the
     // conversational identity separately in metadata for prompt/history use.
     const {
       senderExternalId,
@@ -1174,19 +1175,11 @@ export const messageProcessor: EventProcessor<
     };
 
     // Persist incoming message before processing
-    // Pass namespace for SENT_BY edge creation (user → message)
+    // Pass tenant namespace for participant/message edge creation.
     const createdMessage = await messageService.create(
       incomingMsg,
       context.namespace,
     );
-    const usageNodeId = event.metadata &&
-        typeof event.metadata === "object" &&
-        !Array.isArray(event.metadata) &&
-        typeof (event.metadata as Record<string, unknown>).usageNodeId ===
-          "string"
-      ? (event.metadata as Record<string, unknown>).usageNodeId as string
-      : null;
-
     // Emit ENTITY_EXTRACT event for agents with entity extraction enabled
     // Events go to a background child thread to avoid blocking main thread processing
     // Deduplicate by config to avoid redundant LLM calls for same content
@@ -1198,33 +1191,29 @@ export const messageProcessor: EventProcessor<
         parentEventId?: string;
         traceId?: string;
         priority?: number;
+        namespace?: string;
       }
     > = [];
     const agentsForExtraction = context.agents || [];
 
     // Group agents by their extraction config to deduplicate
-    // Key: JSON-serialized config (namespace scope + entityTypes + thresholds)
-    // Value: { config, namespaces: string[], agentIds: string[] }
+    // Key: JSON-serialized config (entityTypes + thresholds)
+    // Value: { config, agentIds: string[] }
     const configGroups = new Map<string, {
       entityConfig: NonNullable<
         typeof agentsForExtraction[0]["ragOptions"]
       >["entityExtraction"];
-      namespaces: string[];
       agentIds: string[];
     }>();
 
     for (const agent of agentsForExtraction) {
       const entityConfig = agent.ragOptions?.entityExtraction;
-      if (entityConfig?.enabled && persistedContent.trim()) {
+      if (
+        entityConfig?.enabled && persistedContent.trim() && context.namespace
+      ) {
         const agentIdStr = typeof agent.id === "string" ? agent.id : agent.name;
-        const entityNamespace = resolveNamespace(
-          entityConfig.namespace ?? "agent",
-          { threadId, agentId: agentIdStr },
-          context.namespacePrefix,
-        );
 
         // Create a config key that captures the extraction behavior
-        // Same entityTypes + thresholds + llmConfig = same extraction, different namespace
         const configKey = JSON.stringify({
           entityTypes: entityConfig.entityTypes ?? [],
           similarityThreshold: entityConfig.similarityThreshold,
@@ -1235,15 +1224,10 @@ export const messageProcessor: EventProcessor<
 
         const existing = configGroups.get(configKey);
         if (existing) {
-          // Same config - add namespace if not already included
-          if (!existing.namespaces.includes(entityNamespace)) {
-            existing.namespaces.push(entityNamespace);
-          }
           existing.agentIds.push(agentIdStr);
         } else {
           configGroups.set(configKey, {
             entityConfig,
-            namespaces: [entityNamespace],
             agentIds: [agentIdStr],
           });
         }
@@ -1254,22 +1238,16 @@ export const messageProcessor: EventProcessor<
     let messageNodeId: string | null = null;
     let backgroundThreadId: string | null = null;
 
-    if (configGroups.size > 0 || usageNodeId) {
+    if (configGroups.size > 0) {
       try {
-        const messageNodes = await ops.getNodesByNamespace(threadId, "message");
+        const messageNodes = context.namespace
+          ? await ops.getNodesByNamespace(context.namespace, "message")
+          : [];
         const messageNode = messageNodes.find((n) => {
           const data = n.data as Record<string, unknown> | null;
           return data?.messageId === createdMessage.id;
         });
         messageNodeId = messageNode?.id as string ?? null;
-
-        if (messageNodeId && usageNodeId) {
-          await ops.createEdge({
-            sourceNodeId: messageNodeId,
-            targetNodeId: usageNodeId,
-            type: "HAS_LLM_USAGE",
-          });
-        }
 
         // Get or create a background child thread for entity extraction
         // This prevents blocking the main thread's event queue
@@ -1277,6 +1255,7 @@ export const messageProcessor: EventProcessor<
           const bgThreadExternalId = `${threadId}:background`;
           const existingBgThread = await ops.getThreadByExternalId(
             bgThreadExternalId,
+            context.namespace,
           );
           if (existingBgThread) {
             backgroundThreadId = existingBgThread.id as string;
@@ -1286,6 +1265,7 @@ export const messageProcessor: EventProcessor<
               description: `Background worker thread for ${threadId}`,
               participants: [],
               externalId: bgThreadExternalId,
+              namespace: context.namespace ?? null,
               parentThreadId: threadId,
               status: "active",
               mode: "immediate",
@@ -1301,15 +1281,13 @@ export const messageProcessor: EventProcessor<
       }
     }
 
-    // Create one event per unique config (entities will be stored in all relevant namespaces)
+    // Create one event per unique config. Entities are stored in the tenant namespace.
     // Events are queued to the background thread to avoid blocking main thread
     if (messageNodeId && backgroundThreadId) {
       for (const [, group] of configGroups) {
-        const { entityConfig, namespaces, agentIds } = group;
-
-        // For each unique namespace, create an extraction event
-        // (same extraction, but entities stored in different namespaces)
-        for (const entityNamespace of namespaces) {
+        const { entityConfig, agentIds } = group;
+        const entityNamespace = context.namespace;
+        if (entityNamespace) {
           try {
             const extractPayload: EntityExtractPayload = {
               sourceNodeId: messageNodeId,
@@ -1348,6 +1326,7 @@ export const messageProcessor: EventProcessor<
                 ? event.traceId
                 : undefined,
               priority: 0, // Normal priority within the background thread
+              namespace: entityNamespace,
             });
           } catch (err) {
             console.warn(
@@ -1603,7 +1582,7 @@ export const messageProcessor: EventProcessor<
         agentTurnCount: 0,
       });
 
-      await ops.crud.threads?.update?.({ id: thread.id }, {
+      await ops.updateThread(thread.id as string, {
         metadata: getSerializableThreadMetadata(updatedMetadata),
       });
       (thread as unknown as { metadata: unknown }).metadata = updatedMetadata;
@@ -1833,6 +1812,7 @@ export const messageProcessor: EventProcessor<
             collections: context.collections,
             embeddingConfig: context.embeddingConfig,
             embeddingProviders: context.embeddingProviders,
+            namespace: context.namespace,
             threadId,
             userId,
           });
@@ -2041,7 +2021,7 @@ async function buildProcessingContext(
         if (participant) {
           agentNode = {
             id: participant.id,
-            namespace: participant.namespace ?? context.namespace ?? "global",
+            namespace: participant.namespace ?? context.namespace,
             type: "participant",
             name: participant.name ?? targetAgentId,
             content: null,

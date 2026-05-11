@@ -22,7 +22,7 @@ import save_asset from "@/resources/tools/save_asset/index.ts";
 import fetch_asset from "@/resources/tools/fetch_asset/index.ts";
 import search_knowledge from "@/resources/tools/search_knowledge/index.ts";
 import ingest_document from "@/resources/tools/ingest_document/index.ts";
-import list_namespaces from "@/resources/tools/list_namespaces/index.ts";
+import list_knowledge_spaces from "@/resources/tools/list_namespaces/index.ts";
 import delete_document from "@/resources/tools/delete_document/index.ts";
 import update_my_memory from "@/resources/tools/update_my_memory/index.ts";
 import list_skills from "@/resources/tools/list_skills/index.ts";
@@ -53,7 +53,7 @@ export const nativeTools: { [key: string]: NewTool } = {
   fetch_asset,
   search_knowledge,
   ingest_document,
-  list_namespaces,
+  list_knowledge_spaces,
   delete_document,
   update_my_memory,
   list_skills,

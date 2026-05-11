@@ -1,10 +1,13 @@
 # Storage
 
-Copilotz uses a storage backend for assets — images, files, and media produced by tool calls or uploaded by users. Built-in backends are filesystem (`fs`) and Amazon S3 (`s3`).
+Copilotz uses a storage backend for assets — images, files, and media produced
+by tool calls or uploaded by users. Built-in backends are filesystem (`fs`) and
+Amazon S3 (`s3`).
 
 ## Default Behavior
 
-By default, assets are stored on the local filesystem under a configurable root directory. No setup is required for development:
+By default, assets are stored on the local filesystem under a configurable root
+directory. No setup is required for development:
 
 ```typescript
 const copilotz = await createCopilotz({
@@ -31,21 +34,21 @@ const copilotz = await createCopilotz({
 
 ### Filesystem options
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `provider` | `"fs"` | Use `"fs"` for local storage |
-| `rootDir` | `"./assets"` | Root directory for stored files |
+| Option     | Default      | Description                     |
+| ---------- | ------------ | ------------------------------- |
+| `provider` | `"fs"`       | Use `"fs"` for local storage    |
+| `rootDir`  | `"./assets"` | Root directory for stored files |
 
 ### S3 options
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `provider` | — | Use `"s3"` for S3-compatible storage |
-| `bucket` | — | Bucket name |
-| `region` | `"us-east-1"` | AWS region |
-| `endpoint` | AWS default | Custom endpoint (for MinIO, R2, etc.) |
-| `accessKeyId` | From env | AWS access key |
-| `secretAccessKey` | From env | AWS secret key |
+| Option            | Default       | Description                           |
+| ----------------- | ------------- | ------------------------------------- |
+| `provider`        | —             | Use `"s3"` for S3-compatible storage  |
+| `bucket`          | —             | Bucket name                           |
+| `region`          | `"us-east-1"` | AWS region                            |
+| `endpoint`        | AWS default   | Custom endpoint (for MinIO, R2, etc.) |
+| `accessKeyId`     | From env      | AWS access key                        |
+| `secretAccessKey` | From env      | AWS secret key                        |
 
 ## How Assets Flow
 
@@ -53,7 +56,8 @@ const copilotz = await createCopilotz({
 2. Copilotz detects the asset in the tool output
 3. The storage backend saves it and returns an `assetId`
 4. The tool output is rewritten with an `asset://` reference
-5. On the next LLM call, `asset://` refs are resolved to data URLs for vision models
+5. On the next LLM call, `asset://` refs are resolved to data URLs for vision
+   models
 6. An `ASSET_CREATED` event is emitted to the stream
 
 ## The AssetStore Interface
@@ -62,7 +66,10 @@ The underlying storage interface used by the asset system:
 
 ```typescript
 interface AssetStore {
-  save(bytes: Uint8Array, mime: string): Promise<{ assetId: string; info?: AssetInfo }>;
+  save(
+    bytes: Uint8Array,
+    mime: string,
+  ): Promise<{ assetId: string; info?: AssetInfo }>;
   get(assetId: string): Promise<{ bytes: Uint8Array; mime: string }>;
   urlFor(assetId: string, opts?: { inline?: boolean }): Promise<string>;
   info?(assetId: string): Promise<AssetInfo | undefined>;
@@ -71,7 +78,8 @@ interface AssetStore {
 
 ## Writing a Custom Storage Backend
 
-A storage connector implements the low-level read/write operations. Here's a minimal example:
+A storage connector implements the low-level read/write operations. Here's a
+minimal example:
 
 ```typescript
 export interface MyConnector {
@@ -103,7 +111,8 @@ export function createMyConnector(config: MyConfig): MyConnector {
 
 ### Registering via resources directory
 
-Create `resources/storage/my-backend/adapter.ts` with your connector implementation, then declare it in `resources/manifest.ts`:
+Create `resources/storage/my-backend/adapter.ts` with your connector
+implementation, then declare it in `resources/manifest.ts`:
 
 ```typescript
 export default {
@@ -115,7 +124,8 @@ export default {
 
 ## S3-Compatible Services
 
-The built-in `s3` backend works with any S3-compatible service. Set a custom `endpoint`:
+The built-in `s3` backend works with any S3-compatible service. Set a custom
+`endpoint`:
 
 ```typescript
 storageOptions: {

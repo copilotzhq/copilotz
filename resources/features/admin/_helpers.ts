@@ -119,7 +119,9 @@ const USAGE_BREAKDOWN_FIELDS = [
 
 export function buildUsageSumSelects(dataColumn: string): string {
   return USAGE_BREAKDOWN_FIELDS
-    .map((f) => `COALESCE(SUM((${dataColumn}->>'${f.key}')::${f.cast}), 0)::${f.cast} AS "${f.key}"`)
+    .map((f) =>
+      `COALESCE(SUM((${dataColumn}->>'${f.key}')::${f.cast}), 0)::${f.cast} AS "${f.key}"`
+    )
     .join(",\n         ");
 }
 
@@ -152,7 +154,9 @@ export function toIso(value: unknown): string | null {
   return null;
 }
 
-export function toIsoString(value: Date | string | null | undefined): string | null {
+export function toIsoString(
+  value: Date | string | null | undefined,
+): string | null {
   if (!value) return null;
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
@@ -160,10 +164,18 @@ export function toIsoString(value: Date | string | null | undefined): string | n
 
 export function emptyUsageBreakdown(): AdminUsageBreakdown {
   return {
-    inputTokens: 0, outputTokens: 0, reasoningTokens: 0,
-    cacheReadInputTokens: 0, cacheCreationInputTokens: 0, totalTokens: 0,
-    inputCostUsd: 0, outputCostUsd: 0, reasoningCostUsd: 0,
-    cacheReadInputCostUsd: 0, cacheCreationInputCostUsd: 0, totalCostUsd: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    totalTokens: 0,
+    inputCostUsd: 0,
+    outputCostUsd: 0,
+    reasoningCostUsd: 0,
+    cacheReadInputCostUsd: 0,
+    cacheCreationInputCostUsd: 0,
+    totalCostUsd: 0,
   };
 }
 
@@ -212,22 +224,26 @@ export function pushTimeRange(
   to?: string | null,
 ) {
   const f = toIsoString(from ?? null);
-  if (f) { params.push(f); filters.push(`${column} >= $${params.length}`); }
+  if (f) {
+    params.push(f);
+    filters.push(`${column} >= $${params.length}`);
+  }
   const t = toIsoString(to ?? null);
-  if (t) { params.push(t); filters.push(`${column} <= $${params.length}`); }
+  if (t) {
+    params.push(t);
+    filters.push(`${column} <= $${params.length}`);
+  }
 }
 
 export function pushThreadNamespace(
   params: unknown[],
   filters: string[],
-  threadIdExpr: string,
+  threadNamespaceExpr: string,
   namespace?: string,
 ) {
   if (!namespace) return;
   params.push(namespace);
-  filters.push(
-    `EXISTS (SELECT 1 FROM "events" AS "scope_events" WHERE "scope_events"."threadId" = ${threadIdExpr} AND "scope_events"."namespace" = $${params.length})`,
-  );
+  filters.push(`${threadNamespaceExpr} = $${params.length}`);
 }
 
 export function pushScopedThreadNode(
@@ -238,9 +254,7 @@ export function pushScopedThreadNode(
 ) {
   if (!namespace) return;
   params.push(namespace);
-  filters.push(
-    `${nsExpr} IN (SELECT DISTINCT "threadId" FROM "events" WHERE "namespace" = $${params.length})`,
-  );
+  filters.push(`${nsExpr} = $${params.length}`);
 }
 
 export function normalizeSearch(value?: string): string | null {
@@ -249,11 +263,15 @@ export function normalizeSearch(value?: string): string | null {
 }
 
 export function normalizeLimit(value?: number, fallback = 25): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
   return Math.floor(value);
 }
 
 export function normalizeOffset(value?: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return 0;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return 0;
+  }
   return Math.floor(value);
 }

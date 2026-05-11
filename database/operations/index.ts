@@ -15,9 +15,11 @@ import type {
   NewDocument,
   NewDocumentChunk,
   NewMessage,
+  RagScope,
 } from "@/types/index.ts";
 import type { DbInstance } from "../index.ts";
 import { ulid } from "ulid";
+import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 const MAX_EXPIRED_CLEANUP_BATCH = 100;
 const EXPIRED_RETENTION_INTERVAL = "1 day";
@@ -25,7 +27,14 @@ const EXPIRED_RETENTION_INTERVAL = "1 day";
 type MessageInsert =
   & Omit<NewMessage, "id">
   & { id?: string };
-type ThreadInsert = NewThread;
+type ThreadInsert = NewThread & {
+  name?: string;
+  description?: string | null;
+  participants?: string[] | null;
+  initialMessage?: string | null;
+  summary?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
 
 export interface QueueEventInput {
   eventType: Queue["eventType"];
@@ -45,6 +54,11 @@ export interface QueueEventInput {
 export interface ChunkSearchOptions {
   query?: string;
   embedding?: number[];
+  /** Tenant/application namespace. */
+  namespace?: string;
+  /** Graph roots used to resolve eligible documents/chunks. */
+  scope?: RagScope;
+  /** @deprecated Namespace no longer models RAG grouping. Use namespace + scope. */
   namespaces?: string[];
   limit?: number;
   threshold?: number;
@@ -216,7 +230,10 @@ export interface DatabaseOperations {
   ) => Promise<Message[]>;
   deleteMessagesForThread: (threadId: string) => Promise<void>;
   getThreadById: (threadId: string) => Promise<Thread | undefined>;
-  getThreadByExternalId: (externalId: string) => Promise<Thread | undefined>;
+  getThreadByExternalId: (
+    externalId: string,
+    namespace?: string,
+  ) => Promise<Thread | undefined>;
   findOrCreateThread: (
     threadId: string | undefined,
     threadData: ThreadInsert,
@@ -254,7 +271,7 @@ export interface DatabaseOperations {
    *
    * @param externalId - External identifier (user ID or agent ID/name)
    * @param participantType - "human" or "agent"
-   * @param namespace - Namespace scope (null for global participants)
+   * @param namespace - Tenant/application namespace. Required for participant identity.
    * @param data - Participant data
    */
   upsertParticipantNode: (
@@ -273,7 +290,7 @@ export interface DatabaseOperations {
    * @deprecated Use `copilotz.collections.participant.resolveByExternalId` instead.
    * Get a participant node by externalId.
    * Works for both humans and agents.
-   * Also checks for global participants (namespace = "global") as fallback.
+   * Looks only inside the provided tenant namespace.
    */
   getParticipantNode: (
     externalId: string,
@@ -317,7 +334,7 @@ export interface DatabaseOperations {
   // ============================================
 
   // Create message as a node (used internally by createMessage)
-  // namespace: Optional namespace for user lookup (for SENT_BY edge)
+  // namespace: Tenant namespace for participant lookup and message storage.
   createMessageNode: (
     message: MessageInsert,
     previousMessageId?: string,
@@ -747,17 +764,117 @@ export function createOperations(
       id: threadId,
       status: "active",
     }) as Thread | null;
-    return thread ?? undefined;
+    return await hydrateThreadFromNode(thread);
   };
 
   const getThreadByExternalId = async (
     externalId: string,
+    namespace?: string,
   ): Promise<Thread | undefined> => {
-    const thread = await crud.threads.findOne({
+    const filter: Record<string, unknown> = {
       externalId,
       status: "active",
-    }) as Thread | null;
-    return thread ?? undefined;
+    };
+    if (namespace !== undefined) filter.namespace = namespace;
+    const thread = await crud.threads.findOne(filter) as Thread | null;
+    return await hydrateThreadFromNode(thread);
+  };
+
+  const ensureThreadNode = async (
+    thread: Thread,
+    domain: Partial<ThreadInsert>,
+  ): Promise<void> => {
+    const namespace = typeof thread.namespace === "string" &&
+        thread.namespace.length > 0
+      ? thread.namespace
+      : domain.namespace;
+    if (!namespace) return;
+
+    const threadId = thread.id as string;
+    const existing = await getNodeById(threadId);
+    const existingData = existing?.type === "thread"
+      ? (existing.data ?? {}) as Record<string, unknown>
+      : {};
+    const threadMetadata = (thread as { metadata?: Record<string, unknown> | null })
+      .metadata;
+    const data = {
+      description: domain.description ?? thread.description ?? null,
+      summary: domain.summary ?? thread.summary ?? null,
+      initialMessage: domain.initialMessage ?? thread.initialMessage ?? null,
+      metadata: domain.metadata !== undefined
+        ? domain.metadata ?? null
+        : threadMetadata ?? existingData.metadata ?? null,
+      participants: Array.isArray(domain.participants)
+        ? domain.participants
+        : Array.isArray(thread.participants)
+        ? thread.participants
+        : null,
+      externalId: domain.externalId ?? thread.externalId ?? null,
+      mode: domain.mode ?? thread.mode ?? "immediate",
+      status: domain.status ?? thread.status ?? "active",
+    };
+
+    if (existing?.type === "thread") {
+      await updateNode(threadId, {
+        namespace,
+        name: domain.name ?? existing.name ?? "Main Thread",
+        data: {
+          ...existingData,
+          ...data,
+        },
+        sourceType: "thread",
+        sourceId: threadId,
+      });
+      return;
+    }
+
+    await createNode({
+      id: threadId,
+      namespace,
+      type: "thread",
+      name: domain.name ?? "Main Thread",
+      content: null,
+      data,
+      sourceType: "thread",
+      sourceId: threadId,
+    });
+
+    if (typeof domain.parentThreadId === "string") {
+      await createEdge({
+        sourceNodeId: domain.parentThreadId,
+        targetNodeId: threadId,
+        type: GRAPH_EDGE.HAS_CHILD_THREAD,
+      });
+    }
+
+    if (Array.isArray(domain.participants)) {
+      for (const participantId of domain.participants) {
+        const participant = await getParticipantNode(participantId, namespace);
+        if (participant) {
+          await createEdge({
+            sourceNodeId: participant.id as string,
+            targetNodeId: threadId,
+            type: GRAPH_EDGE.PARTICIPATES_IN,
+          });
+        }
+      }
+    }
+  };
+
+  const hydrateThreadFromNode = async (
+    thread: Thread | null | undefined,
+  ): Promise<Thread | undefined> => {
+    if (!thread?.id) return undefined;
+    const node = await getNodeById(thread.id as string);
+    if (node?.type !== "thread") return thread;
+
+    const data = (node.data ?? {}) as Record<string, unknown>;
+    if (data.metadata === undefined || data.metadata === null) return thread;
+
+    return {
+      ...thread,
+      metadata: data.metadata as Thread["metadata"],
+    };
   };
 
   const findOrCreateThread = async (
@@ -789,6 +906,7 @@ export function createOperations(
     if (!existing) {
       const participants = normalizeParticipants(threadData.participants);
       const baseInsert = {
+        namespace: threadData.namespace ?? null,
         name: threadData.name,
         externalId: threadData.externalId ?? null,
         description: threadData.description ?? null,
@@ -798,12 +916,16 @@ export function createOperations(
         status: threadData.status ?? "active",
         summary: threadData.summary ?? null,
         parentThreadId: threadData.parentThreadId ?? null,
-        metadata: threadData.metadata ?? null,
+        rootThreadId: threadData.rootThreadId ?? threadData.parentThreadId ??
+          null,
+        lastEventId: threadData.lastEventId ?? null,
+        lastEventAt: threadData.lastEventAt ?? null,
       };
       const created = await crud.threads.create(
         threadId ? { id: threadId, ...baseInsert } : baseInsert,
       ) as Thread;
-      return created;
+      await ensureThreadNode(created, { ...threadData, participants });
+      return (await hydrateThreadFromNode(created)) ?? created;
     }
 
     const updates: Partial<Thread> = {};
@@ -821,22 +943,22 @@ export function createOperations(
       }
     }
 
-    if (threadData.metadata !== undefined) {
-      const normalizedMetadata = threadData.metadata ?? null;
-      if (
-        JSON.stringify(existing.metadata ?? null) !==
-          JSON.stringify(normalizedMetadata)
-      ) {
-        updates.metadata = normalizedMetadata;
-      }
+    if (
+      typeof threadData.namespace === "string" &&
+      threadData.namespace !== existing.namespace
+    ) {
+      updates.namespace = threadData.namespace;
     }
 
     if (Object.keys(updates).length === 0) {
-      return existing;
+      await ensureThreadNode(existing, threadData);
+      return (await hydrateThreadFromNode(existing)) ?? existing;
     }
 
     const updated = await crud.threads.update({ id: threadId }, updates);
-    return (updated ?? existing) as Thread;
+    const result = (updated ?? existing) as Thread;
+    await ensureThreadNode(result, { ...threadData, ...updates });
+    return (await hydrateThreadFromNode(result)) ?? result;
   };
 
   const createMessage = async (
@@ -847,11 +969,14 @@ export function createOperations(
     const messageWithId = { ...message, id: messageId };
 
     const threadIdStr = message.threadId as string;
+    const thread = await getThreadById(threadIdStr);
+    const messageNamespace = namespace ??
+      (typeof thread?.namespace === "string" ? thread.namespace : undefined);
     const lastMessage = await getLastMessageNode(threadIdStr);
     const messageNode = await createMessageNode(
       messageWithId,
       lastMessage?.id as string | undefined,
-      namespace,
+      messageNamespace,
     );
 
     return nodeToMessage(messageNode);
@@ -925,7 +1050,7 @@ export function createOperations(
   ): Promise<Message[]> => {
     const result = await db.query<KnowledgeNode>(
       `SELECT * FROM "nodes"
-       WHERE "namespace" = $1 AND "type" = 'message'
+       WHERE "source_type" = 'thread' AND "source_id" = $1 AND "type" = 'message'
        ORDER BY "created_at" ASC`,
       [threadId],
     );
@@ -940,12 +1065,16 @@ export function createOperations(
     };
     return {
       id: (data.messageId ?? node.id) as string,
-      threadId: node.namespace,
+      threadId: (data.threadId ?? node.sourceId ?? node.namespace) as string,
       senderId: data.senderId as string,
       senderType: data.senderType as Message["senderType"],
       senderUserId: data.senderUserId as string | null,
       externalId: data.externalId as string | null,
-      content: node.content,
+      content: typeof node.content === "string"
+        ? node.content
+        : typeof data.content === "string"
+        ? data.content
+        : "",
       toolCallId: data.toolCallId as string | null,
       toolCalls: data.toolCalls as Message["toolCalls"],
       reasoning: (data.reasoning as string | null) ?? null,
@@ -989,7 +1118,7 @@ export function createOperations(
   ): Promise<KnowledgeNode | undefined> => {
     const result = await db.query<KnowledgeNode>(
       `SELECT * FROM "nodes" 
-       WHERE "namespace" = $1 AND "type" = 'message'
+       WHERE "source_type" = 'thread' AND "source_id" = $1 AND "type" = 'message'
        ORDER BY "created_at" DESC
        LIMIT 1`,
       [threadId],
@@ -1007,15 +1136,24 @@ export function createOperations(
     const threadId = message.threadId as string;
     const senderId = message.senderId as string;
     const senderType = message.senderType as string;
+    const tenantNamespace = namespace ??
+      (await getThreadById(threadId))?.namespace as string | undefined;
+    if (!tenantNamespace) {
+      throw new Error(
+        `Cannot create message for thread ${threadId}: tenant namespace is required`,
+      );
+    }
 
     // Create message as node
     const messageNode = await createNode({
-      namespace: threadId,
+      id: messageId,
+      namespace: tenantNamespace,
       type: "message",
       name: `${senderType}:${senderId}:${timestamp}`,
       content: (message.content ?? "") as string,
       data: {
         messageId,
+        threadId,
         senderId,
         senderType,
         senderUserId: message.senderUserId ?? null,
@@ -1031,24 +1169,33 @@ export function createOperations(
       sourceId: threadId,
     });
 
-    // Create REPLIED_BY edge from previous message if provided
+    // Link previous message to the current message when available.
     if (previousMessageId) {
       await createEdge({
         sourceNodeId: previousMessageId,
         targetNodeId: messageNode.id as string,
-        type: "REPLIED_BY",
+        type: GRAPH_EDGE.DERIVED_FROM,
       });
     }
 
-    // Create SENT_BY edge from participant node to message (if sender is a user with externalId)
+    await createEdge({
+      sourceNodeId: threadId,
+      targetNodeId: messageNode.id as string,
+      type: GRAPH_EDGE.HAS_MESSAGE,
+    });
+
+    // Link participant node to message (if sender is a user with externalId).
     if (senderType === "user" && senderId) {
       try {
-        const participantNode = await getParticipantNode(senderId, namespace);
+        const participantNode = await getParticipantNode(
+          senderId,
+          tenantNamespace,
+        );
         if (participantNode) {
           await createEdge({
             sourceNodeId: participantNode.id as string,
             targetNodeId: messageNode.id as string,
-            type: "SENT_BY",
+            type: GRAPH_EDGE.SENT_BY,
           });
         }
       } catch {
@@ -1086,7 +1233,8 @@ export function createOperations(
       const cursorResult = await db.query<MessageNodeRow>(
         `SELECT *, COALESCE("data"->>'messageId', "id") AS "messageKey"
          FROM "nodes"
-         WHERE "namespace" = $1
+         WHERE "source_type" = 'thread'
+           AND "source_id" = $1
            AND "type" = 'message'
            AND (COALESCE("data"->>'messageId', "id") = $2 OR "id" = $2)
          LIMIT 1`,
@@ -1106,7 +1254,8 @@ export function createOperations(
       const result = await db.query<MessageNodeRow>(
         `SELECT *, COALESCE("data"->>'messageId', "id") AS "messageKey"
          FROM "nodes"
-         WHERE "namespace" = $1
+         WHERE "source_type" = 'thread'
+           AND "source_id" = $1
            AND "type" = 'message'
            AND (
              "created_at" < $2
@@ -1132,7 +1281,7 @@ export function createOperations(
 
     const result = await db.query<KnowledgeNode>(
       `SELECT * FROM "nodes"
-       WHERE "namespace" = $1 AND "type" = 'message'
+       WHERE "source_type" = 'thread' AND "source_id" = $1 AND "type" = 'message'
        ORDER BY "created_at" DESC, "id" DESC
        LIMIT $2`,
       [threadId, limitPlusOne],
@@ -1158,18 +1307,33 @@ export function createOperations(
   const searchChunksFromGraph = async (
     options: ChunkSearchOptions,
   ): Promise<ChunkSearchResult[]> => {
-    const { embedding, namespaces, limit = 10, threshold = 0.5 } = options;
+    const { embedding, namespace, namespaces, limit = 10, threshold = 0.5 } =
+      options;
 
     if (!embedding || embedding.length === 0) {
       return [];
     }
 
-    const params: unknown[] = [`[${embedding.join(",")}]`];
-    let namespaceClause = "";
+    const searchNamespace = namespace ?? namespaces?.[0];
+    if (!searchNamespace) {
+      throw new Error("RAG search requires tenant namespace");
+    }
 
-    if (namespaces && namespaces.length > 0) {
-      params.push(namespaces);
-      namespaceClause = `AND "namespace" = ANY($${params.length})`;
+    const scopedDocumentIds = await resolveDocumentIdsForScope(
+      searchNamespace,
+      options.scope,
+    );
+
+    const params: unknown[] = [`[${embedding.join(",")}]`];
+    let scopeClause = "";
+
+    params.push(searchNamespace);
+    const namespaceIdx = params.length;
+
+    if (scopedDocumentIds) {
+      if (scopedDocumentIds.length === 0) return [];
+      params.push(scopedDocumentIds);
+      scopeClause = `AND "source_id" = ANY($${params.length})`;
     }
 
     params.push(threshold);
@@ -1195,9 +1359,10 @@ export function createOperations(
         1 - ("embedding" <=> $1::vector) as similarity
       FROM "nodes"
       WHERE "type" = 'chunk'
+        AND "namespace" = $${namespaceIdx}
         AND "embedding" IS NOT NULL
         AND 1 - ("embedding" <=> $1::vector) > $${thresholdIdx}
-        ${namespaceClause}
+        ${scopeClause}
       ORDER BY "embedding" <=> $1::vector
       LIMIT $${limitIdx}`,
       params,
@@ -1224,9 +1389,69 @@ export function createOperations(
     });
   };
 
+  const resolveDocumentIdsForScope = async (
+    namespace: string,
+    scope?: RagScope,
+  ): Promise<string[] | null> => {
+    if (!scope) return null;
+
+    const roots = new Set<string>();
+    if (scope.threadId) roots.add(scope.threadId);
+    if (scope.agentId) roots.add(scope.agentId);
+    for (const id of scope.knowledgeSpaceIds ?? []) roots.add(id);
+    const explicitDocuments = new Set(scope.documentIds ?? []);
+
+    if (roots.size === 0 && explicitDocuments.size === 0) return null;
+
+    const discovered = new Set(explicitDocuments);
+    if (roots.size > 0) {
+      const rootIds = Array.from(roots);
+      const direct = await db.query<{ id: string }>(
+        `SELECT DISTINCT d."id"
+         FROM "edges" e
+         INNER JOIN "nodes" d ON d."id" = e."target_node_id"
+         WHERE e."source_node_id" = ANY($1)
+           AND e."type" = ANY($2)
+           AND d."namespace" = $3
+           AND d."type" = 'document'`,
+        [
+          rootIds,
+          [GRAPH_EDGE.HAS_DOCUMENT, GRAPH_EDGE.CAN_ACCESS],
+          namespace,
+        ],
+      );
+      for (const row of direct.rows) discovered.add(row.id);
+
+      const viaKnowledgeSpace = await db.query<{ id: string }>(
+        `SELECT DISTINCT d."id"
+         FROM "edges" access
+         INNER JOIN "nodes" ks ON ks."id" = access."target_node_id"
+         INNER JOIN "edges" docs ON docs."source_node_id" = ks."id"
+         INNER JOIN "nodes" d ON d."id" = docs."target_node_id"
+         WHERE access."source_node_id" = ANY($1)
+           AND access."type" = ANY($2)
+           AND ks."namespace" = $3
+           AND ks."type" = 'knowledge_space'
+           AND docs."type" = $4
+           AND d."namespace" = $3
+           AND d."type" = 'document'`,
+        [
+          rootIds,
+          [GRAPH_EDGE.USES_KNOWLEDGE_SPACE, GRAPH_EDGE.CAN_ACCESS],
+          namespace,
+          GRAPH_EDGE.HAS_DOCUMENT,
+        ],
+      );
+      for (const row of viaKnowledgeSpace.rows) discovered.add(row.id);
+    }
+
+    return Array.from(discovered);
+  };
+
   const getThreadsForParticipant = async (
     participantId: string,
     options?: {
+      namespace?: string;
       status?: Thread["status"] | "all";
       limit?: number;
       offset?: number;
@@ -1235,17 +1460,40 @@ export function createOperations(
   ): Promise<Thread[]> => {
     const statusFilter = options?.status ?? "active";
     const order = options?.order === "asc" ? "ASC" : "DESC";
+    const participantNode = await getParticipantNode(
+      participantId,
+      options?.namespace,
+    );
+    const participantNodeId = participantNode?.id as string | undefined;
 
-    const params: unknown[] = [];
-    const whereParts: string[] = [];
-    let index = 1;
-
-    whereParts.push(`"participants" ? $${index}`);
-    params.push(participantId);
-    index += 1;
-
+    const params: unknown[] = [participantId, GRAPH_EDGE.PARTICIPATES_IN];
+    const whereParts: string[] = [
+      `(
+        t."participants" @> jsonb_build_array($1::text)
+        OR EXISTS (
+          SELECT 1
+          FROM "edges" e
+          WHERE e."target_node_id" = t."id"
+            AND e."type" = $2
+            AND (
+              e."source_node_id" = $1
+              ${participantNodeId ? `OR e."source_node_id" = $3` : ""}
+            )
+        )
+      )`,
+    ];
+    let index = 3;
+    if (participantNodeId) {
+      params.push(participantNodeId);
+      index = 4;
+    }
+    if (options?.namespace) {
+      whereParts.push(`t."namespace" = $${index}`);
+      params.push(options.namespace);
+      index += 1;
+    }
     if (statusFilter !== "all") {
-      whereParts.push(`"status" = $${index}`);
+      whereParts.push(`t."status" = $${index}`);
       params.push(statusFilter);
       index += 1;
     }
@@ -1265,16 +1513,19 @@ export function createOperations(
     }
 
     const result = await db.query<Thread>(
-      `SELECT *
-       FROM "threads"
+      `SELECT t.*
+       FROM "threads" t
        WHERE ${whereParts.join(" AND ")}
-       ORDER BY "updatedAt" ${order}
+       ORDER BY t."updatedAt" ${order}
        ${limitClause}
        ${offsetClause}`.trim(),
       params,
     );
 
-    return result.rows as Thread[];
+    const threads = result.rows as Thread[];
+    return (await Promise.all(threads.map((thread) =>
+      hydrateThreadFromNode(thread)
+    ))).filter((thread): thread is Thread => thread !== undefined);
   };
 
   const getMessagesForThread = async (
@@ -1299,7 +1550,7 @@ export function createOperations(
     }
     const result = await db.query<KnowledgeNode>(
       `SELECT * FROM "nodes"
-       WHERE "namespace" = $1 AND "type" = 'message'
+       WHERE "source_type" = 'thread' AND "source_id" = $1 AND "type" = 'message'
        ORDER BY "created_at" ${order}
        ${limitClause} ${offsetClause}`.trim(),
       params,
@@ -1358,17 +1609,28 @@ export function createOperations(
       status: "archived",
       summary,
     }) as Thread | null;
-    return updated ?? null;
+    if (!updated) return null;
+    await ensureThreadNode(updated, { status: "archived", summary });
+    return (await hydrateThreadFromNode(updated)) ?? updated;
   };
 
   const updateThread = async (
     threadId: string,
     updates: Partial<ThreadInsert>,
   ): Promise<Thread | null> => {
-    const updated = await crud.threads.update({ id: threadId }, updates) as
-      | Thread
-      | null;
-    return updated ?? null;
+    const { metadata, ...tableUpdates } = updates;
+    const hasTableUpdates = Object.keys(tableUpdates).length > 0;
+    const thread = hasTableUpdates
+      ? await crud.threads.update({ id: threadId }, tableUpdates) as
+        | Thread
+        | null
+      : await crud.threads.findOne({ id: threadId }) as Thread | null;
+    if (!thread) return null;
+    await ensureThreadNode(thread, {
+      ...tableUpdates,
+      ...(updates.metadata !== undefined ? { metadata } : {}),
+    });
+    return (await hydrateThreadFromNode(thread)) ?? thread;
   };
 
   const deleteThread = async (threadId: string): Promise<void> => {
@@ -1392,6 +1654,9 @@ export function createOperations(
       metadata?: Record<string, unknown> | null;
     },
   ): Promise<KnowledgeNode> => {
+    if (!namespace) {
+      throw new Error("Participant namespace is required");
+    }
     // Try to find existing participant node
     const existing = await getParticipantNode(externalId, namespace);
 
@@ -1439,8 +1704,8 @@ export function createOperations(
 
     // Create new participant node
     const participantNode = await createNode({
-      namespace: namespace ?? "global",
-      type: "user", // Keep type: "user" for backward compat
+      namespace,
+      type: "participant",
       name: data.name ?? externalId,
       content: null,
       data: {
@@ -1450,7 +1715,6 @@ export function createOperations(
         email: data.email ?? null,
         agentId: data.agentId ?? null,
         metadata: data.metadata ?? null,
-        isGlobal: namespace === null,
       },
       sourceType: participantType === "human" ? "user" : "agent",
       sourceId: externalId,
@@ -1463,32 +1727,17 @@ export function createOperations(
     externalId: string,
     namespace?: string | null,
   ): Promise<KnowledgeNode | undefined> => {
-    // First try exact namespace match
-    if (namespace) {
-      const result = await db.query<KnowledgeNode>(
-        `SELECT * FROM "nodes" 
-         WHERE "type" = 'user' 
-         AND "namespace" = $1 
-         AND ("data"->>'externalId' = $2 OR "source_id" = $2)
-         LIMIT 1`,
-        [namespace, externalId],
-      );
-      if (result.rows[0]) {
-        return mapNodeRow(result.rows[0]);
-      }
-    }
-
-    // Fallback to global participant (namespace = "global")
-    const globalResult = await db.query<KnowledgeNode>(
+    if (!namespace) return undefined;
+    const result = await db.query<KnowledgeNode>(
       `SELECT * FROM "nodes" 
-       WHERE "type" = 'user' 
-       AND "namespace" = 'global'
-       AND ("data"->>'externalId' = $1 OR "source_id" = $1)
+       WHERE "type" = 'participant'
+       AND "namespace" = $1
+       AND ("data"->>'externalId' = $2 OR "source_id" = $2)
        LIMIT 1`,
-      [externalId],
+      [namespace, externalId],
     );
-    if (globalResult.rows[0]) {
-      return mapNodeRow(globalResult.rows[0]);
+    if (result.rows[0]) {
+      return mapNodeRow(result.rows[0]);
     }
 
     return undefined;
@@ -1501,7 +1750,7 @@ export function createOperations(
     if (options?.namespace) {
       const result = await db.query<KnowledgeNode>(
         `SELECT * FROM "nodes"
-         WHERE "type" = 'user' AND "namespace" = $1
+         WHERE "type" IN ('participant', 'user') AND "namespace" = $1
          ORDER BY "created_at" ASC
          LIMIT $2`,
         [options.namespace, cap],
@@ -1510,7 +1759,7 @@ export function createOperations(
     }
     const result = await db.query<KnowledgeNode>(
       `SELECT * FROM "nodes"
-       WHERE "type" = 'user'
+       WHERE "type" IN ('participant', 'user')
        ORDER BY "namespace", "created_at" ASC
        LIMIT $1`,
       [cap],
@@ -1544,9 +1793,12 @@ export function createOperations(
   const createDocument = async (
     doc: Omit<NewDocument, "id"> & { id?: string },
   ): Promise<Document> => {
+    if (!doc.namespace) {
+      throw new Error("Document namespace is required");
+    }
     const docNode = await createNode({
       id: doc.id,
-      namespace: doc.namespace ?? "default",
+      namespace: doc.namespace,
       type: "document",
       name: doc.title ?? doc.sourceUri ?? doc.contentHash ?? "untitled",
       data: {
@@ -1565,6 +1817,23 @@ export function createOperations(
       sourceType: "document",
       sourceId: null,
     });
+
+    const metadata = doc.metadata ?? {};
+    const scope = typeof metadata === "object"
+      ? (metadata as Record<string, unknown>).scope as RagScope | undefined
+      : undefined;
+    const linkTargets = new Set<string>();
+    if (scope?.threadId) linkTargets.add(scope.threadId);
+    if (scope?.agentId) linkTargets.add(scope.agentId);
+    for (const id of scope?.knowledgeSpaceIds ?? []) linkTargets.add(id);
+    for (const targetId of linkTargets) {
+      await createEdge({
+        sourceNodeId: targetId,
+        targetNodeId: docNode.id as string,
+        type: GRAPH_EDGE.HAS_DOCUMENT,
+      });
+    }
+
     return nodeToDocument(docNode);
   };
 
@@ -1644,6 +1913,11 @@ export function createOperations(
         },
         sourceType: "document",
         sourceId: chunk.documentId,
+      });
+      await createEdge({
+        sourceNodeId: chunk.documentId,
+        targetNodeId: chunkNode.id as string,
+        type: GRAPH_EDGE.HAS_CHUNK,
       });
       created.push({
         id: chunkNode.id as string,

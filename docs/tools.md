@@ -97,12 +97,12 @@ apply_patch({
 
 ### RAG & Knowledge
 
-| Tool               | Description                                                   |
-| ------------------ | ------------------------------------------------------------- |
-| `search_knowledge` | Semantic search across your knowledge base                    |
-| `ingest_document`  | Add a document to the knowledge base (URL, file, or raw text) |
-| `list_namespaces`  | List all knowledge namespaces with document counts            |
-| `delete_document`  | Remove a document from the knowledge base                     |
+| Tool                    | Description                                                   |
+| ----------------------- | ------------------------------------------------------------- |
+| `search_knowledge`      | Semantic search across your knowledge base                    |
+| `ingest_document`       | Add a document to the knowledge base (URL, file, or raw text) |
+| `list_knowledge_spaces` | List knowledge-space nodes in the current tenant namespace    |
+| `delete_document`       | Remove a document from the knowledge base                     |
 
 ### Thread & Multi-Agent
 

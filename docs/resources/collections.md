@@ -13,7 +13,7 @@ resources/collections/<collection-name>.ts
 
 Use a collection for durable app records that belong to your domain.
 
-Recommended use case: business data and app state  
+Recommended use case: business data and app state\
 Most common mistaken alternative: storing durable records in thread metadata
 
 ## How Copilotz Consumes It

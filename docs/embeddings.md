@@ -1,10 +1,13 @@
 # Embeddings
 
-Copilotz uses embeddings for RAG (semantic search over ingested documents). The built-in provider is OpenAI's `text-embedding-3-small`, but you can add your own.
+Copilotz uses embeddings for RAG (semantic search over ingested documents). The
+built-in provider is OpenAI's `text-embedding-3-small`, but you can add your
+own.
 
 ## Using the Default
 
-Embeddings work out of the box when an `OPENAI_API_KEY` is set. The RAG pipeline uses them automatically for document ingestion and search queries.
+Embeddings work out of the box when an `OPENAI_API_KEY` is set. The RAG pipeline
+uses them automatically for document ingestion and search queries.
 
 ```typescript
 const copilotz = await createCopilotz({
@@ -18,7 +21,8 @@ const copilotz = await createCopilotz({
 });
 ```
 
-Even though the agent uses Anthropic for chat, embeddings still use OpenAI by default.
+Even though the agent uses Anthropic for chat, embeddings still use OpenAI by
+default.
 
 ## Configuring Embeddings
 
@@ -35,24 +39,32 @@ const copilotz = await createCopilotz({
 });
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `provider` | `"openai"` | Embedding provider name |
-| `model` | `"text-embedding-3-small"` | Model name |
-| `dimensions` | Provider default | Output dimensions (for models that support it) |
-| `apiKey` | From env | API key override |
-| `baseUrl` | Provider default | Base URL override |
+| Option       | Default                    | Description                                    |
+| ------------ | -------------------------- | ---------------------------------------------- |
+| `provider`   | `"openai"`                 | Embedding provider name                        |
+| `model`      | `"text-embedding-3-small"` | Model name                                     |
+| `dimensions` | Provider default           | Output dimensions (for models that support it) |
+| `apiKey`     | From env                   | API key override                               |
+| `baseUrl`    | Provider default           | Base URL override                              |
 
 ## Writing a Custom Embedding Provider
 
-An embedding provider is a factory function that takes an `EmbeddingConfig` and returns an `EmbeddingProviderAPI`:
+An embedding provider is a factory function that takes an `EmbeddingConfig` and
+returns an `EmbeddingProviderAPI`:
 
 ```typescript
-import type { EmbeddingProviderFactory, EmbeddingConfig } from "@copilotz/copilotz";
+import type {
+  EmbeddingConfig,
+  EmbeddingProviderFactory,
+} from "@copilotz/copilotz";
 
-export const myEmbeddingProvider: EmbeddingProviderFactory = (config: EmbeddingConfig) => {
+export const myEmbeddingProvider: EmbeddingProviderFactory = (
+  config: EmbeddingConfig,
+) => {
   return {
-    endpoint: `${config.baseUrl || "https://api.my-embeddings.com"}/v1/embeddings`,
+    endpoint: `${
+      config.baseUrl || "https://api.my-embeddings.com"
+    }/v1/embeddings`,
 
     headers: (config: EmbeddingConfig) => ({
       "Content-Type": "application/json",
@@ -85,13 +97,13 @@ export const myEmbeddingProvider: EmbeddingProviderFactory = (config: EmbeddingC
 
 ### EmbeddingProviderAPI Interface
 
-| Property | Required | Description |
-|----------|----------|-------------|
-| `endpoint` | Yes | The embeddings API URL |
-| `headers(config)` | Yes | Returns request headers |
-| `body(texts, config)` | Yes | Builds the request body from input texts |
-| `extractEmbeddings(data)` | Yes | Extracts embedding vectors from the API response |
-| `extractUsage(data)` | No | Extracts token usage from the response |
+| Property                  | Required | Description                                      |
+| ------------------------- | -------- | ------------------------------------------------ |
+| `endpoint`                | Yes      | The embeddings API URL                           |
+| `headers(config)`         | Yes      | Returns request headers                          |
+| `body(texts, config)`     | Yes      | Builds the request body from input texts         |
+| `extractEmbeddings(data)` | Yes      | Extracts embedding vectors from the API response |
+| `extractUsage(data)`      | No       | Extracts token usage from the response           |
 
 ## Registering a Custom Provider
 
@@ -114,7 +126,9 @@ Create `resources/embeddings/my-provider/adapter.ts`:
 ```typescript
 import type { EmbeddingProviderFactory } from "@copilotz/copilotz";
 
-export const myProviderEmbeddingProvider: EmbeddingProviderFactory = (config) => ({
+export const myProviderEmbeddingProvider: EmbeddingProviderFactory = (
+  config,
+) => ({
   endpoint: "https://api.my-embeddings.com/v1/embeddings",
   headers: (config) => ({ "Authorization": `Bearer ${config.apiKey}` }),
   body: (texts, config) => ({ model: config.model, input: texts }),
@@ -135,7 +149,8 @@ export default {
 
 ## OpenAI-Compatible Endpoints
 
-Like LLM providers, many embedding APIs follow the OpenAI format. Use the built-in `openai` embedding provider with a custom `baseUrl`:
+Like LLM providers, many embedding APIs follow the OpenAI format. Use the
+built-in `openai` embedding provider with a custom `baseUrl`:
 
 ```typescript
 embeddingOptions: {

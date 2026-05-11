@@ -17,17 +17,19 @@ export default async function (
   const namespace = query.namespace as string | undefined;
 
   const params: unknown[] = [];
-  const filters = [`n."type" = 'user'`];
+  const filters = [`n."type" = 'participant'`];
 
   if (namespace) {
     params.push(namespace);
-    filters.push(`(n."namespace" = $${params.length} OR n."namespace" = 'global')`);
+    filters.push(`n."namespace" = $${params.length}`);
   }
 
   const pType = query.participantType as string | undefined;
   if (pType && pType !== "all") {
     params.push(pType);
-    filters.push(`COALESCE(n."data"->>'participantType', 'human') = $${params.length}`);
+    filters.push(
+      `COALESCE(n."data"->>'participantType', 'human') = $${params.length}`,
+    );
   }
 
   const search = normalizeSearch(query.search as string | undefined);
@@ -40,7 +42,9 @@ export default async function (
   }
 
   const limit = normalizeLimit(query.limit ? Number(query.limit) : undefined);
-  const offset = normalizeOffset(query.offset ? Number(query.offset) : undefined);
+  const offset = normalizeOffset(
+    query.offset ? Number(query.offset) : undefined,
+  );
   params.push(limit);
   const li = params.length;
   params.push(offset);
@@ -49,21 +53,23 @@ export default async function (
   const msgScope: string[] = [`m."type" = 'message'`];
   if (namespace) {
     params.push(namespace);
-    msgScope.push(
-      `m."namespace" IN (SELECT DISTINCT "threadId" FROM "events" WHERE "namespace" = $${params.length})`,
-    );
+    msgScope.push(`m."namespace" = $${params.length}`);
   }
 
   const result = await q<{
-    externalId: string; displayName: string;
-    participantType: "human" | "agent"; namespace: string; isGlobal: boolean;
-    messageCount: number; threadCount: number;
+    externalId: string;
+    displayName: string;
+    participantType: "human" | "agent";
+    namespace: string;
+    isGlobal: boolean;
+    messageCount: number;
+    threadCount: number;
     lastActivityAt: Date | string | null;
   }>(
     `WITH "message_stats" AS (
        SELECT COALESCE(m."data"->>'senderId', '') AS "externalId",
          COUNT(*)::int AS "messageCount",
-         COUNT(DISTINCT m."namespace")::int AS "threadCount",
+         COUNT(DISTINCT m."source_id")::int AS "threadCount",
          MAX(m."created_at") AS "lastActivityAt"
        FROM "nodes" AS m WHERE ${msgScope.join(" AND ")} GROUP BY 1
      )

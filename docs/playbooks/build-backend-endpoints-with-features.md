@@ -5,7 +5,7 @@
 Use a `feature` when your frontend or another backend service should call a
 Copilotz-backed action directly over an app endpoint.
 
-Recommended primitive: `feature`  
+Recommended primitive: `feature`\
 Most common mistaken alternative: implementing app-facing backend behavior as a
 `tool` first
 

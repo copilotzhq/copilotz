@@ -5,7 +5,7 @@
 Use `participant.metadata` when you need durable user profile data or long-term
 user context that should remain available across threads and agent turns.
 
-Recommended primitive: `participant.metadata`  
+Recommended primitive: `participant.metadata`\
 Most common mistaken alternative: creating a separate profile store or using
 thread metadata for durable user state
 

@@ -176,7 +176,7 @@ agents: [{
   allowedAgents: ["other"], // Agent communication whitelist
   ragOptions: { // Per-agent RAG settings
     mode: "auto",
-    namespaces: ["docs"],
+    scope: { knowledgeSpaceIds: ["ks-docs"] },
     autoInjectLimit: 4,
     entityExtraction: { enabled: true },
   },
@@ -394,9 +394,8 @@ tools: [{
 - `public_full`
 
 Use `public_status` when other agents should only know the tool name and
-completion status.
-Use `projector` with `public_result` when other agents should see a compact
-business-level outcome instead of the raw tool payload.
+completion status. Use `projector` with `public_result` when other agents should
+see a compact business-level outcome instead of the raw tool payload.
 
 ## OpenAPI Integrations
 
@@ -547,12 +546,7 @@ rag: {
     similarityThreshold: 0.7,           // Minimum similarity (0-1)
   },
   
-  defaultNamespace: "docs",             // Default namespace for storage
-  
-  namespaceResolver: async (context) => {
-    // Dynamic namespace resolution
-    return `customer:${context.message.metadata?.customerId}`;
-  },
+  // Documents/chunks use the tenant namespace. Search eligibility is graph-scoped.
 }
 ```
 
@@ -814,7 +808,10 @@ const copilotz = await createCopilotz({
     instructions: "You are a helpful support agent.",
     llmOptions: { provider: "openai", model: "gpt-4o-mini" },
     allowedTools: ["search_knowledge", "http_request"],
-    ragOptions: { mode: "auto", namespaces: ["docs", "faq"] },
+    ragOptions: {
+      mode: "auto",
+      scope: { knowledgeSpaceIds: ["ks-docs", "ks-faq"] },
+    },
   }],
 
   dbConfig: {

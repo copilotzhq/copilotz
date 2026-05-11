@@ -7,7 +7,8 @@ tags: [framework, api]
 
 # Add API Integration
 
-Integrate an external REST API using an OpenAPI spec. Copilotz auto-generates tools from the spec.
+Integrate an external REST API using an OpenAPI spec. Copilotz auto-generates
+tools from the spec.
 
 ## Directory Structure
 
@@ -27,26 +28,26 @@ Place the OpenAPI 3.0 spec as `openApiSchema.json`. Can also be `.yaml`.
 import type { API } from "copilotz";
 
 const config: Omit<API, "openApiSchema"> = {
-    id: "my-api",
-    name: "My API",
-    baseUrl: "https://api.example.com",  // Override spec's server URL
-    auth: {
-        type: "bearer",
-        token: Deno.env.get("MY_API_TOKEN"),
+  id: "my-api",
+  name: "My API",
+  baseUrl: "https://api.example.com", // Override spec's server URL
+  auth: {
+    type: "bearer",
+    token: Deno.env.get("MY_API_TOKEN"),
+  },
+  // Control how API tool results appear in history
+  historyPolicyDefaults: {
+    visibility: "requester_only",
+  },
+  toolPolicies: {
+    getItem: { // Keyed by operationId
+      visibility: "public_result",
+      projector: (_args, output) => {
+        const item = output as { name?: string };
+        return `Loaded item: ${item.name}`;
+      },
     },
-    // Control how API tool results appear in history
-    historyPolicyDefaults: {
-        visibility: "requester_only",
-    },
-    toolPolicies: {
-        getItem: {                       // Keyed by operationId
-            visibility: "public_result",
-            projector: (_args, output) => {
-                const item = output as { name?: string };
-                return `Loaded item: ${item.name}`;
-            },
-        },
-    },
+  },
 };
 
 export default config;

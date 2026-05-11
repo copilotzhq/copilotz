@@ -10,7 +10,8 @@ resources/features/<feature>/<action>.ts
 
 The default export receives:
 
-- a request-like object with `method`, `body`, `query`, `headers`, and optional `context`
+- a request-like object with `method`, `body`, `query`, `headers`, and optional
+  `context`
 - the Copilotz instance
 
 ## Return Shape

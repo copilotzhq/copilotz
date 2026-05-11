@@ -18,7 +18,12 @@ export default async function (
 
   const params: unknown[] = [];
   const filters: string[] = [];
-  pushThreadNamespace(params, filters, `t."id"`, query.namespace as string | undefined);
+  pushThreadNamespace(
+    params,
+    filters,
+    `t."namespace"`,
+    query.namespace as string | undefined,
+  );
 
   const status = query.status as string | undefined;
   if (status && status !== "all") {
@@ -39,17 +44,25 @@ export default async function (
 
   const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
   const limit = normalizeLimit(query.limit ? Number(query.limit) : undefined);
-  const offset = normalizeOffset(query.offset ? Number(query.offset) : undefined);
+  const offset = normalizeOffset(
+    query.offset ? Number(query.offset) : undefined,
+  );
   params.push(limit);
   const li = params.length;
   params.push(offset);
   const oi = params.length;
 
   const result = await q<{
-    threadId: string; name: string; status: string; summary: string | null;
-    participantIds: string[] | null; messageCount: number;
-    lastActivityAt: Date | string | null; lastMessagePreview: string | null;
-    createdAt: Date | string | null; updatedAt: Date | string | null;
+    threadId: string;
+    name: string;
+    status: string;
+    summary: string | null;
+    participantIds: string[] | null;
+    messageCount: number;
+    lastActivityAt: Date | string | null;
+    lastMessagePreview: string | null;
+    createdAt: Date | string | null;
+    updatedAt: Date | string | null;
   }>(
     `SELECT
        t."id" AS "threadId", t."name", t."status", t."summary",
@@ -62,7 +75,10 @@ export default async function (
        SELECT COUNT(*)::int AS "messageCount",
          MAX(m."created_at") AS "lastActivityAt",
          (ARRAY_AGG(LEFT(COALESCE(m."content", ''), 280) ORDER BY m."created_at" DESC))[1] AS "lastMessagePreview"
-       FROM "nodes" AS m WHERE m."type" = 'message' AND m."namespace" = t."id"
+       FROM "nodes" AS m
+       WHERE m."type" = 'message'
+         AND m."source_type" = 'thread'
+         AND m."source_id" = t."id"
      ) AS "ms" ON TRUE
      ${whereClause}
      ORDER BY COALESCE("ms"."lastActivityAt", t."updatedAt") DESC, t."updatedAt" DESC

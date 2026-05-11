@@ -39,26 +39,26 @@ resources/mcp-servers/{server-name}/
 import type { MCPServer } from "copilotz";
 
 export default {
-    id: "filesystem",
-    name: "File System",
-    transport: {
-        type: "stdio",
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-filesystem", "/data"],
+  id: "filesystem",
+  name: "File System",
+  transport: {
+    type: "stdio",
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/data"],
+  },
+  historyPolicyDefaults: {
+    visibility: "requester_only",
+  },
+  toolPolicies: {
+    read_file: { visibility: "requester_only" },
+    list_directory: {
+      visibility: "public_result",
+      projector: (_args, output) => {
+        const result = output as { entries?: unknown[] };
+        return `Listed ${result.entries?.length ?? 0} entries.`;
+      },
     },
-    historyPolicyDefaults: {
-        visibility: "requester_only",
-    },
-    toolPolicies: {
-        read_file: { visibility: "requester_only" },
-        list_directory: {
-            visibility: "public_result",
-            projector: (_args, output) => {
-                const result = output as { entries?: unknown[] };
-                return `Listed ${result.entries?.length ?? 0} entries.`;
-            },
-        },
-    },
+  },
 } as MCPServer;
 ```
 
@@ -69,9 +69,11 @@ export default {
 
 ## Tool Naming
 
-MCP tools are exposed as `{serverId}_{toolName}`. Agents access them via `allowedTools`.
+MCP tools are exposed as `{serverId}_{toolName}`. Agents access them via
+`allowedTools`.
 
 ## Notes
 
 - MCP tools are auto-discovered from the server at startup
-- Tool policies can override visibility per-tool using either the Copilotz key or original MCP tool name
+- Tool policies can override visibility per-tool using either the Copilotz key
+  or original MCP tool name

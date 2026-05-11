@@ -25,10 +25,12 @@ export default async function (
   // Thread totals
   const tp: unknown[] = [];
   const tf: string[] = [];
-  pushThreadNamespace(tp, tf, `t."id"`, namespace);
+  pushThreadNamespace(tp, tf, `t."namespace"`, namespace);
   pushTimeRange(tp, tf, `t."createdAt"`, from, to);
   const tw = tf.length ? `WHERE ${tf.join(" AND ")}` : "";
-  const threadResult = await q<{ total: number; active: number; archived: number }>(
+  const threadResult = await q<
+    { total: number; active: number; archived: number }
+  >(
     `SELECT COUNT(*)::int AS "total",
        COUNT(*) FILTER (WHERE t."status" = 'active')::int AS "active",
        COUNT(*) FILTER (WHERE t."status" = 'archived')::int AS "archived"
@@ -39,12 +41,20 @@ export default async function (
   // Queue totals
   const qp: unknown[] = [];
   const qf: string[] = [];
-  if (namespace) { qp.push(namespace); qf.push(`"namespace" = $${qp.length}`); }
+  if (namespace) {
+    qp.push(namespace);
+    qf.push(`"namespace" = $${qp.length}`);
+  }
   pushTimeRange(qp, qf, `"createdAt"`, from, to);
   const qw = qf.length ? `WHERE ${qf.join(" AND ")}` : "";
   const queueResult = await q<{
-    total: number; pending: number; processing: number; completed: number;
-    failed: number; expired: number; overwritten: number;
+    total: number;
+    pending: number;
+    processing: number;
+    completed: number;
+    failed: number;
+    expired: number;
+    overwritten: number;
   }>(
     `SELECT COUNT(*)::int AS "total",
        COUNT(*) FILTER (WHERE "status" = 'pending')::int AS "pending",
@@ -74,12 +84,14 @@ export default async function (
 
   // Participant totals
   const pp: unknown[] = [];
-  const pf: string[] = [`"type" = 'user'`];
+  const pf: string[] = [`"type" = 'participant'`];
   if (namespace) {
     pp.push(namespace);
-    pf.push(`("namespace" = $${pp.length} OR "namespace" = 'global')`);
+    pf.push(`"namespace" = $${pp.length}`);
   }
-  const participantResult = await q<{ total: number; humans: number; agents: number }>(
+  const participantResult = await q<
+    { total: number; humans: number; agents: number }
+  >(
     `SELECT COUNT(*)::int AS "total",
        COUNT(*) FILTER (WHERE COALESCE("data"->>'participantType', 'human') = 'human')::int AS "humans",
        COUNT(*) FILTER (WHERE COALESCE("data"->>'participantType', 'human') = 'agent')::int AS "agents"
@@ -99,19 +111,43 @@ export default async function (
   );
 
   const t = threadResult.rows[0] ?? { total: 0, active: 0, archived: 0 };
-  const qr = queueResult.rows[0] ?? { total: 0, pending: 0, processing: 0, completed: 0, failed: 0, expired: 0, overwritten: 0 };
+  const qr = queueResult.rows[0] ??
+    {
+      total: 0,
+      pending: 0,
+      processing: 0,
+      completed: 0,
+      failed: 0,
+      expired: 0,
+      overwritten: 0,
+    };
   const mr = messageResult.rows[0] ?? { total: 0, toolCallMessages: 0 };
   const pr = participantResult.rows[0] ?? { total: 0, humans: 0, agents: 0 };
 
   const data: AdminOverview = {
-    threadTotals: { total: toNum(t.total), active: toNum(t.active), archived: toNum(t.archived) },
+    threadTotals: {
+      total: toNum(t.total),
+      active: toNum(t.active),
+      archived: toNum(t.archived),
+    },
     queueTotals: {
-      total: toNum(qr.total), pending: toNum(qr.pending), processing: toNum(qr.processing),
-      completed: toNum(qr.completed), failed: toNum(qr.failed), expired: toNum(qr.expired),
+      total: toNum(qr.total),
+      pending: toNum(qr.pending),
+      processing: toNum(qr.processing),
+      completed: toNum(qr.completed),
+      failed: toNum(qr.failed),
+      expired: toNum(qr.expired),
       overwritten: toNum(qr.overwritten),
     },
-    messageTotals: { total: toNum(mr.total), toolCallMessages: toNum(mr.toolCallMessages) },
-    participantTotals: { total: toNum(pr.total), humans: toNum(pr.humans), agents: toNum(pr.agents) },
+    messageTotals: {
+      total: toNum(mr.total),
+      toolCallMessages: toNum(mr.toolCallMessages),
+    },
+    participantTotals: {
+      total: toNum(pr.total),
+      humans: toNum(pr.humans),
+      agents: toNum(pr.agents),
+    },
     llmTotals: toUsageTotals(usageResult.rows[0] ?? emptyUsageTotals()),
   };
 

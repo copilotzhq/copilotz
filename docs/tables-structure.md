@@ -1,10 +1,15 @@
 # Tables Structure
 
-This document describes the database tables used by Copilotz. The framework uses PostgreSQL (or PGLite) with **four persisted tables** per schema: threads, events (queue), nodes, and edges.
+This document describes the database tables used by Copilotz. The framework uses
+PostgreSQL (or PGLite) with **four persisted tables** per schema: threads,
+events (queue), nodes, and edges.
 
 ## Overview
 
-All conversational content, RAG material, users, entities, and custom collection records live in the **knowledge graph** (`nodes` + `edges`). **Threads** hold conversation metadata and grouping. **Events** are the durable work queue that drives processing.
+All conversational content, RAG material, users, entities, and custom collection
+records live in the **knowledge graph** (`nodes` + `edges`). **Threads** hold
+conversation metadata and grouping. **Events** are the durable work queue that
+drives processing.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -13,8 +18,8 @@ All conversational content, RAG material, users, entities, and custom collection
 │  metadata         │  status, payload, priority, TTL, …       │
 ├─────────────────────────────────────────────────────────────┤
 │  nodes                              │  edges                 │
-│  message, chunk, document, user,    │  REPLIED_BY, SENT_BY, │
-│  entity, collection:*, …            │  NEXT_CHUNK, MENTIONS, …│
+│  message, chunk, document, user,    │  derived_from, sent_by, │
+│  entity, collection:*, …            │  derived_from, MENTIONS, …│
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -24,23 +29,24 @@ All conversational content, RAG material, users, entities, and custom collection
 
 ### threads
 
-Conversation threads: metadata, participants, hierarchy, and lifecycle (`active` / `archived`).
+Conversation threads: metadata, participants, hierarchy, and lifecycle (`active`
+/ `archived`).
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | UUID | Primary key |
-| `name` | TEXT | Thread name |
-| `externalId` | TEXT | External system identifier |
-| `description` | TEXT | Thread description |
-| `participants` | JSONB | Array of participant IDs |
-| `initialMessage` | TEXT | First message content |
-| `mode` | TEXT | Thread mode |
-| `status` | TEXT | `active`, `archived` |
-| `summary` | TEXT | Summary (set when archived) |
-| `parentThreadId` | UUID | Parent thread for hierarchies |
-| `metadata` | JSONB | Custom metadata |
-| `createdAt` | TIMESTAMP | Creation time |
-| `updatedAt` | TIMESTAMP | Last update time |
+| Column           | Type      | Description                   |
+| ---------------- | --------- | ----------------------------- |
+| `id`             | UUID      | Primary key                   |
+| `name`           | TEXT      | Thread name                   |
+| `externalId`     | TEXT      | External system identifier    |
+| `description`    | TEXT      | Thread description            |
+| `participants`   | JSONB     | Array of participant IDs      |
+| `initialMessage` | TEXT      | First message content         |
+| `mode`           | TEXT      | Thread mode                   |
+| `status`         | TEXT      | `active`, `archived`          |
+| `summary`        | TEXT      | Summary (set when archived)   |
+| `parentThreadId` | UUID      | Parent thread for hierarchies |
+| `metadata`       | JSONB     | Custom metadata               |
+| `createdAt`      | TIMESTAMP | Creation time                 |
+| `updatedAt`      | TIMESTAMP | Last update time              |
 
 **Access:**
 
@@ -70,24 +76,25 @@ await copilotz.ops.archiveThread(threadId, "Resolved: customer happy");
 
 ### events
 
-The event queue powers Copilotz's event-driven architecture. Every action flows through this table.
+The event queue powers Copilotz's event-driven architecture. Every action flows
+through this table.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | UUID | Primary key |
-| `threadId` | UUID | Associated thread |
-| `eventType` | TEXT | `NEW_MESSAGE`, `LLM_CALL`, `TOOL_CALL`, `RAG_INGEST`, `ENTITY_EXTRACT`, etc. |
-| `payload` | JSONB | Event-specific data |
-| `parentEventId` | UUID | Parent event (for chains) |
-| `traceId` | UUID | Trace ID for debugging |
-| `priority` | INTEGER | Higher = processed first |
-| `ttlMs` | INTEGER | Time-to-live in milliseconds |
-| `expiresAt` | TIMESTAMP | Expiration time |
-| `namespace` | TEXT | Multi-tenancy namespace |
-| `status` | TEXT | `pending`, `processing`, `completed`, `failed`, `expired`, `overwritten` |
-| `metadata` | JSONB | Custom metadata |
-| `createdAt` | TIMESTAMP | Creation time |
-| `updatedAt` | TIMESTAMP | Last update time |
+| Column          | Type      | Description                                                                  |
+| --------------- | --------- | ---------------------------------------------------------------------------- |
+| `id`            | UUID      | Primary key                                                                  |
+| `threadId`      | UUID      | Associated thread                                                            |
+| `eventType`     | TEXT      | `NEW_MESSAGE`, `LLM_CALL`, `TOOL_CALL`, `RAG_INGEST`, `ENTITY_EXTRACT`, etc. |
+| `payload`       | JSONB     | Event-specific data                                                          |
+| `parentEventId` | UUID      | Parent event (for chains)                                                    |
+| `traceId`       | UUID      | Trace ID for debugging                                                       |
+| `priority`      | INTEGER   | Higher = processed first                                                     |
+| `ttlMs`         | INTEGER   | Time-to-live in milliseconds                                                 |
+| `expiresAt`     | TIMESTAMP | Expiration time                                                              |
+| `namespace`     | TEXT      | Multi-tenancy namespace                                                      |
+| `status`        | TEXT      | `pending`, `processing`, `completed`, `failed`, `expired`, `overwritten`     |
+| `metadata`      | JSONB     | Custom metadata                                                              |
+| `createdAt`     | TIMESTAMP | Creation time                                                                |
+| `updatedAt`     | TIMESTAMP | Last update time                                                             |
 
 **Access:**
 
@@ -116,34 +123,38 @@ await copilotz.ops.updateQueueItemStatus(eventId, "completed");
 
 ### nodes
 
-Unified storage for every graph node: messages, RAG documents and chunks, users, entities, and `collection:*` records.
+Unified storage for every graph node: messages, RAG documents and chunks, users,
+entities, and `collection:*` records.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | TEXT (ULID) | Primary key |
-| `namespace` | TEXT | Multi-tenancy namespace |
-| `type` | TEXT | Node type (see below) |
-| `name` | TEXT | Display name |
-| `embedding` | VECTOR(1536) | Vector embedding for semantic search |
-| `content` | TEXT | Text content |
-| `data` | JSONB | Type-specific properties |
-| `source_type` | TEXT | Source of this node |
-| `source_id` | TEXT | Source identifier |
-| `created_at` | TIMESTAMP | Creation time |
-| `updated_at` | TIMESTAMP | Last update time |
+| Column        | Type         | Description                          |
+| ------------- | ------------ | ------------------------------------ |
+| `id`          | TEXT (ULID)  | Primary key                          |
+| `namespace`   | TEXT         | Multi-tenancy namespace              |
+| `type`        | TEXT         | Node type (see below)                |
+| `name`        | TEXT         | Display name                         |
+| `embedding`   | VECTOR(1536) | Vector embedding for semantic search |
+| `content`     | TEXT         | Text content                         |
+| `data`        | JSONB        | Type-specific properties             |
+| `source_type` | TEXT         | Source of this node                  |
+| `source_id`   | TEXT         | Source identifier                    |
+| `created_at`  | TIMESTAMP    | Creation time                        |
+| `updated_at`  | TIMESTAMP    | Last update time                     |
 
 **Built-in node types:**
 
-| Type | Description | Typical producer |
-|------|-------------|------------------|
-| `message` | Conversation turns | NEW_MESSAGE / message pipeline |
-| `document` | Ingested source metadata (URI, hash, status, title, …) | RAG_INGEST |
-| `chunk` | Embedded text segments for retrieval | RAG_INGEST |
-| `user` | End-user identity (often `data.externalId`) | Message / participant upserts |
-| `entity` | Extracted entities | ENTITY_EXTRACT |
-| `collection:*` | Collection-backed records | Collections API |
+| Type           | Description                                            | Typical producer               |
+| -------------- | ------------------------------------------------------ | ------------------------------ |
+| `message`      | Conversation turns                                     | NEW_MESSAGE / message pipeline |
+| `document`     | Ingested source metadata (URI, hash, status, title, …) | RAG_INGEST                     |
+| `chunk`        | Embedded text segments for retrieval                   | RAG_INGEST                     |
+| `user`         | End-user identity (often `data.externalId`)            | Message / participant upserts  |
+| `entity`       | Extracted entities                                     | ENTITY_EXTRACT                 |
+| `collection:*` | Collection-backed records                              | Collections API                |
 
-**RAG note:** There is no separate `documents` or `document_chunks` table. Ingestion creates a `document` node plus `chunk` nodes (and edges such as `NEXT_CHUNK`). High-level helpers like `createDocument`, `getDocumentById`, and `searchChunks` read and write these nodes.
+**RAG note:** There is no separate `documents` or `document_chunks` table.
+Ingestion creates a `document` node plus `chunk` nodes (and edges such as
+`derived_from`). High-level helpers like `createDocument`, `getDocumentById`,
+and `searchChunks` read and write these nodes.
 
 **Access:**
 
@@ -178,7 +189,7 @@ await copilotz.ops.deleteNode(nodeId);
 const results = await copilotz.ops.searchNodes({
   embedding: embeddingVector,
   nodeTypes: ["entity"],
-  namespaces: ["tenant:acme"],
+  namespaces: ["tenant-acme"],
   limit: 10,
   minSimilarity: 0.7,
 });
@@ -190,28 +201,28 @@ const results = await copilotz.ops.searchNodes({
 
 Relationships between nodes.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | TEXT (ULID) | Primary key |
-| `source_node_id` | TEXT | Source node ID (FK) |
-| `target_node_id` | TEXT | Target node ID (FK) |
-| `type` | TEXT | Edge type (see below) |
-| `data` | JSONB | Edge properties |
-| `weight` | FLOAT | Edge weight/strength |
-| `created_at` | TIMESTAMP | Creation time |
+| Column           | Type        | Description           |
+| ---------------- | ----------- | --------------------- |
+| `id`             | TEXT (ULID) | Primary key           |
+| `source_node_id` | TEXT        | Source node ID (FK)   |
+| `target_node_id` | TEXT        | Target node ID (FK)   |
+| `type`           | TEXT        | Edge type (see below) |
+| `data`           | JSONB       | Edge properties       |
+| `weight`         | FLOAT       | Edge weight/strength  |
+| `created_at`     | TIMESTAMP   | Creation time         |
 
 **Built-in edge types:**
 
-| Type | From → To | Description |
-|------|-----------|-------------|
-| `REPLIED_BY` | Message → Message | Conversation flow |
-| `SENT_BY` | User → Message | Message authorship |
-| `MENTIONS` | Message/Chunk → Entity | Entity references in content |
-| `RELATED_TO` | Entity → Entity | Entity relationships |
-| `NEXT_CHUNK` | Chunk → Chunk | Sequential document chunks |
-| `BELONGS_TO` | Node → Node | Custom collection relations |
-| `HAS_MANY` | Node → Node | Custom collection relations |
-| `HAS_ONE` | Node → Node | Custom collection relations |
+| Type           | From → To              | Description                  |
+| -------------- | ---------------------- | ---------------------------- |
+| `derived_from` | Message → Message      | Conversation flow            |
+| `sent_by`      | User → Message         | Message authorship           |
+| `MENTIONS`     | Message/Chunk → Entity | Entity references in content |
+| `RELATED_TO`   | Entity → Entity        | Entity relationships         |
+| `derived_from` | Chunk → Chunk          | Sequential document chunks   |
+| `BELONGS_TO`   | Node → Node            | Custom collection relations  |
+| `HAS_MANY`     | Node → Node            | Custom collection relations  |
+| `HAS_ONE`      | Node → Node            | Custom collection relations  |
 
 **Access:**
 
@@ -253,7 +264,8 @@ const related = await copilotz.ops.findRelatedNodes(nodeId, 2);
 
 ## Messages and participants
 
-Messages are **`nodes` with `type: "message"`**, linked with edges (for example `REPLIED_BY`, `SENT_BY`). Use graph-oriented APIs:
+Messages are **`nodes` with `type: "message"`**, linked with edges (for example
+`derived_from`, `sent_by`). Use graph-oriented APIs:
 
 ```typescript
 const history = await copilotz.ops.getMessageHistoryFromGraph(threadId, 50);
@@ -261,13 +273,15 @@ const last = await copilotz.ops.getLastMessageNode(threadId);
 await copilotz.ops.createMessage(messageInput, namespace);
 ```
 
-Participants (humans and agents) are represented as graph nodes; use `upsertParticipantNode` / `getParticipantNode`.
+Participants (humans and agents) are represented as graph nodes; use
+`upsertParticipantNode` / `getParticipantNode`.
 
 ---
 
 ## Schema Isolation
 
-For multi-tenant applications, each PostgreSQL schema contains the same four tables (`threads`, `events`, `nodes`, `edges`):
+For multi-tenant applications, each PostgreSQL schema contains the same four
+tables (`threads`, `events`, `nodes`, `edges`):
 
 ```typescript
 // Provision a tenant schema
@@ -283,6 +297,7 @@ See [Database](./database.md) for more on multi-tenancy.
 
 ## Next Steps
 
-- [Collections](./collections.md) — Type-safe data storage on the knowledge graph
+- [Collections](./collections.md) — Type-safe data storage on the knowledge
+  graph
 - [Database](./database.md) — Database configuration and multi-tenancy
 - [API Reference](./api-reference.md) — Full ops API documentation

@@ -5,7 +5,7 @@
 Use a `tool` when the model or agent should decide when to call an action during
 execution.
 
-Recommended primitive: `tool`  
+Recommended primitive: `tool`\
 Most common mistaken alternative: building agent-owned behavior as a feature
 endpoint first
 
@@ -37,7 +37,8 @@ export default {
 
 ```ts
 export default async function execute(input, context) {
-  const customers = context.collections?.withNamespace(context.namespace).customer;
+  const customers = context.collections?.withNamespace(context.namespace)
+    .customer;
   const record = await customers.findOne({ id: input.customerId });
   return { summary: `Customer ${record?.id}` };
 }

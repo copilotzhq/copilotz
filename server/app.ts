@@ -51,7 +51,17 @@ export interface AppRequest {
   headers?: Record<string, string>;
   rawBody?: Uint8Array;
   callback?: (event: unknown) => void;
-  context?: Record<string, unknown>;
+  context?: AppRequestContext;
+}
+
+export interface AppRequestContext extends Record<string, unknown> {
+  /**
+   * Tenant/application namespace for this request.
+   *
+   * Server adapters should set this from authenticated app context when the
+   * tenant is not fixed by `CopilotzConfig.namespace`.
+   */
+  namespace?: string;
 }
 
 /**
@@ -91,6 +101,20 @@ export interface CopilotzApp {
   resources(): ResourceDescriptor[];
 }
 
+export interface WithAppOptions {
+  /**
+   * Resolve the tenant/application namespace for each app request.
+   *
+   * Resolution order is:
+   * 1. `request.context.namespace`
+   * 2. `resolveNamespace(request)`
+   * 3. `copilotz.config.namespace`
+   */
+  resolveNamespace?: (
+    request: AppRequest,
+  ) => string | null | undefined | Promise<string | null | undefined>;
+}
+
 // ---------------------------------------------------------------------------
 // Route matching
 // ---------------------------------------------------------------------------
@@ -122,7 +146,8 @@ interface RouteContext {
   headers: Record<string, string>;
   rawBody?: Uint8Array;
   callback?: (event: unknown) => void;
-  context?: Record<string, unknown>;
+  context?: AppRequestContext;
+  namespace?: string;
   method: string;
 }
 
@@ -141,7 +166,7 @@ function matchRoute(
     let match = true;
     for (let i = 0; i < route.pattern.length; i++) {
       if (route.pattern[i].startsWith(":")) {
-        params[route.pattern[i].slice(1)] = path[i];
+        params[route.pattern[i].slice(1)] = decodeURIComponent(path[i]);
       } else if (route.pattern[i] !== path[i]) {
         match = false;
         break;
@@ -209,6 +234,7 @@ function buildRoutes(): Route[] {
             limit: asNumber(ctx.query.limit),
             offset: asNumber(ctx.query.offset),
             order: asEnum(ctx.query.order as string, ["asc", "desc"]),
+            namespace: ctx.namespace,
           }),
         };
       },
@@ -319,7 +345,10 @@ function buildRoutes(): Route[] {
         if (ctx.query.status === "processing") {
           return { status: 200, data: await h.getProcessing(p.id) };
         }
-        return { status: 200, data: await h.getNextPending(p.id) };
+        return {
+          status: 200,
+          data: await h.getNextPending(p.id, ctx.namespace),
+        };
       },
     },
     {
@@ -348,7 +377,7 @@ function buildRoutes(): Route[] {
       pattern: [":collection"],
       action: async (ctx, p) => {
         const q = ctx.query.q as string | undefined;
-        const namespace = ctx.query.namespace as string | undefined;
+        const namespace = requireTenantNamespace(ctx);
         if (q) {
           return {
             status: 200,
@@ -391,7 +420,7 @@ function buildRoutes(): Route[] {
         data: await ctx.handlers.collections.create(
           p.collection,
           ctx.body as Record<string, unknown>,
-          { namespace: ctx.query.namespace as string | undefined },
+          { namespace: requireTenantNamespace(ctx) },
         ),
       }),
     },
@@ -404,7 +433,7 @@ function buildRoutes(): Route[] {
           p.collection,
           p.id,
           {
-            namespace: ctx.query.namespace as string | undefined,
+            namespace: requireTenantNamespace(ctx),
             populate: parseListParam(ctx.query.populate),
           },
         );
@@ -424,7 +453,7 @@ function buildRoutes(): Route[] {
           p.collection,
           p.id,
           ctx.body as Record<string, unknown>,
-          { namespace: ctx.query.namespace as string | undefined },
+          { namespace: requireTenantNamespace(ctx) },
         ),
       }),
     },
@@ -434,7 +463,7 @@ function buildRoutes(): Route[] {
       pattern: [":collection", ":id"],
       action: async (ctx, p) => {
         await ctx.handlers.collections.delete(p.collection, p.id, {
-          namespace: ctx.query.namespace as string | undefined,
+          namespace: requireTenantNamespace(ctx),
         });
         return { status: 204 };
       },
@@ -447,7 +476,10 @@ function buildRoutes(): Route[] {
       pattern: ["search"],
       action: async (ctx) => ({
         status: 200,
-        data: await ctx.handlers.graph.search(ctx.body as any),
+        data: await ctx.handlers.graph.search({
+          ...(ctx.body as Record<string, unknown> | undefined),
+          namespace: requireTenantNamespace(ctx),
+        }),
       }),
     },
     {
@@ -514,10 +546,10 @@ function buildRoutes(): Route[] {
     {
       resource: "graph",
       method: "GET",
-      pattern: ["namespaces", ":namespace", "nodes"],
-      action: async (ctx, p) => ({
+      pattern: ["nodes"],
+      action: async (ctx) => ({
         status: 200,
-        data: await ctx.handlers.graph.listNodes(p.namespace, {
+        data: await ctx.handlers.graph.listNodes(requireTenantNamespace(ctx), {
           type: ctx.query.type as string | undefined,
         }),
       }),
@@ -598,6 +630,15 @@ function parseListParam(val: unknown): string[] | undefined {
   if (!val || typeof val !== "string") return undefined;
   const parts = val.split(",").map((s) => s.trim()).filter(Boolean);
   return parts.length > 0 ? parts : undefined;
+}
+
+function requireTenantNamespace(ctx: RouteContext): string {
+  if (ctx.namespace && ctx.namespace.trim().length > 0) return ctx.namespace;
+  throw {
+    status: 400,
+    message:
+      "Tenant namespace is required. Set CopilotzConfig.namespace, AppRequest.context.namespace, or withApp(..., { resolveNamespace }).",
+  };
 }
 
 async function handleChannelRoute(
@@ -745,6 +786,7 @@ const APP_KEY = Symbol.for("copilotz.app");
 
 export function withApp<T extends Copilotz>(
   copilotz: T,
+  options: WithAppOptions = {},
 ): T & { app: CopilotzApp } {
   const existing = (copilotz as any)[APP_KEY];
   if (existing) return copilotz as T & { app: CopilotzApp };
@@ -789,6 +831,7 @@ export function withApp<T extends Copilotz>(
                 rawBody: ctx.rawBody,
                 callback: ctx.callback,
                 context: ctx.context,
+                namespace: ctx.namespace,
               },
               ctx.copilotz,
             );
@@ -826,6 +869,11 @@ export function withApp<T extends Copilotz>(
         };
       }
 
+      const namespace = await resolveRequestNamespace(
+        request,
+        copilotz,
+        options,
+      );
       const ctx: RouteContext = {
         handlers,
         copilotz,
@@ -835,6 +883,7 @@ export function withApp<T extends Copilotz>(
         rawBody,
         callback,
         context,
+        namespace,
         method,
       };
 
@@ -858,4 +907,23 @@ export function withApp<T extends Copilotz>(
   Object.defineProperty(copilotz, "app", { value: app, enumerable: true });
 
   return copilotz as T & { app: CopilotzApp };
+}
+
+async function resolveRequestNamespace(
+  request: AppRequest,
+  copilotz: Copilotz,
+  options: WithAppOptions,
+): Promise<string | undefined> {
+  const contextNamespace = request.context?.namespace;
+  if (typeof contextNamespace === "string" && contextNamespace.trim()) {
+    return contextNamespace;
+  }
+
+  const resolved = await options.resolveNamespace?.(request);
+  if (typeof resolved === "string" && resolved.trim()) return resolved;
+
+  const configNamespace = copilotz.config.namespace;
+  return typeof configNamespace === "string" && configNamespace.trim()
+    ? configNamespace
+    : undefined;
 }

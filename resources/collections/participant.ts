@@ -3,6 +3,7 @@
  * Replaces the deprecated relational `users` table.
  */
 import { defineCollection, relation } from "@/database/collections/index.ts";
+import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 export default defineCollection({
   name: "participant",
@@ -23,10 +24,6 @@ export default defineCollection({
         description: "Agent ID (only for agent participants)",
       },
       metadata: { type: ["object", "null"] },
-      isGlobal: {
-        type: ["boolean", "null"],
-        description: "Whether this participant exists across all namespaces",
-      },
     },
     required: ["externalId", "participantType"],
   } as const,
@@ -37,9 +34,9 @@ export default defineCollection({
     "participantType",
   ],
   relations: {
-    sentMessages: relation.hasMany("message", "senderId", "SENT_BY"),
+    sentMessages: relation.hasMany("message", "senderId", GRAPH_EDGE.SENT_BY),
   },
-  methods: ({ collection, rootCollections, namespace }) => {
+  methods: ({ collection }) => {
     // Store references to base CRUD methods to avoid infinite recursion
     const base = {
       create: collection.create.bind(collection),
@@ -50,20 +47,6 @@ export default defineCollection({
       count: collection.count.bind(collection),
     };
 
-    const getIdentityNamespace = () => {
-      if (namespace === "global") return "global";
-      const threadMatch = namespace.match(/^(.*?)(?::thread:.*)?$/);
-      return threadMatch ? threadMatch[1] : namespace;
-    };
-
-    const getIdentityCollection = (options?: any) => {
-      const ns = options?.namespace || getIdentityNamespace();
-      // If we are already in the target namespace, return the base collection
-      // to avoid method-binding recursion.
-      if (ns === namespace) return collection;
-      return rootCollections.withNamespace(ns).participant;
-    };
-
     return {
       // ----------------------------------------
       // WIDENED CRUD OVERRIDES
@@ -71,9 +54,12 @@ export default defineCollection({
       async findOne(filter: any, options?: any) {
         // If searching specifically by externalId, use resolution logic
         if (filter.externalId && Object.keys(filter).length === 1) {
-          return await (this as any).resolveByExternalId(filter.externalId, options);
+          return await (this as any).resolveByExternalId(
+            filter.externalId,
+            options,
+          );
         }
-        return await getIdentityCollection(options).findOne(filter, options);
+        return await base.findOne(filter, options);
       },
 
       async findById(id: string, options?: any) {
@@ -81,75 +67,45 @@ export default defineCollection({
       },
 
       async create(data: any, options?: any) {
-        const targetColl = getIdentityCollection(options);
-        const createMethod = targetColl === collection ? base.create : targetColl.create;
-        return await createMethod(data, options);
+        void options;
+        return await base.create(data);
       },
 
       async update(filter: any, data: any, options?: any) {
-        const targetColl = getIdentityCollection(options);
-        const updateMethod = targetColl === collection ? base.update : targetColl.update;
-        return await updateMethod(filter, data, options);
+        void options;
+        return await base.update(filter, data);
       },
 
       async upsert(filter: any, data: any, options?: any) {
-        return await getIdentityCollection(options).upsert(filter, data, options);
+        void options;
+        return await base.upsert(filter, data);
       },
 
       async delete(filter: any, options?: any) {
-        const targetColl = getIdentityCollection(options);
-        const deleteMethod = targetColl === collection ? base.delete : targetColl.delete;
-        return await deleteMethod(filter, options);
+        void options;
+        return await base.delete(filter);
       },
 
       async count(filter: any, options?: any) {
-        const targetColl = getIdentityCollection(options);
-        const countMethod = targetColl === collection ? base.count : targetColl.count;
-        return await countMethod(filter, options);
+        void options;
+        return await base.count(filter);
       },
 
       // ----------------------------------------
       // CUSTOM IDENTITY METHODS
       // ----------------------------------------
       async getByExternalId(externalId: string, options?: any) {
-        const idNamespace = getIdentityNamespace();
-        const identityParticipant = rootCollections.withNamespace(idNamespace).participant;
-        // Use identityParticipant directly - if it's 'this' namespace, the 
-        // findOne check below handles the base call.
         return await (this as any).findOne({ externalId }, options);
       },
 
       async resolveByExternalId(id: string, options?: any) {
-        const idNamespace = getIdentityNamespace();
-        
-        // 1. Try local namespace (widened) by External ID
-        // Note: we use base.findOne if we are looking in our own namespace to break recursion
-        const localColl = getIdentityCollection(options);
-        let record = await (localColl === collection 
-          ? base.findOne({ externalId: id }, options) 
-          : localColl.findOne({ externalId: id }, options));
-        
-        // 2. If not found and looks like a ULID, try by ID
+        let record = await base.findOne({ externalId: id }, options);
+
         if (!record && id.length >= 26) {
-          record = await (localColl === collection 
-            ? base.findOne({ id }, options) 
-            : localColl.findOne({ id }, options));
+          record = await base.findOne({ id }, options);
         }
 
-        if (record || idNamespace === "global") return record;
-        
-        // 3. Fallback to global namespace
-        const globalParticipant = rootCollections.withNamespace("global").participant;
-        if (!globalParticipant || typeof globalParticipant.findOne !== "function") {
-          return null;
-        }
-        
-        // Use the global collection's findOne (which might have its own widening, that's fine)
-        record = await globalParticipant.findOne({ externalId: id }, options);
-        if (!record && id.length >= 26) {
-          record = await globalParticipant.findOne({ id }, options);
-        }
-        return record;
+        return record ?? null;
       },
 
       async upsertIdentity(input: {
@@ -160,12 +116,8 @@ export default defineCollection({
         email?: string | null;
         agentId?: string | null;
         metadata?: Record<string, unknown> | null;
-        isGlobal?: boolean | null;
       }, options?: any) {
-        const targetColl = getIdentityCollection(options);
-        const upsertMethod = targetColl === collection ? base.upsert : targetColl.upsert;
-        
-        return await upsertMethod(
+        return await base.upsert(
           { externalId: input.externalId },
           {
             ...(input.id ? { id: input.id } : {}),
@@ -175,9 +127,7 @@ export default defineCollection({
             email: input.email ?? null,
             agentId: input.agentId ?? null,
             metadata: input.metadata ?? null,
-            isGlobal: input.isGlobal ?? (getIdentityNamespace() === "global"),
           },
-          options,
         );
       },
     };

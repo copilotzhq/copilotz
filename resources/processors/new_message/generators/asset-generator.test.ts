@@ -71,13 +71,66 @@ Deno.test("processAssetsForNewMessage persists generated agent attachments by de
     },
   });
 
-  const attachments = (result.messageMetadata?.attachments ?? []) as Array<Record<string, unknown>>;
+  const attachments = (result.messageMetadata?.attachments ?? []) as Array<
+    Record<string, unknown>
+  >;
   assertEquals(attachments.length, 1);
   assertExists(attachments[0]?.assetRef);
   assert(typeof attachments[0]?.assetRef === "string");
   assertStringIncludes(String(attachments[0]?.assetRef), "asset://");
   assertEquals(emittedEvents.length, 1);
   assertEquals(emittedEvents[0]?.type, "ASSET_CREATED");
+});
+
+Deno.test("processAssetsForNewMessage creates asset graph records without a stream", async () => {
+  const createdNodes: Array<Record<string, unknown>> = [];
+  const createdEdges: Array<Record<string, unknown>> = [];
+  const context = {
+    ...createTestContext(),
+    namespace: "tenant-1",
+  } as ChatContext;
+
+  const result = await processAssetsForNewMessage({
+    payload: {
+      sender: { type: "agent", id: "artist", name: "Artist" },
+      content: [
+        {
+          type: "image",
+          dataBase64: "AQID",
+          mimeType: "image/png",
+        },
+      ],
+    } as MessagePayload,
+    baseMetadata: {},
+    senderId: "artist",
+    senderType: "agent",
+    context,
+    ops: {
+      getNodeById: async () => undefined,
+      createNode: async (node: Record<string, unknown>) => {
+        createdNodes.push(node);
+        return node;
+      },
+      createEdge: async (edge: Record<string, unknown>) => {
+        createdEdges.push(edge);
+        return edge;
+      },
+    } as never,
+    event: createTestEvent(),
+    threadId: "thread-1",
+  });
+
+  const attachments = (result.messageMetadata?.attachments ?? []) as Array<
+    Record<string, unknown>
+  >;
+  assertEquals(attachments.length, 1);
+  assertExists(attachments[0]?.assetRef);
+  assertEquals(createdNodes.length, 1);
+  assertEquals(createdNodes[0]?.namespace, "tenant-1");
+  assertEquals(createdNodes[0]?.type, "asset");
+  assertEquals(createdEdges.length, 1);
+  assertEquals(createdEdges[0]?.sourceNodeId, "thread-1");
+  assertEquals(createdEdges[0]?.type, "has_asset");
 });
 
 Deno.test("processAssetsForNewMessage skips persisting direct agent attachments when disabled", async () => {
@@ -104,7 +157,9 @@ Deno.test("processAssetsForNewMessage skips persisting direct agent attachments 
     },
   });
 
-  const attachments = (result.messageMetadata?.attachments ?? []) as Array<Record<string, unknown>>;
+  const attachments = (result.messageMetadata?.attachments ?? []) as Array<
+    Record<string, unknown>
+  >;
   assertEquals(attachments.length, 1);
   assertEquals(attachments[0]?.mimeType, "image/png");
   assertEquals(attachments[0]?.assetRef, undefined);
@@ -143,7 +198,9 @@ Deno.test("processAssetsForNewMessage sanitizes tool-generated assets when produ
     },
   });
 
-  const toolCalls = (result.messageMetadata?.toolCalls ?? []) as Array<Record<string, unknown>>;
+  const toolCalls = (result.messageMetadata?.toolCalls ?? []) as Array<
+    Record<string, unknown>
+  >;
   assertEquals(toolCalls.length, 1);
 
   const output = toolCalls[0]?.output as Record<string, unknown>;
@@ -155,6 +212,6 @@ Deno.test("processAssetsForNewMessage sanitizes tool-generated assets when produ
   assertEquals(result.messageMetadata?.attachments, undefined);
   assertEquals(emittedEvents.length, 0);
   assertExists(result.contentOverride);
-  assertStringIncludes(String(result.contentOverride), "\"kind\":\"image\"");
+  assertStringIncludes(String(result.contentOverride), '"kind":"image"');
   assert(!String(result.contentOverride).includes("dataBase64"));
 });

@@ -1,9 +1,10 @@
 import type { ToolExecutionContext } from "@/resources/processors/tool_call/index.ts";
 import { createRagDataServices } from "@/runtime/collections/native.ts";
+import type { RagScope } from "@/types/index.ts";
 
 interface SearchKnowledgeParams {
   query: string;
-  namespaces?: string[];
+  scope?: RagScope;
   limit?: number;
   threshold?: number;
 }
@@ -11,18 +12,32 @@ interface SearchKnowledgeParams {
 export default {
   key: "search_knowledge",
   name: "Search Knowledge Base",
-  description: "Search the knowledge base for relevant information using semantic similarity. Returns document chunks that are most relevant to the query.",
+  description:
+    "Search the knowledge base for relevant information using semantic similarity. Returns document chunks that are most relevant to the query.",
   inputSchema: {
     type: "object",
     properties: {
       query: {
         type: "string",
-        description: "Natural language search query to find relevant documents.",
+        description:
+          "Natural language search query to find relevant documents.",
       },
-      namespaces: {
-        type: "array",
-        items: { type: "string" },
-        description: "Knowledge namespaces to search. If not provided, uses agent's default namespaces or 'default'.",
+      scope: {
+        type: "object",
+        description:
+          "Optional graph search scope. If omitted, the current thread and agent are used.",
+        properties: {
+          threadId: { type: "string" },
+          agentId: { type: "string" },
+          knowledgeSpaceIds: {
+            type: "array",
+            items: { type: "string" },
+          },
+          documentIds: {
+            type: "array",
+            items: { type: "string" },
+          },
+        },
       },
       limit: {
         type: "number",
@@ -42,7 +57,7 @@ export default {
     required: ["query"],
   },
   execute: async (
-    { query, namespaces, limit = 5, threshold = 0.5 }: SearchKnowledgeParams,
+    { query, scope, limit = 5, threshold = 0.5 }: SearchKnowledgeParams,
     context?: ToolExecutionContext,
   ) => {
     const ops = context?.db?.ops;
@@ -56,20 +71,30 @@ export default {
 
     const embeddingConfig = context?.embeddingConfig;
     if (!embeddingConfig) {
-      throw new Error("Embedding configuration not available. Ensure RAG is enabled in copilotz config.");
+      throw new Error(
+        "Embedding configuration not available. Ensure RAG is enabled in copilotz config.",
+      );
     }
 
-    let searchNamespaces = namespaces;
-    if (!searchNamespaces || searchNamespaces.length === 0) {
-      const senderId = context?.senderId;
-      const agent = context?.agents?.find((a) => a.id === senderId || a.name === senderId);
-      const agentRagOptions = agent?.ragOptions as { namespaces?: string[] } | undefined;
-      searchNamespaces = agentRagOptions?.namespaces ?? ["default"];
+    const namespace = context?.namespace;
+    if (!namespace) {
+      throw new Error("Tenant namespace not available in context");
     }
+    const senderId = context?.senderId;
+    const agent = context?.agents?.find((a) =>
+      a.id === senderId || a.name === senderId
+    );
+    const agentScope = agent?.ragOptions?.scope;
 
     const results = await ragData.searchChunks({
       query,
-      namespaces: searchNamespaces,
+      namespace,
+      scope: {
+        threadId: context?.threadId,
+        agentId: senderId,
+        ...agentScope,
+        ...scope,
+      },
       limit,
       threshold,
       documentFilters: {
@@ -82,7 +107,7 @@ export default {
         results: [],
         message: "No relevant documents found for the query.",
         query,
-        namespaces: searchNamespaces,
+        namespace,
       };
     }
 
@@ -96,7 +121,7 @@ export default {
         chunkIndex: r.chunkIndex,
       })),
       query,
-      namespaces: searchNamespaces,
+      namespace,
       totalResults: results.length,
     };
   },

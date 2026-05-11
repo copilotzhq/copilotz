@@ -30,14 +30,18 @@ Primary migration targets:
 
 - `overview.md` -> [What Is Copilotz?](./start-here/what-is-copilotz.md) and
   [Architecture Overview](./start-here/architecture-overview.md)
-- `resources.md` -> [Resources Are the Foundation](./start-here/resources-are-the-foundation.md)
+- `resources.md` ->
+  [Resources Are the Foundation](./start-here/resources-are-the-foundation.md)
   and [Resources](./resources/README.md)
-- `server.md` -> [App Dispatcher and Endpoints](./runtime/app-dispatcher-and-endpoints.md)
-  and [Serve Copilotz with Oxian](./playbooks/serve-copilotz-with-oxian.md)
-- `collections.md` -> [Persist Data with Collections](./playbooks/persist-data-with-collections.md)
+- `server.md` ->
+  [App Dispatcher and Endpoints](./runtime/app-dispatcher-and-endpoints.md) and
+  [Serve Copilotz with Oxian](./playbooks/serve-copilotz-with-oxian.md)
+- `collections.md` ->
+  [Persist Data with Collections](./playbooks/persist-data-with-collections.md)
   and [Collections API](./reference/collections-api.md)
 - `events.md` -> [How Events Work](./runtime/how-events-work.md)
-- `tools.md` -> [Add Agent Capabilities with Tools](./playbooks/add-agent-capabilities-with-tools.md)
+- `tools.md` ->
+  [Add Agent Capabilities with Tools](./playbooks/add-agent-capabilities-with-tools.md)
   and [Tools](./resources/tools.md)
 - `skills.md` -> [Skills](./resources/skills.md)
 - `getting-started.md` -> [Start Here](./start-here/README.md)

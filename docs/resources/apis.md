@@ -12,7 +12,7 @@ single fixed folder convention in every project.
 Use an API resource when you want Copilotz to understand and call a structured
 external API surface.
 
-Recommended use case: declarative external API integration  
+Recommended use case: declarative external API integration\
 Most common mistaken alternative: burying all external API knowledge in one-off
 tool code without a reusable contract
 

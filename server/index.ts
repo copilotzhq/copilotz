@@ -55,7 +55,9 @@ export { withApp } from "./app.ts";
 export type {
   AgentHandlers,
   AppRequest,
+  AppRequestContext,
   AppResponse,
   CopilotzApp,
   ResourceDescriptor,
+  WithAppOptions,
 } from "./app.ts";

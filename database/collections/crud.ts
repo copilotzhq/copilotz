@@ -567,7 +567,7 @@ export function createCollectionCrud<TSelect, TInsert>(
     relation: RelationDefinition,
   ): string => {
     if (relation.edgeType) return relation.edgeType;
-    return `HAS_${relation.collection.toUpperCase()}`;
+    return `has_${relation.collection}`;
   };
 
   // ----------------------------------------
@@ -727,7 +727,7 @@ export function createCollectionCrud<TSelect, TInsert>(
               | undefined;
             if (foreignKeyValue) {
               // Create reverse edge from parent to this record
-              const reverseEdgeType = `HAS_${name.toUpperCase()}`;
+              const reverseEdgeType = relation.edgeType ?? `has_${name}`;
               await db.query(
                 `INSERT INTO "edges" ("id", "source_node_id", "target_node_id", "type", "data", "weight", "created_at")
                  VALUES ($1, $2, $3, $4, '{}', 1.0, NOW())

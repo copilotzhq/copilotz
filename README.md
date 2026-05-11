@@ -260,7 +260,7 @@ logical partitioning. Your SaaS is ready for customers on day one.
 // Each customer gets complete isolation
 await copilotz.run(message, {
   schema: "tenant_acme", // PostgreSQL schema
-  namespace: "workspace:123", // Logical partition
+  namespace: "tenant-acme", // Tenant/application partition
 });
 ```
 

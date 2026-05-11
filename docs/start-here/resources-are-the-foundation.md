@@ -37,15 +37,15 @@ Common resource types include:
 
 ## Resource to Runtime Mapping
 
-| Resource | Main Purpose | Consumed By | Public Surface |
-| --- | --- | --- | --- |
-| `features` | app-facing backend actions | app dispatcher | `/features/:name/:action` |
-| `tools` | agent-callable actions | agent runtime | tool calls during runs |
-| `collections` | durable app data | collections manager and runtime | `/collections/:name` |
-| `memory` | contextual recall and identity-aware prompt assembly | memory runtime | prompt/context composition |
-| `agents` | orchestration and instructions | run engine | agent execution |
-| `processors` | background/event work | event engine | event lifecycle |
-| `channels` | ingress and egress | channel runtime | external transports |
+| Resource      | Main Purpose                                         | Consumed By                     | Public Surface             |
+| ------------- | ---------------------------------------------------- | ------------------------------- | -------------------------- |
+| `features`    | app-facing backend actions                           | app dispatcher                  | `/features/:name/:action`  |
+| `tools`       | agent-callable actions                               | agent runtime                   | tool calls during runs     |
+| `collections` | durable app data                                     | collections manager and runtime | `/collections/:name`       |
+| `memory`      | contextual recall and identity-aware prompt assembly | memory runtime                  | prompt/context composition |
+| `agents`      | orchestration and instructions                       | run engine                      | agent execution            |
+| `processors`  | background/event work                                | event engine                    | event lifecycle            |
+| `channels`    | ingress and egress                                   | channel runtime                 | external transports        |
 
 ## Directory Shape
 

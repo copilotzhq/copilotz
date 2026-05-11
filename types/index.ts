@@ -452,39 +452,16 @@ export interface RetrievalConfig {
   similarityThreshold?: number;
 }
 
-/**
- * Context passed to namespace resolver functions for dynamic namespace selection.
- */
-export interface NamespaceContext {
-  /** Thread context information. */
-  thread?: {
-    id?: string;
-    externalId?: string;
-    metadata?: Record<string, unknown>;
-  };
-  /** Sender context information. */
-  sender?: {
-    id?: string;
-    externalId?: string;
-    type?: string;
-    metadata?: Record<string, unknown>;
-  };
-  /** Agent context information. */
-  agent?: { id?: string; name?: string };
-  /** Message context information. */
-  message?: { content?: string };
+export interface RagScope {
+  /** Include documents directly linked to this thread and its knowledge spaces. */
+  threadId?: string;
+  /** Include documents/knowledge spaces this agent can access. */
+  agentId?: string;
+  /** Include explicitly selected knowledge-space nodes. */
+  knowledgeSpaceIds?: string[];
+  /** Include explicitly selected document nodes. */
+  documentIds?: string[];
 }
-
-/**
- * Function type for dynamically resolving RAG namespaces.
- * Use this to select which document namespaces to search based on context.
- *
- * @param context - Context information about the current request
- * @returns Array of namespace names to search
- */
-export type NamespaceResolver = (
-  context: NamespaceContext,
-) => Promise<string[]> | string[];
 
 /**
  * Complete RAG (Retrieval-Augmented Generation) configuration.
@@ -498,10 +475,6 @@ export interface RagConfig {
   chunking?: ChunkingConfig;
   /** Retrieval configuration. */
   retrieval?: RetrievalConfig;
-  /** Default namespace for document storage. */
-  defaultNamespace?: string;
-  /** Dynamic namespace resolver function. */
-  namespaceResolver?: NamespaceResolver;
   /** LLM configuration for background RAG tasks (entity extraction, summarization). */
   llmConfig?: {
     provider: string;
@@ -521,8 +494,6 @@ export interface EntityExtractionConfig {
   similarityThreshold?: number;
   /** Threshold above which to auto-merge without LLM confirm. Default: 0.99. */
   autoMergeThreshold?: number;
-  /** Namespace scope for extracted entities. Default: "agent". */
-  namespace?: "thread" | "agent" | "global";
   /** Filter to specific entity types (open vocabulary). e.g., ["concept", "decision", "person"]. */
   entityTypes?: string[];
 }
@@ -533,10 +504,8 @@ export interface EntityExtractionConfig {
 export interface AgentRagOptions {
   /** RAG mode for this agent. "tool" adds search tools, "auto" injects context, "disabled" turns off RAG. */
   mode?: "tool" | "auto" | "disabled";
-  /** Namespaces this agent can search. */
-  namespaces?: string[];
-  /** Namespace for documents ingested by this agent. */
-  ingestNamespace?: string;
+  /** Graph scope this agent can search. Namespace remains the tenant partition. */
+  scope?: RagScope;
   /** Number of chunks to auto-inject when mode is "auto". */
   autoInjectLimit?: number;
   /** Entity extraction configuration. */
@@ -817,8 +786,6 @@ export interface ChatContext {
      */
     resolveLLMRuntimeConfig?: ResolveLLMRuntimeConfig;
   };
-  /** Optional namespace prefix for multi-tenancy isolation. */
-  namespacePrefix?: string;
   /** Optional AGENTS.md instructions loaded from the current working directory. */
   agentsFileInstructions?: AgentsFileInstructions | null;
   /**
@@ -890,56 +857,6 @@ export interface CollectionsManager {
 export interface ScopedCollectionsManager {
   /** Access scoped collections by name. */
   [collectionName: string]: unknown;
-}
-
-/**
- * Context for namespace resolution.
- */
-export interface NamespaceResolutionContext {
-  /** Thread ID for thread-scoped namespaces. */
-  threadId?: string;
-  /** Agent ID for agent-scoped namespaces. */
-  agentId?: string;
-}
-
-/**
- * Resolves a namespace based on scope and optional prefix.
- *
- * @param scope - The scope level: "thread", "agent", or "global"
- * @param context - Context containing threadId and agentId
- * @param prefix - Optional namespace prefix for isolation
- * @returns Resolved namespace string
- *
- * @example
- * ```ts
- * resolveNamespace("agent", { agentId: "bot-1" }, "myapp")
- * // Returns: "myapp:agent:bot-1"
- *
- * resolveNamespace("thread", { threadId: "abc-123" })
- * // Returns: "thread:abc-123"
- * ```
- */
-export function resolveNamespace(
-  scope: "thread" | "agent" | "global",
-  context: NamespaceResolutionContext,
-  prefix?: string,
-): string {
-  const base = prefix ? `${prefix}:` : "";
-
-  switch (scope) {
-    case "thread":
-      if (!context.threadId) {
-        throw new Error("threadId required for thread-scoped namespace");
-      }
-      return `${base}thread:${context.threadId}`;
-    case "agent":
-      if (!context.agentId) {
-        throw new Error("agentId required for agent-scoped namespace");
-      }
-      return `${base}agent:${context.agentId}`;
-    case "global":
-      return `${base}global`;
-  }
 }
 
 /**

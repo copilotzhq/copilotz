@@ -528,7 +528,14 @@ const schemaDefinition = {
                   },
                 },
               },
-              required: ["message", "retryable", "fallbackAttempted", "fallbackCount", "visibleStreamStarted", "attempts"],
+              required: [
+                "message",
+                "retryable",
+                "fallbackAttempted",
+                "fallbackCount",
+                "visibleStreamStarted",
+                "attempts",
+              ],
             },
             usage: JSON_ANY_SCHEMA,
             cost: JSON_ANY_SCHEMA,
@@ -674,6 +681,7 @@ const schemaDefinition = {
       additionalProperties: false,
       properties: {
         id: READONLY_ULID_SCHEMA,
+        namespace: { type: ["string", "null"], maxLength: 255 },
         name: { type: "string", minLength: 1 },
         externalId: { type: ["string", "null"], maxLength: 255 },
         description: { type: ["string", "null"] },
@@ -693,6 +701,14 @@ const schemaDefinition = {
             { type: "null" },
           ],
         },
+        rootThreadId: {
+          anyOf: [
+            ULID_SCHEMA,
+            { type: "null" },
+          ],
+        },
+        lastEventId: { type: ["string", "null"], maxLength: 255 },
+        lastEventAt: { type: ["string", "null"], format: "date-time" },
         parentThread: {
           readOnly: true,
           anyOf: [
@@ -700,7 +716,6 @@ const schemaDefinition = {
             { type: "null" },
           ],
         },
-        metadata: { type: ["object", "null"] },
         createdAt: { type: "string", format: "date-time" },
         updatedAt: { type: "string", format: "date-time" },
       },
@@ -724,7 +739,8 @@ const schemaDefinition = {
         namespace: {
           type: "string",
           minLength: 1,
-          description: "Scoping: thread_id, agent_id, repo_id, or 'global'",
+          description:
+            "Tenant/application partition. Domain relationships are modeled as edges.",
         },
         type: {
           type: "string",
@@ -833,9 +849,22 @@ export type Queue = typeof queue.$inferSelect;
 export type NewQueue = Record<string, unknown>;
 
 /** Conversation thread containing messages between users and agents. */
-export type Thread = typeof threads.$inferSelect;
+export type ThreadMetadataValue = Record<string, unknown> | null;
+export type Thread = typeof threads.$inferSelect & {
+  /**
+   * Public API metadata is stored canonically on the thread node
+   * (`nodes(type='thread').data.metadata`) and hydrated by operations.
+   */
+  metadata?: ThreadMetadataValue;
+};
 /** Input type for creating a new Thread. */
-export type NewThread = typeof threads.$inferInsert;
+export type NewThread = typeof threads.$inferInsert & {
+  /**
+   * Accepted at the operations/API boundary and persisted on the thread node,
+   * not in the physical `threads` table.
+   */
+  metadata?: ThreadMetadataValue;
+};
 
 /**
  * Knowledge graph node: can represent chunks, entities, concepts, decisions, etc.
@@ -1004,6 +1033,7 @@ export type NewUnknownEvent = {
   ttlMs?: number;
   id?: string;
   status?: QueueStatus;
+  namespace?: string;
   createdAt?: string | Date;
   updatedAt?: string | Date;
 };

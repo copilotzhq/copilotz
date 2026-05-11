@@ -1,8 +1,10 @@
-export const generateMigrations = (): string => (`-- Enable extensions once; safe to re-run.
+export const generateMigrations =
+  (): string => (`-- Enable extensions once; safe to re-run.
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
 CREATE TABLE IF NOT EXISTS "threads" (
   "id" varchar(255) PRIMARY KEY NOT NULL,
+  "namespace" varchar(255),
   "name" varchar(255) NOT NULL,
   "externalId" varchar(255),
   "description" text,
@@ -12,7 +14,9 @@ CREATE TABLE IF NOT EXISTS "threads" (
   "status" varchar DEFAULT 'active' NOT NULL,
   "summary" text,
   "parentThreadId" varchar(255),
-  "metadata" jsonb,
+  "rootThreadId" varchar(255),
+  "lastEventId" varchar(255),
+  "lastEventAt" timestamp,
   "createdAt" timestamp DEFAULT now() NOT NULL,
   "updatedAt" timestamp DEFAULT now() NOT NULL
 );
@@ -36,6 +40,8 @@ CREATE TABLE IF NOT EXISTS "events" (
 
 
 CREATE INDEX IF NOT EXISTS "idx_threads_external_id_active" ON "threads" ("externalId") WHERE "status" = 'active';
+CREATE INDEX IF NOT EXISTS "idx_threads_namespace_external_id_active" ON "threads" ("namespace", "externalId") WHERE "status" = 'active';
+CREATE INDEX IF NOT EXISTS "idx_threads_namespace_status" ON "threads" ("namespace", "status");
 CREATE INDEX IF NOT EXISTS "idx_threads_participants_gin" ON "threads" USING GIN ("participants");
 CREATE INDEX IF NOT EXISTS "idx_events_thread_status" ON "events" ("threadId", "status");
 CREATE INDEX IF NOT EXISTS "idx_events_pending_order" ON "events" (

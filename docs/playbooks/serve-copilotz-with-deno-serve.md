@@ -5,17 +5,19 @@
 Use this pattern when you want a transport-agnostic or minimal HTTP layer
 without Oxian.
 
-Recommended primitive: `withApp(...)` plus a thin `deno.serve` adapter  
+Recommended primitive: `withApp(...)` plus a thin `deno.serve` adapter\
 Most common mistaken alternative: assuming Copilotz requires a specific web
 framework
 
 ## Minimal Example
 
 ```ts
-const copilotz = withApp(await createCopilotz({
-  dbConfig: { url: ":memory:" },
-  resources: { path: ["./resources"] },
-}));
+const copilotz = withApp(
+  await createCopilotz({
+    dbConfig: { url: ":memory:" },
+    resources: { path: ["./resources"] },
+  }),
+);
 
 Deno.serve(async (request) => {
   const url = new URL(request.url);

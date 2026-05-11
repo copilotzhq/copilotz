@@ -1,10 +1,14 @@
 # Resource Loaders
 
-Resource loaders let you organize agents, tools, APIs, processors, skills, and more in a filesystem structure. This is useful for larger projects where configuration-as-code becomes unwieldy.
+Resource loaders let you organize agents, tools, APIs, processors, skills, and
+more in a filesystem structure. This is useful for larger projects where
+configuration-as-code becomes unwieldy.
 
 ## Recommended: Built-in Resource Loading
 
-The simplest way to use file-based resources is via the `resources.path` option in `createCopilotz`. This loads and merges everything automatically, while bundled/native resources come from presets:
+The simplest way to use file-based resources is via the `resources.path` option
+in `createCopilotz`. This loads and merges everything automatically, while
+bundled/native resources come from presets:
 
 ```typescript
 import { createCopilotz } from "@copilotz/copilotz";
@@ -19,17 +23,22 @@ const copilotz = await createCopilotz({
 });
 ```
 
-When `resources.path` is set, `createCopilotz` internally calls `loadResources` and merges the results with any explicit config arrays. See [Configuration — Resources](./configuration.md#resources) for merge semantics.
+When `resources.path` is set, `createCopilotz` internally calls `loadResources`
+and merges the results with any explicit config arrays. See
+[Configuration — Resources](./configuration.md#resources) for merge semantics.
 
 ## Why Loaders?
 
-As your AI application grows, managing everything in a single config object gets messy:
+As your AI application grows, managing everything in a single config object gets
+messy:
+
 - Agents have long instruction prompts
 - Custom tools have complex logic
 - Multiple API integrations need organization
 - Processors and skills need testing independently
 
-Loaders let you organize resources in a clean directory structure with proper separation of concerns.
+Loaders let you organize resources in a clean directory structure with proper
+separation of concerns.
 
 ## Directory Structure
 
@@ -74,10 +83,11 @@ resources/
 
 ## Low-Level Usage with `loadResources()`
 
-If you need more control over the loaded resources before passing them to `createCopilotz`, use `loadResources()` directly:
+If you need more control over the loaded resources before passing them to
+`createCopilotz`, use `loadResources()` directly:
 
 ```typescript
-import { loadResources, createCopilotz } from "@copilotz/copilotz";
+import { createCopilotz, loadResources } from "@copilotz/copilotz";
 
 // Load resources from directory
 const resources = await loadResources({
@@ -97,16 +107,21 @@ const copilotz = await createCopilotz({
 });
 ```
 
-> **Tip**: For most projects, `resources.path` in `createCopilotz` is simpler and handles the merge automatically. Use `loadResources()` when you need to inspect, filter, or transform resources before initialization.
+> **Tip**: For most projects, `resources.path` in `createCopilotz` is simpler
+> and handles the merge automatically. Use `loadResources()` when you need to
+> inspect, filter, or transform resources before initialization.
 
 ## Presets and Imports
 
-`loadResources()` and `createCopilotz({ resources: ... })` support the same two selectors:
+`loadResources()` and `createCopilotz({ resources: ... })` support the same two
+selectors:
 
 - `preset`: named import groups declared by a manifest
-- `imports`: dot-notation selectors such as `tools`, `tools.read_file`, `channels`, `channels.whatsapp`
+- `imports`: dot-notation selectors such as `tools`, `tools.read_file`,
+  `channels`, `channels.whatsapp`
 
-Selectors are additive. For bundled resources, `createCopilotz` always includes `core`, so `preset: ["code"]` behaves like `["core", "code"]`.
+Selectors are additive. For bundled resources, `createCopilotz` always includes
+`core`, so `preset: ["code"]` behaves like `["core", "code"]`.
 
 ## Agent Files
 
@@ -152,7 +167,7 @@ const config: Partial<Agent> = {
   allowedAgents: ["technical-agent"],
   ragOptions: {
     mode: "auto",
-    namespaces: ["support-docs", "faq"],
+    scope: { knowledgeSpaceIds: ["ks-support-docs", "ks-faq"] },
   },
   assetOptions: {
     produce: {
@@ -164,7 +179,9 @@ const config: Partial<Agent> = {
 export default config;
 ```
 
-`assetOptions.produce.persistGeneratedAssets` is useful in loader-based projects when an agent or its tool calls may produce large inline assets that you do not want persisted into the shared asset store or conversation history.
+`assetOptions.produce.persistGeneratedAssets` is useful in loader-based projects
+when an agent or its tool calls may produce large inline assets that you do not
+want persisted into the shared asset store or conversation history.
 
 ## Tool Files
 
@@ -213,7 +230,8 @@ const config: Omit<Tool, "execute"> = {
 export default config;
 ```
 
-`historyPolicy` is especially useful in loader-based projects because it lives in `config.ts`, so you can keep the projector callback in code.
+`historyPolicy` is especially useful in loader-based projects because it lives
+in `config.ts`, so you can keep the projector callback in code.
 
 ### execute.ts (Preferred)
 
@@ -233,14 +251,14 @@ interface Output {
 
 export default async function execute(
   input: Input,
-  context: ToolExecutionContext
+  context: ToolExecutionContext,
 ): Promise<Output> {
   const { text } = input;
   const { threadId, namespace, db } = context;
-  
+
   // Your sentiment analysis logic
   const result = await analyzeSentiment(text);
-  
+
   return {
     sentiment: result.label,
     confidence: result.score,
@@ -310,7 +328,8 @@ Standard OpenAPI 3.0 specification:
 
 ### config.ts
 
-API configuration (the `openApiSchema` is loaded automatically from `openApiSchema.json`):
+API configuration (the `openApiSchema` is loaded automatically from
+`openApiSchema.json`):
 
 ```typescript
 import type { API } from "@copilotz/copilotz";
@@ -340,11 +359,13 @@ const config: Omit<API, "openApiSchema"> = {
 export default config;
 ```
 
-`toolPolicies` are keyed by the generated tool key, which is usually the OpenAPI `operationId`.
+`toolPolicies` are keyed by the generated tool key, which is usually the OpenAPI
+`operationId`.
 
 ## Processor Files
 
-Place processor directories under `processors/` named by event type (e.g. `processors/NEW_MESSAGE/processor.ts`).
+Place processor directories under `processors/` named by event type (e.g.
+`processors/NEW_MESSAGE/processor.ts`).
 
 ### processor.ts (Required)
 
@@ -355,16 +376,16 @@ import type { EventProcessor, ProcessorDeps } from "@copilotz/copilotz";
 
 const processor: EventProcessor = {
   eventType: "NEW_MESSAGE",
-  
+
   shouldProcess: (event, deps: ProcessorDeps) => {
     return event.payload.metadata?.requiresModeration === true;
   },
-  
+
   process: async (event, deps: ProcessorDeps) => {
     const { db, thread, context } = deps;
-    
+
     const isAppropriate = await moderateContent(event.payload.content);
-    
+
     if (!isAppropriate) {
       // Claim: replace the event with a system message
       return {
@@ -377,7 +398,7 @@ const processor: EventProcessor = {
         }],
       };
     }
-    
+
     // Pass: let the next processor (built-in) handle it
     return;
   },
@@ -388,19 +409,23 @@ export default processor;
 
 ### Return semantics
 
-Processors are executed in priority order (user-defined first, built-in last). The first processor whose `process` returns a `producedEvents` array claims the event:
+Processors are executed in priority order (user-defined first, built-in last).
+The first processor whose `process` returns a `producedEvents` array claims the
+event:
 
-| Return value | Behavior |
-|---|---|
+| Return value                       | Behavior                                              |
+| ---------------------------------- | ----------------------------------------------------- |
 | `{ producedEvents: [event, ...] }` | **Claim** — enqueue events, skip remaining processors |
-| `{ producedEvents: [] }` | **Swallow** — claim without producing anything |
-| `void` / `undefined` | **Pass** — fall through to the next processor |
+| `{ producedEvents: [] }`           | **Swallow** — claim without producing anything        |
+| `void` / `undefined`               | **Pass** — fall through to the next processor         |
 
-This lets you override, suppress, or observe any built-in behavior. See [Events — Return Semantics](./events.md#return-semantics) for more detail.
+This lets you override, suppress, or observe any built-in behavior. See
+[Events — Return Semantics](./events.md#return-semantics) for more detail.
 
 ## Skill Files
 
-Place skill directories under `skills/`. Each directory must contain a `SKILL.md` file and optionally a `references/` folder:
+Place skill directories under `skills/`. Each directory must contain a
+`SKILL.md` file and optionally a `references/` folder:
 
 ```
 resources/skills/my-skill/
@@ -409,21 +434,25 @@ resources/skills/my-skill/
     └── example.json
 ```
 
-Skills loaded from the resources directory use progressive disclosure: only names and descriptions are sent to the LLM initially; full instructions are fetched on-demand via the `load_skill` tool. See [Skills](./skills.md) for the full format.
+Skills loaded from the resources directory use progressive disclosure: only
+names and descriptions are sent to the LLM initially; full instructions are
+fetched on-demand via the `load_skill` tool. See [Skills](./skills.md) for the
+full format.
 
 ## Loading Options
 
 ```typescript
 const resources = await loadResources({
-  path: "./resources",               // string or string[] for multiple directories
-  preset: ["core", "rag"],          // optional manifest-defined preset names
-  imports: ["tools.read_file"],     // optional dot-notation selectors
+  path: "./resources", // string or string[] for multiple directories
+  preset: ["core", "rag"], // optional manifest-defined preset names
+  imports: ["tools.read_file"], // optional dot-notation selectors
 });
 ```
 
 ## Combining with Inline Config
 
-The recommended way to combine file-loaded and inline resources is via `resources.path`:
+The recommended way to combine file-loaded and inline resources is via
+`resources.path`:
 
 ```typescript
 const copilotz = await createCopilotz({
@@ -447,7 +476,11 @@ const copilotz = await createCopilotz({
 If you need manual control, use `loadResources()` with `mergeResourceArrays`:
 
 ```typescript
-import { loadResources, createCopilotz, mergeResourceArrays } from "@copilotz/copilotz";
+import {
+  createCopilotz,
+  loadResources,
+  mergeResourceArrays,
+} from "@copilotz/copilotz";
 
 const resources = await loadResources({ path: "./resources" });
 
@@ -462,7 +495,8 @@ const copilotz = await createCopilotz({
 
 ## Best Practices
 
-1. **Use instructions.md for prompts** — Markdown is easier to read and edit than embedded strings.
+1. **Use instructions.md for prompts** — Markdown is easier to read and edit
+   than embedded strings.
 
 2. **Keep execute.ts focused** — Tool implementations should do one thing well.
 
@@ -480,11 +514,13 @@ Deno.test("processor filters flagged messages", async () => {
 });
 ```
 
-5. **Environment-specific configs** — Use environment variables in config files for secrets.
+5. **Environment-specific configs** — Use environment variables in config files
+   for secrets.
 
 ## Next Steps
 
 - [Agents](./agents.md) — Agent configuration options
 - [Tools](./tools.md) — Creating custom tools
 - [Events](./events.md) — Custom event processors
-- [Resources](./resources.md) — Customizing LLM providers, storage, embeddings, and more
+- [Resources](./resources.md) — Customizing LLM providers, storage, embeddings,
+  and more

@@ -51,6 +51,9 @@ export type { GraphHandlers, GraphSearchOptions } from "./graph.ts";
 export { createChannelHandlers } from "./channels.ts";
 export type { ChannelHandlers } from "./channels.ts";
 
+export { migrateTenantNamespaceGraph } from "./migrations.ts";
+export type { TenantNamespaceGraphMigrationResult } from "./migrations.ts";
+
 export { withApp } from "./app.ts";
 export type {
   AgentHandlers,

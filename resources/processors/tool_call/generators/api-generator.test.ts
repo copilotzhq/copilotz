@@ -42,7 +42,7 @@ const buildApiConfig = (overrides: Partial<API> = {}): API =>
     ...overrides,
   }) as API;
 
-Deno.test("API tool returns body text by default", async () => {
+Deno.test("API tool returns structured JSON by default", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () =>
     new Response(JSON.stringify({ ok: true }), {
@@ -57,7 +57,7 @@ Deno.test("API tool returns body text by default", async () => {
     const [tool] = generateApiTools(buildApiConfig());
     const result = await tool.execute({});
 
-    assertEquals(result, JSON.stringify({ ok: true }));
+    assertEquals(result, { ok: true });
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -81,10 +81,53 @@ Deno.test("API tool can include response headers", async () => {
     const result = await tool.execute({});
 
     assertObjectMatch(result as Record<string, unknown>, {
-      body: JSON.stringify({ ok: true }),
+      body: { ok: true },
       headers: {
         "content-type": "application/json",
         "x-request-id": "req_456",
+      },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("API tool preserves dataUrl fields as structured output for asset extraction", async () => {
+  const originalFetch = globalThis.fetch;
+  const dataUrl = "data:image/png;base64,AQID";
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({
+      data: {
+        results: [
+          {
+            action: "screenshot",
+            success: true,
+            mime: "image/png",
+            dataUrl,
+          },
+        ],
+      },
+    }), {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+      },
+    });
+
+  try {
+    const [tool] = generateApiTools(buildApiConfig());
+    const result = await tool.execute({});
+
+    assertEquals(result, {
+      data: {
+        results: [
+          {
+            action: "screenshot",
+            success: true,
+            mime: "image/png",
+            dataUrl,
+          },
+        ],
       },
     });
   } finally {

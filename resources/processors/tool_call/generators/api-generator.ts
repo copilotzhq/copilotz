@@ -685,18 +685,14 @@ function createApiExecutor(
         );
       }
 
-      const responseBody = typeof responseData === "string"
-        ? responseData
-        : JSON.stringify(responseData);
-
       if (apiConfig.includeResponseHeaders) {
         return {
-          body: responseBody,
+          body: responseData,
           headers: Object.fromEntries(response.headers.entries()),
         };
       }
 
-      return responseBody;
+      return responseData;
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         throw new Error(

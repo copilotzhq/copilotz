@@ -25,7 +25,7 @@ export const llmResultProcessor: EventProcessor<
 
     const errorAnswer = payload.status === "failed"
       ? payload.answer ??
-        "O modelo ficou temporariamente indisponível. Tente novamente em alguns instantes."
+        "Model is temporarily unavailable. Please try again in a few moments."
       : "";
 
     const newMessagePayload: MessagePayload = {

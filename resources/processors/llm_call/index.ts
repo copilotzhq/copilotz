@@ -83,12 +83,12 @@ function normalizeExtractedTagTargets(value: unknown): string[] {
 
 function getProviderFailureMessage(error: LLMProviderError): string {
   if (error.reason === "rate_limit") {
-    return "O modelo está temporariamente com limite de uso. Tente novamente em alguns instantes.";
+    return "Model is temporarily unavailable. Please try again in a few moments.";
   }
   if (error.reason === "timeout") {
-    return "A resposta demorou mais que o esperado. Tente novamente em alguns instantes.";
+    return "The response took longer than expected. Please try again in a few moments.";
   }
-  return "O modelo ficou temporariamente indisponível. Tente novamente em alguns instantes.";
+  return "Model is temporarily unavailable. Please try again in a few moments.";
 }
 
 function isRetryableLLMReason(reason: string | null): boolean {

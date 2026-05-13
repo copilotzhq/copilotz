@@ -63,6 +63,24 @@ Deno.test("API tool returns structured JSON by default", async () => {
   }
 });
 
+Deno.test("API tool strips null characters from structured responses", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ text: "hello\u0000world" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+  try {
+    const [tool] = generateApiTools(buildApiConfig());
+    const result = await tool.execute({});
+
+    assertEquals(result, { text: "helloworld" });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("API tool can include response headers", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () =>

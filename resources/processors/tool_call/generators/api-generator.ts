@@ -224,6 +224,32 @@ function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+const NULL_CHAR_PATTERN = /\u0000/g;
+
+function sanitizeToolJsonValue<T>(value: T, seen = new WeakSet<object>()): T {
+  if (typeof value === "string") {
+    return value.replace(NULL_CHAR_PATTERN, "") as T;
+  }
+
+  if (value === null || typeof value !== "object") return value;
+  if (value instanceof Date) return value;
+  if (seen.has(value)) return "[Circular]" as T;
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    const next = value.map((item) => sanitizeToolJsonValue(item, seen)) as T;
+    seen.delete(value);
+    return next;
+  }
+
+  const next: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    next[key] = sanitizeToolJsonValue(child, seen);
+  }
+  seen.delete(value);
+  return next as T;
+}
+
 function decodeJsonPointerSegment(segment: string): string {
   return segment.replace(/~1/g, "/").replace(/~0/g, "~");
 }
@@ -676,6 +702,7 @@ function createApiExecutor(
       } else {
         responseData = await response.text();
       }
+      responseData = sanitizeToolJsonValue(responseData);
 
       if (!response.ok) {
         throw new Error(
@@ -688,7 +715,9 @@ function createApiExecutor(
       if (apiConfig.includeResponseHeaders) {
         return {
           body: responseData,
-          headers: Object.fromEntries(response.headers.entries()),
+          headers: sanitizeToolJsonValue(
+            Object.fromEntries(response.headers.entries()),
+          ),
         };
       }
 

@@ -271,6 +271,16 @@ async function dispatchScheduledJob(
   });
   if (waitForCompletion) {
     await handle.done;
+  } else {
+    handle.done.catch((err) => {
+      console.error("[scheduler] scheduled job run failed", {
+        jobId: job.id,
+        runId,
+        threadId: handle.threadId,
+        queueId: handle.queueId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
   return {
     jobId: job.id,

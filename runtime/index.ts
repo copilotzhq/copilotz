@@ -272,6 +272,9 @@ export async function runThread(
     });
     return { promise: p, resolve, reject };
   })();
+  // The caller still observes rejection when awaiting `handle.done`, but this
+  // prevents fire-and-forget runs from becoming process-level unhandled rejections.
+  doneResolve.promise.catch(() => undefined);
 
   let cancelled = false;
   const cancel = () => {

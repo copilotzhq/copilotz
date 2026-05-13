@@ -49,7 +49,7 @@ type ApiToolExecutionContext = {
   cancelled?: boolean;
   threadId?: string;
   senderId?: string;
-  senderType?: "user" | "agent" | "tool" | "system";
+  senderType?: "user" | "agent" | "tool" | "system" | "job";
   userExternalId?: string;
   agent?: Agent | null;
   namespacePrefix?: string;

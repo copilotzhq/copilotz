@@ -17,7 +17,9 @@ export function priorityForInboundMessage(
   message: Pick<MessagePayload, "sender">,
 ): number {
   const senderType = message.sender?.type;
-  if (senderType === "user") return EVENT_PRIORITIES.USER_INPUT;
+  if (senderType === "user" || senderType === "job") {
+    return EVENT_PRIORITIES.USER_INPUT;
+  }
   if (senderType === "tool") return EVENT_PRIORITIES.SETTLEMENT;
   if (senderType === "agent") return EVENT_PRIORITIES.AGENT_CONTINUATION;
   return EVENT_PRIORITIES.NORMAL;
@@ -26,7 +28,8 @@ export function priorityForInboundMessage(
 export function priorityForAgentLlmCall(
   sourceMessage: Pick<MessagePayload, "sender">,
 ): number {
-  return sourceMessage.sender?.type === "user"
+  return sourceMessage.sender?.type === "user" ||
+      sourceMessage.sender?.type === "job"
     ? EVENT_PRIORITIES.USER_INPUT
     : EVENT_PRIORITIES.AGENT_CONTINUATION;
 }

@@ -391,7 +391,7 @@ export interface ResolveNextTurnInput {
   sender: {
     id: string;
     name?: string | null;
-    type: "agent" | "user" | "tool" | "system";
+    type: "agent" | "user" | "tool" | "system" | "job";
   };
   thread: Thread;
   availableAgents: Agent[];
@@ -627,6 +627,9 @@ function firstAllowedExplicitRoutingTarget(
 }
 
 export function resolveNextTurn(input: ResolveNextTurnInput): NextTurn {
+  const senderActsLikeUser = input.sender.type === "user" ||
+    input.sender.type === "job";
+
   if (input.sender.type === "tool") {
     const replyTarget = input.inbound?.replyToParticipantId ?? input.sender.id;
     const replyQueue = normalizeParticipantQueue(
@@ -643,7 +646,7 @@ export function resolveNextTurn(input: ResolveNextTurnInput): NextTurn {
   }
 
   if (input.multiAgentEnabled === false) {
-    if (input.sender.type !== "user") {
+    if (!senderActsLikeUser) {
       return { kind: "stop" };
     }
 
@@ -697,7 +700,7 @@ export function resolveNextTurn(input: ResolveNextTurnInput): NextTurn {
     );
   }
 
-  if (input.sender.type === "user" && input.userMentionTargets?.length) {
+  if (senderActsLikeUser && input.userMentionTargets?.length) {
     const mentionRoute = buildMentionTargetRoute(input.userMentionTargets, {
       returnTarget: input.sender.id,
     });
@@ -711,7 +714,7 @@ export function resolveNextTurn(input: ResolveNextTurnInput): NextTurn {
     }
   }
 
-  if (input.sender.type === "user" && inboundTargetId) {
+  if (senderActsLikeUser && inboundTargetId) {
     return resolveParticipantTurn(
       inboundTargetId,
       baseQueue,
@@ -720,7 +723,7 @@ export function resolveNextTurn(input: ResolveNextTurnInput): NextTurn {
     );
   }
 
-  if (input.sender.type === "user") {
+  if (senderActsLikeUser) {
     const persistedTarget = resolvePersistedUserTarget(
       input.sender.id,
       input.thread,
@@ -825,7 +828,7 @@ function isDirectConversationThread(
 async function checkAndUpdateAgentTurns(
   ops: Operations,
   thread: Thread,
-  senderType: "agent" | "user" | "tool" | "system",
+  senderType: "agent" | "user" | "tool" | "system" | "job",
   targetId: string,
   availableAgents: Agent[],
   maxAgentTurns: number = 5,
@@ -833,7 +836,7 @@ async function checkAndUpdateAgentTurns(
   const metadata = getRuntimeThreadMetadata(thread.metadata);
   const configuredMax = metadata.maxAgentTurns ?? maxAgentTurns;
 
-  if (senderType === "user") {
+  if (senderType === "user" || senderType === "job") {
     // User message resets counter
     if (metadata.agentTurnCount && metadata.agentTurnCount > 0) {
       const updatedMetadata = setRuntimeThreadMetadata(thread.metadata, {
@@ -962,7 +965,7 @@ type NormalizedToolCall = {
 
 interface MessageContextDetails {
   senderId: string;
-  senderType: "agent" | "user" | "tool" | "system";
+  senderType: "agent" | "user" | "tool" | "system" | "job";
   senderName: string;
   contentText: string;
   toolCalls: NormalizedToolCall[];
@@ -1441,7 +1444,9 @@ export const messageProcessor: EventProcessor<
     // made the request), not the target.
     // ====================================================================
     if (
-      normalizedToolCalls.length > 0 && messageContext.senderType === "agent"
+      normalizedToolCalls.length > 0 &&
+      (messageContext.senderType === "agent" ||
+        messageContext.senderType === "job")
     ) {
       // Find the sending agent (may be absent if filtered out by env config)
       const sendingAgent = availableAgents.find((a) =>
@@ -1524,7 +1529,8 @@ export const messageProcessor: EventProcessor<
     }
 
     const userMentionTargets = (
-        messageContext.senderType === "user" &&
+        (messageContext.senderType === "user" ||
+          messageContext.senderType === "job") &&
         context.multiAgent?.enabled === true
       )
       ? parseMentions(

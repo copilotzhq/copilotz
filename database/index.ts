@@ -26,6 +26,7 @@ import { generateKnowledgeGraphMigrations } from "./migrations/migration_0003_kn
 import { generateUlidSupportMigrations } from "./migrations/migration_0004_ulid_support.ts";
 import { generateNamespaceEventsMigrations } from "./migrations/migration_0005_namespace_events.ts";
 import { generateThreadLeasesMigrations } from "./migrations/migration_0006_thread_leases.ts";
+import { generateScheduledJobsMigrations } from "./migrations/migration_0007_scheduled_jobs.ts";
 import { getCurrentSchema } from "./schema-context.ts";
 import {
   ensureSchemaProvisioned,
@@ -40,7 +41,8 @@ void embedOminipgWorkerForDenoCompile;
 const migrations: string = generateMigrations() + "\n" +
   generateRagMigrations() + "\n" + generateKnowledgeGraphMigrations() + "\n" +
   generateUlidSupportMigrations() + "\n" + generateNamespaceEventsMigrations() +
-  "\n" + generateThreadLeasesMigrations() + "\n";
+  "\n" + generateThreadLeasesMigrations() + "\n" +
+  generateScheduledJobsMigrations() + "\n";
 
 /**
  * Configuration options for creating a database connection.

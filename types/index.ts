@@ -110,7 +110,7 @@ export interface AssetCreatedEventPayload {
   /** MIME type of the stored asset. */
   mime?: string;
   /** Who produced the asset. */
-  by: "tool" | "agent" | "user" | "system";
+  by: "tool" | "agent" | "user" | "system" | "job";
   /** Tool name when the asset came from a tool call. */
   tool?: string;
   /** Tool call ID when the asset came from a tool call. */
@@ -327,7 +327,7 @@ export interface APIPrepareRequestContext {
   toolKey: string;
   threadId?: string;
   senderId?: string;
-  senderType?: "user" | "agent" | "tool" | "system";
+  senderType?: "user" | "agent" | "tool" | "system" | "job";
   userExternalId?: string;
   agent?: Agent | null;
   namespacePrefix?: string;
@@ -577,7 +577,7 @@ export interface Message {
   id: string;
   threadId: string;
   senderId: string;
-  senderType: "agent" | "user" | "system" | "tool";
+  senderType: "agent" | "user" | "system" | "tool" | "job";
   senderUserId?: string | null;
   targetId?: string | null;
   targetQueue?: string[] | null;
@@ -806,7 +806,7 @@ export interface ChatContext {
   sender?: {
     id?: string | null;
     externalId?: string | null;
-    type?: "user" | "agent" | "tool" | "system";
+    type?: "user" | "agent" | "tool" | "system" | "job";
     name?: string | null;
     metadata?: Record<string, unknown> | null;
   };

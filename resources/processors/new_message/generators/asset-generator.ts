@@ -80,6 +80,10 @@ function extractAttachmentsFromContent(
           : undefined;
         if (typeof p.dataBase64 === "string") {
           attachments.push({ kind: "image", data: p.dataBase64, mimeType });
+        } else if (
+          typeof p.url === "string" && p.url.startsWith("asset://")
+        ) {
+          attachments.push({ kind: "image", assetRef: p.url, mimeType });
         } else if (typeof p.url === "string") {
           attachments.push({ kind: "image", dataUrl: p.url, mimeType });
         }
@@ -97,6 +101,10 @@ function extractAttachmentsFromContent(
             mimeType,
             format,
           });
+        } else if (
+          typeof p.url === "string" && p.url.startsWith("asset://")
+        ) {
+          attachments.push({ kind: "audio", assetRef: p.url, mimeType, format });
         } else if (typeof p.url === "string") {
           attachments.push({ kind: "audio", dataUrl: p.url, mimeType, format });
         }
@@ -111,6 +119,15 @@ function extractAttachmentsFromContent(
           attachments.push({
             kind: "file",
             data: p.dataBase64,
+            mimeType,
+            fileName,
+          });
+        } else if (
+          typeof p.url === "string" && p.url.startsWith("asset://")
+        ) {
+          attachments.push({
+            kind: "file",
+            assetRef: p.url,
             mimeType,
             fileName,
           });
@@ -236,7 +253,7 @@ async function emitAssetError(args: {
   emitToStream?: (event: Event) => void;
   event: Event;
   threadId: string;
-  senderType: "agent" | "user" | "tool" | "system";
+  senderType: "agent" | "user" | "tool" | "system" | "job";
   toolCallMetadata: unknown[];
   info: AssetErrorInfo;
   namespace?: string;
@@ -249,7 +266,7 @@ async function emitAssetError(args: {
     ? "tool"
     : senderType === "agent"
     ? "agent"
-    : senderType === "user"
+    : senderType === "user" || senderType === "job"
     ? "user"
     : "system";
 
@@ -305,7 +322,7 @@ export interface AssetProcessingResult {
 
 function findProducerAgent(
   context: ChatContext,
-  senderType: "agent" | "user" | "tool" | "system",
+  senderType: "agent" | "user" | "tool" | "system" | "job",
   senderId: string,
 ) {
   if ((senderType !== "agent" && senderType !== "tool") || !senderId) {
@@ -318,7 +335,7 @@ function findProducerAgent(
 
 function shouldPersistGeneratedAssets(
   context: ChatContext,
-  senderType: "agent" | "user" | "tool" | "system",
+  senderType: "agent" | "user" | "tool" | "system" | "job",
   senderId: string,
 ): boolean {
   const producerAgent = findProducerAgent(context, senderType, senderId);
@@ -392,7 +409,7 @@ export async function processAssetsForNewMessage(args: {
   payload: MessagePayload;
   baseMetadata: Record<string, unknown>;
   senderId: string;
-  senderType: "agent" | "user" | "tool" | "system";
+  senderType: "agent" | "user" | "tool" | "system" | "job";
   context: ChatContext;
   ops?: CopilotzDb["ops"];
   event: Event;
@@ -602,6 +619,8 @@ export async function processAssetsForNewMessage(args: {
           ? "agent"
           : senderType === "user"
           ? "user"
+          : senderType === "job"
+          ? "job"
           : "system";
 
         const toolMeta =

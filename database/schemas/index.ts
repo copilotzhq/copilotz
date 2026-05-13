@@ -218,7 +218,10 @@ const MessagePayloadSchema = {
       properties: {
         id: { type: ["string", "null"] },
         externalId: { type: ["string", "null"] },
-        type: { type: "string", enum: ["agent", "user", "tool", "system"] },
+        type: {
+          type: "string",
+          enum: ["agent", "user", "tool", "system", "job"],
+        },
         name: { type: ["string", "null"] },
         identifierType: {
           type: ["string", "null"],

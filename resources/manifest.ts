@@ -35,6 +35,7 @@ export default {
       "load_skill",
       "read_skill_resource",
       "read_tool_result",
+      "scheduled_jobs",
     ],
     processors: [
       "new_message",
@@ -57,7 +58,14 @@ export default {
     ],
     embeddings: ["openai"],
     storage: ["fs", "s3"],
-    collections: ["participant", "message", "chunk", "document", "llm_usage"],
+    collections: [
+      "participant",
+      "message",
+      "chunk",
+      "document",
+      "llm_usage",
+      "scheduled_job",
+    ],
     channels: ["web", "whatsapp", "zendesk", "discord", "telegram"],
     features: ["admin"],
     skills: [

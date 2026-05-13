@@ -54,6 +54,16 @@ export type { ChannelHandlers } from "./channels.ts";
 export { migrateTenantNamespaceGraph } from "./migrations.ts";
 export type { TenantNamespaceGraphMigrationResult } from "./migrations.ts";
 
+export { tickScheduledJobs } from "@/runtime/scheduler/index.ts";
+export type {
+  ScheduledJobData,
+  ScheduledJobRunTemplate,
+  ScheduledJobSchedule,
+  ScheduledJobStatus,
+  ScheduledJobTickOptions,
+  ScheduledJobTickResult,
+} from "@/runtime/scheduler/index.ts";
+
 export { withApp } from "./app.ts";
 export type {
   AgentHandlers,

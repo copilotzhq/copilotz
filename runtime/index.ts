@@ -63,6 +63,10 @@ export type RunOptions = {
   signal?: AbortSignal;
   /** Time-to-live for queue items in milliseconds. */
   queueTTL?: number;
+  /** Optional trace ID for the initial NEW_MESSAGE event. */
+  traceId?: string;
+  /** Extra metadata for the initial NEW_MESSAGE queue event. */
+  eventMetadata?: Record<string, unknown> | null;
   /**
    * Namespace for this run. Overrides the default namespace from config.
    * Used for multi-tenancy isolation of collections and data within a schema.
@@ -415,10 +419,13 @@ export async function runThread(
   };
 
   const initialEventMetadata = buildInitialRoutingMetadata(
-    normalizedMetadata,
+    {
+      ...(normalizedMetadata ?? {}),
+      ...(options?.eventMetadata ?? {}),
+    },
     normalizedMessage,
   );
-  const traceId = crypto.randomUUID();
+  const traceId = options?.traceId ?? crypto.randomUUID();
 
   const newQueueItem = await ops.addToQueue(threadId, {
     eventType: "NEW_MESSAGE",

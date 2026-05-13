@@ -53,7 +53,7 @@ export default {
             {
                 content: initialMessage || `Started thread: ${name}`,
                 sender: {
-                    type: (context?.senderType ?? "system") as "agent" | "user" | "tool" | "system",
+                    type: (context?.senderType ?? "system") as "agent" | "user" | "tool" | "system" | "job",
                     id: context?.senderId ?? "system",
                     name: context?.senderId ?? "system",
                 },

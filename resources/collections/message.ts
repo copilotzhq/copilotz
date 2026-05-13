@@ -15,7 +15,7 @@ export default defineCollection({
       senderId: { type: ["string", "null"] },
       senderType: {
         type: ["string", "null"],
-        enum: ["user", "agent", "system", null],
+        enum: ["user", "agent", "tool", "system", "job", null],
       },
       senderUserId: { type: ["string", "null"] },
       externalId: { type: ["string", "null"] },

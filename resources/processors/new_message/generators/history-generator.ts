@@ -378,7 +378,9 @@ export function historyGenerator(
       ? "tool"
       : isCurrentAgent
       ? "assistant"
-      : (msg.senderType === "agent" ? "user" : msg.senderType);
+      : (msg.senderType === "agent" || msg.senderType === "job"
+        ? "user"
+        : msg.senderType);
 
     const rawToolCalls = (msg as unknown as { toolCalls?: unknown }).toolCalls;
     const metadataToolCalls = Array.isArray(metadata?.toolCalls)

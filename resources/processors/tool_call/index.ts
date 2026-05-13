@@ -29,7 +29,7 @@ import { resolveAssetIdForStore } from "@/runtime/storage/assets.ts";
 export interface ToolCallPayload {
   agent: { id?: string; name: string }; // agent that requested the tool
   senderId: string;
-  senderType: "user" | "agent" | "tool" | "system";
+  senderType: "user" | "agent" | "tool" | "system" | "job";
   toolCall: ToolInvocation;
 }
 
@@ -56,7 +56,7 @@ export interface ToolResultPayload {
 
 export interface ToolExecutionContext extends ChatContext {
   senderId?: string;
-  senderType?: "user" | "agent" | "tool" | "system";
+  senderType?: "user" | "agent" | "tool" | "system" | "job";
   threadId?: string;
   /** The external ID of the human user in this conversation. Resolved from thread metadata by the framework. */
   userExternalId?: string;
@@ -168,7 +168,7 @@ function assertToolCallPayload(
   }
   if (
     typeof value.senderType !== "string" ||
-    !["user", "agent", "tool", "system"].includes(value.senderType)
+    !["user", "agent", "tool", "system", "job"].includes(value.senderType)
   ) {
     throw new Error("Invalid tool call payload: senderType");
   }

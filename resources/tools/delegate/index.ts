@@ -69,7 +69,7 @@ export default {
                 {
                     content: normalizedTask,
                     sender: {
-                        type: (context.senderType ?? "user") as "agent" | "user" | "tool" | "system",
+                        type: (context.senderType ?? "user") as "agent" | "user" | "tool" | "system" | "job",
                         id: context.senderId,
                         name: context.senderId ?? null,
                     },

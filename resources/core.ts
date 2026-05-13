@@ -33,6 +33,7 @@ import webEgressAdapter from "@/resources/channels/web/egress.ts";
 import participantCollection from "@/resources/collections/participant.ts";
 import messageCollection from "@/resources/collections/message.ts";
 import llmUsageCollection from "@/resources/collections/llm_usage.ts";
+import scheduledJobCollection from "@/resources/collections/scheduled_job.ts";
 
 // ---- Core: memory ----------------------------------------------------------
 import participantMemory from "@/resources/memory/participant.ts";
@@ -200,6 +201,7 @@ const coreTools = [
   "http_request",
   "persistent_terminal",
   "update_my_memory",
+  "scheduled_jobs",
 ] as const;
 
 const coreSkills: Skill[] = [
@@ -352,6 +354,7 @@ function buildCoreCollections(): CollectionDefinition[] {
     participantCollection as unknown as CollectionDefinition,
     messageCollection as unknown as CollectionDefinition,
     llmUsageCollection as unknown as CollectionDefinition,
+    scheduledJobCollection as unknown as CollectionDefinition,
   ];
 }
 

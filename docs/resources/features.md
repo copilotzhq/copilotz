@@ -1,41 +1,42 @@
+---
+title: Features
+description: Resource shape for app-facing backend actions.
+section: Resources
+order: 40
+status: stable
+---
+
 # Features
 
-Features are app-facing backend actions loaded from `resources/features/...`.
+Features are backend actions exposed through the app dispatcher.
 
-## Where It Lives
+Use features when application code owns the call.
+
+## File Shape
 
 ```txt
-resources/features/<feature-name>/<action>.ts
+resources/
+  features/
+    auth/
+      login.ts
+      callback.ts
 ```
 
-## What It Is For
-
-Use a feature when application code should call the behavior directly through an
-endpoint.
-
-Recommended use case: frontend-facing or service-facing backend action\
-Most common mistaken alternative: implementing app contracts as tools
-
-## How Copilotz Consumes It
-
-- features are loaded during `createCopilotz(...)`
-- `withApp(...)` registers them as app routes
-- each feature action is reachable as `/features/:feature/:action`
-
-## Minimal Example
+## Handler Shape
 
 ```ts
-export default async function register(request, copilotz) {
-  return { data: { ok: true } };
+export default async function login(request: unknown, copilotz: unknown) {
+  return { ok: true };
 }
 ```
 
-## Public Surface
+With `withApp(...)`, this becomes:
 
-Features become dispatcher endpoints under the `features` resource family.
+```txt
+POST /features/auth/login
+```
 
 ## Related Pages
 
-- [Build Backend Endpoints with Features](../playbooks/build-backend-endpoints-with-features.md)
+- [Build a Feature Endpoint](../build-guides/build-feature-endpoint.md)
 - [Feature Handler Contract](../reference/feature-handler-contract.md)
-- [App Dispatcher and Endpoints](../runtime/app-dispatcher-and-endpoints.md)

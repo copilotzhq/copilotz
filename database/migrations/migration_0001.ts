@@ -40,6 +40,11 @@ CREATE TABLE IF NOT EXISTS "events" (
   "updatedAt" timestamp DEFAULT now() NOT NULL
 );
 
+/* Add namespace column to threads table */
+ALTER TABLE "threads" ADD COLUMN IF NOT EXISTS "namespace" varchar(255);
+
+/* Add namespace column to events table */
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "namespace" varchar(255);
 
 CREATE INDEX IF NOT EXISTS "idx_threads_external_id_active" ON "threads" ("externalId") WHERE "status" = 'active';
 CREATE INDEX IF NOT EXISTS "idx_threads_namespace_external_id_active" ON "threads" ("namespace", "externalId") WHERE "status" = 'active';

@@ -1,35 +1,53 @@
+---
+title: createCopilotz
+description: Bootstrap a Copilotz runtime from resources, agents, providers, storage, data, and runtime options.
+section: Reference
+order: 10
+status: draft
+---
+
 # createCopilotz
 
-`createCopilotz(...)` is the runtime bootstrap API.
+`createCopilotz(config)` creates a Copilotz runtime.
 
-## What It Does
+```ts
+const copilotz = await createCopilotz(config);
+```
 
-- loads resources
-- creates or attaches the database layer
-- initializes collections, providers, storage, and runtime config
-- returns a Copilotz instance you can run, inspect, or serve
+## Common Config
 
-## Common Inputs
+```ts
+{
+  agents: [agent],
+  tools: [tool],
+  resources: {
+    path: "./resources",
+    imports: ["tools.get_current_time"],
+    preset: ["rag"],
+  },
+  dbConfig: { url: ":memory:" },
+  namespace: "tenant-acme",
+  stream: true,
+}
+```
 
-- `dbConfig`
-- `resources`
-- `namespace`
-- `agent`
+## Instance Methods
+
+The returned instance includes:
+
+- `run(message, options)`
+- `goal(options)`
+- `start(initialMessageOrOptions)`
+- `shutdown()`
 - `assets`
-- `multiAgent`
-- `stream`
-
-## Recommended Use Case
-
-Use `createCopilotz(...)` once in your dependency/bootstrap layer and pass the
-instance into the rest of your app.
-
-## Common Mistaken Alternative
-
-Do not instantiate ad hoc Copilotz instances deep inside route handlers.
+- `collections`
+- `schema`
+- `db`
+- `ops`
+- `config`
 
 ## Related Pages
 
-- [withApp](./with-app.md)
-- [How Resource Loading Works](../runtime/how-resource-loading-works.md)
-- [Serve Copilotz with Oxian](../playbooks/serve-copilotz-with-oxian.md)
+- [Run API](./run-api.md)
+- [Goal API](./goal-api.md)
+- [Resource Loading](../runtime/resource-loading.md)

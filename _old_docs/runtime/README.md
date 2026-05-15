@@ -8,6 +8,7 @@ Copilotz resources and application endpoints.
 - [How Resource Loading Works](./how-resource-loading-works.md)
 - [How Threads Work](./how-threads-work.md)
 - [How Events Work](./how-events-work.md)
+- [Goals](./goals.md)
 - [How the Graph Works](./how-the-graph-works.md)
 - [Namespaces and Multi-Tenancy](./namespaces-and-multi-tenancy.md)
 - [App Dispatcher and Endpoints](./app-dispatcher-and-endpoints.md)

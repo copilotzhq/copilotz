@@ -9,6 +9,7 @@ want the exact contract or API surface.
 - [withApp](./with-app.md)
 - [App Request and Response Contract](./app-request-response-contract.md)
 - [Feature Handler Contract](./feature-handler-contract.md)
+- [Goal API](./goal-api.md)
 - [Tool Execution Context](./tool-execution-context.md)
 - [Collections API](./collections-api.md)
 - [Participant Collection](./participant-collection.md)

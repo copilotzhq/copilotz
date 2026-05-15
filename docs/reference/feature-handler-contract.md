@@ -1,38 +1,41 @@
+---
+title: Feature Handler Contract
+description: Request and return shape for feature action handlers.
+section: Reference
+order: 50
+status: draft
+---
+
 # Feature Handler Contract
 
-A feature action is a function loaded from:
+A feature action is a default-exported function.
+
+```ts
+export default async function action(request: unknown, copilotz: unknown) {
+  return { ok: true };
+}
+```
+
+It lives under:
 
 ```txt
 resources/features/<feature>/<action>.ts
 ```
 
-## Handler Shape
+With `withApp(...)`, the action is reachable through:
 
-The default export receives:
+```txt
+/features/<feature>/<action>
+```
 
-- a request-like object with `method`, `body`, `query`, `headers`, and optional
-  `context`
-- the Copilotz instance
+## Guidance
 
-## Return Shape
+Return JSON-serializable data.
 
-Feature handlers may return:
-
-- an object with `status` and `data`
-- or a value that the dispatcher wraps as `data`
-
-## Recommended Use Case
-
-Use a feature handler for app-facing backend actions with a clear request and
-response contract.
-
-## Common Mistaken Alternative
-
-Do not hide application endpoints inside tools unless the model needs to decide
-when to call them.
+Keep the feature contract app-owned. If the model should choose when to execute
+the behavior, make a tool instead.
 
 ## Related Pages
 
 - [Features](../resources/features.md)
-- [Build Backend Endpoints with Features](../playbooks/build-backend-endpoints-with-features.md)
-- [withApp](./with-app.md)
+- [withApp](../app-integration/with-app.md)

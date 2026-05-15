@@ -1,48 +1,56 @@
+---
+title: Tools
+description: Resource shape for agent-owned executable actions.
+section: Resources
+order: 30
+status: stable
+---
+
 # Tools
 
-Tools are agent-callable actions loaded from `resources/tools/...`.
+Tools let agents execute actions.
 
-## Where It Lives
-
-```txt
-resources/tools/<tool-name>/
-```
-
-## What It Is For
-
-Use a tool when the model should decide whether and when to call an action.
-
-Recommended use case: agent-owned runtime action\
-Most common mistaken alternative: using a feature endpoint for model-internal
-behavior
-
-## How Copilotz Consumes It
-
-- tools are loaded into the runtime tool registry
-- agents can call them during execution
-- tools receive `ToolExecutionContext` for thread, db, collections, assets, and
-  sender state
-
-## Minimal Example
+## Code Shape
 
 ```ts
 export default {
-  key: "getWeather",
-  description: "Get weather for a city",
+  id: "lookup_order",
+  key: "lookup_order",
+  name: "Lookup Order",
+  description: "Find an order by id.",
   inputSchema: {
     type: "object",
-    properties: { city: { type: "string" } },
-    required: ["city"],
+    properties: {
+      orderId: { type: "string" },
+    },
+    required: ["orderId"],
+  },
+  execute: async ({ orderId }, context) => {
+    return await context?.collections?.order.find({ id: orderId });
   },
 };
 ```
 
-## Public Surface
+## File Shape
 
-Tools are runtime-facing, not endpoint-facing by default.
+```txt
+resources/
+  tools/
+    lookup_order/
+      config.ts
+      execute.ts
+```
+
+## Runtime Behavior
+
+1. the agent chooses a tool
+2. Copilotz emits `TOOL_CALL`
+3. the tool executes
+4. Copilotz emits `TOOL_RESULT`
+5. the result can be added to history
+6. the agent can answer using the result
 
 ## Related Pages
 
-- [Add Agent Capabilities with Tools](../playbooks/add-agent-capabilities-with-tools.md)
+- [Create a Custom Tool](../build-guides/create-custom-tool.md)
 - [Tool Execution Context](../reference/tool-execution-context.md)
-- [Processors](./processors.md)

@@ -1,46 +1,81 @@
+---
+title: What Is Copilotz?
+description: Copilotz is a full-stack framework for production AI applications.
+section: Start Here
+order: 10
+status: stable
+---
+
 # What Is Copilotz?
 
-Copilotz is a framework for building AI applications around a shared runtime
-instead of around isolated LLM calls. It combines resource loading, persistent
-state, event-driven execution, assets, tools, and server helpers into one
-application model.
+Copilotz is a full-stack framework for AI applications.
 
-The key idea is simple: you declare resources, and Copilotz wires them into the
-runtime for you.
+An LLM wrapper helps you call a model. Copilotz helps you ship the product
+around the model: agents, tools, memory, RAG, assets, background work, channels,
+multi-tenancy, app endpoints, and persistent data.
 
-## What Copilotz Gives You
+## The Problem
 
-- agent execution with persistent state
-- graph-backed application data through collections
-- tool calling and event-driven processors
-- feature endpoints served through the app dispatcher
-- assets and media handling
-- namespace-aware multi-tenant execution
-- server helpers that work with Oxian or any HTTP layer
+AI apps quickly become infrastructure projects.
 
-## Recommended Use Case
+You start with chat. Then you need conversation history, user memory, tool
+calling, API actions, file handling, vector search, background jobs, cost
+tracking, WhatsApp or web channels, tenant isolation, and application-specific
+data.
 
-Use Copilotz when your application needs more than one-off chat completion
-calls. It works best when you need persistent profile data, agent tools,
-background work, reusable resources, and a clean separation between framework
-runtime and transport layer.
+Without a framework, each of those becomes a separate decision and a separate
+integration.
 
-## Common Mistaken Alternative
+## The Copilotz Approach
 
-Do not think of Copilotz as only an LLM wrapper or only a chat framework. If you
-treat it as "just a model client plus some helpers," you will miss the core
-benefit: resources and runtime composition.
+Copilotz gives you one runtime built around declared resources.
 
-## Public Example
+Resources describe what your app can do:
 
-The primary public example app is `copilotz-starter`. It uses:
+- agents decide and respond
+- tools let agents execute actions
+- features expose app-owned backend behavior
+- collections persist application data
+- memory and RAG add context
+- channels connect transports like web, WhatsApp, Zendesk, Discord, or Telegram
+- processors extend the event pipeline
+- providers connect LLMs, embeddings, storage, APIs, and MCP servers
 
-- `createCopilotz({ resources: { path: [...] } })` in `api/dependencies.ts`
-- `withApp(copilotz)` to expose dispatcher-backed endpoints
-- a React UI that consumes participant and thread data over app routes
+`createCopilotz(...)` loads those resources into a runtime. `copilotz.run(...)`
+sends a message through that runtime. Events show what happened.
 
-## Related Pages
+## What You Build
 
-- [Architecture Overview](./architecture-overview.md)
-- [Resources Are the Foundation](./resources-are-the-foundation.md)
-- [Build Backend Endpoints with Features](../playbooks/build-backend-endpoints-with-features.md)
+You build a Copilotz app by answering a few questions:
+
+- who are the agents?
+- what can they do?
+- what should the app expose directly to users or frontends?
+- what data should be persistent?
+- how should conversations be identified?
+- which channel or UI should deliver messages?
+
+The framework handles the repeatable infrastructure beneath those choices.
+
+## Recommended Use
+
+Use Copilotz when your AI product needs more than a single model call:
+
+- persistent conversations
+- tool execution
+- user or tenant memory
+- RAG and document ingestion
+- background workflows
+- custom data models
+- external channels
+- agent evaluation or synthetic QA
+
+If you only need `fetch("https://api.openai.com/...")`, Copilotz may be more
+framework than you need. If you are building a real AI application, Copilotz is
+designed to be the application layer.
+
+## Next
+
+Continue with [Quickstart](./quickstart.md), then read
+[First Principles](./first-principles.md) to understand how `run`, `start`,
+threads, events, and tools fit together.

@@ -1,0 +1,24 @@
+{
+  "sections": [
+    {
+      "title": "Runtime",
+      "items": [
+        {
+          "title": "Goals",
+          "slug": "runtime/goals",
+          "description": "Run bounded multi-turn agent journeys with stop and evaluate callbacks."
+        }
+      ]
+    },
+    {
+      "title": "Reference",
+      "items": [
+        {
+          "title": "Goal API",
+          "slug": "reference/goal-api",
+          "description": "Exact API contract for copilotz.goal."
+        }
+      ]
+    }
+  ]
+}

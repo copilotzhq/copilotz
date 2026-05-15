@@ -1,47 +1,37 @@
+---
+title: Channels
+description: Ingress and egress adapters for external transports.
+section: Resources
+order: 60
+status: draft
+---
+
 # Channels
 
-Channels connect Copilotz to external ingress and egress systems such as web,
-WhatsApp, or Zendesk.
+Channels connect Copilotz to external transports.
 
-## Where It Lives
+Built-in channel families include:
 
-```txt
-resources/channels/<channel-name>/
-  ingress.ts
-  egress.ts
-```
+- web
+- WhatsApp
+- Zendesk
+- Discord
+- Telegram
 
-## What It Is For
+## What Channels Do
 
-Use a channel when Copilotz should receive or deliver messages through an
-external transport.
+Ingress adapters normalize external messages into Copilotz messages.
 
-Recommended use case: transport integration\
-Most common mistaken alternative: mixing external transport logic directly into
-tools or feature handlers
+Egress adapters deliver Copilotz responses back to the external transport.
 
-## How Copilotz Consumes It
+## When to Use Channels
 
-- channels are loaded into the channel registry
-- ingress adapters normalize incoming payloads into Copilotz envelopes
-- egress adapters deliver runtime output to the target transport
+Use a channel when the app needs transport-specific behavior.
 
-## Minimal Example
-
-```ts
-export default {
-  name: "web",
-  routes: [],
-};
-```
-
-## Public Surface
-
-Channels define ingress and egress behavior rather than standard collection or
-feature endpoints.
+Do not put WhatsApp, Telegram, or Zendesk protocol logic inside ordinary tools
+or agent instructions.
 
 ## Related Pages
 
-- [Channels API](../reference/channels-api.md)
-- [Serve Copilotz with Oxian](../playbooks/serve-copilotz-with-oxian.md)
-- [How Events Work](../runtime/how-events-work.md)
+- [Server Helpers and Channels](../app-integration/server-helpers-and-channels.md)
+- [Resource Types](./resource-types.md)

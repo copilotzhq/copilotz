@@ -1,35 +1,34 @@
+---
+title: Tool Execution Context
+description: Runtime context passed to custom tool execute handlers.
+section: Reference
+order: 60
+status: draft
+---
+
 # Tool Execution Context
 
-`ToolExecutionContext` is the runtime context passed to custom tool `execute`
-handlers.
+Custom tools receive arguments and an optional runtime context.
 
-## Common Fields
+```ts
+execute: (async (args, context) => {
+  // use args and context
+});
+```
 
-- `namespace`
-- `threadId`
-- `senderId`
-- `senderType`
-- `db`
-- `collections`
-- `assetStore`
+The context can expose useful runtime capabilities such as:
 
-## Why It Matters
+- database access
+- collections
+- thread information
+- namespace and schema context
+- assets
+- runtime configuration
 
-The tool context is what lets a tool act like part of the runtime instead of a
-free-floating function.
-
-## Recommended Use Case
-
-Read and write data through the provided namespaced context instead of reaching
-around it through unrelated globals.
-
-## Common Mistaken Alternative
-
-Do not assume the tool can infer the correct namespace or thread state without
-using the provided context.
+Exact fields depend on runtime version and processor path. Treat the context as
+the bridge from model-selected actions into application infrastructure.
 
 ## Related Pages
 
+- [Create a Custom Tool](../build-guides/create-custom-tool.md)
 - [Tools](../resources/tools.md)
-- [Add Agent Capabilities with Tools](../playbooks/add-agent-capabilities-with-tools.md)
-- [Test a Real Copilotz App](../playbooks/test-a-real-copilotz-app.md)

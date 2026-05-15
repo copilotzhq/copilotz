@@ -1,0 +1,229 @@
+{
+  "sections": [
+    {
+      "title": "Start Here",
+      "items": [
+        {
+          "title": "What Is Copilotz?",
+          "slug": "start-here/what-is-copilotz",
+          "description": "The value proposition and mental model behind Copilotz."
+        },
+        {
+          "title": "Quickstart",
+          "slug": "start-here/quickstart",
+          "description": "Create a minimal agent and run your first message."
+        },
+        {
+          "title": "First Principles",
+          "slug": "start-here/first-principles",
+          "description": "Understand run, start, threads, memory, events, and tools from the inside out."
+        },
+        {
+          "title": "Choose the Right Primitive",
+          "slug": "start-here/choose-the-right-primitive",
+          "description": "Decide between run, start, goal, tools, features, processors, collections, and channels."
+        }
+      ]
+    },
+    {
+      "title": "Core Concepts",
+      "items": [
+        {
+          "title": "Resources",
+          "slug": "core-concepts/resources",
+          "description": "The declaration model for Copilotz apps."
+        },
+        {
+          "title": "Agents",
+          "slug": "core-concepts/agents",
+          "description": "How agents are configured and selected."
+        },
+        {
+          "title": "Threads and Messages",
+          "slug": "core-concepts/threads-and-messages",
+          "description": "Conversation identity, history, senders, targets, and participants."
+        },
+        {
+          "title": "Events",
+          "slug": "core-concepts/events",
+          "description": "The runtime event stream that powers agents, tools, assets, and jobs."
+        },
+        {
+          "title": "Tools, Features, and Processors",
+          "slug": "core-concepts/tools-features-processors",
+          "description": "Three extension points with different ownership boundaries."
+        },
+        {
+          "title": "Memory and Context",
+          "slug": "core-concepts/memory-and-context",
+          "description": "Participant memory, history, retrieval, skills, and generated context."
+        },
+        {
+          "title": "Data and Tenancy",
+          "slug": "core-concepts/data-and-tenancy",
+          "description": "Collections, namespaces, schemas, and production isolation."
+        }
+      ]
+    },
+    {
+      "title": "Build Guides",
+      "items": [
+        {
+          "title": "Build a Terminal Chat with run",
+          "slug": "build-guides/terminal-chat-with-run",
+          "description": "Recreate copilotz.start manually to understand the runtime loop."
+        },
+        {
+          "title": "Add a Native Tool",
+          "slug": "build-guides/add-native-tool",
+          "description": "Import a bundled tool and let an agent call it."
+        },
+        {
+          "title": "Create a Custom Tool",
+          "slug": "build-guides/create-custom-tool",
+          "description": "Define application code that an agent can call."
+        },
+        {
+          "title": "Build a Feature Endpoint",
+          "slug": "build-guides/build-feature-endpoint",
+          "description": "Expose app-owned backend behavior through withApp."
+        },
+        {
+          "title": "Persist Data with Collections",
+          "slug": "build-guides/persist-data-with-collections",
+          "description": "Define typed app data and use it from code, tools, and features."
+        },
+        {
+          "title": "Run Synthetic QA with Goals",
+          "slug": "build-guides/synthetic-qa-with-goals",
+          "description": "Use copilotz.goal to drive bounded multi-turn evaluations."
+        }
+      ]
+    },
+    {
+      "title": "Runtime",
+      "items": [
+        {
+          "title": "Runs",
+          "slug": "runtime/runs",
+          "description": "How copilotz.run creates work, streams events, and completes."
+        },
+        {
+          "title": "Goals",
+          "slug": "runtime/goals",
+          "description": "Bounded multi-turn journeys with a private lead agent."
+        },
+        {
+          "title": "Resource Loading",
+          "slug": "runtime/resource-loading",
+          "description": "How bundled, file-based, and explicit resources merge."
+        },
+        {
+          "title": "Thread Routing",
+          "slug": "runtime/thread-routing",
+          "description": "How targets, participants, and target queues route messages."
+        },
+        {
+          "title": "Assets and Media",
+          "slug": "runtime/assets-and-media",
+          "description": "How files, images, and generated assets move through the runtime."
+        }
+      ]
+    },
+    {
+      "title": "Resources",
+      "items": [
+        {
+          "title": "Resource Types",
+          "slug": "resources/resource-types",
+          "description": "All resource families supported by Copilotz."
+        },
+        {
+          "title": "Agents",
+          "slug": "resources/agents",
+          "description": "File and code shapes for agent resources."
+        },
+        {
+          "title": "Tools",
+          "slug": "resources/tools",
+          "description": "File and code shapes for tool resources."
+        },
+        {
+          "title": "Features",
+          "slug": "resources/features",
+          "description": "File shape for app-facing feature actions."
+        },
+        {
+          "title": "Collections",
+          "slug": "resources/collections",
+          "description": "File shape for application data collections."
+        },
+        {
+          "title": "Channels",
+          "slug": "resources/channels",
+          "description": "Ingress and egress transport adapters."
+        },
+        {
+          "title": "Providers and Storage",
+          "slug": "resources/providers-and-storage",
+          "description": "LLM, embedding, storage, memory, skills, APIs, and MCP resources."
+        }
+      ]
+    },
+    {
+      "title": "App Integration",
+      "items": [
+        {
+          "title": "withApp",
+          "slug": "app-integration/with-app",
+          "description": "Attach the framework-agnostic app dispatcher."
+        },
+        {
+          "title": "Server Helpers and Channels",
+          "slug": "app-integration/server-helpers-and-channels",
+          "description": "Expose Copilotz over HTTP frameworks and external transports."
+        },
+        {
+          "title": "React UI",
+          "slug": "app-integration/react-ui",
+          "description": "Connect a frontend to threads, messages, events, and assets."
+        }
+      ]
+    },
+    {
+      "title": "Reference",
+      "items": [
+        {
+          "title": "createCopilotz",
+          "slug": "reference/create-copilotz",
+          "description": "Bootstrap API and configuration contract."
+        },
+        {
+          "title": "Run API",
+          "slug": "reference/run-api",
+          "description": "Message payloads, run options, handles, and stream events."
+        },
+        {
+          "title": "Goal API",
+          "slug": "reference/goal-api",
+          "description": "Goal options, events, stop callbacks, evaluate callbacks, and result shape."
+        },
+        {
+          "title": "Resource Manifest",
+          "slug": "reference/resource-manifest",
+          "description": "Manifest format for packaged resources and import selectors."
+        },
+        {
+          "title": "Feature Handler Contract",
+          "slug": "reference/feature-handler-contract",
+          "description": "Input and output shape for app-facing features."
+        },
+        {
+          "title": "Tool Execution Context",
+          "slug": "reference/tool-execution-context",
+          "description": "Runtime context passed to custom tools."
+        }
+      ]
+    }
+  ]
+}

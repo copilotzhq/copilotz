@@ -1,30 +1,58 @@
+---
+title: Assets and Media
+description: How Copilotz stores, references, and resolves files and generated media.
+section: Runtime
+order: 50
+status: draft
+---
+
 # Assets and Media
 
-Assets let Copilotz persist and reference binary content such as images and
-files without forcing that content into ordinary collection records.
+Copilotz treats files and generated media as first-class runtime data.
 
-## What Assets Do
+Assets can come from:
 
-- store bytes through a configured storage backend
-- return asset references the runtime can resolve
-- support media-aware application and LLM flows
+- user attachments
+- tool outputs
+- generated media
+- persisted files fetched later by clients or models
 
-## Recommended Use Case
+## Asset References
 
-Use assets when the payload is binary or should be resolved through asset
-storage semantics.
+Stored assets use references like:
 
-## Common Mistaken Alternative
+```txt
+asset://<asset-id>
+```
 
-Do not store large file payloads directly inside collection metadata or thread
-metadata.
+The runtime can resolve asset references for model calls and expose asset
+helpers through `copilotz.assets`.
 
-## Public Surface
+## Storage
 
-Assets are exposed through the app layer and through the runtime asset store.
+Copilotz supports memory, filesystem, passthrough, and S3-compatible asset
+storage.
+
+```ts
+const copilotz = await createCopilotz({
+  agents: [agent],
+  assets: {
+    config: {
+      backend: "fs",
+      rootDir: "./.copilotz/assets",
+    },
+  },
+});
+```
+
+## Events
+
+Asset handling can emit:
+
+- `ASSET_CREATED`
+- `ASSET_ERROR`
 
 ## Related Pages
 
-- [Storage Adapters](../resources/storage.md)
-- [createCopilotz](../reference/create-copilotz.md)
-- [Serve Copilotz with Oxian](../playbooks/serve-copilotz-with-oxian.md)
+- [Events](../core-concepts/events.md)
+- [Providers and Storage](../resources/providers-and-storage.md)

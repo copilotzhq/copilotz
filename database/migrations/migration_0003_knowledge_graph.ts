@@ -37,6 +37,10 @@ CREATE TABLE IF NOT EXISTS "edges" (
   "created_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+/* Add namespace column to nodes table */
+ALTER TABLE "nodes" ADD COLUMN IF NOT EXISTS "namespace" TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE "nodes" ADD CONSTRAINT "nodes_namespace_check" CHECK ("namespace" <> '');
+
 /* Idempotent FKs: drop first (IF EXISTS), then re-add. NOT VALID skips existing-row checks. */
 ALTER TABLE "edges" DROP CONSTRAINT IF EXISTS "edges_source_node_id_nodes_fk";
 ALTER TABLE "edges" ADD CONSTRAINT "edges_source_node_id_nodes_fk"

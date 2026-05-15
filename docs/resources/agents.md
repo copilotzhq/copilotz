@@ -1,47 +1,50 @@
+---
+title: Agents
+description: Resource shape for agent configuration.
+section: Resources
+order: 20
+status: stable
+---
+
 # Agents
 
-Agents define orchestration behavior, instructions, allowed tools, and model
-configuration.
+Agent resources define model-backed workers.
 
-## Where It Lives
-
-```txt
-resources/agents/<agent-name>/
-```
-
-## What It Is For
-
-Use an agent resource when you need a named runtime actor with instructions,
-tool access, and execution identity.
-
-Recommended use case: define a reusable runtime actor\
-Most common mistaken alternative: putting all behavior in tools without an
-owning agent
-
-## How Copilotz Consumes It
-
-- agents are loaded into the runtime config
-- the run engine uses them during `run()` and thread execution
-- multi-agent flows build on agent definitions plus runtime state
-
-## Minimal Example
+## Code Shape
 
 ```ts
 export default {
-  id: "assistant",
-  name: "Assistant",
-  role: "assistant",
-  instructions: "Be clear and helpful.",
+  id: "support",
+  name: "Support",
+  role: "customer support assistant",
+  instructions: "Help customers solve support issues.",
+  llmOptions: {
+    provider: "openai",
+    model: "gpt-4o-mini",
+  },
+  allowedTools: ["search_knowledge"],
 };
 ```
 
+## File Shape
+
+A project can keep agents under `resources/agents/<agent-name>/`.
+
+Common files:
+
+- `config.ts`
+- `instructions.md`
+
 ## Public Surface
 
-Agents are visible through runtime execution and can be listed through the app
-layer, but they are not direct CRUD endpoints by default.
+Agents are consumed by:
+
+- `createCopilotz(...)`
+- `run(...)` routing through `target`
+- `goal(...)` lead and target resolution
+- app endpoints that list public agents
 
 ## Related Pages
 
-- [Add Agent Capabilities with Tools](../playbooks/add-agent-capabilities-with-tools.md)
-- [LLM Providers](./llm.md)
+- [Agents](../core-concepts/agents.md)
 - [createCopilotz](../reference/create-copilotz.md)

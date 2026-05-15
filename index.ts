@@ -17,6 +17,11 @@ import {
 } from "@/database/index.ts";
 import type { OminipgWithCrud } from "omnipg";
 import { type RunHandle, type RunOptions, runThread } from "@/runtime/index.ts";
+import {
+  createGoalHandle,
+  type GoalHandle,
+  type GoalOptions,
+} from "@/runtime/goal.ts";
 import type {
   CollectionCrud,
   CollectionDefinition,
@@ -193,6 +198,25 @@ export type {
   /** Context passed to tool result projector callbacks. */
   ToolResultProjectorContext,
 } from "@/types/index.ts";
+export type {
+  GoalAssessment,
+  GoalEvaluateCallback,
+  GoalEvaluateContext,
+  GoalHandle,
+  GoalOptions,
+  GoalResult,
+  GoalResultEvent,
+  GoalRunResult,
+  GoalSender,
+  GoalStatus,
+  GoalStopCallback,
+  GoalStopContext,
+  GoalStoppedEvent,
+  GoalStopResult,
+  GoalStreamEvent,
+  GoalTranscriptMessage,
+} from "@/runtime/goal.ts";
+
 export type {
   ChannelAdapterRequest,
   ChannelEgressOverrides,
@@ -918,6 +942,12 @@ export interface Copilotz {
     message: MessagePayload,
     options?: RunOptions,
   ): Promise<CopilotzRunResult>;
+  /**
+   * Runs a goal-directed conversation using normal Copilotz runs.
+   * The main thread stores the user/agent transcript; a private lead thread
+   * generates follow-up sender messages through `sender.usingAgent`.
+   */
+  goal(options: GoalOptions): Promise<GoalHandle>;
   /**
    * Starts an interactive CLI session.
    * @param initialMessage - Optional initial message or configuration
@@ -1809,6 +1839,12 @@ export async function createCopilotz(
       return baseOps;
     },
     run: performRun,
+    goal: (input: GoalOptions) =>
+      createGoalHandle({
+        performRun,
+        agents: baseConfig.agents,
+        input,
+      }),
     start: (
       initialMessage?:
         | (MessagePayload & {

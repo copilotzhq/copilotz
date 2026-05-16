@@ -1,3 +1,11 @@
+---
+title: "Ch 2: Your First Tool"
+description: "Define typed functions the agent can call and compose into actions."
+section: Getting Started
+order: 20
+status: stable
+---
+
 # Chapter 2: Your First Tool
 
 > **Part 1 — Foundations**

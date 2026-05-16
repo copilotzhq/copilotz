@@ -1,3 +1,11 @@
+---
+title: "Ch 17: Multi-Tenancy"
+description: "Namespace isolation, per-tenant config, and scoped data access."
+section: Getting Started
+order: 170
+status: stable
+---
+
 # Chapter 17: Multi-Tenancy
 
 > **Part 7 — Production Patterns**

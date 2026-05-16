@@ -1,3 +1,11 @@
+---
+title: "Ch 19: Features — Custom Server Logic"
+description: "Webhooks, admin APIs, and custom routes without a second server."
+section: Getting Started
+order: 190
+status: stable
+---
+
 # Chapter 19: Features — Custom Server Logic
 
 > **Part 7 — Production Patterns**

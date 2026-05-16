@@ -1,3 +1,11 @@
+---
+title: "Ch 11: Debugging & Observability"
+description: "Event stream inspection, cost tracking, processor-based export, and the events table."
+section: Getting Started
+order: 110
+status: stable
+---
+
 # Chapter 11: Debugging & Observability
 
 > **Part 5 — Controlling the Runtime**

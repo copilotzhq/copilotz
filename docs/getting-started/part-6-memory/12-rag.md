@@ -1,3 +1,11 @@
+---
+title: "Ch 12: RAG"
+description: "Ground your agent on proprietary documents with semantic retrieval."
+section: Getting Started
+order: 120
+status: stable
+---
+
 # Chapter 12: RAG — Grounding Agents on Proprietary Knowledge
 
 > **Part 6 — Memory & Knowledge**

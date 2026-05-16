@@ -1,3 +1,11 @@
+---
+title: "Ch 3: Native Tools"
+description: "30 production-ready tools — web, filesystem, terminal, scheduling, and more."
+section: Getting Started
+order: 30
+status: stable
+---
+
 # Chapter 3: Native Tools
 
 > **Part 2 — Tools: From Custom to Protocol**

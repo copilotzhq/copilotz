@@ -1,3 +1,11 @@
+---
+title: "Ch 18: Collections — Application Data"
+description: "Your business entities, stored in the same database as your agent."
+section: Getting Started
+order: 180
+status: stable
+---
+
 # Chapter 18: Collections — Application Data
 
 > **Part 7 — Production Patterns**

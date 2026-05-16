@@ -1,3 +1,11 @@
+---
+title: "Ch 8: The Resource System"
+description: "File-based project structure auto-loaded by the framework."
+section: Getting Started
+order: 80
+status: stable
+---
+
 # Chapter 8: The Resource System
 
 > **Part 4 — Organizing Your Code**

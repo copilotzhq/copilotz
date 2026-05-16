@@ -1,3 +1,11 @@
+---
+title: "Ch 5: OpenAPI as Tools"
+description: "Auto-generate agent tools from any OpenAPI 3.x spec."
+section: Getting Started
+order: 50
+status: stable
+---
+
 # Chapter 5: OpenAPI as Tools
 
 > **Part 2 — Tools: From Custom to Protocol**

@@ -1,3 +1,11 @@
+---
+title: "Ch 1: Hello Agent"
+description: "Get a conversational agent running in minutes with a streaming REPL."
+section: Getting Started
+order: 10
+status: stable
+---
+
 # Chapter 1: Hello Agent
 
 > **Part 1 — Foundations**

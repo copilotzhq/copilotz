@@ -1,3 +1,11 @@
+---
+title: "Ch 4: MCP Servers"
+description: "Connect any MCP-compatible tool server to your agent."
+section: Getting Started
+order: 40
+status: stable
+---
+
 # Chapter 4: MCP Servers
 
 > **Part 2 — Tools: From Custom to Protocol**

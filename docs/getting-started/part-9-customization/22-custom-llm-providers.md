@@ -1,4 +1,12 @@
-# Chapter 21: Custom LLM Providers
+---
+title: "Ch 22: Custom LLM Providers"
+description: "Plug in any model or provider the framework doesn't yet support."
+section: Getting Started
+order: 220
+status: stable
+---
+
+# Chapter 22: Custom LLM Providers
 
 > **Part 9 — Deep Customization**
 
@@ -222,4 +230,4 @@ The `isReasoning: true` flag causes Copilotz to emit `TOKEN` events with `isReas
 
 You've reached the end of the core guide. There are three more extension points worth knowing about — Collections (for typed application data), Features (for custom API endpoints), and Web Libraries (for client-side integration). The next chapter gives you an orientation to all three and points you toward the full documentation.
 
-→ **[Chapter 22: What's Next](./22-whats-next.md))**
+→ **[Chapter 23: What's Next](./23-whats-next.md)****

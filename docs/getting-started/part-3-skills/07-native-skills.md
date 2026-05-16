@@ -1,3 +1,11 @@
+---
+title: "Ch 7: Native Skills"
+description: "Expert workflows bundled and ready to drop in."
+section: Getting Started
+order: 70
+status: stable
+---
+
 # Chapter 7: Native Skills
 
 > **Part 3 — Skills: Taming Tool Sprawl**

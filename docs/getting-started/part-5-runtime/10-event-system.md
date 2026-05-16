@@ -1,3 +1,11 @@
+---
+title: "Ch 10: The Event System"
+description: "The full event lifecycle, from message receipt to final response."
+section: Getting Started
+order: 100
+status: stable
+---
+
 # Chapter 10: The Event System
 
 > **Part 5 — Controlling the Runtime**

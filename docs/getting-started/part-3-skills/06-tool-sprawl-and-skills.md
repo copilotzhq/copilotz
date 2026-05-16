@@ -1,3 +1,11 @@
+---
+title: "Ch 6: Tool Sprawl & Custom Skills"
+description: "Package tools into skills to cut context bloat and improve tool selection."
+section: Getting Started
+order: 60
+status: stable
+---
+
 # Chapter 6: Tool Sprawl & Custom Skills
 
 > **Part 3 — Skills: Taming Tool Sprawl**

@@ -1,3 +1,11 @@
+---
+title: "Getting Started Guide"
+description: "How the guide works and what you'll build across 23 chapters."
+section: Getting Started
+order: 0
+status: stable
+---
+
 # Getting Started with Copilotz
 
 This guide takes you from zero to a production-grade AI application. Each chapter builds on the last, introducing complexity only when you feel the pain of not having it.
@@ -52,10 +60,11 @@ By the end, you'll have built a fully featured AI application with tools, memory
 
 ### Part 8 — Multi-Agent Systems
 - [Chapter 20: Multi-Agent Routing & Delegation](./part-8-multi-agent/20-multi-agent.md) — Agent teams, not monoliths
+- [Chapter 21: Goals — Automated Testing & Agent Simulation](./part-8-multi-agent/21-goals-testing.md) — Test agents with agents, score conversations with a judge
 
 ### Part 9 — Deep Customization
-- [Chapter 21: Custom LLM Providers](./part-9-customization/21-custom-llm-providers.md) — Plug in any model, any provider
-- [Chapter 22: What's Next](./part-9-customization/22-whats-next.md) — Web libraries and beyond
+- [Chapter 22: Custom LLM Providers](./part-9-customization/22-custom-llm-providers.md) — Plug in any model, any provider
+- [Chapter 23: What's Next](./part-9-customization/23-whats-next.md) — Web libraries and beyond
 
 ---
 

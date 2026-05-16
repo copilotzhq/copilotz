@@ -1,3 +1,11 @@
+---
+title: "Ch 15: Assets"
+description: "Move files, images, and binary data through the runtime without breaking the prompt."
+section: Getting Started
+order: 150
+status: stable
+---
+
 # Chapter 15: Assets — Media Without Breaking the Prompt
 
 > **Part 7 — Production Patterns**

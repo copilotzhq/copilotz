@@ -1,6 +1,131 @@
 {
   "sections": [
     {
+      "title": "Getting Started",
+      "items": [
+        {
+          "title": "Introduction",
+          "slug": "getting-started",
+          "description": "How the guide works and what you'll build across 23 chapters."
+        },
+        {
+          "title": "Ch 1: Hello Agent",
+          "slug": "getting-started/part-1-foundations/01-hello-agent",
+          "description": "Get a conversational agent running in minutes with a streaming REPL."
+        },
+        {
+          "title": "Ch 2: Your First Tool",
+          "slug": "getting-started/part-1-foundations/02-your-first-tool",
+          "description": "Define typed functions the agent can call and compose into actions."
+        },
+        {
+          "title": "Ch 3: Native Tools",
+          "slug": "getting-started/part-2-tools/03-native-tools",
+          "description": "30 production-ready tools — web, filesystem, terminal, scheduling, and more."
+        },
+        {
+          "title": "Ch 4: MCP Servers",
+          "slug": "getting-started/part-2-tools/04-mcp-servers",
+          "description": "Connect any MCP-compatible tool server to your agent."
+        },
+        {
+          "title": "Ch 5: OpenAPI as Tools",
+          "slug": "getting-started/part-2-tools/05-openapi-as-tools",
+          "description": "Auto-generate agent tools from any OpenAPI 3.x spec."
+        },
+        {
+          "title": "Ch 6: Tool Sprawl & Custom Skills",
+          "slug": "getting-started/part-3-skills/06-tool-sprawl-and-skills",
+          "description": "Package tools into skills to cut context bloat and improve tool selection."
+        },
+        {
+          "title": "Ch 7: Native Skills",
+          "slug": "getting-started/part-3-skills/07-native-skills",
+          "description": "Expert workflows bundled and ready to drop in."
+        },
+        {
+          "title": "Ch 8: The Resource System",
+          "slug": "getting-started/part-4-organizing/08-resource-system",
+          "description": "File-based project structure auto-loaded by the framework."
+        },
+        {
+          "title": "Ch 9: Custom Processors",
+          "slug": "getting-started/part-5-runtime/09-custom-processors",
+          "description": "Middleware-like hooks over every event in the agent lifecycle."
+        },
+        {
+          "title": "Ch 10: The Event System",
+          "slug": "getting-started/part-5-runtime/10-event-system",
+          "description": "The full event lifecycle, from message receipt to final response."
+        },
+        {
+          "title": "Ch 11: Debugging & Observability",
+          "slug": "getting-started/part-5-runtime/11-debugging-and-observability",
+          "description": "Event stream inspection, cost tracking, processor-based export, and the events table."
+        },
+        {
+          "title": "Ch 12: RAG",
+          "slug": "getting-started/part-6-memory/12-rag",
+          "description": "Ground your agent on proprietary documents with semantic retrieval."
+        },
+        {
+          "title": "Ch 13: Knowledge Graph Collections",
+          "slug": "getting-started/part-6-memory/13-knowledge-graph",
+          "description": "Model entities and relationships, not just similarity."
+        },
+        {
+          "title": "Ch 14: Graph Memory",
+          "slug": "getting-started/part-6-memory/14-graph-memory",
+          "description": "Scalable agent memory that extracts entities and improves over time."
+        },
+        {
+          "title": "Ch 15: Assets",
+          "slug": "getting-started/part-7-production/15-assets",
+          "description": "Move files, images, and binary data through the runtime without breaking the prompt."
+        },
+        {
+          "title": "Ch 16: Channels & The Server Facade",
+          "slug": "getting-started/part-7-production/16-channels-and-server",
+          "description": "Ship to WhatsApp, web, Discord, and more via withApp."
+        },
+        {
+          "title": "Ch 17: Multi-Tenancy",
+          "slug": "getting-started/part-7-production/17-multi-tenancy",
+          "description": "Namespace isolation, per-tenant config, and scoped data access."
+        },
+        {
+          "title": "Ch 18: Collections — Application Data",
+          "slug": "getting-started/part-7-production/18-collections-application-data",
+          "description": "Your business entities, stored in the same database as your agent."
+        },
+        {
+          "title": "Ch 19: Features — Custom Server Logic",
+          "slug": "getting-started/part-7-production/19-features-custom-server-logic",
+          "description": "Webhooks, admin APIs, and custom routes without a second server."
+        },
+        {
+          "title": "Ch 20: Multi-Agent Routing & Delegation",
+          "slug": "getting-started/part-8-multi-agent/20-multi-agent",
+          "description": "Build agent teams with routing, delegation, and loop prevention."
+        },
+        {
+          "title": "Ch 21: Goals — Automated Testing & Agent Simulation",
+          "slug": "getting-started/part-8-multi-agent/21-goals-testing",
+          "description": "Test agents with agents; score multi-turn conversations with a judge."
+        },
+        {
+          "title": "Ch 22: Custom LLM Providers",
+          "slug": "getting-started/part-9-customization/22-custom-llm-providers",
+          "description": "Plug in any model or provider the framework doesn't yet support."
+        },
+        {
+          "title": "Ch 23: What's Next",
+          "slug": "getting-started/part-9-customization/23-whats-next",
+          "description": "Web libraries, React UI, and where to go from here."
+        }
+      ]
+    },
+    {
       "title": "Start Here",
       "items": [
         {

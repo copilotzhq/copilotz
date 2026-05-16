@@ -1,3 +1,11 @@
+---
+title: "Ch 20: Multi-Agent Routing & Delegation"
+description: "Build agent teams with routing, delegation, and loop prevention."
+section: Getting Started
+order: 200
+status: stable
+---
+
 # Chapter 20: Multi-Agent Routing & Delegation
 
 > **Part 8 — Multi-Agent Systems**
@@ -168,4 +176,4 @@ Enable `includeTargetContext: true` to give each agent visibility into the deleg
 
 Every agent in this setup uses a built-in LLM provider. But what if a new provider launches — one with better price-performance for your use case — and Copilotz doesn't support it yet? You don't need to wait for a framework update.
 
-→ **[Chapter 21: Custom LLM Providers](../part-9-customization/21-custom-llm-providers.md))**
+→ **[Chapter 21: Goals — Automated Testing & Agent Simulation](./21-goals-testing.md)**

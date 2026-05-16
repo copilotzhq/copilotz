@@ -1,3 +1,11 @@
+---
+title: "Ch 13: Knowledge Graph Collections"
+description: "Model entities and relationships, not just similarity."
+section: Getting Started
+order: 130
+status: stable
+---
+
 # Chapter 13: Knowledge Graph Collections
 
 > **Part 6 — Memory & Knowledge**

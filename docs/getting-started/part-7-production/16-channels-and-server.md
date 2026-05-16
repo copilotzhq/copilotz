@@ -1,3 +1,11 @@
+---
+title: "Ch 16: Channels & The Server Facade"
+description: "Ship to WhatsApp, web, Discord, and more via withApp."
+section: Getting Started
+order: 160
+status: stable
+---
+
 # Chapter 16: Channels & The Server Facade
 
 > **Part 7 — Production Patterns**

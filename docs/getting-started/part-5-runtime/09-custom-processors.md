@@ -1,3 +1,11 @@
+---
+title: "Ch 9: Custom Processors"
+description: "Middleware-like hooks over every event in the agent lifecycle."
+section: Getting Started
+order: 90
+status: stable
+---
+
 # Chapter 9: Custom Processors
 
 > **Part 5 — Controlling the Runtime**

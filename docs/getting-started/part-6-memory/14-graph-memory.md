@@ -1,3 +1,11 @@
+---
+title: "Ch 14: Graph Memory"
+description: "Scalable agent memory that extracts entities and improves over time."
+section: Getting Started
+order: 140
+status: stable
+---
+
 # Chapter 14: Graph Memory
 
 > **Part 6 — Memory & Knowledge**

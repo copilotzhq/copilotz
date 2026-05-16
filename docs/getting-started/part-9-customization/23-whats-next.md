@@ -1,4 +1,12 @@
-# Chapter 22: What's Next
+---
+title: "Ch 23: What's Next"
+description: "Web libraries, React UI, and where to go from here."
+section: Getting Started
+order: 230
+status: stable
+---
+
+# Chapter 23: What's Next
 
 > **Part 9 — Deep Customization**
 

@@ -832,7 +832,38 @@ export type DetectedAsset = {
 	bytes: Uint8Array;
 	mime: string;
 	kind: "image" | "audio" | "video" | "file";
+	fileName?: string;
+	size?: number;
+	metadata?: Record<string, unknown>;
 };
+
+function fileNameFromPath(value: unknown): string | undefined {
+	if (typeof value !== "string" || !value.trim()) return undefined;
+	const normalized = value.replaceAll("\\", "/");
+	const name = normalized.split("/").filter(Boolean).at(-1);
+	return name || undefined;
+}
+
+function sanitizeAssetMetadata(record: Record<string, unknown>): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(record)) {
+		if (key === "dataBase64" || key === "dataUrl") continue;
+		out[key] = value;
+	}
+	return out;
+}
+
+function extractAssetFileName(record: Record<string, unknown>): string | undefined {
+	if (typeof record.fileName === "string" && record.fileName.trim()) return record.fileName;
+	if (typeof record.name === "string" && record.name.trim()) return record.name;
+	return fileNameFromPath(record.path);
+}
+
+function extractAssetSize(record: Record<string, unknown>): number | undefined {
+	return typeof record.size === "number" && Number.isFinite(record.size) && record.size >= 0
+		? record.size
+		: undefined;
+}
 
 export function detectAssetFromValue(value: unknown): DetectedAsset | null {
 	// Pattern 1: { mimeType, dataBase64 }
@@ -841,12 +872,26 @@ export function detectAssetFromValue(value: unknown): DetectedAsset | null {
 		if (typeof v.mimeType === "string" && typeof v.dataBase64 === "string") {
 			const bytes = base64ToBytes(v.dataBase64);
 			const mime = v.mimeType;
-			return { bytes, mime, kind: detectKindFromMime(mime) };
+			return {
+				bytes,
+				mime,
+				kind: detectKindFromMime(mime),
+				fileName: extractAssetFileName(v),
+				size: extractAssetSize(v),
+				metadata: sanitizeAssetMetadata(v),
+			};
 		}
 		if (typeof v.dataUrl === "string" && isDataUrl(v.dataUrl)) {
 			const parsed = parseDataUrl(v.dataUrl);
 			if (parsed) {
-				return { bytes: parsed.bytes, mime: parsed.mime, kind: detectKindFromMime(parsed.mime) };
+				return {
+					bytes: parsed.bytes,
+					mime: parsed.mime,
+					kind: detectKindFromMime(parsed.mime),
+					fileName: extractAssetFileName(v),
+					size: extractAssetSize(v),
+					metadata: sanitizeAssetMetadata(v),
+				};
 			}
 		}
 	}
@@ -862,10 +907,10 @@ export function detectAssetFromValue(value: unknown): DetectedAsset | null {
 
 export type AssetSaveError = { mime: string; kind: DetectedAsset["kind"]; error: string };
 
-export async function normalizeOutputToAssetRefs(value: unknown, store?: AssetStore): Promise<{ normalized: unknown; created: Array<{ ref: AssetRef; mime: string; kind: DetectedAsset["kind"] }>; errors: AssetSaveError[] }> {
+export async function normalizeOutputToAssetRefs(value: unknown, store?: AssetStore): Promise<{ normalized: unknown; created: Array<{ ref: AssetRef; mime: string; kind: DetectedAsset["kind"]; fileName?: string; size?: number }>; errors: AssetSaveError[] }> {
 	if (!store) return { normalized: value, created: [], errors: [] };
 
-	const created: Array<{ ref: AssetRef; mime: string; kind: DetectedAsset["kind"] }> = [];
+	const created: Array<{ ref: AssetRef; mime: string; kind: DetectedAsset["kind"]; fileName?: string; size?: number }> = [];
 	const errors: AssetSaveError[] = [];
 
 	const visit = async (node: unknown): Promise<unknown> => {
@@ -874,8 +919,15 @@ export async function normalizeOutputToAssetRefs(value: unknown, store?: AssetSt
 			try {
 				const { assetId } = await store.save(single.bytes, single.mime);
 				const ref = buildAssetRefForStore(store, assetId);
-				created.push({ ref, mime: single.mime, kind: single.kind });
-				return { assetRef: ref, mimeType: single.mime, kind: single.kind };
+				created.push({ ref, mime: single.mime, kind: single.kind, fileName: single.fileName, size: single.size });
+				return {
+					...(single.metadata ?? {}),
+					assetRef: ref,
+					mimeType: single.mime,
+					kind: single.kind,
+					...(single.fileName ? { fileName: single.fileName } : {}),
+					...(typeof single.size === "number" ? { size: single.size } : {}),
+				};
 			} catch (err) {
 				const errMsg = err instanceof Error ? err.message : String(err);
 				console.warn(

@@ -215,3 +215,64 @@ Deno.test("processAssetsForNewMessage sanitizes tool-generated assets when produ
   assertStringIncludes(String(result.contentOverride), '"kind":"image"');
   assert(!String(result.contentOverride).includes("dataBase64"));
 });
+
+Deno.test("processAssetsForNewMessage preserves exported artifact metadata on attachments", async () => {
+  const result = await processAssetsForNewMessage({
+    payload: {
+      sender: { type: "tool", id: "artist", name: "Artist" },
+      content: "",
+    } as MessagePayload,
+    baseMetadata: {
+      toolCalls: [
+        {
+          id: "tool-1",
+          name: "sandbox_session",
+          output: {
+            results: [
+              {
+                ok: true,
+                action: "artifact",
+                op: "export",
+                artifact: {
+                  path: "src/main.ts",
+                  name: "main.ts",
+                  size: 18,
+                  mimeType: "text/typescript",
+                  dataBase64: btoa("console.log('hi');"),
+                },
+              },
+            ],
+          },
+        },
+      ],
+    },
+    senderId: "artist",
+    senderType: "tool",
+    context: createTestContext(),
+    event: createTestEvent(),
+    threadId: "thread-1",
+  });
+
+  const attachments = (result.messageMetadata?.attachments ?? []) as Array<
+    Record<string, unknown>
+  >;
+  assertEquals(attachments.length, 1);
+  assertEquals(attachments[0]?.mimeType, "text/typescript");
+  assertEquals(attachments[0]?.kind, "file");
+  assertEquals(attachments[0]?.fileName, "main.ts");
+  assertEquals(attachments[0]?.size, 18);
+  assertExists(attachments[0]?.assetRef);
+
+  const toolCalls = (result.messageMetadata?.toolCalls ?? []) as Array<
+    Record<string, unknown>
+  >;
+  const output = toolCalls[0]?.output as Record<string, unknown>;
+  const results = output.results as Array<Record<string, unknown>>;
+  const artifact = results[0]?.artifact as Record<string, unknown>;
+  assertEquals(artifact?.dataBase64, undefined);
+  assertEquals(artifact?.path, "src/main.ts");
+  assertEquals(artifact?.name, "main.ts");
+  assertEquals(artifact?.size, 18);
+  assertEquals(artifact?.fileName, "main.ts");
+  assertExists(artifact?.assetRef);
+});

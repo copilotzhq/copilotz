@@ -31,12 +31,19 @@ type NormalizedAttachment = {
   mimeType?: string;
   format?: string;
   fileName?: string;
+  size?: number;
   assetRef?: string;
   // For http(s) URLs we keep the original URL (not treated as an asset)
   dataUrl?: string;
 };
 
-type CreatedAssetInfo = { ref: string; mime?: string; kind?: AttachmentKind };
+type CreatedAssetInfo = {
+  ref: string;
+  mime?: string;
+  kind?: AttachmentKind;
+  fileName?: string;
+  size?: number;
+};
 
 type AssetErrorInfo = {
   error: unknown;
@@ -104,7 +111,12 @@ function extractAttachmentsFromContent(
         } else if (
           typeof p.url === "string" && p.url.startsWith("asset://")
         ) {
-          attachments.push({ kind: "audio", assetRef: p.url, mimeType, format });
+          attachments.push({
+            kind: "audio",
+            assetRef: p.url,
+            mimeType,
+            format,
+          });
         } else if (typeof p.url === "string") {
           attachments.push({ kind: "audio", dataUrl: p.url, mimeType, format });
         }
@@ -492,6 +504,8 @@ export async function processAssetsForNewMessage(args: {
             kind: c.kind === "image" || c.kind === "audio" || c.kind === "file"
               ? c.kind
               : "file",
+            fileName: c.fileName,
+            size: c.size,
           });
         }
         if (normalized.errors.length > 0) {
@@ -556,6 +570,8 @@ export async function processAssetsForNewMessage(args: {
     createdFromToolOutputs.map((c) => ({
       kind: (c.kind ?? "file") as AttachmentKind,
       mimeType: c.mime,
+      fileName: c.fileName,
+      size: c.size,
       assetRef: c.ref,
     }));
 

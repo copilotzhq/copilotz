@@ -152,6 +152,15 @@ Deno.test("parseToolCallsFromResponse strips incomplete function calls after loc
   );
 });
 
+Deno.test("parseToolCallsFromResponse strips unrecoverable partial function calls", () => {
+  const parsed = parseToolCallsFromResponse(
+    'I will check that.\n<function_calls>\n{"name":"sandbox_session","arguments":{',
+  );
+
+  assertEquals(parsed.cleanResponse, "I will check that.\n");
+  assertEquals(parsed.tool_calls.length, 0);
+});
+
 Deno.test("formatMessages counts structured tool result output toward input limit", () => {
   const hugeBody = "x".repeat(8000);
   const formatted = formatMessages({

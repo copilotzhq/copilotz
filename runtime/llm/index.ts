@@ -1,9 +1,11 @@
 import type {
+  ChatMessage,
   ChatRequest,
   ChatResponse,
+  ProviderConfig,
   ProviderFallbackConfig,
   ProviderFallbackReason,
-  ProviderConfig,
+  ProviderFinishReason,
   ProviderName,
   StreamCallback,
   ToolInvocation,
@@ -36,6 +38,20 @@ const DEFAULT_FALLBACK_REASONS: ProviderFallbackReason[] = [
   "server_error",
   "provider_error",
 ];
+const MAX_TEXT_CONTINUATION_ROUNDS = 1;
+const MAX_TOOL_CALL_REPAIR_ROUNDS = 1;
+const TEXT_CONTINUATION_CUE = `
+Continue the previous assistant response exactly where it stopped.
+Do not repeat earlier content.
+Do not summarize.
+Do not call tools.
+Return only the continuation text.
+`.trim();
+const TOOL_CALL_REPAIR_CUE = `
+Your previous response was cut off while emitting a <function_calls> block.
+Return only one complete valid <function_calls>...</function_calls> block.
+Do not include prose.
+`.trim();
 
 export type LLMProviderAttempt = {
   provider: ProviderName;
@@ -111,7 +127,9 @@ function buildAttemptConfig(
   return withDefaultStopSequences(candidate);
 }
 
-export function classifyLLMError(error: unknown): ProviderFallbackReason | null {
+export function classifyLLMError(
+  error: unknown,
+): ProviderFallbackReason | null {
   const requestError = error as {
     status?: number;
     statusText?: string;
@@ -204,8 +222,8 @@ function normalizeProviderUsage(
   const totalTokens = typeof usage.totalTokens === "number"
     ? usage.totalTokens
     : (inputTokens !== undefined && outputTokens !== undefined)
-      ? inputTokens + outputTokens
-      : undefined;
+    ? inputTokens + outputTokens
+    : undefined;
 
   if (
     inputTokens === undefined &&
@@ -230,6 +248,102 @@ function normalizeProviderUsage(
     status,
     rawUsage: usage.rawUsage ?? null,
   };
+}
+
+function sumUsageNumber(
+  left: number | undefined,
+  right: number | undefined,
+): number | undefined {
+  if (left === undefined && right === undefined) return undefined;
+  return (left ?? 0) + (right ?? 0);
+}
+
+function mergeProviderUsage(
+  left: ProviderUsageUpdate | undefined,
+  right: ProviderUsageUpdate | undefined,
+): ProviderUsageUpdate | undefined {
+  if (!left) return right;
+  if (!right) return left;
+
+  return {
+    inputTokens: sumUsageNumber(left.inputTokens, right.inputTokens),
+    outputTokens: sumUsageNumber(left.outputTokens, right.outputTokens),
+    reasoningTokens: sumUsageNumber(
+      left.reasoningTokens,
+      right.reasoningTokens,
+    ),
+    cacheReadInputTokens: sumUsageNumber(
+      left.cacheReadInputTokens,
+      right.cacheReadInputTokens,
+    ),
+    cacheCreationInputTokens: sumUsageNumber(
+      left.cacheCreationInputTokens,
+      right.cacheCreationInputTokens,
+    ),
+    totalTokens: sumUsageNumber(left.totalTokens, right.totalTokens),
+    rawUsage: {
+      segments: [left.rawUsage ?? null, right.rawUsage ?? null],
+    },
+  };
+}
+
+function mergeExtractedTags(
+  left: Record<string, string[]>,
+  right: Record<string, string[]>,
+): Record<string, string[]> {
+  const merged = { ...left };
+  for (const [key, values] of Object.entries(right)) {
+    merged[key] = [...(merged[key] ?? []), ...values];
+  }
+  return merged;
+}
+
+function hasDanglingFunctionCallsBlock(response: string): boolean {
+  const startTag = "<function_calls>";
+  const endTag = "</function_calls>";
+  return response.lastIndexOf(startTag) > response.lastIndexOf(endTag);
+}
+
+function parseAssistantResponse(
+  response: string,
+  extractedBlockTags: string[] = [],
+  options: { preserveWhitespace?: boolean } = {},
+): {
+  cleanResponse: string;
+  toolCalls: ToolInvocation[];
+  extractedTags: Record<string, string[]>;
+} {
+  let cleanResponse = response;
+  let toolCalls: ToolInvocation[] = [];
+  let extractedTags: Record<string, string[]> = {};
+
+  {
+    const parsed = parseToolCallsFromResponse(response);
+    cleanResponse = parsed.cleanResponse;
+    toolCalls = parsed.tool_calls;
+  }
+  if (extractedBlockTags.length > 0) {
+    const parsed = parseTaggedBlocksFromResponse(
+      cleanResponse,
+      extractedBlockTags,
+    );
+    cleanResponse = parsed.cleanResponse;
+    extractedTags = parsed.extractedTags;
+  } else if (!options.preserveWhitespace) {
+    cleanResponse = cleanResponse.trim();
+  }
+  if (
+    cleanResponse.includes("<no_response") ||
+    cleanResponse.includes("<function_results>") ||
+    cleanResponse.includes("<continue_after_tool_results")
+  ) {
+    const parsed = parseInternalControlTagsFromResponse(cleanResponse);
+    cleanResponse = parsed.cleanResponse;
+  } else if (!options.preserveWhitespace) {
+    cleanResponse = cleanResponse.trim();
+  }
+
+  return { cleanResponse, toolCalls, extractedTags };
 }
 
 /**
@@ -259,8 +373,9 @@ export async function chat(
     ...request.config,
   } as ProviderConfig;
 
-  const providerFromRequest = (request as ChatRequest & { provider?: ProviderName })
-    .provider;
+  const providerFromRequest =
+    (request as ChatRequest & { provider?: ProviderName })
+      .provider;
   if (!baseConfig.provider && providerFromRequest) {
     baseConfig.provider = providerFromRequest;
   }
@@ -307,12 +422,7 @@ export async function chat(
       stop: undefined,
       stopSequences: undefined,
     } satisfies ProviderConfig;
-    const finalMessages = providerAPI.transformMessages
-      ? providerAPI.transformMessages(messages)
-      : messages;
-
     let visibleStreamStarted = false;
-    const abortController = new AbortController();
     const trackedStream = stream
       ? ((chunk: string, options?: { isReasoning?: boolean }) => {
         if (chunk.length > 0 || options?.isReasoning) {
@@ -323,68 +433,135 @@ export async function chat(
       : undefined;
 
     try {
-      const response = await streamPost(
-        providerAPI.endpoint,
-        providerAPI.body(
-          Array.isArray(finalMessages) ? finalMessages : messages,
-          requestConfig,
-        ),
-        {
-          headers: providerAPI.headers(requestConfig),
-          signal: abortController.signal,
-        },
-      ) as StreamResponse;
+      const runProviderStream = async (
+        runMessages: ChatMessage[],
+        onStream: StreamCallback | undefined,
+      ) => {
+        const finalMessages = providerAPI.transformMessages
+          ? providerAPI.transformMessages(runMessages)
+          : runMessages;
+        const abortController = new AbortController();
+        const response = await streamPost(
+          providerAPI.endpoint,
+          providerAPI.body(
+            Array.isArray(finalMessages) ? finalMessages : runMessages,
+            requestConfig,
+          ),
+          {
+            headers: providerAPI.headers(requestConfig),
+            signal: abortController.signal,
+          },
+        ) as StreamResponse;
 
-      const reader = response.stream.getReader();
-      const streamResult = await processStream(
-        reader,
-        trackedStream || (() => {}),
-        providerAPI.extractContent,
-        {
-          ...providerAPI.streamOptions,
-          config: attemptConfig,
-          extractedBlockTags: request.extractTags,
-          extractUsage: providerAPI.extractUsage,
-          localStopSequences,
-          onLocalStop: () => abortController.abort(),
-        },
-      );
+        const reader = response.stream.getReader();
+        return await processStream(
+          reader,
+          onStream || (() => {}),
+          providerAPI.extractContent,
+          {
+            ...providerAPI.streamOptions,
+            config: attemptConfig,
+            extractedBlockTags: request.extractTags,
+            extractUsage: providerAPI.extractUsage,
+            extractFinishReason: providerAPI.extractFinishReason,
+            localStopSequences,
+            onLocalStop: () => abortController.abort(),
+          },
+        );
+      };
+
+      let streamResult = await runProviderStream(messages, trackedStream);
 
       let cleanResponse = streamResult.content;
       let toolCalls: ToolInvocation[] = [];
       let extractedTags: Record<string, string[]> = {};
-      {
-        const parsed = parseToolCallsFromResponse(streamResult.content);
-        cleanResponse = parsed.cleanResponse;
-        toolCalls = parsed.tool_calls;
-      }
-      {
-        const parsed = parseTaggedBlocksFromResponse(
-          cleanResponse,
-          request.extractTags ?? [],
-        );
-        cleanResponse = parsed.cleanResponse;
-        extractedTags = parsed.extractedTags;
-      }
-      {
-        const parsed = parseInternalControlTagsFromResponse(cleanResponse);
-        cleanResponse = parsed.cleanResponse;
+      let parsedResponse = parseAssistantResponse(
+        streamResult.content,
+        request.extractTags ?? [],
+      );
+      cleanResponse = parsedResponse.cleanResponse;
+      toolCalls = parsedResponse.toolCalls;
+      extractedTags = parsedResponse.extractedTags;
+      let aggregateUsage = streamResult.usage;
+      let aggregateReasoning = streamResult.reasoning;
+      let finalFinishReason: ProviderFinishReason | null =
+        streamResult.finishReason;
+
+      if (
+        streamResult.finishReason === "length" &&
+        hasDanglingFunctionCallsBlock(streamResult.content)
+      ) {
+        for (let i = 0; i < MAX_TOOL_CALL_REPAIR_ROUNDS; i++) {
+          const repairResult = await runProviderStream([
+            ...messages,
+            { role: "assistant", content: streamResult.content },
+            { role: "user", content: TOOL_CALL_REPAIR_CUE },
+          ], undefined);
+          aggregateUsage = mergeProviderUsage(
+            aggregateUsage,
+            repairResult.usage,
+          );
+          aggregateReasoning = `${aggregateReasoning}${repairResult.reasoning}`;
+          finalFinishReason = repairResult.finishReason ?? finalFinishReason;
+
+          const repaired = parseAssistantResponse(
+            repairResult.content,
+            request.extractTags ?? [],
+          );
+          if (repaired.toolCalls.length > 0) {
+            toolCalls = repaired.toolCalls;
+            extractedTags = mergeExtractedTags(
+              extractedTags,
+              repaired.extractedTags,
+            );
+            break;
+          }
+        }
+      } else if (streamResult.finishReason === "length") {
+        for (let i = 0; i < MAX_TEXT_CONTINUATION_ROUNDS; i++) {
+          const continuationResult = await runProviderStream([
+            ...messages,
+            { role: "assistant", content: cleanResponse },
+            { role: "user", content: TEXT_CONTINUATION_CUE },
+          ], trackedStream);
+          aggregateUsage = mergeProviderUsage(
+            aggregateUsage,
+            continuationResult.usage,
+          );
+          aggregateReasoning =
+            `${aggregateReasoning}${continuationResult.reasoning}`;
+          finalFinishReason = continuationResult.finishReason ??
+            finalFinishReason;
+
+          const continued = parseAssistantResponse(
+            continuationResult.content,
+            request.extractTags ?? [],
+            { preserveWhitespace: true },
+          );
+          cleanResponse = `${cleanResponse}${continued.cleanResponse}`;
+          extractedTags = mergeExtractedTags(
+            extractedTags,
+            continued.extractedTags,
+          );
+          if (continuationResult.finishReason !== "length") break;
+        }
       }
 
       const usageStatus: TokenUsage["status"] = streamResult.stoppedByLocalStop
         ? "aborted"
         : "completed";
-      const usage = normalizeProviderUsage(streamResult.usage, usageStatus) ??
-        await estimateUsage(messages, streamResult.content, usageStatus);
+      const usage = normalizeProviderUsage(aggregateUsage, usageStatus) ??
+        await estimateUsage(messages, cleanResponse, usageStatus);
       const cost = await estimateUsageCost(attemptConfig, usage ?? undefined);
       const totalTokens = usage.totalTokens ??
-        await countTokens(messages, streamResult.content);
+        await countTokens(messages, cleanResponse);
 
       const chatResponse: ChatResponse = {
         prompt: messages,
         answer: cleanResponse,
-        ...(streamResult.reasoning && { reasoning: streamResult.reasoning }),
+        ...(aggregateReasoning && { reasoning: aggregateReasoning }),
         tokens: totalTokens,
+        finishReason: finalFinishReason,
         usage,
         ...(cost ? { cost } : {}),
         provider: attemptProvider,
@@ -446,7 +623,9 @@ export async function chat(
       cause: lastError,
     });
   }
-  throw new Error("LLM chat exhausted all attempts without returning a response");
+  throw new Error(
+    "LLM chat exhausted all attempts without returning a response",
+  );
 }
 
 export * from "@/runtime/llm/types.ts";

@@ -560,7 +560,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       finishReason:
         Array.isArray(normalizedToolCalls) && normalizedToolCalls.length > 0
           ? "tool_calls"
-          : "stop",
+          : llmResponse.finishReason ?? "stop",
       answer: answer ?? null,
       reasoning: reasoning ?? null,
       toolCalls: normalizedToolCalls ?? null,

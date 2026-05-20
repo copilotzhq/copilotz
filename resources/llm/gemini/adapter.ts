@@ -1,4 +1,11 @@
-import type { ChatMessage, ProviderConfig, ProviderFactory, ExtractedPart, ProviderUsageUpdate } from "@/runtime/llm/types.ts";
+import type {
+  ChatMessage,
+  ExtractedPart,
+  ProviderConfig,
+  ProviderFactory,
+  ProviderFinishReason,
+  ProviderUsageUpdate,
+} from "@/runtime/llm/types.ts";
 
 interface GeminiPart {
   text?: string;
@@ -32,6 +39,14 @@ function getEnvFlag(key: string): string | undefined {
   return undefined;
 }
 
+function extractGeminiFinishReason(data: any): ProviderFinishReason | null {
+  const reason = data?.candidates?.[0]?.finishReason;
+  if (reason === "MAX_TOKENS") return "length";
+  if (reason === "STOP") return "stop";
+  if (reason === "SAFETY" || reason === "RECITATION") return "content_filter";
+  return typeof reason === "string" ? "unknown" : null;
+}
+
 /**
  * Build the Gemini `thinkingConfig` for a model, or return undefined to omit it.
  *
@@ -59,8 +74,18 @@ function buildThinkingConfig(
   let effortFields: Record<string, unknown> | undefined;
   if (effort && !g?.thinkingLevel && g?.thinkingBudget == null) {
     effortFields = is3x
-      ? { thinkingLevel: { minimal: "MINIMAL", low: "LOW", medium: "MEDIUM", high: "HIGH" }[effort] }
-      : { thinkingBudget: { minimal: 0, low: 2048, medium: 8192, high: -1 }[effort] };
+      ? {
+        thinkingLevel: {
+          minimal: "MINIMAL",
+          low: "LOW",
+          medium: "MEDIUM",
+          high: "HIGH",
+        }[effort],
+      }
+      : {
+        thinkingBudget:
+          { minimal: 0, low: 2048, medium: 8192, high: -1 }[effort],
+      };
   }
 
   return { includeThoughts: true, ...effortFields, ...g };
@@ -305,5 +330,6 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
         rawUsage: usage as Record<string, unknown>,
       };
     },
+    extractFinishReason: extractGeminiFinishReason,
   };
 };

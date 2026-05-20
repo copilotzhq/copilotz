@@ -1,12 +1,24 @@
-import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart, ExtractedPart, ProviderUsageUpdate } from '@/runtime/llm/types.ts';
+import type {
+  ChatContentPart,
+  ChatMessage,
+  ExtractedPart,
+  ProviderConfig,
+  ProviderFactory,
+  ProviderFinishReason,
+  ProviderUsageUpdate,
+} from "@/runtime/llm/types.ts";
 
 function extractOpenAIUsage(data: any): ProviderUsageUpdate | null {
   const usage = data?.usage;
   if (!usage || typeof usage !== "object" || Array.isArray(usage)) return null;
 
   return {
-    inputTokens: typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined,
-    outputTokens: typeof usage.completion_tokens === "number" ? usage.completion_tokens : undefined,
+    inputTokens: typeof usage.prompt_tokens === "number"
+      ? usage.prompt_tokens
+      : undefined,
+    outputTokens: typeof usage.completion_tokens === "number"
+      ? usage.completion_tokens
+      : undefined,
     reasoningTokens:
       typeof usage.completion_tokens_details?.reasoning_tokens === "number"
         ? usage.completion_tokens_details.reasoning_tokens
@@ -15,37 +27,59 @@ function extractOpenAIUsage(data: any): ProviderUsageUpdate | null {
       typeof usage.prompt_tokens_details?.cached_tokens === "number"
         ? usage.prompt_tokens_details.cached_tokens
         : undefined,
-    totalTokens: typeof usage.total_tokens === "number" ? usage.total_tokens : undefined,
+    totalTokens: typeof usage.total_tokens === "number"
+      ? usage.total_tokens
+      : undefined,
     rawUsage: usage as Record<string, unknown>,
   };
 }
 
+function extractOpenAIFinishReason(data: any): ProviderFinishReason | null {
+  const reason = data?.choices?.[0]?.finish_reason;
+  if (reason === "length") return "length";
+  if (reason === "stop") return "stop";
+  if (reason === "tool_calls" || reason === "function_call") {
+    return "tool_calls";
+  }
+  if (reason === "content_filter") return "content_filter";
+  return typeof reason === "string" ? "unknown" : null;
+}
+
 export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
   return {
-    endpoint: 'https://api.openai.com/v1/chat/completions',
+    endpoint: "https://api.openai.com/v1/chat/completions",
 
     headers: (config: ProviderConfig) => ({
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.apiKey}`,
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${config.apiKey}`,
     }),
 
     body: (messages: ChatMessage[], config: ProviderConfig) => {
-      const openaiMessages = messages.map(msg => {
+      const openaiMessages = messages.map((msg) => {
         if (Array.isArray(msg.content)) {
           const parts = (msg.content as ChatContentPart[]).flatMap((p) => {
-            if (p.type === 'text') {
-              return [{ type: 'text', text: p.text }];
+            if (p.type === "text") {
+              return [{ type: "text", text: p.text }];
             }
-            if (p.type === 'image_url' && p.image_url?.url) {
-              return [{ type: 'image_url', image_url: { url: p.image_url.url } }];
+            if (p.type === "image_url" && p.image_url?.url) {
+              return [{
+                type: "image_url",
+                image_url: { url: p.image_url.url },
+              }];
             }
-            if (p.type === 'input_audio' && p.input_audio?.data) {
-              return [{ type: 'input_audio', input_audio: { data: p.input_audio.data, format: p.input_audio.format || 'wav' } }];
+            if (p.type === "input_audio" && p.input_audio?.data) {
+              return [{
+                type: "input_audio",
+                input_audio: {
+                  data: p.input_audio.data,
+                  format: p.input_audio.format || "wav",
+                },
+              }];
             }
-            if (p.type === 'file' && p.file?.file_data) {
+            if (p.type === "file" && p.file?.file_data) {
               const data = p.file.file_data;
-              if (typeof data === 'string' && data.startsWith('data:')) {
-                return [{ type: 'image_url', image_url: { url: data } }];
+              if (typeof data === "string" && data.startsWith("data:")) {
+                return [{ type: "image_url", image_url: { url: data } }];
               }
             }
             return [] as any[];
@@ -55,7 +89,7 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
         return { role: msg.role, content: msg.content } as any;
       });
 
-      const modelName = config.model || 'gpt-4o-mini';
+      const modelName = config.model || "gpt-4o-mini";
       const bodyConfig: any = {
         model: modelName,
         messages: openaiMessages,
@@ -70,14 +104,16 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
         user: config.user,
         reasoning_effort: config.reasoningEffort,
         verbosity: config.verbosity,
-        response_format: config.responseType === 'json'
-          ? { type: 'json_object' }
+        response_format: config.responseType === "json"
+          ? { type: "json_object" }
           : undefined,
       };
 
       {
         const maxComp = config.maxCompletionTokens ?? config.maxTokens ?? 1000;
-        if (typeof maxComp === 'number') bodyConfig.max_completion_tokens = maxComp;
+        if (typeof maxComp === "number") {
+          bodyConfig.max_completion_tokens = maxComp;
+        }
       }
 
       return bodyConfig;
@@ -102,5 +138,6 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
     },
 
     extractUsage: extractOpenAIUsage,
+    extractFinishReason: extractOpenAIFinishReason,
   };
 };

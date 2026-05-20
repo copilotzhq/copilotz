@@ -202,6 +202,7 @@ export interface ChatResponse {
   answer: string;
   reasoning?: string;
   tokens: number;
+  finishReason?: ProviderFinishReason | null;
   usage?: TokenUsage;
   cost?: CostBreakdown;
   provider?: ProviderName;
@@ -244,6 +245,14 @@ export interface ProviderUsageUpdate {
   rawUsage?: Record<string, unknown> | null;
 }
 
+export type ProviderFinishReason =
+  | "stop"
+  | "length"
+  | "content_filter"
+  | "tool_calls"
+  | "error"
+  | "unknown";
+
 export interface TokenUsage extends ProviderUsageUpdate {
   source: "provider" | "estimated";
   status: "completed" | "aborted";
@@ -276,6 +285,8 @@ export interface ProcessStreamOptions {
   onLocalStop?: (matchedStop: string) => void;
   /** Extract provider-reported usage from a parsed SSE or JSONL event. */
   extractUsage?: (data: any) => ProviderUsageUpdate | null;
+  /** Extract provider finish reason from a parsed SSE or JSONL event. */
+  extractFinishReason?: (data: any) => ProviderFinishReason | null;
 }
 
 // Provider API interface with multimodal support
@@ -287,6 +298,8 @@ export interface ProviderAPI {
   extractContent: (data: any) => ExtractedPart[] | null;
   /** Extract usage from a single parsed SSE or JSONL event when the provider exposes it. */
   extractUsage?: (data: any) => ProviderUsageUpdate | null;
+  /** Extract a normalized finish reason from a single parsed SSE or JSONL event. */
+  extractFinishReason?: (data: any) => ProviderFinishReason | null;
   transformMessages?: (messages: ChatMessage[]) => any;
   /** Options passed to the shared processStream (format, config, postProcess). */
   streamOptions?: Omit<ProcessStreamOptions, "config">;

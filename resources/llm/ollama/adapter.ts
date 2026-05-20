@@ -1,28 +1,51 @@
-import type { ProviderFactory, ProviderConfig, ChatMessage, ChatContentPart, ExtractedPart } from '@/runtime/llm/types.ts';
+import type {
+  ChatContentPart,
+  ChatMessage,
+  ExtractedPart,
+  ProviderConfig,
+  ProviderFactory,
+  ProviderFinishReason,
+} from "@/runtime/llm/types.ts";
+
+function extractOllamaFinishReason(data: any): ProviderFinishReason | null {
+  if (data?.done !== true) return null;
+  const reason = data?.done_reason;
+  if (reason === "length") return "length";
+  if (reason === "stop" || reason === "unload") return "stop";
+  return typeof reason === "string" ? "unknown" : "stop";
+}
 
 export const ollamaProvider: ProviderFactory = (config: ProviderConfig) => {
   return {
-    endpoint: `${config.baseUrl || config.apiKey || 'http://localhost:11434'}/api/chat`,
-    
+    endpoint: `${
+      config.baseUrl || config.apiKey || "http://localhost:11434"
+    }/api/chat`,
+
     headers: (config: ProviderConfig) => ({
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
     }),
-    
+
     body: (messages: ChatMessage[], config: ProviderConfig) => {
       const ollamaMessages = messages.map((msg) => {
         if (Array.isArray(msg.content)) {
           const parts = msg.content as ChatContentPart[];
           const text = parts
-            .filter((p) => p.type === 'text')
-            .map((p) => (p as Extract<ChatContentPart, { type: 'text' }>).text)
-            .join('\n');
+            .filter((p) => p.type === "text")
+            .map((p) => (p as Extract<ChatContentPart, { type: "text" }>).text)
+            .join("\n");
           const images: string[] = [];
           for (const p of parts) {
-            if (p.type === 'image_url' && p.image_url?.url && p.image_url.url.startsWith('data:')) {
-              const base64 = p.image_url.url.split(',')[1];
+            if (
+              p.type === "image_url" && p.image_url?.url &&
+              p.image_url.url.startsWith("data:")
+            ) {
+              const base64 = p.image_url.url.split(",")[1];
               if (base64) images.push(base64);
-            } else if (p.type === 'file' && typeof p.file?.file_data === 'string' && p.file.file_data.startsWith('data:')) {
-              const base64 = p.file.file_data.split(',')[1];
+            } else if (
+              p.type === "file" && typeof p.file?.file_data === "string" &&
+              p.file.file_data.startsWith("data:")
+            ) {
+              const base64 = p.file.file_data.split(",")[1];
               if (base64) images.push(base64);
             }
           }
@@ -34,7 +57,7 @@ export const ollamaProvider: ProviderFactory = (config: ProviderConfig) => {
       });
 
       return {
-        model: config.model || 'llama3.2',
+        model: config.model || "llama3.2",
         messages: ollamaMessages,
         stream: true,
         options: {
@@ -49,13 +72,15 @@ export const ollamaProvider: ProviderFactory = (config: ProviderConfig) => {
         },
       };
     },
-    
+
     extractContent: (data: any): ExtractedPart[] | null => {
       const content = data?.message?.content;
       if (!content) return null;
       return [{ text: content }];
     },
 
-    streamOptions: { format: 'jsonl' },
+    extractFinishReason: extractOllamaFinishReason,
+
+    streamOptions: { format: "jsonl" },
   };
 };

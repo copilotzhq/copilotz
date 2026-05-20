@@ -1,9 +1,10 @@
 import type {
   ChatContentPart,
   ChatMessage,
+  ExtractedPart,
   ProviderConfig,
   ProviderFactory,
-  ExtractedPart,
+  ProviderFinishReason,
   ProviderUsageUpdate,
 } from "@/runtime/llm/types.ts";
 
@@ -78,6 +79,19 @@ function extractMiniMaxUsage(data: any): ProviderUsageUpdate | null {
   };
 }
 
+function extractOpenAICompatibleFinishReason(
+  data: any,
+): ProviderFinishReason | null {
+  const reason = data?.choices?.[0]?.finish_reason;
+  if (reason === "length") return "length";
+  if (reason === "stop") return "stop";
+  if (reason === "tool_calls" || reason === "function_call") {
+    return "tool_calls";
+  }
+  if (reason === "content_filter") return "content_filter";
+  return typeof reason === "string" ? "unknown" : null;
+}
+
 export const minimaxProvider: ProviderFactory = (config: ProviderConfig) => {
   const baseUrl = config.baseUrl || "https://api.minimax.io";
 
@@ -103,13 +117,17 @@ export const minimaxProvider: ProviderFactory = (config: ProviderConfig) => {
         top_p: normalizeTopP(config.topP),
       };
 
-      const maxCompletionTokens = config.maxCompletionTokens ?? config.maxTokens;
+      const maxCompletionTokens = config.maxCompletionTokens ??
+        config.maxTokens;
       if (
         typeof maxCompletionTokens === "number" &&
         Number.isFinite(maxCompletionTokens) &&
         maxCompletionTokens > 0
       ) {
-        body.max_completion_tokens = Math.min(Math.floor(maxCompletionTokens), 2048);
+        body.max_completion_tokens = Math.min(
+          Math.floor(maxCompletionTokens),
+          2048,
+        );
       }
 
       return body;
@@ -132,6 +150,7 @@ export const minimaxProvider: ProviderFactory = (config: ProviderConfig) => {
     },
 
     extractUsage: extractMiniMaxUsage,
+    extractFinishReason: extractOpenAICompatibleFinishReason,
 
     streamOptions: {
       postProcess: stripOutputTagsFinal,

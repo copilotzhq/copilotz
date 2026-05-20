@@ -6,6 +6,7 @@ import type {
   ExtractedPart,
   ProcessStreamOptions,
   ProviderConfig,
+  ProviderFinishReason,
   ProviderUsageUpdate,
   StreamCallback,
   TokenUsage,
@@ -182,7 +183,11 @@ function contentToText(content: ChatMessage["content"]): string {
     .join("");
 }
 
-function mediaEstimateLabel(type: string, value: string, mime?: string): string {
+function mediaEstimateLabel(
+  type: string,
+  value: string,
+  mime?: string,
+): string {
   if (value.startsWith("data:")) {
     const markerIndex = value.indexOf(";base64,");
     const mimeFromDataUrl = markerIndex === -1
@@ -207,7 +212,9 @@ function inlineMediaEstimateLabel(type: string, mime?: string): string {
  * Does not serialize `toolCalls`; use after {@link materializeHistoryMessage}
  * so tool I/O lives in `content` (e.g. &lt;function_results&gt; blocks).
  */
-function wirePayloadTextForTokenEstimate(content: ChatMessage["content"]): string {
+function wirePayloadTextForTokenEstimate(
+  content: ChatMessage["content"],
+): string {
   if (typeof content === "string") return content;
 
   const chunks: string[] = [];
@@ -639,6 +646,7 @@ export async function processStream(
   content: string;
   reasoning: string;
   usage?: ProviderUsageUpdate;
+  finishReason: ProviderFinishReason | null;
   stoppedByLocalStop: boolean;
 }> {
   const decoder = new TextDecoder("utf-8");
@@ -664,6 +672,7 @@ export async function processStream(
     controlPending: "",
   };
   let usage: ProviderUsageUpdate | undefined;
+  let finishReason: ProviderFinishReason | null = null;
 
   const mergeUsage = (update: ProviderUsageUpdate | null | undefined) => {
     if (!update) return;
@@ -678,6 +687,12 @@ export async function processStream(
       totalTokens: update.totalTokens ?? usage?.totalTokens,
       rawUsage: update.rawUsage ?? usage?.rawUsage ?? null,
     };
+  };
+
+  const mergeFinishReason = (
+    update: ProviderFinishReason | null | undefined,
+  ) => {
+    if (update) finishReason = update;
   };
 
   const appendVisibleContent = (text: string) => {
@@ -733,6 +748,7 @@ export async function processStream(
             const data = parseLine(line, format);
             if (data) {
               mergeUsage(options?.extractUsage?.(data));
+              mergeFinishReason(options?.extractFinishReason?.(data));
               const parts = extractContent(data);
               if (parts) {
                 const shouldStop = handleParts(parts);
@@ -755,6 +771,7 @@ export async function processStream(
         const data = parseLine(line, format);
         if (data) {
           mergeUsage(options?.extractUsage?.(data));
+          mergeFinishReason(options?.extractFinishReason?.(data));
           const parts = extractContent(data);
           if (parts) {
             const shouldStop = handleParts(parts);
@@ -788,6 +805,7 @@ export async function processStream(
     content: fullResponse,
     reasoning: reasoningResponse,
     ...(usage ? { usage } : {}),
+    finishReason,
     stoppedByLocalStop,
   };
 }
@@ -1015,7 +1033,15 @@ export function parseToolCallsFromResponse(
       const objs = extractJsonObjects(after);
       if (objs.length > 0) {
         // Reconstruct a closed block to be parsed by the standard path
-        const rebuilt = response.slice(0, startIdx) + startTag + after + endTag;
+        const rebuilt = response.slice(0, startIdx) + startTag +
+          objs.join("\n") + endTag;
+        response = rebuilt;
+        cleanResponse = rebuilt;
+      } else {
+        // Never expose partial protocol markup to users. If the model was cut
+        // off before a valid JSON object was recoverable, drop the dangling
+        // control block and keep only user-facing prose before it.
+        const rebuilt = response.slice(0, startIdx);
         response = rebuilt;
         cleanResponse = rebuilt;
       }

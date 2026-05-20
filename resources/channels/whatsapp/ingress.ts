@@ -89,7 +89,12 @@ export function createWhatsAppIngressAdapter(
               "video",
               cfg,
             );
-            const mediaBlob = audioBlob || videoBlob;
+            const documentBlob = await downloadWhatsAppMedia(
+              message,
+              "document",
+              cfg,
+            );
+            const mediaBlob = audioBlob || videoBlob || documentBlob;
 
             type ContentItem =
               | { type: "text"; text: string }
@@ -110,6 +115,14 @@ export function createWhatsAppIngressAdapter(
                 type: "file",
                 dataBase64: await blobToBase64(videoBlob),
                 mimeType: message.video?.mime_type || "video/mp4",
+              });
+            }
+            if (documentBlob) {
+              contentParts.push({
+                type: "file",
+                dataBase64: await blobToBase64(documentBlob),
+                mimeType: message.document?.mime_type ||
+                  "application/octet-stream",
               });
             }
 

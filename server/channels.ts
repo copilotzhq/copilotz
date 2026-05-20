@@ -55,6 +55,7 @@ export interface EgressDeliveryContext {
   thread?: Thread;
   message: MessagePayload;
   copilotz: Copilotz;
+  transformDeliveryOutput?: (output: unknown) => Promise<unknown | null>;
 }
 
 export interface EgressAdapter {
@@ -83,14 +84,14 @@ export interface ChannelOverrideArgs<TInput, TOutput> {
 
 export type ChannelOverrideCallback<TInput, TOutput> = (
   args: ChannelOverrideArgs<TInput, TOutput>,
-) => MaybePromise<TOutput | void>;
+) => MaybePromise<TOutput | null | void>;
 
 export interface ChannelIngressOverrides {
   handle?: ChannelOverrideCallback<ChannelAdapterRequest, IngressResult>;
 }
 
 export interface ChannelEgressOverrides {
-  deliver?: ChannelOverrideCallback<EgressDeliveryContext, void>;
+  deliver?: ChannelOverrideCallback<EgressDeliveryContext, unknown>;
 }
 
 export interface ChannelOverridesEntry {
@@ -156,10 +157,18 @@ export function createChannelHandlers(copilotz: Copilotz): ChannelHandlers {
 async function applyChannelOverride<TInput, TOutput>(
   override: ChannelOverrideCallback<TInput, TOutput> | undefined,
   args: ChannelOverrideArgs<TInput, TOutput>,
-): Promise<TOutput> {
+): Promise<TOutput | null> {
   if (!override) return args.output;
   const result = await override(args);
   return result === undefined ? args.output : result;
+}
+
+function swallowedIngressResult(output: IngressResult): IngressResult {
+  return {
+    status: output.status ?? 200,
+    response: output.response ?? { status: "ok" },
+    messages: [],
+  };
 }
 
 function decorateChannelEntry(
@@ -176,12 +185,18 @@ function decorateChannelEntry(
       ...ingress,
       async handle(request, copilotz) {
         const output = await ingress.handle(request, copilotz);
-        return await applyChannelOverride(overrides.ingress?.handle, {
-          input: request,
-          output,
-          channel,
-          copilotz,
-        });
+        const overridden = await applyChannelOverride(
+          overrides.ingress?.handle,
+          {
+            input: request,
+            output,
+            channel,
+            copilotz,
+          },
+        );
+        return overridden === null
+          ? swallowedIngressResult(output)
+          : overridden;
       },
     };
   }
@@ -191,18 +206,44 @@ function decorateChannelEntry(
     decorated.egress = {
       ...egress,
       async deliver(context) {
-        await egress.deliver(context);
-        await applyChannelOverride(overrides.egress?.deliver, {
-          input: context,
-          output: undefined,
-          channel,
-          copilotz: context.copilotz,
-        });
+        let transformed = false;
+        const decoratedContext: EgressDeliveryContext = {
+          ...context,
+          async transformDeliveryOutput(output) {
+            transformed = true;
+            return await applyChannelOverride(overrides.egress?.deliver, {
+              input: decoratedContext,
+              output,
+              channel,
+              copilotz: context.copilotz,
+            });
+          },
+        };
+        await egress.deliver(decoratedContext);
+        if (!transformed) {
+          await applyChannelOverride(overrides.egress?.deliver, {
+            input: decoratedContext,
+            output: undefined,
+            channel,
+            copilotz: context.copilotz,
+          });
+        }
       },
     };
   }
 
   return decorated;
+}
+
+export async function transformEgressDeliveryOutput<T>(
+  context: EgressDeliveryContext,
+  output: T,
+): Promise<T | null> {
+  if (!context.transformDeliveryOutput) return output;
+  const transformed = await context.transformDeliveryOutput(output);
+  if (transformed === undefined) return output;
+  if (transformed === null) return null;
+  return transformed as T;
 }
 
 export function decorateChannelEntries(

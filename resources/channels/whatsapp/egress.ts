@@ -1,5 +1,9 @@
 import type { StreamEvent } from "@/runtime/index.ts";
-import { type EgressAdapter, extractText } from "@/server/channels.ts";
+import {
+  type EgressAdapter,
+  extractText,
+  transformEgressDeliveryOutput,
+} from "@/server/channels.ts";
 import { getChannelContext } from "@/runtime/thread-metadata.ts";
 import {
   callWhatsAppGraphAPI,
@@ -9,6 +13,25 @@ import {
   type WhatsAppConfig,
 } from "./shared.ts";
 
+export type WhatsAppTextDeliveryOutput = {
+  kind: "text";
+  to: string;
+  text: string;
+  event: StreamEvent;
+};
+
+export type WhatsAppMediaDeliveryOutput = {
+  kind: "media";
+  to: string;
+  mediaType: string;
+  mediaId: string;
+  event: StreamEvent;
+};
+
+export type WhatsAppDeliveryOutput =
+  | WhatsAppTextDeliveryOutput
+  | WhatsAppMediaDeliveryOutput;
+
 export function createWhatsAppEgressAdapter(
   config?: Partial<WhatsAppConfig>,
 ): EgressAdapter {
@@ -17,22 +40,28 @@ export function createWhatsAppEgressAdapter(
       const channelContext = getChannelContext(thread?.metadata, "whatsapp");
       if (
         typeof channelContext?.recipientPhone !== "string" ||
-        channelContext.recipientPhone.length === 0
+        channelContext.recipientPhone.length === 0 ||
+        typeof channelContext?.channelId !== "string" ||
+        channelContext.channelId.length === 0
       ) {
         throw {
           status: 422,
           message:
-            "Thread metadata is missing whatsapp recipient routing information",
+            "Thread metadata is missing whatsapp recipient phone or inbound phone number id",
         };
       }
     },
     async deliver(context) {
-      const cfg = resolveWhatsAppConfig(config, context.context);
       const channelContext = getChannelContext(
         context.thread?.metadata,
         "whatsapp",
       );
       const recipientPhone = channelContext?.recipientPhone as string;
+      const channelId = channelContext?.channelId as string;
+      const cfg = {
+        ...resolveWhatsAppConfig(config, context.context),
+        phoneId: channelId,
+      };
 
       for await (
         const event of context.handle.events as AsyncIterable<StreamEvent>
@@ -45,7 +74,17 @@ export function createWhatsAppEgressAdapter(
             if (sender?.type !== "agent") break;
             const text = extractText(ep?.content);
             if (text) {
-              await sendWhatsAppText(cfg, recipientPhone, text);
+              const output = await transformEgressDeliveryOutput<
+                WhatsAppDeliveryOutput
+              >(context, {
+                kind: "text",
+                to: recipientPhone,
+                text,
+                event,
+              });
+              if (output?.kind === "text" && output.text) {
+                await sendWhatsAppText(cfg, output.to, output.text);
+              }
             }
             break;
           }
@@ -55,11 +94,21 @@ export function createWhatsAppEgressAdapter(
             if (dataUrl && mime) {
               const uploaded = await uploadWhatsAppMedia(cfg, dataUrl);
               if (uploaded) {
+                const output = await transformEgressDeliveryOutput<
+                  WhatsAppDeliveryOutput
+                >(context, {
+                  kind: "media",
+                  to: recipientPhone,
+                  mediaType: uploaded.type,
+                  mediaId: uploaded.id,
+                  event,
+                });
+                if (output?.kind !== "media") break;
                 await callWhatsAppGraphAPI(cfg, {
                   messaging_product: "whatsapp",
-                  to: recipientPhone,
-                  type: uploaded.type,
-                  [uploaded.type]: { id: uploaded.id },
+                  to: output.to,
+                  type: output.mediaType,
+                  [output.mediaType]: { id: output.mediaId },
                 });
               }
             }

@@ -53,7 +53,7 @@ export function resolveWhatsAppConfig(
       config?.webhookVerifyToken ||
       Deno.env.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN") || "",
     graphApiVersion: contextConfig?.graphApiVersion ||
-      config?.graphApiVersion || "v19.0",
+      config?.graphApiVersion || "v25.0",
   };
 }
 

@@ -1,9 +1,9 @@
 /**
  * Schema provisioning module for multi-tenant PostgreSQL schema management.
- * 
+ *
  * Provides functions to create, check, and manage tenant schemas with
  * automatic migration support.
- * 
+ *
  * @module
  */
 
@@ -18,7 +18,7 @@ import { splitSQLStatements } from "./migrations/utils.ts";
 const provisionedSchemas = new Set<string>();
 
 // Always consider 'public' as provisioned
-provisionedSchemas.add('public');
+provisionedSchemas.add("public");
 
 /**
  * Regex pattern for valid PostgreSQL schema names.
@@ -31,53 +31,59 @@ const SCHEMA_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/;
  * Reserved schema names that cannot be used for tenants.
  */
 const RESERVED_SCHEMAS = new Set([
-  'pg_catalog',
-  'information_schema',
-  'pg_toast',
-  'pg_temp_1',
-  'pg_toast_temp_1',
+  "pg_catalog",
+  "information_schema",
+  "pg_toast",
+  "pg_temp_1",
+  "pg_toast_temp_1",
 ]);
+
+const REQUIRED_TABLES = ["threads", "events", "nodes", "edges"] as const;
 
 /**
  * Validates a schema name for security and PostgreSQL compatibility.
- * 
+ *
  * @param schemaName - The schema name to validate
  * @throws Error if the schema name is invalid or reserved
- * 
+ *
  * @remarks
  * This validation is critical for preventing SQL injection attacks
  * since schema names cannot be parameterized in PostgreSQL.
  */
 export function validateSchemaName(schemaName: string): void {
-  if (!schemaName || typeof schemaName !== 'string') {
-    throw new Error('Schema name must be a non-empty string');
+  if (!schemaName || typeof schemaName !== "string") {
+    throw new Error("Schema name must be a non-empty string");
   }
 
   if (schemaName.length > 63) {
-    throw new Error(`Schema name too long: max 63 characters, got ${schemaName.length}`);
+    throw new Error(
+      `Schema name too long: max 63 characters, got ${schemaName.length}`,
+    );
   }
 
   if (!SCHEMA_NAME_PATTERN.test(schemaName)) {
     throw new Error(
       `Invalid schema name: "${schemaName}". ` +
-      `Must start with letter or underscore, contain only alphanumeric characters and underscores.`
+        `Must start with letter or underscore, contain only alphanumeric characters and underscores.`,
     );
   }
 
   // Check for reserved names (case-insensitive)
   const lowerName = schemaName.toLowerCase();
-  if (RESERVED_SCHEMAS.has(lowerName) || lowerName.startsWith('pg_')) {
-    throw new Error(`Schema name "${schemaName}" is reserved and cannot be used`);
+  if (RESERVED_SCHEMAS.has(lowerName) || lowerName.startsWith("pg_")) {
+    throw new Error(
+      `Schema name "${schemaName}" is reserved and cannot be used`,
+    );
   }
 }
 
 /**
  * Checks if a schema exists in the database.
- * 
+ *
  * @param db - Database instance
  * @param schemaName - Name of the schema to check
  * @returns true if the schema exists
- * 
+ *
  * @example
  * ```ts
  * if (await schemaExists(db, 'tenant_abc')) {
@@ -87,26 +93,51 @@ export function validateSchemaName(schemaName: string): void {
  */
 export async function schemaExists(
   db: DbInstance,
-  schemaName: string
+  schemaName: string,
 ): Promise<boolean> {
   const result = await db.query<{ exists: boolean }>(
     `SELECT EXISTS(
       SELECT 1 FROM information_schema.schemata 
       WHERE schema_name = $1
     ) as exists`,
-    [schemaName]
+    [schemaName],
   );
   return result.rows[0]?.exists ?? false;
 }
 
 /**
+ * Checks whether a tenant schema has the core Copilotz tables.
+ *
+ * A schema can exist but be empty if it was pre-created manually or by infra.
+ * Such a schema is not provisioned and must still receive migrations.
+ */
+export async function schemaIsProvisioned(
+  db: DbInstance,
+  schemaName: string,
+): Promise<boolean> {
+  if (schemaName !== "public") {
+    validateSchemaName(schemaName);
+  }
+
+  const result = await db.query<{ table_count: number | string }>(
+    `SELECT COUNT(DISTINCT table_name) AS table_count
+     FROM information_schema.tables
+     WHERE table_schema = $1
+       AND table_name = ANY($2::text[])`,
+    [schemaName, [...REQUIRED_TABLES]],
+  );
+  const count = Number(result.rows[0]?.table_count ?? 0);
+  return count === REQUIRED_TABLES.length;
+}
+
+/**
  * Creates a new tenant schema and runs all migrations.
  * This sets up the complete database structure for a new tenant.
- * 
+ *
  * @param db - Database instance
  * @param schemaName - Name of the schema to create
  * @throws Error if schema creation or migration fails
- * 
+ *
  * @example
  * ```ts
  * await provisionTenantSchema(db, 'tenant_abc');
@@ -115,11 +146,11 @@ export async function schemaExists(
  */
 export async function provisionTenantSchema(
   db: DbInstance,
-  schemaName: string
+  schemaName: string,
 ): Promise<void> {
-  if (schemaName === 'public') {
+  if (schemaName === "public") {
     // Public schema should already be provisioned via normal migration
-    provisionedSchemas.add('public');
+    provisionedSchemas.add("public");
     return;
   }
 
@@ -128,28 +159,27 @@ export async function provisionTenantSchema(
   validateSchemaName(schemaName);
 
   // Create the schema if it doesn't exist
-  await db.query(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
+  await db.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(schemaName)}`);
 
-  // Run migrations in the new schema
-  // We need to set search_path for each statement since we're not in a transaction
+  // Run each migration statement inside a transaction with search_path pinned
+  // to the tenant schema. In direct Postgres mode, this must use one checked-out
+  // pool client so BEGIN, SET LOCAL, and the migration statement share a session.
   const statements = splitSQLStatements(migrations);
-  
+
   for (const statement of statements) {
     if (!statement.trim()) continue;
-    
+
     try {
-      // Prefix each statement with search_path setting
-      await db.query(`SET LOCAL search_path TO "${schemaName}", public`);
-      await db.query(statement);
+      await executeInSchemaTransaction(db, schemaName, statement);
     } catch (err) {
       const pgErr = err as { code?: string; message?: string };
       // Ignore "already exists" errors for idempotency
       // 42P07 = duplicate_table, 42710 = duplicate_object
       // 42P16 = invalid_table_definition (for constraints that already exist)
       if (
-        pgErr.code === '42P07' || 
-        pgErr.code === '42710' ||
-        pgErr.message?.includes('already exists')
+        pgErr.code === "42P07" ||
+        pgErr.code === "42710" ||
+        pgErr.message?.includes("already exists")
       ) {
         continue;
       }
@@ -164,11 +194,11 @@ export async function provisionTenantSchema(
 /**
  * Drops a tenant schema and all its data.
  * WARNING: This permanently deletes all data in the schema!
- * 
+ *
  * @param db - Database instance
  * @param schemaName - Name of the schema to drop
  * @throws Error if attempting to drop 'public' schema
- * 
+ *
  * @example
  * ```ts
  * await dropTenantSchema(db, 'tenant_abc');
@@ -177,9 +207,9 @@ export async function provisionTenantSchema(
  */
 export async function dropTenantSchema(
   db: DbInstance,
-  schemaName: string
+  schemaName: string,
 ): Promise<void> {
-  if (schemaName === 'public') {
+  if (schemaName === "public") {
     throw new Error("Cannot drop public schema");
   }
 
@@ -193,10 +223,10 @@ export async function dropTenantSchema(
 /**
  * Ensures a schema is provisioned, creating it if necessary.
  * Uses in-memory caching to avoid repeated database checks.
- * 
+ *
  * @param db - Database instance
  * @param schemaName - Name of the schema to ensure exists
- * 
+ *
  * @example
  * ```ts
  * await ensureSchemaProvisioned(db, 'tenant_abc');
@@ -205,11 +235,11 @@ export async function dropTenantSchema(
  */
 export async function ensureSchemaProvisioned(
   db: DbInstance,
-  schemaName: string
+  schemaName: string,
 ): Promise<void> {
   // Always validate schema name first (defense in depth)
   // This is critical even for cached schemas to prevent injection
-  if (schemaName !== 'public') {
+  if (schemaName !== "public") {
     validateSchemaName(schemaName);
   }
 
@@ -218,25 +248,21 @@ export async function ensureSchemaProvisioned(
     return;
   }
 
-  // Check if schema exists in database
-  const exists = await schemaExists(db, schemaName);
-  
-  if (exists) {
-    // Schema exists, just add to cache
+  if (schemaName === "public" || await schemaIsProvisioned(db, schemaName)) {
     provisionedSchemas.add(schemaName);
     return;
   }
 
-  // Schema doesn't exist, provision it
+  // Schema is missing or exists without the required tables.
   await provisionTenantSchema(db, schemaName);
 }
 
 /**
  * Warms the schema cache by loading all existing schemas from the database.
  * Call this during application startup to avoid first-request latency.
- * 
+ *
  * @param db - Database instance
- * 
+ *
  * @example
  * ```ts
  * const db = await createDatabase(config);
@@ -248,20 +274,25 @@ export async function warmSchemaCache(db: DbInstance): Promise<void> {
   const result = await db.query<{ schema_name: string }>(
     `SELECT schema_name FROM information_schema.schemata 
      WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'pg_temp_1', 'pg_toast_temp_1')
-     AND schema_name NOT LIKE 'pg_%'`
+     AND schema_name NOT LIKE 'pg_%'`,
   );
-  
+
   for (const row of result.rows) {
-    provisionedSchemas.add(row.schema_name);
+    if (
+      row.schema_name === "public" ||
+      await schemaIsProvisioned(db, row.schema_name)
+    ) {
+      provisionedSchemas.add(row.schema_name);
+    }
   }
 }
 
 /**
  * Lists all tenant schemas (excludes system schemas).
- * 
+ *
  * @param db - Database instance
  * @returns Array of schema names
- * 
+ *
  * @example
  * ```ts
  * const schemas = await listTenantSchemas(db);
@@ -273,16 +304,16 @@ export async function listTenantSchemas(db: DbInstance): Promise<string[]> {
     `SELECT schema_name FROM information_schema.schemata 
      WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
      AND schema_name NOT LIKE 'pg_%'
-     ORDER BY schema_name`
+     ORDER BY schema_name`,
   );
-  
-  return result.rows.map(row => row.schema_name);
+
+  return result.rows.map((row) => row.schema_name);
 }
 
 /**
  * Checks if a schema is in the provisioned cache.
  * Does NOT check the database - use schemaExists() for that.
- * 
+ *
  * @param schemaName - Name of the schema to check
  * @returns true if schema is in the cache
  */
@@ -296,5 +327,73 @@ export function isSchemaInCache(schemaName: string): boolean {
  */
 export function clearSchemaCache(): void {
   provisionedSchemas.clear();
-  provisionedSchemas.add('public');
+  provisionedSchemas.add("public");
+}
+
+type DirectPoolClient = {
+  query: (
+    sql: string,
+    params?: unknown[],
+  ) => Promise<{ rows: unknown[]; rowCount?: number }>;
+  release: () => void;
+};
+
+function getDirectPool(db: DbInstance): {
+  connect?: () => Promise<DirectPoolClient>;
+} | undefined {
+  return (db as unknown as {
+    pool?: {
+      connect?: () => Promise<DirectPoolClient>;
+    };
+  }).pool;
+}
+
+async function executeInSchemaTransaction(
+  db: DbInstance,
+  schemaName: string,
+  statement: string,
+): Promise<void> {
+  const pool = getDirectPool(db);
+  if (typeof pool?.connect === "function") {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `SET LOCAL search_path TO ${quoteIdentifier(schemaName)}, public`,
+      );
+      await client.query(statement);
+      await client.query("COMMIT");
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // Ignore rollback errors.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+    return;
+  }
+
+  try {
+    await db.query("BEGIN");
+    await db.query(
+      `SET LOCAL search_path TO ${quoteIdentifier(schemaName)}, public`,
+    );
+    await db.query(statement);
+    await db.query("COMMIT");
+  } catch (error) {
+    try {
+      await db.query("ROLLBACK");
+    } catch {
+      // Ignore rollback errors.
+    }
+    throw error;
+  }
+}
+
+function quoteIdentifier(identifier: string): string {
+  validateSchemaName(identifier);
+  return `"${identifier.replaceAll(`"`, `""`)}"`;
 }

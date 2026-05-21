@@ -505,6 +505,31 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
       assertEquals(data.name, "New Thread");
     });
 
+    await t.step(
+      "POST /threads uses request namespace over body namespace",
+      async () => {
+        const { copilotz, calls } = createMockCopilotz();
+        withApp(copilotz as any);
+
+        await (copilotz as any).app.handle({
+          resource: "threads",
+          method: "POST",
+          path: [],
+          body: { name: "Tenant Thread", namespace: "body-namespace" },
+          context: { namespace: "request-namespace" },
+        });
+
+        const call = calls.find((entry) =>
+          entry.method === "findOrCreateThread"
+        );
+        assertExists(call);
+        assertEquals(
+          (call.args[1] as { namespace?: string }).namespace,
+          "request-namespace",
+        );
+      },
+    );
+
     await t.step("GET /threads/:id returns a thread", async () => {
       const res = await fetch(`${base}/threads/t-100`);
       assertEquals(res.status, 200);

@@ -268,9 +268,8 @@ function buildRoutes(): Route[] {
         const threadId = typeof body.id === "string" ? body.id : undefined;
         const threadData = {
           ...body,
-          namespace: typeof body.namespace === "string"
-            ? body.namespace
-            : ctx.namespace,
+          namespace: ctx.namespace ??
+            (typeof body.namespace === "string" ? body.namespace : undefined),
         } as Parameters<ThreadHandlers["findOrCreate"]>[1];
         return {
           status: 201,

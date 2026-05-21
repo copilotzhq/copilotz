@@ -67,6 +67,9 @@ export function createDiscordEgressAdapter(
         }
 
         if (event.type === "ASSET_CREATED") {
+          const by = ep?.by as string | undefined;
+          if (by === "user") continue;
+
           const dataUrl = ep?.dataUrl as string | undefined;
           const mime = ep?.mime as string | undefined;
           if (dataUrl && mime) {

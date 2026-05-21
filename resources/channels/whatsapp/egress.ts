@@ -89,6 +89,9 @@ export function createWhatsAppEgressAdapter(
             break;
           }
           case "ASSET_CREATED": {
+            const by = ep?.by as string | undefined;
+            if (by === "user") break;
+
             const dataUrl = ep?.dataUrl as string | undefined;
             const mime = ep?.mime as string | undefined;
             if (dataUrl && mime) {

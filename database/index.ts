@@ -365,6 +365,17 @@ function wrapDbWithSchemaSupport(
     params?: unknown[],
   ) => Promise<{ rows: T[]; rowCount?: number }>;
   const autoProvision = config.autoProvisionSchema ?? true;
+  const pool = (db as unknown as {
+    pool?: {
+      connect?: () => Promise<{
+        query: (
+          sql: string,
+          params?: unknown[],
+        ) => Promise<{ rows: unknown[]; rowCount?: number }>;
+        release: () => void;
+      }>;
+    };
+  }).pool;
 
   // Create a wrapped query function that respects schema context
   const wrappedQuery = async function <T extends Record<string, unknown>>(
@@ -402,9 +413,31 @@ function wrapDbWithSchemaSupport(
       }
     }
 
-    // Execute with schema context using manual transaction wrapping
-    // BEGIN starts the transaction, SET LOCAL sets search_path for this tx only
-    // The query executes in the schema context, then we COMMIT
+    if (typeof pool?.connect === "function") {
+      const client = await pool.connect();
+      try {
+        await client.query(`BEGIN`);
+        await client.query(`SET LOCAL search_path TO "${schema}", public`);
+        const result = await client.query(sql, params ?? []);
+        await client.query(`COMMIT`);
+        return {
+          rows: result.rows as T[],
+          rowCount: result.rowCount,
+        };
+      } catch (err) {
+        try {
+          await client.query(`ROLLBACK`);
+        } catch {
+          // Ignore rollback errors
+        }
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
+
+    // Worker/PGlite mode does not expose a pool. Execute with schema context
+    // using manual transaction wrapping through the database abstraction.
     try {
       await originalQuery<Record<string, unknown>>(`BEGIN`);
       await originalQuery<Record<string, unknown>>(

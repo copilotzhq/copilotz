@@ -233,6 +233,7 @@ function createMockCopilotz() {
                 received: req.body,
                 context: req.context ?? null,
                 namespace: req.namespace ?? null,
+                schema: req.schema ?? null,
               },
             }),
           },
@@ -323,8 +324,8 @@ function createMockCopilotz() {
         },
       ],
     },
-    run: async (msg: unknown) => {
-      record("run", msg);
+    run: async (msg: unknown, options?: unknown) => {
+      record("run", msg, options);
       const threadId = typeof msg === "object" && msg !== null &&
           "thread" in msg &&
           typeof (msg as { thread?: { id?: unknown } }).thread?.id === "string"
@@ -684,6 +685,7 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
         assertEquals(data.received.hello, "world");
         assertEquals(data.context, null);
         assertEquals(data.namespace, "tenant-test");
+        assertEquals(data.schema, null);
       },
     );
 
@@ -711,6 +713,7 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
             auth: { sub: "user-1", role: "admin" },
           },
           namespace: "tenant-test",
+          schema: null,
         });
       },
     );
@@ -736,6 +739,56 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
           (result.data as { namespace?: string }).namespace,
           "tenant-resolved",
         );
+      },
+    );
+
+    await t.step(
+      "withApp resolveSchema supplies request schema to feature handlers",
+      async () => {
+        const { copilotz } = createMockCopilotz();
+        withApp(copilotz as any, {
+          resolveSchema: () => "tenant_resolved",
+        });
+
+        const result = await (copilotz as any).app.handle({
+          resource: "features",
+          method: "POST",
+          path: ["echo", "ping"],
+          body: { ok: true },
+        });
+
+        assertEquals(result.status, 200);
+        assertEquals(
+          (result.data as { schema?: string }).schema,
+          "tenant_resolved",
+        );
+      },
+    );
+
+    await t.step(
+      "POST /channels/web passes namespace and schema to copilotz.run",
+      async () => {
+        const { copilotz, calls } = createMockCopilotz();
+        withApp(copilotz as any);
+
+        await (copilotz as any).app.handle({
+          resource: "channels",
+          method: "POST",
+          path: ["web"],
+          body: { content: "hi" },
+          context: {
+            namespace: "tenant-channel",
+            schema: "tenant_channel",
+          },
+          callback: () => {},
+        });
+
+        const runCall = calls.find((call) => call.method === "run");
+        assertExists(runCall);
+        assertEquals(runCall.args[1], {
+          namespace: "tenant-channel",
+          schema: "tenant_channel",
+        });
       },
     );
 

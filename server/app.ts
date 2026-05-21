@@ -37,6 +37,7 @@ import { createGraphHandlers } from "./graph.ts";
 import type { GraphHandlers } from "./graph.ts";
 import { createEventHandlers } from "./events.ts";
 import type { EventHandlers } from "./events.ts";
+import { withSchema } from "@/database/schema-context.ts";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -62,6 +63,13 @@ export interface AppRequestContext extends Record<string, unknown> {
    * tenant is not fixed by `CopilotzConfig.namespace`.
    */
   namespace?: string;
+  /**
+   * PostgreSQL schema for this request.
+   *
+   * Server adapters should set this from authenticated tenant context when
+   * using schema-level isolation.
+   */
+  schema?: string;
 }
 
 /**
@@ -113,6 +121,17 @@ export interface WithAppOptions {
   resolveNamespace?: (
     request: AppRequest,
   ) => string | null | undefined | Promise<string | null | undefined>;
+  /**
+   * Resolve the PostgreSQL schema for each app request.
+   *
+   * Resolution order is:
+   * 1. `request.context.schema`
+   * 2. `resolveSchema(request)`
+   * 3. `copilotz.config.dbConfig.defaultSchema`
+   */
+  resolveSchema?: (
+    request: AppRequest,
+  ) => string | null | undefined | Promise<string | null | undefined>;
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +167,7 @@ interface RouteContext {
   callback?: (event: unknown) => void;
   context?: AppRequestContext;
   namespace?: string;
+  schema?: string;
   method: string;
 }
 
@@ -245,11 +265,18 @@ function buildRoutes(): Route[] {
       pattern: [],
       action: async (ctx) => {
         const body = ctx.body as Record<string, unknown>;
+        const threadId = typeof body.id === "string" ? body.id : undefined;
+        const threadData = {
+          ...body,
+          namespace: typeof body.namespace === "string"
+            ? body.namespace
+            : ctx.namespace,
+        } as Parameters<ThreadHandlers["findOrCreate"]>[1];
         return {
           status: 201,
           data: await ctx.handlers.threads.findOrCreate(
-            body.id as string | undefined,
-            body as Parameters<ThreadHandlers["findOrCreate"]>[1],
+            threadId,
+            threadData,
           ),
         };
       },
@@ -683,27 +710,38 @@ async function handleChannelRoute(
   }
 
   const deliverEnvelope = async (envelope: IngressEnvelope): Promise<void> => {
-    const message = applyThreadMetadataPatch(envelope);
-    const thread = await resolveThreadForMessage(ctx.copilotz, message);
-    const effectiveMetadata = mergeThreadMetadata(
-      thread?.metadata,
-      message.thread?.metadata,
-    );
-    egress.validateThreadContext?.({
-      metadata: getSerializableThreadMetadata(effectiveMetadata),
-    });
+    const envelopeNamespace = envelope.namespace ?? ctx.namespace;
+    const envelopeSchema = envelope.schema ?? ctx.schema;
+    const runDelivery = async () => {
+      const message = applyThreadMetadataPatch(envelope);
+      const thread = await resolveThreadForMessage(ctx.copilotz, message);
+      const effectiveMetadata = mergeThreadMetadata(
+        thread?.metadata,
+        message.thread?.metadata,
+      );
+      egress.validateThreadContext?.({
+        metadata: getSerializableThreadMetadata(effectiveMetadata),
+      });
 
-    const handle = await ctx.copilotz.run(message);
-    const ensuredThread = await ctx.copilotz.ops.getThreadById(handle.threadId);
-    await egress.deliver({
-      route,
-      callback: ctx.callback,
-      context: ctx.context,
-      handle,
-      thread: ensuredThread,
-      message,
-      copilotz: ctx.copilotz,
-    });
+      const handle = await ctx.copilotz.run(message, {
+        namespace: envelopeNamespace,
+        schema: envelopeSchema,
+      });
+      const ensuredThread = await ctx.copilotz.ops.getThreadById(
+        handle.threadId,
+      );
+      await egress.deliver({
+        route,
+        callback: ctx.callback,
+        context: ctx.context,
+        handle,
+        thread: ensuredThread,
+        message,
+        copilotz: ctx.copilotz,
+      });
+    };
+
+    await runWithSchema(envelopeSchema, runDelivery);
   };
 
   if (egress.requestBound) {
@@ -832,6 +870,7 @@ export function withApp<T extends Copilotz>(
                 callback: ctx.callback,
                 context: ctx.context,
                 namespace: ctx.namespace,
+                schema: ctx.schema,
               },
               ctx.copilotz,
             );
@@ -874,6 +913,7 @@ export function withApp<T extends Copilotz>(
         copilotz,
         options,
       );
+      const schema = await resolveRequestSchema(request, copilotz, options);
       const ctx: RouteContext = {
         handlers,
         copilotz,
@@ -884,10 +924,14 @@ export function withApp<T extends Copilotz>(
         callback,
         context,
         namespace,
+        schema,
         method,
       };
 
-      return matched.route.action(ctx, matched.params);
+      return await runWithSchema(
+        schema,
+        () => matched.route.action(ctx, matched.params),
+      );
     },
 
     resources: (): ResourceDescriptor[] => {
@@ -909,6 +953,14 @@ export function withApp<T extends Copilotz>(
   return copilotz as T & { app: CopilotzApp };
 }
 
+async function runWithSchema<T>(
+  schema: string | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (!schema || schema === "public") return await fn();
+  return await withSchema(schema, fn);
+}
+
 async function resolveRequestNamespace(
   request: AppRequest,
   copilotz: Copilotz,
@@ -925,5 +977,24 @@ async function resolveRequestNamespace(
   const configNamespace = copilotz.config.namespace;
   return typeof configNamespace === "string" && configNamespace.trim()
     ? configNamespace
+    : undefined;
+}
+
+async function resolveRequestSchema(
+  request: AppRequest,
+  copilotz: Copilotz,
+  options: WithAppOptions,
+): Promise<string | undefined> {
+  const contextSchema = request.context?.schema;
+  if (typeof contextSchema === "string" && contextSchema.trim()) {
+    return contextSchema;
+  }
+
+  const resolved = await options.resolveSchema?.(request);
+  if (typeof resolved === "string" && resolved.trim()) return resolved;
+
+  const configSchema = copilotz.config.dbConfig?.defaultSchema;
+  return typeof configSchema === "string" && configSchema.trim()
+    ? configSchema
     : undefined;
 }

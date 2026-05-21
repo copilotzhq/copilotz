@@ -31,6 +31,10 @@ export interface ChannelAdapterRequest {
 export interface IngressEnvelope {
   message: MessagePayload;
   threadMetadataPatch?: unknown;
+  /** Tenant/application namespace for this envelope. */
+  namespace?: string;
+  /** PostgreSQL schema for schema-isolated delivery. */
+  schema?: string;
 }
 
 export interface IngressResult {

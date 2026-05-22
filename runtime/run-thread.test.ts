@@ -1,7 +1,93 @@
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import {
+  assert,
+  assertEquals,
+} from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import { createCopilotz } from "@/index.ts";
+import { withSchema } from "@/database/schema-context.ts";
 import { normalizeThreadMetadata } from "@/runtime/thread-metadata.ts";
+
+Deno.test("runThread writes tenant queue rows in the active schema", async () => {
+  const tenant = "tenant_copilotz_com";
+  const tempDir = await Deno.makeTempDir();
+  const copilotz = await createCopilotz({
+    agents: [{
+      id: "tenant-agent",
+      name: "tenant-agent",
+      role: "assistant",
+      instructions: "Handle the tenant message.",
+      llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+    }],
+    processors: [{
+      eventType: "NEW_MESSAGE",
+      shouldProcess: () => true,
+      process: async () => ({ producedEvents: [] }),
+    }],
+    dbConfig: { url: `file://${tempDir}/tenant-schema-run.db` },
+  });
+
+  try {
+    const handle = await copilotz.run({
+      content: "hello tenant",
+      sender: { type: "user", externalId: "tenant-user", name: "Tenant User" },
+      thread: { externalId: "tenant-thread" },
+    }, {
+      namespace: tenant,
+      schema: tenant,
+    });
+
+    let timeoutId: number | undefined;
+    try {
+      await Promise.race([
+        handle.done,
+        new Promise((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error("tenant runThread did not complete")),
+            5_000,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
+
+    const tenantThreads = await withSchema(
+      tenant,
+      () =>
+        copilotz.db.query<{ id: string; namespace: string | null }>(
+          `SELECT "id", "namespace" FROM "threads" WHERE "id" = $1`,
+          [handle.threadId],
+        ),
+    );
+    const tenantEvents = await withSchema(tenant, () =>
+      copilotz.db.query<
+        { id: string; namespace: string | null; status: string }
+      >(
+        `SELECT "id", "namespace", "status" FROM "events" WHERE "threadId" = $1`,
+        [handle.threadId],
+      ));
+    const publicThreads = await copilotz.db.query<{ id: string }>(
+      `SELECT "id" FROM "threads" WHERE "id" = $1`,
+      [handle.threadId],
+    );
+    const publicEvents = await copilotz.db.query<{ id: string }>(
+      `SELECT "id" FROM "events" WHERE "threadId" = $1`,
+      [handle.threadId],
+    );
+
+    assertEquals(tenantThreads.rows.length, 1);
+    assertEquals(tenantThreads.rows[0].namespace, tenant);
+    assertEquals(tenantEvents.rows.length, 1);
+    assertEquals(tenantEvents.rows[0].namespace, tenant);
+    assertEquals(tenantEvents.rows[0].status, "completed");
+    assertEquals(publicThreads.rows.length, 0);
+    assertEquals(publicEvents.rows.length, 0);
+    assert(handle.threadId);
+  } finally {
+    await copilotz.shutdown();
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
 
 Deno.test("runThread keeps done pending for same-thread work queued behind an active worker", async () => {
   const copilotz = await createCopilotz({

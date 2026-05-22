@@ -420,6 +420,12 @@ const toIsoString = (
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 };
 
+type CoreTable = "events" | "threads";
+type RowFilter = Record<string, unknown>;
+
+const quoteIdent = (identifier: string): string =>
+  `"${identifier.replaceAll('"', '""')}"`;
+
 export function createOperations(
   db: DbInstance,
   config?: {
@@ -433,6 +439,108 @@ export function createOperations(
     300000; // Default: 5 minutes
   const THREAD_WORKER_LEASE_MS = config?.threadLeaseMs ?? 120_000; // Default: 2 minutes
   const THREAD_WORKER_HEARTBEAT_MS = config?.threadLeaseHeartbeatMs ?? 30_000; // Default: 30 seconds
+
+  const buildWhereClause = (
+    filter: RowFilter,
+    params: unknown[],
+  ): string => {
+    const parts: string[] = [];
+    for (const [key, value] of Object.entries(filter)) {
+      if (value === undefined || value === null) {
+        parts.push(`${quoteIdent(key)} IS NULL`);
+        continue;
+      }
+      params.push(value);
+      parts.push(`${quoteIdent(key)} = $${params.length}`);
+    }
+    return parts.length > 0 ? parts.join(" AND ") : "TRUE";
+  };
+
+  const insertRow = async <T extends Record<string, unknown>>(
+    table: CoreTable,
+    data: Record<string, unknown>,
+  ): Promise<T> => {
+    const row = {
+      ...data,
+      id: data.id ?? ulid(),
+    };
+    const entries = Object.entries(row).filter(([, value]) =>
+      value !== undefined
+    );
+    const columns = entries.map(([key]) => quoteIdent(key));
+    const params = entries.map(([, value]) => value);
+    const placeholders = params.map((_, index) => `$${index + 1}`);
+    const result = await db.query<T>(
+      `INSERT INTO ${quoteIdent(table)} (${columns.join(", ")})
+       VALUES (${placeholders.join(", ")})
+       RETURNING *`,
+      params,
+    );
+    return result.rows[0] as T;
+  };
+
+  const findRows = async <T extends Record<string, unknown>>(
+    table: CoreTable,
+    filter: RowFilter,
+  ): Promise<T[]> => {
+    const params: unknown[] = [];
+    const where = buildWhereClause(filter, params);
+    const result = await db.query<T>(
+      `SELECT * FROM ${quoteIdent(table)} WHERE ${where}`,
+      params,
+    );
+    return result.rows as T[];
+  };
+
+  const findOneRow = async <T extends Record<string, unknown>>(
+    table: CoreTable,
+    filter: RowFilter,
+  ): Promise<T | null> => {
+    const params: unknown[] = [];
+    const where = buildWhereClause(filter, params);
+    const result = await db.query<T>(
+      `SELECT * FROM ${quoteIdent(table)} WHERE ${where} LIMIT 1`,
+      params,
+    );
+    return (result.rows[0] as T | undefined) ?? null;
+  };
+
+  const updateRows = async <T extends Record<string, unknown>>(
+    table: CoreTable,
+    filter: RowFilter,
+    data: Record<string, unknown>,
+  ): Promise<T | null> => {
+    const entries = Object.entries({
+      ...data,
+      updatedAt: data.updatedAt ?? new Date(),
+    }).filter(([, value]) => value !== undefined);
+    if (entries.length === 0) {
+      return await findOneRow<T>(table, filter);
+    }
+    const params: unknown[] = [];
+    const set = entries.map(([key, value]) => {
+      params.push(value);
+      return `${quoteIdent(key)} = $${params.length}`;
+    });
+    const where = buildWhereClause(filter, params);
+    const result = await db.query<T>(
+      `UPDATE ${quoteIdent(table)}
+       SET ${set.join(", ")}
+       WHERE ${where}
+       RETURNING *`,
+      params,
+    );
+    return (result.rows[0] as T | undefined) ?? null;
+  };
+
+  const deleteRows = async (
+    table: CoreTable,
+    filter: RowFilter,
+  ): Promise<void> => {
+    const params: unknown[] = [];
+    const where = buildWhereClause(filter, params);
+    await db.query(`DELETE FROM ${quoteIdent(table)} WHERE ${where}`, params);
+  };
 
   const cleanupExpiredQueueItems = async (): Promise<void> => {
     await db.query(
@@ -487,7 +595,7 @@ export function createOperations(
       namespace: event.namespace ?? null,
     };
 
-    const newQueueItem = await crud.events.create(insertQueueItem);
+    const newQueueItem = await insertRow<NewQueue>("events", insertQueueItem);
 
     await cleanupExpiredQueueItems();
     return newQueueItem;
@@ -496,14 +604,14 @@ export function createOperations(
   const getQueueItemById = async (
     queueId: string,
   ): Promise<Queue | undefined> => {
-    const item = await crud.events.findOne({ id: queueId }) as Queue | null;
+    const item = await findOneRow<Queue>("events", { id: queueId });
     return item ?? undefined;
   };
 
   const getQueueItemsByTraceId = async (
     traceId: string,
   ): Promise<Queue[]> => {
-    const items = await crud.events.find({ traceId }) as Queue[];
+    const items = await findRows<Queue>("events", { traceId });
     return items;
   };
 
@@ -511,7 +619,7 @@ export function createOperations(
     threadId: string,
   ): Promise<number> => {
     const staleThreshold = new Date(Date.now() - STALE_PROCESSING_THRESHOLD_MS);
-    const processingEvents = await crud.events.find({
+    const processingEvents = await findRows<Queue>("events", {
       threadId,
       status: "processing",
     });
@@ -526,13 +634,10 @@ export function createOperations(
         continue;
       }
 
-      await crud.events.update(
-        { id: event.id },
-        {
-          status: "pending",
-          updatedAt: new Date(),
-        },
-      );
+      await updateRows<Queue>("events", { id: event.id }, {
+        status: "pending",
+        updatedAt: new Date(),
+      });
       recovered += 1;
       console.warn(
         `[recovery] Reset stale processing event ${event.id} in thread ${threadId} (stuck since ${updatedAt.toISOString()})`,
@@ -549,7 +654,7 @@ export function createOperations(
     await recoverStaleProcessingQueueItems(threadId);
 
     // Now check for any remaining processing events at or above minPriority
-    const processingEvents = await crud.events.find({
+    const processingEvents = await findRows<Queue>("events", {
       threadId,
       status: "processing",
     });
@@ -633,7 +738,7 @@ export function createOperations(
     queueId: string,
     status: Queue["status"],
   ): Promise<void> => {
-    await crud.events.update({ id: queueId }, { status });
+    await updateRows<Queue>("events", { id: queueId }, { status });
   };
 
   const getThreadWorkerLeaseConfig = () => ({
@@ -760,10 +865,10 @@ export function createOperations(
   const getThreadById = async (
     threadId: string,
   ): Promise<Thread | undefined> => {
-    const thread = await crud.threads.findOne({
+    const thread = await findOneRow<Thread>("threads", {
       id: threadId,
       status: "active",
-    }) as Thread | null;
+    });
     return await hydrateThreadFromNode(thread);
   };
 
@@ -776,7 +881,7 @@ export function createOperations(
       status: "active",
     };
     if (namespace !== undefined) filter.namespace = namespace;
-    const thread = await crud.threads.findOne(filter) as Thread | null;
+    const thread = await findOneRow<Thread>("threads", filter);
     return await hydrateThreadFromNode(thread);
   };
 
@@ -787,16 +892,18 @@ export function createOperations(
     const namespace = typeof thread.namespace === "string" &&
         thread.namespace.length > 0
       ? thread.namespace
-      : domain.namespace;
-    if (!namespace) return;
+      : typeof domain.namespace === "string" && domain.namespace.length > 0
+      ? domain.namespace
+      : "default";
 
     const threadId = thread.id as string;
     const existing = await getNodeById(threadId);
     const existingData = existing?.type === "thread"
       ? (existing.data ?? {}) as Record<string, unknown>
       : {};
-    const threadMetadata = (thread as { metadata?: Record<string, unknown> | null })
-      .metadata;
+    const threadMetadata =
+      (thread as { metadata?: Record<string, unknown> | null })
+        .metadata;
     const data = {
       description: domain.description ?? thread.description ?? null,
       summary: domain.summary ?? thread.summary ?? null,
@@ -883,13 +990,13 @@ export function createOperations(
   ): Promise<Thread> => {
     let existing: Thread | null = null;
     if (threadId) {
-      existing = await crud.threads.findOne({ id: threadId }) as Thread | null;
+      existing = await findOneRow<Thread>("threads", { id: threadId });
     } else if (
       typeof threadData.externalId === "string" && threadData.externalId
     ) {
-      existing = await crud.threads.findOne({
+      existing = await findOneRow<Thread>("threads", {
         externalId: threadData.externalId,
-      }) as Thread | null;
+      });
     }
 
     const normalizeParticipants = (participants?: string[] | null) => {
@@ -921,9 +1028,10 @@ export function createOperations(
         lastEventId: threadData.lastEventId ?? null,
         lastEventAt: threadData.lastEventAt ?? null,
       };
-      const created = await crud.threads.create(
+      const created = await insertRow<Thread>(
+        "threads",
         threadId ? { id: threadId, ...baseInsert } : baseInsert,
-      ) as Thread;
+      );
       await ensureThreadNode(created, { ...threadData, participants });
       return (await hydrateThreadFromNode(created)) ?? created;
     }
@@ -955,7 +1063,11 @@ export function createOperations(
       return (await hydrateThreadFromNode(existing)) ?? existing;
     }
 
-    const updated = await crud.threads.update({ id: threadId }, updates);
+    const updated = await updateRows<Thread>(
+      "threads",
+      { id: existing.id },
+      updates,
+    );
     const result = (updated ?? existing) as Thread;
     await ensureThreadNode(result, { ...threadData, ...updates });
     return (await hydrateThreadFromNode(result)) ?? result;
@@ -992,9 +1104,9 @@ export function createOperations(
     let level = 0;
 
     while (currentThreadId) {
-      const thread = await crud.threads.findOne({
+      const thread: Thread | null = await findOneRow<Thread>("threads", {
         id: currentThreadId,
-      }) as Thread | null;
+      });
       if (!thread || thread.status !== "active") {
         break;
       }
@@ -1007,7 +1119,9 @@ export function createOperations(
       // Use case-insensitive comparison: thread participants use agent.name (e.g. "Assistant")
       // but history lookups use agent.id (e.g. "assistant"). Normalize both to lowercase.
       const userIdLower = userId.toLowerCase();
-      if (!participants.some((p) => p.toLowerCase() === userIdLower)) {
+      if (
+        !participants.some((p: string) => p.toLowerCase() === userIdLower)
+      ) {
         break;
       }
 
@@ -1523,9 +1637,9 @@ export function createOperations(
     );
 
     const threads = result.rows as Thread[];
-    return (await Promise.all(threads.map((thread) =>
-      hydrateThreadFromNode(thread)
-    ))).filter((thread): thread is Thread => thread !== undefined);
+    return (await Promise.all(
+      threads.map((thread) => hydrateThreadFromNode(thread)),
+    )).filter((thread): thread is Thread => thread !== undefined);
   };
 
   const getMessagesForThread = async (
@@ -1605,10 +1719,10 @@ export function createOperations(
     threadId: string,
     summary: string,
   ): Promise<Thread | null> => {
-    const updated = await crud.threads.update({ id: threadId }, {
+    const updated = await updateRows<Thread>("threads", { id: threadId }, {
       status: "archived",
       summary,
-    }) as Thread | null;
+    });
     if (!updated) return null;
     await ensureThreadNode(updated, { status: "archived", summary });
     return (await hydrateThreadFromNode(updated)) ?? updated;
@@ -1621,10 +1735,8 @@ export function createOperations(
     const { metadata, ...tableUpdates } = updates;
     const hasTableUpdates = Object.keys(tableUpdates).length > 0;
     const thread = hasTableUpdates
-      ? await crud.threads.update({ id: threadId }, tableUpdates) as
-        | Thread
-        | null
-      : await crud.threads.findOne({ id: threadId }) as Thread | null;
+      ? await updateRows<Thread>("threads", { id: threadId }, tableUpdates)
+      : await findOneRow<Thread>("threads", { id: threadId });
     if (!thread) return null;
     await ensureThreadNode(thread, {
       ...tableUpdates,
@@ -1636,7 +1748,7 @@ export function createOperations(
   const deleteThread = async (threadId: string): Promise<void> => {
     await deleteMessagesForThread(threadId);
     await db.query(`DELETE FROM "events" WHERE "threadId" = $1`, [threadId]);
-    await crud.threads.delete({ id: threadId });
+    await deleteRows("threads", { id: threadId });
   };
 
   // ============================================

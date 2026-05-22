@@ -11,6 +11,7 @@
 import { Ominipg } from "omnipg";
 import type { OminipgWithCrud } from "omnipg";
 import { resolveAutoProviders } from "omnipg/auto";
+import { createCrudApi } from "omnipg/crud";
 import type { PGliteConfig } from "omnipg/pglite";
 import { dirname, fromFileUrl } from "@std/path";
 
@@ -377,12 +378,14 @@ function wrapDbWithSchemaSupport(
     };
   }).pool;
 
-  // Create a wrapped query function that respects schema context
+  // Create a wrapped query function that respects schema context.
+  // An explicit withSchema()/run({ schema }) context takes precedence over
+  // the database-level default schema.
   const wrappedQuery = async function <T extends Record<string, unknown>>(
     sql: string,
     params?: unknown[],
   ): Promise<{ rows: T[]; rowCount?: number }> {
-    const schema = getCurrentSchema();
+    const schema = getCurrentSchema() ?? config.defaultSchema;
 
     // If no schema context or using public, execute directly
     if (!schema || schema === "public") {
@@ -457,11 +460,22 @@ function wrapDbWithSchemaSupport(
     }
   };
 
-  // Return a proxy that intercepts query calls
+  const wrappedCrud = createCrudApi(
+    baseSchema,
+    async (sql: string, params?: unknown[]) => {
+      const result = await wrappedQuery(sql, params);
+      return { rows: result.rows as unknown[] };
+    },
+  );
+
+  // Return a proxy that intercepts query and CRUD calls.
   return new Proxy(db, {
     get(target, prop, receiver) {
       if (prop === "query") {
         return wrappedQuery;
+      }
+      if (prop === "crud") {
+        return wrappedCrud;
       }
       return Reflect.get(target, prop, receiver);
     },

@@ -222,10 +222,14 @@ function buildRoutes(): Route[] {
       action: async (ctx, p) => {
         const format = ctx.query.format as string || "dataUrl";
         if (format === "base64") {
-          const result = await ctx.handlers.assets.getBase64(p.id);
+          const result = await ctx.handlers.assets.getBase64(p.id, {
+            namespace: ctx.namespace,
+          });
           return { status: 200, data: { assetId: p.id, ...result } };
         }
-        const result = await ctx.handlers.assets.getDataUrl(p.id);
+        const result = await ctx.handlers.assets.getDataUrl(p.id, {
+          namespace: ctx.namespace,
+        });
         return { status: 200, data: { assetId: p.id, ...result } };
       },
     },

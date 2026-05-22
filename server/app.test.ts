@@ -158,12 +158,12 @@ function createMockCopilotz() {
   };
 
   const mockAssets = {
-    getBase64: async (ref: string, _opts?: unknown) => {
-      record("assets.getBase64", ref);
+    getBase64: async (ref: string, opts?: unknown) => {
+      record("assets.getBase64", ref, opts);
       return { base64: "AQID", mime: "image/png" };
     },
-    getDataUrl: async (ref: string, _opts?: unknown) => {
-      record("assets.getDataUrl", ref);
+    getDataUrl: async (ref: string, opts?: unknown) => {
+      record("assets.getDataUrl", ref, opts);
       return "data:image/png;base64,AQID";
     },
   };
@@ -527,6 +527,52 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
           (call.args[1] as { namespace?: string }).namespace,
           "request-namespace",
         );
+      },
+    );
+
+    await t.step(
+      "GET /assets/:id uses request namespace for bare asset ids",
+      async () => {
+        const { copilotz, calls } = createMockCopilotz();
+        withApp(copilotz as any);
+
+        const result = await (copilotz as any).app.handle({
+          resource: "assets",
+          method: "GET",
+          path: ["asset-1"],
+          context: { namespace: "tenant-assets" },
+        });
+
+        assertEquals(result.status, 200);
+        const call = calls.find((entry) =>
+          entry.method === "assets.getDataUrl"
+        );
+        assertExists(call);
+        assertEquals(call.args[0], "asset://asset-1");
+        assertEquals(call.args[1], { namespace: "tenant-assets" });
+      },
+    );
+
+    await t.step(
+      "GET /assets/:id keeps explicit asset ref namespace over request namespace",
+      async () => {
+        const { copilotz, calls } = createMockCopilotz();
+        withApp(copilotz as any);
+
+        const result = await (copilotz as any).app.handle({
+          resource: "assets",
+          method: "GET",
+          path: ["asset://ref-tenant/asset-1"],
+          context: { namespace: "request-tenant" },
+        });
+
+        assertEquals(result.status, 200);
+        const call = calls.find((entry) =>
+          entry.method === "assets.getDataUrl"
+        );
+        assertExists(call);
+        assertEquals(call.args[0], "asset://ref-tenant/asset-1");
+        assertEquals(call.args[1], { namespace: "ref-tenant" });
       },
     );
 

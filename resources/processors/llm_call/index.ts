@@ -95,8 +95,10 @@ function isRetryableLLMReason(reason: string | null): boolean {
   return reason === "rate_limit" ||
     reason === "timeout" ||
     reason === "network" ||
+    reason === "auth_error" ||
     reason === "server_error" ||
-    reason === "provider_error";
+    reason === "provider_error" ||
+    reason === "unknown";
 }
 
 export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {

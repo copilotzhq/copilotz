@@ -34,9 +34,11 @@ import type {
 const DEFAULT_FALLBACK_REASONS: ProviderFallbackReason[] = [
   "timeout",
   "network",
+  "auth_error",
   "rate_limit",
   "server_error",
   "provider_error",
+  "unknown",
 ];
 const MAX_TEXT_CONTINUATION_ROUNDS = 1;
 const MAX_TOOL_CALL_REPAIR_ROUNDS = 1;
@@ -138,7 +140,7 @@ export function classifyLLMError(
   };
 
   if (requestError?.status === 401 || requestError?.status === 403) {
-    return null;
+    return "auth_error";
   }
 
   if (
@@ -171,7 +173,7 @@ export function classifyLLMError(
     return "network";
   }
 
-  return null;
+  return "unknown";
 }
 
 function shouldAttemptFallback(
@@ -195,6 +197,26 @@ function getErrorStatus(error: unknown): number | undefined {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function warnFallbackAttempt(
+  error: unknown,
+  attempt: ProviderConfig,
+  reason: ProviderFallbackReason | null,
+  nextAttempt: ProviderConfig,
+): void {
+  try {
+    console.warn("[llm] Attempting fallback after provider error", {
+      provider: attempt.provider,
+      model: attempt.model,
+      reason,
+      message: getErrorMessage(error),
+      fallbackProvider: nextAttempt.provider,
+      fallbackModel: nextAttempt.model,
+    });
+  } catch {
+    // Ignore logging failures.
+  }
 }
 
 function normalizeProviderUsage(
@@ -608,6 +630,12 @@ export async function chat(
           cause: error,
         });
       }
+      warnFallbackAttempt(
+        error,
+        attemptConfig,
+        reason,
+        attemptConfigs[index + 1],
+      );
     }
   }
 

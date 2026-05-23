@@ -37,9 +37,11 @@ export interface ChatMessage {
 export type ProviderFallbackReason =
   | "timeout"
   | "network"
+  | "auth_error"
   | "rate_limit"
   | "server_error"
-  | "provider_error";
+  | "provider_error"
+  | "unknown";
 
 export interface ProviderConfigBase {
   // Provider selection

@@ -118,9 +118,14 @@ function buildAttemptConfig(
   env: Record<string, string>,
   override?: ProviderFallbackConfig,
 ): ProviderConfig {
+  const fallbackChangesProvider = override?.provider &&
+    override.provider !== baseConfig.provider;
   const candidate = {
     ...baseConfig,
     ...(override ?? {}),
+    ...(fallbackChangesProvider && !override?.apiKey
+      ? { apiKey: undefined }
+      : {}),
     fallbacks: undefined,
     fallbackOn: undefined,
   } as ProviderConfig;

@@ -247,3 +247,90 @@ Deno.test("chat falls back for auth failures and logs a warning", async () => {
     console.warn = originalWarn;
   }
 });
+
+Deno.test("chat resolves provider-specific fallback api keys when provider changes", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; authorization: string | null }> = [];
+  const registry: ProviderRegistry = {
+    anthropic: () => ({
+      endpoint: "https://example.test/anthropic",
+      headers: (config) => ({ "x-api-key": config.apiKey ?? "" }),
+      body: () => ({}),
+      extractContent: () => null,
+    }),
+    openai: () => ({
+      endpoint: "https://example.test/openai",
+      headers: (config) => ({ Authorization: `Bearer ${config.apiKey}` }),
+      body: () => ({}),
+      extractContent: (data: any) => {
+        const content = data?.choices?.[0]?.delta?.content;
+        return typeof content === "string" && content.length > 0
+          ? [{ text: content }]
+          : null;
+      },
+    }),
+  };
+
+  globalThis.fetch = (url, init?: RequestInit) => {
+    const requestInit = init as { headers?: HeadersInit } | undefined;
+    const headers = new Headers(requestInit?.headers);
+    calls.push({
+      url: String(url),
+      authorization: headers.get("authorization") ??
+        headers.get("x-api-key"),
+    });
+
+    if (String(url).includes("/anthropic")) {
+      return Promise.resolve(
+        new Response("bad anthropic request", {
+          status: 400,
+          statusText: "Bad Request",
+        }),
+      );
+    }
+
+    if (headers.get("authorization") !== "Bearer openai-secret") {
+      return Promise.resolve(
+        new Response("wrong key", {
+          status: 401,
+          statusText: "Unauthorized",
+        }),
+      );
+    }
+
+    return Promise.resolve(
+      new Response(
+        `data: ${
+          JSON.stringify({
+            choices: [{ delta: { content: "ok" }, finish_reason: "stop" }],
+          })
+        }\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "anthropic-secret",
+        fallbacks: [{ provider: "openai", model: "fallback" }],
+      },
+      { OPENAI_API_KEY: "openai-secret" },
+      undefined,
+      registry,
+    );
+
+    assertEquals(response.answer, "ok");
+    assertEquals(response.provider, "openai");
+    assertEquals(response.model, "fallback");
+    assertEquals(calls.length, 2);
+    assertEquals(calls[0].authorization, "anthropic-secret");
+    assertEquals(calls[1].authorization, "Bearer openai-secret");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

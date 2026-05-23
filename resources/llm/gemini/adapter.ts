@@ -20,6 +20,13 @@ interface GeminiMessage {
   role: "user" | "model";
 }
 
+const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite";
+const GEMINI_EXPLICIT_CACHE_MIN_CHARS = 4096;
+const geminiSystemCache = new Map<
+  string,
+  { name: string; expiresAt: number }
+>();
+
 function getEnvFlag(key: string): string | undefined {
   try {
     const anyGlobal = globalThis as unknown as {
@@ -37,6 +44,104 @@ function getEnvFlag(key: string): string | undefined {
   }
 
   return undefined;
+}
+
+function getPromptCacheConfig(config: ProviderConfig) {
+  const promptCache = config.promptCache;
+  if (promptCache === false) return { enabled: false, mode: "auto" as const };
+  if (promptCache && typeof promptCache === "object") {
+    return {
+      enabled: promptCache.enabled !== false,
+      mode: promptCache.mode ?? "auto",
+      ttl: promptCache.ttl,
+      cachedContent: promptCache.cachedContent,
+      displayName: promptCache.displayName,
+    };
+  }
+  return { enabled: true, mode: "auto" as const };
+}
+
+function normalizeGeminiModelName(model: string): string {
+  return model.startsWith("models/") ? model : `models/${model}`;
+}
+
+function supportsImplicitCaching(model: string): boolean {
+  const normalized = model.toLowerCase().replace(/^models\//, "");
+  return /^gemini-(2\.[5-9]|[3-9])/.test(normalized);
+}
+
+function ttlToMs(ttl: string | undefined): number {
+  if (ttl === "1h") return 60 * 60 * 1000;
+  if (ttl === "5m") return 5 * 60 * 1000;
+  const seconds = /^(\d+(?:\.\d+)?)s$/.exec(ttl ?? "");
+  return seconds ? Number(seconds[1]) * 1000 : 60 * 60 * 1000;
+}
+
+async function stableHash(value: string): Promise<string> {
+  const input = new TextEncoder().encode(value);
+  if (crypto.subtle?.digest) {
+    const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", input));
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  let hash = 0;
+  for (const char of value) {
+    hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
+  }
+  return Math.abs(hash).toString(16);
+}
+
+async function createGeminiSystemCache(args: {
+  apiKey?: string;
+  model: string;
+  systemInstruction: { parts: Array<{ text: string }> };
+  ttl?: string;
+  displayName?: string;
+}): Promise<string | undefined> {
+  if (!args.apiKey) return undefined;
+  const text = args.systemInstruction.parts.map((part) => part.text).join("\n");
+  if (text.length < GEMINI_EXPLICIT_CACHE_MIN_CHARS) return undefined;
+
+  const cacheKey = await stableHash(JSON.stringify({
+    model: args.model,
+    systemInstruction: args.systemInstruction,
+    apiKey: args.apiKey,
+  }));
+  const now = Date.now();
+  const cached = geminiSystemCache.get(cacheKey);
+  if (cached && cached.expiresAt > now + 30_000) return cached.name;
+
+  const ttl = args.ttl && args.ttl !== "5m" ? args.ttl : "3600s";
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/cachedContents?key=${
+        encodeURIComponent(args.apiKey)
+      }`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: normalizeGeminiModelName(args.model),
+          systemInstruction: args.systemInstruction,
+          ttl,
+          ...(args.displayName ? { displayName: args.displayName } : {}),
+        }),
+      },
+    );
+    if (!response.ok) return undefined;
+    const data = await response.json() as { name?: unknown };
+    if (typeof data.name !== "string" || data.name.length === 0) {
+      return undefined;
+    }
+    geminiSystemCache.set(cacheKey, {
+      name: data.name,
+      expiresAt: now + ttlToMs(ttl),
+    });
+    return data.name;
+  } catch {
+    return undefined;
+  }
 }
 
 function extractGeminiFinishReason(data: any): ProviderFinishReason | null {
@@ -187,7 +292,7 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
 
   return {
     endpoint: `https://generativelanguage.googleapis.com/v1beta/models/${
-      config.model || "gemini-2.0-flash-lite-preview-02-05"
+      config.model || DEFAULT_GEMINI_MODEL
     }:streamGenerateContent?key=${config.apiKey}&alt=sse`,
 
     headers: (config: ProviderConfig) => ({
@@ -196,9 +301,9 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
 
     transformMessages,
 
-    body: (messages: ChatMessage[], config: ProviderConfig) => {
+    body: async (messages: ChatMessage[], config: ProviderConfig) => {
       const transformed = transformMessages(messages);
-      const modelId = config.model || "gemini-2.0-flash-lite-preview-02-05";
+      const modelId = config.model || DEFAULT_GEMINI_MODEL;
 
       const safetySettings = [
         { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
@@ -228,11 +333,34 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
       const thinkingConfig = buildThinkingConfig(config, modelId);
       if (thinkingConfig) generationConfig.thinkingConfig = thinkingConfig;
 
+      const promptCache = getPromptCacheConfig(config);
+      const explicitCachedContent = promptCache.enabled
+        ? promptCache.cachedContent
+        : undefined;
+      const shouldTryExplicitSystemCache = promptCache.enabled &&
+        !explicitCachedContent &&
+        (promptCache.mode === "explicit" ||
+          (promptCache.mode === "auto" && !supportsImplicitCaching(modelId)));
+      const createdCachedContent = shouldTryExplicitSystemCache &&
+          transformed.systemInstruction
+        ? await createGeminiSystemCache({
+          apiKey: config.apiKey,
+          model: modelId,
+          systemInstruction: transformed.systemInstruction,
+          ttl: promptCache.ttl,
+          displayName: promptCache.displayName,
+        })
+        : undefined;
+      const cachedContent = explicitCachedContent ?? createdCachedContent;
+
       return {
         contents: transformed.messages,
         generationConfig,
         safetySettings,
-        systemInstruction: transformed.systemInstruction,
+        ...(cachedContent ? { cachedContent } : {}),
+        ...(cachedContent
+          ? {}
+          : { systemInstruction: transformed.systemInstruction }),
       };
     },
 

@@ -61,6 +61,25 @@ export interface ProviderConfigBase {
   outputReasoning?: boolean; // Whether to output thinking/reasoning tokens during stream (default true)
   estimateCost?: boolean; // Whether to estimate cost using OpenRouter pricing data (default true)
   pricingModelId?: string; // Explicit OpenRouter model id override for cost estimation
+  /**
+   * Provider prompt/context cache controls.
+   *
+   * Defaults to provider-native automatic caching when available:
+   * - Anthropic: top-level automatic prompt caching (`cache_control`)
+   * - Gemini 2.5+: implicit context caching
+   *
+   * Set `enabled: false` to avoid sending explicit cache directives.
+   */
+  promptCache?: {
+    enabled?: boolean;
+    mode?: "auto" | "implicit" | "explicit";
+    /** Anthropic supports `5m` (default) and `1h`; Gemini explicit cache accepts duration strings like `300s`. */
+    ttl?: "5m" | "1h" | `${number}s`;
+    /** Gemini cached content resource, e.g. `cachedContents/abc123`. */
+    cachedContent?: string;
+    /** Gemini display name when Copilotz creates a best-effort explicit cache. */
+    displayName?: string;
+  } | boolean;
 
   // Advanced sampling parameters
   topP?: number;
@@ -293,7 +312,7 @@ export interface ProcessStreamOptions {
 export interface ProviderAPI {
   endpoint: string;
   headers: (config: ProviderConfig) => Record<string, string>;
-  body: (messages: ChatMessage[], config: ProviderConfig) => any;
+  body: (messages: ChatMessage[], config: ProviderConfig) => any | Promise<any>;
   /** Extract content/reasoning parts from a single parsed SSE or JSONL event. */
   extractContent: (data: any) => ExtractedPart[] | null;
   /** Extract usage from a single parsed SSE or JSONL event when the provider exposes it. */

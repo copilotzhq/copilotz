@@ -15,6 +15,18 @@ const EFFORT_BUDGET_MAP: Record<string, number> = {
   high: 65536,
 };
 
+function getPromptCacheConfig(config: ProviderConfig) {
+  const promptCache = config.promptCache;
+  if (promptCache === false) return { enabled: false };
+  if (promptCache && typeof promptCache === "object") {
+    return {
+      enabled: promptCache.enabled !== false,
+      ttl: promptCache.ttl,
+    };
+  }
+  return { enabled: true };
+}
+
 function extractAnthropicFinishReason(data: any): ProviderFinishReason | null {
   const reason = data?.delta?.stop_reason ?? data?.message?.stop_reason;
   if (reason === "max_tokens") return "length";
@@ -129,6 +141,14 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
         system: transformed.system,
         metadata: config.metadata,
       };
+
+      const promptCache = getPromptCacheConfig(config);
+      if (promptCache.enabled) {
+        body.cache_control = {
+          type: "ephemeral",
+          ...(promptCache.ttl === "1h" ? { ttl: "1h" } : {}),
+        };
+      }
 
       if (budgetTokens) {
         body.thinking = { type: "enabled", budget_tokens: budgetTokens };

@@ -443,7 +443,7 @@ export async function chat(
         const abortController = new AbortController();
         const response = await streamPost(
           providerAPI.endpoint,
-          providerAPI.body(
+          await providerAPI.body(
             Array.isArray(finalMessages) ? finalMessages : runMessages,
             requestConfig,
           ),

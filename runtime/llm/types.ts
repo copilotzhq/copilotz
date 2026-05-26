@@ -156,8 +156,6 @@ export type LLMFallbackConfig =
 export interface LLMConfig extends LLMConfigBase {
   /** Ordered fallback models/providers to try when the primary attempt fails before any visible streaming output. */
   fallbacks?: LLMFallbackConfig[];
-  /** Error classes that are allowed to trigger a fallback attempt. */
-  fallbackOn?: ProviderFallbackReason[];
 }
 
 export type ProviderFallbackConfig =
@@ -168,8 +166,6 @@ export type ProviderFallbackConfig =
 export interface ProviderConfig extends ProviderConfigBase {
   /** Ordered fallback models/providers to try when the primary attempt fails before any visible streaming output. */
   fallbacks?: ProviderFallbackConfig[];
-  /** Error classes that are allowed to trigger a fallback attempt. */
-  fallbackOn?: ProviderFallbackReason[];
 }
 
 export type LLMRuntimeConfig = ProviderConfig;

@@ -1,0 +1,185 @@
+import type {
+  ChatMessage,
+  ProviderAPI,
+  ProviderConfig,
+  ProviderFinishReason,
+  ProviderUsageUpdate,
+  StreamCallback,
+} from "@/runtime/llm/types.ts";
+import { LLMStreamTimeoutError } from "@/runtime/llm/errors.ts";
+import {
+  getLocalStopSequences,
+  processStream,
+} from "@/runtime/llm/utils.ts";
+import { streamPost, type StreamResponse } from "@/runtime/http.ts";
+
+const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 20_000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 5_000;
+
+export interface StreamResult {
+  content: string;
+  reasoning: string;
+  usage?: ProviderUsageUpdate;
+  finishReason: ProviderFinishReason | null;
+  stoppedByLocalStop: boolean;
+}
+
+function resolveTimeoutMs(
+  value: number | undefined,
+  defaultValue: number,
+): number | undefined {
+  if (value === undefined) return defaultValue;
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * Executes a single LLM provider streaming call with timeout management.
+ */
+export async function runProviderStream(
+  messages: ChatMessage[],
+  onStream: StreamCallback | undefined,
+  config: ProviderConfig,
+  providerAPI: ProviderAPI,
+  extractTags?: string[],
+): Promise<StreamResult> {
+  const localStopSequences = getLocalStopSequences(config);
+  const finalMessages = providerAPI.transformMessages
+    ? providerAPI.transformMessages(messages)
+    : messages;
+
+  const requestConfig = {
+    ...config,
+    stop: undefined,
+    stopSequences: undefined,
+  } satisfies ProviderConfig;
+
+  const abortController = new AbortController();
+  const firstTokenTimeoutMs = resolveTimeoutMs(
+    config.firstTokenTimeoutMs,
+    DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
+  );
+  const streamIdleTimeoutMs = resolveTimeoutMs(
+    config.streamIdleTimeoutMs,
+    DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  );
+
+  let firstTokenTimer: number | undefined;
+  let streamIdleTimer: number | undefined;
+  let rejectTimeout: ((error: Error) => void) | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let streamTimeout:
+    | { kind: "first_token" | "idle"; timeoutMs: number }
+    | undefined;
+  let firstStreamActivityReceived = false;
+
+  const clearFirstTokenTimer = () => {
+    if (firstTokenTimer !== undefined) {
+      clearTimeout(firstTokenTimer);
+      firstTokenTimer = undefined;
+    }
+  };
+  const clearStreamIdleTimer = () => {
+    if (streamIdleTimer !== undefined) {
+      clearTimeout(streamIdleTimer);
+      streamIdleTimer = undefined;
+    }
+  };
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    rejectTimeout = reject;
+  });
+
+  const abortForTimeout = (
+    kind: "first_token" | "idle",
+    timeoutMs: number,
+  ) => {
+    if (streamTimeout) return;
+    streamTimeout = { kind, timeoutMs };
+    abortController.abort();
+    void reader?.cancel().catch(() => undefined);
+    rejectTimeout?.(new LLMStreamTimeoutError(kind, timeoutMs));
+  };
+
+  const startFirstTokenTimer = () => {
+    if (!firstTokenTimeoutMs) return;
+    clearFirstTokenTimer();
+    firstTokenTimer = setTimeout(() => {
+      abortForTimeout("first_token", firstTokenTimeoutMs);
+    }, firstTokenTimeoutMs) as unknown as number;
+  };
+
+  const resetStreamIdleTimer = () => {
+    if (!streamIdleTimeoutMs || !firstStreamActivityReceived) return;
+    clearStreamIdleTimer();
+    streamIdleTimer = setTimeout(() => {
+      abortForTimeout("idle", streamIdleTimeoutMs);
+    }, streamIdleTimeoutMs) as unknown as number;
+  };
+
+  const recordStreamActivity = () => {
+    if (!firstStreamActivityReceived) {
+      firstStreamActivityReceived = true;
+      clearFirstTokenTimer();
+    }
+    resetStreamIdleTimer();
+  };
+
+  startFirstTokenTimer();
+  try {
+    const response = await Promise.race([
+      streamPost(
+        providerAPI.endpoint,
+        await providerAPI.body(
+          Array.isArray(finalMessages) ? finalMessages : messages,
+          requestConfig,
+        ),
+        {
+          headers: providerAPI.headers(requestConfig),
+          signal: abortController.signal,
+        },
+      ) as Promise<StreamResponse>,
+      timeoutPromise,
+    ]);
+
+    reader = response.stream.getReader();
+    const streamPromise = processStream(
+      reader,
+      onStream || (() => {}),
+      (data) => {
+        if (providerAPI.isStreamActivity?.(data)) {
+          recordStreamActivity();
+        }
+        const parts = providerAPI.extractContent(data);
+        if (
+          parts?.some((part) =>
+            typeof part.text === "string" && part.text.length > 0
+          )
+        ) {
+          recordStreamActivity();
+        }
+        return parts;
+      },
+      {
+        ...providerAPI.streamOptions,
+        config,
+        extractedBlockTags: extractTags,
+        extractUsage: providerAPI.extractUsage,
+        extractFinishReason: providerAPI.extractFinishReason,
+        localStopSequences,
+        onLocalStop: () => abortController.abort(),
+      },
+    );
+    return await Promise.race([streamPromise, timeoutPromise]);
+  } catch (error) {
+    if (streamTimeout) {
+      throw new LLMStreamTimeoutError(
+        streamTimeout.kind,
+        streamTimeout.timeoutMs,
+      );
+    }
+    throw error;
+  } finally {
+    clearFirstTokenTimer();
+    clearStreamIdleTimer();
+  }
+}

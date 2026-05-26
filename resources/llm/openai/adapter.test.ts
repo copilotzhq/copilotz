@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertThrows } from "@std/assert";
 
 import { openaiProvider } from "./adapter.ts";
 import type { ChatMessage, ProviderConfig } from "@/runtime/llm/types.ts";
@@ -193,4 +193,28 @@ Deno.test("openaiProvider extracts Responses text, reasoning, finish reason, and
       },
     },
   );
+});
+
+Deno.test("openaiProvider throws on Responses stream error events", () => {
+  const config: ProviderConfig = {
+    provider: "openai",
+    model: "gpt-5-mini",
+    apiKey: "test",
+  };
+  const provider = openaiProvider(config);
+
+  const error = assertThrows(
+    () =>
+      provider.extractContent({
+        type: "error",
+        error: {
+          code: "insufficient_quota",
+          message: "quota exceeded",
+        },
+      }),
+    Error,
+    "quota exceeded",
+  );
+
+  assertEquals((error as { status?: number }).status, 429);
 });

@@ -5,24 +5,26 @@
  * following the standardization to the flattened ToolInvocation interface.
  *
  * Run with:
- *   DEFAULT_OPENAI_KEY=<key> deno run -A --env examples/tool-call.ts
+ *   OPENAI_KEY=<key> deno run -A --env examples/tool-call.ts
  */
 import process from "node:process";
 import { createCopilotz } from "../index.ts";
 import type { ToolInvocation } from "../runtime/llm/types.ts";
 
 // 1. Read the API key
-const API_KEY = Deno.env.get("API_KEY") || Deno.env.get("MINIMAX_KEY") ||
-  Deno.env.get("DEFAULT_OPENAI_KEY") || Deno.env.get("OPENAI_API_KEY");
+const API_KEY = Deno.env.get("OPENAI_KEY") || Deno.env.get("OPENAI_API_KEY") ||
+  Deno.env.get("DEFAULT_OPENAI_KEY") || Deno.env.get("LLM_API_KEY") ||
+  Deno.env.get("API_KEY");
 if (!API_KEY) {
   console.error(
-    "❌  API_KEY is not set.\n   Run with: deno run -A --env examples/tool-call.ts",
+    "❌  OPENAI_KEY is not set.\n   Run with: deno run -A --env examples/tool-call.ts",
   );
   Deno.exit(1);
 }
 
 // 2. Create Copilotz instance
 const copilotz = await createCopilotz({
+  namespace: "examples",
   resources: {
     imports: ["tools.get_current_time"],
   },
@@ -34,8 +36,9 @@ const copilotz = await createCopilotz({
       instructions:
         "You are a helpful assistant that can tell the current time using tools. Always use the get_current_time tool when asked for the time. Keep your response very brief.",
       llmOptions: {
-        provider: "minimax",
-        model: "MiniMax-M2.7",
+        provider: "openai",
+        model: "gpt-5.4",
+        openaiApi: "responses",
         apiKey: API_KEY,
       },
       allowedTools: ["get_current_time"],
@@ -49,14 +52,33 @@ console.log("👤 User: What time is it right now?\n");
 const result = await copilotz.run({
   content: "What time is it right now?",
   sender: { type: "user", name: "User" },
+  target: "timekeeper",
+}, {
+  stream: true,
 });
 
 process.stdout.write("🤖 Assistant: ");
 let isThinking = false;
+let sawAssistantOutput = false;
+let sawToolCall = false;
+let llmFailure: string | null = null;
 
 for await (const event of result.events) {
+  if (event.type === "LLM_RESULT") {
+    const payload = event.payload as {
+      status?: string;
+      answer?: string | null;
+      error?: { message?: string | null } | null;
+    };
+    if (payload.status === "failed") {
+      llmFailure = payload.error?.message ?? payload.answer ??
+        "LLM call failed";
+    }
+  }
+
   // Inspect TOOL_CALL events to verify the ToolInvocation structure
   if (event.type === "TOOL_CALL") {
+    sawToolCall = true;
     const toolCall = (event.payload as { toolCall: ToolInvocation }).toolCall;
 
     console.log("\n\x1b[33m[TOOL_CALL Event Payload]\x1b[0m");
@@ -96,6 +118,9 @@ for await (const event of result.events) {
     const payload = event.payload as { token?: string; isReasoning?: boolean };
     const token = payload.token ?? "";
     const isReasoning = !!payload.isReasoning;
+    if (token.length > 0 && !isReasoning) {
+      sawAssistantOutput = true;
+    }
 
     if (isReasoning && !isThinking) {
       await Deno.stdout.write(new TextEncoder().encode("💭 "));
@@ -111,6 +136,15 @@ for await (const event of result.events) {
 
 try {
   await result.done;
+  if (llmFailure) {
+    throw new Error(llmFailure);
+  }
+  if (!sawToolCall) {
+    throw new Error("No tool call event was emitted.");
+  }
+  if (!sawAssistantOutput) {
+    throw new Error("No assistant output was streamed.");
+  }
   console.log("\n\n✅ Done!");
 } catch (error) {
   console.error(

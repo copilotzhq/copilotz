@@ -1,6 +1,7 @@
 import {
   assertEquals,
   assertInstanceOf,
+  assertRejects,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import { chat, LLMProviderError } from "@/runtime/llm/index.ts";
@@ -391,6 +392,201 @@ Deno.test("chat falls back when first extracted token times out", async () => {
     assertEquals(response.answer, "ok");
     assertEquals(response.model, "fallback");
     assertEquals(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("chat treats provider stream activity as progress before extracted text", async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  let calls = 0;
+  const registry: ProviderRegistry = {
+    anthropic: () => ({
+      endpoint: "https://example.test/activity",
+      headers: () => ({}),
+      body: () => ({}),
+      isStreamActivity: (data: any) => data?.event === "progress",
+      extractContent: (data: any) =>
+        typeof data?.content === "string" && data.content.length > 0
+          ? [{ text: data.content }]
+          : null,
+    }),
+  };
+
+  globalThis.fetch = () => {
+    calls += 1;
+    return Promise.resolve(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ event: "progress" })}\n\n`,
+              ),
+            );
+            setTimeout(() => {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({ content: "ok" })}\n\n`,
+                ),
+              );
+              controller.close();
+            }, 20);
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        firstTokenTimeoutMs: 5,
+        streamIdleTimeoutMs: 50,
+      },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(response.answer, "ok");
+    assertEquals(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("chat enforces idle timeout even when fetch abort does not break the reader", async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  let cancelled = false;
+
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${
+                  JSON.stringify({ choices: [{ delta: { content: "hi" } }] })
+                }\n\n`,
+              ),
+            );
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+
+  try {
+    const error = await assertRejects(
+      () =>
+        chat(
+          { messages: [{ role: "user", content: "hello" }] },
+          {
+            provider: "anthropic",
+            model: "primary",
+            apiKey: "test",
+            streamIdleTimeoutMs: 5,
+          },
+          {},
+          undefined,
+          registry,
+        ),
+      LLMProviderError,
+    );
+
+    assertEquals(error.reason, "timeout");
+    assertEquals(cancelled, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("chat recovers reasoning-only length truncation with thought trace context", async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  const bodies: any[] = [];
+  let calls = 0;
+  const registry: ProviderRegistry = {
+    anthropic: () => ({
+      endpoint: "https://example.test/reasoning-only",
+      headers: () => ({}),
+      body: (messages, config) => {
+        const body = {
+          messages,
+          openaiReasoningSummary: config.openaiReasoningSummary,
+          reasoningEffort: config.reasoningEffort,
+          outputReasoning: config.outputReasoning,
+        };
+        bodies.push(body);
+        return body;
+      },
+      extractContent: (data: any) => {
+        if (typeof data?.reasoning === "string" && data.reasoning.length > 0) {
+          return [{ text: data.reasoning, isReasoning: true }];
+        }
+        if (typeof data?.content === "string" && data.content.length > 0) {
+          return [{ text: data.content }];
+        }
+        return null;
+      },
+      extractFinishReason: (data: any) => data?.finishReason ?? null,
+    }),
+  };
+
+  globalThis.fetch = () => {
+    calls += 1;
+    const payload = calls === 1
+      ? { reasoning: "thought trace", finishReason: "length" }
+      : { content: "final answer", finishReason: "stop" };
+    return Promise.resolve(
+      new Response(
+        encoder.encode(`data: ${JSON.stringify(payload)}\n\n`),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "solve it" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        maxCompletionTokens: 100,
+      },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(response.answer, "final answer");
+    assertEquals(response.reasoning, "thought trace");
+    assertEquals(calls, 2);
+    assertEquals(bodies.length, 2);
+    assertEquals(
+      JSON.stringify(bodies[1].messages).includes("<reasoning_summary>"),
+      true,
+    );
+    assertEquals(
+      JSON.stringify(bodies[1].messages).includes("thought trace"),
+      true,
+    );
+    assertEquals(bodies[1].openaiReasoningSummary, false);
+    assertEquals(bodies[1].reasoningEffort, "minimal");
+    assertEquals(bodies[1].outputReasoning, false);
   } finally {
     globalThis.fetch = originalFetch;
   }

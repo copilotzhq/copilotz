@@ -183,6 +183,18 @@ Deno.test("openaiProvider extracts Responses text, reasoning, finish reason, and
     [{ text: "Thinking", isReasoning: true }],
   );
   assertEquals(
+    provider.isStreamActivity?.({ type: "response.in_progress" }),
+    true,
+  );
+  assertEquals(
+    provider.isStreamActivity?.({ type: "response.output_item.added" }),
+    true,
+  );
+  assertEquals(
+    provider.isStreamActivity?.({ type: "response.failed" }),
+    false,
+  );
+  assertEquals(
     openaiProvider(config).extractContent({
       type: "response.completed",
       response: {

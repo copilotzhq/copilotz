@@ -60,9 +60,9 @@ export interface ProviderConfigBase {
   // Response format
   responseType?: "text" | "json";
   stream?: boolean;
-  /** Abort a provider attempt if no extracted model text arrives before this many milliseconds. Defaults to 20_000. Set <= 0 to disable. */
+  /** Abort a provider attempt if no model stream activity arrives before this many milliseconds. Defaults to 20_000. Set <= 0 to disable. */
   firstTokenTimeoutMs?: number;
-  /** Abort a provider attempt if extracted model text stalls for this many milliseconds after the first token. Defaults to 5_000. Set <= 0 to disable. */
+  /** Abort a provider attempt if model stream activity stalls for this many milliseconds after the first activity. Defaults to 5_000. Set <= 0 to disable. */
   streamIdleTimeoutMs?: number;
   outputReasoning?: boolean; // Whether to output thinking/reasoning tokens during stream (default true)
   estimateCost?: boolean; // Whether to estimate cost using OpenRouter pricing data (default true)
@@ -325,6 +325,8 @@ export interface ProviderAPI {
   body: (messages: ChatMessage[], config: ProviderConfig) => any | Promise<any>;
   /** Extract content/reasoning parts from a single parsed SSE or JSONL event. */
   extractContent: (data: any) => ExtractedPart[] | null;
+  /** Report whether a parsed stream event represents provider/model progress even without text. */
+  isStreamActivity?: (data: any) => boolean;
   /** Extract usage from a single parsed SSE or JSONL event when the provider exposes it. */
   extractUsage?: (data: any) => ProviderUsageUpdate | null;
   /** Extract a normalized finish reason from a single parsed SSE or JSONL event. */

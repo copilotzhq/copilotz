@@ -45,12 +45,19 @@ const DEFAULT_FALLBACK_REASONS: ProviderFallbackReason[] = [
 ];
 const MAX_TEXT_CONTINUATION_ROUNDS = 1;
 const MAX_CONTROL_TAG_REPAIR_ROUNDS = 1;
+const MAX_REASONING_ONLY_RECOVERY_ROUNDS = 1;
+const MAX_REASONING_RECOVERY_CONTEXT_CHARS = 12_000;
 const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 20_000;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 5_000;
 const TEXT_CONTINUATION_CUE = `
 Continue the previous assistant response exactly where it stopped.
 Do not repeat earlier content.
 Return only the continuation text.
+`.trim();
+const REASONING_ONLY_RECOVERY_CUE = `
+The previous attempt exhausted its output budget before producing a user-facing answer.
+Using the reasoning summary and partial answer above, return only the final answer for the user.
+Do not include reasoning summaries, analysis, hidden notes, or XML/control tags.
 `.trim();
 function buildControlTagRepairCue(tags: string[]): string {
   const tagList = tags.map((tag) => `<${tag}>...</${tag}>`).join(", ");
@@ -59,6 +66,54 @@ Your previous response ended with incomplete control tag markup.
 Return only the complete corrected control block(s) for: ${tagList}.
 Do not include prose or repeat any normal user-facing text.
 `.trim();
+}
+
+function truncateRecoveryContext(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `[truncated]\n${text.slice(-maxChars)}`;
+}
+
+function escapeInternalBlockText(text: string, tag: string): string {
+  return text.replaceAll(`</${tag}>`, `</ ${tag}>`);
+}
+
+function buildReasoningOnlyRecoveryContext(
+  reasoning: string,
+  partialAnswer: string,
+): string {
+  const safeReasoning = escapeInternalBlockText(
+    truncateRecoveryContext(reasoning, MAX_REASONING_RECOVERY_CONTEXT_CHARS),
+    "reasoning_summary",
+  );
+  const safePartialAnswer = escapeInternalBlockText(
+    truncateRecoveryContext(
+      partialAnswer,
+      MAX_REASONING_RECOVERY_CONTEXT_CHARS,
+    ),
+    "partial_answer",
+  );
+
+  return `
+<reasoning_summary>
+${safeReasoning || "(none)"}
+</reasoning_summary>
+
+<partial_answer>
+${safePartialAnswer || "(none)"}
+</partial_answer>
+`.trim();
+}
+
+function isReasoningOnlyLengthTruncation(
+  answer: string,
+  reasoning: string,
+  finishReason: ProviderFinishReason | null,
+  toolCalls: ToolInvocation[],
+): boolean {
+  return finishReason === "length" &&
+    answer.trim().length === 0 &&
+    reasoning.trim().length > 0 &&
+    toolCalls.length === 0;
 }
 
 export type LLMProviderAttempt = {
@@ -462,12 +517,6 @@ export async function chat(
       );
     }
     const providerAPI = providerFactory(attemptConfig);
-    const localStopSequences = getLocalStopSequences(attemptConfig);
-    const requestConfig = {
-      ...attemptConfig,
-      stop: undefined,
-      stopSequences: undefined,
-    } satisfies ProviderConfig;
     let visibleStreamStarted = false;
     let visibleAnswerBuffer = "";
     const continuationPrefix = visibleTimeoutContinuation?.prefix ?? "";
@@ -487,25 +536,40 @@ export async function chat(
       const runProviderStream = async (
         runMessages: ChatMessage[],
         onStream: StreamCallback | undefined,
+        configOverrides?: Partial<ProviderConfig>,
       ) => {
+        const effectiveAttemptConfig = {
+          ...attemptConfig,
+          ...(configOverrides ?? {}),
+        } as ProviderConfig;
+        const effectiveRequestConfig = {
+          ...effectiveAttemptConfig,
+          stop: undefined,
+          stopSequences: undefined,
+        } satisfies ProviderConfig;
+        const effectiveLocalStopSequences = getLocalStopSequences(
+          effectiveAttemptConfig,
+        );
         const finalMessages = providerAPI.transformMessages
           ? providerAPI.transformMessages(runMessages)
           : runMessages;
         const abortController = new AbortController();
         const firstTokenTimeoutMs = resolveTimeoutMs(
-          attemptConfig.firstTokenTimeoutMs,
+          effectiveAttemptConfig.firstTokenTimeoutMs,
           DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
         );
         const streamIdleTimeoutMs = resolveTimeoutMs(
-          attemptConfig.streamIdleTimeoutMs,
+          effectiveAttemptConfig.streamIdleTimeoutMs,
           DEFAULT_STREAM_IDLE_TIMEOUT_MS,
         );
         let firstTokenTimer: number | undefined;
         let streamIdleTimer: number | undefined;
+        let rejectTimeout: ((error: Error) => void) | undefined;
+        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
         let streamTimeout:
           | { kind: "first_token" | "idle"; timeoutMs: number }
           | undefined;
-        let firstModelTextReceived = false;
+        let firstStreamActivityReceived = false;
         const clearFirstTokenTimer = () => {
           if (firstTokenTimer !== undefined) {
             clearTimeout(firstTokenTimer);
@@ -518,12 +582,18 @@ export async function chat(
             streamIdleTimer = undefined;
           }
         };
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          rejectTimeout = reject;
+        });
         const abortForTimeout = (
           kind: "first_token" | "idle",
           timeoutMs: number,
         ) => {
+          if (streamTimeout) return;
           streamTimeout = { kind, timeoutMs };
           abortController.abort();
+          void reader?.cancel().catch(() => undefined);
+          rejectTimeout?.(new LLMStreamTimeoutError(kind, timeoutMs));
         };
         const startFirstTokenTimer = () => {
           if (!firstTokenTimeoutMs) return;
@@ -533,15 +603,15 @@ export async function chat(
           }, firstTokenTimeoutMs) as unknown as number;
         };
         const resetStreamIdleTimer = () => {
-          if (!streamIdleTimeoutMs || !firstModelTextReceived) return;
+          if (!streamIdleTimeoutMs || !firstStreamActivityReceived) return;
           clearStreamIdleTimer();
           streamIdleTimer = setTimeout(() => {
             abortForTimeout("idle", streamIdleTimeoutMs);
           }, streamIdleTimeoutMs) as unknown as number;
         };
-        const recordExtractedModelText = () => {
-          if (!firstModelTextReceived) {
-            firstModelTextReceived = true;
+        const recordStreamActivity = () => {
+          if (!firstStreamActivityReceived) {
+            firstStreamActivityReceived = true;
             clearFirstTokenTimer();
           }
           resetStreamIdleTimer();
@@ -549,43 +619,50 @@ export async function chat(
 
         startFirstTokenTimer();
         try {
-          const response = await streamPost(
-            providerAPI.endpoint,
-            await providerAPI.body(
-              Array.isArray(finalMessages) ? finalMessages : runMessages,
-              requestConfig,
-            ),
-            {
-              headers: providerAPI.headers(requestConfig),
-              signal: abortController.signal,
-            },
-          ) as StreamResponse;
+          const response = await Promise.race([
+            streamPost(
+              providerAPI.endpoint,
+              await providerAPI.body(
+                Array.isArray(finalMessages) ? finalMessages : runMessages,
+                effectiveRequestConfig,
+              ),
+              {
+                headers: providerAPI.headers(effectiveRequestConfig),
+                signal: abortController.signal,
+              },
+            ) as Promise<StreamResponse>,
+            timeoutPromise,
+          ]);
 
-          const reader = response.stream.getReader();
-          return await processStream(
+          reader = response.stream.getReader();
+          const streamPromise = processStream(
             reader,
             onStream || (() => {}),
             (data) => {
+              if (providerAPI.isStreamActivity?.(data)) {
+                recordStreamActivity();
+              }
               const parts = providerAPI.extractContent(data);
               if (
                 parts?.some((part) =>
                   typeof part.text === "string" && part.text.length > 0
                 )
               ) {
-                recordExtractedModelText();
+                recordStreamActivity();
               }
               return parts;
             },
             {
               ...providerAPI.streamOptions,
-              config: attemptConfig,
+              config: effectiveAttemptConfig,
               extractedBlockTags: request.extractTags,
               extractUsage: providerAPI.extractUsage,
               extractFinishReason: providerAPI.extractFinishReason,
-              localStopSequences,
+              localStopSequences: effectiveLocalStopSequences,
               onLocalStop: () => abortController.abort(),
             },
           );
+          return await Promise.race([streamPromise, timeoutPromise]);
         } catch (error) {
           if (streamTimeout) {
             throw new LLMStreamTimeoutError(
@@ -664,6 +741,58 @@ export async function chat(
           extractedTags = repaired.extractedTags;
           break;
         }
+      } else if (
+        isReasoningOnlyLengthTruncation(
+          cleanResponse,
+          aggregateReasoning,
+          finalFinishReason,
+          toolCalls,
+        )
+      ) {
+        for (let i = 0; i < MAX_REASONING_ONLY_RECOVERY_ROUNDS; i++) {
+          const recoveryResult = await runProviderStream(
+            [
+              ...messages,
+              {
+                role: "assistant",
+                content: buildReasoningOnlyRecoveryContext(
+                  aggregateReasoning,
+                  cleanResponse,
+                ),
+              } as ChatMessage,
+              {
+                role: "user",
+                content: REASONING_ONLY_RECOVERY_CUE,
+              } as ChatMessage,
+            ],
+            trackedStream,
+            {
+              openaiReasoningSummary: false,
+              reasoningEffort: "minimal",
+              outputReasoning: false,
+            },
+          );
+          aggregateUsage = mergeProviderUsage(
+            aggregateUsage,
+            recoveryResult.usage,
+          );
+          aggregateReasoning =
+            `${aggregateReasoning}${recoveryResult.reasoning}`;
+          finalFinishReason = recoveryResult.finishReason ?? finalFinishReason;
+
+          const recovered = parseAssistantResponse(
+            recoveryResult.content,
+            request.extractTags ?? [],
+            { preserveWhitespace: true },
+          );
+          cleanResponse = `${cleanResponse}${recovered.cleanResponse}`;
+          toolCalls = recovered.toolCalls;
+          extractedTags = mergeExtractedTags(
+            extractedTags,
+            recovered.extractedTags,
+          );
+          break;
+        }
       } else if (streamResult.finishReason === "length") {
         for (let i = 0; i < MAX_TEXT_CONTINUATION_ROUNDS; i++) {
           const continuationResult = await runProviderStream([
@@ -692,6 +821,22 @@ export async function chat(
           );
           if (continuationResult.finishReason !== "length") break;
         }
+      }
+
+      if (
+        isReasoningOnlyLengthTruncation(
+          cleanResponse,
+          aggregateReasoning,
+          finalFinishReason,
+          toolCalls,
+        )
+      ) {
+        throw Object.assign(
+          new Error(
+            "LLM produced reasoning but no user-facing answer before hitting the output limit.",
+          ),
+          { status: 400 },
+        );
       }
 
       const usageStatus: TokenUsage["status"] = streamResult.stoppedByLocalStop

@@ -153,6 +153,12 @@ function throwOpenAIResponsesStreamError(data: any): never {
   });
 }
 
+function isOpenAIResponsesStreamActivity(data: any): boolean {
+  const type = data?.type;
+  if (type === "error" || type === "response.failed") return false;
+  return typeof type === "string" && type.startsWith("response.");
+}
+
 function openAIEndpoint(config: ProviderConfig, mode: OpenAIApiMode): string {
   const baseUrl = typeof config.baseUrl === "string" && config.baseUrl.trim()
     ? config.baseUrl.trim().replace(/\/+$/, "")
@@ -433,6 +439,9 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
         : extractOpenAIChatContent(data);
     },
 
+    isStreamActivity: apiMode === "responses"
+      ? isOpenAIResponsesStreamActivity
+      : undefined,
     extractUsage: apiMode === "responses"
       ? extractOpenAIResponsesUsage
       : extractOpenAIChatUsage,

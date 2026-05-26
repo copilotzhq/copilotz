@@ -131,34 +131,84 @@ Deno.test("formatMessages preserves inline audio base64 under estimated input li
   );
 });
 
-Deno.test("getLocalStopSequences stops both function results tag forms", () => {
+Deno.test("getLocalStopSequences stops both tool results tag forms", () => {
   assertEquals(
     getLocalStopSequences(),
-    ["<function_results>", "</function_results>"],
+    ["<tool_results>", "</tool_results>"],
   );
 });
 
-Deno.test("parseToolCallsFromResponse strips incomplete function calls after local stop", () => {
+Deno.test("parseToolCallsFromResponse strips incomplete tool calls after local stop", () => {
   const parsed = parseToolCallsFromResponse(
-    '<function_calls>\n{"name":"saveThreadContext","arguments":{"threadData":{"step":"Direção Criativa"}}}\n',
+    '<tool_calls>\n{"name":"saveThreadContext","arguments":{"threadData":{"step":"Direção Criativa"}}}\n',
   );
 
   assertEquals(parsed.cleanResponse, "");
-  assertEquals(parsed.tool_calls.length, 1);
-  assertEquals(parsed.tool_calls[0].tool.id, "saveThreadContext");
+  assertEquals(parsed.toolCalls.length, 1);
+  assertEquals(parsed.toolCalls[0].tool.id, "saveThreadContext");
   assertEquals(
-    JSON.parse(parsed.tool_calls[0].args as string),
+    JSON.parse(parsed.toolCalls[0].args as string),
     { threadData: { step: "Direção Criativa" } },
   );
 });
 
-Deno.test("parseToolCallsFromResponse strips unrecoverable partial function calls", () => {
+Deno.test("parseToolCallsFromResponse strips unrecoverable partial tool calls", () => {
   const parsed = parseToolCallsFromResponse(
-    'I will check that.\n<function_calls>\n{"name":"sandbox_session","arguments":{',
+    'I will check that.\n<tool_calls>\n{"name":"sandbox_session","arguments":{',
   );
 
   assertEquals(parsed.cleanResponse, "I will check that.\n");
-  assertEquals(parsed.tool_calls.length, 0);
+  assertEquals(parsed.toolCalls.length, 0);
+});
+
+Deno.test("formatMessages canonicalizes structured assistant tool calls over pre-rendered blocks", () => {
+  const formatted = formatMessages({
+    messages: [{
+      role: "assistant",
+      content:
+        'Before\n<tool_calls>\n{"name":"old_tool","arguments":{}}\n</tool_calls>\nAfter',
+      toolCalls: [{
+        id: "call_1",
+        tool: { id: "new_tool" },
+        args: JSON.stringify({ ok: true }),
+      }],
+    }],
+  });
+
+  assertEquals(formatted.length, 1);
+  assertEquals(formatted[0]?.role, "assistant");
+  const wire = formatted[0]?.content as string;
+  assertEquals((wire.match(/<tool_calls>/g) ?? []).length, 1);
+  assertEquals(wire.includes("new_tool"), true);
+  assertEquals(wire.includes("old_tool"), false);
+  assertEquals(wire.includes("Before"), true);
+  assertEquals(wire.includes("After"), true);
+});
+
+Deno.test("formatMessages canonicalizes structured tool results over pre-rendered blocks", () => {
+  const formatted = formatMessages({
+    messages: [{
+      role: "tool",
+      content:
+        '<tool_results>\n{"name":"old_tool","output":"old"}\n</tool_results>\nraw duplicate',
+      toolCalls: [{
+        id: "call_1",
+        tool: { id: "new_tool" },
+        args: "{}",
+        output: { ok: true },
+        status: "completed",
+      }],
+    }],
+  });
+
+  assertEquals(formatted.length, 2);
+  assertEquals(formatted[0]?.role, "assistant");
+  assertEquals(formatted[1]?.role, "user");
+  const wire = formatted[0]?.content as string;
+  assertEquals((wire.match(/<tool_results>/g) ?? []).length, 1);
+  assertEquals(wire.includes("new_tool"), true);
+  assertEquals(wire.includes("old_tool"), false);
+  assertEquals(wire.includes("raw duplicate"), false);
 });
 
 Deno.test("formatMessages counts structured tool result output toward input limit", () => {
@@ -188,7 +238,7 @@ Deno.test("formatMessages counts structured tool result output toward input limi
   assertEquals(typeof toolWire.content, "string");
   const wire = toolWire.content as string;
   // Budget is 500 est. tokens → ~2000 chars; tail-slice may omit the opening
-  // `<function_results>` tag but must not retain the full tool JSON.
+  // `<tool_results>` tag but must not retain the full tool JSON.
   assertEquals(wire.length <= 2100, true);
   assertEquals(wire.includes(hugeBody), false);
 });

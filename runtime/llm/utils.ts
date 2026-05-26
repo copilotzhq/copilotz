@@ -16,11 +16,11 @@ import type {
 
 const TOOL_RESULTS_CONTINUATION_CUE = "<continue_after_tool_results/>";
 const LOCAL_DEFAULT_STOP_SEQUENCES = [
-  "<function_results>",
-  "</function_results>",
+  "<tool_results>",
+  "</tool_results>",
 ];
 const TOOL_RESULTS_CONTINUATION_BLOCK = `<continue_after_tool_results>
-Continue based on the function results above.
+Continue based on the tool results above.
 Do not repeat the previous assistant message.
 If no user-facing reply is necessary, respond with exactly <no_response/>.
 Never output the <continue_after_tool_results> block itself.
@@ -32,6 +32,14 @@ const INTERNAL_LITERAL_CONTROL_TAGS = [
   NO_RESPONSE_SELF_CLOSING_TAG,
   NO_RESPONSE_EMPTY_BLOCK_TAG,
 ];
+export const COPILOTZ_CONTROL_TAGS = [
+  "tool_calls",
+  "tool_results",
+  "route_to",
+  "ask_to",
+  "no_response",
+  "continue_after_tool_results",
+] as const;
 const APPROX_CHARS_PER_TOKEN = 4;
 
 function escapeRegex(value: string): string {
@@ -90,8 +98,8 @@ export function formatMessages(
     ? approximateTokenCount(systemContent)
     : 0;
 
-  // Materialize first so tool I/O is embedded in `content` (function_results /
-  // function_calls blocks). The input limiter only inspects `content` (plus
+  // Materialize first so tool I/O is embedded in `content` (tool_results /
+  // tool_calls blocks). The input limiter only inspects `content` (plus
   // multimodal parts); it cannot see structured `toolCalls` on the wire.
   let normalizedMessages = formattedMessages.map(materializeHistoryMessage);
 
@@ -174,6 +182,35 @@ function prependBlocksToContent(
   return prependTextToContent(normalizedBlocks.join("\n"), content);
 }
 
+function stripTaggedBlocksFromText(text: string, tagNames: string[]): string {
+  let stripped = text;
+  for (const tagName of normalizeStructuredTagNames(tagNames)) {
+    const tag = escapeRegex(tagName);
+    stripped = stripped.replace(
+      new RegExp(`<${tag}>[\\s\\S]*?(?:<\\/${tag}>|$)`, "g"),
+      "",
+    );
+  }
+  return stripped;
+}
+
+function stripTaggedBlocksFromContent(
+  content: ChatMessage["content"],
+  tagNames: string[],
+): ChatMessage["content"] {
+  if (typeof content === "string") {
+    return stripTaggedBlocksFromText(content, tagNames);
+  }
+
+  const strippedParts = content.flatMap((part): ChatContentPart[] => {
+    if (part.type !== "text") return [part];
+    const text = stripTaggedBlocksFromText(part.text, tagNames);
+    return text.length > 0 ? [{ ...part, text }] : [];
+  });
+
+  return strippedParts.length > 0 ? strippedParts : "";
+}
+
 function contentToText(content: ChatMessage["content"]): string {
   if (typeof content === "string") return content;
 
@@ -210,7 +247,7 @@ function inlineMediaEstimateLabel(type: string, mime?: string): string {
  * the LLM.
  *
  * Does not serialize `toolCalls`; use after {@link materializeHistoryMessage}
- * so tool I/O lives in `content` (e.g. &lt;function_results&gt; blocks).
+ * so tool I/O lives in `content` (e.g. &lt;tool_results&gt; blocks).
  */
 function wirePayloadTextForTokenEstimate(
   content: ChatMessage["content"],
@@ -305,11 +342,20 @@ function materializeAssistantControlBlocks(message: ChatMessage): ChatMessage {
       blocks.push(buildRouteToBlock(routeTargets));
     }
     if (toolCalls.length > 0) {
-      blocks.push(buildFunctionCallsBlock(toolCalls));
+      blocks.push(buildToolCallsBlock(toolCalls));
     }
     return {
       ...message,
-      content: prependBlocksToContent(blocks, message.content),
+      content: prependBlocksToContent(
+        blocks,
+        stripTaggedBlocksFromContent(
+          message.content,
+          [
+            ...(routeTargets.length > 0 ? ["route_to"] : []),
+            ...(toolCalls.length > 0 ? ["tool_calls"] : []),
+          ],
+        ),
+      ),
       toolCalls: undefined,
       tool_call_id: undefined,
     };
@@ -328,11 +374,15 @@ function materializeToolResults(message: ChatMessage): ChatMessage {
   }
 
   try {
+    const content = stripTaggedBlocksFromContent(
+      message.content,
+      ["tool_results"],
+    );
     return {
       ...message,
-      content: buildFunctionResultsBlock(
+      content: buildToolResultsBlock(
         toolCalls,
-        contentToText(message.content),
+        contentToText(content),
       ),
       toolCalls: undefined,
       tool_call_id: undefined,
@@ -399,7 +449,7 @@ function appendContinuationCueIfNeeded(messages: ChatMessage[]): ChatMessage[] {
   }
 
   const lastContent = contentToText(lastMessage.content);
-  if (!lastContent.includes("<function_results>")) {
+  if (!lastContent.includes("<tool_results>")) {
     return messages;
   }
 
@@ -634,7 +684,7 @@ function parseLine(line: string, format: "sse" | "jsonl"): any | null {
  *
  * Each provider only needs to implement `extractContent` which maps a parsed
  * event object to an array of `ExtractedPart`s (text + optional isReasoning flag).
- * This function handles SSE/JSONL parsing, `<function_calls>` filtering,
+ * This function handles SSE/JSONL parsing, `<tool_calls>` filtering,
  * reasoning gating, and buffer management — so providers don't have to.
  */
 export async function processStream(
@@ -652,7 +702,7 @@ export async function processStream(
   const decoder = new TextDecoder("utf-8");
   const format = options?.format ?? "sse";
   const config = options?.config;
-  // fullResponse accumulates RAW content (including <function_calls> blocks)
+  // fullResponse accumulates RAW content (including <tool_calls> blocks)
   // so parseToolCallsFromResponse can extract them downstream.
   let fullResponse = "";
   let reasoningResponse = "";
@@ -786,7 +836,9 @@ export async function processStream(
     }
   } catch (error) {
     if (!stoppedByLocalStop) {
-      console.error("Stream processing error:", error);
+      if ((error as { name?: unknown })?.name !== "AbortError") {
+        console.error("Stream processing error:", error);
+      }
       throw error;
     }
   } finally {
@@ -815,12 +867,12 @@ export function filterToolCallTokensStreaming(
   state: { inside: boolean; pending: string; controlPending?: string },
 ): string {
   const nextState = {
-    activeTag: state.inside ? "function_calls" : null,
+    activeTag: state.inside ? "tool_calls" : null,
     pending: state.pending,
     controlPending: state.controlPending ?? "",
   };
   const filtered = filterTaggedControlTokensStreaming(input, nextState, []);
-  state.inside = nextState.activeTag === "function_calls";
+  state.inside = nextState.activeTag === "tool_calls";
   state.pending = nextState.pending;
   state.controlPending = nextState.controlPending;
   return filtered;
@@ -832,7 +884,7 @@ export function filterTaggedControlTokensStreaming(
   extractedBlockTags: string[],
 ): string {
   const structuredTags = normalizeStructuredTagNames([
-    "function_calls",
+    ...COPILOTZ_CONTROL_TAGS,
     ...extractedBlockTags,
   ]).map((name) => ({
     name,
@@ -925,22 +977,22 @@ In this environment you have access to a set of tools you can use to answer the 
 === RULES ===
 
 1. You may talk to the human normally and call tools in the same response.
-2. If a tool is needed, produce JSONL objects between <function_calls> … </function_calls>.  
+2. If a tool is needed, produce JSONL objects between <tool_calls> … </tool_calls>.
    • Required keys: "name", "arguments"  
    • No extra keys.  
 3. Do not wrap the JSON in markdown fences or add other braces.  
 4. Example:
 
 \`\`\` 
-<function_calls>
+<tool_calls>
 { "name": "function_name", "arguments": { "key_1": "value_1", "key_2": "value_2" } }
 { "name": "function_name_2","arguments": { "key_1": "value_1", "key_2": "value_2", "key_3": "value_3"} }
-</function_calls>
-Hi, I'm going to execute two function calls.
+</tool_calls>
+Hi, I'm going to execute two tool calls.
 \`\`\`
 
-VERY IMPORTANT, PAY ATTENTION TO THIS >>>>>> ALWAYS Start your messages with the <function_calls> block when you have a tool to call.
-5. Tool outputs may appear later as <function_results> blocks. Treat them as returned execution results and never generate <function_results> yourself.
+VERY IMPORTANT, PAY ATTENTION TO THIS >>>>>> ALWAYS Start your messages with the <tool_calls> block when you have a tool to call.
+5. Tool outputs may appear later as <tool_results> blocks. Treat them as returned execution results and never generate <tool_results> yourself.
 6. If you later receive the exact user message <continue_after_tool_results/>, apply the following continuation rule:
 
 ${TOOL_RESULTS_CONTINUATION_BLOCK}
@@ -953,9 +1005,9 @@ ${toolDefinitions}
 }
 
 /**
- * Rehydrate a <function_calls> block from recorded tool calls, if present in message metadata
+ * Rehydrate a <tool_calls> block from recorded tool calls, if present in message metadata
  */
-export function buildFunctionCallsBlock(toolCalls: ToolInvocation[]): string {
+export function buildToolCallsBlock(toolCalls: ToolInvocation[]): string {
   const objects = toolCalls.map((call) => {
     let args: any;
     try {
@@ -967,7 +1019,7 @@ export function buildFunctionCallsBlock(toolCalls: ToolInvocation[]): string {
     if (call.id) obj.tool_call_id = call.id;
     return JSON.stringify(obj);
   });
-  return [`<function_calls>`, ...objects, `</function_calls>`].join("\n");
+  return [`<tool_calls>`, ...objects, `</tool_calls>`].join("\n");
 }
 
 function normalizeToolResultOutput(
@@ -985,7 +1037,7 @@ function normalizeToolResultOutput(
   return null;
 }
 
-export function buildFunctionResultsBlock(
+export function buildToolResultsBlock(
   toolResults: ToolInvocation[],
   fallbackContent?: string,
 ): string {
@@ -1005,7 +1057,7 @@ export function buildFunctionResultsBlock(
     return JSON.stringify(obj);
   });
 
-  return [`<function_results>`, ...objects, `</function_results>`].join("\n");
+  return [`<tool_results>`, ...objects, `</tool_results>`].join("\n");
 }
 
 /**
@@ -1013,15 +1065,15 @@ export function buildFunctionResultsBlock(
  */
 export function parseToolCallsFromResponse(
   response: string,
-): { cleanResponse: string; tool_calls: ToolInvocation[] } {
+): { cleanResponse: string; toolCalls: ToolInvocation[] } {
   const toolCalls: ToolInvocation[] = [];
   let cleanResponse = response;
 
-  // 1) Recover missing closing tags by balancing braces inside the last <function_calls>
+  // 1) Recover missing closing tags by balancing braces inside the last <tool_calls>
   //    If we find an opening tag without a closing one, attempt to extract until balanced JSON objects are complete,
   //    then synthetically append the closing tag to allow the standard parser to run.
-  const startTag = "<function_calls>";
-  const endTag = "</function_calls>";
+  const startTag = "<tool_calls>";
+  const endTag = "</tool_calls>";
   const hasStart = response.includes(startTag);
   const hasEnd = response.includes(endTag);
 
@@ -1048,8 +1100,8 @@ export function parseToolCallsFromResponse(
     }
   }
 
-  // Regex to match <function_calls> ... </function_calls> block(s)
-  const toolCallsPattern = /<function_calls>([\s\S]*?)<\/function_calls>/g;
+  // Regex to match <tool_calls> ... </tool_calls> block(s)
+  const toolCallsPattern = /<tool_calls>([\s\S]*?)<\/tool_calls>/g;
   const matches = [...response.matchAll(toolCallsPattern)];
 
   for (const match of matches) {
@@ -1075,7 +1127,7 @@ export function parseToolCallsFromResponse(
     cleanResponse = cleanResponse.replace(match[0], "").trimStart();
   }
 
-  return { cleanResponse, tool_calls: toolCalls };
+  return { cleanResponse, toolCalls };
 }
 
 export function parseInternalControlTagsFromResponse(
@@ -1094,7 +1146,7 @@ export function parseInternalControlTagsFromResponse(
   }
 
   cleanResponse = cleanResponse
-    .replace(/<function_results>[\s\S]*?(?:<\/function_results>|$)/g, "")
+    .replace(/<tool_results>[\s\S]*?(?:<\/tool_results>|$)/g, "")
     .replace(/<continue_after_tool_results\s*\/>/g, "")
     .replace(
       /<continue_after_tool_results>[\s\S]*?<\/continue_after_tool_results>/g,
@@ -1131,6 +1183,50 @@ export function parseTaggedBlocksFromResponse(
   }
 
   return { cleanResponse: cleanResponse.trim(), extractedTags };
+}
+
+export function findDanglingControlTags(
+  response: string,
+  tagNames: readonly string[] = COPILOTZ_CONTROL_TAGS,
+): string[] {
+  const dangling: string[] = [];
+
+  for (const tagName of normalizeStructuredTagNames([...tagNames])) {
+    const openPattern = new RegExp(`<${escapeRegex(tagName)}\\b[^>]*>`, "gi");
+    const closePattern = new RegExp(`</${escapeRegex(tagName)}>`, "gi");
+    const opens = [...response.matchAll(openPattern)]
+      .filter((match) => {
+        const raw = match[0] ?? "";
+        return !raw.trimEnd().endsWith("/>");
+      });
+    const closes = [...response.matchAll(closePattern)];
+    if (opens.length > closes.length) {
+      dangling.push(tagName);
+    }
+  }
+
+  return dangling;
+}
+
+export function stripDanglingControlTail(
+  response: string,
+  tagNames: readonly string[] = COPILOTZ_CONTROL_TAGS,
+): string {
+  let earliestDanglingStart = -1;
+
+  for (const tagName of findDanglingControlTags(response, tagNames)) {
+    const openTag = `<${tagName}`;
+    const index = response.toLowerCase().lastIndexOf(openTag);
+    if (index !== -1) {
+      earliestDanglingStart = earliestDanglingStart === -1
+        ? index
+        : Math.min(earliestDanglingStart, index);
+    }
+  }
+
+  return earliestDanglingStart === -1
+    ? response
+    : response.slice(0, earliestDanglingStart);
 }
 
 /**

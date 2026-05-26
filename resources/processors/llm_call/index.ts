@@ -116,9 +116,9 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     const context = deps.context;
 
     // Defense-in-depth: the shared processStream already filters
-    // <function_calls> blocks, but we keep a second pass here in case
+    // <tool_calls> blocks, but we keep a second pass here in case
     // any slip through (e.g. non-standard provider integration).
-    // TODO: Revisit function-call block handling separately from routing.
+    // TODO: Revisit tool-call block handling separately from routing.
     const toolCallFilterState: {
       inside: boolean;
       pending: string;

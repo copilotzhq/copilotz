@@ -102,7 +102,7 @@ Deno.test("chat repairs truncated tool calls without streaming protocol markup",
             choices: [{
               delta: {
                 content:
-                  'I will inspect it.\n<function_calls>\n{"name":"sandbox_session","arguments":{',
+                  'I will inspect it.\n<tool_calls>\n{"name":"sandbox_session","arguments":{',
               },
             }],
           },
@@ -113,7 +113,7 @@ Deno.test("chat repairs truncated tool calls without streaming protocol markup",
             choices: [{
               delta: {
                 content:
-                  '<function_calls>\n{"name":"sandbox_session","arguments":{"sessionId":"s","actions":[]}}\n</function_calls>',
+                  '<tool_calls>\n{"name":"sandbox_session","arguments":{"sessionId":"s","actions":[]}}\n</tool_calls>',
               },
             }],
           },
@@ -145,8 +145,53 @@ Deno.test("chat repairs truncated tool calls without streaming protocol markup",
     assertEquals(response.toolCalls?.length, 1);
     assertEquals(response.toolCalls?.[0].tool.id, "sandbox_session");
     assertEquals(calls, 2);
-    assertEquals(streamed.join("").includes("<function_calls>"), false);
-    assertEquals(response.answer.includes("<function_calls>"), false);
+    assertEquals(streamed.join("").includes("<tool_calls>"), false);
+    assertEquals(response.answer.includes("<tool_calls>"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("chat repairs dangling routing tags even when provider reports stop", async () => {
+  const originalFetch = globalThis.fetch;
+  const streamed: string[] = [];
+  let calls = 0;
+
+  globalThis.fetch = () => {
+    calls += 1;
+    return Promise.resolve(
+      calls === 1
+        ? sse([
+          { choices: [{ delta: { content: "<route_to>east" } }] },
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ])
+        : sse([
+          {
+            choices: [{
+              delta: { content: "<route_to>east</route_to>" },
+            }],
+          },
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      {
+        messages: [{ role: "user", content: "Route this to East" }],
+        extractTags: ["route_to"],
+      },
+      { provider: "anthropic", model: "test-model", apiKey: "test" },
+      {},
+      (chunk) => streamed.push(chunk),
+      registry,
+    );
+
+    assertEquals(response.answer, "");
+    assertEquals(response.extractedTags?.route_to, ["east"]);
+    assertEquals(calls, 2);
+    assertEquals(streamed.join(""), "");
   } finally {
     globalThis.fetch = originalFetch;
   }

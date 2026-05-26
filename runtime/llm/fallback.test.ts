@@ -334,3 +334,215 @@ Deno.test("chat resolves provider-specific fallback api keys when provider chang
     globalThis.fetch = originalFetch;
   }
 });
+
+Deno.test("chat falls back when first extracted token times out", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+
+  globalThis.fetch = (_url, init?: RequestInit) => {
+    calls += 1;
+    if (calls === 1) {
+      const signal = init?.signal;
+      return Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  controller.error(new DOMException("Aborted", "AbortError"));
+                },
+                { once: true },
+              );
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      );
+    }
+
+    return Promise.resolve(
+      new Response(
+        `data: ${
+          JSON.stringify({
+            choices: [{ delta: { content: "ok" }, finish_reason: "stop" }],
+          })
+        }\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        firstTokenTimeoutMs: 5,
+        fallbacks: [{ provider: "anthropic", model: "fallback" }],
+      },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(response.answer, "ok");
+    assertEquals(response.model, "fallback");
+    assertEquals(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("chat falls back when extracted tokens stall before visible streaming starts", async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  let calls = 0;
+
+  globalThis.fetch = (_url, init?: RequestInit) => {
+    calls += 1;
+    if (calls === 1) {
+      const signal = init?.signal;
+      return Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${
+                    JSON.stringify({
+                      choices: [{
+                        delta: { content: "<tool_calls>" },
+                        finish_reason: null,
+                      }],
+                    })
+                  }\n\n`,
+                ),
+              );
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  controller.error(new DOMException("Aborted", "AbortError"));
+                },
+                { once: true },
+              );
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      );
+    }
+
+    return Promise.resolve(
+      new Response(
+        `data: ${
+          JSON.stringify({
+            choices: [{ delta: { content: "ok" }, finish_reason: "stop" }],
+          })
+        }\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        firstTokenTimeoutMs: 100,
+        streamIdleTimeoutMs: 5,
+        fallbacks: [{ provider: "anthropic", model: "fallback" }],
+      },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(response.answer, "ok");
+    assertEquals(response.model, "fallback");
+    assertEquals(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("chat continues with fallback after visible output times out", async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  const streamedChunks: string[] = [];
+  let calls = 0;
+
+  globalThis.fetch = (_url, init?: RequestInit) => {
+    calls += 1;
+    if (calls === 1) {
+      const signal = init?.signal;
+      return Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${
+                    JSON.stringify({
+                      choices: [{
+                        delta: { content: "hello " },
+                        finish_reason: null,
+                      }],
+                    })
+                  }\n\n`,
+                ),
+              );
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  controller.error(new DOMException("Aborted", "AbortError"));
+                },
+                { once: true },
+              );
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      );
+    }
+
+    return Promise.resolve(
+      new Response(
+        `data: ${
+          JSON.stringify({
+            choices: [{ delta: { content: "world" }, finish_reason: "stop" }],
+          })
+        }\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        streamIdleTimeoutMs: 5,
+        fallbacks: [{ provider: "anthropic", model: "fallback" }],
+      },
+      {},
+      (chunk) => streamedChunks.push(chunk),
+      registry,
+    );
+
+    assertEquals(response.answer, "hello world");
+    assertEquals(streamedChunks.join(""), "hello world");
+    assertEquals(response.model, "fallback");
+    assertEquals(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

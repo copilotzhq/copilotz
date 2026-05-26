@@ -60,6 +60,10 @@ export interface ProviderConfigBase {
   // Response format
   responseType?: "text" | "json";
   stream?: boolean;
+  /** Abort a provider attempt if no extracted model text arrives before this many milliseconds. Defaults to 20_000. Set <= 0 to disable. */
+  firstTokenTimeoutMs?: number;
+  /** Abort a provider attempt if extracted model text stalls for this many milliseconds after the first token. Defaults to 5_000. Set <= 0 to disable. */
+  streamIdleTimeoutMs?: number;
   outputReasoning?: boolean; // Whether to output thinking/reasoning tokens during stream (default true)
   estimateCost?: boolean; // Whether to estimate cost using OpenRouter pricing data (default true)
   pricingModelId?: string; // Explicit OpenRouter model id override for cost estimation
@@ -136,6 +140,10 @@ export interface ProviderConfigBase {
 
   // OpenAI-specific parameters
   user?: string; // OpenAI user identifier
+  /** OpenAI transport selection. Defaults to `auto`: Responses API for current supported families, Chat Completions otherwise. */
+  openaiApi?: "auto" | "responses" | "chat_completions";
+  /** OpenAI Responses reasoning summary mode. Defaults to `auto` for reasoning-capable Responses models; set false to omit. */
+  openaiReasoningSummary?: "auto" | "concise" | "detailed" | false;
   verbosity?: "none" | "low" | "medium" | "high"; // OpenAI reasoning models (o3, o4)
 }
 

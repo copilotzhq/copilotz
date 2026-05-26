@@ -180,15 +180,18 @@ Deno.test("historyGenerator defaults peer tool result visibility to status only"
 
   const formatted = formatMessages({ messages: generated });
   assertEquals(formatted.length, 2);
-  assertEquals(formatted[0]?.content, [
-    "<function_results>",
-    JSON.stringify({
-      name: "search_web",
-      tool_call_id: "c1",
-      status: "completed",
-    }),
-    "</function_results>",
-  ].join("\n"));
+  assertEquals(
+    formatted[0]?.content,
+    [
+      "<tool_results>",
+      JSON.stringify({
+        name: "search_web",
+        tool_call_id: "c1",
+        status: "completed",
+      }),
+      "</tool_results>",
+    ].join("\n"),
+  );
 });
 
 Deno.test("historyGenerator keeps full default tool result for requesting agent", () => {

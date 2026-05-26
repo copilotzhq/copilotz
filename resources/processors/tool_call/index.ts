@@ -409,12 +409,15 @@ export const processToolCalls = async (
           let suggestion = "";
           if (potentialToolName) {
             suggestion =
-              `\n\nDid you mean to call "${potentialToolName}"? Use this format:\n<function_calls>\n<invoke name="${potentialToolName}">\n${
-                JSON.stringify(toolCall)
-              }\n</invoke>\n</function_calls>`;
+              `\n\nDid you mean to call "${potentialToolName}"? Use this format:\n<tool_calls>\n${
+                JSON.stringify({
+                  name: potentialToolName,
+                  arguments: toolCall,
+                })
+              }\n</tool_calls>`;
           } else {
             suggestion =
-              `\n\nCorrect format example:\n<function_calls>\n<invoke name="create_thread">\n{"name": "My Thread", "participants": ["Agent1"]}\n</invoke>\n</function_calls>`;
+              `\n\nCorrect format example:\n<tool_calls>\n{"name":"create_thread","arguments":{"name":"My Thread","participants":["Agent1"]}}\n</tool_calls>`;
           }
 
           return {
@@ -472,10 +475,9 @@ export const processToolCalls = async (
             similarTools.map((t) => `"${t.key}"`).join(", ")
           }?`;
         } else {
-          suggestion =
-            `\n\nExample usage:\n<tool_calls>\n{"function": {"name": "${
-              agentTools[0]?.key || "tool_name"
-            }", "arguments": {...}}}\n</tool_calls>`;
+          suggestion = `\n\nExample usage:\n<tool_calls>\n{"name":"${
+            agentTools[0]?.key || "tool_name"
+          }","arguments":{}}\n</tool_calls>`;
         }
 
         return {

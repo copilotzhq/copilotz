@@ -227,9 +227,7 @@ function truncateToolOutputForHistory(
     _copilotz_history_truncated: true as const,
     preview,
     originalSerializedLength: serialized.length,
-    ...(toolResultQueueEventId
-      ? { toolResultQueueEventId }
-      : {}),
+    ...(toolResultQueueEventId ? { toolResultQueueEventId } : {}),
   });
 
   let previewLen = Math.max(0, maxChars - 200);
@@ -350,10 +348,9 @@ export function historyGenerator(
 ): ChatMessage[] {
   const includeTargetContext = options?.includeTargetContext ?? true;
   const directConversation = options?.directConversation === true;
-  const maxToolResultChars =
-    typeof options?.maxToolResultChars === "number"
-      ? options.maxToolResultChars
-      : DEFAULT_MAX_TOOL_RESULT_CHARS;
+  const maxToolResultChars = typeof options?.maxToolResultChars === "number"
+    ? options.maxToolResultChars
+    : DEFAULT_MAX_TOOL_RESULT_CHARS;
 
   return chatHistory.flatMap((msg, _i) => {
     // Current agent's messages = "assistant"
@@ -369,9 +366,7 @@ export function historyGenerator(
       msg.senderId,
       metadata,
     );
-    const isCurrentAgent = !isToolResult && (
-      isRequestingAgent
-    );
+    const isCurrentAgent = !isToolResult && isRequestingAgent;
 
     // Determine role: tool results stay as "tool", agent messages as "assistant", others based on type
     const role = isToolResult
@@ -395,11 +390,13 @@ export function historyGenerator(
     // Prefix with sender name for non-current-agent messages.
     // Structured tool results are rendered later in the formatter, so keep
     // their raw content untouched here unless we have no structured metadata.
-    if (isToolResult && !hasStructuredToolResult && msg.senderType !== "system") {
+    if (
+      isToolResult && !hasStructuredToolResult && msg.senderType !== "system"
+    ) {
       content = `[Tool Result]: ${content}`;
     } else if (
-      !directConversation && !isCurrentAgent && msg.senderType !== "system"
-      && !isToolResult
+      !directConversation && !isCurrentAgent && msg.senderType !== "system" &&
+      !isToolResult
     ) {
       const senderName = resolveSpeakerLabel(msg, metadata);
       content = `[${senderName}]: ${content}`;
@@ -427,69 +424,49 @@ export function historyGenerator(
 
     // Prefer top-level toolCalls when present, but fall back to metadata for
     // persisted tool-result messages where execution data lives under metadata.
-    const toolCallsSource = Array.isArray(rawToolCalls) && rawToolCalls.length > 0
-      ? rawToolCalls
-      : metadataToolCalls;
+    const toolCallsSource =
+      Array.isArray(rawToolCalls) && rawToolCalls.length > 0
+        ? rawToolCalls
+        : metadataToolCalls;
     const parsedToolCalls: ParsedToolCall[] = toolCallsSource.length > 0
-      ? toolCallsSource.map((call, i) => {
-        const maybeCall = call as
-          | {
-            id?: string | null;
-            function?: { name?: string; arguments?: string };
-          }
-          | {
-            id?: string | null;
-            tool?: { id?: string; name?: string };
-            name?: string;
-            args?: Record<string, unknown> | string;
-            output?: unknown;
-            status?: ToolInvocation["status"];
-            visibility?: ToolHistoryVisibility;
-            projectedOutput?: unknown;
-          };
+      ? toolCallsSource.flatMap((call, i): ParsedToolCall[] => {
+        const maybeCall = call as {
+          id?: string | null;
+          tool?: { id?: string; name?: string };
+          name?: string;
+          args?: Record<string, unknown> | string;
+          output?: unknown;
+          status?: ToolInvocation["status"];
+          visibility?: ToolHistoryVisibility;
+          projectedOutput?: unknown;
+        };
+
+        const toolId = maybeCall.tool?.id ?? maybeCall.name ?? "";
+        if (!toolId) return [];
 
         const callId =
           typeof maybeCall.id === "string" && maybeCall.id.length > 0
             ? maybeCall.id
             : (() => {
-              const candidateName =
-                ("function" in maybeCall && maybeCall.function?.name)
-                  ? maybeCall.function?.name
-                  : ("tool" in maybeCall && maybeCall.tool?.id
-                    ? maybeCall.tool.id
-                    : ("name" in maybeCall ? maybeCall.name : undefined));
-              return `${candidateName || "call"}_${i}`;
+              return `${toolId}_${i}`;
             })();
 
-        let functionName = "";
-        let functionArguments: string | Record<string, unknown> = "{}";
-        if ("function" in maybeCall && maybeCall.function) {
-          functionName = maybeCall.function.name ?? "";
-          functionArguments = maybeCall.function.arguments ?? "{}";
-        } else if (
-          "tool" in maybeCall || "name" in maybeCall || "args" in maybeCall
-        ) {
-          functionName = maybeCall.tool?.id ??
-            (maybeCall as { name?: string }).name ?? "";
-          try {
-            const rawArgs =
-              (maybeCall as { args?: Record<string, unknown> }).args;
-            functionArguments = typeof rawArgs === "string"
-              ? rawArgs
-              : JSON.stringify(rawArgs ?? {});
-          } catch (_err) {
-            functionArguments = "{}";
-          }
+        let toolArgs = "{}";
+        try {
+          const rawArgs = maybeCall.args;
+          toolArgs = typeof rawArgs === "string"
+            ? rawArgs
+            : JSON.stringify(rawArgs ?? {});
+        } catch (_err) {
+          toolArgs = "{}";
         }
 
-        return {
+        return [{
           id: callId,
           tool: {
-            id: functionName,
+            id: toolId,
           },
-          args: typeof functionArguments === "string"
-            ? functionArguments
-            : JSON.stringify(functionArguments),
+          args: toolArgs,
           ...("output" in maybeCall && typeof maybeCall.output !== "undefined"
             ? { output: maybeCall.output }
             : {}),
@@ -503,7 +480,7 @@ export function historyGenerator(
           ...("projectedOutput" in maybeCall
             ? { projectedOutput: maybeCall.projectedOutput }
             : {}),
-        } satisfies ParsedToolCall;
+        }];
       })
       : [];
 

@@ -13,15 +13,18 @@ import type {
 import { estimateUsageCost } from "@/runtime/llm/pricing.ts";
 import { resolveProviderApiKey, toLLMConfig } from "@/runtime/llm/config.ts";
 import {
+  COPILOTZ_CONTROL_TAGS,
   countTokens,
   createMockResponse,
   estimateUsage,
+  findDanglingControlTags,
   formatMessages,
   getLocalStopSequences,
   parseInternalControlTagsFromResponse,
   parseTaggedBlocksFromResponse,
   parseToolCallsFromResponse,
   processStream,
+  stripDanglingControlTail,
   withDefaultStopSequences,
 } from "@/runtime/llm/utils.ts";
 import { streamPost, type StreamResponse } from "@/runtime/http.ts";
@@ -41,19 +44,22 @@ const DEFAULT_FALLBACK_REASONS: ProviderFallbackReason[] = [
   "unknown",
 ];
 const MAX_TEXT_CONTINUATION_ROUNDS = 1;
-const MAX_TOOL_CALL_REPAIR_ROUNDS = 1;
+const MAX_CONTROL_TAG_REPAIR_ROUNDS = 1;
+const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 20_000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 5_000;
 const TEXT_CONTINUATION_CUE = `
 Continue the previous assistant response exactly where it stopped.
 Do not repeat earlier content.
-Do not summarize.
-Do not call tools.
 Return only the continuation text.
 `.trim();
-const TOOL_CALL_REPAIR_CUE = `
-Your previous response was cut off while emitting a <function_calls> block.
-Return only one complete valid <function_calls>...</function_calls> block.
-Do not include prose.
+function buildControlTagRepairCue(tags: string[]): string {
+  const tagList = tags.map((tag) => `<${tag}>...</${tag}>`).join(", ");
+  return `
+Your previous response ended with incomplete control tag markup.
+Return only the complete corrected control block(s) for: ${tagList}.
+Do not include prose or repeat any normal user-facing text.
 `.trim();
+}
 
 export type LLMProviderAttempt = {
   provider: ProviderName;
@@ -97,6 +103,16 @@ export class LLMProviderError extends Error {
     if (options.cause !== undefined) {
       (this as Error & { cause?: unknown }).cause = options.cause;
     }
+  }
+}
+
+class LLMStreamTimeoutError extends Error {
+  constructor(kind: "first_token" | "idle", timeoutMs: number) {
+    const label = kind === "first_token"
+      ? "first token timeout"
+      : "stream idle timeout";
+    super(`LLM ${label} after ${timeoutMs}ms`);
+    this.name = "AbortError";
   }
 }
 
@@ -202,6 +218,14 @@ function getErrorStatus(error: unknown): number | undefined {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function resolveTimeoutMs(
+  value: number | undefined,
+  defaultValue: number,
+): number | undefined {
+  if (value === undefined) return defaultValue;
+  return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function warnFallbackAttempt(
@@ -325,12 +349,6 @@ function mergeExtractedTags(
   return merged;
 }
 
-function hasDanglingFunctionCallsBlock(response: string): boolean {
-  const startTag = "<function_calls>";
-  const endTag = "</function_calls>";
-  return response.lastIndexOf(startTag) > response.lastIndexOf(endTag);
-}
-
 function parseAssistantResponse(
   response: string,
   extractedBlockTags: string[] = [],
@@ -347,7 +365,7 @@ function parseAssistantResponse(
   {
     const parsed = parseToolCallsFromResponse(response);
     cleanResponse = parsed.cleanResponse;
-    toolCalls = parsed.tool_calls;
+    toolCalls = parsed.toolCalls;
   }
   if (extractedBlockTags.length > 0) {
     const parsed = parseTaggedBlocksFromResponse(
@@ -361,7 +379,7 @@ function parseAssistantResponse(
   }
   if (
     cleanResponse.includes("<no_response") ||
-    cleanResponse.includes("<function_results>") ||
+    cleanResponse.includes("<tool_results>") ||
     cleanResponse.includes("<continue_after_tool_results")
   ) {
     const parsed = parseInternalControlTagsFromResponse(cleanResponse);
@@ -430,6 +448,7 @@ export async function chat(
   let lastError: unknown = null;
   const attempts: LLMProviderAttempt[] = [];
   const registry = await getProviderRegistry(providerRegistry);
+  let visibleTimeoutContinuation: { prefix: string } | undefined;
 
   for (let index = 0; index < attemptConfigs.length; index++) {
     const attemptConfig = attemptConfigs[index];
@@ -450,10 +469,15 @@ export async function chat(
       stopSequences: undefined,
     } satisfies ProviderConfig;
     let visibleStreamStarted = false;
+    let visibleAnswerBuffer = "";
+    const continuationPrefix = visibleTimeoutContinuation?.prefix ?? "";
     const trackedStream = stream
       ? ((chunk: string, options?: { isReasoning?: boolean }) => {
         if (chunk.length > 0 || options?.isReasoning) {
           visibleStreamStarted = true;
+        }
+        if (chunk.length > 0 && !options?.isReasoning) {
+          visibleAnswerBuffer += chunk;
         }
         stream(chunk, options);
       })
@@ -468,36 +492,125 @@ export async function chat(
           ? providerAPI.transformMessages(runMessages)
           : runMessages;
         const abortController = new AbortController();
-        const response = await streamPost(
-          providerAPI.endpoint,
-          await providerAPI.body(
-            Array.isArray(finalMessages) ? finalMessages : runMessages,
-            requestConfig,
-          ),
-          {
-            headers: providerAPI.headers(requestConfig),
-            signal: abortController.signal,
-          },
-        ) as StreamResponse;
-
-        const reader = response.stream.getReader();
-        return await processStream(
-          reader,
-          onStream || (() => {}),
-          providerAPI.extractContent,
-          {
-            ...providerAPI.streamOptions,
-            config: attemptConfig,
-            extractedBlockTags: request.extractTags,
-            extractUsage: providerAPI.extractUsage,
-            extractFinishReason: providerAPI.extractFinishReason,
-            localStopSequences,
-            onLocalStop: () => abortController.abort(),
-          },
+        const firstTokenTimeoutMs = resolveTimeoutMs(
+          attemptConfig.firstTokenTimeoutMs,
+          DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
         );
+        const streamIdleTimeoutMs = resolveTimeoutMs(
+          attemptConfig.streamIdleTimeoutMs,
+          DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+        );
+        let firstTokenTimer: number | undefined;
+        let streamIdleTimer: number | undefined;
+        let streamTimeout:
+          | { kind: "first_token" | "idle"; timeoutMs: number }
+          | undefined;
+        let firstModelTextReceived = false;
+        const clearFirstTokenTimer = () => {
+          if (firstTokenTimer !== undefined) {
+            clearTimeout(firstTokenTimer);
+            firstTokenTimer = undefined;
+          }
+        };
+        const clearStreamIdleTimer = () => {
+          if (streamIdleTimer !== undefined) {
+            clearTimeout(streamIdleTimer);
+            streamIdleTimer = undefined;
+          }
+        };
+        const abortForTimeout = (
+          kind: "first_token" | "idle",
+          timeoutMs: number,
+        ) => {
+          streamTimeout = { kind, timeoutMs };
+          abortController.abort();
+        };
+        const startFirstTokenTimer = () => {
+          if (!firstTokenTimeoutMs) return;
+          clearFirstTokenTimer();
+          firstTokenTimer = setTimeout(() => {
+            abortForTimeout("first_token", firstTokenTimeoutMs);
+          }, firstTokenTimeoutMs) as unknown as number;
+        };
+        const resetStreamIdleTimer = () => {
+          if (!streamIdleTimeoutMs || !firstModelTextReceived) return;
+          clearStreamIdleTimer();
+          streamIdleTimer = setTimeout(() => {
+            abortForTimeout("idle", streamIdleTimeoutMs);
+          }, streamIdleTimeoutMs) as unknown as number;
+        };
+        const recordExtractedModelText = () => {
+          if (!firstModelTextReceived) {
+            firstModelTextReceived = true;
+            clearFirstTokenTimer();
+          }
+          resetStreamIdleTimer();
+        };
+
+        startFirstTokenTimer();
+        try {
+          const response = await streamPost(
+            providerAPI.endpoint,
+            await providerAPI.body(
+              Array.isArray(finalMessages) ? finalMessages : runMessages,
+              requestConfig,
+            ),
+            {
+              headers: providerAPI.headers(requestConfig),
+              signal: abortController.signal,
+            },
+          ) as StreamResponse;
+
+          const reader = response.stream.getReader();
+          return await processStream(
+            reader,
+            onStream || (() => {}),
+            (data) => {
+              const parts = providerAPI.extractContent(data);
+              if (
+                parts?.some((part) =>
+                  typeof part.text === "string" && part.text.length > 0
+                )
+              ) {
+                recordExtractedModelText();
+              }
+              return parts;
+            },
+            {
+              ...providerAPI.streamOptions,
+              config: attemptConfig,
+              extractedBlockTags: request.extractTags,
+              extractUsage: providerAPI.extractUsage,
+              extractFinishReason: providerAPI.extractFinishReason,
+              localStopSequences,
+              onLocalStop: () => abortController.abort(),
+            },
+          );
+        } catch (error) {
+          if (streamTimeout) {
+            throw new LLMStreamTimeoutError(
+              streamTimeout.kind,
+              streamTimeout.timeoutMs,
+            );
+          }
+          throw error;
+        } finally {
+          clearFirstTokenTimer();
+          clearStreamIdleTimer();
+        }
       };
 
-      let streamResult = await runProviderStream(messages, trackedStream);
+      const initialMessages = continuationPrefix.length > 0
+        ? [
+          ...messages,
+          { role: "assistant", content: continuationPrefix } as ChatMessage,
+          { role: "user", content: TEXT_CONTINUATION_CUE } as ChatMessage,
+        ]
+        : messages;
+      let streamResult = await runProviderStream(
+        initialMessages,
+        trackedStream,
+      );
 
       let cleanResponse = streamResult.content;
       let toolCalls: ToolInvocation[] = [];
@@ -505,24 +618,30 @@ export async function chat(
       let parsedResponse = parseAssistantResponse(
         streamResult.content,
         request.extractTags ?? [],
+        continuationPrefix.length > 0 ? { preserveWhitespace: true } : {},
       );
-      cleanResponse = parsedResponse.cleanResponse;
+      cleanResponse = `${continuationPrefix}${parsedResponse.cleanResponse}`;
       toolCalls = parsedResponse.toolCalls;
       extractedTags = parsedResponse.extractedTags;
       let aggregateUsage = streamResult.usage;
       let aggregateReasoning = streamResult.reasoning;
       let finalFinishReason: ProviderFinishReason | null =
         streamResult.finishReason;
+      const controlTagNames = [
+        ...COPILOTZ_CONTROL_TAGS,
+        ...(request.extractTags ?? []),
+      ];
+      const danglingTags = findDanglingControlTags(
+        streamResult.content,
+        controlTagNames,
+      );
 
-      if (
-        streamResult.finishReason === "length" &&
-        hasDanglingFunctionCallsBlock(streamResult.content)
-      ) {
-        for (let i = 0; i < MAX_TOOL_CALL_REPAIR_ROUNDS; i++) {
+      if (danglingTags.length > 0) {
+        for (let i = 0; i < MAX_CONTROL_TAG_REPAIR_ROUNDS; i++) {
           const repairResult = await runProviderStream([
             ...messages,
             { role: "assistant", content: streamResult.content },
-            { role: "user", content: TOOL_CALL_REPAIR_CUE },
+            { role: "user", content: buildControlTagRepairCue(danglingTags) },
           ], undefined);
           aggregateUsage = mergeProviderUsage(
             aggregateUsage,
@@ -531,18 +650,19 @@ export async function chat(
           aggregateReasoning = `${aggregateReasoning}${repairResult.reasoning}`;
           finalFinishReason = repairResult.finishReason ?? finalFinishReason;
 
+          const repairedContent = `${
+            stripDanglingControlTail(streamResult.content, controlTagNames)
+          }${repairResult.content}`;
           const repaired = parseAssistantResponse(
-            repairResult.content,
+            repairedContent,
             request.extractTags ?? [],
+            continuationPrefix.length > 0 ? { preserveWhitespace: true } : {},
           );
-          if (repaired.toolCalls.length > 0) {
-            toolCalls = repaired.toolCalls;
-            extractedTags = mergeExtractedTags(
-              extractedTags,
-              repaired.extractedTags,
-            );
-            break;
-          }
+          streamResult = { ...streamResult, content: repairedContent };
+          cleanResponse = `${continuationPrefix}${repaired.cleanResponse}`;
+          toolCalls = repaired.toolCalls;
+          extractedTags = repaired.extractedTags;
+          break;
         }
       } else if (streamResult.finishReason === "length") {
         for (let i = 0; i < MAX_TEXT_CONTINUATION_ROUNDS; i++) {
@@ -610,6 +730,13 @@ export async function chat(
     } catch (error) {
       lastError = error;
       const reason = classifyLLMError(error);
+      const hasFallback = index < attemptConfigs.length - 1;
+      const fallbackAllowed = shouldAttemptFallback(
+        error,
+        baseConfig.fallbackOn,
+      );
+      const continuationCandidatePrefix =
+        `${continuationPrefix}${visibleAnswerBuffer}`;
       attempts.push({
         provider: attemptProvider,
         model: attemptConfig.model,
@@ -618,11 +745,28 @@ export async function chat(
         message: getErrorMessage(error),
       });
 
-      const hasFallback = index < attemptConfigs.length - 1;
+      if (
+        hasFallback &&
+        fallbackAllowed &&
+        reason === "timeout" &&
+        continuationCandidatePrefix.length > 0
+      ) {
+        visibleTimeoutContinuation = {
+          prefix: continuationCandidatePrefix,
+        };
+        warnFallbackAttempt(
+          error,
+          attemptConfig,
+          reason,
+          attemptConfigs[index + 1],
+        );
+        continue;
+      }
+
       if (
         !hasFallback ||
         visibleStreamStarted ||
-        !shouldAttemptFallback(error, baseConfig.fallbackOn)
+        !fallbackAllowed
       ) {
         throw new LLMProviderError(getErrorMessage(error), {
           reason,

@@ -4,12 +4,34 @@ import { createDatabase } from "@/database/index.ts";
 import { createCollectionsManager } from "@/database/collections/index.ts";
 import loadResources from "@/runtime/loaders/resources.ts";
 import participantCollection from "@/resources/collections/participant.ts";
-import { participantLifecycleProcessor, priority } from "./participant_lifecycle.ts";
+import {
+  participantLifecycleProcessor,
+  priority,
+} from "./participant_lifecycle.ts";
 import { messageProcessor } from "./index.ts";
 import type { Event, ProcessorDeps } from "@/types/index.ts";
 
+type TestDb = Awaited<ReturnType<typeof createDatabase>>;
+
+async function createTestDb(name: string): Promise<{
+  db: TestDb;
+  tempDir: string;
+}> {
+  const tempDir = await Deno.makeTempDir();
+  const db = await createDatabase({ url: `file://${tempDir}/${name}.db` });
+  return { db, tempDir };
+}
+
+async function closeTestDb(db: TestDb, tempDir: string): Promise<void> {
+  try {
+    await (db as { close?: () => Promise<void> | void }).close?.();
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+}
+
 Deno.test("participant lifecycle processor upserts sender and configured agents", async () => {
-  const db = await createDatabase({ url: ":memory:" });
+  const { db, tempDir } = await createTestDb("participant-lifecycle-upsert");
   const manager = createCollectionsManager(db, [participantCollection]);
   const collections = manager.withNamespace("tenant-a");
 
@@ -46,24 +68,30 @@ Deno.test("participant lifecycle processor upserts sender and configured agents"
   } as unknown as ProcessorDeps;
 
   try {
-    const result = await participantLifecycleProcessor.process(event, deps) as any;
+    const result = await participantLifecycleProcessor.process(
+      event,
+      deps,
+    ) as any;
     assertEquals(result?.externalId, "user-1");
 
-    const user = await collections.participant.findOne({ externalId: "user-1" });
-    const agent = await collections.participant.findOne({ externalId: "agent-1" });
+    const user = await collections.participant.findOne({
+      externalId: "user-1",
+    });
+    const agent = await collections.participant.findOne({
+      externalId: "agent-1",
+    });
 
     assertEquals(user?.name, "User One");
     assertEquals(user?.email, "user@example.com");
     assertEquals(agent?.participantType, "agent");
     assertEquals(agent?.agentId, "agent-1");
   } finally {
-    await db.query('DELETE FROM "nodes" WHERE 1=1');
-    await db.query('DELETE FROM "edges" WHERE 1=1');
+    await closeTestDb(db, tempDir);
   }
 });
 
 Deno.test("participant lifecycle processor no-ops when participant collection is absent", async () => {
-  const db = await createDatabase({ url: ":memory:" });
+  const { db, tempDir } = await createTestDb("participant-lifecycle-noop");
   const event = {
     id: "evt-2",
     threadId: "thread-1",
@@ -89,13 +117,12 @@ Deno.test("participant lifecycle processor no-ops when participant collection is
     const result = await participantLifecycleProcessor.process(event, deps);
     assertEquals(result, undefined);
   } finally {
-    await db.query('DELETE FROM "nodes" WHERE 1=1');
-    await db.query('DELETE FROM "edges" WHERE 1=1');
+    await closeTestDb(db, tempDir);
   }
 });
 
 Deno.test("participant lifecycle processor treats agent senders as agent participants", async () => {
-  const db = await createDatabase({ url: ":memory:" });
+  const { db, tempDir } = await createTestDb("participant-lifecycle-agent");
   const manager = createCollectionsManager(db, [participantCollection]);
   const collections = manager.withNamespace("tenant-a");
 
@@ -131,10 +158,15 @@ Deno.test("participant lifecycle processor treats agent senders as agent partici
   } as unknown as ProcessorDeps;
 
   try {
-    const result = await participantLifecycleProcessor.process(event, deps) as any;
+    const result = await participantLifecycleProcessor.process(
+      event,
+      deps,
+    ) as any;
     assertEquals(result?.externalId, "estrategista");
 
-    const agent = await collections.participant.findOne({ externalId: "estrategista" });
+    const agent = await collections.participant.findOne({
+      externalId: "estrategista",
+    });
     const user = await collections.participant.findOne({
       externalId: "user-should-not-win",
     });
@@ -143,8 +175,7 @@ Deno.test("participant lifecycle processor treats agent senders as agent partici
     assertEquals(agent?.agentId, "estrategista");
     assertEquals(user, null);
   } finally {
-    await db.query('DELETE FROM "nodes" WHERE 1=1');
-    await db.query('DELETE FROM "edges" WHERE 1=1');
+    await closeTestDb(db, tempDir);
   }
 });
 

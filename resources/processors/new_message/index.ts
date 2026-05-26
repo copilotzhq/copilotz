@@ -974,6 +974,27 @@ interface MessageContextDetails {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+function buildBaseMessageMetadata(
+  payload: MessagePayload,
+  queueMetadata: unknown,
+): Record<string, unknown> {
+  return {
+    ...(isRecord(payload.metadata) ? payload.metadata : {}),
+    ...(
+      queueMetadata && typeof queueMetadata === "object" &&
+        !Array.isArray(queueMetadata)
+        ? Object.fromEntries(
+          Object.entries(queueMetadata as Record<string, unknown>).filter(
+            ([key]) =>
+              key === "routing" || key === "visibility" ||
+              key === "internalConversation",
+          ),
+        )
+        : {}
+    ),
+  } as Record<string, unknown>;
+}
+
 function extractTextContent(content: MessagePayload["content"]): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
@@ -1089,21 +1110,7 @@ export const messageProcessor: EventProcessor<
 
     const messageContext = getMessageContext(payload);
 
-    const baseMetadata = {
-      ...(isRecord(payload.metadata) ? payload.metadata : {}),
-      ...(
-        event.metadata && typeof event.metadata === "object" &&
-          !Array.isArray(event.metadata)
-          ? Object.fromEntries(
-            Object.entries(event.metadata as Record<string, unknown>).filter(
-              ([key]) =>
-                key === "routing" || key === "visibility" ||
-                key === "internalConversation",
-            ),
-          )
-          : {}
-      ),
-    } as Record<string, unknown>;
+    const baseMetadata = buildBaseMessageMetadata(payload, event.metadata);
 
     const { messageMetadata, toolCallMetadata, contentOverride } =
       await processAssetsForNewMessage({
@@ -1630,6 +1637,10 @@ export const messageProcessor: EventProcessor<
 
       for (const candidate of candidates) {
         const candidatePayload = candidate.payload as NewMessageEventPayload;
+        const candidateBaseMetadata = buildBaseMessageMetadata(
+          candidatePayload,
+          candidate.metadata,
+        );
         const candidateMeta = isRecord(candidatePayload.metadata)
           ? candidatePayload.metadata as Record<string, unknown>
           : null;
@@ -1660,14 +1671,28 @@ export const messageProcessor: EventProcessor<
 
         idsToAbsorb.push(candidate.id as string);
 
+        const {
+          messageMetadata: candidateMessageMetadata,
+          toolCallMetadata: candidateToolCallMetadata,
+          contentOverride: candidateContentOverride,
+        } = await processAssetsForNewMessage({
+          payload: candidatePayload,
+          baseMetadata: candidateBaseMetadata,
+          senderId: candidateCtx.senderId,
+          senderType: candidateCtx.senderType,
+          context,
+          ops,
+          event: {
+            ...candidate,
+            type: "NEW_MESSAGE",
+          } as unknown as Event,
+          threadId,
+          emitToStream: deps.emitToStream,
+        });
+
         // Resolve toolCallId (mirrors incomingMsg logic)
         let candToolCallId: string | null = null;
-        const candTcMeta = Array.isArray(
-            (candidateMeta as { toolCalls?: unknown[] } | null)?.toolCalls,
-          )
-          ? ((candidateMeta as { toolCalls?: unknown[] }).toolCalls ?? [])
-          : [];
-        for (const entry of candTcMeta) {
+        for (const entry of candidateToolCallMetadata) {
           if (entry && typeof entry === "object") {
             const maybeId = (entry as { id?: unknown }).id;
             if (typeof maybeId === "string") {
@@ -1694,16 +1719,21 @@ export const messageProcessor: EventProcessor<
           candidateCtx.senderId,
         );
 
+        const candidatePersistedContent =
+          typeof candidateContentOverride === "string"
+            ? candidateContentOverride
+            : candidateCtx.contentText;
+
         await messageService.create({
           threadId,
           senderId: candidateStorageSenderId,
           senderType: candidateCtx.senderType,
           senderUserId: candidateSenderParticipantId ?? undefined,
-          content: candidateCtx.contentText,
+          content: candidatePersistedContent,
           toolCallId: candToolCallId ?? undefined,
           toolCalls: candidatePayload.toolCalls ?? null,
           metadata: {
-            ...(candidateMeta ?? {}),
+            ...(candidateMessageMetadata ?? {}),
             senderExternalId: candidateSenderExternalId.length > 0
               ? candidateSenderExternalId
               : candidateCtx.senderId,

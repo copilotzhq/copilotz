@@ -27,6 +27,47 @@ Deno.test("openaiProvider auto-selects Responses API for current OpenAI model fa
   assertEquals(body.reasoning, { summary: "auto" });
 });
 
+Deno.test("openaiProvider builds GPT-5 Responses body with Responses field names", () => {
+  const config: ProviderConfig = {
+    provider: "openai",
+    model: "gpt-5.4",
+    apiKey: "test",
+    openaiApi: "responses",
+    maxCompletionTokens: 456,
+  };
+  const provider = openaiProvider(config);
+  const body = provider.body(messages, config) as Record<string, any>;
+
+  assertEquals(provider.endpoint, "https://api.openai.com/v1/responses");
+  assertEquals(body.model, "gpt-5.4");
+  assertEquals(body.input, messages);
+  assertEquals(body.stream, true);
+  assertEquals(body.store, false);
+  assertEquals(body.max_output_tokens, 456);
+  assertEquals(body.text, { format: { type: "text" } });
+  assertEquals(body.reasoning, { summary: "auto" });
+  assertEquals(body.parallel_tool_calls, false);
+  assertEquals("messages" in body, false);
+  assertEquals("max_completion_tokens" in body, false);
+  assertEquals("response_format" in body, false);
+});
+
+Deno.test("openaiProvider sends API key only in Authorization header", () => {
+  const config: ProviderConfig = {
+    provider: "openai",
+    model: "gpt-5.4",
+    apiKey: "sk-test",
+    openaiApi: "responses",
+  };
+  const provider = openaiProvider(config);
+  const headers = provider.headers(config);
+  const body = provider.body(messages, config) as Record<string, any>;
+
+  assertEquals(headers.Authorization, "Bearer sk-test");
+  assertEquals("apiKey" in body, false);
+  assertEquals("api_key" in body, false);
+});
+
 Deno.test("openaiProvider keeps Chat Completions for older models in auto mode", () => {
   const config: ProviderConfig = {
     provider: "openai",

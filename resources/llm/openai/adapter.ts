@@ -132,6 +132,27 @@ function extractOpenAIResponsesFinishReason(
   return null;
 }
 
+function openAIResponsesStreamErrorStatus(code: string | undefined): number {
+  if (code === "insufficient_quota" || code === "rate_limit_exceeded") {
+    return 429;
+  }
+  if (code === "invalid_api_key") return 401;
+  if (code === "permission_denied") return 403;
+  return 400;
+}
+
+function throwOpenAIResponsesStreamError(data: any): never {
+  const error = data?.error ?? data?.response?.error ?? {};
+  const code = typeof error?.code === "string" ? error.code : undefined;
+  const message = typeof error?.message === "string" && error.message.length > 0
+    ? error.message
+    : "OpenAI Responses stream failed";
+  throw Object.assign(new Error(message), {
+    status: openAIResponsesStreamErrorStatus(code),
+    code,
+  });
+}
+
 function openAIEndpoint(config: ProviderConfig, mode: OpenAIApiMode): string {
   const baseUrl = typeof config.baseUrl === "string" && config.baseUrl.trim()
     ? config.baseUrl.trim().replace(/\/+$/, "")
@@ -335,6 +356,10 @@ function extractOpenAIResponsesContent(
   const parts: ExtractedPart[] = [];
   const type = data?.type;
   const delta = data?.delta;
+
+  if (type === "error" || type === "response.failed") {
+    throwOpenAIResponsesStreamError(data);
+  }
 
   if (
     (type === "response.output_text.delta" ||

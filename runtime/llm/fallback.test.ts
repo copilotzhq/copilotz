@@ -444,65 +444,77 @@ Deno.test("chat enforces idle timeout even when fetch abort does not break the r
   }
 });
 
-Deno.test("chat does not fallback once visible streaming has started", async () => {
+Deno.test("chat recovers mid-stream by falling back with partial content as context", async () => {
   const originalFetch = globalThis.fetch;
   const encoder = new TextEncoder();
   const streamedChunks: string[] = [];
+  let calls = 0;
 
   globalThis.fetch = (_url, init?: RequestInit) => {
-    const signal = init?.signal;
+    calls += 1;
+    if (calls === 1) {
+      const signal = init?.signal;
+      return Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${
+                    JSON.stringify({
+                      choices: [{
+                        delta: { content: "hello " },
+                        finish_reason: null,
+                      }],
+                    })
+                  }\n\n`,
+                ),
+              );
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  controller.error(new DOMException("Aborted", "AbortError"));
+                },
+                { once: true },
+              );
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      );
+    }
+
     return Promise.resolve(
       new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(
-              encoder.encode(
-                `data: ${
-                  JSON.stringify({
-                    choices: [{
-                      delta: { content: "hello " },
-                      finish_reason: null,
-                    }],
-                  })
-                }\n\n`,
-              ),
-            );
-            signal?.addEventListener(
-              "abort",
-              () => {
-                controller.error(new DOMException("Aborted", "AbortError"));
-              },
-              { once: true },
-            );
-          },
-        }),
+        `data: ${
+          JSON.stringify({
+            choices: [{ delta: { content: "world" }, finish_reason: "stop" }],
+          })
+        }\n\n`,
         { headers: { "content-type": "text/event-stream" } },
       ),
     );
   };
 
   try {
-    const error = await assertRejects(
-      () =>
-        chat(
-          { messages: [{ role: "user", content: "hello" }] },
-          {
-            provider: "anthropic",
-            model: "primary",
-            apiKey: "test",
-            streamIdleTimeoutMs: 5,
-            fallbacks: [{ provider: "anthropic", model: "fallback" }],
-          },
-          {},
-          (chunk) => streamedChunks.push(chunk),
-          registry,
-        ),
-      LLMProviderError,
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        streamIdleTimeoutMs: 5,
+        fallbacks: [{ provider: "anthropic", model: "fallback" }],
+      },
+      {},
+      (chunk) => streamedChunks.push(chunk),
+      registry,
     );
 
-    assertEquals(error.reason, "timeout");
-    assertEquals(error.visibleStreamStarted, true);
-    assertEquals(streamedChunks.join(""), "hello ");
+    assertEquals(response.answer, "hello world");
+    assertEquals(streamedChunks.join(""), "hello world");
+    assertEquals(response.model, "fallback");
+    assertEquals(calls, 2);
   } finally {
     globalThis.fetch = originalFetch;
   }

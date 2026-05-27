@@ -175,6 +175,7 @@ export async function chat(
   const registry = await getProviderRegistry(providerRegistry);
   let lastError: unknown = null;
   const attempts: LLMProviderAttempt[] = [];
+  let recoveryPrefix = "";
 
   for (let index = 0; index < attemptConfigs.length; index++) {
     const attemptConfig = attemptConfigs[index];
@@ -189,28 +190,41 @@ export async function chat(
     }
 
     const providerAPI = providerFactory(attemptConfig);
-    let visibleStreamStarted = false;
 
     const trackedStream = stream
       ? ((chunk: string, options?: { isReasoning?: boolean }) => {
-        if (chunk.length > 0 || options?.isReasoning) {
-          visibleStreamStarted = true;
+        if (chunk.length > 0 && !options?.isReasoning) {
+          recoveryPrefix += chunk;
         }
         stream(chunk, options);
       })
       : undefined;
 
+    const prefixBeforeAttempt = recoveryPrefix;
+    const attemptMessages = prefixBeforeAttempt.length > 0
+      ? [
+        ...messages,
+        { role: "assistant" as const, content: prefixBeforeAttempt },
+        {
+          role: "user" as const,
+          content:
+            "<recovery_instruction>Continue exactly where you left off. Do not repeat earlier content.</recovery_instruction>",
+        },
+      ]
+      : messages;
+
     try {
       const streamResult = await runProviderStream(
-        messages,
+        attemptMessages,
         trackedStream,
         attemptConfig,
         providerAPI,
         request.extractTags,
       );
 
+      const fullContent = prefixBeforeAttempt + streamResult.content;
       const parsed = parseAssistantResponse(
-        streamResult.content,
+        fullContent,
         request.extractTags ?? [],
       );
 
@@ -246,7 +260,6 @@ export async function chat(
     } catch (error) {
       lastError = error;
       const reason = classifyLLMError(error);
-      const hasFallback = index < attemptConfigs.length - 1;
 
       attempts.push({
         provider: attemptProvider,
@@ -255,19 +268,6 @@ export async function chat(
         status: getErrorStatus(error),
         message: getErrorMessage(error),
       });
-
-      if (!hasFallback || visibleStreamStarted) {
-        throw new LLMProviderError(getErrorMessage(error), {
-          reason,
-          provider: attemptProvider,
-          model: attemptConfig.model,
-          status: getErrorStatus(error),
-          attempts,
-          fallbackAttempted: attempts.length > 1,
-          visibleStreamStarted,
-          cause: error,
-        });
-      }
 
       warnFallbackAttempt(
         error,

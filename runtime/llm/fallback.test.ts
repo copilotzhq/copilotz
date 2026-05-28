@@ -737,3 +737,196 @@ Deno.test("chat falls back to next provider on finishReason=error", async () => 
     console.warn = originalWarn;
   }
 });
+
+// ---------------------------------------------------------------------------
+// Empty-response recovery
+// ---------------------------------------------------------------------------
+
+Deno.test("chat retries then falls back when model produces empty response", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const warnings: unknown[][] = [];
+  let calls = 0;
+
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+
+  globalThis.fetch = () => {
+    calls += 1;
+    if (calls <= 2) {
+      // Primary: streams nothing useful, finishes with stop
+      return Promise.resolve(
+        sse([
+          { choices: [{ delta: { content: " " } }] },
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]),
+      );
+    }
+    // Fallback: actual answer
+    return Promise.resolve(
+      sse([
+        { choices: [{ delta: { content: "real answer" } }] },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        fallbacks: [{ provider: "anthropic", model: "fallback" }],
+      },
+      {},
+      undefined,
+      registry,
+    );
+
+    // call 1: primary (empty) → call 2: retry same (empty) → call 3: fallback
+    assertEquals(calls, 3);
+    assertEquals(response.answer, "real answer");
+    assertEquals(response.model, "fallback");
+    assertEquals(warnings.length, 2);
+    assertEquals(
+      (warnings[0][1] as Record<string, unknown>).reason,
+      "empty_response",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
+Deno.test("chat recovers from empty response on same model retry", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  let calls = 0;
+
+  console.warn = () => {};
+
+  globalThis.fetch = () => {
+    calls += 1;
+    if (calls === 1) {
+      // Empty first attempt
+      return Promise.resolve(
+        sse([{ choices: [{ delta: {}, finish_reason: "stop" }] }]),
+      );
+    }
+    // Retry succeeds
+    return Promise.resolve(
+      sse([
+        { choices: [{ delta: { content: "got it" } }] },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(calls, 2);
+    assertEquals(response.answer, "got it");
+    assertEquals(response.model, "primary");
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
+Deno.test("chat does NOT retry when empty response is intentional (no_response)", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  let calls = 0;
+
+  console.warn = () => {};
+
+  globalThis.fetch = () => {
+    calls += 1;
+    return Promise.resolve(
+      sse([
+        { choices: [{ delta: { content: "<no_response/>" } }] },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        fallbacks: [{ provider: "anthropic", model: "fallback" }],
+      },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(calls, 1);
+    assertEquals(response.answer, "");
+    assertEquals(response.model, "primary");
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
+Deno.test("chat does NOT retry when empty response has tool calls", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  let calls = 0;
+
+  console.warn = () => {};
+
+  globalThis.fetch = () => {
+    calls += 1;
+    return Promise.resolve(
+      sse([
+        {
+          choices: [{
+            delta: {
+              content:
+                '<tool_calls>\n{"name":"search","arguments":{"q":"test"}}\n</tool_calls>',
+            },
+          }],
+        },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        fallbacks: [{ provider: "anthropic", model: "fallback" }],
+      },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(calls, 1);
+    assertEquals(response.answer, "");
+    assertEquals(response.toolCalls!.length, 1);
+    assertEquals(response.model, "primary");
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});

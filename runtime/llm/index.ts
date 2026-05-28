@@ -40,6 +40,9 @@ const RECOVERABLE_FINISH_REASONS: ReadonlySet<ProviderFinishReason> = new Set([
   "content_filter",
 ]);
 
+const INTENTIONAL_EMPTY_PATTERN =
+  /<(no_response|route_to|ask_to|continue_after_tool_results)[\s/>]/;
+
 function buildRecoveryCue(reason: string | null): string {
   switch (reason) {
     case "length":
@@ -50,6 +53,8 @@ function buildRecoveryCue(reason: string | null): string {
       return "Previous response was blocked by a content filter. Continue where you left off, rephrasing as needed.";
     case "error":
       return "Previous response was interrupted by a provider error. Continue where you left off.";
+    case "empty_response":
+      return "Previous attempt produced reasoning but no visible response. You must produce a concrete answer for the user.";
     default:
       return "Continue exactly where you left off. Do not repeat earlier content.";
   }
@@ -287,6 +292,45 @@ export async function chat(
         fullContent,
         request.extractTags ?? [],
       );
+
+      // Detect unintentional empty response: model produced no useful
+      // output and didn't use any control action (tool calls, routing, etc.)
+      const isUnintentionallyEmpty =
+        parsed.cleanResponse.length === 0 &&
+        parsed.toolCalls.length === 0 &&
+        Object.keys(parsed.extractedTags).length === 0 &&
+        !INTENTIONAL_EMPTY_PATTERN.test(fullContent);
+
+      if (isUnintentionallyEmpty) {
+        // Undo the accumulation from this attempt — no useful content
+        recoveryPrefix = prefixBeforeAttempt;
+        lastRecoveryReason = "empty_response";
+
+        if (!sameModelRetried) {
+          sameModelRetried = true;
+          warnRecoveryAttempt(
+            "empty_response",
+            attemptConfig,
+            attemptConfig,
+            "Model produced no visible output, retrying",
+          );
+          continue;
+        }
+
+        if (index < attemptConfigs.length - 1) {
+          sameModelRetried = false;
+          warnRecoveryAttempt(
+            "empty_response",
+            attemptConfig,
+            attemptConfigs[index + 1],
+            "Model produced no visible output, falling back",
+          );
+          index++;
+          continue;
+        }
+
+        // No more attempts — fall through to return empty response
+      }
 
       const usageStatus = streamResult.stoppedByLocalStop
         ? "aborted"

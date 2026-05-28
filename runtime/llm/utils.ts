@@ -985,8 +985,8 @@ In this environment you have access to a set of tools you can use to answer the 
 
 \`\`\` 
 <tool_calls>
-{ "name": "function_name", "arguments": { "key_1": "value_1", "key_2": "value_2" } }
-{ "name": "function_name_2","arguments": { "key_1": "value_1", "key_2": "value_2", "key_3": "value_3"} }
+{ "name": "tool_name", "arguments": { "key_1": "value_1", "key_2": "value_2" } }
+{ "name": "tool_name_2","arguments": { "key_1": "value_1", "key_2": "value_2", "key_3": "value_3"} }
 </tool_calls>
 Hi, I'm going to execute two tool calls.
 \`\`\`

@@ -18,6 +18,8 @@ const registry: ProviderRegistry = {
         ? [{ text: content }]
         : null;
     },
+    extractFinishReason: (data: any) =>
+      data?.choices?.[0]?.finish_reason ?? null,
   }),
 };
 
@@ -101,14 +103,12 @@ Deno.test("chat attempts fallback for any provider error when fallbacks are conf
     assertEquals(calls, 2);
     assertEquals(warnings.length, 1);
     assertEquals(
-      String(warnings[0][0]).includes(
-        "Attempting fallback after provider error",
-      ),
+      String(warnings[0][0]).includes("Attempting recovery"),
       true,
     );
     assertEquals((warnings[0][1] as Record<string, unknown>).reason, "unknown");
     assertEquals(
-      (warnings[0][1] as Record<string, unknown>).fallbackModel,
+      (warnings[0][1] as Record<string, unknown>).nextModel,
       "fallback",
     );
   } finally {
@@ -171,7 +171,7 @@ Deno.test("chat falls back for auth failures and logs a warning", async () => {
       "auth_error",
     );
     assertEquals(
-      (warnings[0][1] as Record<string, unknown>).fallbackModel,
+      (warnings[0][1] as Record<string, unknown>).nextModel,
       "fallback",
     );
   } finally {
@@ -517,5 +517,223 @@ Deno.test("chat recovers mid-stream by falling back with partial content as cont
     assertEquals(calls, 2);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// finishReason-based recovery
+// ---------------------------------------------------------------------------
+
+function sse(events: unknown[]): Response {
+  const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(
+    "",
+  );
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+Deno.test("chat retries same model once on finishReason=length then falls back", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const warnings: unknown[][] = [];
+  const streamed: string[] = [];
+  let calls = 0;
+
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+
+  globalThis.fetch = () => {
+    calls += 1;
+    if (calls <= 2) {
+      // Primary: truncated both times
+      return Promise.resolve(
+        sse([
+          { choices: [{ delta: { content: "Hello" } }] },
+          { choices: [{ delta: {}, finish_reason: "length" }] },
+        ]),
+      );
+    }
+    // Fallback: completes
+    return Promise.resolve(
+      sse([
+        { choices: [{ delta: { content: " world" } }] },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "Say hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        fallbacks: [{ provider: "anthropic", model: "fallback" }],
+      },
+      {},
+      (chunk) => streamed.push(chunk),
+      registry,
+    );
+
+    // call 1: primary (length) → call 2: retry same (length) → call 3: fallback (stop)
+    assertEquals(calls, 3);
+    assertEquals(response.answer, "HelloHello world");
+    assertEquals(response.model, "fallback");
+    assertEquals(warnings.length, 2);
+    assertEquals(
+      (warnings[0][1] as Record<string, unknown>).reason,
+      "length",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
+Deno.test("chat recovers from finishReason=length with same model when continuation completes", async () => {
+  const originalFetch = globalThis.fetch;
+  const streamed: string[] = [];
+  let calls = 0;
+
+  globalThis.fetch = () => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.resolve(
+        sse([
+          { choices: [{ delta: { content: "part one" } }] },
+          { choices: [{ delta: {}, finish_reason: "length" }] },
+        ]),
+      );
+    }
+    return Promise.resolve(
+      sse([
+        { choices: [{ delta: { content: " part two" } }] },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {},
+      (chunk) => streamed.push(chunk),
+      registry,
+    );
+
+    assertEquals(calls, 2);
+    assertEquals(response.answer, "part one part two");
+    assertEquals(response.model, "primary");
+    assertEquals(response.finishReason, "stop");
+    assertEquals(streamed.join(""), "part one part two");
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
+Deno.test("chat falls back to next provider on finishReason=content_filter", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+
+  globalThis.fetch = () => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.resolve(
+        sse([
+          { choices: [{ delta: { content: "" } }] },
+          { choices: [{ delta: {}, finish_reason: "content_filter" }] },
+        ]),
+      );
+    }
+    return Promise.resolve(
+      sse([
+        { choices: [{ delta: { content: "safe response" } }] },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        fallbacks: [{ provider: "anthropic", model: "fallback" }],
+      },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(calls, 2);
+    assertEquals(response.answer, "safe response");
+    assertEquals(response.model, "fallback");
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
+Deno.test("chat falls back to next provider on finishReason=error", async () => {
+  const originalFetch = globalThis.fetch;
+  const streamed: string[] = [];
+  let calls = 0;
+
+  globalThis.fetch = () => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.resolve(
+        sse([
+          { choices: [{ delta: { content: "partial " } }] },
+          { choices: [{ delta: {}, finish_reason: "error" }] },
+        ]),
+      );
+    }
+    return Promise.resolve(
+      sse([
+        { choices: [{ delta: { content: "completed" } }] },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        fallbacks: [{ provider: "anthropic", model: "fallback" }],
+      },
+      {},
+      (chunk) => streamed.push(chunk),
+      registry,
+    );
+
+    assertEquals(calls, 2);
+    assertEquals(response.answer, "partial completed");
+    assertEquals(response.model, "fallback");
+    assertEquals(streamed.join(""), "partial completed");
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
   }
 });

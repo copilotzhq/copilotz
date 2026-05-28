@@ -3,6 +3,7 @@ import type {
   ChatResponse,
   ProviderConfig,
   ProviderFallbackConfig,
+  ProviderFinishReason,
   ProviderName,
   ProviderRegistry,
   StreamCallback,
@@ -32,6 +33,27 @@ import {
 
 export { classifyLLMError, LLMProviderError } from "@/runtime/llm/errors.ts";
 export type { LLMProviderAttempt } from "@/runtime/llm/errors.ts";
+
+const RECOVERABLE_FINISH_REASONS: ReadonlySet<ProviderFinishReason> = new Set([
+  "length",
+  "error",
+  "content_filter",
+]);
+
+function buildRecoveryCue(reason: string | null): string {
+  switch (reason) {
+    case "length":
+      return "Previous response exceeded maximum output length. Continue where you left off. Be concise and break into smaller steps if needed.";
+    case "timeout":
+      return "Previous response was interrupted by a timeout. Continue where you left off. Be concise.";
+    case "content_filter":
+      return "Previous response was blocked by a content filter. Continue where you left off, rephrasing as needed.";
+    case "error":
+      return "Previous response was interrupted by a provider error. Continue where you left off.";
+    default:
+      return "Continue exactly where you left off. Do not repeat earlier content.";
+  }
+}
 
 let defaultProviderRegistryPromise: Promise<ProviderRegistry> | undefined;
 
@@ -107,20 +129,20 @@ function parseAssistantResponse(
   return { cleanResponse, toolCalls, extractedTags };
 }
 
-function warnFallbackAttempt(
-  error: unknown,
-  attempt: ProviderConfig,
+function warnRecoveryAttempt(
   reason: string | null,
-  nextAttempt: ProviderConfig,
+  current: ProviderConfig,
+  next: ProviderConfig,
+  message?: string,
 ): void {
   try {
-    console.warn("[llm] Attempting fallback after provider error", {
-      provider: attempt.provider,
-      model: attempt.model,
+    console.warn("[llm] Attempting recovery", {
+      provider: current.provider,
+      model: current.model,
       reason,
-      message: getErrorMessage(error),
-      fallbackProvider: nextAttempt.provider,
-      fallbackModel: nextAttempt.model,
+      ...(message ? { message } : {}),
+      nextProvider: next.provider,
+      nextModel: next.model,
     });
   } catch {
     // Ignore logging failures.
@@ -130,9 +152,9 @@ function warnFallbackAttempt(
 /**
  * Unified AI Chat endpoint.
  *
- * Streams an LLM response through the configured provider.
- * Falls back to alternative providers on error when `config.fallbacks`
- * is set and visible streaming hasn't started yet.
+ * Streams an LLM response through the configured provider. Recovers from
+ * mid-stream failures and truncations by falling back to alternative
+ * providers (or retrying the same model for output-length truncations).
  */
 export async function chat(
   request: ChatRequest,
@@ -176,8 +198,11 @@ export async function chat(
   let lastError: unknown = null;
   const attempts: LLMProviderAttempt[] = [];
   let recoveryPrefix = "";
+  let lastRecoveryReason: string | null = null;
+  let sameModelRetried = false;
 
-  for (let index = 0; index < attemptConfigs.length; index++) {
+  let index = 0;
+  while (index < attemptConfigs.length) {
     const attemptConfig = attemptConfigs[index];
     const attemptProvider = attemptConfig.provider!;
     const providerFactory = registry[attemptProvider];
@@ -207,8 +232,7 @@ export async function chat(
         { role: "assistant" as const, content: prefixBeforeAttempt },
         {
           role: "user" as const,
-          content:
-            "<recovery_instruction>Continue exactly where you left off. Do not repeat earlier content.</recovery_instruction>",
+          content: buildRecoveryCue(lastRecoveryReason),
         },
       ]
       : messages;
@@ -222,6 +246,42 @@ export async function chat(
         request.extractTags,
       );
 
+      // Check for recoverable finish reasons (length, error, content_filter)
+      if (
+        streamResult.finishReason &&
+        RECOVERABLE_FINISH_REASONS.has(streamResult.finishReason)
+      ) {
+        lastRecoveryReason = streamResult.finishReason;
+
+        // For length: retry same model once — continuation context means
+        // the model only needs to finish the remaining part.
+        if (streamResult.finishReason === "length" && !sameModelRetried) {
+          sameModelRetried = true;
+          warnRecoveryAttempt(
+            "length",
+            attemptConfig,
+            attemptConfig,
+            "Retrying same model with continuation context",
+          );
+          continue;
+        }
+
+        // For all recoverable reasons: try next fallback if available
+        if (index < attemptConfigs.length - 1) {
+          sameModelRetried = false;
+          warnRecoveryAttempt(
+            streamResult.finishReason,
+            attemptConfig,
+            attemptConfigs[index + 1],
+          );
+          index++;
+          continue;
+        }
+
+        // No more attempts — fall through to return what we have
+      }
+
+      // Success or exhausted recovery options — build response
       const fullContent = prefixBeforeAttempt + streamResult.content;
       const parsed = parseAssistantResponse(
         fullContent,
@@ -259,22 +319,27 @@ export async function chat(
       };
     } catch (error) {
       lastError = error;
-      const reason = classifyLLMError(error);
+      lastRecoveryReason = classifyLLMError(error);
+      sameModelRetried = false;
 
       attempts.push({
         provider: attemptProvider,
         model: attemptConfig.model,
-        reason,
+        reason: classifyLLMError(error),
         status: getErrorStatus(error),
         message: getErrorMessage(error),
       });
 
-      warnFallbackAttempt(
-        error,
-        attemptConfig,
-        reason,
-        attemptConfigs[index + 1],
-      );
+      if (index < attemptConfigs.length - 1) {
+        warnRecoveryAttempt(
+          lastRecoveryReason,
+          attemptConfig,
+          attemptConfigs[index + 1],
+          getErrorMessage(error),
+        );
+      }
+
+      index++;
     }
   }
 

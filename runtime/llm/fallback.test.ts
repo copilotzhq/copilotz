@@ -351,11 +351,13 @@ Deno.test("chat treats provider stream activity as progress before extracted tex
       new Response(
         new ReadableStream<Uint8Array>({
           start(controller) {
+            // Activity event resets the first-token timer, keeping it alive
             controller.enqueue(
               encoder.encode(
                 `data: ${JSON.stringify({ event: "progress" })}\n\n`,
               ),
             );
+            // Content arrives within the (reset) first-token window
             setTimeout(() => {
               controller.enqueue(
                 encoder.encode(
@@ -378,7 +380,7 @@ Deno.test("chat treats provider stream activity as progress before extracted tex
         provider: "anthropic",
         model: "primary",
         apiKey: "test",
-        firstTokenTimeoutMs: 5,
+        firstTokenTimeoutMs: 30,
         streamIdleTimeoutMs: 50,
       },
       {},

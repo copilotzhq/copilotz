@@ -70,7 +70,7 @@ export async function runProviderStream(
   let streamTimeout:
     | { kind: "first_token" | "idle"; timeoutMs: number }
     | undefined;
-  let firstStreamActivityReceived = false;
+  let firstContentReceived = false;
 
   const clearFirstTokenTimer = () => {
     if (firstTokenTimer !== undefined) {
@@ -109,16 +109,26 @@ export async function runProviderStream(
   };
 
   const resetStreamIdleTimer = () => {
-    if (!streamIdleTimeoutMs || !firstStreamActivityReceived) return;
+    if (!streamIdleTimeoutMs || !firstContentReceived) return;
     clearStreamIdleTimer();
     streamIdleTimer = setTimeout(() => {
       abortForTimeout("idle", streamIdleTimeoutMs);
     }, streamIdleTimeoutMs) as unknown as number;
   };
 
+  // Provider is alive (metadata events) — reset the first-token timer
+  // to extend the deadline, but don't switch to idle mode yet.
   const recordStreamActivity = () => {
-    if (!firstStreamActivityReceived) {
-      firstStreamActivityReceived = true;
+    if (!firstContentReceived) {
+      startFirstTokenTimer();
+    }
+    resetStreamIdleTimer();
+  };
+
+  // Actual content extracted — switch from first-token to idle mode.
+  const recordContentReceived = () => {
+    if (!firstContentReceived) {
+      firstContentReceived = true;
       clearFirstTokenTimer();
     }
     resetStreamIdleTimer();
@@ -155,7 +165,7 @@ export async function runProviderStream(
             typeof part.text === "string" && part.text.length > 0
           )
         ) {
-          recordStreamActivity();
+          recordContentReceived();
         }
         return parts;
       },

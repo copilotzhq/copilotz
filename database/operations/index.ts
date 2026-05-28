@@ -1210,9 +1210,12 @@ export function createOperations(
 
   const getMessageHistoryFromGraph = async (
     threadId: string,
-    limit = 50,
+    limit?: number,
   ): Promise<Message[]> => {
-    const page = await getMessageHistoryPageFromGraph(threadId, { limit });
+    const page = await getMessageHistoryPageFromGraph(
+      threadId,
+      limit !== undefined ? { limit } : undefined,
+    );
     return page.data;
   };
 
@@ -1222,14 +1225,13 @@ export function createOperations(
   ): Promise<MessageHistoryPage> => {
     const limit = typeof options?.limit === "number" && options.limit > 0
       ? Math.floor(options.limit)
-      : 50;
+      : undefined;
     const before =
       typeof options?.before === "string" && options.before.length > 0
         ? options.before
         : null;
 
     type MessageNodeRow = KnowledgeNode & { messageKey?: string };
-    const limitPlusOne = limit + 1;
 
     if (before) {
       const cursorResult = await db.query<MessageNodeRow>(
@@ -1253,6 +1255,10 @@ export function createOperations(
         return emptyMessageHistoryPage();
       }
 
+      const limitClause = limit !== undefined ? `LIMIT $4` : "";
+      const params = limit !== undefined
+        ? [threadId, cursorCreatedAt, cursor.id, limit + 1]
+        : [threadId, cursorCreatedAt, cursor.id];
       const result = await db.query<MessageNodeRow>(
         `SELECT *, COALESCE("data"->>'messageId', "id") AS "messageKey"
          FROM "nodes"
@@ -1264,12 +1270,16 @@ export function createOperations(
              OR ("created_at" = $2 AND "id" < $3)
            )
          ORDER BY "created_at" DESC, "id" DESC
-         LIMIT $4`,
-        [threadId, cursorCreatedAt, cursor.id, limitPlusOne],
+         ${limitClause}`,
+        params,
       );
 
-      const hasMoreBefore = result.rows.length > limit;
-      const rows = result.rows.slice(0, limit).reverse();
+      const hasMoreBefore = limit !== undefined
+        ? result.rows.length > limit
+        : false;
+      const rows = (limit !== undefined
+        ? result.rows.slice(0, limit)
+        : result.rows).reverse();
       const data = rows.map(nodeToMessage);
 
       return {
@@ -1281,16 +1291,24 @@ export function createOperations(
       };
     }
 
+    const limitClause = limit !== undefined ? `LIMIT $2` : "";
+    const params = limit !== undefined
+      ? [threadId, limit + 1]
+      : [threadId];
     const result = await db.query<KnowledgeNode>(
       `SELECT * FROM "nodes"
        WHERE "source_type" = 'thread' AND "source_id" = $1 AND "type" = 'message'
        ORDER BY "created_at" DESC, "id" DESC
-       LIMIT $2`,
-      [threadId, limitPlusOne],
+       ${limitClause}`,
+      params,
     );
 
-    const hasMoreBefore = result.rows.length > limit;
-    const rows = result.rows.slice(0, limit).reverse();
+    const hasMoreBefore = limit !== undefined
+      ? result.rows.length > limit
+      : false;
+    const rows = (limit !== undefined
+      ? result.rows.slice(0, limit)
+      : result.rows).reverse();
     const data = rows.map(nodeToMessage);
 
     return {

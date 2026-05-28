@@ -813,6 +813,12 @@ export interface CopilotzConfig {
      */
     maxAgentTurns?: number;
     /**
+     * Agent to route to when maxAgentTurns is reached, instead of hard-stopping.
+     * Useful for routing to a lead/coordinator agent that can synthesize and
+     * reply to the user. When unset, the loop hard-stops with no response.
+     */
+    maxTurnsFallbackAgent?: string;
+    /**
      * Whether to include target info in conversation history.
      * Helps agents understand conversation flow.
      * Default: true
@@ -1783,6 +1789,7 @@ export async function createCopilotz(
         ? {
           enabled: config.multiAgent.enabled ?? true,
           maxAgentTurns: config.multiAgent.maxAgentTurns ?? 5,
+          maxTurnsFallbackAgent: config.multiAgent.maxTurnsFallbackAgent,
           includeTargetContext: config.multiAgent.includeTargetContext ?? true,
         }
         : undefined,

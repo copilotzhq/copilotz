@@ -1582,26 +1582,38 @@ export const messageProcessor: EventProcessor<
     );
 
     if (loopCheck.shouldForceUserTarget) {
-      // Force target to user - don't trigger any more LLM calls
-      const forcedUserTarget = loopCheck.userToTarget ?? "user";
-      targetResolution = {
-        targetId: forcedUserTarget,
-        targetQueue: [],
-      };
+      const fallbackAgentId = context.multiAgent?.maxTurnsFallbackAgent;
+      const fallbackAgent = fallbackAgentId
+        ? availableAgents.find((a) =>
+          a.id === fallbackAgentId || a.name === fallbackAgentId
+        )
+        : undefined;
 
-      // Persist the forced user target to break the agent loop for future messages
+      // Persist reset to break the agent loop for future messages
       const updatedMetadata = setRuntimeThreadMetadata(thread.metadata, {
-        participantTargets: {}, // Clear all persisted targets to force an explicit mention or user action
+        participantTargets: {},
         agentTurnCount: 0,
       });
-
       await ops.updateThread(thread.id as string, {
         metadata: getSerializableThreadMetadata(updatedMetadata),
       });
       (thread as unknown as { metadata: unknown }).metadata = updatedMetadata;
 
-      // We explicitly clear the counter back to 0 (already done in loopCheck)
-      return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
+      if (fallbackAgent) {
+        // Route to the designated fallback agent instead of hard-stopping.
+        // The fallback agent (e.g. lead/coordinator) can synthesize and
+        // reply to the user.
+        targetResolution = {
+          targetId: (fallbackAgent.id ?? fallbackAgent.name) as string,
+          targetQueue: [],
+        };
+        console.warn(
+          `[multi-agent] Max agent turns (${maxAgentTurns}) reached, routing to fallback agent: ${fallbackAgent.name ?? fallbackAgent.id}`,
+        );
+      } else {
+        // No fallback agent — hard-stop, don't trigger any more LLM calls
+        return { producedEvents: entityExtractEvents as unknown as NewEvent[] };
+      }
     }
 
     // Get the target agent (case-insensitive matching)

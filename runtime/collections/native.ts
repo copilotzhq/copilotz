@@ -205,15 +205,18 @@ export function createMessageService(
       return await ops.getMessageHistoryPageFromGraph(threadId, options);
     },
 
-    async listHistory(threadId: string, limit = 50): Promise<Message[]> {
-      const page = await this.listHistoryPage(threadId, { limit });
+    async listHistory(threadId: string, limit?: number): Promise<Message[]> {
+      const page = await this.listHistoryPage(
+        threadId,
+        limit !== undefined ? { limit } : undefined,
+      );
       return page.data;
     },
 
     async getHistory(
       threadId: string,
       userId: string,
-      limit = 50,
+      limit?: number,
     ): Promise<Message[]> {
       const allMessages: { message: Message; threadLevel: number }[] = [];
       let currentThreadId: string | null = threadId;
@@ -253,7 +256,9 @@ export function createMessageService(
         return b.threadLevel - a.threadLevel;
       });
 
-      return allMessages.slice(-limit).map((entry) => entry.message);
+      return limit !== undefined
+        ? allMessages.slice(-limit).map((entry) => entry.message)
+        : allMessages.map((entry) => entry.message);
     },
 
     async deleteForThread(threadId: string): Promise<void> {

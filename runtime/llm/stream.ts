@@ -160,12 +160,22 @@ export async function runProviderStream(
           recordStreamActivity();
         }
         const parts = providerAPI.extractContent(data);
-        if (
-          parts?.some((part) =>
-            typeof part.text === "string" && part.text.length > 0
-          )
-        ) {
-          recordContentReceived();
+        if (parts) {
+          const hasVisibleContent = parts.some(
+            (p) =>
+              typeof p.text === "string" && p.text.length > 0 && !p.isReasoning,
+          );
+          if (hasVisibleContent) {
+            recordContentReceived();
+          } else if (
+            parts.some(
+              (p) => typeof p.text === "string" && p.text.length > 0,
+            )
+          ) {
+            // Reasoning-only tokens: model is working, extend the first-token
+            // deadline but don't switch to idle mode.
+            recordStreamActivity();
+          }
         }
         return parts;
       },

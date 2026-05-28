@@ -14,21 +14,15 @@ import type {
   ToolInvocation,
 } from "@/runtime/llm/types.ts";
 
-const TOOL_RESULTS_CONTINUATION_CUE = "<continue_after_tool_results/>";
+const TOOL_RESULTS_CONTINUATION_CUE =
+  `<continue_after_tool_results>Continue your response based on the tool results above. Do not repeat earlier content. If no reply is needed, respond with <no_response/>.</continue_after_tool_results>`;
 const LOCAL_DEFAULT_STOP_SEQUENCES = [
   "<tool_results>",
   "</tool_results>",
 ];
-const TOOL_RESULTS_CONTINUATION_BLOCK = `<continue_after_tool_results>
-Continue based on the tool results above.
-Do not repeat the previous assistant message.
-If no user-facing reply is necessary, respond with exactly <no_response/>.
-Never output the <continue_after_tool_results> block itself.
-</continue_after_tool_results>`;
 const NO_RESPONSE_SELF_CLOSING_TAG = "<no_response/>";
 const NO_RESPONSE_EMPTY_BLOCK_TAG = "<no_response></no_response>";
 const INTERNAL_LITERAL_CONTROL_TAGS = [
-  TOOL_RESULTS_CONTINUATION_CUE,
   NO_RESPONSE_SELF_CLOSING_TAG,
   NO_RESPONSE_EMPTY_BLOCK_TAG,
 ];
@@ -993,9 +987,6 @@ Hi, I'm going to execute two tool calls.
 
 VERY IMPORTANT, PAY ATTENTION TO THIS >>>>>> ALWAYS Start your messages with the <tool_calls> block when you have a tool to call.
 5. Tool outputs may appear later as <tool_results> blocks. Treat them as returned execution results and never generate <tool_results> yourself.
-6. If you later receive the exact user message <continue_after_tool_results/>, apply the following continuation rule:
-
-${TOOL_RESULTS_CONTINUATION_BLOCK}
 
 === TOOL CATALOG (read-only) ===
 

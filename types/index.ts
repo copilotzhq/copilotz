@@ -412,6 +412,19 @@ export type HistoryTransform = (
   args: HistoryTransformArgs,
 ) => ChatMessage[] | Promise<ChatMessage[]>;
 
+export type ReasoningHistoryInclude = "none" | "self" | "all";
+
+/**
+ * Controls whether persisted agent reasoning is included in future LLM-visible
+ * history. Defaults to `{ include: "self", maxChars: 2000 }`.
+ */
+export interface ReasoningHistoryOptions {
+  /** Which persisted reasoning entries to include in future prompts. */
+  include?: ReasoningHistoryInclude;
+  /** Max characters of reasoning text included per message. Set 0 to disable caps. */
+  maxChars?: number;
+}
+
 /**
  * Configuration for embedding generation in RAG.
  */
@@ -746,6 +759,11 @@ export interface ChatContext {
    * to the model (before `historyTransform` / `formatMessages`).
    */
   toolResultHistoryMaxChars?: number;
+  /**
+   * Controls whether persisted agent reasoning is included in future LLM-visible
+   * history. Defaults to `{ include: "self", maxChars: 2000 }`.
+   */
+  reasoningHistory?: ReasoningHistoryOptions;
   /** User metadata. */
   userMetadata?: Record<string, unknown>;
   /** Hook for rewriting generated message history before the LLM call. */

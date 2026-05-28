@@ -352,7 +352,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         {
           messages: resolvedMessages,
           tools: payload.tools,
-          extractTags: ["route_to", "ask_to"],
+          extractTags: ["route_to", "ask_to", "previous_reasoning"],
         } as ChatRequest,
         configForCall,
         envVars,

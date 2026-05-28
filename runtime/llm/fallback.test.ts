@@ -885,6 +885,154 @@ Deno.test("chat does NOT retry when empty response is intentional (no_response)"
   }
 });
 
+Deno.test("chat extracts previous_reasoning into reasoning and strips it from answer", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+
+  globalThis.fetch = () => {
+    calls += 1;
+    return Promise.resolve(
+      sse([
+        {
+          choices: [{
+            delta: {
+              content:
+                "Visible answer <previous_reasoning>tag reasoning</previous_reasoning>",
+            },
+          }],
+        },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(calls, 1);
+    assertEquals(response.answer, "Visible answer");
+    assertEquals(response.reasoning, "tag reasoning");
+    assertEquals(response.extractedTags, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("chat merges provider reasoning with previous_reasoning blocks", async () => {
+  const originalFetch = globalThis.fetch;
+  const reasoningRegistry: ProviderRegistry = {
+    anthropic: () => ({
+      endpoint: "https://example.test/anthropic",
+      headers: () => ({}),
+      body: () => ({}),
+      extractContent: (data: any) => {
+        const content = data?.choices?.[0]?.delta?.content;
+        const reasoning = data?.choices?.[0]?.delta?.reasoning;
+        const parts = [];
+        if (typeof reasoning === "string" && reasoning.length > 0) {
+          parts.push({ text: reasoning, isReasoning: true });
+        }
+        if (typeof content === "string" && content.length > 0) {
+          parts.push({ text: content });
+        }
+        return parts.length > 0 ? parts : null;
+      },
+      extractFinishReason: (data: any) =>
+        data?.choices?.[0]?.finish_reason ?? null,
+    }),
+  };
+
+  globalThis.fetch = () =>
+    Promise.resolve(
+      sse([
+        { choices: [{ delta: { reasoning: "provider reasoning" } }] },
+        {
+          choices: [{
+            delta: {
+              content:
+                "Answer <previous_reasoning>tag reasoning</previous_reasoning>",
+            },
+          }],
+        },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {},
+      undefined,
+      reasoningRegistry,
+    );
+
+    assertEquals(response.answer, "Answer");
+    assertEquals(response.reasoning, "provider reasoning\n\ntag reasoning");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("chat retries when response contains only previous_reasoning", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  let calls = 0;
+
+  console.warn = () => {};
+
+  globalThis.fetch = () => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.resolve(
+        sse([
+          {
+            choices: [{
+              delta: {
+                content:
+                  "<previous_reasoning>thinking only</previous_reasoning>",
+              },
+            }],
+          },
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]),
+      );
+    }
+    return Promise.resolve(
+      sse([
+        { choices: [{ delta: { content: "visible now" } }] },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+      },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(calls, 2);
+    assertEquals(response.answer, "visible now");
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
 Deno.test("chat does NOT retry when empty response has tool calls", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;

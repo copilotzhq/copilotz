@@ -27,8 +27,8 @@ import {
   classifyLLMError,
   getErrorMessage,
   getErrorStatus,
-  LLMProviderError,
   type LLMProviderAttempt,
+  LLMProviderError,
 } from "@/runtime/llm/errors.ts";
 
 export { classifyLLMError, LLMProviderError } from "@/runtime/llm/errors.ts";
@@ -42,6 +42,7 @@ const RECOVERABLE_FINISH_REASONS: ReadonlySet<ProviderFinishReason> = new Set([
 
 const INTENTIONAL_EMPTY_PATTERN =
   /<(no_response|route_to|ask_to|continue_after_tool_results)[\s/>]/;
+const REASONING_HISTORY_TAG = "previous_reasoning";
 
 function buildRecoveryCue(reason: string | null): string {
   switch (reason) {
@@ -100,10 +101,12 @@ function parseAssistantResponse(
   cleanResponse: string;
   toolCalls: ToolInvocation[];
   extractedTags: Record<string, string[]>;
+  extractedReasoning: string[];
 } {
   let cleanResponse = response;
   let toolCalls: ToolInvocation[] = [];
   let extractedTags: Record<string, string[]> = {};
+  let extractedReasoning: string[] = [];
 
   {
     const parsed = parseToolCallsFromResponse(response);
@@ -117,6 +120,8 @@ function parseAssistantResponse(
     );
     cleanResponse = parsed.cleanResponse;
     extractedTags = parsed.extractedTags;
+    extractedReasoning = extractedTags[REASONING_HISTORY_TAG] ?? [];
+    delete extractedTags[REASONING_HISTORY_TAG];
   } else {
     cleanResponse = cleanResponse.trim();
   }
@@ -131,7 +136,16 @@ function parseAssistantResponse(
     cleanResponse = cleanResponse.trim();
   }
 
-  return { cleanResponse, toolCalls, extractedTags };
+  return { cleanResponse, toolCalls, extractedTags, extractedReasoning };
+}
+
+function mergeReasoningParts(...parts: Array<string | string[] | undefined>) {
+  const values = parts.flatMap((part) => Array.isArray(part) ? part : [part])
+    .filter((part): part is string =>
+      typeof part === "string" && part.trim().length > 0
+    )
+    .map((part) => part.trim());
+  return values.length > 0 ? values.join("\n\n") : undefined;
 }
 
 function warnRecoveryAttempt(
@@ -243,12 +257,16 @@ export async function chat(
       : messages;
 
     try {
+      const extractedBlockTags = [
+        ...(request.extractTags ?? []),
+        REASONING_HISTORY_TAG,
+      ];
       const streamResult = await runProviderStream(
         attemptMessages,
         trackedStream,
         attemptConfig,
         providerAPI,
-        request.extractTags,
+        extractedBlockTags,
       );
 
       // Check for recoverable finish reasons (length, error, content_filter)
@@ -290,13 +308,16 @@ export async function chat(
       const fullContent = prefixBeforeAttempt + streamResult.content;
       const parsed = parseAssistantResponse(
         fullContent,
-        request.extractTags ?? [],
+        extractedBlockTags,
+      );
+      const reasoning = mergeReasoningParts(
+        streamResult.reasoning,
+        parsed.extractedReasoning,
       );
 
       // Detect unintentional empty response: model produced no useful
       // output and didn't use any control action (tool calls, routing, etc.)
-      const isUnintentionallyEmpty =
-        parsed.cleanResponse.length === 0 &&
+      const isUnintentionallyEmpty = parsed.cleanResponse.length === 0 &&
         parsed.toolCalls.length === 0 &&
         Object.keys(parsed.extractedTags).length === 0 &&
         !INTENTIONAL_EMPTY_PATTERN.test(fullContent);
@@ -344,7 +365,7 @@ export async function chat(
       return {
         prompt: messages,
         answer: parsed.cleanResponse,
-        ...(streamResult.reasoning && { reasoning: streamResult.reasoning }),
+        ...(reasoning && { reasoning }),
         tokens: totalTokens,
         finishReason: streamResult.finishReason,
         usage,

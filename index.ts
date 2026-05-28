@@ -79,6 +79,7 @@ import type {
   NewTool,
   ProcessorDeps,
   RagIngestPayload,
+  ReasoningHistoryOptions,
   ResolveLLMRuntimeConfig,
   TokenEventPayload,
   Tool,
@@ -169,6 +170,10 @@ export type {
   RagConfig,
   /** Payload for background RAG ingestion events. */
   RagIngestPayload,
+  /** Controls whether persisted reasoning is included in future LLM history. */
+  ReasoningHistoryInclude,
+  /** Options for persisted reasoning in future LLM history. */
+  ReasoningHistoryOptions,
   /** Runtime hook for resolving LLM execution config. */
   ResolveLLMRuntimeConfig,
   /** Configuration for similarity-based retrieval. */
@@ -686,6 +691,11 @@ export interface CopilotzConfig {
    * in `llmOptions` still applies later).
    */
   toolResultHistoryMaxChars?: number;
+  /**
+   * Controls whether persisted agent reasoning is included in future LLM-visible
+   * history. Defaults to `{ include: "self", maxChars: 2000 }`.
+   */
+  reasoningHistory?: ReasoningHistoryOptions;
   /**
    * Stale processing event threshold in milliseconds.
    * Events stuck in "processing" status longer than this will be reset to "pending" on next check.
@@ -1773,6 +1783,10 @@ export async function createCopilotz(
       toolExecutionTimeoutMs,
       toolExecutionTimeoutsMs,
       toolResultHistoryMaxChars: config.toolResultHistoryMaxChars ?? 10_000,
+      reasoningHistory: config.reasoningHistory ?? {
+        include: "self",
+        maxChars: 2000,
+      },
       // Sender of the current message (available to processors and tools)
       sender: normalizedMessage.sender
         ? {

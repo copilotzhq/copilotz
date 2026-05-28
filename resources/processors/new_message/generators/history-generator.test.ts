@@ -52,6 +52,97 @@ Deno.test("historyGenerator uses sender display names instead of graph ids in pr
   );
 });
 
+Deno.test("historyGenerator includes only current agent reasoning by default", () => {
+  const currentAgent: Agent = {
+    id: "agent-1",
+    name: "agent-1",
+    role: "assistant",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  };
+
+  const generated = historyGenerator([
+    {
+      threadId: "t-1",
+      senderId: "agent-1",
+      senderType: "agent",
+      content: "I found the answer.",
+      reasoning: "Need to summarize the result.",
+    },
+    {
+      threadId: "t-1",
+      senderId: "agent-2",
+      senderType: "agent",
+      content: "Peer answer.",
+      reasoning: "Peer private reasoning.",
+      metadata: { senderDisplayName: "reviewer" },
+    },
+  ], currentAgent);
+
+  assertEquals(
+    generated[0]?.content,
+    "I found the answer.\n\n<previous_reasoning>\nNeed to summarize the result.\n</previous_reasoning>",
+  );
+  assertEquals(generated[1]?.content, "[reviewer]: Peer answer.");
+});
+
+Deno.test("historyGenerator can disable reasoning history", () => {
+  const currentAgent: Agent = {
+    id: "agent-1",
+    name: "agent-1",
+    role: "assistant",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  };
+
+  const generated = historyGenerator(
+    [
+      {
+        threadId: "t-1",
+        senderId: "agent-1",
+        senderType: "agent",
+        content: "Visible answer.",
+        reasoning: "Hidden reasoning.",
+      },
+    ],
+    currentAgent,
+    {
+      reasoningHistory: { include: "none" },
+    },
+  );
+
+  assertEquals(generated[0]?.content, "Visible answer.");
+});
+
+Deno.test("historyGenerator can include all agent reasoning with a cap", () => {
+  const currentAgent: Agent = {
+    id: "agent-1",
+    name: "agent-1",
+    role: "assistant",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  };
+
+  const generated = historyGenerator(
+    [
+      {
+        threadId: "t-1",
+        senderId: "agent-2",
+        senderType: "agent",
+        content: "Peer answer.",
+        reasoning: "x".repeat(80),
+        metadata: { senderDisplayName: "reviewer" },
+      },
+    ],
+    currentAgent,
+    {
+      reasoningHistory: { include: "all", maxChars: 60 },
+    },
+  );
+
+  assertEquals(
+    generated[0]?.content,
+    "[reviewer]: Peer answer.\n\n<previous_reasoning>\nxxxxxxxxxxxxxxxxxxxx\n[reasoning truncated: 20 chars omitted]\n</previous_reasoning>",
+  );
+});
+
 Deno.test("historyGenerator truncates large tool outputs when maxToolResultChars is set", () => {
   const currentAgent: Agent = {
     id: "agent-1",

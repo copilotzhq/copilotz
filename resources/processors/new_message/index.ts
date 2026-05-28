@@ -1819,6 +1819,7 @@ export const messageProcessor: EventProcessor<
           includeTargetContext: includeTargetContext && !directConversation,
           directConversation,
           maxToolResultChars: context.toolResultHistoryMaxChars,
+          reasoningHistory: context.reasoningHistory,
         },
       );
       const llmHistory: ChatMessage[] = context.historyTransform

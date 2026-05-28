@@ -1,6 +1,7 @@
 import type {
   Agent,
   NewMessage,
+  ReasoningHistoryOptions,
   ToolHistoryVisibility,
 } from "@/types/index.ts";
 import type {
@@ -203,9 +204,52 @@ export interface HistoryGeneratorOptions {
    * `createCopilotz({ toolResultHistoryMaxChars: 0 })` to disable per-result caps.
    */
   maxToolResultChars?: number;
+  /**
+   * Controls whether persisted agent reasoning is included in LLM-visible
+   * history. Defaults to `{ include: "self", maxChars: 2000 }`.
+   */
+  reasoningHistory?: ReasoningHistoryOptions;
 }
 
 const DEFAULT_MAX_TOOL_RESULT_CHARS = 10_000;
+const DEFAULT_REASONING_HISTORY_MAX_CHARS = 2_000;
+
+function normalizeReasoningHistoryOptions(
+  options?: ReasoningHistoryOptions,
+): Required<ReasoningHistoryOptions> {
+  return {
+    include: options?.include ?? "self",
+    maxChars: typeof options?.maxChars === "number"
+      ? options.maxChars
+      : DEFAULT_REASONING_HISTORY_MAX_CHARS,
+  };
+}
+
+function truncateReasoningForHistory(
+  reasoning: string,
+  maxChars: number,
+): string {
+  if (maxChars === 0 || reasoning.length <= maxChars) return reasoning;
+  if (maxChars < 48) return "[reasoning truncated]";
+  const suffix = `\n[reasoning truncated: ${
+    reasoning.length - maxChars
+  } chars omitted]`;
+  return `${
+    reasoning.slice(0, Math.max(0, maxChars - suffix.length))
+  }${suffix}`;
+}
+
+function appendReasoningForHistory(
+  content: string,
+  reasoning: string,
+  maxChars: number,
+): string {
+  const trimmed = reasoning.trim();
+  if (!trimmed) return content;
+  const capped = truncateReasoningForHistory(trimmed, maxChars);
+  const block = `<previous_reasoning>\n${capped}\n</previous_reasoning>`;
+  return content ? `${content}\n\n${block}` : block;
+}
 
 function truncateToolOutputForHistory(
   maxChars: number,
@@ -351,6 +395,9 @@ export function historyGenerator(
   const maxToolResultChars = typeof options?.maxToolResultChars === "number"
     ? options.maxToolResultChars
     : DEFAULT_MAX_TOOL_RESULT_CHARS;
+  const reasoningHistory = normalizeReasoningHistoryOptions(
+    options?.reasoningHistory,
+  );
 
   return chatHistory.flatMap((msg, _i) => {
     // Current agent's messages = "assistant"
@@ -415,6 +462,19 @@ export function historyGenerator(
           content = `${content}\n(addressed to: ${targetName})`;
         }
       }
+    }
+
+    if (
+      reasoningHistory.include !== "none" &&
+      !isToolResult &&
+      typeof msg.reasoning === "string" &&
+      (reasoningHistory.include === "all" || isCurrentAgent)
+    ) {
+      content = appendReasoningForHistory(
+        content,
+        msg.reasoning,
+        reasoningHistory.maxChars,
+      );
     }
 
     const attachmentParts = buildAttachmentParts(metadata);

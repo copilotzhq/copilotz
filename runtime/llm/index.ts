@@ -42,7 +42,7 @@ const RECOVERABLE_FINISH_REASONS: ReadonlySet<ProviderFinishReason> = new Set([
 
 const INTENTIONAL_EMPTY_PATTERN =
   /<(no_response|route_to|ask_to|continue_after_tool_results)[\s/>]/;
-const REASONING_HISTORY_TAG = "previous_reasoning";
+const REASONING_HISTORY_TAG = "think";
 
 function buildRecoveryCue(reason: string | null): string {
   switch (reason) {
@@ -245,16 +245,19 @@ export async function chat(
       : undefined;
 
     const prefixBeforeAttempt = recoveryPrefix;
+    const materializedMessages = request.materializeMessages
+      ? await request.materializeMessages(messages, attemptConfig)
+      : messages;
     const attemptMessages = prefixBeforeAttempt.length > 0
       ? [
-        ...messages,
+        ...materializedMessages,
         { role: "assistant" as const, content: prefixBeforeAttempt },
         {
           role: "user" as const,
           content: buildRecoveryCue(lastRecoveryReason),
         },
       ]
-      : messages;
+      : materializedMessages;
 
     try {
       const extractedBlockTags = [
@@ -357,13 +360,13 @@ export async function chat(
         ? "aborted"
         : "completed";
       const usage = normalizeProviderUsage(streamResult.usage, usageStatus) ??
-        await estimateUsage(messages, parsed.cleanResponse, usageStatus);
+        await estimateUsage(attemptMessages, parsed.cleanResponse, usageStatus);
       const cost = await estimateUsageCost(attemptConfig, usage ?? undefined);
       const totalTokens = usage.totalTokens ??
-        await countTokens(messages, parsed.cleanResponse);
+        await countTokens(attemptMessages, parsed.cleanResponse);
 
       return {
-        prompt: messages,
+        prompt: attemptMessages,
         answer: parsed.cleanResponse,
         ...(reasoning && { reasoning }),
         tokens: totalTokens,

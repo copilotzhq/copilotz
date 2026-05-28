@@ -27,7 +27,7 @@ import type {
   TokenEventPayload,
 } from "@/types/index.ts";
 import { ulid } from "ulid";
-import { resolveAssetRefsInMessages } from "@/runtime/storage/assets.ts";
+import { materializeAssetRefsForProvider } from "@/runtime/llm/asset-materialization.ts";
 import { filterToolCallTokensStreaming } from "@/runtime/llm/utils.ts";
 import { createLlmUsageService } from "@/runtime/collections/native.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
@@ -203,70 +203,72 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     const shouldResolve = perAgentResolve !== undefined
       ? perAgentResolve
       : context.assetConfig?.resolveInLLM !== false;
-    const resolvedMessages = await (async () => {
+    if (shouldResolve && !context.assetStore) {
       try {
-        if (shouldResolve) {
-          // Warn if resolution is expected but store is missing
-          if (!context.assetStore) {
-            try {
-              const anyGlobal = globalThis as unknown as {
-                Deno?: { env?: { get?: (key: string) => string | undefined } };
-                console?: { warn?: (...args: unknown[]) => void };
-              };
-              const debugFlag = anyGlobal?.Deno?.env?.get?.("COPILOTZ_DEBUG");
-              if (debugFlag === "1" && anyGlobal.console?.warn) {
-                anyGlobal.console.warn(
-                  "[llm_call] resolveInLLM is true but assetStore is undefined - asset refs will not be resolved",
-                );
-              }
-            } catch {
-              // ignore logging failures
-            }
-          }
-          const res = await resolveAssetRefsInMessages(
-            payload.messages as ChatMessage[],
+        const anyGlobal = globalThis as unknown as {
+          Deno?: { env?: { get?: (key: string) => string | undefined } };
+          console?: { warn?: (...args: unknown[]) => void };
+        };
+        const debugFlag = anyGlobal?.Deno?.env?.get?.("COPILOTZ_DEBUG");
+        if (debugFlag === "1" && anyGlobal.console?.warn) {
+          anyGlobal.console.warn(
+            "[llm_call] resolveInLLM is true but assetStore is undefined - asset refs will be omitted from provider media parts",
+          );
+        }
+      } catch {
+        // ignore logging failures
+      }
+    }
+
+    const baseMessages = shouldResolve
+      ? payload.messages as ChatMessage[]
+      : (payload.messages as ChatMessage[]).map((m) => {
+        if (Array.isArray(m.content)) {
+          const textOnly = m.content
+            .map((p) =>
+              (p && typeof p === "object" &&
+                  (p as { type?: string }).type === "text")
+                ? (p as { text?: string }).text ?? ""
+                : ""
+            )
+            .join("");
+          return { ...m, content: textOnly };
+        }
+        return m;
+      });
+
+    const materializeMessages = shouldResolve
+      ? async (messages: ChatMessage[], providerConfig: ProviderConfig) => {
+        try {
+          return await materializeAssetRefsForProvider(
+            messages,
+            providerConfig,
             context.assetStore,
           );
-          return res.messages;
-        }
-        const msgs = (payload.messages as ChatMessage[]).map((m) => {
-          if (Array.isArray(m.content)) {
-            const textOnly = m.content
-              .map((p) =>
-                (p && typeof p === "object" &&
-                    (p as { type?: string }).type === "text")
-                  ? (p as { text?: string }).text ?? ""
-                  : ""
-              )
-              .join("");
-            return { ...m, content: textOnly };
-          }
-          return m;
-        });
-        return msgs;
-      } catch (err) {
-        // In debug mode, surface the underlying error so asset resolution issues are visible.
-        try {
-          const anyGlobal = globalThis as unknown as {
-            Deno?: {
-              env?: { get?: (key: string) => string | undefined };
-              stderr?: { writeSync?: (data: Uint8Array) => unknown };
+        } catch (err) {
+          // In debug mode, surface the underlying error so asset resolution issues are visible.
+          try {
+            const anyGlobal = globalThis as unknown as {
+              Deno?: {
+                env?: { get?: (key: string) => string | undefined };
+                stderr?: { writeSync?: (data: Uint8Array) => unknown };
+              };
+              console?: { warn?: (...args: unknown[]) => void };
             };
-            console?: { warn?: (...args: unknown[]) => void };
-          };
-          const debugFlag = anyGlobal?.Deno?.env?.get?.("COPILOTZ_DEBUG");
-          if (debugFlag === "1" && anyGlobal.console?.warn) {
-            anyGlobal.console.warn(
-              "[llm_call] resolveAssetRefsInMessages failed:",
-              err,
-            );
+            const debugFlag = anyGlobal?.Deno?.env?.get?.("COPILOTZ_DEBUG");
+            if (debugFlag === "1" && anyGlobal.console?.warn) {
+              anyGlobal.console.warn(
+                "[llm_call] materializeAssetRefsForProvider failed:",
+                err,
+              );
+            }
+          } catch {
+            // ignore logging failures
           }
-        } catch {
-          // ignore logging failures
+          return messages;
         }
-        return payload.messages as ChatMessage[];
       }
-    })();
+      : undefined;
 
     const agentForCall = context.agents?.find((a) => a.id === payload.agent.id);
     const persistedConfig = (payload.config ?? {}) as LLMConfig;
@@ -322,7 +324,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       console.log("shouldResolve", shouldResolve);
       console.log("hasAssetStore", !!context.assetStore);
       console.log("configForCall", toLLMConfig(configForCall));
-      console.log("resolvedMessages", resolvedMessages);
+      console.log("baseMessages", baseMessages);
     }
 
     const eventMetadata = event.metadata &&
@@ -350,9 +352,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     try {
       response = await chat(
         {
-          messages: resolvedMessages,
+          messages: baseMessages,
           tools: payload.tools,
-          extractTags: ["route_to", "ask_to", "previous_reasoning"],
+          extractTags: ["route_to", "ask_to", "think"],
+          ...(materializeMessages ? { materializeMessages } : {}),
         } as ChatRequest,
         configForCall,
         envVars,

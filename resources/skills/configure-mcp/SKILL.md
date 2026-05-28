@@ -52,11 +52,7 @@ export default {
   toolPolicies: {
     read_file: { visibility: "requester_only" },
     list_directory: {
-      visibility: "public_result",
-      projector: (_args, output) => {
-        const result = output as { entries?: unknown[] };
-        return `Listed ${result.entries?.length ?? 0} entries.`;
-      },
+      visibility: "public",
     },
   },
 } as MCPServer;

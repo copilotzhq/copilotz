@@ -198,10 +198,6 @@ export type {
   ToolHistoryPolicyConfig,
   /** Runtime-only history visibility for tool results across agents. */
   ToolHistoryVisibility,
-  /** Callback type for projecting shared tool results. */
-  ToolResultProjector,
-  /** Context passed to tool result projector callbacks. */
-  ToolResultProjectorContext,
 } from "@/types/index.ts";
 export type {
   GoalAssessment,

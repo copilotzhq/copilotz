@@ -67,9 +67,6 @@ export const toolResultProcessor: EventProcessor<
             ...(typeof payload.historyVisibility === "string"
               ? { visibility: payload.historyVisibility }
               : {}),
-            ...(typeof payload.projectedOutput !== "undefined"
-              ? { projectedOutput: payload.projectedOutput }
-              : {}),
           },
         ],
         ...(payload.batchId ? { batchId: payload.batchId } : {}),

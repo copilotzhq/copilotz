@@ -247,7 +247,7 @@ function appendReasoningForHistory(
   const trimmed = reasoning.trim();
   if (!trimmed) return content;
   const capped = truncateReasoningForHistory(trimmed, maxChars);
-  const block = `<previous_reasoning>\n${capped}\n</previous_reasoning>`;
+  const block = `<think>\n${capped}\n</think>`;
   return content ? `${content}\n\n${block}` : block;
 }
 
@@ -319,8 +319,121 @@ function resolveTargetName(
 
 type ParsedToolCall = ToolInvocation & {
   visibility?: ToolHistoryVisibility;
-  projectedOutput?: unknown;
 };
+
+const OMITTED_TOOL_VALUE = {
+  _copilotz_omitted: true,
+  reason: "public_status",
+} as const;
+
+function sanitizeMetadataForHistory(
+  metadata?: MessageMetadata,
+): MessageMetadata | undefined {
+  if (!metadata) return undefined;
+  const { toolCalls: _toolCalls, ...rest } = metadata as MessageMetadata & {
+    toolCalls?: unknown;
+  };
+  return Object.keys(rest).length > 0 ? rest as MessageMetadata : undefined;
+}
+
+function normalizeToolVisibility(
+  visibility: unknown,
+): ToolHistoryVisibility {
+  return visibility === "requester_only" || visibility === "public"
+    ? visibility
+    : "public_status";
+}
+
+function normalizeVisibleContent(content: string): string {
+  return content
+    .replace(/<span\b[^>]*>\s*<\/span>/gi, "")
+    .trim();
+}
+
+function prefixSpeakerContent(speaker: string, content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) return `[${speaker}]:`;
+  if (trimmed.startsWith("<tool_") || trimmed.includes("\n")) {
+    return `[${speaker}]:\n${trimmed}`;
+  }
+  return `[${speaker}]: ${trimmed}`;
+}
+
+function parseToolArgs(args: ToolInvocation["args"]): unknown {
+  if (typeof args !== "string") return args ?? {};
+  try {
+    return JSON.parse(args);
+  } catch {
+    return args;
+  }
+}
+
+function buildPeerToolCallsBlock(toolCalls: ParsedToolCall[]): string | null {
+  const objects = toolCalls.flatMap((call) => {
+    const visibility = normalizeToolVisibility(call.visibility);
+    if (visibility === "requester_only") return [];
+    const obj: Record<string, unknown> = {
+      name: call.tool.id,
+      status: call.status ?? "requested",
+      arguments: visibility === "public"
+        ? parseToolArgs(call.args)
+        : OMITTED_TOOL_VALUE,
+    };
+    if (call.id) obj.tool_call_id = call.id;
+    return [JSON.stringify(obj)];
+  });
+
+  return objects.length > 0
+    ? ["<tool_calls>", ...objects, "</tool_calls>"].join("\n")
+    : null;
+}
+
+function buildPeerToolResultsBlock(toolCalls: ParsedToolCall[]): string | null {
+  const objects = toolCalls.flatMap((call) => {
+    const visibility = normalizeToolVisibility(call.visibility);
+    if (visibility === "requester_only") return [];
+    const obj: Record<string, unknown> = {
+      name: call.tool.id,
+      status: call.status ?? "completed",
+      output: visibility === "public"
+        ? ("output" in call ? call.output : null)
+        : OMITTED_TOOL_VALUE,
+    };
+    if (call.id) obj.tool_call_id = call.id;
+    return [JSON.stringify(obj)];
+  });
+
+  return objects.length > 0
+    ? ["<tool_results>", ...objects, "</tool_results>"].join("\n")
+    : null;
+}
+
+function collectToolVisibilityByCallId(
+  chatHistory: NewMessage[],
+): Map<string, ToolHistoryVisibility> {
+  const visibilityByCallId = new Map<string, ToolHistoryVisibility>();
+
+  for (const msg of chatHistory) {
+    if (msg.senderType !== "tool") continue;
+    const metadata = (msg.metadata ?? undefined) as MessageMetadata | undefined;
+    const toolCalls = Array.isArray(metadata?.toolCalls)
+      ? metadata.toolCalls
+      : [];
+    for (const call of toolCalls) {
+      if (!call || typeof call !== "object") continue;
+      const maybeCall = call as { id?: unknown; visibility?: unknown };
+      if (typeof maybeCall.id !== "string" || maybeCall.id.length === 0) {
+        continue;
+      }
+      visibilityByCallId.set(
+        maybeCall.id,
+        normalizeToolVisibility(maybeCall.visibility),
+      );
+    }
+  }
+
+  return visibilityByCallId;
+}
 
 function matchesAgentIdentity(
   agent: Agent,
@@ -398,8 +511,9 @@ export function historyGenerator(
   const reasoningHistory = normalizeReasoningHistoryOptions(
     options?.reasoningHistory,
   );
+  const toolVisibilityByCallId = collectToolVisibilityByCallId(chatHistory);
 
-  return chatHistory.flatMap((msg, _i) => {
+  return chatHistory.flatMap((msg, _i): ChatMessage[] => {
     // Current agent's messages = "assistant"
     // Tool results = "tool" (even if senderId matches agent, because senderType is "tool")
     // Everyone else (users + other agents) = "user" with [Name]: prefix
@@ -425,69 +539,22 @@ export function historyGenerator(
         : msg.senderType);
 
     const rawToolCalls = (msg as unknown as { toolCalls?: unknown }).toolCalls;
+    const rawToolCallsArray = Array.isArray(rawToolCalls) ? rawToolCalls : [];
     const metadataToolCalls = Array.isArray(metadata?.toolCalls)
       ? metadata.toolCalls
       : [];
-    const hasStructuredToolResult =
-      (Array.isArray(rawToolCalls) && rawToolCalls.length > 0) ||
+    const hasStructuredToolResult = rawToolCallsArray.length > 0 ||
       metadataToolCalls.length > 0;
 
-    let content = msg.content || "";
+    let content = normalizeVisibleContent(msg.content || "");
 
-    // Prefix with sender name for non-current-agent messages.
-    // Structured tool results are rendered later in the formatter, so keep
-    // their raw content untouched here unless we have no structured metadata.
-    if (
-      isToolResult && !hasStructuredToolResult && msg.senderType !== "system"
-    ) {
-      content = `[Tool Result]: ${content}`;
-    } else if (
-      !directConversation && !isCurrentAgent && msg.senderType !== "system" &&
-      !isToolResult
-    ) {
-      const senderName = resolveSpeakerLabel(msg, metadata);
-      content = `[${senderName}]: ${content}`;
-    }
-
-    // Include target info for context (who they were addressing)
-    // This helps agents understand the conversation flow in multi-agent scenarios
-    if (includeTargetContext && !isCurrentAgent && !isToolResult) {
-      const msgWithTarget = msg as NewMessage & { targetId?: string | null };
-      if (msgWithTarget.targetId) {
-        const targetName = resolveTargetName(msgWithTarget.targetId, metadata);
-        // Only add if it's meaningful context
-        if (
-          targetName !== currentAgent.name && targetName !== currentAgent.id
-        ) {
-          content = `${content}\n(addressed to: ${targetName})`;
-        }
-      }
-    }
-
-    if (
-      reasoningHistory.include !== "none" &&
-      !isToolResult &&
-      typeof msg.reasoning === "string" &&
-      (reasoningHistory.include === "all" || isCurrentAgent)
-    ) {
-      content = appendReasoningForHistory(
-        content,
-        msg.reasoning,
-        reasoningHistory.maxChars,
-      );
-    }
-
-    const attachmentParts = buildAttachmentParts(metadata);
-    const finalContent: string | ChatContentPart[] = attachmentParts
-      ? [{ type: "text", text: content }, ...attachmentParts]
-      : content;
-
-    // Prefer top-level toolCalls when present, but fall back to metadata for
-    // persisted tool-result messages where execution data lives under metadata.
-    const toolCallsSource =
-      Array.isArray(rawToolCalls) && rawToolCalls.length > 0
-        ? rawToolCalls
-        : metadataToolCalls;
+    // Prefer persisted tool-result metadata for tool result messages. For
+    // agent messages, top-level toolCalls are the model-requested calls.
+    const toolCallsSource = isToolResult
+      ? metadataToolCalls
+      : rawToolCallsArray.length > 0
+      ? rawToolCallsArray
+      : metadataToolCalls;
     const parsedToolCalls: ParsedToolCall[] = toolCallsSource.length > 0
       ? toolCallsSource.flatMap((call, i): ParsedToolCall[] => {
         const maybeCall = call as {
@@ -498,7 +565,6 @@ export function historyGenerator(
           output?: unknown;
           status?: ToolInvocation["status"];
           visibility?: ToolHistoryVisibility;
-          projectedOutput?: unknown;
         };
 
         const toolId = maybeCall.tool?.id ?? maybeCall.name ?? "";
@@ -533,16 +599,92 @@ export function historyGenerator(
           ...("status" in maybeCall && typeof maybeCall.status === "string"
             ? { status: maybeCall.status }
             : {}),
-          ...("visibility" in maybeCall &&
-              typeof maybeCall.visibility === "string"
-            ? { visibility: maybeCall.visibility }
-            : {}),
-          ...("projectedOutput" in maybeCall
-            ? { projectedOutput: maybeCall.projectedOutput }
-            : {}),
+          visibility: normalizeToolVisibility(
+            maybeCall.visibility ?? toolVisibilityByCallId.get(callId),
+          ),
         }];
       })
       : [];
+
+    if (isToolResult && !isRequestingAgent) {
+      const toolResultsBlock = buildPeerToolResultsBlock(parsedToolCalls);
+      const parts = [content, toolResultsBlock].filter((
+        part,
+      ): part is string => typeof part === "string" && part.trim().length > 0);
+      if (parts.length === 0) return [];
+
+      const senderName = resolveSpeakerLabel(msg, metadata);
+      const safeMetadata = sanitizeMetadataForHistory(metadata);
+      return [{
+        content: prefixSpeakerContent(senderName, parts.join("\n")),
+        role: "user",
+        senderId: msg.senderId || undefined,
+        ...(safeMetadata ? { metadata: safeMetadata } : {}),
+      }];
+    }
+
+    // Prefix with sender name for non-current-agent messages.
+    // Structured tool results are rendered later in the formatter, so keep
+    // their raw content untouched here unless we have no structured metadata.
+    if (
+      isToolResult && !hasStructuredToolResult && msg.senderType !== "system"
+    ) {
+      content = `[Tool Result]: ${content}`;
+    } else if (
+      !directConversation && !isCurrentAgent && msg.senderType !== "system" &&
+      !isToolResult
+    ) {
+      const senderName = resolveSpeakerLabel(msg, metadata);
+      const peerToolCallsBlock = parsedToolCalls.length > 0
+        ? buildPeerToolCallsBlock(parsedToolCalls)
+        : null;
+      const parts = [content, peerToolCallsBlock].filter((
+        part,
+      ): part is string => typeof part === "string" && part.trim().length > 0);
+      if (parts.length === 0 && msg.senderType === "agent") return [];
+      content = prefixSpeakerContent(senderName, parts.join("\n"));
+    }
+
+    // Include target info for context (who they were addressing)
+    // This helps agents understand the conversation flow in multi-agent scenarios
+    if (includeTargetContext && !isCurrentAgent && !isToolResult) {
+      const msgWithTarget = msg as NewMessage & { targetId?: string | null };
+      if (msgWithTarget.targetId) {
+        const targetName = resolveTargetName(msgWithTarget.targetId, metadata);
+        // Only add if it's meaningful context
+        if (
+          targetName !== currentAgent.name && targetName !== currentAgent.id
+        ) {
+          content = `${content}\n(addressed to: ${targetName})`;
+        }
+      }
+    }
+
+    if (
+      reasoningHistory.include !== "none" &&
+      !isToolResult &&
+      typeof msg.reasoning === "string" &&
+      (reasoningHistory.include === "all" || isCurrentAgent)
+    ) {
+      content = appendReasoningForHistory(
+        content,
+        msg.reasoning,
+        reasoningHistory.maxChars,
+      );
+    }
+
+    if (
+      content.trim().length === 0 &&
+      msg.senderType === "agent" &&
+      !isCurrentAgent
+    ) {
+      return [];
+    }
+
+    const attachmentParts = buildAttachmentParts(metadata);
+    const finalContent: string | ChatContentPart[] = attachmentParts
+      ? [{ type: "text", text: content }, ...attachmentParts]
+      : content;
 
     const toolResultQueueEventId =
       typeof metadata?.toolResultQueueEventId === "string"
@@ -555,7 +697,7 @@ export function historyGenerator(
       const visibleToolCalls = parsedToolCalls.flatMap((call) => {
         const visibility = call.visibility ?? "public_status";
 
-        if (isRequestingAgent || visibility === "public_full") {
+        if (isRequestingAgent || visibility === "public") {
           return [
             applyToolHistoryCharCap(
               maxToolResultChars,
@@ -563,16 +705,6 @@ export function historyGenerator(
               toolResultQueueEventId,
             ),
           ];
-        }
-
-        if (visibility === "public_result") {
-          const capped = applyToolHistoryCharCap(maxToolResultChars, {
-            ...stripParsedToolCall(call),
-            output: typeof call.projectedOutput !== "undefined"
-              ? call.projectedOutput
-              : null,
-          }, toolResultQueueEventId);
-          return [capped];
         }
 
         if (visibility === "public_status") {
@@ -592,11 +724,13 @@ export function historyGenerator(
       toolCalls = parsedToolCalls.map(stripParsedToolCall);
     }
 
+    const safeMetadata = sanitizeMetadataForHistory(metadata);
+
     return [{
       content: hideToolResultContent ? "" : finalContent,
       role: role,
       senderId: msg.senderId || undefined,
-      metadata: metadata,
+      ...(safeMetadata ? { metadata: safeMetadata } : {}),
       tool_call_id: (msg as unknown as { toolCallId?: string }).toolCallId ||
         undefined,
       ...(toolCalls ? { toolCalls } : {}),

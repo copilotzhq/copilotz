@@ -45,10 +45,7 @@ const config: Omit<Tool, "execute"> = {
   },
   // Optional: control how tool results appear in chat history
   historyPolicy: {
-    visibility: "public_result", // "requester_only" | "public_status" | "public_result" | "public_full"
-    projector: (input, output) => {
-      return `Tool completed for ${input.param1}`;
-    },
+    visibility: "public_status", // "requester_only" | "public_status" | "public"
   },
 };
 
@@ -100,10 +97,7 @@ Controls how tool calls and results appear in chat history for other agents:
 
 - `requester_only`: Only the calling agent sees results
 - `public_status`: Other agents see tool name and status only (default)
-- `public_result`: All agents see a projected summary
-- `public_full`: All agents see full input and output
-
-Use `projector` with `public_result` for compact summaries.
+- `public`: All agents see full input and output
 
 ## Notes
 

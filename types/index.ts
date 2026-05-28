@@ -227,29 +227,13 @@ export type ResolveLLMRuntimeConfig = (
 export type ToolHistoryVisibility =
   | "requester_only"
   | "public_status"
-  | "public_result"
-  | "public_full";
-
-export interface ToolResultProjectorContext {
-  toolKey: string;
-  toolName: string;
-  status: "completed" | "failed";
-  error?: unknown;
-}
-
-export type ToolResultProjector = (
-  args: unknown,
-  output: unknown,
-  context: ToolResultProjectorContext,
-) => unknown | Promise<unknown>;
+  | "public";
 
 export interface ToolHistoryPolicyConfig {
   visibility?: ToolHistoryVisibility;
 }
 
-export interface ToolHistoryPolicy extends ToolHistoryPolicyConfig {
-  projector?: ToolResultProjector;
-}
+export interface ToolHistoryPolicy extends ToolHistoryPolicyConfig {}
 
 type ToolExecuteFn = (
   // deno-lint-ignore no-explicit-any

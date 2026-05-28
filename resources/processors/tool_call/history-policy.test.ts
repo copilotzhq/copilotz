@@ -5,18 +5,13 @@ import {
   projectToolResultForHistory,
 } from "./history-policy.ts";
 
-Deno.test("projectToolResultForHistory applies tool projector for public_result tools", async () => {
+Deno.test("projectToolResultForHistory preserves explicit public visibility", async () => {
   const result = await projectToolResultForHistory(
     {
       key: "lookup_route",
       name: "Lookup Route",
       historyPolicy: {
-        visibility: "public_result",
-        projector: (args: unknown, output: unknown) => {
-          const input = args as { origin: string; destination: string };
-          const toolOutput = output as { routeId: string };
-          return `Route resolved: ${input.origin} -> ${input.destination} (${toolOutput.routeId})`;
-        },
+        visibility: "public",
       },
     },
     {
@@ -27,11 +22,7 @@ Deno.test("projectToolResultForHistory applies tool projector for public_result 
     undefined,
   );
 
-  assertEquals(result.visibility, "public_result");
-  assertEquals(
-    result.projectedOutput,
-    "Route resolved: Sao Paulo -> Piracicaba (route-123)",
-  );
+  assertEquals(result.visibility, "public");
 });
 
 Deno.test("projectToolResultForHistory defaults visibility to public_status", async () => {
@@ -47,5 +38,4 @@ Deno.test("projectToolResultForHistory defaults visibility to public_status", as
 
   assertEquals(result.visibility, DEFAULT_TOOL_HISTORY_VISIBILITY);
   assertEquals(result.visibility, "public_status");
-  assertEquals(result.projectedOutput, undefined);
 });

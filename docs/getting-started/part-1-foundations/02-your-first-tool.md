@@ -155,13 +155,13 @@ You can control how tool results appear in history with `historyPolicy`:
 {
   key: "my_tool",
   historyPolicy: {
-    visibility: "public_result",   // "requester_only" | "public_status" | "public_result" | "public_full"
+    visibility: "public_status",   // "requester_only" | "public_status" | "public"
   },
   execute: async (args) => { ... },
 }
 ```
 
-`requester_only` hides the result from other agents in multi-agent scenarios. `public_result` shows the result to all agents. Useful when you have orchestrator/worker patterns.
+`requester_only` hides the tool activity from other agents in multi-agent scenarios. `public_status` shares only name/status. `public` shares full tool calls and results.
 
 ## What this unlocks
 

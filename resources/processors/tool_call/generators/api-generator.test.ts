@@ -163,7 +163,7 @@ Deno.test("API tool applies history policy overrides to generated tools", () => 
     },
     toolPolicies: {
       getStatus: {
-        visibility: "public_result",
+        visibility: "public",
       },
     },
   }));
@@ -171,7 +171,7 @@ Deno.test("API tool applies history policy overrides to generated tools", () => 
   assertObjectMatch(tool, {
     key: "getStatus",
     historyPolicy: {
-      visibility: "public_result",
+      visibility: "public",
     },
   });
 });

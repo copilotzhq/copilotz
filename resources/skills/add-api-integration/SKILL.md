@@ -41,11 +41,7 @@ const config: Omit<API, "openApiSchema"> = {
   },
   toolPolicies: {
     getItem: { // Keyed by operationId
-      visibility: "public_result",
-      projector: (_args, output) => {
-        const item = output as { name?: string };
-        return `Loaded item: ${item.name}`;
-      },
+      visibility: "public",
     },
   },
 };

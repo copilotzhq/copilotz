@@ -80,7 +80,7 @@ Deno.test("historyGenerator includes only current agent reasoning by default", (
 
   assertEquals(
     generated[0]?.content,
-    "I found the answer.\n\n<previous_reasoning>\nNeed to summarize the result.\n</previous_reasoning>",
+    "I found the answer.\n\n<think>\nNeed to summarize the result.\n</think>",
   );
   assertEquals(generated[1]?.content, "[reviewer]: Peer answer.");
 });
@@ -139,7 +139,7 @@ Deno.test("historyGenerator can include all agent reasoning with a cap", () => {
 
   assertEquals(
     generated[0]?.content,
-    "[reviewer]: Peer answer.\n\n<previous_reasoning>\nxxxxxxxxxxxxxxxxxxxx\n[reasoning truncated: 20 chars omitted]\n</previous_reasoning>",
+    "[reviewer]: Peer answer.\n\n<think>\nxxxxxxxxxxxxxxxxxxxx\n[reasoning truncated: 20 chars omitted]\n</think>",
   );
 });
 
@@ -227,7 +227,7 @@ Deno.test("historyGenerator defaults tool output cap to 10_000 chars when maxToo
   );
 });
 
-Deno.test("historyGenerator defaults peer tool result visibility to status only", () => {
+Deno.test("historyGenerator renders peer public_status tool result as attributed user tags", () => {
   const currentAgent: Agent = {
     id: "reviewer",
     name: "reviewer",
@@ -250,6 +250,7 @@ Deno.test("historyGenerator defaults peer tool result visibility to status only"
           args: JSON.stringify({ query: "private query" }),
           output: { secret: "raw output" },
           status: "completed",
+          visibility: "public_status",
         }],
       },
     },
@@ -260,29 +261,27 @@ Deno.test("historyGenerator defaults peer tool result visibility to status only"
   });
 
   assertEquals(generated.length, 1);
-  assertEquals(generated[0]?.role, "tool");
-  assertEquals(generated[0]?.toolCalls, [{
-    id: "c1",
-    tool: { id: "search_web" },
-    args: "{}",
-    status: "completed",
-  }]);
-  assertEquals(generated[0]?.content, "");
-
-  const formatted = formatMessages({ messages: generated });
-  assertEquals(formatted.length, 2);
+  assertEquals(generated[0]?.role, "user");
+  assertEquals(generated[0]?.toolCalls, undefined);
+  assertEquals(generated[0]?.metadata?.toolCalls, undefined);
   assertEquals(
-    formatted[0]?.content,
+    generated[0]?.content,
     [
+      "[researcher]:",
       "<tool_results>",
       JSON.stringify({
         name: "search_web",
-        tool_call_id: "c1",
         status: "completed",
+        output: { _copilotz_omitted: true, reason: "public_status" },
+        tool_call_id: "c1",
       }),
       "</tool_results>",
     ].join("\n"),
   );
+
+  const formatted = formatMessages({ messages: generated });
+  assertEquals(formatted.length, 1);
+  assertEquals(formatted[0]?.role, "user");
 });
 
 Deno.test("historyGenerator keeps full default tool result for requesting agent", () => {
@@ -325,4 +324,160 @@ Deno.test("historyGenerator keeps full default tool result for requesting agent"
     output: { secret: "raw output" },
     status: "completed",
   });
+});
+
+Deno.test("historyGenerator renders peer public tool calls and results fully as user transcript", () => {
+  const currentAgent: Agent = {
+    id: "north",
+    name: "North",
+    role: "assistant",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  };
+
+  const generated = historyGenerator(
+    [
+      {
+        id: "m-call",
+        threadId: "t-1",
+        senderId: "east",
+        senderType: "agent",
+        content: "<span></span>",
+        toolCalls: [{
+          id: "c1",
+          tool: { id: "sandbox_session" },
+          args: JSON.stringify({ actions: [{ action: "exec", cmd: "ls" }] }),
+        }] as never,
+        metadata: { senderDisplayName: "East" },
+      },
+      {
+        id: "m-tool",
+        threadId: "t-1",
+        senderId: "east",
+        senderType: "tool",
+        content: "",
+        metadata: {
+          senderDisplayName: "East",
+          toolCalls: [{
+            id: "c1",
+            tool: { id: "sandbox_session" },
+            args: JSON.stringify({ actions: [{ action: "exec", cmd: "ls" }] }),
+            output: { success: true },
+            status: "completed",
+            visibility: "public",
+          }],
+        },
+      },
+    ],
+    currentAgent,
+    { includeTargetContext: false },
+  );
+
+  assertEquals(generated.length, 2);
+  assertEquals(generated[0]?.role, "user");
+  assertEquals(
+    generated[0]?.content,
+    [
+      "[East]:",
+      "<tool_calls>",
+      JSON.stringify({
+        name: "sandbox_session",
+        status: "requested",
+        arguments: { actions: [{ action: "exec", cmd: "ls" }] },
+        tool_call_id: "c1",
+      }),
+      "</tool_calls>",
+    ].join("\n"),
+  );
+  assertEquals(generated[1]?.role, "user");
+  assertEquals(
+    generated[1]?.content,
+    [
+      "[East]:",
+      "<tool_results>",
+      JSON.stringify({
+        name: "sandbox_session",
+        status: "completed",
+        output: { success: true },
+        tool_call_id: "c1",
+      }),
+      "</tool_results>",
+    ].join("\n"),
+  );
+
+  const formatted = formatMessages({ messages: generated });
+  assertEquals(formatted.length, 1);
+  assertEquals(formatted[0]?.role, "user");
+  assertEquals(
+    formatted[0]?.content,
+    [
+      "[East]:",
+      "<tool_calls>",
+      JSON.stringify({
+        name: "sandbox_session",
+        status: "requested",
+        arguments: { actions: [{ action: "exec", cmd: "ls" }] },
+        tool_call_id: "c1",
+      }),
+      "</tool_calls>",
+      "",
+      "[East]:",
+      "<tool_results>",
+      JSON.stringify({
+        name: "sandbox_session",
+        status: "completed",
+        output: { success: true },
+        tool_call_id: "c1",
+      }),
+      "</tool_results>",
+    ].join("\n"),
+  );
+});
+
+Deno.test("historyGenerator omits peer requester_only tool activity and empty placeholders", () => {
+  const currentAgent: Agent = {
+    id: "north",
+    name: "North",
+    role: "assistant",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  };
+
+  const generated = historyGenerator(
+    [
+      {
+        id: "m-call",
+        threadId: "t-1",
+        senderId: "east",
+        senderType: "agent",
+        content: "<span></span>",
+        toolCalls: [{
+          id: "c-private",
+          tool: { id: "secret_tool" },
+          args: JSON.stringify({ secret: true }),
+        }] as never,
+        metadata: { senderDisplayName: "East" },
+      },
+      {
+        id: "m-tool",
+        threadId: "t-1",
+        senderId: "east",
+        senderType: "tool",
+        content: "",
+        metadata: {
+          senderDisplayName: "East",
+          toolCalls: [{
+            id: "c-private",
+            tool: { id: "secret_tool" },
+            args: JSON.stringify({ secret: true }),
+            output: { secret: "raw" },
+            status: "completed",
+            visibility: "requester_only",
+          }],
+        },
+      },
+    ],
+    currentAgent,
+    { includeTargetContext: false },
+  );
+
+  assertEquals(generated, []);
 });

@@ -1,0 +1,329 @@
+import type {
+  ChatContentPart,
+  ChatMessage,
+  ProviderConfig,
+  ProviderName,
+} from "@/runtime/llm/types.ts";
+import { resolveModelCatalogEntry } from "@/runtime/llm/model-catalog.ts";
+import {
+  type AssetRef,
+  type AssetStore,
+  bytesToBase64,
+  extractAssetId,
+  isAssetRef,
+  parseDataUrl,
+  toDataUrl,
+} from "@/runtime/storage/assets.ts";
+
+type AssetSupport = {
+  image: boolean;
+  audio: boolean;
+};
+
+const MODEL_CATALOG_ASSET_TIMEOUT_MS = 750;
+
+const SUPPORTED_IMAGE_MIME = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+]);
+
+const SUPPORTED_AUDIO_MIME = new Set([
+  "audio/wav",
+  "audio/wave",
+  "audio/x-wav",
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/aiff",
+  "audio/aac",
+  "audio/ogg",
+  "audio/flac",
+]);
+
+const ARCHIVE_MIME_PREFIXES = [
+  "application/zip",
+  "application/x-zip",
+  "application/x-tar",
+  "application/gzip",
+  "application/x-gzip",
+  "application/x-7z",
+  "application/x-rar",
+  "application/vnd.rar",
+];
+
+function providerDefaultSupport(provider?: ProviderName): AssetSupport {
+  switch (provider) {
+    case "anthropic":
+      return { image: true, audio: false };
+    case "gemini":
+      return { image: true, audio: true };
+    case "openai":
+      return { image: true, audio: false };
+    case "ollama":
+      return { image: true, audio: false };
+    default:
+      return { image: false, audio: false };
+  }
+}
+
+function hasInputModality(modalities: string[], modality: string): boolean {
+  return modalities.some((candidate) =>
+    candidate.toLowerCase() === modality.toLowerCase()
+  );
+}
+
+async function resolveAssetSupport(
+  config: Pick<ProviderConfig, "provider" | "model" | "pricingModelId">,
+): Promise<AssetSupport> {
+  const support = providerDefaultSupport(config.provider);
+  let timeoutId: number | undefined;
+  const entry = await Promise.race([
+    resolveModelCatalogEntry(config),
+    new Promise<null>((resolve) => {
+      timeoutId = setTimeout(resolve, MODEL_CATALOG_ASSET_TIMEOUT_MS);
+    }),
+  ]).finally(() => {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  });
+  const inputModalities = entry?.architecture?.inputModalities ?? [];
+  if (inputModalities.length === 0) return support;
+
+  // OpenRouter gives model-level discovery. Native provider adapters still
+  // decide the wire shape, so catalog data can disable a default or explicitly
+  // allow audio, but it does not enable generic file inlining.
+  return {
+    image: support.image && hasInputModality(inputModalities, "image"),
+    audio: support.audio && hasInputModality(inputModalities, "audio"),
+  };
+}
+
+function isSupportedImageMime(mime?: string): mime is string {
+  return typeof mime === "string" &&
+    SUPPORTED_IMAGE_MIME.has(mime.toLowerCase());
+}
+
+function isSupportedAudioMime(mime?: string): mime is string {
+  return typeof mime === "string" &&
+    SUPPORTED_AUDIO_MIME.has(mime.toLowerCase());
+}
+
+function isArchiveMime(mime?: string): boolean {
+  const lower = typeof mime === "string" ? mime.toLowerCase() : "";
+  return ARCHIVE_MIME_PREFIXES.some((prefix) => lower.startsWith(prefix));
+}
+
+function audioFormatFromMime(mime?: string): string | undefined {
+  const lower = typeof mime === "string" ? mime.toLowerCase() : "";
+  if (lower === "audio/mpeg") return "mp3";
+  if (lower === "audio/x-wav" || lower === "audio/wave") return "wav";
+  if (!lower.includes("/")) return undefined;
+  return lower.split("/")[1];
+}
+
+function omittedFileText(
+  reason: string,
+  mime?: string,
+  assetRef?: string,
+): string {
+  const details = [
+    mime ? `mime="${mime}"` : undefined,
+    assetRef && isAssetRef(assetRef)
+      ? `asset_id="${extractAssetId(assetRef)}"`
+      : undefined,
+    `reason="${reason}"`,
+  ].filter(Boolean).join(" ");
+  return `[Attached file omitted from direct LLM input: ${details}]`;
+}
+
+function unavailableAssetText(assetRef: string): string {
+  return `[Attached file unavailable: asset_id="${extractAssetId(assetRef)}"]`;
+}
+
+function dataUrlMime(dataUrl: string): string | undefined {
+  const parsed = parseDataUrl(dataUrl);
+  return parsed?.mime;
+}
+
+function directDataPart(
+  fileData: string,
+  mime: string | undefined,
+  support: AssetSupport,
+): ChatContentPart[] {
+  if (
+    isSupportedImageMime(mime) && support.image && fileData.startsWith("data:")
+  ) {
+    return [{ type: "image_url", image_url: { url: fileData } }];
+  }
+
+  const parsed = fileData.startsWith("data:") ? parseDataUrl(fileData) : null;
+  if (parsed && isSupportedAudioMime(parsed.mime) && support.audio) {
+    return [{
+      type: "input_audio",
+      input_audio: {
+        data: bytesToBase64(parsed.bytes),
+        ...(audioFormatFromMime(parsed.mime)
+          ? { format: audioFormatFromMime(parsed.mime) }
+          : {}),
+      },
+    }];
+  }
+
+  const omittedReason = isArchiveMime(mime)
+    ? "archive_tool_only"
+    : "unsupported_file_type";
+  return [{ type: "text", text: omittedFileText(omittedReason, mime) }];
+}
+
+async function resolveAssetRefPart(
+  assetRef: AssetRef,
+  kind: "image" | "audio" | "file",
+  support: AssetSupport,
+  store?: AssetStore,
+  explicitMime?: string,
+): Promise<ChatContentPart[]> {
+  if (!store) {
+    return [{ type: "text", text: unavailableAssetText(assetRef) }];
+  }
+
+  try {
+    const { bytes, mime } = await store.get(extractAssetId(assetRef));
+    const actualMime = mime || explicitMime;
+    if (
+      kind === "image" &&
+      support.image &&
+      isSupportedImageMime(actualMime)
+    ) {
+      return [{
+        type: "image_url",
+        image_url: { url: toDataUrl(bytes, actualMime) },
+      }];
+    }
+    if (
+      kind === "audio" &&
+      support.audio &&
+      isSupportedAudioMime(actualMime)
+    ) {
+      return [{
+        type: "input_audio",
+        input_audio: {
+          data: bytesToBase64(bytes),
+          ...(audioFormatFromMime(actualMime)
+            ? { format: audioFormatFromMime(actualMime) }
+            : {}),
+        },
+      }];
+    }
+
+    const omittedReason = isArchiveMime(actualMime)
+      ? "archive_tool_only"
+      : "unsupported_file_type";
+    return [{
+      type: "text",
+      text: omittedFileText(omittedReason, actualMime, assetRef),
+    }];
+  } catch {
+    return [{ type: "text", text: unavailableAssetText(assetRef) }];
+  }
+}
+
+async function materializePart(
+  part: ChatContentPart,
+  support: AssetSupport,
+  store?: AssetStore,
+): Promise<ChatContentPart[]> {
+  if (part.type === "text") return [part];
+
+  if (part.type === "image_url" && part.image_url?.url) {
+    const url = part.image_url.url;
+    if (isAssetRef(url)) {
+      return await resolveAssetRefPart(url, "image", support, store);
+    }
+    if (url.startsWith("data:")) {
+      const mime = dataUrlMime(url);
+      return isSupportedImageMime(mime) && support.image ? [part] : [{
+        type: "text",
+        text: omittedFileText("unsupported_image_type", mime),
+      }];
+    }
+    // The OpenAI and Anthropic adapters can pass URLs through. Gemini currently
+    // only maps inline data, but leaving a URL here preserves existing behavior.
+    return support.image ? [part] : [];
+  }
+
+  if (part.type === "input_audio" && part.input_audio?.data) {
+    const data = part.input_audio.data;
+    if (isAssetRef(data)) {
+      return await resolveAssetRefPart(data, "audio", support, store);
+    }
+    return support.audio ? [part] : [{
+      type: "text",
+      text: omittedFileText(
+        "unsupported_audio_input",
+        part.input_audio.format
+          ? `audio/${part.input_audio.format}`
+          : undefined,
+      ),
+    }];
+  }
+
+  if (part.type === "file" && part.file?.file_data) {
+    const fileData = part.file.file_data;
+    if (isAssetRef(fileData)) {
+      return await resolveAssetRefPart(
+        fileData,
+        "file",
+        support,
+        store,
+        part.file.mime_type,
+      );
+    }
+    if (fileData.startsWith("data:")) {
+      return directDataPart(
+        fileData,
+        part.file.mime_type ?? dataUrlMime(fileData),
+        support,
+      );
+    }
+    return [{
+      type: "text",
+      text: omittedFileText("unsupported_file_reference", part.file.mime_type),
+    }];
+  }
+
+  return [];
+}
+
+export async function materializeAssetRefsForProvider(
+  messages: ChatMessage[],
+  config: Pick<ProviderConfig, "provider" | "model" | "pricingModelId">,
+  store?: AssetStore,
+): Promise<ChatMessage[]> {
+  const hasMultimodalParts = messages.some((message) =>
+    Array.isArray(message.content) &&
+    message.content.some((part) => part.type !== "text")
+  );
+  if (!hasMultimodalParts) return messages;
+
+  const support = await resolveAssetSupport(config);
+  const out: ChatMessage[] = [];
+
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) {
+      out.push(message);
+      continue;
+    }
+
+    const parts: ChatContentPart[] = [];
+    for (const part of message.content) {
+      parts.push(...await materializePart(part, support, store));
+    }
+
+    out.push({
+      ...message,
+      content: parts.length > 0 ? parts : "",
+    });
+  }
+
+  return out;
+}

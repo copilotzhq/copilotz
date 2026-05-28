@@ -117,6 +117,85 @@ Deno.test("chat attempts fallback for any provider error when fallbacks are conf
   }
 });
 
+Deno.test("chat materializes messages separately for each provider attempt", async () => {
+  const originalFetch = globalThis.fetch;
+  const seenContents: string[] = [];
+  let calls = 0;
+
+  const registry: ProviderRegistry = {
+    anthropic: () => ({
+      endpoint: "https://example.test/anthropic",
+      headers: () => ({}),
+      body: (messages) => {
+        seenContents.push(String(messages[0]?.content ?? ""));
+        return {};
+      },
+      extractContent: () => null,
+    }),
+    openai: () => ({
+      endpoint: "https://example.test/openai",
+      headers: () => ({}),
+      body: (messages) => {
+        seenContents.push(String(messages[0]?.content ?? ""));
+        return {};
+      },
+      extractContent: (data: any) => {
+        const content = data?.choices?.[0]?.delta?.content;
+        return typeof content === "string" && content.length > 0
+          ? [{ text: content }]
+          : null;
+      },
+    }),
+  };
+
+  globalThis.fetch = (url) => {
+    calls += 1;
+    if (String(url).includes("/anthropic")) {
+      return Promise.resolve(
+        new Response("bad anthropic request", {
+          status: 400,
+          statusText: "Bad Request",
+        }),
+      );
+    }
+    return Promise.resolve(
+      sse([
+        { choices: [{ delta: { content: "ok" } }] },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      {
+        messages: [{ role: "user", content: "hello" }],
+        materializeMessages: (messages, config) =>
+          messages.map((message) => ({
+            ...message,
+            content: `${message.content} via ${config.provider}`,
+          })),
+      },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        fallbacks: [{ provider: "openai", model: "fallback" }],
+      },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(response.answer, "ok");
+    assertEquals(response.provider, "openai");
+    assertEquals(calls, 2);
+    assertEquals(seenContents, ["hello via anthropic", "hello via openai"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("chat falls back for auth failures and logs a warning", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
@@ -885,7 +964,7 @@ Deno.test("chat does NOT retry when empty response is intentional (no_response)"
   }
 });
 
-Deno.test("chat extracts previous_reasoning into reasoning and strips it from answer", async () => {
+Deno.test("chat extracts think into reasoning and strips it from answer", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
 
@@ -896,8 +975,7 @@ Deno.test("chat extracts previous_reasoning into reasoning and strips it from an
         {
           choices: [{
             delta: {
-              content:
-                "Visible answer <previous_reasoning>tag reasoning</previous_reasoning>",
+              content: "Visible answer <think>tag reasoning</think>",
             },
           }],
         },
@@ -924,7 +1002,7 @@ Deno.test("chat extracts previous_reasoning into reasoning and strips it from an
   }
 });
 
-Deno.test("chat merges provider reasoning with previous_reasoning blocks", async () => {
+Deno.test("chat merges provider reasoning with think blocks", async () => {
   const originalFetch = globalThis.fetch;
   const reasoningRegistry: ProviderRegistry = {
     anthropic: () => ({
@@ -955,8 +1033,7 @@ Deno.test("chat merges provider reasoning with previous_reasoning blocks", async
         {
           choices: [{
             delta: {
-              content:
-                "Answer <previous_reasoning>tag reasoning</previous_reasoning>",
+              content: "Answer <think>tag reasoning</think>",
             },
           }],
         },
@@ -980,7 +1057,7 @@ Deno.test("chat merges provider reasoning with previous_reasoning blocks", async
   }
 });
 
-Deno.test("chat retries when response contains only previous_reasoning", async () => {
+Deno.test("chat retries when response contains only think", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
   let calls = 0;
@@ -995,8 +1072,7 @@ Deno.test("chat retries when response contains only previous_reasoning", async (
           {
             choices: [{
               delta: {
-                content:
-                  "<previous_reasoning>thinking only</previous_reasoning>",
+                content: "<think>thinking only</think>",
               },
             }],
           },

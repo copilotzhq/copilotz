@@ -2,9 +2,10 @@
  * Multimodal content parts accepted by providers.
  *
  * Provider notes:
- * - OpenAI/Groq: supports `text`, `image_url` (http(s) or data URL), `input_audio` (base64), limited file via data URL images.
- * - Anthropic: supports `text`, images via URL or base64 data URL (mapped internally to Claude schema). System is text-only.
- * - Gemini: supports `text`, inline_data (from `image_url` data URL, `input_audio`, or `file` data URL).
+ * - Asset refs are materialized per provider attempt before adapter calls.
+ * - OpenAI/Groq: supports `text`, `image_url` (http(s) or data URL), and selected audio/file shapes by model.
+ * - Anthropic: supports `text` and images via URL or base64 data URL (mapped internally to Claude schema). System is text-only.
+ * - Gemini: supports `text` and inline_data derived from image/audio parts. Generic file inlining is intentionally conservative.
  * - Ollama: accepts text and base64 images (we extract from data URLs into `images` array).
  * - DeepSeek: text only (non-text parts are ignored).
  */
@@ -197,6 +198,15 @@ export interface ChatRequest {
    * Example: ["route_to"] extracts `<route_to>writer</route_to>`.
    */
   extractTags?: string[];
+  /**
+   * Optional late materialization hook for provider-attempt-specific message
+   * shaping. Used for asset refs so fallbacks do not inherit another
+   * provider's media/file wire format.
+   */
+  materializeMessages?: (
+    messages: ChatMessage[],
+    config: ProviderConfig,
+  ) => Promise<ChatMessage[]> | ChatMessage[];
 }
 
 // Unified Tool Invocation payload mapping executions end-to-end

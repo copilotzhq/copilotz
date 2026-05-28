@@ -40,7 +40,6 @@ export interface ToolResultPayload {
   args: unknown;
   status: "completed" | "failed" | "cancelled";
   output?: unknown;
-  projectedOutput?: unknown;
   error?: unknown;
   // Optional convenience content (already formatted) for logs/messages
   content?: string | null;
@@ -93,7 +92,6 @@ type ProcessedToolCallResult = {
   output?: unknown;
   error?: unknown;
   historyVisibility?: ToolHistoryVisibility;
-  projectedOutput?: unknown;
 };
 
 type ToolCancelReason = "timeout" | "abort" | string;
@@ -324,9 +322,6 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
         status: result.status ??
           (error ? "failed" : "completed"),
         ...(typeof output !== "undefined" ? { output } : {}),
-        ...(typeof result.projectedOutput !== "undefined"
-          ? { projectedOutput: result.projectedOutput }
-          : {}),
         ...(typeof error !== "undefined" ? { error } : {}),
         content,
         historyVisibility: result.historyVisibility ??
@@ -561,13 +556,12 @@ export const processToolCalls = async (
         );
         const output = await Promise.race([execPromise, cancelPromise]);
 
-        const { visibility, projectedOutput } =
-          await projectToolResultForHistory(
-            tool,
-            args,
-            output,
-            undefined,
-          );
+        const { visibility } = await projectToolResultForHistory(
+          tool,
+          args,
+          output,
+          undefined,
+        );
 
         return {
           tool_call_id: toolCall.id,
@@ -575,9 +569,6 @@ export const processToolCalls = async (
           status: "completed",
           output,
           historyVisibility: visibility,
-          ...(typeof projectedOutput !== "undefined"
-            ? { projectedOutput }
-            : {}),
         } satisfies ProcessedToolCallResult;
       } catch (error) {
         const isTimeout = Boolean(
@@ -591,13 +582,12 @@ export const processToolCalls = async (
             error instanceof Error ? error.message : String(error)
           }`;
 
-        const { visibility, projectedOutput } =
-          await projectToolResultForHistory(
-            tool,
-            args,
-            undefined,
-            errorMessage,
-          );
+        const { visibility } = await projectToolResultForHistory(
+          tool,
+          args,
+          undefined,
+          errorMessage,
+        );
 
         return {
           tool_call_id: toolCall.id,
@@ -605,9 +595,6 @@ export const processToolCalls = async (
           status: isTimeout ? "cancelled" : "failed",
           error: errorMessage,
           historyVisibility: visibility,
-          ...(typeof projectedOutput !== "undefined"
-            ? { projectedOutput }
-            : {}),
         } satisfies ProcessedToolCallResult;
       } finally {
         if (timer) clearTimeout(timer);

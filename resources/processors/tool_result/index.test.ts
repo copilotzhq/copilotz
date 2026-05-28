@@ -19,9 +19,8 @@ Deno.test("tool_result processor converts lifecycle payload to NEW_MESSAGE artif
         args: { query: "copilotz" },
         status: "completed",
         output: { ok: true },
-        projectedOutput: { summary: "done" },
         content: "Search completed",
-        historyVisibility: "public_result",
+        historyVisibility: "public",
         batchId: "batch-1",
         batchSize: 2,
         batchIndex: 0,
@@ -76,8 +75,7 @@ Deno.test("tool_result processor converts lifecycle payload to NEW_MESSAGE artif
       args: { query: "copilotz" },
       output: { ok: true },
       status: "completed",
-      visibility: "public_result",
-      projectedOutput: { summary: "done" },
+      visibility: "public",
     },
   );
 });

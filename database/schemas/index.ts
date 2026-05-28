@@ -429,7 +429,6 @@ const schemaDefinition = {
               enum: ["completed", "failed", "cancelled"],
             },
             output: JSON_ANY_SCHEMA,
-            projectedOutput: JSON_ANY_SCHEMA,
             error: JSON_ANY_SCHEMA,
             content: { type: ["string", "null"] },
             historyVisibility: { type: ["string", "null"] },

@@ -35,6 +35,7 @@ export interface MessageHandlers {
   deleteForThread: (threadId: string) => Promise<void>;
 }
 
+/** Creates framework-independent handlers for thread message history. */
 export function createMessageHandlers(copilotz: Copilotz): MessageHandlers {
   const service = createMessageService({
     collections: copilotz.collections,

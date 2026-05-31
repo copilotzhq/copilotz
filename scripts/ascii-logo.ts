@@ -1,3 +1,10 @@
+/**
+ * Bundled Copilotz ASCII banner used by command-line entrypoints.
+ *
+ * @module
+ */
+
+/** Default Copilotz startup banner text. */
 const asciiLogo: string = `
 ╔═════════════════════════════════════════════════════════════════╗
 ║                                                                 ║

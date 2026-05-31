@@ -8,6 +8,8 @@
  * The provided namespace is the tenant/application partition. Legacy RAG
  * document namespaces are converted into knowledge_space nodes inside that
  * tenant namespace.
+ *
+ * @module
  */
 import { Ominipg } from "omnipg";
 import { resolveAutoProviders } from "omnipg/auto";

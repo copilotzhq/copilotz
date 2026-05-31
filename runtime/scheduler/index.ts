@@ -3,19 +3,23 @@ import type { Copilotz } from "@/index.ts";
 import type { MessagePayload } from "@/types/index.ts";
 import type { RunOptions } from "@/runtime/index.ts";
 
+/** Lifecycle state stored on a scheduled job node. */
 export type ScheduledJobStatus = "active" | "paused" | "cancelled";
 
+/** Cron schedule definition for a scheduled Copilotz job. */
 export type ScheduledJobSchedule = {
   type: "cron";
   expression: string;
   timezone?: string;
 };
 
+/** Runtime message and options dispatched when a scheduled job fires. */
 export type ScheduledJobRunTemplate = {
   message: MessagePayload;
   options?: RunOptions | null;
 };
 
+/** Serialized scheduled job payload stored in the graph. */
 export type ScheduledJobData = {
   id?: string;
   name: string;
@@ -38,6 +42,7 @@ type ScheduledJobRow = {
   data: ScheduledJobData;
 };
 
+/** Options for claiming and dispatching due scheduled jobs. */
 export type ScheduledJobTickOptions = {
   namespace?: string;
   now?: Date;
@@ -47,6 +52,7 @@ export type ScheduledJobTickOptions = {
   waitForCompletion?: boolean;
 };
 
+/** Summary returned after one scheduled-job tick pass. */
 export type ScheduledJobTickResult = {
   namespace: string;
   checkedAt: string;
@@ -292,6 +298,7 @@ async function dispatchScheduledJob(
   };
 }
 
+/** Claims due scheduled jobs and dispatches their configured Copilotz runs. */
 export async function tickScheduledJobs(
   copilotz: Pick<Copilotz, "ops" | "config" | "run">,
   options: ScheduledJobTickOptions = {},

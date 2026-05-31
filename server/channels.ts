@@ -12,11 +12,13 @@ import type { Copilotz } from "@/index.ts";
 import type { RunHandle, StreamEvent } from "@/runtime/index.ts";
 import type { MessagePayload, Thread } from "@/types/index.ts";
 
+/** Pair of ingress and egress channel names resolved from a route. */
 export interface ChannelRouteSpec {
   ingress: string;
   egress: string;
 }
 
+/** Framework-independent request object passed into an ingress channel. */
 export interface ChannelAdapterRequest {
   method: string;
   headers: Record<string, string>;
@@ -28,6 +30,7 @@ export interface ChannelAdapterRequest {
   route: ChannelRouteSpec;
 }
 
+/** Normalized message envelope produced by an ingress adapter. */
 export interface IngressEnvelope {
   message: MessagePayload;
   threadMetadataPatch?: unknown;
@@ -37,12 +40,14 @@ export interface IngressEnvelope {
   schema?: string;
 }
 
+/** Result returned by an ingress adapter after request normalization. */
 export interface IngressResult {
   messages?: IngressEnvelope[];
   status?: number;
   response?: unknown;
 }
 
+/** Adapter that converts an external channel request into Copilotz messages. */
 export interface IngressAdapter {
   handle(
     request: ChannelAdapterRequest,
@@ -51,6 +56,7 @@ export interface IngressAdapter {
   detachedResponseStatus?: number;
 }
 
+/** Context provided to an egress adapter while delivering runtime output. */
 export interface EgressDeliveryContext {
   route: ChannelRouteSpec;
   callback?: (event: unknown) => void;
@@ -62,6 +68,7 @@ export interface EgressDeliveryContext {
   transformDeliveryOutput?: (output: unknown) => Promise<unknown | null>;
 }
 
+/** Adapter that delivers Copilotz output back to an external channel. */
 export interface EgressAdapter {
   requestBound?: boolean;
   requiresCallback?: boolean;
@@ -71,6 +78,7 @@ export interface EgressAdapter {
   deliver(context: EgressDeliveryContext): Promise<void>;
 }
 
+/** Registered channel implementation and its optional ingress/egress sides. */
 export interface ChannelEntry {
   name: string;
   ingress?: IngressAdapter;
@@ -79,6 +87,7 @@ export interface ChannelEntry {
 
 type MaybePromise<T> = T | Promise<T>;
 
+/** Input passed to channel override callbacks. */
 export interface ChannelOverrideArgs<TInput, TOutput> {
   input: TInput;
   output: TOutput;
@@ -86,23 +95,28 @@ export interface ChannelOverrideArgs<TInput, TOutput> {
   copilotz: Copilotz;
 }
 
+/** Callback used to transform or suppress channel ingress/egress output. */
 export type ChannelOverrideCallback<TInput, TOutput> = (
   args: ChannelOverrideArgs<TInput, TOutput>,
 ) => MaybePromise<TOutput | null | void>;
 
+/** Override hooks for an ingress adapter. */
 export interface ChannelIngressOverrides {
   handle?: ChannelOverrideCallback<ChannelAdapterRequest, IngressResult>;
 }
 
+/** Override hooks for an egress adapter. */
 export interface ChannelEgressOverrides {
   deliver?: ChannelOverrideCallback<EgressDeliveryContext, unknown>;
 }
 
+/** Override configuration for one channel entry. */
 export interface ChannelOverridesEntry {
   ingress?: ChannelIngressOverrides;
   egress?: ChannelEgressOverrides;
 }
 
+/** Overrides keyed by channel name. */
 export type ChannelOverrides = Record<
   string,
   ChannelOverridesEntry | undefined
@@ -142,6 +156,7 @@ export function mergeChannelEntries(
   return [...channels.values()];
 }
 
+/** Creates lookup handlers for configured Copilotz channel adapters. */
 export function createChannelHandlers(copilotz: Copilotz): ChannelHandlers {
   const channels = mergeChannelEntries(
     (copilotz.config as { channels?: ChannelEntry[] }).channels,

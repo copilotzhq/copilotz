@@ -154,6 +154,7 @@ export type LLMFallbackConfig =
   & Omit<LLMConfigBase, "provider">
   & { provider: ProviderName };
 
+/** Persisted LLM configuration that omits secret API keys. */
 export interface LLMConfig extends LLMConfigBase {
   /** Ordered fallback models/providers to try when the primary attempt fails before any visible streaming output. */
   fallbacks?: LLMFallbackConfig[];
@@ -169,6 +170,7 @@ export interface ProviderConfig extends ProviderConfigBase {
   fallbacks?: ProviderFallbackConfig[];
 }
 
+/** Runtime LLM provider configuration, including provider credentials. */
 export type LLMRuntimeConfig = ProviderConfig;
 
 // Tool definition for standardized tool calling

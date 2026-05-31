@@ -33,6 +33,7 @@ export interface ThreadHandlers {
   archive: (id: string, summary: string) => Promise<Thread | null>;
 }
 
+/** Creates framework-independent handlers for thread listing and mutation. */
 export function createThreadHandlers(copilotz: Copilotz): ThreadHandlers {
   const { ops } = copilotz;
 

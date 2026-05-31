@@ -1,10 +1,12 @@
 import { resolve } from "node:path";
 
+/** Configuration for discovering supplemental instructions from an agents file. */
 export interface AgentsFileConfig {
   enabled?: boolean;
   fileName?: string;
 }
 
+/** Loaded agents-file instructions and file metadata. */
 export interface AgentsFileInstructions {
   path: string;
   cwd: string;

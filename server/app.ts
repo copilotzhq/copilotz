@@ -43,6 +43,7 @@ import { withSchema } from "@/database/schema-context.ts";
 // Public types
 // ---------------------------------------------------------------------------
 
+/** Framework-neutral request shape handled by {@link CopilotzApp.handle}. */
 export interface AppRequest {
   resource: string;
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -55,6 +56,7 @@ export interface AppRequest {
   context?: AppRequestContext;
 }
 
+/** Per-request tenant, schema, and adapter-specific context. */
 export interface AppRequestContext extends Record<string, unknown> {
   /**
    * Tenant/application namespace for this request.
@@ -87,15 +89,18 @@ export interface AppResponse {
   pageInfo?: MessageHistoryPageInfo | CollectionPageInfo;
 }
 
+/** Handlers for public agent discovery. */
 export interface AgentHandlers {
   list: () => unknown[];
 }
 
+/** Describes one resource exposed by the app dispatcher. */
 export interface ResourceDescriptor {
   name: string;
   methods: string[];
 }
 
+/** Aggregated server helper facade attached by {@link withApp}. */
 export interface CopilotzApp {
   threads: ThreadHandlers;
   messages: MessageHandlers;
@@ -109,6 +114,7 @@ export interface CopilotzApp {
   resources(): ResourceDescriptor[];
 }
 
+/** Options for namespace and schema resolution in {@link withApp}. */
 export interface WithAppOptions {
   /**
    * Resolve the tenant/application namespace for each app request.
@@ -825,6 +831,7 @@ async function resolveThreadForMessage(
 
 const APP_KEY = Symbol.for("copilotz.app");
 
+/** Attaches the framework-independent app facade to a Copilotz instance. */
 export function withApp<T extends Copilotz>(
   copilotz: T,
   options: WithAppOptions = {},

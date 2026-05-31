@@ -29,6 +29,7 @@ export interface EventHandlers {
     ) => Promise<void>;
 }
 
+/** Creates framework-independent handlers for queue event operations. */
 export function createEventHandlers(copilotz: Copilotz): EventHandlers {
     const { ops } = copilotz;
 

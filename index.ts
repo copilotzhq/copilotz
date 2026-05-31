@@ -1,3 +1,13 @@
+/**
+ * Public Copilotz framework API.
+ *
+ * This entrypoint exposes the core runtime factory, database helpers,
+ * collection builders, resource loaders, server channel types, goal APIs, and
+ * the primary configuration types used by applications.
+ *
+ * @module
+ */
+
 import {
   createCollectionsManager,
   createDatabase,
@@ -1142,6 +1152,10 @@ const isInitDebugEnabled = () => Deno.env.get("COPILOTZ_INIT_DEBUG") === "1";
 const elapsedMs = (startedAt: number) =>
   Number((performance.now() - startedAt).toFixed(1));
 
+/**
+ * Creates and initializes a Copilotz runtime from agents, tools, resources,
+ * database settings, and optional runtime adapters.
+ */
 export async function createCopilotz(
   config: CopilotzConfig,
 ): Promise<Copilotz> {

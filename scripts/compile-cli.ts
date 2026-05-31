@@ -1,3 +1,12 @@
+/**
+ * CLI compiler for local Copilotz applications.
+ *
+ * This entrypoint writes a generated runtime wrapper and optionally invokes
+ * `deno compile` so a project can ship a standalone assistant binary.
+ *
+ * @module
+ */
+
 import { basename, dirname, fromFileUrl, join } from "@std/path";
 import defaultAsciiLogo from "./ascii-logo.ts";
 

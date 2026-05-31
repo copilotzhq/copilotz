@@ -68,6 +68,7 @@ export interface CollectionHandlers {
   ) => Promise<unknown[]>;
 }
 
+/** Creates framework-independent handlers for graph-backed collections. */
 export function createCollectionHandlers(
   copilotz: Copilotz,
 ): CollectionHandlers {

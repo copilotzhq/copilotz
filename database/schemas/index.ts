@@ -2,7 +2,7 @@ import { defineSchema, type JsonSchema } from "omnipg";
 import type { FromSchema } from "json-schema-to-ts";
 import { ulid } from "ulid";
 
-// RAG Ingest payload (used by rag_ingest processor)
+/** Payload used by the RAG ingestion processor to index a document source. */
 export interface RagIngestPayload {
   source: string;
   title?: string;
@@ -850,8 +850,9 @@ export type Queue = typeof queue.$inferSelect;
 /** Input type for creating a new Queue item. */
 export type NewQueue = Record<string, unknown>;
 
-/** Conversation thread containing messages between users and agents. */
+/** Arbitrary application metadata attached to a thread. */
 export type ThreadMetadataValue = Record<string, unknown> | null;
+/** Conversation thread containing messages between users and agents. */
 export type Thread = typeof threads.$inferSelect & {
   /**
    * Public API metadata is stored canonically on the thread node

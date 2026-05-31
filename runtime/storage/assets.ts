@@ -84,12 +84,14 @@ export interface AssetStore {
 // Helpers
 // -----------------------------------------------------------------------------
 
+/** Returns true when a value is an `asset://` reference. */
 export function isAssetRef(value: unknown): value is AssetRef {
 	return typeof value === "string" && value.startsWith("asset://");
 }
 
 export type ParsedAssetRef = { id: AssetId; namespace?: string };
 
+/** Parses an `asset://` reference into its asset ID and optional namespace. */
 export function parseAssetRef(value: string): ParsedAssetRef | null {
 	if (!isAssetRef(value)) return null;
 	const raw = value.slice("asset://".length);
@@ -128,6 +130,7 @@ export function buildAssetRef(
 	return (`asset://${assetId}`) as AssetRef;
 }
 
+/** Extracts the raw asset ID from either an asset reference or bare ID. */
 export function extractAssetId(ref: AssetRef | string): AssetId {
 	if (!isAssetRef(ref)) return ref as AssetId;
 	const parsed = parseAssetRef(ref);
@@ -385,6 +388,7 @@ function buildParsedDocumentText(text: string, mime: string): string {
 // Memory Asset Store
 // -----------------------------------------------------------------------------
 
+/** Creates an in-memory asset store for tests and ephemeral runtimes. */
 export function createMemoryAssetStore(config: AssetConfig = {}): AssetStore {
 	const inlineThreshold = Math.max(0, config.inlineThresholdBytes ?? 256_000);
 	const byId = new Map<AssetId, { bytes: Uint8Array; mime: string; createdAt: Date }>();
@@ -657,6 +661,7 @@ export function createAssetStore(config: AssetConfig = {}): AssetStore {
 	return createMemoryAssetStore(common);
 }
 
+/** Creates an asset store with namespace rules resolved from config/context. */
 export function createAssetStoreForNamespace(
 	config: AssetConfig = {},
 	contextNamespace?: string,
@@ -961,12 +966,14 @@ export async function normalizeOutputToAssetRefs(value: unknown, store?: AssetSt
 // Convenience resolvers
 // -----------------------------------------------------------------------------
 
+/** Reads an asset and returns its base64 payload plus MIME type. */
 export async function getBase64ForRef(store: AssetStore, refOrId: string): Promise<{ base64: string; mime: string }> {
 	const id = resolveAssetIdForStore(refOrId, store);
 	const { bytes, mime } = await store.get(id);
 	return { base64: bytesToBase64(bytes), mime };
 }
 
+/** Reads an asset and returns it as a base64 data URL. */
 export async function getDataUrlForRef(store: AssetStore, refOrId: string): Promise<string> {
 	const id = resolveAssetIdForStore(refOrId, store);
 	const { bytes, mime } = await store.get(id);

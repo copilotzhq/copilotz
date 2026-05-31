@@ -8,11 +8,13 @@ type Queryable = {
   ): Promise<{ rows: any[] }>;
 };
 
+/** Result summary for the tenant namespace graph migration. */
 export type TenantNamespaceGraphMigrationResult = {
   namespace: string;
   hasThreadMetadataColumn: boolean;
 };
 
+/** Runs the tenant namespace graph migration through a Copilotz instance. */
 export async function migrateTenantNamespaceGraph(
   copilotz: Pick<Copilotz, "ops" | "config">,
   options: { namespace?: string } = {},

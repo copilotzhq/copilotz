@@ -1,4 +1,13 @@
 // deno-lint-ignore-file no-console
+/**
+ * Project scaffolding CLI for creating a Copilotz starter application.
+ *
+ * Run this module directly with `deno run -Ar jsr:@copilotz/copilotz/create`
+ * to download the starter template, patch project metadata, and initialize a
+ * local git repository when available.
+ *
+ * @module
+ */
 import { join, resolve } from "@std/path";
 
 const TEMPLATE_REPO = "copilotzhq/starter";

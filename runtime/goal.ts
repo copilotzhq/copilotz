@@ -1,6 +1,7 @@
 import type { Agent, MessagePayload } from "@/types/index.ts";
 import type { RunHandle, RunOptions, StreamEvent } from "@/runtime/index.ts";
 
+/** Terminal state for a goal orchestration run. */
 export type GoalStatus =
   | "completed"
   | "failed"
@@ -9,10 +10,12 @@ export type GoalStatus =
   | "error";
 export type GoalPhase = "target" | "lead" | "judge";
 
+/** Sender identity used when the lead agent drives a goal conversation. */
 export type GoalSender = NonNullable<MessagePayload["sender"]> & {
   usingAgent: string | Agent;
 };
 
+/** Single transcript item captured during a goal run. */
 export interface GoalTranscriptMessage {
   turn: number;
   phase: GoalPhase;
@@ -22,6 +25,7 @@ export interface GoalTranscriptMessage {
   content: string;
 }
 
+/** State passed to custom stop callbacks between goal turns. */
 export interface GoalStopContext {
   id: string;
   turns: number;
@@ -32,16 +36,19 @@ export interface GoalStopContext {
   lastMessage?: GoalTranscriptMessage;
 }
 
+/** Decision returned by a custom goal stop callback. */
 export interface GoalStopResult {
   stop: boolean;
   status?: GoalStatus;
   reason?: string;
 }
 
+/** Callback that can stop a goal run before the max turn count is reached. */
 export type GoalStopCallback = (
   context: GoalStopContext,
 ) => boolean | GoalStopResult | Promise<boolean | GoalStopResult>;
 
+/** Assessment produced by a goal evaluator or judge agent. */
 export interface GoalAssessment {
   name?: string;
   status: "completed" | "failed" | "warning";
@@ -50,6 +57,7 @@ export interface GoalAssessment {
   metadata?: Record<string, unknown>;
 }
 
+/** Result of a nested runtime call performed by a goal evaluator. */
 export interface GoalRunResult {
   handle: RunHandle;
   events: StreamEvent[];
@@ -57,6 +65,7 @@ export interface GoalRunResult {
   text: string;
 }
 
+/** Context available to a custom goal evaluation callback. */
 export interface GoalEvaluateContext {
   id: string;
   threadId: string;
@@ -70,6 +79,7 @@ export interface GoalEvaluateContext {
   ) => Promise<GoalRunResult>;
 }
 
+/** Callback that evaluates whether the goal has been satisfied. */
 export type GoalEvaluateCallback = (
   context: GoalEvaluateContext,
 ) =>
@@ -78,6 +88,7 @@ export type GoalEvaluateCallback = (
   | undefined
   | Promise<GoalAssessment | GoalAssessment[] | undefined>;
 
+/** Options for starting a goal-oriented conversation run. */
 export type GoalOptions =
   & Omit<MessagePayload, "sender">
   & RunOptions
@@ -88,6 +99,7 @@ export type GoalOptions =
     evaluate?: GoalEvaluateCallback;
   };
 
+/** Stream event emitted when a goal run stops before normal completion. */
 export interface GoalStoppedEvent {
   type: "GOAL_STOPPED";
   payload: {
@@ -100,13 +112,16 @@ export interface GoalStoppedEvent {
   };
 }
 
+/** Stream event emitted with the final goal result. */
 export interface GoalResultEvent {
   type: "GOAL_RESULT";
   payload: GoalResult;
 }
 
+/** Stream event union emitted by a goal handle. */
 export type GoalStreamEvent = StreamEvent | GoalStoppedEvent | GoalResultEvent;
 
+/** Final aggregate result for a goal run. */
 export interface GoalResult {
   id: string;
   status: GoalStatus;
@@ -130,6 +145,7 @@ export interface GoalResult {
   };
 }
 
+/** Async handle returned while a goal run is active. */
 export interface GoalHandle {
   id: string;
   threadId: string;

@@ -21,6 +21,7 @@ export interface AssetHandlers {
   parseRef: (ref: string) => ParsedAssetRef | null;
 }
 
+/** Creates framework-independent handlers for reading stored assets. */
 export function createAssetHandlers(copilotz: Copilotz): AssetHandlers {
   const { assets } = copilotz;
 

@@ -161,6 +161,7 @@ export type DbInstance = OminipgWithCrud<typeof baseSchema>;
  */
 export type CopilotzDb = DbInstance & { ops: Operations };
 
+/** File paths used when saving or restoring a PGlite data directory snapshot. */
 export interface DatabaseSnapshotFileOptions {
   /** Final snapshot path, e.g. `/data/copilotz.pglite.tar.gz`. */
   path: string;
@@ -168,6 +169,7 @@ export interface DatabaseSnapshotFileOptions {
   tempPath?: string;
 }
 
+/** Snapshot restore and periodic dump behavior for file-backed PGlite stores. */
 export interface DatabaseRestoreConfig extends DatabaseSnapshotFileOptions {
   /** Enables snapshot restore/dump behavior. */
   enabled?: boolean;

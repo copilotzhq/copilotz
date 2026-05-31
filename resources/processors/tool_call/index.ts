@@ -53,6 +53,7 @@ export interface ToolResultPayload {
   resultMessageId?: string | null;
 }
 
+/** Context passed to native and user-defined tool execution handlers. */
 export interface ToolExecutionContext extends ChatContext {
   senderId?: string;
   senderType?: "user" | "agent" | "tool" | "system" | "job";

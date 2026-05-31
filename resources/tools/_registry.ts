@@ -64,6 +64,7 @@ export const nativeTools: { [key: string]: NewTool } = {
   scheduled_jobs,
 };
 
+/** Returns all built-in native tool definitions keyed by tool name. */
 export function getNativeTools(): { [key: string]: NewTool } {
   return nativeTools;
 }

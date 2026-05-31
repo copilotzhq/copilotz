@@ -102,6 +102,7 @@ export type {
   PGliteConfig,
 };
 
+/** Payload emitted when the asset pipeline stores a new file or media object. */
 export interface AssetCreatedEventPayload {
   /** The persisted asset ID. */
   assetId: string;
@@ -121,6 +122,7 @@ export interface AssetCreatedEventPayload {
   dataUrl?: string;
 }
 
+/** Payload emitted when the asset pipeline cannot persist or normalize media. */
 export interface AssetErrorEventPayload {
   /** Normalized error details from the asset pipeline. */
   error: {
@@ -217,6 +219,7 @@ export interface ResolveLLMRuntimeConfigArgs {
   deps: ProcessorDeps;
 }
 
+/** Hook for resolving transient LLM runtime settings before provider calls. */
 export type ResolveLLMRuntimeConfig = (
   args: ResolveLLMRuntimeConfigArgs,
 ) =>
@@ -224,15 +227,19 @@ export type ResolveLLMRuntimeConfig = (
   | Promise<Partial<LLMRuntimeConfig> | undefined>
   | undefined;
 
+/** Visibility level for persisted tool-call results in future LLM history. */
 export type ToolHistoryVisibility =
   | "requester_only"
   | "public_status"
   | "public";
 
+/** Declarative history policy attached to a tool or API-generated tool. */
 export interface ToolHistoryPolicyConfig {
+  /** How much of the tool result can be shown to later agents. */
   visibility?: ToolHistoryVisibility;
 }
 
+/** Runtime tool history policy after configuration defaults are merged. */
 export interface ToolHistoryPolicy extends ToolHistoryPolicyConfig {}
 
 type ToolExecuteFn = (
@@ -396,6 +403,7 @@ export type HistoryTransform = (
   args: HistoryTransformArgs,
 ) => ChatMessage[] | Promise<ChatMessage[]>;
 
+/** Which persisted reasoning entries are eligible for future LLM history. */
 export type ReasoningHistoryInclude = "none" | "self" | "all";
 
 /**

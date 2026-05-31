@@ -18,6 +18,7 @@ import type {
   NewKnowledgeNode,
 } from "@/database/schemas/index.ts";
 
+/** Search options for querying the Copilotz knowledge graph. */
 export interface GraphSearchOptions {
   query?: string;
   embedding?: number[];
@@ -78,6 +79,7 @@ async function resolveSearchEmbedding(
   return await embedOne(options.query, embeddingConfig);
 }
 
+/** Creates framework-independent handlers for knowledge graph operations. */
 export function createGraphHandlers(copilotz: Copilotz): GraphHandlers {
   const { ops } = copilotz;
 

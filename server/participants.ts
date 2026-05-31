@@ -9,12 +9,15 @@
 
 import type { Copilotz } from "@/index.ts";
 
+/** Serializable participant profile data stored on a graph node. */
 export type ParticipantData = Record<string, unknown>;
 
+/** Options for reading a participant profile. */
 export interface ParticipantGetOptions {
   namespace?: string | null;
 }
 
+/** Options for updating a participant profile. */
 export interface ParticipantUpdateOptions extends ParticipantGetOptions {
   participantType?: "human" | "agent";
   replaceKeys?: string[];
@@ -52,6 +55,7 @@ function deepMergeReplaceArrays(
   return result;
 }
 
+/** Handlers for reading and updating participant profiles by external ID. */
 export interface ParticipantHandlers {
   get: (
     externalId: string,
@@ -64,6 +68,7 @@ export interface ParticipantHandlers {
   ) => Promise<ParticipantData>;
 }
 
+/** Creates framework-independent participant profile handlers. */
 export function createParticipantHandlers(
   copilotz: Copilotz,
 ): ParticipantHandlers {

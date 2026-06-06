@@ -30,6 +30,29 @@ type CollectionAccessor =
   | ScopedCollectionsManager
   | undefined;
 
+type MessageEditMetadata = {
+  originalMessageId: string;
+  rootMessageId: string;
+  previousRevisionMessageId: string;
+  revisionIndex: number;
+  editedAt: string;
+  supersededByMessageId?: string;
+  supersededAt?: string;
+};
+
+type MessageEditState = {
+  activeRootMessageId?: string;
+  activeRevisionMessageId?: string;
+  revisionByRoot?: Record<string, string>;
+};
+
+type MessageEditResult = {
+  message: Message;
+  rootMessageId: string;
+  previousRevisionMessageId: string;
+  revisionIndex: number;
+};
+
 type ScopedCollectionLike<TRecord> = {
   create: (data: Record<string, unknown>) => Promise<TRecord>;
   createMany?: (data: Record<string, unknown>[]) => Promise<TRecord[]>;
@@ -71,6 +94,154 @@ type ScopedCollectionLike<TRecord> = {
     options?: Record<string, unknown>,
   ) => Promise<Array<TRecord & { _similarity: number }>>;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getMessageEditMetadata(
+  metadata: Message["metadata"] | undefined | null,
+): MessageEditMetadata | null {
+  const edit = isRecord(metadata) && isRecord(metadata.copilotzEdit)
+    ? metadata.copilotzEdit
+    : null;
+  if (!edit) return null;
+  const originalMessageId = typeof edit.originalMessageId === "string"
+    ? edit.originalMessageId
+    : "";
+  const rootMessageId = typeof edit.rootMessageId === "string"
+    ? edit.rootMessageId
+    : "";
+  const previousRevisionMessageId =
+    typeof edit.previousRevisionMessageId === "string"
+      ? edit.previousRevisionMessageId
+      : "";
+  const revisionIndex = typeof edit.revisionIndex === "number"
+    ? edit.revisionIndex
+    : 0;
+  const editedAt = typeof edit.editedAt === "string" ? edit.editedAt : "";
+  if (
+    !originalMessageId || !rootMessageId || !previousRevisionMessageId ||
+    !revisionIndex || !editedAt
+  ) {
+    return null;
+  }
+  return {
+    originalMessageId,
+    rootMessageId,
+    previousRevisionMessageId,
+    revisionIndex,
+    editedAt,
+    supersededByMessageId: typeof edit.supersededByMessageId === "string"
+      ? edit.supersededByMessageId
+      : undefined,
+    supersededAt: typeof edit.supersededAt === "string"
+      ? edit.supersededAt
+      : undefined,
+  };
+}
+
+function getMessageEditState(metadata: unknown): MessageEditState {
+  const system = isRecord(metadata) && isRecord(metadata.system)
+    ? metadata.system
+    : {};
+  const messageEdits = isRecord(system.messageEdits) ? system.messageEdits : {};
+  const revisionByRoot = isRecord(messageEdits.revisionByRoot)
+    ? Object.fromEntries(
+      Object.entries(messageEdits.revisionByRoot).filter((
+        entry,
+      ): entry is [string, string] =>
+        typeof entry[0] === "string" && typeof entry[1] === "string"
+      ),
+    )
+    : undefined;
+
+  return {
+    activeRootMessageId: typeof messageEdits.activeRootMessageId === "string"
+      ? messageEdits.activeRootMessageId
+      : undefined,
+    activeRevisionMessageId:
+      typeof messageEdits.activeRevisionMessageId === "string"
+        ? messageEdits.activeRevisionMessageId
+        : undefined,
+    revisionByRoot,
+  };
+}
+
+function sortMessagesByCreatedAt(messages: Message[]): Message[] {
+  return [...messages].sort((a, b) => {
+    const aTime = new Date(String(a.createdAt ?? "")).getTime();
+    const bTime = new Date(String(b.createdAt ?? "")).getTime();
+    if (aTime !== bTime) return aTime - bTime;
+    return String(a.id).localeCompare(String(b.id));
+  });
+}
+
+function projectActiveMessageBranch(
+  messages: Message[],
+  metadata: unknown,
+): Message[] {
+  const state = getMessageEditState(metadata);
+  const activeRootId = state.activeRootMessageId;
+  const activeRevisionId = state.activeRevisionMessageId;
+  if (!activeRootId || !activeRevisionId) return messages;
+
+  const byId = new Map(messages.map((message) => [message.id, message]));
+  const activeRevision = byId.get(activeRevisionId);
+  if (!activeRevision) return messages;
+
+  const projected: Message[] = [];
+  let skippingOldBranch = false;
+  for (const message of sortMessagesByCreatedAt(messages)) {
+    if (message.id === activeRootId) {
+      projected.push(activeRevision);
+      skippingOldBranch = true;
+      continue;
+    }
+    if (message.id === activeRevisionId) {
+      skippingOldBranch = false;
+      continue;
+    }
+    if (skippingOldBranch) continue;
+
+    const edit = getMessageEditMetadata(message.metadata);
+    if (edit?.rootMessageId === activeRootId) continue;
+    projected.push(message);
+  }
+
+  return projected;
+}
+
+function paginateProjectedMessages(
+  messages: Message[],
+  options?: MessageHistoryPageOptions,
+): MessageHistoryPage {
+  const ordered = sortMessagesByCreatedAt(messages);
+  const limit = typeof options?.limit === "number" && options.limit > 0
+    ? Math.floor(options.limit)
+    : undefined;
+  const before =
+    typeof options?.before === "string" && options.before.length > 0
+      ? options.before
+      : null;
+  const beforeIndex = before
+    ? ordered.findIndex((message) => message.id === before)
+    : -1;
+  const eligible = before && beforeIndex >= 0
+    ? ordered.slice(0, beforeIndex)
+    : ordered;
+  const data = limit !== undefined ? eligible.slice(-limit) : eligible;
+  const firstIndex = data.length > 0 ? eligible.indexOf(data[0]) : -1;
+
+  return {
+    data,
+    pageInfo: {
+      hasMoreBefore: limit !== undefined && firstIndex > 0,
+      oldestMessageId: data[0]?.id ?? null,
+      newestMessageId: data[data.length - 1]?.id ?? null,
+    },
+  };
+}
 
 interface ParticipantRecord extends Record<string, unknown> {
   id: string;
@@ -202,6 +373,15 @@ export function createMessageService(
       threadId: string,
       options?: MessageHistoryPageOptions,
     ): Promise<MessageHistoryPage> {
+      const thread = await ops.getThreadById(threadId);
+      const editState = getMessageEditState(thread?.metadata);
+      if (editState.activeRootMessageId && editState.activeRevisionMessageId) {
+        const messages = await ops.getMessageHistoryFromGraph(threadId);
+        return paginateProjectedMessages(
+          projectActiveMessageBranch(messages, thread?.metadata),
+          options,
+        );
+      }
       return await ops.getMessageHistoryPageFromGraph(threadId, options);
     },
 
@@ -263,6 +443,114 @@ export function createMessageService(
 
     async deleteForThread(threadId: string): Promise<void> {
       await ops.deleteMessagesForThread(threadId);
+    },
+
+    async edit(
+      threadId: string,
+      messageId: string,
+      content: string,
+    ): Promise<MessageEditResult> {
+      const nextContent = content.trim();
+      if (!nextContent) {
+        throw new Error("Edited message content is required.");
+      }
+
+      const thread = await ops.getThreadById(threadId);
+      if (!thread) {
+        throw new Error("Thread not found.");
+      }
+
+      const messages = await ops.getMessageHistoryFromGraph(threadId);
+      const target = messages.find((message) => message.id === messageId);
+      if (!target) {
+        throw new Error("Message not found.");
+      }
+      if (target.senderType !== "user") {
+        throw new Error("Only user messages can be edited.");
+      }
+
+      const targetEdit = getMessageEditMetadata(target.metadata);
+      const rootMessageId = targetEdit?.rootMessageId ?? target.id;
+      const root = messages.find((message) => message.id === rootMessageId) ??
+        target;
+      const revisionIndex = messages.reduce((count, message) => {
+        const edit = getMessageEditMetadata(message.metadata);
+        return edit?.rootMessageId === rootMessageId ? count + 1 : count;
+      }, 0) + 1;
+      const editedAt = new Date().toISOString();
+      const previousMetadata = isRecord(target.metadata) ? target.metadata : {};
+      const revision = await ops.createMessage({
+        threadId,
+        senderId: target.senderId,
+        senderType: target.senderType,
+        senderUserId: target.senderUserId ?? undefined,
+        externalId: target.externalId ?? undefined,
+        content: nextContent,
+        metadata: {
+          ...previousMetadata,
+          copilotzEdit: {
+            originalMessageId: target.id,
+            rootMessageId,
+            previousRevisionMessageId: target.id,
+            revisionIndex,
+            editedAt,
+          },
+        },
+      }, typeof thread.namespace === "string" ? thread.namespace : undefined);
+
+      const targetNode = await ops.getNodeById(target.id);
+      if (targetNode) {
+        const targetData = isRecord(targetNode.data) ? targetNode.data : {};
+        const targetMetadata = isRecord(targetData.metadata)
+          ? targetData.metadata
+          : {};
+        await ops.updateNode(target.id, {
+          data: {
+            ...targetData,
+            metadata: {
+              ...targetMetadata,
+              copilotzEdit: {
+                ...(isRecord(targetMetadata.copilotzEdit)
+                  ? targetMetadata.copilotzEdit
+                  : {}),
+                supersededByMessageId: revision.id,
+                supersededAt: editedAt,
+              },
+            },
+          },
+        });
+      }
+
+      const existingState = getMessageEditState(thread.metadata);
+      const existingRevisionByRoot = existingState.revisionByRoot ?? {};
+      const systemMetadata = isRecord(thread.metadata?.system)
+        ? thread.metadata.system
+        : {};
+      const updatedMetadata = {
+        ...(isRecord(thread.metadata) ? thread.metadata : {}),
+        system: {
+          ...systemMetadata,
+          messageEdits: {
+            ...existingState,
+            activeRootMessageId: root.id,
+            activeRevisionMessageId: revision.id,
+            revisionByRoot: {
+              ...existingRevisionByRoot,
+              [root.id]: revision.id,
+            },
+          },
+        },
+      };
+      await ops.updateThread(threadId, {
+        metadata: updatedMetadata,
+      });
+
+      return {
+        message: revision,
+        rootMessageId: root.id,
+        previousRevisionMessageId: target.id,
+        revisionIndex,
+      };
     },
   };
 }

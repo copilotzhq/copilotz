@@ -13,6 +13,13 @@ import type {
 } from "@/database/operations/index.ts";
 import { createMessageService } from "@/runtime/collections/native.ts";
 
+export interface MessageEditResult {
+  message: Message;
+  rootMessageId: string;
+  previousRevisionMessageId: string;
+  revisionIndex: number;
+}
+
 /** Handlers returned by {@link createMessageHandlers}. */
 export interface MessageHandlers {
   listForThread: (
@@ -32,6 +39,11 @@ export interface MessageHandlers {
     threadId: string,
     options?: MessageHistoryPageOptions,
   ) => Promise<MessageHistoryPage>;
+  edit: (
+    threadId: string,
+    messageId: string,
+    content: string,
+  ) => Promise<MessageEditResult>;
   deleteForThread: (threadId: string) => Promise<void>;
 }
 
@@ -47,10 +59,11 @@ export function createMessageHandlers(copilotz: Copilotz): MessageHandlers {
       service.listForThread(threadId, options),
     getHistory: (threadId, userId, limit) =>
       service.getHistory(threadId, userId, limit),
-    listFromGraph: (threadId, limit) =>
-      service.listHistory(threadId, limit),
+    listFromGraph: (threadId, limit) => service.listHistory(threadId, limit),
     listPageFromGraph: (threadId, options) =>
       service.listHistoryPage(threadId, options),
+    edit: (threadId, messageId, content) =>
+      service.edit(threadId, messageId, content),
     deleteForThread: (threadId) => service.deleteForThread(threadId),
   };
 }

@@ -370,6 +370,44 @@ function buildRoutes(): Route[] {
         return { status: 204 };
       },
     },
+    {
+      resource: "threads",
+      method: "POST",
+      pattern: [":id", "messages", ":messageId", "edit"],
+      action: async (ctx, p) => {
+        const body = ctx.body as Record<string, unknown>;
+        const content = typeof body.content === "string" ? body.content : "";
+        if (!content.trim()) {
+          throw { status: 400, message: "Edited message content is required" };
+        }
+        try {
+          return {
+            status: 201,
+            data: await ctx.handlers.messages.edit(
+              p.id,
+              p.messageId,
+              content,
+            ),
+          };
+        } catch (error) {
+          const message = error instanceof Error
+            ? error.message
+            : String(error);
+          if (
+            message === "Thread not found." || message === "Message not found."
+          ) {
+            throw { status: 404, message };
+          }
+          if (
+            message === "Only user messages can be edited." ||
+            message === "Edited message content is required."
+          ) {
+            throw { status: 400, message };
+          }
+          throw error;
+        }
+      },
+    },
 
     // ---- threads/:id/events ----
     {

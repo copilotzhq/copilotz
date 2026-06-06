@@ -69,6 +69,13 @@ import {
   loadSkillFromUrl,
   mergeSkills,
 } from "@/runtime/loaders/skill-loader.ts";
+export {
+  addThreadTag,
+  getThreadTags,
+  removeThreadTag,
+  setThreadTags,
+  type ThreadTag,
+} from "@/runtime/thread-metadata.ts";
 import { bundledAgents, coreResources } from "@/resources/core.ts";
 import type {
   Agent,

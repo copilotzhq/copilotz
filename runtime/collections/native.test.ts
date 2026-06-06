@@ -148,3 +148,93 @@ Deno.test({
     assertEquals(created.content, "hello from legacy participant");
   },
 });
+
+Deno.test({
+  name: "message edit creates an active revision branch in the same thread",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({ url: ":memory:" });
+    const manager = createCollectionsManager(db, [
+      participantCollection,
+      messageCollection,
+    ]);
+    const messageService = createMessageService({
+      collections: manager,
+      ops: db.ops,
+    });
+
+    const namespace = "tenant-test";
+    const threadId = crypto.randomUUID();
+    await db.ops.findOrCreateThread(threadId, {
+      namespace,
+      name: "Edit Thread",
+      participants: ["user-1", "assistant"],
+    });
+    await db.ops.createNode({
+      namespace,
+      type: "participant",
+      name: "User 1",
+      data: {
+        externalId: "user-1",
+        participantType: "human",
+        name: "User 1",
+      },
+      sourceType: "user",
+      sourceId: "user-1",
+    });
+
+    const original = await messageService.create({
+      threadId,
+      senderId: "user-1",
+      senderType: "user",
+      content: "original question",
+      metadata: {},
+    }, namespace);
+    await messageService.create({
+      threadId,
+      senderId: "assistant",
+      senderType: "agent",
+      content: "old answer",
+      metadata: {},
+    }, namespace);
+
+    const edit = await messageService.edit(
+      threadId,
+      original.id,
+      "edited question",
+    );
+    const newAnswer = await messageService.create({
+      threadId,
+      senderId: "assistant",
+      senderType: "agent",
+      content: "new answer",
+      metadata: {},
+    }, namespace);
+
+    const page = await messageService.listHistoryPage(threadId);
+
+    assertEquals(page.data.map((message) => message.content), [
+      "edited question",
+      "new answer",
+    ]);
+    assertEquals(edit.rootMessageId, original.id);
+    assertEquals(edit.revisionIndex, 1);
+    const editMetadata = edit.message.metadata?.copilotzEdit as
+      | Record<string, unknown>
+      | undefined;
+    assertEquals(editMetadata, {
+      originalMessageId: original.id,
+      rootMessageId: original.id,
+      previousRevisionMessageId: original.id,
+      revisionIndex: 1,
+      editedAt: editMetadata?.editedAt,
+    });
+    assertEquals(page.pageInfo, {
+      hasMoreBefore: false,
+      oldestMessageId: edit.message.id,
+      newestMessageId: newAnswer.id,
+    });
+  },
+});

@@ -44,6 +44,14 @@ function createMockCopilotz() {
           },
         };
       }
+      if (id === "edit-thread") {
+        return {
+          id,
+          name: "Edit Thread",
+          namespace: "tenant-test",
+          metadata: {},
+        };
+      }
       return { id, name: "Test Thread" };
     },
     getThreadByExternalId: async (eid: string) => {
@@ -75,6 +83,18 @@ function createMockCopilotz() {
     },
     getMessageHistoryFromGraph: async (tid: string, limit?: number) => {
       record("getMessageHistoryFromGraph", tid, limit);
+      if (tid === "edit-thread") {
+        return [{
+          id: "msg-user",
+          threadId: tid,
+          senderId: "user-1",
+          senderType: "user",
+          content: "old content",
+          metadata: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }];
+      }
       return [];
     },
     getMessageHistoryPageFromGraph: async (tid: string, opts?: unknown) => {
@@ -90,6 +110,15 @@ function createMockCopilotz() {
     },
     deleteMessagesForThread: async (tid: string) => {
       record("deleteMessagesForThread", tid);
+    },
+    createMessage: async (message: Record<string, unknown>) => {
+      record("createMessage", message);
+      return {
+        id: "msg-user-edit",
+        ...message,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
     },
     getParticipantNode: async (eid: string, _ns?: string | null) => {
       record("getParticipantNode", eid);
@@ -624,6 +653,26 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
       assertEquals(res.status, 204);
       await res.body?.cancel();
     });
+
+    await t.step(
+      "POST /threads/:id/messages/:messageId/edit creates message revision",
+      async () => {
+        const res = await fetch(
+          `${base}/threads/edit-thread/messages/msg-user/edit`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ content: "edited content" }),
+          },
+        );
+        assertEquals(res.status, 201);
+        const { data } = await res.json();
+        assertEquals(data.message.id, "msg-user-edit");
+        assertEquals(data.message.content, "edited content");
+        assertEquals(data.rootMessageId, "msg-user");
+        assertEquals(data.revisionIndex, 1);
+      },
+    );
 
     // -- threads/:id/events --
     await t.step("GET /threads/:id/events returns pending event", async () => {

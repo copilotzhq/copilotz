@@ -952,6 +952,13 @@ export function createOperations(
       updates.namespace = threadData.namespace;
     }
 
+    if (
+      typeof threadData.status === "string" &&
+      threadData.status !== existing.status
+    ) {
+      updates.status = threadData.status;
+    }
+
     if (Object.keys(updates).length === 0) {
       await ensureThreadNode(existing, threadData);
       return (await hydrateThreadFromNode(existing)) ?? existing;

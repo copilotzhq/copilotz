@@ -153,6 +153,52 @@ Deno.test("runThread keeps done pending for same-thread work queued behind an ac
   }
 });
 
+Deno.test("runThread reopens archived threads before processing new messages", async () => {
+  const tempDir = await Deno.makeTempDir();
+  const copilotz = await createCopilotz({
+    agents: [{
+      id: "test-agent",
+      name: "Test Agent",
+      role: "Test Agent",
+      instructions: "Handle the test message.",
+      llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+    }],
+    processors: [{
+      eventType: "NEW_MESSAGE",
+      shouldProcess: () => true,
+      process: async () => ({ producedEvents: [] }),
+    }],
+    dbConfig: { url: `file://${tempDir}/reopen-archived-thread.db` },
+  });
+
+  try {
+    const thread = await copilotz.ops.findOrCreateThread(undefined, {
+      name: "Archived Thread",
+      participants: ["user-1", "test-agent"],
+      status: "active",
+      mode: "immediate",
+    });
+    await copilotz.ops.archiveThread(thread.id as string, "done");
+
+    const handle = await copilotz.run({
+      content: "hello again",
+      sender: { type: "user", externalId: "user-1", name: "User 1" },
+      thread: { id: thread.id as string },
+    });
+
+    await handle.done;
+
+    const reopened = await copilotz.ops.getThreadById(thread.id as string);
+    assertEquals(reopened?.status, "active");
+
+    const queuedItem = await copilotz.ops.getQueueItemById(handle.queueId);
+    assertEquals(queuedItem?.status, "completed");
+  } finally {
+    await copilotz.shutdown();
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
 Deno.test("runThread normalizes blank thread participants and keeps a stable user identity", async () => {
   const tempDir = await Deno.makeTempDir();
   const copilotz = await createCopilotz({

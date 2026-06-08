@@ -33,6 +33,14 @@ function mockCatalog(inputModalities: string[]) {
               output_modalities: ["text"],
             },
             pricing: { prompt: "0", completion: "0" },
+          }, {
+            id: "google/gemini-test",
+            canonical_slug: "google/gemini-test",
+            architecture: {
+              input_modalities: inputModalities,
+              output_modalities: ["text"],
+            },
+            pricing: { prompt: "0", completion: "0" },
           }],
         }),
         { headers: { "content-type": "application/json" } },
@@ -79,6 +87,219 @@ Deno.test("materializeAssetRefsForProvider keeps ZIP attachments marker-only", a
     assertStringIncludes(
       parts.map((part) => part.type === "text" ? part.text : "").join("\n"),
       'reason="archive_tool_only"',
+    );
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("materializeAssetRefsForProvider preserves Gemini PDF data URLs when catalog supports files", async () => {
+  const restore = mockCatalog(["text", "file"]);
+  const pdfDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
+  const messages: ChatMessage[] = [{
+    role: "user",
+    content: [
+      { type: "text", text: "Summarize this PDF." },
+      {
+        type: "file",
+        file: {
+          file_data: pdfDataUrl,
+          mime_type: "application/pdf",
+        },
+      },
+    ],
+  }];
+
+  try {
+    const result = await materializeAssetRefsForProvider(
+      messages,
+      { provider: "gemini", model: "gemini-test" },
+    );
+
+    assert(Array.isArray(result[0].content));
+    const filePart = result[0].content.find((part) => part.type === "file");
+    assertExists(filePart);
+    assertEquals(filePart.type, "file");
+    assertEquals(filePart.file.file_data, pdfDataUrl);
+    assertEquals(filePart.file.mime_type, "application/pdf");
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("materializeAssetRefsForProvider resolves Gemini PDF refs when catalog supports files", async () => {
+  const restore = mockCatalog(["text", "file"]);
+  const store = createMemoryAssetStore();
+  const { assetId } = await store.save(
+    new TextEncoder().encode("%PDF-1.4\n"),
+    "application/pdf",
+  );
+  const ref = buildAssetRefForStore(store, assetId);
+  const messages: ChatMessage[] = [{
+    role: "user",
+    content: [
+      { type: "text", text: `[Attached file: asset_id="${assetId}"]` },
+      {
+        type: "file",
+        file: {
+          file_data: ref,
+          mime_type: "application/pdf",
+        },
+      },
+    ],
+  }];
+
+  try {
+    const result = await materializeAssetRefsForProvider(
+      messages,
+      { provider: "gemini", model: "gemini-test" },
+      store,
+    );
+
+    assert(Array.isArray(result[0].content));
+    const filePart = result[0].content.find((part) => part.type === "file");
+    assertExists(filePart);
+    assertEquals(filePart.type, "file");
+    assertStringIncludes(
+      filePart.file.file_data,
+      "data:application/pdf;base64,",
+    );
+    assertEquals(filePart.file.mime_type, "application/pdf");
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("materializeAssetRefsForProvider preserves OpenAI PDFs for Responses mode", async () => {
+  const restore = mockCatalog(["text", "file"]);
+  const pdfDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
+  const messages: ChatMessage[] = [{
+    role: "user",
+    content: [
+      { type: "text", text: "Summarize this PDF." },
+      {
+        type: "file",
+        file: {
+          file_data: pdfDataUrl,
+          mime_type: "application/pdf",
+        },
+      },
+    ],
+  }];
+
+  try {
+    const result = await materializeAssetRefsForProvider(
+      messages,
+      {
+        provider: "openai",
+        model: "gpt-4o-mini",
+        pricingModelId: "openai/gpt-test",
+      },
+    );
+
+    assert(Array.isArray(result[0].content));
+    const filePart = result[0].content.find((part) => part.type === "file");
+    assertExists(filePart);
+    assertEquals(filePart.type, "file");
+    assertEquals(filePart.file.file_data, pdfDataUrl);
+    assertEquals(filePart.file.mime_type, "application/pdf");
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("materializeAssetRefsForProvider omits OpenAI PDFs for Chat Completions mode", async () => {
+  const restore = mockCatalog(["text", "file"]);
+  const messages: ChatMessage[] = [{
+    role: "user",
+    content: [{
+      type: "file",
+      file: {
+        file_data: "data:application/pdf;base64,JVBERi0xLjQK",
+        mime_type: "application/pdf",
+      },
+    }],
+  }];
+
+  try {
+    const result = await materializeAssetRefsForProvider(
+      messages,
+      {
+        provider: "openai",
+        model: "gpt-4o-mini",
+        openaiApi: "chat_completions",
+        pricingModelId: "openai/gpt-test",
+      },
+    );
+
+    assert(Array.isArray(result[0].content));
+    assertEquals(result[0].content.some((part) => part.type === "file"), false);
+    assertStringIncludes(
+      result[0].content.map((part) => part.type === "text" ? part.text : "")
+        .join("\n"),
+      'reason="unsupported_file_type"',
+    );
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("materializeAssetRefsForProvider preserves Anthropic PDFs when catalog supports files", async () => {
+  const restore = mockCatalog(["text", "file"]);
+  const pdfDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
+  const messages: ChatMessage[] = [{
+    role: "user",
+    content: [{
+      type: "file",
+      file: {
+        file_data: pdfDataUrl,
+        mime_type: "application/pdf",
+      },
+    }],
+  }];
+
+  try {
+    const result = await materializeAssetRefsForProvider(
+      messages,
+      { provider: "anthropic", model: "claude-test" },
+    );
+
+    assert(Array.isArray(result[0].content));
+    const filePart = result[0].content.find((part) => part.type === "file");
+    assertExists(filePart);
+    assertEquals(filePart.type, "file");
+    assertEquals(filePart.file.file_data, pdfDataUrl);
+    assertEquals(filePart.file.mime_type, "application/pdf");
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("materializeAssetRefsForProvider omits Gemini PDFs when catalog says text-only", async () => {
+  const restore = mockCatalog(["text"]);
+  const messages: ChatMessage[] = [{
+    role: "user",
+    content: [{
+      type: "file",
+      file: {
+        file_data: "data:application/pdf;base64,JVBERi0xLjQK",
+        mime_type: "application/pdf",
+      },
+    }],
+  }];
+
+  try {
+    const result = await materializeAssetRefsForProvider(
+      messages,
+      { provider: "gemini", model: "gemini-test" },
+    );
+
+    assert(Array.isArray(result[0].content));
+    assertEquals(result[0].content.some((part) => part.type === "file"), false);
+    assertStringIncludes(
+      result[0].content.map((part) => part.type === "text" ? part.text : "")
+        .join("\n"),
+      'reason="unsupported_file_type"',
     );
   } finally {
     restore();

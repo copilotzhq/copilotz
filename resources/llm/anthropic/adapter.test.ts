@@ -42,3 +42,41 @@ Deno.test("anthropicProvider can disable prompt cache directives", () => {
 
   assertEquals("cache_control" in body, false);
 });
+
+Deno.test("anthropicProvider maps PDF file data URLs to document blocks", () => {
+  const config: ProviderConfig = {
+    provider: "anthropic",
+    model: "claude-sonnet-4-5",
+    apiKey: "test",
+  };
+  const body = anthropicProvider(config).body([
+    {
+      role: "user",
+      content: [
+        {
+          type: "file",
+          file: {
+            file_data: "data:application/pdf;base64,JVBERi0xLjQK",
+            mime_type: "application/pdf",
+          },
+        },
+        { type: "text", text: "Summarize this PDF." },
+      ],
+    },
+  ], config);
+
+  assertEquals(body.messages, [{
+    role: "user",
+    content: [
+      {
+        type: "document",
+        source: {
+          type: "base64",
+          media_type: "application/pdf",
+          data: "JVBERi0xLjQK",
+        },
+      },
+      { type: "text", text: "Summarize this PDF." },
+    ],
+  }]);
+});

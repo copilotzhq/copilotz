@@ -7,39 +7,14 @@ import type {
   ProviderFinishReason,
   ProviderUsageUpdate,
 } from "@/runtime/llm/types.ts";
+import {
+  isOpenAIReasoningModel,
+  type OpenAIApiMode,
+  resolveOpenAIApiMode,
+} from "@/runtime/llm/openai-api-mode.ts";
 
-type OpenAIApiMode = "chat_completions" | "responses";
 interface OpenAIResponsesExtractionState {
   reasoningDeltaReceived: boolean;
-}
-
-function normalizedOpenAIModelName(model: string | undefined): string {
-  return (model || "gpt-4o-mini")
-    .toLowerCase()
-    .replace(/^openai\//, "");
-}
-
-function isOpenAIResponsesAutoModel(model: string | undefined): boolean {
-  const normalized = normalizedOpenAIModelName(model);
-  if (normalized.includes("audio")) return false;
-
-  return normalized.startsWith("gpt-5") ||
-    normalized.startsWith("gpt-4.1") ||
-    normalized.startsWith("gpt-4o") ||
-    /^o\d(?:[-.]|$)/.test(normalized);
-}
-
-function isOpenAIReasoningModel(model: string | undefined): boolean {
-  const normalized = normalizedOpenAIModelName(model);
-  return normalized.startsWith("gpt-5") || /^o\d(?:[-.]|$)/.test(normalized);
-}
-
-function resolveOpenAIApiMode(config: ProviderConfig): OpenAIApiMode {
-  if (config.openaiApi === "responses") return "responses";
-  if (config.openaiApi === "chat_completions") return "chat_completions";
-  return isOpenAIResponsesAutoModel(config.model)
-    ? "responses"
-    : "chat_completions";
 }
 
 function extractOpenAIChatUsage(data: any): ProviderUsageUpdate | null {
@@ -192,7 +167,7 @@ function toChatCompletionsMessages(messages: ChatMessage[]): any[] {
         }
         if (p.type === "file" && p.file?.file_data) {
           const data = p.file.file_data;
-          if (typeof data === "string" && data.startsWith("data:")) {
+          if (typeof data === "string" && data.startsWith("data:image/")) {
             return [{ type: "image_url", image_url: { url: data } }];
           }
         }

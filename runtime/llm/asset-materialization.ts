@@ -2,9 +2,9 @@ import type {
   ChatContentPart,
   ChatMessage,
   ProviderConfig,
-  ProviderName,
 } from "@/runtime/llm/types.ts";
 import { resolveModelCatalogEntry } from "@/runtime/llm/model-catalog.ts";
+import { resolveOpenAIApiMode } from "@/runtime/llm/openai-api-mode.ts";
 import {
   type AssetRef,
   type AssetStore,
@@ -15,9 +15,10 @@ import {
   toDataUrl,
 } from "@/runtime/storage/assets.ts";
 
-type AssetSupport = {
+type AdapterAssetSupport = {
   image: boolean;
   audio: boolean;
+  file: boolean;
 };
 
 const MODEL_CATALOG_ASSET_TIMEOUT_MS = 750;
@@ -52,18 +53,28 @@ const ARCHIVE_MIME_PREFIXES = [
   "application/vnd.rar",
 ];
 
-function providerDefaultSupport(provider?: ProviderName): AssetSupport {
-  switch (provider) {
+type AssetSupportConfig =
+  & Pick<ProviderConfig, "provider" | "model" | "pricingModelId">
+  & Pick<ProviderConfig, "openaiApi">;
+
+function providerAdapterSupport(
+  config: Pick<ProviderConfig, "provider" | "model" | "openaiApi">,
+): AdapterAssetSupport {
+  switch (config.provider) {
     case "anthropic":
-      return { image: true, audio: false };
+      return { image: true, audio: false, file: true };
     case "gemini":
-      return { image: true, audio: true };
+      return { image: true, audio: true, file: true };
     case "openai":
-      return { image: true, audio: false };
+      return {
+        image: true,
+        audio: false,
+        file: resolveOpenAIApiMode(config) === "responses",
+      };
     case "ollama":
-      return { image: true, audio: false };
+      return { image: true, audio: false, file: false };
     default:
-      return { image: false, audio: false };
+      return { image: false, audio: false, file: false };
   }
 }
 
@@ -74,9 +85,9 @@ function hasInputModality(modalities: string[], modality: string): boolean {
 }
 
 async function resolveAssetSupport(
-  config: Pick<ProviderConfig, "provider" | "model" | "pricingModelId">,
-): Promise<AssetSupport> {
-  const support = providerDefaultSupport(config.provider);
+  config: AssetSupportConfig,
+): Promise<AdapterAssetSupport> {
+  const support = providerAdapterSupport(config);
   let timeoutId: number | undefined;
   const entry = await Promise.race([
     resolveModelCatalogEntry(config),
@@ -89,12 +100,12 @@ async function resolveAssetSupport(
   const inputModalities = entry?.architecture?.inputModalities ?? [];
   if (inputModalities.length === 0) return support;
 
-  // OpenRouter gives model-level discovery. Native provider adapters still
-  // decide the wire shape, so catalog data can disable a default or explicitly
-  // allow audio, but it does not enable generic file inlining.
+  // OpenRouter tells us what the model can accept; the adapter gate tells us
+  // whether Copilotz can serialize that modality for the native provider API.
   return {
     image: support.image && hasInputModality(inputModalities, "image"),
     audio: support.audio && hasInputModality(inputModalities, "audio"),
+    file: support.file && hasInputModality(inputModalities, "file"),
   };
 }
 
@@ -106,6 +117,10 @@ function isSupportedImageMime(mime?: string): mime is string {
 function isSupportedAudioMime(mime?: string): mime is string {
   return typeof mime === "string" &&
     SUPPORTED_AUDIO_MIME.has(mime.toLowerCase());
+}
+
+function isSupportedFileMime(mime?: string): mime is string {
+  return typeof mime === "string" && mime.toLowerCase() === "application/pdf";
 }
 
 function isArchiveMime(mime?: string): boolean {
@@ -148,15 +163,18 @@ function dataUrlMime(dataUrl: string): string | undefined {
 function directDataPart(
   fileData: string,
   mime: string | undefined,
-  support: AssetSupport,
+  support: AdapterAssetSupport,
 ): ChatContentPart[] {
+  const parsed = fileData.startsWith("data:") ? parseDataUrl(fileData) : null;
+  const actualMime = mime ?? parsed?.mime;
+
   if (
-    isSupportedImageMime(mime) && support.image && fileData.startsWith("data:")
+    isSupportedImageMime(actualMime) && support.image &&
+    fileData.startsWith("data:")
   ) {
     return [{ type: "image_url", image_url: { url: fileData } }];
   }
 
-  const parsed = fileData.startsWith("data:") ? parseDataUrl(fileData) : null;
   if (parsed && isSupportedAudioMime(parsed.mime) && support.audio) {
     return [{
       type: "input_audio",
@@ -169,16 +187,23 @@ function directDataPart(
     }];
   }
 
-  const omittedReason = isArchiveMime(mime)
+  if (parsed && isSupportedFileMime(actualMime) && support.file) {
+    return [{
+      type: "file",
+      file: { file_data: fileData, mime_type: actualMime },
+    }];
+  }
+
+  const omittedReason = isArchiveMime(actualMime)
     ? "archive_tool_only"
     : "unsupported_file_type";
-  return [{ type: "text", text: omittedFileText(omittedReason, mime) }];
+  return [{ type: "text", text: omittedFileText(omittedReason, actualMime) }];
 }
 
 async function resolveAssetRefPart(
   assetRef: AssetRef,
   kind: "image" | "audio" | "file",
-  support: AssetSupport,
+  support: AdapterAssetSupport,
   store?: AssetStore,
   explicitMime?: string,
 ): Promise<ChatContentPart[]> {
@@ -214,6 +239,15 @@ async function resolveAssetRefPart(
         },
       }];
     }
+    if (kind === "file" && support.file && isSupportedFileMime(actualMime)) {
+      return [{
+        type: "file",
+        file: {
+          file_data: toDataUrl(bytes, actualMime),
+          mime_type: actualMime,
+        },
+      }];
+    }
 
     const omittedReason = isArchiveMime(actualMime)
       ? "archive_tool_only"
@@ -229,7 +263,7 @@ async function resolveAssetRefPart(
 
 async function materializePart(
   part: ChatContentPart,
-  support: AssetSupport,
+  support: AdapterAssetSupport,
   store?: AssetStore,
 ): Promise<ChatContentPart[]> {
   if (part.type === "text") return [part];
@@ -296,7 +330,7 @@ async function materializePart(
 
 export async function materializeAssetRefsForProvider(
   messages: ChatMessage[],
-  config: Pick<ProviderConfig, "provider" | "model" | "pricingModelId">,
+  config: AssetSupportConfig,
   store?: AssetStore,
 ): Promise<ChatMessage[]> {
   const hasMultimodalParts = messages.some((message) =>

@@ -99,6 +99,32 @@ Deno.test("openaiProvider allows forcing Chat Completions for a Responses-capabl
   );
 });
 
+Deno.test("openaiProvider omits PDF file data URLs from Chat Completions input", () => {
+  const config: ProviderConfig = {
+    provider: "openai",
+    model: "gpt-4o-mini",
+    apiKey: "test",
+    openaiApi: "chat_completions",
+  };
+  const body = openaiProvider(config).body([
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Describe this." },
+        {
+          type: "file",
+          file: { file_data: "data:application/pdf;base64,abc" },
+        },
+      ],
+    },
+  ], config) as Record<string, any>;
+
+  assertEquals(body.messages, [{
+    role: "user",
+    content: [{ type: "text", text: "Describe this." }],
+  }]);
+});
+
 Deno.test("openaiProvider omits reasoning summary when explicitly disabled", () => {
   const config: ProviderConfig = {
     provider: "openai",

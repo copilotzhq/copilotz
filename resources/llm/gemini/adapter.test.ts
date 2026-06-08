@@ -46,6 +46,35 @@ Deno.test("geminiProvider supports explicit cachedContent references", async () 
   assertEquals("systemInstruction" in body, false);
 });
 
+Deno.test("geminiProvider maps PDF file data URLs to inline data parts", async () => {
+  const config: ProviderConfig = { provider: "gemini", apiKey: "test" };
+  const body = await geminiProvider(config).body([
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Summarize this PDF." },
+        {
+          type: "file",
+          file: {
+            file_data: "data:application/pdf;base64,JVBERi0xLjQK",
+            mime_type: "application/pdf",
+          },
+        },
+      ],
+    },
+  ], config);
+
+  assertEquals(body.contents[0].parts, [
+    { text: "Summarize this PDF." },
+    {
+      inline_data: {
+        mime_type: "application/pdf",
+        data: "JVBERi0xLjQK",
+      },
+    },
+  ]);
+});
+
 Deno.test("geminiProvider maps cachedContentTokenCount into cache reads", () => {
   const config: ProviderConfig = { provider: "gemini", apiKey: "test" };
   const usage = geminiProvider(config).extractUsage?.({

@@ -35,6 +35,17 @@ function extractAnthropicFinishReason(data: any): ProviderFinishReason | null {
   return typeof reason === "string" ? "unknown" : null;
 }
 
+function dataUrlSource(dataUrl: string): {
+  mimeType: string;
+  base64Data: string;
+} | null {
+  if (!dataUrl.startsWith("data:")) return null;
+  const header = dataUrl.substring(5);
+  const [mimeType, base64Data] = header.split(";base64,");
+  if (!mimeType || !base64Data) return null;
+  return { mimeType, base64Data };
+}
+
 export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
   const transformMessages = (messages: ChatMessage[]) => {
     const systemPrompts: string[] = [];
@@ -61,15 +72,14 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
             if (p.type === "image_url" && p.image_url?.url) {
               const url = p.image_url.url;
               if (typeof url === "string" && url.startsWith("data:")) {
-                const header = url.substring(5);
-                const [mimeType, base64Data] = header.split(";base64,");
-                if (base64Data) {
+                const source = dataUrlSource(url);
+                if (source) {
                   return [{
                     type: "image",
                     source: {
                       type: "base64",
-                      media_type: mimeType,
-                      data: base64Data,
+                      media_type: source.mimeType,
+                      data: source.base64Data,
                     },
                   }];
                 }
@@ -81,15 +91,26 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
               if (
                 typeof fileData === "string" && fileData.startsWith("data:")
               ) {
-                const header = fileData.substring(5);
-                const [mimeType, base64Data] = header.split(";base64,");
-                if (base64Data) {
+                const source = dataUrlSource(fileData);
+                if (!source) return [] as any[];
+                const mediaType = p.file.mime_type ?? source.mimeType;
+                if (mediaType.toLowerCase() === "application/pdf") {
+                  return [{
+                    type: "document",
+                    source: {
+                      type: "base64",
+                      media_type: "application/pdf",
+                      data: source.base64Data,
+                    },
+                  }];
+                }
+                if (mediaType.toLowerCase().startsWith("image/")) {
                   return [{
                     type: "image",
                     source: {
                       type: "base64",
-                      media_type: mimeType,
-                      data: base64Data,
+                      media_type: mediaType,
+                      data: source.base64Data,
                     },
                   }];
                 }

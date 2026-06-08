@@ -42,7 +42,12 @@ const RECOVERABLE_FINISH_REASONS: ReadonlySet<ProviderFinishReason> = new Set([
 
 const INTENTIONAL_EMPTY_PATTERN =
   /<(no_response|route_to|ask_to|continue_after_tool_results)[\s/>]/;
-const REASONING_HISTORY_TAG = "think";
+const REASONING_HISTORY_TAGS = [
+  "think",
+  "thought",
+  "thinking",
+  "reasoning",
+] as const;
 
 function buildRecoveryCue(reason: string | null): string {
   switch (reason) {
@@ -120,8 +125,11 @@ function parseAssistantResponse(
     );
     cleanResponse = parsed.cleanResponse;
     extractedTags = parsed.extractedTags;
-    extractedReasoning = extractedTags[REASONING_HISTORY_TAG] ?? [];
-    delete extractedTags[REASONING_HISTORY_TAG];
+    extractedReasoning = REASONING_HISTORY_TAGS.flatMap((tag) => {
+      const values = extractedTags[tag] ?? [];
+      delete extractedTags[tag];
+      return values;
+    });
   } else {
     cleanResponse = cleanResponse.trim();
   }
@@ -262,7 +270,7 @@ export async function chat(
     try {
       const extractedBlockTags = [
         ...(request.extractTags ?? []),
-        REASONING_HISTORY_TAG,
+        ...REASONING_HISTORY_TAGS,
       ];
       const streamResult = await runProviderStream(
         attemptMessages,

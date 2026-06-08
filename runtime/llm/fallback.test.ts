@@ -1002,6 +1002,83 @@ Deno.test("chat extracts think into reasoning and strips it from answer", async 
   }
 });
 
+Deno.test("chat extracts thought into reasoning and hides it from stream", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  let streamed = "";
+
+  globalThis.fetch = () => {
+    calls += 1;
+    return Promise.resolve(
+      sse([
+        {
+          choices: [{
+            delta: {
+              content: "Visible <thought>tag reasoning</thought>answer",
+            },
+          }],
+        },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {},
+      (chunk) => {
+        streamed += chunk;
+      },
+      registry,
+    );
+
+    assertEquals(calls, 1);
+    assertEquals(response.answer, "Visible answer");
+    assertEquals(response.reasoning, "tag reasoning");
+    assertEquals(streamed.includes("<thought>"), false);
+    assertEquals(streamed.includes("tag reasoning"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("chat extracts multiple reasoning tag aliases", async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = () =>
+    Promise.resolve(
+      sse([
+        {
+          choices: [{
+            delta: {
+              content:
+                "Answer<thinking>first</thinking><reasoning>second</reasoning>",
+            },
+          }],
+        },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(response.answer, "Answer");
+    assertEquals(response.reasoning, "first\n\nsecond");
+    assertEquals(response.extractedTags, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("chat merges provider reasoning with think blocks", async () => {
   const originalFetch = globalThis.fetch;
   const reasoningRegistry: ProviderRegistry = {

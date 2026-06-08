@@ -74,6 +74,33 @@ Deno.test({
 });
 
 Deno.test({
+  name: "database query boundary strips NUL chars from graph node writes",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({ url: ":memory:" });
+    const node = await db.ops.createNode({
+      namespace: "tenant-test",
+      type: "chunk",
+      name: "nul-test",
+      content: "before\u0000after",
+      data: {
+        "bad\u0000key": "ok\u0000now",
+        nested: ["a\u0000b"],
+      },
+    });
+
+    const persisted = await db.ops.getNodeById(node.id as string);
+    assertEquals(persisted?.content, "beforeafter");
+    assertEquals(persisted?.data, {
+      badkey: "oknow",
+      nested: ["ab"],
+    });
+  },
+});
+
+Deno.test({
   name:
     "message create uses the real participant node id when legacy data.id differs",
   sanitizeExit: false,

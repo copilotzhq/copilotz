@@ -118,6 +118,34 @@ Deno.test("releaseThreadWorkerLeaseIfNoPendingWork ignores lower-priority pendin
   assertEquals(leaseState.workerLockedBy, null);
 });
 
+Deno.test({
+  name: "database query boundary strips NUL chars from queued event payloads",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const { db, thread } = await createTestThread();
+
+    const queued = await db.ops.addToQueue(thread.id as string, {
+      eventType: "NEW_MESSAGE",
+      payload: {
+        content: "before\u0000after",
+        nested: { "bad\u0000key": "ok\u0000now" },
+      },
+      metadata: { reason: "meta\u0000data" },
+      priority: 0,
+    });
+
+    const persisted = await db.ops.getQueueItemById(queued.id as string);
+    assertExists(persisted);
+    assertEquals(persisted.payload, {
+      content: "beforeafter",
+      nested: { badkey: "oknow" },
+    });
+    assertEquals(persisted.metadata, { reason: "metadata" });
+  },
+});
+
 Deno.test("recoverThreadProcessingQueueItems resets only stale processing events", async () => {
   const db = await createDatabase({
     url: ":memory:",

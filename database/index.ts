@@ -33,6 +33,7 @@ import {
   ensureSchemaProvisioned,
   validateSchemaName,
 } from "./schema-provisioning.ts";
+import { sanitizePostgresParams } from "./postgres-json-safety.ts";
 
 // Keep Ominipg's PGlite worker graph visible to `deno compile`.
 const embedOminipgWorkerForDenoCompile = () => import("omnipg/worker");
@@ -388,10 +389,11 @@ function wrapDbWithSchemaSupport(
     params?: unknown[],
   ): Promise<{ rows: T[]; rowCount?: number }> {
     const schema = getCurrentSchema() ?? config.defaultSchema;
+    const safeParams = sanitizePostgresParams(params);
 
     // If no schema context or using public, execute directly
     if (!schema || schema === "public") {
-      return originalQuery<T>(sql, params);
+      return originalQuery<T>(sql, safeParams);
     }
 
     // SECURITY: Always validate schema name before using in SQL
@@ -423,7 +425,7 @@ function wrapDbWithSchemaSupport(
       try {
         await client.query(`BEGIN`);
         await client.query(`SET LOCAL search_path TO "${schema}", public`);
-        const result = await client.query(sql, params ?? []);
+        const result = await client.query(sql, safeParams ?? []);
         await client.query(`COMMIT`);
         return {
           rows: result.rows as T[],
@@ -448,7 +450,7 @@ function wrapDbWithSchemaSupport(
       await originalQuery<Record<string, unknown>>(
         `SET LOCAL search_path TO "${schema}", public`,
       );
-      const result = await originalQuery<T>(sql, params);
+      const result = await originalQuery<T>(sql, safeParams);
       await originalQuery<Record<string, unknown>>(`COMMIT`);
       return result;
     } catch (err) {

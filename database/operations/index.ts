@@ -20,6 +20,7 @@ import type {
 import type { DbInstance } from "../index.ts";
 import { ulid } from "ulid";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
+import { sanitizePostgresParam } from "../postgres-json-safety.ts";
 
 const MAX_EXPIRED_CLEANUP_BATCH = 100;
 const EXPIRED_RETENTION_INTERVAL = "1 day";
@@ -476,14 +477,14 @@ export function createOperations(
     const insertQueueItem = {
       threadId,
       eventType: event.eventType,
-      payload: event.payload,
+      payload: sanitizePostgresParam(event.payload),
       parentEventId: event.parentEventId ?? null,
       traceId: event.traceId ?? null,
       priority: event.priority ?? null,
       ttlMs,
       expiresAt: expiresAt ? new Date(expiresAt) : null,
       status: event.status ?? "pending",
-      metadata: event.metadata ?? null,
+      metadata: event.metadata ? sanitizePostgresParam(event.metadata) : null,
       namespace: event.namespace ?? null,
     };
 

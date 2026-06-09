@@ -1044,6 +1044,77 @@ Deno.test("chat extracts thought into reasoning and hides it from stream", async
   }
 });
 
+Deno.test("chat extracts dangling think tail into reasoning and strips it from answer", async () => {
+  const originalFetch = globalThis.fetch;
+  let streamed = "";
+
+  globalThis.fetch = () =>
+    Promise.resolve(
+      sse([
+        {
+          choices: [{
+            delta: {
+              content: "Visible answer.\n\n<think>private reasoning",
+            },
+          }],
+        },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {},
+      (chunk) => {
+        streamed += chunk;
+      },
+      registry,
+    );
+
+    assertEquals(response.answer, "Visible answer.");
+    assertEquals(response.reasoning, "private reasoning");
+    assertEquals(streamed.includes("<think>"), false);
+    assertEquals(streamed.includes("private reasoning"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("chat extracts dangling reasoning aliases into reasoning", async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = () =>
+    Promise.resolve(
+      sse([
+        {
+          choices: [{
+            delta: {
+              content: "Answer<thought>private tail",
+            },
+          }],
+        },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(response.answer, "Answer");
+    assertEquals(response.reasoning, "private tail");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("chat extracts multiple reasoning tag aliases", async () => {
   const originalFetch = globalThis.fetch;
 

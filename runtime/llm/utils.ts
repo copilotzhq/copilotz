@@ -1154,8 +1154,9 @@ export function parseTaggedBlocksFromResponse(
 ): { cleanResponse: string; extractedTags: Record<string, string[]> } {
   const extractedTags: Record<string, string[]> = {};
   let cleanResponse = response;
+  const normalizedTags = normalizeStructuredTagNames(tagNames);
 
-  for (const tagName of normalizeStructuredTagNames(tagNames)) {
+  for (const tagName of normalizedTags) {
     const pattern = new RegExp(
       `<${escapeRegex(tagName)}>([\\s\\S]*?)<\\/${escapeRegex(tagName)}>`,
       "gi",
@@ -1171,6 +1172,42 @@ export function parseTaggedBlocksFromResponse(
     if (values.length > 0) {
       extractedTags[tagName] = values;
     }
+  }
+
+  let earliestDangling:
+    | { index: number; tagName: string; openTagEnd: number }
+    | null = null;
+
+  for (const tagName of normalizedTags) {
+    const openPattern = new RegExp(`<${escapeRegex(tagName)}\\b[^>]*>`, "gi");
+    const closePattern = new RegExp(`</${escapeRegex(tagName)}>`, "gi");
+    const opens = [...cleanResponse.matchAll(openPattern)]
+      .filter((match) => !(match[0] ?? "").trimEnd().endsWith("/>"));
+    const closes = [...cleanResponse.matchAll(closePattern)];
+    if (opens.length <= closes.length) continue;
+
+    const danglingOpen = opens[closes.length];
+    if (danglingOpen?.index === undefined) continue;
+    const openTag = danglingOpen[0] ?? "";
+    const candidate = {
+      index: danglingOpen.index,
+      tagName,
+      openTagEnd: danglingOpen.index + openTag.length,
+    };
+    if (!earliestDangling || candidate.index < earliestDangling.index) {
+      earliestDangling = candidate;
+    }
+  }
+
+  if (earliestDangling) {
+    const value = cleanResponse.slice(earliestDangling.openTagEnd).trim();
+    if (value.length > 0) {
+      extractedTags[earliestDangling.tagName] = [
+        ...(extractedTags[earliestDangling.tagName] ?? []),
+        value,
+      ];
+    }
+    cleanResponse = cleanResponse.slice(0, earliestDangling.index);
   }
 
   return { cleanResponse: cleanResponse.trim(), extractedTags };

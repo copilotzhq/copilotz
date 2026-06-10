@@ -78,6 +78,147 @@ export function getWhatsAppHeaderValue(
   return match?.[1];
 }
 
+export type WhatsAppReplyButtonInput = {
+  type?: string;
+  text?: string;
+  payload?: string;
+};
+
+export type WhatsAppReplyButton = {
+  type: "reply";
+  reply: {
+    id: string;
+    title: string;
+  };
+};
+
+export type WhatsAppActionPayload = Record<string, unknown> & {
+  type?: string;
+  message?: string;
+  content?: WhatsAppReplyButtonInput[];
+};
+
+export type WhatsAppInteractiveButtonMessage = {
+  messaging_product: "whatsapp";
+  to: string;
+  type: "interactive";
+  interactive: {
+    type: "button";
+    body: { text: string };
+    action: { buttons: WhatsAppReplyButton[] };
+  };
+};
+
+const MAX_REPLY_BUTTONS = 3;
+const MAX_REPLY_BUTTON_TITLE_LENGTH = 20;
+const MAX_REPLY_BUTTON_ID_LENGTH = 256;
+
+function truncate(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : value.slice(0, maxLength);
+}
+
+function normalizeReplyId(value: string): string {
+  return truncate(
+    value
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9_-]+/g, "_")
+      .replace(/^_+|_+$/g, ""),
+    MAX_REPLY_BUTTON_ID_LENGTH,
+  );
+}
+
+export function normalizeWhatsAppReplyButtons(
+  items: WhatsAppReplyButtonInput[] | undefined,
+): WhatsAppReplyButton[] {
+  const buttons: WhatsAppReplyButton[] = [];
+  const seenIds = new Set<string>();
+
+  for (const item of items ?? []) {
+    if (buttons.length >= MAX_REPLY_BUTTONS) break;
+
+    const title = truncate(
+      item?.text?.trim() ?? "",
+      MAX_REPLY_BUTTON_TITLE_LENGTH,
+    );
+    if (!title) continue;
+
+    const idBase = item?.payload?.trim() || item?.text?.trim() || "";
+    const baseId = normalizeReplyId(idBase);
+    if (!baseId) continue;
+
+    let id = baseId;
+    let suffix = 2;
+    while (seenIds.has(id)) {
+      id = truncate(`${baseId}_${suffix++}`, MAX_REPLY_BUTTON_ID_LENGTH);
+    }
+    seenIds.add(id);
+
+    buttons.push({
+      type: "reply",
+      reply: { id, title },
+    });
+  }
+
+  return buttons;
+}
+
+export function normalizeWhatsAppActionPayload(
+  payload: Record<string, unknown> | null | undefined,
+): WhatsAppActionPayload | null {
+  if (!payload || typeof payload !== "object") return null;
+
+  const nestedAction = payload.action;
+  if (nestedAction && typeof nestedAction === "object") {
+    const action = nestedAction as WhatsAppActionPayload;
+    return {
+      ...action,
+      message: typeof payload.content === "string"
+        ? payload.content
+        : (typeof action.message === "string" ? action.message : ""),
+    };
+  }
+
+  return payload as WhatsAppActionPayload;
+}
+
+export function buildWhatsAppReplyButtonsMessage(
+  to: string,
+  action: WhatsAppActionPayload,
+): WhatsAppInteractiveButtonMessage | null {
+  const bodyText = typeof action.message === "string"
+    ? action.message.trim()
+    : "";
+  const buttons = normalizeWhatsAppReplyButtons(action.content);
+  if (!bodyText || buttons.length === 0) return null;
+
+  return {
+    messaging_product: "whatsapp",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: bodyText },
+      action: { buttons },
+    },
+  };
+}
+
+export async function sendWhatsAppActionMessage(
+  config: WhatsAppConfig,
+  to: string,
+  action: WhatsAppActionPayload,
+): Promise<void> {
+  if (action.type !== "reply_buttons") return;
+
+  const body = buildWhatsAppReplyButtonsMessage(to, action);
+  if (!body) return;
+
+  await callWhatsAppGraphAPI(config, body);
+}
+
 export async function sendWhatsAppText(
   config: WhatsAppConfig,
   to: string,

@@ -7,9 +7,12 @@ import {
 import { getChannelContext } from "@/runtime/thread-metadata.ts";
 import {
   callWhatsAppGraphAPI,
+  normalizeWhatsAppActionPayload,
   resolveWhatsAppConfig,
+  sendWhatsAppActionMessage,
   sendWhatsAppText,
   uploadWhatsAppMedia,
+  type WhatsAppActionPayload,
   type WhatsAppConfig,
 } from "./shared.ts";
 
@@ -28,9 +31,17 @@ export type WhatsAppMediaDeliveryOutput = {
   event: StreamEvent;
 };
 
+export type WhatsAppReplyButtonsDeliveryOutput = {
+  kind: "reply_buttons";
+  to: string;
+  action: WhatsAppActionPayload;
+  event: StreamEvent;
+};
+
 export type WhatsAppDeliveryOutput =
   | WhatsAppTextDeliveryOutput
-  | WhatsAppMediaDeliveryOutput;
+  | WhatsAppMediaDeliveryOutput
+  | WhatsAppReplyButtonsDeliveryOutput;
 
 export function createWhatsAppEgressAdapter(
   config?: Partial<WhatsAppConfig>,
@@ -114,6 +125,23 @@ export function createWhatsAppEgressAdapter(
                   [output.mediaType]: { id: output.mediaId },
                 });
               }
+            }
+            break;
+          }
+          case "ACTION": {
+            const action = normalizeWhatsAppActionPayload(ep);
+            if (!action) break;
+            if (action.type === "reply_buttons") {
+              const output = await transformEgressDeliveryOutput<
+                WhatsAppDeliveryOutput
+              >(context, {
+                kind: "reply_buttons",
+                to: recipientPhone,
+                action,
+                event,
+              });
+              if (output?.kind !== "reply_buttons") break;
+              await sendWhatsAppActionMessage(cfg, output.to, output.action);
             }
             break;
           }

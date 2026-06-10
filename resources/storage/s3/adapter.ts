@@ -256,7 +256,7 @@ async function putViaFetch(url: string, params: S3PutObjectParams): Promise<void
 		headers: {
 			...(params.contentType ? { "Content-Type": params.contentType } : {}),
 		},
-		body: params.body,
+		body: params.body as BodyInit,
 	});
 	if (!res.ok) {
 		const bodyText = await safeText(res);

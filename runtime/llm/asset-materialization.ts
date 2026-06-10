@@ -88,11 +88,14 @@ async function resolveAssetSupport(
   config: AssetSupportConfig,
 ): Promise<AdapterAssetSupport> {
   const support = providerAdapterSupport(config);
-  let timeoutId: number | undefined;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const entry = await Promise.race([
     resolveModelCatalogEntry(config),
     new Promise<null>((resolve) => {
-      timeoutId = setTimeout(resolve, MODEL_CATALOG_ASSET_TIMEOUT_MS);
+      timeoutId = setTimeout(
+        () => resolve(null),
+        MODEL_CATALOG_ASSET_TIMEOUT_MS,
+      );
     }),
   ]).finally(() => {
     if (timeoutId !== undefined) clearTimeout(timeoutId);

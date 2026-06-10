@@ -152,9 +152,19 @@ export interface TraversalResult {
   edges: KnowledgeEdge[];
 }
 
+export type QueryResult<
+  T extends Record<string, unknown> = Record<string, unknown>,
+> = {
+  rows: T[];
+  rowCount?: number;
+};
+
 export interface DatabaseOperations {
   crud: DbInstance["crud"];
-  query: DbInstance["query"];
+  query: <T extends Record<string, unknown>>(
+    sql: string,
+    params?: unknown[],
+  ) => Promise<QueryResult<T>>;
   addToQueue: (threadId: string, event: QueueEventInput) => Promise<NewQueue>;
   getQueueItemById: (queueId: string) => Promise<Queue | undefined>;
   getQueueItemsByTraceId: (traceId: string) => Promise<Queue[]>;

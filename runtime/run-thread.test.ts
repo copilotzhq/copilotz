@@ -36,7 +36,7 @@ Deno.test("runThread writes tenant queue rows in the active schema", async () =>
       schema: tenant,
     });
 
-    let timeoutId: number | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
         handle.done,
@@ -227,7 +227,7 @@ Deno.test("runThread normalizes blank thread participants and keeps a stable use
       },
     });
 
-    let timeoutId: number | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
         handle.done,

@@ -442,8 +442,8 @@ export function createOperations(
   const { crud } = db;
   const STALE_PROCESSING_THRESHOLD_MS = config?.staleProcessingThresholdMs ??
     300000; // Default: 5 minutes
-  const THREAD_WORKER_LEASE_MS = config?.threadLeaseMs ?? 120_000; // Default: 2 minutes
-  const THREAD_WORKER_HEARTBEAT_MS = config?.threadLeaseHeartbeatMs ?? 30_000; // Default: 30 seconds
+  const THREAD_WORKER_LEASE_MS = config?.threadLeaseMs ?? 60_000; // Default: 1 minute
+  const THREAD_WORKER_HEARTBEAT_MS = config?.threadLeaseHeartbeatMs ?? 15_000; // Default: 15 seconds
 
   const cleanupExpiredQueueItems = async (): Promise<void> => {
     await db.query(
@@ -619,6 +619,28 @@ export function createOperations(
     return recovered;
   };
 
+  const resetProcessingQueueItemsAfterLeaseTakeover = async (
+    threadId: string,
+  ): Promise<number> => {
+    const result = await db.query<{ id: string }>(
+      `UPDATE "events"
+       SET "status" = 'pending',
+           "updatedAt" = NOW()
+       WHERE "threadId" = $1
+         AND "status" = 'processing'
+       RETURNING "id"`,
+      [threadId],
+    );
+
+    if (result.rows.length > 0) {
+      console.warn(
+        `[recovery] Reset ${result.rows.length} "processing" event(s) after expired worker lease takeover in thread ${threadId}.`,
+      );
+    }
+
+    return result.rows.length;
+  };
+
   const getProcessingQueueItem = async (
     threadId: string,
     minPriority?: number,
@@ -722,21 +744,48 @@ export function createOperations(
     threadId: string,
     workerId: string,
   ): Promise<boolean> => {
-    const result = await db.query<{ id: string }>(
-      `UPDATE "threads"
+    const result = await db.query<{
+      id: string;
+      previousWorkerLockedBy: string | null;
+    }>(
+      `WITH eligible_thread AS (
+         SELECT
+           "id",
+           "workerLockedBy" AS "previousWorkerLockedBy"
+         FROM "threads"
+         WHERE "id" = $1
+           AND (
+             "workerLeaseExpiresAt" IS NULL
+             OR "workerLeaseExpiresAt" < NOW()
+             OR "workerLockedBy" = $2
+           )
+         FOR UPDATE
+       )
+       UPDATE "threads" AS t
        SET "workerLockedBy" = $2,
            "workerLeaseExpiresAt" = NOW() + ($3 * INTERVAL '1 millisecond'),
            "updatedAt" = NOW()
-       WHERE "id" = $1
-         AND (
-           "workerLeaseExpiresAt" IS NULL
-           OR "workerLeaseExpiresAt" < NOW()
-           OR "workerLockedBy" = $2
-         )
-       RETURNING "id"`,
+       FROM eligible_thread
+       WHERE t."id" = eligible_thread."id"
+       RETURNING
+         t."id",
+         eligible_thread."previousWorkerLockedBy"`,
       [threadId, workerId, THREAD_WORKER_LEASE_MS],
     );
-    return result.rows.length > 0;
+
+    const acquired = result.rows[0];
+    if (!acquired) {
+      return false;
+    }
+
+    if (
+      acquired.previousWorkerLockedBy &&
+      acquired.previousWorkerLockedBy !== workerId
+    ) {
+      await resetProcessingQueueItemsAfterLeaseTakeover(threadId);
+    }
+
+    return true;
   };
 
   const renewThreadWorkerLease = async (

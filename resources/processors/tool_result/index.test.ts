@@ -5,6 +5,25 @@ import {
 
 import { process } from "./index.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
+import type { ProcessorDeps } from "@/types/index.ts";
+
+function depsWithSupersededParent(): ProcessorDeps {
+  return {
+    db: {
+      ops: {
+        getQueueItemById: () =>
+          Promise.resolve({
+            id: "evt-tool-call",
+            eventType: "TOOL_CALL",
+            createdAt: "2026-06-10T16:00:00.000Z",
+            parentEventId: null,
+          }),
+        hasNewerHumanInput: () => Promise.resolve(true),
+      },
+    },
+    context: {},
+  } as unknown as ProcessorDeps;
+}
 
 Deno.test("tool_result processor converts lifecycle payload to NEW_MESSAGE artifact", async () => {
   const result = await process(
@@ -128,4 +147,50 @@ Deno.test("tool_result processor persists failed tool errors as output metadata"
     status: "failed",
     error: "EXECUTION ERROR: page crashed",
   });
+});
+
+Deno.test("tool_result processor marks superseded results as non-routing history", async () => {
+  const result = await process(
+    {
+      id: "evt-tool-result-stale",
+      threadId: "thread-1",
+      type: "TOOL_RESULT",
+      payload: {
+        agent: { id: "researcher", name: "Researcher" },
+        toolCallId: "call-123",
+        tool: { id: "search_web", name: "Search Web" },
+        args: { query: "copilotz" },
+        status: "completed",
+        output: { ok: true },
+        content: "Search completed",
+        finishedAt: new Date().toISOString(),
+      },
+      parentEventId: "evt-tool-call",
+      traceId: null,
+      priority: 1000,
+      metadata: null,
+      ttlMs: null,
+      expiresAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: "completed",
+    } as never,
+    depsWithSupersededParent(),
+  );
+
+  if (!result || !("producedEvents" in result) || !result.producedEvents) {
+    throw new Error("Expected producedEvents");
+  }
+  assertEquals(result.producedEvents.length, 1);
+  const produced = result.producedEvents[0] as {
+    payload: Record<string, unknown>;
+  };
+  const metadata = produced.payload.metadata as Record<string, unknown>;
+
+  assertEquals(metadata.skipRouting, true);
+  assertEquals(metadata.supersededSourceEventId, "evt-tool-call");
+  assertEquals(
+    ((metadata.toolCalls as Array<Record<string, unknown>>) ?? [])[0]?.id,
+    "call-123",
+  );
 });

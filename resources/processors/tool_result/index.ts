@@ -7,6 +7,10 @@ import type {
   ToolResultEventPayload,
 } from "@/types/index.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
+import {
+  detectNewerHumanInputSupersession,
+  withSupersededSkipRoutingMetadata,
+} from "@/runtime/event-supersession.ts";
 
 export type TOOLResultPayload = ToolResultEventPayload;
 
@@ -29,13 +33,24 @@ export const toolResultProcessor: EventProcessor<
   ProcessorDeps
 > = {
   shouldProcess: () => true,
-  process: async (event: Event, _deps: ProcessorDeps) => {
+  process: async (event: Event, deps: ProcessorDeps) => {
     const payload = event.payload as ToolResultEventPayload;
     const threadId = typeof event.threadId === "string"
       ? event.threadId
       : (() => {
         throw new Error("Invalid thread id for tool result event");
       })();
+    const parentEventId = typeof event.parentEventId === "string"
+      ? event.parentEventId
+      : null;
+    const superseded = parentEventId
+      ? await detectNewerHumanInputSupersession(
+        deps.db.ops,
+        threadId,
+        parentEventId,
+        deps.context.namespace,
+      )
+      : null;
 
     const toolResultQueueEventId = typeof event.id === "string"
       ? event.id
@@ -78,6 +93,13 @@ export const toolResultProcessor: EventProcessor<
           : {}),
       },
     };
+
+    if (superseded) {
+      newMessagePayload.metadata = withSupersededSkipRoutingMetadata(
+        newMessagePayload.metadata,
+        superseded,
+      );
+    }
 
     const producedEvents: NewEvent[] = [{
       threadId,

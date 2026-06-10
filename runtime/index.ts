@@ -440,6 +440,17 @@ export async function runThread(
     namespace: baseContext.namespace,
   });
 
+  if (normalizedSender.type === "user" || normalizedSender.type === "job") {
+    await ops.overwritePendingAgentContinuations(
+      threadId,
+      newQueueItem.createdAt instanceof Date ||
+        typeof newQueueItem.createdAt === "string"
+        ? newQueueItem.createdAt
+        : new Date(),
+      baseContext.namespace,
+    );
+  }
+
   const contextForWorker: ChatContext = {
     ...baseContext,
     stream,

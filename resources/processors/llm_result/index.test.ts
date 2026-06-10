@@ -5,6 +5,25 @@ import {
 
 import { process } from "./index.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
+import type { ProcessorDeps } from "@/types/index.ts";
+
+function depsWithSupersededParent(): ProcessorDeps {
+  return {
+    db: {
+      ops: {
+        getQueueItemById: () =>
+          Promise.resolve({
+            id: "evt-llm-call",
+            eventType: "LLM_CALL",
+            createdAt: "2026-06-10T16:00:00.000Z",
+            parentEventId: null,
+          }),
+        hasNewerHumanInput: () => Promise.resolve(true),
+      },
+    },
+    context: {},
+  } as unknown as ProcessorDeps;
+}
 
 Deno.test("llm_result processor converts lifecycle payload to NEW_MESSAGE artifact", async () => {
   const result = await process(
@@ -143,5 +162,95 @@ Deno.test("llm_result processor renders failed LLM results as assistant messages
   assertEquals(
     (produced.metadata?.llmError as Record<string, unknown>)?.reason,
     "rate_limit",
+  );
+});
+
+Deno.test("llm_result processor drops superseded assistant tool calls", async () => {
+  const result = await process(
+    {
+      id: "evt-llm-result-stale-tools",
+      threadId: "thread-1",
+      type: "LLM_RESULT",
+      payload: {
+        llmCallId: "llm-123",
+        agent: { id: "researcher", name: "Researcher" },
+        provider: "openai",
+        model: "gpt-5-mini",
+        status: "completed",
+        finishReason: "tool_calls",
+        answer: "",
+        reasoning: null,
+        toolCalls: [{
+          id: "call-1",
+          tool: { id: "search_web", name: "Search Web" },
+          args: { query: "stale" },
+        }],
+        finishedAt: new Date().toISOString(),
+      },
+      parentEventId: "evt-llm-call",
+      traceId: null,
+      priority: 1000,
+      metadata: {},
+      ttlMs: null,
+      expiresAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: "completed",
+    } as never,
+    depsWithSupersededParent(),
+  );
+
+  if (!result || !("producedEvents" in result) || !result.producedEvents) {
+    throw new Error("Expected producedEvents");
+  }
+  assertEquals(result.producedEvents.length, 0);
+});
+
+Deno.test("llm_result processor marks superseded text as non-routing history", async () => {
+  const result = await process(
+    {
+      id: "evt-llm-result-stale-text",
+      threadId: "thread-1",
+      type: "LLM_RESULT",
+      payload: {
+        llmCallId: "llm-123",
+        agent: { id: "researcher", name: "Researcher" },
+        provider: "openai",
+        model: "gpt-5-mini",
+        status: "completed",
+        finishReason: "stop",
+        answer: "Old answer",
+        reasoning: null,
+        toolCalls: null,
+        finishedAt: new Date().toISOString(),
+      },
+      parentEventId: "evt-llm-call",
+      traceId: null,
+      priority: 1000,
+      metadata: {},
+      ttlMs: null,
+      expiresAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: "completed",
+    } as never,
+    depsWithSupersededParent(),
+  );
+
+  if (!result || !("producedEvents" in result) || !result.producedEvents) {
+    throw new Error("Expected producedEvents");
+  }
+  assertEquals(result.producedEvents.length, 1);
+  const produced = result.producedEvents[0] as {
+    payload: Record<string, unknown>;
+  };
+  assertEquals(
+    (produced.payload.metadata as Record<string, unknown>)?.skipRouting,
+    true,
+  );
+  assertEquals(
+    (produced.payload.metadata as Record<string, unknown>)
+      ?.supersededSourceEventId,
+    "evt-llm-call",
   );
 });

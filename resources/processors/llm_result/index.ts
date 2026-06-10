@@ -7,6 +7,10 @@ import type {
   ProcessorDeps,
 } from "@/types/index.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
+import {
+  detectNewerHumanInputSupersession,
+  withSupersededSkipRoutingMetadata,
+} from "@/runtime/event-supersession.ts";
 
 export type LLMResultPayload = LlmResultEventPayload;
 
@@ -15,13 +19,29 @@ export const llmResultProcessor: EventProcessor<
   ProcessorDeps
 > = {
   shouldProcess: () => true,
-  process: async (event: Event, _deps: ProcessorDeps) => {
+  process: async (event: Event, deps: ProcessorDeps) => {
     const payload = event.payload as LlmResultEventPayload;
     const threadId = typeof event.threadId === "string"
       ? event.threadId
       : (() => {
         throw new Error("Invalid thread id for LLM result event");
       })();
+    const parentEventId = typeof event.parentEventId === "string"
+      ? event.parentEventId
+      : null;
+    const superseded = parentEventId
+      ? await detectNewerHumanInputSupersession(
+        deps.db.ops,
+        threadId,
+        parentEventId,
+        deps.context.namespace,
+      )
+      : null;
+    const toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : [];
+
+    if (superseded && toolCalls.length > 0) {
+      return { producedEvents: [] };
+    }
 
     const errorAnswer = payload.status === "failed"
       ? payload.answer ??
@@ -35,10 +55,11 @@ export const llmResultProcessor: EventProcessor<
         type: "agent",
         name: payload.agent.name,
       },
-      ...(Array.isArray(payload.toolCalls)
-        ? { toolCalls: payload.toolCalls }
-        : {}),
+      ...(toolCalls.length > 0 ? { toolCalls } : {}),
       ...(payload.reasoning ? { reasoning: payload.reasoning } : {}),
+      ...(superseded
+        ? { metadata: withSupersededSkipRoutingMetadata(undefined, superseded) }
+        : {}),
     };
 
     const metadata: Record<string, unknown> = {

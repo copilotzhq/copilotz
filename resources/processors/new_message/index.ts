@@ -66,6 +66,10 @@ import {
   priorityForAgentLlmCall,
 } from "@/runtime/event-priority.ts";
 import {
+  detectNewerHumanInputSupersession,
+  withSupersededSkipRoutingMetadata,
+} from "@/runtime/event-supersession.ts";
+import {
   buildMentionTargetRoute,
   extractMentionNames,
 } from "@/utils/mentions.ts";
@@ -1109,6 +1113,33 @@ export const messageProcessor: EventProcessor<
       })();
 
     const messageContext = getMessageContext(payload);
+
+    if (
+      (messageContext.senderType === "agent" ||
+        messageContext.senderType === "tool") &&
+      typeof event.parentEventId === "string"
+    ) {
+      const superseded = await detectNewerHumanInputSupersession(
+        ops,
+        threadId,
+        event.parentEventId,
+        context.namespace,
+      );
+
+      if (
+        superseded && messageContext.senderType === "agent" &&
+        messageContext.toolCalls.length > 0
+      ) {
+        return { producedEvents: [] };
+      }
+
+      if (superseded) {
+        payload.metadata = withSupersededSkipRoutingMetadata(
+          payload.metadata,
+          superseded,
+        );
+      }
+    }
 
     const baseMetadata = buildBaseMessageMetadata(payload, event.metadata);
 

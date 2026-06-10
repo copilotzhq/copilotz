@@ -158,6 +158,16 @@ export interface DatabaseOperations {
   addToQueue: (threadId: string, event: QueueEventInput) => Promise<NewQueue>;
   getQueueItemById: (queueId: string) => Promise<Queue | undefined>;
   getQueueItemsByTraceId: (traceId: string) => Promise<Queue[]>;
+  hasNewerHumanInput: (
+    threadId: string,
+    since: string | Date,
+    namespace?: string,
+  ) => Promise<boolean>;
+  overwritePendingAgentContinuations: (
+    threadId: string,
+    since: string | Date,
+    namespace?: string,
+  ) => Promise<number>;
   getProcessingQueueItem: (
     threadId: string,
     minPriority?: number,
@@ -506,6 +516,72 @@ export function createOperations(
   ): Promise<Queue[]> => {
     const items = await crud.events.find({ traceId }) as Queue[];
     return items;
+  };
+
+  const hasNewerHumanInput = async (
+    threadId: string,
+    since: string | Date,
+    namespace?: string,
+  ): Promise<boolean> => {
+    const sinceIso = toIsoString(since);
+    if (!sinceIso) {
+      return false;
+    }
+
+    const params: unknown[] = [threadId, sinceIso];
+    const namespaceClause = namespace ? `AND "namespace" = $3` : "";
+    if (namespace) {
+      params.push(namespace);
+    }
+
+    const result = await db.query<{ exists: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM "events"
+         WHERE "threadId" = $1
+           AND "createdAt" > ($2::timestamptz)
+           AND "eventType" = 'NEW_MESSAGE'
+           AND "status" IN ('pending', 'processing', 'completed')
+           AND ("payload"->'sender'->>'type') IN ('user', 'job')
+           ${namespaceClause}
+         LIMIT 1
+       ) AS "exists"`,
+      params,
+    );
+
+    return Boolean(result.rows[0]?.exists);
+  };
+
+  const overwritePendingAgentContinuations = async (
+    threadId: string,
+    since: string | Date,
+    namespace?: string,
+  ): Promise<number> => {
+    const sinceIso = toIsoString(since);
+    if (!sinceIso) {
+      return 0;
+    }
+
+    const params: unknown[] = [threadId, sinceIso];
+    const namespaceClause = namespace ? `AND "namespace" = $3` : "";
+    if (namespace) {
+      params.push(namespace);
+    }
+
+    const result = await db.query<{ id: string }>(
+      `UPDATE "events"
+       SET "status" = 'overwritten',
+           "updatedAt" = NOW()
+       WHERE "threadId" = $1
+         AND "createdAt" < ($2::timestamptz)
+         AND "status" = 'pending'
+         AND "eventType" IN ('LLM_CALL', 'TOOL_CALL')
+         ${namespaceClause}
+       RETURNING "id"`,
+      params,
+    );
+
+    return result.rows.length;
   };
 
   const recoverStaleProcessingQueueItems = async (
@@ -2410,6 +2486,8 @@ export function createOperations(
     addToQueue,
     getQueueItemById,
     getQueueItemsByTraceId,
+    hasNewerHumanInput,
+    overwritePendingAgentContinuations,
     getProcessingQueueItem,
     getNextPendingQueueItem,
     updateQueueItemStatus,

@@ -7,7 +7,9 @@ import {
 import { getChannelContext } from "@/runtime/thread-metadata.ts";
 import {
   callWhatsAppGraphAPI,
+  normalizeWhatsAppActionPayload,
   resolveWhatsAppConfig,
+  sendWhatsAppActionMessage,
   sendWhatsAppText,
   uploadWhatsAppMedia,
   type WhatsAppConfig,
@@ -28,9 +30,17 @@ export type WhatsAppMediaDeliveryOutput = {
   event: StreamEvent;
 };
 
+export type WhatsAppActionDeliveryOutput = {
+  kind: "action";
+  to: string;
+  action: Record<string, unknown>;
+  event: StreamEvent;
+};
+
 export type WhatsAppDeliveryOutput =
   | WhatsAppTextDeliveryOutput
-  | WhatsAppMediaDeliveryOutput;
+  | WhatsAppMediaDeliveryOutput
+  | WhatsAppActionDeliveryOutput;
 
 export function createWhatsAppEgressAdapter(
   config?: Partial<WhatsAppConfig>,
@@ -113,6 +123,47 @@ export function createWhatsAppEgressAdapter(
                   type: output.mediaType,
                   [output.mediaType]: { id: output.mediaId },
                 });
+              }
+            }
+            break;
+          }
+          case "ACTION": {
+            const action = normalizeWhatsAppActionPayload(ep);
+            if (!action) break;
+            if (action.type === "reply_buttons") {
+              const output = await transformEgressDeliveryOutput<
+                WhatsAppDeliveryOutput
+              >(context, {
+                kind: "reply_buttons",
+                to: recipientPhone,
+                action,
+                event,
+              });
+              if (output?.kind !== "reply_buttons") break;
+              await sendWhatsAppActionMessage(cfg, output.to, output.action);
+            }
+            break;
+          }
+          case "ACTION": {
+            const action = normalizeWhatsAppActionPayload(ep);
+            if (!action) break;
+            if (action.type === "reply_buttons") {
+              const output = await transformEgressDeliveryOutput<
+                WhatsAppDeliveryOutput
+              >(context, {
+                kind: "action",
+                to: recipientPhone,
+                action,
+                event,
+              });
+              if (output?.kind !== "action") break;
+              const delivered = await sendWhatsAppActionMessage(
+                cfg,
+                output.to,
+                output.action,
+              );
+              if (!delivered && typeof output.action.message === "string") {
+                await sendWhatsAppText(cfg, output.to, output.action.message);
               }
             }
             break;

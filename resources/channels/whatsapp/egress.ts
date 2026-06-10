@@ -12,6 +12,7 @@ import {
   sendWhatsAppActionMessage,
   sendWhatsAppText,
   uploadWhatsAppMedia,
+  type WhatsAppActionPayload,
   type WhatsAppConfig,
 } from "./shared.ts";
 
@@ -30,17 +31,17 @@ export type WhatsAppMediaDeliveryOutput = {
   event: StreamEvent;
 };
 
-export type WhatsAppActionDeliveryOutput = {
-  kind: "action";
+export type WhatsAppReplyButtonsDeliveryOutput = {
+  kind: "reply_buttons";
   to: string;
-  action: Record<string, unknown>;
+  action: WhatsAppActionPayload;
   event: StreamEvent;
 };
 
 export type WhatsAppDeliveryOutput =
   | WhatsAppTextDeliveryOutput
   | WhatsAppMediaDeliveryOutput
-  | WhatsAppActionDeliveryOutput;
+  | WhatsAppReplyButtonsDeliveryOutput;
 
 export function createWhatsAppEgressAdapter(
   config?: Partial<WhatsAppConfig>,
@@ -141,30 +142,6 @@ export function createWhatsAppEgressAdapter(
               });
               if (output?.kind !== "reply_buttons") break;
               await sendWhatsAppActionMessage(cfg, output.to, output.action);
-            }
-            break;
-          }
-          case "ACTION": {
-            const action = normalizeWhatsAppActionPayload(ep);
-            if (!action) break;
-            if (action.type === "reply_buttons") {
-              const output = await transformEgressDeliveryOutput<
-                WhatsAppDeliveryOutput
-              >(context, {
-                kind: "action",
-                to: recipientPhone,
-                action,
-                event,
-              });
-              if (output?.kind !== "action") break;
-              const delivered = await sendWhatsAppActionMessage(
-                cfg,
-                output.to,
-                output.action,
-              );
-              if (!delivered && typeof output.action.message === "string") {
-                await sendWhatsAppText(cfg, output.to, output.action.message);
-              }
             }
             break;
           }

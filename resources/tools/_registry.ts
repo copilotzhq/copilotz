@@ -25,6 +25,7 @@ import ingest_document from "@/resources/tools/ingest_document/index.ts";
 import list_knowledge_spaces from "@/resources/tools/list_namespaces/index.ts";
 import delete_document from "@/resources/tools/delete_document/index.ts";
 import update_my_memory from "@/resources/tools/update_my_memory/index.ts";
+import update_user_memory from "@/resources/tools/update_user_memory/index.ts";
 import list_skills from "@/resources/tools/list_skills/index.ts";
 import load_skill from "@/resources/tools/load_skill/index.ts";
 import read_skill_resource from "@/resources/tools/read_skill_resource/index.ts";
@@ -57,6 +58,7 @@ export const nativeTools: { [key: string]: NewTool } = {
   list_knowledge_spaces,
   delete_document,
   update_my_memory,
+  update_user_memory,
   list_skills,
   load_skill,
   read_skill_resource,

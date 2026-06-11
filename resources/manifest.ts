@@ -31,6 +31,7 @@ export default {
       "list_knowledge_spaces",
       "delete_document",
       "update_my_memory",
+      "update_user_memory",
       "list_skills",
       "load_skill",
       "read_skill_resource",
@@ -112,6 +113,7 @@ export default {
       "tools.http_request",
       "tools.persistent_terminal",
       "tools.update_my_memory",
+      "tools.update_user_memory",
       "processors.new_message",
       "processors.llm_call",
       "processors.llm_result",
@@ -183,6 +185,7 @@ export default {
       "tools.load_skill",
       "tools.read_skill_resource",
       "tools.update_my_memory",
+      "tools.update_user_memory",
     ],
   },
 };

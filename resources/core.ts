@@ -201,6 +201,7 @@ const coreTools = [
   "http_request",
   "persistent_terminal",
   "update_my_memory",
+  "update_user_memory",
   "scheduled_jobs",
 ] as const;
 

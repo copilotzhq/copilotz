@@ -78,7 +78,12 @@ export function createWhatsAppIngressAdapter(
           const userName = contacts?.[0]?.profile?.name;
 
           for (const message of incomingMessages || []) {
-            const text = message.text?.body;
+            // Interactive replies (tapping a reply button or list option) arrive
+            // without `text.body`; surface the selected option's title as the
+            // message text so the agent receives the user's choice.
+            const interactiveReply = message.interactive?.button_reply ??
+              message.interactive?.list_reply;
+            const text = message.text?.body ?? interactiveReply?.title;
             const audioBlob = await downloadWhatsAppMedia(
               message,
               "audio",

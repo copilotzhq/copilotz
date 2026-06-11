@@ -22,6 +22,12 @@ export type WhatsAppWebhookEntry = {
   }>;
 };
 
+export type WhatsAppInteractiveReply = {
+  id?: string;
+  title?: string;
+  description?: string;
+};
+
 export type WhatsAppMessage = {
   from: string;
   id: string;
@@ -31,6 +37,11 @@ export type WhatsAppMessage = {
   audio?: { id: string; mime_type?: string };
   video?: { id: string; mime_type?: string };
   document?: { id: string; mime_type?: string; filename?: string };
+  interactive?: {
+    type?: string;
+    button_reply?: WhatsAppInteractiveReply;
+    list_reply?: WhatsAppInteractiveReply;
+  };
 };
 
 export type WhatsAppWebhookPayload = {

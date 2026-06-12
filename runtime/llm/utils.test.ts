@@ -1,9 +1,13 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import {
+  filterTaggedControlTokensStreaming,
   formatMessages,
   getLocalStopSequences,
   parseToolCallsFromResponse,
+  parseXmlInvokeToolCalls,
+  responseHasToolIntent,
+  sanitizeUserFacingText,
 } from "./utils.ts";
 
 Deno.test("formatMessages limits non-system history using estimated input tokens", () => {
@@ -159,6 +163,98 @@ Deno.test("parseToolCallsFromResponse strips unrecoverable partial tool calls", 
 
   assertEquals(parsed.cleanResponse, "I will check that.\n");
   assertEquals(parsed.toolCalls.length, 0);
+});
+
+Deno.test("parseToolCallsFromResponse recovers the Anthropic/MiniMax <invoke> XML dialect", () => {
+  const response =
+    'Sure.\n<minimax:tool_call>\n<invoke name="get_weather">\n<parameter name="location">San Francisco</parameter>\n<parameter name="opts">{"unit":"celsius","tags":["a","b"]}</parameter>\n</invoke>\n</minimax:tool_call>';
+
+  const parsed = parseToolCallsFromResponse(response);
+
+  assertEquals(parsed.toolCalls.length, 1);
+  assertEquals(parsed.toolCalls[0].tool.id, "get_weather");
+  assertEquals(
+    JSON.parse(parsed.toolCalls[0].args as string),
+    {
+      location: "San Francisco",
+      opts: { unit: "celsius", tags: ["a", "b"] },
+    },
+  );
+  assertEquals(parsed.cleanResponse, "Sure.");
+});
+
+Deno.test("parseToolCallsFromResponse gates dialect recovery on known tool names", () => {
+  const response =
+    '<invoke name="unknown_tool"><parameter name="x">1</parameter></invoke>';
+
+  assertEquals(
+    parseToolCallsFromResponse(response, ["known_tool"]).toolCalls.length,
+    0,
+  );
+  assertEquals(
+    parseToolCallsFromResponse(response, ["unknown_tool"]).toolCalls.length,
+    1,
+  );
+});
+
+Deno.test("parseToolCallsFromResponse leaves an argument-less invoke unparsed", () => {
+  const parsed = parseToolCallsFromResponse(
+    '<invoke name="known"></invoke>',
+    ["known"],
+  );
+  assertEquals(parsed.toolCalls.length, 0);
+});
+
+Deno.test("parseXmlInvokeToolCalls handles multiple invocations", () => {
+  const calls = parseXmlInvokeToolCalls(
+    '<invoke name="a"><parameter name="x">1</parameter></invoke>' +
+      '<invoke name="b"><parameter name="y">two</parameter></invoke>',
+  );
+  assertEquals(calls.map((c) => c.tool.id), ["a", "b"]);
+  assertEquals(JSON.parse(calls[0].args as string), { x: 1 });
+  assertEquals(JSON.parse(calls[1].args as string), { y: "two" });
+});
+
+Deno.test("responseHasToolIntent detects canonical and gated dialect markers", () => {
+  assertEquals(responseHasToolIntent("text <tool_calls> garbage", []), true);
+  assertEquals(
+    responseHasToolIntent('<invoke name="sandbox_session">', [
+      "sandbox_session",
+    ]),
+    true,
+  );
+  assertEquals(responseHasToolIntent('<invoke name="sandbox_session">', []), false);
+  assertEquals(
+    responseHasToolIntent("just a normal answer", ["sandbox_session"]),
+    false,
+  );
+});
+
+Deno.test("sanitizeUserFacingText strips leaked tool-call protocol markup", () => {
+  const leak =
+    'I have the abstract.\n]<]minimax[>[<tool_call>\n<invoke name="sandbox_session">]<]minimax[>[<actions>]<]minimax[>[<cmd>ls</cmd>]<]minimax[>[</tool_call>';
+
+  const clean = sanitizeUserFacingText(leak);
+
+  assertEquals(clean.includes("]<]minimax[>["), false);
+  assertEquals(clean.includes("<invoke"), false);
+  assertEquals(clean.includes("<tool_call>"), false);
+  assertEquals(clean, "I have the abstract.");
+});
+
+Deno.test("filterTaggedControlTokensStreaming hides native tool dialect and leak tokens", () => {
+  const state = { activeTag: null as string | null, pending: "", controlPending: "" };
+  const out = filterTaggedControlTokensStreaming(
+    "Hello ]<]minimax[>[world <minimax:tool_call>secret</minimax:tool_call>!",
+    state,
+    [],
+  );
+
+  assertEquals(out.includes("]<]minimax[>["), false);
+  assertEquals(out.includes("secret"), false);
+  assertEquals(out.includes("<minimax:tool_call>"), false);
+  assertEquals(out.includes("Hello"), true);
+  assertEquals(out.includes("world"), true);
 });
 
 Deno.test("formatMessages canonicalizes structured assistant tool calls over pre-rendered blocks", () => {

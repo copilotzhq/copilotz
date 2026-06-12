@@ -1257,6 +1257,128 @@ Deno.test("chat retries when response contains only think", async () => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Malformed tool-call recovery
+// ---------------------------------------------------------------------------
+
+const searchTool = {
+  type: "function" as const,
+  function: {
+    name: "search",
+    description: "search",
+    parameters: { type: "object" as const, properties: {} },
+  },
+};
+
+Deno.test("chat recovers the <invoke>/<parameter> dialect without an extra round-trip", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+
+  globalThis.fetch = () => {
+    calls += 1;
+    return Promise.resolve(
+      sse([
+        {
+          choices: [{
+            delta: {
+              content:
+                '<minimax:tool_call><invoke name="search"><parameter name="q">hello</parameter></invoke></minimax:tool_call>',
+            },
+          }],
+        },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hi" }], tools: [searchTool] },
+      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(calls, 1);
+    assertEquals(response.toolCalls?.length, 1);
+    assertEquals(response.toolCalls?.[0].tool.id, "search");
+    assertEquals(JSON.parse(response.toolCalls?.[0].args as string), {
+      q: "hello",
+    });
+    assertEquals(response.answer.includes("<invoke"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("chat retries on a malformed tool call then recovers the canonical format", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const warnings: unknown[][] = [];
+  let calls = 0;
+
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+
+  globalThis.fetch = () => {
+    calls += 1;
+    if (calls === 1) {
+      // Native dialect with unparseable args (no <parameter> tags).
+      return Promise.resolve(
+        sse([
+          {
+            choices: [{
+              delta: {
+                content:
+                  '<minimax:tool_call><invoke name="search"><actions><item>x</item></actions></invoke></minimax:tool_call>',
+              },
+            }],
+          },
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]),
+      );
+    }
+    return Promise.resolve(
+      sse([
+        {
+          choices: [{
+            delta: {
+              content:
+                '<tool_calls>\n{"name":"search","arguments":{"q":"x"}}\n</tool_calls>',
+            },
+          }],
+        },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hi" }], tools: [searchTool] },
+      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(calls, 2);
+    assertEquals(response.toolCalls?.length, 1);
+    assertEquals(response.toolCalls?.[0].tool.id, "search");
+    assertEquals(
+      warnings.some((w) =>
+        (w[1] as Record<string, unknown>)?.reason === "malformed_tool_call"
+      ),
+      true,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
 Deno.test("chat does NOT retry when empty response has tool calls", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;

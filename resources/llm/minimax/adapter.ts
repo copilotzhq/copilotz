@@ -124,10 +124,7 @@ export const minimaxProvider: ProviderFactory = (config: ProviderConfig) => {
         Number.isFinite(maxCompletionTokens) &&
         maxCompletionTokens > 0
       ) {
-        body.max_completion_tokens = Math.min(
-          Math.floor(maxCompletionTokens),
-          2048,
-        );
+        body.max_completion_tokens = Math.floor(maxCompletionTokens);
       }
 
       return body;

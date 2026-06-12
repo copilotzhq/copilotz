@@ -19,6 +19,9 @@ import {
   parseInternalControlTagsFromResponse,
   parseTaggedBlocksFromResponse,
   parseToolCallsFromResponse,
+  responseHasToolIntent,
+  sanitizeUserFacingText,
+  stripStructuralLeakTokens,
   withDefaultStopSequences,
 } from "@/runtime/llm/utils.ts";
 import { normalizeProviderUsage } from "@/runtime/llm/usage.ts";
@@ -61,6 +64,8 @@ function buildRecoveryCue(reason: string | null): string {
       return "Previous response was interrupted by a provider error. Continue where you left off.";
     case "empty_response":
       return "Previous attempt produced reasoning but no visible response. You must produce a concrete answer for the user.";
+    case "malformed_tool_call":
+      return 'Your previous response attempted a tool call but used an invalid or non-standard format. Re-issue the tool call using EXACTLY this format and nothing else:\n<tool_calls>\n{"name": "tool_name", "arguments": { }}\n</tool_calls>\nDo not use XML tags (<invoke>, <parameter>, <minimax:tool_call>), function-call syntax, or markdown fences. Do not repeat your earlier prose.';
     default:
       return "Continue exactly where you left off. Do not repeat earlier content.";
   }
@@ -102,6 +107,7 @@ function buildAttemptConfig(
 function parseAssistantResponse(
   response: string,
   extractedBlockTags: string[] = [],
+  knownToolNames: string[] = [],
 ): {
   cleanResponse: string;
   toolCalls: ToolInvocation[];
@@ -114,7 +120,7 @@ function parseAssistantResponse(
   let extractedReasoning: string[] = [];
 
   {
-    const parsed = parseToolCallsFromResponse(response);
+    const parsed = parseToolCallsFromResponse(response, knownToolNames);
     cleanResponse = parsed.cleanResponse;
     toolCalls = parsed.toolCalls;
   }
@@ -143,6 +149,9 @@ function parseAssistantResponse(
   } else {
     cleanResponse = cleanResponse.trim();
   }
+
+  // Structural special-token leaks are never legitimate output; strip always.
+  cleanResponse = stripStructuralLeakTokens(cleanResponse).trim();
 
   return { cleanResponse, toolCalls, extractedTags, extractedReasoning };
 }
@@ -222,6 +231,11 @@ export async function chat(
   ];
 
   const registry = await getProviderRegistry(providerRegistry);
+  const knownToolNames = (request.tools ?? [])
+    .map((tool) => tool?.function?.name)
+    .filter((name): name is string =>
+      typeof name === "string" && name.length > 0
+    );
   let lastError: unknown = null;
   const attempts: LLMProviderAttempt[] = [];
   let recoveryPrefix = "";
@@ -320,11 +334,19 @@ export async function chat(
       const parsed = parseAssistantResponse(
         fullContent,
         extractedBlockTags,
+        knownToolNames,
       );
       const reasoning = mergeReasoningParts(
         streamResult.reasoning,
         parsed.extractedReasoning,
       );
+
+      // Detect a malformed tool-call attempt: the model emitted tool-call
+      // markup (canonical or a native dialect) that produced no parseable call.
+      // Correct it with a synthetic instruction and retry, then fall back —
+      // rather than leaking protocol markup or silently dropping the call.
+      const hasMalformedToolIntent = parsed.toolCalls.length === 0 &&
+        responseHasToolIntent(fullContent, knownToolNames);
 
       // Detect unintentional empty response: model produced no useful
       // output and didn't use any control action (tool calls, routing, etc.)
@@ -333,7 +355,38 @@ export async function chat(
         Object.keys(parsed.extractedTags).length === 0 &&
         !INTENTIONAL_EMPTY_PATTERN.test(fullContent);
 
-      if (isUnintentionallyEmpty) {
+      if (hasMalformedToolIntent) {
+        // Discard the unparseable attempt entirely.
+        recoveryPrefix = prefixBeforeAttempt;
+        lastRecoveryReason = "malformed_tool_call";
+
+        if (!sameModelRetried) {
+          sameModelRetried = true;
+          warnRecoveryAttempt(
+            "malformed_tool_call",
+            attemptConfig,
+            attemptConfig,
+            "Model emitted an unparseable tool call, retrying",
+          );
+          continue;
+        }
+
+        if (index < attemptConfigs.length - 1) {
+          sameModelRetried = false;
+          warnRecoveryAttempt(
+            "malformed_tool_call",
+            attemptConfig,
+            attemptConfigs[index + 1],
+            "Model emitted an unparseable tool call, falling back",
+          );
+          index++;
+          continue;
+        }
+
+        // No more attempts — sanitize protocol markup out of the answer so the
+        // user never sees a leaked tool call, then fall through to return.
+        parsed.cleanResponse = sanitizeUserFacingText(parsed.cleanResponse);
+      } else if (isUnintentionallyEmpty) {
         // Undo the accumulation from this attempt — no useful content
         recoveryPrefix = prefixBeforeAttempt;
         lastRecoveryReason = "empty_response";

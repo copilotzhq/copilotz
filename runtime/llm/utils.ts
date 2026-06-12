@@ -34,6 +34,39 @@ export const COPILOTZ_CONTROL_TAGS = [
   "no_response",
   "continue_after_tool_results",
 ] as const;
+
+/**
+ * Non-canonical tool-call dialects some models emit instead of the canonical
+ * `<tool_calls>` JSONL block (e.g. Anthropic/MiniMax XML). They are hidden from
+ * the user-visible stream and recognized as "tool intent" so we can recover the
+ * call or trigger a corrective retry. Provider-agnostic on purpose.
+ */
+const STREAMING_HIDDEN_DIALECT_TAGS = [
+  "minimax:tool_call",
+  "tool_call",
+  "function_calls",
+] as const;
+
+/**
+ * Literal special-token markers some model servers leak as raw text when their
+ * native tool/message framing is not parsed server-side. These never appear in
+ * legitimate output, so they are always safe to strip.
+ */
+const STRUCTURAL_LEAK_LITERALS = [
+  "]<]minimax[>[",
+  "]~!b[",
+  "]~b]",
+  "[e~[",
+] as const;
+
+/**
+ * Recognizes an opening/closing tool-call marker from any known dialect
+ * (canonical or native). Used to decide whether an otherwise-unparsed response
+ * was actually a malformed tool attempt that should be corrected and retried.
+ */
+const TOOL_INTENT_MARKER_PATTERN =
+  /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|tool_use)\b/i;
+
 const APPROX_CHARS_PER_TOKEN = 4;
 
 function escapeRegex(value: string): string {
@@ -47,7 +80,7 @@ function normalizeStructuredTagNames(tagNames: string[]): string[] {
   for (const candidate of tagNames) {
     if (typeof candidate !== "string") continue;
     const trimmed = candidate.trim();
-    if (!/^[a-z][a-z0-9_-]*$/i.test(trimmed)) continue;
+    if (!/^[a-z][a-z0-9_:-]*$/i.test(trimmed)) continue;
 
     const lower = trimmed.toLowerCase();
     if (seen.has(lower)) continue;
@@ -879,6 +912,7 @@ export function filterTaggedControlTokensStreaming(
 ): string {
   const structuredTags = normalizeStructuredTagNames([
     ...COPILOTZ_CONTROL_TAGS,
+    ...STREAMING_HIDDEN_DIALECT_TAGS,
     ...extractedBlockTags,
   ]).map((name) => ({
     name,
@@ -949,7 +983,7 @@ export function filterTaggedControlTokensStreaming(
   const filteredOutput = stripLiteralControlTagsStreaming(
     output,
     literalState,
-    INTERNAL_LITERAL_CONTROL_TAGS,
+    [...INTERNAL_LITERAL_CONTROL_TAGS, ...STRUCTURAL_LEAK_LITERALS],
   );
   state.controlPending = literalState.pending;
 
@@ -971,21 +1005,20 @@ In this environment you have access to a set of tools you can use to answer the 
 === RULES ===
 
 1. You may talk to the human normally and call tools in the same response.
-2. If a tool is needed, produce JSONL objects between <tool_calls> … </tool_calls>.
-   • Required keys: "name", "arguments"  
-   • No extra keys.  
-3. Do not wrap the JSON in markdown fences or add other braces.  
-4. Example:
+2. To call a tool, emit one JSON object per line between a single <tool_calls> … </tool_calls> block.
+   • Each object has exactly two keys: "name" (string) and "arguments" (object). No other keys.
+   • "arguments" is a JSON object and may contain nested objects/arrays.
+3. Use ONLY this <tool_calls> JSON format. Do NOT use any built-in or native tool/function-calling
+   syntax. Specifically, never emit <minimax:tool_call>, <invoke>, <parameter>, <function_call>,
+   <function=...>, tool_use blocks, XML parameter tags, or markdown code fences around the JSON.
+4. Example (note the nested arguments object):
 
-\`\`\` 
 <tool_calls>
-{ "name": "tool_name", "arguments": { "key_1": "value_1", "key_2": "value_2" } }
-{ "name": "tool_name_2","arguments": { "key_1": "value_1", "key_2": "value_2", "key_3": "value_3"} }
+{ "name": "tool_name", "arguments": { "key_1": "value_1", "options": { "limit": 10, "tags": ["a", "b"] } } }
+{ "name": "tool_name_2", "arguments": { "query": "value" } }
 </tool_calls>
-Hi, I'm going to execute two tool calls.
-\`\`\`
+Sure — running those now.
 
-VERY IMPORTANT, PAY ATTENTION TO THIS >>>>>> ALWAYS Start your messages with the <tool_calls> block when you have a tool to call.
 5. Tool outputs may appear later as <tool_results> blocks. Treat them as returned execution results and never generate <tool_results> yourself.
 
 === TOOL CATALOG (read-only) ===
@@ -1052,10 +1085,114 @@ export function buildToolResultsBlock(
 }
 
 /**
- * Parse tool calls from AI response using the Anthropic-style <tool_calls> JSON block
+ * Coerce an XML `<parameter>` value to a JS value, mirroring MiniMax's reference
+ * parser: try JSON (objects/arrays/numbers/booleans/null), else keep the string.
+ */
+function coerceXmlParamValue(value: string): unknown {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+const XML_INVOKE_PATTERN =
+  /<invoke\b[^>]*\bname\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\/invoke>/gi;
+const XML_PARAMETER_PATTERN =
+  /<parameter\b[^>]*\bname\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\/parameter>/gi;
+
+/**
+ * Recover tool calls emitted in the generalist Anthropic/MiniMax XML dialect:
+ *   <invoke name="tool"><parameter name="k">value</parameter></invoke>
+ * Works regardless of any surrounding wrapper (`<minimax:tool_call>`,
+ * `<function_calls>`, etc.). Only invocations with at least one parameter are
+ * returned; bare or mangled invocations are left for the corrective-retry path
+ * so we never fabricate empty arguments.
+ */
+export function parseXmlInvokeToolCalls(response: string): ToolInvocation[] {
+  const calls: ToolInvocation[] = [];
+  XML_INVOKE_PATTERN.lastIndex = 0;
+  for (const invoke of response.matchAll(XML_INVOKE_PATTERN)) {
+    const name = (invoke[1] ?? invoke[2] ?? invoke[3] ?? "").trim();
+    if (!name) continue;
+    const inner = invoke[4] ?? "";
+    const args: Record<string, unknown> = {};
+    let paramCount = 0;
+    XML_PARAMETER_PATTERN.lastIndex = 0;
+    for (const param of inner.matchAll(XML_PARAMETER_PATTERN)) {
+      const key = (param[1] ?? param[2] ?? param[3] ?? "").trim();
+      if (!key) continue;
+      const rawValue = (param[4] ?? "").replace(/^\n/, "").replace(/\n$/, "");
+      args[key] = coerceXmlParamValue(rawValue);
+      paramCount++;
+    }
+    if (paramCount === 0) continue;
+    calls.push({
+      id: crypto.randomUUID(),
+      tool: { id: name },
+      args: JSON.stringify(args),
+    });
+  }
+  return calls;
+}
+
+/** Remove the structural special-token literals that some servers leak. */
+export function stripStructuralLeakTokens(text: string): string {
+  let out = text;
+  for (const literal of STRUCTURAL_LEAK_LITERALS) {
+    out = out.split(literal).join("");
+  }
+  return out;
+}
+
+/**
+ * Strip recognized tool-call dialect markup (and structural leak tokens) from
+ * text. Used both when a dialect call is recovered and as the final safety net
+ * on the malformed-tool-call path, so protocol markup never reaches the user.
+ */
+export function sanitizeUserFacingText(text: string): string {
+  let out = text
+    .replace(/<minimax:tool_call>[\s\S]*?<\/minimax:tool_call>/gi, "")
+    .replace(/<function_calls>[\s\S]*?<\/function_calls>/gi, "")
+    .replace(/<invoke\b[\s\S]*?<\/invoke>/gi, "")
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "");
+  // Remove any residual stray dialect tags (open or close) that survived,
+  // e.g. mismatched </tool_calls>, dangling <invoke ...> / <parameter ...>.
+  out = out.replace(
+    /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use)(?:\b[^>]*)?>/gi,
+    "",
+  );
+  return stripStructuralLeakTokens(out).trim();
+}
+
+/**
+ * Detect whether a response that produced no parsed tool calls nonetheless
+ * looks like a (malformed) tool-call attempt. Canonical `<tool_calls>` markup
+ * always counts; non-canonical dialects additionally require a known tool name
+ * to be present, to avoid treating incidental prose/code as a tool intent.
+ */
+export function responseHasToolIntent(
+  text: string,
+  knownToolNames: string[] = [],
+): boolean {
+  if (!TOOL_INTENT_MARKER_PATTERN.test(text)) return false;
+  if (/<\/?tool_calls\b/i.test(text)) return true;
+  return knownToolNames.some(
+    (name) => typeof name === "string" && name.length > 0 && text.includes(name),
+  );
+}
+
+/**
+ * Parse tool calls from AI response using the canonical <tool_calls> JSON block,
+ * with a generalist fallback that recovers the Anthropic/MiniMax `<invoke>` XML
+ * dialect. When `knownToolNames` is provided, dialect recovery is gated on a
+ * matching tool name to avoid false positives.
  */
 export function parseToolCallsFromResponse(
   response: string,
+  knownToolNames?: string[],
 ): { cleanResponse: string; toolCalls: ToolInvocation[] } {
   const toolCalls: ToolInvocation[] = [];
   let cleanResponse = response;
@@ -1116,6 +1253,20 @@ export function parseToolCallsFromResponse(
     }
 
     cleanResponse = cleanResponse.replace(match[0], "").trimStart();
+  }
+
+  // Generalist recovery: if no canonical block parsed, accept the well-specified
+  // <invoke>/<parameter> XML dialect (Anthropic/MiniMax) so we avoid a costly
+  // corrective round-trip for these documented formats.
+  if (toolCalls.length === 0) {
+    const xmlCalls = parseXmlInvokeToolCalls(response);
+    const recovered = knownToolNames && knownToolNames.length > 0
+      ? xmlCalls.filter((call) => knownToolNames.includes(call.tool.id))
+      : xmlCalls;
+    if (recovered.length > 0) {
+      toolCalls.push(...recovered);
+      cleanResponse = sanitizeUserFacingText(cleanResponse);
+    }
   }
 
   return { cleanResponse, toolCalls };

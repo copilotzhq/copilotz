@@ -1,6 +1,6 @@
 /**
- * Native tool for agents to update the current user's persistent metadata.
- * Stored on the human participant node and injected as USER METADATA on future turns.
+ * Native tool for agents to update the current user's persistent memories.
+ * Appends to or removes from `metadata.memories.items`, shared with the Profile UI.
  */
 
 import type {
@@ -8,10 +8,22 @@ import type {
   ScopedCollectionsManager,
 } from "@/types/index.ts";
 
+type MemoryCategory = "preference" | "fact" | "goal" | "context" | "other";
+
+interface MemoryItem {
+  id: string;
+  content: string;
+  category?: MemoryCategory;
+  source: "agent" | "user";
+  createdAt: string;
+  updatedAt?: string;
+}
+
 interface UpdateUserMemoryParams {
-  key: string;
-  value: string;
-  operation?: "set" | "append" | "remove";
+  content?: string;
+  category?: MemoryCategory;
+  operation?: "add" | "remove";
+  memoryId?: string;
 }
 
 interface ToolContext {
@@ -20,70 +32,141 @@ interface ToolContext {
   collections?: CollectionsManager | ScopedCollectionsManager;
 }
 
-function applyMetadataOperation(
-  metadata: Record<string, unknown>,
-  key: string,
-  value: string,
-  operation: "set" | "append" | "remove",
-): Record<string, unknown> {
-  const next = { ...metadata };
+function generateMemoryId(): string {
+  return `mem_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
 
-  if (operation === "set") {
-    next[key] = value;
-  } else if (operation === "append") {
-    const existing = next[key];
-    if (Array.isArray(existing)) {
-      next[key] = [...existing, value];
-    } else if (existing) {
-      next[key] = [existing, value];
-    } else {
-      next[key] = [value];
+function isMemoryItem(value: unknown): value is MemoryItem {
+  return typeof value === "object" && value !== null &&
+    typeof (value as MemoryItem).id === "string" &&
+    typeof (value as MemoryItem).content === "string";
+}
+
+export function getMemoryItems(
+  metadata: Record<string, unknown>,
+): MemoryItem[] {
+  const memories = metadata.memories;
+  if (!memories || typeof memories !== "object") return [];
+  const items = (memories as Record<string, unknown>).items;
+  if (!Array.isArray(items)) return [];
+  return items.filter(isMemoryItem);
+}
+
+export function applyUserMemoryOperation(
+  metadata: Record<string, unknown>,
+  args: UpdateUserMemoryParams,
+): { metadata: Record<string, unknown>; item?: MemoryItem } {
+  const operation = args.operation ?? "add";
+
+  if (operation === "add") {
+    const content = args.content?.trim();
+    if (!content) {
+      throw new Error("content is required for add");
     }
-  } else if (operation === "remove") {
-    delete next[key];
+
+    const item: MemoryItem = {
+      id: generateMemoryId(),
+      content,
+      category: args.category ?? "other",
+      source: "agent",
+      createdAt: new Date().toISOString(),
+    };
+
+    const existingMemories = metadata.memories &&
+        typeof metadata.memories === "object"
+      ? metadata.memories as Record<string, unknown>
+      : {};
+
+    return {
+      metadata: {
+        ...metadata,
+        memories: {
+          ...existingMemories,
+          items: [...getMemoryItems(metadata), item],
+        },
+        updatedAt: new Date().toISOString(),
+      },
+      item,
+    };
   }
 
-  return next;
+  if (operation === "remove") {
+    const memoryId = args.memoryId?.trim();
+    if (!memoryId) {
+      throw new Error("memoryId is required for remove");
+    }
+
+    const existingMemories = metadata.memories &&
+        typeof metadata.memories === "object"
+      ? metadata.memories as Record<string, unknown>
+      : {};
+
+    const remaining = getMemoryItems(metadata).filter((item) =>
+      item.id !== memoryId
+    );
+
+    if (remaining.length === getMemoryItems(metadata).length) {
+      throw new Error(`Memory item not found: ${memoryId}`);
+    }
+
+    return {
+      metadata: {
+        ...metadata,
+        memories: {
+          ...existingMemories,
+          items: remaining,
+        },
+        updatedAt: new Date().toISOString(),
+      },
+    };
+  }
+
+  throw new Error(`Unsupported operation: ${operation}`);
 }
 
 export default {
   key: "update_user_memory",
   name: "Update User Memory",
   description:
-    "Store important facts about the current user that should persist across conversations. Use this for user-specific preferences, profile details, or context that should not be shared with other users. Updates the user's participant profile, which is automatically injected into future prompts as USER METADATA.",
+    "Add or remove persistent memories about the current user in their shared profile memory list (memories.items). The same list appears in the user's Profile UI and is injected as USER METADATA on future turns. Use for user-specific facts, preferences, goals, and context — not team-wide agent learnings.",
   inputSchema: {
     type: "object",
     properties: {
-      key: {
+      content: {
         type: "string",
         description:
-          "What to remember about the user (e.g., 'preferences', 'timezone', 'role', 'learnedPreferences')",
+          "The memory to store. One short, standalone sentence the model can reuse without surrounding context. Required for add.",
       },
-      value: {
+      category: {
         type: "string",
-        description: "The information to store about the user",
+        enum: ["preference", "fact", "goal", "context", "other"],
+        description:
+          "What kind of memory this is. Defaults to other.",
+        default: "other",
       },
       operation: {
         type: "string",
-        enum: ["set", "append", "remove"],
+        enum: ["add", "remove"],
         description:
-          "How to update the memory. 'set' replaces the value, 'append' adds to an array, 'remove' deletes the key.",
-        default: "set",
+          "add creates a new memory item; remove deletes one by memoryId.",
+        default: "add",
+      },
+      memoryId: {
+        type: "string",
+        description:
+          "ID of the memory to remove (from USER METADATA memories.items). Required for remove.",
       },
     },
-    required: ["key", "value"],
+    required: [],
   },
   execute: async (args: UpdateUserMemoryParams, context?: ToolContext) => {
-    const { key, value, operation = "set" } = args;
+    const operation = args.operation ?? "add";
 
-    if (!key || typeof key !== "string") {
-      return { success: false, error: "key is required and must be a string" };
+    if (operation === "add" && !args.content?.trim()) {
+      return { success: false, error: "content is required for add" };
     }
-    if (!value && operation !== "remove") {
-      return {
-        success: false,
-        error: "value is required for set/append operations",
-      };
+    if (operation === "remove" && !args.memoryId?.trim()) {
+      return { success: false, error: "memoryId is required for remove" };
     }
 
     const userExternalId = context?.userExternalId;
@@ -120,11 +203,9 @@ export default {
         ? userParticipant.metadata as Record<string, unknown>
         : {};
 
-      const metadata = applyMetadataOperation(
+      const { metadata, item } = applyUserMemoryOperation(
         existingMetadata,
-        key,
-        value,
-        operation,
+        args,
       );
 
       await participantCollection.upsertIdentity({
@@ -138,10 +219,11 @@ export default {
 
       return {
         success: true,
-        message: `User memory ${
-          operation === "remove" ? "removed" : "updated"
-        }: ${key}`,
-        stored: operation !== "remove" ? { [key]: metadata[key] } : undefined,
+        message: operation === "remove"
+          ? `Memory removed: ${args.memoryId}`
+          : "Memory added",
+        ...(item ? { memory: item } : {}),
+        memoryCount: getMemoryItems(metadata).length,
       };
     } catch (error) {
       return {

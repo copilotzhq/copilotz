@@ -54,7 +54,7 @@ export function getProviderDefaults(): Record<LLMProviderName, { model: string; 
     groq: { model: 'llama3-8b-8192', apiKeyEnv: 'GROQ_API_KEY' },
     deepseek: { model: 'deepseek-chat', apiKeyEnv: 'DEEPSEEK_API_KEY' },
     ollama: { model: 'llama3.2', apiKeyEnv: 'OLLAMA_BASE_URL' },
-    minimax: { model: 'M2-her', apiKeyEnv: 'MINIMAX_API_KEY' },
+    minimax: { model: 'MiniMax-M3', apiKeyEnv: 'MINIMAX_API_KEY' },
     xai: { model: 'grok-beta', apiKeyEnv: 'XAI_API_KEY' },
   };
 }

@@ -19,6 +19,7 @@ type AdapterAssetSupport = {
   image: boolean;
   audio: boolean;
   file: boolean;
+  video: boolean;
 };
 
 const MODEL_CATALOG_ASSET_TIMEOUT_MS = 750;
@@ -42,6 +43,16 @@ const SUPPORTED_AUDIO_MIME = new Set([
   "audio/flac",
 ]);
 
+// MiniMax-M3 video input via the Anthropic-compatible Messages API.
+const SUPPORTED_VIDEO_MIME = new Set([
+  "video/mp4",
+  "video/avi",
+  "video/x-msvideo",
+  "video/quicktime",
+  "video/mov",
+  "video/x-matroska",
+]);
+
 const ARCHIVE_MIME_PREFIXES = [
   "application/zip",
   "application/x-zip",
@@ -62,19 +73,23 @@ function providerAdapterSupport(
 ): AdapterAssetSupport {
   switch (config.provider) {
     case "anthropic":
-      return { image: true, audio: false, file: true };
+      return { image: true, audio: false, file: true, video: false };
     case "gemini":
-      return { image: true, audio: true, file: true };
+      return { image: true, audio: true, file: true, video: false };
     case "openai":
       return {
         image: true,
         audio: false,
         file: resolveOpenAIApiMode(config) === "responses",
+        video: false,
       };
     case "ollama":
-      return { image: true, audio: false, file: false };
+      return { image: true, audio: false, file: false, video: false };
+    case "minimax":
+      // MiniMax-M3 accepts image and video via the Anthropic-compatible API.
+      return { image: true, audio: false, file: false, video: true };
     default:
-      return { image: false, audio: false, file: false };
+      return { image: false, audio: false, file: false, video: false };
   }
 }
 
@@ -109,6 +124,7 @@ async function resolveAssetSupport(
     image: support.image && hasInputModality(inputModalities, "image"),
     audio: support.audio && hasInputModality(inputModalities, "audio"),
     file: support.file && hasInputModality(inputModalities, "file"),
+    video: support.video && hasInputModality(inputModalities, "video"),
   };
 }
 
@@ -124,6 +140,11 @@ function isSupportedAudioMime(mime?: string): mime is string {
 
 function isSupportedFileMime(mime?: string): mime is string {
   return typeof mime === "string" && mime.toLowerCase() === "application/pdf";
+}
+
+function isSupportedVideoMime(mime?: string): mime is string {
+  return typeof mime === "string" &&
+    SUPPORTED_VIDEO_MIME.has(mime.toLowerCase());
 }
 
 function isArchiveMime(mime?: string): boolean {
@@ -197,6 +218,13 @@ function directDataPart(
     }];
   }
 
+  if (
+    isSupportedVideoMime(actualMime) && support.video &&
+    fileData.startsWith("data:")
+  ) {
+    return [{ type: "video", video: { url: fileData, mime_type: actualMime } }];
+  }
+
   const omittedReason = isArchiveMime(actualMime)
     ? "archive_tool_only"
     : "unsupported_file_type";
@@ -252,6 +280,18 @@ async function resolveAssetRefPart(
       }];
     }
 
+    // Video attachments arrive as `file` parts; route them to a video part
+    // when the provider can serialize video input (MiniMax-M3).
+    if (kind === "file" && support.video && isSupportedVideoMime(actualMime)) {
+      return [{
+        type: "video",
+        video: {
+          url: toDataUrl(bytes, actualMime),
+          mime_type: actualMime,
+        },
+      }];
+    }
+
     const omittedReason = isArchiveMime(actualMime)
       ? "archive_tool_only"
       : "unsupported_file_type";
@@ -286,6 +326,24 @@ async function materializePart(
     // The OpenAI and Anthropic adapters can pass URLs through. Gemini currently
     // only maps inline data, but leaving a URL here preserves existing behavior.
     return support.image ? [part] : [];
+  }
+
+  if (part.type === "video" && part.video?.url) {
+    const url = part.video.url;
+    if (isAssetRef(url)) {
+      return await resolveAssetRefPart(
+        url,
+        "file",
+        support,
+        store,
+        part.video.mime_type,
+      );
+    }
+    if (support.video) return [part];
+    return [{
+      type: "text",
+      text: omittedFileText("unsupported_video_input", part.video.mime_type),
+    }];
   }
 
   if (part.type === "input_audio" && part.input_audio?.data) {

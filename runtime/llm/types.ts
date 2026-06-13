@@ -8,10 +8,13 @@
  * - Gemini: supports `text` and inline_data derived from image/audio parts. Generic file inlining is intentionally conservative.
  * - Ollama: accepts text and base64 images (we extract from data URLs into `images` array).
  * - DeepSeek: text only (non-text parts are ignored).
+ * - MiniMax (Anthropic-compatible Messages API): supports `text`, `image`, and `video` (MiniMax-M3 only).
+ *   The `video` part carries a data URL, public URL, or `mm_file://{file_id}` reference.
  */
 export type ChatContentPart =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string } }
+  | { type: "video"; video: { url: string; mime_type?: string } }
   | { type: "input_audio"; input_audio: { data: string; format?: string } }
   | { type: "file"; file: { file_data: string; mime_type?: string } };
 

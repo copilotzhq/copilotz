@@ -341,6 +341,108 @@ Deno.test("materializeAssetRefsForProvider resolves supported image refs to data
   }
 });
 
+Deno.test("materializeAssetRefsForProvider routes MiniMax video data URLs to video parts", async () => {
+  const restore = mockCatalog([]);
+  const videoDataUrl = "data:video/mp4;base64,AAAAIGZ0eXBpc29t";
+  const messages: ChatMessage[] = [{
+    role: "user",
+    content: [
+      { type: "text", text: "What happens in this clip?" },
+      {
+        type: "file",
+        file: { file_data: videoDataUrl, mime_type: "video/mp4" },
+      },
+    ],
+  }];
+
+  try {
+    const result = await materializeAssetRefsForProvider(
+      messages,
+      { provider: "minimax", model: "MiniMax-M3" },
+    );
+
+    assert(Array.isArray(result[0].content));
+    const videoPart = result[0].content.find((part) => part.type === "video");
+    assertExists(videoPart);
+    assertEquals(videoPart.type, "video");
+    assertEquals(videoPart.video.url, videoDataUrl);
+    assertEquals(videoPart.video.mime_type, "video/mp4");
+    assertEquals(result[0].content.some((part) => part.type === "file"), false);
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("materializeAssetRefsForProvider resolves MiniMax video refs to data URLs", async () => {
+  const restore = mockCatalog([]);
+  const store = createMemoryAssetStore();
+  const { assetId } = await store.save(
+    new Uint8Array([0, 0, 0, 32]),
+    "video/mp4",
+  );
+  const ref = buildAssetRefForStore(store, assetId);
+  const messages: ChatMessage[] = [{
+    role: "user",
+    content: [
+      { type: "text", text: `[Attached video: asset_id="${assetId}"]` },
+      {
+        type: "file",
+        file: { file_data: ref, mime_type: "video/mp4" },
+      },
+    ],
+  }];
+
+  try {
+    const result = await materializeAssetRefsForProvider(
+      messages,
+      { provider: "minimax", model: "MiniMax-M3" },
+      store,
+    );
+
+    assert(Array.isArray(result[0].content));
+    const videoPart = result[0].content.find((part) => part.type === "video");
+    assertExists(videoPart);
+    assertEquals(videoPart.type, "video");
+    assertStringIncludes(videoPart.video.url, "data:video/mp4;base64,");
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("materializeAssetRefsForProvider keeps MiniMax image refs", async () => {
+  const restore = mockCatalog([]);
+  const store = createMemoryAssetStore();
+  const { assetId } = await store.save(
+    new Uint8Array([137, 80, 78, 71]),
+    "image/png",
+  );
+  const ref = buildAssetRefForStore(store, assetId);
+  const messages: ChatMessage[] = [{
+    role: "user",
+    content: [
+      { type: "image_url", image_url: { url: ref } },
+    ],
+  }];
+
+  try {
+    const result = await materializeAssetRefsForProvider(
+      messages,
+      { provider: "minimax", model: "MiniMax-M3" },
+      store,
+    );
+
+    assert(Array.isArray(result[0].content));
+    const imagePart = result[0].content.find((part) =>
+      part.type === "image_url"
+    );
+    assertExists(imagePart);
+    assertEquals(imagePart.type, "image_url");
+    assertStringIncludes(imagePart.image_url.url, "data:image/png;base64,");
+  } finally {
+    restore();
+  }
+});
+
 Deno.test("materializeAssetRefsForProvider omits images when catalog says text-only", async () => {
   const restore = mockCatalog(["text"]);
   const store = createMemoryAssetStore();

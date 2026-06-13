@@ -124,8 +124,8 @@ Each record contains:
 | `threadId` | The conversation this call belongs to |
 | `agentId` | Which agent made the call |
 | `provider` / `model` | e.g. `"openai"` / `"gpt-4o"` |
-| `promptTokens` | Input tokens |
-| `completionTokens` | Output tokens |
+| `inputTokens` | Input tokens |
+| `outputTokens` | Output tokens |
 | `totalTokens` | Sum |
 | `inputCostUsd` | Cost of input tokens |
 | `outputCostUsd` | Cost of output tokens |
@@ -292,7 +292,7 @@ A processor that counts `LLM_CALL` events per thread and logs a warning after N 
 Log `LLM_CALL` and look at the injected context in the system message — it shows what chunks were retrieved. Also check the similarity threshold in `rag.retrieval.similarityThreshold`; raising it filters out weak matches.
 
 **"Costs spiked last night — what happened?"**
-Query `llm_usage` filtered by `createdAt` range. Compare `promptTokens` across threads; unusually high counts indicate either very long conversation history or runaway loops.
+Query `llm_usage` filtered by `createdAt` range. Compare `inputTokens` across threads; unusually high counts indicate either very long conversation history or runaway loops.
 
 ## What this unlocks
 

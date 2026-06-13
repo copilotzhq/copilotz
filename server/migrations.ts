@@ -14,6 +14,12 @@ export type TenantNamespaceGraphMigrationResult = {
   hasThreadMetadataColumn: boolean;
 };
 
+/** Result summary for the LLM usage contract migration. */
+export type LlmUsageContractMigrationResult = {
+  namespace: string;
+  updatedUsageRows: number;
+};
+
 /** Runs the tenant namespace graph migration through a Copilotz instance. */
 export async function migrateTenantNamespaceGraph(
   copilotz: Pick<Copilotz, "ops" | "config">,
@@ -24,6 +30,63 @@ export async function migrateTenantNamespaceGraph(
     throw new Error("Tenant namespace is required for graph migration");
   }
   return migrateTenantNamespaceGraphWithQuery(copilotz.ops, namespace);
+}
+
+/** Rewrites legacy llm_usage row data into the canonical usage contract. */
+export async function migrateLlmUsageContract(
+  copilotz: Pick<Copilotz, "ops" | "config">,
+  options: { namespace?: string } = {},
+): Promise<LlmUsageContractMigrationResult> {
+  const namespace = options.namespace ?? copilotz.config.namespace;
+  if (!namespace) {
+    throw new Error("Tenant namespace is required for LLM usage migration");
+  }
+  return migrateLlmUsageContractWithQuery(copilotz.ops, namespace);
+}
+
+export async function migrateLlmUsageContractWithQuery(
+  db: Queryable,
+  namespace: string,
+): Promise<LlmUsageContractMigrationResult> {
+  const result = await db.query<{ updatedUsageRows: number | string }>(
+    `WITH updated AS (
+       UPDATE "nodes"
+       SET "data" = (
+         COALESCE("data", '{}'::jsonb)
+           - 'promptTokens'
+           - 'completionTokens'
+           - 'promptCost'
+           - 'completionCost'
+           - 'totalCost'
+       ) || jsonb_strip_nulls(jsonb_build_object(
+         'inputTokens',
+           COALESCE(NULLIF("data"->'inputTokens', 'null'::jsonb), NULLIF("data"->'promptTokens', 'null'::jsonb)),
+         'outputTokens',
+           COALESCE(NULLIF("data"->'outputTokens', 'null'::jsonb), NULLIF("data"->'completionTokens', 'null'::jsonb)),
+         'inputCostUsd',
+           COALESCE(NULLIF("data"->'inputCostUsd', 'null'::jsonb), NULLIF("data"->'promptCost', 'null'::jsonb)),
+         'outputCostUsd',
+           COALESCE(NULLIF("data"->'outputCostUsd', 'null'::jsonb), NULLIF("data"->'completionCost', 'null'::jsonb)),
+         'totalCostUsd',
+           COALESCE(NULLIF("data"->'totalCostUsd', 'null'::jsonb), NULLIF("data"->'totalCost', 'null'::jsonb))
+       ))
+       WHERE "type" = 'llm_usage'
+         AND (
+           COALESCE("data", '{}'::jsonb) ? 'promptTokens'
+           OR COALESCE("data", '{}'::jsonb) ? 'completionTokens'
+           OR COALESCE("data", '{}'::jsonb) ? 'promptCost'
+           OR COALESCE("data", '{}'::jsonb) ? 'completionCost'
+           OR COALESCE("data", '{}'::jsonb) ? 'totalCost'
+         )
+       RETURNING 1
+     )
+     SELECT COUNT(*)::int AS "updatedUsageRows" FROM updated`,
+  );
+
+  return {
+    namespace,
+    updatedUsageRows: Number(result.rows[0]?.updatedUsageRows ?? 0),
+  };
 }
 
 export async function migrateTenantNamespaceGraphWithQuery(

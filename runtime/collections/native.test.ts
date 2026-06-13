@@ -1,11 +1,17 @@
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import {
+  assert,
+  assertEquals,
+} from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 import { createCollectionsManager } from "@/database/collections/index.ts";
 import { createDatabase } from "@/database/index.ts";
 import messageCollection from "@/resources/collections/message.ts";
 import participantCollection from "@/resources/collections/participant.ts";
-import { createMessageService } from "@/runtime/collections/native.ts";
+import {
+  createLlmUsageService,
+  createMessageService,
+} from "@/runtime/collections/native.ts";
 
 Deno.test({
   name:
@@ -263,5 +269,83 @@ Deno.test({
       oldestMessageId: edit.message.id,
       newestMessageId: newAnswer.id,
     });
+  },
+});
+
+Deno.test({
+  name: "llm usage create writes the canonical token and cost contract",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({ url: ":memory:" });
+    const namespace = "tenant-test";
+    const threadId = crypto.randomUUID();
+    await db.ops.findOrCreateThread(threadId, {
+      namespace,
+      name: "Usage Thread",
+      participants: ["agent-1"],
+    });
+
+    const usageService = createLlmUsageService({
+      ops: db.ops,
+    });
+
+    const usageId = await usageService.createUsageRecord({
+      threadId,
+      eventId: "event-1",
+      agentId: "agent-1",
+      provider: "openai",
+      model: "gpt-test",
+      usage: {
+        inputTokens: 10,
+        outputTokens: 20,
+        reasoningTokens: 3,
+        cacheReadInputTokens: 4,
+        cacheCreationInputTokens: 5,
+        totalTokens: 42,
+        rawUsage: { provider: "raw" },
+        source: "provider",
+        status: "completed",
+      },
+      cost: {
+        source: "openrouter",
+        currency: "USD",
+        pricingModelId: "openai/gpt-test",
+        inputCostUsd: 0.01,
+        outputCostUsd: 0.02,
+        reasoningCostUsd: 0.003,
+        cacheReadInputCostUsd: 0.004,
+        cacheCreationInputCostUsd: 0.005,
+        totalCostUsd: 0.042,
+      },
+    });
+
+    assert(usageId);
+    const node = await db.ops.getNodeById(usageId);
+    const data = node?.data as Record<string, unknown>;
+    assertEquals(data.inputTokens, 10);
+    assertEquals(data.outputTokens, 20);
+    assertEquals(data.reasoningTokens, 3);
+    assertEquals(data.cacheReadInputTokens, 4);
+    assertEquals(data.cacheCreationInputTokens, 5);
+    assertEquals(data.totalTokens, 42);
+    assertEquals(data.inputCostUsd, 0.01);
+    assertEquals(data.outputCostUsd, 0.02);
+    assertEquals(data.reasoningCostUsd, 0.003);
+    assertEquals(data.cacheReadInputCostUsd, 0.004);
+    assertEquals(data.cacheCreationInputCostUsd, 0.005);
+    assertEquals(data.totalCostUsd, 0.042);
+    assertEquals(data.pricingModelId, "openai/gpt-test");
+    assertEquals(data.pricingSource, "openrouter");
+    assertEquals(data.pricingCurrency, "USD");
+    assertEquals(data.source, "provider");
+    assertEquals(data.rawUsage, { provider: "raw" });
+    assertEquals(data.status, "completed");
+    assert(!("promptTokens" in data));
+    assert(!("completionTokens" in data));
+    assert(!("promptCost" in data));
+    assert(!("completionCost" in data));
+    assert(!("totalCost" in data));
   },
 });

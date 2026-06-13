@@ -490,11 +490,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           provider: llmResponse.provider ?? null,
           model: llmResponse.model ?? null,
           usage,
-          cost: {
-            inputCostUsd: cost?.inputCostUsd ?? null,
-            outputCostUsd: cost?.outputCostUsd ?? null,
-            totalCostUsd: cost?.totalCostUsd ?? null,
-          },
+          cost: cost ?? null,
         });
       } catch (error) {
         console.warn("[LLM_CALL] Failed to persist llm_usage node:", error);

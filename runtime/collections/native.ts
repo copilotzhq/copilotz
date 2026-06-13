@@ -11,7 +11,7 @@ import type {
   MessageHistoryPage,
   MessageHistoryPageOptions,
 } from "@/database/operations/index.ts";
-import type { TokenUsage } from "@/runtime/llm/types.ts";
+import type { CostBreakdown, TokenUsage } from "@/runtime/llm/types.ts";
 import type {
   CollectionsManager,
   CopilotzDb,
@@ -641,11 +641,7 @@ export function createLlmUsageService(
       provider: string | null;
       model: string | null;
       usage: TokenUsage;
-      cost?: {
-        inputCostUsd?: number | null;
-        outputCostUsd?: number | null;
-        totalCostUsd?: number | null;
-      } | null;
+      cost?: CostBreakdown | null;
     }): Promise<string | null> {
       const thread = await ops.getThreadById(input.threadId);
       const namespace = typeof thread?.namespace === "string" &&
@@ -670,12 +666,25 @@ export function createLlmUsageService(
           agentId: input.agentId,
           provider: input.provider,
           model: input.model,
-          promptTokens: input.usage.inputTokens ?? null,
-          completionTokens: input.usage.outputTokens ?? null,
+          inputTokens: input.usage.inputTokens ?? null,
+          outputTokens: input.usage.outputTokens ?? null,
+          reasoningTokens: input.usage.reasoningTokens ?? null,
+          cacheReadInputTokens: input.usage.cacheReadInputTokens ?? null,
+          cacheCreationInputTokens: input.usage.cacheCreationInputTokens ??
+            null,
           totalTokens: input.usage.totalTokens ?? null,
-          promptCost: input.cost?.inputCostUsd ?? null,
-          completionCost: input.cost?.outputCostUsd ?? null,
-          totalCost: input.cost?.totalCostUsd ?? null,
+          inputCostUsd: input.cost?.inputCostUsd ?? null,
+          outputCostUsd: input.cost?.outputCostUsd ?? null,
+          reasoningCostUsd: input.cost?.reasoningCostUsd ?? null,
+          cacheReadInputCostUsd: input.cost?.cacheReadInputCostUsd ?? null,
+          cacheCreationInputCostUsd: input.cost?.cacheCreationInputCostUsd ??
+            null,
+          totalCostUsd: input.cost?.totalCostUsd ?? null,
+          pricingModelId: input.cost?.pricingModelId ?? null,
+          pricingSource: input.cost?.source ?? null,
+          pricingCurrency: input.cost?.currency ?? null,
+          source: input.usage.source ?? null,
+          rawUsage: input.usage.rawUsage ?? null,
           status: input.usage.status,
         },
         sourceType: "thread",

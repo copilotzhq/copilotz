@@ -117,6 +117,13 @@ export interface CopilotzApp {
 /** Options for namespace and schema resolution in {@link withApp}. */
 export interface WithAppOptions {
   /**
+   * Expose admin feature actions as first-class `/admin/:action` app routes.
+   *
+   * Defaults to false. Clients should only enable this after adding their own
+   * authentication and authorization guard before dispatching requests.
+   */
+  exposeAdminRoutes?: boolean;
+  /**
    * Resolve the tenant/application namespace for each app request.
    *
    * Resolution order is:
@@ -903,32 +910,41 @@ export function withApp<T extends Copilotz>(
         (request: Record<string, unknown>, copilotz: Copilotz) => unknown
       >;
       for (const [actionName, handler] of Object.entries(actions)) {
+        const action = async (ctx: RouteContext) => {
+          const result = await handler(
+            {
+              method: ctx.method,
+              body: ctx.body,
+              query: ctx.query,
+              headers: ctx.headers,
+              rawBody: ctx.rawBody,
+              callback: ctx.callback,
+              context: ctx.context,
+              namespace: ctx.namespace,
+              schema: ctx.schema,
+            },
+            ctx.copilotz,
+          );
+          const res = result as AppResponse | undefined;
+          return {
+            status: res?.status ?? 200,
+            data: res?.data ?? result,
+          };
+        };
         routes.push({
           resource: "features",
           method: "*",
           pattern: [feature.name, actionName],
-          action: async (ctx) => {
-            const result = await handler(
-              {
-                method: ctx.method,
-                body: ctx.body,
-                query: ctx.query,
-                headers: ctx.headers,
-                rawBody: ctx.rawBody,
-                callback: ctx.callback,
-                context: ctx.context,
-                namespace: ctx.namespace,
-                schema: ctx.schema,
-              },
-              ctx.copilotz,
-            );
-            const res = result as AppResponse | undefined;
-            return {
-              status: res?.status ?? 200,
-              data: res?.data ?? result,
-            };
-          },
+          action,
         });
+        if (feature.name === "admin" && options.exposeAdminRoutes === true) {
+          routes.push({
+            resource: "admin",
+            method: "*",
+            pattern: [actionName],
+            action,
+          });
+        }
       }
     }
   }

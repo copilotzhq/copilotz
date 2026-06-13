@@ -765,6 +765,23 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
       assertEquals(res.status, 200);
     });
 
+    await t.step("GET /admin/overview is not exposed by default", async () => {
+      const res = await fetch(`${base}/admin/overview`);
+      assertEquals(res.status, 404);
+    });
+
+    await t.step("withApp can opt in to /admin aliases", async () => {
+      const { copilotz } = createMockCopilotz();
+      withApp(copilotz as any, { exposeAdminRoutes: true });
+      const result = await (copilotz as any).app.handle({
+        resource: "admin",
+        method: "GET",
+        path: ["overview"],
+      });
+      assertEquals(result.status, 200);
+      assertEquals(result.data.totalThreads, 42);
+    });
+
     // -- graph --
     await t.step("GET /graph/nodes/:id returns node", async () => {
       const res = await fetch(`${base}/graph/nodes/n-42`);

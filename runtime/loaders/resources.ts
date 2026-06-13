@@ -11,8 +11,8 @@ import type {
   AgentConfig,
   APIConfig,
   CollectionDefinition,
-  MemoryResource,
   MCPServer,
+  MemoryResource,
   ToolConfig,
 } from "@/index.ts";
 import type { ProviderFactory } from "@/runtime/llm/types.ts";
@@ -561,7 +561,9 @@ async function loadMcpServersByManifest(
   names: string[],
 ): Promise<MCPServer[]> {
   const settled = await Promise.all(names.map(async (name) => {
-    const mod = await importModuleSafe(joinUrl(baseUrl, "mcpServers", name, "index.ts")) ??
+    const mod = await importModuleSafe(
+      joinUrl(baseUrl, "mcpServers", name, "index.ts"),
+    ) ??
       await importModuleSafe(joinUrl(baseUrl, "mcpServers", name + ".ts"));
     if (!mod || typeof mod !== "object") return null;
     return {
@@ -606,7 +608,7 @@ function resolveResourceFromModule(mod: unknown, name: string): unknown {
   const m = mod as Record<string, unknown>;
   if (m.default) return m.default;
   if (m[name]) return m[name];
-  // If it's a module object with only one export, and it's not 'default' or 'name', 
+  // If it's a module object with only one export, and it's not 'default' or 'name',
   // we might still want it, but usually the convention is default or name.
   // We'll return the module object itself as a fallback if it looks like a resource
   return mod;
@@ -644,8 +646,12 @@ async function loadGenericByManifest(
       return {
         id: name,
         name,
-        ...(config && typeof config === "object" ? resolveResourceFromModule(config, name) as any : {}),
-        ...(adapter && typeof adapter === "object" ? resolveResourceFromModule(adapter, name) as any : {}),
+        ...(config && typeof config === "object"
+          ? resolveResourceFromModule(config, name) as any
+          : {}),
+        ...(adapter && typeof adapter === "object"
+          ? resolveResourceFromModule(adapter, name) as any
+          : {}),
       };
     }
 
@@ -699,8 +705,12 @@ async function loadNamedGenericByManifest<T>(
       value = {
         id: name,
         name,
-        ...(config && typeof config === "object" ? resolveResourceFromModule(config, name) as any : {}),
-        ...(adapter && typeof adapter === "object" ? resolveResourceFromModule(adapter, name) as any : {}),
+        ...(config && typeof config === "object"
+          ? resolveResourceFromModule(config, name) as any
+          : {}),
+        ...(adapter && typeof adapter === "object"
+          ? resolveResourceFromModule(adapter, name) as any
+          : {}),
       };
     } else if (singleMod) {
       value = resolveResourceFromModule(singleMod, name);
@@ -787,6 +797,35 @@ async function loadFeaturesFromDirectory(
   );
 
   return features.filter((f): f is FeatureEntry => f !== null);
+}
+
+function toFeatureEntry(name: string, value: unknown): FeatureEntry | null {
+  if (!value || typeof value !== "object") return null;
+  const entry = value as Partial<FeatureEntry>;
+  if (!entry.actions || typeof entry.actions !== "object") return null;
+  return {
+    name: typeof entry.name === "string" && entry.name.length > 0
+      ? entry.name
+      : name,
+    actions: entry.actions,
+  };
+}
+
+async function loadFeaturesByManifest(
+  baseUrl: string,
+  names: string[],
+): Promise<FeatureEntry[]> {
+  const barrelUrl = joinUrl(baseUrl, "features", "mod.ts");
+  const barrel = await importModuleSafe(barrelUrl);
+  if (barrel && typeof barrel === "object") {
+    const barrelMap = barrel as Record<string, unknown>;
+    return names.flatMap((name) => {
+      const entry = toFeatureEntry(name, barrelMap[name]);
+      return entry ? [entry] : [];
+    });
+  }
+
+  return await loadFeaturesFromDirectory(baseUrl, names);
 }
 
 // ---- Channel loading ------------------------------------------------------
@@ -1002,11 +1041,11 @@ async function loadFromManifest(
     );
   }
 
-  if (provides.features?.length && baseUrl.startsWith("file://")) {
+  if (provides.features?.length) {
     tasks.push(
       timed(
         "features",
-        () => loadFeaturesFromDirectory(baseUrl, provides.features!),
+        () => loadFeaturesByManifest(baseUrl, provides.features!),
       ).then((r) => {
         resources.features = r;
       }),
@@ -1044,11 +1083,14 @@ async function loadFromManifest(
   if (provides.embeddings?.length) {
     tasks.push(
       timed("embeddings", async () => {
-        const providers = await loadNamedGenericByManifest<EmbeddingProviderFactory>(
+        const providers = await loadNamedGenericByManifest<
+          EmbeddingProviderFactory
+        >(
           baseUrl,
           "embeddings",
           provides.embeddings!,
-          (value): value is EmbeddingProviderFactory => typeof value === "function",
+          (value): value is EmbeddingProviderFactory =>
+            typeof value === "function",
         );
         return providers.map(({ name, value }) => ({ name, factory: value }));
       }).then((r) => {
@@ -1060,7 +1102,9 @@ async function loadFromManifest(
   if (provides.storage?.length) {
     tasks.push(
       timed("storage", async () => {
-        const providers = await loadNamedGenericByManifest<Record<string, unknown>>(
+        const providers = await loadNamedGenericByManifest<
+          Record<string, unknown>
+        >(
           baseUrl,
           "storage",
           provides.storage!,
@@ -1076,8 +1120,10 @@ async function loadFromManifest(
 
   if (provides.collections?.length) {
     tasks.push(
-      timed("collections", () =>
-        loadGenericByManifest(baseUrl, "collections", provides.collections!),
+      timed(
+        "collections",
+        () =>
+          loadGenericByManifest(baseUrl, "collections", provides.collections!),
       ).then((r) => {
         resources.collections = r as CollectionDefinition[];
       }),
@@ -1116,9 +1162,7 @@ async function loadFromDirectory(
 
   const collectEntries = async (url: string): Promise<Deno.DirEntry[]> => {
     const entries: Deno.DirEntry[] = [];
-    const path = url.startsWith("file://")
-      ? fromFileUrl(url)
-      : url;
+    const path = url.startsWith("file://") ? fromFileUrl(url) : url;
     try {
       for await (const entry of readDir(path)) entries.push(entry);
     } catch (_err) {
@@ -1131,269 +1175,298 @@ async function loadFromDirectory(
   const tasks: Promise<void>[] = [];
 
   // ---- Agents ----
-  if (shouldLoadCategory("agents")) tasks.push((async () => {
-    const s = performance.now();
-    const agentsUrl = joinUrl(baseUrl, "agents");
-    const entries = await collectEntries(agentsUrl);
-    const allowedNames = new Set(
-      filterNames(
-        "agents",
-        entries.filter((e) => e.isDirectory).map((entry) => entry.name),
-      ),
-    );
-    const agents = await Promise.all(
-      entries.filter((e) => e.isDirectory && allowedNames.has(e.name)).map(async (entry) => {
-        const agentUrl = joinUrl(agentsUrl, entry.name);
-        const [instructions, config] = await Promise.all([
-          loadText(joinUrl(agentUrl, "instructions.md")),
-          importModuleSafe(joinUrl(agentUrl, "config.ts")) as Promise<
-            Record<string, unknown> | undefined
-          >,
-        ]);
-        if (!instructions) return null;
-        return {
-          id: entry.name,
-          name: entry.name,
-          instructions,
-          ...(config ?? {}),
-        } as AgentConfig;
-      }),
-    );
-    resources.agents = agents.filter((a): a is AgentConfig => a !== null);
-    logPhase("agents", s, { count: resources.agents.length });
-  })());
-
-  // ---- APIs ----
-  if (shouldLoadCategory("apis")) tasks.push((async () => {
-    const s = performance.now();
-    const apisUrl = joinUrl(baseUrl, "apis");
-    const entries = await collectEntries(apisUrl);
-    const allowedNames = new Set(
-      filterNames(
-        "apis",
-        entries.filter((e) => e.isDirectory).map((entry) => entry.name),
-      ),
-    );
-    const apis = await Promise.all(
-      entries.filter((e) => e.isDirectory && allowedNames.has(e.name)).map(async (entry) => {
-        const apiUrl = joinUrl(apisUrl, entry.name);
-        const [config, openApiSchema] = await Promise.all([
-          importModuleSafe(joinUrl(apiUrl, "config.ts")) as Promise<
-            Record<string, unknown> | undefined
-          >,
-          importModuleSafe(joinUrl(apiUrl, "openApiSchema.json"), {
-            with: { type: "json" },
-          }),
-        ]);
-        if (!openApiSchema) return null;
-        return {
-          id: entry.name,
-          name: entry.name,
-          openApiSchema,
-          ...(config ?? {}),
-        } as APIConfig;
-      }),
-    );
-    resources.apis = apis.filter((a): a is APIConfig => a !== null);
-    logPhase("apis", s, { count: resources.apis.length });
-  })());
-
-  // ---- Tools ----
-  if (shouldLoadCategory("tools")) tasks.push((async () => {
-    const s = performance.now();
-    const toolsUrl = joinUrl(baseUrl, "tools");
-    const entries = await collectEntries(toolsUrl);
-    const allowedNames = new Set(
-      filterNames(
-        "tools",
-        entries
-          .filter((e) => e.isDirectory && !e.name.startsWith("_"))
-          .map((entry) => entry.name),
-      ),
-    );
-    const tools = await Promise.all(
-      entries
-        .filter((e) => e.isDirectory && !e.name.startsWith("_") && allowedNames.has(e.name))
-        .map(async (entry) => await loadToolModule(baseUrl, entry.name)),
-    );
-    resources.tools = tools.filter((t): t is ToolConfig => t !== null);
-    logPhase("tools", s, { count: resources.tools.length });
-  })());
-
-  // ---- Processors ----
-  if (shouldLoadCategory("processors")) tasks.push((async () => {
-    const s = performance.now();
-    const processorsUrl = joinUrl(baseUrl, "processors");
-    try {
-      const evtDirs = await collectEntries(processorsUrl);
-      const allowedEventTypes = new Set(
+  if (shouldLoadCategory("agents")) {
+    tasks.push((async () => {
+      const s = performance.now();
+      const agentsUrl = joinUrl(baseUrl, "agents");
+      const entries = await collectEntries(agentsUrl);
+      const allowedNames = new Set(
         filterNames(
-          "processors",
-          evtDirs.filter((e) => e.isDirectory).map((entry) => entry.name),
+          "agents",
+          entries.filter((e) => e.isDirectory).map((entry) => entry.name),
         ),
       );
-
-      type Discovered = {
-        shouldProcess: (
-          event: unknown,
-          deps?: unknown,
-        ) => boolean | Promise<boolean>;
-        process: (
-          event: unknown,
-          deps?: unknown,
-        ) => unknown | Promise<unknown>;
-        priority?: number;
-        name?: string;
-      };
-
-      const allProcessors = await Promise.all(
-        evtDirs.filter((e) => e.isDirectory && allowedEventTypes.has(e.name)).map(async (evtDir) => {
-          const eventTypeKey = evtDir.name.toUpperCase();
-          const dirUrl = joinUrl(processorsUrl, evtDir.name);
-          const files = await collectEntries(dirUrl);
-
-          const discovered = (
-            await Promise.all(
-              files
-                .filter((f) => f.isFile && f.name.endsWith(".ts"))
-                .map(async (file): Promise<Discovered | null> => {
-                  const specifierUrl = joinUrl(dirUrl, file.name);
-                  let mod: Record<string, unknown> | undefined;
-                  try {
-                    mod = (await import(specifierUrl)) as Record<
-                      string,
-                      unknown
-                    >;
-                  } catch (error) {
-                    console.warn(
-                      `[copilotz:resources] Failed to load processor: ${specifierUrl}`,
-                      error,
-                    );
-                    return null;
-                  }
-                  const maybeShouldProcess = mod?.shouldProcess;
-                  const maybeProcess = mod?.process || mod?.default;
-                  const maybePriority = mod?.priority;
-                  if (
-                    typeof maybeShouldProcess === "function" &&
-                    typeof maybeProcess === "function"
-                  ) {
-                    return {
-                      shouldProcess:
-                        maybeShouldProcess as Discovered["shouldProcess"],
-                      process: maybeProcess as Discovered["process"],
-                      priority: typeof maybePriority === "number"
-                        ? maybePriority
-                        : 0,
-                      name: file.name,
-                    };
-                  }
-                  return null;
-                }),
-            )
-          ).filter((d): d is Discovered => d !== null);
-
-          discovered.sort((a, b) => {
-            if (b.priority !== a.priority) {
-              return (b.priority ?? 0) - (a.priority ?? 0);
-            }
-            return (a.name ?? "").localeCompare(b.name ?? "", "en", {
-              sensitivity: "base",
-            });
-          });
-
-          return discovered.map((d) => ({
-            shouldProcess: asShouldProcess(d.shouldProcess),
-            process: asProcess(d.process),
-            eventType: eventTypeKey,
-            priority: d.priority,
-          })) as ProcessorEntry[];
-        }),
+      const agents = await Promise.all(
+        entries.filter((e) => e.isDirectory && allowedNames.has(e.name)).map(
+          async (entry) => {
+            const agentUrl = joinUrl(agentsUrl, entry.name);
+            const [instructions, config] = await Promise.all([
+              loadText(joinUrl(agentUrl, "instructions.md")),
+              importModuleSafe(joinUrl(agentUrl, "config.ts")) as Promise<
+                Record<string, unknown> | undefined
+              >,
+            ]);
+            if (!instructions) return null;
+            return {
+              id: entry.name,
+              name: entry.name,
+              instructions,
+              ...(config ?? {}),
+            } as AgentConfig;
+          },
+        ),
       );
+      resources.agents = agents.filter((a): a is AgentConfig => a !== null);
+      logPhase("agents", s, { count: resources.agents.length });
+    })());
+  }
 
-      resources.processors = allProcessors.flat();
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.warn(
-        `[copilotz:resources] Failed to load processors from: ${processorsUrl}`,
-        msg,
+  // ---- APIs ----
+  if (shouldLoadCategory("apis")) {
+    tasks.push((async () => {
+      const s = performance.now();
+      const apisUrl = joinUrl(baseUrl, "apis");
+      const entries = await collectEntries(apisUrl);
+      const allowedNames = new Set(
+        filterNames(
+          "apis",
+          entries.filter((e) => e.isDirectory).map((entry) => entry.name),
+        ),
       );
-      resources.processors = [];
-    }
-    logPhase("processors", s, { count: resources.processors?.length ?? 0 });
-  })());
+      const apis = await Promise.all(
+        entries.filter((e) => e.isDirectory && allowedNames.has(e.name)).map(
+          async (entry) => {
+            const apiUrl = joinUrl(apisUrl, entry.name);
+            const [config, openApiSchema] = await Promise.all([
+              importModuleSafe(joinUrl(apiUrl, "config.ts")) as Promise<
+                Record<string, unknown> | undefined
+              >,
+              importModuleSafe(joinUrl(apiUrl, "openApiSchema.json"), {
+                with: { type: "json" },
+              }),
+            ]);
+            if (!openApiSchema) return null;
+            return {
+              id: entry.name,
+              name: entry.name,
+              openApiSchema,
+              ...(config ?? {}),
+            } as APIConfig;
+          },
+        ),
+      );
+      resources.apis = apis.filter((a): a is APIConfig => a !== null);
+      logPhase("apis", s, { count: resources.apis.length });
+    })());
+  }
+
+  // ---- Tools ----
+  if (shouldLoadCategory("tools")) {
+    tasks.push((async () => {
+      const s = performance.now();
+      const toolsUrl = joinUrl(baseUrl, "tools");
+      const entries = await collectEntries(toolsUrl);
+      const allowedNames = new Set(
+        filterNames(
+          "tools",
+          entries
+            .filter((e) => e.isDirectory && !e.name.startsWith("_"))
+            .map((entry) => entry.name),
+        ),
+      );
+      const tools = await Promise.all(
+        entries
+          .filter((e) =>
+            e.isDirectory && !e.name.startsWith("_") && allowedNames.has(e.name)
+          )
+          .map(async (entry) => await loadToolModule(baseUrl, entry.name)),
+      );
+      resources.tools = tools.filter((t): t is ToolConfig => t !== null);
+      logPhase("tools", s, { count: resources.tools.length });
+    })());
+  }
+
+  // ---- Processors ----
+  if (shouldLoadCategory("processors")) {
+    tasks.push((async () => {
+      const s = performance.now();
+      const processorsUrl = joinUrl(baseUrl, "processors");
+      try {
+        const evtDirs = await collectEntries(processorsUrl);
+        const allowedEventTypes = new Set(
+          filterNames(
+            "processors",
+            evtDirs.filter((e) => e.isDirectory).map((entry) => entry.name),
+          ),
+        );
+
+        type Discovered = {
+          shouldProcess: (
+            event: unknown,
+            deps?: unknown,
+          ) => boolean | Promise<boolean>;
+          process: (
+            event: unknown,
+            deps?: unknown,
+          ) => unknown | Promise<unknown>;
+          priority?: number;
+          name?: string;
+        };
+
+        const allProcessors = await Promise.all(
+          evtDirs.filter((e) => e.isDirectory && allowedEventTypes.has(e.name))
+            .map(async (evtDir) => {
+              const eventTypeKey = evtDir.name.toUpperCase();
+              const dirUrl = joinUrl(processorsUrl, evtDir.name);
+              const files = await collectEntries(dirUrl);
+
+              const discovered = (
+                await Promise.all(
+                  files
+                    .filter((f) => f.isFile && f.name.endsWith(".ts"))
+                    .map(async (file): Promise<Discovered | null> => {
+                      const specifierUrl = joinUrl(dirUrl, file.name);
+                      let mod: Record<string, unknown> | undefined;
+                      try {
+                        mod = (await import(specifierUrl)) as Record<
+                          string,
+                          unknown
+                        >;
+                      } catch (error) {
+                        console.warn(
+                          `[copilotz:resources] Failed to load processor: ${specifierUrl}`,
+                          error,
+                        );
+                        return null;
+                      }
+                      const maybeShouldProcess = mod?.shouldProcess;
+                      const maybeProcess = mod?.process || mod?.default;
+                      const maybePriority = mod?.priority;
+                      if (
+                        typeof maybeShouldProcess === "function" &&
+                        typeof maybeProcess === "function"
+                      ) {
+                        return {
+                          shouldProcess:
+                            maybeShouldProcess as Discovered["shouldProcess"],
+                          process: maybeProcess as Discovered["process"],
+                          priority: typeof maybePriority === "number"
+                            ? maybePriority
+                            : 0,
+                          name: file.name,
+                        };
+                      }
+                      return null;
+                    }),
+                )
+              ).filter((d): d is Discovered => d !== null);
+
+              discovered.sort((a, b) => {
+                if (b.priority !== a.priority) {
+                  return (b.priority ?? 0) - (a.priority ?? 0);
+                }
+                return (a.name ?? "").localeCompare(b.name ?? "", "en", {
+                  sensitivity: "base",
+                });
+              });
+
+              return discovered.map((d) => ({
+                shouldProcess: asShouldProcess(d.shouldProcess),
+                process: asProcess(d.process),
+                eventType: eventTypeKey,
+                priority: d.priority,
+              })) as ProcessorEntry[];
+            }),
+        );
+
+        resources.processors = allProcessors.flat();
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[copilotz:resources] Failed to load processors from: ${processorsUrl}`,
+          msg,
+        );
+        resources.processors = [];
+      }
+      logPhase("processors", s, { count: resources.processors?.length ?? 0 });
+    })());
+  }
 
   // ---- Skills ----
-  if (shouldLoadCategory("skills")) tasks.push((async () => {
-    const skillsPath = joinUrl(baseUrl, "skills").replace("file://", "") + "/";
-    const s = performance.now();
-    const names = selection.hasExplicitSelection
-      ? Array.from(selection.all.has("skills") ? [] : (selection.named.get("skills") ?? []))
-      : undefined;
-    resources.skills = await loadSkillsFromDirectory(
-      skillsPath,
-      "project",
-      selection.all.has("skills") ? undefined : names,
-    );
-    logPhase("skills", s, { count: resources.skills?.length ?? 0 });
-  })());
+  if (shouldLoadCategory("skills")) {
+    tasks.push((async () => {
+      const skillsPath = joinUrl(baseUrl, "skills").replace("file://", "") +
+        "/";
+      const s = performance.now();
+      const names = selection.hasExplicitSelection
+        ? Array.from(
+          selection.all.has("skills")
+            ? []
+            : (selection.named.get("skills") ?? []),
+        )
+        : undefined;
+      resources.skills = await loadSkillsFromDirectory(
+        skillsPath,
+        "project",
+        selection.all.has("skills") ? undefined : names,
+      );
+      logPhase("skills", s, { count: resources.skills?.length ?? 0 });
+    })());
+  }
 
   // ---- Features ----
-  if (shouldLoadCategory("features")) tasks.push((async () => {
-    const s = performance.now();
-    const names = selection.all.has("features")
-      ? undefined
-      : selection.hasExplicitSelection
-      ? Array.from(selection.named.get("features") ?? [])
-      : undefined;
-    resources.features = await loadFeaturesFromDirectory(baseUrl, names);
-    logPhase("features", s, { count: resources.features?.length ?? 0 });
-  })());
+  if (shouldLoadCategory("features")) {
+    tasks.push((async () => {
+      const s = performance.now();
+      const names = selection.all.has("features")
+        ? undefined
+        : selection.hasExplicitSelection
+        ? Array.from(selection.named.get("features") ?? [])
+        : undefined;
+      resources.features = await loadFeaturesFromDirectory(baseUrl, names);
+      logPhase("features", s, { count: resources.features?.length ?? 0 });
+    })());
+  }
 
   // ---- Channels ----
-  if (shouldLoadCategory("channels")) tasks.push((async () => {
-    const s = performance.now();
-    const names = selection.all.has("channels")
-      ? undefined
-      : selection.hasExplicitSelection
-      ? Array.from(selection.named.get("channels") ?? [])
-      : undefined;
-    resources.channels = await loadChannelsFromDirectory(
-      baseUrl,
-      names,
-    );
-    logPhase("channels", s, {
-      count: resources.channels?.length ?? 0,
-    });
+  if (shouldLoadCategory("channels")) {
+    tasks.push((async () => {
+      const s = performance.now();
+      const names = selection.all.has("channels")
+        ? undefined
+        : selection.hasExplicitSelection
+        ? Array.from(selection.named.get("channels") ?? [])
+        : undefined;
+      resources.channels = await loadChannelsFromDirectory(
+        baseUrl,
+        names,
+      );
+      logPhase("channels", s, {
+        count: resources.channels?.length ?? 0,
+      });
     })());
+  }
 
   // ---- Collections ----
-  if (shouldLoadCategory("collections")) tasks.push((async () => {
-    const s = performance.now();
-    const collectionsUrl = joinUrl(baseUrl, "collections");
-    const entries = await collectEntries(collectionsUrl);
-    const discovered = entries
-      .filter((entry) =>
-        (entry.isDirectory || entry.name.endsWith(".ts")) &&
-        entry.name !== "mod.ts" &&
-        !entry.name.startsWith("_")
-      )
-      .map((entry) => entry.name.replace(/\.ts$/, ""));
-    
-    const names = filterNames("collections", discovered);
-    const loaded = await loadNamedGenericByManifest<CollectionDefinition>(
-      baseUrl,
-      "collections",
-      names,
-      (value): value is CollectionDefinition =>
-        typeof value === "object" && value !== null && "name" in value &&
-        "schema" in value,
-    );
-    resources.collections = loaded.map(({ value }) => value);
-    logPhase("collections", s, { count: resources.collections.length });
-  })());
+  if (shouldLoadCategory("collections")) {
+    tasks.push((async () => {
+      const s = performance.now();
+      const collectionsUrl = joinUrl(baseUrl, "collections");
+      const entries = await collectEntries(collectionsUrl);
+      const discovered = entries
+        .filter((entry) =>
+          (entry.isDirectory || entry.name.endsWith(".ts")) &&
+          entry.name !== "mod.ts" &&
+          !entry.name.startsWith("_")
+        )
+        .map((entry) => entry.name.replace(/\.ts$/, ""));
 
-    const loadNamedGenericFromDirectory = async <T>(    type: string,
+      const names = filterNames("collections", discovered);
+      const loaded = await loadNamedGenericByManifest<CollectionDefinition>(
+        baseUrl,
+        "collections",
+        names,
+        (value): value is CollectionDefinition =>
+          typeof value === "object" && value !== null && "name" in value &&
+          "schema" in value,
+      );
+      resources.collections = loaded.map(({ value }) => value);
+      logPhase("collections", s, { count: resources.collections.length });
+    })());
+  }
+
+  const loadNamedGenericFromDirectory = async <T>(
+    type: string,
     mapper: (name: string, value: T) => unknown,
     isValid?: (value: unknown) => value is T,
   ) => {
@@ -1410,13 +1483,15 @@ async function loadFromDirectory(
         )
         .map((entry) => entry.name.replace(/\.ts$/, ""));
       const names = filterNames(type, discovered);
-      const loaded = await loadNamedGenericByManifest<T>(        baseUrl,
+      const loaded = await loadNamedGenericByManifest<T>(
+        baseUrl,
         type,
         names,
         isValid,
-      );      (resources as Record<string, unknown>)[type] = loaded.map(({ name, value }) =>
-        mapper(name, value)
       );
+      (resources as Record<string, unknown>)[type] = loaded.map((
+        { name, value },
+      ) => mapper(name, value));
       logPhase(type, s, { count: loaded.length });
     })());
   };
@@ -1490,7 +1565,9 @@ async function loadResourcePath(
   }
 
   // Local path without manifest: fall back to readDir-based discovery
-  return await loadFromDirectory(baseUrl, logPhase, { imports: options?.imports });
+  return await loadFromDirectory(baseUrl, logPhase, {
+    imports: options?.imports,
+  });
 }
 
 // ---- Merge helper ---------------------------------------------------------
@@ -1518,7 +1595,10 @@ function mergeResources(target: Resources, source: Resources): void {
   target.llm = mergeNamedResources(target.llm, source.llm);
   target.embeddings = mergeNamedResources(target.embeddings, source.embeddings);
   target.storage = mergeNamedResources(target.storage, source.storage);
-  target.collections = mergeNamedResources(target.collections, source.collections);
+  target.collections = mergeNamedResources(
+    target.collections,
+    source.collections,
+  );
   if (source.features?.length) {
     const existing = target.features ?? [];
     const existingNames = new Set(existing.map((f) => f.name));

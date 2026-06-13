@@ -2,6 +2,7 @@ import { assert, assertEquals, assertRejects } from "@std/assert";
 import { join } from "@std/path";
 
 import { createCopilotz } from "@/index.ts";
+import { withApp } from "@/server/app.ts";
 
 const TEST_AGENT = {
   id: "assistant",
@@ -156,6 +157,66 @@ Deno.test("createCopilotz keeps loading user features from resources.path when i
   }
 });
 
+Deno.test("createCopilotz loads manifest feature barrels and exposes opt-in admin routes", async () => {
+  const tempDir = await Deno.makeTempDir();
+  const resourcesDir = join(tempDir, "resources");
+  const featuresDir = join(resourcesDir, "features");
+
+  try {
+    await Deno.mkdir(featuresDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(resourcesDir, "manifest.ts"),
+      `export default {
+  provides: {
+    features: ["admin"],
+  },
+  presets: {},
+};
+`,
+    );
+    await Deno.writeTextFile(
+      join(featuresDir, "mod.ts"),
+      `export const admin = {
+  name: "admin",
+  actions: {
+    agents: async () => ({ status: 200, data: ["ok"] }),
+  },
+};
+`,
+    );
+
+    const copilotz = await createCopilotz({
+      dbConfig: { url: ":memory:" },
+      agents: [TEST_AGENT],
+      resources: {
+        path: [resourcesDir],
+        imports: ["features.admin"],
+      },
+    });
+
+    try {
+      const adminFeature = (copilotz.config.features ?? []).find((feature) =>
+        feature.name === "admin"
+      );
+      assert(adminFeature);
+      assertEquals(Object.keys(adminFeature.actions), ["agents"]);
+
+      const extended = withApp(copilotz, { exposeAdminRoutes: true });
+      const result = await extended.app.handle({
+        resource: "admin",
+        method: "GET",
+        path: ["agents"],
+      });
+      assertEquals(result.status, 200);
+      assertEquals(result.data, ["ok"]);
+    } finally {
+      await copilotz.shutdown();
+    }
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
 Deno.test("createCopilotz initializes collections loaded from resources.path", async () => {
   const tempDir = await Deno.makeTempDir();
   const resourcesDir = join(tempDir, "resources");
@@ -256,8 +317,7 @@ Deno.test("createCopilotz agents resolver must return an array", async () => {
       createCopilotz({
         dbConfig: { url: ":memory:" },
         resources: { imports: ["agents.copilotz"] },
-        agents: () =>
-          null as unknown as typeof TEST_AGENT[],
+        agents: () => null as unknown as typeof TEST_AGENT[],
       }),
     TypeError,
     "Resource list resolver must return an array",

@@ -148,6 +148,10 @@ export interface ProviderConfigBase {
   openaiApi?: "auto" | "responses" | "chat_completions";
   /** OpenAI Responses reasoning summary mode. Defaults to `auto` for reasoning-capable Responses models; set false to omit. */
   openaiReasoningSummary?: "auto" | "concise" | "detailed" | false;
+  /** OpenAI `prompt_cache_key`, used to route requests that share common prompt prefixes. */
+  openaiPromptCacheKey?: string;
+  /** OpenAI `prompt_cache_retention` policy. */
+  openaiPromptCacheRetention?: "in_memory" | "24h";
   verbosity?: "none" | "low" | "medium" | "high"; // OpenAI reasoning models (o3, o4)
 }
 

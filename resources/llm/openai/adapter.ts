@@ -256,6 +256,13 @@ function buildChatCompletionsBody(
   if (typeof maxComp === "number") {
     bodyConfig.max_completion_tokens = maxComp;
   }
+  if (typeof config.openaiPromptCacheKey === "string") {
+    const key = config.openaiPromptCacheKey.trim();
+    if (key.length > 0) bodyConfig.prompt_cache_key = key;
+  }
+  if (config.openaiPromptCacheRetention) {
+    bodyConfig.prompt_cache_retention = config.openaiPromptCacheRetention;
+  }
 
   return bodyConfig;
 }
@@ -279,6 +286,13 @@ function buildResponsesBody(
   const maxOutput = config.maxCompletionTokens ?? config.maxTokens ?? 1000;
   if (typeof maxOutput === "number") {
     bodyConfig.max_output_tokens = maxOutput;
+  }
+  if (typeof config.openaiPromptCacheKey === "string") {
+    const key = config.openaiPromptCacheKey.trim();
+    if (key.length > 0) bodyConfig.prompt_cache_key = key;
+  }
+  if (config.openaiPromptCacheRetention) {
+    bodyConfig.prompt_cache_retention = config.openaiPromptCacheRetention;
   }
 
   if (config.seed !== undefined) bodyConfig.seed = config.seed;

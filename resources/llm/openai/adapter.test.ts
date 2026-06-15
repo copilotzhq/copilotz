@@ -34,6 +34,8 @@ Deno.test("openaiProvider builds GPT-5 Responses body with Responses field names
     apiKey: "test",
     openaiApi: "responses",
     maxCompletionTokens: 456,
+    openaiPromptCacheKey: "compass-stable-prefix",
+    openaiPromptCacheRetention: "24h",
   };
   const provider = openaiProvider(config);
   const body = provider.body(messages, config) as Record<string, any>;
@@ -44,6 +46,8 @@ Deno.test("openaiProvider builds GPT-5 Responses body with Responses field names
   assertEquals(body.stream, true);
   assertEquals(body.store, false);
   assertEquals(body.max_output_tokens, 456);
+  assertEquals(body.prompt_cache_key, "compass-stable-prefix");
+  assertEquals(body.prompt_cache_retention, "24h");
   assertEquals(body.text, { format: { type: "text" } });
   assertEquals(body.reasoning, { summary: "auto" });
   assertEquals(body.parallel_tool_calls, false);
@@ -74,6 +78,8 @@ Deno.test("openaiProvider keeps Chat Completions for older models in auto mode",
     model: "gpt-3.5-turbo",
     apiKey: "test",
     maxCompletionTokens: 321,
+    openaiPromptCacheKey: "legacy-cache-key",
+    openaiPromptCacheRetention: "in_memory",
   };
   const provider = openaiProvider(config);
   const body = provider.body(messages, config) as Record<string, any>;
@@ -83,6 +89,8 @@ Deno.test("openaiProvider keeps Chat Completions for older models in auto mode",
   assertEquals(body.messages, messages);
   assertEquals(body.stream_options, { include_usage: true });
   assertEquals(body.max_completion_tokens, 321);
+  assertEquals(body.prompt_cache_key, "legacy-cache-key");
+  assertEquals(body.prompt_cache_retention, "in_memory");
 });
 
 Deno.test("openaiProvider allows forcing Chat Completions for a Responses-capable model", () => {

@@ -222,18 +222,19 @@ export function contextGenerator(
   const agentsFileSection = agentsFileInstructions?.content
     ? [
       "## LOCAL AGENTS INSTRUCTIONS",
-      `Loaded from ${agentsFileInstructions.fileName} in ${agentsFileInstructions.cwd}.`,
+      `Loaded from ${agentsFileInstructions.fileName}.`,
       "",
       agentsFileInstructions.content,
     ].join("\n")
     : "";
 
   const systemPrompt = [
-    threadContext,
-    agentContext,
-    agentMemorySection,
+    // Keep stable, shared instructions first for provider prompt caching.
     agentsFileSection,
     skillsSection,
+    agentContext,
+    agentMemorySection,
+    threadContext,
     metadataSection,
     userMetadataSection,
     dateContext,

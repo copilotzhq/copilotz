@@ -416,6 +416,30 @@ function buildRoutes(): Route[] {
       },
     },
 
+    // ---- threads/:id/activity ----
+    {
+      resource: "threads",
+      method: "GET",
+      pattern: [":id", "activity"],
+      action: async (ctx, p) => {
+        const rawMinPriority = ctx.query.minPriority;
+        const minPriority = typeof rawMinPriority === "string" &&
+            rawMinPriority.trim().length > 0
+          ? Number(rawMinPriority)
+          : undefined;
+        const includeEvents = ctx.query.includeEvents === "true";
+
+        return {
+          status: 200,
+          data: await ctx.copilotz.ops.getThreadActivity(p.id, {
+            namespace: ctx.namespace,
+            includeEvents,
+            ...(Number.isFinite(minPriority) ? { minPriority } : {}),
+          }),
+        };
+      },
+    },
+
     // ---- threads/:id/events ----
     {
       resource: "threads",

@@ -51,6 +51,34 @@ export interface QueueEventInput {
   namespace?: string;
 }
 
+export type ThreadActivityStatus = "idle" | "running" | "failed";
+
+export interface ThreadActivityEvent extends Record<string, unknown> {
+  id: string;
+  eventType: string;
+  status: Queue["status"];
+  priority: number | null;
+  traceId: string | null;
+  parentEventId: string | null;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+}
+
+export interface ThreadActivity {
+  threadId: string;
+  status: ThreadActivityStatus;
+  activeCount: number;
+  activeEvents?: ThreadActivityEvent[];
+  lastFailure: ThreadActivityEvent | null;
+  updatedAt: string;
+}
+
+export interface ThreadActivityOptions {
+  namespace?: string;
+  minPriority?: number;
+  includeEvents?: boolean;
+}
+
 // RAG types
 export interface ChunkSearchOptions {
   query?: string;
@@ -182,6 +210,10 @@ export interface DatabaseOperations {
     threadId: string,
     minPriority?: number,
   ) => Promise<Queue | undefined>;
+  getThreadActivity: (
+    threadId: string,
+    options?: ThreadActivityOptions,
+  ) => Promise<ThreadActivity>;
   getNextPendingQueueItem: (
     threadId: string,
     namespace?: string,
@@ -672,6 +704,64 @@ export function createOperations(
       : processingEvents;
 
     return (relevantEvents[0] as Queue) ?? undefined;
+  };
+
+  const getThreadActivity = async (
+    threadId: string,
+    options: ThreadActivityOptions = {},
+  ): Promise<ThreadActivity> => {
+    const minPriority = options.minPriority ?? 0;
+    const params: unknown[] = [threadId, minPriority];
+    const namespaceClause = options.namespace !== undefined
+      ? ` AND "namespace" = $${params.push(options.namespace)}`
+      : "";
+
+    const activeResult = await db.query<ThreadActivityEvent>(
+      `SELECT "id", "eventType", "status", "priority", "traceId", "parentEventId", "createdAt", "updatedAt"
+       FROM "events"
+       WHERE "threadId" = $1
+         AND "status" IN ('pending', 'processing')
+         AND COALESCE("priority", 0) >= $2
+         ${namespaceClause}
+       ORDER BY COALESCE("priority", 0) DESC, "createdAt" ASC, "id" ASC`,
+      params,
+    );
+
+    const failureResult = await db.query<ThreadActivityEvent>(
+      `SELECT "id", "eventType", "status", "priority", "traceId", "parentEventId", "createdAt", "updatedAt"
+       FROM "events"
+       WHERE "threadId" = $1
+         AND "status" = 'failed'
+         AND COALESCE("priority", 0) >= $2
+         ${namespaceClause}
+       ORDER BY "updatedAt" DESC, "createdAt" DESC, "id" DESC
+       LIMIT 1`,
+      params,
+    );
+
+    const activeEvents = activeResult.rows;
+    const lastFailure = failureResult.rows[0] ?? null;
+    const latestUpdatedAt = [
+      activeEvents[0]?.updatedAt,
+      lastFailure?.updatedAt,
+    ]
+      .map((value) => toIsoString(value))
+      .filter((value): value is string => Boolean(value))
+      .sort()
+      .at(-1) ?? new Date().toISOString();
+
+    return {
+      threadId,
+      status: activeEvents.length > 0
+        ? "running"
+        : lastFailure
+        ? "failed"
+        : "idle",
+      activeCount: activeEvents.length,
+      ...(options.includeEvents ? { activeEvents } : {}),
+      lastFailure,
+      updatedAt: latestUpdatedAt,
+    };
   };
 
   const getNextPendingQueueItem = async (
@@ -2548,6 +2638,7 @@ export function createOperations(
     hasNewerHumanInput,
     overwritePendingAgentContinuations,
     getProcessingQueueItem,
+    getThreadActivity,
     getNextPendingQueueItem,
     updateQueueItemStatus,
     acquireThreadWorkerLease,

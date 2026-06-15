@@ -142,6 +142,16 @@ function createMockCopilotz() {
       record("getProcessingQueueItem", tid);
       return { id: "q-p", threadId: tid, status: "processing" };
     },
+    getThreadActivity: async (tid: string, options?: unknown) => {
+      record("getThreadActivity", tid, options);
+      return {
+        threadId: tid,
+        status: "running",
+        activeCount: 1,
+        lastFailure: null,
+        updatedAt: new Date().toISOString(),
+      };
+    },
     getNextPendingQueueItem: async (tid: string) => {
       record("getNextPendingQueueItem", tid);
       return { id: "q-n", threadId: tid, status: "pending" };
@@ -691,6 +701,20 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
         assertEquals(res.status, 200);
         const { data } = await res.json();
         assertEquals(data.status, "processing");
+      },
+    );
+
+    await t.step(
+      "GET /threads/:id/activity returns thread activity",
+      async () => {
+        const res = await fetch(
+          `${base}/threads/t-100/activity?includeEvents=true&minPriority=0`,
+        );
+        assertEquals(res.status, 200);
+        const { data } = await res.json();
+        assertEquals(data.threadId, "t-100");
+        assertEquals(data.status, "running");
+        assertEquals(data.activeCount, 1);
       },
     );
 

@@ -228,3 +228,49 @@ Deno.test("minimaxProvider extracts Anthropic-style usage fields", () => {
   assertEquals(usage.cacheReadInputTokens, 5);
   assertEquals(usage.totalTokens, 120);
 });
+
+Deno.test("minimaxProvider reads final output tokens from message_delta usage", () => {
+  const api = minimaxProvider(baseConfig);
+
+  // message_start carries the cached/input priming with zeroed output...
+  const start = api.extractUsage?.({
+    type: "message_start",
+    message: {
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 1366,
+      },
+    },
+  });
+  assert(start);
+  assertEquals(start.outputTokens, 0);
+
+  // ...and message_delta carries the final consumption at the top level.
+  const final = api.extractUsage?.({
+    type: "message_delta",
+    delta: { stop_reason: "end_turn" },
+    usage: {
+      input_tokens: 1252,
+      output_tokens: 213,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 114,
+    },
+  });
+  assert(final);
+  assertEquals(final.inputTokens, 1252);
+  assertEquals(final.outputTokens, 213);
+  assertEquals(final.cacheReadInputTokens, 114);
+  assertEquals(final.totalTokens, 1465);
+
+  // Non-usage stream events must not emit usage updates.
+  assertEquals(api.extractUsage?.({ type: "ping" }), null);
+  assertEquals(
+    api.extractUsage?.({
+      type: "content_block_delta",
+      delta: { type: "text_delta", text: "hi" },
+    }),
+    null,
+  );
+});

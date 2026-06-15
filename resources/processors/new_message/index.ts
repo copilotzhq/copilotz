@@ -1639,7 +1639,9 @@ export const messageProcessor: EventProcessor<
           targetQueue: [],
         };
         console.warn(
-          `[multi-agent] Max agent turns (${maxAgentTurns}) reached, routing to fallback agent: ${fallbackAgent.name ?? fallbackAgent.id}`,
+          `[multi-agent] Max agent turns (${maxAgentTurns}) reached, routing to fallback agent: ${
+            fallbackAgent.name ?? fallbackAgent.id
+          }`,
         );
       } else {
         // No fallback agent — hard-stop, don't trigger any more LLM calls
@@ -1872,7 +1874,10 @@ export const messageProcessor: EventProcessor<
         : ctx.allTools.map((t) => t.key);
       const agentTools: ExecutableTool[] = allowedToolKeys
         .map((key) => ctx.allTools.find((t) => t.key === key))
-        .filter((t): t is ExecutableTool => Boolean(t));
+        .filter((t): t is ExecutableTool => Boolean(t))
+        // Keep the prompt prefix stable when agents expose the same tools in
+        // different config orders. Tool calls are resolved by key at execution.
+        .sort((a, b) => a.key.localeCompare(b.key));
       const llmTools: ToolDefinition[] = formatToolsForAI(agentTools);
 
       // Build system prompt

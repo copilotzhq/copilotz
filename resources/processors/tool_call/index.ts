@@ -274,6 +274,9 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
           agents: availableAgents,
           tools: allTools,
           db,
+          onCancel: deps.cancellation?.onCancel,
+          cancelled: deps.cancellation?.isAborted(),
+          cancelReason: deps.cancellation?.reason(),
           resolveAsset: async (ref: string) => {
             if (!context.assetStore) {
               throw new Error("Asset store is not configured");
@@ -283,6 +286,10 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
           },
         },
       );
+
+      if (deps.cancellation?.isAborted()) {
+        throw new Error("Tool execution cancelled by newer interrupting event");
+      }
 
       const result = results[0];
       const call = payload.toolCall;
@@ -533,6 +540,13 @@ export const processToolCalls = async (
         cancellation.cancel(reason);
       };
 
+      const unsubscribeParentCancel = context.onCancel?.(() => {
+        cancelWithContext(context.cancelReason ?? "abort");
+      });
+      if (context.cancelled) {
+        cancelWithContext(context.cancelReason ?? "abort");
+      }
+
       let timer: number | undefined = undefined;
       if (
         typeof timeoutMs === "number" && Number.isFinite(timeoutMs) &&
@@ -599,6 +613,7 @@ export const processToolCalls = async (
         } satisfies ProcessedToolCallResult;
       } finally {
         if (timer) clearTimeout(timer);
+        unsubscribeParentCancel?.();
       }
     }),
   );

@@ -3,7 +3,7 @@ import type { ProcessorDeps } from "@/types/index.ts";
 
 type QueueOps = Pick<
   ProcessorDeps["db"]["ops"],
-  "getQueueItemById" | "hasNewerHumanInput"
+  "getQueueItemById" | "getNewerInterruptingEvent"
 >;
 
 export interface SupersededEventInfo {
@@ -71,10 +71,10 @@ export async function detectNewerHumanInputSupersession(
     return null;
   }
 
-  const superseded = await ops.hasNewerHumanInput(
+  const superseded = await ops.getNewerInterruptingEvent(
     threadId,
     sourceCreatedAt,
-    namespace,
+    { namespace, minPriority: 0 },
   );
 
   if (!superseded) {

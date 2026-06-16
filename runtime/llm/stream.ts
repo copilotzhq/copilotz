@@ -7,10 +7,7 @@ import type {
   StreamCallback,
 } from "@/runtime/llm/types.ts";
 import { LLMStreamTimeoutError } from "@/runtime/llm/errors.ts";
-import {
-  getLocalStopSequences,
-  processStream,
-} from "@/runtime/llm/utils.ts";
+import { getLocalStopSequences, processStream } from "@/runtime/llm/utils.ts";
 import { streamPost, type StreamResponse } from "@/runtime/http.ts";
 
 const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 20_000;
@@ -41,6 +38,7 @@ export async function runProviderStream(
   config: ProviderConfig,
   providerAPI: ProviderAPI,
   extractTags?: string[],
+  signal?: AbortSignal,
 ): Promise<StreamResult> {
   const localStopSequences = getLocalStopSequences(config);
   const finalMessages = providerAPI.transformMessages
@@ -99,6 +97,14 @@ export async function runProviderStream(
     void reader?.cancel().catch(() => undefined);
     rejectTimeout?.(new LLMStreamTimeoutError(kind, timeoutMs));
   };
+  const abortForExternalSignal = () => {
+    abortController.abort();
+    void reader?.cancel().catch(() => undefined);
+  };
+  if (signal?.aborted) {
+    abortForExternalSignal();
+  }
+  signal?.addEventListener("abort", abortForExternalSignal, { once: true });
 
   const startFirstTokenTimer = () => {
     if (!firstTokenTimeoutMs) return;
@@ -201,5 +207,6 @@ export async function runProviderStream(
   } finally {
     clearFirstTokenTimer();
     clearStreamIdleTimer();
+    signal?.removeEventListener("abort", abortForExternalSignal);
   }
 }

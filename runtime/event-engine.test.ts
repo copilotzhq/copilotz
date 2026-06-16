@@ -137,6 +137,7 @@ Deno.test("startEventWorker emits queued event before processor execution", asyn
       nextCalls += 1;
       return nextCalls === 1 ? queuedEvent : undefined;
     },
+    getNewerInterruptingEvent: async () => undefined,
     updateQueueItemStatus: async () => {},
     releaseThreadWorkerLeaseIfNoPendingWork: async () => true,
     releaseThreadWorkerLease: async () => {},
@@ -181,6 +182,97 @@ Deno.test("startEventWorker emits queued event before processor execution", asyn
 
   assertEquals(observations, ["emitted-before-process"]);
   assertEquals(emittedEvents, [{ id: "event-emit-first", type: "TOOL_CALL" }]);
+});
+
+Deno.test("startEventWorker marks active interruptible work overwritten when newer abort input arrives", async () => {
+  const threadId = "thread-interrupt";
+  const queuedEvent = {
+    id: "event-interrupt",
+    threadId,
+    eventType: "LLM_CALL",
+    payload: {
+      agent: { name: "Assistant" },
+      messages: [],
+      tools: [],
+      config: {},
+    },
+    parentEventId: null,
+    traceId: "trace-interrupt",
+    priority: 2000,
+    metadata: null,
+    ttlMs: null,
+    expiresAt: null,
+    createdAt: new Date("2026-06-10T16:00:00.000Z"),
+    updatedAt: new Date("2026-06-10T16:00:00.000Z"),
+    status: "pending",
+  };
+
+  let nextCalls = 0;
+  const statusUpdates: Array<{ id: string; status: string }> = [];
+
+  const ops = {
+    getThreadWorkerLeaseConfig: () => ({
+      leaseMs: 60_000,
+      heartbeatMs: 60_000,
+    }),
+    acquireThreadWorkerLease: async () => true,
+    renewThreadWorkerLease: async () => true,
+    isThreadWorkerLeaseOwner: async () => true,
+    recoverThreadProcessingQueueItems: async () => 0,
+    getNextPendingQueueItem: async () => {
+      nextCalls += 1;
+      return nextCalls === 1 ? queuedEvent : undefined;
+    },
+    getNewerInterruptingEvent: async () => ({
+      id: "event-user",
+      threadId,
+      eventType: "NEW_MESSAGE",
+      payload: { sender: { type: "user" } },
+      priority: 2000,
+      metadata: { interruptsActiveWork: true, interruptMode: "abort" },
+      createdAt: new Date("2026-06-10T16:01:00.000Z"),
+      status: "pending",
+    }),
+    updateQueueItemStatus: async (id: string, status: string) => {
+      statusUpdates.push({ id, status });
+    },
+    releaseThreadWorkerLeaseIfNoPendingWork: async () => true,
+    releaseThreadWorkerLease: async () => {},
+  };
+
+  const fakeDb = { ops };
+
+  await startEventWorker(
+    fakeDb as never,
+    threadId,
+    {
+      processors: {
+        LLM_CALL: [{
+          shouldProcess: () => true,
+          process: async (_event, deps) => {
+            await new Promise<void>((resolve) => {
+              deps.cancellation?.onCancel(resolve);
+            });
+            throw new Error("should be treated as cancellation");
+          },
+        }],
+      },
+      emitToStream: () => {},
+      stream: false,
+    },
+    async () =>
+      ({
+        db: fakeDb,
+        thread: { id: threadId },
+        context: {},
+        emitToStream: () => {},
+      }) as never,
+  );
+
+  assertEquals(statusUpdates, [
+    { id: "event-interrupt", status: "processing" },
+    { id: "event-interrupt", status: "overwritten" },
+  ]);
 });
 
 Deno.test("startEventWorker marks the queue item failed when no processor recovers from an error", async () => {

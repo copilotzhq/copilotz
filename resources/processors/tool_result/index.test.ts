@@ -18,7 +18,7 @@ function depsWithSupersededParent(): ProcessorDeps {
             createdAt: "2026-06-10T16:00:00.000Z",
             parentEventId: null,
           }),
-        hasNewerHumanInput: () => Promise.resolve(true),
+        getNewerInterruptingEvent: () => Promise.resolve({ id: "evt-user" }),
       },
     },
     context: {},

@@ -65,6 +65,8 @@ export type RunOptions = {
   queueTTL?: number;
   /** Optional trace ID for the initial NEW_MESSAGE event. */
   traceId?: string;
+  /** How a newer interrupting input affects active LLM/tool work. Defaults to abort. */
+  interruptMode?: "abort" | "soft";
   /** Extra metadata for the initial NEW_MESSAGE queue event. */
   eventMetadata?: Record<string, unknown> | null;
   /**
@@ -428,6 +430,15 @@ export async function runThread(
     },
     normalizedMessage,
   );
+  const interruptsActiveWork = normalizedSender.type === "user" ||
+    normalizedSender.type === "job";
+  const queueEventMetadata = interruptsActiveWork
+    ? {
+      ...(initialEventMetadata ?? {}),
+      interruptsActiveWork: true,
+      interruptMode: options?.interruptMode === "soft" ? "soft" : "abort",
+    }
+    : initialEventMetadata ?? undefined;
   const traceId = options?.traceId ?? crypto.randomUUID();
 
   const newQueueItem = await ops.addToQueue(threadId, {
@@ -436,7 +447,7 @@ export async function runThread(
     traceId,
     priority: priorityForInboundMessage(normalizedMessage),
     ttlMs: options?.queueTTL,
-    metadata: initialEventMetadata ?? undefined,
+    metadata: queueEventMetadata,
     namespace: baseContext.namespace,
   });
 

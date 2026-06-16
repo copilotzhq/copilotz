@@ -91,3 +91,79 @@ Deno.test({
     );
   },
 });
+
+Deno.test({
+  name: "newer interrupting event lookup respects priority and interrupt mode",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({ url: ":memory:" });
+    const thread = await db.ops.findOrCreateThread(undefined, {
+      name: "Interrupt Lookup Test",
+      participants: ["user-1"],
+      status: "active",
+      mode: "immediate",
+    });
+    const threadId = thread.id as string;
+
+    const source = await db.ops.addToQueue(threadId, {
+      eventType: "LLM_CALL",
+      payload: { agent: { name: "East" } },
+      priority: 2000,
+      status: "processing",
+    });
+    const soft = await db.ops.addToQueue(threadId, {
+      eventType: "NEW_MESSAGE",
+      payload: {
+        content: "let current work finish, but supersede routing",
+        sender: { type: "user", id: "user-1" },
+      },
+      priority: 2000,
+      metadata: { interruptsActiveWork: true, interruptMode: "soft" },
+      status: "pending",
+    });
+    const abort = await db.ops.addToQueue(threadId, {
+      eventType: "NEW_MESSAGE",
+      payload: {
+        content: "stop now",
+        sender: { type: "user", id: "user-1" },
+      },
+      priority: 2000,
+      metadata: { interruptsActiveWork: true, interruptMode: "abort" },
+      status: "pending",
+    });
+
+    await db.query(
+      `UPDATE "events"
+       SET "createdAt" = CASE
+         WHEN "id" = $1 THEN TIMESTAMPTZ '2026-06-10T16:00:00Z'
+         WHEN "id" = $2 THEN TIMESTAMPTZ '2026-06-10T16:01:00Z'
+         WHEN "id" = $3 THEN TIMESTAMPTZ '2026-06-10T16:02:00Z'
+         ELSE "createdAt"
+       END`,
+      [source.id, soft.id, abort.id],
+    );
+
+    const anyInterrupt = await db.ops.getNewerInterruptingEvent(
+      threadId,
+      "2026-06-10T16:00:00Z",
+      { minPriority: 2000 },
+    );
+    assertEquals(anyInterrupt?.id, soft.id);
+
+    const abortInterrupt = await db.ops.getNewerInterruptingEvent(
+      threadId,
+      "2026-06-10T16:00:00Z",
+      { minPriority: 2000, interruptMode: "abort" },
+    );
+    assertEquals(abortInterrupt?.id, abort.id);
+
+    const tooHighPriority = await db.ops.getNewerInterruptingEvent(
+      threadId,
+      "2026-06-10T16:00:00Z",
+      { minPriority: 3000 },
+    );
+    assertEquals(tooHighPriority, undefined);
+  },
+});

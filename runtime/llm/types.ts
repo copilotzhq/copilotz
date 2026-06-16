@@ -216,6 +216,8 @@ export interface ChatRequest {
     messages: ChatMessage[],
     config: ProviderConfig,
   ) => Promise<ChatMessage[]> | ChatMessage[];
+  /** Optional external signal for cancelling active provider work. */
+  signal?: AbortSignal;
 }
 
 // Unified Tool Invocation payload mapping executions end-to-end

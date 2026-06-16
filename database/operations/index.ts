@@ -79,6 +79,12 @@ export interface ThreadActivityOptions {
   includeEvents?: boolean;
 }
 
+export interface NewerInterruptingEventOptions {
+  namespace?: string;
+  minPriority?: number;
+  interruptMode?: "abort" | "soft";
+}
+
 // RAG types
 export interface ChunkSearchOptions {
   query?: string;
@@ -196,6 +202,11 @@ export interface DatabaseOperations {
   addToQueue: (threadId: string, event: QueueEventInput) => Promise<NewQueue>;
   getQueueItemById: (queueId: string) => Promise<Queue | undefined>;
   getQueueItemsByTraceId: (traceId: string) => Promise<Queue[]>;
+  getNewerInterruptingEvent: (
+    threadId: string,
+    since: string | Date,
+    options?: NewerInterruptingEventOptions,
+  ) => Promise<Queue | undefined>;
   hasNewerHumanInput: (
     threadId: string,
     since: string | Date,
@@ -560,38 +571,66 @@ export function createOperations(
     return items;
   };
 
+  const getNewerInterruptingEvent = async (
+    threadId: string,
+    since: string | Date,
+    options: NewerInterruptingEventOptions = {},
+  ): Promise<Queue | undefined> => {
+    const sinceIso = toIsoString(since);
+    if (!sinceIso) {
+      return undefined;
+    }
+
+    const minPriority = options.minPriority ?? 2000;
+    const params: unknown[] = [threadId, sinceIso, minPriority];
+    const filters = [
+      `"threadId" = $1`,
+      `"createdAt" > ($2::timestamptz)`,
+      `"status" IN ('pending', 'processing', 'completed')`,
+      `COALESCE("priority", 0) >= $3`,
+      `(
+        "metadata"->>'interruptsActiveWork' = 'true'
+        OR (
+          "eventType" = 'NEW_MESSAGE'
+          AND ("payload"->'sender'->>'type') IN ('user', 'job')
+        )
+      )`,
+    ];
+
+    if (options.namespace !== undefined) {
+      params.push(options.namespace);
+      filters.push(`"namespace" = $${params.length}`);
+    }
+
+    if (options.interruptMode) {
+      params.push(options.interruptMode);
+      filters.push(
+        `COALESCE("metadata"->>'interruptMode', 'abort') = $${params.length}`,
+      );
+    }
+
+    const result = await db.query<Queue>(
+      `SELECT *
+       FROM "events"
+       WHERE ${filters.join(" AND ")}
+       ORDER BY "createdAt" ASC, "id" ASC
+       LIMIT 1`,
+      params,
+    );
+
+    return result.rows[0] as Queue | undefined;
+  };
+
   const hasNewerHumanInput = async (
     threadId: string,
     since: string | Date,
     namespace?: string,
   ): Promise<boolean> => {
-    const sinceIso = toIsoString(since);
-    if (!sinceIso) {
-      return false;
-    }
-
-    const params: unknown[] = [threadId, sinceIso];
-    const namespaceClause = namespace ? `AND "namespace" = $3` : "";
-    if (namespace) {
-      params.push(namespace);
-    }
-
-    const result = await db.query<{ exists: boolean }>(
-      `SELECT EXISTS (
-         SELECT 1
-         FROM "events"
-         WHERE "threadId" = $1
-           AND "createdAt" > ($2::timestamptz)
-           AND "eventType" = 'NEW_MESSAGE'
-           AND "status" IN ('pending', 'processing', 'completed')
-           AND ("payload"->'sender'->>'type') IN ('user', 'job')
-           ${namespaceClause}
-         LIMIT 1
-       ) AS "exists"`,
-      params,
-    );
-
-    return Boolean(result.rows[0]?.exists);
+    const event = await getNewerInterruptingEvent(threadId, since, {
+      namespace,
+      minPriority: -2147483648,
+    });
+    return Boolean(event);
   };
 
   const overwritePendingAgentContinuations = async (
@@ -2635,6 +2674,7 @@ export function createOperations(
     addToQueue,
     getQueueItemById,
     getQueueItemsByTraceId,
+    getNewerInterruptingEvent,
     hasNewerHumanInput,
     overwritePendingAgentContinuations,
     getProcessingQueueItem,

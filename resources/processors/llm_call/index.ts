@@ -355,6 +355,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           messages: baseMessages,
           tools: payload.tools,
           extractTags: ["route_to", "ask_to", "think"],
+          signal: deps.cancellation?.signal,
           ...(materializeMessages ? { materializeMessages } : {}),
         } as ChatRequest,
         configForCall,
@@ -363,6 +364,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         context.llmProviders,
       );
     } catch (error) {
+      if (deps.cancellation?.isAborted()) {
+        throw error;
+      }
+
       if (streamCallback && deps.emitToStream) {
         deps.emitToStream(buildTokenEvent("", true));
       }

@@ -9,6 +9,7 @@
  */
 
 import { type CopilotzDb, createDatabase } from "@/database/index.ts";
+import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
 
 import type {
   Event,
@@ -75,9 +76,20 @@ export type ProcessorDeps = {
   context: ChatContext;
   /** Push an ephemeral event (e.g. TOKEN, ASSET_CREATED) directly to the client stream. */
   emitToStream: (event: Event) => void;
+  /** Event-local cancellation scope for interruptible processor work. */
+  cancellation?: ProcessorCancellation;
 };
 
 type Operations = CopilotzDb["ops"];
+
+export type ProcessorCancellationReason = "newer_interrupting_event";
+
+export interface ProcessorCancellation {
+  signal: AbortSignal;
+  isAborted: () => boolean;
+  reason: () => ProcessorCancellationReason | undefined;
+  onCancel: (cb: () => void) => () => void;
+}
 
 function castPayload<T>(payload: unknown): T {
   return payload as T;
@@ -236,6 +248,105 @@ export interface WorkerContext {
   minPriority?: number;
   /** Tenant namespace this worker is allowed to process. */
   namespace?: string;
+}
+
+const INTERRUPT_POLL_INTERVAL_MS = 750;
+
+function eventPriority(event: Event): number {
+  return typeof event.priority === "number" ? event.priority : 0;
+}
+
+function isInterruptibleForegroundEvent(event: Event): boolean {
+  return (event.type === "LLM_CALL" || event.type === "TOOL_CALL") &&
+    eventPriority(event) >= EVENT_PRIORITIES.NORMAL;
+}
+
+function createEventCancellationScope(
+  ops: Operations,
+  event: Event,
+  namespace: string | undefined,
+): { cancellation?: ProcessorCancellation; stop: () => void } {
+  if (!isInterruptibleForegroundEvent(event)) {
+    return { stop: () => {} };
+  }
+
+  const threadId = typeof event.threadId === "string" ? event.threadId : null;
+  const createdAt = event.createdAt;
+  if (
+    !threadId || !(createdAt instanceof Date || typeof createdAt === "string")
+  ) {
+    return { stop: () => {} };
+  }
+
+  const controller = new AbortController();
+  let reason: ProcessorCancellationReason | undefined;
+  let stopped = false;
+  const callbacks = new Set<() => void>();
+
+  const abort = (nextReason: ProcessorCancellationReason): void => {
+    if (controller.signal.aborted) return;
+    reason = nextReason;
+    controller.abort(nextReason);
+    for (const cb of Array.from(callbacks)) {
+      try {
+        cb();
+      } catch { /* ignore */ }
+    }
+    callbacks.clear();
+  };
+
+  const check = async (): Promise<void> => {
+    if (stopped || controller.signal.aborted) return;
+    try {
+      const interrupting = await ops.getNewerInterruptingEvent(
+        threadId,
+        createdAt,
+        {
+          namespace,
+          minPriority: EVENT_PRIORITIES.USER_INPUT,
+          interruptMode: "abort",
+        },
+      );
+      if (interrupting) {
+        abort("newer_interrupting_event");
+      }
+    } catch (err) {
+      console.warn(
+        "[event-worker] Failed to check for interrupting work:",
+        err,
+      );
+    }
+  };
+
+  const timer = setInterval(() => {
+    void check();
+  }, INTERRUPT_POLL_INTERVAL_MS);
+  void check();
+
+  const cancellation: ProcessorCancellation = {
+    signal: controller.signal,
+    isAborted: () => controller.signal.aborted,
+    reason: () => reason,
+    onCancel: (cb: () => void) => {
+      if (controller.signal.aborted) {
+        try {
+          cb();
+        } catch { /* ignore */ }
+        return () => {};
+      }
+      callbacks.add(cb);
+      return () => callbacks.delete(cb);
+    },
+  };
+
+  return {
+    cancellation,
+    stop: () => {
+      stopped = true;
+      clearInterval(timer);
+      callbacks.clear();
+    },
+  };
 }
 
 // Generic worker
@@ -412,26 +523,53 @@ export async function startEventWorker(
           event,
           context,
         )) as ProcessorDeps;
+        const cancellationScope = createEventCancellationScope(
+          ops,
+          event,
+          context.namespace,
+        );
+        if (cancellationScope.cancellation) {
+          deps.cancellation = cancellationScope.cancellation;
+        }
 
         let finalEvents: Array<NewEvent | NewUnknownEvent> = [];
         let lastProcessorError: unknown = null;
 
-        const processorList = context.processors[event.type] ?? [];
-        for (const p of processorList) {
-          try {
-            const ok = await p.shouldProcess(event, deps);
-            if (!ok) continue;
-            const res = await p.process(event, deps);
-            if (res?.producedEvents) {
-              finalEvents = res.producedEvents;
-              lastProcessorError = null;
-              break;
+        try {
+          const processorList = context.processors[event.type] ?? [];
+          for (const p of processorList) {
+            try {
+              if (deps.cancellation?.isAborted()) {
+                break;
+              }
+              const ok = await p.shouldProcess(event, deps);
+              if (!ok) continue;
+              if (deps.cancellation?.isAborted()) {
+                break;
+              }
+              const res = await p.process(event, deps);
+              if (res?.producedEvents) {
+                finalEvents = res.producedEvents;
+                lastProcessorError = null;
+                break;
+              }
+            } catch (err) {
+              if (deps.cancellation?.isAborted()) {
+                lastProcessorError = err;
+                break;
+              }
+              // Allow later processors to recover, but if nobody claims the event
+              // we should fail the queue item instead of silently dropping the error.
+              lastProcessorError = err;
             }
-          } catch (err) {
-            // Allow later processors to recover, but if nobody claims the event
-            // we should fail the queue item instead of silently dropping the error.
-            lastProcessorError = err;
           }
+        } finally {
+          cancellationScope.stop();
+        }
+
+        if (deps.cancellation?.isAborted()) {
+          await ops.updateQueueItemStatus(queueId, "overwritten");
+          continue;
         }
 
         if (lastProcessorError && finalEvents.length === 0) {

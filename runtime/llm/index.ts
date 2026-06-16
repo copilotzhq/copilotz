@@ -244,6 +244,9 @@ export async function chat(
 
   let index = 0;
   while (index < attemptConfigs.length) {
+    if (request.signal?.aborted) {
+      throw new DOMException("LLM request aborted", "AbortError");
+    }
     const attemptConfig = attemptConfigs[index];
     const attemptProvider = attemptConfig.provider!;
     const providerFactory = registry[attemptProvider];
@@ -292,6 +295,7 @@ export async function chat(
         attemptConfig,
         providerAPI,
         extractedBlockTags,
+        request.signal,
       );
 
       // Check for recoverable finish reasons (length, error, content_filter)
@@ -447,6 +451,10 @@ export async function chat(
         },
       };
     } catch (error) {
+      if (request.signal?.aborted) {
+        throw error;
+      }
+
       lastError = error;
       lastRecoveryReason = classifyLLMError(error);
       sameModelRetried = false;

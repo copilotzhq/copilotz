@@ -43,6 +43,33 @@ Deno.test("anthropicProvider can disable prompt cache directives", () => {
   assertEquals("cache_control" in body, false);
 });
 
+Deno.test("anthropicProvider forwards resolved native stop sequences", () => {
+  const config: ProviderConfig = {
+    provider: "anthropic",
+    model: "claude-sonnet-4-5",
+    apiKey: "test",
+    nativeStopSequences: ["STOP", "<tool_results>", "</tool_results>"],
+  };
+  const body = anthropicProvider(config).body(messages, config);
+
+  assertEquals(body.stop_sequences, [
+    "STOP",
+    "<tool_results>",
+    "</tool_results>",
+  ]);
+});
+
+Deno.test("anthropicProvider omits stop_sequences when none are configured", () => {
+  const config: ProviderConfig = {
+    provider: "anthropic",
+    model: "claude-sonnet-4-5",
+    apiKey: "test",
+  };
+  const body = anthropicProvider(config).body(messages, config);
+
+  assertEquals(body.stop_sequences, undefined);
+});
+
 Deno.test("anthropicProvider maps PDF file data URLs to document blocks", () => {
   const config: ProviderConfig = {
     provider: "anthropic",

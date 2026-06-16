@@ -7,6 +7,7 @@ import {
   parseToolCallsFromResponse,
   parseXmlInvokeToolCalls,
   processStream,
+  resolveProviderStopSequences,
   responseHasToolIntent,
   sanitizeUserFacingText,
 } from "./utils.ts";
@@ -141,6 +142,40 @@ Deno.test("getLocalStopSequences stops both tool results tag forms", () => {
     getLocalStopSequences(),
     ["<tool_results>", "</tool_results>"],
   );
+});
+
+Deno.test("resolveProviderStopSequences prefers runtime-resolved native list", () => {
+  assertEquals(
+    resolveProviderStopSequences({
+      nativeStopSequences: ["STOP", "<tool_results>"],
+      stop: "IGNORED",
+    }),
+    ["STOP", "<tool_results>"],
+  );
+});
+
+Deno.test("resolveProviderStopSequences merges and dedupes stop/stopSequences fallback", () => {
+  assertEquals(
+    resolveProviderStopSequences({
+      stopSequences: ["STOP", "HALT"],
+      stop: ["HALT", "END"],
+    }),
+    ["STOP", "HALT", "END"],
+  );
+});
+
+Deno.test("resolveProviderStopSequences caps to maxCount keeping order", () => {
+  assertEquals(
+    resolveProviderStopSequences(
+      { nativeStopSequences: ["a", "b", "c", "d", "e", "f"] },
+      { maxCount: 5 },
+    ),
+    ["a", "b", "c", "d", "e"],
+  );
+});
+
+Deno.test("resolveProviderStopSequences returns undefined when empty", () => {
+  assertEquals(resolveProviderStopSequences({}), undefined);
 });
 
 Deno.test("parseToolCallsFromResponse strips incomplete tool calls after local stop", () => {

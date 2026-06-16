@@ -100,6 +100,17 @@ export interface ProviderConfigBase {
   // Stop sequences
   stop?: string | string[];
   stopSequences?: string[];
+  /**
+   * Internal, runtime-resolved stop sequences forwarded to providers that
+   * support native stop handling (Anthropic, Gemini, MiniMax).
+   *
+   * Set by {@link runProviderStream} to the merged client-side stop set
+   * (user `stop`/`stopSequences` plus Copilotz control tags like
+   * `<tool_results>`), so providers can halt generation server-side in
+   * addition to the always-on client-side enforcement. Not part of the
+   * public config surface; callers should use `stop`/`stopSequences`.
+   */
+  nativeStopSequences?: string[];
 
   // Randomization
   seed?: number;

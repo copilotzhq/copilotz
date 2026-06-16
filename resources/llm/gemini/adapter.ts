@@ -6,6 +6,10 @@ import type {
   ProviderFinishReason,
   ProviderUsageUpdate,
 } from "@/runtime/llm/types.ts";
+import { resolveProviderStopSequences } from "@/runtime/llm/utils.ts";
+
+// Gemini rejects requests with more than 5 stop sequences.
+const GEMINI_MAX_STOP_SEQUENCES = 5;
 
 interface GeminiPart {
   text?: string;
@@ -324,7 +328,9 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
         topP: config.topP,
         topK: config.topK,
         candidateCount: config.candidateCount,
-        stopSequences: config.stopSequences || config.stop,
+        stopSequences: resolveProviderStopSequences(config, {
+          maxCount: GEMINI_MAX_STOP_SEQUENCES,
+        }),
         responseMimeType: config.responseType === "json"
           ? "application/json"
           : config.responseMimeType,

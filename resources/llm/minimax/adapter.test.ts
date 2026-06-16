@@ -51,8 +51,6 @@ Deno.test("minimaxProvider omits ignored Anthropic-only params", () => {
   const config: ProviderConfig = {
     ...baseConfig,
     topK: 40,
-    stopSequences: ["STOP"],
-    stop: "HALT",
     promptCache: { ttl: "1h" },
   };
   const body = minimaxProvider(config).body(
@@ -61,8 +59,47 @@ Deno.test("minimaxProvider omits ignored Anthropic-only params", () => {
   );
 
   assertEquals("top_k" in body, false);
-  assertEquals("stop_sequences" in body, false);
   assertEquals("cache_control" in body, false);
+});
+
+Deno.test("minimaxProvider forwards resolved native stop sequences", () => {
+  const config: ProviderConfig = {
+    ...baseConfig,
+    nativeStopSequences: ["STOP", "<tool_results>", "</tool_results>"],
+  };
+  const body = minimaxProvider(config).body(
+    [{ role: "user", content: "Hi" }],
+    config,
+  );
+
+  assertEquals(body.stop_sequences, [
+    "STOP",
+    "<tool_results>",
+    "</tool_results>",
+  ]);
+});
+
+Deno.test("minimaxProvider falls back to stop/stopSequences for direct callers", () => {
+  const config: ProviderConfig = {
+    ...baseConfig,
+    stopSequences: ["STOP"],
+    stop: "HALT",
+  };
+  const body = minimaxProvider(config).body(
+    [{ role: "user", content: "Hi" }],
+    config,
+  );
+
+  assertEquals(body.stop_sequences, ["STOP", "HALT"]);
+});
+
+Deno.test("minimaxProvider omits stop_sequences when none are configured", () => {
+  const body = minimaxProvider(baseConfig).body(
+    [{ role: "user", content: "Hi" }],
+    baseConfig,
+  );
+
+  assertEquals("stop_sequences" in body, false);
 });
 
 Deno.test("minimaxProvider enables adaptive thinking when reasoning effort is set", () => {

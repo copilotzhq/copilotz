@@ -7,6 +7,7 @@ import type {
   ProviderFinishReason,
   ProviderUsageUpdate,
 } from "@/runtime/llm/types.ts";
+import { resolveProviderStopSequences } from "@/runtime/llm/utils.ts";
 
 /**
  * MiniMax adapter targeting the Anthropic-compatible Messages API
@@ -210,9 +211,16 @@ export const minimaxProvider: ProviderFactory = (config: ProviderConfig) => {
 
       if (config.metadata) body.metadata = config.metadata;
 
-      // Note: MiniMax ignores `top_k` and `stop_sequences`, and the
-      // Anthropic-compatible request has no top-level `cache_control`, so we
-      // intentionally omit them.
+      // Forward stop sequences for parity with the other Anthropic-style
+      // adapters and to halt server-side once MiniMax honors them. NOTE: as of
+      // now MiniMax's Anthropic-compatible API documents `stop_sequences` as
+      // ignored, so this is a no-op there and Copilotz's client-side stop
+      // enforcement remains the effective mechanism for MiniMax.
+      const stopSequences = resolveProviderStopSequences(config);
+      if (stopSequences) body.stop_sequences = stopSequences;
+
+      // Note: MiniMax ignores `top_k`, and the Anthropic-compatible request has
+      // no top-level `cache_control`, so we intentionally omit them.
 
       return body;
     },

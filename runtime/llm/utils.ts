@@ -528,6 +528,41 @@ export function getLocalStopSequences(config?: ProviderConfig): string[] {
   ];
 }
 
+/**
+ * Resolve the stop sequences a provider adapter should send natively.
+ *
+ * Prefers the runtime-resolved {@link ProviderConfig.nativeStopSequences}
+ * (populated by `runProviderStream` with the full client-side stop set,
+ * including Copilotz control tags) and falls back to the caller-provided
+ * `stopSequences`/`stop` for direct adapter usage (e.g. tests).
+ *
+ * Returns `undefined` when there is nothing to send. When `maxCount` is given
+ * (e.g. Gemini caps at 5), the list is truncated, keeping user-intent stops
+ * first; any dropped control tags remain enforced client-side.
+ */
+export function resolveProviderStopSequences(
+  config: ProviderConfig,
+  options?: { maxCount?: number },
+): string[] | undefined {
+  const base = config.nativeStopSequences &&
+      config.nativeStopSequences.length > 0
+    ? config.nativeStopSequences
+    : [
+      ...normalizeStopValues(config.stopSequences),
+      ...normalizeStopValues(config.stop),
+    ];
+
+  const deduped = [...new Set(base.filter((value) => value.length > 0))];
+  if (deduped.length === 0) return undefined;
+
+  const max = options?.maxCount;
+  const capped = typeof max === "number" && max > 0
+    ? deduped.slice(0, max)
+    : deduped;
+
+  return capped.length > 0 ? capped : undefined;
+}
+
 type LocalStopState = {
   pending: string;
   matchedStop?: string;

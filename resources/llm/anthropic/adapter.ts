@@ -7,6 +7,7 @@ import type {
   ProviderFinishReason,
   ProviderUsageUpdate,
 } from "@/runtime/llm/types.ts";
+import { resolveProviderStopSequences } from "@/runtime/llm/utils.ts";
 
 const EFFORT_BUDGET_MAP: Record<string, number> = {
   minimal: 1024,
@@ -158,7 +159,7 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
           : maxTokens,
         top_p: config.topP,
         top_k: config.topK,
-        stop_sequences: config.stopSequences || config.stop,
+        stop_sequences: resolveProviderStopSequences(config),
         system: transformed.system,
         metadata: config.metadata,
       };

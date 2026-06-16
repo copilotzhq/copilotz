@@ -51,10 +51,19 @@ export async function runProviderStream(
     ? providerAPI.transformMessages(messages)
     : messages;
 
+  // Stop sequences are always enforced client-side in `processStream`. We also
+  // forward the resolved set to providers with native stop support (Anthropic,
+  // Gemini, MiniMax) via `nativeStopSequences` so they can halt server-side and
+  // avoid generating tokens we would otherwise discard. The public `stop`/
+  // `stopSequences` fields stay stripped so providers without opt-in handling
+  // (e.g. OpenAI's 4-stop limit) are unaffected.
   const requestConfig = {
     ...config,
     stop: undefined,
     stopSequences: undefined,
+    nativeStopSequences: localStopSequences.length > 0
+      ? localStopSequences
+      : undefined,
   } satisfies ProviderConfig;
 
   const abortController = new AbortController();

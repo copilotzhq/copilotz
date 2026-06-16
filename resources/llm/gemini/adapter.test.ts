@@ -46,6 +46,45 @@ Deno.test("geminiProvider supports explicit cachedContent references", async () 
   assertEquals("systemInstruction" in body, false);
 });
 
+Deno.test("geminiProvider forwards resolved native stop sequences", async () => {
+  const config: ProviderConfig = {
+    provider: "gemini",
+    apiKey: "test",
+    nativeStopSequences: ["STOP", "<tool_results>", "</tool_results>"],
+  };
+  const body = await geminiProvider(config).body(messages, config);
+
+  assertEquals(body.generationConfig.stopSequences, [
+    "STOP",
+    "<tool_results>",
+    "</tool_results>",
+  ]);
+});
+
+Deno.test("geminiProvider caps native stop sequences at 5", async () => {
+  const config: ProviderConfig = {
+    provider: "gemini",
+    apiKey: "test",
+    nativeStopSequences: ["a", "b", "c", "d", "e", "f", "g"],
+  };
+  const body = await geminiProvider(config).body(messages, config);
+
+  assertEquals(body.generationConfig.stopSequences, [
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+  ]);
+});
+
+Deno.test("geminiProvider omits stop sequences when none are configured", async () => {
+  const config: ProviderConfig = { provider: "gemini", apiKey: "test" };
+  const body = await geminiProvider(config).body(messages, config);
+
+  assertEquals(body.generationConfig.stopSequences, undefined);
+});
+
 Deno.test("geminiProvider maps PDF file data URLs to inline data parts", async () => {
   const config: ProviderConfig = { provider: "gemini", apiKey: "test" };
   const body = await geminiProvider(config).body([

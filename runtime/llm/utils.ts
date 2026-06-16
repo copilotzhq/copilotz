@@ -636,6 +636,7 @@ export async function estimateUsage(
   messages: ChatMessage[],
   response: string,
   status: TokenUsage["status"],
+  metadata?: Pick<TokenUsage, "statusReason" | "stopSequence">,
 ): Promise<TokenUsage> {
   const inputText = messages.map((m) => contentToText(m.content)).join(" ");
   const outputText = response;
@@ -647,6 +648,8 @@ export async function estimateUsage(
     totalTokens: approximateTokenCount(totalText),
     source: "estimated",
     status,
+    ...(metadata?.statusReason ? { statusReason: metadata.statusReason } : {}),
+    ...(metadata?.stopSequence ? { stopSequence: metadata.stopSequence } : {}),
     rawUsage: null,
   };
 }
@@ -723,8 +726,14 @@ export async function processStream(
   content: string;
   reasoning: string;
   usage?: ProviderUsageUpdate;
+  usageFinalized?: Promise<{
+    usage?: ProviderUsageUpdate;
+    finishReason: ProviderFinishReason | null;
+  }>;
   finishReason: ProviderFinishReason | null;
   stoppedByLocalStop: boolean;
+  localStopReason?: "local_stop_sequence";
+  localStopSequence?: string;
 }> {
   const decoder = new TextDecoder("utf-8");
   const format = options?.format ?? "sse";
@@ -750,6 +759,7 @@ export async function processStream(
   };
   let usage: ProviderUsageUpdate | undefined;
   let finishReason: ProviderFinishReason | null = null;
+  let releaseInBackground = false;
 
   const mergeUsage = (update: ProviderUsageUpdate | null | undefined) => {
     if (!update) return;
@@ -815,13 +825,88 @@ export async function processStream(
     return false;
   };
 
+  const parseUsageOnlyLine = (line: string) => {
+    const data = parseLine(line, format);
+    if (!data) return;
+    mergeUsage(options?.extractUsage?.(data));
+    mergeFinishReason(options?.extractFinishReason?.(data));
+  };
+
+  const drainForFinalUsage = async (
+    pendingLines: string[] = [],
+  ): Promise<{
+    usage?: ProviderUsageUpdate;
+    finishReason: ProviderFinishReason | null;
+  }> => {
+    try {
+      for (const line of pendingLines) parseUsageOnlyLine(line);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          if (buffer) {
+            for (const line of buffer.split("\n")) parseUsageOnlyLine(line);
+            buffer = "";
+          }
+          break;
+        }
+
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) parseUsageOnlyLine(line);
+      }
+    } catch (error) {
+      if ((error as { name?: unknown })?.name !== "AbortError") {
+        console.warn("Stream final usage drain failed:", error);
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        // ignore release errors
+      }
+    }
+
+    return {
+      ...(usage ? { usage } : {}),
+      finishReason,
+    };
+  };
+
+  const buildLocalStopResult = (pendingLines: string[] = []) => {
+    const usageFinalized = options?.continueAfterLocalStop === true
+      ? drainForFinalUsage(pendingLines)
+      : undefined;
+    if (usageFinalized) releaseInBackground = true;
+    const content = options?.postProcess
+      ? options.postProcess(fullResponse)
+      : fullResponse;
+
+    return {
+      content,
+      reasoning: reasoningResponse,
+      ...(usage ? { usage } : {}),
+      ...(usageFinalized ? { usageFinalized } : {}),
+      finishReason,
+      stoppedByLocalStop,
+      localStopReason: "local_stop_sequence" as const,
+      ...(localStopState.matchedStop
+        ? { localStopSequence: localStopState.matchedStop }
+        : {}),
+    };
+  };
+
   try {
     while (true) {
       const { done, value } = await reader.read();
 
       if (done) {
         if (buffer) {
-          for (const line of buffer.split("\n")) {
+          const bufferedLines = buffer.split("\n");
+          for (let i = 0; i < bufferedLines.length; i++) {
+            const line = bufferedLines[i];
             const data = parseLine(line, format);
             if (data) {
               mergeUsage(options?.extractUsage?.(data));
@@ -829,7 +914,9 @@ export async function processStream(
               const parts = extractContent(data);
               if (parts) {
                 const shouldStop = handleParts(parts);
-                if (shouldStop) break;
+                if (shouldStop) {
+                  return buildLocalStopResult(bufferedLines.slice(i + 1));
+                }
               }
             }
           }
@@ -844,7 +931,8 @@ export async function processStream(
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
 
-      for (const line of lines) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
         const data = parseLine(line, format);
         if (data) {
           mergeUsage(options?.extractUsage?.(data));
@@ -852,13 +940,11 @@ export async function processStream(
           const parts = extractContent(data);
           if (parts) {
             const shouldStop = handleParts(parts);
-            if (shouldStop) break;
+            if (shouldStop) {
+              return buildLocalStopResult(lines.slice(i + 1));
+            }
           }
         }
-      }
-
-      if (stoppedByLocalStop) {
-        break;
       }
     }
   } catch (error) {
@@ -869,10 +955,12 @@ export async function processStream(
       throw error;
     }
   } finally {
-    try {
-      reader.releaseLock();
-    } catch {
-      // ignore release errors
+    if (!releaseInBackground) {
+      try {
+        reader.releaseLock();
+      } catch {
+        // ignore release errors
+      }
     }
   }
 
@@ -886,6 +974,12 @@ export async function processStream(
     ...(usage ? { usage } : {}),
     finishReason,
     stoppedByLocalStop,
+    ...(stoppedByLocalStop
+      ? { localStopReason: "local_stop_sequence" as const }
+      : {}),
+    ...(localStopState.matchedStop
+      ? { localStopSequence: localStopState.matchedStop }
+      : {}),
   };
 }
 
@@ -1180,7 +1274,8 @@ export function responseHasToolIntent(
   if (!TOOL_INTENT_MARKER_PATTERN.test(text)) return false;
   if (/<\/?tool_calls\b/i.test(text)) return true;
   return knownToolNames.some(
-    (name) => typeof name === "string" && name.length > 0 && text.includes(name),
+    (name) =>
+      typeof name === "string" && name.length > 0 && text.includes(name),
   );
 }
 

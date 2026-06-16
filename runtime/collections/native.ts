@@ -632,6 +632,45 @@ export function createLlmUsageService(
   deps: { collections?: CollectionAccessor; ops: CopilotzDb["ops"] },
 ) {
   const { ops } = deps;
+  const buildUsageData = (
+    input: {
+      threadId: string;
+      eventId: string | null;
+      agentId: string | null;
+      provider: string | null;
+      model: string | null;
+      usage: TokenUsage;
+      cost?: CostBreakdown | null;
+      metricsFinalizedAt?: string | null;
+    },
+  ) => ({
+    threadId: input.threadId,
+    eventId: input.eventId,
+    agentId: input.agentId,
+    provider: input.provider,
+    model: input.model,
+    inputTokens: input.usage.inputTokens ?? null,
+    outputTokens: input.usage.outputTokens ?? null,
+    reasoningTokens: input.usage.reasoningTokens ?? null,
+    cacheReadInputTokens: input.usage.cacheReadInputTokens ?? null,
+    cacheCreationInputTokens: input.usage.cacheCreationInputTokens ?? null,
+    totalTokens: input.usage.totalTokens ?? null,
+    inputCostUsd: input.cost?.inputCostUsd ?? null,
+    outputCostUsd: input.cost?.outputCostUsd ?? null,
+    reasoningCostUsd: input.cost?.reasoningCostUsd ?? null,
+    cacheReadInputCostUsd: input.cost?.cacheReadInputCostUsd ?? null,
+    cacheCreationInputCostUsd: input.cost?.cacheCreationInputCostUsd ?? null,
+    totalCostUsd: input.cost?.totalCostUsd ?? null,
+    pricingModelId: input.cost?.pricingModelId ?? null,
+    pricingSource: input.cost?.source ?? null,
+    pricingCurrency: input.cost?.currency ?? null,
+    source: input.usage.source ?? null,
+    rawUsage: input.usage.rawUsage ?? null,
+    status: input.usage.status,
+    statusReason: input.usage.statusReason ?? null,
+    stopSequence: input.usage.stopSequence ?? null,
+    metricsFinalizedAt: input.metricsFinalizedAt ?? null,
+  });
 
   return {
     async createUsageRecord(input: {
@@ -660,33 +699,7 @@ export function createLlmUsageService(
         name: `${input.usage.status}:${input.provider ?? "unknown"}:${
           input.model ?? "unknown"
         }`,
-        data: {
-          threadId: input.threadId,
-          eventId: input.eventId,
-          agentId: input.agentId,
-          provider: input.provider,
-          model: input.model,
-          inputTokens: input.usage.inputTokens ?? null,
-          outputTokens: input.usage.outputTokens ?? null,
-          reasoningTokens: input.usage.reasoningTokens ?? null,
-          cacheReadInputTokens: input.usage.cacheReadInputTokens ?? null,
-          cacheCreationInputTokens: input.usage.cacheCreationInputTokens ??
-            null,
-          totalTokens: input.usage.totalTokens ?? null,
-          inputCostUsd: input.cost?.inputCostUsd ?? null,
-          outputCostUsd: input.cost?.outputCostUsd ?? null,
-          reasoningCostUsd: input.cost?.reasoningCostUsd ?? null,
-          cacheReadInputCostUsd: input.cost?.cacheReadInputCostUsd ?? null,
-          cacheCreationInputCostUsd: input.cost?.cacheCreationInputCostUsd ??
-            null,
-          totalCostUsd: input.cost?.totalCostUsd ?? null,
-          pricingModelId: input.cost?.pricingModelId ?? null,
-          pricingSource: input.cost?.source ?? null,
-          pricingCurrency: input.cost?.currency ?? null,
-          source: input.usage.source ?? null,
-          rawUsage: input.usage.rawUsage ?? null,
-          status: input.usage.status,
-        },
+        data: buildUsageData(input),
         sourceType: "thread",
         sourceId: input.threadId,
       });
@@ -696,6 +709,33 @@ export function createLlmUsageService(
         type: GRAPH_EDGE.HAS_LLM_USAGE,
       });
       return node.id as string;
+    },
+    async updateUsageRecordMetrics(input: {
+      usageNodeId: string;
+      threadId: string;
+      eventId: string | null;
+      agentId: string | null;
+      provider: string | null;
+      model: string | null;
+      usage: TokenUsage;
+      cost?: CostBreakdown | null;
+      finalizedAt: string;
+    }): Promise<void> {
+      await ops.updateNode(input.usageNodeId, {
+        name: `${input.usage.status}:${input.provider ?? "unknown"}:${
+          input.model ?? "unknown"
+        }`,
+        data: buildUsageData({
+          threadId: input.threadId,
+          eventId: input.eventId,
+          agentId: input.agentId,
+          provider: input.provider,
+          model: input.model,
+          usage: input.usage,
+          cost: input.cost ?? null,
+          metricsFinalizedAt: input.finalizedAt,
+        }),
+      });
     },
   };
 }

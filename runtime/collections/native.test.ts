@@ -306,7 +306,9 @@ Deno.test({
         totalTokens: 42,
         rawUsage: { provider: "raw" },
         source: "provider",
-        status: "completed",
+        status: "locally_stopped",
+        statusReason: "local_stop_sequence",
+        stopSequence: "<tool_results>",
       },
       cost: {
         source: "openrouter",
@@ -341,7 +343,36 @@ Deno.test({
     assertEquals(data.pricingCurrency, "USD");
     assertEquals(data.source, "provider");
     assertEquals(data.rawUsage, { provider: "raw" });
-    assertEquals(data.status, "completed");
+    assertEquals(data.status, "locally_stopped");
+    assertEquals(data.statusReason, "local_stop_sequence");
+    assertEquals(data.stopSequence, "<tool_results>");
+    assertEquals(data.metricsFinalizedAt, null);
+    await usageService.updateUsageRecordMetrics({
+      usageNodeId: usageId,
+      threadId,
+      eventId: "event-1",
+      agentId: "agent-1",
+      provider: "openai",
+      model: "gpt-test",
+      usage: {
+        inputTokens: 11,
+        outputTokens: 21,
+        totalTokens: 43,
+        rawUsage: { provider: "final" },
+        source: "provider",
+        status: "locally_stopped",
+        statusReason: "local_stop_sequence",
+        stopSequence: "<tool_results>",
+      },
+      cost: null,
+      finalizedAt: "2026-06-16T00:00:00.000Z",
+    });
+    const finalized = await db.ops.getNodeById(usageId);
+    const finalizedData = finalized?.data as Record<string, unknown>;
+    assertEquals(finalizedData.inputTokens, 11);
+    assertEquals(finalizedData.outputTokens, 21);
+    assertEquals(finalizedData.rawUsage, { provider: "final" });
+    assertEquals(finalizedData.metricsFinalizedAt, "2026-06-16T00:00:00.000Z");
     assert(!("promptTokens" in data));
     assert(!("completionTokens" in data));
     assert(!("promptCost" in data));

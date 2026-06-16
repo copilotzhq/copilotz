@@ -86,13 +86,11 @@ function computeCost(
     toNonNegativeInteger(usage.reasoningTokens),
     outputTokens,
   );
-  const cacheReadInputTokens = clamp(
-    toNonNegativeInteger(usage.cacheReadInputTokens),
-    inputTokens,
+  const cacheReadInputTokens = toNonNegativeInteger(
+    usage.cacheReadInputTokens,
   );
-  const cacheCreationInputTokens = clamp(
-    toNonNegativeInteger(usage.cacheCreationInputTokens),
-    Math.max(0, inputTokens - cacheReadInputTokens),
+  const cacheCreationInputTokens = toNonNegativeInteger(
+    usage.cacheCreationInputTokens,
   );
 
   if (

@@ -1,11 +1,9 @@
-import type {
-  ProviderUsageUpdate,
-  TokenUsage,
-} from "@/runtime/llm/types.ts";
+import type { ProviderUsageUpdate, TokenUsage } from "@/runtime/llm/types.ts";
 
 export function normalizeProviderUsage(
   usage: ProviderUsageUpdate | undefined,
   status: TokenUsage["status"],
+  metadata?: Pick<TokenUsage, "statusReason" | "stopSequence">,
 ): TokenUsage | null {
   if (!usage) return null;
 
@@ -52,6 +50,8 @@ export function normalizeProviderUsage(
     totalTokens,
     source: "provider",
     status,
+    ...(metadata?.statusReason ? { statusReason: metadata.statusReason } : {}),
+    ...(metadata?.stopSequence ? { stopSequence: metadata.stopSequence } : {}),
     rawUsage: usage.rawUsage ?? null,
   };
 }

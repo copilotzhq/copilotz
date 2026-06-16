@@ -17,8 +17,14 @@ export interface StreamResult {
   content: string;
   reasoning: string;
   usage?: ProviderUsageUpdate;
+  usageFinalized?: Promise<{
+    usage?: ProviderUsageUpdate;
+    finishReason: ProviderFinishReason | null;
+  }>;
   finishReason: ProviderFinishReason | null;
   stoppedByLocalStop: boolean;
+  localStopReason?: "local_stop_sequence";
+  localStopSequence?: string;
 }
 
 function resolveTimeoutMs(
@@ -192,7 +198,7 @@ export async function runProviderStream(
         extractUsage: providerAPI.extractUsage,
         extractFinishReason: providerAPI.extractFinishReason,
         localStopSequences,
-        onLocalStop: () => abortController.abort(),
+        continueAfterLocalStop: true,
       },
     );
     return await Promise.race([streamPromise, timeoutPromise]);

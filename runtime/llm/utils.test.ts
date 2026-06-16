@@ -6,6 +6,7 @@ import {
   getLocalStopSequences,
   parseToolCallsFromResponse,
   parseXmlInvokeToolCalls,
+  processStream,
   responseHasToolIntent,
   sanitizeUserFacingText,
 } from "./utils.ts";
@@ -223,7 +224,10 @@ Deno.test("responseHasToolIntent detects canonical and gated dialect markers", (
     ]),
     true,
   );
-  assertEquals(responseHasToolIntent('<invoke name="sandbox_session">', []), false);
+  assertEquals(
+    responseHasToolIntent('<invoke name="sandbox_session">', []),
+    false,
+  );
   assertEquals(
     responseHasToolIntent("just a normal answer", ["sandbox_session"]),
     false,
@@ -243,7 +247,11 @@ Deno.test("sanitizeUserFacingText strips leaked tool-call protocol markup", () =
 });
 
 Deno.test("filterTaggedControlTokensStreaming hides native tool dialect and leak tokens", () => {
-  const state = { activeTag: null as string | null, pending: "", controlPending: "" };
+  const state = {
+    activeTag: null as string | null,
+    pending: "",
+    controlPending: "",
+  };
   const out = filterTaggedControlTokensStreaming(
     "Hello ]<]minimax[>[world <minimax:tool_call>secret</minimax:tool_call>!",
     state,
@@ -337,4 +345,67 @@ Deno.test("formatMessages counts structured tool result output toward input limi
   // `<tool_results>` tag but must not retain the full tool JSON.
   assertEquals(wire.length <= 2100, true);
   assertEquals(wire.includes(hugeBody), false);
+});
+
+Deno.test("processStream returns on local stop and drains final usage metadata", async () => {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(
+        encoder.encode(
+          `data: ${
+            JSON.stringify({ text: "visible<tool_results>ignored" })
+          }\n\n`,
+        ),
+      );
+      setTimeout(() => {
+        controller.enqueue(encoder.encode(`data: ${
+          JSON.stringify({
+            usage: {
+              input_tokens: 10,
+              output_tokens: 3,
+              cache_read_input_tokens: 7,
+              total_tokens: 13,
+            },
+            done: true,
+          })
+        }\n\n`));
+        controller.close();
+      }, 0);
+    },
+  });
+
+  const chunks: string[] = [];
+  const result = await processStream(
+    stream.getReader(),
+    (chunk) => chunks.push(chunk),
+    (data) => typeof data.text === "string" ? [{ text: data.text }] : null,
+    {
+      localStopSequences: ["<tool_results>"],
+      continueAfterLocalStop: true,
+      extractUsage: (data) => {
+        const usage = data.usage;
+        return usage
+          ? {
+            inputTokens: usage.input_tokens,
+            outputTokens: usage.output_tokens,
+            cacheReadInputTokens: usage.cache_read_input_tokens,
+            totalTokens: usage.total_tokens,
+            rawUsage: usage,
+          }
+          : null;
+      },
+    },
+  );
+
+  assertEquals(result.content, "visible");
+  assertEquals(chunks.join(""), "visible");
+  assertEquals(result.stoppedByLocalStop, true);
+  assertEquals(result.localStopReason, "local_stop_sequence");
+  assertEquals(result.localStopSequence, "<tool_results>");
+  assertEquals(result.usage, undefined);
+  const finalized = await result.usageFinalized;
+  assertEquals(finalized?.usage?.inputTokens, 10);
+  assertEquals(finalized?.usage?.cacheReadInputTokens, 7);
+  assertEquals(finalized?.usage?.totalTokens, 13);
 });

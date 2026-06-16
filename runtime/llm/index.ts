@@ -7,6 +7,7 @@ import type {
   ProviderName,
   ProviderRegistry,
   StreamCallback,
+  TokenUsage,
   ToolInvocation,
 } from "@/runtime/llm/types.ts";
 import { estimateUsageCost } from "@/runtime/llm/pricing.ts";
@@ -422,13 +423,52 @@ export async function chat(
       }
 
       const usageStatus = streamResult.stoppedByLocalStop
-        ? "aborted"
+        ? "locally_stopped"
         : "completed";
-      const usage = normalizeProviderUsage(streamResult.usage, usageStatus) ??
-        await estimateUsage(attemptMessages, parsed.cleanResponse, usageStatus);
+      const usageMetadata = streamResult.stoppedByLocalStop
+        ? {
+          statusReason: streamResult.localStopReason ?? "local_stop_sequence",
+          ...(streamResult.localStopSequence
+            ? { stopSequence: streamResult.localStopSequence }
+            : {}),
+        } satisfies Pick<TokenUsage, "statusReason" | "stopSequence">
+        : undefined;
+      const usage = normalizeProviderUsage(
+        streamResult.usage,
+        usageStatus,
+        usageMetadata,
+      ) ??
+        await estimateUsage(
+          attemptMessages,
+          parsed.cleanResponse,
+          usageStatus,
+          usageMetadata,
+        );
       const cost = await estimateUsageCost(attemptConfig, usage ?? undefined);
       const totalTokens = usage.totalTokens ??
         await countTokens(attemptMessages, parsed.cleanResponse);
+      const usageFinalized = streamResult.usageFinalized
+        ? streamResult.usageFinalized.then(async (finalized) => {
+          const finalUsage = normalizeProviderUsage(
+            finalized.usage,
+            usageStatus,
+            usageMetadata,
+          );
+          if (!finalUsage) return null;
+          const finalCost = await estimateUsageCost(
+            attemptConfig,
+            finalUsage,
+          );
+          return {
+            usage: finalUsage,
+            ...(finalCost ? { cost: finalCost } : {}),
+            tokens: finalUsage.totalTokens ??
+              await countTokens(attemptMessages, parsed.cleanResponse),
+            finishReason: finalized.finishReason,
+            finalizedAt: new Date().toISOString(),
+          };
+        })
+        : undefined;
 
       return {
         prompt: attemptMessages,
@@ -437,6 +477,7 @@ export async function chat(
         tokens: totalTokens,
         finishReason: streamResult.finishReason,
         usage,
+        ...(usageFinalized ? { usageFinalized } : {}),
         ...(cost ? { cost } : {}),
         provider: attemptProvider,
         model: attemptConfig.model,

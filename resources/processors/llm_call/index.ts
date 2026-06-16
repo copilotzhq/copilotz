@@ -482,6 +482,9 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     const usage: TokenUsage | undefined = ("usage" in llmResponse)
       ? (llmResponse as unknown as { usage?: TokenUsage }).usage
       : undefined;
+    const usageFinalized = ("usageFinalized" in llmResponse)
+      ? (llmResponse as unknown as ChatResponse).usageFinalized
+      : undefined;
     const cost: CostBreakdown | undefined = ("cost" in llmResponse)
       ? (llmResponse as unknown as { cost?: CostBreakdown }).cost
       : undefined;
@@ -500,6 +503,24 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       } catch (error) {
         console.warn("[LLM_CALL] Failed to persist llm_usage node:", error);
       }
+    }
+    if (usageFinalized && usageNodeId) {
+      void usageFinalized.then(async (finalized) => {
+        if (!finalized) return;
+        await llmUsageService.updateUsageRecordMetrics({
+          usageNodeId: usageNodeId as string,
+          threadId,
+          eventId: typeof event.id === "string" ? event.id : null,
+          agentId: (payload.agent.id ?? payload.agent.name) as string | null,
+          provider: llmResponse.provider ?? null,
+          model: llmResponse.model ?? null,
+          usage: finalized.usage,
+          cost: finalized.cost ?? null,
+          finalizedAt: finalized.finalizedAt,
+        });
+      }).catch((error) => {
+        console.warn("[LLM_CALL] Failed to finalize llm_usage node:", error);
+      });
     }
 
     if (Deno.env.get("COPILOTZ_DEBUG") === "1") {

@@ -250,6 +250,7 @@ export interface ChatResponse {
   tokens: number;
   finishReason?: ProviderFinishReason | null;
   usage?: TokenUsage;
+  usageFinalized?: Promise<FinalizedTokenUsage | null>;
   cost?: CostBreakdown;
   provider?: ProviderName;
   model?: string;
@@ -301,7 +302,17 @@ export type ProviderFinishReason =
 
 export interface TokenUsage extends ProviderUsageUpdate {
   source: "provider" | "estimated";
-  status: "completed" | "aborted";
+  status: "completed" | "locally_stopped" | "aborted";
+  statusReason?: "local_stop_sequence";
+  stopSequence?: string;
+}
+
+export interface FinalizedTokenUsage {
+  usage: TokenUsage;
+  cost?: CostBreakdown;
+  tokens: number;
+  finishReason: ProviderFinishReason | null;
+  finalizedAt: string;
 }
 
 export interface CostBreakdown {
@@ -329,6 +340,8 @@ export interface ProcessStreamOptions {
   localStopSequences?: string[];
   /** Called when a local stop sequence is matched. */
   onLocalStop?: (matchedStop: string) => void;
+  /** Continue draining the provider stream for final usage after local stop. */
+  continueAfterLocalStop?: boolean;
   /** Extract provider-reported usage from a parsed SSE or JSONL event. */
   extractUsage?: (data: any) => ProviderUsageUpdate | null;
   /** Extract provider finish reason from a parsed SSE or JSONL event. */

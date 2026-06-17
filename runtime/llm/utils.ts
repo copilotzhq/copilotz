@@ -17,8 +17,13 @@ import type {
 const TOOL_RESULTS_CONTINUATION_CUE =
   `<continue_after_tool_results>Continue your response based on the tool results above. Do not repeat earlier content. If no reply is needed, respond with <no_response/>.</continue_after_tool_results>`;
 const LOCAL_DEFAULT_STOP_SEQUENCES = [
-  "<tool_results>",
+  "<tool_results",
   "</tool_results>",
+  "<continue_after_tool_results",
+  "<result",
+  "</result>",
+  "<tool_result",
+  "</tool_result>",
 ];
 const NO_RESPONSE_SELF_CLOSING_TAG = "<no_response/>";
 const NO_RESPONSE_EMPTY_BLOCK_TAG = "<no_response></no_response>";
@@ -36,15 +41,27 @@ export const COPILOTZ_CONTROL_TAGS = [
 ] as const;
 
 /**
- * Non-canonical tool-call dialects some models emit instead of the canonical
- * `<tool_calls>` JSONL block (e.g. Anthropic/MiniMax XML). They are hidden from
- * the user-visible stream and recognized as "tool intent" so we can recover the
- * call or trigger a corrective retry. Provider-agnostic on purpose.
+ * Protocol tags that must never be visible to users. Canonical `<tool_calls>`
+ * blocks are parsed; non-canonical tool-call dialects trigger recovery; result
+ * and continuation tags trigger local stops.
  */
-const STREAMING_HIDDEN_DIALECT_TAGS = [
+const STREAMING_HIDDEN_PROTOCOL_TAGS = [
   "minimax:tool_call",
   "tool_call",
+  "invoke",
+  "parameter",
+  "function_call",
   "function_calls",
+  "tool_use",
+  "tool",
+  "tool_result",
+  "result",
+  "target_ids",
+  "mm:think",
+  "think",
+  "thought",
+  "thinking",
+  "reasoning",
 ] as const;
 
 /**
@@ -65,9 +82,42 @@ const STRUCTURAL_LEAK_LITERALS = [
  * was actually a malformed tool attempt that should be corrected and retried.
  */
 const TOOL_INTENT_MARKER_PATTERN =
-  /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|tool_use)\b/i;
+  /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool)\b/i;
+const MALFORMED_TOOL_INTENT_MARKER_PATTERN =
+  /<\/?(?:[a-z0-9_]+:)?(?:tool_call|function_call|function_calls|invoke|parameter|tool_use|tool)\b/i;
+const REASONING_MARKUP_PATTERN =
+  /<\/?(?:mm:)?(?:think|thought|thinking|reasoning)\b/i;
+const USER_FACING_PROTOCOL_MARKER_PATTERN =
+  /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids|think|thought|thinking|reasoning)\b/i;
 
 const APPROX_CHARS_PER_TOKEN = 4;
+
+function getEnvVar(key: string): string | undefined {
+  try {
+    const anyGlobal = globalThis as unknown as {
+      Deno?: { env?: { get?: (name: string) => string | undefined } };
+      process?: { env?: Record<string, string | undefined> };
+    };
+    const fromDeno = anyGlobal?.Deno?.env?.get?.(key);
+    if (typeof fromDeno === "string") return fromDeno;
+    const fromNode = anyGlobal?.process?.env?.[key];
+    if (typeof fromNode === "string") return fromNode;
+  } catch {
+    // Ignore env lookup failures in unsupported runtimes.
+  }
+  return undefined;
+}
+
+/**
+ * Diagnostic flag for stop-sequence behavior. Enable with
+ * `COPILOTZ_DEBUG_STOP=1` (or the broad `COPILOTZ_DEBUG=1`) to log the native
+ * stop sequences sent to providers, local stop matches, and whether a provider
+ * keeps generating after a stop sequence (measured during the post-stop drain).
+ */
+export function isStopDebugEnabled(): boolean {
+  return getEnvVar("COPILOTZ_DEBUG_STOP") === "1" ||
+    getEnvVar("COPILOTZ_DEBUG") === "1";
+}
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -89,6 +139,48 @@ function normalizeStructuredTagNames(tagNames: string[]): string[] {
   }
 
   return normalized;
+}
+
+function findStructuredStartTag(
+  input: string,
+  tagName: string,
+): { index: number; length: number } | null {
+  const lowerInput = input.toLowerCase();
+  const lowerTag = tagName.toLowerCase();
+  const needle = `<${lowerTag}`;
+  let index = lowerInput.indexOf(needle);
+
+  while (index !== -1) {
+    const next = lowerInput[index + needle.length];
+    if (
+      next === undefined ||
+      next === ">" ||
+      next === "/" ||
+      /\s/.test(next)
+    ) {
+      const closeIdx = input.indexOf(">", index + needle.length);
+      return {
+        index,
+        length: closeIdx === -1 ? needle.length : closeIdx - index + 1,
+      };
+    }
+    index = lowerInput.indexOf(needle, index + 1);
+  }
+
+  return null;
+}
+
+function structuredStartTagSuffixOverlap(
+  input: string,
+  tagName: string,
+): number {
+  const token = `<${tagName}`.toLowerCase();
+  const lower = input.toLowerCase();
+  let overlap = 0;
+  for (let size = 1; size < token.length; size++) {
+    if (lower.endsWith(token.slice(0, size))) overlap = size;
+  }
+  return overlap;
 }
 
 /**
@@ -783,6 +875,20 @@ export async function processStream(
     : (options?.localStopSequences ?? []);
   const localStopState: LocalStopState = { pending: "" };
   let stoppedByLocalStop = false;
+  const stopDebug = isStopDebugEnabled();
+  let postStopVisibleChars = 0;
+  let postStopReasoningChars = 0;
+  let postStopContentEvents = 0;
+  let postStopSample = "";
+  if (stopDebug) {
+    console.log("[stop-debug] processStream init", {
+      provider: config?.provider,
+      model: config?.model,
+      format,
+      continueAfterLocalStop: options?.continueAfterLocalStop === true,
+      localStopSequences,
+    });
+  }
   const filterState: {
     activeTag: string | null;
     pending: string;
@@ -851,6 +957,12 @@ export async function processStream(
         appendVisibleContent(localStopResult.text);
         if (localStopResult.matchedStop) {
           stoppedByLocalStop = true;
+          if (stopDebug) {
+            console.log("[stop-debug] local stop matched", {
+              matchedStop: localStopResult.matchedStop,
+              visibleCharsBeforeStop: fullResponse.length,
+            });
+          }
           options?.onLocalStop?.(localStopResult.matchedStop);
           return true;
         }
@@ -865,6 +977,21 @@ export async function processStream(
     if (!data) return;
     mergeUsage(options?.extractUsage?.(data));
     mergeFinishReason(options?.extractFinishReason?.(data));
+    if (stopDebug) {
+      const parts = extractContent(data);
+      if (parts) {
+        for (const part of parts) {
+          if (part.text.length === 0) continue;
+          postStopContentEvents += 1;
+          if (part.isReasoning) {
+            postStopReasoningChars += part.text.length;
+          } else {
+            postStopVisibleChars += part.text.length;
+            if (postStopSample.length < 200) postStopSample += part.text;
+          }
+        }
+      }
+    }
   };
 
   const drainForFinalUsage = async (
@@ -902,6 +1029,21 @@ export async function processStream(
       } catch {
         // ignore release errors
       }
+    }
+
+    if (stopDebug) {
+      console.log("[stop-debug] post-stop drain summary", {
+        provider: config?.provider,
+        model: config?.model,
+        postStopContentEvents,
+        postStopVisibleChars,
+        postStopReasoningChars,
+        finishReason,
+        postStopVisibleSample: postStopSample,
+        interpretation: postStopVisibleChars > 0
+          ? "provider KEPT GENERATING visible content after the stop sequence (no server-side stop)"
+          : "no further visible content after the stop sequence (provider likely stopped server-side)",
+      });
     }
 
     return {
@@ -1041,11 +1183,10 @@ export function filterTaggedControlTokensStreaming(
 ): string {
   const structuredTags = normalizeStructuredTagNames([
     ...COPILOTZ_CONTROL_TAGS,
-    ...STREAMING_HIDDEN_DIALECT_TAGS,
+    ...STREAMING_HIDDEN_PROTOCOL_TAGS,
     ...extractedBlockTags,
   ]).map((name) => ({
     name,
-    startTag: `<${name}>`,
     endTag: `</${name}>`,
   }));
 
@@ -1060,13 +1201,14 @@ export function filterTaggedControlTokensStreaming(
         | null = null;
 
       for (const tag of structuredTags) {
-        const index = s.indexOf(tag.startTag);
+        const match = findStructuredStartTag(s, tag.name);
+        const index = match?.index ?? -1;
         if (index === -1) continue;
         if (!nextMatch || index < nextMatch.index) {
           nextMatch = {
             index,
             tagName: tag.name,
-            tagLength: tag.startTag.length,
+            tagLength: match?.length ?? 0,
           };
         }
       }
@@ -1074,7 +1216,10 @@ export function filterTaggedControlTokensStreaming(
       if (!nextMatch) {
         let overlap = 0;
         for (const tag of structuredTags) {
-          overlap = Math.max(overlap, suffixPrefix(s, tag.startTag));
+          overlap = Math.max(
+            overlap,
+            structuredStartTagSuffixOverlap(s, tag.name),
+          );
         }
         if (overlap > 0) {
           output += s.slice(0, s.length - overlap);
@@ -1138,8 +1283,9 @@ In this environment you have access to a set of tools you can use to answer the 
    • Each object has exactly two keys: "name" (string) and "arguments" (object). No other keys.
    • "arguments" is a JSON object and may contain nested objects/arrays.
 3. Use ONLY this <tool_calls> JSON format. Do NOT use any built-in or native tool/function-calling
-   syntax. Specifically, never emit <minimax:tool_call>, <invoke>, <parameter>, <function_call>,
-   <function=...>, tool_use blocks, XML parameter tags, or markdown code fences around the JSON.
+   syntax. Specifically, never emit <tool_call>, <minimax:tool_call>, <invoke>, <parameter>,
+   <function_call>, <function_calls>, <function=...>, <tool_use>, <tool>, XML parameter tags,
+   provider-native tool syntax, or markdown code fences around the JSON.
 4. Example (note the nested arguments object):
 
 <tool_calls>
@@ -1148,7 +1294,8 @@ In this environment you have access to a set of tools you can use to answer the 
 </tool_calls>
 Sure — running those now.
 
-5. Tool outputs may appear later as <tool_results> blocks. Treat them as returned execution results and never generate <tool_results> yourself.
+5. Tool outputs may appear later as <tool_results> blocks. Treat them as returned execution results and never generate <tool_results>, <tool_result>, <result>, <target_ids>, or <continue_after_tool_results> yourself.
+6. Never emit private reasoning tags such as <think>, <thinking>, <reasoning>, or <mm:think> in visible output.
 
 === TOOL CATALOG (read-only) ===
 
@@ -1213,57 +1360,47 @@ export function buildToolResultsBlock(
   return [`<tool_results>`, ...objects, `</tool_results>`].join("\n");
 }
 
-/**
- * Coerce an XML `<parameter>` value to a JS value, mirroring MiniMax's reference
- * parser: try JSON (objects/arrays/numbers/booleans/null), else keep the string.
- */
-function coerceXmlParamValue(value: string): unknown {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return value;
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return value;
-  }
+function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      !Array.isArray(value),
+  );
 }
 
-const XML_INVOKE_PATTERN =
-  /<invoke\b[^>]*\bname\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\/invoke>/gi;
-const XML_PARAMETER_PATTERN =
-  /<parameter\b[^>]*\bname\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\/parameter>/gi;
+function parseCanonicalToolCallLines(blockContent: string): ToolInvocation[] {
+  const lines = blockContent
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
 
-/**
- * Recover tool calls emitted in the generalist Anthropic/MiniMax XML dialect:
- *   <invoke name="tool"><parameter name="k">value</parameter></invoke>
- * Works regardless of any surrounding wrapper (`<minimax:tool_call>`,
- * `<function_calls>`, etc.). Only invocations with at least one parameter are
- * returned; bare or mangled invocations are left for the corrective-retry path
- * so we never fabricate empty arguments.
- */
-export function parseXmlInvokeToolCalls(response: string): ToolInvocation[] {
+  if (lines.length === 0) return [];
+
   const calls: ToolInvocation[] = [];
-  XML_INVOKE_PATTERN.lastIndex = 0;
-  for (const invoke of response.matchAll(XML_INVOKE_PATTERN)) {
-    const name = (invoke[1] ?? invoke[2] ?? invoke[3] ?? "").trim();
-    if (!name) continue;
-    const inner = invoke[4] ?? "";
-    const args: Record<string, unknown> = {};
-    let paramCount = 0;
-    XML_PARAMETER_PATTERN.lastIndex = 0;
-    for (const param of inner.matchAll(XML_PARAMETER_PATTERN)) {
-      const key = (param[1] ?? param[2] ?? param[3] ?? "").trim();
-      if (!key) continue;
-      const rawValue = (param[4] ?? "").replace(/^\n/, "").replace(/\n$/, "");
-      args[key] = coerceXmlParamValue(rawValue);
-      paramCount++;
+  for (const line of lines) {
+    let obj: unknown;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      return [];
     }
-    if (paramCount === 0) continue;
+
+    if (!isPlainJsonObject(obj)) return [];
+    const keys = Object.keys(obj).sort();
+    if (keys.length !== 2 || keys[0] !== "arguments" || keys[1] !== "name") {
+      return [];
+    }
+    if (typeof obj.name !== "string" || !isPlainJsonObject(obj.arguments)) {
+      return [];
+    }
+
     calls.push({
       id: crypto.randomUUID(),
-      tool: { id: name },
-      args: JSON.stringify(args),
+      tool: { id: obj.name },
+      args: JSON.stringify(obj.arguments),
     });
   }
+
   return calls;
 }
 
@@ -1286,13 +1423,28 @@ export function sanitizeUserFacingText(text: string): string {
     .replace(/<minimax:tool_call>[\s\S]*?<\/minimax:tool_call>/gi, "")
     .replace(/<function_calls>[\s\S]*?<\/function_calls>/gi, "")
     .replace(/<invoke\b[\s\S]*?<\/invoke>/gi, "")
-    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "");
+    .replace(/<tool_call\b[\s\S]*?<\/tool_call>/gi, "")
+    .replace(/<tool_results\b[\s\S]*?(?:<\/tool_results>|$)/gi, "")
+    .replace(/<tool_result\b[\s\S]*?(?:<\/tool_result>|$)/gi, "")
+    .replace(/<result\b[\s\S]*?(?:<\/result>|$)/gi, "")
+    .replace(
+      /<continue_after_tool_results\b[\s\S]*?(?:<\/continue_after_tool_results>|$)/gi,
+      "",
+    )
+    .replace(
+      /<(?:mm:)?(?:think|thought|thinking|reasoning)\b[^>]*>[\s\S]*?(?:<\/(?:mm:)?(?:think|thought|thinking|reasoning)>|$)/gi,
+      "",
+    );
   // Remove any residual stray dialect tags (open or close) that survived,
   // e.g. mismatched </tool_calls>, dangling <invoke ...> / <parameter ...>.
   out = out.replace(
-    /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use)(?:\b[^>]*)?>/gi,
+    /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids)(?:\b[^>]*)?>/gi,
     "",
   );
+  const firstProtocolMarker = out.search(USER_FACING_PROTOCOL_MARKER_PATTERN);
+  if (firstProtocolMarker !== -1) {
+    out = out.slice(0, firstProtocolMarker);
+  }
   return stripStructuralLeakTokens(out).trim();
 }
 
@@ -1314,15 +1466,26 @@ export function responseHasToolIntent(
   );
 }
 
+export function responseHasMalformedToolCallIntent(
+  text: string,
+  knownToolNames: string[] = [],
+): boolean {
+  if (!MALFORMED_TOOL_INTENT_MARKER_PATTERN.test(text)) return false;
+  return knownToolNames.length > 0;
+}
+
+export function responseHasReasoningMarkup(text: string): boolean {
+  return REASONING_MARKUP_PATTERN.test(text);
+}
+
 /**
- * Parse tool calls from AI response using the canonical <tool_calls> JSON block,
- * with a generalist fallback that recovers the Anthropic/MiniMax `<invoke>` XML
- * dialect. When `knownToolNames` is provided, dialect recovery is gated on a
- * matching tool name to avoid false positives.
+ * Parse tool calls from AI response using only the canonical <tool_calls>
+ * JSON-lines block. Non-canonical/native tool dialects are intentionally not
+ * normalized; callers detect them separately and trigger corrective recovery.
  */
 export function parseToolCallsFromResponse(
   response: string,
-  knownToolNames?: string[],
+  _knownToolNames?: string[],
 ): { cleanResponse: string; toolCalls: ToolInvocation[] } {
   const toolCalls: ToolInvocation[] = [];
   let cleanResponse = response;
@@ -1339,22 +1502,12 @@ export function parseToolCallsFromResponse(
     const startIdx = response.lastIndexOf(startTag);
     if (startIdx !== -1) {
       const after = response.slice(startIdx + startTag.length);
-      // Attempt to extract valid JSON objects from the tail; if at least one is found, treat as valid and close the tag
-      const objs = extractJsonObjects(after);
-      if (objs.length > 0) {
-        // Reconstruct a closed block to be parsed by the standard path
-        const rebuilt = response.slice(0, startIdx) + startTag +
-          objs.join("\n") + endTag;
-        response = rebuilt;
-        cleanResponse = rebuilt;
-      } else {
-        // Never expose partial protocol markup to users. If the model was cut
-        // off before a valid JSON object was recoverable, drop the dangling
-        // control block and keep only user-facing prose before it.
-        const rebuilt = response.slice(0, startIdx);
-        response = rebuilt;
-        cleanResponse = rebuilt;
-      }
+      // Never expose partial protocol markup to users. If the model was cut off
+      // before a complete canonical block, drop the dangling block and let the
+      // malformed-tool recovery path correct the next attempt.
+      const rebuilt = response.slice(0, startIdx);
+      response = rebuilt;
+      cleanResponse = rebuilt;
     }
   }
 
@@ -1364,39 +1517,9 @@ export function parseToolCallsFromResponse(
 
   for (const match of matches) {
     const blockContent = match[1].trim();
-
-    const jsonObjects = extractJsonObjects(blockContent);
-    for (const jsonStr of jsonObjects) {
-      try {
-        const obj = JSON.parse(jsonStr);
-        if (obj && typeof obj.name === "string") {
-          const executionId = crypto.randomUUID();
-          toolCalls.push({
-            id: executionId,
-            tool: {
-              id: obj.name,
-            },
-            args: JSON.stringify(obj.arguments),
-          });
-        }
-      } catch { /* ignore malformed object */ }
-    }
+    toolCalls.push(...parseCanonicalToolCallLines(blockContent));
 
     cleanResponse = cleanResponse.replace(match[0], "").trimStart();
-  }
-
-  // Generalist recovery: if no canonical block parsed, accept the well-specified
-  // <invoke>/<parameter> XML dialect (Anthropic/MiniMax) so we avoid a costly
-  // corrective round-trip for these documented formats.
-  if (toolCalls.length === 0) {
-    const xmlCalls = parseXmlInvokeToolCalls(response);
-    const recovered = knownToolNames && knownToolNames.length > 0
-      ? xmlCalls.filter((call) => knownToolNames.includes(call.tool.id))
-      : xmlCalls;
-    if (recovered.length > 0) {
-      toolCalls.push(...recovered);
-      cleanResponse = sanitizeUserFacingText(cleanResponse);
-    }
   }
 
   return { cleanResponse, toolCalls };
@@ -1418,10 +1541,12 @@ export function parseInternalControlTagsFromResponse(
   }
 
   cleanResponse = cleanResponse
-    .replace(/<tool_results>[\s\S]*?(?:<\/tool_results>|$)/g, "")
-    .replace(/<continue_after_tool_results\s*\/>/g, "")
+    .replace(/<tool_results\b[\s\S]*?(?:<\/tool_results>|$)/gi, "")
+    .replace(/<tool_result\b[\s\S]*?(?:<\/tool_result>|$)/gi, "")
+    .replace(/<result\b[\s\S]*?(?:<\/result>|$)/gi, "")
+    .replace(/<continue_after_tool_results\s*\/>/gi, "")
     .replace(
-      /<continue_after_tool_results>[\s\S]*?<\/continue_after_tool_results>/g,
+      /<continue_after_tool_results\b[\s\S]*?(?:<\/continue_after_tool_results>|$)/gi,
       "",
     )
     .trim();

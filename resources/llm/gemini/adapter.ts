@@ -203,7 +203,10 @@ function buildThinkingConfig(
 export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
   const debugStream = getEnvFlag("COPILOTZ_DEBUG_GEMINI_STREAM") === "1" ||
     getEnvFlag("COPILOTZ_DEBUG") === "1";
+  const cacheDebug = getEnvFlag("COPILOTZ_DEBUG_CACHE") === "1" ||
+    getEnvFlag("COPILOTZ_DEBUG") === "1";
   let streamEventIndex = 0;
+  let usageEventIndex = 0;
   let lastVisibleSnapshot = "";
   let lastReasoningSnapshot = "";
 
@@ -443,6 +446,21 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
       const usage = data?.usageMetadata;
       if (!usage || typeof usage !== "object" || Array.isArray(usage)) {
         return null;
+      }
+
+      if (cacheDebug) {
+        usageEventIndex += 1;
+        console.log("[cache-debug] gemini usageMetadata", {
+          usageEventIndex,
+          finishReason: data?.candidates?.[0]?.finishReason ?? null,
+          promptTokenCount: usage.promptTokenCount,
+          candidatesTokenCount: usage.candidatesTokenCount,
+          // The key signal: does the cache count appear in early events
+          // (cumulative) or only in the final event (timing-sensitive)?
+          cachedContentTokenCount: usage.cachedContentTokenCount ?? null,
+          thoughtsTokenCount: usage.thoughtsTokenCount ?? null,
+          totalTokenCount: usage.totalTokenCount,
+        });
       }
 
       return {

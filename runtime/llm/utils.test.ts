@@ -5,9 +5,10 @@ import {
   formatMessages,
   getLocalStopSequences,
   parseToolCallsFromResponse,
-  parseXmlInvokeToolCalls,
   processStream,
   resolveProviderStopSequences,
+  responseHasMalformedToolCallIntent,
+  responseHasReasoningMarkup,
   responseHasToolIntent,
   sanitizeUserFacingText,
 } from "./utils.ts";
@@ -140,7 +141,15 @@ Deno.test("formatMessages preserves inline audio base64 under estimated input li
 Deno.test("getLocalStopSequences stops both tool results tag forms", () => {
   assertEquals(
     getLocalStopSequences(),
-    ["<tool_results>", "</tool_results>"],
+    [
+      "<tool_results",
+      "</tool_results>",
+      "<continue_after_tool_results",
+      "<result",
+      "</result>",
+      "<tool_result",
+      "</tool_result>",
+    ],
   );
 });
 
@@ -178,18 +187,13 @@ Deno.test("resolveProviderStopSequences returns undefined when empty", () => {
   assertEquals(resolveProviderStopSequences({}), undefined);
 });
 
-Deno.test("parseToolCallsFromResponse strips incomplete tool calls after local stop", () => {
+Deno.test("parseToolCallsFromResponse rejects incomplete canonical tool calls", () => {
   const parsed = parseToolCallsFromResponse(
     '<tool_calls>\n{"name":"saveThreadContext","arguments":{"threadData":{"step":"Direção Criativa"}}}\n',
   );
 
   assertEquals(parsed.cleanResponse, "");
-  assertEquals(parsed.toolCalls.length, 1);
-  assertEquals(parsed.toolCalls[0].tool.id, "saveThreadContext");
-  assertEquals(
-    JSON.parse(parsed.toolCalls[0].args as string),
-    { threadData: { step: "Direção Criativa" } },
-  );
+  assertEquals(parsed.toolCalls.length, 0);
 });
 
 Deno.test("parseToolCallsFromResponse strips unrecoverable partial tool calls", () => {
@@ -201,54 +205,31 @@ Deno.test("parseToolCallsFromResponse strips unrecoverable partial tool calls", 
   assertEquals(parsed.toolCalls.length, 0);
 });
 
-Deno.test("parseToolCallsFromResponse recovers the Anthropic/MiniMax <invoke> XML dialect", () => {
+Deno.test("parseToolCallsFromResponse rejects non-canonical XML tool dialect", () => {
   const response =
     'Sure.\n<minimax:tool_call>\n<invoke name="get_weather">\n<parameter name="location">San Francisco</parameter>\n<parameter name="opts">{"unit":"celsius","tags":["a","b"]}</parameter>\n</invoke>\n</minimax:tool_call>';
 
   const parsed = parseToolCallsFromResponse(response);
 
-  assertEquals(parsed.toolCalls.length, 1);
-  assertEquals(parsed.toolCalls[0].tool.id, "get_weather");
-  assertEquals(
-    JSON.parse(parsed.toolCalls[0].args as string),
-    {
-      location: "San Francisco",
-      opts: { unit: "celsius", tags: ["a", "b"] },
-    },
-  );
-  assertEquals(parsed.cleanResponse, "Sure.");
+  assertEquals(parsed.toolCalls.length, 0);
+  assertEquals(parsed.cleanResponse, response);
 });
 
-Deno.test("parseToolCallsFromResponse gates dialect recovery on known tool names", () => {
+Deno.test("parseToolCallsFromResponse only accepts strict JSON-lines calls", () => {
   const response =
-    '<invoke name="unknown_tool"><parameter name="x">1</parameter></invoke>';
+    '<tool_calls>\n{"name":"known","arguments":{"x":1}}\n</tool_calls>';
 
   assertEquals(
-    parseToolCallsFromResponse(response, ["known_tool"]).toolCalls.length,
-    0,
-  );
-  assertEquals(
-    parseToolCallsFromResponse(response, ["unknown_tool"]).toolCalls.length,
+    parseToolCallsFromResponse(response, ["known"]).toolCalls.length,
     1,
   );
-});
-
-Deno.test("parseToolCallsFromResponse leaves an argument-less invoke unparsed", () => {
-  const parsed = parseToolCallsFromResponse(
-    '<invoke name="known"></invoke>',
-    ["known"],
+  assertEquals(
+    parseToolCallsFromResponse(
+      '<tool_calls>\n{"name":"known","arguments":{"x":1},"extra":true}\n</tool_calls>',
+      ["known"],
+    ).toolCalls.length,
+    0,
   );
-  assertEquals(parsed.toolCalls.length, 0);
-});
-
-Deno.test("parseXmlInvokeToolCalls handles multiple invocations", () => {
-  const calls = parseXmlInvokeToolCalls(
-    '<invoke name="a"><parameter name="x">1</parameter></invoke>' +
-      '<invoke name="b"><parameter name="y">two</parameter></invoke>',
-  );
-  assertEquals(calls.map((c) => c.tool.id), ["a", "b"]);
-  assertEquals(JSON.parse(calls[0].args as string), { x: 1 });
-  assertEquals(JSON.parse(calls[1].args as string), { y: "two" });
 });
 
 Deno.test("responseHasToolIntent detects canonical and gated dialect markers", () => {
@@ -267,6 +248,36 @@ Deno.test("responseHasToolIntent detects canonical and gated dialect markers", (
     responseHasToolIntent("just a normal answer", ["sandbox_session"]),
     false,
   );
+});
+
+Deno.test("responseHasMalformedToolCallIntent detects non-canonical tool syntax", () => {
+  assertEquals(
+    responseHasMalformedToolCallIntent(
+      '<invoke name="sandbox_session"><parameter name="actions">[]</parameter></invoke>',
+      ["sandbox_session"],
+    ),
+    true,
+  );
+  assertEquals(
+    responseHasMalformedToolCallIntent(
+      '<tool_calls>\n{"name":"sandbox_session","arguments":{}}\n</tool_calls>',
+      ["sandbox_session"],
+    ),
+    false,
+  );
+  assertEquals(
+    responseHasMalformedToolCallIntent('<invoke name="sandbox_session">', []),
+    false,
+  );
+});
+
+Deno.test("responseHasReasoningMarkup detects visible thinking tags", () => {
+  assertEquals(
+    responseHasReasoningMarkup("answer <think>private</think>"),
+    true,
+  );
+  assertEquals(responseHasReasoningMarkup("answer </mm:think>"), true);
+  assertEquals(responseHasReasoningMarkup("plain answer"), false);
 });
 
 Deno.test("sanitizeUserFacingText strips leaked tool-call protocol markup", () => {

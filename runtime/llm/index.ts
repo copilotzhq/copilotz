@@ -20,6 +20,8 @@ import {
   parseInternalControlTagsFromResponse,
   parseTaggedBlocksFromResponse,
   parseToolCallsFromResponse,
+  responseHasMalformedToolCallIntent,
+  responseHasReasoningMarkup,
   responseHasToolIntent,
   sanitizeUserFacingText,
   stripStructuralLeakTokens,
@@ -66,7 +68,31 @@ function buildRecoveryCue(reason: string | null): string {
     case "empty_response":
       return "Previous attempt produced reasoning but no visible response. You must produce a concrete answer for the user.";
     case "malformed_tool_call":
-      return 'Your previous response attempted a tool call but used an invalid or non-standard format. Re-issue the tool call using EXACTLY this format and nothing else:\n<tool_calls>\n{"name": "tool_name", "arguments": { }}\n</tool_calls>\nDo not use XML tags (<invoke>, <parameter>, <minimax:tool_call>), function-call syntax, or markdown fences. Do not repeat your earlier prose.';
+      return `Your previous response attempted to call a tool in an unsupported format.
+
+The only supported tool-call format is exactly:
+
+<tool_calls>
+{"name":"tool_name","arguments":{}}
+</tool_calls>
+
+Rules:
+- Use one valid JSON object per line inside <tool_calls>.
+- Each JSON object must contain exactly "name" and "arguments".
+- "arguments" must be a JSON object.
+- Do not use XML tool syntax such as <tool_call>, <invoke>, <parameter>, <function_call>, <tool_use>, <result>, or <tool_results>.
+- Do not emit provider-native tool syntax.
+- Do not emit tool result tags.
+- Do not wrap the JSON in markdown fences.
+- If you intended to call a tool, re-emit only the corrected <tool_calls> block.
+- If you did not intend to call a tool, answer normally without any tool or result protocol.`;
+    case "visible_reasoning_markup":
+      return `Your previous response exposed private reasoning/thinking markup.
+
+Do not emit <think>, <thought>, <thinking>, <reasoning>, <mm:think>, or any similar reasoning tags in visible output.
+
+If you need to answer, provide only the final user-facing answer.
+If you need to call a tool, use only the supported <tool_calls> JSON Lines format.`;
     default:
       return "Continue exactly where you left off. Do not repeat earlier content.";
   }
@@ -125,18 +151,18 @@ function parseAssistantResponse(
     cleanResponse = parsed.cleanResponse;
     toolCalls = parsed.toolCalls;
   }
+  const visibleExtractedBlockTags = extractedBlockTags.filter((tag) =>
+    !REASONING_HISTORY_TAGS.includes(
+      tag.toLowerCase() as typeof REASONING_HISTORY_TAGS[number],
+    )
+  );
   if (extractedBlockTags.length > 0) {
     const parsed = parseTaggedBlocksFromResponse(
       cleanResponse,
-      extractedBlockTags,
+      visibleExtractedBlockTags,
     );
     cleanResponse = parsed.cleanResponse;
     extractedTags = parsed.extractedTags;
-    extractedReasoning = REASONING_HISTORY_TAGS.flatMap((tag) => {
-      const values = extractedTags[tag] ?? [];
-      delete extractedTags[tag];
-      return values;
-    });
   } else {
     cleanResponse = cleanResponse.trim();
   }
@@ -152,7 +178,9 @@ function parseAssistantResponse(
   }
 
   // Structural special-token leaks are never legitimate output; strip always.
-  cleanResponse = stripStructuralLeakTokens(cleanResponse).trim();
+  cleanResponse = sanitizeUserFacingText(
+    stripStructuralLeakTokens(cleanResponse),
+  ).trim();
 
   return { cleanResponse, toolCalls, extractedTags, extractedReasoning };
 }
@@ -350,8 +378,13 @@ export async function chat(
       // markup (canonical or a native dialect) that produced no parseable call.
       // Correct it with a synthetic instruction and retry, then fall back —
       // rather than leaking protocol markup or silently dropping the call.
-      const hasMalformedToolIntent = parsed.toolCalls.length === 0 &&
-        responseHasToolIntent(fullContent, knownToolNames);
+      const hasMalformedToolIntent = responseHasMalformedToolCallIntent(
+        fullContent,
+        knownToolNames,
+      ) ||
+        (parsed.toolCalls.length === 0 &&
+          responseHasToolIntent(fullContent, knownToolNames));
+      const hasVisibleReasoningMarkup = responseHasReasoningMarkup(fullContent);
 
       // Detect unintentional empty response: model produced no useful
       // output and didn't use any control action (tool calls, routing, etc.)
@@ -390,6 +423,34 @@ export async function chat(
 
         // No more attempts — sanitize protocol markup out of the answer so the
         // user never sees a leaked tool call, then fall through to return.
+        parsed.cleanResponse = sanitizeUserFacingText(parsed.cleanResponse);
+      } else if (hasVisibleReasoningMarkup) {
+        recoveryPrefix = prefixBeforeAttempt;
+        lastRecoveryReason = "visible_reasoning_markup";
+
+        if (!sameModelRetried) {
+          sameModelRetried = true;
+          warnRecoveryAttempt(
+            "visible_reasoning_markup",
+            attemptConfig,
+            attemptConfig,
+            "Model exposed reasoning markup, retrying",
+          );
+          continue;
+        }
+
+        if (index < attemptConfigs.length - 1) {
+          sameModelRetried = false;
+          warnRecoveryAttempt(
+            "visible_reasoning_markup",
+            attemptConfig,
+            attemptConfigs[index + 1],
+            "Model exposed reasoning markup, falling back",
+          );
+          index++;
+          continue;
+        }
+
         parsed.cleanResponse = sanitizeUserFacingText(parsed.cleanResponse);
       } else if (isUnintentionallyEmpty) {
         // Undo the accumulation from this attempt — no useful content

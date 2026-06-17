@@ -7,7 +7,11 @@ import type {
   StreamCallback,
 } from "@/runtime/llm/types.ts";
 import { LLMStreamTimeoutError } from "@/runtime/llm/errors.ts";
-import { getLocalStopSequences, processStream } from "@/runtime/llm/utils.ts";
+import {
+  getLocalStopSequences,
+  isStopDebugEnabled,
+  processStream,
+} from "@/runtime/llm/utils.ts";
 import { streamPost, type StreamResponse } from "@/runtime/http.ts";
 
 const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 20_000;
@@ -65,6 +69,14 @@ export async function runProviderStream(
       ? localStopSequences
       : undefined,
   } satisfies ProviderConfig;
+
+  if (isStopDebugEnabled()) {
+    console.log("[stop-debug] provider request", {
+      provider: config.provider,
+      model: config.model,
+      nativeStopSequences: requestConfig.nativeStopSequences,
+    });
+  }
 
   const abortController = new AbortController();
   const firstTokenTimeoutMs = resolveTimeoutMs(

@@ -165,7 +165,7 @@ export function contextGenerator(
     agent.instructions && `Your instructions are: ${agent.instructions}`,
   ].filter(Boolean).join("\n");
 
-  const currentDate = new Date().toLocaleDateString();
+  const currentDate = new Date().toISOString().slice(0, 10);
   const dateContext = `Current date: ${currentDate}`;
 
   const publicThreadMetadata = getPublicThreadMetadata(thread.metadata);

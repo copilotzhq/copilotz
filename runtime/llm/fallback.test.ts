@@ -964,57 +964,39 @@ Deno.test("chat does NOT retry when empty response is intentional (no_response)"
   }
 });
 
-Deno.test("chat extracts think into reasoning and strips it from answer", async () => {
+Deno.test("chat retries when visible reasoning markup is emitted", async () => {
   const originalFetch = globalThis.fetch;
-  let calls = 0;
-
-  globalThis.fetch = () => {
-    calls += 1;
-    return Promise.resolve(
-      sse([
-        {
-          choices: [{
-            delta: {
-              content: "Visible answer <think>tag reasoning</think>",
-            },
-          }],
-        },
-        { choices: [{ delta: {}, finish_reason: "stop" }] },
-      ]),
-    );
-  };
-
-  try {
-    const response = await chat(
-      { messages: [{ role: "user", content: "hello" }] },
-      { provider: "anthropic", model: "primary", apiKey: "test" },
-      {},
-      undefined,
-      registry,
-    );
-
-    assertEquals(calls, 1);
-    assertEquals(response.answer, "Visible answer");
-    assertEquals(response.reasoning, "tag reasoning");
-    assertEquals(response.extractedTags, undefined);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-Deno.test("chat extracts thought into reasoning and hides it from stream", async () => {
-  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const warnings: unknown[][] = [];
   let calls = 0;
   let streamed = "";
 
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+
   globalThis.fetch = () => {
     calls += 1;
+    if (calls === 1) {
+      return Promise.resolve(
+        sse([
+          {
+            choices: [{
+              delta: {
+                content: "Visible <thought>tag reasoning</thought>answer",
+              },
+            }],
+          },
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]),
+      );
+    }
     return Promise.resolve(
       sse([
         {
           choices: [{
             delta: {
-              content: "Visible <thought>tag reasoning</thought>answer",
+              content: "Clean answer",
             },
           }],
         },
@@ -1034,19 +1016,29 @@ Deno.test("chat extracts thought into reasoning and hides it from stream", async
       registry,
     );
 
-    assertEquals(calls, 1);
-    assertEquals(response.answer, "Visible answer");
-    assertEquals(response.reasoning, "tag reasoning");
+    assertEquals(calls, 2);
+    assertEquals(response.answer, "Clean answer");
     assertEquals(streamed.includes("<thought>"), false);
     assertEquals(streamed.includes("tag reasoning"), false);
+    assertEquals(
+      warnings.some((w) =>
+        (w[1] as Record<string, unknown>)?.reason ===
+          "visible_reasoning_markup"
+      ),
+      true,
+    );
   } finally {
     globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
   }
 });
 
-Deno.test("chat extracts dangling think tail into reasoning and strips it from answer", async () => {
+Deno.test("chat strips visible reasoning markup after exhausted recovery", async () => {
   const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
   let streamed = "";
+
+  console.warn = () => {};
 
   globalThis.fetch = () =>
     Promise.resolve(
@@ -1074,83 +1066,16 @@ Deno.test("chat extracts dangling think tail into reasoning and strips it from a
     );
 
     assertEquals(response.answer, "Visible answer.");
-    assertEquals(response.reasoning, "private reasoning");
+    assertEquals(response.reasoning, undefined);
     assertEquals(streamed.includes("<think>"), false);
     assertEquals(streamed.includes("private reasoning"), false);
   } finally {
     globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
   }
 });
 
-Deno.test("chat extracts dangling reasoning aliases into reasoning", async () => {
-  const originalFetch = globalThis.fetch;
-
-  globalThis.fetch = () =>
-    Promise.resolve(
-      sse([
-        {
-          choices: [{
-            delta: {
-              content: "Answer<thought>private tail",
-            },
-          }],
-        },
-        { choices: [{ delta: {}, finish_reason: "stop" }] },
-      ]),
-    );
-
-  try {
-    const response = await chat(
-      { messages: [{ role: "user", content: "hello" }] },
-      { provider: "anthropic", model: "primary", apiKey: "test" },
-      {},
-      undefined,
-      registry,
-    );
-
-    assertEquals(response.answer, "Answer");
-    assertEquals(response.reasoning, "private tail");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-Deno.test("chat extracts multiple reasoning tag aliases", async () => {
-  const originalFetch = globalThis.fetch;
-
-  globalThis.fetch = () =>
-    Promise.resolve(
-      sse([
-        {
-          choices: [{
-            delta: {
-              content:
-                "Answer<thinking>first</thinking><reasoning>second</reasoning>",
-            },
-          }],
-        },
-        { choices: [{ delta: {}, finish_reason: "stop" }] },
-      ]),
-    );
-
-  try {
-    const response = await chat(
-      { messages: [{ role: "user", content: "hello" }] },
-      { provider: "anthropic", model: "primary", apiKey: "test" },
-      {},
-      undefined,
-      registry,
-    );
-
-    assertEquals(response.answer, "Answer");
-    assertEquals(response.reasoning, "first\n\nsecond");
-    assertEquals(response.extractedTags, undefined);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-Deno.test("chat merges provider reasoning with think blocks", async () => {
+Deno.test("chat preserves provider-native reasoning deltas", async () => {
   const originalFetch = globalThis.fetch;
   const reasoningRegistry: ProviderRegistry = {
     anthropic: () => ({
@@ -1178,13 +1103,7 @@ Deno.test("chat merges provider reasoning with think blocks", async () => {
     Promise.resolve(
       sse([
         { choices: [{ delta: { reasoning: "provider reasoning" } }] },
-        {
-          choices: [{
-            delta: {
-              content: "Answer <think>tag reasoning</think>",
-            },
-          }],
-        },
+        { choices: [{ delta: { content: "Answer" } }] },
         { choices: [{ delta: {}, finish_reason: "stop" }] },
       ]),
     );
@@ -1199,13 +1118,13 @@ Deno.test("chat merges provider reasoning with think blocks", async () => {
     );
 
     assertEquals(response.answer, "Answer");
-    assertEquals(response.reasoning, "provider reasoning\n\ntag reasoning");
+    assertEquals(response.reasoning, "provider reasoning");
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-Deno.test("chat retries when response contains only think", async () => {
+Deno.test("chat retries when response contains only thinking markup", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
   let calls = 0;
@@ -1270,19 +1189,40 @@ const searchTool = {
   },
 };
 
-Deno.test("chat recovers the <invoke>/<parameter> dialect without an extra round-trip", async () => {
+Deno.test("chat retries non-canonical <invoke>/<parameter> tool dialect", async () => {
   const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const warnings: unknown[][] = [];
   let calls = 0;
+
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
 
   globalThis.fetch = () => {
     calls += 1;
+    if (calls === 1) {
+      return Promise.resolve(
+        sse([
+          {
+            choices: [{
+              delta: {
+                content:
+                  '<minimax:tool_call><invoke name="search"><parameter name="q">hello</parameter></invoke></minimax:tool_call>',
+              },
+            }],
+          },
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]),
+      );
+    }
     return Promise.resolve(
       sse([
         {
           choices: [{
             delta: {
               content:
-                '<minimax:tool_call><invoke name="search"><parameter name="q">hello</parameter></invoke></minimax:tool_call>',
+                '<tool_calls>\n{"name":"search","arguments":{"q":"hello"}}\n</tool_calls>',
             },
           }],
         },
@@ -1300,15 +1240,22 @@ Deno.test("chat recovers the <invoke>/<parameter> dialect without an extra round
       registry,
     );
 
-    assertEquals(calls, 1);
+    assertEquals(calls, 2);
     assertEquals(response.toolCalls?.length, 1);
     assertEquals(response.toolCalls?.[0].tool.id, "search");
     assertEquals(JSON.parse(response.toolCalls?.[0].args as string), {
       q: "hello",
     });
     assertEquals(response.answer.includes("<invoke"), false);
+    assertEquals(
+      warnings.some((w) =>
+        (w[1] as Record<string, unknown>)?.reason === "malformed_tool_call"
+      ),
+      true,
+    );
   } finally {
     globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
   }
 });
 

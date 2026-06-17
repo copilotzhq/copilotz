@@ -14,8 +14,9 @@ export default defineCollection({
       externalId: { type: "string" },
       participantType: {
         type: "string",
-        enum: ["human", "agent"],
-        description: "Whether this participant is a human user or an AI agent",
+        enum: ["human", "agent", "job"],
+        description:
+          "Whether this participant is a human user, AI agent, or job",
       },
       name: { type: ["string", "null"] },
       email: { type: ["string", "null"] },
@@ -111,7 +112,7 @@ export default defineCollection({
       async upsertIdentity(input: {
         id?: string;
         externalId: string;
-        participantType: "human" | "agent";
+        participantType: "human" | "agent" | "job";
         name?: string | null;
         email?: string | null;
         agentId?: string | null;

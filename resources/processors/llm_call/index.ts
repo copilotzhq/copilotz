@@ -346,6 +346,14 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       ...(typeof eventMetadata.sourceMessageSenderId === "string"
         ? { sourceMessageSenderId: eventMetadata.sourceMessageSenderId }
         : {}),
+      ...(typeof eventMetadata.sourceMessageSenderType === "string"
+        ? { sourceMessageSenderType: eventMetadata.sourceMessageSenderType }
+        : {}),
+      ...(eventMetadata.runSender &&
+          typeof eventMetadata.runSender === "object" &&
+          !Array.isArray(eventMetadata.runSender)
+        ? { runSender: eventMetadata.runSender }
+        : {}),
     };
 
     let response: ChatResponse;
@@ -496,6 +504,11 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           threadId,
           eventId: typeof event.id === "string" ? event.id : null,
           agentId: (payload.agent.id ?? payload.agent.name) as string | null,
+          runSender: eventMetadata.runSender &&
+              typeof eventMetadata.runSender === "object" &&
+              !Array.isArray(eventMetadata.runSender)
+            ? eventMetadata.runSender as Record<string, unknown>
+            : null,
           provider: llmResponse.provider ?? null,
           model: llmResponse.model ?? null,
           usage,
@@ -513,6 +526,11 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           threadId,
           eventId: typeof event.id === "string" ? event.id : null,
           agentId: (payload.agent.id ?? payload.agent.name) as string | null,
+          runSender: eventMetadata.runSender &&
+              typeof eventMetadata.runSender === "object" &&
+              !Array.isArray(eventMetadata.runSender)
+            ? eventMetadata.runSender as Record<string, unknown>
+            : null,
           provider: llmResponse.provider ?? null,
           model: llmResponse.model ?? null,
           usage: finalized.usage,

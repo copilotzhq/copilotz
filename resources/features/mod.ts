@@ -5,6 +5,7 @@ import agents from "./admin/agents.ts";
 import overview from "./admin/overview.ts";
 import participants from "./admin/participants.ts";
 import threads from "./admin/threads.ts";
+import usage from "./admin/usage.ts";
 
 type FeatureAction = FeatureEntry["actions"][string];
 
@@ -16,6 +17,7 @@ export const admin: FeatureEntry = {
     overview: overview as FeatureAction,
     participants: participants as FeatureAction,
     threads: threads as FeatureAction,
+    usage: usage as FeatureAction,
   },
 };
 

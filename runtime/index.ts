@@ -51,6 +51,25 @@ function buildInitialRoutingMetadata(
   };
 }
 
+function buildRunSenderMetadata(
+  sender: MessagePayload["sender"],
+): Record<string, unknown> | null {
+  if (!sender?.type) return null;
+  const id = sender.id ?? sender.externalId ?? sender.name ?? null;
+  const externalId = sender.externalId ?? sender.id ?? sender.name ?? null;
+  const metadata = sender.metadata && typeof sender.metadata === "object"
+    ? sender.metadata as Record<string, unknown>
+    : null;
+  const email = typeof metadata?.email === "string" ? metadata.email : null;
+  return {
+    type: sender.type,
+    ...(id ? { id } : {}),
+    ...(externalId ? { externalId } : {}),
+    ...(sender.name ? { name: sender.name } : {}),
+    ...(email ? { email } : {}),
+  };
+}
+
 /**
  * Options for running a message through Copilotz.
  */
@@ -432,13 +451,18 @@ export async function runThread(
   );
   const interruptsActiveWork = normalizedSender.type === "user" ||
     normalizedSender.type === "job";
+  const runSenderMetadata = buildRunSenderMetadata(normalizedSender);
   const queueEventMetadata = interruptsActiveWork
     ? {
       ...(initialEventMetadata ?? {}),
+      ...(runSenderMetadata ? { runSender: runSenderMetadata } : {}),
       interruptsActiveWork: true,
       interruptMode: options?.interruptMode === "soft" ? "soft" : "abort",
     }
-    : initialEventMetadata ?? undefined;
+    : {
+      ...(initialEventMetadata ?? {}),
+      ...(runSenderMetadata ? { runSender: runSenderMetadata } : {}),
+    };
   const traceId = options?.traceId ?? crypto.randomUUID();
 
   const newQueueItem = await ops.addToQueue(threadId, {

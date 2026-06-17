@@ -247,7 +247,7 @@ interface ParticipantRecord extends Record<string, unknown> {
   id: string;
   namespace?: string;
   externalId: string;
-  participantType: "human" | "agent";
+  participantType: "human" | "agent" | "job";
   name?: string | null;
   email?: string | null;
   agentId?: string | null;
@@ -265,7 +265,7 @@ type ParticipantCollectionMethods = {
   upsertIdentity?: (input: {
     id?: string;
     externalId: string;
-    participantType: "human" | "agent";
+    participantType: "human" | "agent" | "job";
     name?: string | null;
     email?: string | null;
     agentId?: string | null;
@@ -632,11 +632,74 @@ export function createLlmUsageService(
   deps: { collections?: CollectionAccessor; ops: CopilotzDb["ops"] },
 ) {
   const { ops } = deps;
+  const runSenderExternalId = (
+    sender?: Record<string, unknown> | null,
+  ): string | null => {
+    const candidates = [
+      sender?.externalId,
+      sender?.id,
+      sender?.email,
+      sender?.name,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" && candidate.trim().length > 0) {
+        return candidate.trim();
+      }
+    }
+    return null;
+  };
+
+  const createUsageParticipantEdges = async (
+    input: {
+      namespace: string;
+      usageNodeId: string;
+      agentId: string | null;
+      runSender?: Record<string, unknown> | null;
+    },
+  ) => {
+    const edgeInputs: Array<{
+      sourceNodeId: string;
+      targetNodeId: string;
+      type: string;
+    }> = [];
+
+    if (input.agentId) {
+      const caller = await ops.getParticipantNode(
+        input.agentId,
+        input.namespace,
+      );
+      if (caller?.id) {
+        edgeInputs.push({
+          sourceNodeId: caller.id as string,
+          targetNodeId: input.usageNodeId,
+          type: GRAPH_EDGE.USED_LLM,
+        });
+      }
+    }
+
+    const senderId = runSenderExternalId(input.runSender);
+    if (senderId) {
+      const initiator = await ops.getParticipantNode(senderId, input.namespace);
+      if (initiator?.id) {
+        edgeInputs.push({
+          sourceNodeId: initiator.id as string,
+          targetNodeId: input.usageNodeId,
+          type: GRAPH_EDGE.INITIATED_LLM_USAGE,
+        });
+      }
+    }
+
+    for (const edge of edgeInputs) {
+      await ops.createEdge(edge).catch(() => undefined);
+    }
+  };
+
   const buildUsageData = (
     input: {
       threadId: string;
       eventId: string | null;
       agentId: string | null;
+      runSender?: Record<string, unknown> | null;
       provider: string | null;
       model: string | null;
       usage: TokenUsage;
@@ -677,6 +740,7 @@ export function createLlmUsageService(
       threadId: string;
       eventId: string | null;
       agentId: string | null;
+      runSender?: Record<string, unknown> | null;
       provider: string | null;
       model: string | null;
       usage: TokenUsage;
@@ -708,6 +772,12 @@ export function createLlmUsageService(
         targetNodeId: node.id as string,
         type: GRAPH_EDGE.HAS_LLM_USAGE,
       });
+      await createUsageParticipantEdges({
+        namespace,
+        usageNodeId: node.id as string,
+        agentId: input.agentId,
+        runSender: input.runSender ?? null,
+      });
       return node.id as string;
     },
     async updateUsageRecordMetrics(input: {
@@ -715,6 +785,7 @@ export function createLlmUsageService(
       threadId: string;
       eventId: string | null;
       agentId: string | null;
+      runSender?: Record<string, unknown> | null;
       provider: string | null;
       model: string | null;
       usage: TokenUsage;

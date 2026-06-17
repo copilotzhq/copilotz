@@ -7,7 +7,7 @@ export const priority = 100;
 
 function buildSenderIdentity(payload: NewMessageEventPayload): {
   externalId: string;
-  participantType: "human" | "agent";
+  participantType: "human" | "agent" | "job";
   agentId?: string | null;
 } | null {
   const sender = payload.sender;
@@ -16,6 +16,11 @@ function buildSenderIdentity(payload: NewMessageEventPayload): {
   if (sender.type === "user") {
     const externalId = sender.externalId ?? sender.id ?? sender.name ?? null;
     return externalId ? { externalId, participantType: "human" } : null;
+  }
+
+  if (sender.type === "job") {
+    const externalId = sender.externalId ?? sender.id ?? sender.name ?? null;
+    return externalId ? { externalId, participantType: "job" } : null;
   }
 
   if (sender.type === "agent" || sender.type === "tool") {

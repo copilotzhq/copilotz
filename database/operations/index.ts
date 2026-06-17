@@ -334,13 +334,13 @@ export interface DatabaseOperations {
    * - Agent participants: Store agent identity with persistent memory
    *
    * @param externalId - External identifier (user ID or agent ID/name)
-   * @param participantType - "human" or "agent"
+   * @param participantType - "human", "agent", or "job"
    * @param namespace - Tenant/application namespace. Required for participant identity.
    * @param data - Participant data
    */
   upsertParticipantNode: (
     externalId: string,
-    participantType: "human" | "agent",
+    participantType: "human" | "agent" | "job",
     namespace: string | null,
     data: {
       name?: string | null;
@@ -1937,7 +1937,7 @@ export function createOperations(
 
   const upsertParticipantNode = async (
     externalId: string,
-    participantType: "human" | "agent",
+    participantType: "human" | "agent" | "job",
     namespace: string | null,
     data: {
       name?: string | null;
@@ -2002,13 +2002,13 @@ export function createOperations(
       content: null,
       data: {
         externalId,
-        participantType, // NEW: "human" | "agent"
+        participantType,
         name: data.name ?? null,
         email: data.email ?? null,
         agentId: data.agentId ?? null,
         metadata: data.metadata ?? null,
       },
-      sourceType: participantType === "human" ? "user" : "agent",
+      sourceType: participantType === "human" ? "user" : participantType,
       sourceId: externalId,
     });
 

@@ -284,7 +284,20 @@ Deno.test({
     await db.ops.findOrCreateThread(threadId, {
       namespace,
       name: "Usage Thread",
-      participants: ["agent-1"],
+      participants: ["user-1", "agent-1"],
+    });
+    const manager = createCollectionsManager(db, [participantCollection]);
+    const collections = manager.withNamespace(namespace);
+    await collections.participant.upsertIdentity({
+      externalId: "agent-1",
+      participantType: "agent",
+      name: "Agent One",
+      agentId: "agent-1",
+    });
+    await collections.participant.upsertIdentity({
+      externalId: "user-1",
+      participantType: "human",
+      name: "User One",
     });
 
     const usageService = createLlmUsageService({
@@ -295,6 +308,11 @@ Deno.test({
       threadId,
       eventId: "event-1",
       agentId: "agent-1",
+      runSender: {
+        type: "user",
+        externalId: "user-1",
+        name: "User One",
+      },
       provider: "openai",
       model: "gpt-test",
       usage: {
@@ -324,6 +342,18 @@ Deno.test({
     });
 
     assert(usageId);
+    const usageEdges = await db.ops.query<{
+      type: string;
+      source_node_id: string;
+      target_node_id: string;
+    }>(
+      `SELECT * FROM "edges" WHERE "target_node_id" = $1`,
+      [usageId],
+    );
+    const edgeTypes = usageEdges.rows.map((edge) => edge.type).sort();
+    assertEquals(edgeTypes.includes(GRAPH_EDGE.HAS_LLM_USAGE), true);
+    assertEquals(edgeTypes.includes(GRAPH_EDGE.USED_LLM), true);
+    assertEquals(edgeTypes.includes(GRAPH_EDGE.INITIATED_LLM_USAGE), true);
     const node = await db.ops.getNodeById(usageId);
     const data = node?.data as Record<string, unknown>;
     assertEquals(data.inputTokens, 10);

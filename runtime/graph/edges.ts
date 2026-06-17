@@ -6,6 +6,8 @@ export const GRAPH_EDGE = {
   HAS_TOOL_CALL: "has_tool_call",
   HAS_TOOL_RESULT: "has_tool_result",
   HAS_LLM_USAGE: "has_llm_usage",
+  USED_LLM: "used_llm",
+  INITIATED_LLM_USAGE: "initiated_llm_usage",
   HAS_ASSET: "has_asset",
   CREATED_ASSET: "created_asset",
   HAS_DOCUMENT: "has_document",

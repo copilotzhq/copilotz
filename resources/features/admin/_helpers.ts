@@ -38,7 +38,12 @@ export interface AdminOverview {
     overwritten: number;
   };
   messageTotals: { total: number; toolCallMessages: number };
-  participantTotals: { total: number; humans: number; agents: number };
+  participantTotals: {
+    total: number;
+    humans: number;
+    agents: number;
+    jobs: number;
+  };
   llmTotals: AdminUsageTotals;
 }
 
@@ -65,7 +70,7 @@ export interface AdminThreadSummary {
 export interface AdminParticipantSummary {
   externalId: string;
   displayName: string;
-  participantType: "human" | "agent";
+  participantType: "human" | "agent" | "job";
   namespace: string;
   isGlobal: boolean;
   messageCount: number;

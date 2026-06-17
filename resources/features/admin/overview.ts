@@ -90,11 +90,12 @@ export default async function (
     pf.push(`"namespace" = $${pp.length}`);
   }
   const participantResult = await q<
-    { total: number; humans: number; agents: number }
+    { total: number; humans: number; agents: number; jobs: number }
   >(
     `SELECT COUNT(*)::int AS "total",
        COUNT(*) FILTER (WHERE COALESCE("data"->>'participantType', 'human') = 'human')::int AS "humans",
-       COUNT(*) FILTER (WHERE COALESCE("data"->>'participantType', 'human') = 'agent')::int AS "agents"
+       COUNT(*) FILTER (WHERE COALESCE("data"->>'participantType', 'human') = 'agent')::int AS "agents",
+       COUNT(*) FILTER (WHERE COALESCE("data"->>'participantType', 'human') = 'job')::int AS "jobs"
      FROM "nodes" WHERE ${pf.join(" AND ")}`,
     pp,
   );
@@ -122,7 +123,8 @@ export default async function (
       overwritten: 0,
     };
   const mr = messageResult.rows[0] ?? { total: 0, toolCallMessages: 0 };
-  const pr = participantResult.rows[0] ?? { total: 0, humans: 0, agents: 0 };
+  const pr = participantResult.rows[0] ??
+    { total: 0, humans: 0, agents: 0, jobs: 0 };
 
   const data: AdminOverview = {
     threadTotals: {
@@ -147,6 +149,7 @@ export default async function (
       total: toNum(pr.total),
       humans: toNum(pr.humans),
       agents: toNum(pr.agents),
+      jobs: toNum(pr.jobs),
     },
     llmTotals: toUsageTotals(usageResult.rows[0] ?? emptyUsageTotals()),
   };

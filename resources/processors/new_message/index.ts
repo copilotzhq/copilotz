@@ -991,7 +991,7 @@ function buildBaseMessageMetadata(
           Object.entries(queueMetadata as Record<string, unknown>).filter(
             ([key]) =>
               key === "routing" || key === "visibility" ||
-              key === "internalConversation",
+              key === "internalConversation" || key === "runSender",
           ),
         )
         : {}
@@ -1962,6 +1962,10 @@ export const messageProcessor: EventProcessor<
         targetId: targetResolution.targetId,
         targetQueue: targetResolution.targetQueue,
         sourceMessageSenderId: messageContext.senderId,
+        sourceMessageSenderType: messageContext.senderType,
+        ...(isRecord(eventMetadata.runSender)
+          ? { runSender: eventMetadata.runSender }
+          : {}),
         ...(isRecord(messageMetadata) &&
             typeof messageMetadata.visibility === "string"
           ? { visibility: messageMetadata.visibility }

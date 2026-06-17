@@ -59,7 +59,7 @@ export default async function (
   const result = await q<{
     externalId: string;
     displayName: string;
-    participantType: "human" | "agent";
+    participantType: "human" | "agent" | "job";
     namespace: string;
     isGlobal: boolean;
     messageCount: number;
@@ -94,7 +94,11 @@ export default async function (
   const data: AdminParticipantSummary[] = result.rows.map((row) => ({
     externalId: row.externalId,
     displayName: row.displayName,
-    participantType: row.participantType === "agent" ? "agent" : "human",
+    participantType: row.participantType === "agent"
+      ? "agent"
+      : row.participantType === "job"
+      ? "job"
+      : "human",
     namespace: row.namespace,
     isGlobal: Boolean(row.isGlobal),
     messageCount: toNum(row.messageCount),

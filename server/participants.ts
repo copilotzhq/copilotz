@@ -1,7 +1,7 @@
 /**
  * Framework-independent participant helpers.
  *
- * Participants are stored as graph nodes and can represent humans or agents.
+ * Participants are stored as graph nodes and can represent humans, agents, or jobs.
  * Metadata for the participant lives on the node and is merged on update.
  *
  * @module
@@ -19,7 +19,7 @@ export interface ParticipantGetOptions {
 
 /** Options for updating a participant profile. */
 export interface ParticipantUpdateOptions extends ParticipantGetOptions {
-  participantType?: "human" | "agent";
+  participantType?: "human" | "agent" | "job";
   replaceKeys?: string[];
   name?: string | null;
   email?: string | null;

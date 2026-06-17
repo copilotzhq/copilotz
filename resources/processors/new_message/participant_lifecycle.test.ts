@@ -179,6 +179,55 @@ Deno.test("participant lifecycle processor treats agent senders as agent partici
   }
 });
 
+Deno.test("participant lifecycle processor treats job senders as job participants", async () => {
+  const { db, tempDir } = await createTestDb("participant-lifecycle-job");
+  const manager = createCollectionsManager(db, [participantCollection]);
+  const collections = manager.withNamespace("tenant-a");
+
+  const event = {
+    id: "evt-job",
+    threadId: "thread-1",
+    type: "NEW_MESSAGE",
+    payload: {
+      content: "run scheduled work",
+      sender: {
+        type: "job",
+        id: "job-1",
+        externalId: "job-1",
+        name: "Daily job",
+      },
+    },
+  } as unknown as Event;
+
+  const deps = {
+    db,
+    thread: { id: "thread-1" },
+    context: {
+      namespace: "tenant-a",
+      collections,
+      agents: [],
+    },
+    emitToStream: () => {},
+  } as unknown as ProcessorDeps;
+
+  try {
+    const result = await participantLifecycleProcessor.process(
+      event,
+      deps,
+    ) as any;
+    assertEquals(result?.externalId, "job-1");
+
+    const job = await collections.participant.findOne({
+      externalId: "job-1",
+    });
+
+    assertEquals(job?.participantType, "job");
+    assertEquals(job?.name, "Daily job");
+  } finally {
+    await closeTestDb(db, tempDir);
+  }
+});
+
 Deno.test("participant lifecycle processor loads before main new_message processor", async () => {
   void loadResources;
   assertEquals(priority > 0, true);

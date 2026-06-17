@@ -17,6 +17,7 @@ type UsageGroupBy =
   | "namespace"
   | "provider"
   | "model";
+type UsageAttribution = "generatedBy" | "initiatedBy";
 
 export interface AdminUsagePoint extends AdminUsageTotals {
   bucket: string;
@@ -45,6 +46,10 @@ const GROUPS = new Set<UsageGroupBy>([
   "provider",
   "model",
 ]);
+const ATTRIBUTIONS = new Set<UsageAttribution>([
+  "generatedBy",
+  "initiatedBy",
+]);
 
 function normalizeInterval(value: unknown): UsageInterval {
   return typeof value === "string" && INTERVALS.has(value as UsageInterval)
@@ -58,6 +63,13 @@ function normalizeGroupBy(value: unknown): UsageGroupBy {
     : "participant";
 }
 
+function normalizeAttribution(value: unknown): UsageAttribution {
+  return typeof value === "string" &&
+      ATTRIBUTIONS.has(value as UsageAttribution)
+    ? value as UsageAttribution
+    : "generatedBy";
+}
+
 export default async function (
   request: { query?: Record<string, unknown> },
   copilotz: Copilotz,
@@ -66,6 +78,10 @@ export default async function (
   const q = copilotz.ops.query;
   const interval = normalizeInterval(query.interval);
   const groupBy = normalizeGroupBy(query.groupBy);
+  const attribution = normalizeAttribution(query.attribution);
+  const participantEdgeType = attribution === "initiatedBy"
+    ? GRAPH_EDGE.INITIATED_LLM_USAGE
+    : GRAPH_EDGE.USED_LLM;
 
   const params: unknown[] = [];
   const filters: string[] = [`u."type" = 'llm_usage'`];
@@ -135,7 +151,7 @@ export default async function (
   const participantJoins = needsParticipantJoin
     ? `INNER JOIN "edges" usage_participant
          ON usage_participant."target_node_id" = u."id"
-        AND usage_participant."type" = '${GRAPH_EDGE.USED_LLM}'
+        AND usage_participant."type" = '${participantEdgeType}'
        INNER JOIN "nodes" p
          ON p."id" = usage_participant."source_node_id"
         AND p."type" = 'participant'`

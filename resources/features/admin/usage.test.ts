@@ -70,6 +70,18 @@ Deno.test("admin usage groups by participant, thread, provider, and model", asyn
   assertEquals(participantData.points[0].groupKey, "agent-1");
   assertEquals(participantData.points[0].totalTokens, 125);
 
+  const initiatedByResult = await usage({
+    query: {
+      namespace,
+      groupBy: "participant",
+      interval: "day",
+      attribution: "initiatedBy",
+    },
+  }, copilotz);
+  const initiatedByData = initiatedByResult.data as any;
+  assertEquals(initiatedByData.points[0].groupKey, "user-1");
+  assertEquals(initiatedByData.points[0].groupLabel, "User One");
+
   const providerResult = await usage({
     query: { namespace, groupBy: "provider", provider: "openai" },
   }, copilotz);

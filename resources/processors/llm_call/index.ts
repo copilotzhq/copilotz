@@ -356,6 +356,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           tools: payload.tools,
           extractTags: ["route_to", "ask_to", "think"],
           signal: deps.cancellation?.signal,
+          reasoningHistory: context.reasoningHistory,
           ...(materializeMessages ? { materializeMessages } : {}),
         } as ChatRequest,
         configForCall,

@@ -54,6 +54,11 @@ const REASONING_HISTORY_TAGS = [
   "thinking",
   "reasoning",
 ] as const;
+const DEFAULT_REASONING_HISTORY_MAX_CHARS = 2000;
+const RECOVERY_PROTOCOL_MARKER_PATTERN =
+  /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids)\b/i;
+const VISIBLE_REASONING_BLOCK_PATTERN =
+  /<(?:mm:)?(?:think|thought|thinking|reasoning)\b[^>]*>([\s\S]*?)(?:<\/(?:mm:)?(?:think|thought|thinking|reasoning)>|$)/gi;
 
 function buildRecoveryCue(reason: string | null): string {
   switch (reason) {
@@ -68,7 +73,15 @@ function buildRecoveryCue(reason: string | null): string {
     case "empty_response":
       return "Previous attempt produced reasoning but no visible response. You must produce a concrete answer for the user.";
     case "malformed_tool_call":
-      return `Your previous response attempted to call a tool in an unsupported format.
+      return `<malformed_tool_call_recovery>
+<recovery_previous_response_context>
+The previous assistant message is already present in the conversation and is correct up to the attempted tool call. Do not repeat it.
+</recovery_previous_response_context>
+
+<recovery_required_action>
+If you intended to call a tool, emit only the corrected <tool_calls> block.
+If you did not intend to call a tool, continue from the previous assistant message without any tool or result protocol.
+</recovery_required_action>
 
 The only supported tool-call format is exactly:
 
@@ -76,7 +89,7 @@ The only supported tool-call format is exactly:
 {"name":"tool_name","arguments":{}}
 </tool_calls>
 
-Rules:
+<recovery_tool_call_rules>
 - Use one valid JSON object per line inside <tool_calls>.
 - Each JSON object must contain exactly "name" and "arguments".
 - "arguments" must be a JSON object.
@@ -84,18 +97,97 @@ Rules:
 - Do not emit provider-native tool syntax.
 - Do not emit tool result tags.
 - Do not wrap the JSON in markdown fences.
-- If you intended to call a tool, re-emit only the corrected <tool_calls> block.
-- If you did not intend to call a tool, answer normally without any tool or result protocol.`;
+</recovery_tool_call_rules>
+</malformed_tool_call_recovery>`;
     case "visible_reasoning_markup":
-      return `Your previous response exposed private reasoning/thinking markup.
+      return `<visible_reasoning_markup_recovery>
+<recovery_problem>
+Your previous response exposed private reasoning/thinking markup.
+</recovery_problem>
 
 Do not emit <think>, <thought>, <thinking>, <reasoning>, <mm:think>, or any similar reasoning tags in visible output.
 
 If you need to answer, provide only the final user-facing answer.
-If you need to call a tool, use only the supported <tool_calls> JSON Lines format.`;
+If you need to call a tool, use only the supported <tool_calls> JSON Lines format.
+</visible_reasoning_markup_recovery>`;
     default:
       return "Continue exactly where you left off. Do not repeat earlier content.";
   }
+}
+
+function normalizeReasoningHistoryOptions(
+  options: ChatRequest["reasoningHistory"] | undefined,
+): Required<NonNullable<ChatRequest["reasoningHistory"]>> {
+  return {
+    include: options?.include ?? "self",
+    maxChars: typeof options?.maxChars === "number"
+      ? options.maxChars
+      : DEFAULT_REASONING_HISTORY_MAX_CHARS,
+  };
+}
+
+function truncateReasoningForRecovery(
+  reasoning: string,
+  maxChars: number,
+): string {
+  if (maxChars === 0 || reasoning.length <= maxChars) return reasoning;
+  if (maxChars < 48) return "[reasoning truncated]";
+  const suffix = `\n[reasoning truncated: ${
+    reasoning.length - maxChars
+  } chars omitted]`;
+  return `${
+    reasoning.slice(0, Math.max(0, maxChars - suffix.length))
+  }${suffix}`;
+}
+
+function extractVisibleReasoningMarkup(response: string): string[] {
+  const parts: string[] = [];
+  for (const match of response.matchAll(VISIBLE_REASONING_BLOCK_PATTERN)) {
+    const value = match[1]?.trim();
+    if (value) parts.push(stripStructuralLeakTokens(value));
+  }
+  return parts.filter((part) => part.trim().length > 0);
+}
+
+function getSafeVisiblePrefixBeforeProtocol(response: string): string {
+  const markerIndex = response.search(RECOVERY_PROTOCOL_MARKER_PATTERN);
+  const prefix = markerIndex === -1 ? response : response.slice(0, markerIndex);
+  return sanitizeUserFacingText(prefix);
+}
+
+function buildRecoveryAssistantContext(
+  existingContext: string,
+  visiblePrefix: string,
+  reasoning: string | undefined,
+  options: ChatRequest["reasoningHistory"] | undefined,
+): string {
+  const reasoningHistory = normalizeReasoningHistoryOptions(options);
+  const parts: string[] = [];
+  const trimmedReasoning = reasoning?.trim();
+  if (
+    reasoningHistory.include !== "none" &&
+    typeof trimmedReasoning === "string" &&
+    trimmedReasoning.length > 0
+  ) {
+    parts.push(
+      `<think>\n${
+        truncateReasoningForRecovery(
+          trimmedReasoning,
+          reasoningHistory.maxChars,
+        )
+      }\n</think>`,
+    );
+  }
+
+  const trimmedVisiblePrefix = visiblePrefix.trim();
+  if (trimmedVisiblePrefix.length > 0) {
+    parts.push(trimmedVisiblePrefix);
+  }
+
+  const attemptContext = parts.join("\n\n");
+  return [existingContext.trim(), attemptContext].filter((part) =>
+    part.length > 0
+  ).join("\n\n");
 }
 
 let defaultProviderRegistryPromise: Promise<ProviderRegistry> | undefined;
@@ -373,18 +465,25 @@ export async function chat(
         streamResult.reasoning,
         parsed.extractedReasoning,
       );
+      const parsedCurrentAttempt = parseAssistantResponse(
+        streamResult.content,
+        extractedBlockTags,
+        knownToolNames,
+      );
 
       // Detect a malformed tool-call attempt: the model emitted tool-call
       // markup (canonical or a native dialect) that produced no parseable call.
       // Correct it with a synthetic instruction and retry, then fall back —
       // rather than leaking protocol markup or silently dropping the call.
       const hasMalformedToolIntent = responseHasMalformedToolCallIntent(
-        fullContent,
+        streamResult.content,
         knownToolNames,
       ) ||
-        (parsed.toolCalls.length === 0 &&
-          responseHasToolIntent(fullContent, knownToolNames));
-      const hasVisibleReasoningMarkup = responseHasReasoningMarkup(fullContent);
+        (parsedCurrentAttempt.toolCalls.length === 0 &&
+          responseHasToolIntent(streamResult.content, knownToolNames));
+      const hasVisibleReasoningMarkup = responseHasReasoningMarkup(
+        streamResult.content,
+      );
 
       // Detect unintentional empty response: model produced no useful
       // output and didn't use any control action (tool calls, routing, etc.)
@@ -394,8 +493,19 @@ export async function chat(
         !INTENTIONAL_EMPTY_PATTERN.test(fullContent);
 
       if (hasMalformedToolIntent) {
-        // Discard the unparseable attempt entirely.
-        recoveryPrefix = prefixBeforeAttempt;
+        const safeVisiblePrefix = getSafeVisiblePrefixBeforeProtocol(
+          streamResult.content,
+        );
+        const recoveryReasoning = mergeReasoningParts(
+          streamResult.reasoning,
+          extractVisibleReasoningMarkup(streamResult.content),
+        );
+        recoveryPrefix = buildRecoveryAssistantContext(
+          prefixBeforeAttempt,
+          safeVisiblePrefix,
+          recoveryReasoning,
+          request.reasoningHistory,
+        );
         lastRecoveryReason = "malformed_tool_call";
 
         if (!sameModelRetried) {

@@ -62,6 +62,12 @@ const STREAMING_HIDDEN_PROTOCOL_TAGS = [
   "thought",
   "thinking",
   "reasoning",
+  "malformed_tool_call_recovery",
+  "visible_reasoning_markup_recovery",
+  "recovery_previous_response_context",
+  "recovery_required_action",
+  "recovery_tool_call_rules",
+  "recovery_problem",
 ] as const;
 
 /**
@@ -88,7 +94,7 @@ const MALFORMED_TOOL_INTENT_MARKER_PATTERN =
 const REASONING_MARKUP_PATTERN =
   /<\/?(?:mm:)?(?:think|thought|thinking|reasoning)\b/i;
 const USER_FACING_PROTOCOL_MARKER_PATTERN =
-  /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids|think|thought|thinking|reasoning)\b/i;
+  /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids|think|thought|thinking|reasoning|malformed_tool_call_recovery|visible_reasoning_markup_recovery|recovery_previous_response_context|recovery_required_action|recovery_tool_call_rules|recovery_problem)\b/i;
 
 const APPROX_CHARS_PER_TOKEN = 4;
 
@@ -1434,11 +1440,19 @@ export function sanitizeUserFacingText(text: string): string {
     .replace(
       /<(?:mm:)?(?:think|thought|thinking|reasoning)\b[^>]*>[\s\S]*?(?:<\/(?:mm:)?(?:think|thought|thinking|reasoning)>|$)/gi,
       "",
+    )
+    .replace(
+      /<malformed_tool_call_recovery\b[\s\S]*?(?:<\/malformed_tool_call_recovery>|$)/gi,
+      "",
+    )
+    .replace(
+      /<visible_reasoning_markup_recovery\b[\s\S]*?(?:<\/visible_reasoning_markup_recovery>|$)/gi,
+      "",
     );
   // Remove any residual stray dialect tags (open or close) that survived,
   // e.g. mismatched </tool_calls>, dangling <invoke ...> / <parameter ...>.
   out = out.replace(
-    /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids)(?:\b[^>]*)?>/gi,
+    /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids|think|thought|thinking|reasoning|malformed_tool_call_recovery|visible_reasoning_markup_recovery|recovery_previous_response_context|recovery_required_action|recovery_tool_call_rules|recovery_problem)(?:\b[^>]*)?>/gi,
     "",
   );
   const firstProtocolMarker = out.search(USER_FACING_PROTOCOL_MARKER_PATTERN);

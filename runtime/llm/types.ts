@@ -227,6 +227,15 @@ export interface ChatRequest {
     messages: ChatMessage[],
     config: ProviderConfig,
   ) => Promise<ChatMessage[]> | ChatMessage[];
+  /**
+   * Controls whether reasoning from an interrupted/recovered same-agent attempt
+   * is included in the synthetic retry context. Defaults to the framework
+   * history policy: `{ include: "self", maxChars: 2000 }`.
+   */
+  reasoningHistory?: {
+    include?: "none" | "self" | "all";
+    maxChars?: number;
+  };
   /** Optional external signal for cancelling active provider work. */
   signal?: AbortSignal;
 }

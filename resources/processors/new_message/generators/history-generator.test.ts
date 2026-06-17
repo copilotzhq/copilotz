@@ -80,7 +80,7 @@ Deno.test("historyGenerator includes only current agent reasoning by default", (
 
   assertEquals(
     generated[0]?.content,
-    "I found the answer.\n\n<think>\nNeed to summarize the result.\n</think>",
+    "<think>\nNeed to summarize the result.\n</think>\n\nI found the answer.",
   );
   assertEquals(generated[1]?.content, "[reviewer]: Peer answer.");
 });
@@ -139,7 +139,7 @@ Deno.test("historyGenerator can include all agent reasoning with a cap", () => {
 
   assertEquals(
     generated[0]?.content,
-    "[reviewer]: Peer answer.\n\n<think>\nxxxxxxxxxxxxxxxxxxxx\n[reasoning truncated: 20 chars omitted]\n</think>",
+    "<think>\nxxxxxxxxxxxxxxxxxxxx\n[reasoning truncated: 20 chars omitted]\n</think>\n\n[reviewer]: Peer answer.",
   );
 });
 

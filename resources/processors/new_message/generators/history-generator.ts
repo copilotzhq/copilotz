@@ -248,7 +248,7 @@ function appendReasoningForHistory(
   if (!trimmed) return content;
   const capped = truncateReasoningForHistory(trimmed, maxChars);
   const block = `<think>\n${capped}\n</think>`;
-  return content ? `${content}\n\n${block}` : block;
+  return content ? `${block}\n\n${content}` : block;
 }
 
 function truncateToolOutputForHistory(

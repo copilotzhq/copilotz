@@ -1189,6 +1189,212 @@ const searchTool = {
   },
 };
 
+Deno.test("chat reuses malformed-tool prefix and allowed reasoning in retry context", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const seenMessages: Array<Array<{ role?: string; content?: unknown }>> = [];
+  const streamed: string[] = [];
+  let calls = 0;
+
+  console.warn = () => {};
+
+  const reasoningRegistry: ProviderRegistry = {
+    anthropic: () => ({
+      endpoint: "https://example.test/anthropic",
+      headers: () => ({}),
+      body: (messages) => {
+        seenMessages.push(
+          messages as Array<{ role?: string; content?: unknown }>,
+        );
+        return {};
+      },
+      extractContent: (data: any) => {
+        const delta = data?.choices?.[0]?.delta;
+        const parts: Array<{ text: string; isReasoning?: boolean }> = [];
+        if (typeof delta?.reasoning === "string") {
+          parts.push({ text: delta.reasoning, isReasoning: true });
+        }
+        if (typeof delta?.content === "string") {
+          parts.push({ text: delta.content });
+        }
+        return parts.length > 0 ? parts : null;
+      },
+      extractFinishReason: (data: any) =>
+        data?.choices?.[0]?.finish_reason ?? null,
+    }),
+  };
+
+  globalThis.fetch = () => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.resolve(
+        sse([
+          { choices: [{ delta: { reasoning: "Need to search." } }] },
+          { choices: [{ delta: { content: "Let me check." } }] },
+          {
+            choices: [{
+              delta: {
+                content:
+                  '<invoke name="search"><parameter name="q">hello</parameter></invoke>',
+              },
+            }],
+          },
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]),
+      );
+    }
+
+    return Promise.resolve(
+      sse([
+        {
+          choices: [{
+            delta: {
+              content:
+                '<tool_calls>\n{"name":"search","arguments":{"q":"hello"}}\n</tool_calls>',
+            },
+          }],
+        },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hi" }], tools: [searchTool] },
+      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {},
+      (chunk, options) => {
+        if (!options?.isReasoning) streamed.push(chunk);
+      },
+      reasoningRegistry,
+    );
+
+    assertEquals(calls, 2);
+    assertEquals(response.answer, "Let me check.");
+    assertEquals(response.toolCalls?.length, 1);
+    assertEquals(streamed.join(""), "Let me check.");
+
+    const retryMessages = seenMessages[1] ?? [];
+    const retryAssistant = retryMessages.find((message) =>
+      message.role === "assistant" &&
+      String(message.content ?? "").includes("Let me check.")
+    );
+    const retryUser = retryMessages.find((message) =>
+      message.role === "user" &&
+      String(message.content ?? "").includes("<malformed_tool_call_recovery>")
+    );
+    assertEquals(retryAssistant?.role, "assistant");
+    assertEquals(
+      retryAssistant?.content,
+      "<think>\nNeed to search.\n</think>\n\nLet me check.",
+    );
+
+    const recoveryCue = String(retryUser?.content ?? "");
+    assertEquals(recoveryCue.includes("<malformed_tool_call_recovery>"), true);
+    assertEquals(recoveryCue.includes("<recovery_required_action>"), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
+Deno.test("chat omits malformed-tool retry reasoning when reasoning history is disabled", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const seenMessages: Array<Array<{ role?: string; content?: unknown }>> = [];
+  let calls = 0;
+
+  console.warn = () => {};
+
+  const reasoningRegistry: ProviderRegistry = {
+    anthropic: () => ({
+      endpoint: "https://example.test/anthropic",
+      headers: () => ({}),
+      body: (messages) => {
+        seenMessages.push(
+          messages as Array<{ role?: string; content?: unknown }>,
+        );
+        return {};
+      },
+      extractContent: (data: any) => {
+        const delta = data?.choices?.[0]?.delta;
+        const parts: Array<{ text: string; isReasoning?: boolean }> = [];
+        if (typeof delta?.reasoning === "string") {
+          parts.push({ text: delta.reasoning, isReasoning: true });
+        }
+        if (typeof delta?.content === "string") {
+          parts.push({ text: delta.content });
+        }
+        return parts.length > 0 ? parts : null;
+      },
+      extractFinishReason: (data: any) =>
+        data?.choices?.[0]?.finish_reason ?? null,
+    }),
+  };
+
+  globalThis.fetch = () => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.resolve(
+        sse([
+          { choices: [{ delta: { reasoning: "Need to search." } }] },
+          { choices: [{ delta: { content: "Let me check." } }] },
+          {
+            choices: [{
+              delta: {
+                content:
+                  '<invoke name="search"><parameter name="q">hello</parameter></invoke>',
+              },
+            }],
+          },
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]),
+      );
+    }
+
+    return Promise.resolve(
+      sse([
+        {
+          choices: [{
+            delta: {
+              content:
+                '<tool_calls>\n{"name":"search","arguments":{"q":"hello"}}\n</tool_calls>',
+            },
+          }],
+        },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      {
+        messages: [{ role: "user", content: "hi" }],
+        tools: [searchTool],
+        reasoningHistory: { include: "none" },
+      },
+      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {},
+      undefined,
+      reasoningRegistry,
+    );
+
+    assertEquals(calls, 2);
+    assertEquals(response.answer, "Let me check.");
+    assertEquals(response.toolCalls?.length, 1);
+    const retryAssistant = (seenMessages[1] ?? []).find((message) =>
+      message.role === "assistant" &&
+      String(message.content ?? "").includes("Let me check.")
+    );
+    assertEquals(retryAssistant?.content, "Let me check.");
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
 Deno.test("chat retries non-canonical <invoke>/<parameter> tool dialect", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;

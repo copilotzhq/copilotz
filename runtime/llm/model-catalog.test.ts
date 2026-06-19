@@ -97,4 +97,34 @@ Deno.test("resolveModelCatalogCandidates maps native provider names to OpenRoute
     }),
     ["custom/model", "openai/openai/gpt-test", "openai/gpt-test"],
   );
+  assertEquals(
+    resolveModelCatalogCandidates({
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+    }),
+    ["anthropic/claude-sonnet-4-5", "anthropic/claude-sonnet-4.5"],
+  );
+  assertEquals(
+    resolveModelCatalogCandidates({
+      provider: "anthropic",
+      model: "claude-sonnet-4-5-20241022",
+    }),
+    [
+      "anthropic/claude-sonnet-4-5-20241022",
+      "anthropic/claude-sonnet-4-5",
+      "anthropic/claude-sonnet-4.5",
+    ],
+  );
+  assertEquals(
+    resolveModelCatalogCandidates({
+      provider: "anthropic",
+      model: "claude-3-5-haiku-20241022",
+    }),
+    [
+      "anthropic/claude-3-5-haiku-20241022",
+      "anthropic/claude-3-5-haiku",
+      "anthropic/claude-haiku-3.5",
+      "anthropic/claude-3.5-haiku",
+    ],
+  );
 });

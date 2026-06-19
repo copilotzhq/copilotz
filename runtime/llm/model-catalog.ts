@@ -14,6 +14,43 @@ const PROVIDER_ALIASES: Partial<Record<ProviderName, string>> = {
   xai: "x-ai",
 };
 
+function stripDateSuffix(model: string): string | null {
+  const stripped = model.replace(/-\d{8}$/, "");
+  return stripped === model ? null : stripped;
+}
+
+function anthropicModelVariants(model: string): string[] {
+  const variants: string[] = [];
+  const noDate = stripDateSuffix(model);
+  if (noDate) variants.push(noDate);
+
+  for (
+    const candidate of [model, noDate].filter((value): value is string =>
+      typeof value === "string" && value.length > 0
+    )
+  ) {
+    const familyVersion = candidate.replace(
+      /^(claude)-(sonnet|opus|haiku)-(\d+)-(\d+)$/,
+      "$1-$2-$3.$4",
+    );
+    if (familyVersion !== candidate) variants.push(familyVersion);
+
+    const versionFamily = candidate.replace(
+      /^(claude)-(\d+)-(\d+)-(sonnet|opus|haiku)$/,
+      "$1-$4-$2.$3",
+    );
+    if (versionFamily !== candidate) variants.push(versionFamily);
+
+    const legacyVersion = candidate.replace(
+      /^(claude)-(\d+)-(\d+)-(haiku)$/,
+      "$1-$2.$3-$4",
+    );
+    if (legacyVersion !== candidate) variants.push(legacyVersion);
+  }
+
+  return variants;
+}
+
 export interface PricingRates {
   prompt?: number;
   completion?: number;
@@ -265,6 +302,11 @@ export function resolveModelCatalogCandidates(
   const alias = config.provider ? PROVIDER_ALIASES[config.provider] : undefined;
   if (alias) {
     pushCandidate(`${alias}/${model}`);
+    if (config.provider === "anthropic") {
+      for (const variant of anthropicModelVariants(model)) {
+        pushCandidate(`${alias}/${variant}`);
+      }
+    }
   }
 
   // Allow vendor-qualified local models to opt into direct catalog matching.

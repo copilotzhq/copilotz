@@ -491,6 +491,9 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     const usage: TokenUsage | undefined = ("usage" in llmResponse)
       ? (llmResponse as unknown as { usage?: TokenUsage }).usage
       : undefined;
+    const usageAttempts = ("usageAttempts" in llmResponse)
+      ? (llmResponse as unknown as ChatResponse).usageAttempts
+      : undefined;
     const usageFinalized = ("usageFinalized" in llmResponse)
       ? (llmResponse as unknown as ChatResponse).usageFinalized
       : undefined;
@@ -498,9 +501,21 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       ? (llmResponse as unknown as { cost?: CostBreakdown }).cost
       : undefined;
 
-    if (usage) {
+    const usageRecords =
+      Array.isArray(usageAttempts) && usageAttempts.length > 0
+        ? usageAttempts
+        : usage
+        ? [{
+          provider: llmResponse.provider,
+          model: llmResponse.model,
+          usage,
+          ...(cost ? { cost } : {}),
+        }]
+        : [];
+
+    for (const record of usageRecords) {
       try {
-        usageNodeId = await llmUsageService.createUsageRecord({
+        const createdUsageNodeId = await llmUsageService.createUsageRecord({
           threadId,
           eventId: typeof event.id === "string" ? event.id : null,
           agentId: (payload.agent.id ?? payload.agent.name) as string | null,
@@ -509,11 +524,12 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
               !Array.isArray(eventMetadata.runSender)
             ? eventMetadata.runSender as Record<string, unknown>
             : null,
-          provider: llmResponse.provider ?? null,
-          model: llmResponse.model ?? null,
-          usage,
-          cost: cost ?? null,
+          provider: record.provider ?? null,
+          model: record.model ?? null,
+          usage: record.usage,
+          cost: record.cost ?? null,
         });
+        usageNodeId = createdUsageNodeId ?? usageNodeId;
       } catch (error) {
         console.warn("[LLM_CALL] Failed to persist llm_usage node:", error);
       }

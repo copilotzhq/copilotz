@@ -1189,6 +1189,101 @@ const searchTool = {
   },
 };
 
+Deno.test("chat retries same model when output degenerates into repetition", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const seenMessages: Array<Array<{ role?: string; content?: unknown }>> = [];
+  let calls = 0;
+
+  console.warn = () => {};
+
+  const repetitionRegistry: ProviderRegistry = {
+    anthropic: () => ({
+      endpoint: "https://example.test/anthropic",
+      headers: () => ({}),
+      body: (messages) => {
+        seenMessages.push(
+          messages as Array<{ role?: string; content?: unknown }>,
+        );
+        return {};
+      },
+      extractContent: (data: any) => {
+        const content = data?.choices?.[0]?.delta?.content;
+        return typeof content === "string" && content.length > 0
+          ? [{ text: content }]
+          : null;
+      },
+      extractFinishReason: (data: any) =>
+        data?.choices?.[0]?.finish_reason ?? null,
+    }),
+  };
+
+  const repeated = "the task is blocked because ownership cannot be verified "
+    .repeat(14);
+
+  globalThis.fetch = () => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.resolve(
+        sse([
+          { choices: [{ delta: { content: "I updated the board. " } }] },
+          { choices: [{ delta: { content: repeated } }] },
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]),
+      );
+    }
+
+    return Promise.resolve(
+      sse([
+        {
+          choices: [{
+            delta: { content: "The blocked cards are now marked." },
+          }],
+        },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "update board" }] },
+      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {},
+      undefined,
+      repetitionRegistry,
+    );
+
+    assertEquals(calls, 2);
+    assertEquals(
+      response.answer,
+      "I updated the board. The blocked cards are now marked.",
+    );
+    assertEquals(response.usageAttempts?.length, 2);
+    assertEquals(
+      response.usageAttempts?.[0]?.usage.statusReason,
+      "degenerate_repetition",
+    );
+    assertEquals(response.usageAttempts?.[1]?.usage.statusReason, undefined);
+
+    const retryMessages = seenMessages[1] ?? [];
+    const retryAssistant = retryMessages.find((message) =>
+      message.role === "assistant" &&
+      String(message.content ?? "").includes("I updated the board.")
+    );
+    const retryUser = retryMessages.find((message) =>
+      message.role === "user" &&
+      String(message.content ?? "").includes("degenerated into repeated text")
+    );
+
+    assertEquals(retryAssistant?.content, "I updated the board.");
+    assertEquals(Boolean(retryUser), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
 Deno.test("chat reuses malformed-tool prefix and allowed reasoning in retry context", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;

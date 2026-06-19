@@ -1,6 +1,7 @@
 import type {
   ChatRequest,
   ChatResponse,
+  LLMUsageAttempt,
   ProviderConfig,
   ProviderFallbackConfig,
   ProviderFinishReason,
@@ -8,6 +9,7 @@ import type {
   ProviderRegistry,
   StreamCallback,
   TokenUsage,
+  TokenUsageStatusReason,
   ToolInvocation,
 } from "@/runtime/llm/types.ts";
 import { estimateUsageCost } from "@/runtime/llm/pricing.ts";
@@ -15,6 +17,7 @@ import { resolveProviderApiKey, toLLMConfig } from "@/runtime/llm/config.ts";
 import {
   countTokens,
   createMockResponse,
+  detectDegenerateRepetition,
   estimateUsage,
   formatMessages,
   parseInternalControlTagsFromResponse,
@@ -72,6 +75,8 @@ function buildRecoveryCue(reason: string | null): string {
       return "Previous response was interrupted by a provider error. Continue where you left off.";
     case "empty_response":
       return "Previous attempt produced reasoning but no visible response. You must produce a concrete answer for the user.";
+    case "degenerate_repetition":
+      return "Your previous response degenerated into repeated text. The previous assistant message is already present and correct before the repeated section. Continue from that point with a concise final answer. Do not repeat earlier content, tool results, JSON fragments, or repeated tokens.";
     case "malformed_tool_call":
       return `<malformed_tool_call_recovery>
 <recovery_previous_response_context>
@@ -188,6 +193,18 @@ function buildRecoveryAssistantContext(
   return [existingContext.trim(), attemptContext].filter((part) =>
     part.length > 0
   ).join("\n\n");
+}
+
+function joinRecoveredContent(prefix: string, continuation: string): string {
+  if (!prefix) return continuation;
+  if (!continuation) return prefix;
+  if (/\s$/.test(prefix) || /^\s/.test(continuation)) {
+    return prefix + continuation;
+  }
+  if (/^[.,;:!?)]/.test(continuation)) {
+    return prefix + continuation;
+  }
+  return `${prefix} ${continuation}`;
 }
 
 let defaultProviderRegistryPromise: Promise<ProviderRegistry> | undefined;
@@ -359,6 +376,7 @@ export async function chat(
     );
   let lastError: unknown = null;
   const attempts: LLMProviderAttempt[] = [];
+  const usageAttempts: LLMUsageAttempt[] = [];
   let recoveryPrefix = "";
   let lastRecoveryReason: string | null = null;
   let sameModelRetried = false;
@@ -419,16 +437,56 @@ export async function chat(
         request.signal,
       );
 
+      const buildUsageAttempt = async (
+        statusReason?: TokenUsageStatusReason,
+      ): Promise<LLMUsageAttempt> => {
+        const usageStatus = streamResult.stoppedByLocalStop
+          ? "locally_stopped"
+          : "completed";
+        const usageMetadata = {
+          ...(streamResult.stoppedByLocalStop || statusReason
+            ? {
+              statusReason: statusReason ??
+                streamResult.localStopReason ?? "local_stop_sequence",
+            }
+            : {}),
+          ...(streamResult.localStopSequence
+            ? { stopSequence: streamResult.localStopSequence }
+            : {}),
+        } satisfies Pick<TokenUsage, "statusReason" | "stopSequence">;
+        const usage = normalizeProviderUsage(
+          streamResult.usage,
+          usageStatus,
+          usageMetadata,
+        ) ??
+          await estimateUsage(
+            attemptMessages,
+            streamResult.content,
+            usageStatus,
+            usageMetadata,
+          );
+        const cost = await estimateUsageCost(attemptConfig, usage ?? undefined);
+        return {
+          provider: attemptProvider,
+          model: attemptConfig.model,
+          usage,
+          ...(cost ? { cost } : {}),
+        };
+      };
+
       // Check for recoverable finish reasons (length, error, content_filter)
       if (
         streamResult.finishReason &&
         RECOVERABLE_FINISH_REASONS.has(streamResult.finishReason)
       ) {
+        const recoveryStatusReason = streamResult
+          .finishReason as TokenUsageStatusReason;
         lastRecoveryReason = streamResult.finishReason;
 
         // For length: retry same model once — continuation context means
         // the model only needs to finish the remaining part.
         if (streamResult.finishReason === "length" && !sameModelRetried) {
+          usageAttempts.push(await buildUsageAttempt("length"));
           sameModelRetried = true;
           warnRecoveryAttempt(
             "length",
@@ -441,6 +499,9 @@ export async function chat(
 
         // For all recoverable reasons: try next fallback if available
         if (index < attemptConfigs.length - 1) {
+          usageAttempts.push(
+            await buildUsageAttempt(recoveryStatusReason),
+          );
           sameModelRetried = false;
           warnRecoveryAttempt(
             streamResult.finishReason,
@@ -455,7 +516,10 @@ export async function chat(
       }
 
       // Success or exhausted recovery options — build response
-      const fullContent = prefixBeforeAttempt + streamResult.content;
+      const fullContent = joinRecoveredContent(
+        prefixBeforeAttempt,
+        streamResult.content,
+      );
       const parsed = parseAssistantResponse(
         fullContent,
         extractedBlockTags,
@@ -484,6 +548,9 @@ export async function chat(
       const hasVisibleReasoningMarkup = responseHasReasoningMarkup(
         streamResult.content,
       );
+      const degenerateRepetition = detectDegenerateRepetition(
+        streamResult.content,
+      );
 
       // Detect unintentional empty response: model produced no useful
       // output and didn't use any control action (tool calls, routing, etc.)
@@ -509,6 +576,7 @@ export async function chat(
         lastRecoveryReason = "malformed_tool_call";
 
         if (!sameModelRetried) {
+          usageAttempts.push(await buildUsageAttempt("malformed_tool_call"));
           sameModelRetried = true;
           warnRecoveryAttempt(
             "malformed_tool_call",
@@ -520,6 +588,7 @@ export async function chat(
         }
 
         if (index < attemptConfigs.length - 1) {
+          usageAttempts.push(await buildUsageAttempt("malformed_tool_call"));
           sameModelRetried = false;
           warnRecoveryAttempt(
             "malformed_tool_call",
@@ -534,11 +603,56 @@ export async function chat(
         // No more attempts — sanitize protocol markup out of the answer so the
         // user never sees a leaked tool call, then fall through to return.
         parsed.cleanResponse = sanitizeUserFacingText(parsed.cleanResponse);
+      } else if (degenerateRepetition) {
+        const safeVisiblePrefix = sanitizeUserFacingText(
+          streamResult.content.slice(0, degenerateRepetition.startIndex),
+        );
+        recoveryPrefix = buildRecoveryAssistantContext(
+          prefixBeforeAttempt,
+          safeVisiblePrefix,
+          streamResult.reasoning,
+          request.reasoningHistory,
+        );
+        lastRecoveryReason = "degenerate_repetition";
+
+        if (!sameModelRetried) {
+          usageAttempts.push(await buildUsageAttempt("degenerate_repetition"));
+          sameModelRetried = true;
+          warnRecoveryAttempt(
+            "degenerate_repetition",
+            attemptConfig,
+            attemptConfig,
+            "Model output degenerated into repeated text, retrying",
+          );
+          continue;
+        }
+
+        if (index < attemptConfigs.length - 1) {
+          usageAttempts.push(await buildUsageAttempt("degenerate_repetition"));
+          sameModelRetried = false;
+          warnRecoveryAttempt(
+            "degenerate_repetition",
+            attemptConfig,
+            attemptConfigs[index + 1],
+            "Model output degenerated into repeated text, falling back",
+          );
+          index++;
+          continue;
+        }
+
+        parsed.cleanResponse = sanitizeUserFacingText(
+          [prefixBeforeAttempt, safeVisiblePrefix].filter((part) =>
+            part.trim().length > 0
+          ).join(" "),
+        );
       } else if (hasVisibleReasoningMarkup) {
         recoveryPrefix = prefixBeforeAttempt;
         lastRecoveryReason = "visible_reasoning_markup";
 
         if (!sameModelRetried) {
+          usageAttempts.push(
+            await buildUsageAttempt("visible_reasoning_markup"),
+          );
           sameModelRetried = true;
           warnRecoveryAttempt(
             "visible_reasoning_markup",
@@ -550,6 +664,9 @@ export async function chat(
         }
 
         if (index < attemptConfigs.length - 1) {
+          usageAttempts.push(
+            await buildUsageAttempt("visible_reasoning_markup"),
+          );
           sameModelRetried = false;
           warnRecoveryAttempt(
             "visible_reasoning_markup",
@@ -568,6 +685,7 @@ export async function chat(
         lastRecoveryReason = "empty_response";
 
         if (!sameModelRetried) {
+          usageAttempts.push(await buildUsageAttempt("empty_response"));
           sameModelRetried = true;
           warnRecoveryAttempt(
             "empty_response",
@@ -579,6 +697,7 @@ export async function chat(
         }
 
         if (index < attemptConfigs.length - 1) {
+          usageAttempts.push(await buildUsageAttempt("empty_response"));
           sameModelRetried = false;
           warnRecoveryAttempt(
             "empty_response",
@@ -616,6 +735,15 @@ export async function chat(
           usageMetadata,
         );
       const cost = await estimateUsageCost(attemptConfig, usage ?? undefined);
+      const allUsageAttempts: LLMUsageAttempt[] = [
+        ...usageAttempts,
+        {
+          provider: attemptProvider,
+          model: attemptConfig.model,
+          usage,
+          ...(cost ? { cost } : {}),
+        },
+      ];
       const totalTokens = usage.totalTokens ??
         await countTokens(attemptMessages, parsed.cleanResponse);
       const usageFinalized = streamResult.usageFinalized
@@ -648,6 +776,7 @@ export async function chat(
         tokens: totalTokens,
         finishReason: streamResult.finishReason,
         usage,
+        usageAttempts: allUsageAttempts,
         ...(usageFinalized ? { usageFinalized } : {}),
         ...(cost ? { cost } : {}),
         provider: attemptProvider,

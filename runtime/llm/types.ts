@@ -271,6 +271,7 @@ export interface ChatResponse {
   finishReason?: ProviderFinishReason | null;
   usage?: TokenUsage;
   usageFinalized?: Promise<FinalizedTokenUsage | null>;
+  usageAttempts?: LLMUsageAttempt[];
   cost?: CostBreakdown;
   provider?: ProviderName;
   model?: string;
@@ -323,8 +324,25 @@ export type ProviderFinishReason =
 export interface TokenUsage extends ProviderUsageUpdate {
   source: "provider" | "estimated";
   status: "completed" | "locally_stopped" | "aborted";
-  statusReason?: "local_stop_sequence";
+  statusReason?: TokenUsageStatusReason;
   stopSequence?: string;
+}
+
+export type TokenUsageStatusReason =
+  | "local_stop_sequence"
+  | "length"
+  | "error"
+  | "content_filter"
+  | "empty_response"
+  | "malformed_tool_call"
+  | "visible_reasoning_markup"
+  | "degenerate_repetition";
+
+export interface LLMUsageAttempt {
+  provider?: ProviderName;
+  model?: string;
+  usage: TokenUsage;
+  cost?: CostBreakdown;
 }
 
 export interface FinalizedTokenUsage {

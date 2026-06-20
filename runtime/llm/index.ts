@@ -66,57 +66,25 @@ const VISIBLE_REASONING_BLOCK_PATTERN =
 function buildRecoveryCue(reason: string | null): string {
   switch (reason) {
     case "length":
-      return "Previous response exceeded maximum output length. Continue where you left off. Be concise and break into smaller steps if needed.";
+      return "<recovery_cue>Previous response exceeded maximum output length. Continue where you left off. Be concise and break into smaller steps if needed.</recovery_cue>";
     case "timeout":
-      return "Previous response was interrupted by a timeout. Continue where you left off. Be concise.";
+      return "<recovery_cue>Previous response was interrupted by a timeout. Continue where you left off. Be concise.</recovery_cue>";
     case "content_filter":
-      return "Previous response was blocked by a content filter. Continue where you left off, rephrasing as needed.";
+      return "<recovery_cue>Previous response was blocked by a content filter. Continue where you left off, rephrasing as needed.</recovery_cue>";
     case "error":
-      return "Previous response was interrupted by a provider error. Continue where you left off.";
+      return "<recovery_cue>Previous response was interrupted by a provider error. Continue where you left off.</recovery_cue>";
     case "empty_response":
-      return "Previous attempt produced reasoning but no visible response. You must produce a concrete answer for the user.";
+      return "<recovery_cue>Previous attempt produced reasoning but no visible response. You must produce a concrete answer for the user.</recovery_cue>";
     case "degenerate_repetition":
-      return "Your previous response degenerated into repeated text. The previous assistant message is already present and correct before the repeated section. Continue from that point with a concise final answer. Do not repeat earlier content, tool results, JSON fragments, or repeated tokens.";
+      return "<recovery_cue>Your previous response degenerated into repeated text. The previous assistant message is already present and correct before the repeated section. Continue from that point with a concise final answer. Do not repeat earlier content, tool results, JSON fragments, or repeated tokens.</recovery_cue>";
     case "malformed_tool_call":
-      return `<malformed_tool_call_recovery>
-<recovery_previous_response_context>
+      return `<recovery_cue>
 The previous assistant message is already present in the conversation and is correct up to the attempted tool call. Do not repeat it.
-</recovery_previous_response_context>
-
-<recovery_required_action>
 If you intended to call a tool, emit only the corrected <tool_calls> block.
 If you did not intend to call a tool, continue from the previous assistant message without any tool or result protocol.
-</recovery_required_action>
-
-The only supported tool-call format is exactly:
-
-<tool_calls>
-{"name":"tool_name","arguments":{}}
-</tool_calls>
-
-<recovery_tool_call_rules>
-- Use one valid JSON object per line inside <tool_calls>.
-- Each JSON object must contain exactly "name" and "arguments".
-- "arguments" must be a JSON object.
-- Do not use XML tool syntax such as <tool_call>, <invoke>, <parameter>, <function_call>, <tool_use>, <result>, or <tool_results>.
-- Do not emit provider-native tool syntax.
-- Do not emit tool result tags.
-- Do not wrap the JSON in markdown fences.
-</recovery_tool_call_rules>
-</malformed_tool_call_recovery>`;
-    case "visible_reasoning_markup":
-      return `<visible_reasoning_markup_recovery>
-<recovery_problem>
-Your previous response exposed private reasoning/thinking markup.
-</recovery_problem>
-
-Do not emit <think>, <thought>, <thinking>, <reasoning>, <mm:think>, or any similar reasoning tags in visible output.
-
-If you need to answer, provide only the final user-facing answer.
-If you need to call a tool, use only the supported <tool_calls> JSON Lines format.
-</visible_reasoning_markup_recovery>`;
+</recovery_cue>`;
     default:
-      return "Continue exactly where you left off. Do not repeat earlier content.";
+      return "<recovery_cue>Continue exactly where you left off. Do not repeat earlier content.</recovery_cue>";
   }
 }
 

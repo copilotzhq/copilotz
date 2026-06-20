@@ -3,6 +3,7 @@
 
 # Deno test results
 deno-test-results
+eval-results
 
 # Deno coverage reports
 coverage

@@ -17,6 +17,56 @@ interface OpenAIResponsesExtractionState {
   reasoningDeltaReceived: boolean;
 }
 
+function getEnvFlag(name: string): string | undefined {
+  try {
+    return typeof Deno !== "undefined" ? Deno.env.get(name) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isOpenAIDebugEnabled(): boolean {
+  return getEnvFlag("COPILOTZ_DEBUG_OPENAI") === "1" ||
+    getEnvFlag("COPILOTZ_DEBUG") === "1";
+}
+
+function summarizeBodyForDebug(
+  body: Record<string, unknown>,
+  apiMode: OpenAIApiMode,
+): Record<string, unknown> {
+  const messages = Array.isArray(body.messages) ? body.messages : undefined;
+  const input = Array.isArray(body.input) ? body.input : undefined;
+  return {
+    apiMode,
+    model: body.model,
+    stream: body.stream,
+    messageCount: messages?.length ?? input?.length ?? 0,
+    bodyKeys: Object.keys(body).sort(),
+    maxCompletionTokens: body.max_completion_tokens,
+    maxOutputTokens: body.max_output_tokens,
+    temperature: body.temperature,
+    reasoning: body.reasoning,
+    text: body.text,
+    responseFormat: body.response_format,
+    hasStop: body.stop !== undefined,
+    hasPromptCacheKey: body.prompt_cache_key !== undefined,
+    hasPromptCacheRetention: body.prompt_cache_retention !== undefined,
+  };
+}
+
+function summarizeOpenAIStreamError(data: any): Record<string, unknown> {
+  const error = data?.error ?? data?.response?.error ?? {};
+  return {
+    type: data?.type,
+    responseId: data?.response?.id ?? data?.id,
+    responseStatus: data?.response?.status ?? data?.status,
+    errorType: error?.type,
+    errorCode: error?.code,
+    errorParam: error?.param,
+    errorMessage: error?.message,
+  };
+}
+
 function extractOpenAIChatUsage(data: any): ProviderUsageUpdate | null {
   const usage = data?.usage;
   if (!usage || typeof usage !== "object" || Array.isArray(usage)) return null;
@@ -117,6 +167,13 @@ function openAIResponsesStreamErrorStatus(code: string | undefined): number {
 }
 
 function throwOpenAIResponsesStreamError(data: any): never {
+  if (isOpenAIDebugEnabled()) {
+    console.warn(
+      "[openai.debug] responses stream error",
+      summarizeOpenAIStreamError(data),
+    );
+  }
+
   const error = data?.error ?? data?.response?.error ?? {};
   const code = typeof error?.code === "string" ? error.code : undefined;
   const message = typeof error?.message === "string" && error.message.length > 0
@@ -417,9 +474,16 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
     }),
 
     body: (messages: ChatMessage[], config: ProviderConfig) => {
-      return apiMode === "responses"
+      const body = apiMode === "responses"
         ? buildResponsesBody(messages, config)
         : buildChatCompletionsBody(messages, config);
+      if (isOpenAIDebugEnabled()) {
+        console.log(
+          "[openai.debug] request body summary",
+          summarizeBodyForDebug(body, apiMode),
+        );
+      }
+      return body;
     },
 
     extractContent: (data: any): ExtractedPart[] | null => {

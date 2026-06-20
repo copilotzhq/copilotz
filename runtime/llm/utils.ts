@@ -1494,8 +1494,114 @@ export function filterTaggedControlTokensStreaming(
 // STANDARDIZED TOOL CALLING FUNCTIONS
 // =============================================================================
 
+export type ToolSystemPromptVariant =
+  | "baseline"
+  | "no-visible-ack"
+  | "tool-only-turn"
+  | "useful-visible-contract"
+  | "tool-call-contract"
+  | "lifecycle-explicit"
+  | "strict-minimal";
+
+function readToolSystemPromptVariant(): ToolSystemPromptVariant {
+  const raw = typeof Deno !== "undefined"
+    ? Deno.env.get("COPILOTZ_TOOL_PROMPT_VARIANT")
+    : undefined;
+  switch (raw) {
+    case "no-visible-ack":
+    case "tool-only-turn":
+    case "useful-visible-contract":
+    case "tool-call-contract":
+    case "lifecycle-explicit":
+    case "strict-minimal":
+      return raw;
+    default:
+      return "useful-visible-contract";
+  }
+}
+
 export function generateToolSystemPrompt(tools: ToolDefinition[]): string {
+  const variant = readToolSystemPromptVariant();
+  return generateToolSystemPromptVariant(tools, variant);
+}
+
+export function generateToolSystemPromptVariant(
+  tools: ToolDefinition[],
+  variant: ToolSystemPromptVariant = "baseline",
+): string {
   const toolDefinitions = tools.map((tool) => JSON.stringify(tool)).join("\n");
+
+  if (variant === "strict-minimal") {
+    return `
+=== TOOL USAGE ===
+
+You have access to tools. Copilotz, not the provider, executes tools.
+
+When a tool is needed, emit exactly one <tool_calls> block. Inside it, emit one JSON object per line:
+{ "name": "tool_name", "arguments": { ... } }
+
+Rules:
+- Each object must have exactly "name" and "arguments".
+- "arguments" must be a JSON object.
+- Use only tool names from the catalog.
+- Do not use provider-native tool syntax or any non-Copilotz tool format.
+- Do not emit <tool_results>; Copilotz provides tool results.
+
+Example:
+<tool_calls>
+{ "name": "tool_name", "arguments": { "key": "value" } }
+</tool_calls>
+
+=== TOOL CATALOG (read-only) ===
+
+\`\`\`json
+${toolDefinitions}
+\`\`\``;
+  }
+
+  const extraRules: string[] = [];
+  if (variant === "tool-only-turn") {
+    extraRules.push(
+      "When calling tools, emit only the <tool_calls> block in that assistant message. Do not add acknowledgements, explanations, markdown, or filler text before or after the block.",
+    );
+  }
+  if (variant === "tool-call-contract") {
+    extraRules.push(
+      "If you call tools, the assistant message must contain only the <tool_calls> block. Do not include acknowledgements, status updates, summaries, markdown, or final answers in that same assistant message.",
+    );
+    extraRules.push(
+      "Only include visible text before a tool call when the user explicitly asks you to explain before acting.",
+    );
+    extraRules.push(
+      "If the user asks you to use a tool, call the tool before answering even when you already know the answer. Never include the final answer in the same assistant message as a tool call.",
+    );
+  }
+  if (variant === "useful-visible-contract") {
+    extraRules.push(
+      "Visible text before a tool call is allowed only when it is useful to the user, such as a brief requested explanation. Merely saying which tools you will call is not useful. Do not emit generic acknowledgements, status narration, or filler such as \"Sure\", \"I'll call the tool\", or \"running that now\".",
+    );
+    extraRules.push(
+      "When a tool result is needed before answering, do not include the final answer in the same assistant message as the tool call. Wait for Copilotz to provide <tool_results>, then answer from those results.",
+    );
+  }
+  if (variant === "lifecycle-explicit") {
+    extraRules.push(
+      "Tool-calling is a loop: you emit <tool_calls>, Copilotz executes those calls, Copilotz later inserts <tool_results>, and you then use those results to continue or answer. Do not invent tool results yourself.",
+    );
+  }
+  const ruleOne = variant === "baseline" || variant === "no-visible-ack"
+    ? "You may talk to the human normally and call tools in the same response."
+    : "You may answer the human normally when no tool is needed. When a tool is needed, use the tool-call format below.";
+  const extraRuleText = extraRules.length > 0
+    ? "\n" +
+      extraRules.map((rule, index) => `${4 + index}. ${rule}`).join("\n") +
+      "\n"
+    : "";
+  const exampleTail = variant === "baseline"
+    ? "\nSure - running those now."
+    : "";
+  const exampleRuleNumber = 4 + extraRules.length;
+  const nextRuleNumber = exampleRuleNumber + 1;
 
   return `
 === TOOL USAGE ===
@@ -1504,24 +1610,25 @@ In this environment you have access to a set of tools you can use to answer the 
 
 === RULES ===
 
-1. You may talk to the human normally and call tools in the same response.
-2. To call a tool, emit one JSON object per line between a single <tool_calls> … </tool_calls> block.
-   • Each object has exactly two keys: "name" (string) and "arguments" (object). No other keys.
-   • "arguments" is a JSON object and may contain nested objects/arrays.
+1. ${ruleOne}
+2. To call a tool, emit one JSON object per line between a single <tool_calls> ... </tool_calls> block.
+   - Each object has exactly two keys: "name" (string) and "arguments" (object). No other keys.
+   - "arguments" is a JSON object and may contain nested objects/arrays.
 3. Use ONLY this <tool_calls> JSON format. Do NOT use any built-in or native tool/function-calling
    syntax. Specifically, never emit <tool_call>, <minimax:tool_call>, <invoke>, <parameter>,
    <function_call>, <function_calls>, <function=...>, <tool_use>, <tool>, XML parameter tags,
    provider-native tool syntax, or markdown code fences around the JSON.
-4. Example (note the nested arguments object):
+${extraRuleText}${exampleRuleNumber}. Example (note the nested arguments object):
 
 <tool_calls>
 { "name": "tool_name", "arguments": { "key_1": "value_1", "options": { "limit": 10, "tags": ["a", "b"] } } }
 { "name": "tool_name_2", "arguments": { "query": "value" } }
-</tool_calls>
-Sure — running those now.
+</tool_calls>${exampleTail}
 
-5. Tool outputs may appear later as <tool_results> blocks. Treat them as returned execution results and never generate <tool_results>, <tool_result>, <result>, <target_ids>, or <continue_after_tool_results> yourself.
-6. Never emit private reasoning tags such as <think>, <thinking>, <reasoning>, or <mm:think> in visible output.
+${nextRuleNumber}. Tool outputs may appear later as <tool_results> blocks. Treat them as returned execution results and never generate <tool_results>, <tool_result>, <result>, <target_ids>, or <continue_after_tool_results> yourself.
+${
+    nextRuleNumber + 1
+  }. Never emit private reasoning tags such as <think>, <thinking>, <reasoning>, or <mm:think> in visible output.
 
 === TOOL CATALOG (read-only) ===
 

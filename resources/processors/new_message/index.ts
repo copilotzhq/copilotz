@@ -991,7 +991,8 @@ function buildBaseMessageMetadata(
           Object.entries(queueMetadata as Record<string, unknown>).filter(
             ([key]) =>
               key === "routing" || key === "visibility" ||
-              key === "internalConversation" || key === "runSender",
+              key === "internalConversation" || key === "runSender" ||
+              key === "usageNodeId" || key === "llmError",
           ),
         )
         : {}

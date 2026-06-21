@@ -1,4 +1,5 @@
 import type {
+  LLMUsageAttempt,
   ProviderFallbackReason,
   ProviderName,
 } from "@/runtime/llm/types.ts";
@@ -19,6 +20,7 @@ export class LLMProviderError extends Error {
   attempts: LLMProviderAttempt[];
   fallbackAttempted: boolean;
   visibleStreamStarted: boolean;
+  usageAttempts: LLMUsageAttempt[];
 
   constructor(
     message: string,
@@ -30,6 +32,7 @@ export class LLMProviderError extends Error {
       attempts?: LLMProviderAttempt[];
       fallbackAttempted?: boolean;
       visibleStreamStarted?: boolean;
+      usageAttempts?: LLMUsageAttempt[];
       cause?: unknown;
     },
   ) {
@@ -42,6 +45,7 @@ export class LLMProviderError extends Error {
     this.attempts = options.attempts ?? [];
     this.fallbackAttempted = options.fallbackAttempted ?? false;
     this.visibleStreamStarted = options.visibleStreamStarted ?? false;
+    this.usageAttempts = options.usageAttempts ?? [];
     if (options.cause !== undefined) {
       (this as Error & { cause?: unknown }).cause = options.cause;
     }

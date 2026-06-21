@@ -10,6 +10,7 @@ import type {
   CostBreakdown,
   LLMConfig,
   LLMRuntimeConfig,
+  LLMUsageAttempt,
   ProviderConfig,
   TokenUsage,
   ToolInvocation,
@@ -39,6 +40,14 @@ export type LLMResultPayload = LlmResultEventPayload;
 
 const escapeRegex = (string: string): string =>
   string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function envFlagEnabled(name: string): boolean {
+  try {
+    return Deno.env.get(name) === "1";
+  } catch {
+    return false;
+  }
+}
 
 export function shouldEmitAgentMessage(
   answer: string | undefined,
@@ -114,6 +123,20 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
 
     // Get context from dependencies
     const context = deps.context;
+    let markedVisibleOutputStarted = false;
+    const markVisibleOutputStarted = () => {
+      if (markedVisibleOutputStarted || typeof event.id !== "string") return;
+      markedVisibleOutputStarted = true;
+      void deps.db?.ops?.mergeQueueItemMetadata?.(event.id, {
+        visibleOutputStarted: true,
+        visibleOutputStartedAt: new Date().toISOString(),
+      }).catch((error: unknown) => {
+        console.warn(
+          "[LLM_CALL] Failed to mark visible output progress:",
+          error,
+        );
+      });
+    };
 
     // Defense-in-depth: the shared processStream already filters
     // <tool_calls> blocks, but we keep a second pass here in case
@@ -166,6 +189,14 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         const filtered = options?.isReasoning
           ? token
           : filterToolCallTokensStreaming(token, toolCallFilterState);
+
+        if (
+          !options?.isReasoning &&
+          typeof filtered === "string" &&
+          filtered.trim().length > 0
+        ) {
+          markVisibleOutputStarted();
+        }
 
         deps.emitToStream(
           buildTokenEvent(filtered, false, options?.isReasoning),
@@ -320,7 +351,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     );
     const configuredProvider = configForCall.provider!;
 
-    if (Deno.env.get("COPILOTZ_DEBUG") === "1") {
+    if (envFlagEnabled("COPILOTZ_DEBUG")) {
       console.log("shouldResolve", shouldResolve);
       console.log("hasAssetStore", !!context.assetStore);
       console.log("configForCall", toLLMConfig(configForCall));
@@ -354,6 +385,69 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           !Array.isArray(eventMetadata.runSender)
         ? { runSender: eventMetadata.runSender }
         : {}),
+    };
+
+    let usageNodeId: string | null = null;
+    const llmUsageService = deps.db?.ops
+      ? createLlmUsageService({
+        collections: deps.context.collections,
+        ops: deps.db.ops,
+      })
+      : null;
+    const runSender = eventMetadata.runSender &&
+        typeof eventMetadata.runSender === "object" &&
+        !Array.isArray(eventMetadata.runSender)
+      ? eventMetadata.runSender as Record<string, unknown>
+      : null;
+    const persistUsageRecords = async (
+      records: LLMUsageAttempt[],
+      fallbackFinalized?: ChatResponse["usageFinalized"],
+    ): Promise<void> => {
+      if (!llmUsageService) return;
+      for (let index = 0; index < records.length; index += 1) {
+        const record = records[index];
+        try {
+          const createdUsageNodeId = await llmUsageService.createUsageRecord({
+            threadId,
+            eventId: typeof event.id === "string" ? event.id : null,
+            agentId: (payload.agent.id ?? payload.agent.name) as string | null,
+            runSender,
+            provider: record.provider ?? null,
+            model: record.model ?? null,
+            usage: record.usage,
+            cost: record.cost ?? null,
+          });
+          usageNodeId = createdUsageNodeId ?? usageNodeId;
+          const finalized = record.usageFinalized ??
+            (index === records.length - 1 ? fallbackFinalized : undefined);
+          if (createdUsageNodeId && finalized) {
+            void finalized.then(async (finalizedMetrics) => {
+              if (!finalizedMetrics) return;
+              await llmUsageService.updateUsageRecordMetrics({
+                usageNodeId: createdUsageNodeId,
+                threadId,
+                eventId: typeof event.id === "string" ? event.id : null,
+                agentId: (payload.agent.id ?? payload.agent.name) as
+                  | string
+                  | null,
+                runSender,
+                provider: record.provider ?? null,
+                model: record.model ?? null,
+                usage: finalizedMetrics.usage,
+                cost: finalizedMetrics.cost ?? null,
+                finalizedAt: finalizedMetrics.finalizedAt,
+              });
+            }).catch((error) => {
+              console.warn(
+                "[LLM_CALL] Failed to finalize llm_usage node:",
+                error,
+              );
+            });
+          }
+        } catch (error) {
+          console.warn("[LLM_CALL] Failed to persist llm_usage node:", error);
+        }
+      }
     };
 
     let response: ChatResponse;
@@ -442,6 +536,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         finishedAt: new Date().toISOString(),
       };
 
+      if (providerError.usageAttempts.length > 0) {
+        await persistUsageRecords(providerError.usageAttempts);
+      }
+
       return {
         producedEvents: [{
           threadId,
@@ -461,11 +559,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     }
 
     const llmResponse = response as unknown as ChatResponse;
-    let usageNodeId: string | null = null;
-    const llmUsageService = createLlmUsageService({
-      collections: deps.context.collections,
-      ops: deps.db.ops,
-    });
 
     // finalize stream
     if (streamCallback && deps.emitToStream) {
@@ -513,52 +606,9 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         }]
         : [];
 
-    for (const record of usageRecords) {
-      try {
-        const createdUsageNodeId = await llmUsageService.createUsageRecord({
-          threadId,
-          eventId: typeof event.id === "string" ? event.id : null,
-          agentId: (payload.agent.id ?? payload.agent.name) as string | null,
-          runSender: eventMetadata.runSender &&
-              typeof eventMetadata.runSender === "object" &&
-              !Array.isArray(eventMetadata.runSender)
-            ? eventMetadata.runSender as Record<string, unknown>
-            : null,
-          provider: record.provider ?? null,
-          model: record.model ?? null,
-          usage: record.usage,
-          cost: record.cost ?? null,
-        });
-        usageNodeId = createdUsageNodeId ?? usageNodeId;
-      } catch (error) {
-        console.warn("[LLM_CALL] Failed to persist llm_usage node:", error);
-      }
-    }
-    if (usageFinalized && usageNodeId) {
-      void usageFinalized.then(async (finalized) => {
-        if (!finalized) return;
-        await llmUsageService.updateUsageRecordMetrics({
-          usageNodeId: usageNodeId as string,
-          threadId,
-          eventId: typeof event.id === "string" ? event.id : null,
-          agentId: (payload.agent.id ?? payload.agent.name) as string | null,
-          runSender: eventMetadata.runSender &&
-              typeof eventMetadata.runSender === "object" &&
-              !Array.isArray(eventMetadata.runSender)
-            ? eventMetadata.runSender as Record<string, unknown>
-            : null,
-          provider: llmResponse.provider ?? null,
-          model: llmResponse.model ?? null,
-          usage: finalized.usage,
-          cost: finalized.cost ?? null,
-          finalizedAt: finalized.finalizedAt,
-        });
-      }).catch((error) => {
-        console.warn("[LLM_CALL] Failed to finalize llm_usage node:", error);
-      });
-    }
+    await persistUsageRecords(usageRecords, usageFinalized);
 
-    if (Deno.env.get("COPILOTZ_DEBUG") === "1") {
+    if (envFlagEnabled("COPILOTZ_DEBUG")) {
       console.log("answer", answer);
       console.log("reasoning", reasoning);
       console.log("toolCalls", toolCalls);

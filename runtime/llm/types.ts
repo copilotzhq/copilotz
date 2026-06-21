@@ -332,6 +332,13 @@ export type TokenUsageStatusReason =
   | "local_stop_sequence"
   | "length"
   | "error"
+  | "timeout"
+  | "network"
+  | "auth_error"
+  | "rate_limit"
+  | "server_error"
+  | "provider_error"
+  | "unknown"
   | "content_filter"
   | "empty_response"
   | "malformed_tool_call"
@@ -339,10 +346,13 @@ export type TokenUsageStatusReason =
   | "degenerate_repetition";
 
 export interface LLMUsageAttempt {
+  attemptId?: string;
   provider?: ProviderName;
   model?: string;
   usage: TokenUsage;
   cost?: CostBreakdown;
+  visibleOutputStarted?: boolean;
+  usageFinalized?: Promise<FinalizedTokenUsage | null>;
 }
 
 export interface FinalizedTokenUsage {

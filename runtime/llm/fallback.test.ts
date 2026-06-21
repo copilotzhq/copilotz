@@ -38,7 +38,12 @@ Deno.test("chat wraps provider rate limits as structured LLMProviderError when n
     try {
       await chat(
         { messages: [{ role: "user", content: "hello" }] },
-        { provider: "anthropic", model: "claude-test", apiKey: "test" },
+        {
+          provider: "anthropic",
+          model: "claude-test",
+          apiKey: "test",
+          estimateCost: false,
+        },
         {},
         undefined,
         registry,
@@ -91,6 +96,7 @@ Deno.test("chat attempts fallback for any provider error when fallbacks are conf
         provider: "anthropic",
         model: "primary",
         apiKey: "test",
+        estimateCost: false,
         fallbacks: [{ provider: "anthropic", model: "fallback" }],
       },
       {},
@@ -180,6 +186,7 @@ Deno.test("chat materializes messages separately for each provider attempt", asy
         provider: "anthropic",
         model: "primary",
         apiKey: "test",
+        estimateCost: false,
         fallbacks: [{ provider: "openai", model: "fallback" }],
       },
       {},
@@ -234,6 +241,7 @@ Deno.test("chat falls back for auth failures and logs a warning", async () => {
         provider: "anthropic",
         model: "primary",
         apiKey: "test",
+        estimateCost: false,
         fallbacks: [{ provider: "anthropic", model: "fallback" }],
       },
       {},
@@ -328,6 +336,7 @@ Deno.test("chat resolves provider-specific fallback api keys when provider chang
         provider: "anthropic",
         model: "primary",
         apiKey: "anthropic-secret",
+        estimateCost: false,
         fallbacks: [{ provider: "openai", model: "fallback" }],
       },
       { OPENAI_API_KEY: "openai-secret" },
@@ -391,6 +400,7 @@ Deno.test("chat falls back when first extracted token times out", async () => {
         provider: "anthropic",
         model: "primary",
         apiKey: "test",
+        estimateCost: false,
         firstTokenTimeoutMs: 5,
         fallbacks: [{ provider: "anthropic", model: "fallback" }],
       },
@@ -459,6 +469,7 @@ Deno.test("chat treats provider stream activity as progress before extracted tex
         provider: "anthropic",
         model: "primary",
         apiKey: "test",
+        estimateCost: false,
         firstTokenTimeoutMs: 30,
         streamIdleTimeoutMs: 50,
       },
@@ -509,6 +520,7 @@ Deno.test("chat enforces idle timeout even when fetch abort does not break the r
             provider: "anthropic",
             model: "primary",
             apiKey: "test",
+            estimateCost: false,
             streamIdleTimeoutMs: 5,
           },
           {},
@@ -525,7 +537,7 @@ Deno.test("chat enforces idle timeout even when fetch abort does not break the r
   }
 });
 
-Deno.test("chat recovers mid-stream by falling back with partial content as context", async () => {
+Deno.test("chat returns visible partial instead of falling back after mid-stream timeout", async () => {
   const originalFetch = globalThis.fetch;
   const encoder = new TextEncoder();
   const streamedChunks: string[] = [];
@@ -584,6 +596,7 @@ Deno.test("chat recovers mid-stream by falling back with partial content as cont
         provider: "anthropic",
         model: "primary",
         apiKey: "test",
+        estimateCost: false,
         streamIdleTimeoutMs: 5,
         fallbacks: [{ provider: "anthropic", model: "fallback" }],
       },
@@ -592,10 +605,86 @@ Deno.test("chat recovers mid-stream by falling back with partial content as cont
       registry,
     );
 
-    assertEquals(response.answer, "hello world");
-    assertEquals(streamedChunks.join(""), "hello world");
-    assertEquals(response.model, "fallback");
-    assertEquals(calls, 2);
+    assertEquals(response.answer, "hello");
+    assertEquals(response.finishReason, "error");
+    assertEquals(streamedChunks.join(""), "hello ");
+    assertEquals(response.model, "primary");
+    assertEquals(calls, 1);
+    assertEquals(response.usage?.status, "aborted");
+    assertEquals(response.usage?.statusReason, "timeout");
+    assertEquals(response.usageAttempts?.length, 1);
+    assertEquals(response.usageAttempts?.[0]?.visibleOutputStarted, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("chat returns visible partial instead of falling back after provider stream error", async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  const streamedChunks: string[] = [];
+  let calls = 0;
+
+  globalThis.fetch = () => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${
+                    JSON.stringify({
+                      choices: [{ delta: { content: "partial answer" } }],
+                    })
+                  }\n\n`,
+                ),
+              );
+              setTimeout(() => controller.error(new Error("network lost")), 0);
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      );
+    }
+
+    return Promise.resolve(
+      new Response(
+        `data: ${
+          JSON.stringify({
+            choices: [{ delta: { content: "fallback answer" } }],
+          })
+        }\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+        fallbacks: [{ provider: "anthropic", model: "fallback" }],
+      },
+      {},
+      (chunk) => streamedChunks.push(chunk),
+      registry,
+    );
+
+    assertEquals(calls, 1);
+    assertEquals(response.answer, "partial answer");
+    assertEquals(response.finishReason, "error");
+    assertEquals(response.model, "primary");
+    assertEquals(response.usage?.status, "aborted");
+    assertEquals(response.usage?.statusReason, "network");
+    assertEquals(response.usageAttempts?.length, 1);
+    assertEquals(response.usageAttempts?.[0]?.visibleOutputStarted, true);
+    assertEquals(streamedChunks.join(""), "partial answer");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -615,7 +704,7 @@ function sse(events: unknown[]): Response {
   });
 }
 
-Deno.test("chat retries same model once on finishReason=length then falls back", async () => {
+Deno.test("chat retries same model once on finishReason=length then returns visible partial", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
   const warnings: unknown[][] = [];
@@ -632,7 +721,11 @@ Deno.test("chat retries same model once on finishReason=length then falls back",
       // Primary: truncated both times
       return Promise.resolve(
         sse([
-          { choices: [{ delta: { content: "Hello" } }] },
+          {
+            choices: [{
+              delta: { content: calls === 1 ? "Hello " : "again" },
+            }],
+          },
           { choices: [{ delta: {}, finish_reason: "length" }] },
         ]),
       );
@@ -653,6 +746,7 @@ Deno.test("chat retries same model once on finishReason=length then falls back",
         provider: "anthropic",
         model: "primary",
         apiKey: "test",
+        estimateCost: false,
         fallbacks: [{ provider: "anthropic", model: "fallback" }],
       },
       {},
@@ -660,15 +754,22 @@ Deno.test("chat retries same model once on finishReason=length then falls back",
       registry,
     );
 
-    // call 1: primary (length) → call 2: retry same (length) → call 3: fallback (stop)
-    assertEquals(calls, 3);
-    assertEquals(response.answer, "HelloHello world");
-    assertEquals(response.model, "fallback");
-    assertEquals(warnings.length, 2);
+    // call 1: primary (length) -> call 2: retry same (length), then stop
+    // because visible text has already reached the user.
+    assertEquals(calls, 2);
+    assertEquals(response.answer, "Hello again");
+    assertEquals(response.model, "primary");
+    assertEquals(response.finishReason, "length");
+    assertEquals(streamed.join(""), "Hello again");
+    assertEquals(warnings.length, 1);
     assertEquals(
       (warnings[0][1] as Record<string, unknown>).reason,
       "length",
     );
+    assertEquals(response.usage?.statusReason, "length");
+    assertEquals(response.usageAttempts?.length, 2);
+    assertEquals(response.usageAttempts?.[0]?.visibleOutputStarted, true);
+    assertEquals(response.usageAttempts?.[1]?.visibleOutputStarted, true);
   } finally {
     globalThis.fetch = originalFetch;
     console.warn = originalWarn;
@@ -704,7 +805,12 @@ Deno.test("chat recovers from finishReason=length with same model when continuat
   try {
     const response = await chat(
       { messages: [{ role: "user", content: "hello" }] },
-      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+      },
       {},
       (chunk) => streamed.push(chunk),
       registry,
@@ -753,6 +859,7 @@ Deno.test("chat falls back to next provider on finishReason=content_filter", asy
         provider: "anthropic",
         model: "primary",
         apiKey: "test",
+        estimateCost: false,
         fallbacks: [{ provider: "anthropic", model: "fallback" }],
       },
       {},
@@ -769,7 +876,63 @@ Deno.test("chat falls back to next provider on finishReason=content_filter", asy
   }
 });
 
-Deno.test("chat falls back to next provider on finishReason=error", async () => {
+Deno.test("chat returns visible partial on finishReason=content_filter without fallback", async () => {
+  const originalFetch = globalThis.fetch;
+  const streamed: string[] = [];
+  let calls = 0;
+
+  globalThis.fetch = () => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.resolve(
+        sse([
+          { choices: [{ delta: { content: "partial answer" } }] },
+          { choices: [{ delta: {}, finish_reason: "content_filter" }] },
+        ]),
+      );
+    }
+    return Promise.resolve(
+      sse([
+        { choices: [{ delta: { content: "fallback answer" } }] },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  const originalWarn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+        fallbacks: [{ provider: "anthropic", model: "fallback" }],
+      },
+      {},
+      (chunk) => streamed.push(chunk),
+      registry,
+    );
+
+    assertEquals(calls, 1);
+    assertEquals(response.answer, "partial answer");
+    assertEquals(response.model, "primary");
+    assertEquals(response.finishReason, "content_filter");
+    assertEquals(response.usage?.status, "aborted");
+    assertEquals(response.usage?.statusReason, "content_filter");
+    assertEquals(response.usageAttempts?.length, 1);
+    assertEquals(response.usageAttempts?.[0]?.visibleOutputStarted, true);
+    assertEquals(streamed.join(""), "partial answer");
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
+Deno.test("chat returns visible partial on finishReason=error without fallback", async () => {
   const originalFetch = globalThis.fetch;
   const streamed: string[] = [];
   let calls = 0;
@@ -802,6 +965,7 @@ Deno.test("chat falls back to next provider on finishReason=error", async () => 
         provider: "anthropic",
         model: "primary",
         apiKey: "test",
+        estimateCost: false,
         fallbacks: [{ provider: "anthropic", model: "fallback" }],
       },
       {},
@@ -809,10 +973,15 @@ Deno.test("chat falls back to next provider on finishReason=error", async () => 
       registry,
     );
 
-    assertEquals(calls, 2);
-    assertEquals(response.answer, "partial completed");
-    assertEquals(response.model, "fallback");
-    assertEquals(streamed.join(""), "partial completed");
+    assertEquals(calls, 1);
+    assertEquals(response.answer, "partial");
+    assertEquals(response.model, "primary");
+    assertEquals(response.finishReason, "error");
+    assertEquals(response.usage?.status, "aborted");
+    assertEquals(response.usage?.statusReason, "error");
+    assertEquals(response.usageAttempts?.length, 1);
+    assertEquals(response.usageAttempts?.[0]?.visibleOutputStarted, true);
+    assertEquals(streamed.join(""), "partial ");
   } finally {
     globalThis.fetch = originalFetch;
     console.warn = originalWarn;
@@ -860,6 +1029,7 @@ Deno.test("chat retries then falls back when model produces empty response", asy
         provider: "anthropic",
         model: "primary",
         apiKey: "test",
+        estimateCost: false,
         fallbacks: [{ provider: "anthropic", model: "fallback" }],
       },
       {},
@@ -909,7 +1079,12 @@ Deno.test("chat recovers from empty response on same model retry", async () => {
   try {
     const response = await chat(
       { messages: [{ role: "user", content: "hello" }] },
-      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+      },
       {},
       undefined,
       registry,
@@ -948,6 +1123,7 @@ Deno.test("chat does NOT retry when empty response is intentional (no_response)"
         provider: "anthropic",
         model: "primary",
         apiKey: "test",
+        estimateCost: false,
         fallbacks: [{ provider: "anthropic", model: "fallback" }],
       },
       {},
@@ -964,7 +1140,7 @@ Deno.test("chat does NOT retry when empty response is intentional (no_response)"
   }
 });
 
-Deno.test("chat retries when visible reasoning markup is emitted", async () => {
+Deno.test("chat strips visible reasoning markup without retrying after streamed text", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
   const warnings: unknown[][] = [];
@@ -1008,7 +1184,12 @@ Deno.test("chat retries when visible reasoning markup is emitted", async () => {
   try {
     const response = await chat(
       { messages: [{ role: "user", content: "hello" }] },
-      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+      },
       {},
       (chunk) => {
         streamed += chunk;
@@ -1016,8 +1197,11 @@ Deno.test("chat retries when visible reasoning markup is emitted", async () => {
       registry,
     );
 
-    assertEquals(calls, 2);
-    assertEquals(response.answer, "Clean answer");
+    assertEquals(calls, 1);
+    assertEquals(response.answer, "Visible answer");
+    assertEquals(response.usage?.statusReason, "visible_reasoning_markup");
+    assertEquals(response.usageAttempts?.length, 1);
+    assertEquals(response.usageAttempts?.[0]?.visibleOutputStarted, true);
     assertEquals(streamed.includes("<thought>"), false);
     assertEquals(streamed.includes("tag reasoning"), false);
     assertEquals(
@@ -1025,7 +1209,7 @@ Deno.test("chat retries when visible reasoning markup is emitted", async () => {
         (w[1] as Record<string, unknown>)?.reason ===
           "visible_reasoning_markup"
       ),
-      true,
+      false,
     );
   } finally {
     globalThis.fetch = originalFetch;
@@ -1057,7 +1241,12 @@ Deno.test("chat strips visible reasoning markup after exhausted recovery", async
   try {
     const response = await chat(
       { messages: [{ role: "user", content: "hello" }] },
-      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+      },
       {},
       (chunk) => {
         streamed += chunk;
@@ -1111,7 +1300,12 @@ Deno.test("chat preserves provider-native reasoning deltas", async () => {
   try {
     const response = await chat(
       { messages: [{ role: "user", content: "hello" }] },
-      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+      },
       {},
       undefined,
       reasoningRegistry,
@@ -1162,6 +1356,7 @@ Deno.test("chat retries when response contains only thinking markup", async () =
         provider: "anthropic",
         model: "primary",
         apiKey: "test",
+        estimateCost: false,
       },
       {},
       undefined,
@@ -1248,7 +1443,12 @@ Deno.test("chat retries same model when output degenerates into repetition", asy
   try {
     const response = await chat(
       { messages: [{ role: "user", content: "update board" }] },
-      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+      },
       {},
       undefined,
       repetitionRegistry,
@@ -1357,7 +1557,12 @@ Deno.test("chat reuses malformed-tool prefix and allowed reasoning in retry cont
   try {
     const response = await chat(
       { messages: [{ role: "user", content: "hi" }], tools: [searchTool] },
-      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+      },
       {},
       (chunk, options) => {
         if (!options?.isReasoning) streamed.push(chunk);
@@ -1377,7 +1582,9 @@ Deno.test("chat reuses malformed-tool prefix and allowed reasoning in retry cont
     );
     const retryUser = retryMessages.find((message) =>
       message.role === "user" &&
-      String(message.content ?? "").includes("<malformed_tool_call_recovery>")
+      String(message.content ?? "").includes(
+        "emit only the corrected <tool_calls> block",
+      )
     );
     assertEquals(retryAssistant?.role, "assistant");
     assertEquals(
@@ -1386,8 +1593,11 @@ Deno.test("chat reuses malformed-tool prefix and allowed reasoning in retry cont
     );
 
     const recoveryCue = String(retryUser?.content ?? "");
-    assertEquals(recoveryCue.includes("<malformed_tool_call_recovery>"), true);
-    assertEquals(recoveryCue.includes("<recovery_required_action>"), true);
+    assertEquals(recoveryCue.includes("<recovery_cue>"), true);
+    assertEquals(
+      recoveryCue.includes("emit only the corrected <tool_calls> block"),
+      true,
+    );
   } finally {
     globalThis.fetch = originalFetch;
     console.warn = originalWarn;
@@ -1470,7 +1680,12 @@ Deno.test("chat omits malformed-tool retry reasoning when reasoning history is d
         tools: [searchTool],
         reasoningHistory: { include: "none" },
       },
-      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+      },
       {},
       undefined,
       reasoningRegistry,
@@ -1535,7 +1750,12 @@ Deno.test("chat retries non-canonical <invoke>/<parameter> tool dialect", async 
   try {
     const response = await chat(
       { messages: [{ role: "user", content: "hi" }], tools: [searchTool] },
-      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+      },
       {},
       undefined,
       registry,
@@ -1606,7 +1826,12 @@ Deno.test("chat retries on a malformed tool call then recovers the canonical for
   try {
     const response = await chat(
       { messages: [{ role: "user", content: "hi" }], tools: [searchTool] },
-      { provider: "anthropic", model: "primary", apiKey: "test" },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+      },
       {},
       undefined,
       registry,
@@ -1658,6 +1883,7 @@ Deno.test("chat does NOT retry when empty response has tool calls", async () => 
         provider: "anthropic",
         model: "primary",
         apiKey: "test",
+        estimateCost: false,
         fallbacks: [{ provider: "anthropic", model: "fallback" }],
       },
       {},

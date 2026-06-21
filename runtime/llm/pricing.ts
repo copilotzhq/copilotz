@@ -164,11 +164,7 @@ export async function estimateUsageCost(
   >,
   usage: TokenUsage | undefined,
 ): Promise<CostBreakdown | null> {
-  if (
-    !usage ||
-    config.estimateCost === false ||
-    usage.source !== "provider"
-  ) {
+  if (!usage || config.estimateCost === false) {
     return null;
   }
 

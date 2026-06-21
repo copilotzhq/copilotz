@@ -216,12 +216,10 @@ function parseAssistantResponse(
   cleanResponse: string;
   toolCalls: ToolInvocation[];
   extractedTags: Record<string, string[]>;
-  extractedReasoning: string[];
 } {
   let cleanResponse = response;
   let toolCalls: ToolInvocation[] = [];
   let extractedTags: Record<string, string[]> = {};
-  let extractedReasoning: string[] = [];
 
   {
     const parsed = parseToolCallsFromResponse(response, knownToolNames);
@@ -259,7 +257,7 @@ function parseAssistantResponse(
     stripStructuralLeakTokens(cleanResponse),
   ).trim();
 
-  return { cleanResponse, toolCalls, extractedTags, extractedReasoning };
+  return { cleanResponse, toolCalls, extractedTags };
 }
 
 function mergeReasoningParts(...parts: Array<string | string[] | undefined>) {
@@ -291,12 +289,60 @@ function warnRecoveryAttempt(
   }
 }
 
+function hasMeaningfulVisibleOutput(text: string): boolean {
+  return text.trim().length > 0;
+}
+
+function toUsageStatusReason(
+  reason: string | null,
+): TokenUsageStatusReason | undefined {
+  switch (reason) {
+    case "local_stop_sequence":
+    case "length":
+    case "error":
+    case "timeout":
+    case "network":
+    case "auth_error":
+    case "rate_limit":
+    case "server_error":
+    case "provider_error":
+    case "unknown":
+    case "content_filter":
+    case "empty_response":
+    case "malformed_tool_call":
+    case "visible_reasoning_markup":
+    case "degenerate_repetition":
+      return reason;
+    default:
+      return undefined;
+  }
+}
+
+function usageStatusForReason(
+  statusReason?: TokenUsageStatusReason,
+): TokenUsage["status"] {
+  switch (statusReason) {
+    case "error":
+    case "timeout":
+    case "network":
+    case "auth_error":
+    case "rate_limit":
+    case "server_error":
+    case "provider_error":
+    case "unknown":
+    case "content_filter":
+      return "aborted";
+    default:
+      return "completed";
+  }
+}
+
 /**
  * Unified AI Chat endpoint.
  *
- * Streams an LLM response through the configured provider. Recovers from
- * mid-stream failures and truncations by falling back to alternative
- * providers (or retrying the same model for output-length truncations).
+ * Streams an LLM response through the configured provider. Before user-visible
+ * output is emitted it may recover with retry/fallback attempts; after visible
+ * output starts it preserves that partial response and avoids hidden fallbacks.
  */
 export async function chat(
   request: ChatRequest,
@@ -348,6 +394,8 @@ export async function chat(
   let recoveryPrefix = "";
   let lastRecoveryReason: string | null = null;
   let sameModelRetried = false;
+  let visibleOutputStarted = false;
+  let silentRepairNextAttempt = false;
 
   let index = 0;
   while (index < attemptConfigs.length) {
@@ -366,10 +414,20 @@ export async function chat(
     }
 
     const providerAPI = providerFactory(attemptConfig);
+    const attemptId = crypto.randomUUID();
+    let attemptVisibleOutputStarted = false;
+    let attemptVisibleOutput = "";
+    const silentRepairAttempt = silentRepairNextAttempt;
+    silentRepairNextAttempt = false;
 
-    const trackedStream = stream
+    const trackedStream = stream && !silentRepairAttempt
       ? ((chunk: string, options?: { isReasoning?: boolean }) => {
         if (chunk.length > 0 && !options?.isReasoning) {
+          if (hasMeaningfulVisibleOutput(chunk)) {
+            attemptVisibleOutputStarted = true;
+            visibleOutputStarted = true;
+          }
+          attemptVisibleOutput += chunk;
           recoveryPrefix += chunk;
         }
         stream(chunk, options);
@@ -404,13 +462,14 @@ export async function chat(
         extractedBlockTags,
         request.signal,
       );
+      let finalStatusReason: TokenUsageStatusReason | undefined;
 
       const buildUsageAttempt = async (
         statusReason?: TokenUsageStatusReason,
       ): Promise<LLMUsageAttempt> => {
         const usageStatus = streamResult.stoppedByLocalStop
           ? "locally_stopped"
-          : "completed";
+          : usageStatusForReason(statusReason);
         const usageMetadata = {
           ...(streamResult.stoppedByLocalStop || statusReason
             ? {
@@ -434,11 +493,36 @@ export async function chat(
             usageMetadata,
           );
         const cost = await estimateUsageCost(attemptConfig, usage ?? undefined);
+        const usageFinalized = streamResult.usageFinalized
+          ? streamResult.usageFinalized.then(async (finalized) => {
+            const finalUsage = normalizeProviderUsage(
+              finalized.usage,
+              usageStatus,
+              usageMetadata,
+            );
+            if (!finalUsage) return null;
+            const finalCost = await estimateUsageCost(
+              attemptConfig,
+              finalUsage,
+            );
+            return {
+              usage: finalUsage,
+              ...(finalCost ? { cost: finalCost } : {}),
+              tokens: finalUsage.totalTokens ??
+                await countTokens(attemptMessages, streamResult.content),
+              finishReason: finalized.finishReason,
+              finalizedAt: new Date().toISOString(),
+            };
+          })
+          : undefined;
         return {
+          attemptId,
           provider: attemptProvider,
           model: attemptConfig.model,
           usage,
           ...(cost ? { cost } : {}),
+          visibleOutputStarted: attemptVisibleOutputStarted,
+          ...(usageFinalized ? { usageFinalized } : {}),
         };
       };
 
@@ -465,8 +549,10 @@ export async function chat(
           continue;
         }
 
-        // For all recoverable reasons: try next fallback if available
-        if (index < attemptConfigs.length - 1) {
+        // Provider/model fallback is only safe before any visible output has
+        // reached the user. After that, fall through and finalize the partial
+        // visible response instead of silently switching models.
+        if (index < attemptConfigs.length - 1 && !visibleOutputStarted) {
           usageAttempts.push(
             await buildUsageAttempt(recoveryStatusReason),
           );
@@ -480,7 +566,8 @@ export async function chat(
           continue;
         }
 
-        // No more attempts — fall through to return what we have
+        finalStatusReason = recoveryStatusReason;
+        // No more safe attempts — fall through to return what we have.
       }
 
       // Success or exhausted recovery options — build response
@@ -493,10 +580,7 @@ export async function chat(
         extractedBlockTags,
         knownToolNames,
       );
-      const reasoning = mergeReasoningParts(
-        streamResult.reasoning,
-        parsed.extractedReasoning,
-      );
+      const reasoning = mergeReasoningParts(streamResult.reasoning);
       const parsedCurrentAttempt = parseAssistantResponse(
         streamResult.content,
         extractedBlockTags,
@@ -505,8 +589,8 @@ export async function chat(
 
       // Detect a malformed tool-call attempt: the model emitted tool-call
       // markup (canonical or a native dialect) that produced no parseable call.
-      // Correct it with a synthetic instruction and retry, then fall back —
-      // rather than leaking protocol markup or silently dropping the call.
+      // Correct it with a synthetic instruction and retry. If the user has
+      // already seen text, keep the repair silent and avoid provider fallback.
       const hasMalformedToolIntent = responseHasMalformedToolCallIntent(
         streamResult.content,
         knownToolNames,
@@ -546,6 +630,9 @@ export async function chat(
         if (!sameModelRetried) {
           usageAttempts.push(await buildUsageAttempt("malformed_tool_call"));
           sameModelRetried = true;
+          if (visibleOutputStarted) {
+            silentRepairNextAttempt = true;
+          }
           warnRecoveryAttempt(
             "malformed_tool_call",
             attemptConfig,
@@ -555,7 +642,7 @@ export async function chat(
           continue;
         }
 
-        if (index < attemptConfigs.length - 1) {
+        if (index < attemptConfigs.length - 1 && !visibleOutputStarted) {
           usageAttempts.push(await buildUsageAttempt("malformed_tool_call"));
           sameModelRetried = false;
           warnRecoveryAttempt(
@@ -583,7 +670,14 @@ export async function chat(
         );
         lastRecoveryReason = "degenerate_repetition";
 
-        if (!sameModelRetried) {
+        if (visibleOutputStarted) {
+          finalStatusReason = "degenerate_repetition";
+          parsed.cleanResponse = sanitizeUserFacingText(
+            [prefixBeforeAttempt, safeVisiblePrefix].filter((part) =>
+              part.trim().length > 0
+            ).join(" "),
+          );
+        } else if (!sameModelRetried) {
           usageAttempts.push(await buildUsageAttempt("degenerate_repetition"));
           sameModelRetried = true;
           warnRecoveryAttempt(
@@ -593,9 +687,7 @@ export async function chat(
             "Model output degenerated into repeated text, retrying",
           );
           continue;
-        }
-
-        if (index < attemptConfigs.length - 1) {
+        } else if (index < attemptConfigs.length - 1) {
           usageAttempts.push(await buildUsageAttempt("degenerate_repetition"));
           sameModelRetried = false;
           warnRecoveryAttempt(
@@ -606,18 +698,22 @@ export async function chat(
           );
           index++;
           continue;
+        } else {
+          finalStatusReason = "degenerate_repetition";
+          parsed.cleanResponse = sanitizeUserFacingText(
+            [prefixBeforeAttempt, safeVisiblePrefix].filter((part) =>
+              part.trim().length > 0
+            ).join(" "),
+          );
         }
-
-        parsed.cleanResponse = sanitizeUserFacingText(
-          [prefixBeforeAttempt, safeVisiblePrefix].filter((part) =>
-            part.trim().length > 0
-          ).join(" "),
-        );
       } else if (hasVisibleReasoningMarkup) {
         recoveryPrefix = prefixBeforeAttempt;
         lastRecoveryReason = "visible_reasoning_markup";
 
-        if (!sameModelRetried) {
+        if (visibleOutputStarted) {
+          finalStatusReason = "visible_reasoning_markup";
+          parsed.cleanResponse = sanitizeUserFacingText(parsed.cleanResponse);
+        } else if (!sameModelRetried) {
           usageAttempts.push(
             await buildUsageAttempt("visible_reasoning_markup"),
           );
@@ -629,9 +725,7 @@ export async function chat(
             "Model exposed reasoning markup, retrying",
           );
           continue;
-        }
-
-        if (index < attemptConfigs.length - 1) {
+        } else if (index < attemptConfigs.length - 1) {
           usageAttempts.push(
             await buildUsageAttempt("visible_reasoning_markup"),
           );
@@ -644,15 +738,16 @@ export async function chat(
           );
           index++;
           continue;
+        } else {
+          finalStatusReason = "visible_reasoning_markup";
+          parsed.cleanResponse = sanitizeUserFacingText(parsed.cleanResponse);
         }
-
-        parsed.cleanResponse = sanitizeUserFacingText(parsed.cleanResponse);
       } else if (isUnintentionallyEmpty) {
         // Undo the accumulation from this attempt — no useful content
         recoveryPrefix = prefixBeforeAttempt;
         lastRecoveryReason = "empty_response";
 
-        if (!sameModelRetried) {
+        if (!sameModelRetried && !visibleOutputStarted) {
           usageAttempts.push(await buildUsageAttempt("empty_response"));
           sameModelRetried = true;
           warnRecoveryAttempt(
@@ -664,7 +759,7 @@ export async function chat(
           continue;
         }
 
-        if (index < attemptConfigs.length - 1) {
+        if (index < attemptConfigs.length - 1 && !visibleOutputStarted) {
           usageAttempts.push(await buildUsageAttempt("empty_response"));
           sameModelRetried = false;
           warnRecoveryAttempt(
@@ -678,64 +773,19 @@ export async function chat(
         }
 
         // No more attempts — fall through to return empty response
+        finalStatusReason = "empty_response";
       }
 
-      const usageStatus = streamResult.stoppedByLocalStop
-        ? "locally_stopped"
-        : "completed";
-      const usageMetadata = streamResult.stoppedByLocalStop
-        ? {
-          statusReason: streamResult.localStopReason ?? "local_stop_sequence",
-          ...(streamResult.localStopSequence
-            ? { stopSequence: streamResult.localStopSequence }
-            : {}),
-        } satisfies Pick<TokenUsage, "statusReason" | "stopSequence">
-        : undefined;
-      const usage = normalizeProviderUsage(
-        streamResult.usage,
-        usageStatus,
-        usageMetadata,
-      ) ??
-        await estimateUsage(
-          attemptMessages,
-          parsed.cleanResponse,
-          usageStatus,
-          usageMetadata,
-        );
-      const cost = await estimateUsageCost(attemptConfig, usage ?? undefined);
+      const finalAttempt = await buildUsageAttempt(finalStatusReason);
+      const usage = finalAttempt.usage;
+      const cost = finalAttempt.cost;
       const allUsageAttempts: LLMUsageAttempt[] = [
         ...usageAttempts,
-        {
-          provider: attemptProvider,
-          model: attemptConfig.model,
-          usage,
-          ...(cost ? { cost } : {}),
-        },
+        finalAttempt,
       ];
       const totalTokens = usage.totalTokens ??
         await countTokens(attemptMessages, parsed.cleanResponse);
-      const usageFinalized = streamResult.usageFinalized
-        ? streamResult.usageFinalized.then(async (finalized) => {
-          const finalUsage = normalizeProviderUsage(
-            finalized.usage,
-            usageStatus,
-            usageMetadata,
-          );
-          if (!finalUsage) return null;
-          const finalCost = await estimateUsageCost(
-            attemptConfig,
-            finalUsage,
-          );
-          return {
-            usage: finalUsage,
-            ...(finalCost ? { cost: finalCost } : {}),
-            tokens: finalUsage.totalTokens ??
-              await countTokens(attemptMessages, parsed.cleanResponse),
-            finishReason: finalized.finishReason,
-            finalizedAt: new Date().toISOString(),
-          };
-        })
-        : undefined;
+      const usageFinalized = finalAttempt.usageFinalized;
 
       return {
         prompt: attemptMessages,
@@ -767,6 +817,22 @@ export async function chat(
       lastError = error;
       lastRecoveryReason = classifyLLMError(error);
       sameModelRetried = false;
+      const failedStatusReason = toUsageStatusReason(lastRecoveryReason);
+      const failedUsage = await estimateUsage(
+        attemptMessages,
+        attemptVisibleOutput,
+        usageStatusForReason(failedStatusReason),
+        failedStatusReason ? { statusReason: failedStatusReason } : undefined,
+      );
+      const failedCost = await estimateUsageCost(attemptConfig, failedUsage);
+      usageAttempts.push({
+        attemptId,
+        provider: attemptProvider,
+        model: attemptConfig.model,
+        usage: failedUsage,
+        ...(failedCost ? { cost: failedCost } : {}),
+        visibleOutputStarted: attemptVisibleOutputStarted,
+      });
 
       attempts.push({
         provider: attemptProvider,
@@ -775,6 +841,27 @@ export async function chat(
         status: getErrorStatus(error),
         message: getErrorMessage(error),
       });
+
+      if (visibleOutputStarted) {
+        const answer = sanitizeUserFacingText(recoveryPrefix);
+        return {
+          prompt: attemptMessages,
+          answer,
+          tokens: failedUsage.totalTokens ??
+            await countTokens(attemptMessages, answer),
+          finishReason: "error",
+          usage: failedUsage,
+          usageAttempts: [...usageAttempts],
+          ...(failedCost ? { cost: failedCost } : {}),
+          provider: attemptProvider,
+          model: attemptConfig.model,
+          metadata: {
+            provider: attemptProvider,
+            timestamp: new Date().toISOString(),
+            messageCount: request.messages.length,
+          },
+        };
+      }
 
       if (index < attemptConfigs.length - 1) {
         warnRecoveryAttempt(
@@ -798,6 +885,8 @@ export async function chat(
       status: lastAttempt?.status ?? getErrorStatus(lastError),
       attempts,
       fallbackAttempted: attempts.length > 1,
+      visibleStreamStarted: visibleOutputStarted,
+      usageAttempts,
       cause: lastError,
     });
   }

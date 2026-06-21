@@ -235,6 +235,63 @@ Deno.test({
 
 Deno.test({
   name:
+    "recoverThreadProcessingQueueItems fails stale visible LLM events instead of replaying them",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({
+      url: ":memory:",
+      staleProcessingThresholdMs: 60_000,
+    });
+    const thread = await db.ops.findOrCreateThread(undefined, {
+      name: "Visible Recovery Test",
+      participants: ["user-1"],
+      status: "active",
+      mode: "immediate",
+    });
+
+    const staleVisible = await db.ops.addToQueue(thread.id as string, {
+      eventType: "LLM_CALL",
+      payload: { content: "visible partial" },
+      metadata: { visibleOutputStarted: true },
+      priority: 0,
+      status: "processing",
+    });
+    const staleNormal = await db.ops.addToQueue(thread.id as string, {
+      eventType: "NEW_MESSAGE",
+      payload: { content: "safe to replay" },
+      priority: 0,
+      status: "processing",
+    });
+    const staleTimestamp = new Date(Date.now() - 86_400_000).toISOString();
+
+    await db.query(
+      `UPDATE "events"
+       SET "updatedAt" = $2
+       WHERE "id" IN ($1, $3)`,
+      [String(staleVisible.id), staleTimestamp, String(staleNormal.id)],
+    );
+
+    const recovered = await db.ops.recoverThreadProcessingQueueItems(
+      thread.id as string,
+    );
+
+    assertEquals(recovered, 1);
+
+    const visibleItem = await db.ops.getQueueItemById(String(staleVisible.id));
+    const normalItem = await db.ops.getQueueItemById(String(staleNormal.id));
+    const metadata = visibleItem?.metadata as Record<string, unknown>;
+
+    assertEquals(visibleItem?.status, "failed");
+    assertEquals(metadata.recoverySkipped, true);
+    assertEquals(metadata.recoveryReason, "visible_output_started");
+    assertEquals(normalItem?.status, "pending");
+  },
+});
+
+Deno.test({
+  name:
     "acquireThreadWorkerLease resets processing events after expired lease takeover",
   sanitizeExit: false,
   sanitizeOps: false,
@@ -254,6 +311,13 @@ Deno.test({
       priority: 0,
       status: "processing",
     });
+    const visibleLlm = await db.ops.addToQueue(threadId, {
+      eventType: "LLM_CALL",
+      payload: { content: "visible partial" },
+      metadata: { visibleOutputStarted: true },
+      priority: 0,
+      status: "processing",
+    });
 
     await db.query(
       `UPDATE "threads"
@@ -268,7 +332,13 @@ Deno.test({
     );
 
     const recovered = await db.ops.getQueueItemById(String(processing.id));
+    const skipped = await db.ops.getQueueItemById(String(visibleLlm.id));
+    const skippedMetadata = skipped?.metadata as Record<string, unknown>;
+
     assertEquals(recovered?.status, "pending");
+    assertEquals(skipped?.status, "failed");
+    assertEquals(skippedMetadata.recoverySkipped, true);
+    assertEquals(skippedMetadata.recoveryReason, "visible_output_started");
 
     const leaseState = await getLeaseState(db, threadId);
     assertEquals(leaseState.workerLockedBy, "worker-new");

@@ -234,6 +234,10 @@ export interface DatabaseOperations {
     queueId: string,
     status: Queue["status"],
   ) => Promise<void>;
+  mergeQueueItemMetadata: (
+    queueId: string,
+    metadata: Record<string, unknown>,
+  ) => Promise<void>;
   /**
    * Acquire an exclusive worker lease for a thread.
    * Returns false when another worker holds an active lease.
@@ -665,6 +669,39 @@ export function createOperations(
     return result.rows.length;
   };
 
+  const hasVisibleLlmProgress = (event: Queue): boolean => {
+    if (event.eventType !== "LLM_CALL") return false;
+    const metadata = event.metadata;
+    return Boolean(
+      metadata &&
+        typeof metadata === "object" &&
+        !Array.isArray(metadata) &&
+        (metadata as Record<string, unknown>).visibleOutputStarted === true,
+    );
+  };
+
+  const failVisibleProgressRecovery = async (
+    event: Queue,
+    reason: string,
+  ): Promise<void> => {
+    const metadata = event.metadata && typeof event.metadata === "object" &&
+        !Array.isArray(event.metadata)
+      ? event.metadata as Record<string, unknown>
+      : {};
+    await crud.events.update(
+      { id: event.id },
+      {
+        status: "failed",
+        metadata: sanitizePostgresParam({
+          ...metadata,
+          recoverySkipped: true,
+          recoveryReason: reason,
+        }),
+        updatedAt: new Date(),
+      },
+    );
+  };
+
   const recoverStaleProcessingQueueItems = async (
     threadId: string,
   ): Promise<number> => {
@@ -681,6 +718,17 @@ export function createOperations(
         : event.updatedAt;
 
       if (!updatedAt || updatedAt >= staleThreshold) {
+        continue;
+      }
+
+      if (hasVisibleLlmProgress(event as Queue)) {
+        await failVisibleProgressRecovery(
+          event as Queue,
+          "visible_output_started",
+        );
+        console.warn(
+          `[recovery] Marked visible-progress LLM event ${event.id} in thread ${threadId} as failed instead of replaying.`,
+        );
         continue;
       }
 
@@ -703,23 +751,38 @@ export function createOperations(
   const resetProcessingQueueItemsAfterLeaseTakeover = async (
     threadId: string,
   ): Promise<number> => {
-    const result = await db.query<{ id: string }>(
-      `UPDATE "events"
-       SET "status" = 'pending',
-           "updatedAt" = NOW()
-       WHERE "threadId" = $1
-         AND "status" = 'processing'
-       RETURNING "id"`,
-      [threadId],
-    );
+    const processingEvents = await crud.events.find({
+      threadId,
+      status: "processing",
+    }) as Queue[];
+    let reset = 0;
 
-    if (result.rows.length > 0) {
+    for (const event of processingEvents) {
+      if (hasVisibleLlmProgress(event)) {
+        await failVisibleProgressRecovery(event, "visible_output_started");
+        console.warn(
+          `[recovery] Marked visible-progress LLM event ${event.id} in thread ${threadId} as failed after lease takeover instead of replaying.`,
+        );
+        continue;
+      }
+
+      await crud.events.update(
+        { id: event.id },
+        {
+          status: "pending",
+          updatedAt: new Date(),
+        },
+      );
+      reset += 1;
+    }
+
+    if (reset > 0) {
       console.warn(
-        `[recovery] Reset ${result.rows.length} "processing" event(s) after expired worker lease takeover in thread ${threadId}.`,
+        `[recovery] Reset ${reset} "processing" event(s) after expired worker lease takeover in thread ${threadId}.`,
       );
     }
 
-    return result.rows.length;
+    return reset;
   };
 
   const getProcessingQueueItem = async (
@@ -872,6 +935,25 @@ export function createOperations(
     status: Queue["status"],
   ): Promise<void> => {
     await crud.events.update({ id: queueId }, { status });
+  };
+
+  const mergeQueueItemMetadata = async (
+    queueId: string,
+    metadata: Record<string, unknown>,
+  ): Promise<void> => {
+    const item = await crud.events.findOne({ id: queueId }) as Queue | null;
+    if (!item) return;
+    const current = item.metadata && typeof item.metadata === "object" &&
+        !Array.isArray(item.metadata)
+      ? item.metadata as Record<string, unknown>
+      : {};
+    await crud.events.update(
+      { id: queueId },
+      {
+        metadata: sanitizePostgresParam({ ...current, ...metadata }),
+        updatedAt: new Date(),
+      },
+    );
   };
 
   const getThreadWorkerLeaseConfig = () => ({
@@ -2681,6 +2763,7 @@ export function createOperations(
     getThreadActivity,
     getNextPendingQueueItem,
     updateQueueItemStatus,
+    mergeQueueItemMetadata,
     acquireThreadWorkerLease,
     renewThreadWorkerLease,
     isThreadWorkerLeaseOwner,

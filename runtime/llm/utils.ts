@@ -1504,9 +1504,14 @@ export type ToolSystemPromptVariant =
   | "strict-minimal";
 
 function readToolSystemPromptVariant(): ToolSystemPromptVariant {
-  const raw = typeof Deno !== "undefined"
-    ? Deno.env.get("COPILOTZ_TOOL_PROMPT_VARIANT")
-    : undefined;
+  let raw: string | undefined;
+  try {
+    raw = typeof Deno !== "undefined"
+      ? Deno.env.get("COPILOTZ_TOOL_PROMPT_VARIANT")
+      : undefined;
+  } catch {
+    raw = undefined;
+  }
   switch (raw) {
     case "no-visible-ack":
     case "tool-only-turn":
@@ -1578,7 +1583,7 @@ ${toolDefinitions}
   }
   if (variant === "useful-visible-contract") {
     extraRules.push(
-      "Visible text before a tool call is allowed only when it is useful to the user, such as a brief requested explanation. Merely saying which tools you will call is not useful. Do not emit generic acknowledgements, status narration, or filler such as \"Sure\", \"I'll call the tool\", or \"running that now\".",
+      'Visible text before a tool call is allowed only when it is useful to the user, such as a brief requested explanation. Merely saying which tools you will call is not useful. Do not emit generic acknowledgements, status narration, or filler such as "Sure", "I\'ll call the tool", or "running that now".',
     );
     extraRules.push(
       "When a tool result is needed before answering, do not include the final answer in the same assistant message as the tool call. Wait for Copilotz to provide <tool_results>, then answer from those results.",

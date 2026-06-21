@@ -370,10 +370,20 @@ function createMockCopilotz() {
           typeof (msg as { thread?: { id?: unknown } }).thread?.id === "string"
         ? (msg as { thread: { id: string } }).thread.id
         : "run-thread";
+      const content = typeof msg === "object" && msg !== null &&
+          "content" in msg
+        ? (msg as { content?: unknown }).content
+        : undefined;
       return {
         threadId,
         events: (async function* () {
           yield { type: "TOKEN", payload: { text: "hello" } };
+          if (content === "include excluded") {
+            yield {
+              type: "ASSET_CREATED",
+              payload: { assetId: "asset-1" },
+            };
+          }
           yield {
             type: "NEW_MESSAGE",
             payload: {
@@ -836,17 +846,133 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
       assertEquals(callbackEvents.length, 2);
       assertEquals(logged, [
         {
-          type: "TOKEN",
-          route: { ingress: "web", egress: "web" },
-          threadId: "run-thread",
-        },
-        {
           type: "NEW_MESSAGE",
           route: { ingress: "web", egress: "web" },
           threadId: "run-thread",
         },
       ]);
     });
+
+    await t.step(
+      "withApp boolean event logging writes inline JSON",
+      async () => {
+        const { copilotz } = createMockCopilotz();
+        const originalLog = console.log;
+        const logs: unknown[][] = [];
+        console.log = (...args: unknown[]) => {
+          logs.push(args);
+        };
+
+        try {
+          withApp(copilotz as any, { logGeneratedEvents: true });
+
+          await (copilotz as any).app.handle({
+            resource: "channels",
+            method: "POST",
+            path: ["web"],
+            body: { content: "hi" },
+            callback: () => {},
+          });
+        } finally {
+          console.log = originalLog;
+        }
+
+        assertEquals(logs.length, 1);
+        assertEquals(logs.every((args) => args.length === 1), true);
+        const prefix = "[copilotz:app:event] ";
+        const records = logs.map((args) => {
+          const line = String(args[0]);
+          assertEquals(line.startsWith(prefix), true);
+          return JSON.parse(line.slice(prefix.length));
+        });
+        assertEquals(records, [
+          {
+            type: "NEW_MESSAGE",
+            threadId: "run-thread",
+            route: { ingress: "web", egress: "web" },
+          },
+        ]);
+      },
+    );
+
+    await t.step(
+      "withApp event logging skips default excluded events",
+      async () => {
+        const { copilotz } = createMockCopilotz();
+        const logged: string[] = [];
+
+        withApp(copilotz as any, {
+          logGeneratedEvents: (event) => {
+            logged.push((event as { type?: string }).type ?? "unknown");
+          },
+        });
+
+        await (copilotz as any).app.handle({
+          resource: "channels",
+          method: "POST",
+          path: ["web"],
+          body: { content: "include excluded" },
+          callback: () => {},
+        });
+
+        assertEquals(logged, ["NEW_MESSAGE"]);
+      },
+    );
+
+    await t.step(
+      "withApp event logging can select default excluded event types",
+      async () => {
+        const { copilotz } = createMockCopilotz();
+        const logged: string[] = [];
+
+        withApp(copilotz as any, {
+          logGeneratedEvents: {
+            eventTypes: ["TOKEN", "ASSET_CREATED"],
+            logger: (event) => {
+              logged.push((event as { type?: string }).type ?? "unknown");
+            },
+          },
+        });
+
+        await (copilotz as any).app.handle({
+          resource: "channels",
+          method: "POST",
+          path: ["web"],
+          body: { content: "include excluded" },
+          callback: () => {},
+        });
+
+        assertEquals(logged, ["TOKEN", "ASSET_CREATED"]);
+      },
+    );
+
+    await t.step(
+      "withApp event logging excludeEventTypes wins last",
+      async () => {
+        const { copilotz } = createMockCopilotz();
+        const logged: string[] = [];
+
+        withApp(copilotz as any, {
+          logGeneratedEvents: {
+            eventTypes: ["TOKEN", "NEW_MESSAGE"],
+            excludeEventTypes: ["TOKEN"],
+            logger: (event) => {
+              logged.push((event as { type?: string }).type ?? "unknown");
+            },
+          },
+        });
+
+        await (copilotz as any).app.handle({
+          resource: "channels",
+          method: "POST",
+          path: ["web"],
+          body: { content: "include excluded" },
+          callback: () => {},
+        });
+
+        assertEquals(logged, ["NEW_MESSAGE"]);
+      },
+    );
 
     // -- graph --
     await t.step("GET /graph/nodes/:id returns node", async () => {

@@ -806,6 +806,48 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
       assertEquals(result.data.totalThreads, 42);
     });
 
+    await t.step("withApp can log generated channel events", async () => {
+      const { copilotz } = createMockCopilotz();
+      const logged: Array<{
+        type?: string;
+        route: { ingress: string; egress: string };
+        threadId: string;
+      }> = [];
+
+      withApp(copilotz as any, {
+        logGeneratedEvents: (event, context) => {
+          logged.push({
+            type: (event as { type?: string }).type,
+            route: context.route,
+            threadId: context.threadId,
+          });
+        },
+      });
+
+      const callbackEvents: unknown[] = [];
+      await (copilotz as any).app.handle({
+        resource: "channels",
+        method: "POST",
+        path: ["web"],
+        body: { content: "hi" },
+        callback: (event: unknown) => callbackEvents.push(event),
+      });
+
+      assertEquals(callbackEvents.length, 2);
+      assertEquals(logged, [
+        {
+          type: "TOKEN",
+          route: { ingress: "web", egress: "web" },
+          threadId: "run-thread",
+        },
+        {
+          type: "NEW_MESSAGE",
+          route: { ingress: "web", egress: "web" },
+          threadId: "run-thread",
+        },
+      ]);
+    });
+
     // -- graph --
     await t.step("GET /graph/nodes/:id returns node", async () => {
       const res = await fetch(`${base}/graph/nodes/n-42`);

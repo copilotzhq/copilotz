@@ -1609,6 +1609,11 @@ ${toolDefinitions}
   const nextRuleNumber = exampleRuleNumber + 1;
 
   return `
+
+=== THINKING ===
+
+Your previous thinking traces may appear as <think> ... </think> blocks. Do not include them in your response.
+
 === TOOL USAGE ===
 
 In this environment you have access to a set of tools you can use to answer the user's question.
@@ -1619,10 +1624,7 @@ In this environment you have access to a set of tools you can use to answer the 
 2. To call a tool, emit one JSON object per line between a single <tool_calls> ... </tool_calls> block.
    - Each object has exactly two keys: "name" (string) and "arguments" (object). No other keys.
    - "arguments" is a JSON object and may contain nested objects/arrays.
-3. Use ONLY this <tool_calls> JSON format. Do NOT use any built-in or native tool/function-calling
-   syntax. Specifically, never emit <tool_call>, <minimax:tool_call>, <invoke>, <parameter>,
-   <function_call>, <function_calls>, <function=...>, <tool_use>, <tool>, XML parameter tags,
-   provider-native tool syntax, or markdown code fences around the JSON.
+3. Use ONLY this <tool_calls> JSON format for tool calls..
 ${extraRuleText}${exampleRuleNumber}. Example (note the nested arguments object):
 
 <tool_calls>
@@ -1633,7 +1635,7 @@ ${extraRuleText}${exampleRuleNumber}. Example (note the nested arguments object)
 ${nextRuleNumber}. Tool outputs may appear later as <tool_results> blocks. Treat them as returned execution results and never generate <tool_results>, <tool_result>, <result>, <target_ids>, or <continue_after_tool_results> yourself.
 ${
     nextRuleNumber + 1
-  }. Never emit private reasoning tags such as <think>, <thinking>, <reasoning>, or <mm:think> in visible output.
+  }
 
 === TOOL CATALOG (read-only) ===
 

@@ -537,7 +537,7 @@ Deno.test("chat enforces idle timeout even when fetch abort does not break the r
   }
 });
 
-Deno.test("chat returns visible partial instead of falling back after mid-stream timeout", async () => {
+Deno.test("chat continues after mid-stream timeout using visible context", async () => {
   const originalFetch = globalThis.fetch;
   const encoder = new TextEncoder();
   const streamedChunks: string[] = [];
@@ -605,25 +605,50 @@ Deno.test("chat returns visible partial instead of falling back after mid-stream
       registry,
     );
 
-    assertEquals(response.answer, "hello");
-    assertEquals(response.finishReason, "error");
-    assertEquals(streamedChunks.join(""), "hello ");
+    assertEquals(response.answer, "hello world");
+    assertEquals(response.finishReason, "stop");
+    assertEquals(streamedChunks.join(""), "hello world");
     assertEquals(response.model, "primary");
-    assertEquals(calls, 1);
-    assertEquals(response.usage?.status, "aborted");
-    assertEquals(response.usage?.statusReason, "timeout");
-    assertEquals(response.usageAttempts?.length, 1);
+    assertEquals(calls, 2);
+    assertEquals(response.usageAttempts?.length, 2);
     assertEquals(response.usageAttempts?.[0]?.visibleOutputStarted, true);
+    assertEquals(response.usageAttempts?.[0]?.usage.statusReason, "timeout");
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-Deno.test("chat returns visible partial instead of falling back after provider stream error", async () => {
+Deno.test("chat continues after provider stream error using visible and reasoning context", async () => {
   const originalFetch = globalThis.fetch;
   const encoder = new TextEncoder();
   const streamedChunks: string[] = [];
+  const seenMessages: Array<Array<{ role?: string; content?: unknown }>> = [];
   let calls = 0;
+  const reasoningRegistry: ProviderRegistry = {
+    anthropic: () => ({
+      endpoint: "https://example.test/anthropic",
+      headers: () => ({}),
+      body: (messages) => {
+        seenMessages.push(
+          messages as Array<{ role?: string; content?: unknown }>,
+        );
+        return {};
+      },
+      extractContent: (data: any) => {
+        const delta = data?.choices?.[0]?.delta;
+        const parts: Array<{ text: string; isReasoning?: boolean }> = [];
+        if (typeof delta?.reasoning === "string") {
+          parts.push({ text: delta.reasoning, isReasoning: true });
+        }
+        if (typeof delta?.content === "string") {
+          parts.push({ text: delta.content });
+        }
+        return parts.length > 0 ? parts : null;
+      },
+      extractFinishReason: (data: any) =>
+        data?.choices?.[0]?.finish_reason ?? null,
+    }),
+  };
 
   globalThis.fetch = () => {
     calls += 1;
@@ -632,6 +657,17 @@ Deno.test("chat returns visible partial instead of falling back after provider s
         new Response(
           new ReadableStream<Uint8Array>({
             start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${
+                    JSON.stringify({
+                      choices: [{
+                        delta: { reasoning: "Need a careful wrap." },
+                      }],
+                    })
+                  }\n\n`,
+                ),
+              );
               controller.enqueue(
                 encoder.encode(
                   `data: ${
@@ -653,7 +689,10 @@ Deno.test("chat returns visible partial instead of falling back after provider s
       new Response(
         `data: ${
           JSON.stringify({
-            choices: [{ delta: { content: "fallback answer" } }],
+            choices: [{
+              delta: { content: " continued." },
+              finish_reason: "stop",
+            }],
           })
         }\n\n`,
         { headers: { "content-type": "text/event-stream" } },
@@ -672,19 +711,38 @@ Deno.test("chat returns visible partial instead of falling back after provider s
         fallbacks: [{ provider: "anthropic", model: "fallback" }],
       },
       {},
-      (chunk) => streamedChunks.push(chunk),
-      registry,
+      (chunk, options) => {
+        if (!options?.isReasoning) streamedChunks.push(chunk);
+      },
+      reasoningRegistry,
     );
 
-    assertEquals(calls, 1);
-    assertEquals(response.answer, "partial answer");
-    assertEquals(response.finishReason, "error");
+    assertEquals(calls, 2);
+    assertEquals(response.answer, "partial answer continued.");
+    assertEquals(response.reasoning, "Need a careful wrap.");
+    assertEquals(response.finishReason, "stop");
     assertEquals(response.model, "primary");
-    assertEquals(response.usage?.status, "aborted");
-    assertEquals(response.usage?.statusReason, "network");
-    assertEquals(response.usageAttempts?.length, 1);
+    assertEquals(response.usageAttempts?.length, 2);
     assertEquals(response.usageAttempts?.[0]?.visibleOutputStarted, true);
-    assertEquals(streamedChunks.join(""), "partial answer");
+    assertEquals(response.usageAttempts?.[0]?.usage.statusReason, "network");
+    assertEquals(streamedChunks.join(""), "partial answer continued.");
+
+    const retryMessages = seenMessages[1] ?? [];
+    const retryAssistant = retryMessages.find((message) =>
+      message.role === "assistant" &&
+      String(message.content ?? "").includes("partial answer")
+    );
+    const retryUser = retryMessages.find((message) =>
+      message.role === "user" &&
+      String(message.content ?? "").includes(
+        "Continue exactly where you left off",
+      )
+    );
+    assertEquals(
+      retryAssistant?.content,
+      "<think>\nNeed a careful wrap.\n</think>\n\npartial answer",
+    );
+    assertEquals(Boolean(retryUser), true);
   } finally {
     globalThis.fetch = originalFetch;
   }

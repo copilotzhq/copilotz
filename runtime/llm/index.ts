@@ -394,8 +394,10 @@ export async function chat(
   let recoveryPrefix = "";
   let lastRecoveryReason: string | null = null;
   let sameModelRetried = false;
+  let streamErrorRetried = false;
   let visibleOutputStarted = false;
   let silentRepairNextAttempt = false;
+  let recoveryReasoning = "";
 
   let index = 0;
   while (index < attemptConfigs.length) {
@@ -417,11 +419,15 @@ export async function chat(
     const attemptId = crypto.randomUUID();
     let attemptVisibleOutputStarted = false;
     let attemptVisibleOutput = "";
+    let attemptReasoningOutput = "";
     const silentRepairAttempt = silentRepairNextAttempt;
     silentRepairNextAttempt = false;
 
     const trackedStream = stream && !silentRepairAttempt
       ? ((chunk: string, options?: { isReasoning?: boolean }) => {
+        if (chunk.length > 0 && options?.isReasoning) {
+          attemptReasoningOutput += chunk;
+        }
         if (chunk.length > 0 && !options?.isReasoning) {
           if (hasMeaningfulVisibleOutput(chunk)) {
             attemptVisibleOutputStarted = true;
@@ -580,7 +586,10 @@ export async function chat(
         extractedBlockTags,
         knownToolNames,
       );
-      const reasoning = mergeReasoningParts(streamResult.reasoning);
+      const reasoning = mergeReasoningParts(
+        recoveryReasoning,
+        streamResult.reasoning,
+      );
       const parsedCurrentAttempt = parseAssistantResponse(
         streamResult.content,
         extractedBlockTags,
@@ -842,11 +851,37 @@ export async function chat(
         message: getErrorMessage(error),
       });
 
+      const hasPartialAttemptContext = attemptVisibleOutput.trim().length > 0 ||
+        attemptReasoningOutput.trim().length > 0;
+      if (!streamErrorRetried && hasPartialAttemptContext) {
+        recoveryReasoning = mergeReasoningParts(
+          recoveryReasoning,
+          attemptReasoningOutput,
+        ) ?? "";
+        recoveryPrefix = buildRecoveryAssistantContext(
+          prefixBeforeAttempt,
+          sanitizeUserFacingText(attemptVisibleOutput),
+          attemptReasoningOutput,
+          request.reasoningHistory,
+        );
+        streamErrorRetried = true;
+        warnRecoveryAttempt(
+          lastRecoveryReason,
+          attemptConfig,
+          attemptConfig,
+          "Provider stream failed after partial output, retrying with continuation context",
+        );
+        continue;
+      }
+
       if (visibleOutputStarted) {
         const answer = sanitizeUserFacingText(recoveryPrefix);
         return {
           prompt: attemptMessages,
           answer,
+          ...(attemptReasoningOutput.trim().length > 0
+            ? { reasoning: mergeReasoningParts(attemptReasoningOutput) }
+            : {}),
           tokens: failedUsage.totalTokens ??
             await countTokens(attemptMessages, answer),
           finishReason: "error",

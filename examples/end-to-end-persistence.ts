@@ -53,6 +53,41 @@ function buildSseResponse(content: string, usage: {
   });
 }
 
+function buildBrokenSseResponse(): Response {
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            `data: ${
+              JSON.stringify({
+                choices: [{
+                  delta: { reasoning_content: "Need to continue safely." },
+                }],
+              })
+            }\n\n`,
+          ),
+        );
+        controller.enqueue(
+          encoder.encode(
+            `data: ${
+              JSON.stringify({
+                choices: [{ delta: { content: "Broken partial" } }],
+              })
+            }\n\n`,
+          ),
+        );
+        setTimeout(
+          () => controller.error(new Error("simulated stream break")),
+          0,
+        );
+      },
+    }),
+    { headers: { "content-type": "text/event-stream" } },
+  );
+}
+
 const originalFetch = globalThis.fetch;
 let fetchCalls = 0;
 const requestBodies: Array<Record<string, unknown>> = [];
@@ -73,17 +108,28 @@ globalThis.fetch = (async (input, init) => {
     requestBodies.push(JSON.parse(init.body) as Record<string, unknown>);
   }
 
-  return fetchCalls === 1
-    ? buildSseResponse("Persisted assistant message.", {
+  if (fetchCalls === 1) {
+    return buildSseResponse("Persisted assistant message.", {
       promptTokens: 11,
       completionTokens: 3,
       totalTokens: 14,
-    })
-    : buildSseResponse("Second persisted assistant message.", {
+    });
+  }
+  if (fetchCalls === 2) {
+    return buildSseResponse("Second persisted assistant message.", {
       promptTokens: 25,
       completionTokens: 5,
       totalTokens: 30,
     });
+  }
+  if (fetchCalls === 3) {
+    return buildBrokenSseResponse();
+  }
+  return buildSseResponse(" continued after break.", {
+    promptTokens: 40,
+    completionTokens: 4,
+    totalTokens: 44,
+  });
 }) as typeof fetch;
 
 const copilotz = await createCopilotz({
@@ -154,13 +200,25 @@ try {
   const secondRun = await runAndCollect("And persist a second turn.", {
     id: firstRun.threadId,
   });
+  const thirdRun = await runAndCollect("Break once, then continue.", {
+    id: firstRun.threadId,
+  });
 
   assertEquals(
     secondRun.threadId,
     firstRun.threadId,
     "Expected second turn to use the same thread",
   );
-  assertEquals(fetchCalls, 2, "Expected one provider request per turn");
+  assertEquals(
+    thirdRun.threadId,
+    firstRun.threadId,
+    "Expected third turn to use the same thread",
+  );
+  assertEquals(
+    fetchCalls,
+    4,
+    "Expected third turn to use a continuation request after the stream break",
+  );
   assertEquals(
     firstRun.streamed,
     "Persisted assistant message.",
@@ -171,12 +229,18 @@ try {
     "Second persisted assistant message.",
     "Expected second streamed assistant output",
   );
+  assertEquals(
+    thirdRun.streamed,
+    "Broken partial continued after break.",
+    "Expected third streamed assistant output to include continuation",
+  );
   assert(
     firstRun.eventTypes.includes("LLM_RESULT") &&
-      secondRun.eventTypes.includes("LLM_RESULT"),
-    "Expected an LLM_RESULT event in both streams",
+      secondRun.eventTypes.includes("LLM_RESULT") &&
+      thirdRun.eventTypes.includes("LLM_RESULT"),
+    "Expected an LLM_RESULT event in every stream",
   );
-  assertEquals(requestBodies.length, 2, "Expected two request bodies");
+  assertEquals(requestBodies.length, 4, "Expected four request bodies");
   assertEquals(
     requestBodies[0].model,
     "gpt-4o-mini",
@@ -186,6 +250,11 @@ try {
     requestBodies[1].model,
     "gpt-4o-mini",
     "Expected configured model in second request body",
+  );
+  assertEquals(
+    requestBodies[3].model,
+    "gpt-4o-mini",
+    "Expected configured model in continuation request body",
   );
 
   const secondRequestJson = JSON.stringify(requestBodies[1]);
@@ -197,14 +266,23 @@ try {
     secondRequestJson.includes("Persisted assistant message."),
     "Expected second provider request to include first assistant turn",
   );
+  const continuationRequestJson = JSON.stringify(requestBodies[3]);
+  assert(
+    continuationRequestJson.includes("Need to continue safely."),
+    "Expected continuation request to include failed attempt reasoning",
+  );
+  assert(
+    continuationRequestJson.includes("Broken partial"),
+    "Expected continuation request to include failed attempt visible content",
+  );
 
   const messages = await copilotz.ops.getMessageHistoryFromGraph(
     firstRun.threadId,
   );
   assertEquals(
     messages.length,
-    4,
-    "Expected two user and two assistant messages",
+    6,
+    "Expected three user and three assistant messages",
   );
   assertEquals(
     messages[0].content,
@@ -227,6 +305,21 @@ try {
     "Expected persisted second assistant message",
   );
   assertEquals(
+    messages[4].content,
+    "Break once, then continue.",
+    "Expected persisted third user message",
+  );
+  assertEquals(
+    messages[5].content,
+    "Broken partial continued after break.",
+    "Expected persisted continued assistant message",
+  );
+  assertEquals(
+    messages[5].reasoning,
+    "Need to continue safely.",
+    "Expected persisted continued assistant reasoning from failed attempt",
+  );
+  assertEquals(
     messages[1].senderType,
     "agent",
     "Expected first assistant message sender type",
@@ -235,6 +328,11 @@ try {
     messages[3].senderType,
     "agent",
     "Expected second assistant message sender type",
+  );
+  assertEquals(
+    messages[5].senderType,
+    "agent",
+    "Expected third assistant message sender type",
   );
 
   const firstAssistantMetadata = (messages[1].metadata ?? {}) as Record<
@@ -245,6 +343,10 @@ try {
     string,
     unknown
   >;
+  const thirdAssistantMetadata = (messages[5].metadata ?? {}) as Record<
+    string,
+    unknown
+  >;
   assert(
     typeof firstAssistantMetadata.usageNodeId === "string",
     "Expected first assistant message metadata to reference llm_usage",
@@ -252,6 +354,10 @@ try {
   assert(
     typeof secondAssistantMetadata.usageNodeId === "string",
     "Expected second assistant message metadata to reference llm_usage",
+  );
+  assert(
+    typeof thirdAssistantMetadata.usageNodeId === "string",
+    "Expected third assistant message metadata to reference llm_usage",
   );
 
   const usageRows = await copilotz.db.query<{
@@ -267,7 +373,7 @@ try {
     [firstRun.threadId],
   );
 
-  assertEquals(usageRows.rows.length, 2, "Expected two llm_usage nodes");
+  assertEquals(usageRows.rows.length, 4, "Expected four llm_usage nodes");
   assertEquals(
     usageRows.rows[0].id,
     firstAssistantMetadata.usageNodeId,
@@ -279,6 +385,11 @@ try {
     "Expected second assistant metadata to point at second llm_usage",
   );
   assertEquals(
+    usageRows.rows[3].id,
+    thirdAssistantMetadata.usageNodeId,
+    "Expected continued assistant metadata to point at final continuation llm_usage",
+  );
+  assertEquals(
     usageRows.rows[0].data.totalTokens,
     14,
     "Expected first provider-reported total tokens",
@@ -287,6 +398,16 @@ try {
     usageRows.rows[1].data.totalTokens,
     30,
     "Expected second provider-reported total tokens",
+  );
+  assertEquals(
+    usageRows.rows[2].data.statusReason,
+    "network",
+    "Expected failed stream attempt to be tracked as llm_usage",
+  );
+  assertEquals(
+    usageRows.rows[3].data.totalTokens,
+    44,
+    "Expected continuation provider-reported total tokens",
   );
 
   console.log("End-to-end multi-turn persistence example passed.");

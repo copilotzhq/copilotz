@@ -16,6 +16,8 @@ import {
   generateCollectionIndexes,
   listTenantSchemas,
   loadDatabaseDataDirSnapshot,
+  migrateAllSchemas,
+  migrateSchema,
   migrations,
   prepareDatabase,
   provisionTenantSchema,
@@ -334,6 +336,8 @@ export {
   clearSchemaCache,
   dropTenantSchema,
   listTenantSchemas,
+  migrateAllSchemas,
+  migrateSchema,
   provisionTenantSchema,
   schemaExists,
   warmSchemaCache,
@@ -1082,6 +1086,16 @@ export interface Copilotz {
      * @param schemaName - Name of the schema to create
      */
     provision: (schemaName: string) => Promise<void>;
+    /**
+     * Runs all current Copilotz migrations for a schema.
+     * Idempotent - safe for existing schemas from older Copilotz versions.
+     * @param schemaName - Name of the schema to migrate
+     */
+    migrate: (schemaName: string) => Promise<void>;
+    /**
+     * Runs all current Copilotz migrations for every non-system schema.
+     */
+    migrateAll: () => Promise<{ schemas: string[] }>;
     /**
      * Drops a tenant schema and all its data.
      * WARNING: This permanently deletes all data in the schema!
@@ -1991,6 +2005,8 @@ export async function createCopilotz(
     schema: {
       provision: (schemaName: string) =>
         provisionTenantSchema(baseDb, schemaName),
+      migrate: (schemaName: string) => migrateSchema(baseDb, schemaName),
+      migrateAll: () => migrateAllSchemas(baseDb),
       drop: (schemaName: string) => dropTenantSchema(baseDb, schemaName),
       exists: (schemaName: string) => schemaExists(baseDb, schemaName),
       list: () => listTenantSchemas(baseDb),

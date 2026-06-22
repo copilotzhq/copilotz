@@ -34,6 +34,7 @@ import { generateMutationOutboxMigrations } from "./migrations/migration_0009_mu
 import { getCurrentSchema } from "./schema-context.ts";
 import {
   ensureSchemaProvisioned,
+  migrateSchema,
   validateSchemaName,
 } from "./schema-provisioning.ts";
 import { sanitizePostgresParams } from "./postgres-json-safety.ts";
@@ -358,6 +359,7 @@ const createDbInstance = async (
 
   // Wrap db.query with schema-aware logic
   const wrappedDb = wrapDbWithSchemaSupport(dbInstance, finalConfig, debug);
+  await migrateSchema(wrappedDb, "public");
 
   const ops = createOperations(wrappedDb, {
     staleProcessingThresholdMs: finalConfig.staleProcessingThresholdMs,
@@ -917,6 +919,8 @@ export {
   ensureSchemaProvisioned,
   isSchemaInCache,
   listTenantSchemas,
+  migrateAllSchemas,
+  migrateSchema,
   provisionTenantSchema,
   schemaExists,
   validateSchemaName,

@@ -12,13 +12,10 @@ import { migrations } from "./index.ts";
 import { splitSQLStatements } from "./migrations/utils.ts";
 
 /**
- * In-memory cache of provisioned schemas.
- * Used to avoid repeated database checks for schema existence.
+ * In-memory cache of schemas migrated by this process.
+ * Used to avoid repeated idempotent DDL checks for hot tenant paths.
  */
 const provisionedSchemas = new Set<string>();
-
-// Always consider 'public' as provisioned
-provisionedSchemas.add("public");
 
 /**
  * Regex pattern for valid PostgreSQL schema names.
@@ -148,18 +145,30 @@ export async function provisionTenantSchema(
   db: DbInstance,
   schemaName: string,
 ): Promise<void> {
-  if (schemaName === "public") {
-    // Public schema should already be provisioned via normal migration
-    provisionedSchemas.add("public");
-    return;
-  }
+  await migrateSchema(db, schemaName);
+}
 
+/**
+ * Runs all current Copilotz schema migrations against a schema.
+ *
+ * Existing schemas from older Copilotz versions may already have the core
+ * tables but miss additive columns/indexes from newer releases. This function
+ * treats migrations as the source of truth and is intentionally idempotent.
+ */
+export async function migrateSchema(
+  db: DbInstance,
+  schemaName: string,
+): Promise<void> {
   // Validate schema name (prevent SQL injection)
   // This is critical since schema names cannot be parameterized
-  validateSchemaName(schemaName);
+  if (schemaName !== "public") {
+    validateSchemaName(schemaName);
 
-  // Create the schema if it doesn't exist
-  await db.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(schemaName)}`);
+    // Create the schema if it doesn't exist
+    await db.query(
+      `CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(schemaName)}`,
+    );
+  }
 
   // Run each migration statement inside a transaction with search_path pinned
   // to the tenant schema. In direct Postgres mode, this must use one checked-out
@@ -189,6 +198,19 @@ export async function provisionTenantSchema(
 
   // Mark as provisioned
   provisionedSchemas.add(schemaName);
+}
+
+/**
+ * Runs current Copilotz migrations against every non-system schema.
+ */
+export async function migrateAllSchemas(db: DbInstance): Promise<{
+  schemas: string[];
+}> {
+  const schemas = await listTenantSchemas(db);
+  for (const schemaName of schemas) {
+    await migrateSchema(db, schemaName);
+  }
+  return { schemas };
 }
 
 /**
@@ -243,18 +265,12 @@ export async function ensureSchemaProvisioned(
     validateSchemaName(schemaName);
   }
 
-  // Fast path: already in cache
+  // Fast path: this process already ran current migrations for the schema.
   if (provisionedSchemas.has(schemaName)) {
     return;
   }
 
-  if (schemaName === "public" || await schemaIsProvisioned(db, schemaName)) {
-    provisionedSchemas.add(schemaName);
-    return;
-  }
-
-  // Schema is missing or exists without the required tables.
-  await provisionTenantSchema(db, schemaName);
+  await migrateSchema(db, schemaName);
 }
 
 /**
@@ -278,12 +294,7 @@ export async function warmSchemaCache(db: DbInstance): Promise<void> {
   );
 
   for (const row of result.rows) {
-    if (
-      row.schema_name === "public" ||
-      await schemaIsProvisioned(db, row.schema_name)
-    ) {
-      provisionedSchemas.add(row.schema_name);
-    }
+    await migrateSchema(db, row.schema_name);
   }
 }
 
@@ -327,7 +338,6 @@ export function isSchemaInCache(schemaName: string): boolean {
  */
 export function clearSchemaCache(): void {
   provisionedSchemas.clear();
-  provisionedSchemas.add("public");
 }
 
 type DirectPoolClient = {

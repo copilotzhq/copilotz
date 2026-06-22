@@ -6,6 +6,7 @@ import {
   clearSchemaCache,
   ensureSchemaProvisioned,
   isSchemaInCache,
+  migrateAllSchemas,
   schemaIsProvisioned,
   warmSchemaCache,
 } from "./schema-provisioning.ts";
@@ -77,12 +78,71 @@ Deno.test("ensureSchemaProvisioned migrates an existing empty schema", async () 
   assertEquals(isSchemaInCache("tenant_empty"), true);
 });
 
-Deno.test("warmSchemaCache does not cache empty tenant schemas", async () => {
+Deno.test("ensureSchemaProvisioned migrates an existing ready schema", async () => {
+  clearSchemaCache();
+  const db = new FakeDb(["tenant_ready"]);
+
+  await ensureSchemaProvisioned(db as never, "tenant_ready");
+
+  assert(
+    db.calls.some((call) =>
+      call.sql.includes('CREATE SCHEMA IF NOT EXISTS "tenant_ready"')
+    ),
+  );
+  assert(
+    db.calls.some((call) =>
+      call.sql.includes('SET LOCAL search_path TO "tenant_ready", public')
+    ),
+  );
+  assertEquals(isSchemaInCache("tenant_ready"), true);
+});
+
+Deno.test("ensureSchemaProvisioned migrates public before caching it", async () => {
+  clearSchemaCache();
+  const db = new FakeDb(["public"]);
+
+  assertEquals(isSchemaInCache("public"), false);
+  await ensureSchemaProvisioned(db as never, "public");
+
+  assert(
+    db.calls.some((call) =>
+      call.sql.includes('SET LOCAL search_path TO "public", public')
+    ),
+  );
+  assertEquals(isSchemaInCache("public"), true);
+});
+
+Deno.test("warmSchemaCache migrates and caches existing non-system schemas", async () => {
   clearSchemaCache();
   const db = new FakeDb(["tenant_ready"]);
 
   await warmSchemaCache(db as never);
 
-  assertEquals(isSchemaInCache("tenant_empty"), false);
+  assertEquals(isSchemaInCache("public"), true);
+  assertEquals(isSchemaInCache("tenant_empty"), true);
   assertEquals(isSchemaInCache("tenant_ready"), true);
+});
+
+Deno.test("migrateAllSchemas migrates all listed schemas", async () => {
+  clearSchemaCache();
+  const db = new FakeDb(["tenant_ready"]);
+
+  const result = await migrateAllSchemas(db as never);
+
+  assertEquals(result.schemas, ["public", "tenant_empty", "tenant_ready"]);
+  assert(
+    db.calls.some((call) =>
+      call.sql.includes('SET LOCAL search_path TO "public", public')
+    ),
+  );
+  assert(
+    db.calls.some((call) =>
+      call.sql.includes('SET LOCAL search_path TO "tenant_empty", public')
+    ),
+  );
+  assert(
+    db.calls.some((call) =>
+      call.sql.includes('SET LOCAL search_path TO "tenant_ready", public')
+    ),
+  );
 });

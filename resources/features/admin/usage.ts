@@ -3,8 +3,8 @@ import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 import {
   type AdminUsageTotals,
   buildAdminUsageSourceCte,
+  buildAttemptUsageSumSelects,
   buildUsageCoalesceSelects,
-  buildUsageSumSelects,
   pushAdminUsageSourceScope,
   toIso,
   toNum,
@@ -174,7 +174,7 @@ export default async function (
            DATE_TRUNC('${interval}', u."created_at") AS "bucket",
            COALESCE(${participantKeyExpr}, 'unknown') AS "groupKey",
            COUNT(*)::int AS "totalCalls",
-           ${buildUsageSumSelects(`u."data"`)}
+           ${buildAttemptUsageSumSelects(`u."data"`)}
          FROM "admin_usage_source" u
          WHERE ${whereClause}
          GROUP BY 1, 2
@@ -310,7 +310,7 @@ export default async function (
          ${groupExpr} AS "groupKey",
          ${labelExpr} AS "groupLabel",
          COUNT(*)::int AS "totalCalls",
-         ${buildUsageSumSelects(`u."data"`)}
+         ${buildAttemptUsageSumSelects(`u."data"`)}
        FROM "admin_usage_source" u
        ${participantJoins}
        ${threadJoin}
@@ -330,7 +330,9 @@ export default async function (
 
   const totalsResult = await q<Record<keyof AdminUsageTotals, number>>(
     `WITH ${buildAdminUsageSourceCte(`"admin_usage_source"`, sourceScope)}
-     SELECT COUNT(*)::int AS "totalCalls", ${buildUsageSumSelects(`u."data"`)}
+     SELECT COUNT(*)::int AS "totalCalls", ${
+      buildAttemptUsageSumSelects(`u."data"`)
+    }
      FROM "admin_usage_source" u
      ${participantJoins}
      ${threadJoin}

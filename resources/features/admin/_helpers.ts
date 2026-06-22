@@ -108,18 +108,18 @@ export interface AdminAgentSummary {
 // ---------------------------------------------------------------------------
 
 const USAGE_BREAKDOWN_FIELDS = [
-  { key: "inputTokens", cast: "bigint" },
-  { key: "outputTokens", cast: "bigint" },
-  { key: "reasoningTokens", cast: "bigint" },
-  { key: "cacheReadInputTokens", cast: "bigint" },
-  { key: "cacheCreationInputTokens", cast: "bigint" },
-  { key: "totalTokens", cast: "bigint" },
-  { key: "inputCostUsd", cast: "float8" },
-  { key: "outputCostUsd", cast: "float8" },
-  { key: "reasoningCostUsd", cast: "float8" },
-  { key: "cacheReadInputCostUsd", cast: "float8" },
-  { key: "cacheCreationInputCostUsd", cast: "float8" },
-  { key: "totalCostUsd", cast: "float8" },
+  { key: "inputTokens", source: "usage", cast: "bigint" },
+  { key: "outputTokens", source: "usage", cast: "bigint" },
+  { key: "reasoningTokens", source: "usage", cast: "bigint" },
+  { key: "cacheReadInputTokens", source: "usage", cast: "bigint" },
+  { key: "cacheCreationInputTokens", source: "usage", cast: "bigint" },
+  { key: "totalTokens", source: "usage", cast: "bigint" },
+  { key: "inputCostUsd", source: "cost", cast: "float8" },
+  { key: "outputCostUsd", source: "cost", cast: "float8" },
+  { key: "reasoningCostUsd", source: "cost", cast: "float8" },
+  { key: "cacheReadInputCostUsd", source: "cost", cast: "float8" },
+  { key: "cacheCreationInputCostUsd", source: "cost", cast: "float8" },
+  { key: "totalCostUsd", source: "cost", cast: "float8" },
 ] as const;
 
 export function buildUsageSumSelects(dataColumn: string): string {
@@ -130,27 +130,18 @@ export function buildUsageSumSelects(dataColumn: string): string {
     .join(",\n         ");
 }
 
+export function buildAttemptUsageSumSelects(dataColumn: string): string {
+  return USAGE_BREAKDOWN_FIELDS
+    .map((f) =>
+      `COALESCE(SUM((${dataColumn}->'${f.source}'->>'${f.key}')::${f.cast}), 0)::${f.cast} AS "${f.key}"`
+    )
+    .join(",\n         ");
+}
+
 export function buildUsageCoalesceSelects(alias: string): string {
   return USAGE_BREAKDOWN_FIELDS
     .map((f) => `COALESCE("${alias}"."${f.key}", 0)::${f.cast} AS "${f.key}"`)
     .join(",\n         ");
-}
-
-function buildAttemptUsageDataObject(): string {
-  return `jsonb_build_object(
-           'inputTokens', a."data"->'usage'->'inputTokens',
-           'outputTokens', a."data"->'usage'->'outputTokens',
-           'reasoningTokens', a."data"->'usage'->'reasoningTokens',
-           'cacheReadInputTokens', a."data"->'usage'->'cacheReadInputTokens',
-           'cacheCreationInputTokens', a."data"->'usage'->'cacheCreationInputTokens',
-           'totalTokens', a."data"->'usage'->'totalTokens',
-           'inputCostUsd', a."data"->'cost'->'inputCostUsd',
-           'outputCostUsd', a."data"->'cost'->'outputCostUsd',
-           'reasoningCostUsd', a."data"->'cost'->'reasoningCostUsd',
-           'cacheReadInputCostUsd', a."data"->'cost'->'cacheReadInputCostUsd',
-           'cacheCreationInputCostUsd', a."data"->'cost'->'cacheCreationInputCostUsd',
-           'totalCostUsd', a."data"->'cost'->'totalCostUsd'
-         )`;
 }
 
 function buildRunSenderIdExpr(dataExpr: string): string {
@@ -220,7 +211,7 @@ export function buildAdminUsageSourceCte(
          ${buildRunSenderIdExpr(`a."data"`)} AS "initiatedById",
          COALESCE(a."data"->>'provider', '') AS "provider",
          COALESCE(a."data"->>'model', '') AS "model",
-         ${buildAttemptUsageDataObject()} AS "data",
+         a."data",
          'llm_attempt'::text AS "sourceType"
        FROM "nodes" a
        WHERE ${attemptWhere}

@@ -2,7 +2,11 @@ import {
   assert,
   assertStringIncludes,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { buildAdminUsageSourceCte, buildUsageSumSelects } from "./_helpers.ts";
+import {
+  buildAdminUsageSourceCte,
+  buildAttemptUsageSumSelects,
+  buildUsageSumSelects,
+} from "./_helpers.ts";
 
 Deno.test("admin usage sums read only canonical flattened fields", () => {
   const sql = buildUsageSumSelects('u."data"');
@@ -39,12 +43,21 @@ Deno.test("admin usage sums read only canonical flattened fields", () => {
   }
 });
 
+Deno.test("admin attempt usage sums read nested canonical fields", () => {
+  const sql = buildAttemptUsageSumSelects('u."data"');
+
+  assertStringIncludes(sql, `->'usage'->>'inputTokens'`);
+  assertStringIncludes(sql, `->'usage'->>'totalTokens'`);
+  assertStringIncludes(sql, `->'cost'->>'inputCostUsd'`);
+  assertStringIncludes(sql, `->'cost'->>'totalCostUsd'`);
+  assert(!sql.includes(`legacy_usage`));
+});
+
 Deno.test("admin usage source reads only canonical llm_attempt rows", () => {
   const sql = buildAdminUsageSourceCte();
 
   assertStringIncludes(sql, `a."type" = 'llm_attempt'`);
-  assertStringIncludes(sql, `a."data"->'usage'->'inputTokens'`);
-  assertStringIncludes(sql, `a."data"->'cost'->'totalCostUsd'`);
+  assertStringIncludes(sql, `a."data",`);
   assert(!sql.includes(`llm_usage`));
   assert(!sql.includes(`legacy_usage`));
   assertStringIncludes(sql, `a."data"->>'eventId'`);

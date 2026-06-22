@@ -2,8 +2,8 @@ import type { Copilotz } from "@/index.ts";
 import {
   type AdminActivityPoint,
   buildAdminUsageSourceCte,
+  buildAttemptUsageSumSelects,
   buildUsageCoalesceSelects,
-  buildUsageSumSelects,
   pushAdminUsageSourceScope,
   pushScopedThreadNode,
   pushTimeRange,
@@ -66,7 +66,7 @@ export default async function (
        SELECT
          DATE_TRUNC('${interval}', "created_at") AS "bucket",
          COUNT(*)::int AS "totalCalls",
-         ${buildUsageSumSelects(`"data"`)}
+         ${buildAttemptUsageSumSelects(`"data"`)}
        FROM "admin_usage_source" ${usageWhere}
        GROUP BY 1
      ),

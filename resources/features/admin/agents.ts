@@ -10,6 +10,7 @@ import {
   normalizeLimit,
   normalizeOffset,
   normalizeSearch,
+  pushAdminUsageSourceScope,
   toIso,
   toNum,
   toUsageBreakdown,
@@ -45,11 +46,10 @@ export default async function (
 
   const msgScope: string[] = [`m."type" = 'message'`];
   const usageScope: string[] = [];
-  if (namespace) {
-    params.push(namespace);
-    const ni = params.length;
-    msgScope.push(`m."namespace" = $${ni}`);
-    usageScope.push(`u."namespace" = $${ni}`);
+  const usageSourceScope = pushAdminUsageSourceScope(params, namespace);
+  if (usageSourceScope.namespacePlaceholder) {
+    msgScope.push(`m."namespace" = ${usageSourceScope.namespacePlaceholder}`);
+    usageScope.push(`u."namespace" = ${usageSourceScope.namespacePlaceholder}`);
   }
   const usageWhere = usageScope.length ? usageScope.join(" AND ") : "TRUE";
 
@@ -65,7 +65,7 @@ export default async function (
       lastActivityAt: Date | string | null;
     } & Record<keyof AdminUsageBreakdown, number>
   >(
-    `WITH ${buildAdminUsageSourceCte()},
+    `WITH ${buildAdminUsageSourceCte(`"admin_usage_source"`, usageSourceScope)},
      "message_stats" AS (
        SELECT COALESCE(m."data"->>'senderId', '') AS "agentId",
          COUNT(*)::int AS "messageCount",

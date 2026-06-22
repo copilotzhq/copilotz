@@ -4,6 +4,7 @@ import {
   buildAdminUsageSourceCte,
   buildUsageCoalesceSelects,
   buildUsageSumSelects,
+  pushAdminUsageSourceScope,
   pushScopedThreadNode,
   pushTimeRange,
   toIso,
@@ -29,8 +30,16 @@ export default async function (
   const messageWhere = `WHERE ${mf.join(" AND ")}`;
 
   const uf: string[] = [];
-  pushScopedThreadNode(params, uf, `"namespace"`, namespace);
-  pushTimeRange(params, uf, `"created_at"`, from, to);
+  const usageScope = pushAdminUsageSourceScope(params, namespace, from, to);
+  if (usageScope.namespacePlaceholder) {
+    uf.push(`"namespace" = ${usageScope.namespacePlaceholder}`);
+  }
+  if (usageScope.fromPlaceholder) {
+    uf.push(`"created_at" >= ${usageScope.fromPlaceholder}`);
+  }
+  if (usageScope.toPlaceholder) {
+    uf.push(`"created_at" <= ${usageScope.toPlaceholder}`);
+  }
   const usageWhere = `WHERE ${uf.length ? uf.join(" AND ") : "TRUE"}`;
 
   const result = await q<
@@ -41,7 +50,7 @@ export default async function (
       totalCalls: number;
     } & Record<string, number>
   >(
-    `WITH ${buildAdminUsageSourceCte()},
+    `WITH ${buildAdminUsageSourceCte(`"admin_usage_source"`, usageScope)},
      "message_series" AS (
        SELECT
          DATE_TRUNC('${interval}', "created_at") AS "bucket",

@@ -37,6 +37,65 @@ const RESERVED_SCHEMAS = new Set([
 
 const REQUIRED_TABLES = ["threads", "events", "nodes", "edges"] as const;
 
+const REQUIRED_RUNTIME_COLUMNS = [
+  {
+    table: "events",
+    column: "subjectType",
+    sql:
+      `ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "subjectType" varchar(255)`,
+  },
+  {
+    table: "events",
+    column: "subjectId",
+    sql:
+      `ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "subjectId" varchar(255)`,
+  },
+  {
+    table: "events",
+    column: "operation",
+    sql:
+      `ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "operation" varchar(64)`,
+  },
+  {
+    table: "events",
+    column: "causationId",
+    sql:
+      `ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "causationId" varchar(255)`,
+  },
+  {
+    table: "events",
+    column: "correlationId",
+    sql:
+      `ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "correlationId" varchar(255)`,
+  },
+  {
+    table: "events",
+    column: "dedupeKey",
+    sql:
+      `ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "dedupeKey" varchar(512)`,
+  },
+  {
+    table: "events",
+    column: "input",
+    sql: `ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "input" jsonb`,
+  },
+  {
+    table: "events",
+    column: "before",
+    sql: `ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "before" jsonb`,
+  },
+  {
+    table: "events",
+    column: "after",
+    sql: `ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "after" jsonb`,
+  },
+  {
+    table: "events",
+    column: "patch",
+    sql: `ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "patch" jsonb`,
+  },
+] as const;
+
 /**
  * Validates a schema name for security and PostgreSQL compatibility.
  *
@@ -200,6 +259,37 @@ export async function migrateSchema(
   provisionedSchemas.add(schemaName);
 }
 
+async function schemaHasColumn(
+  db: DbInstance,
+  schemaName: string,
+  tableName: string,
+  columnName: string,
+): Promise<boolean> {
+  const result = await db.query<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = $1
+         AND table_name = $2
+         AND column_name = $3
+     ) AS "exists"`,
+    [schemaName, tableName, columnName],
+  );
+  return result.rows[0]?.exists === true;
+}
+
+async function ensureRuntimeCompatibility(
+  db: DbInstance,
+  schemaName: string,
+): Promise<void> {
+  for (const column of REQUIRED_RUNTIME_COLUMNS) {
+    if (await schemaHasColumn(db, schemaName, column.table, column.column)) {
+      continue;
+    }
+    await executeInSchemaTransaction(db, schemaName, column.sql);
+  }
+}
+
 /**
  * Runs current Copilotz migrations against every non-system schema.
  */
@@ -270,7 +360,14 @@ export async function ensureSchemaProvisioned(
     return;
   }
 
-  await migrateSchema(db, schemaName);
+  const hasCoreTables = await schemaIsProvisioned(db, schemaName);
+  if (!hasCoreTables) {
+    await provisionTenantSchema(db, schemaName);
+    return;
+  }
+
+  await ensureRuntimeCompatibility(db, schemaName);
+  provisionedSchemas.add(schemaName);
 }
 
 /**
@@ -294,7 +391,7 @@ export async function warmSchemaCache(db: DbInstance): Promise<void> {
   );
 
   for (const row of result.rows) {
-    await migrateSchema(db, row.schema_name);
+    await ensureSchemaProvisioned(db, row.schema_name);
   }
 }
 

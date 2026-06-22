@@ -50,3 +50,19 @@ Deno.test("admin usage source prefers llm_attempt and keeps llm_usage as fallbac
   assertStringIncludes(sql, `AND NOT EXISTS`);
   assertStringIncludes(sql, `a."data"->>'eventId'`);
 });
+
+Deno.test("admin usage source pushes namespace and time filters into source scans", () => {
+  const sql = buildAdminUsageSourceCte(`"admin_usage_source"`, {
+    namespacePlaceholder: "$1",
+    fromPlaceholder: "$2",
+    toPlaceholder: "$3",
+  });
+
+  assertStringIncludes(sql, `a."namespace" = $1`);
+  assertStringIncludes(sql, `a."created_at" >= $2`);
+  assertStringIncludes(sql, `a."created_at" <= $3`);
+  assertStringIncludes(sql, `u."namespace" = $1`);
+  assertStringIncludes(sql, `u."created_at" >= $2`);
+  assertStringIncludes(sql, `u."created_at" <= $3`);
+  assertStringIncludes(sql, `lu."namespace" = a."namespace"`);
+});

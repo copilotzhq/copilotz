@@ -153,9 +153,60 @@ function buildAttemptUsageDataObject(): string {
          )`;
 }
 
+export interface AdminUsageSourceScope {
+  namespacePlaceholder?: string;
+  fromPlaceholder?: string;
+  toPlaceholder?: string;
+}
+
+export function pushAdminUsageSourceScope(
+  params: unknown[],
+  namespace?: string,
+  from?: string | null,
+  to?: string | null,
+): AdminUsageSourceScope {
+  const scope: AdminUsageSourceScope = {};
+  if (namespace) {
+    params.push(namespace);
+    scope.namespacePlaceholder = `$${params.length}`;
+  }
+  const f = toIsoString(from ?? null);
+  if (f) {
+    params.push(f);
+    scope.fromPlaceholder = `$${params.length}`;
+  }
+  const t = toIsoString(to ?? null);
+  if (t) {
+    params.push(t);
+    scope.toPlaceholder = `$${params.length}`;
+  }
+  return scope;
+}
+
+function buildUsageSourceNodeFilters(
+  alias: string,
+  type: "llm_attempt" | "llm_usage",
+  scope: AdminUsageSourceScope,
+): string {
+  const filters = [`${alias}."type" = '${type}'`];
+  if (scope.namespacePlaceholder) {
+    filters.push(`${alias}."namespace" = ${scope.namespacePlaceholder}`);
+  }
+  if (scope.fromPlaceholder) {
+    filters.push(`${alias}."created_at" >= ${scope.fromPlaceholder}`);
+  }
+  if (scope.toPlaceholder) {
+    filters.push(`${alias}."created_at" <= ${scope.toPlaceholder}`);
+  }
+  return filters.join(" AND ");
+}
+
 export function buildAdminUsageSourceCte(
   name = `"admin_usage_source"`,
+  scope: AdminUsageSourceScope = {},
 ): string {
+  const attemptWhere = buildUsageSourceNodeFilters("a", "llm_attempt", scope);
+  const legacyWhere = buildUsageSourceNodeFilters("u", "llm_usage", scope);
   return `${name} AS (
        SELECT
          a."id",
@@ -173,6 +224,7 @@ export function buildAdminUsageSourceCte(
          SELECT lu."data"
          FROM "nodes" lu
          WHERE lu."type" = 'llm_usage'
+           AND lu."namespace" = a."namespace"
            AND NULLIF(COALESCE(lu."data"->>'eventId', ''), '') IS NOT NULL
            AND COALESCE(a."data"->>'eventId', '') = COALESCE(lu."data"->>'eventId', '')
            AND COALESCE(a."data"->>'threadId', a."source_id", '') = COALESCE(lu."data"->>'threadId', lu."source_id", '')
@@ -181,7 +233,7 @@ export function buildAdminUsageSourceCte(
          ORDER BY lu."created_at" ASC
          LIMIT 1
        ) legacy_usage ON TRUE
-       WHERE a."type" = 'llm_attempt'
+       WHERE ${attemptWhere}
 
        UNION ALL
 
@@ -197,11 +249,12 @@ export function buildAdminUsageSourceCte(
          u."data" AS "data",
          'llm_usage'::text AS "sourceType"
        FROM "nodes" u
-       WHERE u."type" = 'llm_usage'
+       WHERE ${legacyWhere}
          AND NOT EXISTS (
            SELECT 1
            FROM "nodes" a
            WHERE a."type" = 'llm_attempt'
+             AND a."namespace" = u."namespace"
              AND NULLIF(COALESCE(u."data"->>'eventId', ''), '') IS NOT NULL
              AND COALESCE(a."data"->>'eventId', '') = COALESCE(u."data"->>'eventId', '')
              AND COALESCE(a."data"->>'threadId', a."source_id", '') = COALESCE(u."data"->>'threadId', u."source_id", '')

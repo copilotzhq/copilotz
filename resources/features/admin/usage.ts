@@ -5,7 +5,7 @@ import {
   buildAdminUsageSourceCte,
   buildUsageCoalesceSelects,
   buildUsageSumSelects,
-  pushTimeRange,
+  pushAdminUsageSourceScope,
   toIso,
   toNum,
   toUsageTotals,
@@ -86,21 +86,25 @@ export default async function (
 
   const params: unknown[] = [];
   const filters: string[] = [];
+  const sourceScope = pushAdminUsageSourceScope(
+    params,
+    typeof query.namespace === "string" ? query.namespace : undefined,
+    query.from as string | undefined,
+    query.to as string | undefined,
+  );
 
   const namespace = typeof query.namespace === "string"
     ? query.namespace
     : undefined;
   if (namespace) {
-    params.push(namespace);
-    filters.push(`u."namespace" = $${params.length}`);
+    filters.push(`u."namespace" = ${sourceScope.namespacePlaceholder}`);
   }
-  pushTimeRange(
-    params,
-    filters,
-    `u."created_at"`,
-    query.from as string | undefined,
-    query.to as string | undefined,
-  );
+  if (sourceScope.fromPlaceholder) {
+    filters.push(`u."created_at" >= ${sourceScope.fromPlaceholder}`);
+  }
+  if (sourceScope.toPlaceholder) {
+    filters.push(`u."created_at" <= ${sourceScope.toPlaceholder}`);
+  }
 
   const threadId = typeof query.threadId === "string"
     ? query.threadId
@@ -186,7 +190,7 @@ export default async function (
       totalCalls: number;
     } & Record<string, number>
   >(
-    `WITH ${buildAdminUsageSourceCte()},
+    `WITH ${buildAdminUsageSourceCte(`"admin_usage_source"`, sourceScope)},
      "usage_series" AS (
        SELECT
          DATE_TRUNC('${interval}', u."created_at") AS "bucket",
@@ -212,7 +216,7 @@ export default async function (
   );
 
   const totalsResult = await q<Record<keyof AdminUsageTotals, number>>(
-    `WITH ${buildAdminUsageSourceCte()}
+    `WITH ${buildAdminUsageSourceCte(`"admin_usage_source"`, sourceScope)}
      SELECT COUNT(*)::int AS "totalCalls", ${buildUsageSumSelects(`u."data"`)}
      FROM "admin_usage_source" u
      ${participantJoins}

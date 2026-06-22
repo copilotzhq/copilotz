@@ -4,6 +4,7 @@ import {
   buildAdminUsageSourceCte,
   buildUsageSumSelects,
   emptyUsageTotals,
+  pushAdminUsageSourceScope,
   pushScopedThreadNode,
   pushThreadNamespace,
   pushTimeRange,
@@ -104,11 +105,19 @@ export default async function (
   // LLM usage totals
   const up: unknown[] = [];
   const uf: string[] = [];
-  pushScopedThreadNode(up, uf, `"namespace"`, namespace);
-  pushTimeRange(up, uf, `"created_at"`, from, to);
+  const usageScope = pushAdminUsageSourceScope(up, namespace, from, to);
+  if (usageScope.namespacePlaceholder) {
+    uf.push(`"namespace" = ${usageScope.namespacePlaceholder}`);
+  }
+  if (usageScope.fromPlaceholder) {
+    uf.push(`"created_at" >= ${usageScope.fromPlaceholder}`);
+  }
+  if (usageScope.toPlaceholder) {
+    uf.push(`"created_at" <= ${usageScope.toPlaceholder}`);
+  }
   const usageWhere = uf.length ? uf.join(" AND ") : "TRUE";
   const usageResult = await q<AdminUsageTotalsRow>(
-    `WITH ${buildAdminUsageSourceCte()}
+    `WITH ${buildAdminUsageSourceCte(`"admin_usage_source"`, usageScope)}
      SELECT COUNT(*)::int AS "totalCalls", ${buildUsageSumSelects(`"data"`)}
      FROM "admin_usage_source" WHERE ${usageWhere}`,
     up,

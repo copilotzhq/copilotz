@@ -15,11 +15,16 @@ type QueryCall = { sql: string; params?: unknown[] };
 
 class FakeDb {
   calls: QueryCall[] = [];
+  currentSchemas = new Set<string>();
   readySchemas = new Set<string>();
   schemas = ["public", "tenant_empty", "tenant_ready"];
 
-  constructor(readySchemas: string[] = []) {
+  constructor(
+    readySchemas: string[] = [],
+    currentSchemas: string[] = [],
+  ) {
     this.readySchemas = new Set(readySchemas);
+    this.currentSchemas = new Set(currentSchemas);
   }
 
   async query<T extends Record<string, unknown>>(
@@ -46,6 +51,14 @@ class FakeDb {
       return {
         rows: [{
           table_count: this.readySchemas.has(schema) ? 4 : 0,
+        }] as unknown as T[],
+      };
+    }
+    if (sql.includes("information_schema.columns")) {
+      const schema = String(params?.[0]);
+      return {
+        rows: [{
+          exists: this.currentSchemas.has(schema),
         }] as unknown as T[],
       };
     }
@@ -78,17 +91,12 @@ Deno.test("ensureSchemaProvisioned migrates an existing empty schema", async () 
   assertEquals(isSchemaInCache("tenant_empty"), true);
 });
 
-Deno.test("ensureSchemaProvisioned migrates an existing ready schema", async () => {
+Deno.test("ensureSchemaProvisioned repairs runtime columns on an existing ready schema", async () => {
   clearSchemaCache();
   const db = new FakeDb(["tenant_ready"]);
 
   await ensureSchemaProvisioned(db as never, "tenant_ready");
 
-  assert(
-    db.calls.some((call) =>
-      call.sql.includes('CREATE SCHEMA IF NOT EXISTS "tenant_ready"')
-    ),
-  );
   assert(
     db.calls.some((call) =>
       call.sql.includes('SET LOCAL search_path TO "tenant_ready", public')
@@ -97,7 +105,20 @@ Deno.test("ensureSchemaProvisioned migrates an existing ready schema", async () 
   assertEquals(isSchemaInCache("tenant_ready"), true);
 });
 
-Deno.test("ensureSchemaProvisioned migrates public before caching it", async () => {
+Deno.test("ensureSchemaProvisioned does not run DDL for a current schema", async () => {
+  clearSchemaCache();
+  const db = new FakeDb(["tenant_ready"], ["tenant_ready"]);
+
+  await ensureSchemaProvisioned(db as never, "tenant_ready");
+
+  assertEquals(
+    db.calls.some((call) => call.sql.includes("ALTER TABLE")),
+    false,
+  );
+  assertEquals(isSchemaInCache("tenant_ready"), true);
+});
+
+Deno.test("ensureSchemaProvisioned repairs public before caching it", async () => {
   clearSchemaCache();
   const db = new FakeDb(["public"]);
 
@@ -114,7 +135,10 @@ Deno.test("ensureSchemaProvisioned migrates public before caching it", async () 
 
 Deno.test("warmSchemaCache migrates and caches existing non-system schemas", async () => {
   clearSchemaCache();
-  const db = new FakeDb(["tenant_ready"]);
+  const db = new FakeDb(
+    ["public", "tenant_ready"],
+    ["public", "tenant_ready"],
+  );
 
   await warmSchemaCache(db as never);
 

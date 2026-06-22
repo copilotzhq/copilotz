@@ -81,7 +81,7 @@ Create a new project directory and add Copilotz:
 // deno.json
 {
   "imports": {
-    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.40.0"
+    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.46.0"
   }
 }
 ```

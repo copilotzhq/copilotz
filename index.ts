@@ -125,6 +125,8 @@ export type {
   CopilotzDb,
   /** Configuration options for the database connection. */
   DatabaseConfig,
+  /** Domain-first database operation facade. */
+  DatabaseOperations,
   /** File-backed PGlite snapshot restore/dump configuration. */
   DatabaseRestoreConfig,
   /** File paths used when saving a PGlite data directory snapshot. */
@@ -135,6 +137,8 @@ export type {
   Document,
   /** Chunk of a document with embedding vector. */
   DocumentChunk,
+  /** Grouped graph/domain mutation APIs. */
+  DomainMutationOperations,
   /** Configuration for embedding generation. */
   EmbeddingConfig,
   /** Configuration for entity extraction. */
@@ -147,6 +151,10 @@ export type {
   HistoryTransform,
   /** Arguments passed to the history transform hook. */
   HistoryTransformArgs,
+  /** Canonical LLM attempt creation input. */
+  LlmAttemptInput,
+  /** Canonical LLM attempt update patch. */
+  LlmAttemptPatch,
   /** Specific LLM_CALL event type with typed payload. */
   LlmCallEvent,
   /** Payload structure for LLM call events. */
@@ -179,6 +187,10 @@ export type {
   NewThread,
   /** Input type for creating a new Tool. */
   NewTool,
+  /** Durable mutation outbox event input. */
+  OutboxEventInput,
+  /** Durable mutation outbox operations. */
+  OutboxOperations,
   /** Advanced PGlite runtime options forwarded through Ominipg. */
   PGliteConfig,
   /** Dependencies injected into event processors. */
@@ -209,6 +221,10 @@ export type {
   ToolCallEventPayload,
   /** Context passed to custom tool `execute` handlers (db, threadId, collections, etc.). */
   ToolExecutionContext,
+  /** Canonical tool execution creation input. */
+  ToolExecutionInput,
+  /** Canonical tool execution update patch. */
+  ToolExecutionPatch,
   /** Runtime tool history policy with optional projector callback. */
   ToolHistoryPolicy,
   /** Declarative history policy for tools. */

@@ -30,6 +30,8 @@ type MessageMetadata = Record<string, unknown> & {
   senderDisplayName?: string;
   senderExternalId?: string;
   senderParticipantId?: string;
+  /** Durable tool_execution node id (preferred for read_tool_result). */
+  toolExecutionId?: string;
   /** TOOL_RESULT queue row id (for read_tool_result after history truncation). */
   toolResultQueueEventId?: string;
 };
@@ -254,7 +256,10 @@ function appendReasoningForHistory(
 function truncateToolOutputForHistory(
   maxChars: number,
   value: unknown,
-  toolResultQueueEventId?: string,
+  references?: {
+    toolExecutionId?: string;
+    toolResultQueueEventId?: string;
+  },
 ): unknown {
   if (maxChars < 48) {
     return "[tool output truncated]";
@@ -271,7 +276,12 @@ function truncateToolOutputForHistory(
     _copilotz_history_truncated: true as const,
     preview,
     originalSerializedLength: serialized.length,
-    ...(toolResultQueueEventId ? { toolResultQueueEventId } : {}),
+    ...(references?.toolExecutionId
+      ? { toolExecutionId: references.toolExecutionId }
+      : {}),
+    ...(references?.toolResultQueueEventId
+      ? { toolResultQueueEventId: references.toolResultQueueEventId }
+      : {}),
   });
 
   let previewLen = Math.max(0, maxChars - 200);
@@ -286,7 +296,10 @@ function truncateToolOutputForHistory(
 function applyToolHistoryCharCap(
   maxToolResultChars: number | undefined,
   invocation: ToolInvocation,
-  toolResultQueueEventId?: string,
+  references?: {
+    toolExecutionId?: string;
+    toolResultQueueEventId?: string;
+  },
 ): ToolInvocation {
   if (
     maxToolResultChars === undefined ||
@@ -301,7 +314,7 @@ function applyToolHistoryCharCap(
     output: truncateToolOutputForHistory(
       maxToolResultChars,
       invocation.output,
-      toolResultQueueEventId,
+      references,
     ),
   };
 }
@@ -690,6 +703,9 @@ export function historyGenerator(
       typeof metadata?.toolResultQueueEventId === "string"
         ? metadata.toolResultQueueEventId
         : undefined;
+    const toolExecutionId = typeof metadata?.toolExecutionId === "string"
+      ? metadata.toolExecutionId
+      : undefined;
 
     let toolCalls: ToolInvocation[] | undefined;
     let hideToolResultContent = false;
@@ -702,7 +718,7 @@ export function historyGenerator(
             applyToolHistoryCharCap(
               maxToolResultChars,
               stripParsedToolCall(call),
-              toolResultQueueEventId,
+              { toolExecutionId, toolResultQueueEventId },
             ),
           ];
         }

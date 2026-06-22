@@ -136,6 +136,81 @@ export function buildUsageCoalesceSelects(alias: string): string {
     .join(",\n         ");
 }
 
+function buildAttemptUsageDataObject(): string {
+  return `jsonb_build_object(
+           'inputTokens', COALESCE(a."data"->'usage'->'inputTokens', legacy_usage."data"->'inputTokens'),
+           'outputTokens', COALESCE(a."data"->'usage'->'outputTokens', legacy_usage."data"->'outputTokens'),
+           'reasoningTokens', COALESCE(a."data"->'usage'->'reasoningTokens', legacy_usage."data"->'reasoningTokens'),
+           'cacheReadInputTokens', COALESCE(a."data"->'usage'->'cacheReadInputTokens', legacy_usage."data"->'cacheReadInputTokens'),
+           'cacheCreationInputTokens', COALESCE(a."data"->'usage'->'cacheCreationInputTokens', legacy_usage."data"->'cacheCreationInputTokens'),
+           'totalTokens', COALESCE(a."data"->'usage'->'totalTokens', legacy_usage."data"->'totalTokens'),
+           'inputCostUsd', COALESCE(a."data"->'cost'->'inputCostUsd', legacy_usage."data"->'inputCostUsd'),
+           'outputCostUsd', COALESCE(a."data"->'cost'->'outputCostUsd', legacy_usage."data"->'outputCostUsd'),
+           'reasoningCostUsd', COALESCE(a."data"->'cost'->'reasoningCostUsd', legacy_usage."data"->'reasoningCostUsd'),
+           'cacheReadInputCostUsd', COALESCE(a."data"->'cost'->'cacheReadInputCostUsd', legacy_usage."data"->'cacheReadInputCostUsd'),
+           'cacheCreationInputCostUsd', COALESCE(a."data"->'cost'->'cacheCreationInputCostUsd', legacy_usage."data"->'cacheCreationInputCostUsd'),
+           'totalCostUsd', COALESCE(a."data"->'cost'->'totalCostUsd', legacy_usage."data"->'totalCostUsd')
+         )`;
+}
+
+export function buildAdminUsageSourceCte(
+  name = `"admin_usage_source"`,
+): string {
+  return `${name} AS (
+       SELECT
+         a."id",
+         a."namespace",
+         a."created_at",
+         COALESCE(a."data"->>'threadId', a."source_id") AS "threadId",
+         NULLIF(a."data"->>'eventId', '') AS "eventId",
+         COALESCE(a."data"->>'agentId', '') AS "agentId",
+         COALESCE(a."data"->>'provider', '') AS "provider",
+         COALESCE(a."data"->>'model', '') AS "model",
+         ${buildAttemptUsageDataObject()} AS "data",
+         'llm_attempt'::text AS "sourceType"
+       FROM "nodes" a
+       LEFT JOIN LATERAL (
+         SELECT lu."data"
+         FROM "nodes" lu
+         WHERE lu."type" = 'llm_usage'
+           AND NULLIF(COALESCE(lu."data"->>'eventId', ''), '') IS NOT NULL
+           AND COALESCE(a."data"->>'eventId', '') = COALESCE(lu."data"->>'eventId', '')
+           AND COALESCE(a."data"->>'threadId', a."source_id", '') = COALESCE(lu."data"->>'threadId', lu."source_id", '')
+           AND COALESCE(a."data"->>'provider', '') = COALESCE(lu."data"->>'provider', '')
+           AND COALESCE(a."data"->>'model', '') = COALESCE(lu."data"->>'model', '')
+         ORDER BY lu."created_at" ASC
+         LIMIT 1
+       ) legacy_usage ON TRUE
+       WHERE a."type" = 'llm_attempt'
+
+       UNION ALL
+
+       SELECT
+         u."id",
+         u."namespace",
+         u."created_at",
+         COALESCE(u."data"->>'threadId', u."source_id") AS "threadId",
+         NULLIF(u."data"->>'eventId', '') AS "eventId",
+         COALESCE(u."data"->>'agentId', '') AS "agentId",
+         COALESCE(u."data"->>'provider', '') AS "provider",
+         COALESCE(u."data"->>'model', '') AS "model",
+         u."data" AS "data",
+         'llm_usage'::text AS "sourceType"
+       FROM "nodes" u
+       WHERE u."type" = 'llm_usage'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM "nodes" a
+           WHERE a."type" = 'llm_attempt'
+             AND NULLIF(COALESCE(u."data"->>'eventId', ''), '') IS NOT NULL
+             AND COALESCE(a."data"->>'eventId', '') = COALESCE(u."data"->>'eventId', '')
+             AND COALESCE(a."data"->>'threadId', a."source_id", '') = COALESCE(u."data"->>'threadId', u."source_id", '')
+             AND COALESCE(a."data"->>'provider', '') = COALESCE(u."data"->>'provider', '')
+             AND COALESCE(a."data"->>'model', '') = COALESCE(u."data"->>'model', '')
+         )
+     )`;
+}
+
 // ---------------------------------------------------------------------------
 // Conversion helpers
 // ---------------------------------------------------------------------------

@@ -41,16 +41,21 @@ actions.
 
 ## Processors
 
-Use a processor when the runtime should react to an event.
+Use a processor when the runtime should react to a domain lifecycle event.
 
 Examples:
 
-- after `NEW_MESSAGE`, decide whether an agent should respond
-- after `TOOL_CALL`, execute the tool
-- after `TOOL_RESULT`, add tool output to history
+- after `message.created`, decide whether an agent should respond
+- after `tool_execution.created`, execute the tool
+- after `tool_execution.completed`, expose tool output to history
+- after `llm_attempt.failed`, continue from partial reasoning or visible output
 - after a custom event, update analytics
 
-Processors are event pipeline extensions.
+Processors are event pipeline extensions. New runtime code should use
+`deps.db.ops.mutate.*` to write domain state so the graph mutation and outbox
+event commit in one transaction. Returning `producedEvents` is still supported
+for legacy custom processors and live stream compatibility, but it is not the
+preferred durable workflow primitive.
 
 ## The Boundary
 

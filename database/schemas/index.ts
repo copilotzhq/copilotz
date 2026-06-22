@@ -582,6 +582,16 @@ const schemaDefinition = {
         ttlMs: { type: ["integer", "null"] },
         expiresAt: { type: ["string", "null"], format: "date-time" },
         namespace: { type: ["string", "null"], maxLength: 255 },
+        subjectType: { type: ["string", "null"], maxLength: 255 },
+        subjectId: { type: ["string", "null"], maxLength: 255 },
+        operation: { type: ["string", "null"], maxLength: 64 },
+        causationId: { type: ["string", "null"], maxLength: 255 },
+        correlationId: { type: ["string", "null"], maxLength: 255 },
+        dedupeKey: { type: ["string", "null"], maxLength: 512 },
+        input: JSON_ANY_SCHEMA,
+        before: JSON_ANY_SCHEMA,
+        after: JSON_ANY_SCHEMA,
+        patch: JSON_ANY_SCHEMA,
         status: {
           type: "string",
           enum: [

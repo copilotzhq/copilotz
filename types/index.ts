@@ -101,6 +101,16 @@ export type {
   /** Advanced PGlite runtime options forwarded through Ominipg. */
   PGliteConfig,
 };
+export type {
+  DatabaseOperations,
+  DomainMutationOperations,
+  LlmAttemptInput,
+  LlmAttemptPatch,
+  OutboxEventInput,
+  OutboxOperations,
+  ToolExecutionInput,
+  ToolExecutionPatch,
+} from "@/database/operations/index.ts";
 
 /** Payload emitted when the asset pipeline stores a new file or media object. */
 export interface AssetCreatedEventPayload {

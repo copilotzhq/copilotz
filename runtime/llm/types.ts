@@ -352,6 +352,8 @@ export interface LLMUsageAttempt {
   usage: TokenUsage;
   cost?: CostBreakdown;
   visibleOutputStarted?: boolean;
+  partialAnswer?: string;
+  partialReasoning?: string;
   usageFinalized?: Promise<FinalizedTokenUsage | null>;
 }
 

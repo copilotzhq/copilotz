@@ -992,7 +992,8 @@ function buildBaseMessageMetadata(
             ([key]) =>
               key === "routing" || key === "visibility" ||
               key === "internalConversation" || key === "runSender" ||
-              key === "usageNodeId" || key === "llmError",
+              key === "usageNodeId" || key === "llmAttemptId" ||
+              key === "llmError",
           ),
         )
         : {}
@@ -1550,10 +1551,13 @@ export const messageProcessor: EventProcessor<
             ? event.traceId
             : undefined,
           priority: EVENT_PRIORITIES.SETTLEMENT,
-          metadata: toolReplyMetadata.replyToParticipantId ||
-              toolReplyMetadata.replyToTargetQueue.length > 0
-            ? toolReplyMetadata
-            : undefined,
+          metadata: {
+            sourceMessageId: createdMessage.id,
+            ...(toolReplyMetadata.replyToParticipantId ||
+                toolReplyMetadata.replyToTargetQueue.length > 0
+              ? toolReplyMetadata
+              : {}),
+          },
         });
       });
 
@@ -1962,6 +1966,7 @@ export const messageProcessor: EventProcessor<
       const llmEventMetadata = {
         targetId: targetResolution.targetId,
         targetQueue: targetResolution.targetQueue,
+        sourceMessageId: createdMessage.id,
         sourceMessageSenderId: messageContext.senderId,
         sourceMessageSenderType: messageContext.senderType,
         ...(isRecord(eventMetadata.runSender)

@@ -5,10 +5,13 @@ export const GRAPH_EDGE = {
   SENT_BY: "sent_by",
   HAS_TOOL_CALL: "has_tool_call",
   HAS_TOOL_RESULT: "has_tool_result",
+  HAS_TOOL_EXECUTION: "has_tool_execution",
+  HAS_LLM_ATTEMPT: "has_llm_attempt",
   HAS_LLM_USAGE: "has_llm_usage",
   USED_LLM: "used_llm",
   INITIATED_LLM_USAGE: "initiated_llm_usage",
   HAS_ASSET: "has_asset",
+  HAS_VARIANT: "has_variant",
   CREATED_ASSET: "created_asset",
   HAS_DOCUMENT: "has_document",
   HAS_CHUNK: "has_chunk",
@@ -16,6 +19,7 @@ export const GRAPH_EDGE = {
   CAN_ACCESS: "can_access",
   CREATED_BY: "created_by",
   DERIVED_FROM: "derived_from",
+  FORKED_FROM: "forked_from",
   MENTIONS: "mentions",
 } as const;
 

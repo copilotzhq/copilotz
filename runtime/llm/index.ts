@@ -528,6 +528,8 @@ export async function chat(
           usage,
           ...(cost ? { cost } : {}),
           visibleOutputStarted: attemptVisibleOutputStarted,
+          partialAnswer: sanitizeUserFacingText(attemptVisibleOutput),
+          partialReasoning: attemptReasoningOutput,
           ...(usageFinalized ? { usageFinalized } : {}),
         };
       };
@@ -841,6 +843,8 @@ export async function chat(
         usage: failedUsage,
         ...(failedCost ? { cost: failedCost } : {}),
         visibleOutputStarted: attemptVisibleOutputStarted,
+        partialAnswer: sanitizeUserFacingText(attemptVisibleOutput),
+        partialReasoning: attemptReasoningOutput,
       });
 
       attempts.push({

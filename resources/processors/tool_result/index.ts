@@ -55,6 +55,14 @@ export const toolResultProcessor: EventProcessor<
     const toolResultQueueEventId = typeof event.id === "string"
       ? event.id
       : undefined;
+    const eventMetadata =
+      event.metadata && typeof event.metadata === "object" &&
+        !Array.isArray(event.metadata)
+        ? event.metadata as Record<string, unknown>
+        : {};
+    const toolExecutionId = typeof eventMetadata.toolExecutionId === "string"
+      ? eventMetadata.toolExecutionId
+      : undefined;
     const output = buildFailureOutput(payload);
 
     const newMessagePayload: MessagePayload = {
@@ -66,6 +74,7 @@ export const toolResultProcessor: EventProcessor<
       },
       metadata: {
         ...(toolResultQueueEventId ? { toolResultQueueEventId } : {}),
+        ...(toolExecutionId ? { toolExecutionId } : {}),
         toolCalls: [
           {
             id: payload.toolCallId,

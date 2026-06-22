@@ -157,15 +157,19 @@ const copilotz = await createCopilotz({
 ### Usage and Cost Tracking
 
 Copilotz records provider-native LLM usage when the upstream provider exposes
-it, and can estimate per-call cost using OpenRouter model pricing.
+it, and can estimate per-call cost using OpenRouter model pricing. New
+accounting is canonical in `llm_attempt` graph nodes, one node per provider
+attempt.
 
 - Cost estimation is enabled by default with `llmOptions.estimateCost !== false`
 - Use `llmOptions.pricingModelId` to override the OpenRouter model id when
   automatic mapping is not enough
 - Cost is only estimated when usage came from the provider, not from Copilotz's
   rough fallback token heuristic
-- Admin overview and admin agent summaries aggregate both token and cost totals
-  from persisted `llm_usage` nodes
+- `llm_attempt` stores prompt snapshots, partial output, usage, cost, status,
+  errors, and recovery linkage
+- `llm_usage` remains a compatibility projection for admin screens and older
+  integrations during the migration
 
 See the [copilotz-starter](https://github.com/copilotzhq/starter) template for a
 complete example.
@@ -415,7 +419,7 @@ Seamless resolution for vision LLMs.
 **Core Concepts**
 
 - [Agents](./docs/agents.md) — Multi-agent configuration and communication
-- [Events](./docs/events.md) — Event-driven processing pipeline
+- [Events](./docs/core-concepts/events.md) — Mutation outbox and live stream projections
 - [Tools](./docs/tools.md) — Native tools, APIs, and MCP integration
 
 **Data Layer**

@@ -161,6 +161,7 @@ Deno.test("historyGenerator truncates large tool outputs when maxToolResultChars
       senderType: "tool",
       content: "",
       metadata: {
+        toolExecutionId: "tool-exec-1",
         toolResultQueueEventId: "queue-evt-1",
         toolCalls: [{
           id: "c1",
@@ -183,6 +184,7 @@ Deno.test("historyGenerator truncates large tool outputs when maxToolResultChars
   assertEquals(typeof tc?.output, "object");
   const out = tc?.output as Record<string, unknown>;
   assertEquals(out._copilotz_history_truncated, true);
+  assertEquals(out.toolExecutionId, "tool-exec-1");
   assertEquals(out.toolResultQueueEventId, "queue-evt-1");
   assertEquals(typeof out.preview, "string");
   assertEquals((out.preview as string).length < huge.length, true);

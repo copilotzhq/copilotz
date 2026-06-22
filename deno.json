@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.45.5",
+  "version": "0.46.0",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -46,7 +46,8 @@
   },
   "tasks": {
     "gen:skills": "deno run -A scripts/generate-skill-js.ts",
-    "compile:cli": "deno run -A scripts/compile-cli.ts"
+    "compile:cli": "deno run -A scripts/compile-cli.ts",
+    "test:examples": "deno run -A examples/test-examples.ts"
   },
   "lock": false
 }

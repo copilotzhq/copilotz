@@ -3,6 +3,7 @@ import { listPublicAgents } from "@/utils/list-agents.ts";
 import {
   type AdminAgentSummary,
   type AdminUsageBreakdown,
+  buildAdminUsageSourceCte,
   buildUsageCoalesceSelects,
   buildUsageSumSelects,
   emptyUsageBreakdown,
@@ -43,13 +44,14 @@ export default async function (
   }
 
   const msgScope: string[] = [`m."type" = 'message'`];
-  const usageScope: string[] = [`u."type" = 'llm_usage'`];
+  const usageScope: string[] = [];
   if (namespace) {
     params.push(namespace);
     const ni = params.length;
     msgScope.push(`m."namespace" = $${ni}`);
     usageScope.push(`u."namespace" = $${ni}`);
   }
+  const usageWhere = usageScope.length ? usageScope.join(" AND ") : "TRUE";
 
   const result = await q<
     {
@@ -63,7 +65,8 @@ export default async function (
       lastActivityAt: Date | string | null;
     } & Record<keyof AdminUsageBreakdown, number>
   >(
-    `WITH "message_stats" AS (
+    `WITH ${buildAdminUsageSourceCte()},
+     "message_stats" AS (
        SELECT COALESCE(m."data"->>'senderId', '') AS "agentId",
          COUNT(*)::int AS "messageCount",
          COUNT(*) FILTER (WHERE (
@@ -74,11 +77,11 @@ export default async function (
        FROM "nodes" AS m WHERE ${msgScope.join(" AND ")} GROUP BY 1
      ),
      "usage_stats" AS (
-       SELECT COALESCE(u."data"->>'agentId', '') AS "agentId",
+       SELECT COALESCE(u."agentId", '') AS "agentId",
          COUNT(*)::int AS "llmCallCount",
          ${buildUsageSumSelects(`u."data"`)},
          MAX(u."created_at") AS "lastActivityAt"
-       FROM "nodes" AS u WHERE ${usageScope.join(" AND ")} GROUP BY 1
+       FROM "admin_usage_source" AS u WHERE ${usageWhere} GROUP BY 1
      )
      SELECT
        COALESCE(n."data"->>'agentId', n."data"->>'externalId', n."source_id", n."id") AS "agentId",

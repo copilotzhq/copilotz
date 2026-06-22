@@ -61,9 +61,17 @@ Deno.test("runThread writes tenant queue rows in the active schema", async () =>
     );
     const tenantEvents = await withSchema(tenant, () =>
       copilotz.db.query<
-        { id: string; namespace: string | null; status: string }
+        {
+          id: string;
+          eventType: string;
+          namespace: string | null;
+          status: string;
+        }
       >(
-        `SELECT "id", "namespace", "status" FROM "events" WHERE "threadId" = $1`,
+        `SELECT "id", "eventType", "namespace", "status"
+         FROM "events"
+         WHERE "threadId" = $1
+         ORDER BY "createdAt" ASC`,
         [handle.threadId],
       ));
     const publicThreads = await copilotz.db.query<{ id: string }>(
@@ -77,9 +85,18 @@ Deno.test("runThread writes tenant queue rows in the active schema", async () =>
 
     assertEquals(tenantThreads.rows.length, 1);
     assertEquals(tenantThreads.rows[0].namespace, tenant);
-    assertEquals(tenantEvents.rows.length, 1);
-    assertEquals(tenantEvents.rows[0].namespace, tenant);
-    assertEquals(tenantEvents.rows[0].status, "completed");
+    assertEquals(
+      tenantEvents.rows.map((row) => row.eventType).sort(),
+      ["NEW_MESSAGE", "thread.created"].sort(),
+    );
+    assertEquals(
+      tenantEvents.rows.every((row) => row.namespace === tenant),
+      true,
+    );
+    assertEquals(
+      tenantEvents.rows.every((row) => row.status === "completed"),
+      true,
+    );
     assertEquals(publicThreads.rows.length, 0);
     assertEquals(publicEvents.rows.length, 0);
     assert(handle.threadId);

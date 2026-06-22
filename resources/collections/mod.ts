@@ -1,5 +1,9 @@
 export { default as participant } from "./participant.ts";
+export { default as thread } from "./thread.ts";
 export { default as message } from "./message.ts";
 export { default as chunk } from "./chunk.ts";
 export { default as document } from "./document.ts";
+export { default as asset } from "./asset.ts";
+export { default as llm_attempt } from "./llm_attempt.ts";
+export { default as tool_execution } from "./tool_execution.ts";
 export { default as llm_usage } from "./llm_usage.ts";

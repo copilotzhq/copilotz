@@ -225,6 +225,9 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
             candidate,
           ): candidate is string => typeof candidate === "string")
           : [];
+      const sourceMessageId = typeof eventMetadata?.sourceMessageId === "string"
+        ? eventMetadata.sourceMessageId
+        : null;
       // Agent may be absent if filtered out by env config — fall back to payload data
       const agent =
         availableAgents.find((a: Agent) =>
@@ -255,6 +258,32 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       const agentTools =
         allowedKeys.map((key: string) => allTools.find((t) => t.key === key))
           .filter(hasExecute) || [];
+
+      const call = payload.toolCall;
+      const callId = call.id || `${call.tool.id}_${Date.now()}`;
+      let toolExecutionId: string | null = null;
+      if (db?.ops?.mutate?.toolExecutions) {
+        try {
+          const execution = await db.ops.mutate.toolExecutions.create({
+            threadId,
+            messageId: sourceMessageId,
+            eventId: typeof event.id === "string" ? event.id : null,
+            agentId: payload.agent.id ?? payload.agent.name,
+            agentName: payload.agent.name,
+            toolCallId: callId,
+            tool: { id: call.tool.id, name: call.tool.name },
+            args: call.args,
+            status: "processing",
+            namespace: context.namespace,
+          });
+          toolExecutionId = String(execution.id);
+        } catch (error) {
+          console.warn(
+            "[TOOL_CALL] Failed to create tool_execution node:",
+            error,
+          );
+        }
+      }
 
       // Resolve the human user's external ID from normalized thread metadata
       const resolvedUserExternalId = getUserExternalId(thread?.metadata) ??
@@ -292,8 +321,6 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       }
 
       const result = results[0];
-      const call = payload.toolCall;
-      const callId = call.id || `${call.tool.id}_${Date.now()}`;
 
       // Emit a terminal tool result event; a dedicated tool_result processor
       // turns it into the persisted/history NEW_MESSAGE artifact.
@@ -321,14 +348,59 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       const batchId = call.batchId ?? null;
       const batchSize = call.batchSize ?? null;
       const batchIndex = call.batchIndex ?? null;
+      const terminalStatus = result.status ?? (error ? "failed" : "completed");
+
+      if (toolExecutionId && db?.ops?.mutate?.toolExecutions) {
+        const finishPatch = {
+          status: terminalStatus,
+          ...(typeof output !== "undefined" ? { output } : {}),
+          ...(typeof error !== "undefined" ? { error } : {}),
+          historyVisibility: result.historyVisibility ??
+            DEFAULT_TOOL_HISTORY_VISIBILITY,
+          finishedAt,
+        };
+        try {
+          if (terminalStatus === "failed" || terminalStatus === "cancelled") {
+            await db.ops.mutate.toolExecutions.fail(
+              toolExecutionId,
+              finishPatch,
+              {
+                threadId,
+                traceId: typeof event.traceId === "string"
+                  ? event.traceId
+                  : null,
+                causationId: typeof event.id === "string" ? event.id : null,
+                namespace: context.namespace,
+              },
+            );
+          } else {
+            await db.ops.mutate.toolExecutions.complete(
+              toolExecutionId,
+              finishPatch,
+              {
+                threadId,
+                traceId: typeof event.traceId === "string"
+                  ? event.traceId
+                  : null,
+                causationId: typeof event.id === "string" ? event.id : null,
+                namespace: context.namespace,
+              },
+            );
+          }
+        } catch (toolExecutionError) {
+          console.warn(
+            "[TOOL_CALL] Failed to finalize tool_execution node:",
+            toolExecutionError,
+          );
+        }
+      }
 
       const toolResultPayload: ToolResultEventPayload = {
         agent: { id: payload.agent.id, name: payload.agent.name },
         toolCallId: callId,
         tool: { id: call.tool.id, name: call.tool.name },
         args: call.args,
-        status: result.status ??
-          (error ? "failed" : "completed"),
+        status: terminalStatus,
         ...(typeof output !== "undefined" ? { output } : {}),
         ...(typeof error !== "undefined" ? { error } : {}),
         content,
@@ -350,8 +422,10 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
             ? event.traceId
             : undefined,
           priority: EVENT_PRIORITIES.SETTLEMENT,
-          metadata: replyToParticipantId || replyToTargetQueue.length > 0
+          metadata: toolExecutionId || replyToParticipantId ||
+              replyToTargetQueue.length > 0
             ? {
+              ...(toolExecutionId ? { toolExecutionId } : {}),
               replyToParticipantId,
               replyToTargetQueue,
             }

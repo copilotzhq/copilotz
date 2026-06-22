@@ -151,6 +151,37 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       pending: "",
       controlPending: "",
     };
+    let llmAttemptId: string | null = null;
+    let terminalLlmAttemptId: string | null = null;
+    let partialAnswer = "";
+    let partialReasoning = "";
+    let lastPartialPersistedAt = 0;
+
+    const persistPartialAttempt = (force = false) => {
+      if (!llmAttemptId || !deps.db?.ops?.mutate?.llmAttempts) return;
+      const now = Date.now();
+      if (!force && now - lastPartialPersistedAt < 750) return;
+      lastPartialPersistedAt = now;
+      void deps.db.ops.mutate.llmAttempts.update(
+        llmAttemptId,
+        {
+          status: "processing",
+          partialAnswer,
+          partialReasoning,
+        },
+        {
+          threadId,
+          traceId: typeof event.traceId === "string" ? event.traceId : null,
+          causationId: typeof event.id === "string" ? event.id : null,
+          namespace: context.namespace,
+        },
+      ).catch((error: unknown) => {
+        console.warn(
+          "[LLM_CALL] Failed to persist llm_attempt partial:",
+          error,
+        );
+      });
+    };
 
     const buildTokenEvent = (
       token: string,
@@ -197,6 +228,12 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         ) {
           markVisibleOutputStarted();
         }
+        if (options?.isReasoning) {
+          partialReasoning += token;
+        } else if (filtered) {
+          partialAnswer += filtered;
+        }
+        if (token || filtered) persistPartialAttempt();
 
         deps.emitToStream(
           buildTokenEvent(filtered, false, options?.isReasoning),
@@ -387,6 +424,42 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         : {}),
     };
 
+    const sourceMessageId = typeof eventMetadata.sourceMessageId === "string"
+      ? eventMetadata.sourceMessageId
+      : null;
+    const runSender = eventMetadata.runSender &&
+        typeof eventMetadata.runSender === "object" &&
+        !Array.isArray(eventMetadata.runSender)
+      ? eventMetadata.runSender as Record<string, unknown>
+      : null;
+    if (deps.db?.ops?.mutate?.llmAttempts) {
+      try {
+        const attempt = await deps.db.ops.mutate.llmAttempts.create({
+          threadId,
+          messageId: sourceMessageId,
+          eventId: typeof event.id === "string" ? event.id : null,
+          agentId: payload.agent.id ?? payload.agent.name ?? null,
+          agentName: payload.agent.name,
+          provider: configForCall.provider ?? null,
+          model: configForCall.model ?? null,
+          config: toLLMConfig(configForCall) as Record<string, unknown>,
+          messages: baseMessages,
+          tools: payload.tools,
+          status: "processing",
+          runSender,
+          namespace: context.namespace,
+          metadata: {
+            sourceEventType: event.type,
+          },
+        });
+        llmAttemptId = String(attempt.id);
+        terminalLlmAttemptId = llmAttemptId;
+        baseResultMetadata.llmAttemptId = terminalLlmAttemptId;
+      } catch (error) {
+        console.warn("[LLM_CALL] Failed to create llm_attempt node:", error);
+      }
+    }
+
     let usageNodeId: string | null = null;
     const llmUsageService = deps.db?.ops
       ? createLlmUsageService({
@@ -394,18 +467,100 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         ops: deps.db.ops,
       })
       : null;
-    const runSender = eventMetadata.runSender &&
-        typeof eventMetadata.runSender === "object" &&
-        !Array.isArray(eventMetadata.runSender)
-      ? eventMetadata.runSender as Record<string, unknown>
-      : null;
     const persistUsageRecords = async (
       records: LLMUsageAttempt[],
       fallbackFinalized?: ChatResponse["usageFinalized"],
     ): Promise<void> => {
-      if (!llmUsageService) return;
       for (let index = 0; index < records.length; index += 1) {
         const record = records[index];
+        let canonicalAttemptId = index === 0 ? llmAttemptId : null;
+        if (!canonicalAttemptId && deps.db?.ops?.mutate?.llmAttempts) {
+          try {
+            const attempt = await deps.db.ops.mutate.llmAttempts.create({
+              threadId,
+              messageId: sourceMessageId,
+              eventId: typeof event.id === "string" ? event.id : null,
+              agentId: payload.agent.id ?? payload.agent.name ?? null,
+              agentName: payload.agent.name,
+              provider: record.provider ?? null,
+              model: record.model ?? null,
+              status: "completed",
+              attemptIndex: index,
+              parentAttemptId: llmAttemptId,
+              runSender,
+              namespace: context.namespace,
+              metadata: {
+                sourceEventType: event.type,
+                usageOnly: true,
+              },
+            });
+            canonicalAttemptId = String(attempt.id);
+          } catch (error) {
+            console.warn(
+              "[LLM_CALL] Failed to create usage llm_attempt node:",
+              error,
+            );
+          }
+        }
+
+        if (canonicalAttemptId && deps.db?.ops?.mutate?.llmAttempts) {
+          terminalLlmAttemptId = canonicalAttemptId;
+          try {
+            const usageStatusReason = record.usage &&
+                typeof record.usage === "object"
+              ? (record.usage as { statusReason?: unknown }).statusReason
+              : undefined;
+            const isRecoveredFailure = index < records.length - 1 &&
+              typeof usageStatusReason === "string";
+            const attemptPatch = {
+              provider: record.provider ?? null,
+              model: record.model ?? null,
+              usage: record.usage,
+              cost: record.cost ?? null,
+              ...(record.partialAnswer !== undefined
+                ? { partialAnswer: record.partialAnswer }
+                : {}),
+              ...(record.partialReasoning !== undefined
+                ? { partialReasoning: record.partialReasoning }
+                : {}),
+            };
+            const mutationOptions = {
+              threadId,
+              traceId: typeof event.traceId === "string" ? event.traceId : null,
+              causationId: typeof event.id === "string" ? event.id : null,
+              namespace: context.namespace,
+            };
+            if (isRecoveredFailure) {
+              await deps.db.ops.mutate.llmAttempts.fail(
+                canonicalAttemptId,
+                {
+                  ...attemptPatch,
+                  finishReason: "error",
+                  error: {
+                    reason: usageStatusReason,
+                    recovered: true,
+                    visibleOutputStarted: record.visibleOutputStarted ?? false,
+                  },
+                  finishedAt: new Date().toISOString(),
+                },
+                mutationOptions,
+              );
+            } else {
+              await deps.db.ops.mutate.llmAttempts.update(
+                canonicalAttemptId,
+                attemptPatch,
+                mutationOptions,
+              );
+            }
+          } catch (error) {
+            console.warn(
+              "[LLM_CALL] Failed to persist llm_attempt usage:",
+              error,
+            );
+          }
+        }
+
+        if (!llmUsageService) continue;
         try {
           const createdUsageNodeId = await llmUsageService.createUsageRecord({
             threadId,
@@ -423,6 +578,24 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           if (createdUsageNodeId && finalized) {
             void finalized.then(async (finalizedMetrics) => {
               if (!finalizedMetrics) return;
+              if (canonicalAttemptId && deps.db?.ops?.mutate?.llmAttempts) {
+                await deps.db.ops.mutate.llmAttempts.update(
+                  canonicalAttemptId,
+                  {
+                    usage: finalizedMetrics.usage,
+                    cost: finalizedMetrics.cost ?? null,
+                    metricsFinalizedAt: finalizedMetrics.finalizedAt,
+                  },
+                  {
+                    threadId,
+                    traceId: typeof event.traceId === "string"
+                      ? event.traceId
+                      : null,
+                    causationId: typeof event.id === "string" ? event.id : null,
+                    namespace: context.namespace,
+                  },
+                );
+              }
               await llmUsageService.updateUsageRecordMetrics({
                 usageNodeId: createdUsageNodeId,
                 threadId,
@@ -539,6 +712,39 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       if (providerError.usageAttempts.length > 0) {
         await persistUsageRecords(providerError.usageAttempts);
       }
+      if (terminalLlmAttemptId) {
+        baseResultMetadata.llmAttemptId = terminalLlmAttemptId;
+      }
+      const failedAttemptId = terminalLlmAttemptId ?? llmAttemptId;
+      if (failedAttemptId && deps.db?.ops?.mutate?.llmAttempts) {
+        try {
+          await deps.db.ops.mutate.llmAttempts.fail(
+            failedAttemptId,
+            {
+              provider: providerError.provider ?? configForCall.provider ??
+                null,
+              model: providerError.model ?? configForCall.model ?? null,
+              answer: friendlyAnswer,
+              partialAnswer,
+              partialReasoning,
+              finishReason: "error",
+              error: failedPayload.error,
+              finishedAt: failedPayload.finishedAt,
+            },
+            {
+              threadId,
+              traceId: typeof event.traceId === "string" ? event.traceId : null,
+              causationId: typeof event.id === "string" ? event.id : null,
+              namespace: context.namespace,
+            },
+          );
+        } catch (attemptError) {
+          console.warn(
+            "[LLM_CALL] Failed to mark llm_attempt failed:",
+            attemptError,
+          );
+        }
+      }
 
       return {
         producedEvents: [{
@@ -607,6 +813,9 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         : [];
 
     await persistUsageRecords(usageRecords, usageFinalized);
+    if (terminalLlmAttemptId) {
+      baseResultMetadata.llmAttemptId = terminalLlmAttemptId;
+    }
 
     if (envFlagEnabled("COPILOTZ_DEBUG")) {
       console.log("answer", answer);
@@ -682,6 +891,42 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       ...(usageNodeId ? { usageNodeId } : {}),
       finishedAt: new Date().toISOString(),
     };
+
+    const completionAttemptId = terminalLlmAttemptId ?? llmAttemptId;
+    if (completionAttemptId && deps.db?.ops?.mutate?.llmAttempts) {
+      try {
+        if (completionAttemptId === llmAttemptId) {
+          persistPartialAttempt(true);
+        }
+        await deps.db.ops.mutate.llmAttempts.complete(
+          completionAttemptId,
+          {
+            provider: llmResponse.provider ?? null,
+            model: llmResponse.model ?? null,
+            finishReason: llmResultPayload.finishReason,
+            answer: answer ?? null,
+            reasoning: reasoning ?? null,
+            partialAnswer,
+            partialReasoning,
+            toolCalls: normalizedToolCalls ?? null,
+            usage: usage ?? null,
+            cost: cost ?? null,
+            finishedAt: llmResultPayload.finishedAt,
+          },
+          {
+            threadId,
+            traceId: typeof event.traceId === "string" ? event.traceId : null,
+            causationId: typeof event.id === "string" ? event.id : null,
+            namespace: context.namespace,
+          },
+        );
+      } catch (attemptError) {
+        console.warn(
+          "[LLM_CALL] Failed to mark llm_attempt completed:",
+          attemptError,
+        );
+      }
+    }
 
     const resultMetadata: Record<string, unknown> = {
       ...baseResultMetadata,

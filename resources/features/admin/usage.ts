@@ -2,6 +2,7 @@ import type { Copilotz } from "@/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 import {
   type AdminUsageTotals,
+  buildAdminUsageSourceCte,
   buildUsageCoalesceSelects,
   buildUsageSumSelects,
   pushTimeRange,
@@ -84,7 +85,7 @@ export default async function (
     : GRAPH_EDGE.USED_LLM;
 
   const params: unknown[] = [];
-  const filters: string[] = [`u."type" = 'llm_usage'`];
+  const filters: string[] = [];
 
   const namespace = typeof query.namespace === "string"
     ? query.namespace
@@ -106,9 +107,7 @@ export default async function (
     : undefined;
   if (threadId) {
     params.push(threadId);
-    filters.push(
-      `COALESCE(u."data"->>'threadId', u."source_id") = $${params.length}`,
-    );
+    filters.push(`u."threadId" = $${params.length}`);
   }
 
   const provider = typeof query.provider === "string"
@@ -116,13 +115,13 @@ export default async function (
     : undefined;
   if (provider) {
     params.push(provider);
-    filters.push(`COALESCE(u."data"->>'provider', '') = $${params.length}`);
+    filters.push(`u."provider" = $${params.length}`);
   }
 
   const model = typeof query.model === "string" ? query.model : undefined;
   if (model) {
     params.push(model);
-    filters.push(`COALESCE(u."data"->>'model', '') = $${params.length}`);
+    filters.push(`u."model" = $${params.length}`);
   }
 
   const participantId = typeof query.participantId === "string"
@@ -158,18 +157,18 @@ export default async function (
     : "";
 
   const threadJoin = groupBy === "thread"
-    ? `LEFT JOIN "threads" t ON t."id" = COALESCE(u."data"->>'threadId', u."source_id")`
+    ? `LEFT JOIN "threads" t ON t."id" = u."threadId"`
     : "";
 
   const groupExpr = groupBy === "participant"
     ? `COALESCE(p."data"->>'externalId', p."source_id", p."id", 'unknown')`
     : groupBy === "thread"
-    ? `COALESCE(u."data"->>'threadId', u."source_id", 'unknown')`
+    ? `COALESCE(u."threadId", 'unknown')`
     : groupBy === "namespace"
     ? `COALESCE(u."namespace", 'unknown')`
     : groupBy === "provider"
-    ? `COALESCE(u."data"->>'provider', 'unknown')`
-    : `COALESCE(u."data"->>'model', 'unknown')`;
+    ? `COALESCE(u."provider", 'unknown')`
+    : `COALESCE(u."model", 'unknown')`;
 
   const labelExpr = groupBy === "participant"
     ? `COALESCE(p."data"->>'name', p."name", ${groupExpr})`
@@ -177,7 +176,7 @@ export default async function (
     ? `COALESCE(t."name", ${groupExpr})`
     : groupExpr;
 
-  const whereClause = filters.join(" AND ");
+  const whereClause = filters.length ? filters.join(" AND ") : "TRUE";
 
   const result = await q<
     {
@@ -187,14 +186,15 @@ export default async function (
       totalCalls: number;
     } & Record<string, number>
   >(
-    `WITH "usage_series" AS (
+    `WITH ${buildAdminUsageSourceCte()},
+     "usage_series" AS (
        SELECT
          DATE_TRUNC('${interval}', u."created_at") AS "bucket",
          ${groupExpr} AS "groupKey",
          ${labelExpr} AS "groupLabel",
          COUNT(*)::int AS "totalCalls",
          ${buildUsageSumSelects(`u."data"`)}
-       FROM "nodes" u
+       FROM "admin_usage_source" u
        ${participantJoins}
        ${threadJoin}
        WHERE ${whereClause}
@@ -212,8 +212,9 @@ export default async function (
   );
 
   const totalsResult = await q<Record<keyof AdminUsageTotals, number>>(
-    `SELECT COUNT(*)::int AS "totalCalls", ${buildUsageSumSelects(`u."data"`)}
-     FROM "nodes" u
+    `WITH ${buildAdminUsageSourceCte()}
+     SELECT COUNT(*)::int AS "totalCalls", ${buildUsageSumSelects(`u."data"`)}
+     FROM "admin_usage_source" u
      ${participantJoins}
      ${threadJoin}
      WHERE ${whereClause}`,

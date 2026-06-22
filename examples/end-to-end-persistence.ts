@@ -2,8 +2,8 @@
  * End-to-end persistence check.
  *
  * This example runs through createCopilotz().run(), consumes the stream,
- * waits for result.done, then verifies the user/assistant messages and
- * llm_usage row were persisted in the graph database.
+ * waits for result.done, then verifies the user/assistant messages, canonical
+ * llm_attempt rows, and compatibility llm_usage rows were persisted.
  *
  * It stubs only the outbound OpenAI HTTP stream, so it does not need an API key
  * or network access.
@@ -352,12 +352,89 @@ try {
     "Expected first assistant message metadata to reference llm_usage",
   );
   assert(
+    typeof firstAssistantMetadata.llmAttemptId === "string",
+    "Expected first assistant message metadata to reference llm_attempt",
+  );
+  assert(
     typeof secondAssistantMetadata.usageNodeId === "string",
     "Expected second assistant message metadata to reference llm_usage",
   );
   assert(
+    typeof secondAssistantMetadata.llmAttemptId === "string",
+    "Expected second assistant message metadata to reference llm_attempt",
+  );
+  assert(
     typeof thirdAssistantMetadata.usageNodeId === "string",
     "Expected third assistant message metadata to reference llm_usage",
+  );
+  assert(
+    typeof thirdAssistantMetadata.llmAttemptId === "string",
+    "Expected third assistant message metadata to reference llm_attempt",
+  );
+
+  const attemptRows = await copilotz.db.query<{
+    id: string;
+    data: Record<string, unknown>;
+  }>(
+    `SELECT "id", "data"
+     FROM "nodes"
+     WHERE "data"->>'threadId' = $1
+       AND "type" = 'llm_attempt'
+     ORDER BY "created_at" ASC`,
+    [firstRun.threadId],
+  );
+
+  assertEquals(
+    attemptRows.rows.length,
+    4,
+    "Expected four canonical llm_attempt nodes",
+  );
+  assertEquals(
+    attemptRows.rows[0].id,
+    firstAssistantMetadata.llmAttemptId,
+    "Expected first assistant metadata to point at first llm_attempt",
+  );
+  assertEquals(
+    attemptRows.rows[1].id,
+    secondAssistantMetadata.llmAttemptId,
+    "Expected second assistant metadata to point at second llm_attempt",
+  );
+  assertEquals(
+    attemptRows.rows[3].id,
+    thirdAssistantMetadata.llmAttemptId,
+    "Expected continued assistant metadata to point at final continuation llm_attempt",
+  );
+  assertEquals(
+    attemptRows.rows[0].data.status,
+    "completed",
+    "Expected first llm_attempt to complete",
+  );
+  assertEquals(
+    (attemptRows.rows[1].data.usage as Record<string, unknown> | undefined)
+      ?.totalTokens,
+    30,
+    "Expected second llm_attempt to track provider-reported tokens",
+  );
+  assertEquals(
+    attemptRows.rows[2].data.status,
+    "failed",
+    "Expected broken stream attempt to be tracked as failed",
+  );
+  assertEquals(
+    attemptRows.rows[2].data.partialAnswer,
+    "Broken partial",
+    "Expected failed llm_attempt to persist visible partial output",
+  );
+  assertEquals(
+    attemptRows.rows[2].data.partialReasoning,
+    "Need to continue safely.",
+    "Expected failed llm_attempt to persist partial reasoning",
+  );
+  assertEquals(
+    (attemptRows.rows[3].data.usage as Record<string, unknown> | undefined)
+      ?.totalTokens,
+    44,
+    "Expected continuation llm_attempt to track final provider usage",
   );
 
   const usageRows = await copilotz.db.query<{
@@ -413,6 +490,7 @@ try {
   console.log("End-to-end multi-turn persistence example passed.");
   console.log(`Thread: ${firstRun.threadId}`);
   console.log(`Messages persisted: ${messages.length}`);
+  console.log(`LLM attempts persisted: ${attemptRows.rows.length}`);
   console.log(`LLM usage rows persisted: ${usageRows.rows.length}`);
 } finally {
   globalThis.fetch = originalFetch;

@@ -24,7 +24,9 @@ You're writing middleware for a process you don't fully understand. That needs t
 
 ## The foundation: threads and events
 
-Everything in Copilotz is stored as events in a database. Two tables are central to understanding the runtime:
+Copilotz runtime state is stored as domain objects in the graph/database, with
+an outbox event written in the same transaction for every durable mutation. Two
+things are central to understanding the runtime:
 
 ### The `threads` table
 
@@ -49,19 +51,22 @@ const result2 = await copilotz.run(
 
 ### The `events` table
 
-Every action the agent takes is recorded as an **event**. Events have:
-- `type` — what kind of event it is
-- `threadId` — which conversation it belongs to
-- `payload` — the event's data (varies by type)
-- `status` — `pending` → `processing` → `completed` or `failed`
+Durable workflow facts are recorded in the `events` table as an outbox. Modern
+rows use lifecycle names like `message.created`, `llm_attempt.completed`, and
+`tool_execution.failed`, plus `subjectType`, `subjectId`, `operation`,
+`causationId`, `input`, `before`, `after`, and `patch`.
 
-Processors consume events and can produce new ones. The runtime works its way through pending events in priority order until the thread is quiet.
+Processors react to those lifecycle facts and perform more domain mutations.
+Legacy uppercase queue events and `producedEvents` still exist for compatibility
+and live stream projections, but new durable state should be written through
+`ops.mutate.*`.
 
-This is **event sourcing** — the database is the source of truth. The agent state is always recoverable from the event log.
+The graph/database is the source of truth. The outbox is the durable workflow
+log and debugging/audit trail.
 
-## Persistent event types
+## Live stream event types
 
-These events are stored in the database and drive the agent lifecycle:
+These uppercase events are projected to clients and older integrations:
 
 ### `NEW_MESSAGE`
 Fired when a new message enters the system — from a user, a tool, or another agent.
@@ -220,7 +225,8 @@ User sends message
 
 ## Hooking into any event type
 
-Your processors can intercept any event type. Here's a processor that logs every LLM call with token usage:
+Your processors can intercept any event type. Here's a processor that forwards
+LLM result metadata without creating duplicate accounting rows:
 
 ```typescript
 // resources/processors/usage-logger/index.ts
@@ -233,14 +239,14 @@ export default {
 
   process: async (event, deps) => {
     const usage = event.payload?.usage;
+    const attemptId = event.metadata?.llmAttemptId;
 
-    await deps.db.collections.llm_usage.create({
+    await sendToObservabilitySink({
       threadId: event.threadId,
-      provider: event.payload?.llmConfig?.provider,
-      model: event.payload?.llmConfig?.model,
-      inputTokens: usage?.inputTokens ?? 0,
-      outputTokens: usage?.outputTokens ?? 0,
-      totalTokens: usage?.totalTokens ?? 0,
+      attemptId,
+      provider: event.payload?.provider,
+      model: event.payload?.model,
+      usage,
       namespace: deps.context.namespace,
     });
 

@@ -359,7 +359,7 @@ export function createMessageService(
       message: Omit<NewMessage, "id"> & { id?: string },
       namespace?: string,
     ): Promise<Message> {
-      return await ops.createMessage(message, namespace);
+      return await ops.mutate.messages.create(message, namespace);
     },
 
     async listForThread(

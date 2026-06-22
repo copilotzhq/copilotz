@@ -65,6 +65,22 @@ Common message fields:
 }
 ```
 
+## Stream Events
+
+`events` yields live uppercase projections for UI and integration code. Durable
+workflow facts are written as mutation outbox rows such as `message.created`,
+`llm_attempt.completed`, and `tool_execution.failed`.
+
+Important stream conventions:
+
+- `TOKEN` events are non-durable streaming hints.
+- `LLM_RESULT` metadata may include `llmAttemptId` and compatibility
+  `usageNodeId`.
+- `<no_response/>` produces a terminal empty `LLM_RESULT` and no default
+  visible assistant bubble.
+- `TOOL_CALL` and `TOOL_RESULT` metadata may include `toolExecutionId`; use that
+  id for durable tool output lookup when available.
+
 ## Related Pages
 
 - [Runs](../runtime/runs.md)

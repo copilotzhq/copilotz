@@ -10,6 +10,7 @@
 
 import { Ominipg } from "omnipg";
 import type { OminipgWithCrud } from "omnipg";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveAutoProviders } from "omnipg/auto";
 import { createCrudApi } from "omnipg/crud";
 import type { PGliteConfig } from "omnipg/pglite";
@@ -29,6 +30,7 @@ import { generateNamespaceEventsMigrations } from "./migrations/migration_0005_n
 import { generateThreadLeasesMigrations } from "./migrations/migration_0006_thread_leases.ts";
 import { generateScheduledJobsMigrations } from "./migrations/migration_0007_scheduled_jobs.ts";
 import { generateThreadActivityIndexesMigrations } from "./migrations/migration_0008_thread_activity_indexes.ts";
+import { generateMutationOutboxMigrations } from "./migrations/migration_0009_mutation_outbox.ts";
 import { getCurrentSchema } from "./schema-context.ts";
 import {
   ensureSchemaProvisioned,
@@ -46,7 +48,8 @@ const migrations: string = generateMigrations() + "\n" +
   generateUlidSupportMigrations() + "\n" + generateNamespaceEventsMigrations() +
   "\n" + generateThreadLeasesMigrations() + "\n" +
   generateScheduledJobsMigrations() + "\n" +
-  generateThreadActivityIndexesMigrations() + "\n";
+  generateThreadActivityIndexesMigrations() + "\n" +
+  generateMutationOutboxMigrations() + "\n";
 
 /**
  * Configuration options for creating a database connection.
@@ -152,6 +155,17 @@ export interface DatabaseConfig {
 }
 
 type Operations = DatabaseOperations;
+
+type QueryFn = <T extends Record<string, unknown>>(
+  sql: string,
+  params?: unknown[],
+) => Promise<{ rows: T[]; rowCount?: number }>;
+
+type TransactionContext = {
+  query: QueryFn;
+};
+
+const transactionStorage = new AsyncLocalStorage<TransactionContext>();
 
 /**
  * Low-level database instance type from Ominipg with CRUD operations.
@@ -364,12 +378,7 @@ function wrapDbWithSchemaSupport(
   config: DatabaseConfig,
   debug: boolean,
 ): DbInstance {
-  const originalQuery = db.query.bind(db) as <
-    T extends Record<string, unknown>,
-  >(
-    sql: string,
-    params?: unknown[],
-  ) => Promise<{ rows: T[]; rowCount?: number }>;
+  const originalQuery = db.query.bind(db) as QueryFn;
   const autoProvision = config.autoProvisionSchema ?? true;
   const pool = (db as unknown as {
     pool?: {
@@ -383,20 +392,9 @@ function wrapDbWithSchemaSupport(
     };
   }).pool;
 
-  // Create a wrapped query function that respects schema context.
-  // An explicit withSchema()/run({ schema }) context takes precedence over
-  // the database-level default schema.
-  const wrappedQuery = async function <T extends Record<string, unknown>>(
-    sql: string,
-    params?: unknown[],
-  ): Promise<{ rows: T[]; rowCount?: number }> {
+  const resolveSchemaForQuery = async (): Promise<string | undefined> => {
     const schema = getCurrentSchema() ?? config.defaultSchema;
-    const safeParams = sanitizePostgresParams(params);
-
-    // If no schema context or using public, execute directly
-    if (!schema || schema === "public") {
-      return originalQuery<T>(sql, safeParams);
-    }
+    if (!schema || schema === "public") return undefined;
 
     // SECURITY: Always validate schema name before using in SQL
     // This is critical since schema names cannot be parameterized in PostgreSQL
@@ -420,6 +418,28 @@ function wrapDbWithSchemaSupport(
         }
         throw err;
       }
+    }
+    return schema;
+  };
+
+  // Create a wrapped query function that respects schema and transaction
+  // context. An explicit withSchema()/run({ schema }) context takes precedence
+  // over the database-level default schema.
+  const wrappedQuery = async function <T extends Record<string, unknown>>(
+    sql: string,
+    params?: unknown[],
+  ): Promise<{ rows: T[]; rowCount?: number }> {
+    const safeParams = sanitizePostgresParams(params);
+    const tx = transactionStorage.getStore();
+    if (tx) {
+      return await tx.query<T>(sql, safeParams);
+    }
+
+    const schema = await resolveSchemaForQuery();
+
+    // If no schema context or using public, execute directly
+    if (!schema) {
+      return originalQuery<T>(sql, safeParams);
     }
 
     if (typeof pool?.connect === "function") {
@@ -466,6 +486,78 @@ function wrapDbWithSchemaSupport(
     }
   };
 
+  const runInTransaction = async <T>(
+    fn: () => Promise<T>,
+  ): Promise<T> => {
+    const existing = transactionStorage.getStore();
+    if (existing) return await fn();
+
+    const schema = await resolveSchemaForQuery();
+
+    if (typeof pool?.connect === "function") {
+      const client = await pool.connect();
+      const txQuery: QueryFn = async <T extends Record<string, unknown>>(
+        sql: string,
+        params?: unknown[],
+      ) => {
+        const result = await client.query(
+          sql,
+          sanitizePostgresParams(params) ?? [],
+        );
+        return {
+          rows: result.rows as T[],
+          rowCount: result.rowCount,
+        };
+      };
+
+      try {
+        await client.query("BEGIN");
+        if (schema) {
+          await client.query(`SET LOCAL search_path TO "${schema}", public`);
+        }
+        const result = await transactionStorage.run(
+          { query: txQuery },
+          fn,
+        );
+        await client.query("COMMIT");
+        return result;
+      } catch (err) {
+        try {
+          await client.query("ROLLBACK");
+        } catch {
+          // Ignore rollback errors
+        }
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
+
+    const txQuery: QueryFn = async <T extends Record<string, unknown>>(
+      sql: string,
+      params?: unknown[],
+    ) => await originalQuery<T>(sql, sanitizePostgresParams(params));
+
+    try {
+      await originalQuery<Record<string, unknown>>("BEGIN");
+      if (schema) {
+        await originalQuery<Record<string, unknown>>(
+          `SET LOCAL search_path TO "${schema}", public`,
+        );
+      }
+      const result = await transactionStorage.run({ query: txQuery }, fn);
+      await originalQuery<Record<string, unknown>>("COMMIT");
+      return result;
+    } catch (err) {
+      try {
+        await originalQuery<Record<string, unknown>>("ROLLBACK");
+      } catch {
+        // Ignore rollback errors
+      }
+      throw err;
+    }
+  };
+
   const wrappedCrud = createCrudApi(
     baseSchema,
     async (sql: string, params?: unknown[]) => {
@@ -482,6 +574,9 @@ function wrapDbWithSchemaSupport(
       }
       if (prop === "crud") {
         return wrappedCrud;
+      }
+      if (prop === "__copilotzTransaction") {
+        return runInTransaction;
       }
       return Reflect.get(target, prop, receiver);
     },

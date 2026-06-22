@@ -1,14 +1,21 @@
 ---
 name: add-processor
-description: Create a custom event processor to extend the Copilotz event pipeline.
+description: Create a custom processor to react to Copilotz lifecycle events.
 allowed-tools: [read_file, write_file, list_directory]
 tags: [framework, events, processor]
 ---
 
 # Add Processor
 
-Custom event processors let you intercept and handle events in the processing
-pipeline.
+Custom processors let you react to Copilotz lifecycle events and mutate domain
+state.
+
+Prefer domain mutations such as `deps.db.ops.mutate.messages.create(...)`,
+`deps.db.ops.mutate.llmAttempts.update(...)`, and
+`deps.db.ops.mutate.toolExecutions.complete(...)`. These write the graph/table
+change and append a durable outbox row in one transaction. Returning
+`producedEvents` is still supported for legacy custom processors and live stream
+compatibility, but it should not be the first choice for durable workflow state.
 
 ## Directory Structure
 
@@ -17,7 +24,9 @@ resources/event-processors/{EVENT_TYPE}/
   processor.ts    # Required: exports shouldProcess + process
 ```
 
-The directory name is the event type (e.g., `NEW_MESSAGE`, `CUSTOM_EVENT`).
+The legacy directory name is the event type (for example `NEW_MESSAGE` or
+`CUSTOM_EVENT`). Core lifecycle processors use durable dot-case events such as
+`message.created`, `llm_attempt.completed`, and `tool_execution.failed`.
 
 ## Create processor.ts
 
@@ -40,18 +49,19 @@ const processor: EventProcessor = {
     const isOk = await moderateContent(content);
 
     if (!isOk) {
-      return {
-        producedEvents: [{
-          type: "NEW_MESSAGE",
-          payload: {
-            content: "This message was flagged.",
-            sender: { type: "system", name: "Moderator" },
-          },
-        }],
-      };
+      await db.ops.mutate.messages.create({
+        threadId: event.threadId,
+        senderType: "system",
+        senderId: "moderator",
+        content: "This message was flagged.",
+        metadata: { causationId: event.id },
+      }, context.namespace, {
+        traceId: event.traceId,
+        causationId: event.id,
+      });
     }
 
-    return { producedEvents: [] };
+    return {};
   },
 };
 
@@ -68,14 +78,18 @@ export default processor;
 
 ## Event Types
 
-Common built-in event types:
+Common lifecycle events:
 
-- `NEW_MESSAGE` — New message in a thread
-- `LLM_CALL` — LLM API call about to be made
-- `TOOL_CALL` — Tool invocation
-- `ENTITY_EXTRACT` — Entity extraction from messages
+- `message.created` — Message aggregate created
+- `llm_attempt.created` — LLM provider attempt started
+- `llm_attempt.completed` — LLM provider attempt finished
+- `llm_attempt.failed` — LLM provider attempt failed or recovered
+- `tool_execution.created` — Tool invocation started
+- `tool_execution.completed` — Tool invocation finished
+- `asset.created` — Asset node created
 
-You can also define custom event types.
+Live uppercase events such as `TOKEN`, `TOOL_CALL`, `TOOL_RESULT`, and
+`LLM_RESULT` are stream projections for clients.
 
 ## Priority
 
@@ -89,4 +103,6 @@ export const priority = 10; // Runs before priority 0 (default)
 
 - Processors are loaded from `resources/event-processors/` automatically
 - Multiple processors can handle the same event type
-- Return `producedEvents` to emit new events into the pipeline
+- Use `ops.mutate.*` for durable state changes and outbox facts
+- Return `producedEvents` only for legacy compatibility or deliberate stream
+  projections

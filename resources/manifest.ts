@@ -61,7 +61,11 @@ export default {
     storage: ["fs", "s3"],
     collections: [
       "participant",
+      "thread",
       "message",
+      "asset",
+      "llm_attempt",
+      "tool_execution",
       "chunk",
       "document",
       "llm_usage",
@@ -100,7 +104,11 @@ export default {
     core: [
       "channels.web",
       "collections.participant",
+      "collections.thread",
       "collections.message",
+      "collections.asset",
+      "collections.llm_attempt",
+      "collections.tool_execution",
       "collections.llm_usage",
       "memory.participant",
       "memory.history",

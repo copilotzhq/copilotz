@@ -1,6 +1,7 @@
 import type { Copilotz } from "@/index.ts";
 import {
   type AdminActivityPoint,
+  buildAdminUsageSourceCte,
   buildUsageCoalesceSelects,
   buildUsageSumSelects,
   pushScopedThreadNode,
@@ -27,18 +28,21 @@ export default async function (
   pushTimeRange(params, mf, `"created_at"`, from, to);
   const messageWhere = `WHERE ${mf.join(" AND ")}`;
 
-  const uf: string[] = [`"type" = 'llm_usage'`];
+  const uf: string[] = [];
   pushScopedThreadNode(params, uf, `"namespace"`, namespace);
   pushTimeRange(params, uf, `"created_at"`, from, to);
-  const usageWhere = `WHERE ${uf.join(" AND ")}`;
+  const usageWhere = `WHERE ${uf.length ? uf.join(" AND ") : "TRUE"}`;
 
-  const result = await q<{
-    bucket: Date | string;
-    messageCount: number;
-    toolCallMessageCount: number;
-    totalCalls: number;
-  } & Record<string, number>>(
-    `WITH "message_series" AS (
+  const result = await q<
+    {
+      bucket: Date | string;
+      messageCount: number;
+      toolCallMessageCount: number;
+      totalCalls: number;
+    } & Record<string, number>
+  >(
+    `WITH ${buildAdminUsageSourceCte()},
+     "message_series" AS (
        SELECT
          DATE_TRUNC('${interval}', "created_at") AS "bucket",
          COUNT(*)::int AS "messageCount",
@@ -54,7 +58,7 @@ export default async function (
          DATE_TRUNC('${interval}', "created_at") AS "bucket",
          COUNT(*)::int AS "totalCalls",
          ${buildUsageSumSelects(`"data"`)}
-       FROM "nodes" ${usageWhere}
+       FROM "admin_usage_source" ${usageWhere}
        GROUP BY 1
      ),
      "all_buckets" AS (
@@ -74,7 +78,8 @@ export default async function (
   );
 
   const data: AdminActivityPoint[] = result.rows.map((row) => ({
-    bucket: toIso(row.bucket) ?? new Date(row.bucket as string | Date).toISOString(),
+    bucket: toIso(row.bucket) ??
+      new Date(row.bucket as string | Date).toISOString(),
     messageCount: toNum(row.messageCount),
     toolCallMessageCount: toNum(row.toolCallMessageCount),
     llmCallCount: toNum(row.totalCalls),

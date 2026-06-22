@@ -20,11 +20,12 @@ You add a `console.log`. It tells you what the user sent. It doesn't tell you wh
 
 Every `copilotz.run()` emits a typed event stream that exposes every decision the agent makes. You can watch it in real time, store it, or forward it to any observability platform. Beyond the event stream, Copilotz automatically records token and cost data for every LLM call — queryable, per-tenant, indexed by thread and model.
 
-Three layers:
+Four layers:
 
 1. **The event stream** — live, per-run observability
-2. **`llm_usage` collection** — automatic cost and token tracking
+2. **`llm_attempt` graph nodes** — canonical prompt, partial, usage, cost, and recovery tracking
 3. **Custom processors** — forward any event to Datadog, Langfuse, OpenTelemetry, or your own sink
+4. **The outbox `events` table** — durable mutation facts for post-mortem debugging
 
 ## Layer 1: The event stream
 
@@ -99,9 +100,14 @@ const result = await copilotz.run(
 
 The same `traceId` appears on `LLM_CALL` and `LLM_RESULT` events, so you can join Copilotz events with your own spans in any observability backend.
 
-## Layer 2: `llm_usage` — cost and token tracking
+## Layer 2: `llm_attempt` — attempt, usage, and cost tracking
 
-Every LLM call automatically writes a record to the `llm_usage` collection:
+Every provider attempt writes an `llm_attempt` graph node. It is the canonical
+record for prompt snapshots, partial visible output, reasoning, tool calls,
+usage, cost, status, provider/model, errors, and recovery linkage.
+
+`llm_usage` remains as a compatibility projection for admin screens and older
+integrations while the migration completes:
 
 ```typescript
 const db = copilotz.collections.withNamespace("acme");
@@ -200,9 +206,15 @@ The same pattern works for `LLM_CALL` (to log prompts), `TOOL_CALL`/`TOOL_RESULT
 
 ## Layer 4: The events table — post-mortem debugging
 
-The event stream shows what's happening right now. The `llm_usage` collection tracks cost over time. But when something went wrong an hour ago — or when you need to understand a background process that never surfaced in a live stream — the `events` table is the authoritative record.
+The event stream shows what's happening right now. `llm_attempt` graph nodes
+track prompt snapshots, partial output, usage, cost, and recovery state. When
+something went wrong an hour ago, the `events` table shows the mutation outbox
+facts that led to the current graph state.
 
-Every queue event Copilotz processes is persisted to this table: its `type`, full `payload` (JSONB), `status`, `traceId`, `parentEventId`, `namespace`, and `createdAt`. This includes events that run asynchronously after the main response — `RAG_INGEST`, `ENTITY_EXTRACT`, background tool calls — which never appear in the live stream at all.
+Modern rows include `type`, `subjectType`, `subjectId`, `operation`,
+`causationId`, `correlationId`, `input`, `before`, `after`, `patch`, `status`,
+`traceId`, `parentEventId`, `namespace`, and `createdAt`. Legacy uppercase queue
+events may also appear during the compatibility migration.
 
 Query it via `copilotz.ops.query()`:
 
@@ -292,7 +304,10 @@ A processor that counts `LLM_CALL` events per thread and logs a warning after N 
 Log `LLM_CALL` and look at the injected context in the system message — it shows what chunks were retrieved. Also check the similarity threshold in `rag.retrieval.similarityThreshold`; raising it filters out weak matches.
 
 **"Costs spiked last night — what happened?"**
-Query `llm_usage` filtered by `createdAt` range. Compare `inputTokens` across threads; unusually high counts indicate either very long conversation history or runaway loops.
+Query `llm_attempt` nodes filtered by `createdAt` range. Compare usage across
+threads and inspect prompt snapshots; unusually high counts indicate either very
+long conversation history or runaway loops. `llm_usage` can still be queried as
+a compatibility projection where admin screens expect it.
 
 ## What this unlocks
 

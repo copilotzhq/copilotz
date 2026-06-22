@@ -22,6 +22,12 @@ There's no hook in the LLM API for this. The standard tool-calling flow goes fro
 
 Copilotz processes every agent action through an **event processor chain**. When the LLM decides to call a tool, a `TOOL_CALL` event is created and passed through registered processors in priority order. You can insert your own processor anywhere in that chain — inspect the event, block it, modify it, or let it through.
 
+This chapter describes the legacy uppercase processor contract that remains
+supported for compatibility. For new durable workflow state, prefer
+`deps.db.ops.mutate.*`; those operations write the graph/table mutation and
+append an outbox lifecycle event in one transaction. Use `producedEvents` when
+you intentionally want to claim a legacy event or emit compatibility work.
+
 This is middleware for agent actions.
 
 Create `resources/processors/safety-guard/index.ts`:

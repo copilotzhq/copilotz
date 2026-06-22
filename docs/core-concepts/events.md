@@ -8,27 +8,58 @@ status: stable
 
 # Events
 
-Copilotz is event-driven.
+Copilotz has two event surfaces:
 
-`copilotz.run(...)` creates work and returns a live event stream. The runtime
-then emits events as messages are persisted, models are called, tools run,
-assets are created, and background processors continue the work.
+- durable mutation events in the database outbox
+- live stream projections returned by `copilotz.run(...)`
 
-## Common Events
+Durable events are produced by domain mutations. For example,
+`ops.mutate.messages.create(...)` writes the message and appends a
+`message.created` outbox row in the same transaction. The live stream still
+emits uppercase events such as `TOKEN`, `TOOL_CALL`, `TOOL_RESULT`, and
+`LLM_RESULT` so existing clients and adapters keep working.
 
-| Event           | Meaning                                          |
-| --------------- | ------------------------------------------------ |
-| `NEW_MESSAGE`   | A user, agent, tool, or system message was added |
-| `TOKEN`         | A streamed model token was produced              |
-| `LLM_CALL`      | The runtime is about to call an LLM provider     |
-| `LLM_RESULT`    | The LLM provider returned a result               |
-| `TOOL_CALL`     | An agent requested a tool call                   |
-| `TOOL_RESULT`   | A tool call completed or failed                  |
-| `ASSET_CREATED` | An asset was extracted and stored                |
-| `ASSET_ERROR`   | Asset extraction or storage failed               |
-| `RAG_INGEST`    | A document ingestion job was queued or processed |
-| `GOAL_STOPPED`  | A goal loop stopped                              |
-| `GOAL_RESULT`   | A goal produced its final result                 |
+## Durable Mutation Events
+
+The physical table is still `events`, but durable workflow facts use lifecycle
+names and subject fields:
+
+| Event                    | Meaning                                |
+| ------------------------ | -------------------------------------- |
+| `thread.created`         | A thread graph node was created        |
+| `message.created`        | A participant turn was persisted       |
+| `message.updated`        | A message aggregate gained new parts   |
+| `llm_attempt.created`    | A provider attempt started             |
+| `llm_attempt.updated`    | Partial output, usage, or cost changed |
+| `llm_attempt.completed`  | A provider attempt finished            |
+| `llm_attempt.failed`     | A provider attempt failed or recovered |
+| `tool_execution.created` | A tool execution started               |
+| `tool_execution.completed` | A tool execution returned output     |
+| `tool_execution.failed`  | A tool execution errored               |
+| `asset.created`          | An asset node was created              |
+
+Outbox rows include `subjectType`, `subjectId`, `operation`, `causationId`,
+`correlationId`, optional `dedupeKey`, and `input`/`before`/`after`/`patch`
+snapshots. Those fields are for recovery, debugging, projections, and future
+replay support.
+
+## Live Stream Events
+
+These are compatibility projections for UI and integration code:
+
+| Event           | Meaning                                      |
+| --------------- | -------------------------------------------- |
+| `NEW_MESSAGE`   | A visible or history message was projected   |
+| `TOKEN`         | A streamed model token was produced          |
+| `LLM_CALL`      | The runtime is about to call an LLM provider |
+| `LLM_RESULT`    | The LLM provider returned a result           |
+| `TOOL_CALL`     | An agent requested a tool call               |
+| `TOOL_RESULT`   | A tool call completed or failed              |
+| `ASSET_CREATED` | An asset was extracted and stored            |
+| `ASSET_ERROR`   | Asset extraction or storage failed           |
+| `RAG_INGEST`    | A document ingestion job ran                 |
+| `GOAL_STOPPED`  | A goal loop stopped                          |
+| `GOAL_RESULT`   | A goal produced its final result             |
 
 ## Listen to a Run
 
@@ -47,16 +78,21 @@ await run.done;
 For a clean chat UI, display user-facing agent messages.
 
 For debugging, also log tool calls, tool results, LLM calls, and asset events.
+For LLM accounting and recovery debugging, inspect `llm_attempt` graph nodes.
+They are canonical; `llm_usage` exists as a compatibility projection while
+admin and older integrations migrate.
 
 The same event stream supports both uses.
 
 ## Processors
 
-Processors react to events. Built-in processors handle normal work like
-responding to new messages, calling tools, storing tool results, and running RAG
-ingestion.
+Processors react to lifecycle facts and perform more domain mutations. Built-in
+processors handle normal work like responding to messages, calling tools,
+storing tool results, and running RAG ingestion.
 
-Custom processors are how you extend the runtime pipeline.
+Legacy custom processors that return `producedEvents` are still supported during
+the migration. New core runtime code should prefer `ops.mutate.*` so state and
+outbox facts are committed atomically.
 
 ## Related Pages
 

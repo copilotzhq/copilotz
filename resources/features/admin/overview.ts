@@ -1,6 +1,7 @@
 import type { Copilotz } from "@/index.ts";
 import {
   type AdminOverview,
+  buildAdminUsageSourceCte,
   buildUsageSumSelects,
   emptyUsageTotals,
   pushScopedThreadNode,
@@ -102,12 +103,14 @@ export default async function (
 
   // LLM usage totals
   const up: unknown[] = [];
-  const uf: string[] = [`"type" = 'llm_usage'`];
+  const uf: string[] = [];
   pushScopedThreadNode(up, uf, `"namespace"`, namespace);
   pushTimeRange(up, uf, `"created_at"`, from, to);
+  const usageWhere = uf.length ? uf.join(" AND ") : "TRUE";
   const usageResult = await q<AdminUsageTotalsRow>(
-    `SELECT COUNT(*)::int AS "totalCalls", ${buildUsageSumSelects(`"data"`)}
-     FROM "nodes" WHERE ${uf.join(" AND ")}`,
+    `WITH ${buildAdminUsageSourceCte()}
+     SELECT COUNT(*)::int AS "totalCalls", ${buildUsageSumSelects(`"data"`)}
+     FROM "admin_usage_source" WHERE ${usageWhere}`,
     up,
   );
 

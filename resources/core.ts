@@ -31,7 +31,11 @@ import webEgressAdapter from "@/resources/channels/web/egress.ts";
 
 // ---- Core: collections -----------------------------------------------------
 import participantCollection from "@/resources/collections/participant.ts";
+import threadCollection from "@/resources/collections/thread.ts";
 import messageCollection from "@/resources/collections/message.ts";
+import assetCollection from "@/resources/collections/asset.ts";
+import llmAttemptCollection from "@/resources/collections/llm_attempt.ts";
+import toolExecutionCollection from "@/resources/collections/tool_execution.ts";
 import llmUsageCollection from "@/resources/collections/llm_usage.ts";
 import scheduledJobCollection from "@/resources/collections/scheduled_job.ts";
 
@@ -353,7 +357,11 @@ function buildCoreChannels(): ChannelEntry[] {
 function buildCoreCollections(): CollectionDefinition[] {
   return [
     participantCollection as unknown as CollectionDefinition,
+    threadCollection as unknown as CollectionDefinition,
     messageCollection as unknown as CollectionDefinition,
+    assetCollection as unknown as CollectionDefinition,
+    llmAttemptCollection as unknown as CollectionDefinition,
+    toolExecutionCollection as unknown as CollectionDefinition,
     llmUsageCollection as unknown as CollectionDefinition,
     scheduledJobCollection as unknown as CollectionDefinition,
   ];

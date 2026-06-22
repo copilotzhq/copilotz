@@ -153,6 +153,10 @@ function buildAttemptUsageDataObject(): string {
          )`;
 }
 
+function buildRunSenderIdExpr(dataExpr: string): string {
+  return `COALESCE(${dataExpr}->'runSender'->>'externalId', ${dataExpr}->'runSender'->>'id', ${dataExpr}->'runSender'->>'email', ${dataExpr}->'runSender'->>'name', '')`;
+}
+
 export interface AdminUsageSourceScope {
   namespacePlaceholder?: string;
   fromPlaceholder?: string;
@@ -215,6 +219,7 @@ export function buildAdminUsageSourceCte(
          COALESCE(a."data"->>'threadId', a."source_id") AS "threadId",
          NULLIF(a."data"->>'eventId', '') AS "eventId",
          COALESCE(a."data"->>'agentId', '') AS "agentId",
+         ${buildRunSenderIdExpr(`a."data"`)} AS "initiatedById",
          COALESCE(a."data"->>'provider', '') AS "provider",
          COALESCE(a."data"->>'model', '') AS "model",
          a."data"
@@ -229,6 +234,7 @@ export function buildAdminUsageSourceCte(
          COALESCE(u."data"->>'threadId', u."source_id") AS "threadId",
          NULLIF(u."data"->>'eventId', '') AS "eventId",
          COALESCE(u."data"->>'agentId', '') AS "agentId",
+         ${buildRunSenderIdExpr(`u."data"`)} AS "initiatedById",
          COALESCE(u."data"->>'provider', '') AS "provider",
          COALESCE(u."data"->>'model', '') AS "model",
          u."data"
@@ -240,6 +246,8 @@ export function buildAdminUsageSourceCte(
          "namespace",
          "eventId",
          "threadId",
+         "agentId",
+         "initiatedById",
          "provider",
          "model",
          "data"
@@ -255,6 +263,7 @@ export function buildAdminUsageSourceCte(
          a."threadId",
          a."eventId",
          a."agentId",
+         a."initiatedById",
          a."provider",
          a."model",
          ${buildAttemptUsageDataObject()} AS "data",
@@ -276,6 +285,7 @@ export function buildAdminUsageSourceCte(
          u."threadId",
          u."eventId",
          u."agentId",
+         u."initiatedById",
          u."provider",
          u."model",
          u."data",

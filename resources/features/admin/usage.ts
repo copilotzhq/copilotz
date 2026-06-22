@@ -135,9 +135,128 @@ export default async function (
       query.participantType !== "all"
     ? query.participantType
     : undefined;
+  const participantKeyExpr = attribution === "initiatedBy"
+    ? `NULLIF(u."initiatedById", '')`
+    : `NULLIF(u."agentId", '')`;
+  const whereClause = filters.length ? filters.join(" AND ") : "TRUE";
 
-  const needsParticipantJoin = groupBy === "participant" || participantId ||
-    participantType;
+  if (groupBy === "participant") {
+    const participantFilters: string[] = [];
+    if (participantId) {
+      params.push(participantId);
+      participantFilters.push(
+        `COALESCE(p."data"->>'externalId', p."source_id", p."id") = $${params.length}`,
+      );
+    }
+    if (participantType) {
+      params.push(participantType);
+      participantFilters.push(
+        `COALESCE(p."data"->>'participantType', 'human') = $${params.length}`,
+      );
+    }
+    const participantWhere = participantFilters.length
+      ? `WHERE ${participantFilters.join(" AND ")}`
+      : "";
+    const participantNamespaceJoin = sourceScope.namespacePlaceholder
+      ? `AND p."namespace" = ${sourceScope.namespacePlaceholder}`
+      : "";
+    const result = await q<
+      {
+        bucket: Date | string;
+        groupKey: string;
+        groupLabel: string;
+        totalCalls: number;
+      } & Record<string, number>
+    >(
+      `WITH ${buildAdminUsageSourceCte(`"admin_usage_source"`, sourceScope)},
+       "usage_series" AS (
+         SELECT
+           DATE_TRUNC('${interval}', u."created_at") AS "bucket",
+           COALESCE(${participantKeyExpr}, 'unknown') AS "groupKey",
+           COUNT(*)::int AS "totalCalls",
+           ${buildUsageSumSelects(`u."data"`)}
+         FROM "admin_usage_source" u
+         WHERE ${whereClause}
+         GROUP BY 1, 2
+       ),
+       "usage_with_participant" AS (
+         SELECT
+           usage_series.*,
+           COALESCE(p."data"->>'name', p."name", usage_series."groupKey") AS "groupLabel"
+         FROM "usage_series"
+         LEFT JOIN "nodes" p
+           ON p."type" = 'participant'
+          ${participantNamespaceJoin}
+          AND COALESCE(p."data"->>'externalId', p."source_id", p."id") = usage_series."groupKey"
+         ${participantWhere}
+       )
+       SELECT
+         "bucket",
+         "groupKey",
+         "groupLabel",
+         COALESCE("totalCalls", 0)::int AS "totalCalls",
+         ${buildUsageCoalesceSelects("usage_with_participant")}
+       FROM "usage_with_participant"
+       ORDER BY "bucket" ASC, "totalCostUsd" DESC, "totalTokens" DESC`,
+      params,
+    );
+
+    const points = result.rows.map((row) => ({
+      bucket: toIso(row.bucket) ??
+        new Date(row.bucket as string | Date).toISOString(),
+      groupKey: row.groupKey,
+      groupLabel: row.groupLabel,
+      ...toUsageTotals(row),
+      totalCalls: toNum(row.totalCalls),
+    }));
+    const totals = points.reduce<AdminUsageTotals>(
+      (acc, point) => ({
+        totalCalls: acc.totalCalls + point.totalCalls,
+        inputTokens: acc.inputTokens + point.inputTokens,
+        outputTokens: acc.outputTokens + point.outputTokens,
+        reasoningTokens: acc.reasoningTokens + point.reasoningTokens,
+        cacheReadInputTokens: acc.cacheReadInputTokens +
+          point.cacheReadInputTokens,
+        cacheCreationInputTokens: acc.cacheCreationInputTokens +
+          point.cacheCreationInputTokens,
+        totalTokens: acc.totalTokens + point.totalTokens,
+        inputCostUsd: acc.inputCostUsd + point.inputCostUsd,
+        outputCostUsd: acc.outputCostUsd + point.outputCostUsd,
+        reasoningCostUsd: acc.reasoningCostUsd + point.reasoningCostUsd,
+        cacheReadInputCostUsd: acc.cacheReadInputCostUsd +
+          point.cacheReadInputCostUsd,
+        cacheCreationInputCostUsd: acc.cacheCreationInputCostUsd +
+          point.cacheCreationInputCostUsd,
+        totalCostUsd: acc.totalCostUsd + point.totalCostUsd,
+      }),
+      {
+        totalCalls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        totalTokens: 0,
+        inputCostUsd: 0,
+        outputCostUsd: 0,
+        reasoningCostUsd: 0,
+        cacheReadInputCostUsd: 0,
+        cacheCreationInputCostUsd: 0,
+        totalCostUsd: 0,
+      },
+    );
+
+    return {
+      status: 200,
+      data: {
+        points,
+        rows: points,
+        totals,
+      } satisfies AdminUsageResponse,
+    };
+  }
+
+  const needsParticipantJoin = Boolean(participantId || participantType);
   if (participantId) {
     params.push(participantId);
     filters.push(
@@ -164,9 +283,7 @@ export default async function (
     ? `LEFT JOIN "threads" t ON t."id" = u."threadId"`
     : "";
 
-  const groupExpr = groupBy === "participant"
-    ? `COALESCE(p."data"->>'externalId', p."source_id", p."id", 'unknown')`
-    : groupBy === "thread"
+  const groupExpr = groupBy === "thread"
     ? `COALESCE(u."threadId", 'unknown')`
     : groupBy === "namespace"
     ? `COALESCE(u."namespace", 'unknown')`
@@ -174,13 +291,9 @@ export default async function (
     ? `COALESCE(u."provider", 'unknown')`
     : `COALESCE(u."model", 'unknown')`;
 
-  const labelExpr = groupBy === "participant"
-    ? `COALESCE(p."data"->>'name', p."name", ${groupExpr})`
-    : groupBy === "thread"
+  const labelExpr = groupBy === "thread"
     ? `COALESCE(t."name", ${groupExpr})`
     : groupExpr;
-
-  const whereClause = filters.length ? filters.join(" AND ") : "TRUE";
 
   const result = await q<
     {

@@ -207,7 +207,7 @@ export function buildAdminUsageSourceCte(
 ): string {
   const attemptWhere = buildUsageSourceNodeFilters("a", "llm_attempt", scope);
   const legacyWhere = buildUsageSourceNodeFilters("u", "llm_usage", scope);
-  return `${name} AS (
+  return `"admin_usage_attempts" AS (
        SELECT
          a."id",
          a."namespace",
@@ -217,26 +217,11 @@ export function buildAdminUsageSourceCte(
          COALESCE(a."data"->>'agentId', '') AS "agentId",
          COALESCE(a."data"->>'provider', '') AS "provider",
          COALESCE(a."data"->>'model', '') AS "model",
-         ${buildAttemptUsageDataObject()} AS "data",
-         'llm_attempt'::text AS "sourceType"
+         a."data"
        FROM "nodes" a
-       LEFT JOIN LATERAL (
-         SELECT lu."data"
-         FROM "nodes" lu
-         WHERE lu."type" = 'llm_usage'
-           AND lu."namespace" = a."namespace"
-           AND NULLIF(COALESCE(lu."data"->>'eventId', ''), '') IS NOT NULL
-           AND COALESCE(a."data"->>'eventId', '') = COALESCE(lu."data"->>'eventId', '')
-           AND COALESCE(a."data"->>'threadId', a."source_id", '') = COALESCE(lu."data"->>'threadId', lu."source_id", '')
-           AND COALESCE(a."data"->>'provider', '') = COALESCE(lu."data"->>'provider', '')
-           AND COALESCE(a."data"->>'model', '') = COALESCE(lu."data"->>'model', '')
-         ORDER BY lu."created_at" ASC
-         LIMIT 1
-       ) legacy_usage ON TRUE
        WHERE ${attemptWhere}
-
-       UNION ALL
-
+     ),
+     "admin_usage_legacy" AS (
        SELECT
          u."id",
          u."namespace",
@@ -246,20 +231,64 @@ export function buildAdminUsageSourceCte(
          COALESCE(u."data"->>'agentId', '') AS "agentId",
          COALESCE(u."data"->>'provider', '') AS "provider",
          COALESCE(u."data"->>'model', '') AS "model",
-         u."data" AS "data",
-         'llm_usage'::text AS "sourceType"
+         u."data"
        FROM "nodes" u
        WHERE ${legacyWhere}
-         AND NOT EXISTS (
+     ),
+     "admin_usage_legacy_match" AS (
+       SELECT DISTINCT ON ("namespace", "eventId", "threadId", "provider", "model")
+         "namespace",
+         "eventId",
+         "threadId",
+         "provider",
+         "model",
+         "data"
+       FROM "admin_usage_legacy"
+       WHERE "eventId" IS NOT NULL
+       ORDER BY "namespace", "eventId", "threadId", "provider", "model", "created_at" ASC, "id" ASC
+     ),
+     ${name} AS (
+       SELECT
+         a."id",
+         a."namespace",
+         a."created_at",
+         a."threadId",
+         a."eventId",
+         a."agentId",
+         a."provider",
+         a."model",
+         ${buildAttemptUsageDataObject()} AS "data",
+         'llm_attempt'::text AS "sourceType"
+       FROM "admin_usage_attempts" a
+       LEFT JOIN "admin_usage_legacy_match" legacy_usage
+         ON legacy_usage."namespace" = a."namespace"
+        AND legacy_usage."eventId" = a."eventId"
+        AND legacy_usage."threadId" = a."threadId"
+        AND legacy_usage."provider" = a."provider"
+        AND legacy_usage."model" = a."model"
+
+       UNION ALL
+
+       SELECT
+         u."id",
+         u."namespace",
+         u."created_at",
+         u."threadId",
+         u."eventId",
+         u."agentId",
+         u."provider",
+         u."model",
+         u."data",
+         'llm_usage'::text AS "sourceType"
+       FROM "admin_usage_legacy" u
+       WHERE NOT EXISTS (
            SELECT 1
-           FROM "nodes" a
-           WHERE a."type" = 'llm_attempt'
-             AND a."namespace" = u."namespace"
-             AND NULLIF(COALESCE(u."data"->>'eventId', ''), '') IS NOT NULL
-             AND COALESCE(a."data"->>'eventId', '') = COALESCE(u."data"->>'eventId', '')
-             AND COALESCE(a."data"->>'threadId', a."source_id", '') = COALESCE(u."data"->>'threadId', u."source_id", '')
-             AND COALESCE(a."data"->>'provider', '') = COALESCE(u."data"->>'provider', '')
-             AND COALESCE(a."data"->>'model', '') = COALESCE(u."data"->>'model', '')
+           FROM "admin_usage_attempts" a
+           WHERE a."namespace" = u."namespace"
+             AND a."eventId" = u."eventId"
+             AND a."threadId" = u."threadId"
+             AND a."provider" = u."provider"
+             AND a."model" = u."model"
          )
      )`;
 }

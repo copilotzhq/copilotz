@@ -138,18 +138,18 @@ export function buildUsageCoalesceSelects(alias: string): string {
 
 function buildAttemptUsageDataObject(): string {
   return `jsonb_build_object(
-           'inputTokens', COALESCE(a."data"->'usage'->'inputTokens', legacy_usage."data"->'inputTokens'),
-           'outputTokens', COALESCE(a."data"->'usage'->'outputTokens', legacy_usage."data"->'outputTokens'),
-           'reasoningTokens', COALESCE(a."data"->'usage'->'reasoningTokens', legacy_usage."data"->'reasoningTokens'),
-           'cacheReadInputTokens', COALESCE(a."data"->'usage'->'cacheReadInputTokens', legacy_usage."data"->'cacheReadInputTokens'),
-           'cacheCreationInputTokens', COALESCE(a."data"->'usage'->'cacheCreationInputTokens', legacy_usage."data"->'cacheCreationInputTokens'),
-           'totalTokens', COALESCE(a."data"->'usage'->'totalTokens', legacy_usage."data"->'totalTokens'),
-           'inputCostUsd', COALESCE(a."data"->'cost'->'inputCostUsd', legacy_usage."data"->'inputCostUsd'),
-           'outputCostUsd', COALESCE(a."data"->'cost'->'outputCostUsd', legacy_usage."data"->'outputCostUsd'),
-           'reasoningCostUsd', COALESCE(a."data"->'cost'->'reasoningCostUsd', legacy_usage."data"->'reasoningCostUsd'),
-           'cacheReadInputCostUsd', COALESCE(a."data"->'cost'->'cacheReadInputCostUsd', legacy_usage."data"->'cacheReadInputCostUsd'),
-           'cacheCreationInputCostUsd', COALESCE(a."data"->'cost'->'cacheCreationInputCostUsd', legacy_usage."data"->'cacheCreationInputCostUsd'),
-           'totalCostUsd', COALESCE(a."data"->'cost'->'totalCostUsd', legacy_usage."data"->'totalCostUsd')
+           'inputTokens', a."data"->'usage'->'inputTokens',
+           'outputTokens', a."data"->'usage'->'outputTokens',
+           'reasoningTokens', a."data"->'usage'->'reasoningTokens',
+           'cacheReadInputTokens', a."data"->'usage'->'cacheReadInputTokens',
+           'cacheCreationInputTokens', a."data"->'usage'->'cacheCreationInputTokens',
+           'totalTokens', a."data"->'usage'->'totalTokens',
+           'inputCostUsd', a."data"->'cost'->'inputCostUsd',
+           'outputCostUsd', a."data"->'cost'->'outputCostUsd',
+           'reasoningCostUsd', a."data"->'cost'->'reasoningCostUsd',
+           'cacheReadInputCostUsd', a."data"->'cost'->'cacheReadInputCostUsd',
+           'cacheCreationInputCostUsd', a."data"->'cost'->'cacheCreationInputCostUsd',
+           'totalCostUsd', a."data"->'cost'->'totalCostUsd'
          )`;
 }
 
@@ -189,10 +189,9 @@ export function pushAdminUsageSourceScope(
 
 function buildUsageSourceNodeFilters(
   alias: string,
-  type: "llm_attempt" | "llm_usage",
   scope: AdminUsageSourceScope,
 ): string {
-  const filters = [`${alias}."type" = '${type}'`];
+  const filters = [`${alias}."type" = 'llm_attempt'`];
   if (scope.namespacePlaceholder) {
     filters.push(`${alias}."namespace" = ${scope.namespacePlaceholder}`);
   }
@@ -209,9 +208,8 @@ export function buildAdminUsageSourceCte(
   name = `"admin_usage_source"`,
   scope: AdminUsageSourceScope = {},
 ): string {
-  const attemptWhere = buildUsageSourceNodeFilters("a", "llm_attempt", scope);
-  const legacyWhere = buildUsageSourceNodeFilters("u", "llm_usage", scope);
-  return `"admin_usage_attempts" AS (
+  const attemptWhere = buildUsageSourceNodeFilters("a", scope);
+  return `${name} AS (
        SELECT
          a."id",
          a."namespace",
@@ -222,84 +220,10 @@ export function buildAdminUsageSourceCte(
          ${buildRunSenderIdExpr(`a."data"`)} AS "initiatedById",
          COALESCE(a."data"->>'provider', '') AS "provider",
          COALESCE(a."data"->>'model', '') AS "model",
-         a."data"
-       FROM "nodes" a
-       WHERE ${attemptWhere}
-     ),
-     "admin_usage_legacy" AS (
-       SELECT
-         u."id",
-         u."namespace",
-         u."created_at",
-         COALESCE(u."data"->>'threadId', u."source_id") AS "threadId",
-         NULLIF(u."data"->>'eventId', '') AS "eventId",
-         COALESCE(u."data"->>'agentId', '') AS "agentId",
-         ${buildRunSenderIdExpr(`u."data"`)} AS "initiatedById",
-         COALESCE(u."data"->>'provider', '') AS "provider",
-         COALESCE(u."data"->>'model', '') AS "model",
-         u."data"
-       FROM "nodes" u
-       WHERE ${legacyWhere}
-     ),
-     "admin_usage_legacy_match" AS (
-       SELECT DISTINCT ON ("namespace", "eventId", "threadId", "provider", "model")
-         "namespace",
-         "eventId",
-         "threadId",
-         "agentId",
-         "initiatedById",
-         "provider",
-         "model",
-         "data"
-       FROM "admin_usage_legacy"
-       WHERE "eventId" IS NOT NULL
-       ORDER BY "namespace", "eventId", "threadId", "provider", "model", "created_at" ASC, "id" ASC
-     ),
-     ${name} AS (
-       SELECT
-         a."id",
-         a."namespace",
-         a."created_at",
-         a."threadId",
-         a."eventId",
-         a."agentId",
-         a."initiatedById",
-         a."provider",
-         a."model",
          ${buildAttemptUsageDataObject()} AS "data",
          'llm_attempt'::text AS "sourceType"
-       FROM "admin_usage_attempts" a
-       LEFT JOIN "admin_usage_legacy_match" legacy_usage
-         ON legacy_usage."namespace" = a."namespace"
-        AND legacy_usage."eventId" = a."eventId"
-        AND legacy_usage."threadId" = a."threadId"
-        AND legacy_usage."provider" = a."provider"
-        AND legacy_usage."model" = a."model"
-
-       UNION ALL
-
-       SELECT
-         u."id",
-         u."namespace",
-         u."created_at",
-         u."threadId",
-         u."eventId",
-         u."agentId",
-         u."initiatedById",
-         u."provider",
-         u."model",
-         u."data",
-         'llm_usage'::text AS "sourceType"
-       FROM "admin_usage_legacy" u
-       WHERE NOT EXISTS (
-           SELECT 1
-           FROM "admin_usage_attempts" a
-           WHERE a."namespace" = u."namespace"
-             AND a."eventId" = u."eventId"
-             AND a."threadId" = u."threadId"
-             AND a."provider" = u."provider"
-             AND a."model" = u."model"
-         )
+       FROM "nodes" a
+       WHERE ${attemptWhere}
      )`;
 }
 

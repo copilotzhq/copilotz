@@ -39,17 +39,14 @@ Deno.test("admin usage sums read only canonical flattened fields", () => {
   }
 });
 
-Deno.test("admin usage source prefers llm_attempt and keeps llm_usage as fallback", () => {
+Deno.test("admin usage source reads only canonical llm_attempt rows", () => {
   const sql = buildAdminUsageSourceCte();
 
   assertStringIncludes(sql, `a."type" = 'llm_attempt'`);
   assertStringIncludes(sql, `a."data"->'usage'->'inputTokens'`);
   assertStringIncludes(sql, `a."data"->'cost'->'totalCostUsd'`);
-  assertStringIncludes(sql, `legacy_usage."data"->'totalCostUsd'`);
-  assertStringIncludes(sql, `u."type" = 'llm_usage'`);
-  assertStringIncludes(sql, `"admin_usage_attempts"`);
-  assertStringIncludes(sql, `"admin_usage_legacy_match"`);
-  assertStringIncludes(sql, `WHERE NOT EXISTS`);
+  assert(!sql.includes(`llm_usage`));
+  assert(!sql.includes(`legacy_usage`));
   assertStringIncludes(sql, `a."data"->>'eventId'`);
 });
 
@@ -63,8 +60,6 @@ Deno.test("admin usage source pushes namespace and time filters into source scan
   assertStringIncludes(sql, `a."namespace" = $1`);
   assertStringIncludes(sql, `a."created_at" >= $2`);
   assertStringIncludes(sql, `a."created_at" <= $3`);
-  assertStringIncludes(sql, `u."namespace" = $1`);
-  assertStringIncludes(sql, `u."created_at" >= $2`);
-  assertStringIncludes(sql, `u."created_at" <= $3`);
-  assertStringIncludes(sql, `legacy_usage."namespace" = a."namespace"`);
+  assert(!sql.includes(`u."namespace"`));
+  assert(!sql.includes(`u."created_at"`));
 });

@@ -128,7 +128,7 @@ Deno.test("admin usage groups canonical llm_attempt rows without double-counting
   assertEquals(threadData.points[0].groupLabel, "Usage Thread");
 });
 
-Deno.test("admin usage falls back to legacy llm_usage rows without attempts", async () => {
+Deno.test("admin usage ignores legacy llm_usage rows without attempts", async () => {
   const db = await createDatabase({ url: ":memory:" });
   const namespace = "tenant-usage-legacy";
   const threadId = crypto.randomUUID();
@@ -180,13 +180,13 @@ Deno.test("admin usage falls back to legacy llm_usage rows without attempts", as
   }, { ops: db.ops } as any);
   const data = result.data as any;
 
-  assertEquals(data.points[0].groupKey, "anthropic");
-  assertEquals(data.totals.totalCalls, 1);
-  assertEquals(data.totals.totalTokens, 44);
-  assertEquals(data.totals.totalCostUsd, 0.03);
+  assertEquals(data.points.length, 0);
+  assertEquals(data.totals.totalCalls, 0);
+  assertEquals(data.totals.totalTokens, 0);
+  assertEquals(data.totals.totalCostUsd, 0);
 });
 
-Deno.test("admin usage fills missing llm_attempt metrics from matching llm_usage projection", async () => {
+Deno.test("admin usage does not fill llm_attempt metrics from llm_usage projection", async () => {
   const db = await createDatabase({ url: ":memory:" });
   const namespace = "tenant-usage-coalesce";
   const threadId = crypto.randomUUID();
@@ -247,8 +247,8 @@ Deno.test("admin usage fills missing llm_attempt metrics from matching llm_usage
   const data = result.data as any;
 
   assertEquals(data.totals.totalCalls, 1);
-  assertEquals(data.totals.totalTokens, 23);
-  assertEquals(data.totals.totalCostUsd, 0.03);
+  assertEquals(data.totals.totalTokens, 0);
+  assertEquals(data.totals.totalCostUsd, 0);
 });
 
 Deno.test("admin aggregate endpoints read llm_attempt usage", async () => {

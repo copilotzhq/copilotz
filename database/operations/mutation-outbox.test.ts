@@ -32,6 +32,12 @@ Deno.test({
       content: "hello",
     }, namespace);
 
+    await db.ops.mutate.messages.appendSegments(
+      message.id,
+      [{ kind: "text", content: "hello" }],
+      { threadId, namespace },
+    );
+
     const attempt = await db.ops.mutate.llmAttempts.create({
       threadId,
       messageId: message.id,
@@ -76,15 +82,31 @@ Deno.test({
     assertExists(output);
     assertEquals(output.output, { ok: true });
 
+    await db.ops.mutate.assets.create({
+      id: `asset-${suffix}`,
+      threadId,
+      ref: `asset://${suffix}`,
+      mime: "text/plain",
+      by: "tool",
+      namespace,
+    });
+
     const lifecycle = await db.query<
-      { eventType: string; subjectType: string }
+      {
+        eventType: string;
+        subjectType: string;
+        operation: string;
+        status: string;
+      }
     >(
-      `SELECT "eventType", "subjectType"
+      `SELECT "eventType", "subjectType", "operation", "status"
        FROM "events"
        WHERE "threadId" = $1
          AND "eventType" IN (
+           'asset.created',
            'thread.created',
            'message.created',
+           'message.updated',
            'llm_attempt.created',
            'llm_attempt.completed',
            'tool_execution.created',
@@ -97,13 +119,184 @@ Deno.test({
     assertEquals(
       lifecycle.rows.map((row) => row.eventType).sort(),
       [
+        "asset.created",
         "llm_attempt.completed",
         "llm_attempt.created",
         "message.created",
+        "message.updated",
         "thread.created",
         "tool_execution.completed",
         "tool_execution.created",
       ].sort(),
+    );
+    assertEquals(
+      lifecycle.rows.every((row) =>
+        row.eventType === `${row.subjectType}.${row.operation}`
+      ),
+      true,
+    );
+    assertEquals(
+      lifecycle.rows.every((row) => row.status === "completed"),
+      true,
+    );
+  },
+});
+
+Deno.test({
+  name: "domain lifecycle outbox append is centralized behind domainMutation",
+  fn: async () => {
+    const source = await Deno.readTextFile(
+      new URL("./index.ts", import.meta.url),
+    );
+    const directLifecycleCalls = [...source.matchAll(/await lifecycleEvent\(/g)]
+      .length;
+
+    assertEquals(
+      directLifecycleCalls,
+      1,
+      "Only domainMutation may call lifecycleEvent directly",
+    );
+    assertEquals(
+      source.includes("await lifecycleEvent(event);"),
+      true,
+      "domainMutation must be the outbox emission point for domain mutations",
+    );
+  },
+});
+
+Deno.test({
+  name: "unsafeGraph writes bypass lifecycle outbox rows explicitly",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({ url: ":memory:" });
+    const suffix = crypto.randomUUID();
+    const namespace = `unsafe-graph-${suffix}`;
+    const thread = await db.ops.mutate.threads.create(undefined, {
+      namespace,
+      name: "Unsafe Graph Test",
+      participants: [`user-${suffix}`],
+      status: "active",
+      mode: "immediate",
+    });
+    const threadId = String(thread.id);
+    const nodeId = `raw-${suffix}`;
+
+    await db.ops.unsafeGraph.createNode({
+      id: nodeId,
+      namespace,
+      type: "raw_test",
+      name: "Raw Test",
+      data: { threadId },
+      sourceType: "test",
+      sourceId: suffix,
+    });
+    await db.ops.unsafeGraph.updateNode(nodeId, {
+      data: { threadId, updated: true },
+    });
+
+    const rows = await db.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS "count"
+       FROM "events"
+       WHERE "subjectId" = $1
+         AND "eventType" IN ('raw_test.created', 'raw_test.updated')`,
+      [nodeId],
+    );
+
+    assertEquals(rows.rows[0]?.count, 0);
+  },
+});
+
+Deno.test({
+  name:
+    "safe graph mutations require a topic and write semantic lifecycle rows",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({ url: ":memory:" });
+    const suffix = crypto.randomUUID();
+    const namespace = `safe-graph-${suffix}`;
+    const thread = await db.ops.mutate.threads.create(undefined, {
+      namespace,
+      name: "Safe Graph Test",
+      participants: [`user-${suffix}`],
+      status: "active",
+      mode: "immediate",
+    });
+    const threadId = String(thread.id);
+    const nodeId = `entity-${suffix}`;
+
+    const node = await db.ops.mutate.graph.createNode({
+      id: nodeId,
+      namespace,
+      type: "entity",
+      name: "Important Entity",
+      content: "first",
+      data: { source: "test" },
+      sourceType: "test",
+      sourceId: suffix,
+    }, {
+      threadId,
+      namespace,
+      traceId: `trace-${suffix}`,
+      causationId: `cause-${suffix}`,
+    });
+    assertEquals(node.id, nodeId);
+
+    await db.ops.mutate.graph.updateNode(nodeId, {
+      content: "second",
+      data: { source: "test", updated: true },
+    }, { threadId, namespace });
+
+    const edge = await db.ops.mutate.graph.createEdge({
+      sourceNodeId: threadId,
+      targetNodeId: nodeId,
+      type: "mentions",
+      data: { via: "test" },
+    }, { threadId, namespace });
+
+    await db.ops.mutate.graph.deleteEdge(String(edge.id), {
+      threadId,
+      namespace,
+    });
+    await db.ops.mutate.graph.deleteNode(nodeId, { threadId, namespace });
+
+    const rows = await db.query<{
+      eventType: string;
+      threadId: string;
+      subjectType: string;
+      operation: string;
+      subjectId: string;
+    }>(
+      `SELECT "eventType", "threadId", "subjectType", "operation", "subjectId"
+       FROM "events"
+       WHERE "threadId" = $1
+         AND (
+           "subjectId" = $2
+           OR "subjectId" = $3
+         )
+       ORDER BY "createdAt" ASC, "id" ASC`,
+      [threadId, nodeId, String(edge.id)],
+    );
+
+    assertEquals(
+      rows.rows.map((row) => row.eventType),
+      [
+        "entity.created",
+        "entity.updated",
+        "edge.created",
+        "edge.deleted",
+        "entity.deleted",
+      ],
+    );
+    assertEquals(
+      rows.rows.every((row) =>
+        row.threadId === threadId &&
+        row.eventType === `${row.subjectType}.${row.operation}`
+      ),
+      true,
     );
   },
 });

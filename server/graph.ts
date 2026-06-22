@@ -9,6 +9,7 @@
 
 import type { Copilotz } from "@/index.ts";
 import type {
+  GraphMutationOptions,
   GraphQueryResult,
   TraversalResult,
 } from "@/database/operations/index.ts";
@@ -52,8 +53,9 @@ export interface GraphHandlers {
   updateNode: (
     id: string,
     updates: Partial<NewKnowledgeNode>,
+    options: GraphMutationOptions,
   ) => Promise<KnowledgeNode | undefined>;
-  deleteNode: (id: string) => Promise<void>;
+  deleteNode: (id: string, options: GraphMutationOptions) => Promise<void>;
 }
 
 async function resolveSearchEmbedding(
@@ -81,36 +83,37 @@ async function resolveSearchEmbedding(
 
 /** Creates framework-independent handlers for knowledge graph operations. */
 export function createGraphHandlers(copilotz: Copilotz): GraphHandlers {
-  const { ops } = copilotz;
+  const unsafeGraph = copilotz.ops.unsafeGraph ?? copilotz.ops;
+  const graphMutations = copilotz.ops.mutate?.graph;
 
   return {
-    getNodeById: (id) => ops.getNodeById(id),
+    getNodeById: (id) => unsafeGraph.getNodeById(id),
 
     listNodes: (namespace, options) =>
-      ops.getNodesByNamespace(namespace, options?.type),
+      unsafeGraph.getNodesByNamespace(namespace, options?.type),
 
     getEdges: (nodeId, options) =>
-      ops.getEdgesForNode(
+      unsafeGraph.getEdgesForNode(
         nodeId,
         options?.direction ?? "both",
         options?.types,
       ),
 
     traverse: (nodeId, options) =>
-      ops.traverseGraph(
+      unsafeGraph.traverseGraph(
         nodeId,
         options?.edgeTypes,
         options?.depth,
       ),
 
     findRelated: (nodeId, options) =>
-      ops.findRelatedNodes(nodeId, options?.depth),
+      unsafeGraph.findRelatedNodes(nodeId, options?.depth),
 
     search: async (options) => {
       const embedding = await resolveSearchEmbedding(copilotz, options);
       if (!embedding || embedding.length === 0) return [];
 
-      return ops.searchNodes({
+      return unsafeGraph.searchNodes({
         embedding,
         namespaces: options.namespace ? [options.namespace] : undefined,
         nodeTypes: options.nodeTypes,
@@ -119,8 +122,14 @@ export function createGraphHandlers(copilotz: Copilotz): GraphHandlers {
       });
     },
 
-    updateNode: (id, updates) => ops.updateNode(id, updates),
+    updateNode: (id, updates, options) =>
+      graphMutations?.updateNode
+        ? graphMutations.updateNode(id, updates, options)
+        : unsafeGraph.updateNode(id, updates),
 
-    deleteNode: (id) => ops.deleteNode(id),
+    deleteNode: (id, options) =>
+      graphMutations?.deleteNode
+        ? graphMutations.deleteNode(id, options)
+        : unsafeGraph.deleteNode(id),
   };
 }

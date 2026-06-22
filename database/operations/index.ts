@@ -224,6 +224,20 @@ export interface OutboxEventInput {
   namespace?: string | null;
 }
 
+type LifecycleOperation = NonNullable<OutboxEventInput["operation"]>;
+
+type DomainLifecycleEventInput =
+  & Omit<OutboxEventInput, "eventType" | "operation" | "subjectType">
+  & {
+    subjectType: string;
+    operation: LifecycleOperation;
+  };
+
+type DomainMutationCommit<T> = {
+  result: T;
+  event?: DomainLifecycleEventInput | null;
+};
+
 export interface LlmAttemptInput {
   id?: string;
   threadId: string;
@@ -294,6 +308,13 @@ export interface ThreadMutationOptions {
   traceId?: string | null;
   causationId?: string | null;
   namespace?: string | null;
+}
+
+export interface GraphMutationOptions extends ThreadMutationOptions {
+  /** Queue/outbox topic for this mutation. Often a conversation thread id. */
+  threadId: string;
+  correlationId?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export type ThreadCreateInput = ThreadInsert;
@@ -427,6 +448,80 @@ export interface DomainMutationOperations {
       namespace?: string | null;
     }) => Promise<KnowledgeNode>;
   };
+  graph: {
+    createNode: (
+      node: Omit<NewKnowledgeNode, "id"> & { id?: string },
+      options: GraphMutationOptions,
+    ) => Promise<KnowledgeNode>;
+    updateNode: (
+      id: string,
+      updates: Partial<NewKnowledgeNode>,
+      options: GraphMutationOptions,
+    ) => Promise<KnowledgeNode | undefined>;
+    deleteNode: (
+      id: string,
+      options: GraphMutationOptions,
+    ) => Promise<void>;
+    createEdge: (
+      edge: Omit<NewKnowledgeEdge, "id"> & { id?: string },
+      options: GraphMutationOptions,
+    ) => Promise<KnowledgeEdge>;
+    deleteEdge: (
+      id: string,
+      options: GraphMutationOptions,
+    ) => Promise<void>;
+  };
+}
+
+/**
+ * Low-level graph operations that bypass domain mutation/outbox semantics.
+ *
+ * Use these only for admin/debug tooling, migrations, read-oriented graph
+ * exploration, or non-thread-scoped knowledge nodes. Thread-scoped durable
+ * workflow state should go through `ops.mutate.*` so the graph/table mutation
+ * and `<subjectType>.<operation>` outbox row are committed atomically.
+ */
+export interface UnsafeGraphOperations {
+  createNode: (
+    node: Omit<NewKnowledgeNode, "id"> & { id?: string },
+  ) => Promise<KnowledgeNode>;
+  createNodes: (
+    nodes: Array<Omit<NewKnowledgeNode, "id"> & { id?: string }>,
+  ) => Promise<KnowledgeNode[]>;
+  getNodeById: (id: string) => Promise<KnowledgeNode | undefined>;
+  getNodesByNamespace: (
+    namespace: string,
+    type?: string,
+  ) => Promise<KnowledgeNode[]>;
+  updateNode: (
+    id: string,
+    updates: Partial<NewKnowledgeNode>,
+  ) => Promise<KnowledgeNode | undefined>;
+  deleteNode: (id: string) => Promise<void>;
+  deleteNodesBySource: (sourceType: string, sourceId: string) => Promise<void>;
+  createEdge: (
+    edge: Omit<NewKnowledgeEdge, "id"> & { id?: string },
+  ) => Promise<KnowledgeEdge>;
+  createEdges: (
+    edges: Array<Omit<NewKnowledgeEdge, "id"> & { id?: string }>,
+  ) => Promise<KnowledgeEdge[]>;
+  getEdgesForNode: (
+    nodeId: string,
+    direction?: "in" | "out" | "both",
+    types?: string[],
+  ) => Promise<KnowledgeEdge[]>;
+  deleteEdge: (id: string) => Promise<void>;
+  deleteEdgesForNode: (nodeId: string) => Promise<void>;
+  searchNodes: (options: GraphQueryOptions) => Promise<GraphQueryResult[]>;
+  traverseGraph: (
+    startNodeId: string,
+    edgeTypes?: string[],
+    maxDepth?: number,
+  ) => Promise<TraversalResult>;
+  findRelatedNodes: (
+    nodeId: string,
+    depth?: number,
+  ) => Promise<KnowledgeNode[]>;
 }
 
 export interface OutboxOperations {
@@ -442,6 +537,7 @@ export interface DatabaseOperations {
   transaction: <T>(fn: (ops: DatabaseOperations) => Promise<T>) => Promise<T>;
   outbox: OutboxOperations;
   mutate: DomainMutationOperations;
+  unsafeGraph: UnsafeGraphOperations;
   addToQueue: (threadId: string, event: QueueEventInput) => Promise<NewQueue>;
   getQueueItemById: (queueId: string) => Promise<Queue | undefined>;
   getQueueItemsByTraceId: (traceId: string) => Promise<Queue[]>;
@@ -675,50 +771,66 @@ export interface DatabaseOperations {
   ) => Promise<ChunkSearchResult[]>;
 
   // ============================================
-  // KNOWLEDGE GRAPH OPERATIONS
+  // UNSAFE/LEGACY KNOWLEDGE GRAPH OPERATIONS
   // ============================================
+  //
+  // These flat aliases bypass domain mutation outbox semantics. Prefer
+  // `ops.mutate.*` for durable workflow state and `ops.unsafeGraph.*` when a
+  // low-level graph write is intentionally needed.
 
-  // Node CRUD
+  /** @deprecated Use `ops.unsafeGraph.createNode` or `ops.mutate.*`. */
   createNode: (
     node: Omit<NewKnowledgeNode, "id"> & { id?: string },
   ) => Promise<KnowledgeNode>;
+  /** @deprecated Use `ops.unsafeGraph.createNodes` or `ops.mutate.*`. */
   createNodes: (
     nodes: Array<Omit<NewKnowledgeNode, "id"> & { id?: string }>,
   ) => Promise<KnowledgeNode[]>;
+  /** @deprecated Use `ops.unsafeGraph.getNodeById` for low-level graph reads. */
   getNodeById: (id: string) => Promise<KnowledgeNode | undefined>;
+  /** @deprecated Use `ops.unsafeGraph.getNodesByNamespace` for low-level graph reads. */
   getNodesByNamespace: (
     namespace: string,
     type?: string,
   ) => Promise<KnowledgeNode[]>;
+  /** @deprecated Use `ops.unsafeGraph.updateNode` or `ops.mutate.*`. */
   updateNode: (
     id: string,
     updates: Partial<NewKnowledgeNode>,
   ) => Promise<KnowledgeNode | undefined>;
+  /** @deprecated Use `ops.unsafeGraph.deleteNode` or a domain mutation. */
   deleteNode: (id: string) => Promise<void>;
+  /** @deprecated Use `ops.unsafeGraph.deleteNodesBySource` or a domain mutation. */
   deleteNodesBySource: (sourceType: string, sourceId: string) => Promise<void>;
 
-  // Edge CRUD
+  /** @deprecated Use `ops.unsafeGraph.createEdge` or a domain mutation. */
   createEdge: (
     edge: Omit<NewKnowledgeEdge, "id"> & { id?: string },
   ) => Promise<KnowledgeEdge>;
+  /** @deprecated Use `ops.unsafeGraph.createEdges` or a domain mutation. */
   createEdges: (
     edges: Array<Omit<NewKnowledgeEdge, "id"> & { id?: string }>,
   ) => Promise<KnowledgeEdge[]>;
+  /** @deprecated Use `ops.unsafeGraph.getEdgesForNode` for low-level graph reads. */
   getEdgesForNode: (
     nodeId: string,
     direction?: "in" | "out" | "both",
     types?: string[],
   ) => Promise<KnowledgeEdge[]>;
+  /** @deprecated Use `ops.unsafeGraph.deleteEdge` or a domain mutation. */
   deleteEdge: (id: string) => Promise<void>;
+  /** @deprecated Use `ops.unsafeGraph.deleteEdgesForNode` or a domain mutation. */
   deleteEdgesForNode: (nodeId: string) => Promise<void>;
 
-  // Graph queries
+  /** @deprecated Use `ops.unsafeGraph.searchNodes` for low-level graph reads. */
   searchNodes: (options: GraphQueryOptions) => Promise<GraphQueryResult[]>;
+  /** @deprecated Use `ops.unsafeGraph.traverseGraph` for low-level graph reads. */
   traverseGraph: (
     startNodeId: string,
     edgeTypes?: string[],
     maxDepth?: number,
   ) => Promise<TraversalResult>;
+  /** @deprecated Use `ops.unsafeGraph.findRelatedNodes` for low-level graph reads. */
   findRelatedNodes: (
     nodeId: string,
     depth?: number,
@@ -1476,121 +1588,130 @@ export function createOperations(
     threadId: string | undefined,
     threadData: ThreadInsert,
     options: ThreadMutationOptions = {},
-  ): Promise<Thread> => {
-    let existing: Thread | null = null;
-    if (threadId) {
-      existing = await crud.threads.findOne({ id: threadId }) as Thread | null;
-    } else if (
-      typeof threadData.externalId === "string" && threadData.externalId
-    ) {
-      existing = await crud.threads.findOne({
-        externalId: threadData.externalId,
-      }) as Thread | null;
-    }
-
-    const normalizeParticipants = (participants?: string[] | null) => {
-      if (!Array.isArray(participants)) return participants ?? null;
-      const normalized = participants
-        .filter((participant): participant is string =>
-          typeof participant === "string"
-        )
-        .map((participant) => participant.trim())
-        .filter((participant) => participant.length > 0);
-      return Array.from(new Set(normalized));
-    };
-
-    if (!existing) {
-      const participants = normalizeParticipants(threadData.participants);
-      const baseInsert = {
-        namespace: threadData.namespace ?? null,
-        name: threadData.name,
-        externalId: threadData.externalId ?? null,
-        description: threadData.description ?? null,
-        participants,
-        initialMessage: threadData.initialMessage ?? null,
-        mode: threadData.mode ?? "immediate",
-        status: threadData.status ?? "active",
-        summary: threadData.summary ?? null,
-        parentThreadId: threadData.parentThreadId ?? null,
-        rootThreadId: threadData.rootThreadId ?? threadData.parentThreadId ??
-          null,
-        lastEventId: threadData.lastEventId ?? null,
-        lastEventAt: threadData.lastEventAt ?? null,
-      };
-      const created = await crud.threads.create(
-        threadId ? { id: threadId, ...baseInsert } : baseInsert,
-      ) as Thread;
-      await ensureThreadNode(created, { ...threadData, participants });
-      await lifecycleEvent({
-        threadId: String(created.id),
-        subjectType: "thread",
-        subjectId: String(created.id),
-        operation: "created",
-        input: threadData,
-        after: created as unknown as Record<string, unknown>,
-        traceId: options.traceId ?? null,
-        causationId: options.causationId ?? null,
-        namespace: typeof created.namespace === "string"
-          ? created.namespace
-          : options.namespace ?? null,
-      });
-      return (await hydrateThreadFromNode(created)) ?? created;
-    }
-
-    const updates: Partial<Thread> = {};
-
-    if (
-      Array.isArray(threadData.participants) &&
-      threadData.participants.length > 0
-    ) {
-      const incoming = normalizeParticipants(threadData.participants);
-      const existingParticipants = Array.isArray(existing.participants)
-        ? existing.participants
-        : [];
-      if (JSON.stringify(existingParticipants) !== JSON.stringify(incoming)) {
-        updates.participants = incoming ?? null;
+  ): Promise<Thread> =>
+    await domainMutation(async () => {
+      let existing: Thread | null = null;
+      if (threadId) {
+        existing = await crud.threads.findOne({ id: threadId }) as
+          | Thread
+          | null;
+      } else if (
+        typeof threadData.externalId === "string" && threadData.externalId
+      ) {
+        existing = await crud.threads.findOne({
+          externalId: threadData.externalId,
+        }) as Thread | null;
       }
-    }
 
-    if (
-      typeof threadData.namespace === "string" &&
-      threadData.namespace !== existing.namespace
-    ) {
-      updates.namespace = threadData.namespace;
-    }
+      const normalizeParticipants = (participants?: string[] | null) => {
+        if (!Array.isArray(participants)) return participants ?? null;
+        const normalized = participants
+          .filter((participant): participant is string =>
+            typeof participant === "string"
+          )
+          .map((participant) => participant.trim())
+          .filter((participant) => participant.length > 0);
+        return Array.from(new Set(normalized));
+      };
 
-    if (
-      typeof threadData.status === "string" &&
-      threadData.status !== existing.status
-    ) {
-      updates.status = threadData.status;
-    }
+      if (!existing) {
+        const participants = normalizeParticipants(threadData.participants);
+        const baseInsert = {
+          namespace: threadData.namespace ?? null,
+          name: threadData.name,
+          externalId: threadData.externalId ?? null,
+          description: threadData.description ?? null,
+          participants,
+          initialMessage: threadData.initialMessage ?? null,
+          mode: threadData.mode ?? "immediate",
+          status: threadData.status ?? "active",
+          summary: threadData.summary ?? null,
+          parentThreadId: threadData.parentThreadId ?? null,
+          rootThreadId: threadData.rootThreadId ?? threadData.parentThreadId ??
+            null,
+          lastEventId: threadData.lastEventId ?? null,
+          lastEventAt: threadData.lastEventAt ?? null,
+        };
+        const created = await crud.threads.create(
+          threadId ? { id: threadId, ...baseInsert } : baseInsert,
+        ) as Thread;
+        await ensureThreadNode(created, { ...threadData, participants });
+        const result = (await hydrateThreadFromNode(created)) ?? created;
+        return {
+          result,
+          event: {
+            threadId: String(created.id),
+            subjectType: "thread",
+            subjectId: String(created.id),
+            operation: "created",
+            input: threadData,
+            after: result as unknown as Record<string, unknown>,
+            traceId: options.traceId ?? null,
+            causationId: options.causationId ?? null,
+            namespace: typeof created.namespace === "string"
+              ? created.namespace
+              : options.namespace ?? null,
+          },
+        };
+      }
 
-    if (Object.keys(updates).length === 0) {
-      await ensureThreadNode(existing, threadData);
-      return (await hydrateThreadFromNode(existing)) ?? existing;
-    }
+      const updates: Partial<Thread> = {};
 
-    const updated = await crud.threads.update({ id: existing.id }, updates);
-    const result = (updated ?? existing) as Thread;
-    await ensureThreadNode(result, { ...threadData, ...updates });
-    await lifecycleEvent({
-      threadId: String(result.id),
-      subjectType: "thread",
-      subjectId: String(result.id),
-      operation: "updated",
-      input: threadData,
-      before: existing as unknown as Record<string, unknown>,
-      after: result as unknown as Record<string, unknown>,
-      patch: updates,
-      traceId: options.traceId ?? null,
-      causationId: options.causationId ?? null,
-      namespace: typeof result.namespace === "string"
-        ? result.namespace
-        : options.namespace ?? null,
+      if (
+        Array.isArray(threadData.participants) &&
+        threadData.participants.length > 0
+      ) {
+        const incoming = normalizeParticipants(threadData.participants);
+        const existingParticipants = Array.isArray(existing.participants)
+          ? existing.participants
+          : [];
+        if (JSON.stringify(existingParticipants) !== JSON.stringify(incoming)) {
+          updates.participants = incoming ?? null;
+        }
+      }
+
+      if (
+        typeof threadData.namespace === "string" &&
+        threadData.namespace !== existing.namespace
+      ) {
+        updates.namespace = threadData.namespace;
+      }
+
+      if (
+        typeof threadData.status === "string" &&
+        threadData.status !== existing.status
+      ) {
+        updates.status = threadData.status;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        await ensureThreadNode(existing, threadData);
+        return { result: (await hydrateThreadFromNode(existing)) ?? existing };
+      }
+
+      const updated = await crud.threads.update({ id: existing.id }, updates);
+      const result = (updated ?? existing) as Thread;
+      await ensureThreadNode(result, { ...threadData, ...updates });
+      const hydrated = (await hydrateThreadFromNode(result)) ?? result;
+      return {
+        result: hydrated,
+        event: {
+          threadId: String(result.id),
+          subjectType: "thread",
+          subjectId: String(result.id),
+          operation: "updated",
+          input: threadData,
+          before: existing as unknown as Record<string, unknown>,
+          after: hydrated as unknown as Record<string, unknown>,
+          patch: updates,
+          traceId: options.traceId ?? null,
+          causationId: options.causationId ?? null,
+          namespace: typeof result.namespace === "string"
+            ? result.namespace
+            : options.namespace ?? null,
+        },
+      };
     });
-    return (await hydrateThreadFromNode(result)) ?? result;
-  };
 
   const createMessage = async (
     message: MessageInsert,
@@ -2266,11 +2387,11 @@ export function createOperations(
     updates: Partial<ThreadInsert>,
     options: ThreadMutationOptions = {},
   ): Promise<Thread | null> => {
-    return await transaction(async () => {
+    return await domainMutation(async () => {
       const before = await crud.threads.findOne({ id: threadId }) as
         | Thread
         | null;
-      if (!before) return null;
+      if (!before) return { result: null };
 
       const { metadata, ...tableUpdates } = updates;
       const hasTableUpdates = Object.keys(tableUpdates).length > 0;
@@ -2279,28 +2400,30 @@ export function createOperations(
           | Thread
           | null
         : before;
-      if (!thread) return null;
+      if (!thread) return { result: null };
 
       await ensureThreadNode(thread, {
         ...tableUpdates,
         ...(updates.metadata !== undefined ? { metadata } : {}),
       });
       const hydrated = (await hydrateThreadFromNode(thread)) ?? thread;
-      await lifecycleEvent({
-        threadId: String(hydrated.id),
-        subjectType: "thread",
-        subjectId: String(hydrated.id),
-        operation: "updated",
-        before: before as unknown as Record<string, unknown>,
-        after: hydrated as unknown as Record<string, unknown>,
-        patch: updates,
-        traceId: options.traceId ?? null,
-        causationId: options.causationId ?? null,
-        namespace: typeof hydrated.namespace === "string"
-          ? hydrated.namespace
-          : options.namespace ?? null,
-      });
-      return hydrated;
+      return {
+        result: hydrated,
+        event: {
+          threadId: String(hydrated.id),
+          subjectType: "thread",
+          subjectId: String(hydrated.id),
+          operation: "updated",
+          before: before as unknown as Record<string, unknown>,
+          after: hydrated as unknown as Record<string, unknown>,
+          patch: updates,
+          traceId: options.traceId ?? null,
+          causationId: options.causationId ?? null,
+          namespace: typeof hydrated.namespace === "string"
+            ? hydrated.namespace
+            : options.namespace ?? null,
+        },
+      };
     });
   };
 
@@ -2868,13 +2991,7 @@ export function createOperations(
       created_at: Date;
     };
 
-    const result = await db.query<EdgeRow>(
-      `SELECT * FROM "edges" WHERE ${whereClause} ORDER BY "created_at" DESC`,
-      params,
-    );
-
-    // Convert snake_case to camelCase
-    return result.rows.map((row) => ({
+    const mapEdgeRow = (row: EdgeRow): KnowledgeEdge => ({
       id: row.id,
       sourceNodeId: row.source_node_id,
       targetNodeId: row.target_node_id,
@@ -2882,7 +2999,44 @@ export function createOperations(
       data: row.data,
       weight: row.weight,
       createdAt: row.created_at,
-    }));
+    });
+
+    const result = await db.query<EdgeRow>(
+      `SELECT * FROM "edges" WHERE ${whereClause} ORDER BY "created_at" DESC`,
+      params,
+    );
+
+    return result.rows.map(mapEdgeRow);
+  };
+
+  const getEdgeById = async (
+    id: string,
+  ): Promise<KnowledgeEdge | undefined> => {
+    type EdgeRow = {
+      id: string;
+      source_node_id: string;
+      target_node_id: string;
+      type: string;
+      data: Record<string, unknown> | null;
+      weight: number | null;
+      created_at: Date;
+    };
+
+    const result = await db.query<EdgeRow>(
+      `SELECT * FROM "edges" WHERE "id" = $1`,
+      [id],
+    );
+    const row = result.rows[0];
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      sourceNodeId: row.source_node_id,
+      targetNodeId: row.target_node_id,
+      type: row.type,
+      data: row.data,
+      weight: row.weight,
+      createdAt: row.created_at,
+    };
   };
 
   const deleteEdge = async (id: string): Promise<void> => {
@@ -3121,10 +3275,7 @@ export function createOperations(
   ): string => `${subjectType}.${operation}`;
 
   const lifecycleEvent = async (
-    args: Omit<OutboxEventInput, "eventType"> & {
-      subjectType: string;
-      operation: string;
-    },
+    args: DomainLifecycleEventInput,
   ): Promise<Queue> =>
     await appendOutboxEvent({
       ...args,
@@ -3135,6 +3286,169 @@ export function createOperations(
         after: args.after,
         patch: args.patch,
       } as Record<string, unknown>,
+    });
+
+  const domainMutation = async <T>(
+    fn: () => Promise<DomainMutationCommit<T>>,
+  ): Promise<T> =>
+    await transaction(async () => {
+      const { result, event } = await fn();
+      if (event) await lifecycleEvent(event);
+      return result;
+    });
+
+  const graphTopicThreadId = (options: GraphMutationOptions): string => {
+    const threadId = options.threadId?.trim();
+    if (!threadId) {
+      throw new Error(
+        "Graph mutation requires a threadId queue topic. Use ops.unsafeGraph only for explicit raw graph writes.",
+      );
+    }
+    return threadId;
+  };
+
+  const graphMutationEventBase = (
+    options: GraphMutationOptions,
+    subjectType: string,
+    subjectId: string,
+    operation: LifecycleOperation,
+  ) => ({
+    threadId: graphTopicThreadId(options),
+    subjectType,
+    subjectId,
+    operation,
+    traceId: options.traceId ?? null,
+    causationId: options.causationId ?? null,
+    correlationId: options.correlationId ?? null,
+    namespace: options.namespace ?? null,
+    metadata: options.metadata ?? null,
+  });
+
+  const createGraphNode = async (
+    node: Omit<NewKnowledgeNode, "id"> & { id?: string },
+    options: GraphMutationOptions,
+  ): Promise<KnowledgeNode> =>
+    await domainMutation(async () => {
+      const created = await createNode(node);
+      const after = await getNodeById(String(created.id)) ?? created;
+      const subjectType = String(after.type ?? node.type ?? "node");
+      return {
+        result: after,
+        event: {
+          ...graphMutationEventBase(
+            options,
+            subjectType,
+            String(after.id),
+            "created",
+          ),
+          namespace: options.namespace ?? after.namespace ?? node.namespace ??
+            null,
+          input: node,
+          after,
+        },
+      };
+    });
+
+  const updateGraphNode = async (
+    id: string,
+    updates: Partial<NewKnowledgeNode>,
+    options: GraphMutationOptions,
+  ): Promise<KnowledgeNode | undefined> =>
+    await domainMutation(async () => {
+      const before = await getNodeById(id);
+      if (!before) return { result: undefined };
+      const updated = await updateNode(id, updates);
+      const after = updated ? await getNodeById(id) ?? updated : undefined;
+      return {
+        result: after,
+        event: after
+          ? {
+            ...graphMutationEventBase(
+              options,
+              String(after.type ?? before.type ?? "node"),
+              id,
+              "updated",
+            ),
+            namespace: options.namespace ?? after.namespace ??
+              before.namespace ?? null,
+            before,
+            after,
+            patch: updates,
+          }
+          : null,
+      };
+    });
+
+  const deleteGraphNode = async (
+    id: string,
+    options: GraphMutationOptions,
+  ): Promise<void> =>
+    await domainMutation(async () => {
+      const before = await getNodeById(id);
+      if (!before) return { result: undefined };
+      await deleteNode(id);
+      return {
+        result: undefined,
+        event: {
+          ...graphMutationEventBase(
+            options,
+            String(before.type ?? "node"),
+            id,
+            "deleted",
+          ),
+          namespace: options.namespace ?? before.namespace ?? null,
+          before,
+          after: null,
+        },
+      };
+    });
+
+  const createGraphEdge = async (
+    edge: Omit<NewKnowledgeEdge, "id"> & { id?: string },
+    options: GraphMutationOptions,
+  ): Promise<KnowledgeEdge> =>
+    await domainMutation(async () => {
+      const created = await createEdge(edge);
+      const after = await getEdgeById(String(created.id)) ?? created;
+      return {
+        result: after,
+        event: {
+          ...graphMutationEventBase(
+            options,
+            "edge",
+            String(after.id),
+            "created",
+          ),
+          input: edge,
+          after,
+          metadata: {
+            ...(options.metadata ?? {}),
+            edgeType: after.type ?? edge.type,
+          },
+        },
+      };
+    });
+
+  const deleteGraphEdge = async (
+    id: string,
+    options: GraphMutationOptions,
+  ): Promise<void> =>
+    await domainMutation(async () => {
+      const before = await getEdgeById(id);
+      if (!before) return { result: undefined };
+      await deleteEdge(id);
+      return {
+        result: undefined,
+        event: {
+          ...graphMutationEventBase(options, "edge", id, "deleted"),
+          before,
+          after: null,
+          metadata: {
+            ...(options.metadata ?? {}),
+            edgeType: before.type,
+          },
+        },
+      };
     });
 
   const mergeNodeData = (
@@ -3231,43 +3545,47 @@ export function createOperations(
       namespace?: string | null;
     },
   ): Promise<KnowledgeNode> => {
-    const threadId = String(thread.id);
-    const namespace = options?.namespace ?? thread.namespace ?? "default";
-    const existing = await getNodeBySource(
-      namespace,
-      "thread",
-      "thread",
-      threadId,
-    );
-    if (existing) return existing;
-
-    const node = await createNode({
-      namespace,
-      type: "thread",
-      name: String(thread.name ?? threadId),
-      content: thread.summary ?? thread.description ?? null,
-      sourceType: "thread",
-      sourceId: threadId,
-      data: {
+    return await domainMutation(async () => {
+      const threadId = String(thread.id);
+      const namespace = options?.namespace ?? thread.namespace ?? "default";
+      const existing = await getNodeBySource(
+        namespace,
+        "thread",
+        "thread",
         threadId,
-        externalId: thread.externalId ?? null,
-        status: thread.status ?? null,
-        parentThreadId: thread.parentThreadId ?? null,
-        rootThreadId: thread.rootThreadId ?? thread.id,
-        participants: thread.participants ?? null,
-        metadata: options?.metadata ?? thread.metadata ?? null,
-      },
-    });
+      );
+      if (existing) return { result: existing };
 
-    await lifecycleEvent({
-      threadId,
-      subjectType: "thread",
-      subjectId: node.id as string,
-      operation: "created",
-      after: node,
-      namespace,
+      const node = await createNode({
+        namespace,
+        type: "thread",
+        name: String(thread.name ?? threadId),
+        content: thread.summary ?? thread.description ?? null,
+        sourceType: "thread",
+        sourceId: threadId,
+        data: {
+          threadId,
+          externalId: thread.externalId ?? null,
+          status: thread.status ?? null,
+          parentThreadId: thread.parentThreadId ?? null,
+          rootThreadId: thread.rootThreadId ?? thread.id,
+          participants: thread.participants ?? null,
+          metadata: options?.metadata ?? thread.metadata ?? null,
+        },
+      });
+
+      return {
+        result: node,
+        event: {
+          threadId,
+          subjectType: "thread",
+          subjectId: node.id as string,
+          operation: "created",
+          after: node,
+          namespace,
+        },
+      };
     });
-    return node;
   };
 
   const createDomainMessage = async (
@@ -3275,20 +3593,22 @@ export function createOperations(
     namespace?: string | null,
     options?: { traceId?: string | null; causationId?: string | null },
   ): Promise<Message> =>
-    await transaction(async () => {
+    await domainMutation(async () => {
       const created = await createMessage(message, namespace ?? undefined);
-      await lifecycleEvent({
-        threadId: created.threadId,
-        subjectType: "message",
-        subjectId: created.id,
-        operation: "created",
-        input: message,
-        after: created as unknown as Record<string, unknown>,
-        traceId: options?.traceId ?? null,
-        causationId: options?.causationId ?? null,
-        namespace,
-      });
-      return created;
+      return {
+        result: created,
+        event: {
+          threadId: created.threadId,
+          subjectType: "message",
+          subjectId: created.id,
+          operation: "created",
+          input: message,
+          after: created as unknown as Record<string, unknown>,
+          traceId: options?.traceId ?? null,
+          causationId: options?.causationId ?? null,
+          namespace,
+        },
+      };
     });
 
   const appendMessageSegments = async (
@@ -3301,9 +3621,9 @@ export function createOperations(
       causationId?: string | null;
     },
   ): Promise<KnowledgeNode | undefined> =>
-    await transaction(async () => {
+    await domainMutation(async () => {
       const node = await getNodeById(messageId);
-      if (!node) return undefined;
+      if (!node) return { result: undefined };
       const previous = node;
       const data = mergeNodeData(node, {
         segments: [
@@ -3313,27 +3633,29 @@ export function createOperations(
         ],
       });
       const updated = await updateNode(messageId, { data });
-      if (options?.threadId && updated) {
-        await lifecycleEvent({
-          threadId: options.threadId,
-          subjectType: "message",
-          subjectId: messageId,
-          operation: "updated",
-          before: previous,
-          after: updated,
-          patch: { segments },
-          traceId: options.traceId ?? null,
-          causationId: options.causationId ?? null,
-          namespace: options.namespace ?? null,
-        });
-      }
-      return updated;
+      return {
+        result: updated,
+        event: options?.threadId && updated
+          ? {
+            threadId: options.threadId,
+            subjectType: "message",
+            subjectId: messageId,
+            operation: "updated",
+            before: previous,
+            after: updated,
+            patch: { segments },
+            traceId: options.traceId ?? null,
+            causationId: options.causationId ?? null,
+            namespace: options.namespace ?? null,
+          }
+          : null,
+      };
     });
 
   const createLlmAttempt = async (
     input: LlmAttemptInput,
   ): Promise<KnowledgeNode> =>
-    await transaction(async () => {
+    await domainMutation(async () => {
       const now = new Date().toISOString();
       const node = await createNode({
         id: input.id,
@@ -3376,17 +3698,19 @@ export function createOperations(
         agentId: input.agentId ?? null,
         runSender: input.runSender ?? null,
       });
-      await lifecycleEvent({
-        threadId: input.threadId,
-        subjectType: "llm_attempt",
-        subjectId: node.id as string,
-        operation: "created",
-        input,
-        after: node,
-        causationId: input.eventId ?? null,
-        namespace: input.namespace ?? null,
-      });
-      return node;
+      return {
+        result: node,
+        event: {
+          threadId: input.threadId,
+          subjectType: "llm_attempt",
+          subjectId: node.id as string,
+          operation: "created",
+          input,
+          after: node,
+          causationId: input.eventId ?? null,
+          namespace: input.namespace ?? null,
+        },
+      };
     });
 
   const updateLlmAttempt = async (
@@ -3400,9 +3724,9 @@ export function createOperations(
       namespace?: string | null;
     },
   ): Promise<KnowledgeNode | undefined> =>
-    await transaction(async () => {
+    await domainMutation(async () => {
       const previous = await getNodeById(id);
-      if (!previous) return undefined;
+      if (!previous) return { result: undefined };
       const dataPatch: Record<string, unknown> = {
         ...patch,
         ...(patch.startedAt ? { startedAt: toIsoString(patch.startedAt) } : {}),
@@ -3418,27 +3742,29 @@ export function createOperations(
           null,
         data: mergeNodeData(previous, dataPatch),
       });
-      if (options?.threadId && updated) {
-        await lifecycleEvent({
-          threadId: options.threadId,
-          subjectType: "llm_attempt",
-          subjectId: id,
-          operation,
-          before: previous,
-          after: updated,
-          patch: dataPatch,
-          traceId: options.traceId ?? null,
-          causationId: options.causationId ?? null,
-          namespace: options.namespace ?? null,
-        });
-      }
-      return updated;
+      return {
+        result: updated,
+        event: options?.threadId && updated
+          ? {
+            threadId: options.threadId,
+            subjectType: "llm_attempt",
+            subjectId: id,
+            operation,
+            before: previous,
+            after: updated,
+            patch: dataPatch,
+            traceId: options.traceId ?? null,
+            causationId: options.causationId ?? null,
+            namespace: options.namespace ?? null,
+          }
+          : null,
+      };
     });
 
   const createToolExecution = async (
     input: ToolExecutionInput,
   ): Promise<KnowledgeNode> =>
-    await transaction(async () => {
+    await domainMutation(async () => {
       const now = new Date().toISOString();
       const node = await createNode({
         id: input.id,
@@ -3468,17 +3794,19 @@ export function createOperations(
           type: GRAPH_EDGE.HAS_TOOL_EXECUTION,
         });
       }
-      await lifecycleEvent({
-        threadId: input.threadId,
-        subjectType: "tool_execution",
-        subjectId: node.id as string,
-        operation: "created",
-        input,
-        after: node,
-        causationId: input.eventId ?? null,
-        namespace: input.namespace ?? null,
-      });
-      return node;
+      return {
+        result: node,
+        event: {
+          threadId: input.threadId,
+          subjectType: "tool_execution",
+          subjectId: node.id as string,
+          operation: "created",
+          input,
+          after: node,
+          causationId: input.eventId ?? null,
+          namespace: input.namespace ?? null,
+        },
+      };
     });
 
   const updateToolExecution = async (
@@ -3492,9 +3820,9 @@ export function createOperations(
       namespace?: string | null;
     },
   ): Promise<KnowledgeNode | undefined> =>
-    await transaction(async () => {
+    await domainMutation(async () => {
       const previous = await getNodeById(id);
-      if (!previous) return undefined;
+      if (!previous) return { result: undefined };
       const dataPatch: Record<string, unknown> = {
         ...patch,
         ...(patch.startedAt ? { startedAt: toIsoString(patch.startedAt) } : {}),
@@ -3505,21 +3833,23 @@ export function createOperations(
       const updated = await updateNode(id, {
         data: mergeNodeData(previous, dataPatch),
       });
-      if (options?.threadId && updated) {
-        await lifecycleEvent({
-          threadId: options.threadId,
-          subjectType: "tool_execution",
-          subjectId: id,
-          operation,
-          before: previous,
-          after: updated,
-          patch: dataPatch,
-          traceId: options.traceId ?? null,
-          causationId: options.causationId ?? null,
-          namespace: options.namespace ?? null,
-        });
-      }
-      return updated;
+      return {
+        result: updated,
+        event: options?.threadId && updated
+          ? {
+            threadId: options.threadId,
+            subjectType: "tool_execution",
+            subjectId: id,
+            operation,
+            before: previous,
+            after: updated,
+            patch: dataPatch,
+            traceId: options.traceId ?? null,
+            causationId: options.causationId ?? null,
+            namespace: options.namespace ?? null,
+          }
+          : null,
+      };
     });
 
   const getToolExecutionOutput = async (
@@ -3555,7 +3885,7 @@ export function createOperations(
       namespace?: string | null;
     },
   ): Promise<KnowledgeNode> =>
-    await transaction(async () => {
+    await domainMutation(async () => {
       const node = await createNode({
         id: input.id,
         namespace: input.namespace ?? "default",
@@ -3572,23 +3902,25 @@ export function createOperations(
           metadata: input.metadata ?? null,
         },
       });
-      await lifecycleEvent({
-        threadId: input.threadId,
-        subjectType: "asset",
-        subjectId: node.id as string,
-        operation: "created",
-        input,
-        after: node,
-        namespace: input.namespace ?? null,
-      });
-      return node;
+      return {
+        result: node,
+        event: {
+          threadId: input.threadId,
+          subjectType: "asset",
+          subjectId: node.id as string,
+          operation: "created",
+          input,
+          after: node,
+          namespace: input.namespace ?? null,
+        },
+      };
     });
 
   const forkThread = async (
     input: ThreadForkInput,
     options: ThreadMutationOptions = {},
   ): Promise<Thread> =>
-    await transaction(async () => {
+    await domainMutation(async () => {
       const source = await getThreadById(input.sourceThreadId);
       if (!source) {
         throw new Error(`Source thread not found: ${input.sourceThreadId}`);
@@ -3613,22 +3945,23 @@ export function createOperations(
         mode: forkInput.mode ?? source.mode ?? "immediate",
       }, options);
 
-      await lifecycleEvent({
-        threadId: String(forked.id),
-        subjectType: "thread",
-        subjectId: String(forked.id),
-        operation: "forked",
-        input,
-        before: source as unknown as Record<string, unknown>,
-        after: forked as unknown as Record<string, unknown>,
-        traceId: options.traceId ?? null,
-        causationId: options.causationId ?? null,
-        namespace: typeof forked.namespace === "string"
-          ? forked.namespace
-          : options.namespace ?? null,
-      });
-
-      return forked;
+      return {
+        result: forked,
+        event: {
+          threadId: String(forked.id),
+          subjectType: "thread",
+          subjectId: String(forked.id),
+          operation: "forked",
+          input,
+          before: source as unknown as Record<string, unknown>,
+          after: forked as unknown as Record<string, unknown>,
+          traceId: options.traceId ?? null,
+          causationId: options.causationId ?? null,
+          namespace: typeof forked.namespace === "string"
+            ? forked.namespace
+            : options.namespace ?? null,
+        },
+      };
     });
 
   const mutate: DomainMutationOperations = {
@@ -3686,6 +4019,31 @@ export function createOperations(
     assets: {
       create: createAssetNode,
     },
+    graph: {
+      createNode: createGraphNode,
+      updateNode: updateGraphNode,
+      deleteNode: deleteGraphNode,
+      createEdge: createGraphEdge,
+      deleteEdge: deleteGraphEdge,
+    },
+  };
+
+  const unsafeGraph: UnsafeGraphOperations = {
+    createNode,
+    createNodes,
+    getNodeById,
+    getNodesByNamespace,
+    updateNode,
+    deleteNode,
+    deleteNodesBySource,
+    createEdge,
+    createEdges,
+    getEdgesForNode,
+    deleteEdge,
+    deleteEdgesForNode,
+    searchNodes,
+    traverseGraph,
+    findRelatedNodes,
   };
 
   operations = {
@@ -3696,6 +4054,7 @@ export function createOperations(
       append: appendOutboxEvent,
     },
     mutate,
+    unsafeGraph,
     addToQueue,
     getQueueItemById,
     getQueueItemsByTraceId,

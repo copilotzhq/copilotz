@@ -147,6 +147,8 @@ export type {
   Event,
   /** Interface for custom event processors. */
   EventProcessor,
+  /** Required provenance for safe graph mutations. */
+  GraphMutationOptions,
   /** Hook for rewriting generated message history before the LLM call. */
   HistoryTransform,
   /** Arguments passed to the history transform hook. */
@@ -231,6 +233,8 @@ export type {
   ToolHistoryPolicyConfig,
   /** Runtime-only history visibility for tool results across agents. */
   ToolHistoryVisibility,
+  /** Explicit low-level graph operations that bypass mutation outbox semantics. */
+  UnsafeGraphOperations,
 } from "@/types/index.ts";
 export type {
   GoalAssessment,

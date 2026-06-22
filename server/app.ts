@@ -12,7 +12,10 @@ import type { Copilotz } from "@/index.ts";
 import type { RunHandle } from "@/runtime/index.ts";
 import { listPublicAgents } from "@/utils/list-agents.ts";
 import type { FeatureEntry } from "@/runtime/loaders/resources.ts";
-import type { MessageHistoryPageInfo } from "@/database/operations/index.ts";
+import type {
+  GraphMutationOptions,
+  MessageHistoryPageInfo,
+} from "@/database/operations/index.ts";
 import type { CollectionPageInfo } from "@/database/collections/types.ts";
 import { createChannelHandlers } from "./channels.ts";
 import type {
@@ -646,7 +649,12 @@ function buildRoutes(): Route[] {
       method: "PATCH",
       pattern: ["nodes", ":id"],
       action: async (ctx, p) => {
-        const node = await ctx.handlers.graph.updateNode(p.id, ctx.body as any);
+        const mutation = graphMutationOptions(ctx);
+        const node = await ctx.handlers.graph.updateNode(
+          p.id,
+          graphMutationBody(ctx.body),
+          mutation,
+        );
         if (!node) throw { status: 404, message: "Node not found" };
         return { status: 200, data: node };
       },
@@ -656,7 +664,7 @@ function buildRoutes(): Route[] {
       method: "DELETE",
       pattern: ["nodes", ":id"],
       action: async (ctx, p) => {
-        await ctx.handlers.graph.deleteNode(p.id);
+        await ctx.handlers.graph.deleteNode(p.id, graphMutationOptions(ctx));
         return { status: 204 };
       },
     },
@@ -779,6 +787,86 @@ function parseListParam(val: unknown): string[] | undefined {
   if (!val || typeof val !== "string") return undefined;
   const parts = val.split(",").map((s) => s.trim()).filter(Boolean);
   return parts.length > 0 ? parts : undefined;
+}
+
+function asString(val: unknown): string | undefined {
+  const candidate = Array.isArray(val) ? val[0] : val;
+  return typeof candidate === "string" && candidate.trim().length > 0
+    ? candidate.trim()
+    : undefined;
+}
+
+function headerValue(
+  headers: Record<string, string>,
+  name: string,
+): string | undefined {
+  const exact = headers[name];
+  if (typeof exact === "string") return exact;
+  const lower = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lower) return value;
+  }
+  return undefined;
+}
+
+function graphMutationBody(body: unknown): Record<string, unknown> {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return {};
+  const {
+    threadId: _threadId,
+    topicThreadId: _topicThreadId,
+    traceId: _traceId,
+    causationId: _causationId,
+    correlationId: _correlationId,
+    mutationMetadata: _mutationMetadata,
+    ...updates
+  } = body as Record<string, unknown>;
+  return updates;
+}
+
+function graphMutationOptions(ctx: RouteContext): GraphMutationOptions {
+  const body = bodyRecord(ctx.body);
+  const threadId = asString(ctx.query.threadId) ??
+    asString(ctx.query.topicThreadId) ??
+    asString(body?.threadId) ??
+    asString(body?.topicThreadId) ??
+    asString(ctx.context?.threadId) ??
+    asString(ctx.context?.topicThreadId) ??
+    asString(headerValue(ctx.headers, "x-copilotz-thread-id")) ??
+    asString(headerValue(ctx.headers, "x-copilotz-topic-id"));
+
+  if (!threadId) {
+    throw {
+      status: 400,
+      message:
+        "Graph mutation requires a threadId queue topic. Pass threadId in the request body, query, context, or x-copilotz-thread-id header.",
+    };
+  }
+
+  const metadata = body?.mutationMetadata &&
+      typeof body.mutationMetadata === "object" &&
+      !Array.isArray(body.mutationMetadata)
+    ? body.mutationMetadata as Record<string, unknown>
+    : undefined;
+
+  return {
+    threadId,
+    namespace: requireTenantNamespace(ctx),
+    traceId: asString(ctx.query.traceId) ?? asString(body?.traceId) ??
+      asString(headerValue(ctx.headers, "x-copilotz-trace-id")) ?? null,
+    causationId: asString(ctx.query.causationId) ??
+      asString(body?.causationId) ??
+      asString(headerValue(ctx.headers, "x-copilotz-causation-id")) ?? null,
+    correlationId: asString(ctx.query.correlationId) ??
+      asString(body?.correlationId) ??
+      asString(headerValue(ctx.headers, "x-copilotz-correlation-id")) ?? null,
+    metadata: metadata ?? null,
+  };
+}
+
+function bodyRecord(body: unknown): Record<string, unknown> | undefined {
+  return body && typeof body === "object" && !Array.isArray(body)
+    ? body as Record<string, unknown>
+    : undefined;
 }
 
 function requireTenantNamespace(ctx: RouteContext): string {

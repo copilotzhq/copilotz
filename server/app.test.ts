@@ -194,6 +194,21 @@ function createMockCopilotz() {
     deleteNode: async (id: string) => {
       record("deleteNode", id);
     },
+    mutate: {
+      graph: {
+        updateNode: async (
+          id: string,
+          updates: unknown,
+          options: unknown,
+        ) => {
+          record("mutate.graph.updateNode", id, updates, options);
+          return { id, ...(updates as object) };
+        },
+        deleteNode: async (id: string, options: unknown) => {
+          record("mutate.graph.deleteNode", id, options);
+        },
+      },
+    },
   };
 
   const mockAssets = {
@@ -511,7 +526,7 @@ async function waitFor(
 // ---------------------------------------------------------------------------
 
 Deno.test("withApp — handle() routes and Deno.serve integration", async (t) => {
-  const { copilotz, deliveries } = createMockCopilotz();
+  const { copilotz, calls, deliveries } = createMockCopilotz();
   // deno-lint-ignore no-explicit-any
   const extended = withApp(copilotz as any);
   const { server, base, request } = createServer(extended);
@@ -998,6 +1013,64 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
       assertEquals(data.length, 1);
       assertEquals(data[0].id, "result-1");
     });
+
+    await t.step(
+      "PATCH /graph/nodes/:id requires a queue topic threadId",
+      async () => {
+        const res = await fetch(`${base}/graph/nodes/n-42`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "Updated" }),
+        });
+        assertEquals(res.status, 400);
+      },
+    );
+
+    await t.step(
+      "PATCH /graph/nodes/:id uses safe graph mutation with topic",
+      async () => {
+        const res = await fetch(`${base}/graph/nodes/n-42`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            threadId: "topic-1",
+            traceId: "trace-1",
+            name: "Updated",
+          }),
+        });
+        assertEquals(res.status, 200);
+        const call = calls.findLast((entry) =>
+          entry.method === "mutate.graph.updateNode"
+        );
+        assertExists(call);
+        assertEquals(call.args[0], "n-42");
+        assertEquals(call.args[1], { name: "Updated" });
+        assertEquals(
+          (call.args[2] as Record<string, unknown>).threadId,
+          "topic-1",
+        );
+      },
+    );
+
+    await t.step(
+      "DELETE /graph/nodes/:id uses safe graph mutation with header topic",
+      async () => {
+        const res = await fetch(`${base}/graph/nodes/n-42`, {
+          method: "DELETE",
+          headers: { "x-copilotz-thread-id": "topic-delete" },
+        });
+        assertEquals(res.status, 204);
+        const call = calls.findLast((entry) =>
+          entry.method === "mutate.graph.deleteNode"
+        );
+        assertExists(call);
+        assertEquals(call.args[0], "n-42");
+        assertEquals(
+          (call.args[1] as Record<string, unknown>).threadId,
+          "topic-delete",
+        );
+      },
+    );
 
     // -- features --
     await t.step(

@@ -104,12 +104,14 @@ export type {
 export type {
   DatabaseOperations,
   DomainMutationOperations,
+  GraphMutationOptions,
   LlmAttemptInput,
   LlmAttemptPatch,
   OutboxEventInput,
   OutboxOperations,
   ToolExecutionInput,
   ToolExecutionPatch,
+  UnsafeGraphOperations,
 } from "@/database/operations/index.ts";
 
 /** Payload emitted when the asset pipeline stores a new file or media object. */

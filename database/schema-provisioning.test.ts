@@ -18,6 +18,7 @@ class FakeDb {
   currentSchemas = new Set<string>();
   readySchemas = new Set<string>();
   schemas = ["public", "tenant_empty", "tenant_ready"];
+  queryDelayMs = 0;
 
   constructor(
     readySchemas: string[] = [],
@@ -31,6 +32,9 @@ class FakeDb {
     sql: string,
     params?: unknown[],
   ): Promise<{ rows: T[]; rowCount?: number }> {
+    if (this.queryDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.queryDelayMs));
+    }
     this.calls.push({ sql, params });
     if (sql.includes("information_schema.schemata")) {
       if (sql.includes("schema_name = $1")) {
@@ -115,6 +119,37 @@ Deno.test("ensureSchemaProvisioned does not run DDL for a current schema", async
     db.calls.some((call) => call.sql.includes("ALTER TABLE")),
     false,
   );
+  assertEquals(isSchemaInCache("tenant_ready"), true);
+});
+
+Deno.test("ensureSchemaProvisioned does not run runtime index DDL", async () => {
+  clearSchemaCache();
+  const db = new FakeDb(["tenant_ready"], ["tenant_ready"]);
+
+  await ensureSchemaProvisioned(db as never, "tenant_ready");
+
+  assertEquals(
+    db.calls.some((call) => call.sql.includes("CREATE INDEX")),
+    false,
+  );
+  assertEquals(isSchemaInCache("tenant_ready"), true);
+});
+
+Deno.test("ensureSchemaProvisioned coalesces concurrent provisioning per schema", async () => {
+  clearSchemaCache();
+  const db = new FakeDb(["tenant_ready"]);
+  db.queryDelayMs = 1;
+
+  await Promise.all([
+    ensureSchemaProvisioned(db as never, "tenant_ready"),
+    ensureSchemaProvisioned(db as never, "tenant_ready"),
+  ]);
+
+  const tableChecks = db.calls.filter((call) =>
+    call.sql.includes("information_schema.tables") &&
+    call.params?.[0] === "tenant_ready"
+  );
+  assertEquals(tableChecks.length, 1);
   assertEquals(isSchemaInCache("tenant_ready"), true);
 });
 

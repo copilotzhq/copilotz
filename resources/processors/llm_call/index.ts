@@ -41,6 +41,8 @@ export type LLMResultPayload = LlmResultEventPayload;
 const escapeRegex = (string: string): string =>
   string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+const LLM_PARTIAL_PERSIST_INTERVAL_MS = 10_000;
+
 function envFlagEnabled(name: string): boolean {
   try {
     return Deno.env.get(name) === "1";
@@ -160,7 +162,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     const persistPartialAttempt = (force = false) => {
       if (!llmAttemptId || !deps.db?.ops?.mutate?.llmAttempts) return;
       const now = Date.now();
-      if (!force && now - lastPartialPersistedAt < 750) return;
+      if (
+        !force &&
+        now - lastPartialPersistedAt < LLM_PARTIAL_PERSIST_INTERVAL_MS
+      ) return;
       lastPartialPersistedAt = now;
       void deps.db.ops.mutate.llmAttempts.update(
         llmAttemptId,

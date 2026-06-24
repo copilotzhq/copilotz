@@ -3235,10 +3235,11 @@ export function createOperations(
     const createEvent = crud.events.create as unknown as (
       data: Record<string, unknown>,
     ) => Promise<Queue>;
+    const eventPayload = event.payload ?? event.input ?? event.patch ?? {};
     const row = await createEvent({
       threadId: event.threadId,
       eventType: event.eventType,
-      payload: sanitizePostgresParam(event.payload ?? {}),
+      payload: sanitizePostgresParam(eventPayload),
       parentEventId: event.parentEventId ?? null,
       traceId: event.traceId ?? null,
       priority: event.priority ?? null,
@@ -3253,18 +3254,10 @@ export function createOperations(
       causationId: event.causationId ?? event.parentEventId ?? null,
       correlationId: event.correlationId ?? event.traceId ?? null,
       dedupeKey: event.dedupeKey ?? null,
-      input: event.input === undefined
-        ? null
-        : sanitizePostgresParam(event.input),
-      before: event.before === undefined
-        ? null
-        : sanitizePostgresParam(event.before),
-      after: event.after === undefined
-        ? null
-        : sanitizePostgresParam(event.after),
-      patch: event.patch === undefined
-        ? null
-        : sanitizePostgresParam(event.patch),
+      input: null,
+      before: null,
+      after: null,
+      patch: null,
     });
     return row;
   };
@@ -3280,12 +3273,6 @@ export function createOperations(
     await appendOutboxEvent({
       ...args,
       eventType: eventTypeFor(args.subjectType, args.operation),
-      payload: args.payload ?? {
-        input: args.input,
-        before: args.before,
-        after: args.after,
-        patch: args.patch,
-      } as Record<string, unknown>,
     });
 
   const domainMutation = async <T>(

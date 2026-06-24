@@ -96,27 +96,7 @@ const REQUIRED_RUNTIME_COLUMNS = [
   },
 ] as const;
 
-const REQUIRED_RUNTIME_INDEXES = [
-  `CREATE INDEX IF NOT EXISTS "idx_nodes_admin_llm_attempt_time"
-     ON "nodes" ("namespace", "created_at")
-     WHERE "type" = 'llm_attempt'`,
-  `CREATE INDEX IF NOT EXISTS "idx_nodes_admin_llm_attempt_agent_time"
-     ON "nodes" ("namespace", ("data"->>'agentId'), "created_at")
-     WHERE "type" = 'llm_attempt'`,
-  `CREATE INDEX IF NOT EXISTS "idx_nodes_admin_llm_attempt_initiator_time"
-     ON "nodes" (
-       "namespace",
-       (COALESCE("data"->'runSender'->>'externalId', "data"->'runSender'->>'id', "data"->'runSender'->>'email', "data"->'runSender'->>'name', '')),
-       "created_at"
-     )
-     WHERE "type" = 'llm_attempt'`,
-  `CREATE INDEX IF NOT EXISTS "idx_nodes_admin_llm_attempt_provider_time"
-     ON "nodes" ("namespace", ("data"->>'provider'), "created_at")
-     WHERE "type" = 'llm_attempt'`,
-  `CREATE INDEX IF NOT EXISTS "idx_nodes_admin_llm_attempt_model_time"
-     ON "nodes" ("namespace", ("data"->>'model'), "created_at")
-     WHERE "type" = 'llm_attempt'`,
-] as const;
+const provisioningPromises = new Map<string, Promise<void>>();
 
 /**
  * Validates a schema name for security and PostgreSQL compatibility.
@@ -310,9 +290,6 @@ async function ensureRuntimeCompatibility(
     }
     await executeInSchemaTransaction(db, schemaName, column.sql);
   }
-  for (const statement of REQUIRED_RUNTIME_INDEXES) {
-    await executeInSchemaTransaction(db, schemaName, statement);
-  }
 }
 
 /**
@@ -385,14 +362,29 @@ export async function ensureSchemaProvisioned(
     return;
   }
 
-  const hasCoreTables = await schemaIsProvisioned(db, schemaName);
-  if (!hasCoreTables) {
-    await provisionTenantSchema(db, schemaName);
+  const existingProvisioning = provisioningPromises.get(schemaName);
+  if (existingProvisioning) {
+    await existingProvisioning;
     return;
   }
 
-  await ensureRuntimeCompatibility(db, schemaName);
-  provisionedSchemas.add(schemaName);
+  const provisioning = (async () => {
+    const hasCoreTables = await schemaIsProvisioned(db, schemaName);
+    if (!hasCoreTables) {
+      await provisionTenantSchema(db, schemaName);
+      return;
+    }
+
+    await ensureRuntimeCompatibility(db, schemaName);
+    provisionedSchemas.add(schemaName);
+  })();
+
+  provisioningPromises.set(schemaName, provisioning);
+  try {
+    await provisioning;
+  } finally {
+    provisioningPromises.delete(schemaName);
+  }
 }
 
 /**
@@ -460,6 +452,7 @@ export function isSchemaInCache(schemaName: string): boolean {
  */
 export function clearSchemaCache(): void {
   provisionedSchemas.clear();
+  provisioningPromises.clear();
 }
 
 type DirectPoolClient = {

@@ -139,6 +139,29 @@ Deno.test({
       lifecycle.rows.every((row) => row.status === "completed"),
       true,
     );
+
+    const completedAttempt = await db.query<
+      {
+        payload: Record<string, unknown>;
+        input: Record<string, unknown> | null;
+        before: Record<string, unknown> | null;
+        after: Record<string, unknown> | null;
+        patch: Record<string, unknown> | null;
+      }
+    >(
+      `SELECT "payload", "input", "before", "after", "patch"
+       FROM "events"
+       WHERE "threadId" = $1
+         AND "eventType" = 'llm_attempt.completed'
+       LIMIT 1`,
+      [threadId],
+    );
+
+    assertEquals(completedAttempt.rows[0]?.payload?.answer, "hi");
+    assertEquals(completedAttempt.rows[0]?.input, null);
+    assertEquals(completedAttempt.rows[0]?.before, null);
+    assertEquals(completedAttempt.rows[0]?.after, null);
+    assertEquals(completedAttempt.rows[0]?.patch, null);
   },
 });
 
@@ -344,10 +367,15 @@ Deno.test({
         eventType: string;
         operation: string;
         subjectId: string;
+        payload: Record<string, unknown> | null;
+        input: Record<string, unknown> | null;
+        before: Record<string, unknown> | null;
+        after: Record<string, unknown> | null;
         patch: Record<string, unknown> | null;
       }
     >(
-      `SELECT "eventType", "operation", "subjectId", "patch"
+      `SELECT "eventType", "operation", "subjectId",
+              "payload", "input", "before", "after", "patch"
        FROM "events"
        WHERE "threadId" IN ($1, $2)
          AND "eventType" IN ('thread.created', 'thread.updated', 'thread.forked')
@@ -367,7 +395,14 @@ Deno.test({
     assertEquals(
       lifecycle.rows.some((row) =>
         row.eventType === "thread.updated" &&
-        row.patch?.metadata !== undefined
+        row.payload?.metadata !== undefined
+      ),
+      true,
+    );
+    assertEquals(
+      lifecycle.rows.every((row) =>
+        row.input === null && row.before === null && row.after === null &&
+        row.patch === null
       ),
       true,
     );

@@ -1199,11 +1199,25 @@ export function createOperations(
       params,
     );
 
+    const latestSettledResult = await db.query<ThreadActivityEvent>(
+      `SELECT "id", "eventType", "status", "priority", "traceId", "parentEventId", "createdAt", "updatedAt"
+       FROM "events"
+       WHERE "threadId" = $1
+         AND "status" IN ('completed', 'failed')
+         AND COALESCE("priority", 0) >= $2
+         ${namespaceClause}
+       ORDER BY "updatedAt" DESC, "createdAt" DESC, "id" DESC
+       LIMIT 1`,
+      params,
+    );
+
     const activeEvents = activeResult.rows;
     const lastFailure = failureResult.rows[0] ?? null;
+    const latestSettled = latestSettledResult.rows[0] ?? null;
     const latestUpdatedAt = [
       activeEvents[0]?.updatedAt,
       lastFailure?.updatedAt,
+      latestSettled?.updatedAt,
     ]
       .map((value) => toIsoString(value))
       .filter((value): value is string => Boolean(value))
@@ -1214,7 +1228,7 @@ export function createOperations(
       threadId,
       status: activeEvents.length > 0
         ? "running"
-        : lastFailure
+        : latestSettled?.status === "failed"
         ? "failed"
         : "idle",
       activeCount: activeEvents.length,

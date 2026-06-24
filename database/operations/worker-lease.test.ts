@@ -291,6 +291,88 @@ Deno.test({
 });
 
 Deno.test({
+  name: "getThreadActivity treats newer completed work as idle after a failure",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const { db, thread } = await createTestThread();
+    const threadId = thread.id as string;
+
+    const failed = await db.ops.addToQueue(threadId, {
+      eventType: "LLM_CALL",
+      payload: { content: "failed" },
+      priority: 2000,
+      status: "failed",
+    });
+    const completed = await db.ops.addToQueue(threadId, {
+      eventType: "LLM_CALL",
+      payload: { content: "completed later" },
+      priority: 2000,
+      status: "completed",
+    });
+
+    await db.query(
+      `UPDATE "events" SET "updatedAt" = $2 WHERE "id" = $1`,
+      [String(failed.id), new Date(Date.now() - 10_000).toISOString()],
+    );
+    await db.query(
+      `UPDATE "events" SET "updatedAt" = $2 WHERE "id" = $1`,
+      [String(completed.id), new Date(Date.now() + 10_000).toISOString()],
+    );
+
+    const activity = await db.ops.getThreadActivity(threadId, {
+      minPriority: 0,
+    });
+
+    assertEquals(activity.status, "idle");
+    assertEquals(activity.activeCount, 0);
+    assertEquals(activity.lastFailure?.id, failed.id);
+  },
+});
+
+Deno.test({
+  name: "getThreadActivity reports failed when the latest settled work failed",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const { db, thread } = await createTestThread();
+    const threadId = thread.id as string;
+
+    const completed = await db.ops.addToQueue(threadId, {
+      eventType: "LLM_CALL",
+      payload: { content: "completed first" },
+      priority: 2000,
+      status: "completed",
+    });
+    const failed = await db.ops.addToQueue(threadId, {
+      eventType: "LLM_CALL",
+      payload: { content: "failed later" },
+      priority: 2000,
+      status: "failed",
+    });
+
+    await db.query(
+      `UPDATE "events" SET "updatedAt" = $2 WHERE "id" = $1`,
+      [String(completed.id), new Date(Date.now() - 10_000).toISOString()],
+    );
+    await db.query(
+      `UPDATE "events" SET "updatedAt" = $2 WHERE "id" = $1`,
+      [String(failed.id), new Date(Date.now() + 10_000).toISOString()],
+    );
+
+    const activity = await db.ops.getThreadActivity(threadId, {
+      minPriority: 0,
+    });
+
+    assertEquals(activity.status, "failed");
+    assertEquals(activity.activeCount, 0);
+    assertEquals(activity.lastFailure?.id, failed.id);
+  },
+});
+
+Deno.test({
   name:
     "acquireThreadWorkerLease resets processing events after expired lease takeover",
   sanitizeExit: false,

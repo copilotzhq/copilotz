@@ -21,6 +21,7 @@ import {
   projectToolResultForHistory,
 } from "./history-policy.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
+import { createUsageService } from "@/runtime/collections/native.ts";
 
 import Ajv from "npm:ajv@^8.17.1";
 import addFormats from "npm:ajv-formats@^3.0.1";
@@ -303,6 +304,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       const resolvedUserExternalId = getUserExternalId(thread?.metadata) ??
         undefined;
 
+      const toolStartedMs = Date.now();
       const results = await processToolCalls(
         [payload.toolCall],
         agentTools,
@@ -436,6 +438,39 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
             "[TOOL_CALL] Failed to finalize tool_execution node:",
             toolExecutionError,
           );
+        }
+
+        // Record a unified usage ledger entry for this tool execution. Cost is
+        // null by default (the framework only meters tools); deployments can
+        // price tools via the `usage.resolveCost` hook.
+        if (context.usage?.enabled !== false && db?.ops) {
+          try {
+            const usageService = createUsageService({
+              collections: context.collections,
+              ops: db.ops,
+              usageOptions: context.usage,
+            });
+            await usageService.recordUsage({
+              kind: "tool",
+              resource: call.tool.id,
+              operation: "tool.exec",
+              status: terminalStatus,
+              threadId,
+              eventId: typeof event.id === "string" ? event.id : null,
+              agentId: (payload.agent.id ?? payload.agent.name) ?? null,
+              initiatedById: resolvedUserExternalId ?? null,
+              metrics: {
+                calls: 1,
+                durationMs: Math.max(0, Date.now() - toolStartedMs),
+              },
+              dedupeKey: toolExecutionId,
+            });
+          } catch (usageError) {
+            console.warn(
+              "[TOOL_CALL] Failed to record tool usage:",
+              usageError,
+            );
+          }
         }
       }
 

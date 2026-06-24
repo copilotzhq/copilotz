@@ -202,7 +202,7 @@ Deno.test("llm_call processor persists one llm_usage node per provider attempt",
        FROM "nodes"
        WHERE "source_type" = 'thread'
          AND "source_id" = $1
-         AND "type" = 'llm_usage'
+         AND "type" = 'usage'
        ORDER BY "created_at" ASC`,
       [thread.id as string],
     );

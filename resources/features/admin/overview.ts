@@ -2,7 +2,7 @@ import type { Copilotz } from "@/index.ts";
 import {
   type AdminOverview,
   buildAdminUsageSourceCte,
-  buildAttemptUsageSumSelects,
+  buildUsageSumSelects,
   emptyUsageTotals,
   pushAdminUsageSourceScope,
   pushScopedThreadNode,
@@ -119,7 +119,7 @@ export default async function (
   const usageResult = await q<AdminUsageTotalsRow>(
     `WITH ${buildAdminUsageSourceCte(`"admin_usage_source"`, usageScope)}
      SELECT COUNT(*)::int AS "totalCalls", ${
-      buildAttemptUsageSumSelects(`"data"`)
+      buildUsageSumSelects(`"data"`)
     }
      FROM "admin_usage_source" WHERE ${usageWhere}`,
     up,

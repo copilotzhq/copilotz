@@ -122,6 +122,27 @@ const REQUIRED_RUNTIME_INDEXES = [
   `CREATE INDEX IF NOT EXISTS "idx_nodes_admin_llm_attempt_thread_time"
      ON "nodes" ("namespace", ("data"->>'threadId'), "created_at")
      WHERE "type" = 'llm_attempt'`,
+  `CREATE INDEX IF NOT EXISTS "idx_nodes_usage_time"
+     ON "nodes" ("namespace", "created_at")
+     WHERE "type" = 'usage'`,
+  `CREATE INDEX IF NOT EXISTS "idx_nodes_usage_kind_time"
+     ON "nodes" ("namespace", ("data"->>'kind'), "created_at")
+     WHERE "type" = 'usage'`,
+  `CREATE INDEX IF NOT EXISTS "idx_nodes_usage_agent_time"
+     ON "nodes" ("namespace", ("data"->>'agentId'), "created_at")
+     WHERE "type" = 'usage'`,
+  `CREATE INDEX IF NOT EXISTS "idx_nodes_usage_initiator_time"
+     ON "nodes" ("namespace", ("data"->>'initiatedById'), "created_at")
+     WHERE "type" = 'usage'`,
+  `CREATE INDEX IF NOT EXISTS "idx_nodes_usage_provider_time"
+     ON "nodes" ("namespace", ("data"->>'provider'), "created_at")
+     WHERE "type" = 'usage'`,
+  `CREATE INDEX IF NOT EXISTS "idx_nodes_usage_model_time"
+     ON "nodes" ("namespace", ("data"->>'model'), "created_at")
+     WHERE "type" = 'usage'`,
+  `CREATE INDEX IF NOT EXISTS "idx_nodes_usage_thread_time"
+     ON "nodes" ("namespace", ("data"->>'threadId'), "created_at")
+     WHERE "type" = 'usage'`,
 ] as const;
 
 const provisioningPromises = new Map<string, Promise<void>>();

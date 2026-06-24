@@ -462,6 +462,132 @@ Deno.test({
 });
 
 Deno.test({
+  name: "findRecoverableThreadIds returns pending work without an active lease",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({ url: ":memory:" });
+    const recoverable = await db.ops.findOrCreateThread(undefined, {
+      name: "Recoverable",
+      namespace: "tenant-a",
+      participants: ["user-1"],
+      status: "active",
+      mode: "immediate",
+    });
+    const locked = await db.ops.findOrCreateThread(undefined, {
+      name: "Locked",
+      namespace: "tenant-a",
+      participants: ["user-1"],
+      status: "active",
+      mode: "immediate",
+    });
+    const otherTenant = await db.ops.findOrCreateThread(undefined, {
+      name: "Other Tenant",
+      namespace: "tenant-b",
+      participants: ["user-1"],
+      status: "active",
+      mode: "immediate",
+    });
+
+    await db.ops.addToQueue(recoverable.id as string, {
+      eventType: "NEW_MESSAGE",
+      namespace: "tenant-a",
+      payload: { content: "wake me" },
+      priority: 0,
+    });
+    await db.ops.addToQueue(locked.id as string, {
+      eventType: "NEW_MESSAGE",
+      namespace: "tenant-a",
+      payload: { content: "already running" },
+      priority: 0,
+    });
+    await db.ops.addToQueue(otherTenant.id as string, {
+      eventType: "NEW_MESSAGE",
+      namespace: "tenant-b",
+      payload: { content: "not this tenant" },
+      priority: 0,
+    });
+    assertEquals(
+      await db.ops.acquireThreadWorkerLease(locked.id as string, "worker-live"),
+      true,
+    );
+
+    const threadIds = await db.ops.findRecoverableThreadIds({
+      namespace: "tenant-a",
+    });
+
+    assertEquals(threadIds, [recoverable.id]);
+  },
+});
+
+Deno.test({
+  name:
+    "findRecoverableThreadIds returns stale processing work after lease expiry",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({
+      url: ":memory:",
+      staleProcessingThresholdMs: 60_000,
+    });
+    const staleThread = await db.ops.findOrCreateThread(undefined, {
+      name: "Stale",
+      namespace: "stale-recovery-test",
+      participants: ["user-1"],
+      status: "active",
+      mode: "immediate",
+    });
+    const freshThread = await db.ops.findOrCreateThread(undefined, {
+      name: "Fresh",
+      namespace: "stale-recovery-test",
+      participants: ["user-1"],
+      status: "active",
+      mode: "immediate",
+    });
+
+    const stale = await db.ops.addToQueue(staleThread.id as string, {
+      eventType: "NEW_MESSAGE",
+      namespace: "stale-recovery-test",
+      payload: { content: "stale" },
+      priority: 0,
+      status: "processing",
+    });
+    await db.ops.addToQueue(freshThread.id as string, {
+      eventType: "NEW_MESSAGE",
+      namespace: "stale-recovery-test",
+      payload: { content: "fresh" },
+      priority: 0,
+      status: "processing",
+    });
+
+    await db.query(
+      `UPDATE "events"
+       SET "updatedAt" = $2
+       WHERE "id" = $1`,
+      [String(stale.id), new Date(Date.now() - 86_400_000).toISOString()],
+    );
+    assertEquals(
+      await db.ops.acquireThreadWorkerLease(staleThread.id as string, "old"),
+      true,
+    );
+    await db.query(
+      `UPDATE "threads"
+       SET "workerLeaseExpiresAt" = NOW() - INTERVAL '1 second'
+       WHERE "id" = $1`,
+      [staleThread.id as string],
+    );
+
+    const threadIds = await db.ops.findRecoverableThreadIds({
+      namespace: "stale-recovery-test",
+    });
+
+    assertEquals(threadIds, [staleThread.id]);
+  },
+});
+
+Deno.test({
   name: "isThreadWorkerLeaseOwner reports active ownership accurately",
   sanitizeExit: false,
   sanitizeOps: false,

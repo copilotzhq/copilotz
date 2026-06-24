@@ -734,6 +734,12 @@ export interface ChatContext {
   skills?: import("@/runtime/loaders/skill-types.ts").Skill[];
   /** Whether streaming is enabled. Default: true. */
   stream?: boolean;
+  /**
+   * Minimum event priority this worker should process.
+   * Defaults to 0 for foreground runs; recovery/background workers may use
+   * lower values to resume deferred work.
+   */
+  minPriority?: number;
   /** Database instance. */
   dbInstance?: CopilotzDb;
   /** Database configuration. */
@@ -772,6 +778,8 @@ export interface ChatContext {
   userMetadata?: Record<string, unknown>;
   /** Hook for rewriting generated message history before the LLM call. */
   historyTransform?: HistoryTransform;
+  /** Usage/cost tracking options (cost resolver + record hook). */
+  usage?: import("@/runtime/usage/types.ts").UsageOptions;
   /** Event processors by event type, ordered by priority. */
   processors?: Record<
     string,

@@ -35,6 +35,6 @@ export default defineCollection({
   relations: {
     sender: relation.belongsTo("participant", "senderId", GRAPH_EDGE.SENT_BY),
     replies: relation.hasMany("message", "messageId", GRAPH_EDGE.DERIVED_FROM),
-    llmUsage: relation.hasOne("llm_usage", "eventId", GRAPH_EDGE.HAS_LLM_USAGE),
+    llmUsage: relation.hasOne("usage", "eventId", GRAPH_EDGE.HAS_LLM_USAGE),
   },
 });

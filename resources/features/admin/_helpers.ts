@@ -144,17 +144,6 @@ export function buildUsageCoalesceSelects(alias: string): string {
     .join(",\n         ");
 }
 
-function buildRunSenderIdExpr(dataExpr: string): string {
-  return `COALESCE(${dataExpr}->'runSender'->>'externalId', ${dataExpr}->'runSender'->>'id', ${dataExpr}->'runSender'->>'email', ${dataExpr}->'runSender'->>'name', '')`;
-}
-
-function buildAttemptUsageDataExpr(dataExpr: string): string {
-  return `jsonb_build_object(
-         'usage', COALESCE(${dataExpr}->'usage', '{}'::jsonb),
-         'cost', COALESCE(${dataExpr}->'cost', '{}'::jsonb)
-       )`;
-}
-
 export interface AdminUsageSourceScope {
   namespacePlaceholder?: string;
   fromPlaceholder?: string;
@@ -195,7 +184,13 @@ function buildUsageSourceNodeFilters(
   alias: string,
   scope: AdminUsageSourceScope,
 ): string {
-  const filters = [`${alias}."type" = 'llm_attempt'`];
+  // Aggregate from the lightweight unified usage ledger (scoped to LLM usage
+  // to preserve the LLM-centric semantics of these dashboards). Usage rows are
+  // tiny and flat, so this avoids detoasting full conversation payloads.
+  const filters = [
+    `${alias}."type" = 'usage'`,
+    `${alias}."data"->>'kind' = 'llm'`,
+  ];
   if (scope.namespacePlaceholder) {
     filters.push(`${alias}."namespace" = ${scope.namespacePlaceholder}`);
   }
@@ -217,7 +212,7 @@ export function buildAdminUsageSourceCte(
   name = `"admin_usage_source"`,
   scope: AdminUsageSourceScope = {},
 ): string {
-  const attemptWhere = buildUsageSourceNodeFilters("a", scope);
+  const sourceWhere = buildUsageSourceNodeFilters("a", scope);
   return `${name} AS (
        SELECT
          a."id",
@@ -226,13 +221,13 @@ export function buildAdminUsageSourceCte(
          COALESCE(a."data"->>'threadId', a."source_id") AS "threadId",
          NULLIF(a."data"->>'eventId', '') AS "eventId",
          COALESCE(a."data"->>'agentId', '') AS "agentId",
-         ${buildRunSenderIdExpr(`a."data"`)} AS "initiatedById",
+         COALESCE(a."data"->>'initiatedById', '') AS "initiatedById",
          COALESCE(a."data"->>'provider', '') AS "provider",
          COALESCE(a."data"->>'model', '') AS "model",
-         ${buildAttemptUsageDataExpr(`a."data"`)} AS "data",
-         'llm_attempt'::text AS "sourceType"
+         a."data" AS "data",
+         'usage'::text AS "sourceType"
        FROM "nodes" a
-       WHERE ${attemptWhere}
+       WHERE ${sourceWhere}
      )`;
 }
 

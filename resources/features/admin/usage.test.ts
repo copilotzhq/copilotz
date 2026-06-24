@@ -7,12 +7,12 @@ import usage from "./usage.ts";
 import { createDatabase } from "@/database/index.ts";
 import { createCollectionsManager } from "@/database/collections/index.ts";
 import participantCollection from "@/resources/collections/participant.ts";
-import { createLlmUsageService } from "@/runtime/collections/native.ts";
+import { createUsageService } from "@/runtime/collections/native.ts";
 import activity from "./activity.ts";
 import agents from "./agents.ts";
 import overview from "./overview.ts";
 
-Deno.test("admin usage groups canonical llm_attempt rows without double-counting llm_usage projections", async () => {
+Deno.test("admin usage groups canonical usage ledger rows", async () => {
   const db = await createDatabase({ url: ":memory:" });
   const namespace = "tenant-usage";
   const threadId = crypto.randomUUID();
@@ -56,23 +56,7 @@ Deno.test("admin usage groups canonical llm_attempt rows without double-counting
     totalCostUsd: 0.15,
   } as const;
 
-  const attempt = await db.ops.mutate.llmAttempts.create({
-    threadId,
-    eventId,
-    agentId: "agent-1",
-    agentName: "Agent One",
-    runSender: { type: "user", externalId: "user-1" },
-    provider: "openai",
-    model: "gpt-test",
-    namespace,
-  });
-  await db.ops.mutate.llmAttempts.complete(String(attempt.id), {
-    usage: usagePayload,
-    cost: costPayload,
-    finishedAt: new Date().toISOString(),
-  }, { threadId, namespace });
-
-  const usageService = createLlmUsageService({ ops: db.ops });
+  const usageService = createUsageService({ ops: db.ops });
   const usageId = await usageService.createUsageRecord({
     threadId,
     eventId,
@@ -128,30 +112,30 @@ Deno.test("admin usage groups canonical llm_attempt rows without double-counting
   assertEquals(threadData.points[0].groupLabel, "Usage Thread");
 });
 
-Deno.test("admin usage ignores legacy llm_usage rows without attempts", async () => {
+Deno.test("admin usage counts usage ledger rows (LLM kind)", async () => {
   const db = await createDatabase({ url: ":memory:" });
-  const namespace = "tenant-usage-legacy";
+  const namespace = "tenant-usage-ledger";
   const threadId = crypto.randomUUID();
   await db.ops.findOrCreateThread(threadId, {
     namespace,
-    name: "Legacy Usage Thread",
-    participants: ["agent-legacy"],
+    name: "Ledger Usage Thread",
+    participants: ["agent-ledger"],
   });
 
   const manager = createCollectionsManager(db, [participantCollection]);
   const collections = manager.withNamespace(namespace);
   await collections.participant.upsertIdentity({
-    externalId: "agent-legacy",
+    externalId: "agent-ledger",
     participantType: "agent",
-    name: "Legacy Agent",
-    agentId: "agent-legacy",
+    name: "Ledger Agent",
+    agentId: "agent-ledger",
   });
 
-  const usageService = createLlmUsageService({ ops: db.ops });
+  const usageService = createUsageService({ ops: db.ops });
   const usageId = await usageService.createUsageRecord({
     threadId,
-    eventId: "legacy-event",
-    agentId: "agent-legacy",
+    eventId: "ledger-event",
+    agentId: "agent-ledger",
     provider: "anthropic",
     model: "claude-test",
     usage: {
@@ -180,49 +164,38 @@ Deno.test("admin usage ignores legacy llm_usage rows without attempts", async ()
   }, { ops: db.ops } as any);
   const data = result.data as any;
 
-  assertEquals(data.points.length, 0);
-  assertEquals(data.totals.totalCalls, 0);
-  assertEquals(data.totals.totalTokens, 0);
-  assertEquals(data.totals.totalCostUsd, 0);
+  assertEquals(data.points.length, 1);
+  assertEquals(data.totals.totalCalls, 1);
+  assertEquals(data.totals.totalTokens, 44);
+  assertEquals(data.totals.totalCostUsd, 0.03);
 });
 
-Deno.test("admin usage does not fill llm_attempt metrics from llm_usage projection", async () => {
+Deno.test("admin usage reads flat metrics from the usage ledger", async () => {
   const db = await createDatabase({ url: ":memory:" });
-  const namespace = "tenant-usage-coalesce";
+  const namespace = "tenant-usage-flat";
   const threadId = crypto.randomUUID();
   await db.ops.findOrCreateThread(threadId, {
     namespace,
-    name: "Coalesced Usage Thread",
-    participants: ["agent-coalesce"],
+    name: "Flat Usage Thread",
+    participants: ["agent-flat"],
   });
 
   const manager = createCollectionsManager(db, [participantCollection]);
   const collections = manager.withNamespace(namespace);
   await collections.participant.upsertIdentity({
-    externalId: "agent-coalesce",
+    externalId: "agent-flat",
     participantType: "agent",
-    name: "Coalesce Agent",
-    agentId: "agent-coalesce",
+    name: "Flat Agent",
+    agentId: "agent-flat",
   });
 
-  const eventId = "coalesce-event";
-  await db.ops.mutate.llmAttempts.create({
-    threadId,
-    eventId,
-    agentId: "agent-coalesce",
-    agentName: "Coalesce Agent",
-    provider: "openai",
-    model: "gpt-coalesce",
-    namespace,
-  });
-
-  const usageService = createLlmUsageService({ ops: db.ops });
+  const usageService = createUsageService({ ops: db.ops });
   const usageId = await usageService.createUsageRecord({
     threadId,
-    eventId,
-    agentId: "agent-coalesce",
+    eventId: "flat-event",
+    agentId: "agent-flat",
     provider: "openai",
-    model: "gpt-coalesce",
+    model: "gpt-flat",
     usage: {
       inputTokens: 20,
       outputTokens: 3,
@@ -233,7 +206,7 @@ Deno.test("admin usage does not fill llm_attempt metrics from llm_usage projecti
     cost: {
       source: "openrouter",
       currency: "USD",
-      pricingModelId: "openai/gpt-coalesce",
+      pricingModelId: "openai/gpt-flat",
       inputCostUsd: 0.02,
       outputCostUsd: 0.01,
       totalCostUsd: 0.03,
@@ -247,11 +220,11 @@ Deno.test("admin usage does not fill llm_attempt metrics from llm_usage projecti
   const data = result.data as any;
 
   assertEquals(data.totals.totalCalls, 1);
-  assertEquals(data.totals.totalTokens, 0);
-  assertEquals(data.totals.totalCostUsd, 0);
+  assertEquals(data.totals.totalTokens, 23);
+  assertEquals(data.totals.totalCostUsd, 0.03);
 });
 
-Deno.test("admin aggregate endpoints read llm_attempt usage", async () => {
+Deno.test("admin aggregate endpoints read the usage ledger", async () => {
   const db = await createDatabase({ url: ":memory:" });
   const namespace = "tenant-admin-aggregates";
   const threadId = crypto.randomUUID();
@@ -270,16 +243,13 @@ Deno.test("admin aggregate endpoints read llm_attempt usage", async () => {
     agentId: "agent-aggregate",
   });
 
-  const attempt = await db.ops.mutate.llmAttempts.create({
+  const usageService = createUsageService({ ops: db.ops });
+  await usageService.createUsageRecord({
     threadId,
     eventId: "aggregate-event",
     agentId: "agent-aggregate",
-    agentName: "Aggregate Agent",
     provider: "openai",
     model: "gpt-aggregate",
-    namespace,
-  });
-  await db.ops.mutate.llmAttempts.complete(String(attempt.id), {
     usage: {
       inputTokens: 10,
       outputTokens: 5,
@@ -295,8 +265,7 @@ Deno.test("admin aggregate endpoints read llm_attempt usage", async () => {
       outputCostUsd: 0.02,
       totalCostUsd: 0.03,
     },
-    finishedAt: new Date().toISOString(),
-  }, { threadId, namespace });
+  });
 
   const copilotz = { ops: db.ops, config: { agents: [] } } as any;
 

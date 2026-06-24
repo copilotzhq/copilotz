@@ -3,8 +3,8 @@ import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 import {
   type AdminUsageTotals,
   buildAdminUsageSourceCte,
-  buildAttemptUsageSumSelects,
   buildUsageCoalesceSelects,
+  buildUsageSumSelects,
   pushAdminUsageSourceScope,
   sumUsageTotalsFromPoints,
   toIso,
@@ -171,7 +171,7 @@ export default async function (
            DATE_TRUNC('${interval}', u."created_at") AS "bucket",
            COALESCE(${participantKeyExpr}, 'unknown') AS "groupKey",
            COUNT(*)::int AS "totalCalls",
-           ${buildAttemptUsageSumSelects(`u."data"`)}
+           ${buildUsageSumSelects(`u."data"`)}
          FROM "admin_usage_source" u
          WHERE ${whereClause}
          GROUP BY 1, 2
@@ -272,7 +272,7 @@ export default async function (
          ${groupExpr} AS "groupKey",
          ${labelExpr} AS "groupLabel",
          COUNT(*)::int AS "totalCalls",
-         ${buildAttemptUsageSumSelects(`u."data"`)}
+         ${buildUsageSumSelects(`u."data"`)}
        FROM "admin_usage_source" u
        ${participantJoins}
        ${threadJoin}

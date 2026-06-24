@@ -13,6 +13,11 @@ import type {
 } from "@/database/operations/index.ts";
 import type { CostBreakdown, TokenUsage } from "@/runtime/llm/types.ts";
 import type {
+  UsageCost,
+  UsageEvent,
+  UsageOptions,
+} from "@/runtime/usage/types.ts";
+import type {
   CollectionsManager,
   CopilotzDb,
   Document,
@@ -633,10 +638,44 @@ export function createRagDataServices(
   };
 }
 
-export function createLlmUsageService(
-  deps: { collections?: CollectionAccessor; ops: CopilotzDb["ops"] },
+/**
+ * Maps the legacy LLM {@link CostBreakdown} into the normalized {@link UsageCost}
+ * so the LLM path and generic kinds share one cost shape.
+ */
+function costBreakdownToUsageCost(
+  cost?: CostBreakdown | null,
+): UsageCost | null {
+  if (!cost) return null;
+  const breakdown: Record<string, number> = {};
+  for (
+    const key of [
+      "inputCostUsd",
+      "outputCostUsd",
+      "reasoningCostUsd",
+      "cacheReadInputCostUsd",
+      "cacheCreationInputCostUsd",
+    ] as const
+  ) {
+    const value = (cost as unknown as Record<string, unknown>)[key];
+    if (typeof value === "number") breakdown[key] = value;
+  }
+  return {
+    currency: cost.currency ?? "USD",
+    total: cost.totalCostUsd ?? 0,
+    source: cost.source ?? "openrouter",
+    pricingModelId: cost.pricingModelId,
+    breakdown: Object.keys(breakdown).length ? breakdown : undefined,
+  };
+}
+
+export function createUsageService(
+  deps: {
+    collections?: CollectionAccessor;
+    ops: CopilotzDb["ops"];
+    usageOptions?: UsageOptions;
+  },
 ) {
-  const { ops } = deps;
+  const { ops, usageOptions } = deps;
   const runSenderExternalId = (
     sender?: Record<string, unknown> | null,
   ): string | null => {
@@ -699,6 +738,24 @@ export function createLlmUsageService(
     }
   };
 
+  const tokenMetrics = (usage: TokenUsage): Record<string, number> => {
+    const metrics: Record<string, number> = {};
+    for (
+      const key of [
+        "inputTokens",
+        "outputTokens",
+        "reasoningTokens",
+        "cacheReadInputTokens",
+        "cacheCreationInputTokens",
+        "totalTokens",
+      ] as const
+    ) {
+      const value = usage[key];
+      if (typeof value === "number") metrics[key] = value;
+    }
+    return metrics;
+  };
+
   const buildUsageData = (
     input: {
       threadId: string;
@@ -710,8 +767,18 @@ export function createLlmUsageService(
       usage: TokenUsage;
       cost?: CostBreakdown | null;
       metricsFinalizedAt?: string | null;
+      dedupeKey?: string | null;
+      occurredAt?: string | null;
     },
   ) => ({
+    // Unified ledger classification (LLM kind).
+    kind: "llm",
+    resource: input.model ?? input.provider ?? "unknown",
+    operation: "chat",
+    initiatedById: runSenderExternalId(input.runSender) ?? null,
+    metrics: tokenMetrics(input.usage),
+    dedupeKey: input.dedupeKey ?? null,
+    occurredAt: input.occurredAt ?? new Date().toISOString(),
     threadId: input.threadId,
     eventId: input.eventId,
     agentId: input.agentId,
@@ -740,6 +807,100 @@ export function createLlmUsageService(
     metricsFinalizedAt: input.metricsFinalizedAt ?? null,
   });
 
+  const usageCostToBreakdown = (
+    cost: UsageCost | null,
+  ): CostBreakdown | null =>
+    cost
+      ? ({
+        source: (cost.source as CostBreakdown["source"]) ?? "openrouter",
+        currency: (cost.currency as CostBreakdown["currency"]) ?? "USD",
+        pricingModelId: cost.pricingModelId ?? "",
+        ...(cost.breakdown ?? {}),
+        totalCostUsd: cost.total,
+      } as CostBreakdown)
+      : null;
+
+  /**
+   * Applies the configured cost resolver and record hook. Returns null when the
+   * record is vetoed by `onRecord`. With no hooks configured this is a no-op
+   * that preserves the supplied cost exactly.
+   */
+  const applyHooks = async (
+    event: UsageEvent,
+    source: unknown,
+  ): Promise<{ cost: UsageCost | null; metrics: Record<string, number> } | null> => {
+    if (!usageOptions?.resolveCost && !usageOptions?.onRecord) {
+      return { cost: event.cost ?? null, metrics: event.metrics };
+    }
+    let cost = event.cost ?? null;
+    if (usageOptions.resolveCost) {
+      cost = (await usageOptions.resolveCost(event, {
+        source,
+        defaultResolve: () => Promise.resolve(event.cost ?? null),
+      })) ?? null;
+    }
+    let record = { ...event, cost };
+    if (usageOptions.onRecord) {
+      const out = await usageOptions.onRecord(record);
+      if (!out) return null;
+      record = { ...out, cost: out.cost ?? null };
+    }
+    return { cost: record.cost ?? null, metrics: record.metrics ?? event.metrics };
+  };
+
+  const resolveNamespace = async (threadId: string): Promise<string> => {
+    const thread = await ops.getThreadById(threadId);
+    const namespace = typeof thread?.namespace === "string" &&
+        thread.namespace.length > 0
+      ? thread.namespace
+      : undefined;
+    if (!namespace) {
+      throw new Error(
+        `Cannot create usage record for thread ${threadId}: tenant namespace is required`,
+      );
+    }
+    return namespace;
+  };
+
+  /**
+   * Persists a usage node through the durable domain-mutation path so a
+   * `usage.created` outbox event is committed atomically (status `completed`,
+   * so it never enters the worker queue). Returns the node id.
+   */
+  const persistUsageNode = async (args: {
+    namespace: string;
+    threadId: string;
+    name: string;
+    data: Record<string, unknown>;
+    agentId: string | null;
+    runSender?: Record<string, unknown> | null;
+  }): Promise<string> => {
+    const created = await ops.mutate.graph.createNode(
+      {
+        namespace: args.namespace,
+        type: "usage",
+        name: args.name,
+        data: args.data,
+        sourceType: "thread",
+        sourceId: args.threadId,
+      },
+      { threadId: args.threadId, namespace: args.namespace },
+    );
+    const nodeId = created.id as string;
+    await ops.unsafeGraph.createEdge({
+      sourceNodeId: args.threadId,
+      targetNodeId: nodeId,
+      type: GRAPH_EDGE.HAS_LLM_USAGE,
+    }).catch(() => undefined);
+    await createUsageParticipantEdges({
+      namespace: args.namespace,
+      usageNodeId: nodeId,
+      agentId: args.agentId,
+      runSender: args.runSender ?? null,
+    });
+    return nodeId;
+  };
+
   return {
     async createUsageRecord(input: {
       threadId: string;
@@ -750,40 +911,105 @@ export function createLlmUsageService(
       model: string | null;
       usage: TokenUsage;
       cost?: CostBreakdown | null;
+      dedupeKey?: string | null;
     }): Promise<string | null> {
-      const thread = await ops.getThreadById(input.threadId);
-      const namespace = typeof thread?.namespace === "string" &&
-          thread.namespace.length > 0
-        ? thread.namespace
-        : undefined;
-      if (!namespace) {
-        throw new Error(
-          `Cannot create llm_usage for thread ${input.threadId}: tenant namespace is required`,
-        );
-      }
+      const namespace = await resolveNamespace(input.threadId);
 
-      const node = await ops.unsafeGraph.createNode({
+      const event: UsageEvent = {
+        kind: "llm",
+        resource: input.model ?? input.provider ?? "unknown",
+        provider: input.provider,
+        operation: "chat",
+        status: input.usage.status,
+        statusReason: input.usage.statusReason ?? null,
+        threadId: input.threadId,
+        eventId: input.eventId,
+        agentId: input.agentId,
+        runSender: input.runSender ?? null,
+        metrics: tokenMetrics(input.usage),
+        cost: costBreakdownToUsageCost(input.cost),
+        dedupeKey: input.dedupeKey ?? null,
+        raw: input.usage.rawUsage ?? null,
+      };
+      const hooked = await applyHooks(event, input.usage);
+      if (!hooked) return null;
+
+      const effectiveCost = (usageOptions?.resolveCost || usageOptions?.onRecord)
+        ? usageCostToBreakdown(hooked.cost)
+        : input.cost ?? null;
+
+      const data = buildUsageData({ ...input, cost: effectiveCost });
+      data.metrics = hooked.metrics;
+
+      return await persistUsageNode({
         namespace,
-        type: "llm_usage",
+        threadId: input.threadId,
         name: `${input.usage.status}:${input.provider ?? "unknown"}:${
           input.model ?? "unknown"
         }`,
-        data: buildUsageData(input),
-        sourceType: "thread",
-        sourceId: input.threadId,
-      });
-      await ops.unsafeGraph.createEdge({
-        sourceNodeId: input.threadId,
-        targetNodeId: node.id as string,
-        type: GRAPH_EDGE.HAS_LLM_USAGE,
-      });
-      await createUsageParticipantEdges({
-        namespace,
-        usageNodeId: node.id as string,
+        data,
         agentId: input.agentId,
         runSender: input.runSender ?? null,
       });
-      return node.id as string;
+    },
+
+    /**
+     * Records a metered usage event for any resource family (tools, assets,
+     * RAG, ...). Resolves cost via the configured hook, persists a `usage`
+     * ledger node with the outbox durability semantics, and returns the id.
+     */
+    async recordUsage(event: UsageEvent): Promise<string | null> {
+      const namespace = await resolveNamespace(event.threadId);
+      const hooked = await applyHooks(event, event.raw);
+      if (!hooked) return null;
+
+      const cost = hooked.cost;
+      const data: Record<string, unknown> = {
+        kind: event.kind,
+        resource: event.resource,
+        operation: event.operation ?? null,
+        provider: event.provider ?? null,
+        model: event.kind === "llm" ? event.resource : null,
+        status: event.status ?? null,
+        statusReason: event.statusReason ?? null,
+        threadId: event.threadId,
+        eventId: event.eventId ?? null,
+        messageId: event.messageId ?? null,
+        agentId: event.agentId ?? null,
+        initiatedById: event.initiatedById ??
+          runSenderExternalId(event.runSender) ?? null,
+        metrics: hooked.metrics,
+        // Flat token fields (present only for token-metered kinds).
+        inputTokens: hooked.metrics.inputTokens ?? null,
+        outputTokens: hooked.metrics.outputTokens ?? null,
+        reasoningTokens: hooked.metrics.reasoningTokens ?? null,
+        cacheReadInputTokens: hooked.metrics.cacheReadInputTokens ?? null,
+        cacheCreationInputTokens: hooked.metrics.cacheCreationInputTokens ?? null,
+        totalTokens: hooked.metrics.totalTokens ?? null,
+        // Flat cost fields.
+        inputCostUsd: cost?.breakdown?.inputCostUsd ?? null,
+        outputCostUsd: cost?.breakdown?.outputCostUsd ?? null,
+        reasoningCostUsd: cost?.breakdown?.reasoningCostUsd ?? null,
+        cacheReadInputCostUsd: cost?.breakdown?.cacheReadInputCostUsd ?? null,
+        cacheCreationInputCostUsd: cost?.breakdown?.cacheCreationInputCostUsd ??
+          null,
+        totalCostUsd: cost?.total ?? null,
+        pricingModelId: cost?.pricingModelId ?? null,
+        pricingSource: cost?.source ?? null,
+        pricingCurrency: cost?.currency ?? null,
+        dedupeKey: event.dedupeKey ?? null,
+        occurredAt: event.occurredAt ?? new Date().toISOString(),
+        metricsFinalizedAt: null,
+      };
+
+      return await persistUsageNode({
+        namespace,
+        threadId: event.threadId,
+        name: `${event.kind}:${event.resource}`,
+        data,
+        agentId: event.agentId ?? null,
+        runSender: event.runSender ?? null,
+      });
     },
     async updateUsageRecordMetrics(input: {
       usageNodeId: string;
@@ -805,6 +1031,7 @@ export function createLlmUsageService(
           threadId: input.threadId,
           eventId: input.eventId,
           agentId: input.agentId,
+          runSender: input.runSender ?? null,
           provider: input.provider,
           model: input.model,
           usage: input.usage,
@@ -815,3 +1042,9 @@ export function createLlmUsageService(
     },
   };
 }
+
+/**
+ * @deprecated Prefer {@link createUsageService}. Retained for backward
+ * compatibility; the LLM usage path is now part of the unified usage ledger.
+ */
+export const createLlmUsageService = createUsageService;

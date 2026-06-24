@@ -28,7 +28,14 @@ import {
   writeDatabaseDataDirSnapshot,
 } from "@/database/index.ts";
 import type { OminipgWithCrud } from "omnipg";
-import { type RunHandle, type RunOptions, runThread } from "@/runtime/index.ts";
+import {
+  recoverStuckThreads,
+  type RecoverStuckThreadsOptions,
+  type RecoverStuckThreadsResult,
+  type RunHandle,
+  type RunOptions,
+  runThread,
+} from "@/runtime/index.ts";
 import {
   createGoalHandle,
   type GoalHandle,
@@ -104,6 +111,8 @@ import type {
   Tool,
   ToolCallEventPayload,
 } from "@/types/index.ts";
+
+import type { UsageOptions } from "@/runtime/usage/types.ts";
 
 import defaultBanner from "@/runtime/banner.ts";
 import { startInteractiveCli } from "@/runtime/cli.ts";
@@ -402,8 +411,21 @@ export {
 } from "@/runtime/storage/assets.ts";
 
 /** Event emitted from the streaming event queue. */
-export type { StreamEvent } from "@/runtime/index.ts";
+export type {
+  RecoverStuckThreadsOptions,
+  RecoverStuckThreadsResult,
+  StreamEvent,
+} from "@/runtime/index.ts";
 export type { LLMConfig, LLMRuntimeConfig } from "@/runtime/llm/index.ts";
+export type {
+  UsageCost,
+  UsageEvent,
+  UsageKind,
+  UsageOnRecord,
+  UsageOptions,
+  UsageRecord,
+  UsageResolveCost,
+} from "@/runtime/usage/types.ts";
 
 import type { AssetConfig, AssetStore } from "@/runtime/storage/assets.ts";
 import {
@@ -695,6 +717,13 @@ export interface CopilotzConfig {
   };
   /** Optional hook for rewriting generated message history before the LLM call. */
   historyTransform?: HistoryTransform;
+  /**
+   * Optional usage/cost tracking options. Provide a `resolveCost` callback to
+   * price tool/asset/RAG usage (or override the built-in OpenRouter LLM
+   * pricing), and/or an `onRecord` hook to veto/transform ledger rows. Set
+   * `enabled: false` to disable usage persistence entirely.
+   */
+  usage?: UsageOptions;
   /** Optional database configuration. Defaults to in-memory PGlite. */
   dbConfig?: DatabaseConfig;
   /** Optional pre-existing database instance to reuse. */
@@ -740,6 +769,19 @@ export interface CopilotzConfig {
    * Default: 300000 (5 minutes).
    */
   staleProcessingThresholdMs?: number;
+  /**
+   * Background self-healing for threads with expired worker leases, pending
+   * events, or stale processing events. Disabled by default.
+   */
+  recovery?: {
+    enabled?: boolean;
+    /** How often to scan for recoverable threads. Default: 30000. */
+    intervalMs?: number;
+    /** Maximum threads to wake per scan. Default: 25. */
+    limit?: number;
+    /** Minimum event priority to recover. Default: -Infinity. */
+    minPriority?: number;
+  };
   /** Whether to enable streaming mode for real-time token output. */
   stream?: boolean;
   /**
@@ -1001,6 +1043,10 @@ export interface Copilotz {
    * generates follow-up sender messages through `sender.usingAgent`.
    */
   goal(options: GoalOptions): Promise<GoalHandle>;
+  /** Manually wake all currently recoverable threads for this instance. */
+  recover(
+    options?: RecoverStuckThreadsOptions,
+  ): Promise<RecoverStuckThreadsResult>;
   /**
    * Starts an interactive CLI session.
    * @param initialMessage - Optional initial message or configuration
@@ -1808,6 +1854,7 @@ export async function createCopilotz(
       memory: baseConfig.memory,
       skills: baseConfig.skills,
       historyTransform: baseConfig.historyTransform,
+      usage: baseConfig.usage,
       dbConfig: baseConfig.dbConfig,
       dbInstance: baseDb,
       threadMetadata: baseConfig.threadMetadata,
@@ -1885,6 +1932,94 @@ export async function createCopilotz(
     return await runThread(baseDb, ctx, normalizedMessage, options);
   };
 
+  const buildRecoveryContext = async (
+    options: RecoverStuckThreadsOptions = {},
+  ): Promise<ChatContext> => {
+    const resolvedNamespace = options.namespace ?? config.namespace;
+    const resolvedCollections = collectionsManager
+      ? resolvedNamespace
+        ? collectionsManager.withNamespace(resolvedNamespace)
+        : collectionsManager
+      : undefined;
+    const assetStoreForRecovery = getAssetStoreForNamespace(resolvedNamespace);
+    const agentsFileInstructions = await loadAgentsFileInstructions(
+      config.agentsFile,
+    );
+    const toolExecutionTimeoutMs = ("toolExecutionTimeoutMs" in config)
+      ? config.toolExecutionTimeoutMs
+      : 300_000;
+    const toolExecutionTimeoutsMs =
+      ("toolExecutionTimeoutsMs" in config && config.toolExecutionTimeoutsMs)
+        ? config.toolExecutionTimeoutsMs
+        : undefined;
+
+    return {
+      agents: baseConfig.agents,
+      tools: baseConfig.tools,
+      apis: baseConfig.apis,
+      mcpServers: baseConfig.mcpServers,
+      memory: baseConfig.memory,
+      skills: baseConfig.skills,
+      historyTransform: baseConfig.historyTransform,
+      usage: baseConfig.usage,
+      dbConfig: baseConfig.dbConfig,
+      dbInstance: baseDb,
+      threadMetadata: baseConfig.threadMetadata,
+      queueTTL: baseConfig.queueTTL,
+      stream: false,
+      minPriority: options.minPriority ?? -Infinity,
+      processors: baseConfig.processorsByType,
+      assetStore: assetStoreForRecovery,
+      assetConfig: normalizedAssetConfig,
+      resolveAsset: async (ref: string) => {
+        const id = resolveAssetIdForStore(ref, assetStoreForRecovery);
+        return await assetStoreForRecovery.get(id);
+      },
+      ragConfig: config.rag
+        ? {
+          enabled: config.rag.enabled ?? true,
+          embedding: config.rag.embedding,
+          chunking: config.rag.chunking,
+          retrieval: config.rag.retrieval,
+          llmConfig: config.rag.llmConfig,
+        }
+        : undefined,
+      embeddingConfig: config.rag?.embedding,
+      llmProviders: llmProviderRegistry,
+      embeddingProviders: embeddingProviderRegistry,
+      storageBackends: availableStorageBackends,
+      security: baseConfig.security,
+      namespace: resolvedNamespace,
+      collections: resolvedCollections,
+      agentsFileInstructions,
+      toolExecutionTimeoutMs,
+      toolExecutionTimeoutsMs,
+      toolResultHistoryMaxChars: config.toolResultHistoryMaxChars ?? 10_000,
+      reasoningHistory: config.reasoningHistory ?? {
+        include: "self",
+        maxChars: 2000,
+      },
+      multiAgent: config.multiAgent
+        ? {
+          enabled: config.multiAgent.enabled ?? true,
+          maxAgentTurns: config.multiAgent.maxAgentTurns ?? 5,
+          maxTurnsFallbackAgent: config.multiAgent.maxTurnsFallbackAgent,
+          includeTargetContext: config.multiAgent.includeTargetContext ?? true,
+        }
+        : undefined,
+    };
+  };
+
+  const recover = async (
+    options: RecoverStuckThreadsOptions = {},
+  ): Promise<RecoverStuckThreadsResult> => {
+    const context = await buildRecoveryContext(options);
+    return await recoverStuckThreads(baseDb, context, {
+      ...options,
+      namespace: options.namespace ?? context.namespace,
+    });
+  };
+
   let snapshotInProgress = false;
   const writeManagedSnapshot = async () => {
     const restore = config.dbConfig?.restore;
@@ -1912,6 +2047,26 @@ export async function createCopilotz(
       }, snapshotIntervalMs)
       : undefined;
 
+  const recoveryConfig = config.recovery;
+  let recoveryInProgress = false;
+  const recoveryIntervalMs = recoveryConfig?.enabled === true
+    ? Math.max(1_000, Math.floor(recoveryConfig.intervalMs ?? 30_000))
+    : undefined;
+  const recoveryIntervalId = recoveryIntervalMs
+    ? setInterval(() => {
+      if (recoveryInProgress) return;
+      recoveryInProgress = true;
+      void recover({
+        limit: recoveryConfig?.limit,
+        minPriority: recoveryConfig?.minPriority,
+      }).catch((error) => {
+        console.warn("[copilotz] background recovery failed", error);
+      }).finally(() => {
+        recoveryInProgress = false;
+      });
+    }, recoveryIntervalMs)
+    : undefined;
+
   let shuttingDown = false;
   const copilotz = {
     config: Object.freeze({ ...baseConfig }),
@@ -1926,6 +2081,7 @@ export async function createCopilotz(
         agents: baseConfig.agents,
         input,
       }),
+    recover,
     start: (
       initialMessage?:
         | (MessagePayload & {
@@ -1962,6 +2118,9 @@ export async function createCopilotz(
       shuttingDown = true;
       if (snapshotIntervalId) {
         clearInterval(snapshotIntervalId);
+      }
+      if (recoveryIntervalId) {
+        clearInterval(recoveryIntervalId);
       }
       if (managedDb) {
         if (fromCache) {

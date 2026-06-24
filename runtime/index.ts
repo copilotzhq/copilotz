@@ -139,6 +139,56 @@ export type RunOptions = {
   tools?: Tool[];
 };
 
+export type RecoverStuckThreadsOptions = {
+  namespace?: string;
+  limit?: number;
+  minPriority?: number;
+};
+
+export type RecoverStuckThreadsResult = {
+  checked: number;
+  started: number;
+  threadIds: string[];
+};
+
+export async function recoverStuckThreads(
+  db: CopilotzDb,
+  baseContext: ChatContext,
+  options: RecoverStuckThreadsOptions = {},
+): Promise<RecoverStuckThreadsResult> {
+  const minPriority = options.minPriority ?? -Infinity;
+  const threadIds = await db.ops.findRecoverableThreadIds({
+    namespace: options.namespace ?? baseContext.namespace,
+    limit: options.limit,
+    minPriority,
+  });
+  const context: ChatContext = {
+    ...baseContext,
+    stream: false,
+    minPriority,
+  };
+  const emitToStream = () => {};
+
+  let started = 0;
+  await Promise.all(threadIds.map(async (threadId) => {
+    try {
+      await startThreadEventWorker(db, threadId, context, emitToStream);
+      started += 1;
+    } catch (error) {
+      console.warn("[recovery] Failed to recover stuck thread:", {
+        threadId,
+        error,
+      });
+    }
+  }));
+
+  return {
+    checked: threadIds.length,
+    started,
+    threadIds,
+  };
+}
+
 /**
  * Event emitted from the streaming event queue.
  * Can be a typed Event or a custom event with string type and payload.

@@ -484,10 +484,12 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     }
 
     let usageNodeId: string | null = null;
-    const llmUsageService = deps.db?.ops
+    const usageEnabled = deps.context.usage?.enabled !== false;
+    const llmUsageService = deps.db?.ops && usageEnabled
       ? createLlmUsageService({
         collections: deps.context.collections,
         ops: deps.db.ops,
+        usageOptions: deps.context.usage,
       })
       : null;
     const persistUsageRecords = async (

@@ -4,8 +4,8 @@ import {
   type AdminAgentSummary,
   type AdminUsageBreakdown,
   buildAdminUsageSourceCte,
-  buildAttemptUsageSumSelects,
   buildUsageCoalesceSelects,
+  buildUsageSumSelects,
   emptyUsageBreakdown,
   normalizeLimit,
   normalizeOffset,
@@ -104,7 +104,7 @@ export default async function (
      "usage_stats" AS (
        SELECT COALESCE(u."agentId", '') AS "agentId",
          COUNT(*)::int AS "llmCallCount",
-         ${buildAttemptUsageSumSelects(`u."data"`)},
+         ${buildUsageSumSelects(`u."data"`)},
          MAX(u."created_at") AS "lastActivityAt"
        FROM "admin_usage_source" AS u WHERE ${usageWhere} GROUP BY 1
      )

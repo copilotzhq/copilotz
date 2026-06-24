@@ -139,6 +139,7 @@ export async function startThreadEventWorker(
     processors: context.processors ?? {},
     emitToStream,
     stream: context.stream ?? true,
+    minPriority: context.minPriority,
     namespace: context.namespace,
   };
 

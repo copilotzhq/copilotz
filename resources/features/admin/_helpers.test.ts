@@ -53,14 +53,15 @@ Deno.test("admin attempt usage sums read nested canonical fields", () => {
   assert(!sql.includes(`legacy_usage`));
 });
 
-Deno.test("admin usage source reads only canonical llm_attempt rows", () => {
+Deno.test("admin usage source reads canonical usage ledger rows", () => {
   const sql = buildAdminUsageSourceCte();
 
-  assertStringIncludes(sql, `a."type" = 'llm_attempt'`);
-  assertStringIncludes(sql, `jsonb_build_object(`);
-  assertStringIncludes(sql, `'usage', COALESCE(a."data"->'usage'`);
-  assertStringIncludes(sql, `'cost', COALESCE(a."data"->'cost'`);
-  assert(!sql.includes(`llm_usage`));
+  assertStringIncludes(sql, `a."type" = 'usage'`);
+  assertStringIncludes(sql, `a."data"->>'kind' = 'llm'`);
+  // Flat passthrough — no per-row jsonb rebuild of nested usage/cost.
+  assert(!sql.includes(`jsonb_build_object(`));
+  assertStringIncludes(sql, `a."data" AS "data"`);
+  assertStringIncludes(sql, `a."data"->>'initiatedById'`);
   assert(!sql.includes(`legacy_usage`));
   assertStringIncludes(sql, `a."data"->>'eventId'`);
 });

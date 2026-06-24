@@ -521,6 +521,12 @@ export interface OutboxOperations {
   append: (event: OutboxEventInput) => Promise<Queue>;
 }
 
+export interface RecoverableThreadQueryOptions {
+  namespace?: string;
+  limit?: number;
+  minPriority?: number;
+}
+
 export interface DatabaseOperations {
   crud: DbInstance["crud"];
   query: <T extends Record<string, unknown>>(
@@ -604,6 +610,10 @@ export interface DatabaseOperations {
   ) => Promise<boolean>;
   /** Get effective thread worker lease configuration. */
   getThreadWorkerLeaseConfig: () => { leaseMs: number; heartbeatMs: number };
+  /** Find threads whose pending or stale processing work can be resumed. */
+  findRecoverableThreadIds: (
+    options?: RecoverableThreadQueryOptions,
+  ) => Promise<string[]>;
   /** Crash recovery: reset stale "processing" queue items for a thread back to "pending". */
   recoverThreadProcessingQueueItems: (threadId: string) => Promise<number>;
   getMessageHistory: (
@@ -1333,6 +1343,59 @@ export function createOperations(
     leaseMs: THREAD_WORKER_LEASE_MS,
     heartbeatMs: THREAD_WORKER_HEARTBEAT_MS,
   });
+
+  const findRecoverableThreadIds = async (
+    options: RecoverableThreadQueryOptions = {},
+  ): Promise<string[]> => {
+    const limit = Math.max(1, Math.floor(options.limit ?? 25));
+    const minPriority = typeof options.minPriority === "number" &&
+        Number.isFinite(options.minPriority)
+      ? options.minPriority
+      : -Infinity;
+    const staleThreshold = new Date(Date.now() - STALE_PROCESSING_THRESHOLD_MS);
+    const params: unknown[] = [staleThreshold, limit];
+    const whereParts = [
+      `t."status" = 'active'`,
+      `(
+        t."workerLeaseExpiresAt" IS NULL
+        OR t."workerLeaseExpiresAt" < NOW()
+      )`,
+      `(
+        e."status" = 'pending'
+        OR (
+          e."status" = 'processing'
+          AND e."updatedAt" < $1
+        )
+      )`,
+    ];
+
+    if (Number.isFinite(minPriority)) {
+      params.push(minPriority);
+      whereParts.push(`COALESCE(e."priority", 0) >= $${params.length}`);
+    }
+
+    if (options.namespace !== undefined) {
+      params.push(options.namespace);
+      whereParts.push(
+        `(e."namespace" = $${params.length} OR t."namespace" = $${params.length})`,
+      );
+    }
+
+    const result = await db.query<{ threadId: string }>(
+      `SELECT e."threadId" AS "threadId"
+       FROM "events" e
+       INNER JOIN "threads" t ON t."id" = e."threadId"
+       WHERE ${whereParts.join("\n         AND ")}
+       GROUP BY e."threadId"
+       ORDER BY MIN(e."createdAt") ASC, e."threadId" ASC
+       LIMIT $2`,
+      params,
+    );
+
+    return result.rows
+      .map((row) => row.threadId)
+      .filter((threadId): threadId is string => typeof threadId === "string");
+  };
 
   const acquireThreadWorkerLease = async (
     threadId: string,
@@ -4077,6 +4140,7 @@ export function createOperations(
     releaseThreadWorkerLease,
     releaseThreadWorkerLeaseIfNoPendingWork,
     getThreadWorkerLeaseConfig,
+    findRecoverableThreadIds,
     recoverThreadProcessingQueueItems,
     getMessageHistory,
     getThreadsForParticipant,

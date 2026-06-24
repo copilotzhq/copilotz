@@ -37,6 +37,7 @@ import assetCollection from "@/resources/collections/asset.ts";
 import llmAttemptCollection from "@/resources/collections/llm_attempt.ts";
 import toolExecutionCollection from "@/resources/collections/tool_execution.ts";
 import llmUsageCollection from "@/resources/collections/llm_usage.ts";
+import usageCollection from "@/resources/collections/usage.ts";
 import scheduledJobCollection from "@/resources/collections/scheduled_job.ts";
 
 // ---- Core: memory ----------------------------------------------------------
@@ -365,6 +366,7 @@ function buildCoreCollections(): CollectionDefinition[] {
     llmAttemptCollection as unknown as CollectionDefinition,
     toolExecutionCollection as unknown as CollectionDefinition,
     llmUsageCollection as unknown as CollectionDefinition,
+    usageCollection as unknown as CollectionDefinition,
     scheduledJobCollection as unknown as CollectionDefinition,
   ];
 }

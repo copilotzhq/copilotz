@@ -20,6 +20,12 @@ export type LlmUsageContractMigrationResult = {
   updatedUsageRows: number;
 };
 
+/** Result summary for the legacy `llm_usage` -> unified `usage` ledger migration. */
+export type UsageLedgerMigrationResult = {
+  namespace: string;
+  migratedRows: number;
+};
+
 /** Runs the tenant namespace graph migration through a Copilotz instance. */
 export async function migrateTenantNamespaceGraph(
   copilotz: Pick<Copilotz, "ops" | "config">,
@@ -42,6 +48,73 @@ export async function migrateLlmUsageContract(
     throw new Error("Tenant namespace is required for LLM usage migration");
   }
   return migrateLlmUsageContractWithQuery(copilotz.ops, namespace);
+}
+
+/**
+ * Converts legacy `llm_usage` nodes into the unified `usage` ledger in place.
+ *
+ * The node id is preserved, so `usageNodeId` references in message metadata and
+ * all attribution edges (`has_llm_usage`, `used_llm`, `initiated_llm_usage`)
+ * remain valid. Run {@link migrateLlmUsageContract} first so the flat
+ * token/cost fields are present before they are mirrored into `metrics`.
+ */
+export async function migrateLlmUsageToUsageLedger(
+  copilotz: Pick<Copilotz, "ops" | "config">,
+  options: { namespace?: string } = {},
+): Promise<UsageLedgerMigrationResult> {
+  const namespace = options.namespace ?? copilotz.config.namespace;
+  if (!namespace) {
+    throw new Error("Tenant namespace is required for usage ledger migration");
+  }
+  return migrateLlmUsageToUsageLedgerWithQuery(copilotz.ops, namespace);
+}
+
+export async function migrateLlmUsageToUsageLedgerWithQuery(
+  db: Queryable,
+  namespace: string,
+): Promise<UsageLedgerMigrationResult> {
+  const result = await db.query<{ migratedRows: number | string }>(
+    `WITH updated AS (
+       UPDATE "nodes"
+       SET "type" = 'usage',
+           "data" = jsonb_strip_nulls(
+             COALESCE("data", '{}'::jsonb)
+             || jsonb_build_object(
+               'kind', 'llm',
+               'resource', COALESCE("data"->>'model', "data"->>'provider', 'unknown'),
+               'operation', COALESCE("data"->>'operation', 'chat'),
+               'initiatedById', COALESCE(
+                 "data"->>'initiatedById',
+                 "data"->'runSender'->>'externalId',
+                 "data"->'runSender'->>'id',
+                 "data"->'runSender'->>'email',
+                 "data"->'runSender'->>'name'
+               ),
+               'metrics', COALESCE(
+                 "data"->'metrics',
+                 jsonb_strip_nulls(jsonb_build_object(
+                   'inputTokens', "data"->'inputTokens',
+                   'outputTokens', "data"->'outputTokens',
+                   'reasoningTokens', "data"->'reasoningTokens',
+                   'cacheReadInputTokens', "data"->'cacheReadInputTokens',
+                   'cacheCreationInputTokens', "data"->'cacheCreationInputTokens',
+                   'totalTokens', "data"->'totalTokens'
+                 ))
+               )
+             )
+           )
+       WHERE "type" = 'llm_usage'
+         AND "namespace" = $1
+       RETURNING 1
+     )
+     SELECT COUNT(*)::int AS "migratedRows" FROM updated`,
+    [namespace],
+  );
+
+  return {
+    namespace,
+    migratedRows: Number(result.rows[0]?.migratedRows ?? 0),
+  };
 }
 
 export async function migrateLlmUsageContractWithQuery(

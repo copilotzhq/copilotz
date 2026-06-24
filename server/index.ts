@@ -53,11 +53,13 @@ export type { ChannelHandlers } from "./channels.ts";
 
 export {
   migrateLlmUsageContract,
+  migrateLlmUsageToUsageLedger,
   migrateTenantNamespaceGraph,
 } from "./migrations.ts";
 export type {
   LlmUsageContractMigrationResult,
   TenantNamespaceGraphMigrationResult,
+  UsageLedgerMigrationResult,
 } from "./migrations.ts";
 
 export { tickScheduledJobs } from "@/runtime/scheduler/index.ts";

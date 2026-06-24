@@ -479,7 +479,7 @@ export function createMessageService(
       }, 0) + 1;
       const editedAt = new Date().toISOString();
       const previousMetadata = isRecord(target.metadata) ? target.metadata : {};
-      const revision = await ops.createMessage({
+      const revision = await ops.mutate.messages.create({
         threadId,
         senderId: target.senderId,
         senderType: target.senderType,
@@ -498,13 +498,13 @@ export function createMessageService(
         },
       }, typeof thread.namespace === "string" ? thread.namespace : undefined);
 
-      const targetNode = await ops.getNodeById(target.id);
+      const targetNode = await ops.unsafeGraph.getNodeById(target.id);
       if (targetNode) {
         const targetData = isRecord(targetNode.data) ? targetNode.data : {};
         const targetMetadata = isRecord(targetData.metadata)
           ? targetData.metadata
           : {};
-        await ops.updateNode(target.id, {
+        await ops.mutate.graph.updateNode(target.id, {
           data: {
             ...targetData,
             metadata: {
@@ -518,6 +518,11 @@ export function createMessageService(
               },
             },
           },
+        }, {
+          threadId,
+          namespace: typeof thread.namespace === "string"
+            ? thread.namespace
+            : null,
         });
       }
 
@@ -690,7 +695,7 @@ export function createLlmUsageService(
     }
 
     for (const edge of edgeInputs) {
-      await ops.createEdge(edge).catch(() => undefined);
+      await ops.unsafeGraph.createEdge(edge).catch(() => undefined);
     }
   };
 
@@ -757,7 +762,7 @@ export function createLlmUsageService(
         );
       }
 
-      const node = await ops.createNode({
+      const node = await ops.unsafeGraph.createNode({
         namespace,
         type: "llm_usage",
         name: `${input.usage.status}:${input.provider ?? "unknown"}:${
@@ -767,7 +772,7 @@ export function createLlmUsageService(
         sourceType: "thread",
         sourceId: input.threadId,
       });
-      await ops.createEdge({
+      await ops.unsafeGraph.createEdge({
         sourceNodeId: input.threadId,
         targetNodeId: node.id as string,
         type: GRAPH_EDGE.HAS_LLM_USAGE,
@@ -792,7 +797,7 @@ export function createLlmUsageService(
       cost?: CostBreakdown | null;
       finalizedAt: string;
     }): Promise<void> {
-      await ops.updateNode(input.usageNodeId, {
+      await ops.unsafeGraph.updateNode(input.usageNodeId, {
         name: `${input.usage.status}:${input.provider ?? "unknown"}:${
           input.model ?? "unknown"
         }`,

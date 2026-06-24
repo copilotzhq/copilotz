@@ -12,24 +12,37 @@ status: stable
 
 ## The pain
 
-Something is wrong. The agent called the wrong tool. It ignored a document it should have found. Costs spiked overnight. A user says it "forgot" something from earlier in the conversation.
+Something is wrong. The agent called the wrong tool. It ignored a document it
+should have found. Costs spiked overnight. A user says it "forgot" something
+from earlier in the conversation.
 
-You add a `console.log`. It tells you what the user sent. It doesn't tell you what the LLM actually received — the full system prompt, the tool list, the history — or what it decided to do and why. You're debugging a black box with no windows.
+You add a `console.log`. It tells you what the user sent. It doesn't tell you
+what the LLM actually received — the full system prompt, the tool list, the
+history — or what it decided to do and why. You're debugging a black box with no
+windows.
 
 ## The solution
 
-Every `copilotz.run()` emits a typed event stream that exposes every decision the agent makes. You can watch it in real time, store it, or forward it to any observability platform. Beyond the event stream, Copilotz automatically records token and cost data for every LLM call — queryable, per-tenant, indexed by thread and model.
+Every `copilotz.run()` emits a typed event stream that exposes every decision
+the agent makes. You can watch it in real time, store it, or forward it to any
+observability platform. Beyond the event stream, Copilotz automatically records
+token and cost data for every LLM call — queryable, per-tenant, indexed by
+thread and model.
 
 Four layers:
 
 1. **The event stream** — live, per-run observability
-2. **`llm_attempt` graph nodes** — canonical prompt, partial, usage, cost, and recovery tracking
-3. **Custom processors** — forward any event to Datadog, Langfuse, OpenTelemetry, or your own sink
-4. **The outbox `events` table** — durable mutation facts for post-mortem debugging
+2. **`llm_attempt` graph nodes** — canonical prompt, partial, usage, cost, and
+   recovery tracking
+3. **Custom processors** — forward any event to Datadog, Langfuse,
+   OpenTelemetry, or your own sink
+4. **The outbox `events` table** — durable mutation facts for post-mortem
+   debugging
 
 ## Layer 1: The event stream
 
-Every call to `copilotz.run()` returns a `RunHandle` with an `events` async iterable. Consume it to see exactly what happened:
+Every call to `copilotz.run()` returns a `RunHandle` with an `events` async
+iterable. Consume it to see exactly what happened:
 
 ```typescript
 const result = await copilotz.run({
@@ -43,7 +56,10 @@ for await (const event of result.events) {
       // The full prompt that was sent to the model
       console.log("[LLM_CALL] agent:", event.payload.agent.name);
       console.log("[LLM_CALL] messages:", event.payload.messages.length);
-      console.log("[LLM_CALL] tools available:", event.payload.tools.map(t => t.name));
+      console.log(
+        "[LLM_CALL] tools available:",
+        event.payload.tools.map((t) => t.name),
+      );
       break;
 
     case "LLM_RESULT":
@@ -54,11 +70,18 @@ for await (const event of result.events) {
       break;
 
     case "TOOL_CALL":
-      console.log("[TOOL_CALL]", event.payload.toolCall?.tool?.name, event.payload.toolCall?.args);
+      console.log(
+        "[TOOL_CALL]",
+        event.payload.toolCall?.tool?.name,
+        event.payload.toolCall?.args,
+      );
       break;
 
     case "TOOL_RESULT":
-      console.log("[TOOL_RESULT]", JSON.stringify(event.payload.result).slice(0, 200));
+      console.log(
+        "[TOOL_RESULT]",
+        JSON.stringify(event.payload.result).slice(0, 200),
+      );
       break;
 
     case "TOKEN":
@@ -72,33 +95,38 @@ await result.done;
 
 ### The full event reference
 
-| Event | When it fires | Key payload fields |
-|---|---|---|
-| `NEW_MESSAGE` | Message received, before any processing | `content`, `sender`, `threadId` |
-| `LLM_CALL` | Just before the LLM is called | `agent`, `messages` (full history), `tools` (full list), `config` |
-| `TOKEN` | Each streamed token | `token`, `isReasoning` |
-| `LLM_RESULT` | After the LLM responds | `answer`, `toolCalls`, `provider`, `model`, `finishReason`, `status` |
-| `TOOL_CALL` | Agent decided to call a tool | `toolCall.tool.name`, `toolCall.args` |
-| `TOOL_RESULT` | Tool finished executing | `result`, `toolCall` |
-| `RAG_INGEST` | Document ingestion queued | `source`, `title` |
-| `ENTITY_EXTRACT` | Entity extraction queued | `content`, `namespace` |
+| Event            | When it fires                           | Key payload fields                                                   |
+| ---------------- | --------------------------------------- | -------------------------------------------------------------------- |
+| `NEW_MESSAGE`    | Message received, before any processing | `content`, `sender`, `threadId`                                      |
+| `LLM_CALL`       | Just before the LLM is called           | `agent`, `messages` (full history), `tools` (full list), `config`    |
+| `TOKEN`          | Each streamed token                     | `token`, `isReasoning`                                               |
+| `LLM_RESULT`     | After the LLM responds                  | `answer`, `toolCalls`, `provider`, `model`, `finishReason`, `status` |
+| `TOOL_CALL`      | Agent decided to call a tool            | `toolCall.tool.name`, `toolCall.args`                                |
+| `TOOL_RESULT`    | Tool finished executing                 | `result`, `toolCall`                                                 |
+| `RAG_INGEST`     | Document ingestion queued               | `source`, `title`                                                    |
+| `ENTITY_EXTRACT` | Entity extraction queued                | `content`, `namespace`                                               |
 
-`LLM_CALL` is the most diagnostic. It shows the exact prompt construction — the system prompt, the conversation history, every tool description — which is what the model actually sees when it makes a decision.
+`LLM_CALL` is the most diagnostic. It shows the exact prompt construction — the
+system prompt, the conversation history, every tool description — which is what
+the model actually sees when it makes a decision.
 
 ## Trace IDs
 
-Every run is assigned a `traceId`. All events in that run share it. You can pass your own trace ID to correlate Copilotz runs with your application's distributed trace:
+Every run is assigned a `traceId`. All events in that run share it. You can pass
+your own trace ID to correlate Copilotz runs with your application's distributed
+trace:
 
 ```typescript
 const myTraceId = crypto.randomUUID(); // or pull from your tracing context
 
 const result = await copilotz.run(
   { content: "Hello", sender: { type: "user", name: "Alice" } },
-  { traceId: myTraceId }
+  { traceId: myTraceId },
 );
 ```
 
-The same `traceId` appears on `LLM_CALL` and `LLM_RESULT` events, so you can join Copilotz events with your own spans in any observability backend.
+The same `traceId` appears on `LLM_CALL` and `LLM_RESULT` events, so you can
+join Copilotz events with your own spans in any observability backend.
 
 ## Layer 2: `llm_attempt` — attempt, usage, and cost tracking
 
@@ -118,32 +146,38 @@ const usage = await db.llm_usage.find({ threadId: "thread-abc" });
 // Aggregate across all threads for a namespace
 const allUsage = await db.llm_usage.find({});
 const totalTokens = allUsage.reduce((sum, r) => sum + (r.totalTokens ?? 0), 0);
-const totalCostUsd = allUsage.reduce((sum, r) => sum + (r.totalCostUsd ?? 0), 0);
+const totalCostUsd = allUsage.reduce(
+  (sum, r) => sum + (r.totalCostUsd ?? 0),
+  0,
+);
 
 console.log(`Total: ${totalTokens} tokens, $${totalCostUsd.toFixed(4)}`);
 ```
 
 Each record contains:
 
-| Field | What it is |
-|---|---|
-| `threadId` | The conversation this call belongs to |
-| `agentId` | Which agent made the call |
-| `provider` / `model` | e.g. `"openai"` / `"gpt-4o"` |
-| `inputTokens` | Input tokens |
-| `outputTokens` | Output tokens |
-| `totalTokens` | Sum |
-| `inputCostUsd` | Cost of input tokens |
-| `outputCostUsd` | Cost of output tokens |
-| `totalCostUsd` | Total cost |
-| `reasoningTokens` | Reasoning tokens (o1/DeepSeek-R1) |
-| `cacheReadInputTokens` | Prompt cache hits |
+| Field                  | What it is                            |
+| ---------------------- | ------------------------------------- |
+| `threadId`             | The conversation this call belongs to |
+| `agentId`              | Which agent made the call             |
+| `provider` / `model`   | e.g. `"openai"` / `"gpt-4o"`          |
+| `inputTokens`          | Input tokens                          |
+| `outputTokens`         | Output tokens                         |
+| `totalTokens`          | Sum                                   |
+| `inputCostUsd`         | Cost of input tokens                  |
+| `outputCostUsd`        | Cost of output tokens                 |
+| `totalCostUsd`         | Total cost                            |
+| `reasoningTokens`      | Reasoning tokens (o1/DeepSeek-R1)     |
+| `cacheReadInputTokens` | Prompt cache hits                     |
 
-The collection is indexed by `threadId`, `provider`, and `model`, so filtering by any of these is fast.
+The collection is indexed by `threadId`, `provider`, and `model`, so filtering
+by any of these is fast.
 
 ### The admin feature gives you aggregates
 
-Once the `admin` preset is loaded, `features/admin/overview` and `features/admin/activity` expose pre-built aggregations without writing any query code:
+Once the `admin` preset is loaded, `features/admin/overview` and
+`features/admin/activity` expose pre-built aggregations without writing any
+query code:
 
 ```
 GET /api/features/admin/overview?namespace=acme
@@ -155,7 +189,9 @@ GET /api/features/admin/activity?namespace=acme&interval=day&from=2025-01-01
 
 ## Layer 3: Processor-based export
 
-For production observability — Langfuse, Datadog, OpenTelemetry, a custom data warehouse — write a processor that intercepts `LLM_RESULT` events and forwards what you need:
+For production observability — Langfuse, Datadog, OpenTelemetry, a custom data
+warehouse — write a processor that intercepts `LLM_RESULT` events and forwards
+what you need:
 
 ```typescript
 // resources/processors/observability/index.ts
@@ -202,7 +238,8 @@ export const observabilityProcessor: EventProcessor = {
 export default observabilityProcessor;
 ```
 
-The same pattern works for `LLM_CALL` (to log prompts), `TOOL_CALL`/`TOOL_RESULT` (to trace tool latency), or any other event type.
+The same pattern works for `LLM_CALL` (to log prompts),
+`TOOL_CALL`/`TOOL_RESULT` (to trace tool latency), or any other event type.
 
 ## Layer 4: The events table — post-mortem debugging
 
@@ -212,8 +249,10 @@ something went wrong an hour ago, the `events` table shows the mutation outbox
 facts that led to the current graph state.
 
 Modern rows include `type`, `subjectType`, `subjectId`, `operation`,
-`causationId`, `correlationId`, `input`, `before`, `after`, `patch`, `status`,
-`traceId`, `parentEventId`, `namespace`, and `createdAt`. Legacy uppercase queue
+`causationId`, `correlationId`, compact mutation `payload`, `metadata`,
+`status`, `traceId`, `parentEventId`, `namespace`, and `createdAt`. Snapshot
+columns such as `input`, `before`, `after`, and `patch` are retained for schema
+compatibility but are empty for new runtime mutations. Legacy uppercase queue
 events may also appear during the compatibility migration.
 
 Query it via `copilotz.ops.query()`:
@@ -251,7 +290,9 @@ const stuck = await copilotz.ops.query(
 
 ### Reading the event tree
 
-`parentEventId` captures the causal chain. An `LLM_RESULT` that triggers a tool call will be the parent of the resulting `TOOL_CALL` event. Reconstructing this gives you the full decision tree for any run:
+`parentEventId` captures the causal chain. An `LLM_RESULT` that triggers a tool
+call will be the parent of the resulting `TOOL_CALL` event. Reconstructing this
+gives you the full decision tree for any run:
 
 ```typescript
 // Reconstruct the causal tree for a trace
@@ -277,49 +318,66 @@ const tree = await copilotz.ops.query(
 
 ### What each status means
 
-| Status | Meaning |
-|---|---|
-| `pending` | Queued, not yet picked up |
-| `processing` | Currently executing |
-| `completed` | Finished successfully |
-| `failed` | Threw an error — check `payload` for the error details |
-| `expired` | Timed out before being processed |
-| `overwritten` | Superseded by a newer event before it ran |
+| Status        | Meaning                                                |
+| ------------- | ------------------------------------------------------ |
+| `pending`     | Queued, not yet picked up                              |
+| `processing`  | Currently executing                                    |
+| `completed`   | Finished successfully                                  |
+| `failed`      | Threw an error — check `payload` for the error details |
+| `expired`     | Timed out before being processed                       |
+| `overwritten` | Superseded by a newer event before it ran              |
 
-`failed` + inspecting `payload` is the fastest path to a root cause on any background event. `processing` with an old timestamp is a reliable signal for a hung or crashed worker.
+`failed` + inspecting `payload` is the fastest path to a root cause on any
+background event. `processing` with an old timestamp is a reliable signal for a
+hung or crashed worker.
 
 ### Background events
 
-The events table is the only place async background events appear after the response is returned. If a user's message triggered document ingestion and it failed silently, query for `type = 'RAG_INGEST'` and `status = 'failed'` in that namespace and time window — the `payload` will contain the error.
+The events table is the only place async background events appear after the
+response is returned. If a user's message triggered document ingestion and it
+failed silently, query for `type = 'RAG_INGEST'` and `status = 'failed'` in that
+namespace and time window — the `payload` will contain the error.
 
 ## Common debugging scenarios
 
-**"Why did the agent pick the wrong tool?"**
-Log the `LLM_CALL` event and inspect `event.payload.tools` — you'll see every tool description the model received. Too many tools? See Chapter 6 on skills. A confusing description? Update your tool's `description` field.
+**"Why did the agent pick the wrong tool?"** Log the `LLM_CALL` event and
+inspect `event.payload.tools` — you'll see every tool description the model
+received. Too many tools? See Chapter 6 on skills. A confusing description?
+Update your tool's `description` field.
 
-**"Why is the agent looping / not terminating?"**
-A processor that counts `LLM_CALL` events per thread and logs a warning after N calls will surface this immediately. The `max_iterations` config on the agent is the hard stop; use the processor to catch soft loops early.
+**"Why is the agent looping / not terminating?"** A processor that counts
+`LLM_CALL` events per thread and logs a warning after N calls will surface this
+immediately. The `max_iterations` config on the agent is the hard stop; use the
+processor to catch soft loops early.
 
-**"Why didn't RAG find the right document?"**
-Log `LLM_CALL` and look at the injected context in the system message — it shows what chunks were retrieved. Also check the similarity threshold in `rag.retrieval.similarityThreshold`; raising it filters out weak matches.
+**"Why didn't RAG find the right document?"** Log `LLM_CALL` and look at the
+injected context in the system message — it shows what chunks were retrieved.
+Also check the similarity threshold in `rag.retrieval.similarityThreshold`;
+raising it filters out weak matches.
 
-**"Costs spiked last night — what happened?"**
-Query `llm_attempt` nodes filtered by `createdAt` range. Compare usage across
-threads and inspect prompt snapshots; unusually high counts indicate either very
-long conversation history or runaway loops. `llm_usage` can still be queried as
-a compatibility projection where admin screens expect it.
+**"Costs spiked last night — what happened?"** Query `llm_attempt` nodes
+filtered by `createdAt` range. Compare usage across threads and inspect prompt
+snapshots; unusually high counts indicate either very long conversation history
+or runaway loops. `llm_usage` can still be queried as a compatibility projection
+where admin screens expect it.
 
 ## What this unlocks
 
 - See the exact prompt, tool list, and history sent to the model on every call
-- Trace IDs for correlating agent runs with your application's distributed traces
-- Automatic cost and token tracking per thread, agent, model, and provider — no setup required
+- Trace IDs for correlating agent runs with your application's distributed
+  traces
+- Automatic cost and token tracking per thread, agent, model, and provider — no
+  setup required
 - A processor hook to ship any event to any observability backend
 - Pre-built admin aggregations for live deployment monitoring
-- The `events` table as a permanent, queryable audit log — every LLM call, tool call, and background event, with causal links via `parentEventId`
+- The `events` table as a permanent, queryable audit log — every LLM call, tool
+  call, and background event, with causal links via `parentEventId`
 
 ## What's next
 
-Your agent is now inspectable, measurable, and debuggable. The next question is: what does it know? Out of the box, it only knows what its training data contains. To answer questions about your product, your policies, or your internal documentation, you need to bring that knowledge in at runtime.
+Your agent is now inspectable, measurable, and debuggable. The next question is:
+what does it know? Out of the box, it only knows what its training data
+contains. To answer questions about your product, your policies, or your
+internal documentation, you need to bring that knowledge in at runtime.
 
 → **[Chapter 12: RAG](../part-6-memory/12-rag.md)**

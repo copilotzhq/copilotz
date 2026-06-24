@@ -34,6 +34,9 @@ export const toolResultProcessor: EventProcessor<
 > = {
   shouldProcess: () => true,
   process: async (event: Event, deps: ProcessorDeps) => {
+    const eventType = (event as unknown as { type?: string }).type;
+    const isLifecycleToolResult = eventType === "tool_execution.completed" ||
+      eventType === "tool_execution.failed";
     const payload = event.payload as ToolResultEventPayload;
     const threadId = typeof event.threadId === "string"
       ? event.threadId
@@ -108,6 +111,33 @@ export const toolResultProcessor: EventProcessor<
         newMessagePayload.metadata,
         superseded,
       );
+    }
+
+    if (isLifecycleToolResult && deps.db?.ops?.mutate?.messages) {
+      await deps.db.ops.mutate.messages.create(
+        {
+          threadId,
+          senderId: payload.agent.id ?? payload.agent.name,
+          senderType: "tool",
+          content: typeof newMessagePayload.content === "string"
+            ? newMessagePayload.content
+            : "",
+          metadata: newMessagePayload.metadata ?? null,
+        },
+        deps.context.namespace,
+        {
+          traceId: typeof event.traceId === "string" ? event.traceId : null,
+          causationId: typeof event.id === "string" ? event.id : null,
+          priority: EVENT_PRIORITIES.SETTLEMENT,
+          status: "pending",
+          metadata: event.metadata && typeof event.metadata === "object" &&
+              !Array.isArray(event.metadata)
+            ? event.metadata as Record<string, unknown>
+            : null,
+          eventPayload: newMessagePayload as unknown as Record<string, unknown>,
+        },
+      );
+      return { producedEvents: [] };
     }
 
     const producedEvents: NewEvent[] = [{

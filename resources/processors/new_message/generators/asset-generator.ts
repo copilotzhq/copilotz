@@ -648,41 +648,57 @@ export async function processAssetsForNewMessage(args: {
           const assetInfo = typeof store.info === "function"
             ? await store.info(id).catch(() => undefined)
             : undefined;
-          const existing = await ops.getNodeById(id);
+          const createEdgeIfMissing = async (
+            sourceNodeId: string,
+            targetNodeId: string,
+            type: string,
+          ) => {
+            const existingEdges = await ops.unsafeGraph.getEdgesForNode(
+              sourceNodeId,
+              "out",
+              [type],
+            ).catch(() => []);
+            if (
+              existingEdges.some((edge) => edge.targetNodeId === targetNodeId)
+            ) return;
+            await ops.mutate.graph.createEdge({
+              sourceNodeId,
+              targetNodeId,
+              type,
+            }, {
+              threadId,
+              namespace: context.namespace ?? null,
+              traceId: typeof event.traceId === "string" ? event.traceId : null,
+              causationId: typeof event.id === "string" ? event.id : null,
+            });
+          };
+
+          const existing = await ops.unsafeGraph.getNodeById(id);
           if (!existing) {
-            await ops.createNode({
+            await ops.mutate.assets.create({
               id,
+              threadId,
+              ref,
+              mime: mimeForEvent,
+              by,
+              toolCallId: toolMeta?.id ?? null,
               namespace: context.namespace,
-              type: "asset",
-              name: id,
-              content: null,
-              data: {
-                assetId: id,
-                ref,
-                mime: mimeForEvent,
-                kind: kindFromMime(mimeForEvent),
+              metadata: {
                 size: assetInfo?.size ?? bytes.byteLength,
-                by,
+                kind: kindFromMime(mimeForEvent),
                 ...(toolMeta?.name ? { tool: toolMeta.name } : {}),
-                ...(toolMeta?.id ? { toolCallId: toolMeta.id } : {}),
               },
-              sourceType: "asset_store",
-              sourceId: id,
             });
           }
-          await ops.createEdge({
-            sourceNodeId: threadId,
-            targetNodeId: id,
-            type: GRAPH_EDGE.HAS_ASSET,
-          });
+          await createEdgeIfMissing(threadId, id, GRAPH_EDGE.HAS_ASSET);
           if (typeof toolMeta?.id === "string") {
-            const toolNode = await ops.getNodeById(toolMeta.id);
+            const toolNode = await ops.unsafeGraph.getNodeById(toolMeta.id);
             if (toolNode) {
-              await ops.createEdge({
-                sourceNodeId: toolMeta.id,
-                targetNodeId: id,
-                type: GRAPH_EDGE.CREATED_ASSET,
-              });
+              await createEdgeIfMissing(
+                toolMeta.id,
+                id,
+                GRAPH_EDGE.CREATED_ASSET,
+              );
             }
           }
         }

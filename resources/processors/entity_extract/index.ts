@@ -1,6 +1,6 @@
 /**
  * ENTITY_EXTRACT Event Processor
- * 
+ *
  * Handles entity extraction pipeline:
  * 1. Extract entities from content using LLM
  * 2. Search for similar existing entities (deduplication)
@@ -10,23 +10,23 @@
 
 import type {
   ChatContext,
+  EmbeddingConfig,
   Event,
   EventProcessor,
   NewEvent,
   ProcessorDeps,
-  EmbeddingConfig,
 } from "@/types/index.ts";
 import type { EntityExtractPayload } from "@/database/schemas/index.ts";
 import { embed } from "@/runtime/embeddings/index.ts";
 import { chat } from "@/runtime/llm/index.ts";
-import type { ProviderConfig } from "@/runtime/llm/types.ts";
+import type { ChatMessage, ProviderConfig } from "@/runtime/llm/types.ts";
 
 export type { EntityExtractPayload };
 
 // Extracted entity structure from LLM
 interface ExtractedEntity {
   name: string;
-  type: string;  // "concept", "decision", "person", "tool", etc.
+  type: string; // "concept", "decision", "person", "tool", etc.
   description?: string;
 }
 
@@ -36,7 +36,9 @@ interface ExtractionResult {
 }
 
 // Type guard for payload
-function isEntityExtractPayload(payload: unknown): payload is EntityExtractPayload {
+function isEntityExtractPayload(
+  payload: unknown,
+): payload is EntityExtractPayload {
   if (!payload || typeof payload !== "object") return false;
   const p = payload as Record<string, unknown>;
   return typeof p.sourceNodeId === "string" && typeof p.content === "string";
@@ -49,7 +51,10 @@ const DEFAULT_AUTO_MERGE_THRESHOLD = 0.99;
 /**
  * Build the extraction prompt for the LLM
  */
-function buildExtractionPrompt(content: string, entityTypes?: string[]): string {
+function buildExtractionPrompt(
+  content: string,
+  entityTypes?: string[],
+): string {
   const typeHint = entityTypes?.length
     ? `Focus on these entity types: ${entityTypes.join(", ")}.`
     : `Common entity types include: concept, decision, person, tool, task, fact.`;
@@ -85,7 +90,11 @@ Respond with valid JSON only, in this exact format:
 /**
  * Build the merge confirmation prompt
  */
-function buildMergeConfirmPrompt(newEntity: ExtractedEntity, existingName: string, existingType: string): string {
+function buildMergeConfirmPrompt(
+  newEntity: ExtractedEntity,
+  existingName: string,
+  existingType: string,
+): string {
   return `Are these two entities the same thing?
 
 Entity 1 (existing): "${existingName}" (type: ${existingType})
@@ -113,17 +122,119 @@ function parseJsonResponse<T>(response: string): T | null {
   }
 }
 
-export const entityExtractProcessor: EventProcessor<EntityExtractPayload, ProcessorDeps> = {
+function safeLlmConfig(config: ProviderConfig): Record<string, unknown> {
+  const { apiKey: _apiKey, headers: _headers, ...safe } = config as
+    & ProviderConfig
+    & { apiKey?: unknown; headers?: unknown };
+  return safe as Record<string, unknown>;
+}
+
+async function trackedEntityChat(args: {
+  ops: ProcessorDeps["db"]["ops"];
+  threadId: string;
+  namespace: string;
+  agentId?: string | null;
+  llmConfig: ProviderConfig;
+  messages: ChatMessage[];
+  purpose: string;
+  traceId?: string | null;
+  causationId?: string | null;
+  llmProviders?: ChatContext["llmProviders"];
+}) {
+  let attemptId: string | null = null;
+  try {
+    const attempt = await args.ops.mutate.llmAttempts.create({
+      threadId: args.threadId,
+      agentId: args.agentId ?? null,
+      agentName: args.agentId ?? "entity_extraction",
+      provider: args.llmConfig.provider ?? null,
+      model: args.llmConfig.model ?? null,
+      config: safeLlmConfig(args.llmConfig),
+      messages: args.messages,
+      status: "processing",
+      namespace: args.namespace,
+      metadata: {
+        source: "entity_extraction",
+        purpose: args.purpose,
+      },
+    }, {
+      traceId: args.traceId ?? null,
+      causationId: args.causationId ?? null,
+    });
+    attemptId = String(attempt.id);
+  } catch (error) {
+    console.warn("[ENTITY_EXTRACT] Failed to create llm_attempt:", error);
+  }
+
+  try {
+    const result = await chat(
+      { messages: args.messages },
+      { ...args.llmConfig, stream: false },
+      {},
+      undefined,
+      args.llmProviders,
+    );
+    if (attemptId) {
+      await args.ops.mutate.llmAttempts.complete(
+        attemptId,
+        {
+          answer: result.answer,
+          reasoning: result.reasoning ?? null,
+          provider: result.provider ?? args.llmConfig.provider ?? null,
+          model: result.model ?? args.llmConfig.model ?? null,
+          usage: result.usage ?? null,
+          cost: result.cost ?? null,
+          finishReason: result.finishReason ?? null,
+          finishedAt: new Date().toISOString(),
+        },
+        {
+          threadId: args.threadId,
+          traceId: args.traceId ?? null,
+          causationId: args.causationId ?? null,
+          namespace: args.namespace,
+        },
+      );
+    }
+    return result;
+  } catch (error) {
+    if (attemptId) {
+      await args.ops.mutate.llmAttempts.fail(
+        attemptId,
+        {
+          error: {
+            message: error instanceof Error ? error.message : String(error),
+          },
+          finishedAt: new Date().toISOString(),
+        },
+        {
+          threadId: args.threadId,
+          traceId: args.traceId ?? null,
+          causationId: args.causationId ?? null,
+          namespace: args.namespace,
+        },
+      ).catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
+export const entityExtractProcessor: EventProcessor<
+  EntityExtractPayload,
+  ProcessorDeps
+> = {
   shouldProcess: (event: Event) => {
     const eventType = (event as unknown as { type: string }).type;
     const eventPayload = (event as unknown as { payload: unknown }).payload;
-    return eventType === "ENTITY_EXTRACT" && isEntityExtractPayload(eventPayload);
+    return (eventType === "ENTITY_EXTRACT" ||
+      eventType === "entity_extraction.created") &&
+      isEntityExtractPayload(eventPayload);
   },
 
   process: async (event: Event, deps: ProcessorDeps) => {
     const { db, context } = deps;
     const ops = db.ops;
-    const payload = (event as unknown as { payload: EntityExtractPayload }).payload;
+    const payload =
+      (event as unknown as { payload: EntityExtractPayload }).payload;
 
     const {
       sourceNodeId,
@@ -135,44 +246,77 @@ export const entityExtractProcessor: EventProcessor<EntityExtractPayload, Proces
     } = payload;
 
     // Get embedding config
-    const embeddingConfig = context.embeddingConfig ?? context.ragConfig?.embedding;
+    const embeddingConfig = context.embeddingConfig ??
+      context.ragConfig?.embedding;
     if (!embeddingConfig) {
-      console.warn("[ENTITY_EXTRACT] No embedding config available, skipping extraction");
+      console.warn(
+        "[ENTITY_EXTRACT] No embedding config available, skipping extraction",
+      );
       return { producedEvents: [] };
     }
 
     // Get LLM config from payload (preferred) or fallback to RAG config
     // The payload config is set per-agent or per-deduplicated-group during event creation
-    const payloadLlmConfig = extractionConfig?.llmConfig as ProviderConfig | undefined;
-    const ragLlmConfig = context.ragConfig?.llmConfig as ProviderConfig | undefined;
-    const llmConfig = payloadLlmConfig?.provider ? payloadLlmConfig : ragLlmConfig;
-    
+    const payloadLlmConfig = extractionConfig?.llmConfig as
+      | ProviderConfig
+      | undefined;
+    const ragLlmConfig = context.ragConfig?.llmConfig as
+      | ProviderConfig
+      | undefined;
+    const llmConfig = payloadLlmConfig?.provider
+      ? payloadLlmConfig
+      : ragLlmConfig;
+
     if (!llmConfig?.provider) {
-      console.warn("[ENTITY_EXTRACT] No LLM config available in payload or rag.llmConfig, skipping extraction");
+      console.warn(
+        "[ENTITY_EXTRACT] No LLM config available in payload or rag.llmConfig, skipping extraction",
+      );
       return { producedEvents: [] };
     }
 
     // Get entity extraction config from payload
-    const similarityThreshold = extractionConfig?.similarityThreshold ?? DEFAULT_SIMILARITY_THRESHOLD;
-    const autoMergeThreshold = extractionConfig?.autoMergeThreshold ?? DEFAULT_AUTO_MERGE_THRESHOLD;
+    const similarityThreshold = extractionConfig?.similarityThreshold ??
+      DEFAULT_SIMILARITY_THRESHOLD;
+    const autoMergeThreshold = extractionConfig?.autoMergeThreshold ??
+      DEFAULT_AUTO_MERGE_THRESHOLD;
     const entityTypes = extractionConfig?.entityTypes;
 
     try {
       // Step 1: Extract entities using LLM
       const extractionPrompt = buildExtractionPrompt(content, entityTypes);
-      
-      const extractionResult = await chat(
-        { messages: [{ role: "user", content: extractionPrompt }] },
-        { ...llmConfig, stream: false },
-        {},
-        undefined,
-        context.llmProviders,
-      );
+      const eventThreadId = typeof (event as unknown as { threadId?: unknown })
+          .threadId === "string"
+        ? (event as unknown as { threadId: string }).threadId
+        : sourceContext?.threadId ?? sourceNodeId;
+      const eventId = typeof (event as unknown as { id?: unknown }).id ===
+          "string"
+        ? (event as unknown as { id: string }).id
+        : null;
+      const traceId = typeof (event as unknown as { traceId?: unknown })
+          .traceId === "string"
+        ? (event as unknown as { traceId: string }).traceId
+        : null;
+      const extractionMessages: ChatMessage[] = [{
+        role: "user",
+        content: extractionPrompt,
+      }];
+      const extractionResult = await trackedEntityChat({
+        ops,
+        threadId: eventThreadId,
+        namespace,
+        agentId: sourceContext?.agentId ?? null,
+        llmConfig,
+        messages: extractionMessages,
+        purpose: "extract_entities",
+        traceId,
+        causationId: eventId,
+        llmProviders: context.llmProviders,
+      });
 
       const extractionText = extractionResult.answer;
 
       const parsed = parseJsonResponse<ExtractionResult>(extractionText);
-      
+
       if (!parsed?.entities?.length) {
         // No entities found
         return { producedEvents: [] };
@@ -192,11 +336,13 @@ export const entityExtractProcessor: EventProcessor<EntityExtractPayload, Proces
           autoMergeThreshold,
           llmProviders: context.llmProviders,
           embeddingProviders: context.embeddingProviders,
+          threadId: eventThreadId,
+          traceId,
+          causationId: eventId,
         });
       }
 
       return { producedEvents: [] };
-
     } catch (error) {
       console.error("[ENTITY_EXTRACT] Error:", error);
       return { producedEvents: [] };
@@ -214,6 +360,9 @@ interface ProcessEntityContext {
   sourceContext?: EntityExtractPayload["sourceContext"];
   similarityThreshold: number;
   autoMergeThreshold: number;
+  threadId: string;
+  traceId?: string | null;
+  causationId?: string | null;
   llmProviders?: ChatContext["llmProviders"];
   embeddingProviders?: ChatContext["embeddingProviders"];
 }
@@ -226,19 +375,20 @@ interface ProcessEntityContext {
  */
 async function processEntity(
   entity: ExtractedEntity,
-  ctx: ProcessEntityContext
+  ctx: ProcessEntityContext,
 ): Promise<void> {
   const {
     ops,
     embeddingConfig,
-    llmConfig,
     namespace,
     sourceNodeId,
     sourceType,
     sourceContext,
     similarityThreshold,
     autoMergeThreshold,
-    llmProviders,
+    threadId,
+    traceId,
+    causationId,
     embeddingProviders,
   } = ctx;
 
@@ -246,7 +396,7 @@ async function processEntity(
   const textToEmbed = entity.description
     ? `${entity.name}: ${entity.description}`
     : entity.name;
-  
+
   const embeddingResult = await embed(
     [textToEmbed],
     embeddingConfig,
@@ -256,15 +406,17 @@ async function processEntity(
   const embedding = embeddingResult.embeddings[0];
 
   if (!embedding) {
-    console.warn(`[ENTITY_EXTRACT] Failed to generate embedding for entity "${entity.name}"`);
+    console.warn(
+      `[ENTITY_EXTRACT] Failed to generate embedding for entity "${entity.name}"`,
+    );
     return;
   }
 
   // Search for similar existing entities in the same namespace
-  const similarEntities = await ops.searchNodes({
+  const similarEntities = await ops.unsafeGraph.searchNodes({
     embedding,
     namespaces: [namespace],
-    nodeTypes: [entity.type],  // Only match same type
+    nodeTypes: [entity.type], // Only match same type
     limit: 5,
     minSimilarity: similarityThreshold,
   });
@@ -273,7 +425,7 @@ async function processEntity(
 
   if (similarEntities.length === 0) {
     // No similar entity found - create new
-    const newNode = await ops.createNode({
+    const newNode = await ops.mutate.graph.createNode({
       namespace,
       type: entity.type,
       name: entity.name,
@@ -285,9 +437,13 @@ async function processEntity(
       },
       sourceType: "extraction",
       sourceId: sourceNodeId,
+    }, {
+      threadId,
+      namespace,
+      traceId,
+      causationId,
     });
     targetEntityId = newNode.id as string;
-    
   } else {
     // Found similar entity - check if we should merge
     const topMatch = similarEntities[0];
@@ -297,24 +453,22 @@ async function processEntity(
     if (similarity >= autoMergeThreshold) {
       // Auto-merge: very high confidence
       targetEntityId = matchedNode.id as string;
-      await mergeIntoExisting(ops, targetEntityId, entity);
-      
+      await mergeIntoExisting(ops, targetEntityId, entity, ctx);
     } else {
       // Similarity between threshold and auto-merge: ask LLM to confirm
       const shouldMerge = await confirmMerge(
         entity,
         matchedNode.name ?? "Unknown",
         matchedNode.type,
-        llmConfig,
-        llmProviders,
+        ctx,
       );
 
       if (shouldMerge) {
         targetEntityId = matchedNode.id as string;
-        await mergeIntoExisting(ops, targetEntityId, entity);
+        await mergeIntoExisting(ops, targetEntityId, entity, ctx);
       } else {
         // Different entity - create new and link with RELATED_TO
-        const newNode = await ops.createNode({
+        const newNode = await ops.mutate.graph.createNode({
           namespace,
           type: entity.type,
           name: entity.name,
@@ -326,22 +480,32 @@ async function processEntity(
           },
           sourceType: "extraction",
           sourceId: sourceNodeId,
+        }, {
+          threadId,
+          namespace,
+          traceId,
+          causationId,
         });
         targetEntityId = newNode.id as string;
 
         // Create RELATED_TO edge to the similar entity
-        await ops.createEdge({
+        await ops.mutate.graph.createEdge({
           sourceNodeId: targetEntityId,
           targetNodeId: matchedNode.id as string,
           type: "RELATED_TO",
           data: { similarity },
+        }, {
+          threadId,
+          namespace,
+          traceId,
+          causationId,
         });
       }
     }
   }
 
   // Create MENTIONS edge from source to entity
-  await ops.createEdge({
+  await ops.mutate.graph.createEdge({
     sourceNodeId,
     targetNodeId: targetEntityId,
     type: "MENTIONS",
@@ -350,6 +514,11 @@ async function processEntity(
       extractedName: entity.name,
       ...sourceContext,
     },
+  }, {
+    threadId,
+    namespace,
+    traceId,
+    causationId,
   });
 }
 
@@ -359,9 +528,13 @@ async function processEntity(
 async function mergeIntoExisting(
   ops: ProcessorDeps["db"]["ops"],
   existingId: string,
-  newEntity: ExtractedEntity
+  newEntity: ExtractedEntity,
+  ctx: Pick<
+    ProcessEntityContext,
+    "threadId" | "namespace" | "traceId" | "causationId"
+  >,
 ): Promise<void> {
-  const existing = await ops.getNodeById(existingId);
+  const existing = await ops.unsafeGraph.getNodeById(existingId);
   if (!existing) return;
 
   const data = (existing.data ?? {}) as Record<string, unknown>;
@@ -373,12 +546,17 @@ async function mergeIntoExisting(
     aliases.push(newEntity.name);
   }
 
-  await ops.updateNode(existingId, {
+  await ops.mutate.graph.updateNode(existingId, {
     data: {
       ...data,
       aliases,
       mentionCount: mentionCount + 1,
     },
+  }, {
+    threadId: ctx.threadId,
+    namespace: ctx.namespace,
+    traceId: ctx.traceId,
+    causationId: ctx.causationId,
   });
 }
 
@@ -389,25 +567,45 @@ async function confirmMerge(
   newEntity: ExtractedEntity,
   existingName: string,
   existingType: string,
-  llmConfig: ProviderConfig,
-  llmProviders?: ChatContext["llmProviders"],
+  ctx: Pick<
+    ProcessEntityContext,
+    | "ops"
+    | "threadId"
+    | "namespace"
+    | "sourceContext"
+    | "llmConfig"
+    | "traceId"
+    | "causationId"
+    | "llmProviders"
+  >,
 ): Promise<boolean> {
   try {
-    const prompt = buildMergeConfirmPrompt(newEntity, existingName, existingType);
-    
-    const result = await chat(
-      { messages: [{ role: "user", content: prompt }] },
-      { ...llmConfig, stream: false },
-      {},
-      undefined,
-      llmProviders,
+    const prompt = buildMergeConfirmPrompt(
+      newEntity,
+      existingName,
+      existingType,
     );
+    const messages: ChatMessage[] = [{ role: "user", content: prompt }];
+    const result = await trackedEntityChat({
+      ops: ctx.ops,
+      threadId: ctx.threadId,
+      namespace: ctx.namespace,
+      agentId: ctx.sourceContext?.agentId ?? null,
+      llmConfig: ctx.llmConfig,
+      messages,
+      purpose: "confirm_entity_merge",
+      traceId: ctx.traceId,
+      causationId: ctx.causationId,
+      llmProviders: ctx.llmProviders,
+    });
 
     const parsed = parseJsonResponse<{ same: boolean }>(result.answer);
     return parsed?.same === true;
-    
   } catch (error) {
-    console.warn("[ENTITY_EXTRACT] Merge confirmation failed, defaulting to no merge:", error);
+    console.warn(
+      "[ENTITY_EXTRACT] Merge confirmation failed, defaulting to no merge:",
+      error,
+    );
     return false;
   }
 }

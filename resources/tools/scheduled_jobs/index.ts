@@ -495,25 +495,40 @@ async function persistAssetNode(
   const ops = context.db?.ops;
   const namespace = requireNamespace(context);
   if (!ops) return;
-  const existing = await ops.getNodeById(asset.assetId);
+  const existing = await ops.unsafeGraph.getNodeById(asset.assetId);
   if (!existing) {
-    await ops.createNode({
-      id: asset.assetId,
-      namespace,
-      type: "asset",
-      name: asset.assetId,
-      content: null,
-      data: {
-        assetId: asset.assetId,
+    if (context.threadId) {
+      await ops.mutate.assets.create({
+        id: asset.assetId,
+        threadId: context.threadId,
         ref: asset.ref,
         mime: asset.mime,
-        kind: asset.kind,
-        size: asset.size,
         by: "job",
-      },
-      sourceType: "asset_store",
-      sourceId: asset.assetId,
-    });
+        namespace,
+        metadata: {
+          kind: asset.kind,
+          size: asset.size,
+        },
+      });
+    } else {
+      await ops.unsafeGraph.createNode({
+        id: asset.assetId,
+        namespace,
+        type: "asset",
+        name: asset.assetId,
+        content: null,
+        data: {
+          assetId: asset.assetId,
+          ref: asset.ref,
+          mime: asset.mime,
+          kind: asset.kind,
+          size: asset.size,
+          by: "job",
+        },
+        sourceType: "asset_store",
+        sourceId: asset.assetId,
+      });
+    }
   }
 }
 
@@ -610,11 +625,27 @@ async function linkJobAssets(
   const ops = context.db?.ops;
   if (!ops || assets.length === 0) return;
   for (const asset of assets) {
-    await ops.createEdge({
+    const existingEdges = await ops.unsafeGraph.getEdgesForNode(
+      jobId,
+      "out",
+      [GRAPH_EDGE.HAS_ASSET],
+    ).catch(() => []);
+    if (
+      existingEdges.some((edge) => edge.targetNodeId === asset.assetId)
+    ) continue;
+    const edge = {
       sourceNodeId: jobId,
       targetNodeId: asset.assetId,
       type: GRAPH_EDGE.HAS_ASSET,
-    }).catch(() => undefined);
+    };
+    if (context.threadId) {
+      await ops.mutate.graph.createEdge(edge, {
+        threadId: context.threadId,
+        namespace: context.namespace ?? null,
+      }).catch(() => undefined);
+    } else {
+      await ops.unsafeGraph.createEdge(edge).catch(() => undefined);
+    }
   }
 }
 

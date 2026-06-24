@@ -113,6 +113,11 @@ Deno.test("startEventWorker emits queued event before processor execution", asyn
     traceId: null,
     priority: 0,
     metadata: null,
+    subjectType: "message",
+    subjectId: "message-1",
+    operation: "created",
+    causationId: "cause-1",
+    correlationId: "trace-1",
     ttlMs: null,
     expiresAt: null,
     createdAt: new Date(),
@@ -182,6 +187,103 @@ Deno.test("startEventWorker emits queued event before processor execution", asyn
 
   assertEquals(observations, ["emitted-before-process"]);
   assertEquals(emittedEvents, [{ id: "event-emit-first", type: "TOOL_CALL" }]);
+});
+
+Deno.test("startEventWorker does not auto-emit lifecycle outbox rows", async () => {
+  const threadId = "thread-lifecycle-stream";
+  const queuedEvent = {
+    id: "event-message-created",
+    threadId,
+    eventType: "message.created",
+    payload: { content: "hello", sender: { type: "user" } },
+    parentEventId: null,
+    traceId: null,
+    priority: 0,
+    metadata: null,
+    subjectType: "message",
+    subjectId: "message-1",
+    operation: "created",
+    causationId: "cause-1",
+    correlationId: "trace-1",
+    ttlMs: null,
+    expiresAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    status: "pending",
+  };
+
+  let nextCalls = 0;
+  const processedEventIds: string[] = [];
+  const observedLifecycleFields: Array<Record<string, unknown>> = [];
+  const emittedEvents: unknown[] = [];
+
+  const ops = {
+    getThreadWorkerLeaseConfig: () => ({
+      leaseMs: 60_000,
+      heartbeatMs: 60_000,
+    }),
+    acquireThreadWorkerLease: async () => true,
+    renewThreadWorkerLease: async () => true,
+    isThreadWorkerLeaseOwner: async () => true,
+    recoverThreadProcessingQueueItems: async () => 0,
+    getNextPendingQueueItem: async () => {
+      nextCalls += 1;
+      return nextCalls === 1 ? queuedEvent : undefined;
+    },
+    getNewerInterruptingEvent: async () => undefined,
+    updateQueueItemStatus: async () => {},
+    releaseThreadWorkerLeaseIfNoPendingWork: async () => true,
+    releaseThreadWorkerLease: async () => {},
+  };
+
+  const fakeDb = { ops };
+
+  await startEventWorker(
+    fakeDb as never,
+    threadId,
+    {
+      processors: {
+        "message.created": [
+          {
+            shouldProcess: () => true,
+            process: async (event: import("@/types/index.ts").Event) => {
+              processedEventIds.push(event.id as string);
+              observedLifecycleFields.push({
+                subjectType: (event as { subjectType?: unknown }).subjectType,
+                subjectId: (event as { subjectId?: unknown }).subjectId,
+                operation: (event as { operation?: unknown }).operation,
+                causationId: (event as { causationId?: unknown }).causationId,
+                correlationId: (event as { correlationId?: unknown })
+                  .correlationId,
+              });
+              return { producedEvents: [] };
+            },
+          },
+        ],
+      },
+      emitToStream: (ev: unknown) => {
+        emittedEvents.push(ev);
+      },
+      stream: true,
+    },
+    async () =>
+      ({
+        db: fakeDb,
+        thread: { id: threadId },
+        context: {},
+        emitToStream: () => {},
+      }) as never,
+  );
+
+  assertEquals(processedEventIds, ["event-message-created"]);
+  assertEquals(observedLifecycleFields, [{
+    subjectType: "message",
+    subjectId: "message-1",
+    operation: "created",
+    causationId: "cause-1",
+    correlationId: "trace-1",
+  }]);
+  assertEquals(emittedEvents, []);
 });
 
 Deno.test("startEventWorker marks active interruptible work overwritten when newer abort input arrives", async () => {

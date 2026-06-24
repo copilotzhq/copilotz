@@ -69,25 +69,37 @@ export default {
       }
     }
 
-    await ops.addToQueue(threadId, {
-      eventType: "RAG_INGEST",
-      payload: {
-        source,
-        title: docTitle,
-        namespace: targetNamespace,
-        metadata: {
-          ...(metadata ?? {}),
-          scope: {
-            threadId,
-            agentId: context?.senderId,
-            ...((metadata?.scope &&
-                typeof metadata.scope === "object")
-              ? metadata.scope as Record<string, unknown>
-              : {}),
-          },
+    const payload = {
+      source,
+      title: docTitle,
+      namespace: targetNamespace,
+      metadata: {
+        ...(metadata ?? {}),
+        scope: {
+          threadId,
+          agentId: context?.senderId,
+          ...((metadata?.scope &&
+              typeof metadata.scope === "object")
+            ? metadata.scope as Record<string, unknown>
+            : {}),
         },
       },
+    };
+
+    await ops.mutate.graph.createNode({
       namespace: targetNamespace,
+      type: "rag_ingestion",
+      name: docTitle,
+      content: source,
+      sourceType: "thread",
+      sourceId: threadId,
+      data: payload,
+    }, {
+      threadId,
+      namespace: targetNamespace,
+      status: "pending",
+      priority: 0,
+      eventPayload: payload,
     });
 
     return {

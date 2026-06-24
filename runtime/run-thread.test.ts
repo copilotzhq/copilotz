@@ -87,7 +87,7 @@ Deno.test("runThread writes tenant queue rows in the active schema", async () =>
     assertEquals(tenantThreads.rows[0].namespace, tenant);
     assertEquals(
       tenantEvents.rows.map((row) => row.eventType).sort(),
-      ["NEW_MESSAGE", "thread.created"].sort(),
+      ["message.created", "thread.created"].sort(),
     );
     assertEquals(
       tenantEvents.rows.every((row) => row.namespace === tenant),

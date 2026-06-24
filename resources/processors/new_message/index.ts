@@ -1096,6 +1096,8 @@ export const messageProcessor: EventProcessor<
 > = {
   shouldProcess: () => true,
   process: async (event: Event, deps: ProcessorDeps) => {
+    const eventType = (event as unknown as { type?: string }).type;
+    const isLifecycleMessageCreated = eventType === "message.created";
     // 1. Ensure participants exist (Identity Lifecycle Side-effect)
     const senderIdentity = await ensureParticipants(event, deps);
 
@@ -1217,12 +1219,59 @@ export const messageProcessor: EventProcessor<
       metadata: persistedMessageMetadata,
     };
 
-    // Persist incoming message before processing
-    // Pass tenant namespace for participant/message edge creation.
-    const createdMessage = await messageService.create(
-      incomingMsg,
-      context.namespace,
-    );
+    // Persist incoming legacy NEW_MESSAGE events. Lifecycle `message.created`
+    // events already committed the message in the same transaction that
+    // appended this outbox row, so processing must not duplicate it.
+    const createdMessage = isLifecycleMessageCreated
+      ? {
+        ...incomingMsg,
+        id: typeof (event as unknown as { subjectId?: unknown }).subjectId ===
+            "string"
+          ? (event as unknown as { subjectId: string }).subjectId
+          : typeof (event as unknown as { id?: unknown }).id === "string"
+          ? (event as unknown as { id: string }).id
+          : crypto.randomUUID(),
+        createdAt: event.createdAt ?? new Date(),
+        updatedAt: event.updatedAt ?? new Date(),
+      } as unknown as NewMessage & { id: string }
+      : await messageService.create(
+        incomingMsg,
+        context.namespace,
+      );
+
+    if (isLifecycleMessageCreated) {
+      await ops.mutate.graph.updateNode(
+        createdMessage.id,
+        {
+          content: incomingMsg.content,
+          data: {
+            messageId: createdMessage.id,
+            threadId,
+            senderId: incomingMsg.senderId,
+            senderType: incomingMsg.senderType,
+            senderUserId: incomingMsg.senderUserId ?? null,
+            externalId: null,
+            toolCallId: incomingMsg.toolCallId ?? null,
+            toolCalls: incomingMsg.toolCalls ?? null,
+            reasoning: incomingMsg.reasoning ?? null,
+            metadata: incomingMsg.metadata ?? null,
+          },
+        },
+        {
+          threadId,
+          namespace: context.namespace ?? null,
+          traceId: typeof event.traceId === "string" ? event.traceId : null,
+          causationId: typeof event.id === "string" ? event.id : null,
+          eventPayload: {
+            content: incomingMsg.content,
+            toolCallId: incomingMsg.toolCallId,
+            toolCalls: incomingMsg.toolCalls,
+            reasoning: incomingMsg.reasoning,
+            metadata: incomingMsg.metadata,
+          },
+        },
+      );
+    }
     // Emit ENTITY_EXTRACT event for agents with entity extraction enabled
     // Events go to a background child thread to avoid blocking main thread processing
     // Deduplicate by config to avoid redundant LLM calls for same content
@@ -1358,19 +1407,44 @@ export const messageProcessor: EventProcessor<
               },
             };
 
-            entityExtractEvents.push({
-              threadId: backgroundThreadId, // Use background thread instead of main thread
-              type: "ENTITY_EXTRACT",
-              payload: extractPayload,
-              parentEventId: typeof event.id === "string"
-                ? event.id
-                : undefined,
-              traceId: typeof event.traceId === "string"
-                ? event.traceId
-                : undefined,
-              priority: 0, // Normal priority within the background thread
-              namespace: entityNamespace,
-            });
+            if (isLifecycleMessageCreated && ops.mutate?.graph) {
+              await ops.mutate.graph.createNode({
+                namespace: entityNamespace,
+                type: "entity_extraction",
+                name: `entity_extraction:${messageNodeId}`,
+                content: null,
+                sourceType: "message",
+                sourceId: messageNodeId,
+                data: extractPayload as unknown as Record<string, unknown>,
+              }, {
+                threadId,
+                namespace: entityNamespace,
+                traceId: typeof event.traceId === "string"
+                  ? event.traceId
+                  : null,
+                causationId: typeof event.id === "string" ? event.id : null,
+                priority: 0,
+                status: "pending",
+                eventPayload: extractPayload as unknown as Record<
+                  string,
+                  unknown
+                >,
+              });
+            } else {
+              entityExtractEvents.push({
+                threadId: backgroundThreadId, // Use background thread instead of main thread
+                type: "ENTITY_EXTRACT",
+                payload: extractPayload,
+                parentEventId: typeof event.id === "string"
+                  ? event.id
+                  : undefined,
+                traceId: typeof event.traceId === "string"
+                  ? event.traceId
+                  : undefined,
+                priority: 0, // Normal priority within the background thread
+                namespace: entityNamespace,
+              });
+            }
           } catch (err) {
             console.warn(
               `[NEW_MESSAGE] Failed to queue entity extraction for namespace "${entityNamespace}":`,
@@ -1517,7 +1591,8 @@ export const messageProcessor: EventProcessor<
         nextTurnAfterTools,
       );
 
-      normalizedToolCalls.forEach((call, i: number) => {
+      for (let i = 0; i < normalizedToolCalls.length; i += 1) {
+        const call = normalizedToolCalls[i];
         const toolId = call.tool?.id || agentForToolCalls.name ||
           "unknown_tool";
         const toolName = call.tool?.name || toolId;
@@ -1542,24 +1617,61 @@ export const messageProcessor: EventProcessor<
             batchIndex: call.batchIndex ?? null,
           },
         } as ToolCallEventPayload;
-        producedEvents.push({
-          threadId,
-          type: "TOOL_CALL",
-          payload: toolCallEventPayload,
-          parentEventId: typeof event.id === "string" ? event.id : undefined,
-          traceId: typeof event.traceId === "string"
-            ? event.traceId
-            : undefined,
-          priority: EVENT_PRIORITIES.SETTLEMENT,
-          metadata: {
-            sourceMessageId: createdMessage.id,
-            ...(toolReplyMetadata.replyToParticipantId ||
-                toolReplyMetadata.replyToTargetQueue.length > 0
-              ? toolReplyMetadata
-              : {}),
-          },
-        });
-      });
+        const toolMetadata = {
+          sourceMessageId: createdMessage.id,
+          ...(call.batchId ? { batchId: call.batchId } : {}),
+          ...(typeof call.batchSize === "number"
+            ? { batchSize: call.batchSize }
+            : {}),
+          ...(typeof call.batchIndex === "number"
+            ? { batchIndex: call.batchIndex }
+            : {}),
+          ...(toolReplyMetadata.replyToParticipantId ||
+              toolReplyMetadata.replyToTargetQueue.length > 0
+            ? toolReplyMetadata
+            : {}),
+        };
+        if (isLifecycleMessageCreated && ops.mutate?.toolExecutions) {
+          await ops.mutate.toolExecutions.create({
+            threadId,
+            messageId: createdMessage.id,
+            eventId: typeof event.id === "string" ? event.id : null,
+            agentId: senderIdForTool,
+            agentName: agentForToolCalls.name,
+            toolCallId: callId,
+            tool: {
+              id: toolId,
+              name: toolName,
+            },
+            args: argumentsString,
+            status: "processing",
+            metadata: toolMetadata,
+            namespace: context.namespace,
+          }, {
+            traceId: typeof event.traceId === "string" ? event.traceId : null,
+            causationId: typeof event.id === "string" ? event.id : null,
+            priority: EVENT_PRIORITIES.SETTLEMENT,
+            status: "pending",
+            metadata: toolMetadata,
+            eventPayload: toolCallEventPayload as unknown as Record<
+              string,
+              unknown
+            >,
+          });
+        } else {
+          producedEvents.push({
+            threadId,
+            type: "TOOL_CALL",
+            payload: toolCallEventPayload,
+            parentEventId: typeof event.id === "string" ? event.id : undefined,
+            traceId: typeof event.traceId === "string"
+              ? event.traceId
+              : undefined,
+            priority: EVENT_PRIORITIES.SETTLEMENT,
+            metadata: toolMetadata,
+          });
+        }
+      }
 
       // Tool calls processed - return without triggering LLM call
       // The tool results will come back as NEW_MESSAGE events and route back to this agent
@@ -1982,15 +2094,47 @@ export const messageProcessor: EventProcessor<
           : {}),
       };
 
-      producedEvents.push({
-        threadId,
-        type: "LLM_CALL",
-        payload: llmPayload,
-        parentEventId: typeof event.id === "string" ? event.id : undefined,
-        traceId: typeof event.traceId === "string" ? event.traceId : undefined,
-        priority: priorityForAgentLlmCall(payload),
-        metadata: llmEventMetadata,
-      });
+      if (isLifecycleMessageCreated && ops.mutate?.llmAttempts) {
+        await ops.mutate.llmAttempts.create({
+          threadId,
+          messageId: createdMessage.id,
+          eventId: typeof event.id === "string" ? event.id : null,
+          agentId: agent.id ?? agent.name ?? null,
+          agentName: agent.name,
+          provider: llmConfig.provider ?? null,
+          model: llmConfig.model ?? null,
+          config: llmConfig as unknown as Record<string, unknown>,
+          messages: llmMessages,
+          tools: llmTools,
+          status: "processing",
+          runSender: isRecord(eventMetadata.runSender)
+            ? eventMetadata.runSender as Record<string, unknown>
+            : null,
+          metadata: {
+            sourceEventType: eventType,
+          },
+          namespace: context.namespace,
+        }, {
+          traceId: typeof event.traceId === "string" ? event.traceId : null,
+          causationId: typeof event.id === "string" ? event.id : null,
+          priority: priorityForAgentLlmCall(payload),
+          status: "pending",
+          metadata: llmEventMetadata,
+          eventPayload: llmPayload as unknown as Record<string, unknown>,
+        });
+      } else {
+        producedEvents.push({
+          threadId,
+          type: "LLM_CALL",
+          payload: llmPayload,
+          parentEventId: typeof event.id === "string" ? event.id : undefined,
+          traceId: typeof event.traceId === "string"
+            ? event.traceId
+            : undefined,
+          priority: priorityForAgentLlmCall(payload),
+          metadata: llmEventMetadata,
+        });
+      }
     }
 
     // Add entity extraction events (low priority, runs after main processing)

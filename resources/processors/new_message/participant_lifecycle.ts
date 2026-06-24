@@ -5,6 +5,42 @@ import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 export const priority = 100;
 
+async function createEdgeIfMissing(args: {
+  deps: ProcessorDeps;
+  event: Event;
+  sourceExternalId: string;
+  targetNodeId: string;
+  type: string;
+}): Promise<void> {
+  const { deps, event, sourceExternalId, targetNodeId, type } = args;
+  const threadId = typeof deps.thread?.id === "string" ? deps.thread.id : null;
+  if (!threadId) return;
+  const sourceNode = await deps.db.ops.getParticipantNode(
+    sourceExternalId,
+    deps.context.namespace ?? null,
+  ).catch(() => undefined);
+  const sourceNodeId = sourceNode?.id;
+  if (typeof sourceNodeId !== "string") return;
+
+  const existing = await deps.db.ops.unsafeGraph.getEdgesForNode(
+    sourceNodeId,
+    "out",
+    [type],
+  ).catch(() => []);
+  if (existing.some((edge) => edge.targetNodeId === targetNodeId)) return;
+
+  await deps.db.ops.mutate.graph.createEdge({
+    sourceNodeId,
+    targetNodeId,
+    type,
+  }, {
+    threadId,
+    namespace: deps.context.namespace ?? null,
+    traceId: typeof event.traceId === "string" ? event.traceId : null,
+    causationId: typeof event.id === "string" ? event.id : null,
+  }).catch(() => undefined);
+}
+
 function buildSenderIdentity(payload: NewMessageEventPayload): {
   externalId: string;
   participantType: "human" | "agent" | "job";
@@ -77,11 +113,13 @@ export const participantLifecycleProcessor: EventProcessor<
         ...(metadata !== undefined ? { metadata } : {}),
       });
       if (senderRecord?.id && typeof deps.thread?.id === "string") {
-        await deps.db.ops.createEdge({
-          sourceNodeId: senderRecord.id,
+        await createEdgeIfMissing({
+          deps,
+          event,
+          sourceExternalId: senderIdentity.externalId,
           targetNodeId: deps.thread.id,
           type: GRAPH_EDGE.PARTICIPATES_IN,
-        }).catch(() => undefined);
+        });
       }
     }
 
@@ -97,11 +135,13 @@ export const participantLifecycleProcessor: EventProcessor<
         metadata: null,
       });
       if (agentRecord?.id && typeof deps.thread?.id === "string") {
-        await deps.db.ops.createEdge({
-          sourceNodeId: agentRecord.id,
+        await createEdgeIfMissing({
+          deps,
+          event,
+          sourceExternalId: externalId,
           targetNodeId: deps.thread.id,
           type: GRAPH_EDGE.PARTICIPATES_IN,
-        }).catch(() => undefined);
+        });
       }
     }
 

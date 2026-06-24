@@ -20,6 +20,9 @@ export const llmResultProcessor: EventProcessor<
 > = {
   shouldProcess: () => true,
   process: async (event: Event, deps: ProcessorDeps) => {
+    const eventType = (event as unknown as { type?: string }).type;
+    const isLifecycleAttemptResult = eventType === "llm_attempt.completed" ||
+      eventType === "llm_attempt.failed";
     const payload = event.payload as LlmResultEventPayload;
     const threadId = typeof event.threadId === "string"
       ? event.threadId
@@ -72,6 +75,39 @@ export const llmResultProcessor: EventProcessor<
         ? { llmError: payload.error }
         : {}),
     };
+
+    const messageMetadata = metadata;
+
+    if (isLifecycleAttemptResult && deps.db?.ops?.mutate?.messages) {
+      await deps.db.ops.mutate.messages.create(
+        {
+          threadId,
+          senderId: payload.agent.id ?? payload.agent.name,
+          senderType: "agent",
+          content: typeof newMessagePayload.content === "string"
+            ? newMessagePayload.content
+            : "",
+          toolCalls: newMessagePayload.toolCalls ?? null,
+          reasoning: newMessagePayload.reasoning ?? null,
+          metadata: newMessagePayload.metadata
+            ? {
+              ...messageMetadata,
+              ...(newMessagePayload.metadata as Record<string, unknown>),
+            }
+            : messageMetadata,
+        },
+        deps.context.namespace,
+        {
+          traceId: typeof event.traceId === "string" ? event.traceId : null,
+          causationId: typeof event.id === "string" ? event.id : null,
+          priority: EVENT_PRIORITIES.SETTLEMENT,
+          status: "pending",
+          metadata,
+          eventPayload: newMessagePayload as unknown as Record<string, unknown>,
+        },
+      );
+      return { producedEvents: [] };
+    }
 
     const producedEvents: NewEvent[] = [{
       threadId,

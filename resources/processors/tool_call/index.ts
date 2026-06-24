@@ -198,6 +198,9 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
   {
     shouldProcess: () => true,
     process: async (event: Event, deps: ProcessorDeps) => {
+      const eventType = (event as unknown as { type?: string }).type;
+      const isLifecycleToolExecutionCreated =
+        eventType === "tool_execution.created";
       const { db, thread, context } = deps;
       assertToolCallPayload(event.payload);
       const payload = event.payload;
@@ -261,8 +264,19 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
 
       const call = payload.toolCall;
       const callId = call.id || `${call.tool.id}_${Date.now()}`;
-      let toolExecutionId: string | null = null;
-      if (db?.ops?.mutate?.toolExecutions) {
+      let toolExecutionId: string | null = isLifecycleToolExecutionCreated &&
+          typeof (event as unknown as { subjectId?: unknown }).subjectId ===
+            "string"
+        ? (event as unknown as { subjectId: string }).subjectId
+        : null;
+      if (isLifecycleToolExecutionCreated) {
+        deps.emitToStream({
+          ...event,
+          type: "TOOL_CALL",
+          payload,
+        } as Event);
+      }
+      if (!isLifecycleToolExecutionCreated && db?.ops?.mutate?.toolExecutions) {
         try {
           const execution = await db.ops.mutate.toolExecutions.create({
             threadId,
@@ -350,51 +364,6 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       const batchIndex = call.batchIndex ?? null;
       const terminalStatus = result.status ?? (error ? "failed" : "completed");
 
-      if (toolExecutionId && db?.ops?.mutate?.toolExecutions) {
-        const finishPatch = {
-          status: terminalStatus,
-          ...(typeof output !== "undefined" ? { output } : {}),
-          ...(typeof error !== "undefined" ? { error } : {}),
-          historyVisibility: result.historyVisibility ??
-            DEFAULT_TOOL_HISTORY_VISIBILITY,
-          finishedAt,
-        };
-        try {
-          if (terminalStatus === "failed" || terminalStatus === "cancelled") {
-            await db.ops.mutate.toolExecutions.fail(
-              toolExecutionId,
-              finishPatch,
-              {
-                threadId,
-                traceId: typeof event.traceId === "string"
-                  ? event.traceId
-                  : null,
-                causationId: typeof event.id === "string" ? event.id : null,
-                namespace: context.namespace,
-              },
-            );
-          } else {
-            await db.ops.mutate.toolExecutions.complete(
-              toolExecutionId,
-              finishPatch,
-              {
-                threadId,
-                traceId: typeof event.traceId === "string"
-                  ? event.traceId
-                  : null,
-                causationId: typeof event.id === "string" ? event.id : null,
-                namespace: context.namespace,
-              },
-            );
-          }
-        } catch (toolExecutionError) {
-          console.warn(
-            "[TOOL_CALL] Failed to finalize tool_execution node:",
-            toolExecutionError,
-          );
-        }
-      }
-
       const toolResultPayload: ToolResultEventPayload = {
         agent: { id: payload.agent.id, name: payload.agent.name },
         toolCallId: callId,
@@ -412,6 +381,77 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
         finishedAt,
       };
 
+      const resultMetadata = toolExecutionId || replyToParticipantId ||
+          replyToTargetQueue.length > 0
+        ? {
+          ...(toolExecutionId ? { toolExecutionId } : {}),
+          replyToParticipantId,
+          replyToTargetQueue,
+        }
+        : undefined;
+
+      if (toolExecutionId && db?.ops?.mutate?.toolExecutions) {
+        const finishPatch = {
+          status: terminalStatus,
+          ...(typeof output !== "undefined" ? { output } : {}),
+          ...(typeof error !== "undefined" ? { error } : {}),
+          historyVisibility: result.historyVisibility ??
+            DEFAULT_TOOL_HISTORY_VISIBILITY,
+          finishedAt,
+        };
+        const mutationOptions = {
+          threadId,
+          traceId: typeof event.traceId === "string" ? event.traceId : null,
+          causationId: typeof event.id === "string" ? event.id : null,
+          namespace: context.namespace,
+          status: isLifecycleToolExecutionCreated
+            ? "pending" as const
+            : undefined,
+          priority: isLifecycleToolExecutionCreated
+            ? EVENT_PRIORITIES.SETTLEMENT
+            : undefined,
+          metadata: isLifecycleToolExecutionCreated
+            ? resultMetadata ?? null
+            : null,
+          eventPayload: isLifecycleToolExecutionCreated
+            ? toolResultPayload as unknown as Record<string, unknown>
+            : null,
+        };
+        try {
+          if (terminalStatus === "failed" || terminalStatus === "cancelled") {
+            await db.ops.mutate.toolExecutions.fail(
+              toolExecutionId,
+              finishPatch,
+              mutationOptions,
+            );
+          } else {
+            await db.ops.mutate.toolExecutions.complete(
+              toolExecutionId,
+              finishPatch,
+              mutationOptions,
+            );
+          }
+        } catch (toolExecutionError) {
+          console.warn(
+            "[TOOL_CALL] Failed to finalize tool_execution node:",
+            toolExecutionError,
+          );
+        }
+      }
+
+      if (toolExecutionId && isLifecycleToolExecutionCreated) {
+        deps.emitToStream({
+          ...event,
+          type: "TOOL_RESULT",
+          payload: toolResultPayload,
+          parentEventId: typeof event.id === "string" ? event.id : null,
+          priority: EVENT_PRIORITIES.SETTLEMENT,
+          metadata: resultMetadata ?? null,
+          status: "completed",
+        } as Event);
+        return { producedEvents: [] };
+      }
+
       const producedEvents: NewEvent[] = [
         {
           threadId,
@@ -422,14 +462,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
             ? event.traceId
             : undefined,
           priority: EVENT_PRIORITIES.SETTLEMENT,
-          metadata: toolExecutionId || replyToParticipantId ||
-              replyToTargetQueue.length > 0
-            ? {
-              ...(toolExecutionId ? { toolExecutionId } : {}),
-              replyToParticipantId,
-              replyToTargetQueue,
-            }
-            : undefined,
+          metadata: resultMetadata,
         },
       ];
 

@@ -52,6 +52,8 @@ import * as llmCallProcessor from "@/resources/processors/llm_call/index.ts";
 import * as llmResultProcessor from "@/resources/processors/llm_result/index.ts";
 import * as toolCallProcessor from "@/resources/processors/tool_call/index.ts";
 import * as toolResultProcessor from "@/resources/processors/tool_result/index.ts";
+import * as ragIngestProcessor from "@/resources/processors/rag_ingest/index.ts";
+import * as entityExtractProcessor from "@/resources/processors/entity_extract/index.ts";
 
 // ---- Core: llm providers + storage adapters --------------------------------
 import * as llmProviders from "@/resources/llm/mod.ts";
@@ -190,7 +192,7 @@ function toProcessorEntry(
         deps?: unknown,
       ) => unknown | Promise<unknown>,
     ),
-    eventType: eventType.toUpperCase(),
+    eventType: eventType.includes(".") ? eventType : eventType.toUpperCase(),
     priority: typeof mod.priority === "number" ? mod.priority : 0,
   };
 }
@@ -377,6 +379,42 @@ function buildCoreMemory(): MemoryResource[] {
 function buildCoreProcessors(): ProcessorEntry[] {
   return [
     toProcessorEntry(
+      "message.created",
+      newMessageProcessor as Record<string, unknown>,
+    ),
+    toProcessorEntry(
+      "llm_attempt.created",
+      llmCallProcessor as Record<string, unknown>,
+    ),
+    toProcessorEntry(
+      "llm_attempt.completed",
+      llmResultProcessor as Record<string, unknown>,
+    ),
+    toProcessorEntry(
+      "llm_attempt.failed",
+      llmResultProcessor as Record<string, unknown>,
+    ),
+    toProcessorEntry(
+      "tool_execution.created",
+      toolCallProcessor as Record<string, unknown>,
+    ),
+    toProcessorEntry(
+      "tool_execution.completed",
+      toolResultProcessor as Record<string, unknown>,
+    ),
+    toProcessorEntry(
+      "tool_execution.failed",
+      toolResultProcessor as Record<string, unknown>,
+    ),
+    toProcessorEntry(
+      "rag_ingestion.created",
+      ragIngestProcessor as Record<string, unknown>,
+    ),
+    toProcessorEntry(
+      "entity_extraction.created",
+      entityExtractProcessor as Record<string, unknown>,
+    ),
+    toProcessorEntry(
       "new_message",
       newMessageProcessor as Record<string, unknown>,
     ),
@@ -389,6 +427,14 @@ function buildCoreProcessors(): ProcessorEntry[] {
     toProcessorEntry(
       "tool_result",
       toolResultProcessor as Record<string, unknown>,
+    ),
+    toProcessorEntry(
+      "rag_ingest",
+      ragIngestProcessor as Record<string, unknown>,
+    ),
+    toProcessorEntry(
+      "entity_extract",
+      entityExtractProcessor as Record<string, unknown>,
     ),
   ];
 }

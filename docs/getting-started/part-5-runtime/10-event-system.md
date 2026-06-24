@@ -12,15 +12,18 @@ status: stable
 
 ## The pain
 
-You've used processors to intercept tool calls. But the agent runtime still feels like a black box. Questions you can't yet answer:
+You've used processors to intercept tool calls. But the agent runtime still
+feels like a black box. Questions you can't yet answer:
 
 - What exactly happens between a user message arriving and the LLM responding?
 - How does conversation history get built?
 - What triggers a tool call vs. a direct response?
 - How do streaming tokens get from the LLM to the client?
-- If I want to add custom logging, observability, or side effects at different points in the lifecycle — where do I hook in?
+- If I want to add custom logging, observability, or side effects at different
+  points in the lifecycle — where do I hook in?
 
-You're writing middleware for a process you don't fully understand. That needs to change.
+You're writing middleware for a process you don't fully understand. That needs
+to change.
 
 ## The foundation: threads and events
 
@@ -31,21 +34,24 @@ things are central to understanding the runtime:
 ### The `threads` table
 
 A **thread** is a conversation. It has:
+
 - A unique `id`
-- `metadata` — a JSON blob where you can store anything (agent turn counts, user preferences, approval tokens, etc.)
+- `metadata` — a JSON blob where you can store anything (agent turn counts, user
+  preferences, approval tokens, etc.)
 - Timestamps
 
-Every call to `copilotz.run()` is associated with a thread. The same thread can be used across multiple turns by passing `threadId`:
+Every call to `copilotz.run()` is associated with a thread. The same thread can
+be used across multiple turns by passing `threadId`:
 
 ```typescript
 const result1 = await copilotz.run(
   { content: "My name is Alice.", sender: { type: "user", name: "Alice" } },
-  { threadId: "thread-123" }
+  { threadId: "thread-123" },
 );
 
 const result2 = await copilotz.run(
   { content: "What's my name?", sender: { type: "user", name: "Alice" } },
-  { threadId: "thread-123" }  // Same thread — agent remembers "Alice"
+  { threadId: "thread-123" }, // Same thread — agent remembers "Alice"
 );
 ```
 
@@ -54,7 +60,10 @@ const result2 = await copilotz.run(
 Durable workflow facts are recorded in the `events` table as an outbox. Modern
 rows use lifecycle names like `message.created`, `llm_attempt.completed`, and
 `tool_execution.failed`, plus `subjectType`, `subjectId`, `operation`,
-`causationId`, `input`, `before`, `after`, and `patch`.
+`causationId`, structured `metadata`, and a compact `payload` containing the
+mutation input. Snapshot columns such as `input`, `before`, `after`, and `patch`
+remain in the table for migration compatibility, but new runtime mutations leave
+them empty to avoid duplicating large graph state.
 
 Processors react to those lifecycle facts and perform more domain mutations.
 Legacy uppercase queue events and `producedEvents` still exist for compatibility
@@ -69,12 +78,16 @@ log and debugging/audit trail.
 These uppercase events are projected to clients and older integrations:
 
 ### `NEW_MESSAGE`
-Fired when a new message enters the system — from a user, a tool, or another agent.
 
-**Produced by:** `copilotz.run()`, tool result handlers, agent delegation  
-**Consumed by:** `new_message` processor — builds conversation history, resolves context, enqueues `LLM_CALL`
+Fired when a new message enters the system — from a user, a tool, or another
+agent.
+
+**Produced by:** `copilotz.run()`, tool result handlers, agent delegation\
+**Consumed by:** `new_message` processor — builds conversation history, resolves
+context, enqueues `LLM_CALL`
 
 **Payload:**
+
 ```typescript
 {
   content: string | ContentPart[];
@@ -85,12 +98,15 @@ Fired when a new message enters the system — from a user, a tool, or another a
 ```
 
 ### `LLM_CALL`
+
 Fired to invoke the LLM.
 
-**Produced by:** `new_message` processor  
-**Consumed by:** `llm_call` processor — assembles the full prompt, calls the LLM API, streams tokens, enqueues `LLM_RESULT`
+**Produced by:** `new_message` processor\
+**Consumed by:** `llm_call` processor — assembles the full prompt, calls the LLM
+API, streams tokens, enqueues `LLM_RESULT`
 
 **Payload:**
+
 ```typescript
 {
   messages: ChatMessage[];     // Full conversation history
@@ -100,12 +116,16 @@ Fired to invoke the LLM.
 ```
 
 ### `LLM_RESULT`
+
 Fired when the LLM finishes responding.
 
-**Produced by:** `llm_call` processor  
-**Consumed by:** `llm_result` processor — parses the response, routes to agents via @mention, triggers entity extraction, enqueues `NEW_MESSAGE` if there's a tool result to send back
+**Produced by:** `llm_call` processor\
+**Consumed by:** `llm_result` processor — parses the response, routes to agents
+via @mention, triggers entity extraction, enqueues `NEW_MESSAGE` if there's a
+tool result to send back
 
 **Payload:**
+
 ```typescript
 {
   content: string;
@@ -115,29 +135,39 @@ Fired when the LLM finishes responding.
 ```
 
 ### `TOOL_CALL`
+
 Fired for each tool the LLM requested.
 
-**Produced by:** `llm_result` processor (one event per requested tool call)  
-**Consumed by:** `tool_call` processor — executes the tool function, enqueues `TOOL_RESULT`
+**Produced by:** `llm_result` processor (one event per requested tool call)\
+**Consumed by:** `tool_call` processor — executes the tool function, enqueues
+`TOOL_RESULT`
 
 **Payload:**
+
 ```typescript
 {
   toolCall: {
     id: string;
-    tool: { id: string; key: string; name: string };
+    tool: {
+      id: string;
+      key: string;
+      name: string;
+    }
     args: Record<string, unknown>;
-  };
+  }
 }
 ```
 
 ### `TOOL_RESULT`
+
 Fired when a tool finishes executing.
 
-**Produced by:** `tool_call` processor  
-**Consumed by:** `tool_result` processor — aggregates results, projects history, determines whether to loop back to the LLM
+**Produced by:** `tool_call` processor\
+**Consumed by:** `tool_result` processor — aggregates results, projects history,
+determines whether to loop back to the LLM
 
 **Payload:**
+
 ```typescript
 {
   toolCallId: string;
@@ -149,9 +179,11 @@ Fired when a tool finishes executing.
 
 ## Synthetic event types
 
-These events are emitted to the real-time stream but not persisted in the database. They exist for client-side consumption only.
+These events are emitted to the real-time stream but not persisted in the
+database. They exist for client-side consumption only.
 
 ### `TOKEN`
+
 One streaming token from the LLM.
 
 ```typescript
@@ -164,6 +196,7 @@ One streaming token from the LLM.
 Use this to render the LLM response word-by-word in your UI.
 
 ### `ASSET_CREATED`
+
 Fired when a tool produces an asset (image, file) that has been saved.
 
 ```typescript
@@ -233,7 +266,7 @@ LLM result metadata without creating duplicate accounting rows:
 export default {
   eventType: "LLM_RESULT",
   id: "usage-logger",
-  priority: 50,  // Run before built-in but don't claim
+  priority: 50, // Run before built-in but don't claim
 
   shouldProcess: (event) => event.type === "LLM_RESULT",
 
@@ -250,7 +283,7 @@ export default {
       namespace: deps.context.namespace,
     });
 
-    return undefined;  // Pass — let built-in handle the rest
+    return undefined; // Pass — let built-in handle the rest
   },
 };
 ```
@@ -262,7 +295,7 @@ A processor that intercepts incoming messages to add context:
 export default {
   eventType: "NEW_MESSAGE",
   id: "context-injector",
-  priority: 200,  // Run first
+  priority: 200, // Run first
 
   shouldProcess: (event) => event.payload?.sender?.type === "user",
 
@@ -281,14 +314,15 @@ export default {
       });
     }
 
-    return undefined;  // Pass
+    return undefined; // Pass
   },
 };
 ```
 
 ## Custom event types
 
-You can emit custom event types to the stream. These are received by the client as-is:
+You can emit custom event types to the stream. These are received by the client
+as-is:
 
 ```typescript
 // In a processor
@@ -317,11 +351,17 @@ for await (const event of result.events) {
 - Complete visibility into the agent lifecycle
 - Hook into any stage: message intake, LLM calls, tool execution, or results
 - Custom observability, logging, and tracing at the framework level
-- Approval workflows, rate limiting, content moderation — all expressible as processors
-- The ability to build entirely custom runtime behaviors by replacing built-in processors
+- Approval workflows, rate limiting, content moderation — all expressible as
+  processors
+- The ability to build entirely custom runtime behaviors by replacing built-in
+  processors
 
 ## What's next
 
-You now control the runtime completely. But your agent is still only as smart as its training data plus what users tell it in the conversation. What about the proprietary knowledge your company has accumulated — your documentation, your customer records, your product knowledge base? That's where RAG comes in.
+You now control the runtime completely. But your agent is still only as smart as
+its training data plus what users tell it in the conversation. What about the
+proprietary knowledge your company has accumulated — your documentation, your
+customer records, your product knowledge base? That's where RAG comes in.
 
-→ **[Chapter 11: Debugging & Observability](./11-debugging-and-observability.md))**
+→
+**[Chapter 11: Debugging & Observability](./11-debugging-and-observability.md))**

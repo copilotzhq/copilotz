@@ -24,24 +24,25 @@ emits uppercase events such as `TOKEN`, `TOOL_CALL`, `TOOL_RESULT`, and
 The physical table is still `events`, but durable workflow facts use lifecycle
 names and subject fields:
 
-| Event                    | Meaning                                |
-| ------------------------ | -------------------------------------- |
-| `thread.created`         | A thread graph node was created        |
-| `message.created`        | A participant turn was persisted       |
-| `message.updated`        | A message aggregate gained new parts   |
-| `llm_attempt.created`    | A provider attempt started             |
-| `llm_attempt.updated`    | Partial output, usage, or cost changed |
-| `llm_attempt.completed`  | A provider attempt finished            |
-| `llm_attempt.failed`     | A provider attempt failed or recovered |
-| `tool_execution.created` | A tool execution started               |
-| `tool_execution.completed` | A tool execution returned output     |
-| `tool_execution.failed`  | A tool execution errored               |
-| `asset.created`          | An asset node was created              |
+| Event                      | Meaning                                |
+| -------------------------- | -------------------------------------- |
+| `thread.created`           | A thread graph node was created        |
+| `message.created`          | A participant turn was persisted       |
+| `message.updated`          | A message aggregate gained new parts   |
+| `llm_attempt.created`      | A provider attempt started             |
+| `llm_attempt.updated`      | Partial output, usage, or cost changed |
+| `llm_attempt.completed`    | A provider attempt finished            |
+| `llm_attempt.failed`       | A provider attempt failed or recovered |
+| `tool_execution.created`   | A tool execution started               |
+| `tool_execution.completed` | A tool execution returned output       |
+| `tool_execution.failed`    | A tool execution errored               |
+| `asset.created`            | An asset node was created              |
 
 Outbox rows include `subjectType`, `subjectId`, `operation`, `causationId`,
-`correlationId`, optional `dedupeKey`, and `input`/`before`/`after`/`patch`
-snapshots. Those fields are for recovery, debugging, projections, and future
-replay support.
+`correlationId`, optional `dedupeKey`, structured `metadata`, and a compact
+`payload` containing the mutation input. Snapshot columns such as `input`,
+`before`, `after`, and `patch` still exist during the migration, but new runtime
+mutations leave them empty to avoid duplicating large graph state.
 
 ## Live Stream Events
 
@@ -79,8 +80,8 @@ For a clean chat UI, display user-facing agent messages.
 
 For debugging, also log tool calls, tool results, LLM calls, and asset events.
 For LLM accounting and recovery debugging, inspect `llm_attempt` graph nodes.
-They are canonical; `llm_usage` exists as a compatibility projection while
-admin and older integrations migrate.
+They are canonical; `llm_usage` exists as a compatibility projection while admin
+and older integrations migrate.
 
 The same event stream supports both uses.
 

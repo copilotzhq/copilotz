@@ -70,6 +70,26 @@ function buildRunSenderMetadata(
   };
 }
 
+function messageContentToText(content: MessagePayload["content"]): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((part) => {
+    if (!part || typeof part !== "object") return "";
+    const typed = part as { type?: string; text?: string; value?: unknown };
+    if (typed.type === "text" && typeof typed.text === "string") {
+      return typed.text;
+    }
+    if (typed.type === "json") {
+      try {
+        return JSON.stringify(typed.value ?? "");
+      } catch {
+        return String(typed.value ?? "");
+      }
+    }
+    return "";
+  }).join("");
+}
+
 /**
  * Options for running a message through Copilotz.
  */
@@ -464,16 +484,42 @@ export async function runThread(
       ...(runSenderMetadata ? { runSender: runSenderMetadata } : {}),
     };
   const traceId = options?.traceId ?? crypto.randomUUID();
+  const messageNamespace = baseContext.namespace ??
+    (typeof ensuredThread.namespace === "string" &&
+        ensuredThread.namespace.length > 0
+      ? ensuredThread.namespace
+      : "default");
 
-  const newQueueItem = await ops.addToQueue(threadId, {
-    eventType: "NEW_MESSAGE",
-    payload: normalizedMessage,
-    traceId,
-    priority: priorityForInboundMessage(normalizedMessage),
-    ttlMs: options?.queueTTL,
-    metadata: queueEventMetadata,
-    namespace: baseContext.namespace,
-  });
+  const createdInputMessage = await ops.mutate.messages.create(
+    {
+      threadId,
+      senderId: normalizedSender.id ?? normalizedSender.externalId ??
+        normalizedSender.name ?? "user",
+      senderType: normalizedSender.type ?? "user",
+      content: messageContentToText(normalizedMessage.content),
+      toolCalls: normalizedMessage.toolCalls ?? null,
+      metadata: normalizedMessage.metadata ?? null,
+    },
+    messageNamespace,
+    {
+      traceId,
+      priority: priorityForInboundMessage(normalizedMessage),
+      status: "pending",
+      metadata: queueEventMetadata,
+      eventPayload: normalizedMessage as Record<string, unknown>,
+    },
+  );
+
+  const traceItems = await ops.getQueueItemsByTraceId(traceId);
+  const newQueueItem =
+    traceItems.find((item) =>
+      item.eventType === "message.created" &&
+      item.subjectId === createdInputMessage.id
+    ) ?? traceItems[0];
+
+  if (!newQueueItem) {
+    throw new Error(`Queue trace not found after message mutation: ${traceId}`);
+  }
 
   if (normalizedSender.type === "user" || normalizedSender.type === "job") {
     await ops.overwritePendingAgentContinuations(

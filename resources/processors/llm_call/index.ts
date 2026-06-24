@@ -115,6 +115,8 @@ function isRetryableLLMReason(reason: string | null): boolean {
 export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
   shouldProcess: () => true,
   process: async (event: Event, deps: ProcessorDeps) => {
+    const eventType = (event as unknown as { type?: string }).type;
+    const isLifecycleAttemptCreated = eventType === "llm_attempt.created";
     const payload = event.payload as LlmCallEventPayload;
 
     const threadId = typeof event.threadId === "string"
@@ -219,6 +221,22 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         status: isComplete ? "completed" : "processing",
       };
     };
+
+    if (isLifecycleAttemptCreated) {
+      llmAttemptId =
+        typeof (event as unknown as { subjectId?: unknown }).subjectId ===
+            "string"
+          ? (event as unknown as { subjectId: string }).subjectId
+          : null;
+      terminalLlmAttemptId = llmAttemptId;
+      if (llmAttemptId) {
+        deps.emitToStream({
+          ...event,
+          type: "LLM_CALL",
+          payload,
+        } as Event);
+      }
+    }
 
     const streamCallback = (context.stream && deps.emitToStream)
       ? (token: string, options?: { isReasoning?: boolean }) => {
@@ -437,7 +455,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         !Array.isArray(eventMetadata.runSender)
       ? eventMetadata.runSender as Record<string, unknown>
       : null;
-    if (deps.db?.ops?.mutate?.llmAttempts) {
+    if (!isLifecycleAttemptCreated && deps.db?.ops?.mutate?.llmAttempts) {
       try {
         const attempt = await deps.db.ops.mutate.llmAttempts.create({
           threadId,
@@ -741,6 +759,14 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
               traceId: typeof event.traceId === "string" ? event.traceId : null,
               causationId: typeof event.id === "string" ? event.id : null,
               namespace: context.namespace,
+              status: isLifecycleAttemptCreated ? "pending" : undefined,
+              priority: isLifecycleAttemptCreated
+                ? EVENT_PRIORITIES.SETTLEMENT
+                : undefined,
+              metadata: isLifecycleAttemptCreated ? baseResultMetadata : null,
+              eventPayload: isLifecycleAttemptCreated
+                ? failedPayload as unknown as Record<string, unknown>
+                : null,
             },
           );
         } catch (attemptError) {
@@ -749,6 +775,22 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             attemptError,
           );
         }
+      }
+
+      if (isLifecycleAttemptCreated) {
+        deps.emitToStream({
+          ...event,
+          type: "LLM_RESULT",
+          payload: failedPayload,
+          parentEventId: typeof event.id === "string" ? event.id : null,
+          priority: EVENT_PRIORITIES.SETTLEMENT,
+          metadata: {
+            ...baseResultMetadata,
+            llmError: failedPayload.error,
+          },
+          status: "completed",
+        } as Event);
+        return { producedEvents: [] };
       }
 
       return {
@@ -897,6 +939,25 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       finishedAt: new Date().toISOString(),
     };
 
+    const resultMetadata: Record<string, unknown> = {
+      ...baseResultMetadata,
+      ...(routeTargets.length > 0
+        ? {
+          routing: {
+            routeTo: routeTargets,
+          },
+        }
+        : {}),
+      ...(askTargets.length > 0
+        ? {
+          routing: {
+            ...(routeTargets.length > 0 ? { routeTo: routeTargets } : {}),
+            askTo: askTargets,
+          },
+        }
+        : {}),
+    };
+
     const completionAttemptId = terminalLlmAttemptId ?? llmAttemptId;
     if (completionAttemptId && deps.db?.ops?.mutate?.llmAttempts) {
       try {
@@ -923,6 +984,14 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             traceId: typeof event.traceId === "string" ? event.traceId : null,
             causationId: typeof event.id === "string" ? event.id : null,
             namespace: context.namespace,
+            status: isLifecycleAttemptCreated ? "pending" : undefined,
+            priority: isLifecycleAttemptCreated
+              ? EVENT_PRIORITIES.SETTLEMENT
+              : undefined,
+            metadata: isLifecycleAttemptCreated ? resultMetadata : null,
+            eventPayload: isLifecycleAttemptCreated
+              ? llmResultPayload as unknown as Record<string, unknown>
+              : null,
           },
         );
       } catch (attemptError) {
@@ -933,25 +1002,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       }
     }
 
-    const resultMetadata: Record<string, unknown> = {
-      ...baseResultMetadata,
-      ...(routeTargets.length > 0
-        ? {
-          routing: {
-            routeTo: routeTargets,
-          },
-        }
-        : {}),
-      ...(askTargets.length > 0
-        ? {
-          routing: {
-            ...(routeTargets.length > 0 ? { routeTo: routeTargets } : {}),
-            askTo: askTargets,
-          },
-        }
-        : {}),
-    };
-
     const producedEvents: NewEvent[] = [{
       threadId,
       type: "LLM_RESULT",
@@ -961,6 +1011,19 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       priority: EVENT_PRIORITIES.SETTLEMENT,
       metadata: resultMetadata,
     }];
+
+    if (isLifecycleAttemptCreated) {
+      deps.emitToStream({
+        ...event,
+        type: "LLM_RESULT",
+        payload: llmResultPayload,
+        parentEventId: typeof event.id === "string" ? event.id : null,
+        priority: EVENT_PRIORITIES.SETTLEMENT,
+        metadata: resultMetadata,
+        status: "completed",
+      } as Event);
+      return { producedEvents: [] };
+    }
 
     return { producedEvents };
   },

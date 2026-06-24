@@ -238,6 +238,16 @@ type DomainMutationCommit<T> = {
   event?: DomainLifecycleEventInput | null;
 };
 
+type WorkflowMutationOptions = {
+  traceId?: string | null;
+  causationId?: string | null;
+  namespace?: string | null;
+  status?: Queue["status"];
+  priority?: number | null;
+  metadata?: Record<string, unknown> | null;
+  eventPayload?: Record<string, unknown> | null;
+};
+
 export interface LlmAttemptInput {
   id?: string;
   threadId: string;
@@ -315,6 +325,9 @@ export interface GraphMutationOptions extends ThreadMutationOptions {
   threadId: string;
   correlationId?: string | null;
   metadata?: Record<string, unknown> | null;
+  status?: Queue["status"];
+  priority?: number | null;
+  eventPayload?: Record<string, unknown> | null;
 }
 
 export type ThreadCreateInput = ThreadInsert;
@@ -351,7 +364,7 @@ export interface DomainMutationOperations {
     create: (
       message: MessageInsert,
       namespace?: string | null,
-      options?: { traceId?: string | null; causationId?: string | null },
+      options?: WorkflowMutationOptions,
     ) => Promise<Message>;
     appendSegments: (
       messageId: string,
@@ -361,73 +374,53 @@ export interface DomainMutationOperations {
         namespace?: string | null;
         traceId?: string | null;
         causationId?: string | null;
+        status?: Queue["status"];
+        priority?: number | null;
+        metadata?: Record<string, unknown> | null;
+        eventPayload?: Record<string, unknown> | null;
       },
     ) => Promise<KnowledgeNode | undefined>;
   };
   llmAttempts: {
-    create: (input: LlmAttemptInput) => Promise<KnowledgeNode>;
+    create: (
+      input: LlmAttemptInput,
+      options?: WorkflowMutationOptions,
+    ) => Promise<KnowledgeNode>;
     update: (
       id: string,
       patch: LlmAttemptPatch,
-      options?: {
-        threadId?: string | null;
-        traceId?: string | null;
-        causationId?: string | null;
-        namespace?: string | null;
-      },
+      options?: WorkflowMutationOptions & { threadId?: string | null },
     ) => Promise<KnowledgeNode | undefined>;
     complete: (
       id: string,
       patch: LlmAttemptPatch,
-      options?: {
-        threadId?: string | null;
-        traceId?: string | null;
-        causationId?: string | null;
-        namespace?: string | null;
-      },
+      options?: WorkflowMutationOptions & { threadId?: string | null },
     ) => Promise<KnowledgeNode | undefined>;
     fail: (
       id: string,
       patch: LlmAttemptPatch,
-      options?: {
-        threadId?: string | null;
-        traceId?: string | null;
-        causationId?: string | null;
-        namespace?: string | null;
-      },
+      options?: WorkflowMutationOptions & { threadId?: string | null },
     ) => Promise<KnowledgeNode | undefined>;
   };
   toolExecutions: {
-    create: (input: ToolExecutionInput) => Promise<KnowledgeNode>;
+    create: (
+      input: ToolExecutionInput,
+      options?: WorkflowMutationOptions,
+    ) => Promise<KnowledgeNode>;
     update: (
       id: string,
       patch: ToolExecutionPatch,
-      options?: {
-        threadId?: string | null;
-        traceId?: string | null;
-        causationId?: string | null;
-        namespace?: string | null;
-      },
+      options?: WorkflowMutationOptions & { threadId?: string | null },
     ) => Promise<KnowledgeNode | undefined>;
     complete: (
       id: string,
       patch: ToolExecutionPatch,
-      options?: {
-        threadId?: string | null;
-        traceId?: string | null;
-        causationId?: string | null;
-        namespace?: string | null;
-      },
+      options?: WorkflowMutationOptions & { threadId?: string | null },
     ) => Promise<KnowledgeNode | undefined>;
     fail: (
       id: string,
       patch: ToolExecutionPatch,
-      options?: {
-        threadId?: string | null;
-        traceId?: string | null;
-        causationId?: string | null;
-        namespace?: string | null;
-      },
+      options?: WorkflowMutationOptions & { threadId?: string | null },
     ) => Promise<KnowledgeNode | undefined>;
     getOutput: (
       id: string,
@@ -953,7 +946,7 @@ export function createOperations(
       `(
         "metadata"->>'interruptsActiveWork' = 'true'
         OR (
-          "eventType" = 'NEW_MESSAGE'
+          "eventType" IN ('NEW_MESSAGE', 'message.created')
           AND ("payload"->'sender'->>'type') IN ('user', 'job')
         )
       )`,
@@ -1018,7 +1011,12 @@ export function createOperations(
        WHERE "threadId" = $1
          AND "createdAt" < ($2::timestamptz)
          AND "status" = 'pending'
-         AND "eventType" IN ('LLM_CALL', 'TOOL_CALL')
+         AND "eventType" IN (
+           'LLM_CALL',
+           'TOOL_CALL',
+           'llm_attempt.created',
+           'tool_execution.created'
+         )
          ${namespaceClause}
        RETURNING "id"`,
       params,
@@ -1028,7 +1026,10 @@ export function createOperations(
   };
 
   const hasVisibleLlmProgress = (event: Queue): boolean => {
-    if (event.eventType !== "LLM_CALL") return false;
+    if (
+      event.eventType !== "LLM_CALL" &&
+      event.eventType !== "llm_attempt.created"
+    ) return false;
     const metadata = event.metadata;
     return Boolean(
       metadata &&
@@ -1658,8 +1659,7 @@ export function createOperations(
             subjectType: "thread",
             subjectId: String(created.id),
             operation: "created",
-            input: threadData,
-            after: result as unknown as Record<string, unknown>,
+            payload: threadData as Record<string, unknown>,
             traceId: options.traceId ?? null,
             causationId: options.causationId ?? null,
             namespace: typeof created.namespace === "string"
@@ -1714,10 +1714,7 @@ export function createOperations(
           subjectType: "thread",
           subjectId: String(result.id),
           operation: "updated",
-          input: threadData,
-          before: existing as unknown as Record<string, unknown>,
-          after: hydrated as unknown as Record<string, unknown>,
-          patch: updates,
+          payload: updates as Record<string, unknown>,
           traceId: options.traceId ?? null,
           causationId: options.causationId ?? null,
           namespace: typeof result.namespace === "string"
@@ -2360,7 +2357,7 @@ export function createOperations(
        WHERE "threadId" = $1
          AND "id" != $2
          AND "status" = 'pending'
-         AND "eventType" = 'NEW_MESSAGE'
+         AND "eventType" IN ('NEW_MESSAGE', 'message.created')
          ${namespaceClause}
        ORDER BY "createdAt" ASC`,
       params,
@@ -2428,9 +2425,7 @@ export function createOperations(
           subjectType: "thread",
           subjectId: String(hydrated.id),
           operation: "updated",
-          before: before as unknown as Record<string, unknown>,
-          after: hydrated as unknown as Record<string, unknown>,
-          patch: updates,
+          payload: updates as Record<string, unknown>,
           traceId: options.traceId ?? null,
           causationId: options.causationId ?? null,
           namespace: typeof hydrated.namespace === "string"
@@ -3323,6 +3318,8 @@ export function createOperations(
     correlationId: options.correlationId ?? null,
     namespace: options.namespace ?? null,
     metadata: options.metadata ?? null,
+    status: options.status,
+    priority: options.priority ?? null,
   });
 
   const createGraphNode = async (
@@ -3344,8 +3341,8 @@ export function createOperations(
           ),
           namespace: options.namespace ?? after.namespace ?? node.namespace ??
             null,
-          input: node,
-          after,
+          payload: options.eventPayload ??
+            (node as unknown as Record<string, unknown>),
         },
       };
     });
@@ -3372,9 +3369,8 @@ export function createOperations(
             ),
             namespace: options.namespace ?? after.namespace ??
               before.namespace ?? null,
-            before,
-            after,
-            patch: updates,
+            payload: options.eventPayload ??
+              (updates as Record<string, unknown>),
           }
           : null,
       };
@@ -3398,8 +3394,7 @@ export function createOperations(
             "deleted",
           ),
           namespace: options.namespace ?? before.namespace ?? null,
-          before,
-          after: null,
+          payload: options.eventPayload ?? { id },
         },
       };
     });
@@ -3420,8 +3415,8 @@ export function createOperations(
             String(after.id),
             "created",
           ),
-          input: edge,
-          after,
+          payload: options.eventPayload ??
+            (edge as unknown as Record<string, unknown>),
           metadata: {
             ...(options.metadata ?? {}),
             edgeType: after.type ?? edge.type,
@@ -3442,8 +3437,7 @@ export function createOperations(
         result: undefined,
         event: {
           ...graphMutationEventBase(options, "edge", id, "deleted"),
-          before,
-          after: null,
+          payload: options.eventPayload ?? { id },
           metadata: {
             ...(options.metadata ?? {}),
             edgeType: before.type,
@@ -3582,7 +3576,10 @@ export function createOperations(
           subjectType: "thread",
           subjectId: node.id as string,
           operation: "created",
-          after: node,
+          payload: {
+            threadId,
+            namespace,
+          },
           namespace,
         },
       };
@@ -3592,7 +3589,7 @@ export function createOperations(
   const createDomainMessage = async (
     message: MessageInsert,
     namespace?: string | null,
-    options?: { traceId?: string | null; causationId?: string | null },
+    options?: WorkflowMutationOptions,
   ): Promise<Message> =>
     await domainMutation(async () => {
       const created = await createMessage(message, namespace ?? undefined);
@@ -3603,10 +3600,13 @@ export function createOperations(
           subjectType: "message",
           subjectId: created.id,
           operation: "created",
-          input: message,
-          after: created as unknown as Record<string, unknown>,
+          payload: options?.eventPayload ??
+            (message as Record<string, unknown>),
           traceId: options?.traceId ?? null,
           causationId: options?.causationId ?? null,
+          priority: options?.priority ?? null,
+          status: options?.status,
+          metadata: options?.metadata ?? null,
           namespace,
         },
       };
@@ -3620,6 +3620,10 @@ export function createOperations(
       namespace?: string | null;
       traceId?: string | null;
       causationId?: string | null;
+      status?: Queue["status"];
+      priority?: number | null;
+      metadata?: Record<string, unknown> | null;
+      eventPayload?: Record<string, unknown> | null;
     },
   ): Promise<KnowledgeNode | undefined> =>
     await domainMutation(async () => {
@@ -3642,11 +3646,12 @@ export function createOperations(
             subjectType: "message",
             subjectId: messageId,
             operation: "updated",
-            before: previous,
-            after: updated,
-            patch: { segments },
+            payload: options.eventPayload ?? { segments },
             traceId: options.traceId ?? null,
             causationId: options.causationId ?? null,
+            priority: options.priority ?? null,
+            status: options.status,
+            metadata: options.metadata ?? null,
             namespace: options.namespace ?? null,
           }
           : null,
@@ -3655,6 +3660,7 @@ export function createOperations(
 
   const createLlmAttempt = async (
     input: LlmAttemptInput,
+    options: WorkflowMutationOptions = {},
   ): Promise<KnowledgeNode> =>
     await domainMutation(async () => {
       const now = new Date().toISOString();
@@ -3706,9 +3712,13 @@ export function createOperations(
           subjectType: "llm_attempt",
           subjectId: node.id as string,
           operation: "created",
-          input,
-          after: node,
-          causationId: input.eventId ?? null,
+          payload: options.eventPayload ??
+            (input as unknown as Record<string, unknown>),
+          traceId: options.traceId ?? null,
+          causationId: options.causationId ?? input.eventId ?? null,
+          priority: options.priority ?? null,
+          status: options.status,
+          metadata: options.metadata ?? null,
           namespace: input.namespace ?? null,
         },
       };
@@ -3718,12 +3728,7 @@ export function createOperations(
     id: string,
     patch: LlmAttemptPatch,
     operation = "updated",
-    options?: {
-      threadId?: string | null;
-      traceId?: string | null;
-      causationId?: string | null;
-      namespace?: string | null;
-    },
+    options?: WorkflowMutationOptions & { threadId?: string | null },
   ): Promise<KnowledgeNode | undefined> =>
     await domainMutation(async () => {
       const previous = await getNodeById(id);
@@ -3751,11 +3756,12 @@ export function createOperations(
             subjectType: "llm_attempt",
             subjectId: id,
             operation,
-            before: previous,
-            after: updated,
-            patch: dataPatch,
+            payload: options.eventPayload ?? dataPatch,
             traceId: options.traceId ?? null,
             causationId: options.causationId ?? null,
+            priority: options.priority ?? null,
+            status: options.status,
+            metadata: options.metadata ?? null,
             namespace: options.namespace ?? null,
           }
           : null,
@@ -3764,6 +3770,7 @@ export function createOperations(
 
   const createToolExecution = async (
     input: ToolExecutionInput,
+    options: WorkflowMutationOptions = {},
   ): Promise<KnowledgeNode> =>
     await domainMutation(async () => {
       const now = new Date().toISOString();
@@ -3802,9 +3809,13 @@ export function createOperations(
           subjectType: "tool_execution",
           subjectId: node.id as string,
           operation: "created",
-          input,
-          after: node,
-          causationId: input.eventId ?? null,
+          payload: options.eventPayload ??
+            (input as unknown as Record<string, unknown>),
+          traceId: options.traceId ?? null,
+          causationId: options.causationId ?? input.eventId ?? null,
+          priority: options.priority ?? null,
+          status: options.status,
+          metadata: options.metadata ?? null,
           namespace: input.namespace ?? null,
         },
       };
@@ -3814,12 +3825,7 @@ export function createOperations(
     id: string,
     patch: ToolExecutionPatch,
     operation = "updated",
-    options?: {
-      threadId?: string | null;
-      traceId?: string | null;
-      causationId?: string | null;
-      namespace?: string | null;
-    },
+    options?: WorkflowMutationOptions & { threadId?: string | null },
   ): Promise<KnowledgeNode | undefined> =>
     await domainMutation(async () => {
       const previous = await getNodeById(id);
@@ -3842,11 +3848,12 @@ export function createOperations(
             subjectType: "tool_execution",
             subjectId: id,
             operation,
-            before: previous,
-            after: updated,
-            patch: dataPatch,
+            payload: options.eventPayload ?? dataPatch,
             traceId: options.traceId ?? null,
             causationId: options.causationId ?? null,
+            priority: options.priority ?? null,
+            status: options.status,
+            metadata: options.metadata ?? null,
             namespace: options.namespace ?? null,
           }
           : null,
@@ -3910,8 +3917,7 @@ export function createOperations(
           subjectType: "asset",
           subjectId: node.id as string,
           operation: "created",
-          input,
-          after: node,
+          payload: input,
           namespace: input.namespace ?? null,
         },
       };
@@ -3953,9 +3959,7 @@ export function createOperations(
           subjectType: "thread",
           subjectId: String(forked.id),
           operation: "forked",
-          input,
-          before: source as unknown as Record<string, unknown>,
-          after: forked as unknown as Record<string, unknown>,
+          payload: input as Record<string, unknown>,
           traceId: options.traceId ?? null,
           causationId: options.causationId ?? null,
           namespace: typeof forked.namespace === "string"

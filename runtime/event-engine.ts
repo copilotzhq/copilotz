@@ -257,8 +257,27 @@ function eventPriority(event: Event): number {
 }
 
 function isInterruptibleForegroundEvent(event: Event): boolean {
-  return (event.type === "LLM_CALL" || event.type === "TOOL_CALL") &&
+  const type = (event as unknown as { type?: string }).type;
+  return (
+    type === "LLM_CALL" ||
+    type === "TOOL_CALL" ||
+    type === "llm_attempt.created" ||
+    type === "tool_execution.created"
+  ) &&
     eventPriority(event) >= EVENT_PRIORITIES.NORMAL;
+}
+
+function isPublicStreamEventType(eventType: string): boolean {
+  return eventType === "NEW_MESSAGE" ||
+    eventType === "TOKEN" ||
+    eventType === "LLM_CALL" ||
+    eventType === "LLM_RESULT" ||
+    eventType === "TOOL_CALL" ||
+    eventType === "TOOL_RESULT" ||
+    eventType === "ASSET_CREATED" ||
+    eventType === "ASSET_ERROR" ||
+    eventType === "GOAL_STOPPED" ||
+    eventType === "GOAL_RESULT";
 }
 
 function createEventCancellationScope(
@@ -447,6 +466,14 @@ export async function startEventWorker(
         createdAt: next.createdAt,
         updatedAt: next.updatedAt,
         status: next.status,
+        subjectType: (next as { subjectType?: string | null }).subjectType ??
+          null,
+        subjectId: (next as { subjectId?: string | null }).subjectId ?? null,
+        operation: (next as { operation?: string | null }).operation ?? null,
+        causationId: (next as { causationId?: string | null }).causationId ??
+          null,
+        correlationId:
+          (next as { correlationId?: string | null }).correlationId ?? null,
       };
 
       let event: Event;
@@ -513,9 +540,11 @@ export async function startEventWorker(
       await assertLeaseOwnership();
       await ops.updateQueueItemStatus(queueId, "processing");
 
-      try {
-        context.emitToStream(event);
-      } catch { /* ignore stream push errors */ }
+      if (isPublicStreamEventType(event.type)) {
+        try {
+          context.emitToStream(event);
+        } catch { /* ignore stream push errors */ }
+      }
 
       try {
         const deps: ProcessorDeps = (await buildDeps(

@@ -1654,9 +1654,18 @@ export async function createCopilotz(
         typeof (p as EventProcessor<unknown, ProcessorDeps>).process !==
           "function"
       ) continue;
-      const key = String(eventType).toUpperCase();
+      const rawEventType = String(eventType);
+      const key = rawEventType.includes(".")
+        ? rawEventType
+        : rawEventType.toUpperCase();
       if (!byType[key]) byType[key] = [];
       byType[key].push(p as EventProcessor<unknown, ProcessorDeps>);
+      if (key === "NEW_MESSAGE") {
+        if (!byType["message.created"]) byType["message.created"] = [];
+        byType["message.created"].push(
+          p as EventProcessor<unknown, ProcessorDeps>,
+        );
+      }
     }
     baseConfig.processorsByType = byType;
   }

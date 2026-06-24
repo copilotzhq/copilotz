@@ -122,15 +122,18 @@ Deno.test("ensureSchemaProvisioned does not run DDL for a current schema", async
   assertEquals(isSchemaInCache("tenant_ready"), true);
 });
 
-Deno.test("ensureSchemaProvisioned does not run runtime index DDL", async () => {
+Deno.test("ensureSchemaProvisioned runs runtime index DDL on existing schemas", async () => {
   clearSchemaCache();
   const db = new FakeDb(["tenant_ready"], ["tenant_ready"]);
 
   await ensureSchemaProvisioned(db as never, "tenant_ready");
 
   assertEquals(
-    db.calls.some((call) => call.sql.includes("CREATE INDEX")),
-    false,
+    db.calls.some((call) =>
+      call.sql.includes("CREATE INDEX") &&
+      call.sql.includes("idx_nodes_admin_llm_attempt_time")
+    ),
+    true,
   );
   assertEquals(isSchemaInCache("tenant_ready"), true);
 });

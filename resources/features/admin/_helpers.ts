@@ -148,10 +148,18 @@ function buildRunSenderIdExpr(dataExpr: string): string {
   return `COALESCE(${dataExpr}->'runSender'->>'externalId', ${dataExpr}->'runSender'->>'id', ${dataExpr}->'runSender'->>'email', ${dataExpr}->'runSender'->>'name', '')`;
 }
 
+function buildAttemptUsageDataExpr(dataExpr: string): string {
+  return `jsonb_build_object(
+         'usage', COALESCE(${dataExpr}->'usage', '{}'::jsonb),
+         'cost', COALESCE(${dataExpr}->'cost', '{}'::jsonb)
+       )`;
+}
+
 export interface AdminUsageSourceScope {
   namespacePlaceholder?: string;
   fromPlaceholder?: string;
   toPlaceholder?: string;
+  threadIdPlaceholder?: string;
 }
 
 export function pushAdminUsageSourceScope(
@@ -159,6 +167,7 @@ export function pushAdminUsageSourceScope(
   namespace?: string,
   from?: string | null,
   to?: string | null,
+  threadId?: string,
 ): AdminUsageSourceScope {
   const scope: AdminUsageSourceScope = {};
   if (namespace) {
@@ -174,6 +183,10 @@ export function pushAdminUsageSourceScope(
   if (t) {
     params.push(t);
     scope.toPlaceholder = `$${params.length}`;
+  }
+  if (threadId) {
+    params.push(threadId);
+    scope.threadIdPlaceholder = `$${params.length}`;
   }
   return scope;
 }
@@ -191,6 +204,11 @@ function buildUsageSourceNodeFilters(
   }
   if (scope.toPlaceholder) {
     filters.push(`${alias}."created_at" <= ${scope.toPlaceholder}`);
+  }
+  if (scope.threadIdPlaceholder) {
+    filters.push(
+      `COALESCE(${alias}."data"->>'threadId', ${alias}."source_id") = ${scope.threadIdPlaceholder}`,
+    );
   }
   return filters.join(" AND ");
 }
@@ -211,7 +229,7 @@ export function buildAdminUsageSourceCte(
          ${buildRunSenderIdExpr(`a."data"`)} AS "initiatedById",
          COALESCE(a."data"->>'provider', '') AS "provider",
          COALESCE(a."data"->>'model', '') AS "model",
-         a."data",
+         ${buildAttemptUsageDataExpr(`a."data"`)} AS "data",
          'llm_attempt'::text AS "sourceType"
        FROM "nodes" a
        WHERE ${attemptWhere}
@@ -268,6 +286,33 @@ export function emptyUsageBreakdown(): AdminUsageBreakdown {
 
 export function emptyUsageTotals(): AdminUsageTotals {
   return { totalCalls: 0, ...emptyUsageBreakdown() };
+}
+
+export function sumUsageTotalsFromPoints(
+  points: ReadonlyArray<Partial<AdminUsageTotals>>,
+): AdminUsageTotals {
+  return points.reduce<AdminUsageTotals>(
+    (acc, point) => ({
+      totalCalls: acc.totalCalls + toNum(point.totalCalls),
+      inputTokens: acc.inputTokens + toNum(point.inputTokens),
+      outputTokens: acc.outputTokens + toNum(point.outputTokens),
+      reasoningTokens: acc.reasoningTokens + toNum(point.reasoningTokens),
+      cacheReadInputTokens: acc.cacheReadInputTokens +
+        toNum(point.cacheReadInputTokens),
+      cacheCreationInputTokens: acc.cacheCreationInputTokens +
+        toNum(point.cacheCreationInputTokens),
+      totalTokens: acc.totalTokens + toNum(point.totalTokens),
+      inputCostUsd: acc.inputCostUsd + toNum(point.inputCostUsd),
+      outputCostUsd: acc.outputCostUsd + toNum(point.outputCostUsd),
+      reasoningCostUsd: acc.reasoningCostUsd + toNum(point.reasoningCostUsd),
+      cacheReadInputCostUsd: acc.cacheReadInputCostUsd +
+        toNum(point.cacheReadInputCostUsd),
+      cacheCreationInputCostUsd: acc.cacheCreationInputCostUsd +
+        toNum(point.cacheCreationInputCostUsd),
+      totalCostUsd: acc.totalCostUsd + toNum(point.totalCostUsd),
+    }),
+    emptyUsageTotals(),
+  );
 }
 
 export function toUsageBreakdown(

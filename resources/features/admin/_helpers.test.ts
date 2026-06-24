@@ -57,10 +57,23 @@ Deno.test("admin usage source reads only canonical llm_attempt rows", () => {
   const sql = buildAdminUsageSourceCte();
 
   assertStringIncludes(sql, `a."type" = 'llm_attempt'`);
-  assertStringIncludes(sql, `a."data",`);
+  assertStringIncludes(sql, `jsonb_build_object(`);
+  assertStringIncludes(sql, `'usage', COALESCE(a."data"->'usage'`);
+  assertStringIncludes(sql, `'cost', COALESCE(a."data"->'cost'`);
   assert(!sql.includes(`llm_usage`));
   assert(!sql.includes(`legacy_usage`));
   assertStringIncludes(sql, `a."data"->>'eventId'`);
+});
+
+Deno.test("admin usage source can push threadId into source scans", () => {
+  const sql = buildAdminUsageSourceCte(`"admin_usage_source"`, {
+    threadIdPlaceholder: "$1",
+  });
+
+  assertStringIncludes(
+    sql,
+    `COALESCE(a."data"->>'threadId', a."source_id") = $1`,
+  );
 });
 
 Deno.test("admin usage source pushes namespace and time filters into source scans", () => {

@@ -16,6 +16,18 @@ import {
   toUsageBreakdown,
 } from "./_helpers.ts";
 
+const DEFAULT_AGENTS_LOOKBACK_DAYS = 30;
+
+function defaultAgentsUsageFrom(): string {
+  const from = new Date();
+  from.setDate(from.getDate() - DEFAULT_AGENTS_LOOKBACK_DAYS);
+  return from.toISOString();
+}
+
+function defaultAgentsUsageTo(): string {
+  return new Date().toISOString();
+}
+
 export default async function (
   request: { query?: Record<string, unknown> },
   copilotz: Copilotz,
@@ -24,6 +36,8 @@ export default async function (
   const q = copilotz.ops.query;
   const namespace = query.namespace as string | undefined;
   const search = normalizeSearch(query.search as string | undefined);
+  const from = query.from as string | undefined;
+  const to = query.to as string | undefined;
 
   const params: unknown[] = [];
   const filters = [
@@ -46,10 +60,21 @@ export default async function (
 
   const msgScope: string[] = [`m."type" = 'message'`];
   const usageScope: string[] = [];
-  const usageSourceScope = pushAdminUsageSourceScope(params, namespace);
+  const usageSourceScope = pushAdminUsageSourceScope(
+    params,
+    namespace,
+    from ?? defaultAgentsUsageFrom(),
+    to ?? defaultAgentsUsageTo(),
+  );
   if (usageSourceScope.namespacePlaceholder) {
     msgScope.push(`m."namespace" = ${usageSourceScope.namespacePlaceholder}`);
     usageScope.push(`u."namespace" = ${usageSourceScope.namespacePlaceholder}`);
+  }
+  if (usageSourceScope.fromPlaceholder) {
+    usageScope.push(`u."created_at" >= ${usageSourceScope.fromPlaceholder}`);
+  }
+  if (usageSourceScope.toPlaceholder) {
+    usageScope.push(`u."created_at" <= ${usageSourceScope.toPlaceholder}`);
   }
   const usageWhere = usageScope.length ? usageScope.join(" AND ") : "TRUE";
 

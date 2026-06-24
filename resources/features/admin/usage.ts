@@ -6,6 +6,7 @@ import {
   buildAttemptUsageSumSelects,
   buildUsageCoalesceSelects,
   pushAdminUsageSourceScope,
+  sumUsageTotalsFromPoints,
   toIso,
   toNum,
   toUsageTotals,
@@ -86,11 +87,15 @@ export default async function (
 
   const params: unknown[] = [];
   const filters: string[] = [];
+  const threadId = typeof query.threadId === "string"
+    ? query.threadId
+    : undefined;
   const sourceScope = pushAdminUsageSourceScope(
     params,
     typeof query.namespace === "string" ? query.namespace : undefined,
     query.from as string | undefined,
     query.to as string | undefined,
+    threadId,
   );
 
   const namespace = typeof query.namespace === "string"
@@ -104,14 +109,6 @@ export default async function (
   }
   if (sourceScope.toPlaceholder) {
     filters.push(`u."created_at" <= ${sourceScope.toPlaceholder}`);
-  }
-
-  const threadId = typeof query.threadId === "string"
-    ? query.threadId
-    : undefined;
-  if (threadId) {
-    params.push(threadId);
-    filters.push(`u."threadId" = $${params.length}`);
   }
 
   const provider = typeof query.provider === "string"
@@ -209,42 +206,7 @@ export default async function (
       ...toUsageTotals(row),
       totalCalls: toNum(row.totalCalls),
     }));
-    const totals = points.reduce<AdminUsageTotals>(
-      (acc, point) => ({
-        totalCalls: acc.totalCalls + point.totalCalls,
-        inputTokens: acc.inputTokens + point.inputTokens,
-        outputTokens: acc.outputTokens + point.outputTokens,
-        reasoningTokens: acc.reasoningTokens + point.reasoningTokens,
-        cacheReadInputTokens: acc.cacheReadInputTokens +
-          point.cacheReadInputTokens,
-        cacheCreationInputTokens: acc.cacheCreationInputTokens +
-          point.cacheCreationInputTokens,
-        totalTokens: acc.totalTokens + point.totalTokens,
-        inputCostUsd: acc.inputCostUsd + point.inputCostUsd,
-        outputCostUsd: acc.outputCostUsd + point.outputCostUsd,
-        reasoningCostUsd: acc.reasoningCostUsd + point.reasoningCostUsd,
-        cacheReadInputCostUsd: acc.cacheReadInputCostUsd +
-          point.cacheReadInputCostUsd,
-        cacheCreationInputCostUsd: acc.cacheCreationInputCostUsd +
-          point.cacheCreationInputCostUsd,
-        totalCostUsd: acc.totalCostUsd + point.totalCostUsd,
-      }),
-      {
-        totalCalls: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        reasoningTokens: 0,
-        cacheReadInputTokens: 0,
-        cacheCreationInputTokens: 0,
-        totalTokens: 0,
-        inputCostUsd: 0,
-        outputCostUsd: 0,
-        reasoningCostUsd: 0,
-        cacheReadInputCostUsd: 0,
-        cacheCreationInputCostUsd: 0,
-        totalCostUsd: 0,
-      },
-    );
+    const totals = sumUsageTotalsFromPoints(points);
 
     return {
       status: 200,
@@ -328,18 +290,6 @@ export default async function (
     params,
   );
 
-  const totalsResult = await q<Record<keyof AdminUsageTotals, number>>(
-    `WITH ${buildAdminUsageSourceCte(`"admin_usage_source"`, sourceScope)}
-     SELECT COUNT(*)::int AS "totalCalls", ${
-      buildAttemptUsageSumSelects(`u."data"`)
-    }
-     FROM "admin_usage_source" u
-     ${participantJoins}
-     ${threadJoin}
-     WHERE ${whereClause}`,
-    params,
-  );
-
   const points = result.rows.map((row) => ({
     bucket: toIso(row.bucket) ??
       new Date(row.bucket as string | Date).toISOString(),
@@ -354,7 +304,7 @@ export default async function (
     data: {
       points,
       rows: points,
-      totals: toUsageTotals(totalsResult.rows[0]),
+      totals: sumUsageTotalsFromPoints(points),
     } satisfies AdminUsageResponse,
   };
 }

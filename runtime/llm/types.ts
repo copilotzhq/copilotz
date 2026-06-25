@@ -331,6 +331,12 @@ export interface ExtractedPart {
 }
 
 export interface ProviderUsageUpdate {
+  /**
+   * Total prompt tokens for the request, including cache reads and cache
+   * writes. Cache fields are subsets of this total (OpenAI/Gemini style).
+   * Anthropic-compatible providers are normalized to this inclusive shape in
+   * their adapters before cost and cache-hit math run.
+   */
   inputTokens?: number;
   outputTokens?: number;
   reasoningTokens?: number;

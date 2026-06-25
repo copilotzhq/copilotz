@@ -260,10 +260,10 @@ Deno.test("minimaxProvider extracts Anthropic-style usage fields", () => {
   });
 
   assert(usage);
-  assertEquals(usage.inputTokens, 100);
+  assertEquals(usage.inputTokens, 105);
   assertEquals(usage.outputTokens, 20);
   assertEquals(usage.cacheReadInputTokens, 5);
-  assertEquals(usage.totalTokens, 120);
+  assertEquals(usage.totalTokens, 125);
 });
 
 Deno.test("minimaxProvider reads final output tokens from message_delta usage", () => {
@@ -283,6 +283,7 @@ Deno.test("minimaxProvider reads final output tokens from message_delta usage", 
   });
   assert(start);
   assertEquals(start.outputTokens, 0);
+  assertEquals(start.inputTokens, 1366);
 
   // ...and message_delta carries the final consumption at the top level.
   const final = api.extractUsage?.({
@@ -296,10 +297,10 @@ Deno.test("minimaxProvider reads final output tokens from message_delta usage", 
     },
   });
   assert(final);
-  assertEquals(final.inputTokens, 1252);
+  assertEquals(final.inputTokens, 1366);
   assertEquals(final.outputTokens, 213);
   assertEquals(final.cacheReadInputTokens, 114);
-  assertEquals(final.totalTokens, 1465);
+  assertEquals(final.totalTokens, 1579);
 
   // Non-usage stream events must not emit usage updates.
   assertEquals(api.extractUsage?.({ type: "ping" }), null);

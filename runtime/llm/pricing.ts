@@ -9,6 +9,7 @@ import {
   resolveModelCatalogCandidates,
   resolveModelCatalogEntry,
 } from "@/runtime/llm/model-catalog.ts";
+import { inclusiveInputTokensFromRawUsage } from "@/runtime/llm/usage.ts";
 
 const WARN_TTL_MS = 5 * 60 * 1000;
 const warningTimestamps = new Map<string, number>();
@@ -80,7 +81,11 @@ function computeCost(
   usage: TokenUsage,
   entry: ModelCatalogEntry,
 ): CostBreakdown | null {
-  const inputTokens = toNonNegativeInteger(usage.inputTokens);
+  const storedInputTokens = toNonNegativeInteger(usage.inputTokens);
+  const inputTokens = inclusiveInputTokensFromRawUsage(
+    usage.rawUsage,
+    storedInputTokens,
+  );
   const outputTokens = toNonNegativeInteger(usage.outputTokens);
   const reasoningTokens = clamp(
     toNonNegativeInteger(usage.reasoningTokens),

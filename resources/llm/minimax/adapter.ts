@@ -7,6 +7,7 @@ import type {
   ProviderFinishReason,
   ProviderUsageUpdate,
 } from "@/runtime/llm/types.ts";
+import { withInclusiveInputTokens } from "@/runtime/llm/usage.ts";
 import { resolveProviderStopSequences } from "@/runtime/llm/utils.ts";
 
 /**
@@ -145,7 +146,7 @@ function extractMiniMaxUsage(data: any): ProviderUsageUpdate | null {
     ? usage.output_tokens
     : undefined;
 
-  return {
+  return withInclusiveInputTokens({
     inputTokens,
     outputTokens,
     cacheReadInputTokens: typeof usage.cache_read_input_tokens === "number"
@@ -155,11 +156,8 @@ function extractMiniMaxUsage(data: any): ProviderUsageUpdate | null {
       typeof usage.cache_creation_input_tokens === "number"
         ? usage.cache_creation_input_tokens
         : undefined,
-    totalTokens: inputTokens !== undefined && outputTokens !== undefined
-      ? inputTokens + outputTokens
-      : undefined,
     rawUsage: usage as Record<string, unknown>,
-  };
+  });
 }
 
 export const minimaxProvider: ProviderFactory = (config: ProviderConfig) => {

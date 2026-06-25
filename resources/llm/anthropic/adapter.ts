@@ -7,6 +7,7 @@ import type {
   ProviderFinishReason,
   ProviderUsageUpdate,
 } from "@/runtime/llm/types.ts";
+import { withInclusiveInputTokens } from "@/runtime/llm/usage.ts";
 import { resolveProviderStopSequences } from "@/runtime/llm/utils.ts";
 
 const EFFORT_BUDGET_MAP: Record<string, number> = {
@@ -210,7 +211,7 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
         ? usage.output_tokens
         : undefined;
 
-      return {
+      return withInclusiveInputTokens({
         inputTokens,
         outputTokens,
         cacheReadInputTokens: typeof usage.cache_read_input_tokens === "number"
@@ -220,11 +221,8 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
           typeof usage.cache_creation_input_tokens === "number"
             ? usage.cache_creation_input_tokens
             : undefined,
-        totalTokens: inputTokens !== undefined && outputTokens !== undefined
-          ? inputTokens + outputTokens
-          : undefined,
         rawUsage: usage as Record<string, unknown>,
-      };
+      });
     },
     extractFinishReason: extractAnthropicFinishReason,
   };

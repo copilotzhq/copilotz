@@ -117,3 +117,51 @@ Deno.test({
     assertEquals(second.migratedRows, 0);
   },
 });
+
+Deno.test({
+  name:
+    "llm_usage -> usage ledger migration backfills initiatedById from the initiated_llm_usage edge",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({ url: ":memory:" });
+    // Legacy usage row WITHOUT a flat initiatedById or runSender on data.
+    const usage = await db.ops.createNode({
+      namespace: "tenant-edge",
+      type: "llm_usage",
+      name: "completed:openai:gpt-test",
+      data: {
+        threadId: "thread-1",
+        provider: "openai",
+        model: "gpt-test",
+        inputTokens: 5,
+        outputTokens: 7,
+        totalTokens: 12,
+      },
+      sourceType: "thread",
+      sourceId: "thread-1",
+    });
+    const participant = await db.ops.createNode({
+      namespace: "tenant-edge",
+      type: "participant",
+      name: "Alice",
+      data: { externalId: "alice-ext", participantType: "human", name: "Alice" },
+      sourceType: "user",
+      sourceId: "alice-ext",
+    });
+    await db.query(
+      `INSERT INTO "edges" ("id", "source_node_id", "target_node_id", "type", "data", "weight", "created_at")
+       VALUES (gen_random_uuid(), $1, $2, 'initiated_llm_usage', '{}'::jsonb, 1.0, NOW())`,
+      [participant.id, usage.id],
+    );
+
+    const result = await migrateLlmUsageToUsageLedgerWithQuery(db, "tenant-edge");
+    assertEquals(result.migratedRows, 1);
+
+    const migrated = await db.ops.getNodeById(usage.id as string);
+    const data = migrated?.data as Record<string, unknown>;
+    assertEquals(migrated?.type, "usage");
+    assertEquals(data.initiatedById, "alice-ext");
+  },
+});

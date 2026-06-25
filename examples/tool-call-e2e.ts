@@ -276,6 +276,25 @@ try {
     40,
     "Expected final answer attempt usage",
   );
+  const toolAttemptDebug = attemptRows.rows[0].data.debug as Record<
+    string,
+    unknown
+  >;
+  assert(
+    Array.isArray(toolAttemptDebug.inputMessages),
+    "Expected tool-call llm_attempt debug snapshot to include input messages",
+  );
+  assert(
+    String((toolAttemptDebug.rawOutput as Record<string, unknown>).content)
+      .includes("<tool_calls>"),
+    "Expected tool-call llm_attempt debug snapshot to include raw tool markup",
+  );
+  assertEquals(
+    ((toolAttemptDebug.parsedOutput as Record<string, unknown>)
+      .toolCalls as unknown[]).length,
+    1,
+    "Expected tool-call llm_attempt debug snapshot to include parsed tool call",
+  );
 
   const secondRequestJson = JSON.stringify(requestBodies[1]);
   assert(

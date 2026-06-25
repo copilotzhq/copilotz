@@ -180,6 +180,8 @@ async function trackedEntityChat(args: {
         {
           answer: result.answer,
           reasoning: result.reasoning ?? null,
+          messages: result.prompt,
+          debug: result.debug ?? null,
           provider: result.provider ?? args.llmConfig.provider ?? null,
           model: result.model ?? args.llmConfig.model ?? null,
           usage: result.usage ?? null,

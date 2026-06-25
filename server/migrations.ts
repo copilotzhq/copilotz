@@ -111,6 +111,54 @@ export async function migrateLlmUsageToUsageLedgerWithQuery(
     [namespace],
   );
 
+  // Legacy `llm_usage` rows never stored a flat `initiatedById`; the initiator
+  // was only recorded as an `initiated_llm_usage` edge (participant -> usage).
+  // Backfill it from that edge using the same participant key the admin
+  // dashboards group/join on, so attribution resolves instead of "unknown".
+  await db.query(
+    `UPDATE "nodes" u
+     SET "data" = jsonb_set(
+       COALESCE(u."data", '{}'::jsonb),
+       '{initiatedById}',
+       to_jsonb(COALESCE(p."data"->>'externalId', p."source_id", p."id"))
+     )
+     FROM "edges" e
+     INNER JOIN "nodes" p
+       ON p."id" = e."source_node_id"
+      AND p."type" = 'participant'
+     WHERE u."type" = 'usage'
+       AND u."namespace" = $1
+       AND u."data"->>'kind' = 'llm'
+       AND (u."data"->>'initiatedById' IS NULL OR u."data"->>'initiatedById' = '')
+       AND e."target_node_id" = u."id"
+       AND e."type" = $2
+       AND COALESCE(p."data"->>'externalId', p."source_id", p."id") IS NOT NULL`,
+    [namespace, GRAPH_EDGE.INITIATED_LLM_USAGE],
+  );
+
+  // Defensive: backfill the agent attribution from the `used_llm` edge when the
+  // flat `agentId` is missing (harmless no-op when it is already present).
+  await db.query(
+    `UPDATE "nodes" u
+     SET "data" = jsonb_set(
+       COALESCE(u."data", '{}'::jsonb),
+       '{agentId}',
+       to_jsonb(COALESCE(p."data"->>'externalId', p."source_id", p."id"))
+     )
+     FROM "edges" e
+     INNER JOIN "nodes" p
+       ON p."id" = e."source_node_id"
+      AND p."type" = 'participant'
+     WHERE u."type" = 'usage'
+       AND u."namespace" = $1
+       AND u."data"->>'kind' = 'llm'
+       AND (u."data"->>'agentId' IS NULL OR u."data"->>'agentId' = '')
+       AND e."target_node_id" = u."id"
+       AND e."type" = $2
+       AND COALESCE(p."data"->>'externalId', p."source_id", p."id") IS NOT NULL`,
+    [namespace, GRAPH_EDGE.USED_LLM],
+  );
+
   return {
     namespace,
     migratedRows: Number(result.rows[0]?.migratedRows ?? 0),

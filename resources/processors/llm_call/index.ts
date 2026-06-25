@@ -160,16 +160,21 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     let partialAnswer = "";
     let partialReasoning = "";
     let lastPartialPersistedAt = 0;
+    let lastPartialPersistPromise: Promise<void> = Promise.resolve();
+    const isSuperseded = () => deps.cancellation?.isAborted() === true;
+    const cancellationReason = () => deps.cancellation?.reason?.() ?? null;
 
-    const persistPartialAttempt = (force = false) => {
-      if (!llmAttemptId || !deps.db?.ops?.mutate?.llmAttempts) return;
+    const persistPartialAttempt = (force = false): Promise<void> => {
+      if (!llmAttemptId || !deps.db?.ops?.mutate?.llmAttempts) {
+        return Promise.resolve();
+      }
       const now = Date.now();
       if (
         !force &&
         now - lastPartialPersistedAt < LLM_PARTIAL_PERSIST_INTERVAL_MS
-      ) return;
+      ) return Promise.resolve();
       lastPartialPersistedAt = now;
-      void deps.db.ops.mutate.llmAttempts.update(
+      const promise = deps.db.ops.mutate.llmAttempts.update(
         llmAttemptId,
         {
           status: "processing",
@@ -188,6 +193,8 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           error,
         );
       });
+      lastPartialPersistPromise = promise.then(() => undefined);
+      return lastPartialPersistPromise;
     };
 
     const buildTokenEvent = (
@@ -256,7 +263,9 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         } else if (filtered) {
           partialAnswer += filtered;
         }
-        if (token || filtered) persistPartialAttempt();
+        if (!isSuperseded() && (token || filtered)) persistPartialAttempt();
+
+        if (isSuperseded()) return;
 
         deps.emitToStream(
           buildTokenEvent(filtered, false, options?.isReasoning),
@@ -509,11 +518,13 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
               agentName: payload.agent.name,
               provider: record.provider ?? null,
               model: record.model ?? null,
+              messages: record.messages ?? null,
               status: "completed",
               attemptIndex: index,
               parentAttemptId: llmAttemptId,
               runSender,
               namespace: context.namespace,
+              debug: record.debug ?? null,
               metadata: {
                 sourceEventType: event.type,
                 usageOnly: true,
@@ -540,6 +551,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             const attemptPatch = {
               provider: record.provider ?? null,
               model: record.model ?? null,
+              ...(record.messages !== undefined
+                ? { messages: record.messages }
+                : {}),
+              ...(record.debug !== undefined ? { debug: record.debug } : {}),
               usage: record.usage,
               cost: record.cost ?? null,
               ...(record.partialAnswer !== undefined
@@ -648,28 +663,204 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       }
     };
 
+    const markAttemptSuperseded = async (
+      patch: {
+        provider?: string | null;
+        model?: string | null;
+        finishReason?: string | null;
+        answer?: string | null;
+        reasoning?: string | null;
+        messages?: unknown;
+        debug?: unknown;
+        toolCalls?: unknown;
+        usage?: unknown;
+        cost?: unknown;
+        error?: unknown;
+        finishedAt?: string;
+      },
+    ): Promise<void> => {
+      const supersededAttemptId = terminalLlmAttemptId ?? llmAttemptId;
+      if (!supersededAttemptId || !deps.db?.ops?.mutate?.llmAttempts) return;
+      try {
+        await lastPartialPersistPromise;
+        await deps.db.ops.mutate.llmAttempts.update(
+          supersededAttemptId,
+          {
+            ...patch,
+            status: "superseded",
+            partialAnswer,
+            partialReasoning,
+            metadata: {
+              superseded: true,
+              cancellationReason: cancellationReason(),
+            },
+            finishedAt: patch.finishedAt ?? new Date().toISOString(),
+          },
+          {
+            threadId,
+            traceId: typeof event.traceId === "string" ? event.traceId : null,
+            causationId: typeof event.id === "string" ? event.id : null,
+            namespace: context.namespace,
+          },
+        );
+      } catch (error) {
+        console.warn(
+          "[LLM_CALL] Failed to mark llm_attempt superseded:",
+          error,
+        );
+      }
+    };
+
+    const persistSupersededResponse = async (
+      llmResponse: ChatResponse,
+    ): Promise<void> => {
+      const usage = llmResponse.usage;
+      const usageAttempts = llmResponse.usageAttempts;
+      const cost = llmResponse.cost;
+      const usageRecords =
+        Array.isArray(usageAttempts) && usageAttempts.length > 0
+          ? usageAttempts
+          : usage
+          ? [{
+            provider: llmResponse.provider,
+            model: llmResponse.model,
+            usage,
+            ...(cost ? { cost } : {}),
+          }]
+          : [];
+
+      await persistUsageRecords(usageRecords, llmResponse.usageFinalized);
+      await markAttemptSuperseded({
+        provider: llmResponse.provider ?? null,
+        model: llmResponse.model ?? null,
+        finishReason: llmResponse.finishReason ?? "stop",
+        answer: llmResponse.answer ?? null,
+        reasoning: llmResponse.reasoning ?? null,
+        messages: llmResponse.prompt,
+        debug: llmResponse.debug ?? null,
+        toolCalls: llmResponse.toolCalls ?? null,
+        usage: usage ?? null,
+        cost: cost ?? null,
+      });
+    };
+
+    const persistSupersededError = async (error: unknown): Promise<void> => {
+      const providerError = error instanceof LLMProviderError
+        ? error
+        : new LLMProviderError(
+          error instanceof Error ? error.message : String(error),
+          {
+            reason: classifyLLMError(error),
+            provider: configuredProvider,
+            model: configForCall.model,
+            status: typeof (error as { status?: unknown })?.status === "number"
+              ? (error as { status: number }).status
+              : undefined,
+            attempts: [{
+              provider: configuredProvider,
+              model: configForCall.model,
+              reason: classifyLLMError(error),
+              status:
+                typeof (error as { status?: unknown })?.status === "number"
+                  ? (error as { status: number }).status
+                  : undefined,
+              message: error instanceof Error ? error.message : String(error),
+            }],
+            cause: error,
+          },
+        );
+
+      if (providerError.usageAttempts.length > 0) {
+        await persistUsageRecords(providerError.usageAttempts);
+      }
+      await markAttemptSuperseded({
+        provider: providerError.provider ?? configForCall.provider ?? null,
+        model: providerError.model ?? configForCall.model ?? null,
+        answer: null,
+        finishReason: "error",
+        error: {
+          message: providerError.message,
+          reason: providerError.reason,
+          provider: providerError.provider ?? null,
+          model: providerError.model ?? null,
+          status: providerError.status ?? null,
+          retryable: isRetryableLLMReason(providerError.reason),
+          fallbackAttempted: providerError.fallbackAttempted,
+          fallbackCount: Math.max(0, providerError.attempts.length - 1),
+          visibleStreamStarted: providerError.visibleStreamStarted,
+          attempts: providerError.attempts.map((attempt) => ({
+            provider: attempt.provider,
+            model: attempt.model ?? null,
+            reason: attempt.reason ?? null,
+            status: attempt.status ?? null,
+            message: attempt.message ?? null,
+          })),
+        },
+      });
+    };
+
+    const detachSupersededDrain = (
+      chatPromise: Promise<ChatResponse>,
+    ): void => {
+      void chatPromise.then(persistSupersededResponse)
+        .catch(persistSupersededError)
+        .catch((error) => {
+          console.warn(
+            "[LLM_CALL] Failed to drain superseded LLM call:",
+            error,
+          );
+        });
+    };
+
+    const awaitChatOrSupersession = async (
+      chatPromise: Promise<ChatResponse>,
+    ): Promise<ChatResponse | "superseded"> => {
+      if (!deps.cancellation) return await chatPromise;
+      if (isSuperseded()) return "superseded";
+      let unsubscribe = () => {};
+      const superseded = new Promise<"superseded">((resolve) => {
+        unsubscribe = deps.cancellation!.onCancel(() => resolve("superseded"));
+      });
+      try {
+        return await Promise.race([chatPromise, superseded]);
+      } finally {
+        unsubscribe();
+      }
+    };
+
     let response: ChatResponse;
+    const chatPromise = chat(
+      {
+        messages: baseMessages,
+        tools: payload.tools,
+        extractTags: ["route_to", "ask_to", "think"],
+        reasoningHistory: context.reasoningHistory,
+        ...(materializeMessages ? { materializeMessages } : {}),
+      } as ChatRequest,
+      configForCall,
+      envVars,
+      streamCallback,
+      context.llmProviders,
+    );
     try {
-      response = await chat(
-        {
-          messages: baseMessages,
-          tools: payload.tools,
-          extractTags: ["route_to", "ask_to", "think"],
-          signal: deps.cancellation?.signal,
-          reasoningHistory: context.reasoningHistory,
-          ...(materializeMessages ? { materializeMessages } : {}),
-        } as ChatRequest,
-        configForCall,
-        envVars,
-        streamCallback,
-        context.llmProviders,
-      );
+      const settled = await awaitChatOrSupersession(chatPromise);
+      if (settled === "superseded") {
+        detachSupersededDrain(chatPromise);
+        return { producedEvents: [] };
+      }
+      response = settled;
     } catch (error) {
-      if (deps.cancellation?.isAborted()) {
-        throw error;
+      if (isSuperseded()) {
+        void persistSupersededError(error).catch((persistError) => {
+          console.warn(
+            "[LLM_CALL] Failed to persist superseded LLM error:",
+            persistError,
+          );
+        });
+        return { producedEvents: [] };
       }
 
-      if (streamCallback && deps.emitToStream) {
+      if (!isSuperseded() && streamCallback && deps.emitToStream) {
         deps.emitToStream(buildTokenEvent("", true));
       }
 
@@ -740,9 +931,22 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       if (terminalLlmAttemptId) {
         baseResultMetadata.llmAttemptId = terminalLlmAttemptId;
       }
+      if (isSuperseded()) {
+        await markAttemptSuperseded({
+          provider: providerError.provider ?? configForCall.provider ?? null,
+          model: providerError.model ?? configForCall.model ?? null,
+          answer: null,
+          finishReason: "error",
+          error: failedPayload.error,
+          finishedAt: failedPayload.finishedAt,
+        });
+        return { producedEvents: [] };
+      }
+
       const failedAttemptId = terminalLlmAttemptId ?? llmAttemptId;
       if (failedAttemptId && deps.db?.ops?.mutate?.llmAttempts) {
         try {
+          await lastPartialPersistPromise;
           await deps.db.ops.mutate.llmAttempts.fail(
             failedAttemptId,
             {
@@ -816,7 +1020,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     const llmResponse = response as unknown as ChatResponse;
 
     // finalize stream
-    if (streamCallback && deps.emitToStream) {
+    if (!isSuperseded() && streamCallback && deps.emitToStream) {
       deps.emitToStream(buildTokenEvent("", true));
     }
 
@@ -918,6 +1122,25 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     );
     const askTargets = normalizeExtractedTagTargets(extractedTags?.ask_to);
 
+    if (isSuperseded()) {
+      await markAttemptSuperseded({
+        provider: llmResponse.provider ?? null,
+        model: llmResponse.model ?? null,
+        finishReason:
+          Array.isArray(normalizedToolCalls) && normalizedToolCalls.length > 0
+            ? "tool_calls"
+            : llmResponse.finishReason ?? "stop",
+        answer: answer ?? null,
+        reasoning: reasoning ?? null,
+        messages: llmResponse.prompt,
+        debug: llmResponse.debug ?? null,
+        toolCalls: normalizedToolCalls ?? null,
+        usage: usage ?? null,
+        cost: cost ?? null,
+      });
+      return { producedEvents: [] };
+    }
+
     const llmResultPayload: LlmResultEventPayload = {
       llmCallId: typeof event.id === "string" ? event.id : ulid(),
       agent: {
@@ -964,7 +1187,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     if (completionAttemptId && deps.db?.ops?.mutate?.llmAttempts) {
       try {
         if (completionAttemptId === llmAttemptId) {
-          persistPartialAttempt(true);
+          await persistPartialAttempt(true);
         }
         await deps.db.ops.mutate.llmAttempts.complete(
           completionAttemptId,
@@ -974,6 +1197,8 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             finishReason: llmResultPayload.finishReason,
             answer: answer ?? null,
             reasoning: reasoning ?? null,
+            messages: llmResponse.prompt,
+            debug: llmResponse.debug ?? null,
             partialAnswer,
             partialReasoning,
             toolCalls: normalizedToolCalls ?? null,

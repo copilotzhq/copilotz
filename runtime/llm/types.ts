@@ -64,9 +64,9 @@ export interface ProviderConfigBase {
   // Response format
   responseType?: "text" | "json";
   stream?: boolean;
-  /** Abort a provider attempt if no model stream activity arrives before this many milliseconds. Defaults to 20_000. Set <= 0 to disable. */
+  /** Abort a provider attempt if no model stream activity arrives before this many milliseconds. Defaults to 90_000. Set <= 0 to disable. */
   firstTokenTimeoutMs?: number;
-  /** Abort a provider attempt if model stream activity stalls for this many milliseconds after the first activity. Defaults to 5_000. Set <= 0 to disable. */
+  /** Abort a provider attempt if model stream activity stalls for this many milliseconds after the first activity. Defaults to 30_000. Set <= 0 to disable. */
   streamIdleTimeoutMs?: number;
   outputReasoning?: boolean; // Whether to output thinking/reasoning tokens during stream (default true)
   estimateCost?: boolean; // Whether to estimate cost using OpenRouter pricing data (default true)
@@ -277,10 +277,30 @@ export interface ChatResponse {
   model?: string;
   toolCalls?: ToolInvocation[];
   extractedTags?: Record<string, string[]>;
+  debug?: LLMDebugSnapshot;
   metadata?: {
     provider?: ProviderName;
     timestamp: string;
     messageCount: number;
+  };
+}
+
+export interface LLMDebugSnapshot {
+  inputMessages: ChatMessage[];
+  rawOutput: {
+    /** Raw assistant content after continuation-prefix join, before parser cleanup. */
+    content: string;
+    /** Raw assistant content from the final provider attempt only. */
+    currentAttemptContent: string;
+    /** Provider reasoning/thinking stream, before parser cleanup. */
+    reasoning?: string;
+  };
+  parsedOutput: {
+    answer: string;
+    reasoning?: string;
+    toolCalls: ToolInvocation[];
+    extractedTags: Record<string, string[]>;
+    finishReason: ProviderFinishReason | null;
   };
 }
 
@@ -349,6 +369,8 @@ export interface LLMUsageAttempt {
   attemptId?: string;
   provider?: ProviderName;
   model?: string;
+  messages?: ChatMessage[];
+  debug?: LLMDebugSnapshot;
   usage: TokenUsage;
   cost?: CostBreakdown;
   visibleOutputStarted?: boolean;

@@ -14,8 +14,8 @@ import {
 } from "@/runtime/llm/utils.ts";
 import { streamPost, type StreamResponse } from "@/runtime/http.ts";
 
-const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 20_000;
-const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 5_000;
+const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 90_000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 30_000;
 
 export interface StreamResult {
   content: string;

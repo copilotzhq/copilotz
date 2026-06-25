@@ -260,6 +260,7 @@ export interface LlmAttemptInput {
   config?: Record<string, unknown> | null;
   messages?: unknown;
   tools?: unknown;
+  debug?: unknown;
   status?: string | null;
   attemptIndex?: number | null;
   parentAttemptId?: string | null;
@@ -275,6 +276,8 @@ export interface LlmAttemptPatch {
   finishReason?: string | null;
   answer?: string | null;
   reasoning?: string | null;
+  messages?: unknown;
+  debug?: unknown;
   partialAnswer?: string | null;
   partialReasoning?: string | null;
   toolCalls?: unknown;
@@ -3747,6 +3750,7 @@ export function createOperations(
           config: input.config ?? null,
           messages: input.messages ?? null,
           tools: input.tools ?? null,
+          debug: input.debug ?? null,
           status: input.status ?? "processing",
           attemptIndex: input.attemptIndex ?? 0,
           parentAttemptId: input.parentAttemptId ?? null,
@@ -3755,7 +3759,7 @@ export function createOperations(
           metadata: input.metadata ?? null,
         },
       });
-      if (input.messageId) {
+      if (input.messageId && await getNodeById(input.messageId)) {
         await createEdge({
           sourceNodeId: input.messageId,
           targetNodeId: node.id as string,

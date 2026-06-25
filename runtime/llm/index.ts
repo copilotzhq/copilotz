@@ -1,6 +1,8 @@
 import type {
+  ChatMessage,
   ChatRequest,
   ChatResponse,
+  LLMDebugSnapshot,
   LLMUsageAttempt,
   ProviderConfig,
   ProviderFallbackConfig,
@@ -260,6 +262,33 @@ function parseAssistantResponse(
   return { cleanResponse, toolCalls, extractedTags };
 }
 
+function buildDebugSnapshot(args: {
+  inputMessages: ChatMessage[];
+  rawContent: string;
+  currentAttemptContent: string;
+  reasoning?: string;
+  answer: string;
+  toolCalls: ToolInvocation[];
+  extractedTags: Record<string, string[]>;
+  finishReason: ProviderFinishReason | null;
+}): LLMDebugSnapshot {
+  return {
+    inputMessages: args.inputMessages,
+    rawOutput: {
+      content: args.rawContent,
+      currentAttemptContent: args.currentAttemptContent,
+      ...(args.reasoning ? { reasoning: args.reasoning } : {}),
+    },
+    parsedOutput: {
+      answer: args.answer,
+      ...(args.reasoning ? { reasoning: args.reasoning } : {}),
+      toolCalls: args.toolCalls,
+      extractedTags: args.extractedTags,
+      finishReason: args.finishReason,
+    },
+  };
+}
+
 function mergeReasoningParts(...parts: Array<string | string[] | undefined>) {
   const values = parts.flatMap((part) => Array.isArray(part) ? part : [part])
     .filter((part): part is string =>
@@ -473,6 +502,19 @@ export async function chat(
       const buildUsageAttempt = async (
         statusReason?: TokenUsageStatusReason,
       ): Promise<LLMUsageAttempt> => {
+        const rawContent = joinRecoveredContent(
+          prefixBeforeAttempt,
+          streamResult.content,
+        );
+        const parsedForDebug = parseAssistantResponse(
+          rawContent,
+          extractedBlockTags,
+          knownToolNames,
+        );
+        const reasoningForDebug = mergeReasoningParts(
+          recoveryReasoning,
+          streamResult.reasoning,
+        );
         const usageStatus = streamResult.stoppedByLocalStop
           ? "locally_stopped"
           : usageStatusForReason(statusReason);
@@ -525,6 +567,17 @@ export async function chat(
           attemptId,
           provider: attemptProvider,
           model: attemptConfig.model,
+          messages: attemptMessages,
+          debug: buildDebugSnapshot({
+            inputMessages: attemptMessages,
+            rawContent,
+            currentAttemptContent: streamResult.content,
+            reasoning: reasoningForDebug,
+            answer: parsedForDebug.cleanResponse,
+            toolCalls: parsedForDebug.toolCalls,
+            extractedTags: parsedForDebug.extractedTags,
+            finishReason: streamResult.finishReason,
+          }),
           usage,
           ...(cost ? { cost } : {}),
           visibleOutputStarted: attemptVisibleOutputStarted,
@@ -788,6 +841,16 @@ export async function chat(
       }
 
       const finalAttempt = await buildUsageAttempt(finalStatusReason);
+      finalAttempt.debug = buildDebugSnapshot({
+        inputMessages: attemptMessages,
+        rawContent: fullContent,
+        currentAttemptContent: streamResult.content,
+        reasoning,
+        answer: parsed.cleanResponse,
+        toolCalls: parsed.toolCalls,
+        extractedTags: parsed.extractedTags,
+        finishReason: streamResult.finishReason,
+      });
       const usage = finalAttempt.usage;
       const cost = finalAttempt.cost;
       const allUsageAttempts: LLMUsageAttempt[] = [
@@ -810,6 +873,7 @@ export async function chat(
         ...(cost ? { cost } : {}),
         provider: attemptProvider,
         model: attemptConfig.model,
+        debug: finalAttempt.debug,
         ...(parsed.toolCalls.length > 0 && { toolCalls: parsed.toolCalls }),
         ...(Object.keys(parsed.extractedTags).length > 0 && {
           extractedTags: parsed.extractedTags,

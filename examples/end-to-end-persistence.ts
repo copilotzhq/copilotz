@@ -2,8 +2,8 @@
  * End-to-end persistence check.
  *
  * This example runs through createCopilotz().run(), consumes the stream,
- * waits for result.done, then verifies the user/assistant messages, canonical
- * llm_attempt rows, and compatibility llm_usage rows were persisted.
+ * waits for result.done, then verifies the user/assistant messages and
+ * canonical llm_attempt rows were persisted with usage and debug snapshots.
  *
  * It stubs only the outbound OpenAI HTTP stream, so it does not need an API key
  * or network access.
@@ -415,6 +415,24 @@ try {
     30,
     "Expected second llm_attempt to track provider-reported tokens",
   );
+  const firstAttemptDebug = attemptRows.rows[0].data.debug as Record<
+    string,
+    unknown
+  >;
+  assert(
+    Array.isArray(firstAttemptDebug.inputMessages),
+    "Expected first llm_attempt debug snapshot to include input messages",
+  );
+  assertEquals(
+    (firstAttemptDebug.rawOutput as Record<string, unknown>).content,
+    "Persisted assistant message.",
+    "Expected first llm_attempt debug snapshot to include raw output",
+  );
+  assertEquals(
+    (firstAttemptDebug.parsedOutput as Record<string, unknown>).answer,
+    "Persisted assistant message.",
+    "Expected first llm_attempt debug snapshot to include parsed output",
+  );
   assertEquals(
     attemptRows.rows[2].data.status,
     "failed",
@@ -436,62 +454,26 @@ try {
     44,
     "Expected continuation llm_attempt to track final provider usage",
   );
-
-  const usageRows = await copilotz.db.query<{
-    id: string;
-    data: Record<string, unknown>;
-  }>(
-    `SELECT "id", "data"
-     FROM "nodes"
-     WHERE "source_type" = 'thread'
-       AND "source_id" = $1
-       AND "type" = 'llm_usage'
-     ORDER BY "created_at" ASC`,
-    [firstRun.threadId],
-  );
-
-  assertEquals(usageRows.rows.length, 4, "Expected four llm_usage nodes");
-  assertEquals(
-    usageRows.rows[0].id,
-    firstAssistantMetadata.usageNodeId,
-    "Expected first assistant metadata to point at first llm_usage",
+  const continuationDebug = attemptRows.rows[3].data.debug as Record<
+    string,
+    unknown
+  >;
+  assert(
+    JSON.stringify(continuationDebug.inputMessages).includes(
+      "Need to continue safely.",
+    ),
+    "Expected continuation llm_attempt debug input to include prior reasoning",
   );
   assertEquals(
-    usageRows.rows[1].id,
-    secondAssistantMetadata.usageNodeId,
-    "Expected second assistant metadata to point at second llm_usage",
-  );
-  assertEquals(
-    usageRows.rows[3].id,
-    thirdAssistantMetadata.usageNodeId,
-    "Expected continued assistant metadata to point at final continuation llm_usage",
-  );
-  assertEquals(
-    usageRows.rows[0].data.totalTokens,
-    14,
-    "Expected first provider-reported total tokens",
-  );
-  assertEquals(
-    usageRows.rows[1].data.totalTokens,
-    30,
-    "Expected second provider-reported total tokens",
-  );
-  assertEquals(
-    usageRows.rows[2].data.statusReason,
-    "network",
-    "Expected failed stream attempt to be tracked as llm_usage",
-  );
-  assertEquals(
-    usageRows.rows[3].data.totalTokens,
-    44,
-    "Expected continuation provider-reported total tokens",
+    (continuationDebug.parsedOutput as Record<string, unknown>).answer,
+    "Broken partial continued after break.",
+    "Expected continuation llm_attempt debug snapshot to include parsed continuation",
   );
 
   console.log("End-to-end multi-turn persistence example passed.");
   console.log(`Thread: ${firstRun.threadId}`);
   console.log(`Messages persisted: ${messages.length}`);
   console.log(`LLM attempts persisted: ${attemptRows.rows.length}`);
-  console.log(`LLM usage rows persisted: ${usageRows.rows.length}`);
 } finally {
   globalThis.fetch = originalFetch;
   await copilotz.shutdown();

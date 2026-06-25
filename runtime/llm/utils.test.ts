@@ -280,6 +280,22 @@ Deno.test("parseToolCallsFromResponse accepts optional tool_call_id after visibl
   assertEquals(parsed.toolCalls[1].tool.id, "update_user_memory");
 });
 
+Deno.test("parseToolCallsFromResponse salvages restarted canonical block after malformed prefix", () => {
+  const response =
+    '<tool_calls>\n{"name":"\n[reasoning truncated: 9497 chars omitted]<tool_calls>\n{"name":"kanban","arguments":{"action":"move_card","stage":"done"},"tool_call_id":"call-1"}\n</tool_calls>\nVisible answer';
+
+  const parsed = parseToolCallsFromResponse(response);
+
+  assertEquals(parsed.cleanResponse, "Visible answer");
+  assertEquals(parsed.toolCalls.length, 1);
+  assertEquals(parsed.toolCalls[0].id, "call-1");
+  assertEquals(parsed.toolCalls[0].tool.id, "kanban");
+  assertEquals(
+    JSON.parse(parsed.toolCalls[0].args),
+    { action: "move_card", stage: "done" },
+  );
+});
+
 Deno.test("responseHasToolIntent detects canonical and gated dialect markers", () => {
   assertEquals(responseHasToolIntent("text <tool_calls> garbage", []), true);
   assertEquals(

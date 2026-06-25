@@ -106,13 +106,7 @@ function truncateReasoningForRecovery(
   maxChars: number,
 ): string {
   if (maxChars === 0 || reasoning.length <= maxChars) return reasoning;
-  if (maxChars < 48) return "[reasoning truncated]";
-  const suffix = `\n[reasoning truncated: ${
-    reasoning.length - maxChars
-  } chars omitted]`;
-  return `${
-    reasoning.slice(0, Math.max(0, maxChars - suffix.length))
-  }${suffix}`;
+  return reasoning.slice(0, Math.max(0, maxChars));
 }
 
 function extractVisibleReasoningMarkup(response: string): string[] {

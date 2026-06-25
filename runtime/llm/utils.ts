@@ -1874,7 +1874,14 @@ export function parseToolCallsFromResponse(
 
   for (const match of matches) {
     const blockContent = match[1].trim();
-    toolCalls.push(...parseCanonicalToolCallLines(blockContent));
+    let parsedCalls = parseCanonicalToolCallLines(blockContent);
+    if (parsedCalls.length === 0 && blockContent.includes(startTag)) {
+      const restartedBlock = blockContent.slice(
+        blockContent.lastIndexOf(startTag) + startTag.length,
+      ).trim();
+      parsedCalls = parseCanonicalToolCallLines(restartedBlock);
+    }
+    toolCalls.push(...parsedCalls);
 
     cleanResponse = cleanResponse.replace(match[0], "").trimStart();
   }

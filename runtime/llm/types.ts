@@ -36,6 +36,13 @@ export interface ChatMessage {
   tool_call_id?: string;
   // Prefer passing tool calls explicitly for assistant messages
   toolCalls?: ToolInvocation[];
+  /**
+   * Persisted reasoning materialized as `<think>` during wire
+   * composition. Not sent to providers until {@link formatMessages} runs.
+   */
+  reasoning?: string;
+  /** Character cap when materializing {@link reasoning}. */
+  reasoningMaxChars?: number;
 }
 
 export type ProviderFallbackReason =

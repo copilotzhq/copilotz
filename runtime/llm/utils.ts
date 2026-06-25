@@ -288,8 +288,8 @@ export function formatMessages(
     ];
   }
 
-  // Collapse consecutive messages from the same sender to avoid provider
-  // errors with repeated assistant turns while preserving chronology.
+  // Collapse consecutive messages with the same role so provider history
+  // alternates assistant/user turns (system messages stay separate).
   const mergedMessages = mergeConsecutiveMessages(normalizedMessages);
 
   return appendContinuationCueIfNeeded(mergedMessages);
@@ -324,31 +324,34 @@ function mergeMessageContent(
   ];
 }
 
-function prependTextToContent(
-  prefix: string,
-  content: ChatMessage["content"],
-): ChatMessage["content"] {
-  if (typeof content === "string") {
-    return content.length > 0 ? `${prefix}\n${content}` : prefix;
-  }
+const WIRE_STRIP_TAG_NAMES = [
+  "redacted_thinking",
+  "route_to",
+  "ask_to",
+  "tool_calls",
+  "tool_results",
+] as const;
 
-  return [
-    {
-      type: "text",
-      text: content.length > 0 ? `${prefix}\n` : prefix,
-    },
-    ...content,
-  ];
-}
+const OMITTED_PEER_TOOL_VALUE = {
+  _copilotz_omitted: true,
+  reason: "public_status",
+} as const;
 
-function prependBlocksToContent(
-  blocks: string[],
-  content: ChatMessage["content"],
-): ChatMessage["content"] {
-  const normalizedBlocks = blocks.filter((block) => block.trim().length > 0);
-  if (normalizedBlocks.length === 0) return content;
-  return prependTextToContent(normalizedBlocks.join("\n"), content);
-}
+export type WireToolFormat = "request" | "peer";
+
+export type ComposeWireContentInput = {
+  reasoning?: string;
+  reasoningMaxChars?: number;
+  noResponse?: boolean;
+  visible?: string;
+  routeTo?: string[];
+  askTo?: string[];
+  toolCalls?: ToolInvocation[];
+  toolResults?: ToolInvocation[];
+  toolCallFormat?: WireToolFormat;
+  toolResultFormat?: WireToolFormat;
+  toolResultsFallbackContent?: string;
+};
 
 function stripTaggedBlocksFromText(text: string, tagNames: string[]): string {
   let stripped = text;
@@ -456,21 +459,22 @@ function wirePayloadTextForTokenEstimate(
   return chunks.join("\n");
 }
 
-function extractRouteTargetsFromMetadata(
+function extractRoutingTargetsFromMetadata(
   metadata: ChatMessage["metadata"],
+  key: "routeTo" | "askTo",
 ): string[] {
   if (!metadata || typeof metadata !== "object") return [];
 
   const routing = (metadata as { routing?: unknown }).routing;
   if (!routing || typeof routing !== "object") return [];
 
-  const routeTo = (routing as { routeTo?: unknown }).routeTo;
-  if (!Array.isArray(routeTo)) return [];
+  const values = (routing as Record<string, unknown>)[key];
+  if (!Array.isArray(values)) return [];
 
   const seen = new Set<string>();
   const targets: string[] = [];
 
-  for (const candidate of routeTo) {
+  for (const candidate of values) {
     if (typeof candidate !== "string") continue;
     const trimmed = candidate.trim();
     if (trimmed.length === 0) continue;
@@ -483,100 +487,346 @@ function extractRouteTargetsFromMetadata(
   return targets;
 }
 
+function extractInlineRoutingTargets(
+  text: string,
+  tagName: "route_to" | "ask_to",
+): string[] {
+  const pattern = new RegExp(
+    `<${tagName}>([\\s\\S]*?)<\\/${tagName}>`,
+    "gi",
+  );
+  const seen = new Set<string>();
+  const targets: string[] = [];
+
+  for (const match of text.matchAll(pattern)) {
+    const value = match[1]?.trim();
+    if (!value) continue;
+    const lower = value.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    targets.push(value);
+  }
+
+  return targets;
+}
+
+function mergeRoutingTargets(
+  ...groups: string[][]
+): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+
+  for (const group of groups) {
+    for (const target of group) {
+      const lower = target.toLowerCase();
+      if (seen.has(lower)) continue;
+      seen.add(lower);
+      merged.push(target);
+    }
+  }
+
+  return merged;
+}
+
+function hasNoResponseMarker(text: string): boolean {
+  return /<no_response\s*\/>|<no_response>\s*<\/no_response>/i.test(text);
+}
+
+function truncateReasoningForWire(
+  reasoning: string,
+  maxChars?: number,
+): string {
+  if (typeof maxChars !== "number" || maxChars === 0 || reasoning.length <= maxChars) {
+    return reasoning;
+  }
+  if (maxChars < 48) return "[reasoning truncated]";
+  const suffix = `\n[reasoning truncated: ${
+    reasoning.length - maxChars
+  } chars omitted]`;
+  return `${
+    reasoning.slice(0, Math.max(0, maxChars - suffix.length))
+  }${suffix}`;
+}
+
+export function buildRedactedThinkingBlock(
+  reasoning: string,
+  maxChars?: number,
+): string {
+  const trimmed = reasoning.trim();
+  if (!trimmed) return "";
+  const capped = truncateReasoningForWire(trimmed, maxChars);
+  return `<think>\n${capped}\n</think>`;
+}
+
+export function buildAskToBlock(askTargets: string[]): string {
+  return extractRoutingTargetsFromMetadata({
+    routing: { askTo: askTargets },
+  }, "askTo")
+    .map((target) => `<ask_to>${target}</ask_to>`)
+    .join("\n");
+}
+
+export function stripWireProtocolFromText(text: string): string {
+  let stripped = stripTaggedBlocksFromText(text, [...WIRE_STRIP_TAG_NAMES]);
+  stripped = stripped
+    .replace(/<no_response\s*\/>/gi, "")
+    .replace(/<no_response>\s*<\/no_response>/gi, "");
+  return stripped.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function parseToolCallArgs(args: ToolInvocation["args"]): unknown {
+  if (typeof args !== "string") return args ?? {};
+  try {
+    return JSON.parse(args);
+  } catch {
+    return args;
+  }
+}
+
+function readPeerToolVisibility(
+  call: ToolInvocation,
+): "public" | "public_status" | "requester_only" {
+  const visibility = (call as ToolInvocation & {
+    visibility?: unknown;
+  }).visibility;
+  return visibility === "requester_only" || visibility === "public"
+    ? visibility
+    : "public_status";
+}
+
+export function composeWireContent(input: ComposeWireContentInput): string {
+  const parts: string[] = [];
+
+  if (typeof input.reasoning === "string" && input.reasoning.trim().length > 0) {
+    parts.push(
+      buildRedactedThinkingBlock(input.reasoning, input.reasoningMaxChars),
+    );
+  }
+
+  if (input.noResponse) {
+    parts.push(NO_RESPONSE_SELF_CLOSING_TAG);
+  }
+
+  if (typeof input.visible === "string" && input.visible.trim().length > 0) {
+    parts.push(input.visible.trim());
+  }
+
+  const routeTo = mergeRoutingTargets(input.routeTo ?? []);
+  if (routeTo.length > 0) {
+    parts.push(buildRouteToBlock(routeTo));
+  }
+
+  const askTo = mergeRoutingTargets(input.askTo ?? []);
+  if (askTo.length > 0) {
+    parts.push(buildAskToBlock(askTo));
+  }
+
+  if (Array.isArray(input.toolCalls) && input.toolCalls.length > 0) {
+    const block = buildToolCallsBlock(
+      input.toolCalls,
+      input.toolCallFormat ?? "request",
+    );
+    if (block) parts.push(block);
+  }
+
+  if (Array.isArray(input.toolResults) && input.toolResults.length > 0) {
+    const block = buildToolResultsBlock(
+      input.toolResults,
+      input.toolResultsFallbackContent,
+      input.toolResultFormat ?? "request",
+    );
+    if (block) parts.push(block);
+  }
+
+  return parts.join("\n\n");
+}
+
+function readWireToolFormat(
+  metadata: ChatMessage["metadata"],
+): WireToolFormat {
+  return metadata && typeof metadata === "object" &&
+      (metadata as { wireToolFormat?: unknown }).wireToolFormat === "peer"
+    ? "peer"
+    : "request";
+}
+
+function toolCallsRepresentResults(toolCalls: ToolInvocation[]): boolean {
+  return toolCalls.some((call) => typeof call.output !== "undefined");
+}
+
+function collectWireSegmentsFromMessage(
+  message: ChatMessage,
+): ComposeWireContentInput {
+  const rawText = contentToText(message.content);
+  const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+  const wireToolFormat = readWireToolFormat(message.metadata);
+  const strippedVisible = stripWireProtocolFromText(rawText);
+
+  const routeTo = mergeRoutingTargets(
+    extractRoutingTargetsFromMetadata(message.metadata, "routeTo"),
+    extractInlineRoutingTargets(rawText, "route_to"),
+  );
+  const askTo = mergeRoutingTargets(
+    extractRoutingTargetsFromMetadata(message.metadata, "askTo"),
+    extractInlineRoutingTargets(rawText, "ask_to"),
+  );
+
+  const base: ComposeWireContentInput = {
+    reasoning: typeof message.reasoning === "string"
+      ? message.reasoning
+      : undefined,
+    reasoningMaxChars: typeof message.reasoningMaxChars === "number"
+      ? message.reasoningMaxChars
+      : undefined,
+    noResponse: hasNoResponseMarker(rawText),
+    visible: strippedVisible.length > 0 ? strippedVisible : undefined,
+    routeTo,
+    askTo,
+    toolCallFormat: wireToolFormat,
+    toolResultFormat: wireToolFormat,
+  };
+
+  const emitToolResults = message.role === "tool" ||
+    message.role === "tool_result" ||
+    (message.metadata &&
+      typeof message.metadata === "object" &&
+      (message.metadata as { wireSegment?: unknown }).wireSegment ===
+        "toolResults") ||
+    toolCallsRepresentResults(toolCalls);
+
+  if (emitToolResults && toolCalls.length > 0) {
+    return {
+      ...base,
+      visible: undefined,
+      noResponse: false,
+      toolResults: toolCalls,
+      toolResultsFallbackContent: toolCalls.length === 1 &&
+          typeof toolCalls[0]?.output === "undefined"
+        ? strippedVisible
+        : undefined,
+    };
+  }
+
+  if (toolCalls.length > 0) {
+    return {
+      ...base,
+      toolCalls,
+    };
+  }
+
+  return base;
+}
+
+function shouldMaterializeWireContent(message: ChatMessage): boolean {
+  if (message.role === "tool" || message.role === "tool_result") {
+    return Array.isArray(message.toolCalls) && message.toolCalls.length > 0;
+  }
+
+  const speakerLabel = message.metadata &&
+    typeof message.metadata === "object" &&
+    typeof (message.metadata as { speakerLabel?: unknown }).speakerLabel ===
+      "string";
+  if (speakerLabel) return true;
+
+  const toolCalls = Array.isArray(message.toolCalls) && message.toolCalls.length > 0;
+  const routing =
+    extractRoutingTargetsFromMetadata(message.metadata, "routeTo").length > 0 ||
+    extractRoutingTargetsFromMetadata(message.metadata, "askTo").length > 0;
+  const reasoning = typeof message.reasoning === "string" &&
+    message.reasoning.trim().length > 0;
+  const rawText = contentToText(message.content);
+  const hasProtocolTags =
+    /<(redacted_thinking|route_to|ask_to|tool_calls|tool_results|no_response)\b/i
+      .test(rawText);
+
+  if (message.role === "assistant" || message.role === "user") {
+    return toolCalls || routing || reasoning || hasProtocolTags;
+  }
+
+  return false;
+}
+
+function applyComposedWireContent(
+  original: ChatMessage["content"],
+  composed: string,
+): ChatMessage["content"] {
+  if (typeof original === "string") return composed;
+
+  const nonTextParts = original.filter((part) => part.type !== "text");
+  if (nonTextParts.length === 0) return composed;
+  if (!composed) return nonTextParts;
+
+  return [{ type: "text", text: composed }, ...nonTextParts];
+}
+
+function prefixSpeakerLabel(label: string, body: string): string {
+  const trimmed = body.trim();
+  if (!trimmed) return `[${label}]:`;
+  if (trimmed.startsWith("<") || trimmed.includes("\n")) {
+    return `[${label}]:\n${trimmed}`;
+  }
+  return `[${label}]: ${trimmed}`;
+}
+
+function materializeWireContent(message: ChatMessage): ChatMessage {
+  if (!shouldMaterializeWireContent(message)) {
+    return message;
+  }
+
+  try {
+    let composed = composeWireContent(collectWireSegmentsFromMessage(message));
+    const speakerLabel = message.metadata &&
+        typeof message.metadata === "object" &&
+        typeof (message.metadata as { speakerLabel?: unknown }).speakerLabel ===
+          "string"
+      ? (message.metadata as { speakerLabel: string }).speakerLabel
+      : undefined;
+    if (speakerLabel) {
+      composed = prefixSpeakerLabel(speakerLabel, composed);
+    }
+
+    const role = message.role === "tool" || message.role === "tool_result"
+      ? "assistant"
+      : message.role;
+
+    const nextMetadata = message.metadata &&
+        typeof message.metadata === "object"
+      ? { ...message.metadata }
+      : undefined;
+    if (nextMetadata) {
+      delete (nextMetadata as { speakerLabel?: unknown }).speakerLabel;
+    }
+
+    return {
+      ...message,
+      role,
+      content: applyComposedWireContent(message.content, composed),
+      metadata: nextMetadata &&
+          Object.keys(nextMetadata).length > 0
+        ? nextMetadata
+        : undefined,
+      toolCalls: undefined,
+      reasoning: undefined,
+      reasoningMaxChars: undefined,
+      tool_call_id: undefined,
+    };
+  } catch {
+    return message;
+  }
+}
+
 export function buildRouteToBlock(routeTargets: string[]): string {
-  const normalizedTargets = extractRouteTargetsFromMetadata({
+  const normalizedTargets = extractRoutingTargetsFromMetadata({
     routing: { routeTo: routeTargets },
-  });
+  }, "routeTo");
 
   return normalizedTargets
     .map((target) => `<route_to>${target}</route_to>`)
     .join("\n");
 }
 
-function materializeAssistantControlBlocks(message: ChatMessage): ChatMessage {
-  const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
-  const routeTargets = extractRouteTargetsFromMetadata(message.metadata);
-
-  if (
-    message.role !== "assistant" ||
-    (toolCalls.length === 0 && routeTargets.length === 0)
-  ) {
-    return message;
-  }
-
-  try {
-    const blocks: string[] = [];
-    if (routeTargets.length > 0) {
-      blocks.push(buildRouteToBlock(routeTargets));
-    }
-    if (toolCalls.length > 0) {
-      blocks.push(buildToolCallsBlock(toolCalls));
-    }
-    return {
-      ...message,
-      content: prependBlocksToContent(
-        blocks,
-        stripTaggedBlocksFromContent(
-          message.content,
-          [
-            ...(routeTargets.length > 0 ? ["route_to"] : []),
-            ...(toolCalls.length > 0 ? ["tool_calls"] : []),
-          ],
-        ),
-      ),
-      toolCalls: undefined,
-      tool_call_id: undefined,
-    };
-  } catch {
-    return message;
-  }
-}
-
-function materializeToolResults(message: ChatMessage): ChatMessage {
-  const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
-  if (
-    (message.role !== "tool" && message.role !== "tool_result") ||
-    toolCalls.length === 0
-  ) {
-    return message;
-  }
-
-  try {
-    const content = stripTaggedBlocksFromContent(
-      message.content,
-      ["tool_results"],
-    );
-    return {
-      ...message,
-      content: buildToolResultsBlock(
-        toolCalls,
-        contentToText(content),
-      ),
-      toolCalls: undefined,
-      tool_call_id: undefined,
-    };
-  } catch {
-    return {
-      ...message,
-      toolCalls: undefined,
-    };
-  }
-}
-
 function materializeHistoryMessage(message: ChatMessage): ChatMessage {
-  if (message.role === "assistant") {
-    return materializeAssistantControlBlocks(message);
-  }
-
-  if (message.role === "tool" || message.role === "tool_result") {
-    const toolResultMessage = materializeToolResults(message);
-    return {
-      ...toolResultMessage,
-      role: "assistant",
-    };
-  }
-
-  return message;
+  return materializeWireContent(message);
 }
 
 function mergeConsecutiveMessages(messages: ChatMessage[]): ChatMessage[] {
@@ -584,20 +834,25 @@ function mergeConsecutiveMessages(messages: ChatMessage[]): ChatMessage[] {
 
   for (const message of messages) {
     const previous = merged[merged.length - 1];
-    if (
-      previous &&
+    const canMerge = previous &&
       previous.role !== "system" &&
       message.role !== "system" &&
-      typeof previous.senderId === "string" &&
-      typeof message.senderId === "string" &&
-      previous.senderId === message.senderId &&
       previous.role === message.role &&
       (!Array.isArray(previous.toolCalls) || previous.toolCalls.length === 0) &&
-      (!Array.isArray(message.toolCalls) || message.toolCalls.length === 0)
-    ) {
+      (!Array.isArray(message.toolCalls) || message.toolCalls.length === 0);
+
+    if (canMerge) {
+      const sameSender = typeof previous.senderId === "string" &&
+        typeof message.senderId === "string" &&
+        previous.senderId === message.senderId;
+
       merged[merged.length - 1] = {
         ...previous,
         content: mergeMessageContent(previous.content, message.content),
+        senderId: sameSender ? previous.senderId : undefined,
+        metadata: sameSender ? previous.metadata : undefined,
+        reasoning: sameSender ? previous.reasoning : undefined,
+        reasoningMaxChars: sameSender ? previous.reasoningMaxChars : undefined,
         tool_call_id: undefined,
         toolCalls: undefined,
       };
@@ -1542,7 +1797,7 @@ export function generateToolSystemPromptVariant(
 
 You have access to tools. Copilotz, not the provider, executes tools.
 
-When a tool is needed, emit exactly one <tool_calls> block. Inside it, emit one JSON object per line:
+When a tool is needed, emit optional visible text first, then exactly one <tool_calls> block. Inside it, emit one JSON object per line:
 { "name": "tool_name", "arguments": { ... } }
 
 Rules:
@@ -1553,6 +1808,8 @@ Rules:
 - Do not emit <tool_results>; Copilotz provides tool results.
 
 Example:
+Sure — checking that now.
+
 <tool_calls>
 { "name": "tool_name", "arguments": { "key": "value" } }
 </tool_calls>
@@ -1586,7 +1843,10 @@ ${toolDefinitions}
       'Visible text before a tool call is allowed only when it is useful to the user, such as a brief requested explanation. Merely saying which tools you will call is not useful. Do not emit generic acknowledgements, status narration, or filler such as "Sure", "I\'ll call the tool", or "running that now".',
     );
     extraRules.push(
-      "When a tool result is needed before answering, do not include the final answer in the same assistant message as the tool call. Wait for Copilotz to provide <tool_results>, then answer from those results.",
+      "When a tool result is needed before answering, do not include the final answer in the same assistant message as the tool call. Wait for it will be provided as <tool_results> in next turn, then answer from those results.",
+    );
+    extraRules.push(
+      "When your response includes multiple sections, emit them in this order: optional visible text, then any <route_to> or <ask_to> tags, then <tool_calls>. Never place routing or tool blocks before visible text unless there is no visible text.",
     );
   }
   if (variant === "lifecycle-explicit") {
@@ -1595,8 +1855,8 @@ ${toolDefinitions}
     );
   }
   const ruleOne = variant === "baseline" || variant === "no-visible-ack"
-    ? "You may talk to the human normally and call tools in the same response."
-    : "You may answer the human normally when no tool is needed. When a tool is needed, use the tool-call format below.";
+    ? "You may talk to the human normally and call tools in the same response. Put visible text first, then any routing tags, then <tool_calls>."
+    : "You may answer the human normally when no tool is needed. When a tool is needed, put visible text first, then any routing tags, then <tool_calls>.";
   const extraRuleText = extraRules.length > 0
     ? "\n" +
       extraRules.map((rule, index) => `${4 + index}. ${rule}`).join("\n") +
@@ -1614,6 +1874,15 @@ ${toolDefinitions}
 
 Your previous thinking traces may appear as <think> ... </think> blocks. Do not include them in your response.
 
+=== RESPONSE STRUCTURE ===
+
+When a response includes multiple sections, emit them in this order:
+1. Visible text for the user (if any)
+2. <route_to>agent-id</route_to> and/or <ask_to>agent-id</ask_to> (if routing)
+3. <tool_calls> ... </tool_calls> (if calling tools)
+Copilotz inserts <tool_results> later; never emit tool results yourself.
+If no visible reply is needed, respond with <no_response/>.
+
 === TOOL USAGE ===
 
 In this environment you have access to a set of tools you can use to answer the user's question.
@@ -1625,12 +1894,18 @@ In this environment you have access to a set of tools you can use to answer the 
    - Each object has exactly two keys: "name" (string) and "arguments" (object). No other keys.
    - "arguments" is a JSON object and may contain nested objects/arrays.
 3. Use ONLY this <tool_calls> JSON format for tool calls..
-${extraRuleText}${exampleRuleNumber}. Example (note the nested arguments object):
+${extraRuleText}${exampleRuleNumber}. 
 
-<tool_calls>
-{ "name": "tool_name", "arguments": { "key_1": "value_1", "options": { "limit": 10, "tags": ["a", "b"] } } }
-{ "name": "tool_name_2", "arguments": { "query": "value" } }
-</tool_calls>${exampleTail}
+##### Example (note the nested arguments object):
+
+>
+> Sure. Let me check the weather in New York and Tokyo for today.
+>
+> <tool_calls>
+> { "name": "get_weather", "arguments": { "city": "New York", "config": { "units": "celsius" } } }
+> { "name": "get_weather", "arguments": { "city": "Tokyo", "config": { "units": "celsius" } } }
+> </tool_calls>
+>
 
 ${nextRuleNumber}. Tool outputs may appear later as <tool_results> blocks. Treat them as returned execution results and never generate <tool_results>, <tool_result>, <result>, <target_ids>, or <continue_after_tool_results> yourself.
 ${nextRuleNumber + 1}
@@ -1645,18 +1920,38 @@ ${toolDefinitions}
 /**
  * Rehydrate a <tool_calls> block from recorded tool calls, if present in message metadata
  */
-export function buildToolCallsBlock(toolCalls: ToolInvocation[]): string {
-  const objects = toolCalls.map((call) => {
-    let args: any;
+export function buildToolCallsBlock(
+  toolCalls: ToolInvocation[],
+  format: WireToolFormat = "request",
+): string {
+  const objects = toolCalls.flatMap((call) => {
+    if (format === "peer") {
+      const visibility = readPeerToolVisibility(call);
+      if (visibility === "requester_only") return [];
+      const obj: Record<string, unknown> = {
+        name: call.tool.id,
+        status: call.status ?? "requested",
+        arguments: visibility === "public"
+          ? parseToolCallArgs(call.args)
+          : OMITTED_PEER_TOOL_VALUE,
+      };
+      if (call.id) obj.tool_call_id = call.id;
+      return [JSON.stringify(obj)];
+    }
+
+    let args: unknown;
     try {
       args = typeof call.args === "string" ? JSON.parse(call.args) : call.args;
     } catch {
       args = call.args;
     }
-    const obj: any = { name: call.tool.id, arguments: args };
+    const obj: Record<string, unknown> = { name: call.tool.id, arguments: args };
     if (call.id) obj.tool_call_id = call.id;
-    return JSON.stringify(obj);
+    return [JSON.stringify(obj)];
   });
+
+  if (objects.length === 0) return "";
+
   return [`<tool_calls>`, ...objects, `</tool_calls>`].join("\n");
 }
 
@@ -1678,8 +1973,23 @@ function normalizeToolResultOutput(
 export function buildToolResultsBlock(
   toolResults: ToolInvocation[],
   fallbackContent?: string,
+  format: WireToolFormat = "request",
 ): string {
-  const objects = toolResults.map((call) => {
+  const objects = toolResults.flatMap((call) => {
+    if (format === "peer") {
+      const visibility = readPeerToolVisibility(call);
+      if (visibility === "requester_only") return [];
+      const obj: Record<string, unknown> = {
+        name: call.tool.id,
+        status: call.status ?? "completed",
+        output: visibility === "public"
+          ? ("output" in call ? call.output : null)
+          : OMITTED_PEER_TOOL_VALUE,
+      };
+      if (call.id) obj.tool_call_id = call.id;
+      return [JSON.stringify(obj)];
+    }
+
     const obj: Record<string, unknown> = {
       name: call.tool.id,
     };
@@ -1692,8 +2002,10 @@ export function buildToolResultsBlock(
     }
     if (call.id) obj.tool_call_id = call.id;
     if (call.status) obj.status = call.status;
-    return JSON.stringify(obj);
+    return [JSON.stringify(obj)];
   });
+
+  if (objects.length === 0) return "";
 
   return [`<tool_results>`, ...objects, `</tool_results>`].join("\n");
 }

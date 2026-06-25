@@ -48,6 +48,13 @@ Deno.test("historyGenerator uses sender display names instead of graph ids in pr
   assertEquals(generated[0]?.content, "I am right here!");
   assertEquals(
     generated[1]?.content,
+    "Good news — they just posted!",
+  );
+  assertEquals(generated[1]?.metadata?.speakerLabel, "reviewer");
+
+  const formatted = formatMessages({ messages: generated });
+  assertEquals(
+    formatted[1]?.content,
     "[reviewer]: Good news — they just posted!",
   );
 });
@@ -79,10 +86,16 @@ Deno.test("historyGenerator includes only current agent reasoning by default", (
   ], currentAgent);
 
   assertEquals(
-    generated[0]?.content,
-    "<think>\nNeed to summarize the result.\n</think>\n\nI found the answer.",
+    generated[0]?.reasoning,
+    "Need to summarize the result.",
   );
-  assertEquals(generated[1]?.content, "[reviewer]: Peer answer.");
+  assertEquals(generated[0]?.content, "I found the answer.");
+  assertEquals(generated[1]?.content, "Peer answer.");
+  assertEquals(
+    generated[1]?.metadata?.speakerLabel,
+    "reviewer",
+  );
+  assertEquals(generated[1]?.reasoning, undefined);
 });
 
 Deno.test("historyGenerator can disable reasoning history", () => {
@@ -138,8 +151,27 @@ Deno.test("historyGenerator can include all agent reasoning with a cap", () => {
   );
 
   assertEquals(
-    generated[0]?.content,
-    "<think>\nxxxxxxxxxxxxxxxxxxxx\n[reasoning truncated: 20 chars omitted]\n</think>\n\n[reviewer]: Peer answer.",
+    generated[0]?.reasoning,
+    "x".repeat(80),
+  );
+  assertEquals(generated[0]?.content, "Peer answer.");
+  assertEquals(
+    generated[0]?.metadata?.speakerLabel,
+    "reviewer",
+  );
+
+  const formatted = formatMessages({ messages: generated });
+  assertEquals(
+    formatted[0]?.content,
+    [
+      "[reviewer]:",
+      "<think>",
+      "xxxxxxxxxxxxxxxxxxxx",
+      "[reasoning truncated: 20 chars omitted]",
+      "</think>",
+      "",
+      "Peer answer.",
+    ].join("\n"),
   );
 });
 
@@ -264,10 +296,13 @@ Deno.test("historyGenerator renders peer public_status tool result as attributed
 
   assertEquals(generated.length, 1);
   assertEquals(generated[0]?.role, "user");
-  assertEquals(generated[0]?.toolCalls, undefined);
-  assertEquals(generated[0]?.metadata?.toolCalls, undefined);
+  assertEquals(generated[0]?.toolCalls?.length, 1);
+
+  const formatted = formatMessages({ messages: generated });
+  assertEquals(formatted.length, 1);
+  assertEquals(formatted[0]?.role, "user");
   assertEquals(
-    generated[0]?.content,
+    formatted[0]?.content,
     [
       "[researcher]:",
       "<tool_results>",
@@ -280,10 +315,6 @@ Deno.test("historyGenerator renders peer public_status tool result as attributed
       "</tool_results>",
     ].join("\n"),
   );
-
-  const formatted = formatMessages({ messages: generated });
-  assertEquals(formatted.length, 1);
-  assertEquals(formatted[0]?.role, "user");
 });
 
 Deno.test("historyGenerator keeps full default tool result for requesting agent", () => {
@@ -376,35 +407,9 @@ Deno.test("historyGenerator renders peer public tool calls and results fully as 
 
   assertEquals(generated.length, 2);
   assertEquals(generated[0]?.role, "user");
-  assertEquals(
-    generated[0]?.content,
-    [
-      "[East]:",
-      "<tool_calls>",
-      JSON.stringify({
-        name: "sandbox_session",
-        status: "requested",
-        arguments: { actions: [{ action: "exec", cmd: "ls" }] },
-        tool_call_id: "c1",
-      }),
-      "</tool_calls>",
-    ].join("\n"),
-  );
+  assertEquals(generated[0]?.toolCalls?.length, 1);
   assertEquals(generated[1]?.role, "user");
-  assertEquals(
-    generated[1]?.content,
-    [
-      "[East]:",
-      "<tool_results>",
-      JSON.stringify({
-        name: "sandbox_session",
-        status: "completed",
-        output: { success: true },
-        tool_call_id: "c1",
-      }),
-      "</tool_results>",
-    ].join("\n"),
-  );
+  assertEquals(generated[1]?.toolCalls?.length, 1);
 
   const formatted = formatMessages({ messages: generated });
   assertEquals(formatted.length, 1);
@@ -433,6 +438,67 @@ Deno.test("historyGenerator renders peer public tool calls and results fully as 
       "</tool_results>",
     ].join("\n"),
   );
+});
+
+Deno.test("formatMessages merges human and peer user turns into one user message", () => {
+  const currentAgent: Agent = {
+    id: "north",
+    name: "North",
+    role: "assistant",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  };
+
+  const generated = historyGenerator(
+    [
+      {
+        id: "m-user",
+        threadId: "t-1",
+        senderId: "user-1",
+        senderType: "user",
+        content: "Can you both weigh in?",
+      },
+      {
+        id: "m-east",
+        threadId: "t-1",
+        senderId: "east",
+        senderType: "agent",
+        content: "I can take implementation.",
+        metadata: { senderDisplayName: "East" },
+      },
+      {
+        id: "m-south",
+        threadId: "t-1",
+        senderId: "south",
+        senderType: "agent",
+        content: "I will review the risks.",
+        metadata: { senderDisplayName: "South" },
+      },
+      {
+        id: "m-north",
+        threadId: "t-1",
+        senderId: "north",
+        senderType: "agent",
+        content: "Plan is set.",
+      },
+    ],
+    currentAgent,
+    { includeTargetContext: false },
+  );
+
+  const formatted = formatMessages({ messages: generated });
+  assertEquals(
+    formatted.map((message) => message.role),
+    ["user", "assistant"],
+  );
+  assertEquals(
+    formatted[0]?.content,
+    [
+      "[user-1]: Can you both weigh in?",
+      "[East]: I can take implementation.",
+      "[South]: I will review the risks.",
+    ].join("\n\n"),
+  );
+  assertEquals(formatted[1]?.content, "Plan is set.");
 });
 
 Deno.test("historyGenerator omits peer requester_only tool activity and empty placeholders", () => {

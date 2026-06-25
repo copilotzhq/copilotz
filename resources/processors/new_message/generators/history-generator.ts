@@ -26,10 +26,14 @@ type MessageMetadata = Record<string, unknown> & {
   attachments?: StoredAttachment[];
   routing?: {
     routeTo?: string[];
+    askTo?: string[];
   };
   senderDisplayName?: string;
   senderExternalId?: string;
   senderParticipantId?: string;
+  speakerLabel?: string;
+  wireToolFormat?: "peer";
+  wireSegment?: "toolResults";
   /** Durable tool_execution node id (preferred for read_tool_result). */
   toolExecutionId?: string;
   /** TOOL_RESULT queue row id (for read_tool_result after history truncation). */
@@ -227,32 +231,6 @@ function normalizeReasoningHistoryOptions(
   };
 }
 
-function truncateReasoningForHistory(
-  reasoning: string,
-  maxChars: number,
-): string {
-  if (maxChars === 0 || reasoning.length <= maxChars) return reasoning;
-  if (maxChars < 48) return "[reasoning truncated]";
-  const suffix = `\n[reasoning truncated: ${
-    reasoning.length - maxChars
-  } chars omitted]`;
-  return `${
-    reasoning.slice(0, Math.max(0, maxChars - suffix.length))
-  }${suffix}`;
-}
-
-function appendReasoningForHistory(
-  content: string,
-  reasoning: string,
-  maxChars: number,
-): string {
-  const trimmed = reasoning.trim();
-  if (!trimmed) return content;
-  const capped = truncateReasoningForHistory(trimmed, maxChars);
-  const block = `<think>\n${capped}\n</think>`;
-  return content ? `${block}\n\n${content}` : block;
-}
-
 function truncateToolOutputForHistory(
   maxChars: number,
   value: unknown,
@@ -334,16 +312,17 @@ type ParsedToolCall = ToolInvocation & {
   visibility?: ToolHistoryVisibility;
 };
 
-const OMITTED_TOOL_VALUE = {
-  _copilotz_omitted: true,
-  reason: "public_status",
-} as const;
-
 function sanitizeMetadataForHistory(
   metadata?: MessageMetadata,
 ): MessageMetadata | undefined {
   if (!metadata) return undefined;
-  const { toolCalls: _toolCalls, ...rest } = metadata as MessageMetadata & {
+  const {
+    toolCalls: _toolCalls,
+    speakerLabel: _speakerLabel,
+    wireToolFormat: _wireToolFormat,
+    wireSegment: _wireSegment,
+    ...rest
+  } = metadata as MessageMetadata & {
     toolCalls?: unknown;
   };
   return Object.keys(rest).length > 0 ? rest as MessageMetadata : undefined;
@@ -361,64 +340,6 @@ function normalizeVisibleContent(content: string): string {
   return content
     .replace(/<span\b[^>]*>\s*<\/span>/gi, "")
     .trim();
-}
-
-function prefixSpeakerContent(speaker: string, content: string): string {
-  const trimmed = content.trim();
-  if (!trimmed) return `[${speaker}]:`;
-  if (trimmed.startsWith("<tool_") || trimmed.includes("\n")) {
-    return `[${speaker}]:\n${trimmed}`;
-  }
-  return `[${speaker}]: ${trimmed}`;
-}
-
-function parseToolArgs(args: ToolInvocation["args"]): unknown {
-  if (typeof args !== "string") return args ?? {};
-  try {
-    return JSON.parse(args);
-  } catch {
-    return args;
-  }
-}
-
-function buildPeerToolCallsBlock(toolCalls: ParsedToolCall[]): string | null {
-  const objects = toolCalls.flatMap((call) => {
-    const visibility = normalizeToolVisibility(call.visibility);
-    if (visibility === "requester_only") return [];
-    const obj: Record<string, unknown> = {
-      name: call.tool.id,
-      status: call.status ?? "requested",
-      arguments: visibility === "public"
-        ? parseToolArgs(call.args)
-        : OMITTED_TOOL_VALUE,
-    };
-    if (call.id) obj.tool_call_id = call.id;
-    return [JSON.stringify(obj)];
-  });
-
-  return objects.length > 0
-    ? ["<tool_calls>", ...objects, "</tool_calls>"].join("\n")
-    : null;
-}
-
-function buildPeerToolResultsBlock(toolCalls: ParsedToolCall[]): string | null {
-  const objects = toolCalls.flatMap((call) => {
-    const visibility = normalizeToolVisibility(call.visibility);
-    if (visibility === "requester_only") return [];
-    const obj: Record<string, unknown> = {
-      name: call.tool.id,
-      status: call.status ?? "completed",
-      output: visibility === "public"
-        ? ("output" in call ? call.output : null)
-        : OMITTED_TOOL_VALUE,
-    };
-    if (call.id) obj.tool_call_id = call.id;
-    return [JSON.stringify(obj)];
-  });
-
-  return objects.length > 0
-    ? ["<tool_results>", ...objects, "</tool_results>"].join("\n")
-    : null;
 }
 
 function collectToolVisibilityByCallId(
@@ -488,7 +409,10 @@ function resolveSpeakerLabel(
   return "unknown";
 }
 
-function stripParsedToolCall(call: ParsedToolCall): ToolInvocation {
+function stripParsedToolCall(
+  call: ParsedToolCall,
+  options?: { includeVisibility?: boolean },
+): ToolInvocation {
   return {
     id: call.id,
     tool: call.tool,
@@ -497,7 +421,10 @@ function stripParsedToolCall(call: ParsedToolCall): ToolInvocation {
     ...("status" in call && typeof call.status === "string"
       ? { status: call.status }
       : {}),
-  };
+    ...(options?.includeVisibility && call.visibility
+      ? { visibility: call.visibility }
+      : {}),
+  } as ToolInvocation;
 }
 
 function toPublicStatusToolCall(call: ParsedToolCall): ToolInvocation {
@@ -620,19 +547,35 @@ export function historyGenerator(
       : [];
 
     if (isToolResult && !isRequestingAgent) {
-      const toolResultsBlock = buildPeerToolResultsBlock(parsedToolCalls);
-      const parts = [content, toolResultsBlock].filter((
-        part,
-      ): part is string => typeof part === "string" && part.trim().length > 0);
-      if (parts.length === 0) return [];
+      const visibleToolCalls = parsedToolCalls.flatMap((call) => {
+        const visibility = call.visibility ?? "public_status";
+        if (visibility === "requester_only") return [];
+        return [stripParsedToolCall(call, { includeVisibility: true })];
+      });
+
+      if (visibleToolCalls.length === 0) return [];
 
       const senderName = resolveSpeakerLabel(msg, metadata);
       const safeMetadata = sanitizeMetadataForHistory(metadata);
       return [{
-        content: prefixSpeakerContent(senderName, parts.join("\n")),
+        content,
         role: "user",
         senderId: msg.senderId || undefined,
-        ...(safeMetadata ? { metadata: safeMetadata } : {}),
+        toolCalls: visibleToolCalls,
+        ...(safeMetadata ? {
+          metadata: {
+            ...safeMetadata,
+            wireToolFormat: "peer",
+            wireSegment: "toolResults",
+            speakerLabel: senderName,
+          },
+        } : {
+          metadata: {
+            wireToolFormat: "peer",
+            wireSegment: "toolResults",
+            speakerLabel: senderName,
+          },
+        }),
       }];
     }
 
@@ -647,15 +590,9 @@ export function historyGenerator(
       !directConversation && !isCurrentAgent && msg.senderType !== "system" &&
       !isToolResult
     ) {
-      const senderName = resolveSpeakerLabel(msg, metadata);
-      const peerToolCallsBlock = parsedToolCalls.length > 0
-        ? buildPeerToolCallsBlock(parsedToolCalls)
-        : null;
-      const parts = [content, peerToolCallsBlock].filter((
-        part,
-      ): part is string => typeof part === "string" && part.trim().length > 0);
-      if (parts.length === 0 && msg.senderType === "agent") return [];
-      content = prefixSpeakerContent(senderName, parts.join("\n"));
+      if (content.trim().length === 0 && parsedToolCalls.length === 0) {
+        if (msg.senderType === "agent") return [];
+      }
     }
 
     // Include target info for context (who they were addressing)
@@ -673,21 +610,24 @@ export function historyGenerator(
       }
     }
 
-    if (
-      reasoningHistory.include !== "none" &&
+    const includeReasoning = reasoningHistory.include !== "none" &&
       !isToolResult &&
       typeof msg.reasoning === "string" &&
-      (reasoningHistory.include === "all" || isCurrentAgent)
-    ) {
-      content = appendReasoningForHistory(
-        content,
-        msg.reasoning,
-        reasoningHistory.maxChars,
-      );
-    }
+      (reasoningHistory.include === "all" || isCurrentAgent);
+    const reasoning = includeReasoning ? msg.reasoning : undefined;
+    const reasoningMaxChars = includeReasoning
+      ? reasoningHistory.maxChars
+      : undefined;
+
+    const peerSpeakerLabel = !directConversation && !isCurrentAgent &&
+        msg.senderType !== "system" && !isToolResult
+      ? resolveSpeakerLabel(msg, metadata)
+      : undefined;
 
     if (
       content.trim().length === 0 &&
+      !reasoning &&
+      parsedToolCalls.length === 0 &&
       msg.senderType === "agent" &&
       !isCurrentAgent
     ) {
@@ -737,18 +677,42 @@ export function historyGenerator(
 
       toolCalls = visibleToolCalls;
     } else if (role === "assistant" && parsedToolCalls.length > 0) {
-      toolCalls = parsedToolCalls.map(stripParsedToolCall);
+      toolCalls = parsedToolCalls.map((call) => stripParsedToolCall(call));
+    } else if (
+      peerSpeakerLabel &&
+      parsedToolCalls.length > 0 &&
+      !isToolResult
+    ) {
+      toolCalls = parsedToolCalls.flatMap((call) => {
+        const visibility = call.visibility ?? "public_status";
+        if (visibility === "requester_only") return [];
+        return [stripParsedToolCall(call, { includeVisibility: true })];
+      });
+      if (toolCalls.length === 0) return [];
     }
 
     const safeMetadata = sanitizeMetadataForHistory(metadata);
+    const wireMetadata = {
+      ...(safeMetadata ?? {}),
+      ...(peerSpeakerLabel ? { speakerLabel: peerSpeakerLabel } : {}),
+      ...(peerSpeakerLabel && toolCalls
+        ? { wireToolFormat: "peer" as const }
+        : {}),
+      ...(isToolResult && !isRequestingAgent
+        ? { wireToolFormat: "peer" as const, wireSegment: "toolResults" as const }
+        : {}),
+    };
 
     return [{
       content: hideToolResultContent ? "" : finalContent,
       role: role,
       senderId: msg.senderId || undefined,
-      ...(safeMetadata ? { metadata: safeMetadata } : {}),
+      ...(Object.keys(wireMetadata).length > 0
+        ? { metadata: wireMetadata }
+        : {}),
       tool_call_id: (msg as unknown as { toolCallId?: string }).toolCallId ||
         undefined,
+      ...(reasoning ? { reasoning, reasoningMaxChars } : {}),
       ...(toolCalls ? { toolCalls } : {}),
     }];
   });

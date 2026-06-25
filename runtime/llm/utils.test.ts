@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import {
+  composeWireContent,
   detectDegenerateRepetition,
   filterTaggedControlTokensStreaming,
   formatMessages,
@@ -13,6 +14,62 @@ import {
   responseHasToolIntent,
   sanitizeUserFacingText,
 } from "./utils.ts";
+
+Deno.test("formatMessages merges consecutive user turns from different senders", () => {
+  const formatted = formatMessages({
+    messages: [
+      { role: "user", content: "[Alice]: Hello team." },
+      { role: "user", content: "[Bob]: Following up on that." },
+      { role: "assistant", content: "Thanks, I will handle it." },
+    ],
+  });
+
+  assertEquals(formatted.map((message) => message.role), ["user", "assistant"]);
+  assertEquals(
+    formatted[0]?.content,
+    "[Alice]: Hello team.\n\n[Bob]: Following up on that.",
+  );
+});
+
+Deno.test("formatMessages merges consecutive assistant turns for tool loops", () => {
+  const formatted = formatMessages({
+    messages: [
+      {
+        role: "assistant",
+        senderId: "agent-1",
+        content: "Checking now.",
+        toolCalls: [{
+          id: "call-1",
+          tool: { id: "search" },
+          args: "{}",
+        }],
+      },
+      {
+        role: "tool",
+        senderId: "agent-1",
+        content: "",
+        toolCalls: [{
+          id: "call-1",
+          tool: { id: "search" },
+          args: "{}",
+          output: { ok: true },
+          status: "completed",
+        }],
+      },
+    ],
+  });
+
+  assertEquals(formatted.map((message) => message.role), ["assistant", "user"]);
+  const wire = formatted[0]?.content as string;
+  assertEquals(wire.includes("<tool_calls>"), true);
+  assertEquals(wire.includes("<tool_results>"), true);
+  assertEquals(wire.indexOf("Checking now.") < wire.indexOf("<tool_calls>"), true);
+  assertEquals(wire.indexOf("<tool_calls>") < wire.indexOf("<tool_results>"), true);
+  assertEquals(
+    (formatted[1]?.content as string).includes("<continue_after_tool_results>"),
+    true,
+  );
+});
 
 Deno.test("formatMessages limits non-system history using estimated input tokens", () => {
   const formatted = formatMessages({
@@ -397,6 +454,33 @@ Deno.test("formatMessages canonicalizes structured assistant tool calls over pre
   assertEquals(wire.includes("old_tool"), false);
   assertEquals(wire.includes("Before"), true);
   assertEquals(wire.includes("After"), true);
+  assertEquals(wire.indexOf("Before"), 0);
+  assertEquals(wire.indexOf("<tool_calls>") > wire.indexOf("After"), true);
+});
+
+Deno.test("composeWireContent emits canonical segment order", () => {
+  const wire = composeWireContent({
+    reasoning: "Need weather first.",
+    visible: "Checking both cities.",
+    routeTo: ["reviewer"],
+    askTo: ["researcher"],
+    toolCalls: [{
+      id: "call-1",
+      tool: { id: "get_weather" },
+      args: JSON.stringify({ city: "NYC" }),
+    }],
+  });
+
+  const reasoningIdx = wire.indexOf("<think>");
+  const visibleIdx = wire.indexOf("Checking both cities.");
+  const routeIdx = wire.indexOf("<route_to>");
+  const askIdx = wire.indexOf("<ask_to>");
+  const toolIdx = wire.indexOf("<tool_calls>");
+
+  assertEquals(reasoningIdx < visibleIdx, true);
+  assertEquals(visibleIdx < routeIdx, true);
+  assertEquals(routeIdx < askIdx, true);
+  assertEquals(askIdx < toolIdx, true);
 });
 
 Deno.test("formatMessages canonicalizes structured tool results over pre-rendered blocks", () => {

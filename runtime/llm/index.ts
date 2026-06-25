@@ -17,6 +17,7 @@ import type {
 import { estimateUsageCost } from "@/runtime/llm/pricing.ts";
 import { resolveProviderApiKey, toLLMConfig } from "@/runtime/llm/config.ts";
 import {
+  composeWireContent,
   countTokens,
   createMockResponse,
   detectDegenerateRepetition,
@@ -101,14 +102,6 @@ function normalizeReasoningHistoryOptions(
   };
 }
 
-function truncateReasoningForRecovery(
-  reasoning: string,
-  maxChars: number,
-): string {
-  if (maxChars === 0 || reasoning.length <= maxChars) return reasoning;
-  return reasoning.slice(0, Math.max(0, maxChars));
-}
-
 function extractVisibleReasoningMarkup(response: string): string[] {
   const parts: string[] = [];
   for (const match of response.matchAll(VISIBLE_REASONING_BLOCK_PATTERN)) {
@@ -131,29 +124,17 @@ function buildRecoveryAssistantContext(
   options: ChatRequest["reasoningHistory"] | undefined,
 ): string {
   const reasoningHistory = normalizeReasoningHistoryOptions(options);
-  const parts: string[] = [];
   const trimmedReasoning = reasoning?.trim();
-  if (
-    reasoningHistory.include !== "none" &&
-    typeof trimmedReasoning === "string" &&
-    trimmedReasoning.length > 0
-  ) {
-    parts.push(
-      `<think>\n${
-        truncateReasoningForRecovery(
-          trimmedReasoning,
-          reasoningHistory.maxChars,
-        )
-      }\n</think>`,
-    );
-  }
-
-  const trimmedVisiblePrefix = visiblePrefix.trim();
-  if (trimmedVisiblePrefix.length > 0) {
-    parts.push(trimmedVisiblePrefix);
-  }
-
-  const attemptContext = parts.join("\n\n");
+  const attemptContext = composeWireContent({
+    reasoning:
+      reasoningHistory.include !== "none" &&
+        typeof trimmedReasoning === "string" &&
+        trimmedReasoning.length > 0
+        ? trimmedReasoning
+        : undefined,
+    reasoningMaxChars: reasoningHistory.maxChars,
+    visible: visiblePrefix.trim() || undefined,
+  });
   return [existingContext.trim(), attemptContext].filter((part) =>
     part.length > 0
   ).join("\n\n");

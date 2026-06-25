@@ -263,6 +263,23 @@ Deno.test("parseToolCallsFromResponse only accepts strict JSON-lines calls", () 
   );
 });
 
+Deno.test("parseToolCallsFromResponse accepts optional tool_call_id after visible punctuation", () => {
+  const response =
+    'I will do it.<tool_calls>\n{"name":"kanban","arguments":{"action":"move_card","stage":"done"},"tool_call_id":"call-1"}\n{"name":"update_user_memory","arguments":{"content":"context","category":"context"}}\n</tool_calls>';
+
+  const parsed = parseToolCallsFromResponse(response);
+
+  assertEquals(parsed.cleanResponse, "I will do it.");
+  assertEquals(parsed.toolCalls.length, 2);
+  assertEquals(parsed.toolCalls[0].id, "call-1");
+  assertEquals(parsed.toolCalls[0].tool.id, "kanban");
+  assertEquals(
+    JSON.parse(parsed.toolCalls[0].args),
+    { action: "move_card", stage: "done" },
+  );
+  assertEquals(parsed.toolCalls[1].tool.id, "update_user_memory");
+});
+
 Deno.test("responseHasToolIntent detects canonical and gated dialect markers", () => {
   assertEquals(responseHasToolIntent("text <tool_calls> garbage", []), true);
   assertEquals(

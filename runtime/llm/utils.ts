@@ -1633,9 +1633,7 @@ ${extraRuleText}${exampleRuleNumber}. Example (note the nested arguments object)
 </tool_calls>${exampleTail}
 
 ${nextRuleNumber}. Tool outputs may appear later as <tool_results> blocks. Treat them as returned execution results and never generate <tool_results>, <tool_result>, <result>, <target_ids>, or <continue_after_tool_results> yourself.
-${
-    nextRuleNumber + 1
-  }
+${nextRuleNumber + 1}
 
 === TOOL CATALOG (read-only) ===
 
@@ -1727,15 +1725,26 @@ function parseCanonicalToolCallLines(blockContent: string): ToolInvocation[] {
 
     if (!isPlainJsonObject(obj)) return [];
     const keys = Object.keys(obj).sort();
-    if (keys.length !== 2 || keys[0] !== "arguments" || keys[1] !== "name") {
+    const hasOnlyCanonicalKeys =
+      (keys.length === 2 && keys[0] === "arguments" && keys[1] === "name") ||
+      (keys.length === 3 && keys[0] === "arguments" && keys[1] === "name" &&
+        keys[2] === "tool_call_id");
+    if (!hasOnlyCanonicalKeys) {
       return [];
     }
     if (typeof obj.name !== "string" || !isPlainJsonObject(obj.arguments)) {
       return [];
     }
+    if (
+      "tool_call_id" in obj && typeof obj.tool_call_id !== "string"
+    ) {
+      return [];
+    }
 
     calls.push({
-      id: crypto.randomUUID(),
+      id: typeof obj.tool_call_id === "string"
+        ? obj.tool_call_id
+        : crypto.randomUUID(),
       tool: { id: obj.name },
       args: JSON.stringify(obj.arguments),
     });

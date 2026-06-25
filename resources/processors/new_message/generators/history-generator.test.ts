@@ -166,8 +166,8 @@ Deno.test("historyGenerator can include all agent reasoning with a cap", () => {
     [
       "[reviewer]:",
       "<think>",
-      "xxxxxxxxxxxxxxxxxxxx",
       "[reasoning truncated: 20 chars omitted]",
+      "xxxxxxxxxxxxxxxxxxxx",
       "</think>",
       "",
       "Peer answer.",

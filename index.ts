@@ -759,7 +759,7 @@ export interface CopilotzConfig {
   toolResultHistoryMaxChars?: number;
   /**
    * Controls whether persisted agent reasoning is included in future LLM-visible
-   * history. Defaults to `{ include: "self", maxChars: 2000 }`.
+   * history. Defaults to `{ include: "self", maxChars: 3000 }`.
    */
   reasoningHistory?: ReasoningHistoryOptions;
   /**
@@ -1892,7 +1892,7 @@ export async function createCopilotz(
       toolResultHistoryMaxChars: config.toolResultHistoryMaxChars ?? 10_000,
       reasoningHistory: config.reasoningHistory ?? {
         include: "self",
-        maxChars: 2000,
+        maxChars: 3000,
       },
       // Sender of the current message (available to processors and tools)
       sender: normalizedMessage.sender
@@ -1997,7 +1997,7 @@ export async function createCopilotz(
       toolResultHistoryMaxChars: config.toolResultHistoryMaxChars ?? 10_000,
       reasoningHistory: config.reasoningHistory ?? {
         include: "self",
-        maxChars: 2000,
+        maxChars: 3000,
       },
       multiAgent: config.multiAgent
         ? {

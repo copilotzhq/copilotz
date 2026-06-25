@@ -420,7 +420,7 @@ export type ReasoningHistoryInclude = "none" | "self" | "all";
 
 /**
  * Controls whether persisted agent reasoning is included in future LLM-visible
- * history. Defaults to `{ include: "self", maxChars: 2000 }`.
+ * history. Defaults to `{ include: "self", maxChars: 3000 }`.
  */
 export interface ReasoningHistoryOptions {
   /** Which persisted reasoning entries to include in future prompts. */
@@ -771,7 +771,7 @@ export interface ChatContext {
   toolResultHistoryMaxChars?: number;
   /**
    * Controls whether persisted agent reasoning is included in future LLM-visible
-   * history. Defaults to `{ include: "self", maxChars: 2000 }`.
+   * history. Defaults to `{ include: "self", maxChars: 3000 }`.
    */
   reasoningHistory?: ReasoningHistoryOptions;
   /** User metadata. */

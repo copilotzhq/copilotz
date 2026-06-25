@@ -237,7 +237,7 @@ export interface ChatRequest {
   /**
    * Controls whether reasoning from an interrupted/recovered same-agent attempt
    * is included in the synthetic retry context. Defaults to the framework
-   * history policy: `{ include: "self", maxChars: 2000 }`.
+   * history policy: `{ include: "self", maxChars: 3000 }`.
    */
   reasoningHistory?: {
     include?: "none" | "self" | "all";

@@ -60,7 +60,7 @@ const REASONING_HISTORY_TAGS = [
   "thinking",
   "reasoning",
 ] as const;
-const DEFAULT_REASONING_HISTORY_MAX_CHARS = 2000;
+const DEFAULT_REASONING_HISTORY_MAX_CHARS = 3000;
 const RECOVERY_PROTOCOL_MARKER_PATTERN =
   /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids)\b/i;
 const VISIBLE_REASONING_BLOCK_PATTERN =

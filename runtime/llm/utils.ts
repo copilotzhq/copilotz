@@ -540,12 +540,13 @@ function truncateReasoningForWire(
     return reasoning;
   }
   if (maxChars < 48) return "[reasoning truncated]";
-  const suffix = `\n[reasoning truncated: ${
+  const prefix = `[reasoning truncated: ${
     reasoning.length - maxChars
-  } chars omitted]`;
-  return `${
-    reasoning.slice(0, Math.max(0, maxChars - suffix.length))
-  }${suffix}`;
+  } chars omitted]\n`;
+  if (maxChars <= prefix.length) return "[reasoning truncated]";
+  return `${prefix}${
+    reasoning.slice(-Math.max(0, maxChars - prefix.length))
+  }`;
 }
 
 export function buildRedactedThinkingBlock(

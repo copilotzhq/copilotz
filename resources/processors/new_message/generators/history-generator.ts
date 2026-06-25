@@ -212,13 +212,13 @@ export interface HistoryGeneratorOptions {
   maxToolResultChars?: number;
   /**
    * Controls whether persisted agent reasoning is included in LLM-visible
-   * history. Defaults to `{ include: "self", maxChars: 2000 }`.
+   * history. Defaults to `{ include: "self", maxChars: 3000 }`.
    */
   reasoningHistory?: ReasoningHistoryOptions;
 }
 
 const DEFAULT_MAX_TOOL_RESULT_CHARS = 10_000;
-const DEFAULT_REASONING_HISTORY_MAX_CHARS = 2_000;
+const DEFAULT_REASONING_HISTORY_MAX_CHARS = 3_000;
 
 function normalizeReasoningHistoryOptions(
   options?: ReasoningHistoryOptions,

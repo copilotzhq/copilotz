@@ -469,6 +469,7 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
     endpoint: openAIEndpoint(config, apiMode),
 
     headers: (config: ProviderConfig) => ({
+      ...(config.extraHeaders ?? {}),
       "Content-Type": "application/json",
       "Authorization": `Bearer ${config.apiKey}`,
     }),

@@ -126,6 +126,8 @@ export interface ProviderConfigBase {
 
   // Custom base URL (Ollama, self-hosted)
   baseUrl?: string; // Custom base URL (Ollama, self-hosted)
+  /** Extra headers merged into every provider request (e.g., ChatGPT-Account-ID for subscription OAuth). */
+  extraHeaders?: Record<string, string>;
 
   // Gemini-specific parameters
   candidateCount?: number; // Gemini

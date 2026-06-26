@@ -1,5 +1,9 @@
 import type { Copilotz } from "@/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
+import {
+  USAGE_GENERATOR_EDGE_TYPES,
+  USAGE_INITIATOR_EDGE_TYPES,
+} from "@/runtime/usage/attribution.ts";
 
 type Queryable = {
   query<T = Record<string, unknown>>(
@@ -112,9 +116,8 @@ export async function migrateLlmUsageToUsageLedgerWithQuery(
   );
 
   // Legacy `llm_usage` rows never stored a flat `initiatedById`; the initiator
-  // was only recorded as an `initiated_llm_usage` edge (participant -> usage).
-  // Backfill it from that edge using the same participant key the admin
-  // dashboards group/join on, so attribution resolves instead of "unknown".
+  // was only recorded as a participant→usage edge. Backfill from legacy and
+  // current edge types so attribution resolves instead of "unknown".
   await db.query(
     `UPDATE "nodes" u
      SET "data" = jsonb_set(
@@ -131,13 +134,13 @@ export async function migrateLlmUsageToUsageLedgerWithQuery(
        AND u."data"->>'kind' = 'llm'
        AND (u."data"->>'initiatedById' IS NULL OR u."data"->>'initiatedById' = '')
        AND e."target_node_id" = u."id"
-       AND e."type" = $2
+       AND e."type" = ANY($2::text[])
        AND COALESCE(p."data"->>'externalId', p."source_id", p."id") IS NOT NULL`,
-    [namespace, GRAPH_EDGE.INITIATED_LLM_USAGE],
+    [namespace, [...USAGE_INITIATOR_EDGE_TYPES]],
   );
 
-  // Defensive: backfill the agent attribution from the `used_llm` edge when the
-  // flat `agentId` is missing (harmless no-op when it is already present).
+  // Defensive: backfill agent attribution from participant→usage generator edges
+  // when the flat `agentId` is missing (harmless no-op when already present).
   await db.query(
     `UPDATE "nodes" u
      SET "data" = jsonb_set(
@@ -154,9 +157,41 @@ export async function migrateLlmUsageToUsageLedgerWithQuery(
        AND u."data"->>'kind' = 'llm'
        AND (u."data"->>'agentId' IS NULL OR u."data"->>'agentId' = '')
        AND e."target_node_id" = u."id"
-       AND e."type" = $2
+       AND e."type" = ANY($2::text[])
        AND COALESCE(p."data"->>'externalId', p."source_id", p."id") IS NOT NULL`,
-    [namespace, GRAPH_EDGE.USED_LLM],
+    [namespace, [...USAGE_GENERATOR_EDGE_TYPES]],
+  );
+
+  // Backfill initiator from thread memory identity when event metadata was lost
+  // (common for LLM calls after tool loops before runSender propagation).
+  await db.query(
+    `UPDATE "nodes" u
+     SET "data" = jsonb_set(
+       COALESCE(u."data", '{}'::jsonb),
+       '{initiatedById}',
+       to_jsonb(
+         NULLIF(trim(
+           COALESCE(
+             thread_node."data" #>> '{metadata,system,memory,identity,userExternalId}',
+             thread_node."data" #>> '{system,memory,identity,userExternalId}'
+           )
+         ), '')
+       )
+     )
+     FROM "nodes" thread_node
+     WHERE u."type" = 'usage'
+       AND u."namespace" = $1
+       AND (u."data"->>'initiatedById' IS NULL OR u."data"->>'initiatedById' = '')
+       AND thread_node."type" = 'thread'
+       AND thread_node."id" = COALESCE(u."data"->>'threadId', u."source_id")
+       AND thread_node."namespace" = u."namespace"
+       AND NULLIF(trim(
+         COALESCE(
+           thread_node."data" #>> '{metadata,system,memory,identity,userExternalId}',
+           thread_node."data" #>> '{system,memory,identity,userExternalId}'
+         )
+       ), '') IS NOT NULL`,
+    [namespace],
   );
 
   return {

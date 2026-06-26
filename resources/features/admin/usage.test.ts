@@ -112,6 +112,69 @@ Deno.test("admin usage groups canonical usage ledger rows", async () => {
   assertEquals(threadData.points[0].groupLabel, "Usage Thread");
 });
 
+Deno.test("admin usage attributes initiatedBy from thread identity fallback", async () => {
+  const db = await createDatabase({ url: ":memory:" });
+  const namespace = "tenant-usage-fallback";
+  const threadId = crypto.randomUUID();
+  await db.ops.findOrCreateThread(threadId, {
+    namespace,
+    name: "Fallback Usage Thread",
+    participants: ["user-fallback", "agent-fallback"],
+    metadata: {
+      system: {
+        memory: {
+          identity: { userExternalId: "user-fallback" },
+        },
+      },
+    },
+  });
+
+  const manager = createCollectionsManager(db, [participantCollection]);
+  const collections = manager.withNamespace(namespace);
+  await collections.participant.upsertIdentity({
+    externalId: "user-fallback",
+    participantType: "human",
+    name: "Fallback User",
+  });
+  await collections.participant.upsertIdentity({
+    externalId: "agent-fallback",
+    participantType: "agent",
+    name: "Fallback Agent",
+    agentId: "agent-fallback",
+  });
+
+  const usageService = createUsageService({ ops: db.ops });
+  const usageId = await usageService.createUsageRecord({
+    threadId,
+    eventId: "fallback-event",
+    agentId: "agent-fallback",
+    provider: "openai",
+    model: "gpt-fallback",
+    usage: {
+      inputTokens: 12,
+      outputTokens: 3,
+      totalTokens: 15,
+      source: "provider",
+      status: "completed",
+    },
+  });
+  assert(usageId);
+
+  const result = await usage({
+    query: {
+      namespace,
+      groupBy: "participant",
+      interval: "day",
+      attribution: "initiatedBy",
+    },
+  }, { ops: db.ops } as any);
+  const data = result.data as any;
+
+  assertEquals(data.points.length, 1);
+  assertEquals(data.points[0].groupKey, "user-fallback");
+  assertEquals(data.points[0].groupLabel, "Fallback User");
+});
+
 Deno.test("admin usage counts usage ledger rows (LLM kind)", async () => {
   const db = await createDatabase({ url: ":memory:" });
   const namespace = "tenant-usage-ledger";

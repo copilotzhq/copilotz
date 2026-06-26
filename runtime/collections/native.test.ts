@@ -351,9 +351,9 @@ Deno.test({
       [usageId],
     );
     const edgeTypes = usageEdges.rows.map((edge) => edge.type).sort();
-    assertEquals(edgeTypes.includes(GRAPH_EDGE.HAS_LLM_USAGE), true);
-    assertEquals(edgeTypes.includes(GRAPH_EDGE.USED_LLM), true);
-    assertEquals(edgeTypes.includes(GRAPH_EDGE.INITIATED_LLM_USAGE), true);
+    assertEquals(edgeTypes.includes(GRAPH_EDGE.HAS_USAGE), true);
+    assertEquals(edgeTypes.includes(GRAPH_EDGE.GENERATED_USAGE), true);
+    assertEquals(edgeTypes.includes(GRAPH_EDGE.INITIATED_USAGE), true);
     const node = await db.ops.getNodeById(usageId);
     const data = node?.data as Record<string, unknown>;
     assertEquals(data.inputTokens, 10);
@@ -408,5 +408,59 @@ Deno.test({
     assert(!("promptCost" in data));
     assert(!("completionCost" in data));
     assert(!("totalCost" in data));
+  },
+});
+
+Deno.test({
+  name: "createUsageRecord falls back to thread user identity without runSender",
+  fn: async () => {
+    const db = await createDatabase({ url: ":memory:" });
+    const namespace = "tenant-fallback";
+    const threadId = crypto.randomUUID();
+    await db.ops.findOrCreateThread(threadId, {
+      namespace,
+      name: "Fallback Thread",
+      participants: ["user-1", "agent-1"],
+      metadata: {
+        system: {
+          memory: {
+            identity: { userExternalId: "user-1" },
+          },
+        },
+      },
+    });
+
+    const manager = createCollectionsManager(db, [participantCollection]);
+    const collections = manager.withNamespace(namespace);
+    await collections.participant.upsertIdentity({
+      externalId: "user-1",
+      participantType: "human",
+      name: "User One",
+    });
+    await collections.participant.upsertIdentity({
+      externalId: "agent-1",
+      participantType: "agent",
+      name: "Agent One",
+      agentId: "agent-1",
+    });
+
+    const usageService = createLlmUsageService({ ops: db.ops });
+    const usageId = await usageService.createUsageRecord({
+      threadId,
+      eventId: "event-fallback",
+      agentId: "agent-1",
+      provider: "openai",
+      model: "gpt-test",
+      usage: {
+        inputTokens: 5,
+        outputTokens: 2,
+        totalTokens: 7,
+        source: "provider",
+        status: "completed",
+      },
+    });
+    assert(usageId);
+    const node = await db.ops.getNodeById(usageId);
+    assertEquals((node?.data as Record<string, unknown>).initiatedById, "user-1");
   },
 });

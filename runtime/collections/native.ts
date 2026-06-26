@@ -29,6 +29,9 @@ import type {
   ScopedCollectionsManager,
 } from "@/types/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
+import {
+  resolveInitiatedById,
+} from "@/runtime/usage/attribution.ts";
 
 type CollectionAccessor =
   | CollectionsManager
@@ -676,29 +679,13 @@ export function createUsageService(
   },
 ) {
   const { ops, usageOptions } = deps;
-  const runSenderExternalId = (
-    sender?: Record<string, unknown> | null,
-  ): string | null => {
-    const candidates = [
-      sender?.externalId,
-      sender?.id,
-      sender?.email,
-      sender?.name,
-    ];
-    for (const candidate of candidates) {
-      if (typeof candidate === "string" && candidate.trim().length > 0) {
-        return candidate.trim();
-      }
-    }
-    return null;
-  };
 
   const createUsageParticipantEdges = async (
     input: {
       namespace: string;
       usageNodeId: string;
       agentId: string | null;
-      runSender?: Record<string, unknown> | null;
+      initiatedById: string | null;
     },
   ) => {
     const edgeInputs: Array<{
@@ -716,19 +703,21 @@ export function createUsageService(
         edgeInputs.push({
           sourceNodeId: caller.id as string,
           targetNodeId: input.usageNodeId,
-          type: GRAPH_EDGE.USED_LLM,
+          type: GRAPH_EDGE.GENERATED_USAGE,
         });
       }
     }
 
-    const senderId = runSenderExternalId(input.runSender);
-    if (senderId) {
-      const initiator = await ops.getParticipantNode(senderId, input.namespace);
+    if (input.initiatedById) {
+      const initiator = await ops.getParticipantNode(
+        input.initiatedById,
+        input.namespace,
+      );
       if (initiator?.id) {
         edgeInputs.push({
           sourceNodeId: initiator.id as string,
           targetNodeId: input.usageNodeId,
-          type: GRAPH_EDGE.INITIATED_LLM_USAGE,
+          type: GRAPH_EDGE.INITIATED_USAGE,
         });
       }
     }
@@ -761,7 +750,7 @@ export function createUsageService(
       threadId: string;
       eventId: string | null;
       agentId: string | null;
-      runSender?: Record<string, unknown> | null;
+      initiatedById: string | null;
       provider: string | null;
       model: string | null;
       usage: TokenUsage;
@@ -775,7 +764,7 @@ export function createUsageService(
     kind: "llm",
     resource: input.model ?? input.provider ?? "unknown",
     operation: "chat",
-    initiatedById: runSenderExternalId(input.runSender) ?? null,
+    initiatedById: input.initiatedById,
     metrics: tokenMetrics(input.usage),
     dedupeKey: input.dedupeKey ?? null,
     occurredAt: input.occurredAt ?? new Date().toISOString(),
@@ -848,7 +837,9 @@ export function createUsageService(
     return { cost: record.cost ?? null, metrics: record.metrics ?? event.metrics };
   };
 
-  const resolveNamespace = async (threadId: string): Promise<string> => {
+  const resolveThreadContext = async (
+    threadId: string,
+  ): Promise<{ namespace: string; threadMetadata: unknown }> => {
     const thread = await ops.getThreadById(threadId);
     const namespace = typeof thread?.namespace === "string" &&
         thread.namespace.length > 0
@@ -859,7 +850,7 @@ export function createUsageService(
         `Cannot create usage record for thread ${threadId}: tenant namespace is required`,
       );
     }
-    return namespace;
+    return { namespace, threadMetadata: thread?.metadata };
   };
 
   /**
@@ -873,7 +864,7 @@ export function createUsageService(
     name: string;
     data: Record<string, unknown>;
     agentId: string | null;
-    runSender?: Record<string, unknown> | null;
+    initiatedById: string | null;
   }): Promise<string> => {
     const created = await ops.mutate.graph.createNode(
       {
@@ -890,13 +881,13 @@ export function createUsageService(
     await ops.unsafeGraph.createEdge({
       sourceNodeId: args.threadId,
       targetNodeId: nodeId,
-      type: GRAPH_EDGE.HAS_LLM_USAGE,
+      type: GRAPH_EDGE.HAS_USAGE,
     }).catch(() => undefined);
     await createUsageParticipantEdges({
       namespace: args.namespace,
       usageNodeId: nodeId,
       agentId: args.agentId,
-      runSender: args.runSender ?? null,
+      initiatedById: args.initiatedById,
     });
     return nodeId;
   };
@@ -913,7 +904,13 @@ export function createUsageService(
       cost?: CostBreakdown | null;
       dedupeKey?: string | null;
     }): Promise<string | null> {
-      const namespace = await resolveNamespace(input.threadId);
+      const { namespace, threadMetadata } = await resolveThreadContext(
+        input.threadId,
+      );
+      const initiatedById = resolveInitiatedById({
+        runSender: input.runSender ?? null,
+        threadMetadata,
+      });
 
       const event: UsageEvent = {
         kind: "llm",
@@ -925,6 +922,7 @@ export function createUsageService(
         threadId: input.threadId,
         eventId: input.eventId,
         agentId: input.agentId,
+        initiatedById,
         runSender: input.runSender ?? null,
         metrics: tokenMetrics(input.usage),
         cost: costBreakdownToUsageCost(input.cost),
@@ -938,7 +936,11 @@ export function createUsageService(
         ? usageCostToBreakdown(hooked.cost)
         : input.cost ?? null;
 
-      const data = buildUsageData({ ...input, cost: effectiveCost });
+      const data = buildUsageData({
+        ...input,
+        initiatedById,
+        cost: effectiveCost,
+      });
       data.metrics = hooked.metrics;
 
       return await persistUsageNode({
@@ -949,7 +951,7 @@ export function createUsageService(
         }`,
         data,
         agentId: input.agentId,
-        runSender: input.runSender ?? null,
+        initiatedById,
       });
     },
 
@@ -959,7 +961,14 @@ export function createUsageService(
      * ledger node with the outbox durability semantics, and returns the id.
      */
     async recordUsage(event: UsageEvent): Promise<string | null> {
-      const namespace = await resolveNamespace(event.threadId);
+      const { namespace, threadMetadata } = await resolveThreadContext(
+        event.threadId,
+      );
+      const initiatedById = resolveInitiatedById({
+        initiatedById: event.initiatedById,
+        runSender: event.runSender ?? null,
+        threadMetadata,
+      });
       const hooked = await applyHooks(event, event.raw);
       if (!hooked) return null;
 
@@ -976,8 +985,7 @@ export function createUsageService(
         eventId: event.eventId ?? null,
         messageId: event.messageId ?? null,
         agentId: event.agentId ?? null,
-        initiatedById: event.initiatedById ??
-          runSenderExternalId(event.runSender) ?? null,
+        initiatedById,
         metrics: hooked.metrics,
         // Flat token fields (present only for token-metered kinds).
         inputTokens: hooked.metrics.inputTokens ?? null,
@@ -1008,7 +1016,7 @@ export function createUsageService(
         name: `${event.kind}:${event.resource}`,
         data,
         agentId: event.agentId ?? null,
-        runSender: event.runSender ?? null,
+        initiatedById,
       });
     },
     async updateUsageRecordMetrics(input: {
@@ -1023,6 +1031,11 @@ export function createUsageService(
       cost?: CostBreakdown | null;
       finalizedAt: string;
     }): Promise<void> {
+      const { threadMetadata } = await resolveThreadContext(input.threadId);
+      const initiatedById = resolveInitiatedById({
+        runSender: input.runSender ?? null,
+        threadMetadata,
+      });
       await ops.unsafeGraph.updateNode(input.usageNodeId, {
         name: `${input.usage.status}:${input.provider ?? "unknown"}:${
           input.model ?? "unknown"
@@ -1031,7 +1044,7 @@ export function createUsageService(
           threadId: input.threadId,
           eventId: input.eventId,
           agentId: input.agentId,
-          runSender: input.runSender ?? null,
+          initiatedById,
           provider: input.provider,
           model: input.model,
           usage: input.usage,

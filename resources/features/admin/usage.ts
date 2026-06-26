@@ -1,5 +1,8 @@
 import type { Copilotz } from "@/index.ts";
-import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
+import {
+  USAGE_GENERATOR_EDGE_TYPES,
+  USAGE_INITIATOR_EDGE_TYPES,
+} from "@/runtime/usage/attribution.ts";
 import {
   type AdminUsageTotals,
   buildAdminUsageSourceCte,
@@ -81,9 +84,12 @@ export default async function (
   const interval = normalizeInterval(query.interval);
   const groupBy = normalizeGroupBy(query.groupBy);
   const attribution = normalizeAttribution(query.attribution);
-  const participantEdgeType = attribution === "initiatedBy"
-    ? GRAPH_EDGE.INITIATED_LLM_USAGE
-    : GRAPH_EDGE.USED_LLM;
+  const participantEdgeTypes = attribution === "initiatedBy"
+    ? USAGE_INITIATOR_EDGE_TYPES
+    : USAGE_GENERATOR_EDGE_TYPES;
+  const participantEdgeTypeList = participantEdgeTypes
+    .map((type) => `'${type}'`)
+    .join(", ");
 
   const params: unknown[] = [];
   const filters: string[] = [];
@@ -235,7 +241,7 @@ export default async function (
   const participantJoins = needsParticipantJoin
     ? `INNER JOIN "edges" usage_participant
          ON usage_participant."target_node_id" = u."id"
-        AND usage_participant."type" = '${participantEdgeType}'
+        AND usage_participant."type" IN (${participantEdgeTypeList})
        INNER JOIN "nodes" p
          ON p."id" = usage_participant."source_node_id"
         AND p."type" = 'participant'`

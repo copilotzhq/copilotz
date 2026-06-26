@@ -21,6 +21,10 @@ import {
   projectToolResultForHistory,
 } from "./history-policy.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
+import {
+  pickRunSenderFromMetadata,
+  withRunSenderMetadata,
+} from "@/runtime/usage/attribution.ts";
 import { createUsageService } from "@/runtime/collections/native.ts";
 
 import Ajv from "npm:ajv@^8.17.1";
@@ -383,14 +387,17 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
         finishedAt,
       };
 
-      const resultMetadata = toolExecutionId || replyToParticipantId ||
-          replyToTargetQueue.length > 0
-        ? {
-          ...(toolExecutionId ? { toolExecutionId } : {}),
-          replyToParticipantId,
-          replyToTargetQueue,
-        }
-        : undefined;
+      const resultMetadata = withRunSenderMetadata(
+        toolExecutionId || replyToParticipantId ||
+            replyToTargetQueue.length > 0
+          ? {
+            ...(toolExecutionId ? { toolExecutionId } : {}),
+            replyToParticipantId,
+            replyToTargetQueue,
+          }
+          : undefined,
+        pickRunSenderFromMetadata(eventMetadata),
+      );
 
       if (toolExecutionId && db?.ops?.mutate?.toolExecutions) {
         const finishPatch = {

@@ -71,6 +71,10 @@ import {
   withSupersededSkipRoutingMetadata,
 } from "@/runtime/event-supersession.ts";
 import {
+  pickRunSenderFromMetadata,
+  withRunSenderMetadata,
+} from "@/runtime/usage/attribution.ts";
+import {
   buildMentionTargetRoute,
   extractMentionNames,
 } from "@/utils/mentions.ts";
@@ -1618,7 +1622,7 @@ export const messageProcessor: EventProcessor<
             batchIndex: call.batchIndex ?? null,
           },
         } as ToolCallEventPayload;
-        const toolMetadata = {
+        const toolMetadata = withRunSenderMetadata({
           sourceMessageId: createdMessage.id,
           ...(call.batchId ? { batchId: call.batchId } : {}),
           ...(typeof call.batchSize === "number"
@@ -1631,7 +1635,7 @@ export const messageProcessor: EventProcessor<
               toolReplyMetadata.replyToTargetQueue.length > 0
             ? toolReplyMetadata
             : {}),
-        };
+        }, pickRunSenderFromMetadata(eventMetadata))!;
         if (isLifecycleMessageCreated && ops.mutate?.toolExecutions) {
           await ops.mutate.toolExecutions.create({
             threadId,

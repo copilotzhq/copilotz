@@ -824,6 +824,12 @@ export interface ChatContext {
    */
   namespace?: string;
   /**
+   * PostgreSQL schema for this run/worker lifecycle.
+   * Propagated to background event workers so tenant-scoped DB writes
+   * stay in the same schema as the initial run request.
+   */
+  schema?: string;
+  /**
    * Collections manager for custom data storage.
    * - If namespace is set: returns pre-scoped collections (no withNamespace needed)
    * - If no namespace: returns raw manager (use withNamespace manually)

@@ -4,8 +4,50 @@ import {
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import { createCopilotz } from "@/index.ts";
-import { withSchema } from "@/database/schema-context.ts";
+import { getCurrentSchema, withSchema } from "@/database/schema-context.ts";
 import { normalizeThreadMetadata } from "@/runtime/thread-metadata.ts";
+
+Deno.test("runThread event worker keeps tenant schema after run returns", async () => {
+  const tenant = "tenant_worker_schema";
+  const tempDir = await Deno.makeTempDir();
+  let workerSchema: string | undefined;
+
+  const copilotz = await createCopilotz({
+    agents: [{
+      id: "tenant-agent",
+      name: "tenant-agent",
+      role: "assistant",
+      instructions: "Handle the tenant message.",
+      llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+    }],
+    processors: [{
+      eventType: "NEW_MESSAGE",
+      shouldProcess: () => true,
+      process: async () => {
+        workerSchema = getCurrentSchema();
+        return { producedEvents: [] };
+      },
+    }],
+    dbConfig: { url: `file://${tempDir}/tenant-worker-schema.db` },
+  });
+
+  try {
+    const handle = await copilotz.run({
+      content: "hello tenant worker",
+      sender: { type: "user", externalId: "tenant-user", name: "Tenant User" },
+      thread: { externalId: "tenant-worker-thread" },
+    }, {
+      namespace: tenant,
+      schema: tenant,
+    });
+
+    await handle.done;
+    assertEquals(workerSchema, tenant);
+  } finally {
+    await copilotz.shutdown();
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
 
 Deno.test("runThread writes tenant queue rows in the active schema", async () => {
   const tenant = "tenant_copilotz_com";

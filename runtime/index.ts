@@ -7,6 +7,10 @@ import type {
   Tool,
 } from "@/types/index.ts";
 import type { EventBase } from "@/database/schemas/index.ts";
+import {
+  getCurrentSchema,
+  withSchema,
+} from "@/database/schema-context.ts";
 import { startThreadEventWorker } from "@/runtime/event-engine.ts";
 import { redactEventForStream } from "@/runtime/stream-redaction.ts";
 import {
@@ -141,9 +145,28 @@ export type RunOptions = {
 
 export type RecoverStuckThreadsOptions = {
   namespace?: string;
+  schema?: string;
   limit?: number;
   minPriority?: number;
 };
+
+function resolveWorkerSchema(
+  context: ChatContext,
+  options?: { schema?: string },
+): string | undefined {
+  return context.schema ?? options?.schema ?? getCurrentSchema();
+}
+
+async function runInWorkerSchema(
+  schema: string | undefined,
+  fn: () => Promise<void>,
+): Promise<void> {
+  if (schema && schema !== "public") {
+    await withSchema(schema, fn);
+    return;
+  }
+  await fn();
+}
 
 export type RecoverStuckThreadsResult = {
   checked: number;
@@ -170,9 +193,12 @@ export async function recoverStuckThreads(
   const emitToStream = () => {};
 
   let started = 0;
+  const workerSchema = resolveWorkerSchema(context, options);
   await Promise.all(threadIds.map(async (threadId) => {
     try {
-      await startThreadEventWorker(db, threadId, context, emitToStream);
+      await runInWorkerSchema(workerSchema, async () => {
+        await startThreadEventWorker(db, threadId, context, emitToStream);
+      });
       started += 1;
     } catch (error) {
       console.warn("[recovery] Failed to recover stuck thread:", {
@@ -582,22 +608,26 @@ export async function runThread(
     );
   }
 
+  const workerSchema = resolveWorkerSchema(baseContext, options);
   const contextForWorker: ChatContext = {
     ...baseContext,
     stream,
+    schema: workerSchema,
   };
 
   // Start and wire completion
   Promise.resolve()
     .then(async () => {
-      await startThreadEventWorker(
-        db,
-        threadId!,
-        contextForWorker,
-        emitToStream,
-      );
-      await waitForTraceTerminalState(ops, traceId, {
-        isCancelled: () => cancelled,
+      await runInWorkerSchema(workerSchema, async () => {
+        await startThreadEventWorker(
+          db,
+          threadId!,
+          contextForWorker,
+          emitToStream,
+        );
+        await waitForTraceTerminalState(ops, traceId, {
+          isCancelled: () => cancelled,
+        });
       });
     })
     .then(() => {

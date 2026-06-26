@@ -1884,6 +1884,7 @@ export async function createCopilotz(
       security: baseConfig.security,
       // Resolved namespace for this run
       namespace: resolvedNamespace,
+      schema: resolvedSchema,
       // Collections: scoped if namespace is set, otherwise raw manager
       collections: resolvedCollections,
       agentsFileInstructions,
@@ -1935,6 +1936,7 @@ export async function createCopilotz(
   const buildRecoveryContext = async (
     options: RecoverStuckThreadsOptions = {},
   ): Promise<ChatContext> => {
+    const resolvedSchema = options.schema ?? config.dbConfig?.defaultSchema;
     const resolvedNamespace = options.namespace ?? config.namespace;
     const resolvedCollections = collectionsManager
       ? resolvedNamespace
@@ -1990,6 +1992,7 @@ export async function createCopilotz(
       storageBackends: availableStorageBackends,
       security: baseConfig.security,
       namespace: resolvedNamespace,
+      schema: resolvedSchema,
       collections: resolvedCollections,
       agentsFileInstructions,
       toolExecutionTimeoutMs,

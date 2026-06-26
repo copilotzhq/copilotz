@@ -204,11 +204,8 @@ export interface ToolDefinition {
   function: {
     name: string;
     description: string;
-    parameters: {
-      type: "object";
-      properties: Record<string, any>;
-      required?: string[];
-    };
+    /** Generated TypeScript types rendered in the agent tool catalog prompt. */
+    inputTypes: string;
   };
 }
 

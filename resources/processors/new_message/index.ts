@@ -40,6 +40,7 @@ import type {
   ToolInvocation,
 } from "@/runtime/llm/types.ts";
 import { toLLMConfig } from "@/runtime/llm/config.ts";
+import { formatToolsForPrompt } from "@/runtime/tools/format-tools-for-prompt.ts";
 
 import type { NewMessageEventPayload } from "@/database/schemas/index.ts";
 
@@ -1995,7 +1996,7 @@ export const messageProcessor: EventProcessor<
         // Keep the prompt prefix stable when agents expose the same tools in
         // different config orders. Tool calls are resolved by key at execution.
         .sort((a, b) => a.key.localeCompare(b.key));
-      const llmTools: ToolDefinition[] = formatToolsForAI(agentTools);
+      const llmTools: ToolDefinition[] = formatToolsForPrompt(agentTools);
 
       // Build system prompt
       let systemPrompt = typeof llmContext.systemPrompt === "string"
@@ -2145,32 +2146,6 @@ export const messageProcessor: EventProcessor<
       ],
     };
   },
-};
-
-const formatToolsForAI = (tools: ExecutableTool[]): ToolDefinition[] => {
-  return tools.map((tool) => ({
-    type: "function" as const,
-    function: {
-      name: tool.key,
-      description: tool.description,
-      parameters: tool.inputSchema && typeof tool.inputSchema === "object"
-        ? {
-          type: "object" as const,
-          properties:
-            (tool.inputSchema as { properties?: Record<string, unknown> })
-              .properties ?? {},
-          required: Array.isArray(
-              (tool.inputSchema as { required?: string[] }).required,
-            )
-            ? (tool.inputSchema as { required?: string[] }).required
-            : undefined,
-        }
-        : {
-          type: "object" as const,
-          properties: {},
-        },
-    },
-  }));
 };
 
 async function buildProcessingContext(

@@ -1438,7 +1438,7 @@ const searchTool = {
   function: {
     name: "search",
     description: "search",
-    parameters: { type: "object" as const, properties: {} },
+    inputTypes: "export interface SearchInput { query?: string; }\n",
   },
 };
 

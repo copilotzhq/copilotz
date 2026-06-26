@@ -1786,11 +1786,26 @@ export function generateToolSystemPrompt(tools: ToolDefinition[]): string {
   return generateToolSystemPromptVariant(tools, variant);
 }
 
+function renderToolCatalog(tools: ToolDefinition[]): string {
+  return tools.map((tool) => {
+    const { name, description, inputTypes } = tool.function;
+    return [
+      `### ${name}`,
+      "",
+      description,
+      "",
+      "```typescript",
+      inputTypes.trim(),
+      "```",
+    ].join("\n");
+  }).join("\n\n");
+}
+
 export function generateToolSystemPromptVariant(
   tools: ToolDefinition[],
   variant: ToolSystemPromptVariant = "baseline",
 ): string {
-  const toolDefinitions = tools.map((tool) => JSON.stringify(tool)).join("\n");
+  const toolCatalog = renderToolCatalog(tools);
 
   if (variant === "strict-minimal") {
     return `
@@ -1817,9 +1832,7 @@ Sure — checking that now.
 
 === TOOL CATALOG (read-only) ===
 
-\`\`\`json
-${toolDefinitions}
-\`\`\``;
+${toolCatalog}`;
   }
 
   const extraRules: string[] = [];
@@ -1913,9 +1926,7 @@ ${nextRuleNumber + 1}
 
 === TOOL CATALOG (read-only) ===
 
-\`\`\`json
-${toolDefinitions}
-\`\`\``;
+${toolCatalog}`;
 }
 
 /**

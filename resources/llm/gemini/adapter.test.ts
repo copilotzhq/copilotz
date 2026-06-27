@@ -85,6 +85,62 @@ Deno.test("geminiProvider omits stop sequences when none are configured", async 
   assertEquals(body.generationConfig.stopSequences, undefined);
 });
 
+Deno.test("geminiProvider maps reasoningEffort to thinkingLevel for Gemini 3.x", async () => {
+  const config: ProviderConfig = {
+    provider: "gemini",
+    apiKey: "test",
+    model: "gemini-3.5-flash",
+    reasoningEffort: "low",
+  };
+  const body = await geminiProvider(config).body(messages, config);
+
+  assertEquals(body.generationConfig.thinkingConfig, {
+    includeThoughts: true,
+    thinkingLevel: "LOW",
+  });
+});
+
+Deno.test("geminiProvider omits thinkingLevel when reasoningEffort is unset on Gemini 3.x", async () => {
+  const config: ProviderConfig = {
+    provider: "gemini",
+    apiKey: "test",
+    model: "gemini-3.5-flash",
+  };
+  const body = await geminiProvider(config).body(messages, config);
+
+  assertEquals(body.generationConfig.thinkingConfig, {
+    includeThoughts: true,
+  });
+});
+
+Deno.test("geminiProvider omits thinkingConfig when outputReasoning is false", async () => {
+  const config: ProviderConfig = {
+    provider: "gemini",
+    apiKey: "test",
+    model: "gemini-3.5-flash",
+    reasoningEffort: "low",
+    outputReasoning: false,
+  };
+  const body = await geminiProvider(config).body(messages, config);
+
+  assertEquals(body.generationConfig.thinkingConfig, undefined);
+});
+
+Deno.test("geminiProvider maps reasoningEffort to thinkingBudget for Gemini 2.5", async () => {
+  const config: ProviderConfig = {
+    provider: "gemini",
+    apiKey: "test",
+    model: "gemini-2.5-flash",
+    reasoningEffort: "low",
+  };
+  const body = await geminiProvider(config).body(messages, config);
+
+  assertEquals(body.generationConfig.thinkingConfig, {
+    includeThoughts: true,
+    thinkingBudget: 2048,
+  });
+});
+
 Deno.test("geminiProvider maps PDF file data URLs to inline data parts", async () => {
   const config: ProviderConfig = { provider: "gemini", apiKey: "test" };
   const body = await geminiProvider(config).body([

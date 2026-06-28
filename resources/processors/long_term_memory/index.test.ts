@@ -1,9 +1,44 @@
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  assertAlmostEquals,
+  assertEquals,
+  assertStringIncludes,
+} from "@std/assert";
 import { createDatabase } from "@/database/index.ts";
 import type { Event, ProcessorDeps } from "@/types/index.ts";
 import type { ProviderFactory } from "@/runtime/llm/types.ts";
 import type { EmbeddingProviderFactory } from "@/runtime/embeddings/types.ts";
-import { process } from "./index.ts";
+import {
+  averageNormalizedEmbeddings,
+  chunkLinesForEmbedding,
+  process,
+} from "./index.ts";
+
+Deno.test("embedding chunks preserve message lines until a line is oversized", () => {
+  assertEquals(
+    chunkLinesForEmbedding(["first", "second", "third"], 12),
+    [
+      { text: "first\nsecond", characterCount: 12 },
+      { text: "third", characterCount: 5 },
+    ],
+  );
+  assertEquals(
+    chunkLinesForEmbedding(["123456789"], 4),
+    [
+      { text: "1234", characterCount: 4 },
+      { text: "5678", characterCount: 4 },
+      { text: "9", characterCount: 1 },
+    ],
+  );
+});
+
+Deno.test("embedding aggregation uses character-weighted normalized vectors", () => {
+  const result = averageNormalizedEmbeddings(
+    [[3, 0], [0, 4]],
+    [1, 3],
+  );
+  assertAlmostEquals(result[0], 1 / Math.sqrt(10));
+  assertAlmostEquals(result[1], 3 / Math.sqrt(10));
+});
 
 function mockRegistries(answer: string) {
   const chatRequests: Array<Record<string, unknown>> = [];

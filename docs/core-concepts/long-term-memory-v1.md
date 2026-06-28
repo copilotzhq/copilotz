@@ -392,6 +392,7 @@ const longTermMemory: MemoryResource = {
   enabled: true,
   config: {
     triggerChars: 80_000,
+    retainRecentChars: 8_000,
     maxContentChars: 48_000,
     retrievalLimit: 20,
   },
@@ -421,6 +422,20 @@ For the first checkpoint, the observer pages backward from the triggering
 message and stops once the threshold is reached. For later checkpoints,
 `sourceStartMessageId` is the first eligible message after the previous ready
 `sourceEndMessageId`; the complete delta is retained.
+
+`retainRecentChars` keeps a newest complete-message tail outside the checkpoint.
+The observer moves `sourceEndMessageId` to immediately before that tail, so the
+normal conversation runtime continues to include it as hot history. Those
+messages remain part of the next checkpoint delta and are consolidated once
+they are no longer in the retained tail. Set it to `0` to retain no overlap;
+the bundled default is `0` for backward compatibility.
+
+Conversation retrieval embeddings are generated from message-aware chunks
+bounded by the embedding connector's input limit. Each chunk vector is
+normalized, weighted by the number of visible characters it represents,
+summed, and normalized again. This prevents a long consolidation range from
+being represented only by the beginning silently truncated by the embedding
+connector.
 
 ## Correctness
 

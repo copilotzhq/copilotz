@@ -104,6 +104,64 @@ Deno.test("later long-term-memory ranges preserve the complete prior-boundary de
   );
 });
 
+Deno.test("long-term-memory range retains a complete recent-message tail", async () => {
+  const { db, namespace, threadId, messages } = await createThreadMessages();
+  const selected = messages.slice(-3);
+  const triggerChars = selected.reduce(
+    (total, message) => total + projectMessageForSharedMemory(message).length,
+    0,
+  );
+  const retainedChars = projectMessageForSharedMemory(messages.at(-1)!).length;
+  const range = await selectLongTermMemoryRange({
+    db,
+    threadId,
+    triggerMessageId: messages.at(-1)!.id,
+    previous: null,
+    triggerChars,
+    retainRecentChars: retainedChars,
+    pageSize: 2,
+  });
+
+  assertEquals(
+    range?.messages.map((message) => message.id),
+    selected.slice(0, -1).map((message) => message.id),
+  );
+  assertEquals(range?.sourceEndMessageId, selected.at(-2)?.id);
+  assertEquals(range?.retainedMessageCount, 1);
+  assertEquals(range?.retainedCharacterCount, retainedChars);
+
+  const ready = {
+    node: {
+      id: "memory-retained-tail",
+      namespace,
+      type: "long_term_memory",
+      name: "memory-retained-tail",
+      content: "ready",
+      embedding: null,
+      data: {},
+      sourceType: "thread",
+      sourceId: threadId,
+    },
+    data: {
+      schemaVersion: "1",
+      strategy: "checkpointed_graph",
+      status: "ready",
+      threadId,
+      memorySpaceId: "space-1",
+      sequence: 1,
+      agentId: "agent",
+      sourceStartMessageId: range!.sourceStartMessageId,
+      sourceEndMessageId: range!.sourceEndMessageId,
+    },
+  } as LongTermMemoryRecord;
+  assertEquals(
+    sliceMessagesAfterLongTermMemory(messages, ready).map((message) =>
+      message.id
+    ),
+    [messages.at(-1)!.id],
+  );
+});
+
 Deno.test("shared-memory projection hides requester-only tool output", () => {
   const message = {
     id: "tool-message",

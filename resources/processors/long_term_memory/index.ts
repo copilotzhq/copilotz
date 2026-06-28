@@ -21,13 +21,16 @@ import type {
   ToolDefinition,
 } from "@/runtime/llm/types.ts";
 import { assertAgentLLMConfig } from "@/resources/processors/llm_call/index.ts";
-import { embed } from "@/runtime/embeddings/index.ts";
+import {
+  embed,
+  getEmbeddingMaxInputChars,
+} from "@/runtime/embeddings/index.ts";
 import { createLlmUsageService } from "@/runtime/collections/native.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 import {
+  getLatestReadyLongTermMemory,
   getLongTermMemoryConfig,
   getLongTermMemoryData,
-  getLatestReadyLongTermMemory,
   loadMessagesInLongTermMemoryRange,
   projectMessageForSharedMemory,
 } from "@/runtime/memory/index.ts";
@@ -37,8 +40,7 @@ const CONSOLIDATE_MEMORY_TOOL: ToolDefinition = {
   type: "function",
   function: {
     name: "consolidate_memory",
-    description:
-      "Store a consolidated snapshot of the conversation memory. " +
+    description: "Store a consolidated snapshot of the conversation memory. " +
       "Call this tool exactly once with your full analysis of the conversation range. " +
       "Do not call this tool during normal conversation — it is invoked only by the memory system.",
     inputTypes: `type Input = {
@@ -127,6 +129,91 @@ function clampConfidence(value: unknown): number | null {
 function isEmbedding(value: unknown): value is number[] {
   return Array.isArray(value) && value.length > 0 &&
     value.every((entry) => typeof entry === "number" && Number.isFinite(entry));
+}
+
+export interface EmbeddingTextChunk {
+  text: string;
+  characterCount: number;
+}
+
+/**
+ * Packs complete message lines together where possible. A single oversized
+ * line is split only when it cannot fit within the embedding model's limit.
+ */
+export function chunkLinesForEmbedding(
+  lines: string[],
+  maxChars: number,
+): EmbeddingTextChunk[] {
+  const limit = Math.max(1, Math.floor(maxChars));
+  const chunks: EmbeddingTextChunk[] = [];
+  let current = "";
+
+  const flush = () => {
+    if (!current) return;
+    chunks.push({ text: current, characterCount: current.length });
+    current = "";
+  };
+
+  for (const line of lines.filter((candidate) => candidate.length > 0)) {
+    if (line.length > limit) {
+      flush();
+      for (let offset = 0; offset < line.length; offset += limit) {
+        const text = line.slice(offset, offset + limit);
+        chunks.push({ text, characterCount: text.length });
+      }
+      continue;
+    }
+
+    const candidate = current ? `${current}\n${line}` : line;
+    if (candidate.length > limit) flush();
+    current = current ? `${current}\n${line}` : line;
+  }
+  flush();
+  return chunks;
+}
+
+/**
+ * Combines semantic directions rather than raw vector magnitudes: normalize
+ * each chunk, weight it by visible characters, sum, then normalize once more.
+ */
+export function averageNormalizedEmbeddings(
+  embeddings: number[][],
+  weights: number[],
+): number[] {
+  if (embeddings.length === 0 || embeddings.length !== weights.length) {
+    throw new Error("Embedding vectors and weights must have equal length.");
+  }
+
+  const dimensions = embeddings[0].length;
+  const sum = new Array<number>(dimensions).fill(0);
+  let totalWeight = 0;
+
+  embeddings.forEach((embedding, index) => {
+    if (!isEmbedding(embedding) || embedding.length !== dimensions) {
+      throw new Error("Embedding vectors must have consistent dimensions.");
+    }
+    const weight = weights[index];
+    if (!Number.isFinite(weight) || weight <= 0) return;
+    const norm = Math.sqrt(
+      embedding.reduce((total, value) => total + value * value, 0),
+    );
+    if (norm === 0) return;
+    for (let dimension = 0; dimension < dimensions; dimension++) {
+      sum[dimension] += (embedding[dimension] / norm) * weight;
+    }
+    totalWeight += weight;
+  });
+
+  if (totalWeight === 0) {
+    throw new Error("Embedding aggregation requires a positive weight.");
+  }
+  const sumNorm = Math.sqrt(
+    sum.reduce((total, value) => total + value * value, 0),
+  );
+  if (sumNorm === 0) {
+    throw new Error("Embedding aggregation produced a zero vector.");
+  }
+  return sum.map((value) => value / sumNorm);
 }
 
 function parseJsonObject(value: string): Record<string, unknown> | null {
@@ -608,13 +695,23 @@ export const longTermMemoryProcessor: EventProcessor<
         throw new Error("The reserved memory range has no shared content.");
       }
 
+      const embeddingMaxChars = getEmbeddingMaxInputChars(
+        deps.context.embeddingConfig.maxInputTokens,
+      );
+      const conversationChunks = chunkLinesForEmbedding(
+        conversationLines,
+        embeddingMaxChars,
+      );
       const queryEmbeddingResult = await embed(
-        [conversation],
+        conversationChunks.map((chunk) => chunk.text),
         deps.context.embeddingConfig,
         {},
         deps.context.embeddingProviders,
       );
-      const queryEmbedding = queryEmbeddingResult.embeddings[0];
+      const queryEmbedding = averageNormalizedEmbeddings(
+        queryEmbeddingResult.embeddings,
+        conversationChunks.map((chunk) => chunk.characterCount),
+      );
       if (!isEmbedding(queryEmbedding)) {
         throw new Error("Failed to generate consolidation query embedding.");
       }
@@ -717,13 +814,20 @@ export const longTermMemoryProcessor: EventProcessor<
         olderRelations: older.relations,
         maxContentChars: config.maxContentChars,
       });
-      const finalEmbeddingResult = await embed(
+      const contentChunks = chunkLinesForEmbedding(
         [content],
+        embeddingMaxChars,
+      );
+      const finalEmbeddingResult = await embed(
+        contentChunks.map((chunk) => chunk.text),
         deps.context.embeddingConfig,
         {},
         deps.context.embeddingProviders,
       );
-      const finalEmbedding = finalEmbeddingResult.embeddings[0];
+      const finalEmbedding = averageNormalizedEmbeddings(
+        finalEmbeddingResult.embeddings,
+        contentChunks.map((chunk) => chunk.characterCount),
+      );
       if (!isEmbedding(finalEmbedding)) {
         throw new Error("Failed to generate long-term-memory embedding.");
       }

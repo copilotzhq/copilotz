@@ -2,12 +2,14 @@ import type { MemoryResource, RagConfig } from "@/types/index.ts";
 
 export interface LongTermMemoryConfig {
   triggerChars: number;
+  retainRecentChars: number;
   maxContentChars: number;
   retrievalLimit: number;
 }
 
 export const DEFAULT_LONG_TERM_MEMORY_CONFIG: LongTermMemoryConfig = {
   triggerChars: 80_000,
+  retainRecentChars: 0,
   maxContentChars: 48_000,
   retrievalLimit: 20,
 };
@@ -70,6 +72,12 @@ function positiveInteger(value: unknown, fallback: number): number {
     : fallback;
 }
 
+function nonNegativeInteger(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : fallback;
+}
+
 export function getLongTermMemoryConfig(
   resources?: MemoryResource[] | null,
 ): LongTermMemoryConfig | null {
@@ -83,6 +91,10 @@ export function getLongTermMemoryConfig(
     triggerChars: positiveInteger(
       config.triggerChars,
       DEFAULT_LONG_TERM_MEMORY_CONFIG.triggerChars,
+    ),
+    retainRecentChars: nonNegativeInteger(
+      config.retainRecentChars,
+      DEFAULT_LONG_TERM_MEMORY_CONFIG.retainRecentChars,
     ),
     maxContentChars: positiveInteger(
       config.maxContentChars,

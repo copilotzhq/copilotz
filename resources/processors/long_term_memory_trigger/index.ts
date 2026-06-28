@@ -94,6 +94,7 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
         triggerMessageId,
         previous,
         triggerChars: config.triggerChars,
+        retainRecentChars: config.retainRecentChars,
         maxToolResultChars: deps.context.toolResultHistoryMaxChars,
       });
       if (!range) return;
@@ -160,6 +161,8 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
           sourceEndMessageId: range.sourceEndMessageId,
           metadata: {
             characterCount: range.characterCount,
+            retainedCharacterCount: range.retainedCharacterCount,
+            retainedMessageCount: range.retainedMessageCount,
           },
         },
         sourceType: "thread",

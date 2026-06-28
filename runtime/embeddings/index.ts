@@ -13,6 +13,9 @@ import type {
 } from "@/runtime/embeddings/types.ts";
 import { post, type RequestResponse } from "@/runtime/http.ts";
 
+export const DEFAULT_EMBEDDING_MAX_INPUT_TOKENS = 7_500;
+export const EMBEDDING_ESTIMATED_CHARS_PER_TOKEN = 2;
+
 export type { 
   EmbeddingConfig, 
   EmbeddingRequest, 
@@ -82,12 +85,21 @@ function getEnvVar(key: string): string | undefined {
  * - Need even more conservative: 2 chars/token
  */
 function truncateToTokenLimit(text: string, maxTokens: number): string {
-  const maxChars = maxTokens * 2; // Very conservative: ~2 chars per token
+  const maxChars = getEmbeddingMaxInputChars(maxTokens);
   if (text.length <= maxChars) {
     return text;
   }
   // Truncate and add ellipsis to indicate truncation
   return text.slice(0, maxChars - 3) + "...";
+}
+
+export function getEmbeddingMaxInputChars(
+  maxInputTokens = DEFAULT_EMBEDDING_MAX_INPUT_TOKENS,
+): number {
+  const tokens = Number.isFinite(maxInputTokens) && maxInputTokens > 0
+    ? Math.floor(maxInputTokens)
+    : DEFAULT_EMBEDDING_MAX_INPUT_TOKENS;
+  return tokens * EMBEDDING_ESTIMATED_CHARS_PER_TOKEN;
 }
 
 /**
@@ -122,7 +134,8 @@ export async function embed(
   }
 
   // Truncate texts to fit within token limit (default 7500 tokens, safe buffer for 8192 limit)
-  const maxInputTokens = config.maxInputTokens ?? 7500;
+  const maxInputTokens = config.maxInputTokens ??
+    DEFAULT_EMBEDDING_MAX_INPUT_TOKENS;
   const truncatedTexts = texts.map(text => truncateToTokenLimit(text, maxInputTokens));
 
   const provider = config.provider;

@@ -447,6 +447,8 @@ export interface EmbeddingConfig {
   dimensions?: number;
   /** Number of texts to embed in a single batch. */
   batchSize?: number;
+  /** Maximum estimated input tokens per embedded text. Defaults to 7,500. */
+  maxInputTokens?: number;
 }
 
 /**

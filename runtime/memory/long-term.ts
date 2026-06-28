@@ -27,6 +27,8 @@ export interface LongTermMemoryRecord {
 export interface LongTermMemoryRange {
   messages: Message[];
   characterCount: number;
+  retainedCharacterCount: number;
+  retainedMessageCount: number;
   sourceStartMessageId: string;
   sourceEndMessageId: string;
 }
@@ -256,6 +258,7 @@ export async function selectLongTermMemoryRange(args: {
   triggerMessageId: string;
   previous: LongTermMemoryRecord | null;
   triggerChars: number;
+  retainRecentChars?: number;
   maxToolResultChars?: number;
   pageSize?: number;
 }): Promise<LongTermMemoryRange | null> {
@@ -265,6 +268,7 @@ export async function selectLongTermMemoryRange(args: {
     triggerMessageId,
     previous,
     triggerChars,
+    retainRecentChars = 0,
     maxToolResultChars,
     pageSize = 100,
   } = args;
@@ -321,12 +325,36 @@ export async function selectLongTermMemoryRange(args: {
     return null;
   }
 
-  const messages = selectedNewestFirst.reverse();
+  const selectedMessages = selectedNewestFirst.reverse();
+  let retainedCharacterCount = 0;
+  let retainedMessageCount = 0;
+
+  if (retainRecentChars > 0) {
+    for (
+      let index = selectedMessages.length - 1;
+      index >= 0 && retainedCharacterCount < retainRecentChars;
+      index--
+    ) {
+      retainedCharacterCount += projectMessageForSharedMemory(
+        selectedMessages[index],
+        maxToolResultChars,
+      ).length;
+      retainedMessageCount++;
+    }
+  }
+
+  const messages = retainedMessageCount > 0
+    ? selectedMessages.slice(0, -retainedMessageCount)
+    : selectedMessages;
+  if (messages.length === 0) return null;
+
   return {
     messages,
     characterCount,
+    retainedCharacterCount,
+    retainedMessageCount,
     sourceStartMessageId: messages[0].id,
-    sourceEndMessageId: triggerMessageId,
+    sourceEndMessageId: messages.at(-1)!.id,
   };
 }
 

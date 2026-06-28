@@ -49,7 +49,7 @@ By the end, you'll have built a fully featured AI application with tools, memory
 ### Part 6 — Memory & Knowledge
 - [Chapter 12: RAG](./part-6-memory/12-rag.md) — Ground your agent on proprietary knowledge
 - [Chapter 13: Knowledge Graph Collections](./part-6-memory/13-knowledge-graph.md) — Relationships, not just similarity
-- [Chapter 14: Graph Memory](./part-6-memory/14-graph-memory.md) — Scalable memory that improves over time
+- [Chapter 14: Long-Term Conversation Memory](./part-6-memory/14-graph-memory.md) — Cache-stable checkpoints for conversations that outgrow raw history
 
 ### Part 7 — Production Patterns
 - [Chapter 15: Assets](./part-7-production/15-assets.md) — Media handling without breaking the prompt

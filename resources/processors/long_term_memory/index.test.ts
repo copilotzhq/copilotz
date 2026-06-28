@@ -10,6 +10,9 @@ import type { EmbeddingProviderFactory } from "@/runtime/embeddings/types.ts";
 import {
   averageNormalizedEmbeddings,
   chunkLinesForEmbedding,
+  extractVisibleMemoryItemIds,
+  fuseMemoryCandidateRanks,
+  parseConsolidationProposal,
   process,
 } from "./index.ts";
 
@@ -40,8 +43,62 @@ Deno.test("embedding aggregation uses character-weighted normalized vectors", ()
   assertAlmostEquals(result[1], 3 / Math.sqrt(10));
 });
 
+Deno.test("checkpoint item IDs are extractable only when fully rendered", () => {
+  assertEquals(
+    extractVisibleMemoryItemIds(
+      "- [id:item-1] [fact] One\n- [id:item-2] [task] Two\n[id:item-1]",
+    ),
+    ["item-1", "item-2"],
+  );
+  assertEquals(extractVisibleMemoryItemIds("- [id:truncated"), []);
+});
+
+Deno.test("memory candidate fusion preserves strong matches and rewards consensus", () => {
+  assertEquals(
+    fuseMemoryCandidateRanks([
+      [{ id: "rare", similarity: 0.99 }, {
+        id: "consensus",
+        similarity: 0.7,
+      }],
+      [{ id: "consensus", similarity: 0.7 }],
+    ], 2),
+    ["rare", "consensus"],
+  );
+});
+
+Deno.test("consolidation may supersede only a visible checkpoint item", () => {
+  const proposal = JSON.stringify({
+    workState: "Updating a prior decision.",
+    items: [{
+      localId: "new-decision",
+      kind: "decision",
+      name: "Updated decision",
+      content: "Use the new approach.",
+      sourceMessageIds: ["message-1"],
+      supersedesItemId: "visible-item",
+    }, {
+      localId: "other-decision",
+      kind: "decision",
+      name: "Other decision",
+      content: "Do not supersede an unseen item.",
+      sourceMessageIds: ["message-1"],
+      supersedesItemId: "hidden-item",
+    }],
+    relations: [],
+  });
+  const parsed = parseConsolidationProposal(
+    proposal,
+    new Set(["message-1"]),
+    new Set(["visible-item"]),
+  );
+
+  assertEquals(parsed.items[0].supersedesItemId, "visible-item");
+  assertEquals(parsed.items[1].supersedesItemId, undefined);
+});
+
 function mockRegistries(answer: string) {
   const chatRequests: Array<Record<string, unknown>> = [];
+  const embeddingRequests: string[][] = [];
   const llmFactory: ProviderFactory = () => ({
     endpoint: "https://mock.local/chat",
     headers: () => ({}),
@@ -66,6 +123,7 @@ function mockRegistries(answer: string) {
       const body = JSON.parse(String(init?.body ?? "{}")) as {
         texts?: string[];
       };
+      embeddingRequests.push(body.texts ?? []);
       return Promise.resolve(
         new Response(
           JSON.stringify({
@@ -95,13 +153,16 @@ function mockRegistries(answer: string) {
     llmProviders: { openai: llmFactory },
     embeddingProviders: { openai: embeddingFactory },
     chatRequests,
+    embeddingRequests,
     restore: () => {
       globalThis.fetch = originalFetch;
     },
   };
 }
 
-async function createPendingCheckpoint() {
+async function createPendingCheckpoint(
+  options: { withPrevious?: boolean } = {},
+) {
   const db = await createDatabase({ url: ":memory:" });
   const suffix = crypto.randomUUID();
   const namespace = `long-term-processor-${suffix}`;
@@ -135,10 +196,59 @@ async function createPendingCheckpoint() {
     sourceType: "thread",
     sourceId: threadId,
   }, { threadId, namespace });
+  let previousItemId: string | null = null;
+  if (options.withPrevious) {
+    const previousCheckpointId = `previous-checkpoint-${suffix}`;
+    previousItemId = `previous-item-${suffix}`;
+    await db.ops.mutate.graph.createNode({
+      id: previousItemId,
+      namespace,
+      type: "memory_item",
+      name: "Previous decision",
+      content: "Use the previous approach.",
+      embedding: Array.from(
+        { length: 1536 },
+        (_, index) => index === 0 ? 1 : 0,
+      ),
+      data: {
+        memorySpaceId: String(memorySpace.id),
+        checkpointId: previousCheckpointId,
+        kind: "decision",
+        name: "Previous decision",
+        content: "Use the previous approach.",
+        sourceMessageIds: [first.id],
+      },
+      sourceType: "long_term_memory",
+      sourceId: previousCheckpointId,
+    }, { threadId, namespace });
+    await db.ops.mutate.graph.createNode({
+      id: previousCheckpointId,
+      namespace,
+      type: "long_term_memory",
+      name: `thread:${threadId}:memory:1`,
+      content:
+        `## LONG-TERM CONVERSATION MEMORY\n\n### Relevant memory\n- [id:${previousItemId}] [decision] Previous decision: Use the previous approach.`,
+      embedding: null,
+      data: {
+        schemaVersion: "1",
+        strategy: "checkpointed_graph",
+        status: "ready",
+        threadId,
+        memorySpaceId: String(memorySpace.id),
+        sequence: 1,
+        agentId: "agent",
+        sourceStartMessageId: first.id,
+        sourceEndMessageId: first.id,
+        metadata: { visibleItemIds: [previousItemId] },
+      },
+      sourceType: "thread",
+      sourceId: threadId,
+    }, { threadId, namespace });
+  }
   const checkpoint = await db.ops.mutate.graph.createNode({
     namespace,
     type: "long_term_memory",
-    name: `thread:${threadId}:memory:1`,
+    name: `thread:${threadId}:memory:${options.withPrevious ? 2 : 1}`,
     content: null,
     embedding: null,
     data: {
@@ -147,7 +257,7 @@ async function createPendingCheckpoint() {
       status: "pending",
       threadId,
       memorySpaceId: String(memorySpace.id),
-      sequence: 1,
+      sequence: options.withPrevious ? 2 : 1,
       agentId: "agent",
       sourceStartMessageId: first.id,
       sourceEndMessageId: last.id,
@@ -155,7 +265,16 @@ async function createPendingCheckpoint() {
     sourceType: "thread",
     sourceId: threadId,
   }, { threadId, namespace });
-  return { db, namespace, thread, threadId, checkpoint, first, last };
+  return {
+    db,
+    namespace,
+    thread,
+    threadId,
+    checkpoint,
+    first,
+    last,
+    previousItemId,
+  };
 }
 
 function createDeps(
@@ -244,6 +363,22 @@ Deno.test("long-term-memory processor finalizes the reserved node atomically", a
     );
     assertEquals(items.length, 1);
     assertEquals(items[0].content, proposal.items[0].content);
+    assertStringIncludes(
+      checkpoint?.content ?? "",
+      `[id:${items[0].id}]`,
+    );
+    assertEquals(
+      (
+        (checkpoint?.data as Record<string, unknown>).metadata as Record<
+          string,
+          unknown
+        >
+      ).visibleItemIds,
+      [items[0].id],
+    );
+    assertEquals(registries.embeddingRequests[0], [
+      proposal.items[0].content,
+    ]);
     assertEquals(
       (registries.chatRequests[0]?.config as Record<string, unknown>).model,
       "mock",
@@ -257,6 +392,65 @@ Deno.test("long-term-memory processor finalizes the reserved node atomically", a
       );
     assertEquals(itemsAfterRetry.length, 1);
     assertEquals(registries.chatRequests.length, 1);
+  } finally {
+    registries.restore();
+  }
+});
+
+Deno.test("processor may supersede an item visible in the previous checkpoint", async () => {
+  const fixture = await createPendingCheckpoint({ withPrevious: true });
+  const proposal = {
+    workState: "The previous decision is being replaced.",
+    items: [{
+      localId: "replacement",
+      kind: "decision",
+      name: "Replacement decision",
+      content: "Use the replacement approach.",
+      confidence: 0.95,
+      sourceMessageIds: [fixture.last.id],
+      supersedesItemId: fixture.previousItemId,
+    }],
+    relations: [],
+  };
+  const registries = mockRegistries(JSON.stringify(proposal));
+  try {
+    const event = {
+      id: `event-${crypto.randomUUID()}`,
+      type: "long_term_memory.created",
+      threadId: fixture.threadId,
+      subjectType: "long_term_memory",
+      subjectId: fixture.checkpoint.id,
+      payload: fixture.checkpoint,
+    } as unknown as Event;
+    await process(event, createDeps(fixture, registries));
+
+    assertStringIncludes(
+      JSON.stringify(registries.chatRequests[0]?.messages),
+      `[id:${fixture.previousItemId}]`,
+    );
+    const items = await fixture.db.ops.unsafeGraph.getNodesByNamespace(
+      fixture.namespace,
+      "memory_item",
+    );
+    const replacement = items.find((item) =>
+      item.name === "Replacement decision"
+    );
+    const edges = await fixture.db.ops.unsafeGraph.getEdgesForNode(
+      String(replacement?.id),
+      "out",
+      ["supersedes"],
+    );
+    assertEquals(edges.length, 1);
+    assertEquals(String(edges[0].targetNodeId), fixture.previousItemId);
+    const checkpoint = await fixture.db.ops.unsafeGraph.getNodeById(
+      String(fixture.checkpoint.id),
+    );
+    const metadata = (checkpoint?.data as Record<string, unknown>)
+      .metadata as Record<
+        string,
+        unknown
+      >;
+    assertEquals(metadata.retrievedItemIds, []);
   } finally {
     registries.restore();
   }

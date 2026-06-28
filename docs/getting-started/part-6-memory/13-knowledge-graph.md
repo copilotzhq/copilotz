@@ -249,6 +249,9 @@ This means your custom data participates in the same graph as RAG documents and 
 
 ## What's next
 
-The knowledge graph is powerful, but right now you're populating it manually — ingesting documents, creating records, defining relations. What if the graph could grow automatically, directly from the conversations your agents have? Enter graph memory.
+The knowledge graph gives your application durable structure. Conversation
+history has the opposite problem: it is detailed and useful, but grows without
+bound. Next, you will use the same graph foundations to consolidate a long
+thread into cache-stable checkpoints, immutable memory items, and relations.
 
-→ **[Chapter 14: Graph Memory](./14-graph-memory.md))**
+→ **[Chapter 14: Long-Term Conversation Memory](./14-graph-memory.md)**

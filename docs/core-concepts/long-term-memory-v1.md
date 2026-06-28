@@ -130,7 +130,7 @@ related_to, supports, contradicts, depends_on, supersedes
 
 Items are append-only. Changed knowledge creates a new item and, when known, a
 `supersedes` edge to the older item. The LLM may supersede only an older item
-that the framework included in its consolidation input.
+whose canonical ID was visible in the preceding checkpoint.
 
 ### Long-term memory checkpoint
 
@@ -205,11 +205,17 @@ The memory processor finalizes that same node:
     contentHash,
     tokenEstimate,
     metadata: {
-      processorVersion: "v1"
+      processorVersion: "v1",
+      retrievedItemIds: ["..."],
+      visibleItemIds: ["..."]
     }
   }
 }
 ```
+
+Every rendered memory item includes its canonical ID. `visibleItemIds` records
+the IDs that survived the rendered-content budget and are therefore legal
+targets for relations or supersession during the next consolidation.
 
 ```text
 Memory Space ──has_long_term_memory──> Long-Term Memory
@@ -261,8 +267,8 @@ insert its content + messages after sourceEndMessageId
 When assembling an LLM request, `new_message`:
 
 1. Loads the thread's highest-sequence ready `long_term_memory`.
-2. Inserts the stored `content` into the system prompt before recent conversation
-   history.
+2. Inserts the stored `content` into the system prompt before recent
+   conversation history.
 3. Loads raw messages after `sourceEndMessageId`.
 4. Runs the agent-specific history generator on those messages.
 
@@ -304,19 +310,20 @@ The bundled processor handles `long_term_memory.created`. It:
 3. Loads messages in the reserved source range and projects them through the
    shared-memory filter (excludes private reasoning and requester-only tool
    results).
-4. Generates a query embedding from the projected conversation text.
-5. Retrieves relevant older memory items from the thread's memory space using
-   vector similarity.
-6. Calls the reserved agent's LLM to produce a structured consolidation
+4. Loads the previous ready checkpoint and its visible item IDs.
+5. Calls the reserved agent's LLM to produce a structured consolidation
    proposal. The system prompt is built with `contextGenerator` — the same
    construction used for normal chat turns — so the provider can reuse its KV
-   cache on the stable agent-context prefix. The consolidation-specific
-   content (conversation range, older items, JSON schema) is placed in the user
-   message. JSON output mode is requested; the LLM returns raw structured data,
-   not conversational text.
-7. Validates and parses the proposal.
-8. Embeds each proposed memory item.
-9. Renders one final memory string.
+   cache on the stable agent-context prefix. The consolidation-specific content
+   (conversation range and JSON schema) is placed in the user message. JSON
+   output mode is requested; the LLM returns raw structured data, not
+   conversational text.
+6. Validates and parses the proposal. References to older items are accepted
+   only when their IDs were visible in the previous checkpoint.
+7. Embeds each proposed memory item.
+8. Uses every new item embedding to retrieve older memory candidates, combines
+   the per-item rankings, and applies `retrievalLimit` globally.
+9. Renders one final memory string with canonical IDs on every included item.
 10. Atomically creates the memory items and relation edges, updates the
     checkpoint node with `status: "ready"`, content, embedding, `contentHash`,
     and derived metadata.
@@ -421,21 +428,25 @@ remains the final safety limit for the complete request.
 For the first checkpoint, the observer pages backward from the triggering
 message and stops once the threshold is reached. For later checkpoints,
 `sourceStartMessageId` is the first eligible message after the previous ready
-`sourceEndMessageId`; the complete delta is retained.
+`sourceEndMessageId`; the complete delta is considered before the newest
+configured tail is retained as raw history.
 
 `retainRecentChars` keeps a newest complete-message tail outside the checkpoint.
 The observer moves `sourceEndMessageId` to immediately before that tail, so the
 normal conversation runtime continues to include it as hot history. Those
-messages remain part of the next checkpoint delta and are consolidated once
-they are no longer in the retained tail. Set it to `0` to retain no overlap;
-the bundled default is `0` for backward compatibility.
+messages remain part of the next checkpoint delta and are consolidated once they
+are no longer in the retained tail. Set it to `0` to retain no overlap; the
+bundled default is `0` for backward compatibility.
 
-Conversation retrieval embeddings are generated from message-aware chunks
-bounded by the embedding connector's input limit. Each chunk vector is
-normalized, weighted by the number of visible characters it represents,
-summed, and normalized again. This prevents a long consolidation range from
-being represented only by the beginning silently truncated by the embedding
-connector.
+Older-item retrieval uses the embeddings of the newly consolidated memory items,
+not one embedding of the complete conversation range. Results from the
+individual searches are fused using maximum similarity with a
+reciprocal-rank-based consensus bonus, then limited globally.
+
+The final checkpoint embedding is generated from chunks bounded by the embedding
+connector's input limit. Each chunk vector is normalized, weighted by the
+characters it represents, summed, and normalized again. This prevents the stored
+checkpoint vector from representing only the beginning of long content.
 
 ## Correctness
 
@@ -465,6 +476,11 @@ Agent-specific recent history continues to use the existing history generator.
 The first consolidation uses the most recent eligible history up to the
 configured threshold. Older raw history remains stored but is not automatically
 backfilled.
+
+Older ready checkpoints that do not render canonical item IDs remain readable.
+They simply provide no legal supersession targets. The next finalized checkpoint
+adds IDs and `visibleItemIds`, enabling normal reconciliation from the following
+epoch without a migration.
 
 ## File structure
 

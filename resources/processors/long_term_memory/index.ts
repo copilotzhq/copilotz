@@ -59,7 +59,7 @@ const CONSOLIDATE_MEMORY_TOOL: ToolDefinition = {
     confidence: number;
     /** IDs of source messages that support this item. */
     sourceMessageIds: string[];
-    /** ID of an older item this supersedes (optional). */
+    /** ID of an item visible in the previous checkpoint that this supersedes (optional). */
     supersedesItemId?: string;
   }>;
   relations: Array<{
@@ -67,7 +67,7 @@ const CONSOLIDATE_MEMORY_TOOL: ToolDefinition = {
     source: string;
     /** One of: related_to, supports, contradicts, depends_on, supersedes */
     type: string;
-    /** localId or older-item ID of the target. */
+    /** localId or visible previous-checkpoint item ID of the target. */
     target: string;
   }>;
 };`,
@@ -116,6 +116,10 @@ interface RetrievedMemoryItem {
   similarity: number;
 }
 
+const MEMORY_ITEM_ID_PATTERN = /^- \[id:([^\]\s]+)\]/gm;
+const RRF_K = 60;
+const RRF_WEIGHT = 0.1;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -129,6 +133,28 @@ function clampConfidence(value: unknown): number | null {
 function isEmbedding(value: unknown): value is number[] {
   return Array.isArray(value) && value.length > 0 &&
     value.every((entry) => typeof entry === "number" && Number.isFinite(entry));
+}
+
+export function extractVisibleMemoryItemIds(content: string): string[] {
+  return [...content.matchAll(MEMORY_ITEM_ID_PATTERN)]
+    .map((match) => match[1])
+    .filter((id, index, ids) => ids.indexOf(id) === index);
+}
+
+function getVisibleMemoryItemIds(
+  memory: Awaited<ReturnType<typeof getLatestReadyLongTermMemory>>,
+): Set<string> {
+  if (!memory) return new Set();
+  const metadata = isRecord(memory.data.metadata) ? memory.data.metadata : {};
+  const persisted = Array.isArray(metadata.visibleItemIds)
+    ? metadata.visibleItemIds.filter((id): id is string =>
+      typeof id === "string" && id.length > 0
+    )
+    : [];
+  return new Set([
+    ...persisted,
+    ...extractVisibleMemoryItemIds(memory.node.content ?? ""),
+  ]);
 }
 
 export interface EmbeddingTextChunk {
@@ -319,7 +345,7 @@ export function parseConsolidationProposal(
 function itemLabel(node: KnowledgeNode): string {
   const data = isRecord(node.data) ? node.data : {};
   const kind = typeof data.kind === "string" ? data.kind : "memory";
-  return `[${kind}] ${node.name}: ${node.content ?? ""}`.trim();
+  return `[id:${node.id}] [${kind}] ${node.name}: ${node.content ?? ""}`.trim();
 }
 
 function renderRelationship(
@@ -347,9 +373,12 @@ export function renderLongTermMemory(args: {
     ),
   );
   const relevant = [
-    ...proposal.items.map((item) =>
-      `- [${item.kind}] ${item.name}: ${item.content}`
-    ),
+    ...proposal.items.map((item) => {
+      const node = newItemNodes.get(item.localId);
+      return `- [id:${
+        node?.id ?? item.localId
+      }] [${item.kind}] ${item.name}: ${item.content}`;
+    }),
     ...olderItems
       .filter((item) => !superseded.has(String(item.node.id)))
       .map((item) => `- ${itemLabel(item.node)}`),
@@ -454,13 +483,12 @@ async function resolveMemoryLlmConfig(args: {
 async function buildConsolidationContext(args: {
   agent: Agent;
   deps: ProcessorDeps;
-  threadId: string;
-  namespace: string;
   conversation: string;
-  olderItems: RetrievedMemoryItem[];
-  olderRelations: KnowledgeEdge[];
+  previousMemory: Awaited<
+    ReturnType<typeof getLatestReadyLongTermMemory>
+  >;
 }): Promise<{ messages: ChatMessage[]; tools: ToolDefinition[] }> {
-  const { agent, deps, threadId, namespace } = args;
+  const { agent, deps } = args;
 
   // Build exactly the same system prompt the agent uses in regular chat turns
   // (no consolidation-specific additions) so the provider can reuse its KV
@@ -472,13 +500,8 @@ async function buildConsolidationContext(args: {
     deps.context.agents ?? [],
   );
   let systemPrompt = llmContext.systemPrompt;
-  const previousMemory = await getLatestReadyLongTermMemory(
-    deps.db,
-    threadId,
-    namespace,
-  );
-  if (previousMemory?.node.content) {
-    systemPrompt = `${systemPrompt}\n\n${previousMemory.node.content}`;
+  if (args.previousMemory?.node.content) {
+    systemPrompt = `${systemPrompt}\n\n${args.previousMemory.node.content}`;
   }
 
   // All consolidation-specific content lives in the user message so the
@@ -486,29 +509,16 @@ async function buildConsolidationContext(args: {
   // We use JSON output mode (responseType:"json") so the model reliably
   // returns structured data without needing any format training in the
   // system prompt.
-  const olderItemText = args.olderItems.length > 0
-    ? args.olderItems.map((item) =>
-      `- id=${item.node.id} ${itemLabel(item.node)}`
-    ).join("\n")
-    : "(none)";
-  const olderRelationText = args.olderRelations.length > 0
-    ? args.olderRelations.map((edge) =>
-      `${edge.sourceNodeId} --${edge.type}--> ${edge.targetNodeId}`
-    ).join("\n")
-    : "(none)";
-
+  const reconciliationInstruction = args.previousMemory?.node.content
+    ? "You may supersede or relate only older memory item IDs shown in the previous checkpoint above."
+    : "There is no previous checkpoint; relations may target only new localIds.";
   const userContent = [
     "Conversation range to consolidate:",
     args.conversation,
     "",
-    "Relevant older memory items:",
-    olderItemText,
-    "",
-    "Known relations between older items:",
-    olderRelationText,
-    "",
     "---",
     "Analyze the conversation above and return a JSON object that consolidates it into durable memory.",
+    reconciliationInstruction,
     "Output ONLY the JSON object — no markdown, no explanation.",
     "",
     "Schema:",
@@ -524,34 +534,124 @@ async function buildConsolidationContext(args: {
   };
 }
 
+export interface RankedMemoryCandidate {
+  id: string;
+  similarity: number;
+}
+
+export function fuseMemoryCandidateRanks(
+  candidateLists: RankedMemoryCandidate[][],
+  limit: number,
+): string[] {
+  const scores = new Map<
+    string,
+    { maxSimilarity: number; reciprocalRank: number }
+  >();
+  for (const candidates of candidateLists) {
+    candidates.forEach((candidate, index) => {
+      const current = scores.get(candidate.id) ?? {
+        maxSimilarity: 0,
+        reciprocalRank: 0,
+      };
+      current.maxSimilarity = Math.max(
+        current.maxSimilarity,
+        candidate.similarity,
+      );
+      current.reciprocalRank += 1 / (RRF_K + index + 1);
+      scores.set(candidate.id, current);
+    });
+  }
+  return [...scores.entries()]
+    .sort(([leftId, left], [rightId, right]) => {
+      const leftScore = left.maxSimilarity +
+        RRF_WEIGHT * (RRF_K + 1) * left.reciprocalRank;
+      const rightScore = right.maxSimilarity +
+        RRF_WEIGHT * (RRF_K + 1) * right.reciprocalRank;
+      return rightScore - leftScore || leftId.localeCompare(rightId);
+    })
+    .slice(0, Math.max(0, limit))
+    .map(([id]) => id);
+}
+
 async function retrieveOlderMemory(args: {
   deps: ProcessorDeps;
   namespace: string;
   memorySpaceId: string;
-  queryEmbedding: number[];
+  queryEmbeddings: number[][];
+  pinnedItemIds?: string[];
+  excludedItemIds?: string[];
   limit: number;
 }): Promise<{
   items: RetrievedMemoryItem[];
   relations: KnowledgeEdge[];
 }> {
-  const results = await args.deps.db.ops.unsafeGraph.searchNodes({
-    embedding: args.queryEmbedding,
-    namespaces: [args.namespace],
-    nodeTypes: ["memory_item"],
-    limit: Math.max(args.limit * 3, args.limit),
-    minSimilarity: 0.2,
-  });
-  const items = results.flatMap((result): RetrievedMemoryItem[] => {
-    const data = isRecord(result.node.data) ? result.node.data : {};
-    return data.memorySpaceId === args.memorySpaceId
-      ? [{ node: result.node, similarity: result.similarity ?? 0 }]
-      : [];
-  }).slice(0, args.limit);
-  const itemById = new Map(
-    items.map((item) => [String(item.node.id), item]),
+  const excludedItemIds = new Set(args.excludedItemIds ?? []);
+  const resultLists = await Promise.all(
+    args.queryEmbeddings.map((embedding) =>
+      args.deps.db.ops.unsafeGraph.searchNodes({
+        embedding,
+        namespaces: [args.namespace],
+        nodeTypes: ["memory_item"],
+        limit: Math.max(args.limit * 3, args.limit),
+        minSimilarity: 0.2,
+      })
+    ),
   );
+  const candidateLists = resultLists.map((results) =>
+    results.flatMap((result): RetrievedMemoryItem[] => {
+      const data = isRecord(result.node.data) ? result.node.data : {};
+      return data.memorySpaceId === args.memorySpaceId &&
+          !excludedItemIds.has(String(result.node.id))
+        ? [{ node: result.node, similarity: result.similarity ?? 0 }]
+        : [];
+    })
+  );
+  const candidateById = new Map<string, RetrievedMemoryItem>();
+  for (const candidate of candidateLists.flat()) {
+    const id = String(candidate.node.id);
+    const current = candidateById.get(id);
+    if (!current || candidate.similarity > current.similarity) {
+      candidateById.set(id, candidate);
+    }
+  }
+  const rankedIds = fuseMemoryCandidateRanks(
+    candidateLists.map((candidates) =>
+      candidates.map((candidate) => ({
+        id: String(candidate.node.id),
+        similarity: candidate.similarity,
+      }))
+    ),
+    args.limit,
+  );
+
+  const itemById = new Map<string, RetrievedMemoryItem>();
+  const pinnedIds = [...new Set(args.pinnedItemIds ?? [])];
+  const pinnedNodes = await Promise.all(
+    pinnedIds.map((id) => args.deps.db.ops.unsafeGraph.getNodeById(id)),
+  );
+  for (const node of pinnedNodes) {
+    if (itemById.size >= args.limit) break;
+    const data = node && isRecord(node.data) ? node.data : {};
+    if (
+      node?.type === "memory_item" &&
+      node.namespace === args.namespace &&
+      data.memorySpaceId === args.memorySpaceId &&
+      !excludedItemIds.has(String(node.id))
+    ) {
+      itemById.set(String(node.id), {
+        node,
+        similarity: candidateById.get(String(node.id))?.similarity ?? 0,
+      });
+    }
+  }
+  for (const id of rankedIds) {
+    if (itemById.size >= args.limit) break;
+    const candidate = candidateById.get(id);
+    if (candidate) itemById.set(id, candidate);
+  }
+
   const relationById = new Map<string, KnowledgeEdge>();
-  for (const item of [...items]) {
+  for (const item of [...itemById.values()]) {
     const edges = await args.deps.db.ops.unsafeGraph.getEdgesForNode(
       String(item.node.id),
       "both",
@@ -695,43 +795,18 @@ export const longTermMemoryProcessor: EventProcessor<
         throw new Error("The reserved memory range has no shared content.");
       }
 
-      const embeddingMaxChars = getEmbeddingMaxInputChars(
-        deps.context.embeddingConfig.maxInputTokens,
-      );
-      const conversationChunks = chunkLinesForEmbedding(
-        conversationLines,
-        embeddingMaxChars,
-      );
-      const queryEmbeddingResult = await embed(
-        conversationChunks.map((chunk) => chunk.text),
-        deps.context.embeddingConfig,
-        {},
-        deps.context.embeddingProviders,
-      );
-      const queryEmbedding = averageNormalizedEmbeddings(
-        queryEmbeddingResult.embeddings,
-        conversationChunks.map((chunk) => chunk.characterCount),
-      );
-      if (!isEmbedding(queryEmbedding)) {
-        throw new Error("Failed to generate consolidation query embedding.");
-      }
-      const older = await retrieveOlderMemory({
-        deps,
+      const previousMemory = await getLatestReadyLongTermMemory(
+        deps.db,
+        threadId,
         namespace,
-        memorySpaceId: checkpointData.memorySpaceId,
-        queryEmbedding,
-        limit: config.retrievalLimit,
-      });
-
+      );
+      const allowedVisibleItemIds = getVisibleMemoryItemIds(previousMemory);
       const { messages: llmMessages, tools: llmTools } =
         await buildConsolidationContext({
           agent,
           deps,
-          threadId,
-          namespace,
           conversation,
-          olderItems: older.items,
-          olderRelations: older.relations,
+          previousMemory,
         });
       const llmConfig = await resolveMemoryLlmConfig({
         agent,
@@ -759,7 +834,7 @@ export const longTermMemoryProcessor: EventProcessor<
       const proposal = parseConsolidationProposal(
         response.answer,
         new Set(sourceMessages.map((message) => message.id)),
-        new Set(older.items.map((item) => String(item.node.id))),
+        allowedVisibleItemIds,
       );
 
       const itemEmbeddingResult = proposal.items.length > 0
@@ -779,6 +854,20 @@ export const longTermMemoryProcessor: EventProcessor<
           "Failed to generate one or more memory-item embeddings.",
         );
       }
+      const pinnedItemIds = proposal.relations.flatMap((relation) =>
+        allowedVisibleItemIds.has(relation.target) ? [relation.target] : []
+      );
+      const older = await retrieveOlderMemory({
+        deps,
+        namespace,
+        memorySpaceId: checkpointData.memorySpaceId,
+        queryEmbeddings: itemEmbeddingResult.embeddings,
+        pinnedItemIds,
+        excludedItemIds: proposal.items.flatMap((item) =>
+          item.supersedesItemId ? [item.supersedesItemId] : []
+        ),
+        limit: config.retrievalLimit,
+      });
       const localItemNodes = new Map<string, KnowledgeNode>();
       const createNodes: Array<
         Omit<NewKnowledgeNode, "id"> & { id?: string }
@@ -814,6 +903,9 @@ export const longTermMemoryProcessor: EventProcessor<
         olderRelations: older.relations,
         maxContentChars: config.maxContentChars,
       });
+      const embeddingMaxChars = getEmbeddingMaxInputChars(
+        deps.context.embeddingConfig.maxInputTokens,
+      );
       const contentChunks = chunkLinesForEmbedding(
         [content],
         embeddingMaxChars,
@@ -858,6 +950,8 @@ export const longTermMemoryProcessor: EventProcessor<
         localItemNodes.get(value)?.id as string | undefined ??
           (older.items.some((item) => String(item.node.id) === value)
             ? value
+            : allowedVisibleItemIds.has(value)
+            ? value
             : null);
       for (const relation of proposal.relations) {
         const sourceNodeId = resolveItemId(relation.source);
@@ -899,6 +993,7 @@ export const longTermMemoryProcessor: EventProcessor<
           ...(checkpointData.metadata ?? {}),
           processorVersion: "v1",
           retrievedItemIds: older.items.map((item) => String(item.node.id)),
+          visibleItemIds: extractVisibleMemoryItemIds(content),
         },
       };
       await deps.db.ops.mutate.graph.mutateMany({

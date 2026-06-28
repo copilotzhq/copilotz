@@ -236,6 +236,7 @@ type DomainLifecycleEventInput =
 type DomainMutationCommit<T> = {
   result: T;
   event?: DomainLifecycleEventInput | null;
+  events?: DomainLifecycleEventInput[];
 };
 
 type WorkflowMutationOptions = {
@@ -331,6 +332,21 @@ export interface GraphMutationOptions extends ThreadMutationOptions {
   status?: Queue["status"];
   priority?: number | null;
   eventPayload?: Record<string, unknown> | null;
+}
+
+export interface GraphMutateManyInput {
+  createNodes?: Array<Omit<NewKnowledgeNode, "id"> & { id?: string }>;
+  updateNodes?: Array<{
+    id: string;
+    updates: Partial<NewKnowledgeNode>;
+  }>;
+  createEdges?: Array<Omit<NewKnowledgeEdge, "id"> & { id?: string }>;
+}
+
+export interface GraphMutateManyResult {
+  createdNodes: KnowledgeNode[];
+  updatedNodes: KnowledgeNode[];
+  createdEdges: KnowledgeEdge[];
 }
 
 export type ThreadCreateInput = ThreadInsert;
@@ -445,6 +461,10 @@ export interface DomainMutationOperations {
     }) => Promise<KnowledgeNode>;
   };
   graph: {
+    mutateMany: (
+      input: GraphMutateManyInput,
+      options: GraphMutationOptions,
+    ) => Promise<GraphMutateManyResult>;
     createNode: (
       node: Omit<NewKnowledgeNode, "id"> & { id?: string },
       options: GraphMutationOptions,
@@ -3354,8 +3374,9 @@ export function createOperations(
     fn: () => Promise<DomainMutationCommit<T>>,
   ): Promise<T> =>
     await transaction(async () => {
-      const { result, event } = await fn();
-      if (event) await lifecycleEvent(event);
+      const { result, event, events } = await fn();
+      const lifecycleEvents = events ?? (event ? [event] : []);
+      for (const event of lifecycleEvents) await lifecycleEvent(event);
       return result;
     });
 
@@ -3410,6 +3431,86 @@ export function createOperations(
           payload: options.eventPayload ??
             (node as unknown as Record<string, unknown>),
         },
+      };
+    });
+
+  const mutateManyGraph = async (
+    input: GraphMutateManyInput,
+    options: GraphMutationOptions,
+  ): Promise<GraphMutateManyResult> =>
+    await domainMutation(async () => {
+      const createdNodes: KnowledgeNode[] = [];
+      const updatedNodes: KnowledgeNode[] = [];
+      const createdEdges: KnowledgeEdge[] = [];
+      const events: DomainLifecycleEventInput[] = [];
+
+      for (const node of input.createNodes ?? []) {
+        const created = await createNode(node);
+        const after = await getNodeById(String(created.id)) ?? created;
+        createdNodes.push(after);
+        events.push({
+          ...graphMutationEventBase(
+            options,
+            String(after.type ?? node.type ?? "node"),
+            String(after.id),
+            "created",
+          ),
+          namespace: options.namespace ?? after.namespace ?? node.namespace ??
+            null,
+          payload: node as unknown as Record<string, unknown>,
+        });
+      }
+
+      for (const edge of input.createEdges ?? []) {
+        const created = await createEdge(edge);
+        const after = await getEdgeById(String(created.id)) ?? created;
+        createdEdges.push(after);
+        events.push({
+          ...graphMutationEventBase(
+            options,
+            "edge",
+            String(after.id),
+            "created",
+          ),
+          payload: edge as unknown as Record<string, unknown>,
+          metadata: {
+            ...(options.metadata ?? {}),
+            edgeType: after.type ?? edge.type,
+          },
+        });
+      }
+
+      for (const update of input.updateNodes ?? []) {
+        const before = await getNodeById(update.id);
+        if (!before) {
+          throw new Error(
+            `Graph node not found for batch update: ${update.id}`,
+          );
+        }
+        const updated = await updateNode(update.id, update.updates);
+        const after = updated
+          ? await getNodeById(update.id) ?? updated
+          : undefined;
+        if (!after) {
+          throw new Error(`Graph node update failed in batch: ${update.id}`);
+        }
+        updatedNodes.push(after);
+        events.push({
+          ...graphMutationEventBase(
+            options,
+            String(after.type ?? before.type ?? "node"),
+            update.id,
+            "updated",
+          ),
+          namespace: options.namespace ?? after.namespace ??
+            before.namespace ?? null,
+          payload: update.updates as Record<string, unknown>,
+        });
+      }
+
+      return {
+        result: { createdNodes, updatedNodes, createdEdges },
+        events,
       };
     });
 
@@ -4092,6 +4193,7 @@ export function createOperations(
       create: createAssetNode,
     },
     graph: {
+      mutateMany: mutateManyGraph,
       createNode: createGraphNode,
       updateNode: updateGraphNode,
       deleteNode: deleteGraphNode,

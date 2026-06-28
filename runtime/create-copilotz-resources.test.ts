@@ -74,7 +74,7 @@ Deno.test("createCopilotz loads the bundled native agent only when explicitly im
     assert(toolKeys.includes("read_skill_resource"));
     assert(!toolKeys.includes("read_file"));
     assertEquals(channelNames, ["web"]);
-    assertEquals(memoryNames.sort(), ["history", "participant"]);
+    assertEquals(memoryNames.sort(), ["history", "long_term", "participant"]);
     assertEquals(bundledAgent?.allowedTools, undefined);
   } finally {
     await copilotz.shutdown();

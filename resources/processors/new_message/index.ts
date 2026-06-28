@@ -48,10 +48,13 @@ import type { NewMessageEventPayload } from "@/database/schemas/index.ts";
 import {
   contextGenerator,
   generateRagContext,
+  getLatestReadyLongTermMemory,
+  getLongTermMemoryConfig,
   getUserExternalId,
   historyGenerator,
   type LLMContextData,
   resolveParticipantCollection,
+  sliceMessagesAfterLongTermMemory,
 } from "@/runtime/memory/index.ts";
 
 import { processAssetsForNewMessage } from "./generators/asset-generator.ts";
@@ -1936,6 +1939,20 @@ export const messageProcessor: EventProcessor<
         agentId,
         agentId,
       );
+      const longTermMemoryConfig = getLongTermMemoryConfig(context.memory);
+      const longTermMemoryNamespace = context.namespace ??
+        (typeof thread.namespace === "string" ? thread.namespace : null);
+      const longTermMemory = longTermMemoryConfig && longTermMemoryNamespace
+        ? await getLatestReadyLongTermMemory(
+          deps.db,
+          threadId,
+          longTermMemoryNamespace,
+        )
+        : null;
+      const recentChatHistory = sliceMessagesAfterLongTermMemory(
+        ctx.chatHistory,
+        longTermMemory,
+      );
 
       // Filter skills for this agent and build compact index for system prompt
       const agentSkills = filterSkillsForAgent(context.skills ?? [], agent);
@@ -1968,7 +1985,7 @@ export const messageProcessor: EventProcessor<
         agent,
       );
       const generatedHistory: ChatMessage[] = historyGenerator(
-        ctx.chatHistory,
+        recentChatHistory,
         agent,
         {
           includeTargetContext: includeTargetContext && !directConversation,
@@ -1980,7 +1997,7 @@ export const messageProcessor: EventProcessor<
       const llmHistory: ChatMessage[] = context.historyTransform
         ? await context.historyTransform({
           messages: generatedHistory,
-          rawHistory: ctx.chatHistory,
+          rawHistory: recentChatHistory,
           thread,
           agent,
           sourceEvent: event,
@@ -2006,6 +2023,9 @@ export const messageProcessor: EventProcessor<
       let systemPrompt = typeof llmContext.systemPrompt === "string"
         ? llmContext.systemPrompt
         : JSON.stringify(llmContext.systemPrompt ?? {});
+      if (longTermMemory?.node.content) {
+        systemPrompt = `${systemPrompt}\n\n${longTermMemory.node.content}`;
+      }
 
       // Auto-inject RAG context if agent has ragOptions.mode === "auto"
       if (agent.ragOptions?.mode === "auto" && context.embeddingConfig) {

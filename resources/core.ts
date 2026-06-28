@@ -39,10 +39,14 @@ import toolExecutionCollection from "@/resources/collections/tool_execution.ts";
 import llmUsageCollection from "@/resources/collections/llm_usage.ts";
 import usageCollection from "@/resources/collections/usage.ts";
 import scheduledJobCollection from "@/resources/collections/scheduled_job.ts";
+import memorySpaceCollection from "@/resources/collections/memory_space.ts";
+import memoryItemCollection from "@/resources/collections/memory_item.ts";
+import longTermMemoryCollection from "@/resources/collections/long_term_memory.ts";
 
 // ---- Core: memory ----------------------------------------------------------
 import participantMemory from "@/resources/memory/participant.ts";
 import historyMemory from "@/resources/memory/history.ts";
+import longTermMemory from "@/resources/memory/long_term.ts";
 
 // ---- Core: tools -----------------------------------------------------------
 import { nativeTools } from "@/resources/tools/_registry.ts";
@@ -55,6 +59,8 @@ import * as toolCallProcessor from "@/resources/processors/tool_call/index.ts";
 import * as toolResultProcessor from "@/resources/processors/tool_result/index.ts";
 import * as ragIngestProcessor from "@/resources/processors/rag_ingest/index.ts";
 import * as entityExtractProcessor from "@/resources/processors/entity_extract/index.ts";
+import * as longTermMemoryTriggerProcessor from "@/resources/processors/long_term_memory_trigger/index.ts";
+import * as longTermMemoryProcessor from "@/resources/processors/long_term_memory/index.ts";
 
 // ---- Core: llm providers + storage adapters --------------------------------
 import * as llmProviders from "@/resources/llm/mod.ts";
@@ -368,6 +374,9 @@ function buildCoreCollections(): CollectionDefinition[] {
     llmUsageCollection as unknown as CollectionDefinition,
     usageCollection as unknown as CollectionDefinition,
     scheduledJobCollection as unknown as CollectionDefinition,
+    memorySpaceCollection as unknown as CollectionDefinition,
+    memoryItemCollection as unknown as CollectionDefinition,
+    longTermMemoryCollection as unknown as CollectionDefinition,
   ];
 }
 
@@ -375,11 +384,16 @@ function buildCoreMemory(): MemoryResource[] {
   return [
     { name: "participant", ...(participantMemory as object) } as MemoryResource,
     { name: "history", ...(historyMemory as object) } as MemoryResource,
+    { name: "long_term", ...(longTermMemory as object) } as MemoryResource,
   ];
 }
 
 function buildCoreProcessors(): ProcessorEntry[] {
   return [
+    toProcessorEntry(
+      "message.created",
+      longTermMemoryTriggerProcessor as Record<string, unknown>,
+    ),
     toProcessorEntry(
       "message.created",
       newMessageProcessor as Record<string, unknown>,
@@ -415,6 +429,10 @@ function buildCoreProcessors(): ProcessorEntry[] {
     toProcessorEntry(
       "entity_extraction.created",
       entityExtractProcessor as Record<string, unknown>,
+    ),
+    toProcessorEntry(
+      "long_term_memory.created",
+      longTermMemoryProcessor as Record<string, unknown>,
     ),
     toProcessorEntry(
       "new_message",

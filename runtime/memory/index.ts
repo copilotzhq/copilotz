@@ -18,8 +18,25 @@ export {
 } from "./identity.ts";
 export {
   getEnabledMemoryResources,
+  getLongTermMemoryConfig,
   hasMemoryResource,
   isHistoryMemoryEnabled,
   isParticipantMemoryEnabled,
   isRetrievalMemoryEnabled,
+  type LongTermMemoryConfig,
 } from "./resources.ts";
+export {
+  findMemorySpace,
+  getLatestReadyLongTermMemory,
+  getLongTermMemoryData,
+  getNextLongTermMemorySequence,
+  getPendingLongTermMemory,
+  loadMessagesInLongTermMemoryRange,
+  type LongTermMemoryData,
+  type LongTermMemoryRange,
+  type LongTermMemoryRecord,
+  type LongTermMemoryStatus,
+  projectMessageForSharedMemory,
+  selectLongTermMemoryRange,
+  sliceMessagesAfterLongTermMemory,
+} from "./long-term.ts";

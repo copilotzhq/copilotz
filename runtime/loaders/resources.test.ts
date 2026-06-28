@@ -186,6 +186,47 @@ Deno.test("loadResources applies dot-notation imports to local directory discove
   }
 });
 
+Deno.test("loadResources preserves dotted lifecycle processor event names", async () => {
+  const tempDir = await Deno.makeTempDir();
+
+  try {
+    await writeFixtureFile(
+      `${tempDir}/manifest.ts`,
+      `export default {
+        provides: {
+          processors: ["long_term_memory_handler", "message.created"],
+        },
+      };`,
+    );
+    await writeFixtureFile(
+      `${tempDir}/processors/long_term_memory_handler/index.ts`,
+      `export const eventType = "long_term_memory.created";
+       export const shouldProcess = () => true;
+       export const process = () => ({ producedEvents: [] });`,
+    );
+    await writeFixtureFile(
+      `${tempDir}/processors/message.created/index.ts`,
+      `export const shouldProcess = () => true;
+       export const process = () => undefined;`,
+    );
+
+    const resources = await loadResources({
+      path: tempDir,
+      imports: [
+        "processors.long_term_memory_handler",
+        "processors.message.created",
+      ],
+    });
+
+    assertEquals(
+      resources.processors?.map((processor) => processor.eventType).sort(),
+      ["long_term_memory.created", "message.created"],
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
 Deno.test("loadResources accepts index.ts tool modules as a fallback format", async () => {
   const tempDir = await Deno.makeTempDir();
 

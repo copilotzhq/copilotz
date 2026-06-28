@@ -30,6 +30,15 @@ export const GRAPH_EDGE = {
   DERIVED_FROM: "derived_from",
   FORKED_FROM: "forked_from",
   MENTIONS: "mentions",
+  OWNS_MEMORY_SPACE: "owns_memory_space",
+  HAS_MEMORY_ITEM: "has_memory_item",
+  HAS_LONG_TERM_MEMORY: "has_long_term_memory",
+  INCLUDES_MEMORY_ITEM: "includes_memory_item",
+  RELATED_TO: "related_to",
+  SUPPORTS: "supports",
+  CONTRADICTS: "contradicts",
+  DEPENDS_ON: "depends_on",
+  SUPERSEDES: "supersedes",
 } as const;
 
 export type GraphEdgeType = typeof GRAPH_EDGE[keyof typeof GRAPH_EDGE];

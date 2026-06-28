@@ -158,6 +158,10 @@ export type {
   Event,
   /** Interface for custom event processors. */
   EventProcessor,
+  /** Atomic graph mutation batch input. */
+  GraphMutateManyInput,
+  /** Atomic graph mutation batch result. */
+  GraphMutateManyResult,
   /** Required provenance for safe graph mutations. */
   GraphMutationOptions,
   /** Hook for rewriting generated message history before the LLM call. */
@@ -247,6 +251,12 @@ export type {
   /** Explicit low-level graph operations that bypass mutation outbox semantics. */
   UnsafeGraphOperations,
 } from "@/types/index.ts";
+export type {
+  LongTermMemoryData,
+  LongTermMemoryRecord,
+  LongTermMemoryStatus,
+} from "@/runtime/memory/long-term.ts";
+export type { LongTermMemoryConfig } from "@/runtime/memory/resources.ts";
 export type {
   GoalAssessment,
   GoalEvaluateCallback,

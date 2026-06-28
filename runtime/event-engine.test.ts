@@ -2,6 +2,87 @@ import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import { startEventWorker } from "./event-engine.ts";
 
+Deno.test("startEventWorker lets a void observer pass to the claiming processor", async () => {
+  const threadId = "thread-observer";
+  const order: string[] = [];
+  let nextCalls = 0;
+  const queuedEvent = {
+    id: "event-observer",
+    threadId,
+    eventType: "message.created",
+    payload: { content: "answer", sender: { type: "agent", id: "agent" } },
+    parentEventId: null,
+    traceId: null,
+    priority: 0,
+    metadata: null,
+    subjectType: "message",
+    subjectId: "message-1",
+    operation: "created",
+    causationId: null,
+    correlationId: null,
+    ttlMs: null,
+    expiresAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    status: "pending",
+  };
+  const ops = {
+    getThreadWorkerLeaseConfig: () => ({
+      leaseMs: 60_000,
+      heartbeatMs: 60_000,
+    }),
+    acquireThreadWorkerLease: async () => true,
+    renewThreadWorkerLease: async () => true,
+    isThreadWorkerLeaseOwner: async () => true,
+    recoverThreadProcessingQueueItems: async () => 0,
+    getNextPendingQueueItem: async () => {
+      nextCalls += 1;
+      return nextCalls === 1 ? queuedEvent : undefined;
+    },
+    updateQueueItemStatus: async () => {},
+    releaseThreadWorkerLeaseIfNoPendingWork: async () => true,
+    releaseThreadWorkerLease: async () => {},
+  };
+  const fakeDb = { ops };
+
+  await startEventWorker(
+    fakeDb as never,
+    threadId,
+    {
+      processors: {
+        "message.created": [{
+          shouldProcess: () => true,
+          process: () => {
+            order.push("observer");
+          },
+        }, {
+          shouldProcess: () => true,
+          process: () => {
+            order.push("claimer");
+            return { producedEvents: [] };
+          },
+        }, {
+          shouldProcess: () => true,
+          process: () => {
+            order.push("skipped");
+          },
+        }],
+      },
+      emitToStream: () => {},
+      stream: false,
+    },
+    async () =>
+      ({
+        db: fakeDb,
+        thread: { id: threadId },
+        context: {},
+        emitToStream: () => {},
+      }) as never,
+  );
+
+  assertEquals(order, ["observer", "claimer"]);
+});
+
 Deno.test("startEventWorker keeps polling when conditional lease release fails", async () => {
   const threadId = "thread-1";
   const processedEventIds: string[] = [];

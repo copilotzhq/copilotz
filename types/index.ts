@@ -104,6 +104,8 @@ export type {
 export type {
   DatabaseOperations,
   DomainMutationOperations,
+  GraphMutateManyInput,
+  GraphMutateManyResult,
   GraphMutationOptions,
   LlmAttemptInput,
   LlmAttemptPatch,

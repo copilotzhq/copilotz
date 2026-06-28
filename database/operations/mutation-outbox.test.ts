@@ -188,6 +188,120 @@ Deno.test({
 });
 
 Deno.test({
+  name:
+    "mutateMany commits graph changes and one lifecycle event per mutation atomically",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({ url: ":memory:" });
+    const suffix = crypto.randomUUID();
+    const namespace = `mutate-many-${suffix}`;
+    const thread = await db.ops.mutate.threads.create(undefined, {
+      namespace,
+      name: "Mutate Many",
+      participants: ["user"],
+      status: "active",
+      mode: "immediate",
+    });
+    const threadId = String(thread.id);
+    const checkpoint = await db.ops.mutate.graph.createNode({
+      id: `checkpoint-${suffix}`,
+      namespace,
+      type: "long_term_memory",
+      name: "checkpoint",
+      data: { status: "pending" },
+      sourceType: "thread",
+      sourceId: threadId,
+    }, { threadId, namespace });
+    const itemId = `item-${suffix}`;
+    const edgeId = `edge-${suffix}`;
+
+    const result = await db.ops.mutate.graph.mutateMany({
+      createNodes: [{
+        id: itemId,
+        namespace,
+        type: "memory_item",
+        name: "item",
+        content: "remembered",
+        data: { kind: "fact" },
+        sourceType: "long_term_memory",
+        sourceId: String(checkpoint.id),
+      }],
+      createEdges: [{
+        id: edgeId,
+        sourceNodeId: String(checkpoint.id),
+        targetNodeId: itemId,
+        type: "includes_memory_item",
+      }],
+      updateNodes: [{
+        id: String(checkpoint.id),
+        updates: {
+          content: "ready",
+          data: { status: "ready" },
+        },
+      }],
+    }, { threadId, namespace });
+
+    assertEquals(result.createdNodes.map((node) => node.id), [itemId]);
+    assertEquals(result.createdEdges.map((edge) => edge.id), [edgeId]);
+    assertEquals(
+      (result.updatedNodes[0]?.data as Record<string, unknown>).status,
+      "ready",
+    );
+
+    const lifecycle = await db.query<{
+      eventType: string;
+      subjectId: string;
+      status: string;
+    }>(
+      `SELECT "eventType", "subjectId", "status"
+       FROM "events"
+       WHERE "threadId" = $1
+         AND "subjectId" IN ($2, $3, $4)
+       ORDER BY "createdAt" ASC, "id" ASC`,
+      [threadId, itemId, edgeId, checkpoint.id],
+    );
+    assertEquals(
+      lifecycle.rows.map((row) => row.eventType).sort(),
+      [
+        "edge.created",
+        "long_term_memory.created",
+        "long_term_memory.updated",
+        "memory_item.created",
+      ].sort(),
+    );
+    assertEquals(
+      lifecycle.rows.every((row) => row.status === "completed"),
+      true,
+    );
+
+    const rollbackNodeId = `rollback-${suffix}`;
+    await assertRejects(() =>
+      db.ops.mutate.graph.mutateMany({
+        createNodes: [{
+          id: rollbackNodeId,
+          namespace,
+          type: "memory_item",
+          name: "rollback",
+          data: {},
+        }, {
+          id: itemId,
+          namespace,
+          type: "memory_item",
+          name: "duplicate",
+          data: {},
+        }],
+      }, { threadId, namespace })
+    );
+    assertEquals(
+      await db.ops.unsafeGraph.getNodeById(rollbackNodeId),
+      undefined,
+    );
+  },
+});
+
+Deno.test({
   name: "unsafeGraph writes bypass lifecycle outbox rows explicitly",
   sanitizeExit: false,
   sanitizeOps: false,

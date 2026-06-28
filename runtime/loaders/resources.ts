@@ -43,6 +43,10 @@ type ProcessorEntry = EventProcessor<unknown, ProcessorDeps> & {
   id?: string;
 };
 
+function normalizeProcessorEventType(eventType: string): string {
+  return eventType.includes(".") ? eventType : eventType.toUpperCase();
+}
+
 /** A loaded feature with named action handlers. */
 export type FeatureEntry = {
   name: string;
@@ -205,8 +209,10 @@ function parseImportSelection(
   };
 
   for (const entry of normalized) {
-    const parts = entry.split(".").filter(Boolean);
-    if (parts.length === 0 || parts.length > 2) {
+    const separator = entry.indexOf(".");
+    const type = separator === -1 ? entry : entry.slice(0, separator);
+    const name = separator === -1 ? "" : entry.slice(separator + 1);
+    if (!type || (separator !== -1 && !name)) {
       if (isInitDebugEnabled()) {
         console.warn(
           `[copilotz:resources] Ignoring invalid import selector "${entry}"`,
@@ -214,7 +220,6 @@ function parseImportSelection(
       }
       continue;
     }
-    const [type, name] = parts;
     if (!name) {
       selection.all.add(type);
       selection.named.delete(type);
@@ -520,7 +525,6 @@ async function loadProcessorsByManifest(
   eventTypes: string[],
 ): Promise<ProcessorEntry[]> {
   const settled = await Promise.all(eventTypes.map(async (eventType) => {
-    const eventTypeKey = eventType.toUpperCase();
     const processorUrl = joinUrl(baseUrl, "processors", eventType);
 
     const mod = (await importModuleSafe(
@@ -534,6 +538,9 @@ async function loadProcessorsByManifest(
       typeof maybeShouldProcess === "function" &&
       typeof maybeProcess === "function"
     ) {
+      const configuredEventType = typeof mod.eventType === "string"
+        ? mod.eventType
+        : eventType;
       return {
         shouldProcess: asShouldProcess(
           maybeShouldProcess as (
@@ -547,7 +554,7 @@ async function loadProcessorsByManifest(
             deps?: unknown,
           ) => unknown | Promise<unknown>,
         ),
-        eventType: eventTypeKey,
+        eventType: normalizeProcessorEventType(configuredEventType),
         priority: typeof mod.priority === "number" ? mod.priority : 0,
       } as ProcessorEntry;
     }
@@ -1301,12 +1308,13 @@ async function loadFromDirectory(
           ) => unknown | Promise<unknown>;
           priority?: number;
           name?: string;
+          eventType?: string;
         };
 
         const allProcessors = await Promise.all(
           evtDirs.filter((e) => e.isDirectory && allowedEventTypes.has(e.name))
             .map(async (evtDir) => {
-              const eventTypeKey = evtDir.name.toUpperCase();
+              const eventTypeKey = normalizeProcessorEventType(evtDir.name);
               const dirUrl = joinUrl(processorsUrl, evtDir.name);
               const files = await collectEntries(dirUrl);
 
@@ -1344,6 +1352,9 @@ async function loadFromDirectory(
                             ? maybePriority
                             : 0,
                           name: file.name,
+                          eventType: typeof mod?.eventType === "string"
+                            ? mod.eventType
+                            : undefined,
                         };
                       }
                       return null;
@@ -1363,7 +1374,9 @@ async function loadFromDirectory(
               return discovered.map((d) => ({
                 shouldProcess: asShouldProcess(d.shouldProcess),
                 process: asProcess(d.process),
-                eventType: eventTypeKey,
+                eventType: normalizeProcessorEventType(
+                  d.eventType ?? eventTypeKey,
+                ),
                 priority: d.priority,
               })) as ProcessorEntry[];
             }),

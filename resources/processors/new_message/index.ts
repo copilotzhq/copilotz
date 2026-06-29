@@ -52,6 +52,7 @@ import {
   getLongTermMemoryConfig,
   getUserExternalId,
   historyGenerator,
+  limitHotHistoryByCharacters,
   type LLMContextData,
   resolveParticipantCollection,
   sliceMessagesAfterLongTermMemory,
@@ -1949,10 +1950,17 @@ export const messageProcessor: EventProcessor<
           longTermMemoryNamespace,
         )
         : null;
-      const recentChatHistory = sliceMessagesAfterLongTermMemory(
+      const checkpointedChatHistory = sliceMessagesAfterLongTermMemory(
         ctx.chatHistory,
         longTermMemory,
       );
+      const recentChatHistory = longTermMemoryConfig
+        ? limitHotHistoryByCharacters(
+          checkpointedChatHistory,
+          longTermMemoryConfig.maxHotHistoryChars,
+          context.toolResultHistoryMaxChars,
+        )
+        : checkpointedChatHistory;
 
       // Filter skills for this agent and build compact index for system prompt
       const agentSkills = filterSkillsForAgent(context.skills ?? [], agent);

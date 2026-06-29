@@ -277,6 +277,7 @@ export function formatMessages(
     normalizedMessages = limitMessageEstimatedInputTokens(
       normalizedMessages,
       config.limitEstimatedInputTokens - systemEstimatedTokens,
+      formattedMessages,
     );
   }
 
@@ -1012,44 +1013,52 @@ function applyLocalStopSequences(
 function limitMessageEstimatedInputTokens(
   messages: ChatMessage[],
   limitTokens: number,
+  groupingMessages: ChatMessage[] = messages,
 ): ChatMessage[] {
   if (limitTokens <= 0) {
     return messages.filter((message) => message.role === "system");
   }
 
-  const result: ChatMessage[] = [];
-  let totalTokens = 0;
-
-  // Process messages from newest to oldest
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (!message.content) continue;
+  const systemMessages: ChatMessage[] = [];
+  const units: ChatMessage[][] = [];
+  messages.forEach((message, index) => {
     if (message.role === "system") {
-      result.unshift(message);
-      continue;
+      systemMessages.push(message);
+      return;
     }
-
-    const messageText = wirePayloadTextForTokenEstimate(message.content);
-    const messageTokens = approximateTokenCount(messageText);
-
-    if (totalTokens + messageTokens <= limitTokens) {
-      result.unshift(message);
-      totalTokens += messageTokens;
+    const groupingRole = groupingMessages[index]?.role ?? message.role;
+    if (
+      (groupingRole === "tool" || groupingRole === "tool_result") &&
+      units.length > 0
+    ) {
+      units[units.length - 1].push(message);
     } else {
-      // Truncate text messages to fit the remaining estimated token budget.
-      const remainingTokens = limitTokens - totalTokens;
-      if (remainingTokens > 0 && typeof message.content === "string") {
-        const remainingChars = remainingTokens * APPROX_CHARS_PER_TOKEN;
-        result.unshift({
-          ...message,
-          content: message.content.slice(-remainingChars),
-        });
-      }
+      units.push([message]);
+    }
+  });
+
+  const keptUnits: ChatMessage[][] = [];
+  let totalTokens = 0;
+  for (let index = units.length - 1; index >= 0; index--) {
+    const unit = units[index].filter((message) => Boolean(message.content));
+    if (unit.length === 0) continue;
+    const unitTokens = unit.reduce(
+      (sum, message) =>
+        sum +
+        approximateTokenCount(wirePayloadTextForTokenEstimate(message.content)),
+      0,
+    );
+    if (totalTokens + unitTokens <= limitTokens) {
+      keptUnits.unshift(unit);
+      totalTokens += unitTokens;
+    } else {
+      // Never split a conversation/tool-cycle unit. Preserve an oversized
+      // newest unit so callers can handle the over-budget request explicitly.
+      if (keptUnits.length === 0) keptUnits.unshift(unit);
       break;
     }
   }
-
-  return result;
+  return [...systemMessages, ...keptUnits.flat()];
 }
 
 /**

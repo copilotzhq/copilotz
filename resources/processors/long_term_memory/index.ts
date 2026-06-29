@@ -404,23 +404,24 @@ export function renderLongTermMemory(args: {
     ),
   ];
 
-  const content = [
+  const blocks = [
     "## LONG-TERM CONVERSATION MEMORY",
-    "",
-    "### Work state",
-    proposal.workState || "No active work state was identified.",
-    "",
+    `### Work state\n${
+      proposal.workState || "No active work state was identified."
+    }`,
     "### Relevant memory",
     ...(relevant.length > 0 ? relevant : ["- No durable memory items."]),
-    "",
     "### Relationships",
     ...(relationLines.length > 0
       ? relationLines
       : ["- No explicit relationships."]),
-  ].join("\n");
-  return content.length <= args.maxContentChars
-    ? content
-    : content.slice(0, args.maxContentChars);
+  ];
+  const retained: string[] = [];
+  for (const block of blocks) {
+    const candidate = [...retained, block].join("\n\n");
+    if (candidate.length <= args.maxContentChars) retained.push(block);
+  }
+  return retained.join("\n\n");
 }
 
 async function sha256(value: string): Promise<string> {
@@ -757,6 +758,8 @@ export const longTermMemoryProcessor: EventProcessor<
     const namespace = deps.context.namespace ??
       (typeof checkpoint.namespace === "string" ? checkpoint.namespace : null);
     const threadId = checkpointData.threadId;
+    const sourceThread = await deps.db.ops.getThreadById(threadId);
+    const memoryDeps = sourceThread ? { ...deps, thread: sourceThread } : deps;
     let attemptId: string | null = null;
 
     try {
@@ -804,7 +807,7 @@ export const longTermMemoryProcessor: EventProcessor<
       const { messages: llmMessages, tools: llmTools } =
         await buildConsolidationContext({
           agent,
-          deps,
+          deps: memoryDeps,
           conversation,
           previousMemory,
         });
@@ -812,11 +815,11 @@ export const longTermMemoryProcessor: EventProcessor<
         agent,
         messages: llmMessages,
         event,
-        deps,
+        deps: memoryDeps,
       });
       attemptId = await persistAttemptStart({
         event,
-        deps,
+        deps: memoryDeps,
         threadId,
         namespace,
         agent,
@@ -858,7 +861,7 @@ export const longTermMemoryProcessor: EventProcessor<
         allowedVisibleItemIds.has(relation.target) ? [relation.target] : []
       );
       const older = await retrieveOlderMemory({
-        deps,
+        deps: memoryDeps,
         namespace,
         memorySpaceId: checkpointData.memorySpaceId,
         queryEmbeddings: itemEmbeddingResult.embeddings,

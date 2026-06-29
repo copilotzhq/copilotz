@@ -399,6 +399,7 @@ const longTermMemory: MemoryResource = {
   enabled: true,
   config: {
     triggerChars: 80_000,
+    maxHotHistoryChars: 120_000,
     retainRecentChars: 8_000,
     maxContentChars: 48_000,
     retrievalLimit: 20,

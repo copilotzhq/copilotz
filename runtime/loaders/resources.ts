@@ -408,6 +408,20 @@ const asProcess = (
         return { producedEvents: [produced as NewEvent | NewUnknownEvent] };
       }
     }
+    if (
+      typeof result === "object" && result &&
+      "backgroundThreadIds" in (result as Record<string, unknown>)
+    ) {
+      const backgroundThreadIds =
+        (result as { backgroundThreadIds?: unknown }).backgroundThreadIds;
+      if (Array.isArray(backgroundThreadIds)) {
+        return {
+          backgroundThreadIds: backgroundThreadIds.filter(
+            (value): value is string => typeof value === "string",
+          ),
+        };
+      }
+    }
     return;
   };
 };

@@ -66,8 +66,10 @@ Deno.test("long-term-memory trigger reserves one pending checkpoint and outbox e
   } as ProcessorDeps;
 
   assertEquals(await shouldProcess(event, deps), true);
+  const triggerResult = await process(event, deps);
+  assertEquals(triggerResult?.backgroundThreadIds?.length, 1);
   assertEquals(await process(event, deps), undefined);
-  assertEquals(await process(event, deps), undefined);
+  const backgroundThreadId = triggerResult!.backgroundThreadIds![0];
 
   const checkpoints = await db.ops.unsafeGraph.getNodesByNamespace(
     namespace,
@@ -95,7 +97,7 @@ Deno.test("long-term-memory trigger reserves one pending checkpoint and outbox e
      FROM "events"
      WHERE "threadId" = $1
        AND "eventType" = 'long_term_memory.created'`,
-    [threadId],
+    [backgroundThreadId],
   );
   assertEquals(lifecycle.rows, [{
     eventType: "long_term_memory.created",

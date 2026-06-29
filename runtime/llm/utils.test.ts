@@ -119,7 +119,7 @@ Deno.test("formatMessages preserves the system prompt outside the estimated inpu
   );
 });
 
-Deno.test("formatMessages trims the oldest included text message to fit the remaining estimated budget", () => {
+Deno.test("formatMessages drops the oldest whole message at the estimated budget", () => {
   const formatted = formatMessages({
     messages: [
       { role: "user", content: "12345678" }, // 2 tokens
@@ -136,7 +136,6 @@ Deno.test("formatMessages trims the oldest included text message to fit the rema
       content: message.content,
     })),
     [
-      { role: "user", content: "5678" },
       { role: "assistant", content: "abcdefghijkl" },
     ],
   );
@@ -535,10 +534,10 @@ Deno.test("formatMessages counts structured tool result output toward input limi
   const toolWire = assistantTurns[assistantTurns.length - 1];
   assertEquals(typeof toolWire.content, "string");
   const wire = toolWire.content as string;
-  // Budget is 500 est. tokens → ~2000 chars; tail-slice may omit the opening
-  // `<tool_results>` tag but must not retain the full tool JSON.
-  assertEquals(wire.length <= 2100, true);
-  assertEquals(wire.includes(hugeBody), false);
+  // A newest tool-result unit is retained atomically even when it alone exceeds
+  // the estimated budget; it must never be cut into invalid protocol content.
+  assertEquals(wire.includes("<tool_results>"), true);
+  assertEquals(wire.includes(hugeBody), true);
 });
 
 Deno.test("processStream returns on local stop and drains final usage metadata", async () => {

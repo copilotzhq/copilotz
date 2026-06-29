@@ -31,6 +31,7 @@ export {
   getLongTermMemoryData,
   getNextLongTermMemorySequence,
   getPendingLongTermMemory,
+  limitHotHistoryByCharacters,
   loadMessagesInLongTermMemoryRange,
   type LongTermMemoryData,
   type LongTermMemoryRange,

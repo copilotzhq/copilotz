@@ -143,6 +143,23 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
         threadId,
         namespace,
       );
+      const backgroundExternalId = `${threadId}:long-term-memory`;
+      const existingBackgroundThread = await deps.db.ops.getThreadByExternalId(
+        backgroundExternalId,
+        namespace,
+      );
+      const backgroundThread = existingBackgroundThread ??
+        await deps.db.ops.findOrCreateThread(undefined, {
+          name: "Long-term Memory",
+          description: `Long-term-memory worker for ${threadId}`,
+          participants: [],
+          externalId: backgroundExternalId,
+          namespace,
+          parentThreadId: threadId,
+          status: "active",
+          mode: "immediate",
+        });
+      const backgroundThreadId = String(backgroundThread.id);
       await deps.db.ops.mutate.graph.createNode({
         namespace,
         type: "long_term_memory",
@@ -168,13 +185,14 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
         sourceType: "thread",
         sourceId: threadId,
       }, {
-        threadId,
+        threadId: backgroundThreadId,
         namespace,
         traceId: typeof event.traceId === "string" ? event.traceId : null,
         causationId: typeof event.id === "string" ? event.id : null,
         priority: EVENT_PRIORITIES.NORMAL,
         status: "pending",
       });
+      return { backgroundThreadIds: [backgroundThreadId] };
     } catch (error) {
       console.warn(
         "[long_term_memory_trigger] Failed to reserve checkpoint:",

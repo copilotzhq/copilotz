@@ -173,6 +173,7 @@ export async function startThreadEventWorker(
  * |------------------------------------|-------------------------------------------------|
  * | `{ producedEvents: [event, ...] }` | **Claim** — enqueue events, skip remaining processors |
  * | `{ producedEvents: [] }`           | **Swallow** — claim without producing anything  |
+ * | `{ backgroundThreadIds: [...] }`   | **Observe** — wake child workers and continue processors |
  * | `void` / `undefined`               | **Pass** — fall through to the next processor   |
  *
  * @typeParam TPayload - The expected payload type for events this processor handles
@@ -218,14 +219,23 @@ export interface EventProcessor<TPayload = unknown, TDeps = unknown> {
    *
    * - Return `{ producedEvents: [...] }` to claim the event and enqueue new events.
    * - Return `{ producedEvents: [] }` to claim without producing (swallow).
+   * - Return `{ backgroundThreadIds: [...] }` to wake child workers and pass through.
    * - Return `void` / `undefined` to pass through to the next processor.
    */
   process: (
     event: Event,
     deps: TDeps,
   ) =>
-    | Promise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void>
-    | { producedEvents?: Array<NewEvent | NewUnknownEvent> }
+    | Promise<
+      {
+        producedEvents?: Array<NewEvent | NewUnknownEvent>;
+        backgroundThreadIds?: string[];
+      } | void
+    >
+    | {
+      producedEvents?: Array<NewEvent | NewUnknownEvent>;
+      backgroundThreadIds?: string[];
+    }
     | void;
 }
 
@@ -564,6 +574,7 @@ export async function startEventWorker(
         }
 
         let finalEvents: Array<NewEvent | NewUnknownEvent> = [];
+        const observedBackgroundThreadIds = new Set<string>();
         let lastProcessorError: unknown = null;
 
         try {
@@ -579,6 +590,9 @@ export async function startEventWorker(
                 break;
               }
               const res = await p.process(event, deps);
+              for (const backgroundThreadId of res?.backgroundThreadIds ?? []) {
+                observedBackgroundThreadIds.add(backgroundThreadId);
+              }
               if (res?.producedEvents) {
                 finalEvents = res.producedEvents;
                 lastProcessorError = null;
@@ -607,7 +621,7 @@ export async function startEventWorker(
           throw lastProcessorError;
         }
 
-        const backgroundThreadIds = new Set<string>();
+        const backgroundThreadIds = new Set(observedBackgroundThreadIds);
 
         await assertLeaseOwnership();
 

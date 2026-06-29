@@ -14,6 +14,7 @@ import {
   fuseMemoryCandidateRanks,
   parseConsolidationProposal,
   process,
+  renderLongTermMemory,
 } from "./index.ts";
 
 Deno.test("embedding chunks preserve message lines until a line is oversized", () => {
@@ -41,6 +42,24 @@ Deno.test("embedding aggregation uses character-weighted normalized vectors", ()
   );
   assertAlmostEquals(result[0], 1 / Math.sqrt(10));
   assertAlmostEquals(result[1], 3 / Math.sqrt(10));
+});
+
+Deno.test("checkpoint rendering omits oversized blocks instead of slicing them", () => {
+  const oversized = "OVERSIZED_MEMORY_BLOCK_".repeat(20);
+  const rendered = renderLongTermMemory({
+    proposal: {
+      workState: oversized,
+      items: [],
+      relations: [],
+    },
+    newItemNodes: new Map(),
+    olderItems: [],
+    olderRelations: [],
+    maxContentChars: 120,
+  });
+
+  assertEquals(rendered.length <= 120, true);
+  assertEquals(rendered.includes("OVERSIZED_MEMORY_BLOCK_"), false);
 });
 
 Deno.test("checkpoint item IDs are extractable only when fully rendered", () => {

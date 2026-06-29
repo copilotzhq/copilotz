@@ -44,6 +44,51 @@ export type WhatsAppDeliveryOutput =
   | WhatsAppMediaDeliveryOutput
   | WhatsAppReplyButtonsDeliveryOutput;
 
+function getAgentMessageDelivery(event: StreamEvent): {
+  text: string;
+  deduplicationKey: string | null;
+} | null {
+  if (
+    event.type !== "NEW_MESSAGE" &&
+    !(event.type === "message.created" && event.operation === "created")
+  ) {
+    return null;
+  }
+
+  const payload = event.payload as Record<string, unknown>;
+  const sender = payload.sender && typeof payload.sender === "object"
+    ? payload.sender as Record<string, unknown>
+    : undefined;
+  const senderType = typeof sender?.type === "string"
+    ? sender.type
+    : payload.senderType;
+  if (senderType !== "agent") return null;
+
+  const text = extractText(payload.content);
+  if (!text) return null;
+
+  const senderId = typeof sender?.id === "string"
+    ? sender.id
+    : typeof payload.senderId === "string"
+    ? payload.senderId
+    : "";
+  const causalId = typeof event.causationId === "string"
+    ? event.causationId
+    : typeof event.parentEventId === "string"
+    ? event.parentEventId
+    : null;
+  const eventIdentity = causalId ??
+    (typeof event.subjectId === "string" ? event.subjectId : null) ??
+    (typeof event.id === "string" ? event.id : null);
+
+  return {
+    text,
+    deduplicationKey: eventIdentity
+      ? `${eventIdentity}:${senderId}:${text}`
+      : null,
+  };
+}
+
 export function createWhatsAppEgressAdapter(
   config?: Partial<WhatsAppConfig>,
 ): EgressAdapter {
@@ -82,6 +127,7 @@ export function createWhatsAppEgressAdapter(
 
       let eventCount = 0;
       let agentMessageCount = 0;
+      const deliveredAgentMessages = new Set<string>();
       void context.handle.done.then(
         () => {
           debugWhatsAppChannel("run_handle_done", {
@@ -107,31 +153,48 @@ export function createWhatsAppEgressAdapter(
           eventCount += 1;
           const ep = event.payload as Record<string, unknown>;
           const sender = ep?.sender as Record<string, unknown> | undefined;
+          const senderType = typeof sender?.type === "string"
+            ? sender.type
+            : typeof ep?.senderType === "string"
+            ? ep.senderType
+            : null;
           debugWhatsAppChannel("egress_event_received", {
             eventType: event.type,
-            senderType: typeof sender?.type === "string" ? sender.type : null,
+            senderType,
           });
 
-          switch (event.type) {
-            case "NEW_MESSAGE": {
-              if (sender?.type !== "agent") break;
-              agentMessageCount += 1;
-              const text = extractText(ep?.content);
-              if (text) {
-                const output = await transformEgressDeliveryOutput<
-                  WhatsAppDeliveryOutput
-                >(context, {
-                  kind: "text",
-                  to: recipientPhone,
-                  text,
-                  event,
-                });
-                if (output?.kind === "text" && output.text) {
-                  await sendWhatsAppText(cfg, output.to, output.text);
-                }
-              }
-              break;
+          const agentMessage = getAgentMessageDelivery(event);
+          if (agentMessage) {
+            if (
+              agentMessage.deduplicationKey &&
+              deliveredAgentMessages.has(agentMessage.deduplicationKey)
+            ) {
+              debugWhatsAppChannel("egress_message_skipped", {
+                reason: "duplicate",
+                eventType: event.type,
+              });
+              continue;
             }
+            if (agentMessage.deduplicationKey) {
+              deliveredAgentMessages.add(agentMessage.deduplicationKey);
+            }
+
+            agentMessageCount += 1;
+            const output = await transformEgressDeliveryOutput<
+              WhatsAppDeliveryOutput
+            >(context, {
+              kind: "text",
+              to: recipientPhone,
+              text: agentMessage.text,
+              event,
+            });
+            if (output?.kind === "text" && output.text) {
+              await sendWhatsAppText(cfg, output.to, output.text);
+            }
+            continue;
+          }
+
+          switch (event.type) {
             case "ASSET_CREATED": {
               const by = ep?.by as string | undefined;
               if (by === "user") break;

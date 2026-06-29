@@ -270,6 +270,7 @@ function isInterruptibleForegroundEvent(event: Event): boolean {
 
 function isPublicStreamEventType(eventType: string): boolean {
   return eventType === "NEW_MESSAGE" ||
+    eventType === "message.created" ||
     eventType === "TOKEN" ||
     eventType === "LLM_CALL" ||
     eventType === "LLM_RESULT" ||

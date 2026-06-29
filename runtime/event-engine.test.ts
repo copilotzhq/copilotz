@@ -270,7 +270,7 @@ Deno.test("startEventWorker emits queued event before processor execution", asyn
   assertEquals(emittedEvents, [{ id: "event-emit-first", type: "TOOL_CALL" }]);
 });
 
-Deno.test("startEventWorker does not auto-emit lifecycle outbox rows", async () => {
+Deno.test("startEventWorker emits message.created lifecycle rows", async () => {
   const threadId = "thread-lifecycle-stream";
   const queuedEvent = {
     id: "event-message-created",
@@ -342,8 +342,13 @@ Deno.test("startEventWorker does not auto-emit lifecycle outbox rows", async () 
           },
         ],
       },
-      emitToStream: (ev: unknown) => {
-        emittedEvents.push(ev);
+      emitToStream: (ev: import("@/types/index.ts").Event) => {
+        emittedEvents.push({
+          type: ev.type,
+          operation: (ev as { operation?: unknown }).operation,
+          subjectId: (ev as { subjectId?: unknown }).subjectId,
+          payload: ev.payload,
+        });
       },
       stream: true,
     },
@@ -364,7 +369,12 @@ Deno.test("startEventWorker does not auto-emit lifecycle outbox rows", async () 
     causationId: "cause-1",
     correlationId: "trace-1",
   }]);
-  assertEquals(emittedEvents, []);
+  assertEquals(emittedEvents, [{
+    type: "message.created",
+    operation: "created",
+    subjectId: "message-1",
+    payload: { content: "hello", sender: { type: "user" } },
+  }]);
 });
 
 Deno.test("startEventWorker marks active interruptible work overwritten when newer abort input arrives", async () => {

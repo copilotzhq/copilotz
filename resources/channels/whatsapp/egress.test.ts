@@ -166,6 +166,119 @@ Deno.test("WhatsApp egress ignores invalid reply button actions", async () => {
   assertEquals(calls, []);
 });
 
+Deno.test("WhatsApp egress sends native message.created agent messages", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    calls.push(JSON.parse(String(init?.body)));
+    return Promise.resolve(
+      new Response(JSON.stringify({ messages: [{ id: "wamid.native" }] }), {
+        status: 200,
+      }),
+    );
+  }) as typeof fetch;
+
+  try {
+    await createWhatsAppEgressAdapter().deliver(deliveryContext([
+      {
+        id: "outbox-message-created",
+        type: "message.created",
+        operation: "created",
+        subjectType: "message",
+        subjectId: "message-1",
+        causationId: "llm-result-1",
+        payload: {
+          sender: { type: "agent", id: "north", name: "North" },
+          content: "Native outbox reply",
+        },
+      },
+    ]));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].type, "text");
+  assertEquals(calls[0].text, { body: "Native outbox reply" });
+});
+
+Deno.test("WhatsApp egress supports flat native message.created payloads", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    calls.push(JSON.parse(String(init?.body)));
+    return Promise.resolve(
+      new Response(JSON.stringify({ messages: [{ id: "wamid.flat" }] }), {
+        status: 200,
+      }),
+    );
+  }) as typeof fetch;
+
+  try {
+    await createWhatsAppEgressAdapter().deliver(deliveryContext([
+      {
+        id: "outbox-flat-message",
+        type: "message.created",
+        operation: "created",
+        subjectType: "message",
+        subjectId: "message-2",
+        payload: {
+          senderType: "agent",
+          senderId: "north",
+          content: "Flat native reply",
+        },
+      },
+    ]));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].text, { body: "Flat native reply" });
+});
+
+Deno.test("WhatsApp egress deduplicates native and legacy message events", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    calls.push(JSON.parse(String(init?.body)));
+    return Promise.resolve(
+      new Response(JSON.stringify({ messages: [{ id: "wamid.dedup" }] }), {
+        status: 200,
+      }),
+    );
+  }) as typeof fetch;
+
+  const payload = {
+    sender: { type: "agent", id: "north", name: "North" },
+    content: "Only once",
+  };
+
+  try {
+    await createWhatsAppEgressAdapter().deliver(deliveryContext([
+      {
+        id: "legacy-new-message",
+        type: "NEW_MESSAGE",
+        parentEventId: "llm-result-3",
+        payload,
+      },
+      {
+        id: "outbox-message-created",
+        type: "message.created",
+        operation: "created",
+        subjectType: "message",
+        subjectId: "message-3",
+        causationId: "llm-result-3",
+        payload,
+      },
+    ]));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assertEquals(calls.length, 1);
+});
+
 Deno.test("WhatsApp channel debug logs run completion and delivery completion", async () => {
   const previousDebug = Deno.env.get("COPILOTZ_DEBUG_CHANNELS");
   const originalFetch = globalThis.fetch;

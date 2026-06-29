@@ -14,6 +14,16 @@ export function createWebEgressAdapter(): EgressAdapter {
       }
 
       for await (const event of toAsyncIterable(context.handle.events)) {
+        // The web UI renders live output from TOKEN/LLM_RESULT and refreshes
+        // persisted history separately. Forwarding the native persistence
+        // event would render the same assistant message a second time.
+        if (
+          typeof event === "object" &&
+          event !== null &&
+          (event as { type?: unknown }).type === "message.created"
+        ) {
+          continue;
+        }
         context.callback(event);
       }
     },

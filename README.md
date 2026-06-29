@@ -398,6 +398,10 @@ import {
 full lifecycle internally — verify the webhook, parse the payload, run the
 agent, and push responses back to the platform API.
 
+Set `COPILOTZ_DEBUG_CHANNELS=1` to trace sanitized WhatsApp egress events and
+Meta Graph API request/response metadata. Tokens, message contents, and full
+recipient phone numbers are not logged.
+
 ### Streaming
 
 Real-time token streaming with callbacks and async iterables.

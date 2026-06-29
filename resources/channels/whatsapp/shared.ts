@@ -11,6 +11,81 @@ export type WhatsAppConfig = {
 
 type ChannelRuntimeContext = Record<string, unknown> | undefined;
 
+export function whatsappChannelDebugEnabled(): boolean {
+  const value = Deno.env.get("COPILOTZ_DEBUG_CHANNELS")?.toLowerCase();
+  return value === "1" || value === "true";
+}
+
+export function debugWhatsAppChannel(
+  event: string,
+  details: Record<string, unknown>,
+): void {
+  if (!whatsappChannelDebugEnabled()) return;
+  console.log("[copilotz:channels:whatsapp]", { event, ...details });
+}
+
+function maskWhatsAppRecipient(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  return value.length <= 4 ? "***" : `***${value.slice(-4)}`;
+}
+
+function summarizeWhatsAppMessage(body: Record<string, unknown>) {
+  const text = body.text && typeof body.text === "object"
+    ? body.text as Record<string, unknown>
+    : undefined;
+  const interactive = body.interactive && typeof body.interactive === "object"
+    ? body.interactive as Record<string, unknown>
+    : undefined;
+
+  return {
+    type: typeof body.type === "string" ? body.type : null,
+    recipient: maskWhatsAppRecipient(body.to),
+    textLength: typeof text?.body === "string" ? text.body.length : null,
+    interactiveType: typeof interactive?.type === "string"
+      ? interactive.type
+      : null,
+  };
+}
+
+function summarizeWhatsAppGraphResponse(payload: unknown) {
+  if (!payload || typeof payload !== "object") return {};
+  const record = payload as Record<string, unknown>;
+  const error = record.error && typeof record.error === "object"
+    ? record.error as Record<string, unknown>
+    : undefined;
+  const messages = Array.isArray(record.messages) ? record.messages : [];
+  const firstMessage = messages[0] && typeof messages[0] === "object"
+    ? messages[0] as Record<string, unknown>
+    : undefined;
+
+  return {
+    messageId: typeof firstMessage?.id === "string" ? firstMessage.id : null,
+    error: error
+      ? {
+        message: typeof error.message === "string" ? error.message : null,
+        type: typeof error.type === "string" ? error.type : null,
+        code: typeof error.code === "number" ? error.code : null,
+        errorSubcode: typeof error.error_subcode === "number"
+          ? error.error_subcode
+          : null,
+        fbtraceId: typeof error.fbtrace_id === "string"
+          ? error.fbtrace_id
+          : null,
+      }
+      : null,
+  };
+}
+
+async function readWhatsAppGraphResponse(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
 export type WhatsAppWebhookEntry = {
   id: string;
   changes?: Array<{
@@ -270,13 +345,28 @@ export async function uploadWhatsAppMedia(
   formData.append("messaging_product", "whatsapp");
 
   try {
+    debugWhatsAppChannel("media_upload_request", {
+      graphApiVersion: config.graphApiVersion,
+      phoneId: config.phoneId || null,
+      accessTokenConfigured: config.accessToken.length > 0,
+      mimeType,
+      byteLength: bytes.byteLength,
+    });
     const res = await fetch(
       `https://graph.facebook.com/${config.graphApiVersion}/${config.phoneId}/media?access_token=${config.accessToken}`,
       { method: "POST", body: formData },
     );
+    const json = await readWhatsAppGraphResponse(res) as
+      | Record<string, unknown>
+      | null;
+    debugWhatsAppChannel("media_upload_response", {
+      status: res.status,
+      ok: res.ok,
+      ...summarizeWhatsAppGraphResponse(json),
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    return { id: json?.id, type: mediaType };
+    const mediaId = typeof json?.id === "string" ? json.id : null;
+    return mediaId ? { id: mediaId, type: mediaType } : null;
   } catch (err) {
     console.error("[whatsapp] media upload error:", err);
     return null;
@@ -288,6 +378,12 @@ export async function callWhatsAppGraphAPI(
   body: Record<string, unknown>,
 ): Promise<unknown> {
   try {
+    debugWhatsAppChannel("message_send_request", {
+      graphApiVersion: config.graphApiVersion,
+      phoneId: config.phoneId || null,
+      accessTokenConfigured: config.accessToken.length > 0,
+      message: summarizeWhatsAppMessage(body),
+    });
     const res = await fetch(
       `https://graph.facebook.com/${config.graphApiVersion}/${config.phoneId}/messages?access_token=${config.accessToken}`,
       {
@@ -296,8 +392,14 @@ export async function callWhatsAppGraphAPI(
         body: JSON.stringify(body),
       },
     );
+    const payload = await readWhatsAppGraphResponse(res);
+    debugWhatsAppChannel("message_send_response", {
+      status: res.status,
+      ok: res.ok,
+      ...summarizeWhatsAppGraphResponse(payload),
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
+    return payload;
   } catch (err) {
     console.error("[whatsapp] send error:", err);
     return null;

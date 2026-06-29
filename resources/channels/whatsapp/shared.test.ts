@@ -1,7 +1,12 @@
-import { assertEquals, assertNotEquals } from "jsr:@std/assert";
+import {
+  assertEquals,
+  assertNotEquals,
+  assertStringIncludes,
+} from "jsr:@std/assert";
 
 import {
   buildWhatsAppReplyButtonsMessage,
+  callWhatsAppGraphAPI,
   normalizeWhatsAppActionPayload,
   normalizeWhatsAppReplyButtons,
 } from "./shared.ts";
@@ -121,4 +126,99 @@ Deno.test("buildWhatsAppReplyButtonsMessage returns null without a valid body or
     }),
     null,
   );
+});
+
+Deno.test("WhatsApp channel debug logs sanitized Meta request and error response", async () => {
+  const previousDebug = Deno.env.get("COPILOTZ_DEBUG_CHANNELS");
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const originalError = console.error;
+  const logs: unknown[][] = [];
+
+  Deno.env.set("COPILOTZ_DEBUG_CHANNELS", "1");
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "Invalid OAuth access token.",
+            type: "OAuthException",
+            code: 190,
+            error_subcode: 463,
+            fbtrace_id: "trace-123",
+          },
+        }),
+        { status: 401 },
+      ),
+    )) as typeof fetch;
+  console.log = (...args: unknown[]) => logs.push(args);
+  console.error = () => {};
+
+  try {
+    const result = await callWhatsAppGraphAPI(
+      {
+        accessToken: "super-secret-token",
+        phoneId: "phone-number-id",
+        appSecret: "",
+        webhookVerifyToken: "",
+        graphApiVersion: "v25.0",
+      },
+      {
+        messaging_product: "whatsapp",
+        to: "5511999999999",
+        type: "text",
+        text: { body: "sensitive message" },
+      },
+    );
+
+    assertEquals(result, null);
+    assertEquals(logs, [
+      [
+        "[copilotz:channels:whatsapp]",
+        {
+          event: "message_send_request",
+          graphApiVersion: "v25.0",
+          phoneId: "phone-number-id",
+          accessTokenConfigured: true,
+          message: {
+            type: "text",
+            recipient: "***9999",
+            textLength: 17,
+            interactiveType: null,
+          },
+        },
+      ],
+      [
+        "[copilotz:channels:whatsapp]",
+        {
+          event: "message_send_response",
+          status: 401,
+          ok: false,
+          messageId: null,
+          error: {
+            message: "Invalid OAuth access token.",
+            type: "OAuthException",
+            code: 190,
+            errorSubcode: 463,
+            fbtraceId: "trace-123",
+          },
+        },
+      ],
+    ]);
+
+    const serializedLogs = JSON.stringify(logs);
+    assertEquals(serializedLogs.includes("super-secret-token"), false);
+    assertEquals(serializedLogs.includes("sensitive message"), false);
+    assertEquals(serializedLogs.includes("5511999999999"), false);
+    assertStringIncludes(serializedLogs, "Invalid OAuth access token.");
+  } finally {
+    if (previousDebug === undefined) {
+      Deno.env.delete("COPILOTZ_DEBUG_CHANNELS");
+    } else {
+      Deno.env.set("COPILOTZ_DEBUG_CHANNELS", previousDebug);
+    }
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+    console.error = originalError;
+  }
 });

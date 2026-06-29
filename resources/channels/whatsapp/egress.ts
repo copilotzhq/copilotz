@@ -7,6 +7,7 @@ import {
 import { getChannelContext } from "@/runtime/thread-metadata.ts";
 import {
   callWhatsAppGraphAPI,
+  debugWhatsAppChannel,
   normalizeWhatsAppActionPayload,
   resolveWhatsAppConfig,
   sendWhatsAppActionMessage,
@@ -73,12 +74,21 @@ export function createWhatsAppEgressAdapter(
         ...resolveWhatsAppConfig(config, context.context),
         phoneId: channelId,
       };
+      debugWhatsAppChannel("egress_delivery_started", {
+        graphApiVersion: cfg.graphApiVersion,
+        phoneId: cfg.phoneId || null,
+        accessTokenConfigured: cfg.accessToken.length > 0,
+      });
 
       for await (
         const event of context.handle.events as AsyncIterable<StreamEvent>
       ) {
         const ep = event.payload as Record<string, unknown>;
         const sender = ep?.sender as Record<string, unknown> | undefined;
+        debugWhatsAppChannel("egress_event_received", {
+          eventType: event.type,
+          senderType: typeof sender?.type === "string" ? sender.type : null,
+        });
 
         switch (event.type) {
           case "NEW_MESSAGE": {

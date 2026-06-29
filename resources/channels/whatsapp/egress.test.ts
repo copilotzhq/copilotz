@@ -165,3 +165,63 @@ Deno.test("WhatsApp egress ignores invalid reply button actions", async () => {
 
   assertEquals(calls, []);
 });
+
+Deno.test("WhatsApp channel debug logs run completion and delivery completion", async () => {
+  const previousDebug = Deno.env.get("COPILOTZ_DEBUG_CHANNELS");
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const logs: unknown[][] = [];
+
+  Deno.env.set("COPILOTZ_DEBUG_CHANNELS", "1");
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({ messages: [{ id: "wamid.debug" }] }),
+        { status: 200 },
+      ),
+    )) as typeof fetch;
+  console.log = (...args: unknown[]) => logs.push(args);
+
+  try {
+    await createWhatsAppEgressAdapter().deliver(deliveryContext([
+      {
+        type: "NEW_MESSAGE",
+        payload: {
+          sender: { type: "agent", id: "mobizap" },
+          content: "debug lifecycle",
+        },
+      },
+    ]));
+
+    const events = logs
+      .map((entry) => entry[1])
+      .filter((entry): entry is Record<string, unknown> =>
+        typeof entry === "object" && entry !== null
+      )
+      .map((entry) => entry.event)
+      .sort();
+
+    assertEquals(events, [
+      "egress_delivery_finished",
+      "egress_delivery_started",
+      "egress_event_received",
+      "message_send_request",
+      "message_send_response",
+      "run_handle_done",
+    ]);
+
+    const finished = logs
+      .map((entry) => entry[1] as Record<string, unknown> | undefined)
+      .find((entry) => entry?.event === "egress_delivery_finished");
+    assertEquals(finished?.eventCount, 1);
+    assertEquals(finished?.agentMessageCount, 1);
+  } finally {
+    if (previousDebug === undefined) {
+      Deno.env.delete("COPILOTZ_DEBUG_CHANNELS");
+    } else {
+      Deno.env.set("COPILOTZ_DEBUG_CHANNELS", previousDebug);
+    }
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+  }
+});

@@ -929,7 +929,7 @@ async function handleChannelRoute(
         thread?.metadata,
         message.thread?.metadata,
       );
-      egress.validateThreadContext?.({
+      await egress.validateThreadContext?.({
         metadata: getSerializableThreadMetadata(effectiveMetadata),
       });
 

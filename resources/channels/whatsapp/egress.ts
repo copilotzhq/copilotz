@@ -80,44 +80,67 @@ export function createWhatsAppEgressAdapter(
         accessTokenConfigured: cfg.accessToken.length > 0,
       });
 
-      for await (
-        const event of context.handle.events as AsyncIterable<StreamEvent>
-      ) {
-        const ep = event.payload as Record<string, unknown>;
-        const sender = ep?.sender as Record<string, unknown> | undefined;
-        debugWhatsAppChannel("egress_event_received", {
-          eventType: event.type,
-          senderType: typeof sender?.type === "string" ? sender.type : null,
-        });
+      let eventCount = 0;
+      let agentMessageCount = 0;
+      void context.handle.done.then(
+        () => {
+          debugWhatsAppChannel("run_handle_done", {
+            status: "resolved",
+            eventCount,
+            agentMessageCount,
+          });
+        },
+        (error: unknown) => {
+          debugWhatsAppChannel("run_handle_done", {
+            status: "rejected",
+            eventCount,
+            agentMessageCount,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        },
+      );
 
-        switch (event.type) {
-          case "NEW_MESSAGE": {
-            if (sender?.type !== "agent") break;
-            const text = extractText(ep?.content);
-            if (text) {
-              const output = await transformEgressDeliveryOutput<
-                WhatsAppDeliveryOutput
-              >(context, {
-                kind: "text",
-                to: recipientPhone,
-                text,
-                event,
-              });
-              if (output?.kind === "text" && output.text) {
-                await sendWhatsAppText(cfg, output.to, output.text);
+      try {
+        for await (
+          const event of context.handle.events as AsyncIterable<StreamEvent>
+        ) {
+          eventCount += 1;
+          const ep = event.payload as Record<string, unknown>;
+          const sender = ep?.sender as Record<string, unknown> | undefined;
+          debugWhatsAppChannel("egress_event_received", {
+            eventType: event.type,
+            senderType: typeof sender?.type === "string" ? sender.type : null,
+          });
+
+          switch (event.type) {
+            case "NEW_MESSAGE": {
+              if (sender?.type !== "agent") break;
+              agentMessageCount += 1;
+              const text = extractText(ep?.content);
+              if (text) {
+                const output = await transformEgressDeliveryOutput<
+                  WhatsAppDeliveryOutput
+                >(context, {
+                  kind: "text",
+                  to: recipientPhone,
+                  text,
+                  event,
+                });
+                if (output?.kind === "text" && output.text) {
+                  await sendWhatsAppText(cfg, output.to, output.text);
+                }
               }
+              break;
             }
-            break;
-          }
-          case "ASSET_CREATED": {
-            const by = ep?.by as string | undefined;
-            if (by === "user") break;
+            case "ASSET_CREATED": {
+              const by = ep?.by as string | undefined;
+              if (by === "user") break;
 
-            const dataUrl = ep?.dataUrl as string | undefined;
-            const mime = ep?.mime as string | undefined;
-            if (dataUrl && mime) {
-              const uploaded = await uploadWhatsAppMedia(cfg, dataUrl);
-              if (uploaded) {
+              const dataUrl = ep?.dataUrl as string | undefined;
+              const mime = ep?.mime as string | undefined;
+              if (dataUrl && mime) {
+                const uploaded = await uploadWhatsAppMedia(cfg, dataUrl);
+                if (!uploaded) break;
                 const output = await transformEgressDeliveryOutput<
                   WhatsAppDeliveryOutput
                 >(context, {
@@ -135,27 +158,32 @@ export function createWhatsAppEgressAdapter(
                   [output.mediaType]: { id: output.mediaId },
                 });
               }
+              break;
             }
-            break;
-          }
-          case "ACTION": {
-            const action = normalizeWhatsAppActionPayload(ep);
-            if (!action) break;
-            if (action.type === "reply_buttons") {
-              const output = await transformEgressDeliveryOutput<
-                WhatsAppDeliveryOutput
-              >(context, {
-                kind: "reply_buttons",
-                to: recipientPhone,
-                action,
-                event,
-              });
-              if (output?.kind !== "reply_buttons") break;
-              await sendWhatsAppActionMessage(cfg, output.to, output.action);
+            case "ACTION": {
+              const action = normalizeWhatsAppActionPayload(ep);
+              if (!action) break;
+              if (action.type === "reply_buttons") {
+                const output = await transformEgressDeliveryOutput<
+                  WhatsAppDeliveryOutput
+                >(context, {
+                  kind: "reply_buttons",
+                  to: recipientPhone,
+                  action,
+                  event,
+                });
+                if (output?.kind !== "reply_buttons") break;
+                await sendWhatsAppActionMessage(cfg, output.to, output.action);
+              }
+              break;
             }
-            break;
           }
         }
+      } finally {
+        debugWhatsAppChannel("egress_delivery_finished", {
+          eventCount,
+          agentMessageCount,
+        });
       }
     },
   };

@@ -52,10 +52,10 @@ stable agent context
 ```
 
 When recent visible history reaches `triggerChars`, Copilotz reserves a
-checkpoint for a dedicated non-blocking memory queue. While it is pending,
-`maxHotHistoryChars` prunes only complete oldest conversation/tool cycles.
-The checkpoint retains a configured newest-message tail and consolidates the
-older range in the background.
+checkpoint for a dedicated non-blocking memory queue. While it is pending, the
+existing raw history remains available until the checkpoint is ready. The
+checkpoint retains a configured newest-message tail and consolidates the older
+range in the background.
 
 The checkpoint combines:
 

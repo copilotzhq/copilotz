@@ -71,7 +71,7 @@ Deno.test("formatMessages merges consecutive assistant turns for tool loops", ()
   );
 });
 
-Deno.test("formatMessages limits non-system history using estimated input tokens", () => {
+Deno.test("formatMessages creates headroom after crossing the estimated input limit", () => {
   const formatted = formatMessages({
     messages: [
       { role: "user", content: "12345678" }, // 2 tokens
@@ -89,9 +89,25 @@ Deno.test("formatMessages limits non-system history using estimated input tokens
       content: message.content,
     })),
     [
-      { role: "assistant", content: "abcdefgh" },
       { role: "user", content: "ijklmnop" },
     ],
+  );
+});
+
+Deno.test("formatMessages does not prune inside the hysteresis band", () => {
+  const formatted = formatMessages({
+    messages: [
+      { role: "assistant", content: "abcdefgh" }, // 2 tokens
+      { role: "user", content: "ijklmnop" }, // 2 tokens
+    ],
+    config: {
+      limitEstimatedInputTokens: 4,
+    },
+  });
+
+  assertEquals(
+    formatted.map((message) => message.content),
+    ["abcdefgh", "ijklmnop"],
   );
 });
 

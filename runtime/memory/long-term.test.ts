@@ -2,7 +2,6 @@ import { assertEquals } from "@std/assert";
 import { createDatabase } from "@/database/index.ts";
 import type { Message } from "@/types/index.ts";
 import {
-  limitHotHistoryByCharacters,
   type LongTermMemoryRecord,
   projectMessageForSharedMemory,
   selectLongTermMemoryRange,
@@ -198,48 +197,4 @@ Deno.test("shared-memory projection counts agent tool calls and arguments", () =
 
   assertEquals(projected.includes("[Tool call sandbox]"), true);
   assertEquals(projected.includes("deno test"), true);
-});
-
-Deno.test("hot-history limiting preserves a complete newest tool cycle", () => {
-  const messages = [
-    {
-      id: "old",
-      threadId: "thread",
-      senderId: "user",
-      senderType: "user",
-      content: "old".repeat(100),
-    },
-    {
-      id: "call",
-      threadId: "thread",
-      senderId: "agent",
-      senderType: "agent",
-      content: "calling",
-      toolCalls: [{
-        id: "call-1",
-        tool: { id: "sandbox" },
-        args: { command: "test" },
-      }],
-    },
-    {
-      id: "result",
-      threadId: "thread",
-      senderId: "agent",
-      senderType: "tool",
-      content: "",
-      metadata: {
-        toolCalls: [{
-          id: "call-1",
-          tool: { id: "sandbox" },
-          output: "result".repeat(100),
-          visibility: "public",
-        }],
-      },
-    },
-  ] as Message[];
-
-  assertEquals(
-    limitHotHistoryByCharacters(messages, 10).map((message) => message.id),
-    ["call", "result"],
-  );
 });

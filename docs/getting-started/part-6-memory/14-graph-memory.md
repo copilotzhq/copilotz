@@ -95,7 +95,6 @@ const copilotz = await createCopilotz({
       enabled: true,
       config: {
         triggerChars: 80_000,
-        maxHotHistoryChars: 120_000,
         retainRecentChars: 8_000,
         maxContentChars: 48_000,
         retrievalLimit: 20,
@@ -177,7 +176,6 @@ Consider this configuration:
 ```typescript
 {
   triggerChars: 80_000,
-  maxHotHistoryChars: 120_000,
   retainRecentChars: 8_000,
   maxContentChars: 48_000,
   retrievalLimit: 20,
@@ -218,7 +216,6 @@ This is tail retention, not duplicated overlap.
 | Option              | Meaning                                                                                             | Bundled default |
 | ------------------- | --------------------------------------------------------------------------------------------------- | --------------: |
 | `triggerChars`      | Start a rollover when model-visible messages since the active checkpoint reach this character count |        `80_000` |
-| `maxHotHistoryChars` | Keep only the newest complete conversation/tool cycles while asynchronous consolidation is pending |       `120_000` |
 | `retainRecentChars` | Keep at least this many newest characters as complete raw messages outside the new checkpoint       |             `0` |
 | `maxContentChars`   | Hard maximum length of the rendered checkpoint string                                               |        `48_000` |
 | `retrievalLimit`    | Maximum number of older memory items selected for the new checkpoint after per-item retrieval       |            `20` |
@@ -245,13 +242,6 @@ until an agent response is created.
 
 Consolidation runs immediately on a dedicated child-thread queue, so it does not
 block tool settlements or agent continuations in the conversation queue.
-
-### `maxHotHistoryChars`
-
-This is the hard hot-history safety watermark while a checkpoint is pending.
-Copilotz removes oldest complete conversation/tool-cycle units; it never slices
-message or tool protocol content. The newest unit is retained whole even when it
-alone exceeds the configured value.
 
 ### `retainRecentChars`
 

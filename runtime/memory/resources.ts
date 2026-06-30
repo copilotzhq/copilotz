@@ -2,7 +2,6 @@ import type { MemoryResource, RagConfig } from "@/types/index.ts";
 
 export interface LongTermMemoryConfig {
   triggerChars: number;
-  maxHotHistoryChars: number;
   retainRecentChars: number;
   maxContentChars: number;
   retrievalLimit: number;
@@ -10,7 +9,6 @@ export interface LongTermMemoryConfig {
 
 export const DEFAULT_LONG_TERM_MEMORY_CONFIG: LongTermMemoryConfig = {
   triggerChars: 80_000,
-  maxHotHistoryChars: 120_000,
   retainRecentChars: 0,
   maxContentChars: 48_000,
   retrievalLimit: 20,
@@ -93,10 +91,6 @@ export function getLongTermMemoryConfig(
     triggerChars: positiveInteger(
       config.triggerChars,
       DEFAULT_LONG_TERM_MEMORY_CONFIG.triggerChars,
-    ),
-    maxHotHistoryChars: positiveInteger(
-      config.maxHotHistoryChars,
-      DEFAULT_LONG_TERM_MEMORY_CONFIG.maxHotHistoryChars,
     ),
     retainRecentChars: nonNegativeInteger(
       config.retainRecentChars,

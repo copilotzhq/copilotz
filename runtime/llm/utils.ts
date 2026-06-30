@@ -274,10 +274,18 @@ export function formatMessages(
   // Apply estimated input budget if specified. We preserve the system prompt and
   // trim only the remaining history budget.
   if (config?.limitEstimatedInputTokens) {
+    const historyLimit = config.limitEstimatedInputTokens -
+      systemEstimatedTokens;
+    const historyTarget = Math.max(
+      0,
+      Math.floor(config.limitEstimatedInputTokens * 0.8) -
+        systemEstimatedTokens,
+    );
     normalizedMessages = limitMessageEstimatedInputTokens(
       normalizedMessages,
-      config.limitEstimatedInputTokens - systemEstimatedTokens,
+      historyLimit,
       formattedMessages,
+      historyTarget,
     );
   }
 
@@ -1008,12 +1016,14 @@ function applyLocalStopSequences(
 }
 
 /**
- * Limits the total character length of messages, keeping the most recent ones
+ * Enforces the estimated input ceiling with 20% hysteresis, keeping complete
+ * newest conversation/tool-cycle units.
  */
 function limitMessageEstimatedInputTokens(
   messages: ChatMessage[],
   limitTokens: number,
   groupingMessages: ChatMessage[] = messages,
+  targetTokens = limitTokens,
 ): ChatMessage[] {
   if (limitTokens <= 0) {
     return messages.filter((message) => message.role === "system");
@@ -1037,24 +1047,39 @@ function limitMessageEstimatedInputTokens(
     }
   });
 
+  const measuredUnits = units.map((unit) => {
+    const messages = unit.filter((message) => Boolean(message.content));
+    return {
+      messages,
+      tokens: messages.reduce(
+        (sum, message) =>
+          sum +
+          approximateTokenCount(
+            wirePayloadTextForTokenEstimate(message.content),
+          ),
+        0,
+      ),
+    };
+  }).filter((unit) => unit.messages.length > 0);
+  const measuredTotal = measuredUnits.reduce(
+    (sum, unit) => sum + unit.tokens,
+    0,
+  );
+  if (measuredTotal <= limitTokens) {
+    return [...systemMessages, ...measuredUnits.flatMap((unit) => unit.messages)];
+  }
+
   const keptUnits: ChatMessage[][] = [];
-  let totalTokens = 0;
-  for (let index = units.length - 1; index >= 0; index--) {
-    const unit = units[index].filter((message) => Boolean(message.content));
-    if (unit.length === 0) continue;
-    const unitTokens = unit.reduce(
-      (sum, message) =>
-        sum +
-        approximateTokenCount(wirePayloadTextForTokenEstimate(message.content)),
-      0,
-    );
-    if (totalTokens + unitTokens <= limitTokens) {
-      keptUnits.unshift(unit);
-      totalTokens += unitTokens;
+  let retainedTokens = 0;
+  for (let index = measuredUnits.length - 1; index >= 0; index--) {
+    const unit = measuredUnits[index];
+    if (retainedTokens + unit.tokens <= targetTokens) {
+      keptUnits.unshift(unit.messages);
+      retainedTokens += unit.tokens;
     } else {
       // Never split a conversation/tool-cycle unit. Preserve an oversized
       // newest unit so callers can handle the over-budget request explicitly.
-      if (keptUnits.length === 0) keptUnits.unshift(unit);
+      if (keptUnits.length === 0) keptUnits.unshift(unit.messages);
       break;
     }
   }

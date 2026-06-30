@@ -212,13 +212,11 @@ function stringifyToolArgs(value: unknown): string {
 export function projectMessageForSharedMemory(
   message: ProjectableMessage,
   maxToolResultChars = 10_000,
-  options: { includeRequesterOnly?: boolean } = {},
 ): string {
   const metadata = isRecord(message.metadata) ? message.metadata : {};
   if (
     metadata.visibility === "private" ||
-    (!options.includeRequesterOnly &&
-      metadata.visibility === "requester_only")
+    metadata.visibility === "requester_only"
   ) {
     return "";
   }
@@ -232,9 +230,7 @@ export function projectMessageForSharedMemory(
         : call.visibility === "requester_only"
         ? "requester_only"
         : "public_status";
-      if (visibility === "requester_only" && !options.includeRequesterOnly) {
-        return [];
-      }
+      if (visibility === "requester_only") return [];
       const tool = isRecord(call.tool) ? call.tool : {};
       const name = String(tool.name ?? tool.id ?? "tool");
       const status = typeof call.status === "string"
@@ -266,12 +262,7 @@ export function projectMessageForSharedMemory(
   const toolCalls = message.senderType === "agent" &&
       Array.isArray(message.toolCalls)
     ? message.toolCalls.flatMap((call): string[] => {
-      if (
-        !isRecord(call) ||
-        (call.visibility === "requester_only" && !options.includeRequesterOnly)
-      ) {
-        return [];
-      }
+      if (!isRecord(call) || call.visibility === "requester_only") return [];
       const tool = isRecord(call.tool) ? call.tool : {};
       const name = String(tool.name ?? tool.id ?? "tool");
       return [`[Tool call ${name}] ${stringifyToolArgs(call.args)}`.trim()];
@@ -281,42 +272,6 @@ export function projectMessageForSharedMemory(
     content ? `[${message.senderType}:${message.senderId}] ${content}` : "",
     ...toolCalls,
   ].filter(Boolean).join("\n");
-}
-
-/** Keep newest complete conversation/tool-cycle units within a char budget. */
-export function limitHotHistoryByCharacters<T extends ProjectableMessage>(
-  messages: T[],
-  maxChars: number,
-  maxToolResultChars = 10_000,
-): T[] {
-  if (maxChars <= 0 || messages.length === 0) return messages;
-
-  const units: T[][] = [];
-  for (const message of messages) {
-    if (message.senderType === "tool" && units.length > 0) {
-      units[units.length - 1].push(message);
-    } else {
-      units.push([message]);
-    }
-  }
-
-  const kept: T[][] = [];
-  let total = 0;
-  for (let index = units.length - 1; index >= 0; index--) {
-    const unit = units[index];
-    const chars = unit.reduce(
-      (sum, message) =>
-        sum +
-        projectMessageForSharedMemory(message, maxToolResultChars, {
-          includeRequesterOnly: true,
-        }).length,
-      0,
-    );
-    if (kept.length > 0 && total + chars > maxChars) break;
-    kept.unshift(unit);
-    total += chars;
-  }
-  return kept.flat();
 }
 
 export async function selectLongTermMemoryRange(args: {

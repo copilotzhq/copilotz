@@ -200,6 +200,21 @@ function openAIEndpoint(config: ProviderConfig, mode: OpenAIApiMode): string {
   }`;
 }
 
+function isChatGPTCodexTransport(config: ProviderConfig): boolean {
+  if (typeof config.baseUrl !== "string") return false;
+  try {
+    const url = new URL(config.baseUrl);
+    return url.protocol === "https:" &&
+      url.hostname === "chatgpt.com" &&
+      (
+        url.pathname.replace(/\/+$/, "") === "/backend-api/codex" ||
+        url.pathname.startsWith("/backend-api/codex/")
+      );
+  } catch {
+    return false;
+  }
+}
+
 function toChatCompletionsMessages(messages: ChatMessage[]): any[] {
   return messages.map((msg) => {
     if (Array.isArray(msg.content)) {
@@ -329,19 +344,23 @@ function buildResponsesBody(
   config: ProviderConfig,
 ): Record<string, unknown> {
   const modelName = config.model || "gpt-4o-mini";
+  const chatGPTCodex = isChatGPTCodexTransport(config);
   const bodyConfig: Record<string, unknown> = {
     model: modelName,
     input: toResponsesInput(messages),
     stream: true,
     store: false,
-    temperature: config.temperature || 1,
     top_p: config.topP,
-    truncation: "disabled",
     parallel_tool_calls: false,
+    // The ChatGPT Codex Responses backend rejects these public API controls.
+    ...(chatGPTCodex ? {} : {
+      temperature: config.temperature || 1,
+      truncation: "disabled",
+    }),
   };
 
   const maxOutput = config.maxCompletionTokens ?? config.maxTokens ?? 1000;
-  if (typeof maxOutput === "number") {
+  if (!chatGPTCodex && typeof maxOutput === "number") {
     bodyConfig.max_output_tokens = maxOutput;
   }
   if (typeof config.openaiPromptCacheKey === "string") {

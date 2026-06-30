@@ -23,6 +23,8 @@ Deno.test("openaiProvider auto-selects Responses API for current OpenAI model fa
   assertEquals(body.input, messages);
   assertEquals(body.stream, true);
   assertEquals(body.store, false);
+  assertEquals(body.temperature, 1);
+  assertEquals(body.truncation, "disabled");
   assertEquals(body.max_output_tokens, 123);
   assertEquals(body.reasoning, { summary: "auto" });
 });
@@ -54,6 +56,32 @@ Deno.test("openaiProvider builds GPT-5 Responses body with Responses field names
   assertEquals("messages" in body, false);
   assertEquals("max_completion_tokens" in body, false);
   assertEquals("response_format" in body, false);
+});
+
+Deno.test("openaiProvider omits unsupported fields for ChatGPT Codex OAuth transport", () => {
+  const config: ProviderConfig = {
+    provider: "openai",
+    model: "gpt-5.4",
+    apiKey: "oauth-token",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    extraHeaders: { "ChatGPT-Account-ID": "account-1" },
+    openaiApi: "responses",
+    temperature: 0.7,
+    maxCompletionTokens: 456,
+  };
+  const provider = openaiProvider(config);
+  const body = provider.body(messages, config) as Record<string, any>;
+
+  assertEquals(
+    provider.endpoint,
+    "https://chatgpt.com/backend-api/codex/responses",
+  );
+  assertEquals(provider.headers(config)["ChatGPT-Account-ID"], "account-1");
+  assertEquals("temperature" in body, false);
+  assertEquals("truncation" in body, false);
+  assertEquals("max_output_tokens" in body, false);
+  assertEquals(body.store, false);
+  assertEquals(body.parallel_tool_calls, false);
 });
 
 Deno.test("openaiProvider sends API key only in Authorization header", () => {

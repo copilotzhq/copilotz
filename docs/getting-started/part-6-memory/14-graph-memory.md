@@ -41,7 +41,7 @@ stable agent prompt
 + recent raw messages (the hot tail)
 ```
 
-The recent messages grow normally. When their visible character count crosses a
+The recent messages grow normally. When their estimated token count crosses a
 configured threshold, Copilotz consolidates the older portion into a new
 checkpoint and retains the newest complete messages as raw conversation.
 
@@ -94,9 +94,9 @@ const copilotz = await createCopilotz({
       kind: "long_term",
       enabled: true,
       config: {
-        triggerChars: 80_000,
-        retainRecentChars: 8_000,
-        maxContentChars: 48_000,
+        triggerEstimatedTokens: 20_000,
+        retainRecentEstimatedTokens: 2_000,
+        maxContentEstimatedTokens: 12_000,
         retrievalLimit: 20,
       },
     },
@@ -131,7 +131,7 @@ agent response
     v
 message.created
     |
-    +-- below triggerChars --------------------------> no memory work
+    +-- below triggerEstimatedTokens ----------------> no memory work
     |
     +-- threshold crossed
             |
@@ -150,7 +150,7 @@ message.created
 ```
 
 Reservation is deliberately cheap. The `message.created` observer counts visible
-characters and creates the pending node; it does not call an LLM or an embedding
+tokens and creates the pending node; it does not call an LLM or an embedding
 provider.
 
 The background processor then:
@@ -175,9 +175,9 @@ Consider this configuration:
 
 ```typescript
 {
-  triggerChars: 80_000,
-  retainRecentChars: 8_000,
-  maxContentChars: 48_000,
+  triggerEstimatedTokens: 20_000,
+  retainRecentEstimatedTokens: 2_000,
+  maxContentEstimatedTokens: 12_000,
   retrievalLimit: 20,
 }
 ```
@@ -186,23 +186,23 @@ Before the first rollover:
 
 ```text
 agent prompt
-+ approximately 80,000 visible characters of raw conversation
++ approximately 20,000 estimated tokens of raw conversation
 ```
 
 When the threshold is crossed, Copilotz walks backward over complete messages
-until it has retained at least 8,000 characters. Everything before that boundary
+until it has retained at least 2,000 estimated tokens. Everything before that boundary
 becomes the source range for the checkpoint.
 
 After the checkpoint is ready:
 
 ```text
 agent prompt
-+ checkpoint 1 (at most 48,000 characters)
-+ approximately 8,000+ characters of retained raw messages
++ checkpoint 1 (at most 12,000 estimated tokens)
++ approximately 2,000+ estimated tokens of retained raw messages
 ```
 
 The values are approximate because Copilotz never cuts a message merely to hit
-`retainRecentChars` exactly. A single large message can make the retained tail
+`retainRecentEstimatedTokens` exactly. A single large message can make the retained tail
 larger than the configured value.
 
 The retained messages are not copied into checkpoint 1. They remain raw and are
@@ -215,14 +215,14 @@ This is tail retention, not duplicated overlap.
 
 | Option              | Meaning                                                                                             | Bundled default |
 | ------------------- | --------------------------------------------------------------------------------------------------- | --------------: |
-| `triggerChars`      | Start a rollover when model-visible messages since the active checkpoint reach this character count |        `80_000` |
-| `retainRecentChars` | Keep at least this many newest characters as complete raw messages outside the new checkpoint       |             `0` |
-| `maxContentChars`   | Hard maximum length of the rendered checkpoint string                                               |        `48_000` |
+| `triggerEstimatedTokens`      | Start a rollover when model-visible messages since the active checkpoint reach this estimate |        `20_000` |
+| `retainRecentEstimatedTokens` | Keep at least this many newest estimated tokens as complete raw messages outside the checkpoint |             `0` |
+| `maxContentEstimatedTokens`   | Maximum estimated tokens in the rendered checkpoint, preserving complete blocks |        `12_000` |
 | `retrievalLimit`    | Maximum number of older memory items selected for the new checkpoint after per-item retrieval       |            `20` |
 
-### `triggerChars`
+### `triggerEstimatedTokens`
 
-This is a character threshold, not a token threshold.
+This uses Copilotz's lightweight universal token estimator.
 
 Copilotz counts the same shared content that is eligible for conversation
 memory:
@@ -243,7 +243,7 @@ until an agent response is created.
 Consolidation runs immediately on a dedicated child-thread queue, so it does not
 block tool settlements or agent continuations in the conversation queue.
 
-### `retainRecentChars`
+### `retainRecentEstimatedTokens`
 
 This controls how much immediate conversational texture survives a rollover.
 
@@ -253,9 +253,9 @@ after consolidation, but makes the checkpoint responsible for more immediate
 context.
 
 Use `0` when no retained tail is needed. For active project work, a modest tail
-such as `8_000` characters is a useful starting point.
+such as `2_000` estimated tokens is a useful starting point.
 
-### `maxContentChars`
+### `maxContentEstimatedTokens`
 
 This bounds the stable checkpoint placed in the system context. It is not the
 size of the raw source range and does not limit how many items are persisted in
@@ -284,7 +284,7 @@ all new items proposed for the current consolidation
 + relations whose endpoints are included
 ```
 
-`retrievalLimit` does not limit newly generated items. `maxContentChars` is the
+`retrievalLimit` does not limit newly generated items. `maxContentEstimatedTokens` is the
 final bound on the rendered checkpoint.
 
 The LLM may supersede only an item whose canonical ID was visible in the
@@ -421,12 +421,12 @@ agent instructions and tools
 <= model input budget
 ```
 
-Do not set `triggerChars` so high that ordinary requests exceed the input limit
-before consolidation can run. Likewise, do not make `maxContentChars` consume
+Do not set `triggerEstimatedTokens` so high that ordinary requests exceed the input limit
+before consolidation can run. Likewise, do not make `maxContentEstimatedTokens` consume
 most of the model's context by itself.
 
-Character counts and estimated tokens are intentionally not treated as
-interchangeable units. Tokenization varies by model and by content.
+Estimates are provider/model-aware and calibrated from actual input usage when
+available. Exact tokenization still varies by provider and content.
 
 ## Credentials
 
@@ -459,7 +459,7 @@ credential problem, even if normal agent chat is working.
 Enabling long-term memory does not backfill an entire old thread.
 
 For the first checkpoint, Copilotz walks backward from the triggering message
-and selects the most recent eligible range needed to cross `triggerChars`.
+and selects the most recent eligible range needed to cross `triggerEstimatedTokens`.
 Earlier messages remain stored, but are not automatically consolidated.
 
 Later checkpoints use the complete delta after the previous ready
@@ -537,14 +537,14 @@ variable. The agent's connected chat integration may be unrelated.
 
 ### The hot history is too large after rollover
 
-`retainRecentChars` is a lower target over complete messages, not a hard
+`retainRecentEstimatedTokens` is a lower target over complete messages, not a hard
 maximum. A very large recent message is retained whole. Reduce large tool
-results before they enter history and configure `toolResultHistoryMaxChars`
+results before they enter history and configure `toolResultHistoryMaxEstimatedTokens`
 where appropriate.
 
 ### The checkpoint is too large
 
-Reduce `maxContentChars` or `retrievalLimit`. Remember that all newly generated
+Reduce `maxContentEstimatedTokens` or `retrievalLimit`. Remember that all newly generated
 items are considered before the final rendered-content cap.
 
 ## Replacing the bundled strategy
@@ -575,7 +575,7 @@ application state.
 
 The bundled strategy intentionally favors predictable behavior:
 
-- rollover uses a deterministic character threshold rather than letting the LLM
+- rollover uses a deterministic token estimate rather than letting the LLM
   decide when to page memory;
 - items are immutable rather than repeatedly rewriting old knowledge;
 - only previously visible IDs may be superseded or targeted by the consolidation
@@ -592,7 +592,7 @@ Those choices also create limitations:
 - a newly rediscovered older item waits until the next epoch before the LLM can
   supersede or relate to it;
 - bounded relation expansion can miss distant multi-hop evidence;
-- the rendered `maxContentChars` cap can omit lower sections even though their
+- the rendered `maxContentEstimatedTokens` cap can omit lower sections even though their
   underlying items remain persisted.
 
 Use collections and tools for authoritative business state. Use RAG when the

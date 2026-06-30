@@ -1990,7 +1990,8 @@ export const messageProcessor: EventProcessor<
         {
           includeTargetContext: includeTargetContext && !directConversation,
           directConversation,
-          maxToolResultChars: context.toolResultHistoryMaxChars,
+          maxToolResultEstimatedTokens:
+            context.toolResultHistoryMaxEstimatedTokens,
           reasoningHistory: context.reasoningHistory,
         },
       );

@@ -5,6 +5,7 @@ import {
   detectDegenerateRepetition,
   filterTaggedControlTokensStreaming,
   formatMessages,
+  formatMessagesDetailed,
   getLocalStopSequences,
   parseToolCallsFromResponse,
   processStream,
@@ -14,6 +15,40 @@ import {
   responseHasToolIntent,
   sanitizeUserFacingText,
 } from "./utils.ts";
+
+Deno.test("estimated input limiting reports and reuses a whole-message boundary", () => {
+  const source = ["m1", "m2", "m3"].map((sourceMessageId, index) => ({
+    role: index % 2 === 0 ? "user" as const : "assistant" as const,
+    content: String(index + 1).repeat(40),
+    metadata: { sourceMessageId },
+  }));
+  const first = formatMessagesDetailed({
+    messages: source,
+    config: { limitEstimatedInputTokens: 30 },
+  });
+
+  assertEquals(first.cutoffSourceMessageId, "m2");
+  assertEquals(first.messages.map((message) => message.content), [
+    "3".repeat(40),
+  ]);
+
+  const next = formatMessagesDetailed({
+    messages: [
+      ...source.slice(2),
+      {
+        role: "assistant",
+        content: "4".repeat(40),
+        metadata: { sourceMessageId: "m4" },
+      },
+    ],
+    config: { limitEstimatedInputTokens: 30 },
+  });
+  assertEquals(next.cutoffSourceMessageId, undefined);
+  assertEquals(next.messages.map((message) => message.content), [
+    "3".repeat(40),
+    "4".repeat(40),
+  ]);
+});
 
 Deno.test("formatMessages merges consecutive user turns from different senders", () => {
   const formatted = formatMessages({
@@ -63,8 +98,14 @@ Deno.test("formatMessages merges consecutive assistant turns for tool loops", ()
   const wire = formatted[0]?.content as string;
   assertEquals(wire.includes("<tool_calls>"), true);
   assertEquals(wire.includes("<tool_results>"), true);
-  assertEquals(wire.indexOf("Checking now.") < wire.indexOf("<tool_calls>"), true);
-  assertEquals(wire.indexOf("<tool_calls>") < wire.indexOf("<tool_results>"), true);
+  assertEquals(
+    wire.indexOf("Checking now.") < wire.indexOf("<tool_calls>"),
+    true,
+  );
+  assertEquals(
+    wire.indexOf("<tool_calls>") < wire.indexOf("<tool_results>"),
+    true,
+  );
   assertEquals(
     (formatted[1]?.content as string).includes("<continue_after_tool_results>"),
     true,
@@ -79,7 +120,7 @@ Deno.test("formatMessages creates headroom after crossing the estimated input li
       { role: "user", content: "ijklmnop" }, // 2 tokens
     ],
     config: {
-      limitEstimatedInputTokens: 4,
+      limitEstimatedInputTokens: 12,
     },
   });
 
@@ -101,7 +142,7 @@ Deno.test("formatMessages does not prune inside the hysteresis band", () => {
       { role: "user", content: "ijklmnop" }, // 2 tokens
     ],
     config: {
-      limitEstimatedInputTokens: 4,
+      limitEstimatedInputTokens: 12,
     },
   });
 
@@ -119,7 +160,7 @@ Deno.test("formatMessages preserves the system prompt outside the estimated inpu
     ],
     instructions: "system", // 2 tokens
     config: {
-      limitEstimatedInputTokens: 4,
+      limitEstimatedInputTokens: 12,
     },
   });
 

@@ -22,8 +22,8 @@ import type {
 } from "@/runtime/llm/types.ts";
 import { assertAgentLLMConfig } from "@/resources/processors/llm_call/index.ts";
 import {
+  DEFAULT_EMBEDDING_MAX_INPUT_TOKENS,
   embed,
-  getEmbeddingMaxInputChars,
 } from "@/runtime/embeddings/index.ts";
 import { createLlmUsageService } from "@/runtime/collections/native.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
@@ -35,6 +35,7 @@ import {
   projectMessageForSharedMemory,
 } from "@/runtime/memory/index.ts";
 import { contextGenerator } from "@/resources/processors/new_message/generators/context-generator.ts";
+import { estimateTextTokens } from "@/runtime/tokens/index.ts";
 
 const CONSOLIDATE_MEMORY_TOOL: ToolDefinition = {
   type: "function",
@@ -168,9 +169,9 @@ export interface EmbeddingTextChunk {
  */
 export function chunkLinesForEmbedding(
   lines: string[],
-  maxChars: number,
+  maxEstimatedTokens: number,
 ): EmbeddingTextChunk[] {
-  const limit = Math.max(1, Math.floor(maxChars));
+  const limit = Math.max(1, Math.floor(maxEstimatedTokens));
   const chunks: EmbeddingTextChunk[] = [];
   let current = "";
 
@@ -181,17 +182,31 @@ export function chunkLinesForEmbedding(
   };
 
   for (const line of lines.filter((candidate) => candidate.length > 0)) {
-    if (line.length > limit) {
+    if (estimateTextTokens(line) > limit) {
       flush();
-      for (let offset = 0; offset < line.length; offset += limit) {
-        const text = line.slice(offset, offset + limit);
+      let offset = 0;
+      while (offset < line.length) {
+        let low = 1;
+        let high = line.length - offset;
+        while (low < high) {
+          const midpoint = Math.ceil((low + high) / 2);
+          if (
+            estimateTextTokens(line.slice(offset, offset + midpoint)) <= limit
+          ) {
+            low = midpoint;
+          } else {
+            high = midpoint - 1;
+          }
+        }
+        const text = line.slice(offset, offset + low);
         chunks.push({ text, characterCount: text.length });
+        offset += low;
       }
       continue;
     }
 
     const candidate = current ? `${current}\n${line}` : line;
-    if (candidate.length > limit) flush();
+    if (estimateTextTokens(candidate) > limit) flush();
     current = current ? `${current}\n${line}` : line;
   }
   flush();
@@ -361,7 +376,7 @@ export function renderLongTermMemory(args: {
   newItemNodes: Map<string, KnowledgeNode>;
   olderItems: RetrievedMemoryItem[];
   olderRelations: KnowledgeEdge[];
-  maxContentChars: number;
+  maxContentEstimatedTokens: number;
 }): string {
   const { proposal, newItemNodes, olderItems, olderRelations } = args;
   const olderItemNames = new Map(
@@ -419,7 +434,9 @@ export function renderLongTermMemory(args: {
   const retained: string[] = [];
   for (const block of blocks) {
     const candidate = [...retained, block].join("\n\n");
-    if (candidate.length <= args.maxContentChars) retained.push(block);
+    if (
+      estimateTextTokens(candidate) <= args.maxContentEstimatedTokens
+    ) retained.push(block);
   }
   return retained.join("\n\n");
 }
@@ -787,7 +804,7 @@ export const longTermMemoryProcessor: EventProcessor<
       const conversationLines = sourceMessages.flatMap((message): string[] => {
         const projected = projectMessageForSharedMemory(
           message,
-          deps.context.toolResultHistoryMaxChars,
+          deps.context.toolResultHistoryMaxEstimatedTokens,
         );
         return projected
           ? [JSON.stringify({ messageId: message.id, content: projected })]
@@ -904,14 +921,12 @@ export const longTermMemoryProcessor: EventProcessor<
         newItemNodes: localItemNodes,
         olderItems: older.items,
         olderRelations: older.relations,
-        maxContentChars: config.maxContentChars,
+        maxContentEstimatedTokens: config.maxContentEstimatedTokens,
       });
-      const embeddingMaxChars = getEmbeddingMaxInputChars(
-        deps.context.embeddingConfig.maxInputTokens,
-      );
       const contentChunks = chunkLinesForEmbedding(
         [content],
-        embeddingMaxChars,
+        deps.context.embeddingConfig.maxInputTokens ??
+          DEFAULT_EMBEDDING_MAX_INPUT_TOKENS,
       );
       const finalEmbeddingResult = await embed(
         contentChunks.map((chunk) => chunk.text),
@@ -990,7 +1005,7 @@ export const longTermMemoryProcessor: EventProcessor<
         ...checkpointData,
         status: "ready",
         contentHash: await sha256(content),
-        tokenEstimate: Math.ceil(content.length / 4),
+        tokenEstimate: estimateTextTokens(content),
         error: null,
         metadata: {
           ...(checkpointData.metadata ?? {}),

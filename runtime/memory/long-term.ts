@@ -1,5 +1,6 @@
 import type { KnowledgeNode } from "@/database/schemas/index.ts";
 import type { CopilotzDb, Message } from "@/types/index.ts";
+import { estimateTextTokens } from "@/runtime/tokens/index.ts";
 
 export type LongTermMemoryStatus = "pending" | "ready" | "failed";
 
@@ -26,8 +27,8 @@ export interface LongTermMemoryRecord {
 
 export interface LongTermMemoryRange {
   messages: Message[];
-  characterCount: number;
-  retainedCharacterCount: number;
+  estimatedTokens: number;
+  retainedEstimatedTokens: number;
   retainedMessageCount: number;
   sourceStartMessageId: string;
   sourceEndMessageId: string;
@@ -211,7 +212,7 @@ function stringifyToolArgs(value: unknown): string {
 
 export function projectMessageForSharedMemory(
   message: ProjectableMessage,
-  maxToolResultChars = 10_000,
+  maxToolResultEstimatedTokens = 2_500,
 ): string {
   const metadata = isRecord(message.metadata) ? message.metadata : {};
   if (
@@ -240,9 +241,24 @@ export function projectMessageForSharedMemory(
         return [`[Tool ${name}: ${status}]`];
       }
       const output = stringifyToolOutput(call.output ?? call.error ?? "");
-      const capped = maxToolResultChars > 0
-        ? output.slice(0, maxToolResultChars)
-        : output;
+      let capped = output;
+      if (
+        maxToolResultEstimatedTokens > 0 &&
+        estimateTextTokens(capped) > maxToolResultEstimatedTokens
+      ) {
+        let length = Math.min(
+          capped.length,
+          maxToolResultEstimatedTokens * 4,
+        );
+        while (
+          length > 0 &&
+          estimateTextTokens(capped.slice(0, length)) >
+            maxToolResultEstimatedTokens
+        ) {
+          length = Math.floor(length * 0.88);
+        }
+        capped = capped.slice(0, length);
+      }
       return [`[Tool ${name}: ${status}] ${capped}`.trim()];
     });
     return projected.join("\n");
@@ -279,9 +295,9 @@ export async function selectLongTermMemoryRange(args: {
   threadId: string;
   triggerMessageId: string;
   previous: LongTermMemoryRecord | null;
-  triggerChars: number;
-  retainRecentChars?: number;
-  maxToolResultChars?: number;
+  triggerEstimatedTokens: number;
+  retainRecentEstimatedTokens?: number;
+  maxToolResultEstimatedTokens?: number;
   pageSize?: number;
 }): Promise<LongTermMemoryRange | null> {
   const {
@@ -289,13 +305,13 @@ export async function selectLongTermMemoryRange(args: {
     threadId,
     triggerMessageId,
     previous,
-    triggerChars,
-    retainRecentChars = 0,
-    maxToolResultChars,
+    triggerEstimatedTokens,
+    retainRecentEstimatedTokens = 0,
+    maxToolResultEstimatedTokens,
     pageSize = 100,
   } = args;
   const selectedNewestFirst: Message[] = [];
-  let characterCount = 0;
+  let estimatedTokens = 0;
   let before: string | null = null;
   let foundPreviousBoundary = previous === null;
   let reachedTriggerMessage = false;
@@ -321,16 +337,15 @@ export async function selectLongTermMemoryRange(args: {
         break;
       }
       selectedNewestFirst.push(message);
-      characterCount += projectMessageForSharedMemory(
-        message,
-        maxToolResultChars,
-      ).length;
-      if (!previous && characterCount >= triggerChars) break;
+      estimatedTokens += estimateTextTokens(
+        projectMessageForSharedMemory(message, maxToolResultEstimatedTokens),
+      );
+      if (!previous && estimatedTokens >= triggerEstimatedTokens) break;
     }
 
     if (
       (previous && foundPreviousBoundary) ||
-      (!previous && characterCount >= triggerChars) ||
+      (!previous && estimatedTokens >= triggerEstimatedTokens) ||
       !page.pageInfo.hasMoreBefore
     ) {
       break;
@@ -341,17 +356,17 @@ export async function selectLongTermMemoryRange(args: {
   if (
     !reachedTriggerMessage ||
     (previous && !foundPreviousBoundary) ||
-    characterCount < triggerChars ||
+    estimatedTokens < triggerEstimatedTokens ||
     selectedNewestFirst.length === 0
   ) {
     return null;
   }
 
   const selectedMessages = selectedNewestFirst.reverse();
-  let retainedCharacterCount = 0;
+  let retainedEstimatedTokens = 0;
   let retainedMessageCount = 0;
 
-  if (retainRecentChars > 0) {
+  if (retainRecentEstimatedTokens > 0) {
     const units: Message[][] = [];
     for (const message of selectedMessages) {
       if (message.senderType === "tool" && units.length > 0) {
@@ -362,14 +377,19 @@ export async function selectLongTermMemoryRange(args: {
     }
     for (
       let index = units.length - 1;
-      index >= 0 && retainedCharacterCount < retainRecentChars;
+      index >= 0 && retainedEstimatedTokens < retainRecentEstimatedTokens;
       index--
     ) {
       const unit = units[index];
-      retainedCharacterCount += unit.reduce(
+      retainedEstimatedTokens += unit.reduce(
         (sum, message) =>
           sum +
-          projectMessageForSharedMemory(message, maxToolResultChars).length,
+          estimateTextTokens(
+            projectMessageForSharedMemory(
+              message,
+              maxToolResultEstimatedTokens,
+            ),
+          ),
         0,
       );
       retainedMessageCount += unit.length;
@@ -383,8 +403,8 @@ export async function selectLongTermMemoryRange(args: {
 
   return {
     messages,
-    characterCount,
-    retainedCharacterCount,
+    estimatedTokens,
+    retainedEstimatedTokens,
     retainedMessageCount,
     sourceStartMessageId: messages[0].id,
     sourceEndMessageId: messages.at(-1)!.id,

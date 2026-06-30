@@ -19,17 +19,16 @@ import {
 
 Deno.test("embedding chunks preserve message lines until a line is oversized", () => {
   assertEquals(
-    chunkLinesForEmbedding(["first", "second", "third"], 12),
+    chunkLinesForEmbedding(["first", "second", "third"], 3),
     [
       { text: "first\nsecond", characterCount: 12 },
       { text: "third", characterCount: 5 },
     ],
   );
   assertEquals(
-    chunkLinesForEmbedding(["123456789"], 4),
+    chunkLinesForEmbedding(["123456789"], 2),
     [
-      { text: "1234", characterCount: 4 },
-      { text: "5678", characterCount: 4 },
+      { text: "12345678", characterCount: 8 },
       { text: "9", characterCount: 1 },
     ],
   );
@@ -55,7 +54,7 @@ Deno.test("checkpoint rendering omits oversized blocks instead of slicing them",
     newItemNodes: new Map(),
     olderItems: [],
     olderRelations: [],
-    maxContentChars: 120,
+    maxContentEstimatedTokens: 30,
   });
 
   assertEquals(rendered.length <= 120, true);
@@ -310,8 +309,8 @@ function createDeps(
         kind: "long_term",
         enabled: true,
         config: {
-          triggerChars: 1,
-          maxContentChars: 10_000,
+          triggerEstimatedTokens: 1,
+          maxContentEstimatedTokens: 2_500,
           retrievalLimit: 5,
         },
       }],

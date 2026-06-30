@@ -22,7 +22,7 @@ import {
   createMockResponse,
   detectDegenerateRepetition,
   estimateUsage,
-  formatMessages,
+  formatMessagesDetailed,
   parseInternalControlTagsFromResponse,
   parseTaggedBlocksFromResponse,
   parseToolCallsFromResponse,
@@ -33,6 +33,10 @@ import {
   stripStructuralLeakTokens,
   withDefaultStopSequences,
 } from "@/runtime/llm/utils.ts";
+import {
+  estimateChatMessages,
+  observeTokenCalibration,
+} from "@/runtime/tokens/index.ts";
 import { normalizeProviderUsage } from "@/runtime/llm/usage.ts";
 import { runProviderStream } from "@/runtime/llm/stream.ts";
 import {
@@ -60,7 +64,7 @@ const REASONING_HISTORY_TAGS = [
   "thinking",
   "reasoning",
 ] as const;
-const DEFAULT_REASONING_HISTORY_MAX_CHARS = 3000;
+const DEFAULT_REASONING_HISTORY_MAX_ESTIMATED_TOKENS = 750;
 const RECOVERY_PROTOCOL_MARKER_PATTERN =
   /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids)\b/i;
 const VISIBLE_REASONING_BLOCK_PATTERN =
@@ -96,9 +100,9 @@ function normalizeReasoningHistoryOptions(
 ): Required<NonNullable<ChatRequest["reasoningHistory"]>> {
   return {
     include: options?.include ?? "self",
-    maxChars: typeof options?.maxChars === "number"
-      ? options.maxChars
-      : DEFAULT_REASONING_HISTORY_MAX_CHARS,
+    maxEstimatedTokens: typeof options?.maxEstimatedTokens === "number"
+      ? options.maxEstimatedTokens
+      : DEFAULT_REASONING_HISTORY_MAX_ESTIMATED_TOKENS,
   };
 }
 
@@ -126,13 +130,12 @@ function buildRecoveryAssistantContext(
   const reasoningHistory = normalizeReasoningHistoryOptions(options);
   const trimmedReasoning = reasoning?.trim();
   const attemptContext = composeWireContent({
-    reasoning:
-      reasoningHistory.include !== "none" &&
+    reasoning: reasoningHistory.include !== "none" &&
         typeof trimmedReasoning === "string" &&
         trimmedReasoning.length > 0
-        ? trimmedReasoning
-        : undefined,
-    reasoningMaxChars: reasoningHistory.maxChars,
+      ? trimmedReasoning
+      : undefined,
+    reasoningMaxEstimatedTokens: reasoningHistory.maxEstimatedTokens,
     visible: visiblePrefix.trim() || undefined,
   });
   return [existingContext.trim(), attemptContext].filter((part) =>
@@ -246,9 +249,13 @@ function buildDebugSnapshot(args: {
   toolCalls: ToolInvocation[];
   extractedTags: Record<string, string[]>;
   finishReason: ProviderFinishReason | null;
+  inputTokenEstimate?: import("@/runtime/tokens/chat.ts").ChatTokenEstimate;
 }): LLMDebugSnapshot {
   return {
     inputMessages: args.inputMessages,
+    ...(args.inputTokenEstimate
+      ? { inputTokenEstimate: args.inputTokenEstimate }
+      : {}),
     rawOutput: {
       content: args.rawContent,
       currentAttemptContent: args.currentAttemptContent,
@@ -261,6 +268,35 @@ function buildDebugSnapshot(args: {
       extractedTags: args.extractedTags,
       finishReason: args.finishReason,
     },
+  };
+}
+
+function promptProfileKey(
+  config: ProviderConfig,
+  namespace = "default",
+): string {
+  return `${namespace}:${config.provider ?? "unknown"}:${
+    config.model ?? "default"
+  }:${config.limitEstimatedInputTokens ?? 0}`;
+}
+
+function applyHistoryCutoff(
+  messages: ChatMessage[],
+  sourceEndMessageId: string | undefined,
+): { messages: ChatMessage[]; found: boolean } {
+  if (!sourceEndMessageId) return { messages, found: false };
+  const boundary = messages.findIndex((message) =>
+    message.metadata?.sourceMessageId === sourceEndMessageId
+  );
+  if (boundary < 0) return { messages, found: false };
+  return {
+    messages: [
+      ...messages.filter((message, index) =>
+        message.role === "system" && index <= boundary
+      ),
+      ...messages.slice(boundary + 1),
+    ],
+    found: true,
   };
 }
 
@@ -373,12 +409,6 @@ export async function chat(
     throw new Error("No LLM provider configured for chat request");
   }
 
-  const messages = formatMessages({
-    ...request,
-    messages: request.messages,
-    config: toLLMConfig(baseConfig),
-  });
-
   const attemptConfigs = [
     buildAttemptConfig(baseConfig, env),
     ...(baseConfig.fallbacks ?? []).map((fallback) =>
@@ -420,6 +450,36 @@ export async function chat(
     }
 
     const providerAPI = providerFactory(attemptConfig);
+    const profileKey = promptProfileKey(
+      attemptConfig,
+      request.historyCutoffNamespace,
+    );
+    const persistedCutoff = request.historyCutoffs?.[profileKey];
+    const cutoffApplied = applyHistoryCutoff(
+      request.messages,
+      persistedCutoff,
+    );
+    if (persistedCutoff && !cutoffApplied.found) {
+      await request.onHistoryCutoff?.(profileKey, null);
+    }
+    const materializedRequestMessages = request.materializeMessages
+      ? await request.materializeMessages(cutoffApplied.messages, attemptConfig)
+      : cutoffApplied.messages;
+    const formatted = formatMessagesDetailed({
+      ...request,
+      messages: materializedRequestMessages,
+      config: toLLMConfig(attemptConfig),
+    });
+    if (
+      formatted.cutoffSourceMessageId &&
+      formatted.cutoffSourceMessageId !== persistedCutoff
+    ) {
+      await request.onHistoryCutoff?.(
+        profileKey,
+        formatted.cutoffSourceMessageId,
+      );
+    }
+    const messages = formatted.messages;
     const attemptId = crypto.randomUUID();
     let attemptVisibleOutputStarted = false;
     let attemptVisibleOutput = "";
@@ -445,19 +505,20 @@ export async function chat(
       : undefined;
 
     const prefixBeforeAttempt = recoveryPrefix;
-    const materializedMessages = request.materializeMessages
-      ? await request.materializeMessages(messages, attemptConfig)
-      : messages;
     const attemptMessages = prefixBeforeAttempt.length > 0
       ? [
-        ...materializedMessages,
+        ...messages,
         { role: "assistant" as const, content: prefixBeforeAttempt },
         {
           role: "user" as const,
           content: buildRecoveryCue(lastRecoveryReason),
         },
       ]
-      : materializedMessages;
+      : messages;
+    const attemptInputEstimate = estimateChatMessages(
+      attemptMessages,
+      attemptConfig,
+    );
 
     try {
       const extractedBlockTags = [
@@ -514,6 +575,7 @@ export async function chat(
             streamResult.content,
             usageStatus,
             usageMetadata,
+            attemptConfig,
           );
         const cost = await estimateUsageCost(attemptConfig, usage ?? undefined);
         const usageFinalized = streamResult.usageFinalized
@@ -524,6 +586,16 @@ export async function chat(
               usageMetadata,
             );
             if (!finalUsage) return null;
+            if (
+              usage?.source !== "provider" &&
+              typeof finalUsage.inputTokens === "number"
+            ) {
+              observeTokenCalibration(
+                attemptInputEstimate.calibrationKey,
+                attemptInputEstimate.rawEstimatedTokens,
+                finalUsage.inputTokens,
+              );
+            }
             const finalCost = await estimateUsageCost(
               attemptConfig,
               finalUsage,
@@ -532,13 +604,17 @@ export async function chat(
               usage: finalUsage,
               ...(finalCost ? { cost: finalCost } : {}),
               tokens: finalUsage.totalTokens ??
-                await countTokens(attemptMessages, streamResult.content),
+                await countTokens(
+                  attemptMessages,
+                  streamResult.content,
+                  attemptConfig,
+                ),
               finishReason: finalized.finishReason,
               finalizedAt: new Date().toISOString(),
             };
           })
           : undefined;
-        return {
+        const result: LLMUsageAttempt = {
           attemptId,
           provider: attemptProvider,
           model: attemptConfig.model,
@@ -552,6 +628,7 @@ export async function chat(
             toolCalls: parsedForDebug.toolCalls,
             extractedTags: parsedForDebug.extractedTags,
             finishReason: streamResult.finishReason,
+            inputTokenEstimate: attemptInputEstimate,
           }),
           usage,
           ...(cost ? { cost } : {}),
@@ -560,6 +637,17 @@ export async function chat(
           partialReasoning: attemptReasoningOutput,
           ...(usageFinalized ? { usageFinalized } : {}),
         };
+        if (
+          usage?.source === "provider" &&
+          typeof usage.inputTokens === "number"
+        ) {
+          observeTokenCalibration(
+            attemptInputEstimate.calibrationKey,
+            attemptInputEstimate.rawEstimatedTokens,
+            usage.inputTokens,
+          );
+        }
+        return result;
       };
 
       // Check for recoverable finish reasons (length, error, content_filter)
@@ -833,7 +921,11 @@ export async function chat(
         finalAttempt,
       ];
       const totalTokens = usage.totalTokens ??
-        await countTokens(attemptMessages, parsed.cleanResponse);
+        await countTokens(
+          attemptMessages,
+          parsed.cleanResponse,
+          attemptConfig,
+        );
       const usageFinalized = finalAttempt.usageFinalized;
 
       return {
@@ -873,6 +965,7 @@ export async function chat(
         attemptVisibleOutput,
         usageStatusForReason(failedStatusReason),
         failedStatusReason ? { statusReason: failedStatusReason } : undefined,
+        attemptConfig,
       );
       const failedCost = await estimateUsageCost(attemptConfig, failedUsage);
       usageAttempts.push({
@@ -926,7 +1019,7 @@ export async function chat(
             ? { reasoning: mergeReasoningParts(attemptReasoningOutput) }
             : {}),
           tokens: failedUsage.totalTokens ??
-            await countTokens(attemptMessages, answer),
+            await countTokens(attemptMessages, answer, attemptConfig),
           finishReason: "error",
           usage: failedUsage,
           usageAttempts: [...usageAttempts],

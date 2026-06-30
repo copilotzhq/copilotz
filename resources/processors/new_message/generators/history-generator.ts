@@ -10,6 +10,7 @@ import type {
   ToolInvocation,
 } from "@/runtime/llm/types.ts";
 import { extractAssetId, isAssetRef } from "@/runtime/storage/assets.ts";
+import { estimateTextTokens } from "@/runtime/tokens/index.ts";
 
 type StoredAttachment = {
   kind?: string;
@@ -17,6 +18,9 @@ type StoredAttachment = {
   data?: string;
   dataUrl?: string;
   durationMs?: number;
+  width?: number;
+  height?: number;
+  pages?: number;
   format?: string;
   fileName?: string;
   assetRef?: string;
@@ -82,6 +86,21 @@ const buildAttachmentParts = (
       ? attachment.kind
       : undefined;
     const dataInfo = toDataUrl(attachment);
+    const tokenMetadata = {
+      ...(typeof attachment.width === "number"
+        ? { width: attachment.width }
+        : {}),
+      ...(typeof attachment.height === "number"
+        ? { height: attachment.height }
+        : {}),
+      ...(typeof attachment.durationMs === "number"
+        ? { durationSeconds: attachment.durationMs / 1_000 }
+        : {}),
+      ...(typeof attachment.pages === "number"
+        ? { pages: attachment.pages }
+        : {}),
+    };
+    const hasTokenMetadata = Object.keys(tokenMetadata).length > 0;
 
     // Prefer assetRef if provided; resolved later in LLM_CALL
     // Add asset ID as text so the agent can reference it in tool calls or conversation
@@ -99,6 +118,7 @@ const buildAttachmentParts = (
         parts.push({
           type: "image_url",
           image_url: { url: attachment.assetRef },
+          ...(hasTokenMetadata ? { tokenMetadata } : {}),
         });
         continue;
       }
@@ -112,6 +132,7 @@ const buildAttachmentParts = (
             data: attachment.assetRef,
             ...(format ? { format } : {}),
           },
+          ...(hasTokenMetadata ? { tokenMetadata } : {}),
         });
         continue;
       }
@@ -124,6 +145,7 @@ const buildAttachmentParts = (
             ? attachment.mimeType
             : undefined,
         },
+        ...(hasTokenMetadata ? { tokenMetadata } : {}),
       });
       continue;
     }
@@ -136,6 +158,7 @@ const buildAttachmentParts = (
         parts.push({
           type: "image_url",
           image_url: { url: attachment.dataUrl },
+          ...(hasTokenMetadata ? { tokenMetadata } : {}),
         });
         continue;
       }
@@ -147,7 +170,11 @@ const buildAttachmentParts = (
 
     if (kind === "image") {
       const url = `data:${dataInfo.mimeType};base64,${dataInfo.data}`;
-      parts.push({ type: "image_url", image_url: { url } });
+      parts.push({
+        type: "image_url",
+        image_url: { url },
+        ...(hasTokenMetadata ? { tokenMetadata } : {}),
+      });
       continue;
     }
 
@@ -165,6 +192,7 @@ const buildAttachmentParts = (
           data: dataInfo.data,
           ...(format ? { format } : {}),
         },
+        ...(hasTokenMetadata ? { tokenMetadata } : {}),
       });
       continue;
     }
@@ -177,6 +205,7 @@ const buildAttachmentParts = (
           file_data,
           mime_type: dataInfo.mimeType,
         },
+        ...(hasTokenMetadata ? { tokenMetadata } : {}),
       });
       continue;
     }
@@ -189,6 +218,7 @@ const buildAttachmentParts = (
         file_data: fallback,
         mime_type: dataInfo.mimeType,
       },
+      ...(hasTokenMetadata ? { tokenMetadata } : {}),
     });
   }
 
@@ -204,42 +234,42 @@ export interface HistoryGeneratorOptions {
   /** Whether this is a simple direct user-agent conversation */
   directConversation?: boolean;
   /**
-   * Cap each tool result `output` when building LLM-facing history (characters
-   * of JSON-serialized tool output, including truncation envelope).
-   * Default **10_000** is applied by the caller when unset; pass `0` via
-   * `createCopilotz({ toolResultHistoryMaxChars: 0 })` to disable per-result caps.
+   * Cap each tool result `output` when building LLM-facing history (estimated
+   * tokens of JSON-serialized tool output, including truncation envelope).
+   * Default **2_500** is applied by the caller when unset; pass `0` via
+   * `createCopilotz({ toolResultHistoryMaxEstimatedTokens: 0 })` to disable it.
    */
-  maxToolResultChars?: number;
+  maxToolResultEstimatedTokens?: number;
   /**
    * Controls whether persisted agent reasoning is included in LLM-visible
-   * history. Defaults to `{ include: "self", maxChars: 3000 }`.
+   * history. Defaults to `{ include: "self", maxEstimatedTokens: 750 }`.
    */
   reasoningHistory?: ReasoningHistoryOptions;
 }
 
-const DEFAULT_MAX_TOOL_RESULT_CHARS = 10_000;
-const DEFAULT_REASONING_HISTORY_MAX_CHARS = 3_000;
+const DEFAULT_MAX_TOOL_RESULT_ESTIMATED_TOKENS = 2_500;
+const DEFAULT_REASONING_HISTORY_MAX_ESTIMATED_TOKENS = 750;
 
 function normalizeReasoningHistoryOptions(
   options?: ReasoningHistoryOptions,
 ): Required<ReasoningHistoryOptions> {
   return {
     include: options?.include ?? "self",
-    maxChars: typeof options?.maxChars === "number"
-      ? options.maxChars
-      : DEFAULT_REASONING_HISTORY_MAX_CHARS,
+    maxEstimatedTokens: typeof options?.maxEstimatedTokens === "number"
+      ? options.maxEstimatedTokens
+      : DEFAULT_REASONING_HISTORY_MAX_ESTIMATED_TOKENS,
   };
 }
 
 function truncateToolOutputForHistory(
-  maxChars: number,
+  maxEstimatedTokens: number,
   value: unknown,
   references?: {
     toolExecutionId?: string;
     toolResultQueueEventId?: string;
   },
 ): unknown {
-  if (maxChars < 48) {
+  if (maxEstimatedTokens < 12) {
     return "[tool output truncated]";
   }
   let serialized: string;
@@ -248,7 +278,7 @@ function truncateToolOutputForHistory(
   } catch {
     serialized = String(value);
   }
-  if (serialized.length <= maxChars) return value;
+  if (estimateTextTokens(serialized) <= maxEstimatedTokens) return value;
 
   const envelope = (preview: string) => ({
     _copilotz_history_truncated: true as const,
@@ -262,17 +292,21 @@ function truncateToolOutputForHistory(
       : {}),
   });
 
-  let previewLen = Math.max(0, maxChars - 200);
+  let previewLen = Math.max(0, maxEstimatedTokens * 4 - 200);
   while (previewLen > 0) {
     const surrogate = envelope(serialized.slice(0, previewLen));
-    if (JSON.stringify(surrogate).length <= maxChars) return surrogate;
+    if (
+      estimateTextTokens(JSON.stringify(surrogate)) <= maxEstimatedTokens
+    ) {
+      return surrogate;
+    }
     previewLen = Math.floor(previewLen * 0.88);
   }
   return envelope("");
 }
 
-function applyToolHistoryCharCap(
-  maxToolResultChars: number | undefined,
+function applyToolHistoryTokenCap(
+  maxToolResultEstimatedTokens: number | undefined,
   invocation: ToolInvocation,
   references?: {
     toolExecutionId?: string;
@@ -280,8 +314,8 @@ function applyToolHistoryCharCap(
   },
 ): ToolInvocation {
   if (
-    maxToolResultChars === undefined ||
-    maxToolResultChars <= 0 ||
+    maxToolResultEstimatedTokens === undefined ||
+    maxToolResultEstimatedTokens <= 0 ||
     !("output" in invocation) ||
     invocation.output === undefined
   ) {
@@ -290,7 +324,7 @@ function applyToolHistoryCharCap(
   return {
     ...invocation,
     output: truncateToolOutputForHistory(
-      maxToolResultChars,
+      maxToolResultEstimatedTokens,
       invocation.output,
       references,
     ),
@@ -445,9 +479,10 @@ export function historyGenerator(
 ): ChatMessage[] {
   const includeTargetContext = options?.includeTargetContext ?? true;
   const directConversation = options?.directConversation === true;
-  const maxToolResultChars = typeof options?.maxToolResultChars === "number"
-    ? options.maxToolResultChars
-    : DEFAULT_MAX_TOOL_RESULT_CHARS;
+  const maxToolResultEstimatedTokens =
+    typeof options?.maxToolResultEstimatedTokens === "number"
+      ? options.maxToolResultEstimatedTokens
+      : DEFAULT_MAX_TOOL_RESULT_ESTIMATED_TOKENS;
   const reasoningHistory = normalizeReasoningHistoryOptions(
     options?.reasoningHistory,
   );
@@ -562,20 +597,22 @@ export function historyGenerator(
         role: "user",
         senderId: msg.senderId || undefined,
         toolCalls: visibleToolCalls,
-        ...(safeMetadata ? {
-          metadata: {
-            ...safeMetadata,
-            wireToolFormat: "peer",
-            wireSegment: "toolResults",
-            speakerLabel: senderName,
-          },
-        } : {
-          metadata: {
-            wireToolFormat: "peer",
-            wireSegment: "toolResults",
-            speakerLabel: senderName,
-          },
-        }),
+        ...(safeMetadata
+          ? {
+            metadata: {
+              ...safeMetadata,
+              wireToolFormat: "peer",
+              wireSegment: "toolResults",
+              speakerLabel: senderName,
+            },
+          }
+          : {
+            metadata: {
+              wireToolFormat: "peer",
+              wireSegment: "toolResults",
+              speakerLabel: senderName,
+            },
+          }),
       }];
     }
 
@@ -615,8 +652,8 @@ export function historyGenerator(
       typeof msg.reasoning === "string" &&
       (reasoningHistory.include === "all" || isCurrentAgent);
     const reasoning = includeReasoning ? msg.reasoning : undefined;
-    const reasoningMaxChars = includeReasoning
-      ? reasoningHistory.maxChars
+    const reasoningMaxEstimatedTokens = includeReasoning
+      ? reasoningHistory.maxEstimatedTokens
       : undefined;
 
     const peerSpeakerLabel = !directConversation && !isCurrentAgent &&
@@ -655,8 +692,8 @@ export function historyGenerator(
 
         if (isRequestingAgent || visibility === "public") {
           return [
-            applyToolHistoryCharCap(
-              maxToolResultChars,
+            applyToolHistoryTokenCap(
+              maxToolResultEstimatedTokens,
               stripParsedToolCall(call),
               { toolExecutionId, toolResultQueueEventId },
             ),
@@ -694,12 +731,16 @@ export function historyGenerator(
     const safeMetadata = sanitizeMetadataForHistory(metadata);
     const wireMetadata = {
       ...(safeMetadata ?? {}),
+      ...(msg.id ? { sourceMessageId: msg.id } : {}),
       ...(peerSpeakerLabel ? { speakerLabel: peerSpeakerLabel } : {}),
       ...(peerSpeakerLabel && toolCalls
         ? { wireToolFormat: "peer" as const }
         : {}),
       ...(isToolResult && !isRequestingAgent
-        ? { wireToolFormat: "peer" as const, wireSegment: "toolResults" as const }
+        ? {
+          wireToolFormat: "peer" as const,
+          wireSegment: "toolResults" as const,
+        }
         : {}),
     };
 
@@ -712,7 +753,7 @@ export function historyGenerator(
         : {}),
       tool_call_id: (msg as unknown as { toolCallId?: string }).toolCallId ||
         undefined,
-      ...(reasoning ? { reasoning, reasoningMaxChars } : {}),
+      ...(reasoning ? { reasoning, reasoningMaxEstimatedTokens } : {}),
       ...(toolCalls ? { toolCalls } : {}),
     }];
   });

@@ -761,15 +761,15 @@ export interface CopilotzConfig {
    */
   toolExecutionTimeoutsMs?: Record<string, number | undefined>;
   /**
-   * Maximum serialized size (characters) of each tool result `output` when
-   * building chat history for the LLM (envelope included). Default: **10_000**.
+   * Maximum estimated tokens of each serialized tool result `output` when
+   * building chat history for the LLM (envelope included). Default: **2_500**.
    * Set to **0** to disable per-result caps (global `limitEstimatedInputTokens`
    * in `llmOptions` still applies later).
    */
-  toolResultHistoryMaxChars?: number;
+  toolResultHistoryMaxEstimatedTokens?: number;
   /**
    * Controls whether persisted agent reasoning is included in future LLM-visible
-   * history. Defaults to `{ include: "self", maxChars: 3000 }`.
+   * history. Defaults to `{ include: "self", maxEstimatedTokens: 750 }`.
    */
   reasoningHistory?: ReasoningHistoryOptions;
   /**
@@ -1900,10 +1900,11 @@ export async function createCopilotz(
       agentsFileInstructions,
       toolExecutionTimeoutMs,
       toolExecutionTimeoutsMs,
-      toolResultHistoryMaxChars: config.toolResultHistoryMaxChars ?? 10_000,
+      toolResultHistoryMaxEstimatedTokens:
+        config.toolResultHistoryMaxEstimatedTokens ?? 2_500,
       reasoningHistory: config.reasoningHistory ?? {
         include: "self",
-        maxChars: 3000,
+        maxEstimatedTokens: 750,
       },
       // Sender of the current message (available to processors and tools)
       sender: normalizedMessage.sender
@@ -2007,10 +2008,11 @@ export async function createCopilotz(
       agentsFileInstructions,
       toolExecutionTimeoutMs,
       toolExecutionTimeoutsMs,
-      toolResultHistoryMaxChars: config.toolResultHistoryMaxChars ?? 10_000,
+      toolResultHistoryMaxEstimatedTokens:
+        config.toolResultHistoryMaxEstimatedTokens ?? 2_500,
       reasoningHistory: config.reasoningHistory ?? {
         include: "self",
-        maxChars: 3000,
+        maxEstimatedTokens: 750,
       },
       multiAgent: config.multiAgent
         ? {

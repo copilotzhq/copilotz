@@ -7,9 +7,9 @@ const longTermMemory: MemoryResource = {
     "Checkpointed long-term conversation memory for stable prompt prefixes.",
   enabled: false,
   config: {
-    triggerChars: 80_000,
-    retainRecentChars: 0,
-    maxContentChars: 48_000,
+    triggerEstimatedTokens: 20_000,
+    retainRecentEstimatedTokens: 0,
+    maxContentEstimatedTokens: 12_000,
     retrievalLimit: 20,
   },
 };

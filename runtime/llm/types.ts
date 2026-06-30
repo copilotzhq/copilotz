@@ -11,12 +11,34 @@
  * - MiniMax (Anthropic-compatible Messages API): supports `text`, `image`, and `video` (MiniMax-M3 only).
  *   The `video` part carries a data URL, public URL, or `mm_file://{file_id}` reference.
  */
+import type { TokenMediaMetadata } from "@/runtime/tokens/estimate.ts";
+import type { ChatTokenEstimate } from "@/runtime/tokens/chat.ts";
+
 export type ChatContentPart =
   | { type: "text"; text: string }
-  | { type: "image_url"; image_url: { url: string } }
-  | { type: "video"; video: { url: string; mime_type?: string } }
-  | { type: "input_audio"; input_audio: { data: string; format?: string } }
-  | { type: "file"; file: { file_data: string; mime_type?: string } };
+  | {
+    type: "image_url";
+    image_url: {
+      url: string;
+      detail?: "low" | "high" | "original" | "auto";
+    };
+    tokenMetadata?: TokenMediaMetadata;
+  }
+  | {
+    type: "video";
+    video: { url: string; mime_type?: string };
+    tokenMetadata?: TokenMediaMetadata;
+  }
+  | {
+    type: "input_audio";
+    input_audio: { data: string; format?: string };
+    tokenMetadata?: TokenMediaMetadata;
+  }
+  | {
+    type: "file";
+    file: { file_data: string; mime_type?: string };
+    tokenMetadata?: TokenMediaMetadata;
+  };
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool" | "tool_result";
@@ -42,7 +64,7 @@ export interface ChatMessage {
    */
   reasoning?: string;
   /** Character cap when materializing {@link reasoning}. */
-  reasoningMaxChars?: number;
+  reasoningMaxEstimatedTokens?: number;
 }
 
 export type ProviderFallbackReason =
@@ -66,7 +88,8 @@ export interface ProviderConfigBase {
   // Token limits
   maxTokens?: number;
   maxCompletionTokens?: number;
-  limitEstimatedInputTokens?: number; // Approximate input/history budget using rough token estimation
+  /** Calibrated estimated input budget; history is removed at whole-message boundaries. */
+  limitEstimatedInputTokens?: number;
 
   // Response format
   responseType?: "text" | "json";
@@ -233,14 +256,23 @@ export interface ChatRequest {
     messages: ChatMessage[],
     config: ProviderConfig,
   ) => Promise<ChatMessage[]> | ChatMessage[];
+  /** Internal persisted prompt-history boundaries keyed by provider profile. */
+  historyCutoffs?: Record<string, string>;
+  /** Internal namespace used to isolate persisted cutoffs (normally agent id). */
+  historyCutoffNamespace?: string;
+  /** Internal persistence hook invoked when a stable cutoff changes. */
+  onHistoryCutoff?: (
+    profileKey: string,
+    sourceEndMessageId: string | null,
+  ) => Promise<void> | void;
   /**
    * Controls whether reasoning from an interrupted/recovered same-agent attempt
    * is included in the synthetic retry context. Defaults to the framework
-   * history policy: `{ include: "self", maxChars: 3000 }`.
+   * history policy: `{ include: "self", maxEstimatedTokens: 750 }`.
    */
   reasoningHistory?: {
     include?: "none" | "self" | "all";
-    maxChars?: number;
+    maxEstimatedTokens?: number;
   };
   /** Optional external signal for cancelling active provider work. */
   signal?: AbortSignal;
@@ -293,6 +325,7 @@ export interface ChatResponse {
 
 export interface LLMDebugSnapshot {
   inputMessages: ChatMessage[];
+  inputTokenEstimate?: ChatTokenEstimate;
   rawOutput: {
     /** Raw assistant content after continuation-prefix join, before parser cleanup. */
     content: string;

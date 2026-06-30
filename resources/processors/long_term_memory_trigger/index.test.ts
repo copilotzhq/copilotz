@@ -52,8 +52,8 @@ Deno.test("long-term-memory trigger reserves one pending checkpoint and outbox e
         kind: "long_term",
         enabled: true,
         config: {
-          triggerChars: 1,
-          maxContentChars: 10_000,
+          triggerEstimatedTokens: 1,
+          maxContentEstimatedTokens: 2_500,
           retrievalLimit: 5,
         },
       }],

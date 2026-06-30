@@ -422,13 +422,13 @@ export type ReasoningHistoryInclude = "none" | "self" | "all";
 
 /**
  * Controls whether persisted agent reasoning is included in future LLM-visible
- * history. Defaults to `{ include: "self", maxChars: 3000 }`.
+ * history. Defaults to `{ include: "self", maxEstimatedTokens: 750 }`.
  */
 export interface ReasoningHistoryOptions {
   /** Which persisted reasoning entries to include in future prompts. */
   include?: ReasoningHistoryInclude;
-  /** Max characters of reasoning text included per message. Set 0 to disable caps. */
-  maxChars?: number;
+  /** Max estimated reasoning tokens included per message. Set 0 to disable caps. */
+  maxEstimatedTokens?: number;
 }
 
 /**
@@ -767,15 +767,15 @@ export interface ChatContext {
    */
   toolExecutionTimeoutsMs?: Record<string, number | undefined>;
   /**
-   * Max characters of JSON-serialized tool `output` per result in LLM history
-   * (envelope included). Default **10_000** from `createCopilotz`; set **0** on
+   * Max estimated tokens of JSON-serialized tool `output` per result in LLM
+   * history (envelope included). Default **2_500** from `createCopilotz`; set **0** on
    * config to disable. Does not alter persisted messages — only history passed
    * to the model (before `historyTransform` / `formatMessages`).
    */
-  toolResultHistoryMaxChars?: number;
+  toolResultHistoryMaxEstimatedTokens?: number;
   /**
    * Controls whether persisted agent reasoning is included in future LLM-visible
-   * history. Defaults to `{ include: "self", maxChars: 3000 }`.
+   * history. Defaults to `{ include: "self", maxEstimatedTokens: 750 }`.
    */
   reasoningHistory?: ReasoningHistoryOptions;
   /** User metadata. */

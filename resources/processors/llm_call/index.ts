@@ -32,6 +32,11 @@ import { materializeAssetRefsForProvider } from "@/runtime/llm/asset-materializa
 import { filterToolCallTokensStreaming } from "@/runtime/llm/utils.ts";
 import { createLlmUsageService } from "@/runtime/collections/native.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
+import {
+  getRuntimeThreadMetadata,
+  getSerializableThreadMetadata,
+  setRuntimeThreadMetadata,
+} from "@/runtime/thread-metadata.ts";
 
 export type { ChatMessage };
 
@@ -829,12 +834,47 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     };
 
     let response: ChatResponse;
+    const runtimeMetadata = getRuntimeThreadMetadata(deps.thread?.metadata);
+    const historyCutoffs = runtimeMetadata.promptHistoryCutoffs &&
+        typeof runtimeMetadata.promptHistoryCutoffs === "object" &&
+        !Array.isArray(runtimeMetadata.promptHistoryCutoffs)
+      ? runtimeMetadata.promptHistoryCutoffs as Record<string, string>
+      : {};
+    const onHistoryCutoff = async (
+      profileKey: string,
+      sourceEndMessageId: string | null,
+    ) => {
+      const latestThread = await deps.db.ops.getThreadById(threadId);
+      const latestRuntime = getRuntimeThreadMetadata(latestThread?.metadata);
+      const current = latestRuntime.promptHistoryCutoffs &&
+          typeof latestRuntime.promptHistoryCutoffs === "object" &&
+          !Array.isArray(latestRuntime.promptHistoryCutoffs)
+        ? latestRuntime.promptHistoryCutoffs as Record<string, string>
+        : {};
+      const next = { ...current };
+      if (sourceEndMessageId) next[profileKey] = sourceEndMessageId;
+      else delete next[profileKey];
+      await deps.db.ops.updateThread(threadId, {
+        metadata: getSerializableThreadMetadata(
+          setRuntimeThreadMetadata(latestThread?.metadata, {
+            promptHistoryCutoffs: Object.keys(next).length > 0
+              ? next
+              : undefined,
+          }),
+        ),
+      });
+    };
     const chatPromise = chat(
       {
         messages: baseMessages,
         tools: payload.tools,
         extractTags: ["route_to", "ask_to", "think"],
         reasoningHistory: context.reasoningHistory,
+        historyCutoffs,
+        historyCutoffNamespace: String(
+          payload.agent.id ?? payload.agent.name,
+        ),
+        onHistoryCutoff,
         ...(materializeMessages ? { materializeMessages } : {}),
       } as ChatRequest,
       configForCall,

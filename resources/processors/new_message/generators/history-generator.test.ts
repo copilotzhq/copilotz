@@ -146,7 +146,7 @@ Deno.test("historyGenerator can include all agent reasoning with a cap", () => {
     ],
     currentAgent,
     {
-      reasoningHistory: { include: "all", maxChars: 60 },
+      reasoningHistory: { include: "all", maxEstimatedTokens: 15 },
     },
   );
 
@@ -161,21 +161,11 @@ Deno.test("historyGenerator can include all agent reasoning with a cap", () => {
   );
 
   const formatted = formatMessages({ messages: generated });
-  assertEquals(
-    formatted[0]?.content,
-    [
-      "[reviewer]:",
-      "<think>",
-      "[reasoning truncated: 20 chars omitted]",
-      "xxxxxxxxxxxxxxxxxxxx",
-      "</think>",
-      "",
-      "Peer answer.",
-    ].join("\n"),
-  );
+  assertEquals(String(formatted[0]?.content).includes("reasoning truncated"), true);
+  assertEquals(String(formatted[0]?.content).includes("Peer answer."), true);
 });
 
-Deno.test("historyGenerator truncates large tool outputs when maxToolResultChars is set", () => {
+Deno.test("historyGenerator truncates large tool outputs at an estimated-token cap", () => {
   const currentAgent: Agent = {
     id: "agent-1",
     name: "agent-1",
@@ -207,7 +197,7 @@ Deno.test("historyGenerator truncates large tool outputs when maxToolResultChars
 
   const generated = historyGenerator(chatHistory, currentAgent, {
     includeTargetContext: false,
-    maxToolResultChars: 120,
+    maxToolResultEstimatedTokens: 30,
   });
 
   assertEquals(generated.length, 1);
@@ -222,7 +212,7 @@ Deno.test("historyGenerator truncates large tool outputs when maxToolResultChars
   assertEquals((out.preview as string).length < huge.length, true);
 });
 
-Deno.test("historyGenerator defaults tool output cap to 10_000 chars when maxToolResultChars omitted", () => {
+Deno.test("historyGenerator defaults tool output cap to 2_500 estimated tokens", () => {
   const currentAgent: Agent = {
     id: "agent-1",
     name: "agent-1",

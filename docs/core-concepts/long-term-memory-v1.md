@@ -11,7 +11,7 @@ status: stable
 Copilotz periodically replaces old prompt history with one finalized,
 already-rendered `long_term_memory` node.
 
-When accumulated agent-visible characters cross a configured threshold, a
+When accumulated agent-visible estimated tokens cross a configured threshold, a
 lightweight observer reserves the next node with `status: "pending"`. Its normal
 graph outbox event, `long_term_memory.created`, invokes the bundled processor,
 which finalizes that same node from:
@@ -283,7 +283,7 @@ considers agent messages and:
 
 1. Stops immediately if another long-term-memory node is already pending.
 2. Loads the latest ready long-term memory.
-3. Reads subsequent messages and counts model-visible characters.
+3. Reads subsequent messages and estimates their model-visible tokens.
 4. Returns `void` when the threshold has not been reached.
 5. If the threshold is crossed, creates one pending `long_term_memory` node
    containing the closed source boundary.
@@ -398,9 +398,9 @@ const longTermMemory: MemoryResource = {
   kind: "long_term",
   enabled: true,
   config: {
-    triggerChars: 80_000,
-    retainRecentChars: 8_000,
-    maxContentChars: 48_000,
+    triggerEstimatedTokens: 20_000,
+    retainRecentEstimatedTokens: 2_000,
+    maxContentEstimatedTokens: 12_000,
     retrievalLimit: 20,
   },
 };
@@ -414,7 +414,7 @@ credentials, usage, and cost attribution.
 
 Embeddings reuse Copilotz's existing `embeddingConfig`.
 
-## Character threshold
+## Estimated-token threshold
 
 The observer counts the same text eligible for normal model history:
 
@@ -422,8 +422,10 @@ The observer counts the same text eligible for normal model history:
 - projected tool results allowed by history policy;
 - no private reasoning or hidden framework metadata.
 
-Characters are deterministic and cheap. The existing `limitEstimatedInputTokens`
-remains the final safety limit for the complete request.
+The same dependency-free estimator used by request limiting counts text,
+protocol structure, tool calls/results, and supported media metadata. Provider
+usage calibrates it per process. `limitEstimatedInputTokens` remains the final
+budget for the complete request.
 
 For the first checkpoint, the observer pages backward from the triggering
 message and stops once the threshold is reached. For later checkpoints,
@@ -431,7 +433,7 @@ message and stops once the threshold is reached. For later checkpoints,
 `sourceEndMessageId`; the complete delta is considered before the newest
 configured tail is retained as raw history.
 
-`retainRecentChars` keeps a newest complete-message tail outside the checkpoint.
+`retainRecentEstimatedTokens` keeps a newest complete-message tail outside the checkpoint.
 The observer moves `sourceEndMessageId` to immediately before that tail, so the
 normal conversation runtime continues to include it as hot history. Those
 messages remain part of the next checkpoint delta and are consolidated once they

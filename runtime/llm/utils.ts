@@ -13,6 +13,11 @@ import type {
   ToolDefinition,
   ToolInvocation,
 } from "@/runtime/llm/types.ts";
+import {
+  type ChatTokenEstimate,
+  estimateChatMessages,
+  estimateTextTokens,
+} from "@/runtime/tokens/index.ts";
 
 const TOOL_RESULTS_CONTINUATION_CUE =
   `<continue_after_tool_results>Continue your response based on the tool results above. Do not repeat earlier content. If no reply is needed, respond with <no_response/>.</continue_after_tool_results>`;
@@ -95,8 +100,6 @@ const REASONING_MARKUP_PATTERN =
   /<\/?(?:mm:)?(?:think|thought|thinking|reasoning)\b/i;
 const USER_FACING_PROTOCOL_MARKER_PATTERN =
   /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids|think|thought|thinking|reasoning|malformed_tool_call_recovery|visible_reasoning_markup_recovery|recovery_previous_response_context|recovery_required_action|recovery_tool_call_rules|recovery_problem)\b/i;
-
-const APPROX_CHARS_PER_TOKEN = 4;
 
 export type DegenerateRepetitionDetection = {
   startIndex: number;
@@ -235,9 +238,15 @@ function structuredStartTagSuffixOverlap(
 /**
  * Formats chat messages with instructions and applies estimated input limits.
  */
-export function formatMessages(
+export interface FormattedMessagesResult {
+  messages: ChatMessage[];
+  estimate: ChatTokenEstimate;
+  cutoffSourceMessageId?: string;
+}
+
+export function formatMessagesDetailed(
   { messages, instructions, config, tools }: ChatRequest,
-): ChatMessage[] {
+): FormattedMessagesResult {
   // Build system content with instructions and tool definitions
   let systemContent = instructions ||
     messages.filter((m) => m.role === "system").map((m) => m.content).join(
@@ -262,9 +271,8 @@ export function formatMessages(
     ...messages.filter((m) => m.role !== "system"),
   ];
 
-  const systemEstimatedTokens = systemContent
-    ? approximateTokenCount(systemContent)
-    : 0;
+  const systemEstimatedTokens = estimateChatMessages(systemMessage, config)
+    .estimatedTokens;
 
   // Materialize first so tool I/O is embedded in `content` (tool_results /
   // tool_calls blocks). The input limiter only inspects `content` (plus
@@ -273,6 +281,7 @@ export function formatMessages(
 
   // Apply estimated input budget if specified. We preserve the system prompt and
   // trim only the remaining history budget.
+  let cutoffSourceMessageId: string | undefined;
   if (config?.limitEstimatedInputTokens) {
     const historyLimit = config.limitEstimatedInputTokens -
       systemEstimatedTokens;
@@ -281,12 +290,15 @@ export function formatMessages(
       Math.floor(config.limitEstimatedInputTokens * 0.8) -
         systemEstimatedTokens,
     );
-    normalizedMessages = limitMessageEstimatedInputTokens(
+    const limited = limitMessageEstimatedInputTokens(
       normalizedMessages,
       historyLimit,
       formattedMessages,
       historyTarget,
+      config,
     );
+    normalizedMessages = limited.messages;
+    cutoffSourceMessageId = limited.cutoffSourceMessageId;
   }
 
   // Ensure system message is first if it exists
@@ -301,7 +313,16 @@ export function formatMessages(
   // alternates assistant/user turns (system messages stay separate).
   const mergedMessages = mergeConsecutiveMessages(normalizedMessages);
 
-  return appendContinuationCueIfNeeded(mergedMessages);
+  const finalMessages = appendContinuationCueIfNeeded(mergedMessages);
+  return {
+    messages: finalMessages,
+    estimate: estimateChatMessages(finalMessages, config),
+    ...(cutoffSourceMessageId ? { cutoffSourceMessageId } : {}),
+  };
+}
+
+export function formatMessages(request: ChatRequest): ChatMessage[] {
+  return formatMessagesDetailed(request).messages;
 }
 
 function isEmptyContent(content: ChatMessage["content"]): boolean {
@@ -350,7 +371,7 @@ export type WireToolFormat = "request" | "peer";
 
 export type ComposeWireContentInput = {
   reasoning?: string;
-  reasoningMaxChars?: number;
+  reasoningMaxEstimatedTokens?: number;
   noResponse?: boolean;
   visible?: string;
   routeTo?: string[];
@@ -398,74 +419,6 @@ function contentToText(content: ChatMessage["content"]): string {
     .filter((part) => part.type === "text")
     .map((part) => (part as Extract<ChatContentPart, { type: "text" }>).text)
     .join("");
-}
-
-function mediaEstimateLabel(
-  type: string,
-  value: string,
-  mime?: string,
-): string {
-  if (value.startsWith("data:")) {
-    const markerIndex = value.indexOf(";base64,");
-    const mimeFromDataUrl = markerIndex === -1
-      ? ""
-      : value.slice(5, markerIndex);
-    return `[${type}:${mime ?? (mimeFromDataUrl || "inline")}]`;
-  }
-  return value;
-}
-
-function inlineMediaEstimateLabel(type: string, mime?: string): string {
-  return `[${type}:${mime ?? "inline"}]`;
-}
-
-/**
- * Text used for rough input-token budgeting before sending to a provider.
- * Inline media is represented by a compact placeholder instead of raw base64:
- * provider APIs bill media by their own modality rules, and counting transport
- * base64 here can drop the entire newest multimodal message before it reaches
- * the LLM.
- *
- * Does not serialize `toolCalls`; use after {@link materializeHistoryMessage}
- * so tool I/O lives in `content` (e.g. &lt;tool_results&gt; blocks).
- */
-function wirePayloadTextForTokenEstimate(
-  content: ChatMessage["content"],
-): string {
-  if (typeof content === "string") return content;
-
-  const chunks: string[] = [];
-  for (const part of content) {
-    if (part.type === "text") {
-      chunks.push((part as Extract<ChatContentPart, { type: "text" }>).text);
-      continue;
-    }
-    if (part.type === "image_url" && part.image_url?.url) {
-      chunks.push(mediaEstimateLabel("image", part.image_url.url));
-      continue;
-    }
-    if (part.type === "input_audio" && part.input_audio?.data) {
-      chunks.push(
-        inlineMediaEstimateLabel(
-          "audio",
-          part.input_audio.format
-            ? `audio/${part.input_audio.format}`
-            : undefined,
-        ),
-      );
-      continue;
-    }
-    if (part.type === "file" && part.file?.file_data) {
-      chunks.push(
-        mediaEstimateLabel(
-          "file",
-          part.file.file_data,
-          part.file.mime_type,
-        ),
-      );
-    }
-  }
-  return chunks.join("\n");
 }
 
 function extractRoutingTargetsFromMetadata(
@@ -543,28 +496,35 @@ function hasNoResponseMarker(text: string): boolean {
 
 function truncateReasoningForWire(
   reasoning: string,
-  maxChars?: number,
+  maxEstimatedTokens?: number,
 ): string {
-  if (typeof maxChars !== "number" || maxChars === 0 || reasoning.length <= maxChars) {
+  if (
+    typeof maxEstimatedTokens !== "number" ||
+    maxEstimatedTokens === 0 ||
+    estimateTextTokens(reasoning) <= maxEstimatedTokens
+  ) {
     return reasoning;
   }
-  if (maxChars < 48) return "[reasoning truncated]";
-  const prefix = `[reasoning truncated: ${
-    reasoning.length - maxChars
-  } chars omitted]\n`;
-  if (maxChars <= prefix.length) return "[reasoning truncated]";
-  return `${prefix}${
-    reasoning.slice(-Math.max(0, maxChars - prefix.length))
-  }`;
+  if (maxEstimatedTokens < 12) return "[reasoning truncated]";
+  let suffixLength = Math.max(0, maxEstimatedTokens * 4 - 96);
+  while (suffixLength > 0) {
+    const omitted = Math.max(0, reasoning.length - suffixLength);
+    const candidate = `[reasoning truncated: ${omitted} chars omitted]\n${
+      reasoning.slice(-suffixLength)
+    }`;
+    if (estimateTextTokens(candidate) <= maxEstimatedTokens) return candidate;
+    suffixLength = Math.floor(suffixLength * 0.88);
+  }
+  return "[reasoning truncated]";
 }
 
 export function buildRedactedThinkingBlock(
   reasoning: string,
-  maxChars?: number,
+  maxEstimatedTokens?: number,
 ): string {
   const trimmed = reasoning.trim();
   if (!trimmed) return "";
-  const capped = truncateReasoningForWire(trimmed, maxChars);
+  const capped = truncateReasoningForWire(trimmed, maxEstimatedTokens);
   return `<think>\n${capped}\n</think>`;
 }
 
@@ -607,9 +567,14 @@ function readPeerToolVisibility(
 export function composeWireContent(input: ComposeWireContentInput): string {
   const parts: string[] = [];
 
-  if (typeof input.reasoning === "string" && input.reasoning.trim().length > 0) {
+  if (
+    typeof input.reasoning === "string" && input.reasoning.trim().length > 0
+  ) {
     parts.push(
-      buildRedactedThinkingBlock(input.reasoning, input.reasoningMaxChars),
+      buildRedactedThinkingBlock(
+        input.reasoning,
+        input.reasoningMaxEstimatedTokens,
+      ),
     );
   }
 
@@ -685,9 +650,10 @@ function collectWireSegmentsFromMessage(
     reasoning: typeof message.reasoning === "string"
       ? message.reasoning
       : undefined,
-    reasoningMaxChars: typeof message.reasoningMaxChars === "number"
-      ? message.reasoningMaxChars
-      : undefined,
+    reasoningMaxEstimatedTokens:
+      typeof message.reasoningMaxEstimatedTokens === "number"
+        ? message.reasoningMaxEstimatedTokens
+        : undefined,
     noResponse: hasNoResponseMarker(rawText),
     visible: strippedVisible.length > 0 ? strippedVisible : undefined,
     routeTo,
@@ -738,7 +704,8 @@ function shouldMaterializeWireContent(message: ChatMessage): boolean {
       "string";
   if (speakerLabel) return true;
 
-  const toolCalls = Array.isArray(message.toolCalls) && message.toolCalls.length > 0;
+  const toolCalls = Array.isArray(message.toolCalls) &&
+    message.toolCalls.length > 0;
   const routing =
     extractRoutingTargetsFromMetadata(message.metadata, "routeTo").length > 0 ||
     extractRoutingTargetsFromMetadata(message.metadata, "askTo").length > 0;
@@ -817,7 +784,7 @@ function materializeWireContent(message: ChatMessage): ChatMessage {
         : undefined,
       toolCalls: undefined,
       reasoning: undefined,
-      reasoningMaxChars: undefined,
+      reasoningMaxEstimatedTokens: undefined,
       tool_call_id: undefined,
     };
   } catch {
@@ -862,7 +829,9 @@ function mergeConsecutiveMessages(messages: ChatMessage[]): ChatMessage[] {
         senderId: sameSender ? previous.senderId : undefined,
         metadata: sameSender ? previous.metadata : undefined,
         reasoning: sameSender ? previous.reasoning : undefined,
-        reasoningMaxChars: sameSender ? previous.reasoningMaxChars : undefined,
+        reasoningMaxEstimatedTokens: sameSender
+          ? previous.reasoningMaxEstimatedTokens
+          : undefined,
         tool_call_id: undefined,
         toolCalls: undefined,
       };
@@ -1024,9 +993,12 @@ function limitMessageEstimatedInputTokens(
   limitTokens: number,
   groupingMessages: ChatMessage[] = messages,
   targetTokens = limitTokens,
-): ChatMessage[] {
+  config: ProviderConfig = {},
+): { messages: ChatMessage[]; cutoffSourceMessageId?: string } {
   if (limitTokens <= 0) {
-    return messages.filter((message) => message.role === "system");
+    return {
+      messages: messages.filter((message) => message.role === "system"),
+    };
   }
 
   const systemMessages: ChatMessage[] = [];
@@ -1051,14 +1023,7 @@ function limitMessageEstimatedInputTokens(
     const messages = unit.filter((message) => Boolean(message.content));
     return {
       messages,
-      tokens: messages.reduce(
-        (sum, message) =>
-          sum +
-          approximateTokenCount(
-            wirePayloadTextForTokenEstimate(message.content),
-          ),
-        0,
-      ),
+      tokens: estimateChatMessages(messages, config).estimatedTokens,
     };
   }).filter((unit) => unit.messages.length > 0);
   const measuredTotal = measuredUnits.reduce(
@@ -1066,36 +1031,58 @@ function limitMessageEstimatedInputTokens(
     0,
   );
   if (measuredTotal <= limitTokens) {
-    return [...systemMessages, ...measuredUnits.flatMap((unit) => unit.messages)];
+    return {
+      messages: [
+        ...systemMessages,
+        ...measuredUnits.flatMap((unit) => unit.messages),
+      ],
+    };
   }
 
   const keptUnits: ChatMessage[][] = [];
   let retainedTokens = 0;
+  let firstKeptIndex = measuredUnits.length;
   for (let index = measuredUnits.length - 1; index >= 0; index--) {
     const unit = measuredUnits[index];
     if (retainedTokens + unit.tokens <= targetTokens) {
       keptUnits.unshift(unit.messages);
       retainedTokens += unit.tokens;
+      firstKeptIndex = index;
     } else {
       // Never split a conversation/tool-cycle unit. Preserve an oversized
       // newest unit so callers can handle the over-budget request explicitly.
-      if (keptUnits.length === 0) keptUnits.unshift(unit.messages);
+      if (keptUnits.length === 0) {
+        keptUnits.unshift(unit.messages);
+        firstKeptIndex = index;
+      }
       break;
     }
   }
-  return [...systemMessages, ...keptUnits.flat()];
+  const dropped = measuredUnits.slice(0, firstKeptIndex).flatMap((unit) =>
+    unit.messages
+  );
+  const cutoffSourceMessageId = dropped.toReversed().flatMap((message) => {
+    const value = message.metadata?.sourceMessageId;
+    return typeof value === "string" ? [value] : [];
+  })[0];
+  return {
+    messages: [...systemMessages, ...keptUnits.flat()],
+    ...(cutoffSourceMessageId ? { cutoffSourceMessageId } : {}),
+  };
 }
 
 /**
- * Counts tokens in messages and response using a lightweight character-based approximation.
+ * Counts tokens in messages and response using the shared lightweight estimator.
  */
 export async function countTokens(
   messages: ChatMessage[],
   response: string,
+  config: ProviderConfig = {},
 ): Promise<number> {
-  const totalText = messages.map((m) => contentToText(m.content)).join(" ") +
-    response;
-  return approximateTokenCount(totalText);
+  return estimateChatMessages([
+    ...messages,
+    { role: "assistant", content: response },
+  ], config).estimatedTokens;
 }
 
 export async function estimateUsage(
@@ -1103,26 +1090,21 @@ export async function estimateUsage(
   response: string,
   status: TokenUsage["status"],
   metadata?: Pick<TokenUsage, "statusReason" | "stopSequence">,
+  config: ProviderConfig = {},
 ): Promise<TokenUsage> {
-  const inputText = messages.map((m) => contentToText(m.content)).join(" ");
-  const outputText = response;
-  const totalText = inputText + outputText;
+  const inputTokens = estimateChatMessages(messages, config).estimatedTokens;
+  const outputTokens = estimateTextTokens(response);
 
   return {
-    inputTokens: approximateTokenCount(inputText),
-    outputTokens: approximateTokenCount(outputText),
-    totalTokens: approximateTokenCount(totalText),
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
     source: "estimated",
     status,
     ...(metadata?.statusReason ? { statusReason: metadata.statusReason } : {}),
     ...(metadata?.stopSequence ? { stopSequence: metadata.stopSequence } : {}),
     rawUsage: null,
   };
-}
-
-function approximateTokenCount(text: string): number {
-  if (!text) return 0;
-  return Math.ceil(text.length / APPROX_CHARS_PER_TOKEN);
 }
 
 function tokenizeRepetitionTail(
@@ -1991,7 +1973,10 @@ export function buildToolCallsBlock(
     } catch {
       args = call.args;
     }
-    const obj: Record<string, unknown> = { name: call.tool.id, arguments: args };
+    const obj: Record<string, unknown> = {
+      name: call.tool.id,
+      arguments: args,
+    };
     if (call.id) obj.tool_call_id = call.id;
     return [JSON.stringify(obj)];
   });

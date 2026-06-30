@@ -106,8 +106,8 @@ Deno.test("new_message injects ready memory and keeps only messages after its bo
         kind: "long_term",
         enabled: true,
         config: {
-          triggerChars: 80_000,
-          maxContentChars: 48_000,
+          triggerEstimatedTokens: 20_000,
+          maxContentEstimatedTokens: 12_000,
           retrievalLimit: 20,
         },
       }],

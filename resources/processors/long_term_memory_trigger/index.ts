@@ -93,9 +93,10 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
         threadId,
         triggerMessageId,
         previous,
-        triggerChars: config.triggerChars,
-        retainRecentChars: config.retainRecentChars,
-        maxToolResultChars: deps.context.toolResultHistoryMaxChars,
+        triggerEstimatedTokens: config.triggerEstimatedTokens,
+        retainRecentEstimatedTokens: config.retainRecentEstimatedTokens,
+        maxToolResultEstimatedTokens:
+          deps.context.toolResultHistoryMaxEstimatedTokens,
       });
       if (!range) return;
 
@@ -177,8 +178,8 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
           sourceStartMessageId: range.sourceStartMessageId,
           sourceEndMessageId: range.sourceEndMessageId,
           metadata: {
-            characterCount: range.characterCount,
-            retainedCharacterCount: range.retainedCharacterCount,
+            estimatedTokens: range.estimatedTokens,
+            retainedEstimatedTokens: range.retainedEstimatedTokens,
             retainedMessageCount: range.retainedMessageCount,
           },
         },

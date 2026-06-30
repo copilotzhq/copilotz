@@ -51,7 +51,7 @@ stable agent context
 + recent raw messages after that checkpoint
 ```
 
-When recent visible history reaches `triggerChars`, Copilotz reserves a
+When recent visible history reaches `triggerEstimatedTokens`, Copilotz reserves a
 checkpoint for a dedicated non-blocking memory queue. While it is pending, the
 existing raw history remains available until the checkpoint is ready. The
 checkpoint retains a configured newest-message tail and consolidates the older
@@ -140,12 +140,14 @@ agent instructions and tool definitions
 ```
 
 `limitEstimatedInputTokens` is the final estimated request budget. It preserves
-the system context and trims older raw history from the remaining budget.
+the system context and trims older raw history only at complete message/tool
+cycle boundaries. The boundary is persisted per thread, agent, provider, and
+model so sequential prompts retain a stable cacheable prefix.
 
 Memory-specific settings determine what each source contributes. For example:
 
-- `maxContentChars` bounds the long-term checkpoint;
-- `retainRecentChars` controls the raw tail after rollover;
+- `maxContentEstimatedTokens` bounds the long-term checkpoint;
+- `retainRecentEstimatedTokens` controls the raw tail after rollover;
 - RAG retrieval limits bound document chunks;
 - asset references keep binary content out of text history.
 

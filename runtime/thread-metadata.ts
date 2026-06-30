@@ -14,6 +14,7 @@ export interface RuntimeThreadMetadata {
   agentTurnCount?: number;
   maxAgentTurns?: number;
   pendingToolBatches?: Record<string, unknown>;
+  promptHistoryCutoffs?: Record<string, string>;
   [key: string]: unknown;
 }
 

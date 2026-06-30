@@ -7,6 +7,7 @@ import {
   selectLongTermMemoryRange,
   sliceMessagesAfterLongTermMemory,
 } from "./long-term.ts";
+import { estimateTextTokens } from "@/runtime/tokens/index.ts";
 
 async function createThreadMessages() {
   const db = await createDatabase({ url: ":memory:" });
@@ -38,13 +39,13 @@ async function createThreadMessages() {
 Deno.test("first long-term-memory range scans only the recent threshold suffix", async () => {
   const { db, threadId, messages } = await createThreadMessages();
   const last = messages.at(-1)!;
-  const projectedLast = projectMessageForSharedMemory(last).length;
+  const projectedLast = estimateTextTokens(projectMessageForSharedMemory(last));
   const range = await selectLongTermMemoryRange({
     db,
     threadId,
     triggerMessageId: last.id,
     previous: null,
-    triggerChars: projectedLast + 1,
+    triggerEstimatedTokens: projectedLast + 1,
     pageSize: 2,
   });
 
@@ -87,7 +88,7 @@ Deno.test("later long-term-memory ranges preserve the complete prior-boundary de
     threadId,
     triggerMessageId: messages[4].id,
     previous,
-    triggerChars: 1,
+    triggerEstimatedTokens: 1,
     pageSize: 2,
   });
 
@@ -107,18 +108,21 @@ Deno.test("later long-term-memory ranges preserve the complete prior-boundary de
 Deno.test("long-term-memory range retains a complete recent-message tail", async () => {
   const { db, namespace, threadId, messages } = await createThreadMessages();
   const selected = messages.slice(-3);
-  const triggerChars = selected.reduce(
-    (total, message) => total + projectMessageForSharedMemory(message).length,
+  const triggerEstimatedTokens = selected.reduce(
+    (total, message) =>
+      total + estimateTextTokens(projectMessageForSharedMemory(message)),
     0,
   );
-  const retainedChars = projectMessageForSharedMemory(messages.at(-1)!).length;
+  const retainedEstimatedTokens = estimateTextTokens(
+    projectMessageForSharedMemory(messages.at(-1)!),
+  );
   const range = await selectLongTermMemoryRange({
     db,
     threadId,
     triggerMessageId: messages.at(-1)!.id,
     previous: null,
-    triggerChars,
-    retainRecentChars: retainedChars,
+    triggerEstimatedTokens,
+    retainRecentEstimatedTokens: retainedEstimatedTokens,
     pageSize: 2,
   });
 
@@ -128,7 +132,7 @@ Deno.test("long-term-memory range retains a complete recent-message tail", async
   );
   assertEquals(range?.sourceEndMessageId, selected.at(-2)?.id);
   assertEquals(range?.retainedMessageCount, 1);
-  assertEquals(range?.retainedCharacterCount, retainedChars);
+  assertEquals(range?.retainedEstimatedTokens, retainedEstimatedTokens);
 
   const ready = {
     node: {

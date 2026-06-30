@@ -1,52 +1,58 @@
 /**
  * Embedding Connector
- * 
+ *
  * Unified interface for generating vector embeddings across providers.
  * Follows the same pattern as the LLM connector.
  */
 
-import type { 
-  EmbeddingConfig, 
-  EmbeddingResponse,
+import type {
+  EmbeddingConfig,
   EmbeddingProviderFactory,
   EmbeddingProviderRegistry,
+  EmbeddingResponse,
 } from "@/runtime/embeddings/types.ts";
 import { post, type RequestResponse } from "@/runtime/http.ts";
+import { estimateTextTokens } from "@/runtime/tokens/index.ts";
 
 export const DEFAULT_EMBEDDING_MAX_INPUT_TOKENS = 7_500;
-export const EMBEDDING_ESTIMATED_CHARS_PER_TOKEN = 2;
 
-export type { 
-  EmbeddingConfig, 
-  EmbeddingRequest, 
-  EmbeddingResponse,
-  EmbeddingProviderName,
+export type {
+  EmbeddingConfig,
   EmbeddingProviderAPI,
   EmbeddingProviderFactory,
+  EmbeddingProviderName,
+  EmbeddingRequest,
+  EmbeddingResponse,
 } from "@/runtime/embeddings/types.ts";
 
-export { 
-  getEmbeddingProvider, 
+export {
   getAvailableEmbeddingProviders,
-  isEmbeddingProviderAvailable,
+  getEmbeddingProvider,
   getEmbeddingProviderDefaults,
+  isEmbeddingProviderAvailable,
 } from "@/runtime/embeddings/registry.ts";
 
 let defaultEmbeddingRegistryPromise:
-  Promise<typeof import("@/runtime/embeddings/registry.ts")> | undefined;
+  | Promise<typeof import("@/runtime/embeddings/registry.ts")>
+  | undefined;
 
 async function getEmbeddingRegistryModule(
   registry?: EmbeddingProviderRegistry,
 ): Promise<{
   registry: EmbeddingProviderRegistry;
-  defaults: Record<string, { model: string; dimensions: number; apiKeyEnv: string }>;
+  defaults: Record<
+    string,
+    { model: string; dimensions: number; apiKeyEnv: string }
+  >;
 }> {
   if (registry) {
     const mod = await import("@/runtime/embeddings/registry.ts");
     return { registry, defaults: mod.getEmbeddingProviderDefaults() };
   }
   if (!defaultEmbeddingRegistryPromise) {
-    defaultEmbeddingRegistryPromise = import("@/runtime/embeddings/registry.ts");
+    defaultEmbeddingRegistryPromise = import(
+      "@/runtime/embeddings/registry.ts"
+    );
   }
   const mod = await defaultEmbeddingRegistryPromise;
   return {
@@ -76,40 +82,30 @@ function getEnvVar(key: string): string | undefined {
 
 /**
  * Truncate text to fit within token limit.
- * Uses very conservative approximation of 2.5 characters per token to safely
- * handle code, URLs, punctuation, and other short tokens.
- * 
- * Examples:
- * - 7500 tokens × 2.5 = 18,750 chars → ~7,500 tokens (safe)
- * - Worst case (2 chars/token): 18,750 ÷ 2 = 9,375 tokens (still exceeds 8192)
- * - Need even more conservative: 2 chars/token
+ * Uses the shared lightweight estimator and binary search, without a tokenizer
+ * dependency.
  */
 function truncateToTokenLimit(text: string, maxTokens: number): string {
-  const maxChars = getEmbeddingMaxInputChars(maxTokens);
-  if (text.length <= maxChars) {
-    return text;
+  if (estimateTextTokens(text) <= maxTokens) return text;
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const midpoint = Math.ceil((low + high) / 2);
+    const candidate = `${text.slice(0, midpoint)}...`;
+    if (estimateTextTokens(candidate) <= maxTokens) low = midpoint;
+    else high = midpoint - 1;
   }
-  // Truncate and add ellipsis to indicate truncation
-  return text.slice(0, maxChars - 3) + "...";
-}
-
-export function getEmbeddingMaxInputChars(
-  maxInputTokens = DEFAULT_EMBEDDING_MAX_INPUT_TOKENS,
-): number {
-  const tokens = Number.isFinite(maxInputTokens) && maxInputTokens > 0
-    ? Math.floor(maxInputTokens)
-    : DEFAULT_EMBEDDING_MAX_INPUT_TOKENS;
-  return tokens * EMBEDDING_ESTIMATED_CHARS_PER_TOKEN;
+  return `${text.slice(0, low)}...`;
 }
 
 /**
  * Generate embeddings for an array of texts
- * 
+ *
  * @param texts - Array of text strings to embed
  * @param config - Embedding configuration
  * @param env - Optional environment variables for API keys
  * @returns Embedding response with vectors
- * 
+ *
  * @example
  * ```typescript
  * const response = await embed(
@@ -136,20 +132,23 @@ export async function embed(
   // Truncate texts to fit within token limit (default 7500 tokens, safe buffer for 8192 limit)
   const maxInputTokens = config.maxInputTokens ??
     DEFAULT_EMBEDDING_MAX_INPUT_TOKENS;
-  const truncatedTexts = texts.map(text => truncateToTokenLimit(text, maxInputTokens));
+  const truncatedTexts = texts.map((text) =>
+    truncateToTokenLimit(text, maxInputTokens)
+  );
 
   const provider = config.provider;
-  const { registry, defaults: defaultConfigMap } = await getEmbeddingRegistryModule(
-    providerRegistry,
-  );
+  const { registry, defaults: defaultConfigMap } =
+    await getEmbeddingRegistryModule(
+      providerRegistry,
+    );
   const defaults = defaultConfigMap[provider];
 
   // Merge configuration with defaults and environment
   const mergedConfig: EmbeddingConfig = {
     ...config,
     model: config.model || defaults?.model || "text-embedding-3-small",
-    apiKey: config.apiKey || 
-      env[defaults?.apiKeyEnv ?? ""] || 
+    apiKey: config.apiKey ||
+      env[defaults?.apiKeyEnv ?? ""] ||
       getEnvVar(defaults?.apiKeyEnv ?? "") ||
       env.OPENAI_API_KEY ||
       getEnvVar("OPENAI_API_KEY"),
@@ -157,7 +156,9 @@ export async function embed(
   };
 
   // Get provider API
-  const providerFactory = registry[provider] as EmbeddingProviderFactory | undefined;
+  const providerFactory = registry[provider] as
+    | EmbeddingProviderFactory
+    | undefined;
   if (!providerFactory) {
     throw new Error(
       `Embedding provider '${provider}' is not supported. Available providers: ${
@@ -182,7 +183,7 @@ export async function embed(
       providerAPI.body(batch, mergedConfig),
       {
         headers: providerAPI.headers(mergedConfig),
-      }
+      },
     ) as RequestResponse;
 
     // Extract embeddings from response
@@ -206,16 +207,18 @@ export async function embed(
     embeddings: allEmbeddings,
     model: mergedConfig.model,
     dimensions,
-    usage: totalPromptTokens > 0 ? {
-      promptTokens: totalPromptTokens,
-      totalTokens: totalTokens,
-    } : undefined,
+    usage: totalPromptTokens > 0
+      ? {
+        promptTokens: totalPromptTokens,
+        totalTokens: totalTokens,
+      }
+      : undefined,
   };
 }
 
 /**
  * Generate a single embedding for a text string
- * 
+ *
  * @param text - Text string to embed
  * @param config - Embedding configuration
  * @param env - Optional environment variables

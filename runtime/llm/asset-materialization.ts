@@ -411,7 +411,18 @@ export async function materializeAssetRefsForProvider(
 
     const parts: ChatContentPart[] = [];
     for (const part of message.content) {
-      parts.push(...await materializePart(part, support, store));
+      const materialized = await materializePart(part, support, store);
+      parts.push(...materialized.map((candidate): ChatContentPart => {
+        if (
+          part.type !== "text" &&
+          part.tokenMetadata &&
+          candidate.type !== "text" &&
+          !candidate.tokenMetadata
+        ) {
+          return { ...candidate, tokenMetadata: part.tokenMetadata };
+        }
+        return candidate;
+      }));
     }
 
     out.push({

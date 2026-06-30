@@ -1,16 +1,16 @@
 import type { MemoryResource, RagConfig } from "@/types/index.ts";
 
 export interface LongTermMemoryConfig {
-  triggerChars: number;
-  retainRecentChars: number;
-  maxContentChars: number;
+  triggerEstimatedTokens: number;
+  retainRecentEstimatedTokens: number;
+  maxContentEstimatedTokens: number;
   retrievalLimit: number;
 }
 
 export const DEFAULT_LONG_TERM_MEMORY_CONFIG: LongTermMemoryConfig = {
-  triggerChars: 80_000,
-  retainRecentChars: 0,
-  maxContentChars: 48_000,
+  triggerEstimatedTokens: 20_000,
+  retainRecentEstimatedTokens: 0,
+  maxContentEstimatedTokens: 12_000,
   retrievalLimit: 20,
 };
 
@@ -88,17 +88,17 @@ export function getLongTermMemoryConfig(
   if (!resource) return null;
   const config = resource.config ?? {};
   return {
-    triggerChars: positiveInteger(
-      config.triggerChars,
-      DEFAULT_LONG_TERM_MEMORY_CONFIG.triggerChars,
+    triggerEstimatedTokens: positiveInteger(
+      config.triggerEstimatedTokens,
+      DEFAULT_LONG_TERM_MEMORY_CONFIG.triggerEstimatedTokens,
     ),
-    retainRecentChars: nonNegativeInteger(
-      config.retainRecentChars,
-      DEFAULT_LONG_TERM_MEMORY_CONFIG.retainRecentChars,
+    retainRecentEstimatedTokens: nonNegativeInteger(
+      config.retainRecentEstimatedTokens,
+      DEFAULT_LONG_TERM_MEMORY_CONFIG.retainRecentEstimatedTokens,
     ),
-    maxContentChars: positiveInteger(
-      config.maxContentChars,
-      DEFAULT_LONG_TERM_MEMORY_CONFIG.maxContentChars,
+    maxContentEstimatedTokens: positiveInteger(
+      config.maxContentEstimatedTokens,
+      DEFAULT_LONG_TERM_MEMORY_CONFIG.maxContentEstimatedTokens,
     ),
     retrievalLimit: positiveInteger(
       config.retrievalLimit,

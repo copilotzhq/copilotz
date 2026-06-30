@@ -2,15 +2,9 @@
  * Text Chunker Utility
  *
  * Splits text into chunks for embedding and retrieval.
- * Uses lightweight token approximation for sizing decisions.
+ * Uses the shared lightweight token estimator for sizing decisions.
  */
-
-/**
- * Token counting using character-based approximation.
- * OpenAI's cl100k_base tokenizer averages ~4 characters per token for English.
- * This is a lightweight approximation that avoids bundling large BPE tables.
- */
-const CHARS_PER_TOKEN = 4;
+import { estimateTextTokens } from "@/runtime/tokens/index.ts";
 
 export interface ChunkMetadata {
   chunkIndex: number;
@@ -36,18 +30,19 @@ export interface ChunkerOptions {
 }
 
 /**
- * Count tokens in a text string using character-based approximation.
- * Uses ~4 characters per token which is typical for English text.
+ * Count tokens in a text string using the shared universal estimator.
  */
 export function countTokens(text: string): number {
-  if (!text) return 0;
-  return Math.ceil(text.length / CHARS_PER_TOKEN);
+  return estimateTextTokens(text);
 }
 
 /**
  * Split text into chunks based on token count
  */
-export function chunkText(text: string, options: ChunkerOptions = {}): TextChunk[] {
+export function chunkText(
+  text: string,
+  options: ChunkerOptions = {},
+): TextChunk[] {
   const {
     chunkSize = 512,
     chunkOverlap = 50,
@@ -78,10 +73,10 @@ function chunkByTokens(
   chunkOverlap: number,
 ): TextChunk[] {
   const chunks: TextChunk[] = [];
-  
+
   // Split by whitespace while preserving position
   const words = text.split(/(\s+)/);
-  
+
   let currentChunk = "";
   let currentTokenCount = 0;
   let chunkStartPos = 0;
@@ -91,8 +86,11 @@ function chunkByTokens(
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
     const wordTokens = countTokens(word);
-    
-    if (currentTokenCount + wordTokens > chunkSize && currentChunk.trim().length > 0) {
+
+    if (
+      currentTokenCount + wordTokens > chunkSize &&
+      currentChunk.trim().length > 0
+    ) {
       // Save current chunk
       chunks.push({
         content: currentChunk.trim(),
@@ -153,25 +151,25 @@ function findOverlapStart(
 
   const lastChunk = chunks[chunks.length - 1];
   const words = lastChunk.content.split(/(\s+)/);
-  
+
   let overlapText = "";
   let tokenCount = 0;
-  
+
   // Work backwards from the end of the last chunk
   for (let i = words.length - 1; i >= 0; i--) {
     const word = words[i];
     const wordTokens = countTokens(word);
-    
+
     if (tokenCount + wordTokens > overlapTokens) {
       break;
     }
-    
+
     overlapText = word + overlapText;
     tokenCount += wordTokens;
   }
 
   const overlapStartPos = lastChunk.metadata.endPosition - overlapText.length;
-  
+
   return {
     text: overlapText,
     tokens: tokenCount,
@@ -189,7 +187,7 @@ function chunkByParagraph(
 ): TextChunk[] {
   const paragraphs = text.split(/\n\s*\n/);
   const chunks: TextChunk[] = [];
-  
+
   let currentChunk = "";
   let currentTokenCount = 0;
   let chunkStartPos = 0;
@@ -291,7 +289,7 @@ function chunkBySentence(
   // Simple sentence splitting - matches ., !, ? followed by space or end
   const sentences = text.match(/[^.!?]*[.!?]+[\s]*/g) || [text];
   const chunks: TextChunk[] = [];
-  
+
   let currentChunk = "";
   let currentTokenCount = 0;
   let chunkStartPos = 0;

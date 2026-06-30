@@ -33,17 +33,22 @@ function assertEquals<T>(actual: T, expected: T, label: string): void {
 
 // ─── live mode detection ──────────────────────────────────────────────────────
 
-const OPENAI_KEY = Deno.env.get("OPENAI_KEY") || Deno.env.get("OPENAI_API_KEY") ||
+const OPENAI_KEY = Deno.env.get("OPENAI_KEY") ||
+  Deno.env.get("OPENAI_API_KEY") ||
   Deno.env.get("DEFAULT_OPENAI_KEY") || Deno.env.get("LLM_API_KEY");
 const LIVE_MODE = Boolean(OPENAI_KEY);
 
 if (LIVE_MODE) {
   console.log("Running in LIVE mode with real OpenAI API.");
 } else {
-  console.log("Running in MOCK mode (no API key found). Pass --env to use real OpenAI.");
+  console.log(
+    "Running in MOCK mode (no API key found). Pass --env to use real OpenAI.",
+  );
 }
 
-const OPENAI_BASE = LIVE_MODE ? "https://api.openai.com" : "https://mock.openai.test";
+const OPENAI_BASE = LIVE_MODE
+  ? "https://api.openai.com"
+  : "https://mock.openai.test";
 const BASE = `${OPENAI_BASE}/v1`;
 const CHAT_URL = `${BASE}/chat/completions`;
 const EMBED_URL = `${BASE}/embeddings`;
@@ -224,8 +229,8 @@ const copilotz = await createCopilotz({
       enabled: true,
       config: {
         // Low threshold so a few messages trigger consolidation.
-        triggerChars: 200,
-        maxContentChars: 48_000,
+        triggerEstimatedTokens: 50,
+        maxContentEstimatedTokens: 12_000,
         retrievalLimit: 20,
       },
     },
@@ -298,7 +303,9 @@ async function waitForLongTermMemory(
     if (rows.rows.length > 0) return rows.rows[0];
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error(`Timed out waiting for long_term_memory with status=${status}`);
+  throw new Error(
+    `Timed out waiting for long_term_memory with status=${status}`,
+  );
 }
 
 // ─── example run ─────────────────────────────────────────────────────────────
@@ -314,7 +321,7 @@ try {
   const turn2 = await runTurn("How does the threshold work?", threadId);
   console.log(`Turn 2: ${turn2.answer}`);
 
-  // Turn 3 — should cross the triggerChars threshold (200 chars total of
+  // Turn 3 — should cross the estimated-token threshold (50 tokens total of
   // projected agent + user content). The trigger reserves a pending node and
   // the consolidation event is queued with lower priority than interactive work.
   const turn3 = await runTurn(

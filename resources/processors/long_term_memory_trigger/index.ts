@@ -3,11 +3,11 @@ import type { Event, EventProcessor, ProcessorDeps } from "@/types/index.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 import {
-  findMemorySpace,
   getLatestReadyLongTermMemory,
   getLongTermMemoryConfig,
   getNextLongTermMemorySequence,
   getPendingLongTermMemory,
+  resolveThreadMemorySpaces,
   selectLongTermMemoryRange,
 } from "@/runtime/memory/index.ts";
 
@@ -102,14 +102,14 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
       });
       if (!range) return;
 
-      let memorySpace = await findMemorySpace(
+      let memorySpaces = await resolveThreadMemorySpaces(
         deps.db,
         threadId,
         namespace,
       );
-      if (!memorySpace) {
+      if (!memorySpaces.some((space) => space.access === "read_write")) {
         const memorySpaceId = ulid();
-        const result = await deps.db.ops.mutate.graph.mutateMany({
+        await deps.db.ops.mutate.graph.mutateMany({
           createNodes: [{
             id: memorySpaceId,
             namespace,
@@ -117,9 +117,8 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
             name: `thread:${threadId}`,
             content: null,
             data: {
-              kind: "thread",
-              ownerNodeId: threadId,
-              threadId,
+              scopeType: "thread",
+              scopeId: threadId,
             },
             sourceType: "thread",
             sourceId: threadId,
@@ -127,7 +126,11 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
           createEdges: [{
             sourceNodeId: threadId,
             targetNodeId: memorySpaceId,
-            type: GRAPH_EDGE.OWNS_MEMORY_SPACE,
+            type: GRAPH_EDGE.USES_MEMORY_SPACE,
+            data: {
+              access: "read_write",
+              defaultWrite: true,
+            },
           }],
         }, {
           threadId,
@@ -135,11 +138,28 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
           traceId: typeof event.traceId === "string" ? event.traceId : null,
           causationId: typeof event.id === "string" ? event.id : null,
         });
-        memorySpace = result.createdNodes[0] ?? null;
-        if (!memorySpace) {
+        memorySpaces = await resolveThreadMemorySpaces(
+          deps.db,
+          threadId,
+          namespace,
+        );
+        if (!memorySpaces.some((space) => space.defaultWrite)) {
           throw new Error("Failed to create thread memory space.");
         }
       }
+      const readMemorySpaceIds = memorySpaces.map((space) =>
+        String(space.node.id)
+      );
+      const writeMemorySpaceIds = memorySpaces
+        .filter((space) => space.access === "read_write")
+        .map((space) => String(space.node.id));
+      const defaultWriteSpace = memorySpaces.find((space) =>
+        space.defaultWrite
+      );
+      if (!defaultWriteSpace) {
+        throw new Error("Thread has no default writable memory space.");
+      }
+      const defaultWriteMemorySpaceId = String(defaultWriteSpace.node.id);
 
       const sequence = await getNextLongTermMemorySequence(
         deps.db,
@@ -171,11 +191,13 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
         content: null,
         embedding: null,
         data: {
-          schemaVersion: "1",
+          schemaVersion: "2",
           strategy: "checkpointed_graph",
           status: "pending",
           threadId,
-          memorySpaceId: String(memorySpace.id),
+          readMemorySpaceIds,
+          writeMemorySpaceIds,
+          defaultWriteMemorySpaceId,
           sequence,
           agentId,
           sourceStartMessageId: range.sourceStartMessageId,

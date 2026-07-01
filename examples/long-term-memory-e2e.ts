@@ -366,8 +366,8 @@ try {
   );
   assertEquals(
     memoryData.schemaVersion,
-    "1",
-    "Expected schemaVersion to be 1",
+    "2",
+    "Expected schemaVersion to be 2",
   );
   assert(
     typeof memoryData.contentHash === "string" &&

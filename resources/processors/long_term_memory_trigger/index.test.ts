@@ -1,6 +1,7 @@
 import { assertEquals, assertExists } from "@std/assert";
 import { createDatabase } from "@/database/index.ts";
 import type { Event, ProcessorDeps } from "@/types/index.ts";
+import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 import { process, shouldProcess } from "./index.ts";
 
 Deno.test("long-term-memory trigger reserves one pending checkpoint and outbox event", async () => {
@@ -29,6 +30,20 @@ Deno.test("long-term-memory trigger reserves one pending checkpoint and outbox e
     senderType: "agent",
     content: "B".repeat(50),
   }, namespace);
+  const readableSpace = await db.ops.mutate.graph.createNode({
+    namespace,
+    type: "memory_space",
+    name: "Global read-only memory",
+    data: { scopeType: "global", scopeId: namespace },
+    sourceType: "global",
+    sourceId: namespace,
+  }, { threadId, namespace });
+  await db.ops.mutate.graph.createEdge({
+    sourceNodeId: threadId,
+    targetNodeId: String(readableSpace.id),
+    type: GRAPH_EDGE.USES_MEMORY_SPACE,
+    data: { access: "read" },
+  }, { threadId, namespace });
 
   const event = {
     id: `event-${suffix}`,
@@ -84,13 +99,28 @@ Deno.test("long-term-memory trigger reserves one pending checkpoint and outbox e
     (checkpoints[0].data as Record<string, unknown>).agentId,
     "agent",
   );
+  assertEquals(
+    (checkpoints[0].data as Record<string, unknown>).schemaVersion,
+    "2",
+  );
 
   const spaces = await db.ops.unsafeGraph.getNodesByNamespace(
     namespace,
     "memory_space",
   );
-  assertEquals(spaces.length, 1);
-  assertExists(spaces[0]);
+  assertEquals(spaces.length, 2);
+  const writableSpace = spaces.find((space) =>
+    (space.data as Record<string, unknown>).scopeType === "thread"
+  );
+  assertExists(writableSpace);
+  assertEquals(
+    (checkpoints[0].data as Record<string, unknown>).readMemorySpaceIds,
+    [writableSpace.id, readableSpace.id],
+  );
+  assertEquals(
+    (checkpoints[0].data as Record<string, unknown>).writeMemorySpaceIds,
+    [writableSpace.id],
+  );
 
   const lifecycle = await db.query<{
     eventType: string;

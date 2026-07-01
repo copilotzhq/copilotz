@@ -11,6 +11,10 @@ import type { DbInstance } from "./index.ts";
 import { migrations } from "./index.ts";
 import { splitSQLStatements } from "./migrations/utils.ts";
 import { AGENT_MEMORY_OWNERSHIP_MIGRATIONS } from "./migrations/migration_0013_agent_memory_ownership.ts";
+import {
+  MEMORY_SPACE_ACCESS_DATA_MIGRATIONS,
+  MEMORY_SPACE_ACCESS_INDEX_MIGRATIONS,
+} from "./migrations/migration_0014_memory_space_access.ts";
 
 /**
  * In-memory cache of schemas migrated by this process.
@@ -148,11 +152,13 @@ const REQUIRED_RUNTIME_INDEXES = [
 
 const REQUIRED_RUNTIME_DATA_MIGRATIONS = [
   AGENT_MEMORY_OWNERSHIP_MIGRATIONS[0],
+  ...MEMORY_SPACE_ACCESS_DATA_MIGRATIONS,
 ] as const;
 
-const REQUIRED_AGENT_MEMORY_INDEXES = AGENT_MEMORY_OWNERSHIP_MIGRATIONS.slice(
-  1,
-);
+const REQUIRED_AGENT_MEMORY_INDEXES = [
+  ...AGENT_MEMORY_OWNERSHIP_MIGRATIONS.slice(1),
+  ...MEMORY_SPACE_ACCESS_INDEX_MIGRATIONS,
+];
 
 const provisioningPromises = new Map<string, Promise<void>>();
 

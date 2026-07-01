@@ -27,16 +27,23 @@ export {
 } from "./resources.ts";
 export {
   findMemorySpace,
+  getCheckpointMemorySpaceIds,
   getLatestReadyLongTermMemory,
   getLongTermMemoryData,
   getNextLongTermMemorySequence,
   getPendingLongTermMemory,
+  isLongTermMemoryAccessible,
   loadMessagesInLongTermMemoryRange,
   type LongTermMemoryData,
+  type LongTermMemoryDataV1,
+  type LongTermMemoryDataV2,
   type LongTermMemoryRange,
   type LongTermMemoryRecord,
   type LongTermMemoryStatus,
+  type MemorySpaceAccessMode,
   projectMessageForSharedMemory,
+  resolveThreadMemorySpaces,
   selectLongTermMemoryRange,
   sliceMessagesAfterLongTermMemory,
+  type ThreadMemorySpaceAccess,
 } from "./long-term.ts";

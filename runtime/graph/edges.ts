@@ -30,6 +30,8 @@ export const GRAPH_EDGE = {
   DERIVED_FROM: "derived_from",
   FORKED_FROM: "forked_from",
   MENTIONS: "mentions",
+  USES_MEMORY_SPACE: "uses_memory_space",
+  /** @deprecated Use {@link GRAPH_EDGE.USES_MEMORY_SPACE}. */
   OWNS_MEMORY_SPACE: "owns_memory_space",
   HAS_MEMORY_ITEM: "has_memory_item",
   HAS_LONG_TERM_MEMORY: "has_long_term_memory",

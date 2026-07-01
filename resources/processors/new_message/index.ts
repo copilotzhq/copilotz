@@ -52,8 +52,10 @@ import {
   getLongTermMemoryConfig,
   getUserExternalId,
   historyGenerator,
+  isLongTermMemoryAccessible,
   type LLMContextData,
   resolveParticipantCollection,
+  resolveThreadMemorySpaces,
   sliceMessagesAfterLongTermMemory,
 } from "@/runtime/memory/index.ts";
 
@@ -1942,13 +1944,26 @@ export const messageProcessor: EventProcessor<
       const longTermMemoryConfig = getLongTermMemoryConfig(context.memory);
       const longTermMemoryNamespace = context.namespace ??
         (typeof thread.namespace === "string" ? thread.namespace : null);
-      const longTermMemory = longTermMemoryConfig && longTermMemoryNamespace
-        ? await getLatestReadyLongTermMemory(
-          deps.db,
-          threadId,
-          longTermMemoryNamespace,
-          agentId,
-        )
+      const candidateLongTermMemory =
+        longTermMemoryConfig && longTermMemoryNamespace
+          ? await getLatestReadyLongTermMemory(
+            deps.db,
+            threadId,
+            longTermMemoryNamespace,
+            agentId,
+          )
+          : null;
+      const longTermMemory = candidateLongTermMemory &&
+          longTermMemoryNamespace &&
+          isLongTermMemoryAccessible(
+            candidateLongTermMemory.data,
+            await resolveThreadMemorySpaces(
+              deps.db,
+              threadId,
+              longTermMemoryNamespace,
+            ),
+          )
+        ? candidateLongTermMemory
         : null;
       const recentChatHistory = sliceMessagesAfterLongTermMemory(
         ctx.chatHistory,

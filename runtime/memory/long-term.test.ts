@@ -2,12 +2,17 @@ import { assertEquals } from "@std/assert";
 import { createDatabase } from "@/database/index.ts";
 import type { Message } from "@/types/index.ts";
 import {
+  findMemorySpace,
+  isLongTermMemoryAccessible,
+  type LongTermMemoryData,
   type LongTermMemoryRecord,
   projectMessageForSharedMemory,
+  resolveThreadMemorySpaces,
   selectLongTermMemoryRange,
   sliceMessagesAfterLongTermMemory,
 } from "./long-term.ts";
 import { estimateTextTokens } from "@/runtime/tokens/index.ts";
+import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 async function createThreadMessages() {
   const db = await createDatabase({ url: ":memory:" });
@@ -201,4 +206,113 @@ Deno.test("shared-memory projection counts agent tool calls and arguments", () =
 
   assertEquals(projected.includes("[Tool call sandbox]"), true);
   assertEquals(projected.includes("deno test"), true);
+});
+
+Deno.test("thread memory spaces resolve one default writer and additional readable spaces", async () => {
+  const db = await createDatabase({ url: ":memory:" });
+  const suffix = crypto.randomUUID();
+  const namespace = `memory-space-access-${suffix}`;
+  const thread = await db.ops.mutate.threads.create(undefined, {
+    namespace,
+    name: "Memory space access",
+    participants: ["user", "agent"],
+    status: "active",
+    mode: "immediate",
+  });
+  const threadId = String(thread.id);
+  const writable = await db.ops.mutate.graph.createNode({
+    namespace,
+    type: "memory_space",
+    name: "Thread memory",
+    data: { scopeType: "thread", scopeId: threadId },
+    sourceType: "thread",
+    sourceId: threadId,
+  }, { threadId, namespace });
+  const readable = await db.ops.mutate.graph.createNode({
+    namespace,
+    type: "memory_space",
+    name: "Global memory",
+    data: { scopeType: "global", scopeId: namespace },
+    sourceType: "global",
+    sourceId: namespace,
+  }, { threadId, namespace });
+  await db.ops.mutate.graph.mutateMany({
+    createEdges: [{
+      sourceNodeId: threadId,
+      targetNodeId: String(writable.id),
+      type: GRAPH_EDGE.USES_MEMORY_SPACE,
+      data: { access: "read_write", defaultWrite: true },
+    }, {
+      sourceNodeId: threadId,
+      targetNodeId: String(readable.id),
+      type: GRAPH_EDGE.USES_MEMORY_SPACE,
+      data: { access: "read" },
+    }],
+  }, { threadId, namespace });
+
+  const spaces = await resolveThreadMemorySpaces(db, threadId, namespace);
+  assertEquals(
+    spaces.map((space) => ({
+      id: space.node.id,
+      access: space.access,
+      defaultWrite: space.defaultWrite,
+    })),
+    [{
+      id: writable.id,
+      access: "read_write",
+      defaultWrite: true,
+    }, {
+      id: readable.id,
+      access: "read",
+      defaultWrite: false,
+    }],
+  );
+  assertEquals(
+    (await findMemorySpace(db, threadId, namespace))?.id,
+    writable.id,
+  );
+  const checkpointData = {
+    schemaVersion: "2",
+    strategy: "checkpointed_graph",
+    status: "ready",
+    threadId,
+    readMemorySpaceIds: [String(writable.id), String(readable.id)],
+    writeMemorySpaceIds: [String(writable.id)],
+    defaultWriteMemorySpaceId: String(writable.id),
+    sequence: 1,
+    agentId: "agent",
+    sourceStartMessageId: "start",
+    sourceEndMessageId: "end",
+  } satisfies LongTermMemoryData;
+  assertEquals(isLongTermMemoryAccessible(checkpointData, spaces), true);
+  assertEquals(
+    isLongTermMemoryAccessible({
+      ...checkpointData,
+      readMemorySpaceIds: [...checkpointData.readMemorySpaceIds, "revoked"],
+    }, spaces),
+    false,
+  );
+
+  const secondThread = await db.ops.mutate.threads.create(undefined, {
+    namespace,
+    name: "Second memory-space consumer",
+    participants: ["user", "agent"],
+    status: "active",
+    mode: "immediate",
+  });
+  const secondThreadId = String(secondThread.id);
+  await db.ops.mutate.graph.createEdge({
+    sourceNodeId: secondThreadId,
+    targetNodeId: String(readable.id),
+    type: GRAPH_EDGE.USES_MEMORY_SPACE,
+    data: { access: "read_write", defaultWrite: true },
+  }, { threadId: secondThreadId, namespace });
+  const secondThreadSpaces = await resolveThreadMemorySpaces(
+    db,
+    secondThreadId,
+    namespace,
+  );
+  assertEquals(secondThreadSpaces.map((space) => space.node.id), [
+    readable.id,
+  ]);
 });

@@ -10,6 +10,7 @@ export default defineCollection({
       memorySpaceId: { type: "string" },
       checkpointId: { type: "string" },
       createdByAgentId: { type: "string" },
+      originThreadId: { type: "string" },
       kind: {
         type: "string",
         enum: [
@@ -33,6 +34,7 @@ export default defineCollection({
       "memorySpaceId",
       "checkpointId",
       "createdByAgentId",
+      "originThreadId",
       "kind",
       "name",
       "content",
@@ -43,6 +45,7 @@ export default defineCollection({
     "memorySpaceId",
     "checkpointId",
     "createdByAgentId",
+    "originThreadId",
     ["memorySpaceId", "createdByAgentId"],
     "kind",
   ],

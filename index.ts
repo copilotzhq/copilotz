@@ -85,6 +85,11 @@ export {
   setThreadTags,
   type ThreadTag,
 } from "@/runtime/thread-metadata.ts";
+export { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
+export {
+  findMemorySpace,
+  resolveThreadMemorySpaces,
+} from "@/runtime/memory/long-term.ts";
 import { bundledAgents, coreResources } from "@/resources/core.ts";
 import type {
   Agent,
@@ -253,8 +258,12 @@ export type {
 } from "@/types/index.ts";
 export type {
   LongTermMemoryData,
+  LongTermMemoryDataV1,
+  LongTermMemoryDataV2,
   LongTermMemoryRecord,
   LongTermMemoryStatus,
+  MemorySpaceAccessMode,
+  ThreadMemorySpaceAccess,
 } from "@/runtime/memory/long-term.ts";
 export type { LongTermMemoryConfig } from "@/runtime/memory/resources.ts";
 export type {

@@ -14,7 +14,10 @@ export default defineCollection({
         type: "string",
         enum: ["pending", "ready", "failed"],
       },
-      memorySpaceId: { type: "string" },
+      memorySpaceId: { type: ["string", "null"] },
+      readMemorySpaceIds: { type: "array", items: { type: "string" } },
+      writeMemorySpaceIds: { type: "array", items: { type: "string" } },
+      defaultWriteMemorySpaceId: { type: ["string", "null"] },
       sequence: { type: "number" },
       agentId: { type: "string" },
       sourceStartMessageId: { type: "string" },
@@ -31,7 +34,6 @@ export default defineCollection({
       "schemaVersion",
       "strategy",
       "status",
-      "memorySpaceId",
       "sequence",
       "agentId",
       "sourceStartMessageId",
@@ -41,15 +43,11 @@ export default defineCollection({
   indexes: [
     "threadId",
     "memorySpaceId",
+    "defaultWriteMemorySpaceId",
     ["threadId", "agentId", "status", "sequence"],
     ["memorySpaceId", "status", "sequence"],
   ],
   relations: {
-    memorySpace: relation.belongsTo(
-      "memory_space",
-      "memorySpaceId",
-      GRAPH_EDGE.HAS_LONG_TERM_MEMORY,
-    ),
     items: relation.hasMany(
       "memory_item",
       "checkpointId",

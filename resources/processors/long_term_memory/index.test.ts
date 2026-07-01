@@ -7,6 +7,7 @@ import { createDatabase } from "@/database/index.ts";
 import type { Event, ProcessorDeps } from "@/types/index.ts";
 import type { ProviderFactory } from "@/runtime/llm/types.ts";
 import type { EmbeddingProviderFactory } from "@/runtime/embeddings/types.ts";
+import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 import {
   averageNormalizedEmbeddings,
   chunkLinesForEmbedding,
@@ -114,6 +115,31 @@ Deno.test("consolidation may supersede only a visible checkpoint item", () => {
   assertEquals(parsed.items[1].supersedesItemId, undefined);
 });
 
+Deno.test("consolidation routes invalid memory-space targets to the default", () => {
+  const parsed = parseConsolidationProposal(
+    JSON.stringify({
+      workState: "Routing memory.",
+      items: [{
+        localId: "item",
+        kind: "fact",
+        name: "Routed fact",
+        content: "Use a validated writable target.",
+        sourceMessageIds: ["message-1"],
+        memorySpaceId: "not-attached",
+      }],
+      relations: [],
+    }),
+    new Set(["message-1"]),
+    new Set(),
+    {
+      writableMemorySpaceIds: new Set(["default-space", "shared-space"]),
+      defaultWriteMemorySpaceId: "default-space",
+    },
+  );
+
+  assertEquals(parsed.items[0].memorySpaceId, "default-space");
+});
+
 function mockRegistries(answer: string) {
   const chatRequests: Array<Record<string, unknown>> = [];
   const embeddingRequests: string[][] = [];
@@ -179,7 +205,11 @@ function mockRegistries(answer: string) {
 }
 
 async function createPendingCheckpoint(
-  options: { withPrevious?: boolean; withForeignItem?: boolean } = {},
+  options: {
+    withPrevious?: boolean;
+    withForeignItem?: boolean;
+    withSharedSpace?: boolean;
+  } = {},
 ) {
   const db = await createDatabase({ url: ":memory:" });
   const suffix = crypto.randomUUID();
@@ -210,10 +240,59 @@ async function createPendingCheckpoint(
     namespace,
     type: "memory_space",
     name: `thread:${threadId}`,
-    data: { kind: "thread", ownerNodeId: threadId, threadId },
+    data: { scopeType: "thread", scopeId: threadId },
     sourceType: "thread",
     sourceId: threadId,
   }, { threadId, namespace });
+  await db.ops.mutate.graph.createEdge({
+    sourceNodeId: threadId,
+    targetNodeId: String(memorySpace.id),
+    type: GRAPH_EDGE.USES_MEMORY_SPACE,
+    data: { access: "read_write", defaultWrite: true },
+  }, { threadId, namespace });
+  let sharedMemorySpaceId: string | null = null;
+  let sharedItemId: string | null = null;
+  if (options.withSharedSpace) {
+    const sharedSpace = await db.ops.mutate.graph.createNode({
+      namespace,
+      type: "memory_space",
+      name: "Shared user memory",
+      data: { scopeType: "user", scopeId: "user" },
+      sourceType: "user",
+      sourceId: "user",
+    }, { threadId, namespace });
+    sharedMemorySpaceId = String(sharedSpace.id);
+    await db.ops.mutate.graph.createEdge({
+      sourceNodeId: threadId,
+      targetNodeId: sharedMemorySpaceId,
+      type: GRAPH_EDGE.USES_MEMORY_SPACE,
+      data: { access: "read_write" },
+    }, { threadId, namespace });
+    sharedItemId = `shared-item-${suffix}`;
+    await db.ops.mutate.graph.createNode({
+      id: sharedItemId,
+      namespace,
+      type: "memory_item",
+      name: "Cross-thread preference",
+      content: "The user prefers memories shared across threads.",
+      embedding: Array.from(
+        { length: 1536 },
+        (_, index) => index === 0 ? 1 : 0,
+      ),
+      data: {
+        memorySpaceId: sharedMemorySpaceId,
+        checkpointId: `shared-checkpoint-${suffix}`,
+        createdByAgentId: "agent",
+        originThreadId: `other-thread-${suffix}`,
+        kind: "preference",
+        name: "Cross-thread preference",
+        content: "The user prefers memories shared across threads.",
+        sourceMessageIds: [],
+      },
+      sourceType: "long_term_memory",
+      sourceId: `shared-checkpoint-${suffix}`,
+    }, { threadId, namespace });
+  }
   let previousItemId: string | null = null;
   let foreignItemId: string | null = null;
   if (options.withPrevious) {
@@ -233,6 +312,7 @@ async function createPendingCheckpoint(
         memorySpaceId: String(memorySpace.id),
         checkpointId: previousCheckpointId,
         createdByAgentId: "agent",
+        originThreadId: threadId,
         kind: "decision",
         name: "Previous decision",
         content: "Use the previous approach.",
@@ -281,6 +361,7 @@ async function createPendingCheckpoint(
         memorySpaceId: String(memorySpace.id),
         checkpointId: `foreign-checkpoint-${suffix}`,
         createdByAgentId: "other-agent",
+        originThreadId: threadId,
         kind: "fact",
         name: "Other agent memory",
         content: "Only the other agent should recall this.",
@@ -297,11 +378,23 @@ async function createPendingCheckpoint(
     content: null,
     embedding: null,
     data: {
-      schemaVersion: "1",
+      schemaVersion: options.withSharedSpace ? "2" : "1",
       strategy: "checkpointed_graph",
       status: "pending",
       threadId,
-      memorySpaceId: String(memorySpace.id),
+      ...(options.withSharedSpace
+        ? {
+          readMemorySpaceIds: [
+            String(memorySpace.id),
+            sharedMemorySpaceId!,
+          ],
+          writeMemorySpaceIds: [
+            String(memorySpace.id),
+            sharedMemorySpaceId!,
+          ],
+          defaultWriteMemorySpaceId: String(memorySpace.id),
+        }
+        : { memorySpaceId: String(memorySpace.id) }),
       sequence: options.withPrevious ? 2 : 1,
       agentId: "agent",
       sourceStartMessageId: first.id,
@@ -320,6 +413,9 @@ async function createPendingCheckpoint(
     last,
     previousItemId,
     foreignItemId,
+    memorySpaceId: String(memorySpace.id),
+    sharedMemorySpaceId,
+    sharedItemId,
   };
 }
 
@@ -500,7 +596,7 @@ Deno.test("processor may supersede an item visible in the previous checkpoint", 
         string,
         unknown
       >;
-    assertEquals(metadata.retrievedItemIds, []);
+    assertEquals(metadata.retrievedItemIds, [fixture.previousItemId]);
   } finally {
     registries.restore();
   }
@@ -547,6 +643,61 @@ Deno.test("processor retrieves only memory items created by its agent", async ()
         >
       ).retrievedItemIds,
       [],
+    );
+  } finally {
+    registries.restore();
+  }
+});
+
+Deno.test("processor reads and writes across attached memory spaces", async () => {
+  const fixture = await createPendingCheckpoint({ withSharedSpace: true });
+  const proposal = {
+    workState: "The shared user memory is being updated.",
+    items: [{
+      localId: "shared-decision",
+      kind: "decision",
+      name: "Shared decision",
+      content: "Store this decision in the shared user memory.",
+      confidence: 0.95,
+      sourceMessageIds: [fixture.last.id],
+      memorySpaceId: fixture.sharedMemorySpaceId,
+    }],
+    relations: [],
+  };
+  const registries = mockRegistries(JSON.stringify(proposal));
+  try {
+    const event = {
+      id: `event-${crypto.randomUUID()}`,
+      type: "long_term_memory.created",
+      threadId: fixture.threadId,
+      subjectType: "long_term_memory",
+      subjectId: fixture.checkpoint.id,
+      payload: fixture.checkpoint,
+    } as unknown as Event;
+    await process(event, createDeps(fixture, registries));
+
+    const items = await fixture.db.ops.unsafeGraph.getNodesByNamespace(
+      fixture.namespace,
+      "memory_item",
+    );
+    const created = items.find((item) => item.name === "Shared decision");
+    const createdData = created?.data as Record<string, unknown>;
+    assertEquals(createdData.memorySpaceId, fixture.sharedMemorySpaceId);
+    assertEquals(createdData.originThreadId, fixture.threadId);
+
+    const checkpoint = await fixture.db.ops.unsafeGraph.getNodeById(
+      String(fixture.checkpoint.id),
+    );
+    assertStringIncludes(
+      checkpoint?.content ?? "",
+      "The user prefers memories shared across threads.",
+    );
+    const metadata = (checkpoint?.data as Record<string, unknown>)
+      .metadata as Record<string, unknown>;
+    assertEquals(metadata.retrievedItemIds, [fixture.sharedItemId]);
+    assertStringIncludes(
+      JSON.stringify(registries.chatRequests[0]?.messages),
+      String(fixture.sharedMemorySpaceId),
     );
   } finally {
     registries.restore();

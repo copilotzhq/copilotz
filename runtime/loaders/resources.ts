@@ -23,13 +23,11 @@ import {
   type IngressAdapter,
   mergeChannelEntries,
 } from "@/server/channels.ts";
-import type {
-  Event,
-  EventProcessor,
-  NewEvent,
-  NewUnknownEvent,
-  ProcessorDeps,
-} from "@/types/index.ts";
+import type { EventProcessor, ProcessorDeps } from "@/types/index.ts";
+import {
+  coerceProcessorProcess,
+  coerceProcessorShouldProcess,
+} from "@/runtime/processors/coerce.ts";
 import type { Skill } from "@/runtime/loaders/skill-types.ts";
 import { loadSkillsFromDirectory } from "@/runtime/loaders/skill-loader.ts";
 
@@ -366,66 +364,6 @@ async function* readDir(path: string) {
 
 // ---- Processor coercion helpers -------------------------------------------
 
-const asShouldProcess = (
-  fn: (event: unknown, deps?: unknown) => boolean | Promise<boolean>,
-): EventProcessor<unknown, ProcessorDeps>["shouldProcess"] => {
-  return async (event: Event, deps: ProcessorDeps): Promise<boolean> => {
-    try {
-      return Boolean(await fn(event, deps));
-    } catch {
-      return false;
-    }
-  };
-};
-
-const asProcess = (
-  fn: (event: unknown, deps?: unknown) => unknown | Promise<unknown>,
-): EventProcessor<unknown, ProcessorDeps>["process"] => {
-  return async (event: Event, deps: ProcessorDeps) => {
-    const result = await fn(event, deps);
-    if (result == null) return;
-    if (Array.isArray(result)) {
-      return { producedEvents: result as Array<NewEvent | NewUnknownEvent> };
-    }
-    if (
-      typeof result === "object" && result &&
-      "type" in (result as Record<string, unknown>) &&
-      "payload" in (result as Record<string, unknown>)
-    ) {
-      return { producedEvents: [result as NewEvent | NewUnknownEvent] };
-    }
-    if (
-      typeof result === "object" && result &&
-      "producedEvents" in (result as Record<string, unknown>)
-    ) {
-      const produced = (result as { producedEvents?: unknown }).producedEvents;
-      if (Array.isArray(produced)) {
-        return {
-          producedEvents: produced as Array<NewEvent | NewUnknownEvent>,
-        };
-      }
-      if (produced) {
-        return { producedEvents: [produced as NewEvent | NewUnknownEvent] };
-      }
-    }
-    if (
-      typeof result === "object" && result &&
-      "backgroundThreadIds" in (result as Record<string, unknown>)
-    ) {
-      const backgroundThreadIds =
-        (result as { backgroundThreadIds?: unknown }).backgroundThreadIds;
-      if (Array.isArray(backgroundThreadIds)) {
-        return {
-          backgroundThreadIds: backgroundThreadIds.filter(
-            (value): value is string => typeof value === "string",
-          ),
-        };
-      }
-    }
-    return;
-  };
-};
-
 // ---- Manifest loading -----------------------------------------------------
 
 async function tryLoadManifest(
@@ -556,13 +494,13 @@ async function loadProcessorsByManifest(
         ? mod.eventType
         : eventType;
       return {
-        shouldProcess: asShouldProcess(
+        shouldProcess: coerceProcessorShouldProcess(
           maybeShouldProcess as (
             event: unknown,
             deps?: unknown,
           ) => boolean | Promise<boolean>,
         ),
-        process: asProcess(
+        process: coerceProcessorProcess(
           maybeProcess as (
             event: unknown,
             deps?: unknown,
@@ -1386,8 +1324,8 @@ async function loadFromDirectory(
               });
 
               return discovered.map((d) => ({
-                shouldProcess: asShouldProcess(d.shouldProcess),
-                process: asProcess(d.process),
+                shouldProcess: coerceProcessorShouldProcess(d.shouldProcess),
+                process: coerceProcessorProcess(d.process),
                 eventType: normalizeProcessorEventType(
                   d.eventType ?? eventTypeKey,
                 ),

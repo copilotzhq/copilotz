@@ -1,15 +1,15 @@
 import type { KnowledgeNode } from "@/database/schemas/index.ts";
 import type { CopilotzDb, Message } from "@/types/index.ts";
 import { estimateTextTokens } from "@/runtime/tokens/index.ts";
+import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 export type LongTermMemoryStatus = "pending" | "ready" | "failed";
 
-export interface LongTermMemoryData {
-  schemaVersion: "1";
+interface LongTermMemoryDataBase {
+  schemaVersion: "1" | "2";
   strategy: string;
   status: LongTermMemoryStatus;
   threadId: string;
-  memorySpaceId: string;
   sequence: number;
   agentId: string;
   sourceStartMessageId: string;
@@ -20,9 +20,34 @@ export interface LongTermMemoryData {
   metadata?: Record<string, unknown> | null;
 }
 
+export interface LongTermMemoryDataV1 extends LongTermMemoryDataBase {
+  schemaVersion: "1";
+  memorySpaceId: string;
+}
+
+export interface LongTermMemoryDataV2 extends LongTermMemoryDataBase {
+  schemaVersion: "2";
+  readMemorySpaceIds: string[];
+  writeMemorySpaceIds: string[];
+  defaultWriteMemorySpaceId: string;
+}
+
+export type LongTermMemoryData =
+  | LongTermMemoryDataV1
+  | LongTermMemoryDataV2;
+
 export interface LongTermMemoryRecord {
   node: KnowledgeNode;
   data: LongTermMemoryData;
+}
+
+export type MemorySpaceAccessMode = "read" | "read_write";
+
+export interface ThreadMemorySpaceAccess {
+  node: KnowledgeNode;
+  access: MemorySpaceAccessMode;
+  defaultWrite: boolean;
+  edgeId: string | null;
 }
 
 export interface LongTermMemoryRange {
@@ -98,12 +123,12 @@ export function getLongTermMemoryData(
   }
   const data = node.data;
   const status = data.status;
+  const schemaVersion = data.schemaVersion;
   if (
-    data.schemaVersion !== "1" ||
+    (schemaVersion !== "1" && schemaVersion !== "2") ||
     typeof data.strategy !== "string" ||
     (status !== "pending" && status !== "ready" && status !== "failed") ||
     typeof data.threadId !== "string" ||
-    typeof data.memorySpaceId !== "string" ||
     typeof data.sequence !== "number" ||
     typeof data.agentId !== "string" ||
     typeof data.sourceStartMessageId !== "string" ||
@@ -111,7 +136,35 @@ export function getLongTermMemoryData(
   ) {
     return null;
   }
+  if (schemaVersion === "1" && typeof data.memorySpaceId !== "string") {
+    return null;
+  }
+  const readMemorySpaceIds = isStringArray(data.readMemorySpaceIds)
+    ? data.readMemorySpaceIds
+    : null;
+  const writeMemorySpaceIds = isStringArray(data.writeMemorySpaceIds)
+    ? data.writeMemorySpaceIds
+    : null;
+  if (
+    schemaVersion === "2" &&
+    (
+      !readMemorySpaceIds ||
+      !writeMemorySpaceIds ||
+      readMemorySpaceIds.length === 0 ||
+      writeMemorySpaceIds.length === 0 ||
+      !writeMemorySpaceIds.every((id) => readMemorySpaceIds.includes(id)) ||
+      typeof data.defaultWriteMemorySpaceId !== "string" ||
+      !writeMemorySpaceIds.includes(data.defaultWriteMemorySpaceId)
+    )
+  ) {
+    return null;
+  }
   return data as unknown as LongTermMemoryData;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) &&
+    value.every((entry) => typeof entry === "string" && entry.length > 0);
 }
 
 async function findLongTermMemory(
@@ -184,18 +237,129 @@ export async function findMemorySpace(
   threadId: string,
   namespace: string,
 ): Promise<KnowledgeNode | null> {
+  const spaces = await resolveThreadMemorySpaces(db, threadId, namespace);
+  return spaces.find((space) => space.defaultWrite)?.node ??
+    spaces.find((space) => space.access === "read_write")?.node ??
+    spaces[0]?.node ??
+    null;
+}
+
+export async function resolveThreadMemorySpaces(
+  db: CopilotzDb,
+  threadId: string,
+  namespace: string,
+): Promise<ThreadMemorySpaceAccess[]> {
   const result = await db.query<Record<string, unknown>>(
+    `SELECT n.*, e."id" AS "edge_id", e."type" AS "edge_type",
+            e."data" AS "edge_data", e."created_at" AS "edge_created_at"
+     FROM "edges" e
+     JOIN "nodes" n ON n."id" = e."target_node_id"
+     WHERE e."source_node_id" = $1
+       AND e."type" = ANY($2)
+       AND n."namespace" = $3
+       AND n."type" = 'memory_space'
+     ORDER BY (e."type" = 'uses_memory_space') DESC,
+              e."created_at" DESC, e."id" DESC`,
+    [
+      threadId,
+      [GRAPH_EDGE.USES_MEMORY_SPACE, GRAPH_EDGE.OWNS_MEMORY_SPACE],
+      namespace,
+    ],
+  );
+
+  const bySpaceId = new Map<string, ThreadMemorySpaceAccess>();
+  for (const row of result.rows) {
+    const node = mapNodeRow(row);
+    const id = String(node.id);
+    const edgeType = typeof row.edge_type === "string" ? row.edge_type : "";
+    const edgeData = isRecord(row.edge_data) ? row.edge_data : {};
+    const access: MemorySpaceAccessMode = edgeType ===
+          GRAPH_EDGE.OWNS_MEMORY_SPACE ||
+        edgeData.access === "read_write"
+      ? "read_write"
+      : "read";
+    const candidate: ThreadMemorySpaceAccess = {
+      node,
+      access,
+      defaultWrite: access === "read_write" &&
+        (edgeType === GRAPH_EDGE.OWNS_MEMORY_SPACE ||
+          edgeData.defaultWrite === true),
+      edgeId: typeof row.edge_id === "string" ? row.edge_id : null,
+    };
+    if (!bySpaceId.has(id)) {
+      bySpaceId.set(id, candidate);
+    }
+  }
+
+  const legacy = await db.query<Record<string, unknown>>(
     `SELECT *
      FROM "nodes"
      WHERE "namespace" = $1
        AND "type" = 'memory_space'
        AND "source_type" = 'thread'
        AND "source_id" = $2
-     ORDER BY "created_at" ASC, "id" ASC
-     LIMIT 1`,
+     ORDER BY "created_at" ASC, "id" ASC`,
     [namespace, threadId],
   );
-  return result.rows[0] ? mapNodeRow(result.rows[0]) : null;
+  for (const row of legacy.rows) {
+    const node = mapNodeRow(row);
+    if (!bySpaceId.has(String(node.id))) {
+      bySpaceId.set(String(node.id), {
+        node,
+        access: "read_write",
+        defaultWrite: bySpaceId.size === 0,
+        edgeId: null,
+      });
+    }
+  }
+
+  const spaces = [...bySpaceId.values()];
+  const explicitDefault = spaces.find((space) =>
+    space.defaultWrite && space.access === "read_write"
+  );
+  const effectiveDefault = explicitDefault ??
+    spaces.find((space) => space.access === "read_write");
+  return spaces
+    .map((space) => ({
+      ...space,
+      defaultWrite: space === effectiveDefault,
+    }))
+    .sort((left, right) =>
+      Number(right.defaultWrite) - Number(left.defaultWrite) ||
+      String(left.node.name).localeCompare(String(right.node.name)) ||
+      String(left.node.id).localeCompare(String(right.node.id))
+    );
+}
+
+export function getCheckpointMemorySpaceIds(
+  data: LongTermMemoryData,
+): {
+  readMemorySpaceIds: string[];
+  writeMemorySpaceIds: string[];
+  defaultWriteMemorySpaceId: string;
+} {
+  if (data.schemaVersion === "1") {
+    return {
+      readMemorySpaceIds: [data.memorySpaceId],
+      writeMemorySpaceIds: [data.memorySpaceId],
+      defaultWriteMemorySpaceId: data.memorySpaceId,
+    };
+  }
+  return {
+    readMemorySpaceIds: [...data.readMemorySpaceIds],
+    writeMemorySpaceIds: [...data.writeMemorySpaceIds],
+    defaultWriteMemorySpaceId: data.defaultWriteMemorySpaceId,
+  };
+}
+
+export function isLongTermMemoryAccessible(
+  data: LongTermMemoryData,
+  spaces: ThreadMemorySpaceAccess[],
+): boolean {
+  const readableIds = new Set(spaces.map((space) => String(space.node.id)));
+  return getCheckpointMemorySpaceIds(data).readMemorySpaceIds.every((id) =>
+    readableIds.has(id)
+  );
 }
 
 function stringifyToolOutput(value: unknown): string {

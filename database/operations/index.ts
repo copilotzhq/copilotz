@@ -160,6 +160,10 @@ export interface GraphQueryOptions {
   nodeTypes?: string[];
   /** Require exact string matches for keys stored in the node's JSON data. */
   dataFilters?: Record<string, string>;
+  /** Require a node JSON-data key to match any value in the provided list. */
+  dataFilterAny?: Record<string, string[]>;
+  /** Exclude nodes targeted by any incoming edge of these types. */
+  excludeWithIncomingEdgeTypes?: string[];
   /** Edge types to traverse (e.g., 'mentions', 'caused') */
   edgeTypes?: string[];
   /** Maximum traversal depth (0 = vector search only) */
@@ -3155,6 +3159,8 @@ export function createOperations(
       namespaces,
       nodeTypes,
       dataFilters,
+      dataFilterAny,
+      excludeWithIncomingEdgeTypes,
       limit = 10,
       minSimilarity = 0.5,
     } = options;
@@ -3186,6 +3192,33 @@ export function createOperations(
       const valueIdx = params.length;
       dataClauses.push(
         `AND "data"->>$${keyIdx} = $${valueIdx}`,
+      );
+    }
+
+    for (const [key, values] of Object.entries(dataFilterAny ?? {})) {
+      if (values.length === 0) return [];
+      params.push(key);
+      const keyIdx = params.length;
+      params.push(values);
+      const valuesIdx = params.length;
+      dataClauses.push(
+        `AND "data"->>$${keyIdx} = ANY($${valuesIdx})`,
+      );
+    }
+
+    if (
+      excludeWithIncomingEdgeTypes &&
+      excludeWithIncomingEdgeTypes.length > 0
+    ) {
+      params.push(excludeWithIncomingEdgeTypes);
+      const edgeTypesIdx = params.length;
+      dataClauses.push(
+        `AND NOT EXISTS (
+          SELECT 1
+          FROM "edges" excluded_edge
+          WHERE excluded_edge."target_node_id" = "nodes"."id"
+            AND excluded_edge."type" = ANY($${edgeTypesIdx})
+        )`,
       );
     }
 

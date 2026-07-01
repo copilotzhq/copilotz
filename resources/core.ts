@@ -2,13 +2,14 @@ import type { ChannelEntry } from "@/server/channels.ts";
 import type { Skill } from "@/runtime/loaders/skill-types.ts";
 import { parseSkillMarkdown } from "@/runtime/loaders/skill-parser.ts";
 import type {
-  Event,
   EventProcessor,
   MemoryResource,
-  NewEvent,
-  NewUnknownEvent,
   ProcessorDeps,
 } from "@/types/index.ts";
+import {
+  coerceProcessorProcess,
+  coerceProcessorShouldProcess,
+} from "@/runtime/processors/coerce.ts";
 import type { ProviderFactory } from "@/runtime/llm/types.ts";
 import type { Resources } from "@/runtime/loaders/resources.ts";
 import type { AgentConfig, CollectionDefinition, ToolConfig } from "@/index.ts";
@@ -128,52 +129,6 @@ type ProcessorEntry = EventProcessor<unknown, ProcessorDeps> & {
   id?: string;
 };
 
-const asShouldProcess = (
-  fn: (event: unknown, deps?: unknown) => boolean | Promise<boolean>,
-): ProcessorEntry["shouldProcess"] => {
-  return async (event: Event, deps: ProcessorDeps): Promise<boolean> => {
-    try {
-      return Boolean(await fn(event, deps));
-    } catch {
-      return false;
-    }
-  };
-};
-
-const asProcess = (
-  fn: (event: unknown, deps?: unknown) => unknown | Promise<unknown>,
-): ProcessorEntry["process"] => {
-  return async (event: Event, deps: ProcessorDeps) => {
-    const result = await fn(event, deps);
-    if (result == null) return;
-    if (Array.isArray(result)) {
-      return { producedEvents: result as Array<NewEvent | NewUnknownEvent> };
-    }
-    if (
-      typeof result === "object" && result &&
-      "type" in (result as Record<string, unknown>) &&
-      "payload" in (result as Record<string, unknown>)
-    ) {
-      return { producedEvents: [result as NewEvent | NewUnknownEvent] };
-    }
-    if (
-      typeof result === "object" && result &&
-      "producedEvents" in (result as Record<string, unknown>)
-    ) {
-      const produced = (result as { producedEvents?: unknown }).producedEvents;
-      if (Array.isArray(produced)) {
-        return {
-          producedEvents: produced as Array<NewEvent | NewUnknownEvent>,
-        };
-      }
-      if (produced) {
-        return { producedEvents: [produced as NewEvent | NewUnknownEvent] };
-      }
-    }
-    return;
-  };
-};
-
 function toProcessorEntry(
   eventType: string,
   mod: Record<string, unknown>,
@@ -187,13 +142,13 @@ function toProcessorEntry(
     throw new Error(`Invalid processor module for ${eventType}`);
   }
   return {
-    shouldProcess: asShouldProcess(
+    shouldProcess: coerceProcessorShouldProcess(
       maybeShouldProcess as (
         event: unknown,
         deps?: unknown,
       ) => boolean | Promise<boolean>,
     ),
-    process: asProcess(
+    process: coerceProcessorProcess(
       maybeProcess as (
         event: unknown,
         deps?: unknown,

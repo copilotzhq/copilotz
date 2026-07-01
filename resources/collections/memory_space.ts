@@ -7,23 +7,20 @@ export default defineCollection({
     type: "object",
     properties: {
       id: { type: "string" },
-      kind: { type: "string" },
-      ownerNodeId: { type: "string" },
-      threadId: { type: "string" },
+      scopeType: { type: "string" },
+      scopeId: { type: "string" },
+      kind: { type: ["string", "null"] },
+      ownerNodeId: { type: ["string", "null"] },
+      threadId: { type: ["string", "null"] },
     },
-    required: ["kind", "ownerNodeId", "threadId"],
+    required: ["scopeType", "scopeId"],
   } as const,
-  indexes: [["kind", "ownerNodeId"], "threadId"],
+  indexes: [["scopeType", "scopeId"], ["kind", "ownerNodeId"], "threadId"],
   relations: {
     items: relation.hasMany(
       "memory_item",
       "memorySpaceId",
       GRAPH_EDGE.HAS_MEMORY_ITEM,
-    ),
-    checkpoints: relation.hasMany(
-      "long_term_memory",
-      "memorySpaceId",
-      GRAPH_EDGE.HAS_LONG_TERM_MEMORY,
     ),
   },
 });

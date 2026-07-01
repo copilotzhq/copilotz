@@ -5,6 +5,7 @@ import {
 } from "@std/assert";
 import { createDatabase } from "@/database/index.ts";
 import type { Event, ProcessorDeps } from "@/types/index.ts";
+import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 import { messageProcessor } from "./index.ts";
 
 Deno.test("new_message injects ready memory and keeps only messages after its boundary", async () => {
@@ -40,17 +41,49 @@ Deno.test("new_message injects ready memory and keeps only messages after its bo
     senderType: "user",
     content: "CURRENT_HISTORY_SENTINEL",
   }, namespace);
+  await db.ops.mutate.graph.mutateMany({
+    createNodes: [{
+      id: `space-${suffix}`,
+      namespace,
+      type: "memory_space",
+      name: "Thread memory",
+      data: { scopeType: "thread", scopeId: threadId },
+      sourceType: "thread",
+      sourceId: threadId,
+    }, {
+      id: `user-space-${suffix}`,
+      namespace,
+      type: "memory_space",
+      name: "User memory",
+      data: { scopeType: "user", scopeId: "user" },
+      sourceType: "user",
+      sourceId: "user",
+    }],
+    createEdges: [{
+      sourceNodeId: threadId,
+      targetNodeId: `space-${suffix}`,
+      type: GRAPH_EDGE.USES_MEMORY_SPACE,
+      data: { access: "read_write", defaultWrite: true },
+    }, {
+      sourceNodeId: threadId,
+      targetNodeId: `user-space-${suffix}`,
+      type: GRAPH_EDGE.USES_MEMORY_SPACE,
+      data: { access: "read" },
+    }],
+  }, { threadId, namespace });
   await db.ops.mutate.graph.createNode({
     namespace,
     type: "long_term_memory",
     name: `thread:${threadId}:memory:1`,
     content: "READY_MEMORY_SENTINEL",
     data: {
-      schemaVersion: "1",
+      schemaVersion: "2",
       strategy: "checkpointed_graph",
       status: "ready",
       threadId,
-      memorySpaceId: `space-${suffix}`,
+      readMemorySpaceIds: [`space-${suffix}`, `user-space-${suffix}`],
+      writeMemorySpaceIds: [`space-${suffix}`],
+      defaultWriteMemorySpaceId: `space-${suffix}`,
       sequence: 1,
       agentId: "assistant",
       sourceStartMessageId: `old-user-${suffix}`,
@@ -84,11 +117,13 @@ Deno.test("new_message injects ready memory and keeps only messages after its bo
     name: `thread:${threadId}:memory:2`,
     content: "PENDING_MEMORY_SENTINEL",
     data: {
-      schemaVersion: "1",
+      schemaVersion: "2",
       strategy: "checkpointed_graph",
       status: "pending",
       threadId,
-      memorySpaceId: `space-${suffix}`,
+      readMemorySpaceIds: [`space-${suffix}`],
+      writeMemorySpaceIds: [`space-${suffix}`],
+      defaultWriteMemorySpaceId: `space-${suffix}`,
       sequence: 2,
       agentId: "assistant",
       sourceStartMessageId: current.id,

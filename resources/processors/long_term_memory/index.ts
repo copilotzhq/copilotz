@@ -28,11 +28,15 @@ import {
 import { createLlmUsageService } from "@/runtime/collections/native.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 import {
+  getCheckpointMemorySpaceIds,
   getLatestReadyLongTermMemory,
   getLongTermMemoryConfig,
   getLongTermMemoryData,
+  isLongTermMemoryAccessible,
   loadMessagesInLongTermMemoryRange,
   projectMessageForSharedMemory,
+  resolveThreadMemorySpaces,
+  type ThreadMemorySpaceAccess,
 } from "@/runtime/memory/index.ts";
 import { contextGenerator } from "@/resources/processors/new_message/generators/context-generator.ts";
 import { estimateTextTokens } from "@/runtime/tokens/index.ts";
@@ -60,6 +64,8 @@ const CONSOLIDATE_MEMORY_TOOL: ToolDefinition = {
     confidence: number;
     /** IDs of source messages that support this item. */
     sourceMessageIds: string[];
+    /** ID of the writable memory space where this item belongs. */
+    memorySpaceId: string;
     /** ID of an item visible in the previous checkpoint that this supersedes (optional). */
     supersedesItemId?: string;
   }>;
@@ -103,6 +109,7 @@ interface ConsolidationProposal {
     content: string;
     confidence?: number;
     sourceMessageIds?: string[];
+    memorySpaceId?: string;
     supersedesItemId?: string;
   }>;
   relations: Array<{
@@ -277,6 +284,10 @@ export function parseConsolidationProposal(
   value: string,
   allowedSourceMessageIds: Set<string>,
   allowedOlderItemIds: Set<string>,
+  routing?: {
+    writableMemorySpaceIds: Set<string>;
+    defaultWriteMemorySpaceId: string;
+  },
 ): ConsolidationProposal {
   const parsed = parseJsonObject(value);
   if (!parsed || typeof parsed.workState !== "string") {
@@ -316,6 +327,14 @@ export function parseConsolidationProposal(
         ? candidate.supersedesItemId
         : undefined;
       const confidence = clampConfidence(candidate.confidence);
+      const requestedMemorySpaceId = typeof candidate.memorySpaceId === "string"
+        ? candidate.memorySpaceId.trim()
+        : "";
+      const memorySpaceId = routing
+        ? routing.writableMemorySpaceIds.has(requestedMemorySpaceId)
+          ? requestedMemorySpaceId
+          : routing.defaultWriteMemorySpaceId
+        : requestedMemorySpaceId || undefined;
       return [{
         localId,
         kind,
@@ -323,6 +342,7 @@ export function parseConsolidationProposal(
         content,
         ...(confidence !== null ? { confidence } : {}),
         sourceMessageIds,
+        ...(memorySpaceId ? { memorySpaceId } : {}),
         ...(supersedesItemId ? { supersedesItemId } : {}),
       }];
     },
@@ -502,6 +522,8 @@ async function buildConsolidationContext(args: {
   agent: Agent;
   deps: ProcessorDeps;
   conversation: string;
+  memorySpaces: ThreadMemorySpaceAccess[];
+  defaultWriteMemorySpaceId: string;
   previousMemory: Awaited<
     ReturnType<typeof getLatestReadyLongTermMemory>
   >;
@@ -530,6 +552,23 @@ async function buildConsolidationContext(args: {
   const reconciliationInstruction = args.previousMemory?.node.content
     ? "You may supersede or relate only older memory item IDs shown in the previous checkpoint above."
     : "There is no previous checkpoint; relations may target only new localIds.";
+  const writableMemorySpaces = args.memorySpaces
+    .filter((space) => space.access === "read_write")
+    .map((space) => {
+      const data = isRecord(space.node.data) ? space.node.data : {};
+      return {
+        id: String(space.node.id),
+        name: space.node.name,
+        description: space.node.content ?? null,
+        scopeType: typeof data.scopeType === "string"
+          ? data.scopeType
+          : typeof data.kind === "string"
+          ? data.kind
+          : "custom",
+        defaultWrite: String(space.node.id) ===
+          args.defaultWriteMemorySpaceId,
+      };
+    });
   const userContent = [
     "Conversation range to consolidate:",
     args.conversation,
@@ -537,6 +576,9 @@ async function buildConsolidationContext(args: {
     "---",
     "Analyze the conversation above and return a JSON object that consolidates it into durable memory.",
     reconciliationInstruction,
+    "Assign every new item to exactly one writable memory space from this catalog.",
+    `Writable memory spaces: ${JSON.stringify(writableMemorySpaces)}`,
+    `If uncertain, use the default memory space ID: ${args.defaultWriteMemorySpaceId}`,
     "Output ONLY the JSON object — no markdown, no explanation.",
     "",
     "Schema:",
@@ -594,17 +636,16 @@ export function fuseMemoryCandidateRanks(
 async function retrieveOlderMemory(args: {
   deps: ProcessorDeps;
   namespace: string;
-  memorySpaceId: string;
+  memorySpaceIds: string[];
   agentId: string;
   queryEmbeddings: number[][];
   pinnedItemIds?: string[];
-  excludedItemIds?: string[];
   limit: number;
 }): Promise<{
   items: RetrievedMemoryItem[];
   relations: KnowledgeEdge[];
 }> {
-  const excludedItemIds = new Set(args.excludedItemIds ?? []);
+  const memorySpaceIds = new Set(args.memorySpaceIds);
   const resultLists = await Promise.all(
     args.queryEmbeddings.map((embedding) =>
       args.deps.db.ops.unsafeGraph.searchNodes({
@@ -612,9 +653,12 @@ async function retrieveOlderMemory(args: {
         namespaces: [args.namespace],
         nodeTypes: ["memory_item"],
         dataFilters: {
-          memorySpaceId: args.memorySpaceId,
           createdByAgentId: args.agentId,
         },
+        dataFilterAny: {
+          memorySpaceId: args.memorySpaceIds,
+        },
+        excludeWithIncomingEdgeTypes: [GRAPH_EDGE.SUPERSEDES],
         limit: Math.max(args.limit * 3, args.limit),
         minSimilarity: 0.2,
       })
@@ -623,9 +667,9 @@ async function retrieveOlderMemory(args: {
   const candidateLists = resultLists.map((results) =>
     results.flatMap((result): RetrievedMemoryItem[] => {
       const data = isRecord(result.node.data) ? result.node.data : {};
-      return data.memorySpaceId === args.memorySpaceId &&
-          data.createdByAgentId === args.agentId &&
-          !excludedItemIds.has(String(result.node.id))
+      return typeof data.memorySpaceId === "string" &&
+          memorySpaceIds.has(data.memorySpaceId) &&
+          data.createdByAgentId === args.agentId
         ? [{ node: result.node, similarity: result.similarity ?? 0 }]
         : [];
     })
@@ -654,14 +698,21 @@ async function retrieveOlderMemory(args: {
     pinnedIds.map((id) => args.deps.db.ops.unsafeGraph.getNodeById(id)),
   );
   for (const node of pinnedNodes) {
-    if (itemById.size >= args.limit) break;
     const data = node && isRecord(node.data) ? node.data : {};
+    const supersedingEdges = node
+      ? await args.deps.db.ops.unsafeGraph.getEdgesForNode(
+        String(node.id),
+        "in",
+        [GRAPH_EDGE.SUPERSEDES],
+      )
+      : [];
     if (
       node?.type === "memory_item" &&
       node.namespace === args.namespace &&
-      data.memorySpaceId === args.memorySpaceId &&
+      typeof data.memorySpaceId === "string" &&
+      memorySpaceIds.has(data.memorySpaceId) &&
       data.createdByAgentId === args.agentId &&
-      !excludedItemIds.has(String(node.id))
+      supersedingEdges.length === 0
     ) {
       itemById.set(String(node.id), {
         node,
@@ -686,14 +737,22 @@ async function retrieveOlderMemory(args: {
       const sourceId = String(edge.sourceNodeId);
       const targetId = String(edge.targetNodeId);
       const otherId = sourceId === String(item.node.id) ? targetId : sourceId;
-      if (!itemById.has(otherId) && itemById.size < args.limit) {
+      const pointsToSupersededItem = edge.type === GRAPH_EDGE.SUPERSEDES &&
+        sourceId === String(item.node.id);
+      if (
+        !pointsToSupersededItem &&
+        !itemById.has(otherId) &&
+        itemById.size < args.limit
+      ) {
         const related = await args.deps.db.ops.unsafeGraph.getNodeById(otherId);
         const relatedData = related && isRecord(related.data)
           ? related.data
           : {};
         if (
           related?.type === "memory_item" &&
-          relatedData.memorySpaceId === args.memorySpaceId &&
+          typeof relatedData.memorySpaceId === "string" &&
+          memorySpaceIds.has(relatedData.memorySpaceId) &&
+          relatedData.memorySpaceId === memoryItemSpaceId(item.node) &&
           relatedData.createdByAgentId === args.agentId
         ) {
           itemById.set(otherId, { node: related, similarity: 0 });
@@ -701,7 +760,9 @@ async function retrieveOlderMemory(args: {
       }
       if (
         itemById.has(sourceId) &&
-        itemById.has(targetId)
+        itemById.has(targetId) &&
+        memoryItemSpaceId(itemById.get(sourceId)?.node) ===
+          memoryItemSpaceId(itemById.get(targetId)?.node)
       ) {
         relationById.set(String(edge.id), edge);
       }
@@ -711,6 +772,45 @@ async function retrieveOlderMemory(args: {
     items: [...itemById.values()],
     relations: [...relationById.values()],
   };
+}
+
+function memoryItemSpaceId(
+  node: KnowledgeNode | null | undefined,
+): string | null {
+  const data = node && isRecord(node.data) ? node.data : {};
+  return typeof data.memorySpaceId === "string" ? data.memorySpaceId : null;
+}
+
+function constrainProposalToMemorySpaces(
+  proposal: ConsolidationProposal,
+  olderItems: RetrievedMemoryItem[],
+): ConsolidationProposal {
+  const localSpaces = new Map(
+    proposal.items.map((item) => [item.localId, item.memorySpaceId ?? null]),
+  );
+  const olderSpaces = new Map(
+    olderItems.map((item) => [
+      String(item.node.id),
+      memoryItemSpaceId(item.node),
+    ]),
+  );
+  const items = proposal.items.map((item) => {
+    if (
+      item.supersedesItemId &&
+      olderSpaces.get(item.supersedesItemId) !== item.memorySpaceId
+    ) {
+      const { supersedesItemId: _supersedesItemId, ...rest } = item;
+      return rest;
+    }
+    return item;
+  });
+  const relations = proposal.relations.filter((relation) => {
+    const sourceSpace = localSpaces.get(relation.source);
+    const targetSpace = localSpaces.get(relation.target) ??
+      olderSpaces.get(relation.target);
+    return Boolean(sourceSpace && sourceSpace === targetSpace);
+  });
+  return { ...proposal, items, relations };
 }
 
 async function persistAttemptStart(args: {
@@ -802,6 +902,41 @@ export const longTermMemoryProcessor: EventProcessor<
           `Long-term-memory agent not found: ${checkpointData.agentId}`,
         );
       }
+      const checkpointSpaces = getCheckpointMemorySpaceIds(checkpointData);
+      const currentMemorySpaces = await resolveThreadMemorySpaces(
+        deps.db,
+        threadId,
+        namespace,
+      );
+      const currentMemorySpaceById = new Map(
+        currentMemorySpaces.map((space) => [String(space.node.id), space]),
+      );
+      const readMemorySpaceIds = checkpointSpaces.readMemorySpaceIds.filter(
+        (id) => currentMemorySpaceById.has(id),
+      );
+      const writeMemorySpaceIds = checkpointSpaces.writeMemorySpaceIds.filter(
+        (id) =>
+          currentMemorySpaceById.get(id)?.access === "read_write" &&
+          readMemorySpaceIds.includes(id),
+      );
+      const defaultWriteMemorySpaceId = writeMemorySpaceIds.includes(
+          checkpointSpaces.defaultWriteMemorySpaceId,
+        )
+        ? checkpointSpaces.defaultWriteMemorySpaceId
+        : writeMemorySpaceIds[0];
+      if (
+        readMemorySpaceIds.length === 0 ||
+        writeMemorySpaceIds.length === 0 ||
+        !defaultWriteMemorySpaceId
+      ) {
+        throw new Error(
+          "Long-term-memory checkpoint has no currently accessible writable memory space.",
+        );
+      }
+      const memorySpaces = readMemorySpaceIds.flatMap((id) => {
+        const space = currentMemorySpaceById.get(id);
+        return space ? [space] : [];
+      });
 
       const sourceMessages = await loadMessagesInLongTermMemoryRange(
         deps.db,
@@ -823,18 +958,27 @@ export const longTermMemoryProcessor: EventProcessor<
         throw new Error("The reserved memory range has no shared content.");
       }
 
-      const previousMemory = await getLatestReadyLongTermMemory(
+      const previousMemoryCandidate = await getLatestReadyLongTermMemory(
         deps.db,
         threadId,
         namespace,
         checkpointData.agentId,
       );
+      const previousMemory = previousMemoryCandidate &&
+          isLongTermMemoryAccessible(
+            previousMemoryCandidate.data,
+            currentMemorySpaces,
+          )
+        ? previousMemoryCandidate
+        : null;
       const allowedVisibleItemIds = getVisibleMemoryItemIds(previousMemory);
       const { messages: llmMessages, tools: llmTools } =
         await buildConsolidationContext({
           agent,
           deps: memoryDeps,
           conversation,
+          memorySpaces,
+          defaultWriteMemorySpaceId,
           previousMemory,
         });
       const llmConfig = await resolveMemoryLlmConfig({
@@ -860,10 +1004,14 @@ export const longTermMemoryProcessor: EventProcessor<
         undefined,
         deps.context.llmProviders,
       );
-      const proposal = parseConsolidationProposal(
+      let proposal = parseConsolidationProposal(
         response.answer,
         new Set(sourceMessages.map((message) => message.id)),
         allowedVisibleItemIds,
+        {
+          writableMemorySpaceIds: new Set(writeMemorySpaceIds),
+          defaultWriteMemorySpaceId,
+        },
       );
 
       const itemEmbeddingResult = proposal.items.length > 0
@@ -883,21 +1031,24 @@ export const longTermMemoryProcessor: EventProcessor<
           "Failed to generate one or more memory-item embeddings.",
         );
       }
-      const pinnedItemIds = proposal.relations.flatMap((relation) =>
-        allowedVisibleItemIds.has(relation.target) ? [relation.target] : []
-      );
+      const pinnedItemIds = [
+        ...proposal.relations.flatMap((relation) =>
+          allowedVisibleItemIds.has(relation.target) ? [relation.target] : []
+        ),
+        ...proposal.items.flatMap((item) =>
+          item.supersedesItemId ? [item.supersedesItemId] : []
+        ),
+      ];
       const older = await retrieveOlderMemory({
         deps: memoryDeps,
         namespace,
-        memorySpaceId: checkpointData.memorySpaceId,
+        memorySpaceIds: readMemorySpaceIds,
         agentId: checkpointData.agentId,
         queryEmbeddings: itemEmbeddingResult.embeddings,
         pinnedItemIds,
-        excludedItemIds: proposal.items.flatMap((item) =>
-          item.supersedesItemId ? [item.supersedesItemId] : []
-        ),
         limit: config.retrievalLimit,
       });
+      proposal = constrainProposalToMemorySpaces(proposal, older.items);
       const localItemNodes = new Map<string, KnowledgeNode>();
       const createNodes: Array<
         Omit<NewKnowledgeNode, "id"> & { id?: string }
@@ -911,9 +1062,11 @@ export const longTermMemoryProcessor: EventProcessor<
           content: item.content,
           embedding: itemEmbeddingResult.embeddings[index] ?? null,
           data: {
-            memorySpaceId: checkpointData.memorySpaceId,
+            memorySpaceId: item.memorySpaceId ??
+              defaultWriteMemorySpaceId,
             checkpointId,
             createdByAgentId: checkpointData.agentId,
+            originThreadId: threadId,
             kind: item.kind,
             name: item.name,
             content: item.content,
@@ -955,16 +1108,12 @@ export const longTermMemoryProcessor: EventProcessor<
 
       const createEdges: Array<
         Omit<NewKnowledgeEdge, "id"> & { id?: string }
-      > = [{
-        id: ulid(),
-        sourceNodeId: checkpointData.memorySpaceId,
-        targetNodeId: checkpointId,
-        type: GRAPH_EDGE.HAS_LONG_TERM_MEMORY,
-      }];
+      > = [];
       for (const node of createNodes) {
+        const nodeData = isRecord(node.data) ? node.data : {};
         createEdges.push({
           id: ulid(),
-          sourceNodeId: checkpointData.memorySpaceId,
+          sourceNodeId: String(nodeData.memorySpaceId),
           targetNodeId: String(node.id),
           type: GRAPH_EDGE.HAS_MEMORY_ITEM,
         }, {
@@ -978,8 +1127,6 @@ export const longTermMemoryProcessor: EventProcessor<
       const resolveItemId = (value: string): string | null =>
         localItemNodes.get(value)?.id as string | undefined ??
           (older.items.some((item) => String(item.node.id) === value)
-            ? value
-            : allowedVisibleItemIds.has(value)
             ? value
             : null);
       for (const relation of proposal.relations) {
@@ -1020,7 +1167,7 @@ export const longTermMemoryProcessor: EventProcessor<
         error: null,
         metadata: {
           ...(checkpointData.metadata ?? {}),
-          processorVersion: "v1",
+          processorVersion: "v2",
           retrievedItemIds: older.items.map((item) => String(item.node.id)),
           visibleItemIds: extractVisibleMemoryItemIds(content),
         },

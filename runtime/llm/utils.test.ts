@@ -376,6 +376,28 @@ Deno.test("parseToolCallsFromResponse only accepts strict JSON-lines calls", () 
   );
 });
 
+Deno.test("parseToolCallsFromResponse closes truncated JSON-line containers", () => {
+  const response =
+    '<tool_calls>\n{"name":"first","arguments":{"actions":[{"x":1}]}\n{"name":"second","arguments":{"x":2}}\n</tool_calls>';
+
+  const parsed = parseToolCallsFromResponse(response);
+
+  assertEquals(parsed.toolCalls.map((call) => call.tool.id), [
+    "first",
+    "second",
+  ]);
+  assertEquals(JSON.parse(parsed.toolCalls[0].args), {
+    actions: [{ x: 1 }],
+  });
+});
+
+Deno.test("parseToolCallsFromResponse does not repair truncated strings", () => {
+  const response =
+    '<tool_calls>\n{"name":"first","arguments":{"value":"unfinished}}\n{"name":"second","arguments":{"x":2}}\n</tool_calls>';
+
+  assertEquals(parseToolCallsFromResponse(response).toolCalls.length, 0);
+});
+
 Deno.test("parseToolCallsFromResponse accepts optional tool_call_id after visible punctuation", () => {
   const response =
     'I will do it.<tool_calls>\n{"name":"kanban","arguments":{"action":"move_card","stage":"done"},"tool_call_id":"call-1"}\n{"name":"update_user_memory","arguments":{"content":"context","category":"context"}}\n</tool_calls>';

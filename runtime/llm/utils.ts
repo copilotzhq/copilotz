@@ -2049,6 +2049,38 @@ function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
   );
 }
 
+function closeTruncatedJsonContainers(line: string): string | null {
+  const expectedClosers: string[] = [];
+  let inString = false;
+  let escaped = false;
+
+  for (const char of line) {
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+    } else if (char === "{") {
+      expectedClosers.push("}");
+    } else if (char === "[") {
+      expectedClosers.push("]");
+    } else if (char === "}" || char === "]") {
+      if (expectedClosers.pop() !== char) return null;
+    }
+  }
+
+  if (inString || expectedClosers.length === 0) return null;
+  return line + expectedClosers.reverse().join("");
+}
+
 function parseCanonicalToolCallLines(blockContent: string): ToolInvocation[] {
   const lines = blockContent
     .split(/\r?\n/)
@@ -2063,7 +2095,13 @@ function parseCanonicalToolCallLines(blockContent: string): ToolInvocation[] {
     try {
       obj = JSON.parse(line);
     } catch {
-      return [];
+      const repaired = closeTruncatedJsonContainers(line);
+      if (!repaired) return [];
+      try {
+        obj = JSON.parse(repaired);
+      } catch {
+        return [];
+      }
     }
 
     if (!isPlainJsonObject(obj)) return [];

@@ -1,6 +1,7 @@
 import {
   assertEquals,
   assertExists,
+  assertMatch,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import { process } from "./index.ts";
@@ -215,6 +216,108 @@ Deno.test("llm_call processor persists one llm_usage node per provider attempt",
     assertEquals(usageRows.rows[1].data.statusReason, null);
     assertEquals(usageRows.rows[1].data.model, "fallback");
     assertEquals(produced.payload.usageNodeId, usageRows.rows[1].id);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("llm_call persists and sends its automatic OpenAI prompt cache key", async () => {
+  const db = await createDatabase({ url: ":memory:" });
+  const thread = await db.ops.findOrCreateThread(undefined, {
+    namespace: "tenant-test",
+    name: "Prompt Cache Key Thread",
+    participants: ["researcher"],
+    status: "active",
+    mode: "immediate",
+  });
+  const originalFetch = globalThis.fetch;
+  let sentCacheKey: string | undefined;
+  const registry: ProviderRegistry = {
+    openai: () => ({
+      endpoint: "https://example.test/openai",
+      headers: () => ({}),
+      body: (_messages, config) => ({
+        prompt_cache_key: config.openaiPromptCacheKey,
+      }),
+      extractContent: (data: any) => {
+        const content = data?.choices?.[0]?.delta?.content;
+        return typeof content === "string" && content.length > 0
+          ? [{ text: content }]
+          : null;
+      },
+      extractFinishReason: (data: any) =>
+        data?.choices?.[0]?.finish_reason ?? null,
+    }),
+  };
+
+  globalThis.fetch = (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as {
+      prompt_cache_key?: string;
+    };
+    sentCacheKey = body.prompt_cache_key;
+    return Promise.resolve(
+      new Response(
+        `data: ${
+          JSON.stringify({
+            choices: [{ delta: { content: "ok" }, finish_reason: "stop" }],
+          })
+        }\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+
+  try {
+    await process(
+      {
+        id: "evt-prompt-cache-key",
+        threadId: thread.id,
+        type: "LLM_CALL",
+        payload: {
+          agent: { id: "researcher", name: "Researcher" },
+          messages: [{ role: "user", content: "hello" }],
+          tools: [],
+          config: {
+            provider: "openai",
+            model: "gpt-5.4",
+            apiKey: "test",
+            estimateCost: false,
+          },
+        },
+        parentEventId: null,
+        traceId: "trace-prompt-cache-key",
+        priority: 1000,
+        metadata: { targetId: "user-1" },
+        ttlMs: null,
+        expiresAt: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        status: "processing",
+      } as never,
+      {
+        db,
+        thread,
+        context: {
+          namespace: "tenant-test",
+          stream: false,
+          llmProviders: registry,
+        },
+      } as unknown as ProcessorDeps,
+    );
+
+    const attempts = await db.query<{ data: Record<string, any> }>(
+      `SELECT "data"
+       FROM "nodes"
+       WHERE "source_type" = 'llm_attempt'
+         AND "type" = 'llm_attempt'
+         AND "data"->>'threadId' = $1`,
+      [thread.id as string],
+    );
+    const persistedCacheKey = attempts.rows[0]?.data?.config
+      ?.openaiPromptCacheKey;
+
+    assertMatch(sentCacheKey ?? "", /^[a-f0-9]{64}$/);
+    assertEquals(persistedCacheKey, sentCacheKey);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -118,6 +118,7 @@ async function findLongTermMemory(
   db: CopilotzDb,
   threadId: string,
   namespace: string,
+  agentId: string,
   status: LongTermMemoryStatus,
 ): Promise<LongTermMemoryRecord | null> {
   const result = await db.query<Record<string, unknown>>(
@@ -128,9 +129,10 @@ async function findLongTermMemory(
        AND "source_type" = 'thread'
        AND "source_id" = $2
        AND "data"->>'status' = $3
+       AND "data"->>'agentId' = $4
      ORDER BY (("data"->>'sequence')::bigint) DESC, "created_at" DESC, "id" DESC
      LIMIT 1`,
-    [namespace, threadId, status],
+    [namespace, threadId, status, agentId],
   );
   const row = result.rows[0];
   if (!row) return null;
@@ -143,22 +145,25 @@ export async function getLatestReadyLongTermMemory(
   db: CopilotzDb,
   threadId: string,
   namespace: string,
+  agentId: string,
 ): Promise<LongTermMemoryRecord | null> {
-  return await findLongTermMemory(db, threadId, namespace, "ready");
+  return await findLongTermMemory(db, threadId, namespace, agentId, "ready");
 }
 
 export async function getPendingLongTermMemory(
   db: CopilotzDb,
   threadId: string,
   namespace: string,
+  agentId: string,
 ): Promise<LongTermMemoryRecord | null> {
-  return await findLongTermMemory(db, threadId, namespace, "pending");
+  return await findLongTermMemory(db, threadId, namespace, agentId, "pending");
 }
 
 export async function getNextLongTermMemorySequence(
   db: CopilotzDb,
   threadId: string,
   namespace: string,
+  agentId: string,
 ): Promise<number> {
   const result = await db.query<{ sequence: number | string | null }>(
     `SELECT MAX((NULLIF("data"->>'sequence', ''))::bigint) AS "sequence"
@@ -166,8 +171,9 @@ export async function getNextLongTermMemorySequence(
      WHERE "namespace" = $1
        AND "type" = 'long_term_memory'
        AND "source_type" = 'thread'
-       AND "source_id" = $2`,
-    [namespace, threadId],
+       AND "source_id" = $2
+       AND "data"->>'agentId' = $3`,
+    [namespace, threadId, agentId],
   );
   const current = Number(result.rows[0]?.sequence ?? 0);
   return Number.isFinite(current) ? current + 1 : 1;

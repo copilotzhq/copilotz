@@ -1947,6 +1947,7 @@ export const messageProcessor: EventProcessor<
           deps.db,
           threadId,
           longTermMemoryNamespace,
+          agentId,
         )
         : null;
       const recentChatHistory = sliceMessagesAfterLongTermMemory(

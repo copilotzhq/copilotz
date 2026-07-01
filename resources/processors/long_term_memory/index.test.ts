@@ -179,7 +179,7 @@ function mockRegistries(answer: string) {
 }
 
 async function createPendingCheckpoint(
-  options: { withPrevious?: boolean } = {},
+  options: { withPrevious?: boolean; withForeignItem?: boolean } = {},
 ) {
   const db = await createDatabase({ url: ":memory:" });
   const suffix = crypto.randomUUID();
@@ -215,6 +215,7 @@ async function createPendingCheckpoint(
     sourceId: threadId,
   }, { threadId, namespace });
   let previousItemId: string | null = null;
+  let foreignItemId: string | null = null;
   if (options.withPrevious) {
     const previousCheckpointId = `previous-checkpoint-${suffix}`;
     previousItemId = `previous-item-${suffix}`;
@@ -231,6 +232,7 @@ async function createPendingCheckpoint(
       data: {
         memorySpaceId: String(memorySpace.id),
         checkpointId: previousCheckpointId,
+        createdByAgentId: "agent",
         kind: "decision",
         name: "Previous decision",
         content: "Use the previous approach.",
@@ -263,6 +265,31 @@ async function createPendingCheckpoint(
       sourceId: threadId,
     }, { threadId, namespace });
   }
+  if (options.withForeignItem) {
+    foreignItemId = `foreign-item-${suffix}`;
+    await db.ops.mutate.graph.createNode({
+      id: foreignItemId,
+      namespace,
+      type: "memory_item",
+      name: "Other agent memory",
+      content: "Only the other agent should recall this.",
+      embedding: Array.from(
+        { length: 1536 },
+        (_, index) => index === 0 ? 1 : 0,
+      ),
+      data: {
+        memorySpaceId: String(memorySpace.id),
+        checkpointId: `foreign-checkpoint-${suffix}`,
+        createdByAgentId: "other-agent",
+        kind: "fact",
+        name: "Other agent memory",
+        content: "Only the other agent should recall this.",
+        sourceMessageIds: [first.id],
+      },
+      sourceType: "long_term_memory",
+      sourceId: `foreign-checkpoint-${suffix}`,
+    }, { threadId, namespace });
+  }
   const checkpoint = await db.ops.mutate.graph.createNode({
     namespace,
     type: "long_term_memory",
@@ -292,6 +319,7 @@ async function createPendingCheckpoint(
     first,
     last,
     previousItemId,
+    foreignItemId,
   };
 }
 
@@ -381,6 +409,10 @@ Deno.test("long-term-memory processor finalizes the reserved node atomically", a
     );
     assertEquals(items.length, 1);
     assertEquals(items[0].content, proposal.items[0].content);
+    assertEquals(
+      (items[0].data as Record<string, unknown>).createdByAgentId,
+      "agent",
+    );
     assertStringIncludes(
       checkpoint?.content ?? "",
       `[id:${items[0].id}]`,
@@ -469,6 +501,53 @@ Deno.test("processor may supersede an item visible in the previous checkpoint", 
         unknown
       >;
     assertEquals(metadata.retrievedItemIds, []);
+  } finally {
+    registries.restore();
+  }
+});
+
+Deno.test("processor retrieves only memory items created by its agent", async () => {
+  const fixture = await createPendingCheckpoint({ withForeignItem: true });
+  const proposal = {
+    workState: "The current agent is recording its own decision.",
+    items: [{
+      localId: "own-decision",
+      kind: "decision",
+      name: "Own decision",
+      content: "This decision belongs to the current agent.",
+      confidence: 0.95,
+      sourceMessageIds: [fixture.last.id],
+    }],
+    relations: [],
+  };
+  const registries = mockRegistries(JSON.stringify(proposal));
+  try {
+    const event = {
+      id: `event-${crypto.randomUUID()}`,
+      type: "long_term_memory.created",
+      threadId: fixture.threadId,
+      subjectType: "long_term_memory",
+      subjectId: fixture.checkpoint.id,
+      payload: fixture.checkpoint,
+    } as unknown as Event;
+    await process(event, createDeps(fixture, registries));
+
+    const checkpoint = await fixture.db.ops.unsafeGraph.getNodeById(
+      String(fixture.checkpoint.id),
+    );
+    assertEquals(
+      checkpoint?.content?.includes("Only the other agent should recall this."),
+      false,
+    );
+    assertEquals(
+      (
+        (checkpoint?.data as Record<string, unknown>).metadata as Record<
+          string,
+          unknown
+        >
+      ).retrievedItemIds,
+      [],
+    );
   } finally {
     registries.restore();
   }

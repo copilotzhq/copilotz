@@ -78,6 +78,7 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
         deps.db,
         threadId,
         namespace,
+        agentId,
       );
       if (pending) return;
 
@@ -87,6 +88,7 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
         deps.db,
         threadId,
         namespace,
+        agentId,
       );
       const range = await selectLongTermMemoryRange({
         db: deps.db,
@@ -143,8 +145,9 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
         deps.db,
         threadId,
         namespace,
+        agentId,
       );
-      const backgroundExternalId = `${threadId}:long-term-memory`;
+      const backgroundExternalId = `${threadId}:long-term-memory:${agentId}`;
       const existingBackgroundThread = await deps.db.ops.getThreadByExternalId(
         backgroundExternalId,
         namespace,
@@ -164,7 +167,7 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
       await deps.db.ops.mutate.graph.createNode({
         namespace,
         type: "long_term_memory",
-        name: `thread:${threadId}:memory:${sequence}`,
+        name: `thread:${threadId}:agent:${agentId}:memory:${sequence}`,
         content: null,
         embedding: null,
         data: {

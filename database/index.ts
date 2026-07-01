@@ -34,6 +34,7 @@ import { generateMutationOutboxMigrations } from "./migrations/migration_0009_mu
 import { generateAdminLlmAttemptIndexesMigrations } from "./migrations/migration_0010_admin_llm_attempt_indexes.ts";
 import { generateAdminLlmAttemptIndexesV2Migrations } from "./migrations/migration_0011_admin_llm_attempt_indexes.ts";
 import { generateUsageLedgerIndexesMigrations } from "./migrations/migration_0012_usage_ledger_indexes.ts";
+import { generateAgentMemoryOwnershipMigrations } from "./migrations/migration_0013_agent_memory_ownership.ts";
 import { getCurrentSchema } from "./schema-context.ts";
 import {
   ensureSchemaProvisioned,
@@ -55,7 +56,8 @@ const migrations: string = generateMigrations() + "\n" +
   generateMutationOutboxMigrations() + "\n" +
   generateAdminLlmAttemptIndexesMigrations() + "\n" +
   generateAdminLlmAttemptIndexesV2Migrations() + "\n" +
-  generateUsageLedgerIndexesMigrations() + "\n";
+  generateUsageLedgerIndexesMigrations() + "\n" +
+  generateAgentMemoryOwnershipMigrations() + "\n";
 
 /**
  * Configuration options for creating a database connection.

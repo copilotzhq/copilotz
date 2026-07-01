@@ -9,6 +9,7 @@ export default defineCollection({
       id: { type: "string" },
       memorySpaceId: { type: "string" },
       checkpointId: { type: "string" },
+      createdByAgentId: { type: "string" },
       kind: {
         type: "string",
         enum: [
@@ -31,13 +32,20 @@ export default defineCollection({
     required: [
       "memorySpaceId",
       "checkpointId",
+      "createdByAgentId",
       "kind",
       "name",
       "content",
       "sourceMessageIds",
     ],
   } as const,
-  indexes: ["memorySpaceId", "checkpointId", "kind"],
+  indexes: [
+    "memorySpaceId",
+    "checkpointId",
+    "createdByAgentId",
+    ["memorySpaceId", "createdByAgentId"],
+    "kind",
+  ],
   relations: {
     memorySpace: relation.belongsTo(
       "memory_space",

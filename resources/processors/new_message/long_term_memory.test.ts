@@ -62,6 +62,25 @@ Deno.test("new_message injects ready memory and keeps only messages after its bo
   await db.ops.mutate.graph.createNode({
     namespace,
     type: "long_term_memory",
+    name: `thread:${threadId}:agent:other:memory:99`,
+    content: "OTHER_AGENT_MEMORY_SENTINEL",
+    data: {
+      schemaVersion: "1",
+      strategy: "checkpointed_graph",
+      status: "ready",
+      threadId,
+      memorySpaceId: `space-${suffix}`,
+      sequence: 99,
+      agentId: "other",
+      sourceStartMessageId: `old-user-${suffix}`,
+      sourceEndMessageId: current.id,
+    },
+    sourceType: "thread",
+    sourceId: threadId,
+  }, { threadId, namespace });
+  await db.ops.mutate.graph.createNode({
+    namespace,
+    type: "long_term_memory",
     name: `thread:${threadId}:memory:2`,
     content: "PENDING_MEMORY_SENTINEL",
     data: {
@@ -142,4 +161,5 @@ Deno.test("new_message injects ready memory and keeps only messages after its bo
   assertNotMatch(serializedMessages, /OLD_HISTORY_SENTINEL/);
   assertNotMatch(serializedMessages, /OLD_AGENT_SENTINEL/);
   assertNotMatch(serializedMessages, /PENDING_MEMORY_SENTINEL/);
+  assertNotMatch(serializedMessages, /OTHER_AGENT_MEMORY_SENTINEL/);
 });

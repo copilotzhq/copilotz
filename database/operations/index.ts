@@ -158,6 +158,8 @@ export interface GraphQueryOptions {
   namespaces?: string[];
   /** Filter by node types (e.g., 'chunk', 'entity', 'concept') */
   nodeTypes?: string[];
+  /** Require exact string matches for keys stored in the node's JSON data. */
+  dataFilters?: Record<string, string>;
   /** Edge types to traverse (e.g., 'mentions', 'caused') */
   edgeTypes?: string[];
   /** Maximum traversal depth (0 = vector search only) */
@@ -3152,6 +3154,7 @@ export function createOperations(
       embedding,
       namespaces,
       nodeTypes,
+      dataFilters,
       limit = 10,
       minSimilarity = 0.5,
     } = options;
@@ -3164,6 +3167,7 @@ export function createOperations(
     const params: unknown[] = [`[${embedding.join(",")}]`];
     let namespaceClause = "";
     let typeClause = "";
+    const dataClauses: string[] = [];
 
     if (namespaces && namespaces.length > 0) {
       params.push(namespaces);
@@ -3173,6 +3177,16 @@ export function createOperations(
     if (nodeTypes && nodeTypes.length > 0) {
       params.push(nodeTypes);
       typeClause = `AND "type" = ANY($${params.length})`;
+    }
+
+    for (const [key, value] of Object.entries(dataFilters ?? {})) {
+      params.push(key);
+      const keyIdx = params.length;
+      params.push(value);
+      const valueIdx = params.length;
+      dataClauses.push(
+        `AND "data"->>$${keyIdx} = $${valueIdx}`,
+      );
     }
 
     params.push(minSimilarity);
@@ -3190,6 +3204,7 @@ export function createOperations(
         AND 1 - ("embedding" <=> $1::vector) > $${thresholdIdx}
         ${namespaceClause}
         ${typeClause}
+        ${dataClauses.join("\n        ")}
       ORDER BY "embedding" <=> $1::vector
       LIMIT $${limitIdx}`,
       params,

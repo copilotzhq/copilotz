@@ -80,6 +80,10 @@ Deno.test("long-term-memory trigger reserves one pending checkpoint and outbox e
     (checkpoints[0].data as Record<string, unknown>).status,
     "pending",
   );
+  assertEquals(
+    (checkpoints[0].data as Record<string, unknown>).agentId,
+    "agent",
+  );
 
   const spaces = await db.ops.unsafeGraph.getNodesByNamespace(
     namespace,
@@ -104,4 +108,99 @@ Deno.test("long-term-memory trigger reserves one pending checkpoint and outbox e
     status: "pending",
     priority: 0,
   }]);
+});
+
+Deno.test("long-term-memory trigger keeps agent checkpoints independent in one thread space", async () => {
+  const db = await createDatabase({ url: ":memory:" });
+  const suffix = crypto.randomUUID();
+  const namespace = `long-term-trigger-agents-${suffix}`;
+  const thread = await db.ops.mutate.threads.create(undefined, {
+    namespace,
+    name: "Agent-scoped long-term memory",
+    participants: ["user", "agent-a", "agent-b"],
+    status: "active",
+    mode: "immediate",
+  });
+  const threadId = String(thread.id);
+  await db.ops.mutate.messages.create({
+    id: `user-${suffix}`,
+    threadId,
+    senderId: "user",
+    senderType: "user",
+    content: "Shared history for both agents.",
+  }, namespace);
+
+  const deps = {
+    db,
+    thread,
+    context: {
+      namespace,
+      memory: [{
+        name: "long_term",
+        kind: "long_term",
+        enabled: true,
+        config: {
+          triggerEstimatedTokens: 1,
+          maxContentEstimatedTokens: 2_500,
+          retrievalLimit: 5,
+        },
+      }],
+      embeddingConfig: {
+        provider: "openai",
+        model: "mock",
+      },
+    },
+    emitToStream: () => {},
+  } as ProcessorDeps;
+
+  const trigger = async (agentId: string) => {
+    const message = await db.ops.mutate.messages.create({
+      id: `${agentId}-${suffix}`,
+      threadId,
+      senderId: agentId,
+      senderType: "agent",
+      content: `${agentId} response`,
+    }, namespace);
+    const event = {
+      id: `event-${agentId}-${suffix}`,
+      type: "message.created",
+      threadId,
+      subjectType: "message",
+      subjectId: message.id,
+      payload: {
+        content: message.content,
+        senderId: agentId,
+        senderType: "agent",
+      },
+    } as unknown as Event;
+    return await process(event, deps);
+  };
+
+  const first = await trigger("agent-a");
+  const second = await trigger("agent-b");
+  assertEquals(first?.backgroundThreadIds?.length, 1);
+  assertEquals(second?.backgroundThreadIds?.length, 1);
+  assertEquals(
+    first?.backgroundThreadIds?.[0] === second?.backgroundThreadIds?.[0],
+    false,
+  );
+
+  const checkpoints = await db.ops.unsafeGraph.getNodesByNamespace(
+    namespace,
+    "long_term_memory",
+  );
+  assertEquals(checkpoints.length, 2);
+  assertEquals(
+    checkpoints.map((checkpoint) => {
+      const data = checkpoint.data as Record<string, unknown>;
+      return [data.agentId, data.sequence];
+    }).sort(),
+    [["agent-a", 1], ["agent-b", 1]],
+  );
+
+  const spaces = await db.ops.unsafeGraph.getNodesByNamespace(
+    namespace,
+    "memory_space",
+  );
+  assertEquals(spaces.length, 1);
 });

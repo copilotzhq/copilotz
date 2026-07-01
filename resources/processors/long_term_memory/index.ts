@@ -595,6 +595,7 @@ async function retrieveOlderMemory(args: {
   deps: ProcessorDeps;
   namespace: string;
   memorySpaceId: string;
+  agentId: string;
   queryEmbeddings: number[][];
   pinnedItemIds?: string[];
   excludedItemIds?: string[];
@@ -610,6 +611,10 @@ async function retrieveOlderMemory(args: {
         embedding,
         namespaces: [args.namespace],
         nodeTypes: ["memory_item"],
+        dataFilters: {
+          memorySpaceId: args.memorySpaceId,
+          createdByAgentId: args.agentId,
+        },
         limit: Math.max(args.limit * 3, args.limit),
         minSimilarity: 0.2,
       })
@@ -619,6 +624,7 @@ async function retrieveOlderMemory(args: {
     results.flatMap((result): RetrievedMemoryItem[] => {
       const data = isRecord(result.node.data) ? result.node.data : {};
       return data.memorySpaceId === args.memorySpaceId &&
+          data.createdByAgentId === args.agentId &&
           !excludedItemIds.has(String(result.node.id))
         ? [{ node: result.node, similarity: result.similarity ?? 0 }]
         : [];
@@ -654,6 +660,7 @@ async function retrieveOlderMemory(args: {
       node?.type === "memory_item" &&
       node.namespace === args.namespace &&
       data.memorySpaceId === args.memorySpaceId &&
+      data.createdByAgentId === args.agentId &&
       !excludedItemIds.has(String(node.id))
     ) {
       itemById.set(String(node.id), {
@@ -686,7 +693,8 @@ async function retrieveOlderMemory(args: {
           : {};
         if (
           related?.type === "memory_item" &&
-          relatedData.memorySpaceId === args.memorySpaceId
+          relatedData.memorySpaceId === args.memorySpaceId &&
+          relatedData.createdByAgentId === args.agentId
         ) {
           itemById.set(otherId, { node: related, similarity: 0 });
         }
@@ -819,6 +827,7 @@ export const longTermMemoryProcessor: EventProcessor<
         deps.db,
         threadId,
         namespace,
+        checkpointData.agentId,
       );
       const allowedVisibleItemIds = getVisibleMemoryItemIds(previousMemory);
       const { messages: llmMessages, tools: llmTools } =
@@ -881,6 +890,7 @@ export const longTermMemoryProcessor: EventProcessor<
         deps: memoryDeps,
         namespace,
         memorySpaceId: checkpointData.memorySpaceId,
+        agentId: checkpointData.agentId,
         queryEmbeddings: itemEmbeddingResult.embeddings,
         pinnedItemIds,
         excludedItemIds: proposal.items.flatMap((item) =>
@@ -903,6 +913,7 @@ export const longTermMemoryProcessor: EventProcessor<
           data: {
             memorySpaceId: checkpointData.memorySpaceId,
             checkpointId,
+            createdByAgentId: checkpointData.agentId,
             kind: item.kind,
             name: item.name,
             content: item.content,

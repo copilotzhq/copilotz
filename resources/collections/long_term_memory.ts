@@ -41,6 +41,7 @@ export default defineCollection({
   indexes: [
     "threadId",
     "memorySpaceId",
+    ["threadId", "agentId", "status", "sequence"],
     ["memorySpaceId", "status", "sequence"],
   ],
   relations: {

@@ -10,6 +10,7 @@
 import type { DbInstance } from "./index.ts";
 import { migrations } from "./index.ts";
 import { splitSQLStatements } from "./migrations/utils.ts";
+import { AGENT_MEMORY_OWNERSHIP_MIGRATIONS } from "./migrations/migration_0013_agent_memory_ownership.ts";
 
 /**
  * In-memory cache of schemas migrated by this process.
@@ -144,6 +145,14 @@ const REQUIRED_RUNTIME_INDEXES = [
      ON "nodes" ("namespace", ("data"->>'threadId'), "created_at")
      WHERE "type" = 'usage'`,
 ] as const;
+
+const REQUIRED_RUNTIME_DATA_MIGRATIONS = [
+  AGENT_MEMORY_OWNERSHIP_MIGRATIONS[0],
+] as const;
+
+const REQUIRED_AGENT_MEMORY_INDEXES = AGENT_MEMORY_OWNERSHIP_MIGRATIONS.slice(
+  1,
+);
 
 const provisioningPromises = new Map<string, Promise<void>>();
 
@@ -340,6 +349,12 @@ async function ensureRuntimeCompatibility(
     await executeInSchemaTransaction(db, schemaName, column.sql);
   }
   for (const statement of REQUIRED_RUNTIME_INDEXES) {
+    await executeInSchemaTransaction(db, schemaName, statement);
+  }
+  for (const statement of REQUIRED_RUNTIME_DATA_MIGRATIONS) {
+    await executeInSchemaTransaction(db, schemaName, statement);
+  }
+  for (const statement of REQUIRED_AGENT_MEMORY_INDEXES) {
     await executeInSchemaTransaction(db, schemaName, statement);
   }
 }

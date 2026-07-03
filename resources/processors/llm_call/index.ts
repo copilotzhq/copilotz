@@ -15,7 +15,11 @@ import type {
   TokenUsage,
   ToolInvocation,
 } from "@/runtime/llm/types.ts";
-import { mergeLLMRuntimeConfig, toLLMConfig } from "@/runtime/llm/config.ts";
+import {
+  mergeLLMRuntimeConfig,
+  readRuntimeEnvironment,
+  toLLMConfig,
+} from "@/runtime/llm/config.ts";
 import { withAutomaticOpenAIPromptCacheKeys } from "@/runtime/llm/prompt-cache.ts";
 import type {
   AgentLlmOptionsResolverArgs,
@@ -279,27 +283,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       }
       : undefined;
 
-    const envVars: Record<string, string> = (() => {
-      try {
-        const anyGlobal = globalThis as unknown as {
-          Deno?: { env?: { toObject?: () => Record<string, string> } };
-          process?: { env?: Record<string, string | undefined> };
-        };
-        const fromDeno = anyGlobal?.Deno?.env?.toObject?.();
-        if (fromDeno && typeof fromDeno === "object") return fromDeno;
-        const fromNode = anyGlobal?.process?.env;
-        if (fromNode && typeof fromNode === "object") {
-          const out: Record<string, string> = {};
-          for (const [k, v] of Object.entries(fromNode)) {
-            if (typeof v === "string") out[k] = v;
-          }
-          return out;
-        }
-      } catch {
-        // ignore
-      }
-      return {};
-    })();
+    const envVars = readRuntimeEnvironment();
 
     // Per-agent resolveInLLM takes precedence over the global asset config.
     const agentForAssets = context.agents?.find((a) =>
@@ -592,6 +576,8 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
                   finishReason: "error",
                   error: {
                     reason: usageStatusReason,
+                    status: record.error?.status ?? null,
+                    message: record.error?.message ?? null,
                     recovered: true,
                     visibleOutputStarted: record.visibleOutputStarted ?? false,
                   },

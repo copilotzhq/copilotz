@@ -33,6 +33,15 @@ function currentStatePatch(sourceMessageId: string, value: string | null) {
   };
 }
 
+interface MockRegistries {
+  llmProviders: Record<string, ProviderFactory>;
+  embeddingProviders: Record<string, EmbeddingProviderFactory>;
+  chatRequests: Array<Record<string, unknown>>;
+  chatAuthorizations: Array<string | null>;
+  embeddingRequests: string[][];
+  restore: () => void;
+}
+
 Deno.test("embedding chunks preserve message lines until a line is oversized", () => {
   assertEquals(
     chunkLinesForEmbedding(["first", "second", "third"], 3),
@@ -240,7 +249,8 @@ Deno.test("consolidation routes invalid memory-space targets to the default", ()
   assertEquals(parsed.items[0].memorySpaceId, "default-space");
 });
 
-function mockRegistries(answer: string) {
+function mockRegistries(answer: string | string[]): MockRegistries {
+  const answers = Array.isArray(answer) ? answer : [answer];
   const chatRequests: Array<Record<string, unknown>> = [];
   const embeddingRequests: string[][] = [];
   const llmFactory: ProviderFactory = () => ({
@@ -285,7 +295,9 @@ function mockRegistries(answer: string) {
     chatRequests.push(
       JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
     );
-    const event = JSON.stringify({ content: answer, done: true });
+    const responseAnswer =
+      answers[Math.min(chatRequests.length - 1, answers.length - 1)];
+    const event = JSON.stringify({ content: responseAnswer, done: true });
     return Promise.resolve(
       new Response(`data: ${event}\n\ndata: [DONE]\n\n`, {
         status: 200,
@@ -297,6 +309,108 @@ function mockRegistries(answer: string) {
     llmProviders: { openai: llmFactory },
     embeddingProviders: { openai: embeddingFactory },
     chatRequests,
+    chatAuthorizations: [],
+    embeddingRequests,
+    restore: () => {
+      globalThis.fetch = originalFetch;
+    },
+  };
+}
+
+function mockFallbackRegistries(
+  answer: string,
+  fallbackStatus?: number,
+): MockRegistries {
+  const chatRequests: Array<Record<string, unknown>> = [];
+  const chatAuthorizations: Array<string | null> = [];
+  const embeddingRequests: string[][] = [];
+  const anthropicFactory: ProviderFactory = () => ({
+    endpoint: "https://mock.local/anthropic",
+    headers: (config) => ({ "x-api-key": config.apiKey ?? "" }),
+    body: (messages, config) => ({ messages, config }),
+    extractContent: () => null,
+  });
+  const openaiFactory: ProviderFactory = () => ({
+    endpoint: "https://mock.local/openai",
+    headers: (config) => ({
+      "Authorization": `Bearer ${config.apiKey}`,
+    }),
+    body: (messages, config) => ({ messages, config }),
+    extractContent: (data) =>
+      typeof data?.content === "string"
+        ? [{ text: data.content, isReasoning: false }]
+        : null,
+    extractFinishReason: (data) => data?.done ? "stop" : null,
+  });
+  const embeddingFactory: EmbeddingProviderFactory = () => ({
+    endpoint: "https://mock.local/embeddings",
+    headers: () => ({}),
+    body: (texts) => ({ texts }),
+    extractEmbeddings: (data) =>
+      (data as { embeddings: number[][] }).embeddings,
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/embeddings")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        texts?: string[];
+      };
+      embeddingRequests.push(body.texts ?? []);
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            embeddings: (body.texts ?? []).map(() =>
+              Array.from({ length: 1536 }, (_, index) => index === 0 ? 1 : 0)
+            ),
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      );
+    }
+
+    chatRequests.push(
+      JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+    );
+    chatAuthorizations.push(
+      new Headers(init?.headers).get("authorization") ??
+        new Headers(init?.headers).get("x-api-key"),
+    );
+    if (url.endsWith("/anthropic")) {
+      return Promise.resolve(
+        new Response("primary unavailable", {
+          status: 400,
+          statusText: "Bad Request",
+        }),
+      );
+    }
+    if (fallbackStatus) {
+      return Promise.resolve(
+        new Response("fallback unavailable", {
+          status: fallbackStatus,
+          statusText: "Fallback unavailable",
+        }),
+      );
+    }
+    const event = JSON.stringify({ content: answer, done: true });
+    return Promise.resolve(
+      new Response(`data: ${event}\n\ndata: [DONE]\n\n`, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+    );
+  };
+  return {
+    llmProviders: {
+      anthropic: anthropicFactory,
+      openai: openaiFactory,
+    },
+    embeddingProviders: { openai: embeddingFactory },
+    chatRequests,
+    chatAuthorizations,
     embeddingRequests,
     restore: () => {
       globalThis.fetch = originalFetch;
@@ -542,7 +656,7 @@ async function createPendingCheckpoint(
 
 function createDeps(
   fixture: Awaited<ReturnType<typeof createPendingCheckpoint>>,
-  registries: ReturnType<typeof mockRegistries>,
+  registries: MockRegistries,
 ): ProcessorDeps {
   return {
     db: fixture.db,
@@ -900,9 +1014,216 @@ Deno.test("processor reads and writes across attached memory spaces", async () =
   }
 });
 
-Deno.test("long-term-memory processor terminalizes an invalid consolidation", async () => {
+Deno.test("long-term-memory processor authenticates cross-provider fallbacks from runtime env", async () => {
   const fixture = await createPendingCheckpoint();
-  const registries = mockRegistries("not-json");
+  const answer = JSON.stringify({
+    continuityPatch: currentStatePatch(
+      fixture.last.id,
+      "The fallback completed memory consolidation.",
+    ),
+    items: [],
+    relations: [],
+  });
+  const registries = mockFallbackRegistries(answer);
+  const previousOpenAiKey = Deno.env.get("OPENAI_API_KEY");
+  Deno.env.set("OPENAI_API_KEY", "fallback-openai-key");
+  try {
+    const event = {
+      id: `event-${crypto.randomUUID()}`,
+      type: "long_term_memory.created",
+      threadId: fixture.threadId,
+      subjectType: "long_term_memory",
+      subjectId: fixture.checkpoint.id,
+      payload: fixture.checkpoint,
+    } as unknown as Event;
+    const deps = createDeps(fixture, registries);
+    deps.context.agents = [{
+      id: "agent",
+      name: "Agent",
+      role: "assistant",
+      llmOptions: {
+        provider: "anthropic",
+        model: "primary",
+        fallbacks: [{ provider: "openai", model: "fallback" }],
+        estimateCost: false,
+      },
+    }];
+    deps.context.security = {
+      resolveLLMRuntimeConfig: () => ({ apiKey: "primary-anthropic-key" }),
+    };
+    await process(event, deps);
+
+    const checkpoint = await fixture.db.ops.unsafeGraph.getNodeById(
+      String(fixture.checkpoint.id),
+    );
+    assertEquals(
+      (checkpoint?.data as Record<string, unknown>).status,
+      "ready",
+    );
+    assertEquals(registries.chatRequests.length, 2);
+    assertEquals(registries.chatAuthorizations, [
+      "primary-anthropic-key",
+      "Bearer fallback-openai-key",
+    ]);
+    const attempts = await fixture.db.ops.unsafeGraph.getNodesByNamespace(
+      fixture.namespace,
+      "llm_attempt",
+    );
+    const debug = (attempts[0].data as Record<string, unknown>)
+      .debug as Record<string, unknown>;
+    const consolidation = debug.consolidation as Record<string, unknown>;
+    const providerAttempts = consolidation.providerAttempts as Array<
+      Record<string, unknown>
+    >;
+    assertEquals(
+      providerAttempts.map((attempt) => attempt.model),
+      ["primary", "fallback"],
+    );
+    assertEquals(
+      providerAttempts[0].error,
+      {
+        reason: "provider_error",
+        status: 400,
+        message: "Request failed with status 400",
+      },
+    );
+  } finally {
+    if (previousOpenAiKey === undefined) Deno.env.delete("OPENAI_API_KEY");
+    else Deno.env.set("OPENAI_API_KEY", previousOpenAiKey);
+    registries.restore();
+  }
+});
+
+Deno.test("long-term-memory processor persists the complete failed fallback chain", async () => {
+  const fixture = await createPendingCheckpoint();
+  const registries = mockFallbackRegistries("", 401);
+  const previousOpenAiKey = Deno.env.get("OPENAI_API_KEY");
+  Deno.env.set("OPENAI_API_KEY", "fallback-openai-key");
+  try {
+    const event = {
+      id: `event-${crypto.randomUUID()}`,
+      type: "long_term_memory.created",
+      threadId: fixture.threadId,
+      subjectType: "long_term_memory",
+      subjectId: fixture.checkpoint.id,
+      payload: fixture.checkpoint,
+    } as unknown as Event;
+    const deps = createDeps(fixture, registries);
+    deps.context.agents = [{
+      id: "agent",
+      name: "Agent",
+      role: "assistant",
+      llmOptions: {
+        provider: "anthropic",
+        model: "primary",
+        fallbacks: [{ provider: "openai", model: "fallback" }],
+        estimateCost: false,
+      },
+    }];
+    deps.context.security = {
+      resolveLLMRuntimeConfig: () => ({ apiKey: "primary-anthropic-key" }),
+    };
+    await process(event, deps);
+
+    const checkpoint = await fixture.db.ops.unsafeGraph.getNodeById(
+      String(fixture.checkpoint.id),
+    );
+    const checkpointData = checkpoint?.data as Record<string, unknown>;
+    assertEquals(checkpointData.status, "failed");
+    const checkpointError = checkpointData.error as Record<string, unknown>;
+    assertEquals(checkpointError.fallbackAttempted, true);
+    assertEquals(checkpointError.provider, "openai");
+    const providerAttempts = checkpointError.attempts as Array<
+      Record<string, unknown>
+    >;
+    assertEquals(
+      providerAttempts.map((attempt) => ({
+        provider: attempt.provider,
+        model: attempt.model,
+        status: attempt.status,
+      })),
+      [
+        { provider: "anthropic", model: "primary", status: 400 },
+        { provider: "openai", model: "fallback", status: 401 },
+      ],
+    );
+
+    const attempts = await fixture.db.ops.unsafeGraph.getNodesByNamespace(
+      fixture.namespace,
+      "llm_attempt",
+    );
+    assertEquals(
+      (attempts[0].data as Record<string, unknown>).error,
+      checkpointError,
+    );
+  } finally {
+    if (previousOpenAiKey === undefined) Deno.env.delete("OPENAI_API_KEY");
+    else Deno.env.set("OPENAI_API_KEY", previousOpenAiKey);
+    registries.restore();
+  }
+});
+
+Deno.test("long-term-memory processor repairs an invalid consolidation response once", async () => {
+  const fixture = await createPendingCheckpoint();
+  const repairedAnswer = JSON.stringify({
+    continuityPatch: currentStatePatch(
+      fixture.last.id,
+      "The malformed consolidation response was repaired.",
+    ),
+    items: [],
+    relations: [],
+  });
+  const registries = mockRegistries(["not-json", repairedAnswer]);
+  try {
+    const event = {
+      id: `event-${crypto.randomUUID()}`,
+      type: "long_term_memory.created",
+      threadId: fixture.threadId,
+      subjectType: "long_term_memory",
+      subjectId: fixture.checkpoint.id,
+      payload: fixture.checkpoint,
+    } as unknown as Event;
+    await process(event, createDeps(fixture, registries));
+
+    const checkpoint = await fixture.db.ops.unsafeGraph.getNodeById(
+      String(fixture.checkpoint.id),
+    );
+    assertEquals(
+      (checkpoint?.data as Record<string, unknown>).status,
+      "ready",
+    );
+    assertEquals(registries.chatRequests.length, 2);
+    assertStringIncludes(
+      JSON.stringify(registries.chatRequests[1]),
+      "failed validation",
+    );
+
+    const attempts = await fixture.db.ops.unsafeGraph.getNodesByNamespace(
+      fixture.namespace,
+      "llm_attempt",
+    );
+    const attemptData = attempts[0].data as Record<string, unknown>;
+    assertEquals(attemptData.status, "completed");
+    assertEquals(attemptData.answer, repairedAnswer);
+    const debug = attemptData.debug as Record<string, unknown>;
+    const consolidation = debug.consolidation as Record<string, unknown>;
+    assertEquals(consolidation.repairAttempted, true);
+    const rejected = consolidation.rejectedValidationAttempts as Array<
+      Record<string, unknown>
+    >;
+    const rejectedDebug = rejected[0].debug as Record<string, unknown>;
+    assertEquals(
+      (rejectedDebug.rawOutput as Record<string, unknown>).content,
+      "not-json",
+    );
+  } finally {
+    registries.restore();
+  }
+});
+
+Deno.test("long-term-memory processor terminalizes an invalid consolidation after one repair", async () => {
+  const fixture = await createPendingCheckpoint();
+  const registries = mockRegistries(["not-json", "still-not-json"]);
   try {
     const event = {
       id: `event-${crypto.randomUUID()}`,
@@ -920,6 +1241,22 @@ Deno.test("long-term-memory processor terminalizes an invalid consolidation", as
     assertEquals(
       (checkpoint?.data as Record<string, unknown>).status,
       "failed",
+    );
+    assertEquals(registries.chatRequests.length, 2);
+    const attempts = await fixture.db.ops.unsafeGraph.getNodesByNamespace(
+      fixture.namespace,
+      "llm_attempt",
+    );
+    const attemptData = attempts[0].data as Record<string, unknown>;
+    assertEquals(attemptData.status, "failed");
+    assertEquals(attemptData.answer, "still-not-json");
+    const error = attemptData.error as Record<string, unknown>;
+    assertEquals(error.reason, "invalid_response");
+    assertEquals(error.validationRepairAttempted, true);
+    const debug = attemptData.debug as Record<string, unknown>;
+    assertEquals(
+      (debug.rawOutput as Record<string, unknown>).content,
+      "still-not-json",
     );
   } finally {
     registries.restore();

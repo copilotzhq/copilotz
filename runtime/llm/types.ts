@@ -433,6 +433,11 @@ export interface LLMUsageAttempt {
   model?: string;
   messages?: ChatMessage[];
   debug?: LLMDebugSnapshot;
+  error?: {
+    reason: ProviderFallbackReason | null;
+    status?: number;
+    message: string;
+  };
   usage: TokenUsage;
   cost?: CostBreakdown;
   visibleOutputStarted?: boolean;

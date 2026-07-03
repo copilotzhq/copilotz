@@ -12,10 +12,15 @@ import type {
   NewKnowledgeEdge,
   NewKnowledgeNode,
 } from "@/database/schemas/index.ts";
-import { chat } from "@/runtime/llm/index.ts";
-import { mergeLLMRuntimeConfig, toLLMConfig } from "@/runtime/llm/config.ts";
+import { chat, LLMProviderError } from "@/runtime/llm/index.ts";
+import {
+  mergeLLMRuntimeConfig,
+  readRuntimeEnvironment,
+  toLLMConfig,
+} from "@/runtime/llm/config.ts";
 import type {
   ChatMessage,
+  ChatResponse,
   LLMRuntimeConfig,
   ProviderConfig,
   ToolDefinition,
@@ -678,6 +683,157 @@ export function parseConsolidationProposal(
   };
 }
 
+interface ConsolidationValidationFailure {
+  errorMessage: string;
+  response: ChatResponse;
+}
+
+function responseDebugSnapshot(
+  response: ChatResponse,
+): Record<string, unknown> {
+  if (response.debug) return { ...response.debug };
+  return {
+    inputMessages: response.prompt,
+    rawOutput: {
+      content: response.answer,
+      currentAttemptContent: response.answer,
+      ...(response.reasoning ? { reasoning: response.reasoning } : {}),
+    },
+    parsedOutput: {
+      answer: response.answer,
+      ...(response.reasoning ? { reasoning: response.reasoning } : {}),
+      toolCalls: response.toolCalls ?? [],
+      extractedTags: response.extractedTags ?? {},
+      finishReason: response.finishReason ?? null,
+    },
+  };
+}
+
+function buildConsolidationDebug(
+  response: ChatResponse | null,
+  validationFailures: ConsolidationValidationFailure[],
+): Record<string, unknown> | null {
+  if (!response) return null;
+  const providerAttempts = (response.usageAttempts ?? []).map((attempt) => ({
+    provider: attempt.provider ?? null,
+    model: attempt.model ?? null,
+    usage: attempt.usage,
+    cost: attempt.cost ?? null,
+    visibleOutputStarted: attempt.visibleOutputStarted ?? false,
+    partialAnswer: attempt.partialAnswer ?? null,
+    partialReasoning: attempt.partialReasoning ?? null,
+    error: attempt.error ?? null,
+    debug: attempt.debug ?? null,
+  }));
+  if (validationFailures.length === 0 && providerAttempts.length <= 1) {
+    return responseDebugSnapshot(response);
+  }
+  return {
+    ...responseDebugSnapshot(response),
+    consolidation: {
+      repairAttempted: validationFailures.length > 0,
+      providerAttempts,
+      rejectedValidationAttempts: validationFailures.map(
+        (failure, attemptIndex) => ({
+          attemptIndex,
+          error: { message: failure.errorMessage },
+          provider: failure.response.provider ?? null,
+          model: failure.response.model ?? null,
+          usage: failure.response.usage ?? null,
+          cost: failure.response.cost ?? null,
+          debug: responseDebugSnapshot(failure.response),
+        }),
+      ),
+    },
+  };
+}
+
+function buildConsolidationRepairMessages(
+  messages: ChatMessage[],
+  response: ChatResponse,
+  error: unknown,
+): ChatMessage[] {
+  const message = error instanceof Error ? error.message : String(error);
+  return [
+    ...messages,
+    { role: "assistant", content: response.answer },
+    {
+      role: "user",
+      content: [
+        "Your previous consolidation response failed validation.",
+        `Validation error: ${message}`,
+        "Return the complete corrected JSON object now.",
+        "Preserve every valid memory item and relation from the previous response.",
+        "Every changed continuity field must use { value, sourceMessageIds }, and sourceMessageIds must come from the conversation range.",
+        "Output ONLY the JSON object — no markdown, no explanation.",
+      ].join("\n"),
+    },
+  ];
+}
+
+function isRetryableLlmReason(reason: string | null): boolean {
+  return reason === "rate_limit" ||
+    reason === "timeout" ||
+    reason === "network" ||
+    reason === "auth_error" ||
+    reason === "server_error" ||
+    reason === "provider_error" ||
+    reason === "unknown";
+}
+
+function serializeConsolidationError(
+  error: unknown,
+  config: ProviderConfig | null,
+  response: ChatResponse | null,
+  validationFailures: ConsolidationValidationFailure[],
+): Record<string, unknown> {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof LLMProviderError) {
+    return {
+      message,
+      reason: error.reason,
+      provider: error.provider ?? null,
+      model: error.model ?? null,
+      status: error.status ?? null,
+      retryable: isRetryableLlmReason(error.reason),
+      fallbackAttempted: error.fallbackAttempted,
+      fallbackCount: Math.max(0, error.attempts.length - 1),
+      visibleStreamStarted: error.visibleStreamStarted,
+      attempts: error.attempts.map((attempt) => ({
+        provider: attempt.provider,
+        model: attempt.model ?? null,
+        reason: attempt.reason ?? null,
+        status: attempt.status ?? null,
+        message: attempt.message ?? null,
+      })),
+      validationRepairAttempted: validationFailures.length > 0,
+    };
+  }
+  const responseAttempts = (response?.usageAttempts ?? []).map((attempt) => ({
+    provider: attempt.provider ?? response?.provider ?? config?.provider ??
+      "unknown",
+    model: attempt.model ?? null,
+    reason: attempt.error?.reason ?? attempt.usage.statusReason ?? null,
+    status: attempt.error?.status ?? null,
+    message: attempt.error?.message ?? null,
+  }));
+  return {
+    message,
+    reason: validationFailures.length > 0 ? "invalid_response" : null,
+    provider: response?.provider ?? config?.provider ?? null,
+    model: response?.model ?? config?.model ?? null,
+    status: null,
+    retryable: validationFailures.length > 0,
+    fallbackAttempted: responseAttempts.length > 1,
+    fallbackCount: Math.max(0, responseAttempts.length - 1),
+    visibleStreamStarted: (response?.usageAttempts ?? []).some((attempt) =>
+      attempt.visibleOutputStarted
+    ),
+    attempts: responseAttempts,
+    validationRepairAttempted: validationFailures.length > 0,
+  };
+}
+
 function itemLabel(node: KnowledgeNode): string {
   const data = isRecord(node.data) ? node.data : {};
   const kind = typeof data.kind === "string" ? data.kind : "memory";
@@ -1259,6 +1415,9 @@ export const longTermMemoryProcessor: EventProcessor<
     const sourceThread = await deps.db.ops.getThreadById(threadId);
     const memoryDeps = sourceThread ? { ...deps, thread: sourceThread } : deps;
     let attemptId: string | null = null;
+    let llmConfig: ProviderConfig | null = null;
+    let response: ChatResponse | null = null;
+    const validationFailures: ConsolidationValidationFailure[] = [];
 
     try {
       if (!config || !namespace || !deps.context.embeddingConfig) {
@@ -1356,7 +1515,7 @@ export const longTermMemoryProcessor: EventProcessor<
           previousMemory,
           previousContinuity,
         });
-      const llmConfig = await resolveMemoryLlmConfig({
+      llmConfig = await resolveMemoryLlmConfig({
         agent,
         messages: llmMessages,
         event,
@@ -1372,22 +1531,55 @@ export const longTermMemoryProcessor: EventProcessor<
         messages: llmMessages,
       });
 
-      const response = await chat(
+      const runtimeEnvironment = readRuntimeEnvironment();
+      response = await chat(
         { messages: llmMessages, tools: llmTools },
         llmConfig,
-        {},
+        runtimeEnvironment,
         undefined,
         deps.context.llmProviders,
       );
-      let proposal = parseConsolidationProposal(
-        response.answer,
-        new Set(sourceMessages.map((message) => message.id)),
-        allowedVisibleItemIds,
-        {
-          writableMemorySpaceIds: new Set(writeMemorySpaceIds),
-          defaultWriteMemorySpaceId,
-        },
+      const allowedSourceMessageIds = new Set(
+        sourceMessages.map((message) => message.id),
       );
+      const proposalRouting = {
+        writableMemorySpaceIds: new Set(writeMemorySpaceIds),
+        defaultWriteMemorySpaceId,
+      };
+      let proposal: ConsolidationProposal;
+      try {
+        proposal = parseConsolidationProposal(
+          response.answer,
+          allowedSourceMessageIds,
+          allowedVisibleItemIds,
+          proposalRouting,
+        );
+      } catch (validationError) {
+        validationFailures.push({
+          errorMessage: validationError instanceof Error
+            ? validationError.message
+            : String(validationError),
+          response,
+        });
+        const repairMessages = buildConsolidationRepairMessages(
+          llmMessages,
+          response,
+          validationError,
+        );
+        response = await chat(
+          { messages: repairMessages, tools: llmTools },
+          llmConfig,
+          runtimeEnvironment,
+          undefined,
+          deps.context.llmProviders,
+        );
+        proposal = parseConsolidationProposal(
+          response.answer,
+          allowedSourceMessageIds,
+          allowedVisibleItemIds,
+          proposalRouting,
+        );
+      }
       const continuity = applyContinuityPatch(
         previousContinuity,
         proposal.continuityPatch,
@@ -1588,7 +1780,7 @@ export const longTermMemoryProcessor: EventProcessor<
           answer: response.answer,
           reasoning: response.reasoning ?? null,
           messages: response.prompt,
-          debug: response.debug ?? null,
+          debug: buildConsolidationDebug(response, validationFailures),
           provider: response.provider ?? llmConfig.provider ?? null,
           model: response.model ?? llmConfig.model ?? null,
           usage: response.usage ?? null,
@@ -1630,11 +1822,28 @@ export const longTermMemoryProcessor: EventProcessor<
         });
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const structuredError = serializeConsolidationError(
+        error,
+        llmConfig,
+        response,
+        validationFailures,
+      );
       console.warn("[long_term_memory] Consolidation failed:", error);
       if (attemptId) {
         await deps.db.ops.mutate.llmAttempts.fail(attemptId, {
-          error: { message },
+          answer: response?.answer ?? null,
+          reasoning: response?.reasoning ?? null,
+          messages: response?.prompt,
+          debug: buildConsolidationDebug(response, validationFailures),
+          provider: error instanceof LLMProviderError
+            ? error.provider
+            : response?.provider ?? llmConfig?.provider ?? null,
+          model: error instanceof LLMProviderError
+            ? error.model ?? null
+            : response?.model ?? llmConfig?.model ?? null,
+          usage: response?.usage ?? null,
+          cost: response?.cost ?? null,
+          error: structuredError,
           finishReason: "error",
           finishedAt: new Date().toISOString(),
         }, {
@@ -1648,7 +1857,7 @@ export const longTermMemoryProcessor: EventProcessor<
         data: {
           ...checkpointData,
           status: "failed",
-          error: { message },
+          error: structuredError,
         },
       }, {
         threadId,

@@ -1068,6 +1068,11 @@ export async function chat(
         attemptId,
         provider: attemptProvider,
         model: attemptConfig.model,
+        error: {
+          reason: classifyLLMError(error),
+          status: getErrorStatus(error),
+          message: getErrorMessage(error),
+        },
         usage: failedUsage,
         ...(failedCost ? { cost: failedCost } : {}),
         visibleOutputStarted: attemptVisibleOutputStarted,

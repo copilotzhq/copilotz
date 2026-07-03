@@ -2,6 +2,7 @@ import {
   assertAlmostEquals,
   assertEquals,
   assertStringIncludes,
+  assertThrows,
 } from "@std/assert";
 import { createDatabase } from "@/database/index.ts";
 import type { Event, ProcessorDeps } from "@/types/index.ts";
@@ -9,14 +10,28 @@ import type { ProviderFactory } from "@/runtime/llm/types.ts";
 import type { EmbeddingProviderFactory } from "@/runtime/embeddings/types.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 import {
+  applyContinuityPatch,
   averageNormalizedEmbeddings,
+  buildContinuityRetrievalTexts,
   chunkLinesForEmbedding,
+  createEmptyContinuity,
   extractVisibleMemoryItemIds,
   fuseMemoryCandidateRanks,
   parseConsolidationProposal,
   process,
   renderLongTermMemory,
 } from "./index.ts";
+
+function currentStatePatch(sourceMessageId: string, value: string | null) {
+  return {
+    state: {
+      currentState: {
+        value,
+        sourceMessageIds: [sourceMessageId],
+      },
+    },
+  };
+}
 
 Deno.test("embedding chunks preserve message lines until a line is oversized", () => {
   assertEquals(
@@ -46,12 +61,21 @@ Deno.test("embedding aggregation uses character-weighted normalized vectors", ()
 
 Deno.test("checkpoint rendering omits oversized blocks instead of slicing them", () => {
   const oversized = "OVERSIZED_MEMORY_BLOCK_".repeat(20);
+  const continuity = applyContinuityPatch(createEmptyContinuity(), {
+    state: {
+      currentState: {
+        value: oversized,
+        sourceMessageIds: ["message-1"],
+      },
+    },
+  });
   const rendered = renderLongTermMemory({
     proposal: {
-      workState: oversized,
+      continuityPatch: {},
       items: [],
       relations: [],
     },
+    continuity,
     newItemNodes: new Map(),
     olderItems: [],
     olderRelations: [],
@@ -60,6 +84,79 @@ Deno.test("checkpoint rendering omits oversized blocks instead of slicing them",
 
   assertEquals(rendered.length <= 120, true);
   assertEquals(rendered.includes("OVERSIZED_MEMORY_BLOCK_"), false);
+});
+
+Deno.test("continuity patches retain omitted fields and explicitly clear values", () => {
+  const initial = applyContinuityPatch(createEmptyContinuity(), {
+    intent: {
+      challenge: {
+        value: "Preserve the user's goal across rollovers.",
+        sourceMessageIds: ["message-1"],
+      },
+    },
+    state: {
+      openQuestions: {
+        value: ["How should retrieval support continuity?"],
+        sourceMessageIds: ["message-1"],
+      },
+    },
+  });
+  const updated = applyContinuityPatch(initial, {
+    state: {
+      openQuestions: {
+        value: [],
+        sourceMessageIds: ["message-2"],
+      },
+    },
+  });
+
+  assertEquals(updated.intent.challenge, initial.intent.challenge);
+  assertEquals(updated.state.openQuestions, {
+    value: [],
+    sourceMessageIds: ["message-2"],
+  });
+});
+
+Deno.test("continuity creates separate intent and state retrieval queries", () => {
+  const continuity = applyContinuityPatch(createEmptyContinuity(), {
+    intent: {
+      desiredOutcome: {
+        value: "Long conversations retain their original objective.",
+        sourceMessageIds: ["message-1"],
+      },
+    },
+    state: {
+      activeApproach: {
+        value: "Use deterministic continuity patches.",
+        sourceMessageIds: ["message-2"],
+      },
+    },
+  });
+
+  assertEquals(buildContinuityRetrievalTexts(continuity), [
+    "desiredOutcome: Long conversations retain their original objective.",
+    "activeApproach: Use deterministic continuity patches.",
+  ]);
+});
+
+Deno.test("continuity updates require provenance from the reserved range", () => {
+  assertThrows(
+    () =>
+      parseConsolidationProposal(
+        JSON.stringify({
+          continuityPatch: currentStatePatch(
+            "outside-range",
+            "This update has no valid provenance.",
+          ),
+          items: [],
+          relations: [],
+        }),
+        new Set(["message-1"]),
+        new Set(),
+      ),
+    Error,
+    "currentState",
+  );
 });
 
 Deno.test("checkpoint item IDs are extractable only when fully rendered", () => {
@@ -87,7 +184,10 @@ Deno.test("memory candidate fusion preserves strong matches and rewards consensu
 
 Deno.test("consolidation may supersede only a visible checkpoint item", () => {
   const proposal = JSON.stringify({
-    workState: "Updating a prior decision.",
+    continuityPatch: currentStatePatch(
+      "message-1",
+      "Updating a prior decision.",
+    ),
     items: [{
       localId: "new-decision",
       kind: "decision",
@@ -118,7 +218,7 @@ Deno.test("consolidation may supersede only a visible checkpoint item", () => {
 Deno.test("consolidation routes invalid memory-space targets to the default", () => {
   const parsed = parseConsolidationProposal(
     JSON.stringify({
-      workState: "Routing memory.",
+      continuityPatch: currentStatePatch("message-1", "Routing memory."),
       items: [{
         localId: "item",
         kind: "fact",
@@ -298,6 +398,23 @@ async function createPendingCheckpoint(
   if (options.withPrevious) {
     const previousCheckpointId = `previous-checkpoint-${suffix}`;
     previousItemId = `previous-item-${suffix}`;
+    const previousContinuity = applyContinuityPatch(
+      createEmptyContinuity(),
+      {
+        intent: {
+          challenge: {
+            value: "Keep long-running work aligned with the user's goal.",
+            sourceMessageIds: [first.id],
+          },
+        },
+        state: {
+          currentState: {
+            value: "A previous implementation decision is active.",
+            sourceMessageIds: [first.id],
+          },
+        },
+      },
+    );
     await db.ops.mutate.graph.createNode({
       id: previousItemId,
       namespace,
@@ -339,7 +456,11 @@ async function createPendingCheckpoint(
         agentId: "agent",
         sourceStartMessageId: first.id,
         sourceEndMessageId: first.id,
-        metadata: { visibleItemIds: [previousItemId] },
+        metadata: {
+          continuityVersion: "1",
+          continuity: previousContinuity,
+          visibleItemIds: [previousItemId],
+        },
       },
       sourceType: "thread",
       sourceId: threadId,
@@ -463,7 +584,10 @@ function createDeps(
 Deno.test("long-term-memory processor finalizes the reserved node atomically", async () => {
   const fixture = await createPendingCheckpoint();
   const proposal = {
-    workState: "The lifecycle-based memory processor is being implemented.",
+    continuityPatch: currentStatePatch(
+      fixture.last.id,
+      "The lifecycle-based memory processor is being implemented.",
+    ),
     items: [{
       localId: "decision-1",
       kind: "decision",
@@ -524,6 +648,7 @@ Deno.test("long-term-memory processor finalizes the reserved node atomically", a
     );
     assertEquals(registries.embeddingRequests[0], [
       proposal.items[0].content,
+      "currentState: The lifecycle-based memory processor is being implemented.",
     ]);
     assertEquals(
       (registries.chatRequests[0]?.config as Record<string, unknown>).model,
@@ -546,7 +671,10 @@ Deno.test("long-term-memory processor finalizes the reserved node atomically", a
 Deno.test("processor may supersede an item visible in the previous checkpoint", async () => {
   const fixture = await createPendingCheckpoint({ withPrevious: true });
   const proposal = {
-    workState: "The previous decision is being replaced.",
+    continuityPatch: currentStatePatch(
+      fixture.last.id,
+      "The previous decision is being replaced.",
+    ),
     items: [{
       localId: "replacement",
       kind: "decision",
@@ -602,10 +730,75 @@ Deno.test("processor may supersede an item visible in the previous checkpoint", 
   }
 });
 
+Deno.test("processor retains prior intent and retrieves memory without new items", async () => {
+  const fixture = await createPendingCheckpoint({ withPrevious: true });
+  const proposal = {
+    continuityPatch: currentStatePatch(
+      fixture.last.id,
+      "Implementation details are being reviewed.",
+    ),
+    items: [],
+    relations: [],
+  };
+  const registries = mockRegistries(JSON.stringify(proposal));
+  try {
+    const event = {
+      id: `event-${crypto.randomUUID()}`,
+      type: "long_term_memory.created",
+      threadId: fixture.threadId,
+      subjectType: "long_term_memory",
+      subjectId: fixture.checkpoint.id,
+      payload: fixture.checkpoint,
+    } as unknown as Event;
+    await process(event, createDeps(fixture, registries));
+
+    const checkpoint = await fixture.db.ops.unsafeGraph.getNodeById(
+      String(fixture.checkpoint.id),
+    );
+    const metadata = (checkpoint?.data as Record<string, unknown>)
+      .metadata as Record<string, unknown>;
+    const continuity = metadata.continuity as ReturnType<
+      typeof createEmptyContinuity
+    >;
+    assertEquals(
+      continuity.intent.challenge.value,
+      "Keep long-running work aligned with the user's goal.",
+    );
+    assertEquals(
+      continuity.intent.challenge.sourceMessageIds,
+      [fixture.first.id],
+    );
+    assertEquals(
+      continuity.state.currentState.value,
+      "Implementation details are being reviewed.",
+    );
+    assertEquals(metadata.retrievedItemIds, [fixture.previousItemId]);
+    assertStringIncludes(
+      checkpoint?.content ?? "",
+      "Keep long-running work aligned with the user's goal.",
+    );
+    assertStringIncludes(
+      checkpoint?.content ?? "",
+      "Previous decision",
+    );
+    assertEquals(registries.embeddingRequests[0], [
+      "challenge: Keep long-running work aligned with the user's goal.",
+      [
+        "currentState: Implementation details are being reviewed.",
+      ].join("\n"),
+    ]);
+  } finally {
+    registries.restore();
+  }
+});
+
 Deno.test("processor retrieves only memory items created by its agent", async () => {
   const fixture = await createPendingCheckpoint({ withForeignItem: true });
   const proposal = {
-    workState: "The current agent is recording its own decision.",
+    continuityPatch: currentStatePatch(
+      fixture.last.id,
+      "The current agent is recording its own decision.",
+    ),
     items: [{
       localId: "own-decision",
       kind: "decision",
@@ -652,7 +845,10 @@ Deno.test("processor retrieves only memory items created by its agent", async ()
 Deno.test("processor reads and writes across attached memory spaces", async () => {
   const fixture = await createPendingCheckpoint({ withSharedSpace: true });
   const proposal = {
-    workState: "The shared user memory is being updated.",
+    continuityPatch: currentStatePatch(
+      fixture.last.id,
+      "The shared user memory is being updated.",
+    ),
     items: [{
       localId: "shared-decision",
       kind: "decision",

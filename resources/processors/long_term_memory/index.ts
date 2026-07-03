@@ -49,8 +49,39 @@ const CONSOLIDATE_MEMORY_TOOL: ToolDefinition = {
       "Call this tool exactly once with your full analysis of the conversation range. " +
       "Do not call this tool during normal conversation — it is invoked only by the memory system.",
     inputTypes: `type Input = {
-  /** Brief phrase describing where the work currently stands. */
-  workState: string;
+  /**
+   * Include only fields introduced, refined, changed, or explicitly cleared
+   * by this conversation range. Omitted fields retain their previous values.
+   * Use null or [] only when the range explicitly clears a value.
+   */
+  continuityPatch: {
+    intent?: {
+      /** Problem, opportunity, or driving question — not the current task. */
+      challenge?: SourcedValue<string | null>;
+      /** Why this matters to the user or affected stakeholders. */
+      purpose?: SourcedValue<string | null>;
+      /** Conditions the user wants to make true — not merely an activity. */
+      desiredOutcome?: SourcedValue<string | null>;
+      /** Observable evidence that the desired outcome has been achieved. */
+      successCriteria?: SourcedValue<string[]>;
+      /** Preferences and tradeoffs used to evaluate alternatives. */
+      decisionCriteria?: SourcedValue<string[]>;
+      /** Non-negotiable boundaries such as time, budget, policy, or scope. */
+      constraints?: SourcedValue<string[]>;
+    };
+    state?: {
+      /** Concise description of present reality and meaningful progress. */
+      currentState?: SourcedValue<string | null>;
+      /** Currently selected strategy, hypothesis, or line of attack. */
+      activeApproach?: SourcedValue<string | null>;
+      /** Current obstacles, dependencies, or material risks. */
+      risksAndBlockers?: SourcedValue<string[]>;
+      /** Important unanswered questions or assumptions to validate. */
+      openQuestions?: SourcedValue<string[]>;
+      /** Concrete actions that can move the work forward. */
+      nextActions?: SourcedValue<string[]>;
+    };
+  };
   items: Array<{
     /** Unique local identifier for cross-referencing in relations. */
     localId: string;
@@ -77,6 +108,12 @@ const CONSOLIDATE_MEMORY_TOOL: ToolDefinition = {
     /** localId or visible previous-checkpoint item ID of the target. */
     target: string;
   }>;
+};
+
+type SourcedValue<T> = {
+  value: T;
+  /** IDs from the current conversation range that justify this change. */
+  sourceMessageIds: string[];
 };`,
   },
 };
@@ -100,8 +137,36 @@ const RELATION_TYPES: ReadonlySet<string> = new Set([
   GRAPH_EDGE.SUPERSEDES,
 ]);
 
+export interface SourcedContinuityValue<T> {
+  value: T;
+  sourceMessageIds: string[];
+}
+
+export interface LongTermMemoryContinuity {
+  intent: {
+    challenge: SourcedContinuityValue<string | null>;
+    purpose: SourcedContinuityValue<string | null>;
+    desiredOutcome: SourcedContinuityValue<string | null>;
+    successCriteria: SourcedContinuityValue<string[]>;
+    decisionCriteria: SourcedContinuityValue<string[]>;
+    constraints: SourcedContinuityValue<string[]>;
+  };
+  state: {
+    currentState: SourcedContinuityValue<string | null>;
+    activeApproach: SourcedContinuityValue<string | null>;
+    risksAndBlockers: SourcedContinuityValue<string[]>;
+    openQuestions: SourcedContinuityValue<string[]>;
+    nextActions: SourcedContinuityValue<string[]>;
+  };
+}
+
+export interface LongTermMemoryContinuityPatch {
+  intent?: Partial<LongTermMemoryContinuity["intent"]>;
+  state?: Partial<LongTermMemoryContinuity["state"]>;
+}
+
 interface ConsolidationProposal {
-  workState: string;
+  continuityPatch: LongTermMemoryContinuityPatch;
   items: Array<{
     localId: string;
     kind: string;
@@ -127,6 +192,30 @@ interface RetrievedMemoryItem {
 const MEMORY_ITEM_ID_PATTERN = /^- \[id:([^\]\s]+)\]/gm;
 const RRF_K = 60;
 const RRF_WEIGHT = 0.1;
+const CONTINUITY_VERSION = "1";
+
+type ContinuityValueKind = "nullable_string" | "string_list";
+
+const CONTINUITY_FIELD_KINDS = {
+  intent: {
+    challenge: "nullable_string",
+    purpose: "nullable_string",
+    desiredOutcome: "nullable_string",
+    successCriteria: "string_list",
+    decisionCriteria: "string_list",
+    constraints: "string_list",
+  },
+  state: {
+    currentState: "nullable_string",
+    activeApproach: "nullable_string",
+    risksAndBlockers: "string_list",
+    openQuestions: "string_list",
+    nextActions: "string_list",
+  },
+} as const satisfies Record<
+  "intent" | "state",
+  Record<string, ContinuityValueKind>
+>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -141,6 +230,214 @@ function clampConfidence(value: unknown): number | null {
 function isEmbedding(value: unknown): value is number[] {
   return Array.isArray(value) && value.length > 0 &&
     value.every((entry) => typeof entry === "number" && Number.isFinite(entry));
+}
+
+function emptySourcedValue<T>(value: T): SourcedContinuityValue<T> {
+  return { value, sourceMessageIds: [] };
+}
+
+export function createEmptyContinuity(): LongTermMemoryContinuity {
+  return {
+    intent: {
+      challenge: emptySourcedValue<string | null>(null),
+      purpose: emptySourcedValue<string | null>(null),
+      desiredOutcome: emptySourcedValue<string | null>(null),
+      successCriteria: emptySourcedValue<string[]>([]),
+      decisionCriteria: emptySourcedValue<string[]>([]),
+      constraints: emptySourcedValue<string[]>([]),
+    },
+    state: {
+      currentState: emptySourcedValue<string | null>(null),
+      activeApproach: emptySourcedValue<string | null>(null),
+      risksAndBlockers: emptySourcedValue<string[]>([]),
+      openQuestions: emptySourcedValue<string[]>([]),
+      nextActions: emptySourcedValue<string[]>([]),
+    },
+  };
+}
+
+function normalizeStringList(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const normalized = value.map((entry) =>
+    typeof entry === "string" ? entry.trim() : ""
+  );
+  if (normalized.some((entry) => !entry)) return null;
+  return normalized.filter((entry, index, values) =>
+    values.indexOf(entry) === index
+  );
+}
+
+function parseSourcedContinuityValue(
+  candidate: unknown,
+  kind: ContinuityValueKind,
+  allowedSourceMessageIds?: Set<string>,
+  requireSource = false,
+): SourcedContinuityValue<string | null | string[]> | null {
+  if (!isRecord(candidate) || !Array.isArray(candidate.sourceMessageIds)) {
+    return null;
+  }
+  const sourceMessageIds = candidate.sourceMessageIds
+    .filter((id): id is string =>
+      typeof id === "string" &&
+      id.length > 0 &&
+      (!allowedSourceMessageIds || allowedSourceMessageIds.has(id))
+    )
+    .filter((id, index, ids) => ids.indexOf(id) === index);
+  if (requireSource && sourceMessageIds.length === 0) return null;
+
+  if (kind === "nullable_string") {
+    if (candidate.value === null) {
+      return { value: null, sourceMessageIds };
+    }
+    const value = typeof candidate.value === "string"
+      ? candidate.value.trim()
+      : "";
+    return value ? { value, sourceMessageIds } : null;
+  }
+
+  const value = normalizeStringList(candidate.value);
+  return value ? { value, sourceMessageIds } : null;
+}
+
+function parseContinuitySection(
+  candidate: unknown,
+  fieldKinds: Record<string, ContinuityValueKind>,
+  allowedSourceMessageIds?: Set<string>,
+  requireSource = false,
+): Record<string, SourcedContinuityValue<string | null | string[]>> {
+  if (candidate === undefined) return {};
+  if (!isRecord(candidate)) {
+    throw new Error("Invalid long-term-memory continuity section.");
+  }
+  const parsed: Record<
+    string,
+    SourcedContinuityValue<string | null | string[]>
+  > = {};
+  for (const [field, kind] of Object.entries(fieldKinds)) {
+    if (!Object.prototype.hasOwnProperty.call(candidate, field)) continue;
+    const value = parseSourcedContinuityValue(
+      candidate[field],
+      kind,
+      allowedSourceMessageIds,
+      requireSource,
+    );
+    if (!value) {
+      throw new Error(`Invalid long-term-memory continuity field: ${field}`);
+    }
+    parsed[field] = value;
+  }
+  return parsed;
+}
+
+function parseContinuityPatch(
+  candidate: unknown,
+  allowedSourceMessageIds: Set<string>,
+): LongTermMemoryContinuityPatch {
+  if (!isRecord(candidate)) {
+    throw new Error("Invalid long-term-memory continuity patch.");
+  }
+  return {
+    ...(candidate.intent !== undefined
+      ? {
+        intent: parseContinuitySection(
+          candidate.intent,
+          CONTINUITY_FIELD_KINDS.intent,
+          allowedSourceMessageIds,
+          true,
+        ) as LongTermMemoryContinuityPatch["intent"],
+      }
+      : {}),
+    ...(candidate.state !== undefined
+      ? {
+        state: parseContinuitySection(
+          candidate.state,
+          CONTINUITY_FIELD_KINDS.state,
+          allowedSourceMessageIds,
+          true,
+        ) as LongTermMemoryContinuityPatch["state"],
+      }
+      : {}),
+  };
+}
+
+export function applyContinuityPatch(
+  previous: LongTermMemoryContinuity,
+  patch: LongTermMemoryContinuityPatch,
+): LongTermMemoryContinuity {
+  return {
+    intent: {
+      ...previous.intent,
+      ...(patch.intent ?? {}),
+    },
+    state: {
+      ...previous.state,
+      ...(patch.state ?? {}),
+    },
+  };
+}
+
+function readPersistedContinuity(
+  memory: Awaited<ReturnType<typeof getLatestReadyLongTermMemory>>,
+): LongTermMemoryContinuity {
+  const fallback = createEmptyContinuity();
+  const metadata = memory && isRecord(memory.data.metadata)
+    ? memory.data.metadata
+    : {};
+  const candidate = isRecord(metadata.continuity) ? metadata.continuity : null;
+  if (!candidate) {
+    const legacyWorkState = memory?.node.content?.match(
+      /### Work state\s*\n([\s\S]*?)(?=\n\n### |\n\n## |$)/,
+    )?.[1]?.trim();
+    return legacyWorkState
+      ? applyContinuityPatch(fallback, {
+        state: {
+          currentState: {
+            value: legacyWorkState,
+            sourceMessageIds: [memory!.data.sourceEndMessageId],
+          },
+        },
+      })
+      : fallback;
+  }
+
+  try {
+    const intent = parseContinuitySection(
+      candidate.intent,
+      CONTINUITY_FIELD_KINDS.intent,
+    );
+    const state = parseContinuitySection(
+      candidate.state,
+      CONTINUITY_FIELD_KINDS.state,
+    );
+    return applyContinuityPatch(fallback, {
+      intent: intent as LongTermMemoryContinuityPatch["intent"],
+      state: state as LongTermMemoryContinuityPatch["state"],
+    });
+  } catch {
+    return fallback;
+  }
+}
+
+function continuityValueText(
+  value: SourcedContinuityValue<string | null | string[]>,
+): string[] {
+  if (Array.isArray(value.value)) return value.value;
+  return value.value ? [value.value] : [];
+}
+
+export function buildContinuityRetrievalTexts(
+  continuity: LongTermMemoryContinuity,
+): string[] {
+  const intent = Object.entries(continuity.intent).flatMap(([field, value]) =>
+    continuityValueText(value).map((text) => `${field}: ${text}`)
+  );
+  const state = Object.entries(continuity.state).flatMap(([field, value]) =>
+    continuityValueText(value).map((text) => `${field}: ${text}`)
+  );
+  return [
+    intent.length > 0 ? intent.join("\n") : "",
+    state.length > 0 ? state.join("\n") : "",
+  ].filter(Boolean);
 }
 
 export function extractVisibleMemoryItemIds(content: string): string[] {
@@ -290,9 +587,13 @@ export function parseConsolidationProposal(
   },
 ): ConsolidationProposal {
   const parsed = parseJsonObject(value);
-  if (!parsed || typeof parsed.workState !== "string") {
+  if (!parsed) {
     throw new Error("Invalid long-term-memory consolidation response.");
   }
+  const continuityPatch = parseContinuityPatch(
+    parsed.continuityPatch,
+    allowedSourceMessageIds,
+  );
 
   const localIds = new Set<string>();
   const items = (Array.isArray(parsed.items) ? parsed.items : []).flatMap(
@@ -371,7 +672,7 @@ export function parseConsolidationProposal(
     });
 
   return {
-    workState: parsed.workState.trim(),
+    continuityPatch,
     items,
     relations,
   };
@@ -391,8 +692,70 @@ function renderRelationship(
   return `- ${source} --${type}--> ${target}`;
 }
 
+function renderContinuityScalar(
+  label: string,
+  value: SourcedContinuityValue<string | null>,
+): string[] {
+  return value.value ? [`- ${label}: ${value.value}`] : [];
+}
+
+function renderContinuityList(
+  label: string,
+  value: SourcedContinuityValue<string[]>,
+): string[] {
+  return value.value.length > 0
+    ? value.value.map((entry) => `- ${label}: ${entry}`)
+    : [];
+}
+
+function renderContinuityBlocks(
+  continuity: LongTermMemoryContinuity,
+): string[] {
+  const intent = [
+    ...renderContinuityScalar("Challenge", continuity.intent.challenge),
+    ...renderContinuityScalar("Purpose", continuity.intent.purpose),
+    ...renderContinuityScalar(
+      "Desired outcome",
+      continuity.intent.desiredOutcome,
+    ),
+    ...renderContinuityList(
+      "Success criteria",
+      continuity.intent.successCriteria,
+    ),
+    ...renderContinuityList(
+      "Decision criteria",
+      continuity.intent.decisionCriteria,
+    ),
+    ...renderContinuityList("Constraints", continuity.intent.constraints),
+  ];
+  const state = [
+    ...renderContinuityScalar("Current state", continuity.state.currentState),
+    ...renderContinuityScalar(
+      "Active approach",
+      continuity.state.activeApproach,
+    ),
+    ...renderContinuityList(
+      "Risks and blockers",
+      continuity.state.risksAndBlockers,
+    ),
+    ...renderContinuityList(
+      "Open questions",
+      continuity.state.openQuestions,
+    ),
+    ...renderContinuityList("Next actions", continuity.state.nextActions),
+  ];
+  return [
+    "## CONTINUITY",
+    "### Intent",
+    ...(intent.length > 0 ? intent : ["- No explicit intent recorded."]),
+    "### Current state",
+    ...(state.length > 0 ? state : ["- No explicit current state recorded."]),
+  ];
+}
+
 export function renderLongTermMemory(args: {
   proposal: ConsolidationProposal;
+  continuity: LongTermMemoryContinuity;
   newItemNodes: Map<string, KnowledgeNode>;
   olderItems: RetrievedMemoryItem[];
   olderRelations: KnowledgeEdge[];
@@ -441,24 +804,22 @@ export function renderLongTermMemory(args: {
 
   const blocks = [
     "## LONG-TERM CONVERSATION MEMORY",
-    `### Work state\n${
-      proposal.workState || "No active work state was identified."
-    }`,
-    "### Relevant memory",
+    ...renderContinuityBlocks(args.continuity),
+    "## RELEVANT MEMORY",
     ...(relevant.length > 0 ? relevant : ["- No durable memory items."]),
-    "### Relationships",
+    "## RELATIONSHIPS",
     ...(relationLines.length > 0
       ? relationLines
       : ["- No explicit relationships."]),
   ];
   const retained: string[] = [];
   for (const block of blocks) {
-    const candidate = [...retained, block].join("\n\n");
+    const candidate = [...retained, block].join("\n");
     if (
       estimateTextTokens(candidate) <= args.maxContentEstimatedTokens
     ) retained.push(block);
   }
-  return retained.join("\n\n");
+  return retained.join("\n");
 }
 
 async function sha256(value: string): Promise<string> {
@@ -527,6 +888,7 @@ async function buildConsolidationContext(args: {
   previousMemory: Awaited<
     ReturnType<typeof getLatestReadyLongTermMemory>
   >;
+  previousContinuity: LongTermMemoryContinuity;
 }): Promise<{ messages: ChatMessage[]; tools: ToolDefinition[] }> {
   const { agent, deps } = args;
 
@@ -570,11 +932,22 @@ async function buildConsolidationContext(args: {
       };
     });
   const userContent = [
+    "Previous structured continuity:",
+    JSON.stringify(args.previousContinuity),
+    "",
     "Conversation range to consolidate:",
     args.conversation,
     "",
     "---",
-    "Analyze the conversation above and return a JSON object that consolidates it into durable memory.",
+    "Update continuity and extract durable memory from the conversation range above.",
+    "Continuity must let another capable agent resume the work after archived messages are unavailable.",
+    "Do not produce a chronological summary.",
+    "For continuity, emit only fields introduced, refined, changed, or explicitly cleared by this range.",
+    "Omit unchanged continuity fields so the processor retains their previous values exactly.",
+    "When updating a list field, return its complete new value, including prior entries that remain active.",
+    "Never infer missing intent. Use null or [] only when this range explicitly clears a value.",
+    "Keep the challenge distinct from the current task and the desired outcome distinct from an activity.",
+    "Keep unresolved blockers, questions, and actions until the range explicitly changes or resolves them.",
     reconciliationInstruction,
     "Assign every new item to exactly one writable memory space from this catalog.",
     `Writable memory spaces: ${JSON.stringify(writableMemorySpaces)}`,
@@ -971,6 +1344,7 @@ export const longTermMemoryProcessor: EventProcessor<
           )
         ? previousMemoryCandidate
         : null;
+      const previousContinuity = readPersistedContinuity(previousMemory);
       const allowedVisibleItemIds = getVisibleMemoryItemIds(previousMemory);
       const { messages: llmMessages, tools: llmTools } =
         await buildConsolidationContext({
@@ -980,6 +1354,7 @@ export const longTermMemoryProcessor: EventProcessor<
           memorySpaces,
           defaultWriteMemorySpaceId,
           previousMemory,
+          previousContinuity,
         });
       const llmConfig = await resolveMemoryLlmConfig({
         agent,
@@ -1013,24 +1388,39 @@ export const longTermMemoryProcessor: EventProcessor<
           defaultWriteMemorySpaceId,
         },
       );
+      const continuity = applyContinuityPatch(
+        previousContinuity,
+        proposal.continuityPatch,
+      );
 
-      const itemEmbeddingResult = proposal.items.length > 0
+      const continuityRetrievalTexts = buildContinuityRetrievalTexts(
+        continuity,
+      );
+      const retrievalTexts = [
+        ...proposal.items.map((item) => item.content),
+        ...continuityRetrievalTexts,
+      ];
+      const retrievalEmbeddingResult = retrievalTexts.length > 0
         ? await embed(
-          proposal.items.map((item) => item.content),
+          retrievalTexts,
           deps.context.embeddingConfig,
           {},
           deps.context.embeddingProviders,
         )
         : { embeddings: [] as number[][] };
       if (
-        proposal.items.some((_item, index) =>
-          !isEmbedding(itemEmbeddingResult.embeddings[index])
+        retrievalTexts.some((_text, index) =>
+          !isEmbedding(retrievalEmbeddingResult.embeddings[index])
         )
       ) {
         throw new Error(
-          "Failed to generate one or more memory-item embeddings.",
+          "Failed to generate one or more memory retrieval embeddings.",
         );
       }
+      const itemEmbeddings = retrievalEmbeddingResult.embeddings.slice(
+        0,
+        proposal.items.length,
+      );
       const pinnedItemIds = [
         ...proposal.relations.flatMap((relation) =>
           allowedVisibleItemIds.has(relation.target) ? [relation.target] : []
@@ -1044,7 +1434,7 @@ export const longTermMemoryProcessor: EventProcessor<
         namespace,
         memorySpaceIds: readMemorySpaceIds,
         agentId: checkpointData.agentId,
-        queryEmbeddings: itemEmbeddingResult.embeddings,
+        queryEmbeddings: retrievalEmbeddingResult.embeddings,
         pinnedItemIds,
         limit: config.retrievalLimit,
       });
@@ -1060,7 +1450,7 @@ export const longTermMemoryProcessor: EventProcessor<
           type: "memory_item",
           name: item.name,
           content: item.content,
-          embedding: itemEmbeddingResult.embeddings[index] ?? null,
+          embedding: itemEmbeddings[index] ?? null,
           data: {
             memorySpaceId: item.memorySpaceId ??
               defaultWriteMemorySpaceId,
@@ -1082,6 +1472,7 @@ export const longTermMemoryProcessor: EventProcessor<
 
       const content = renderLongTermMemory({
         proposal,
+        continuity,
         newItemNodes: localItemNodes,
         olderItems: older.items,
         olderRelations: older.relations,
@@ -1168,6 +1559,8 @@ export const longTermMemoryProcessor: EventProcessor<
         metadata: {
           ...(checkpointData.metadata ?? {}),
           processorVersion: "v2",
+          continuityVersion: CONTINUITY_VERSION,
+          continuity,
           retrievedItemIds: older.items.map((item) => String(item.node.id)),
           visibleItemIds: extractVisibleMemoryItemIds(content),
         },

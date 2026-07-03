@@ -51,18 +51,23 @@ stable agent context
 + recent raw messages after that checkpoint
 ```
 
-When recent visible history reaches `triggerEstimatedTokens`, Copilotz reserves a
-checkpoint for a dedicated non-blocking memory queue. While it is pending, the
+When recent visible history reaches `triggerEstimatedTokens`, Copilotz reserves
+a checkpoint for a dedicated non-blocking memory queue. While it is pending, the
 existing raw history remains available until the checkpoint is ready. The
 checkpoint retains a configured newest-message tail and consolidates the older
 range in the background.
 
 The checkpoint combines:
 
-- a current work-state summary;
+- structured continuity for intent and current state;
 - newly extracted immutable memory items;
-- relevant older items retrieved by embedding similarity;
+- relevant older items retrieved from both continuity and new-item embeddings;
 - graph relations between those items.
+
+Continuity is updated as a patch: omitted fields retain their previous values
+exactly, while explicit changes carry source-message provenance. This prevents a
+thread's challenge, purpose, desired outcome, or open work from disappearing
+merely because the newest consolidated range did not repeat it.
 
 Raw messages remain stored. Only the prompt representation changes.
 

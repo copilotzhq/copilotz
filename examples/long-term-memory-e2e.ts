@@ -120,8 +120,45 @@ if (LIVE_MODE) {
       // The system prompt is identical to regular chat (cache-stable); only the
       // user message carries consolidation-specific content.
       if (isConsolidationBody(body)) {
+        const requestMessages = Array.isArray(body.messages)
+          ? body.messages as Array<Record<string, unknown>>
+          : [];
+        const consolidationMessage = requestMessages.find((message) =>
+          message.role === "user" &&
+          String(message.content ?? "").includes(
+            "Conversation range to consolidate:",
+          )
+        );
+        const sourceMessageIds = [
+          ...String(consolidationMessage?.content ?? "").matchAll(
+            /"messageId":"([^"]+)"/g,
+          ),
+        ].map((match) => match[1]);
+        const sourceMessageId = sourceMessageIds.at(-1);
+        if (!sourceMessageId) {
+          throw new Error("Mock consolidation request has no source messages.");
+        }
         const proposal = {
-          workState: "Discussing Copilotz long-term memory architecture.",
+          continuityPatch: {
+            intent: {
+              challenge: {
+                value:
+                  "Preserve useful context across long-running conversations.",
+                sourceMessageIds: [sourceMessageId],
+              },
+              desiredOutcome: {
+                value:
+                  "Copilotz retains stable continuity while bounding raw prompt history.",
+                sourceMessageIds: [sourceMessageId],
+              },
+            },
+            state: {
+              currentState: {
+                value: "Discussing Copilotz long-term memory architecture.",
+                sourceMessageIds: [sourceMessageId],
+              },
+            },
+          },
           items: [
             {
               localId: "item-1",
@@ -130,7 +167,7 @@ if (LIVE_MODE) {
               content:
                 "Copilotz uses single-assignment long_term_memory checkpoints for stable prompt prefixes.",
               confidence: 0.97,
-              sourceMessageIds: [],
+              sourceMessageIds: [sourceMessageId],
             },
             {
               localId: "item-2",
@@ -139,7 +176,7 @@ if (LIVE_MODE) {
               content:
                 "A long_term_memory node is reserved as pending before any LLM work runs, ensuring idempotent retries.",
               confidence: 0.95,
-              sourceMessageIds: [],
+              sourceMessageIds: [sourceMessageId],
             },
           ],
           relations: [
@@ -352,11 +389,11 @@ try {
     "Expected memory content to start with the standard heading",
   );
   assert(
-    memoryContent.includes("Work state"),
-    "Expected memory content to include work state section",
+    memoryContent.includes("## CONTINUITY"),
+    "Expected memory content to include continuity section",
   );
   assert(
-    memoryContent.includes("Relevant memory"),
+    memoryContent.includes("## RELEVANT MEMORY"),
     "Expected memory content to include memory items section",
   );
   assertEquals(

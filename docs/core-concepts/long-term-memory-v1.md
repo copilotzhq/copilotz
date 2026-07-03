@@ -16,9 +16,9 @@ lightweight observer reserves the next node with `status: "pending"`. Its normal
 graph outbox event, `long_term_memory.created`, invokes the bundled processor,
 which finalizes that same node from:
 
-- a short work-state summary;
+- structured continuity updated from the preceding checkpoint;
 - memory-item nodes extracted from the closed history;
-- relevant older memory items found through embeddings;
+- relevant older memory items found from continuity and item embeddings;
 - relations between those items.
 
 The node is single-assignment: it moves from `pending` to `ready` exactly once
@@ -189,13 +189,18 @@ The memory processor finalizes that same node:
 {
   content: `## LONG-TERM CONVERSATION MEMORY
 
-### Work state
+## CONTINUITY
+
+### Intent
 ...
 
-### Relevant memory
+### Current state
 ...
 
-### Relationships
+## RELEVANT MEMORY
+...
+
+## RELATIONSHIPS
 ...`,
 
   embedding: [/* vector */],
@@ -205,7 +210,9 @@ The memory processor finalizes that same node:
     contentHash,
     tokenEstimate,
     metadata: {
-      processorVersion: "v1",
+      processorVersion: "v2",
+      continuityVersion: "1",
+      continuity: { /* materialized continuity */ },
       retrievedItemIds: ["..."],
       visibleItemIds: ["..."]
     }
@@ -311,20 +318,24 @@ The bundled processor handles `long_term_memory.created`. It:
    shared-memory filter (excludes private reasoning and requester-only tool
    results).
 4. Loads the previous ready checkpoint and its visible item IDs.
-5. Calls the reserved agent's LLM to produce a structured consolidation
-   proposal. The system prompt is built with `contextGenerator` — the same
-   construction used for normal chat turns — so the provider can reuse its KV
-   cache on the stable agent-context prefix. The consolidation-specific content
-   (conversation range and JSON schema) is placed in the user message. JSON
-   output mode is requested; the LLM returns raw structured data, not
+5. Calls the reserved agent's LLM to produce a continuity patch, new memory
+   items, and relations. The system prompt is built with `contextGenerator` —
+   the same construction used for normal chat turns — so the provider can reuse
+   its KV cache on the stable agent-context prefix. The consolidation-specific
+   content (conversation range and JSON schema) is placed in the user message.
+   JSON output mode is requested; the LLM returns raw structured data, not
    conversational text.
 6. Validates and parses the proposal. References to older items are accepted
    only when their IDs were visible in the previous checkpoint.
-7. Embeds each proposed memory item.
-8. Uses every new item embedding to retrieve older memory candidates, combines
-   the per-item rankings, and applies `retrievalLimit` globally.
-9. Renders one final memory string with canonical IDs on every included item.
-10. Atomically creates the memory items and relation edges, updates the
+7. Applies the continuity patch to the previous structured continuity. Omitted
+   fields retain their values exactly; explicit updates carry source message
+   IDs.
+8. Embeds each proposed memory item plus one combined intent query and one
+   combined current-state query.
+9. Uses those embeddings to retrieve older memory candidates, combines their
+   rankings, and applies `retrievalLimit` globally.
+10. Renders continuity first, followed by memory items and relations.
+11. Atomically creates the memory items and relation edges, updates the
     checkpoint node with `status: "ready"`, content, embedding, `contentHash`,
     and derived metadata.
 
@@ -334,8 +345,29 @@ read path continues using the preceding ready version.
 The LLM returns only structured data:
 
 ```ts
+interface SourcedValue<T> {
+  value: T;
+  sourceMessageIds: string[];
+}
+
 interface ConsolidationProposal {
-  workState: string;
+  continuityPatch: {
+    intent?: {
+      challenge?: SourcedValue<string | null>;
+      purpose?: SourcedValue<string | null>;
+      desiredOutcome?: SourcedValue<string | null>;
+      successCriteria?: SourcedValue<string[]>;
+      decisionCriteria?: SourcedValue<string[]>;
+      constraints?: SourcedValue<string[]>;
+    };
+    state?: {
+      currentState?: SourcedValue<string | null>;
+      activeApproach?: SourcedValue<string | null>;
+      risksAndBlockers?: SourcedValue<string[]>;
+      openQuestions?: SourcedValue<string[]>;
+      nextActions?: SourcedValue<string[]>;
+    };
+  };
   items: Array<{
     localId: string;
     kind: string;
@@ -433,17 +465,19 @@ message and stops once the threshold is reached. For later checkpoints,
 `sourceEndMessageId`; the complete delta is considered before the newest
 configured tail is retained as raw history.
 
-`retainRecentEstimatedTokens` keeps a newest complete-message tail outside the checkpoint.
-The observer moves `sourceEndMessageId` to immediately before that tail, so the
-normal conversation runtime continues to include it as hot history. Those
-messages remain part of the next checkpoint delta and are consolidated once they
-are no longer in the retained tail. Set it to `0` to retain no overlap; the
-bundled default is `0` for backward compatibility.
+`retainRecentEstimatedTokens` keeps a newest complete-message tail outside the
+checkpoint. The observer moves `sourceEndMessageId` to immediately before that
+tail, so the normal conversation runtime continues to include it as hot history.
+Those messages remain part of the next checkpoint delta and are consolidated
+once they are no longer in the retained tail. Set it to `0` to retain no
+overlap; the bundled default is `0` for backward compatibility.
 
 Older-item retrieval uses the embeddings of the newly consolidated memory items,
-not one embedding of the complete conversation range. Results from the
-individual searches are fused using maximum similarity with a
-reciprocal-rank-based consensus bonus, then limited globally.
+a combined continuity-intent query, and a combined continuity-state query.
+Results from the individual searches are fused using maximum similarity with a
+reciprocal-rank-based consensus bonus, then limited globally. Because continuity
+supplies queries even when no new items are extracted, foundational older memory
+can remain relevant across quieter consolidation ranges.
 
 The final checkpoint embedding is generated from chunks bounded by the embedding
 connector's input limit. Each chunk vector is normalized, weighted by the

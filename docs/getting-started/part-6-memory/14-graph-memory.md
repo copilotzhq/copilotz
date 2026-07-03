@@ -47,10 +47,15 @@ checkpoint and retains the newest complete messages as raw conversation.
 
 The checkpoint contains:
 
-- a short description of the current work state;
+- structured continuity covering durable intent and current working state;
 - new durable memory items extracted from the closed conversation range;
-- relevant items retrieved from earlier checkpoints;
+- relevant items retrieved from continuity and new-item queries;
 - relationships between those items.
+
+Continuity is patch-based. Fields omitted by a consolidation retain their
+previous values exactly; fields that change carry the IDs of messages supporting
+the update. A goal therefore does not disappear merely because a later range
+discusses implementation details without repeating it.
 
 The original messages remain stored. Consolidation changes what is sent to the
 model, not the persisted thread history.
@@ -157,14 +162,15 @@ The background processor then:
 
 1. loads the exact reserved message range;
 2. projects only content eligible for shared conversation memory;
-3. shows the reserved agent's LLM the previous checkpoint and asks for
-   structured memory items and relations;
+3. shows the reserved agent's LLM the previous checkpoint and asks for a
+   continuity patch, structured memory items, and relations;
 4. validates relations and supersession against item IDs visible in that
    checkpoint;
-5. embeds the new items;
-6. uses each new item to retrieve relevant earlier memory;
-7. renders the checkpoint;
-8. atomically stores the new nodes, edges, and ready checkpoint.
+5. applies continuity updates while retaining omitted fields;
+6. embeds the new items plus combined intent and current-state queries;
+7. uses those embeddings to retrieve relevant earlier memory;
+8. renders continuity before optional memory items and relations;
+9. atomically stores the new nodes, edges, and ready checkpoint.
 
 Only the latest `ready` checkpoint is inserted into model context. A `pending`
 or `failed` checkpoint never replaces the preceding ready version.
@@ -190,8 +196,8 @@ agent prompt
 ```
 
 When the threshold is crossed, Copilotz walks backward over complete messages
-until it has retained at least 2,000 estimated tokens. Everything before that boundary
-becomes the source range for the checkpoint.
+until it has retained at least 2,000 estimated tokens. Everything before that
+boundary becomes the source range for the checkpoint.
 
 After the checkpoint is ready:
 
@@ -202,8 +208,8 @@ agent prompt
 ```
 
 The values are approximate because Copilotz never cuts a message merely to hit
-`retainRecentEstimatedTokens` exactly. A single large message can make the retained tail
-larger than the configured value.
+`retainRecentEstimatedTokens` exactly. A single large message can make the
+retained tail larger than the configured value.
 
 The retained messages are not copied into checkpoint 1. They remain raw and are
 part of the source range considered for checkpoint 2 once they are no longer in
@@ -213,12 +219,12 @@ This is tail retention, not duplicated overlap.
 
 ## Configuration reference
 
-| Option              | Meaning                                                                                             | Bundled default |
-| ------------------- | --------------------------------------------------------------------------------------------------- | --------------: |
-| `triggerEstimatedTokens`      | Start a rollover when model-visible messages since the active checkpoint reach this estimate |        `20_000` |
+| Option                        | Meaning                                                                                         | Bundled default |
+| ----------------------------- | ----------------------------------------------------------------------------------------------- | --------------: |
+| `triggerEstimatedTokens`      | Start a rollover when model-visible messages since the active checkpoint reach this estimate    |        `20_000` |
 | `retainRecentEstimatedTokens` | Keep at least this many newest estimated tokens as complete raw messages outside the checkpoint |             `0` |
-| `maxContentEstimatedTokens`   | Maximum estimated tokens in the rendered checkpoint, preserving complete blocks |        `12_000` |
-| `retrievalLimit`    | Maximum number of older memory items selected for the new checkpoint after per-item retrieval       |            `20` |
+| `maxContentEstimatedTokens`   | Maximum estimated tokens in the rendered checkpoint, preserving complete blocks                 |        `12_000` |
+| `retrievalLimit`              | Maximum older memory items selected after continuity and item retrieval                         |            `20` |
 
 ### `triggerEstimatedTokens`
 
@@ -261,8 +267,9 @@ This bounds the stable checkpoint placed in the system context. It is not the
 size of the raw source range and does not limit how many items are persisted in
 the graph.
 
-The rendered checkpoint is capped after its work state, relevant items, and
-relationships are assembled. Choose a value that leaves room for:
+The rendered checkpoint is capped after continuity, relevant items, and
+relationships are assembled. Continuity is considered first, so optional memory
+items cannot displace it. Choose a value that leaves room for:
 
 - the agent prompt and tool definitions;
 - participant or application context;
@@ -271,10 +278,11 @@ relationships are assembled. Choose a value that leaves room for:
 
 ### `retrievalLimit`
 
-After consolidation generates and embeds the new memory items, Copilotz uses
-each item embedding to search older `memory_item` nodes in the same thread
-memory space. The per-item results are fused and `retrievalLimit` is applied to
-the combined older set, not separately to every query.
+After consolidation materializes continuity and embeds the new memory items,
+Copilotz searches older `memory_item` nodes using each item embedding plus one
+combined intent query and one combined current-state query. The results are
+fused and `retrievalLimit` is applied to the combined older set, not separately
+to every query.
 
 The new checkpoint contains:
 
@@ -284,8 +292,8 @@ all new items proposed for the current consolidation
 + relations whose endpoints are included
 ```
 
-`retrievalLimit` does not limit newly generated items. `maxContentEstimatedTokens` is the
-final bound on the rendered checkpoint.
+`retrievalLimit` does not limit newly generated items.
+`maxContentEstimatedTokens` is the final bound on the rendered checkpoint.
 
 The LLM may supersede only an item whose canonical ID was visible in the
 previous checkpoint. The old item remains immutable in the graph, a `supersedes`
@@ -339,14 +347,16 @@ history and provenance instead of silently mutating yesterday's memory.
 
 ## How older memory is retrieved
 
-The consolidation LLM first decomposes the source range into small, durable
-items. Copilotz already embeds each of those items for persistence, so the same
-vectors become retrieval queries:
+The consolidation LLM updates continuity and decomposes the source range into
+small, durable items. Copilotz embeds both continuity query texts and each item,
+so all of those vectors become retrieval queries:
 
 ```text
 closing conversation
         |
         v
+continuity intent --> search older items
+continuity state ---> search older items
 new decision -----> search older items
 new constraint ---> search older items
 new task ----------> search older items
@@ -367,10 +377,14 @@ the new rendered checkpoint.
 Copilotz then includes relations between the selected older items and can use
 nearby related items while staying within the global `retrievalLimit`.
 
+This means older memory can still be retrieved when a consolidation produces no
+new items. Retrieval supports continuity, but never controls whether continuity
+survives.
+
 The final rendered checkpoint may itself exceed one embedding-model input. Its
 stored checkpoint embedding is therefore generated from bounded chunks using a
 character-weighted normalized combination. That embedding is checkpoint
-metadata; older-item retrieval uses the individual new-item vectors.
+metadata; older-item retrieval uses the continuity and individual item vectors.
 
 ## Why the checkpoint improves cache reuse
 
@@ -421,9 +435,9 @@ agent instructions and tools
 <= model input budget
 ```
 
-Do not set `triggerEstimatedTokens` so high that ordinary requests exceed the input limit
-before consolidation can run. Likewise, do not make `maxContentEstimatedTokens` consume
-most of the model's context by itself.
+Do not set `triggerEstimatedTokens` so high that ordinary requests exceed the
+input limit before consolidation can run. Likewise, do not make
+`maxContentEstimatedTokens` consume most of the model's context by itself.
 
 Estimates are provider/model-aware and calibrated from actual input usage when
 available. Exact tokenization still varies by provider and content.
@@ -459,8 +473,9 @@ credential problem, even if normal agent chat is working.
 Enabling long-term memory does not backfill an entire old thread.
 
 For the first checkpoint, Copilotz walks backward from the triggering message
-and selects the most recent eligible range needed to cross `triggerEstimatedTokens`.
-Earlier messages remain stored, but are not automatically consolidated.
+and selects the most recent eligible range needed to cross
+`triggerEstimatedTokens`. Earlier messages remain stored, but are not
+automatically consolidated.
 
 Later checkpoints use the complete delta after the previous ready
 `sourceEndMessageId`, minus the newest retained tail.
@@ -537,15 +552,15 @@ variable. The agent's connected chat integration may be unrelated.
 
 ### The hot history is too large after rollover
 
-`retainRecentEstimatedTokens` is a lower target over complete messages, not a hard
-maximum. A very large recent message is retained whole. Reduce large tool
-results before they enter history and configure `toolResultHistoryMaxEstimatedTokens`
-where appropriate.
+`retainRecentEstimatedTokens` is a lower target over complete messages, not a
+hard maximum. A very large recent message is retained whole. Reduce large tool
+results before they enter history and configure
+`toolResultHistoryMaxEstimatedTokens` where appropriate.
 
 ### The checkpoint is too large
 
-Reduce `maxContentEstimatedTokens` or `retrievalLimit`. Remember that all newly generated
-items are considered before the final rendered-content cap.
+Reduce `maxContentEstimatedTokens` or `retrievalLimit`. Remember that all newly
+generated items are considered before the final rendered-content cap.
 
 ## Replacing the bundled strategy
 
@@ -578,6 +593,7 @@ The bundled strategy intentionally favors predictable behavior:
 - rollover uses a deterministic token estimate rather than letting the LLM
   decide when to page memory;
 - items are immutable rather than repeatedly rewriting old knowledge;
+- structured continuity uses deterministic patches, so omitted fields survive;
 - only previously visible IDs may be superseded or targeted by the consolidation
   LLM;
 - retrieval uses vector similarity plus bounded nearby relations rather than an
@@ -587,13 +603,13 @@ The bundled strategy intentionally favors predictable behavior:
 Those choices also create limitations:
 
 - consolidation can omit details that remain only in raw history;
-- if item extraction omits a topic, item-based retrieval cannot recover that
-  topic during the same consolidation;
+- semantic retrieval can still omit details not represented by continuity or
+  extracted items;
 - a newly rediscovered older item waits until the next epoch before the LLM can
   supersede or relate to it;
 - bounded relation expansion can miss distant multi-hop evidence;
-- the rendered `maxContentEstimatedTokens` cap can omit lower sections even though their
-  underlying items remain persisted.
+- the rendered `maxContentEstimatedTokens` cap can omit lower sections even
+  though their underlying items remain persisted.
 
 Use collections and tools for authoritative business state. Use RAG when the
 model must retrieve exact source material. Treat long-term memory as continuity

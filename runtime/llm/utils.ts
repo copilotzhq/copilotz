@@ -12,6 +12,7 @@ import type {
   TokenUsage,
   ToolDefinition,
   ToolInvocation,
+  WireChatMessage,
 } from "@/runtime/llm/types.ts";
 import {
   type ChatTokenEstimate,
@@ -19,8 +20,6 @@ import {
   estimateTextTokens,
 } from "@/runtime/tokens/index.ts";
 
-const TOOL_RESULTS_CONTINUATION_CUE =
-  `<continue_after_tool_results>Continue your response based on the tool results above. Do not repeat earlier content. If no reply is needed, respond with <no_response/>.</continue_after_tool_results>`;
 const LOCAL_DEFAULT_STOP_SEQUENCES = [
   "<tool_results",
   "</tool_results>",
@@ -98,6 +97,10 @@ const MALFORMED_TOOL_INTENT_MARKER_PATTERN =
   /<\/?(?:[a-z0-9_]+:)?(?:tool_call|function_call|function_calls|invoke|parameter|tool_use|tool)\b/i;
 const REASONING_MARKUP_PATTERN =
   /<\/?(?:mm:)?(?:think|thought|thinking|reasoning)\b/i;
+const ORPHANED_TOOL_RESULT_TERMINAL_PATTERN =
+  /"tool_call_id"\s*:\s*"[^"]+"\s*,\s*"status"\s*:\s*"(?:completed|failed|expired|overwritten)"\s*}\s*$/i;
+const ORPHANED_TOOL_RESULT_EVIDENCE_PATTERN =
+  /"(?:output|success|error|stoppedEarly|sessionSummary)"\s*:/gi;
 const USER_FACING_PROTOCOL_MARKER_PATTERN =
   /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids|think|thought|thinking|reasoning|malformed_tool_call_recovery|visible_reasoning_markup_recovery|recovery_previous_response_context|recovery_required_action|recovery_tool_call_rules|recovery_problem)\b/i;
 
@@ -239,7 +242,7 @@ function structuredStartTagSuffixOverlap(
  * Formats chat messages with instructions and applies estimated input limits.
  */
 export interface FormattedMessagesResult {
-  messages: ChatMessage[];
+  messages: WireChatMessage[];
   estimate: ChatTokenEstimate;
   cutoffSourceMessageId?: string;
 }
@@ -266,10 +269,12 @@ export function formatMessagesDetailed(
     ? [{ role: "system", content: systemContent }]
     : [];
 
-  let formattedMessages = [
+  let formattedMessages: ChatMessage[] = [
     ...systemMessage,
     ...messages.filter((m) => m.role !== "system"),
   ];
+  const orderedHistory = orderCompletedToolCycles(formattedMessages);
+  formattedMessages = orderedHistory.messages;
 
   const systemEstimatedTokens = estimateChatMessages(systemMessage, config)
     .estimatedTokens;
@@ -296,6 +301,7 @@ export function formatMessagesDetailed(
       formattedMessages,
       historyTarget,
       config,
+      orderedHistory.unitKeys,
     );
     normalizedMessages = limited.messages;
     cutoffSourceMessageId = limited.cutoffSourceMessageId;
@@ -311,9 +317,8 @@ export function formatMessagesDetailed(
 
   // Collapse consecutive messages with the same role so provider history
   // alternates assistant/user turns (system messages stay separate).
-  const mergedMessages = mergeConsecutiveMessages(normalizedMessages);
-
-  const finalMessages = appendContinuationCueIfNeeded(mergedMessages);
+  const finalMessages = mergeConsecutiveMessages(normalizedMessages);
+  assertWireMessageInvariants(finalMessages);
   return {
     messages: finalMessages,
     estimate: estimateChatMessages(finalMessages, config),
@@ -321,7 +326,7 @@ export function formatMessagesDetailed(
   };
 }
 
-export function formatMessages(request: ChatRequest): ChatMessage[] {
+export function formatMessages(request: ChatRequest): WireChatMessage[] {
   return formatMessagesDetailed(request).messages;
 }
 
@@ -629,6 +634,114 @@ function toolCallsRepresentResults(toolCalls: ToolInvocation[]): boolean {
   return toolCalls.some((call) => typeof call.output !== "undefined");
 }
 
+function isToolResultRole(
+  role: ChatMessage["role"],
+): role is "tool" | "tool_result" {
+  return role === "tool" || role === "tool_result";
+}
+
+function requestedToolCallIds(message: ChatMessage): string[] {
+  if (message.role !== "assistant" || !Array.isArray(message.toolCalls)) {
+    return [];
+  }
+  return message.toolCalls.flatMap((call) =>
+    typeof call.id === "string" &&
+      call.id.length > 0 &&
+      typeof call.output === "undefined"
+      ? [call.id]
+      : []
+  );
+}
+
+function resultToolCallIds(message: ChatMessage): string[] {
+  if (!isToolResultRole(message.role) || !Array.isArray(message.toolCalls)) {
+    return [];
+  }
+  return message.toolCalls.flatMap((call) =>
+    typeof call.id === "string" && call.id.length > 0 ? [call.id] : []
+  );
+}
+
+/**
+ * Keep a completed current-agent tool cycle causally adjacent on the provider
+ * wire even when peer/user events landed while tools were running.
+ *
+ * Peer tool activity is already represented as attributed `user` transcript,
+ * so only internal `tool`/`tool_result` messages can satisfy a current
+ * assistant request. A result message is moved only when all of its call ids
+ * belong to that request and every requested call has a terminal result.
+ */
+function orderCompletedToolCycles(messages: ChatMessage[]): {
+  messages: ChatMessage[];
+  unitKeys: Array<string | undefined>;
+} {
+  const consumedResultIndexes = new Set<number>();
+  const resultsByRequestIndex = new Map<number, number[]>();
+  const unitKeyByOriginalIndex = new Map<number, string>();
+
+  for (let requestIndex = 0; requestIndex < messages.length; requestIndex++) {
+    const requestIds = requestedToolCallIds(messages[requestIndex]);
+    if (requestIds.length === 0) continue;
+
+    const requestIdSet = new Set(requestIds);
+    const foundIds = new Set<string>();
+    const resultIndexes: number[] = [];
+
+    for (
+      let candidateIndex = requestIndex + 1;
+      candidateIndex < messages.length;
+      candidateIndex++
+    ) {
+      const candidate = messages[candidateIndex];
+      // A later current-agent assistant turn closes this tool cycle. Do not
+      // reach across it to claim a delayed or duplicate result.
+      if (candidate.role === "assistant") break;
+      if (consumedResultIndexes.has(candidateIndex)) continue;
+
+      const candidateIds = resultToolCallIds(candidate);
+      if (
+        candidateIds.length === 0 ||
+        candidateIds.some((id) => !requestIdSet.has(id))
+      ) {
+        continue;
+      }
+
+      resultIndexes.push(candidateIndex);
+      candidateIds.forEach((id) => foundIds.add(id));
+      if (requestIds.every((id) => foundIds.has(id))) break;
+    }
+
+    if (!requestIds.every((id) => foundIds.has(id))) continue;
+    resultsByRequestIndex.set(requestIndex, resultIndexes);
+    resultIndexes.forEach((index) => consumedResultIndexes.add(index));
+    const lastResultIndex = Math.max(...resultIndexes);
+    const unitKey = `tool-cycle:${requestIndex}`;
+    for (let index = requestIndex; index <= lastResultIndex; index++) {
+      unitKeyByOriginalIndex.set(index, unitKey);
+    }
+  }
+
+  if (consumedResultIndexes.size === 0) {
+    return {
+      messages,
+      unitKeys: messages.map(() => undefined),
+    };
+  }
+
+  const ordered: ChatMessage[] = [];
+  const unitKeys: Array<string | undefined> = [];
+  messages.forEach((message, index) => {
+    if (consumedResultIndexes.has(index)) return;
+    ordered.push(message);
+    unitKeys.push(unitKeyByOriginalIndex.get(index));
+    for (const resultIndex of resultsByRequestIndex.get(index) ?? []) {
+      ordered.push(messages[resultIndex]);
+      unitKeys.push(unitKeyByOriginalIndex.get(resultIndex));
+    }
+  });
+  return { messages: ordered, unitKeys };
+}
+
 function collectWireSegmentsFromMessage(
   message: ChatMessage,
 ): ComposeWireContentInput {
@@ -745,9 +858,28 @@ function prefixSpeakerLabel(label: string, body: string): string {
   return `[${label}]: ${trimmed}`;
 }
 
-function materializeWireContent(message: ChatMessage): ChatMessage {
+function toWireRole(
+  role: ChatMessage["role"],
+): WireChatMessage["role"] {
+  return isToolResultRole(role) ? "user" : role;
+}
+
+function lowerUnmaterializedMessage(message: ChatMessage): WireChatMessage {
+  const role = toWireRole(message.role);
+  if (!isToolResultRole(message.role)) {
+    return { ...message, role };
+  }
+  return {
+    ...message,
+    role,
+    toolCalls: undefined,
+    tool_call_id: undefined,
+  };
+}
+
+function materializeWireContent(message: ChatMessage): WireChatMessage {
   if (!shouldMaterializeWireContent(message)) {
-    return message;
+    return lowerUnmaterializedMessage(message);
   }
 
   try {
@@ -762,9 +894,7 @@ function materializeWireContent(message: ChatMessage): ChatMessage {
       composed = prefixSpeakerLabel(speakerLabel, composed);
     }
 
-    const role = message.role === "tool" || message.role === "tool_result"
-      ? "assistant"
-      : message.role;
+    const role = toWireRole(message.role);
 
     const nextMetadata = message.metadata &&
         typeof message.metadata === "object"
@@ -788,7 +918,7 @@ function materializeWireContent(message: ChatMessage): ChatMessage {
       tool_call_id: undefined,
     };
   } catch {
-    return message;
+    return lowerUnmaterializedMessage(message);
   }
 }
 
@@ -802,12 +932,14 @@ export function buildRouteToBlock(routeTargets: string[]): string {
     .join("\n");
 }
 
-function materializeHistoryMessage(message: ChatMessage): ChatMessage {
+function materializeHistoryMessage(message: ChatMessage): WireChatMessage {
   return materializeWireContent(message);
 }
 
-function mergeConsecutiveMessages(messages: ChatMessage[]): ChatMessage[] {
-  const merged: ChatMessage[] = [];
+function mergeConsecutiveMessages(
+  messages: WireChatMessage[],
+): WireChatMessage[] {
+  const merged: WireChatMessage[] = [];
 
   for (const message of messages) {
     const previous = merged[merged.length - 1];
@@ -844,24 +976,29 @@ function mergeConsecutiveMessages(messages: ChatMessage[]): ChatMessage[] {
   return merged;
 }
 
-function appendContinuationCueIfNeeded(messages: ChatMessage[]): ChatMessage[] {
-  const lastMessage = messages[messages.length - 1];
-  if (!lastMessage || lastMessage.role !== "assistant") {
-    return messages;
+function assertWireMessageInvariants(
+  messages: WireChatMessage[],
+): void {
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    if (
+      message.role === "assistant" &&
+      /<tool_results?\b/i.test(contentToText(message.content))
+    ) {
+      throw new Error(
+        "Invalid provider transcript: assistant messages cannot contain tool results",
+      );
+    }
+    if (
+      index > 0 &&
+      message.role !== "system" &&
+      messages[index - 1]?.role === message.role
+    ) {
+      throw new Error(
+        `Invalid provider transcript: consecutive ${message.role} turns were not coalesced`,
+      );
+    }
   }
-
-  const lastContent = contentToText(lastMessage.content);
-  if (!lastContent.includes("<tool_results>")) {
-    return messages;
-  }
-
-  return [
-    ...messages,
-    {
-      role: "user",
-      content: TOOL_RESULTS_CONTINUATION_CUE,
-    },
-  ];
 }
 
 function normalizeStopValues(value?: string | string[]): string[] {
@@ -988,34 +1125,44 @@ function applyLocalStopSequences(
  * Enforces the estimated input ceiling with 20% hysteresis, keeping complete
  * newest conversation/tool-cycle units.
  */
-function limitMessageEstimatedInputTokens(
-  messages: ChatMessage[],
+function limitMessageEstimatedInputTokens<T extends ChatMessage>(
+  messages: T[],
   limitTokens: number,
   groupingMessages: ChatMessage[] = messages,
   targetTokens = limitTokens,
   config: ProviderConfig = {},
-): { messages: ChatMessage[]; cutoffSourceMessageId?: string } {
+  groupingUnitKeys: Array<string | undefined> = [],
+): { messages: T[]; cutoffSourceMessageId?: string } {
   if (limitTokens <= 0) {
     return {
       messages: messages.filter((message) => message.role === "system"),
     };
   }
 
-  const systemMessages: ChatMessage[] = [];
-  const units: ChatMessage[][] = [];
+  const systemMessages: T[] = [];
+  const units: T[][] = [];
+  const unitKeys: Array<string | undefined> = [];
   messages.forEach((message, index) => {
     if (message.role === "system") {
       systemMessages.push(message);
       return;
     }
     const groupingRole = groupingMessages[index]?.role ?? message.role;
+    const groupingUnitKey = groupingUnitKeys[index];
+    const continuesExplicitUnit = typeof groupingUnitKey === "string" &&
+      unitKeys[unitKeys.length - 1] === groupingUnitKey;
     if (
-      (groupingRole === "tool" || groupingRole === "tool_result") &&
-      units.length > 0
+      units.length > 0 &&
+      (
+        continuesExplicitUnit ||
+        groupingRole === "tool" ||
+        groupingRole === "tool_result"
+      )
     ) {
       units[units.length - 1].push(message);
     } else {
       units.push([message]);
+      unitKeys.push(groupingUnitKey);
     }
   });
 
@@ -1039,7 +1186,7 @@ function limitMessageEstimatedInputTokens(
     };
   }
 
-  const keptUnits: ChatMessage[][] = [];
+  const keptUnits: T[][] = [];
   let retainedTokens = 0;
   let firstKeptIndex = measuredUnits.length;
   for (let index = measuredUnits.length - 1; index >= 0; index--) {
@@ -1837,7 +1984,7 @@ Rules:
 - "arguments" must be a JSON object.
 - Use only tool names from the catalog.
 - Do not use provider-native tool syntax or any non-Copilotz tool format.
-- Do not emit <tool_results>; Copilotz provides tool results.
+- Do not emit <tool_results>; Copilotz provides tool results as external input in a later user turn.
 
 Example:
 Sure — checking that now.
@@ -1910,7 +2057,7 @@ When a response includes multiple sections, emit them in this order:
 1. Visible text for the user (if any)
 2. <route_to>agent-id</route_to> and/or <ask_to>agent-id</ask_to> (if routing)
 3. <tool_calls> ... </tool_calls> (if calling tools)
-Copilotz inserts <tool_results> later; never emit tool results yourself.
+Copilotz inserts <tool_results> later in user turns; never emit tool results yourself.
 If no visible reply is needed, respond with <no_response/>.
 
 === TOOL USAGE ===
@@ -1937,7 +2084,7 @@ ${extraRuleText}${exampleRuleNumber}.
 > </tool_calls>
 >
 
-${nextRuleNumber}. Tool outputs may appear later as <tool_results> blocks. Treat them as returned execution results and never generate <tool_results>, <tool_result>, <result>, <target_ids>, or <continue_after_tool_results> yourself.
+${nextRuleNumber}. Tool outputs may appear later as <tool_results> blocks in user turns. Treat them as returned execution results and never generate <tool_results>, <tool_result>, <result>, <target_ids>, or <continue_after_tool_results> yourself.
 ${nextRuleNumber + 1}
 
 === TOOL CATALOG (read-only) ===
@@ -2214,6 +2361,21 @@ export function responseHasMalformedToolCallIntent(
 
 export function responseHasReasoningMarkup(text: string): boolean {
   return REASONING_MARKUP_PATTERN.test(text);
+}
+
+/**
+ * Detect a tagless tail of Copilotz's serialized tool-result envelope.
+ *
+ * Providers occasionally imitate only the JSON suffix, so neither the
+ * `<tool_results>` stop sequence nor tag sanitizer can see it. The reserved
+ * call id plus terminal status and multiple result-envelope fields form a
+ * deliberately narrow signature that ordinary prose/JSON should not match.
+ */
+export function responseHasOrphanedToolResult(text: string): boolean {
+  const trimmed = text.trim();
+  if (!ORPHANED_TOOL_RESULT_TERMINAL_PATTERN.test(trimmed)) return false;
+  const evidence = trimmed.match(ORPHANED_TOOL_RESULT_EVIDENCE_PATTERN) ?? [];
+  return evidence.length >= 2;
 }
 
 /**

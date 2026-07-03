@@ -161,7 +161,10 @@ Deno.test("historyGenerator can include all agent reasoning with a cap", () => {
   );
 
   const formatted = formatMessages({ messages: generated });
-  assertEquals(String(formatted[0]?.content).includes("reasoning truncated"), true);
+  assertEquals(
+    String(formatted[0]?.content).includes("reasoning truncated"),
+    true,
+  );
   assertEquals(String(formatted[0]?.content).includes("Peer answer."), true);
 });
 
@@ -347,6 +350,14 @@ Deno.test("historyGenerator keeps full default tool result for requesting agent"
     output: { secret: "raw output" },
     status: "completed",
   });
+
+  const formatted = formatMessages({ messages: generated });
+  assertEquals(formatted.length, 1);
+  assertEquals(formatted[0]?.role, "user");
+  assertEquals(
+    String(formatted[0]?.content).includes('"secret":"raw output"'),
+    true,
+  );
 });
 
 Deno.test("historyGenerator renders peer public tool calls and results fully as user transcript", () => {

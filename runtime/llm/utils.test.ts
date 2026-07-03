@@ -11,6 +11,7 @@ import {
   processStream,
   resolveProviderStopSequences,
   responseHasMalformedToolCallIntent,
+  responseHasOrphanedToolResult,
   responseHasReasoningMarkup,
   responseHasToolIntent,
   sanitizeUserFacingText,
@@ -66,7 +67,7 @@ Deno.test("formatMessages merges consecutive user turns from different senders",
   );
 });
 
-Deno.test("formatMessages merges consecutive assistant turns for tool loops", () => {
+Deno.test("formatMessages emits current-agent tool results as the following user turn", () => {
   const formatted = formatMessages({
     messages: [
       {
@@ -95,21 +96,171 @@ Deno.test("formatMessages merges consecutive assistant turns for tool loops", ()
   });
 
   assertEquals(formatted.map((message) => message.role), ["assistant", "user"]);
-  const wire = formatted[0]?.content as string;
-  assertEquals(wire.includes("<tool_calls>"), true);
-  assertEquals(wire.includes("<tool_results>"), true);
+  const assistantWire = formatted[0]?.content as string;
+  const resultWire = formatted[1]?.content as string;
+  assertEquals(assistantWire.includes("<tool_calls>"), true);
+  assertEquals(assistantWire.includes("<tool_results>"), false);
+  assertEquals(resultWire.includes("<tool_results>"), true);
   assertEquals(
-    wire.indexOf("Checking now.") < wire.indexOf("<tool_calls>"),
+    assistantWire.indexOf("Checking now.") <
+      assistantWire.indexOf("<tool_calls>"),
+    true,
+  );
+  assertEquals(resultWire.includes("<continue_after_tool_results>"), false);
+});
+
+Deno.test("formatMessages places completed results before interleaved multi-agent user events", () => {
+  const formatted = formatMessages({
+    messages: [
+      {
+        role: "user",
+        content: "[Vinicius]: Check the preview.",
+      },
+      {
+        role: "assistant",
+        senderId: "east",
+        content: "Checking.",
+        toolCalls: [{
+          id: "preview-1",
+          tool: { id: "browser_session" },
+          args: "{}",
+        }],
+      },
+      {
+        role: "user",
+        senderId: "north",
+        content: "[North]: Also inspect the console.",
+      },
+      {
+        role: "tool",
+        senderId: "east",
+        content: "",
+        toolCalls: [{
+          id: "preview-1",
+          tool: { id: "browser_session" },
+          args: "{}",
+          output: { ready: true },
+          status: "completed",
+        }],
+      },
+      {
+        role: "user",
+        senderId: "user-1",
+        content: "[Vinicius]: Any errors?",
+      },
+    ],
+  });
+
+  assertEquals(
+    formatted.map((message) => message.role),
+    ["user", "assistant", "user"],
+  );
+  const userContinuation = formatted[2]?.content as string;
+  assertEquals(
+    userContinuation.indexOf("<tool_results>") <
+      userContinuation.indexOf("[North]"),
     true,
   );
   assertEquals(
-    wire.indexOf("<tool_calls>") < wire.indexOf("<tool_results>"),
+    userContinuation.indexOf("[North]") <
+      userContinuation.indexOf("[Vinicius]"),
+    true,
+  );
+  assertEquals(formatted[2]?.senderId, undefined);
+});
+
+Deno.test("formatMessages batches parallel results into one user turn before peer text", () => {
+  const formatted = formatMessages({
+    messages: [
+      {
+        role: "assistant",
+        senderId: "east",
+        content: "",
+        toolCalls: [
+          { id: "call-1", tool: { id: "first" }, args: "{}" },
+          { id: "call-2", tool: { id: "second" }, args: "{}" },
+        ],
+      },
+      {
+        role: "user",
+        senderId: "north",
+        content: "[North]: Waiting on both.",
+      },
+      {
+        role: "tool",
+        senderId: "east",
+        content: "",
+        toolCalls: [{
+          id: "call-1",
+          tool: { id: "first" },
+          args: "{}",
+          output: { first: true },
+          status: "completed",
+        }],
+      },
+      {
+        role: "tool_result",
+        senderId: "east",
+        content: "",
+        toolCalls: [{
+          id: "call-2",
+          tool: { id: "second" },
+          args: "{}",
+          output: { second: true },
+          status: "completed",
+        }],
+      },
+    ],
+  });
+
+  assertEquals(formatted.map((message) => message.role), ["assistant", "user"]);
+  const resultTurn = formatted[1]?.content as string;
+  assertEquals((resultTurn.match(/<tool_results>/g) ?? []).length, 2);
+  assertEquals(
+    resultTurn.indexOf('"first":true') < resultTurn.indexOf('"second":true'),
     true,
   );
   assertEquals(
-    (formatted[1]?.content as string).includes("<continue_after_tool_results>"),
+    resultTurn.indexOf('"second":true') < resultTurn.indexOf("[North]"),
     true,
   );
+});
+
+Deno.test("formatMessages lowers unstructured legacy tool results to user input", () => {
+  const formatted = formatMessages({
+    messages: [{
+      role: "tool",
+      content: "[Tool Result]: legacy output",
+      tool_call_id: "legacy-call",
+    }],
+  });
+
+  assertEquals(formatted, [{
+    role: "user",
+    content: "[Tool Result]: legacy output",
+    toolCalls: undefined,
+    tool_call_id: undefined,
+  }]);
+});
+
+Deno.test("formatMessages strips model-authored tool results from assistant history", () => {
+  const formatted = formatMessages({
+    messages: [{
+      role: "assistant",
+      content:
+        'Visible answer.\n<tool_results>\n{"tool_call_id":"fake"}\n</tool_results>',
+    }],
+  });
+
+  assertEquals(formatted, [{
+    role: "assistant",
+    content: "Visible answer.",
+    metadata: undefined,
+    toolCalls: undefined,
+    reasoning: undefined,
+    reasoningMaxEstimatedTokens: undefined,
+    tool_call_id: undefined,
+  }]);
 });
 
 Deno.test("formatMessages creates headroom after crossing the estimated input limit", () => {
@@ -249,6 +400,60 @@ Deno.test("formatMessages preserves inline audio base64 under estimated input li
   assertEquals(
     (parts[1] as { input_audio?: { data?: string } })?.input_audio?.data,
     audio,
+  );
+});
+
+Deno.test("formatMessages truncation keeps an interleaved completed tool cycle atomic", () => {
+  const formatted = formatMessages({
+    messages: [
+      {
+        role: "user",
+        content: "old history ".repeat(40),
+        metadata: { sourceMessageId: "old" },
+      },
+      {
+        role: "assistant",
+        senderId: "east",
+        content: "Checking.",
+        metadata: { sourceMessageId: "call" },
+        toolCalls: [{
+          id: "cycle-1",
+          tool: { id: "sandbox_session" },
+          args: "{}",
+        }],
+      },
+      {
+        role: "user",
+        senderId: "north",
+        content: "[North]: Preserve this interleaved note.",
+        metadata: { sourceMessageId: "peer" },
+      },
+      {
+        role: "tool",
+        senderId: "east",
+        content: "",
+        metadata: { sourceMessageId: "result" },
+        toolCalls: [{
+          id: "cycle-1",
+          tool: { id: "sandbox_session" },
+          args: "{}",
+          output: { body: "x".repeat(800) },
+          status: "completed",
+        }],
+      },
+    ],
+    config: { limitEstimatedInputTokens: 20 },
+  });
+
+  assertEquals(formatted.map((message) => message.role), ["assistant", "user"]);
+  assertEquals(String(formatted[0]?.content).includes("<tool_calls>"), true);
+  assertEquals(String(formatted[1]?.content).includes("<tool_results>"), true);
+  assertEquals(String(formatted[1]?.content).includes("[North]"), true);
+  assertEquals(
+    formatted.some((message) =>
+      String(message.content).includes("old history")
+    ),
+    false,
   );
 });
 
@@ -479,6 +684,25 @@ Deno.test("responseHasReasoningMarkup detects visible thinking tags", () => {
   assertEquals(responseHasReasoningMarkup("plain answer"), false);
 });
 
+Deno.test("responseHasOrphanedToolResult detects production-shaped tagless result tails", () => {
+  const leak =
+    '"}]}],"success":true,"stoppedEarly":false,"sessionSummary":{"status":"idle"},"tool_call_id":"verify_live_preview","status":"completed"}';
+
+  assertEquals(responseHasOrphanedToolResult(leak), true);
+  assertEquals(
+    responseHasOrphanedToolResult(
+      '{"tool_call_id":"example","status":"completed"}',
+    ),
+    false,
+  );
+  assertEquals(
+    responseHasOrphanedToolResult(
+      'The operation succeeded with status "completed".',
+    ),
+    false,
+  );
+});
+
 Deno.test("sanitizeUserFacingText strips leaked tool-call protocol markup", () => {
   const leak =
     'I have the abstract.\n]<]minimax[>[<tool_call>\n<invoke name="sandbox_session">]<]minimax[>[<actions>]<]minimax[>[<cmd>ls</cmd>]<]minimax[>[</tool_call>';
@@ -577,9 +801,8 @@ Deno.test("formatMessages canonicalizes structured tool results over pre-rendere
     }],
   });
 
-  assertEquals(formatted.length, 2);
-  assertEquals(formatted[0]?.role, "assistant");
-  assertEquals(formatted[1]?.role, "user");
+  assertEquals(formatted.length, 1);
+  assertEquals(formatted[0]?.role, "user");
   const wire = formatted[0]?.content as string;
   assertEquals((wire.match(/<tool_results>/g) ?? []).length, 1);
   assertEquals(wire.includes("new_tool"), true);
@@ -608,9 +831,9 @@ Deno.test("formatMessages counts structured tool result output toward input limi
     },
   });
 
-  const assistantTurns = formatted.filter((m) => m.role === "assistant");
-  assertEquals(assistantTurns.length >= 1, true);
-  const toolWire = assistantTurns[assistantTurns.length - 1];
+  const userTurns = formatted.filter((m) => m.role === "user");
+  assertEquals(userTurns.length >= 1, true);
+  const toolWire = userTurns[userTurns.length - 1];
   assertEquals(typeof toolWire.content, "string");
   const wire = toolWire.content as string;
   // A newest tool-result unit is retained atomically even when it alone exceeds

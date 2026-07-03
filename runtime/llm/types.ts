@@ -67,6 +67,17 @@ export interface ChatMessage {
   reasoningMaxEstimatedTokens?: number;
 }
 
+/**
+ * Provider-facing message after Copilotz materializes its text protocol.
+ *
+ * Tool execution remains represented as `tool`/`tool_result` internally, but
+ * results are external input to the model and are lowered to `user` turns
+ * before provider adapters receive the transcript.
+ */
+export type WireChatMessage =
+  & Omit<ChatMessage, "role">
+  & { role: "system" | "user" | "assistant" };
+
 export type ProviderFallbackReason =
   | "timeout"
   | "network"
@@ -412,6 +423,7 @@ export type TokenUsageStatusReason =
   | "content_filter"
   | "empty_response"
   | "malformed_tool_call"
+  | "orphaned_tool_result"
   | "visible_reasoning_markup"
   | "degenerate_repetition";
 

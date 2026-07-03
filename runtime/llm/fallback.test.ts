@@ -1442,6 +1442,90 @@ const searchTool = {
   },
 };
 
+Deno.test("chat quarantines and retries a tagless orphaned tool-result tail", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const seenMessages: Array<Array<{ role?: string; content?: unknown }>> = [];
+  const streamed: string[] = [];
+  let calls = 0;
+
+  console.warn = () => {};
+  const orphanRegistry: ProviderRegistry = {
+    anthropic: () => ({
+      endpoint: "https://example.test/anthropic",
+      headers: () => ({}),
+      body: (messages) => {
+        seenMessages.push(
+          messages as Array<{ role?: string; content?: unknown }>,
+        );
+        return {};
+      },
+      extractContent: (data: any) => {
+        const content = data?.choices?.[0]?.delta?.content;
+        return typeof content === "string" && content.length > 0
+          ? [{ text: content }]
+          : null;
+      },
+      extractFinishReason: (data: any) =>
+        data?.choices?.[0]?.finish_reason ?? null,
+    }),
+  };
+  const leak =
+    '"}]}],"success":true,"stoppedEarly":false,"sessionSummary":{"status":"idle"},"tool_call_id":"verify_live_preview","status":"completed"}';
+
+  globalThis.fetch = () => {
+    calls += 1;
+    return Promise.resolve(
+      calls === 1
+        ? sse([
+          { choices: [{ delta: { content: leak } }] },
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ])
+        : sse([
+          { choices: [{ delta: { content: "Recovered answer." } }] },
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "verify it" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+      },
+      {},
+      (chunk, options) => {
+        if (!options?.isReasoning) streamed.push(chunk);
+      },
+      orphanRegistry,
+    );
+
+    assertEquals(calls, 2);
+    assertEquals(response.answer, "Recovered answer.");
+    assertEquals(streamed.join(""), "Recovered answer.");
+    assertEquals(
+      response.usageAttempts?.[0]?.usage.statusReason,
+      "orphaned_tool_result",
+    );
+    assertEquals(
+      seenMessages[1]?.some((message) =>
+        message.role === "user" &&
+        String(message.content ?? "").includes(
+          "imitated a tool-result payload",
+        )
+      ),
+      true,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
 Deno.test("chat retries same model when output degenerates into repetition", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;

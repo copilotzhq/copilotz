@@ -797,6 +797,109 @@ interface ToolCallValidation {
   arguments: unknown;
 }
 
+
+export function formatDiscriminatedOneOfError(
+  schema: any,
+  args: any,
+  toolName: string = "tool"
+): string | null {
+  if (!schema || !Array.isArray(schema.oneOf)) {
+    return null;
+  }
+
+  let discriminatorName: string | null = null;
+  const allowedValues: string[] = [];
+  const branchMap = new Map<string, any>();
+
+  const firstBranch = schema.oneOf[0];
+  if (!firstBranch || !firstBranch.properties) {
+    return null;
+  }
+
+  const candidates = Object.keys(firstBranch.properties).filter(key => {
+    const prop = firstBranch.properties[key];
+    return prop && typeof prop === "object" && "const" in prop && typeof prop.const === "string";
+  });
+
+  for (const candidate of candidates) {
+    let isDiscriminator = true;
+    const values: string[] = [];
+    const tempBranchMap = new Map<string, any>();
+
+    for (const branch of schema.oneOf) {
+      if (!branch.properties || !branch.properties[candidate]) {
+        isDiscriminator = false;
+        break;
+      }
+      const prop = branch.properties[candidate];
+      if (!prop || typeof prop !== "object" || !("const" in prop) || typeof prop.const !== "string") {
+        isDiscriminator = false;
+        break;
+      }
+      values.push(prop.const);
+      tempBranchMap.set(prop.const, branch);
+    }
+
+    if (isDiscriminator) {
+      discriminatorName = candidate;
+      allowedValues.push(...values);
+      for (const [k, v] of tempBranchMap.entries()) {
+        branchMap.set(k, v);
+      }
+      break;
+    }
+  }
+
+  if (!discriminatorName) {
+    return null;
+  }
+
+  const val = args[discriminatorName];
+
+  if (val === undefined || val === null) {
+    return `Missing required field '${discriminatorName}'. Allowed ${discriminatorName}s: ${allowedValues.join(", ")}`;
+  }
+
+  if (typeof val !== "string" || !branchMap.has(val)) {
+    return `Unknown ${discriminatorName} '${val}'. Allowed ${discriminatorName}s: ${allowedValues.join(", ")}`;
+  }
+
+  const branch = branchMap.get(val);
+  const requiredFields = Array.isArray(branch.required) ? branch.required : [];
+  const allowedFields = branch.properties ? Object.keys(branch.properties) : [];
+  
+  const missingRequired: string[] = [];
+  const unexpectedFields: string[] = [];
+
+  for (const req of requiredFields) {
+    if (!(req in args)) {
+      missingRequired.push(req);
+    }
+  }
+
+  for (const key of Object.keys(args)) {
+    if (!allowedFields.includes(key)) {
+      unexpectedFields.push(key);
+    }
+  }
+
+  if (missingRequired.length > 0 || unexpectedFields.length > 0) {
+    let msg = `Invalid arguments for ${toolName} ${discriminatorName} '${val}'.`;
+    if (requiredFields.length > 0) {
+      msg += ` Required: ${requiredFields.join(", ")}.`;
+    }
+    if (allowedFields.length > 0) {
+      msg += ` Allowed: ${allowedFields.join(", ")}.`;
+    }
+    if (unexpectedFields.length > 0) {
+      msg += ` Unexpected: ${unexpectedFields.join(", ")}.`;
+    }
+    return msg;
+  }
+
+  return null;
+}
+
 export const validateToolCall = (
   toolCall: ToolCallValidation,
   tool: Tool,
@@ -818,10 +921,21 @@ export const validateToolCall = (
     : undefined;
 
   // If the schema has no properties and no required fields, accept empty arguments
+  // ONLY if it does not contain any schema combinators (oneOf, anyOf, allOf, if, then, else, not)
+  const hasCombinators = 
+    "oneOf" in tool.inputSchema ||
+    "anyOf" in tool.inputSchema ||
+    "allOf" in tool.inputSchema ||
+    "if" in tool.inputSchema ||
+    "then" in tool.inputSchema ||
+    "else" in tool.inputSchema ||
+    "not" in tool.inputSchema;
+
   if (
     tool.inputSchema.type === "object" &&
     (!schemaProperties || Object.keys(schemaProperties).length === 0) &&
-    (!requiredFields || requiredFields.length === 0)
+    (!requiredFields || requiredFields.length === 0) &&
+    !hasCombinators
   ) {
     return { valid: true };
   }
@@ -831,7 +945,8 @@ export const validateToolCall = (
     const valid = validate(args);
 
     if (!valid) {
-      const errorMessage = ajv.errorsText(validate.errors);
+      const formattedError = formatDiscriminatedOneOfError(tool.inputSchema, args, toolCall.name);
+      const errorMessage = formattedError || ajv.errorsText(validate.errors);
       return { valid: false, error: errorMessage };
     }
 

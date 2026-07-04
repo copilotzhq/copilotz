@@ -719,6 +719,23 @@ export class YahooProvider implements FinanceDataProvider {
       validateRange('dayVolumeRange', eqInput.dayVolumeRange);
       validateRange('betaRange', eqInput.betaRange);
       validateRange('dividendYieldRange', eqInput.dividendYieldRange);
+      validateRange('lastClosePriceBookValueRange', eqInput.lastClosePriceBookValueRange);
+      validateRange('pegRatio5YrRange', eqInput.pegRatio5YrRange);
+      validateRange('currentRatioRange', eqInput.currentRatioRange);
+      validateRange('grossProfitMarginRange', eqInput.grossProfitMarginRange);
+      validateRange('returnOnAssetsRange', eqInput.returnOnAssetsRange);
+      validateRange('returnOnEquityRange', eqInput.returnOnEquityRange);
+      validateRange('totalDebtEquityRange', eqInput.totalDebtEquityRange);
+      validateRange('longTermDebtEquityRange', eqInput.longTermDebtEquityRange);
+      validateRange('returnOnTotalCapitalRange', eqInput.returnOnTotalCapitalRange);
+      validateRange('netIncomeMarginRange', eqInput.netIncomeMarginRange);
+      validateRange('altmanZScoreRange', eqInput.altmanZScoreRange);
+      validateRange('quickRatioRange', eqInput.quickRatioRange);
+      validateRange('totalDebtEbitdaRange', eqInput.totalDebtEbitdaRange);
+      validateRange('ebitdaMarginRange', eqInput.ebitdaMarginRange);
+      validateRange('netDebtEbitdaRange', eqInput.netDebtEbitdaRange);
+      validateRange('epsGrowthRange', eqInput.epsGrowthRange);
+      validateRange('forwardDividendYieldRange', eqInput.forwardDividendYieldRange);
     }
 
     // 2. Sort field mapping
@@ -752,6 +769,23 @@ export class YahooProvider implements FinanceDataProvider {
       industry: 'industry',
       exchange: 'exchange',
       region: 'region',
+      lastClosePriceBookValueLtm: 'lastclosepricebookvalue.lasttwelvemonths',
+      pegRatio5Yr: 'pegratio_5y',
+      currentRatioLtm: 'currentratio.lasttwelvemonths',
+      grossProfitMarginPercentLtm: 'grossprofitmargin.lasttwelvemonths',
+      returnOnAssetsPercentLtm: 'returnonassets.lasttwelvemonths',
+      returnOnEquityPercentLtm: 'returnonequity.lasttwelvemonths',
+      totalDebtEquityPercentLtm: 'totaldebtequity.lasttwelvemonths',
+      longTermDebtEquityPercentLtm: 'ltdebtequity.lasttwelvemonths',
+      returnOnTotalCapitalLtm: 'returnontotalcapital.lasttwelvemonths',
+      netIncomeMarginPercentLtm: 'netincomemargin.lasttwelvemonths',
+      altmanZScoreLtm: 'altmanzscoreusingtheaveragestockinformationforaperiod.lasttwelvemonths',
+      quickRatioLtm: 'quickratio.lasttwelvemonths',
+      totalDebtEbitdaLtm: 'totaldebtebitda.lasttwelvemonths',
+      ebitdaMarginPercentLtm: 'ebitdamargin.lasttwelvemonths',
+      netDebtEbitdaLtm: 'netdebtebitda.lasttwelvemonths',
+      epsGrowthPercentLtm: 'epsgrowth.lasttwelvemonths',
+      forwardDividendYieldPercent: 'forward_dividend_yield',
     };
 
     let yahooSortField = sortField;
@@ -866,6 +900,65 @@ export class YahooProvider implements FinanceDataProvider {
 
       const divYieldNode = buildRange('dividendyield', eqInput.dividendYieldRange);
       if (divYieldNode) operands.push(divYieldNode);
+
+      const lastClosePriceBookValueNode = buildRange('lastclosepricebookvalue.lasttwelvemonths', eqInput.lastClosePriceBookValueRange);
+      if (lastClosePriceBookValueNode) operands.push(lastClosePriceBookValueNode);
+
+      const pegRatio5YrNode = buildRange('pegratio_5y', eqInput.pegRatio5YrRange);
+      if (pegRatio5YrNode) operands.push(pegRatio5YrNode);
+
+      const currentRatioNode = buildRange('currentratio.lasttwelvemonths', eqInput.currentRatioRange);
+      if (currentRatioNode) operands.push(currentRatioNode);
+
+      const grossProfitMarginNode = buildRange('grossprofitmargin.lasttwelvemonths', eqInput.grossProfitMarginRange);
+      if (grossProfitMarginNode) operands.push(grossProfitMarginNode);
+
+      const returnOnAssetsNode = buildRange('returnonassets.lasttwelvemonths', eqInput.returnOnAssetsRange);
+      if (returnOnAssetsNode) operands.push(returnOnAssetsNode);
+
+      const returnOnEquityNode = buildRange('returnonequity.lasttwelvemonths', eqInput.returnOnEquityRange);
+      if (returnOnEquityNode) operands.push(returnOnEquityNode);
+
+      const totalDebtEquityNode = buildRange('totaldebtequity.lasttwelvemonths', eqInput.totalDebtEquityRange);
+      if (totalDebtEquityNode) operands.push(totalDebtEquityNode);
+
+      const longTermDebtEquityNode = buildRange('ltdebtequity.lasttwelvemonths', eqInput.longTermDebtEquityRange);
+      if (longTermDebtEquityNode) operands.push(longTermDebtEquityNode);
+
+      const returnOnTotalCapitalNode = buildRange('returnontotalcapital.lasttwelvemonths', eqInput.returnOnTotalCapitalRange);
+      if (returnOnTotalCapitalNode) operands.push(returnOnTotalCapitalNode);
+
+      const netIncomeMarginNode = buildRange('netincomemargin.lasttwelvemonths', eqInput.netIncomeMarginRange);
+      if (netIncomeMarginNode) operands.push(netIncomeMarginNode);
+
+      const altmanZScoreNode = buildRange('altmanzscoreusingtheaveragestockinformationforaperiod.lasttwelvemonths', eqInput.altmanZScoreRange);
+      if (altmanZScoreNode) operands.push(altmanZScoreNode);
+
+      const quickRatioNode = buildRange('quickratio.lasttwelvemonths', eqInput.quickRatioRange);
+      if (quickRatioNode) operands.push(quickRatioNode);
+
+      const totalDebtEbitdaNode = buildRange('totaldebtebitda.lasttwelvemonths', eqInput.totalDebtEbitdaRange);
+      if (totalDebtEbitdaNode) operands.push(totalDebtEbitdaNode);
+
+      const ebitdaMarginNode = buildRange('ebitdamargin.lasttwelvemonths', eqInput.ebitdaMarginRange);
+      if (ebitdaMarginNode) operands.push(ebitdaMarginNode);
+
+      const netDebtEbitdaNode = buildRange('netdebtebitda.lasttwelvemonths', eqInput.netDebtEbitdaRange);
+      if (netDebtEbitdaNode) operands.push(netDebtEbitdaNode);
+
+      const epsGrowthNode = buildRange('epsgrowth.lasttwelvemonths', eqInput.epsGrowthRange);
+      if (epsGrowthNode) operands.push(epsGrowthNode);
+
+      const forwardDividendYieldNode = buildRange('forward_dividend_yield', eqInput.forwardDividendYieldRange);
+      if (forwardDividendYieldNode) operands.push(forwardDividendYieldNode);
+    }
+
+    // Complexity check
+    if (operands.length > 20) {
+      throw new FinanceError({
+        code: 'bad_request',
+        message: `Query complexity limit exceeded: maximum of 20 top-level filter groups allowed. Got ${operands.length}.`,
+      });
     }
 
     // 4. Map requested fields to Yahoo internal fields
@@ -878,7 +971,7 @@ export class YahooProvider implements FinanceDataProvider {
       : defaultFields;
 
     const includeFields = Array.from(new Set(
-      requestedFields.map(f => {
+      requestedFields.map((f: string) => {
         if (quoteType === 'INDEX') {
           const INDEX_FIELD_MAP: Record<string, string> = {
             symbol: 'ticker',
@@ -998,7 +1091,58 @@ export class YahooProvider implements FinanceDataProvider {
             mapped.beta = lookup(['beta']);
             break;
           case 'dividendYield':
-            mapped.dividendYield = lookup(['dividendYield', 'dividendyield']);
+            mapped.dividendYield = lookup(['dividendYield', 'dividendyield', 'dividendYieldPercent']);
+            break;
+          case 'lastClosePriceBookValueLtm':
+            mapped.lastClosePriceBookValueLtm = lookup(['lastClosePriceBookValueLtm', 'lastclosepricebookvalueltm']);
+            break;
+          case 'pegRatio5Yr':
+            mapped.pegRatio5Yr = lookup(['pegRatio5Yr', 'pegratio5yr']);
+            break;
+          case 'currentRatioLtm':
+            mapped.currentRatioLtm = lookup(['currentRatioLtm', 'currentratioltm']);
+            break;
+          case 'grossProfitMarginPercentLtm':
+            mapped.grossProfitMarginPercentLtm = lookup(['grossProfitMarginPercentLtm', 'grossprofitmarginpercentltm']);
+            break;
+          case 'returnOnAssetsPercentLtm':
+            mapped.returnOnAssetsPercentLtm = lookup(['returnOnAssetsPercentLtm', 'returnonassetspercentltm']);
+            break;
+          case 'returnOnEquityPercentLtm':
+            mapped.returnOnEquityPercentLtm = lookup(['returnOnEquityPercentLtm', 'returnonequitypercentltm']);
+            break;
+          case 'totalDebtEquityPercentLtm':
+            mapped.totalDebtEquityPercentLtm = lookup(['totalDebtEquityPercentLtm', 'totaldebtequitypercentltm']);
+            break;
+          case 'longTermDebtEquityPercentLtm':
+            mapped.longTermDebtEquityPercentLtm = lookup(['longTermDebtEquityPercentLtm', 'longtermdebtequitypercentltm']);
+            break;
+          case 'returnOnTotalCapitalLtm':
+            mapped.returnOnTotalCapitalLtm = lookup(['returnOnTotalCapitalLtm', 'returnontotalcapitalltm']);
+            break;
+          case 'netIncomeMarginPercentLtm':
+            mapped.netIncomeMarginPercentLtm = lookup(['netIncomeMarginPercentLtm', 'netincomemarginpercentltm']);
+            break;
+          case 'altmanZScoreLtm':
+            mapped.altmanZScoreLtm = lookup(['altmanZScoreLtm', 'altmanzscoreltm']);
+            break;
+          case 'quickRatioLtm':
+            mapped.quickRatioLtm = lookup(['quickRatioLtm', 'quickratioltm']);
+            break;
+          case 'totalDebtEbitdaLtm':
+            mapped.totalDebtEbitdaLtm = lookup(['totalDebtEbitdaLtm', 'totaldebtebitdaltm']);
+            break;
+          case 'ebitdaMarginPercentLtm':
+            mapped.ebitdaMarginPercentLtm = lookup(['ebitdaMarginPercentLtm', 'ebitdamarginpercentltm']);
+            break;
+          case 'netDebtEbitdaLtm':
+            mapped.netDebtEbitdaLtm = lookup(['netDebtEbitdaLtm', 'netdebtebitdaltm']);
+            break;
+          case 'epsGrowthPercentLtm':
+            mapped.epsGrowthPercentLtm = lookup(['epsGrowthPercentLtm', 'epsgrowthpercentltm']);
+            break;
+          case 'forwardDividendYieldPercent':
+            mapped.forwardDividendYieldPercent = lookup(['forwardDividendYieldPercent', 'forwarddividendyieldpercent']);
             break;
           case 'sector':
             mapped.sector = lookup(['sector']);

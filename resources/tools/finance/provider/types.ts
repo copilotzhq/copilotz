@@ -361,7 +361,7 @@ export interface FinancialPeriod {
 
 
 // 4.9 Screen Securities
-export type ScreenSecuritiesInput = ScreenSecuritiesIndexInput | ScreenSecuritiesEquityInput;
+
 
 export interface ScreenSecuritiesIndexInput {
   action: 'screen_securities';
@@ -383,9 +383,26 @@ export interface ScreenSecuritiesIndexInput {
   provider?: string;
 }
 
-export interface ScreenSecuritiesEquityInput {
+export type ScreenSecuritiesInput = ScreenSecuritiesIndexInput | ScreenSecuritiesEquityInput | ScreenSecuritiesEtfInput | ScreenSecuritiesMutualFundInput;
+
+export interface ScreenSecuritiesEtfInput {
   action: 'screen_securities';
-  quoteType: 'EQUITY' | 'ETF' | 'MUTUALFUND';
+  quoteType: 'ETF';
+  [key: string]: any;
+}
+
+export interface ScreenSecuritiesMutualFundInput {
+  action: 'screen_securities';
+  quoteType: 'MUTUALFUND';
+  [key: string]: any;
+}
+
+export type ScreenSecuritiesEquityInput = ScreenSecuritiesEquityStandardInput | ScreenSecuritiesEquityRatiosInput;
+
+export interface ScreenSecuritiesEquityStandardInput {
+  action: 'screen_securities';
+  quoteType: 'EQUITY';
+  fieldProfile: 'standard';
   regions?: string[];
   exchanges?: string[];
   sectors?: string[];
@@ -399,6 +416,49 @@ export interface ScreenSecuritiesEquityInput {
   averageDailyVolume3MonthAbove?: number;
   betaRange?: [number, number];
   dividendYieldRange?: [number, number];
+  size?: number;
+  offset?: number;
+  sortField?: string;
+  sortOrder?: 'asc' | 'desc';
+  fields?: string[];
+  provider?: string;
+}
+
+export interface ScreenSecuritiesEquityRatiosInput {
+  action: 'screen_securities';
+  quoteType: 'EQUITY';
+  fieldProfile: 'ratios';
+  regions?: string[];
+  exchanges?: string[];
+  sectors?: string[];
+  industries?: string[];
+  marketCapRange?: [number, number];
+  peRatioRange?: [number, number];
+  priceRange?: [number, number];
+  percentChangeRange?: [number, number];
+  fiftyTwoWeekPercentChangeRange?: [number, number];
+  dayVolumeRange?: [number, number];
+  averageDailyVolume3MonthAbove?: number;
+  betaRange?: [number, number];
+  dividendYieldRange?: [number, number];
+  // New ratio range filters:
+  lastClosePriceBookValueRange?: [number, number];
+  pegRatio5YrRange?: [number, number];
+  currentRatioRange?: [number, number];
+  grossProfitMarginRange?: [number, number];
+  returnOnAssetsRange?: [number, number];
+  returnOnEquityRange?: [number, number];
+  totalDebtEquityRange?: [number, number];
+  longTermDebtEquityRange?: [number, number];
+  returnOnTotalCapitalRange?: [number, number];
+  netIncomeMarginRange?: [number, number];
+  altmanZScoreRange?: [number, number];
+  quickRatioRange?: [number, number];
+  totalDebtEbitdaRange?: [number, number];
+  ebitdaMarginRange?: [number, number];
+  netDebtEbitdaRange?: [number, number];
+  epsGrowthRange?: [number, number];
+  forwardDividendYieldRange?: [number, number];
   size?: number;
   offset?: number;
   sortField?: string;

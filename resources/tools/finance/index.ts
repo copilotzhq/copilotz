@@ -420,138 +420,400 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
             properties: {
               action: { const: 'screen_securities' },
               quoteType: { const: 'EQUITY' },
-              regions: {
-                type: 'array',
-                items: {
-                  type: 'string',
-                  enum: [
-                    'us', 'ca', 'gb', 'fr', 'de', 'jp', 'hk', 'au', 'in', 'br', 'cn', 'kr', 'tw', 'ch', 'nl', 'se', 'es', 'it', 'sg', 'mx', 'za', 'ru', 'sa', 'tr', 'id', 'th', 'my', 'ph', 'vn', 'pl', 'be', 'at', 'fi', 'no', 'dk', 'ie', 'pt', 'gr', 'il', 'nz', 'co', 'cl', 'pe', 'ar', 'cz', 'hu', 'ro', 'ua', 'ae', 'qa'
-                  ],
-                },
-                description: 'Filter by region/country codes (e.g. ["us", "ca"]).',
-              },
-              exchanges: {
-                type: 'array',
-                items: {
-                  type: 'string',
-                  enum: [
-                    'nyq', 'nms', 'ams', 'par', 'ger', 'fra', 'stu', 'mun', 'ber', 'dus', 'ham', 'han', 'mil', 'mad', 'lis', 'bru', 'vie', 'zur', 'sto', 'osl', 'cph', 'hel', 'ice', 'ath', 'ist', 'lse', 'iob', 'dub', 'tae', 'jse', 'sau', 'dfm', 'adx', 'qse', 'tai', 'koe', 'hkg', 'shh', 'shz', 'bom', 'nse', 'asx', 'nze', 'sgx', 'kln', 'set', 'pse', 'jkt', 'vse', 'sao', 'mex', 'bue', 'sgo', 'col', 'lim', 'ccs', 'mte', 'wse', 'bud', 'pra', 'buh', 'mic', 'kse', 'cse', 'doh', 'bah', 'mus', 'cas', 'nig', 'gha', 'ken', 'uga', 'rwa', 'tzs', 'zim', 'bot', 'nam', 'mau', 'pal', 'amm', 'bei', 'dam', 'bag', 'teh', 'dse', 'hcm', 'hnx'
-                  ],
-                },
-                description: 'Filter by exchange codes (e.g. ["nyq", "nms"]).',
-              },
-              sectors: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Filter by sectors (e.g. ["Technology", "Healthcare"]).',
-              },
-              industries: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Filter by industries (e.g. ["Semiconductors", "Software"]).',
-              },
-              marketCapRange: {
-                type: 'array',
-                items: { type: 'number' },
-                minItems: 2,
-                maxItems: 2,
-                description: 'Filter by market cap range [min, max] in USD.',
-              },
-              peRatioRange: {
-                type: 'array',
-                items: { type: 'number' },
-                minItems: 2,
-                maxItems: 2,
-                description: 'Filter by PE ratio range [min, max].',
-              },
-              priceRange: {
-                type: 'array',
-                items: { type: 'number' },
-                minItems: 2,
-                maxItems: 2,
-                description: 'Filter by price range [min, max] in USD.',
-              },
-              percentChangeRange: {
-                type: 'array',
-                items: { type: 'number' },
-                minItems: 2,
-                maxItems: 2,
-                description: 'Filter by percent change range [min, max] (e.g. [-5, 5]).',
-              },
-              fiftyTwoWeekPercentChangeRange: {
-                type: 'array',
-                items: { type: 'number' },
-                minItems: 2,
-                maxItems: 2,
-                description: 'Filter by 52-week percent change range [min, max].',
-              },
-              dayVolumeRange: {
-                type: 'array',
-                items: { type: 'number' },
-                minItems: 2,
-                maxItems: 2,
-                description: 'Filter by day volume range [min, max].',
-              },
-              averageDailyVolume3MonthAbove: {
-                type: 'number',
-                description: 'Filter by 3-month average daily volume above this value.',
-              },
-              betaRange: {
-                type: 'array',
-                items: { type: 'number' },
-                minItems: 2,
-                maxItems: 2,
-                description: 'Filter by beta range [min, max].',
-              },
-              dividendYieldRange: {
-                type: 'array',
-                items: { type: 'number' },
-                minItems: 2,
-                maxItems: 2,
-                description: 'Filter by dividend yield range [min, max] as decimal percentage (e.g. [0.01, 0.05]).',
-              },
-              size: {
-                type: 'number',
-                minimum: 1,
-                maximum: 200,
-                default: 25,
-                description: 'Max records to return. Default 25, max 200.',
-              },
-              offset: {
-                type: 'number',
-                minimum: 0,
-                default: 0,
-                description: 'Offset for pagination. Default 0.',
-              },
-              sortField: {
-                type: 'string',
-                description: 'Field to sort by (e.g. "marketCap", "peRatioLtm", "regularMarketPrice"). Let Yahoo validate.',
-              },
-              sortOrder: {
-                type: 'string',
-                enum: ['asc', 'desc'],
-                default: 'desc',
-                description: 'Sort order (asc or desc). Default desc.',
-              },
-              fields: {
-                type: 'array',
-                items: {
-                  type: 'string',
-                  enum: [
-                    'symbol', 'shortName', 'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent', 'marketCap', 'peRatioLtm', 'regularMarketVolume', 'averageDailyVolume3Month', 'fiftyTwoWeekPercentChange', 'beta', 'dividendYield', 'sector', 'industry', 'exchange', 'region'
-                  ],
-                  description: 'Requested fields. Enum values map to output keys: symbol (ticker), shortName (companyName), regularMarketPrice (intradayprice), regularMarketChange (intradaypricechange), regularMarketChangePercent (percentchange), marketCap (intradaymarketcap), peRatioLtm (peratio.lasttwelvemonths), regularMarketVolume (dayvolume), averageDailyVolume3Month (avgdailyvol3m), fiftyTwoWeekPercentChange (fiftytwowkpercentchange), beta (beta), dividendYield (dividendyield), sector (sector), industry (industry), exchange (exchange), region (region).',
-                },
-                description: 'Specific fields to return in the records.',
-              },
-              provider: {
-                type: 'string',
-                default: 'yahoo',
-                description: 'Optional provider override (e.g. "yahoo").',
-              },
             },
             required: ['action', 'quoteType'],
-            additionalProperties: false,
+            oneOf: [
+              {
+                properties: {
+                  fieldProfile: { const: 'standard' },
+                  regions: {
+                    type: 'array',
+                    items: {
+                      type: 'string',
+                      enum: [
+                        'us', 'ca', 'gb', 'fr', 'de', 'jp', 'hk', 'au', 'in', 'br', 'cn', 'kr', 'tw', 'ch', 'nl', 'se', 'es', 'it', 'sg', 'mx', 'za', 'ru', 'sa', 'tr', 'id', 'th', 'my', 'ph', 'vn', 'pl', 'be', 'at', 'fi', 'no', 'dk', 'ie', 'pt', 'gr', 'il', 'nz', 'co', 'cl', 'pe', 'ar', 'cz', 'hu', 'ro', 'ua', 'ae', 'qa'
+                      ],
+                    },
+                    description: 'Filter by region/country codes (e.g. ["us", "ca"]).',
+                  },
+                  exchanges: {
+                    type: 'array',
+                    items: {
+                      type: 'string',
+                      enum: [
+                        'nyq', 'nms', 'ams', 'par', 'ger', 'fra', 'stu', 'mun', 'ber', 'dus', 'ham', 'han', 'mil', 'mad', 'lis', 'bru', 'vie', 'zur', 'sto', 'osl', 'cph', 'hel', 'ice', 'ath', 'ist', 'lse', 'iob', 'dub', 'tae', 'jse', 'sau', 'dfm', 'adx', 'qse', 'tai', 'koe', 'hkg', 'shh', 'shz', 'bom', 'nse', 'asx', 'nze', 'sgx', 'kln', 'set', 'pse', 'jkt', 'vse', 'sao', 'mex', 'bue', 'sgo', 'col', 'lim', 'ccs', 'mte', 'wse', 'bud', 'pra', 'buh', 'mic', 'kse', 'cse', 'doh', 'bah', 'mus', 'cas', 'nig', 'gha', 'ken', 'uga', 'rwa', 'tzs', 'zim', 'bot', 'nam', 'mau', 'pal', 'amm', 'bei', 'dam', 'bag', 'teh', 'dse', 'hcm', 'hnx'
+                      ],
+                    },
+                    description: 'Filter by exchange codes (e.g. ["nyq", "nms"]).',
+                  },
+                  sectors: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Filter by sectors (e.g. ["Technology", "Healthcare"]).',
+                  },
+                  industries: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Filter by industries (e.g. ["Semiconductors", "Software"]).',
+                  },
+                  marketCapRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by market cap range [min, max] in USD.',
+                  },
+                  peRatioRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by PE ratio range [min, max].',
+                  },
+                  priceRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by price range [min, max] in USD.',
+                  },
+                  percentChangeRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by percent change range [min, max] (e.g. [-5, 5]).',
+                  },
+                  fiftyTwoWeekPercentChangeRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by 52-week percent change range [min, max].',
+                  },
+                  dayVolumeRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by day volume range [min, max].',
+                  },
+                  averageDailyVolume3MonthAbove: {
+                    type: 'number',
+                    description: 'Filter by 3-month average daily volume above this value.',
+                  },
+                  betaRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by beta range [min, max].',
+                  },
+                  dividendYieldRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by dividend yield range [min, max] as decimal percentage (e.g. [0.01, 0.05]).',
+                  },
+                  size: {
+                    type: 'number',
+                    minimum: 1,
+                    maximum: 200,
+                    default: 25,
+                    description: 'Max records to return. Default 25, max 200.',
+                  },
+                  offset: {
+                    type: 'number',
+                    minimum: 0,
+                    default: 0,
+                    description: 'Offset for pagination. Default 0.',
+                  },
+                  sortField: {
+                    type: 'string',
+                    description: 'Field to sort by (e.g. "marketCap", "peRatioLtm", "regularMarketPrice"). Let Yahoo validate.',
+                  },
+                  sortOrder: {
+                    type: 'string',
+                    enum: ['asc', 'desc'],
+                    default: 'desc',
+                    description: 'Sort order (asc or desc). Default desc.',
+                  },
+                  fields: {
+                    type: 'array',
+                    items: {
+                      type: 'string',
+                      enum: [
+                        'symbol', 'shortName', 'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent', 'marketCap', 'peRatioLtm', 'regularMarketVolume', 'averageDailyVolume3Month', 'fiftyTwoWeekPercentChange', 'beta', 'dividendYield', 'sector', 'industry', 'exchange', 'region'
+                      ],
+                    },
+                    description: 'Specific fields to return in the records.',
+                  },
+                  provider: {
+                    type: 'string',
+                    default: 'yahoo',
+                    description: 'Optional provider override (e.g. "yahoo").',
+                  },
+                },
+                required: ['fieldProfile'],
+                additionalProperties: false,
+              },
+              {
+                properties: {
+                  fieldProfile: { const: 'ratios' },
+                  regions: {
+                    type: 'array',
+                    items: {
+                      type: 'string',
+                      enum: [
+                        'us', 'ca', 'gb', 'fr', 'de', 'jp', 'hk', 'au', 'in', 'br', 'cn', 'kr', 'tw', 'ch', 'nl', 'se', 'es', 'it', 'sg', 'mx', 'za', 'ru', 'sa', 'tr', 'id', 'th', 'my', 'ph', 'vn', 'pl', 'be', 'at', 'fi', 'no', 'dk', 'ie', 'pt', 'gr', 'il', 'nz', 'co', 'cl', 'pe', 'ar', 'cz', 'hu', 'ro', 'ua', 'ae', 'qa'
+                      ],
+                    },
+                    description: 'Filter by region/country codes (e.g. ["us", "ca"]).',
+                  },
+                  exchanges: {
+                    type: 'array',
+                    items: {
+                      type: 'string',
+                      enum: [
+                        'nyq', 'nms', 'ams', 'par', 'ger', 'fra', 'stu', 'mun', 'ber', 'dus', 'ham', 'han', 'mil', 'mad', 'lis', 'bru', 'vie', 'zur', 'sto', 'osl', 'cph', 'hel', 'ice', 'ath', 'ist', 'lse', 'iob', 'dub', 'tae', 'jse', 'sau', 'dfm', 'adx', 'qse', 'tai', 'koe', 'hkg', 'shh', 'shz', 'bom', 'nse', 'asx', 'nze', 'sgx', 'kln', 'set', 'pse', 'jkt', 'vse', 'sao', 'mex', 'bue', 'sgo', 'col', 'lim', 'ccs', 'mte', 'wse', 'bud', 'pra', 'buh', 'mic', 'kse', 'cse', 'doh', 'bah', 'mus', 'cas', 'nig', 'gha', 'ken', 'uga', 'rwa', 'tzs', 'zim', 'bot', 'nam', 'mau', 'pal', 'amm', 'bei', 'dam', 'bag', 'teh', 'dse', 'hcm', 'hnx'
+                      ],
+                    },
+                    description: 'Filter by exchange codes (e.g. ["nyq", "nms"]).',
+                  },
+                  sectors: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Filter by sectors (e.g. ["Technology", "Healthcare"]).',
+                  },
+                  industries: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Filter by industries (e.g. ["Semiconductors", "Software"]).',
+                  },
+                  marketCapRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by market cap range [min, max] in USD.',
+                  },
+                  peRatioRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by PE ratio range [min, max].',
+                  },
+                  priceRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by price range [min, max] in USD.',
+                  },
+                  percentChangeRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by percent change range [min, max] (e.g. [-5, 5]).',
+                  },
+                  fiftyTwoWeekPercentChangeRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by 52-week percent change range [min, max].',
+                  },
+                  dayVolumeRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by day volume range [min, max].',
+                  },
+                  averageDailyVolume3MonthAbove: {
+                    type: 'number',
+                    description: 'Filter by 3-month average daily volume above this value.',
+                  },
+                  betaRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by beta range [min, max].',
+                  },
+                  dividendYieldRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by dividend yield range [min, max] as decimal percentage (e.g. [0.01, 0.05]).',
+                  },
+                  lastClosePriceBookValueRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by last close price to book value ratio range [min, max].',
+                  },
+                  pegRatio5YrRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by 5-year PEG ratio range [min, max].',
+                  },
+                  currentRatioRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by current ratio range [min, max].',
+                  },
+                  grossProfitMarginRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by gross profit margin range [min, max].',
+                  },
+                  returnOnAssetsRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by return on assets range [min, max].',
+                  },
+                  returnOnEquityRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by return on equity range [min, max].',
+                  },
+                  totalDebtEquityRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by total debt to equity ratio range [min, max].',
+                  },
+                  longTermDebtEquityRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by long term debt to equity ratio range [min, max].',
+                  },
+                  returnOnTotalCapitalRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by return on total capital range [min, max].',
+                  },
+                  netIncomeMarginRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by net income margin range [min, max].',
+                  },
+                  altmanZScoreRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by Altman Z-score range [min, max].',
+                  },
+                  quickRatioRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by quick ratio range [min, max].',
+                  },
+                  totalDebtEbitdaRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by total debt to EBITDA ratio range [min, max].',
+                  },
+                  ebitdaMarginRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by EBITDA margin range [min, max].',
+                  },
+                  netDebtEbitdaRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by net debt to EBITDA ratio range [min, max].',
+                  },
+                  epsGrowthRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by EPS growth range [min, max].',
+                  },
+                  forwardDividendYieldRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by forward dividend yield range [min, max].',
+                  },
+                  size: {
+                    type: 'number',
+                    minimum: 1,
+                    maximum: 200,
+                    default: 25,
+                    description: 'Max records to return. Default 25, max 200.',
+                  },
+                  offset: {
+                    type: 'number',
+                    minimum: 0,
+                    default: 0,
+                    description: 'Offset for pagination. Default 0.',
+                  },
+                  sortField: {
+                    type: 'string',
+                    description: 'Field to sort by (e.g. "marketCap", "peRatioLtm", "regularMarketPrice"). Let Yahoo validate.',
+                  },
+                  sortOrder: {
+                    type: 'string',
+                    enum: ['asc', 'desc'],
+                    default: 'desc',
+                    description: 'Sort order (asc or desc). Default desc.',
+                  },
+                  fields: {
+                    type: 'array',
+                    items: {
+                      type: 'string',
+                      enum: [
+                        'symbol', 'shortName', 'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent', 'marketCap', 'peRatioLtm', 'regularMarketVolume', 'averageDailyVolume3Month', 'fiftyTwoWeekPercentChange', 'beta', 'dividendYield', 'sector', 'industry', 'exchange', 'region',
+                        'lastClosePriceBookValueLtm', 'pegRatio5Yr', 'currentRatioLtm', 'grossProfitMarginPercentLtm', 'returnOnAssetsPercentLtm', 'returnOnEquityPercentLtm', 'totalDebtEquityPercentLtm', 'longTermDebtEquityPercentLtm', 'returnOnTotalCapitalLtm', 'netIncomeMarginPercentLtm', 'altmanZScoreLtm', 'quickRatioLtm', 'totalDebtEbitdaLtm', 'ebitdaMarginPercentLtm', 'netDebtEbitdaLtm', 'epsGrowthPercentLtm', 'forwardDividendYieldPercent'
+                      ],
+                    },
+                    description: 'Specific fields to return in the records.',
+                  },
+                  provider: {
+                    type: 'string',
+                    default: 'yahoo',
+                    description: 'Optional provider override (e.g. "yahoo").',
+                  },
+                },
+                required: ['fieldProfile'],
+                additionalProperties: false,
+              }
+            ],
           },
           {
             properties: {

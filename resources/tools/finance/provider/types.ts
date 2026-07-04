@@ -397,7 +397,7 @@ export interface ScreenSecuritiesMutualFundInput {
   [key: string]: any;
 }
 
-export type ScreenSecuritiesEquityInput = ScreenSecuritiesEquityStandardInput | ScreenSecuritiesEquityRatiosInput;
+export type ScreenSecuritiesEquityInput = ScreenSecuritiesEquityStandardInput | ScreenSecuritiesEquityRatiosInput | ScreenSecuritiesEquityFinancialsInput;
 
 export interface ScreenSecuritiesEquityStandardInput {
   action: 'screen_securities';
@@ -458,6 +458,51 @@ export interface ScreenSecuritiesEquityRatiosInput {
   ebitdaMarginRange?: [number, number];
   netDebtEbitdaRange?: [number, number];
   epsGrowthRange?: [number, number];
+  forwardDividendYieldRange?: [number, number];
+  size?: number;
+  offset?: number;
+  sortField?: string;
+  sortOrder?: 'asc' | 'desc';
+  fields?: string[];
+  provider?: string;
+}
+
+export interface ScreenSecuritiesEquityFinancialsInput {
+  action: 'screen_securities';
+  quoteType: 'EQUITY';
+  fieldProfile: 'financials';
+  regions?: string[];
+  exchanges?: string[];
+  sectors?: string[];
+  industries?: string[];
+  marketCapRange?: [number, number];
+  priceRange?: [number, number];
+  percentChangeRange?: [number, number];
+  fiftyTwoWeekPercentChangeRange?: [number, number];
+  dayVolumeRange?: [number, number];
+  averageDailyVolume3MonthAbove?: number;
+  operatingCashFlowToCurrentLiabilitiesRange?: [number, number];
+  ebitdaInterestExpenseRange?: [number, number];
+  ebitInterestExpenseRange?: [number, number];
+  totalRevenue1YrGrowthRange?: [number, number];
+  netIncome1YrGrowthRange?: [number, number];
+  basicEpsContinuingOperationsRange?: [number, number];
+  revenueGrowthPercentYoYQuarterlyRange?: [number, number];
+  totalRevenueRange?: [number, number];
+  totalRevenueAnnualMarketCurrencyRange?: [number, number];
+  totalRevenuePerEmployeeAnnualMarketCurrencyRange?: [number, number];
+  netEpsBasicRange?: [number, number];
+  ebitda1YrGrowthRange?: [number, number];
+  dilutedEps1YrGrowthRange?: [number, number];
+  netEpsDilutedRange?: [number, number];
+  netIncomeIsRange?: [number, number];
+  netIncomeIsAnnualMarketCurrencyRange?: [number, number];
+  netIncomePerEmployeeAnnualMarketCurrencyRange?: [number, number];
+  operatingIncomeRange?: [number, number];
+  grossProfitRange?: [number, number];
+  ebitdaRange?: [number, number];
+  dilutedEpsContinuingOperationsRange?: [number, number];
+  ebitRange?: [number, number];
   forwardDividendYieldRange?: [number, number];
   size?: number;
   offset?: number;

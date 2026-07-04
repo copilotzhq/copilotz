@@ -692,6 +692,12 @@ export class YahooProvider implements FinanceDataProvider {
     // Validate ranges
     const validateRange = (field: string, range?: [number, number]) => {
       if (!range) return;
+      if (!Array.isArray(range)) {
+        throw new FinanceError({
+          code: 'bad_request',
+          message: `Invalid range format for '${field}': expected [min, max] array.`,
+        });
+      }
       const [min, max] = range;
       if (min > max) {
         throw new FinanceError({
@@ -736,6 +742,28 @@ export class YahooProvider implements FinanceDataProvider {
       validateRange('netDebtEbitdaRange', eqInput.netDebtEbitdaRange);
       validateRange('epsGrowthRange', eqInput.epsGrowthRange);
       validateRange('forwardDividendYieldRange', eqInput.forwardDividendYieldRange);
+      validateRange('operatingCashFlowToCurrentLiabilitiesRange', eqInput.operatingCashFlowToCurrentLiabilitiesRange);
+      validateRange('ebitdaInterestExpenseRange', eqInput.ebitdaInterestExpenseRange);
+      validateRange('ebitInterestExpenseRange', eqInput.ebitInterestExpenseRange);
+      validateRange('totalRevenue1YrGrowthRange', eqInput.totalRevenue1YrGrowthRange);
+      validateRange('netIncome1YrGrowthRange', eqInput.netIncome1YrGrowthRange);
+      validateRange('basicEpsContinuingOperationsRange', eqInput.basicEpsContinuingOperationsRange);
+      validateRange('revenueGrowthPercentYoYQuarterlyRange', eqInput.revenueGrowthPercentYoYQuarterlyRange);
+      validateRange('totalRevenueRange', eqInput.totalRevenueRange);
+      validateRange('totalRevenueAnnualMarketCurrencyRange', eqInput.totalRevenueAnnualMarketCurrencyRange);
+      validateRange('totalRevenuePerEmployeeAnnualMarketCurrencyRange', eqInput.totalRevenuePerEmployeeAnnualMarketCurrencyRange);
+      validateRange('netEpsBasicRange', eqInput.netEpsBasicRange);
+      validateRange('ebitda1YrGrowthRange', eqInput.ebitda1YrGrowthRange);
+      validateRange('dilutedEps1YrGrowthRange', eqInput.dilutedEps1YrGrowthRange);
+      validateRange('netEpsDilutedRange', eqInput.netEpsDilutedRange);
+      validateRange('netIncomeIsRange', eqInput.netIncomeIsRange);
+      validateRange('netIncomeIsAnnualMarketCurrencyRange', eqInput.netIncomeIsAnnualMarketCurrencyRange);
+      validateRange('netIncomePerEmployeeAnnualMarketCurrencyRange', eqInput.netIncomePerEmployeeAnnualMarketCurrencyRange);
+      validateRange('operatingIncomeRange', eqInput.operatingIncomeRange);
+      validateRange('grossProfitRange', eqInput.grossProfitRange);
+      validateRange('ebitdaRange', eqInput.ebitdaRange);
+      validateRange('dilutedEpsContinuingOperationsRange', eqInput.dilutedEpsContinuingOperationsRange);
+      validateRange('ebitRange', eqInput.ebitRange);
     }
 
     // 2. Sort field mapping
@@ -786,6 +814,28 @@ export class YahooProvider implements FinanceDataProvider {
       netDebtEbitdaLtm: 'netdebtebitda.lasttwelvemonths',
       epsGrowthPercentLtm: 'epsgrowth.lasttwelvemonths',
       forwardDividendYieldPercent: 'forward_dividend_yield',
+      operatingCashFlowToCurrentLiabilitiesLtm: 'operatingcashflowtocurrentliabilities.lasttwelvemonths',
+      ebitdaInterestExpenseLtm: 'ebitdainterestexpense.lasttwelvemonths',
+      ebitInterestExpenseLtm: 'ebitinterestexpense.lasttwelvemonths',
+      totalRevenue1YrGrowthPercentLtm: 'totalrevenues1yrgrowth.lasttwelvemonths',
+      netIncome1YrGrowthPercentLtm: 'netincome1yrgrowth.lasttwelvemonths',
+      basicEpsContinuingOperationsLtm: 'basicepscontinuingoperations.lasttwelvemonths',
+      revenueGrowthPercentYoYQuarterly: 'quarterlyrevenuegrowth.quarterly',
+      totalRevenueLtm: 'totalrevenues.lasttwelvemonths',
+      totalRevenueAnnualMarketCurrency: 'total_revenue_market_currency.annual',
+      totalRevenuePerEmployeeAnnualMarketCurrency: 'total_revenue_per_employee_annual_market_currency',
+      netEpsBasicLtm: 'netepsbasic.lasttwelvemonths',
+      ebitda1YrGrowthPercentLtm: 'ebitda1yrgrowth.lasttwelvemonths',
+      dilutedEps1YrGrowthPercentLtm: 'dilutedeps1yrgrowth.lasttwelvemonths',
+      netEpsDilutedLtm: 'netepsdiluted.lasttwelvemonths',
+      netIncomeIsLtm: 'netincomeis.lasttwelvemonths',
+      netIncomeIsAnnualMarketCurrency: 'netincomeismarketcurrency.annual',
+      netIncomePerEmployeeAnnualMarketCurrency: 'net_income_per_employee_annual_market_currency',
+      operatingIncomeLtm: 'operatingincome.lasttwelvemonths',
+      grossProfitLtm: 'grossprofit.lasttwelvemonths',
+      ebitdaLtm: 'ebitda.lasttwelvemonths',
+      dilutedEpsContinuingOperationsLtm: 'dilutedepscontinuingoperations.lasttwelvemonths',
+      ebitLtm: 'ebit.lasttwelvemonths',
     };
 
     let yahooSortField = sortField;
@@ -817,6 +867,12 @@ export class YahooProvider implements FinanceDataProvider {
 
     const buildRange = (field: string, range?: [number, number]) => {
       if (!range) return null;
+      if (!Array.isArray(range)) {
+        throw new FinanceError({
+          code: 'bad_request',
+          message: `Invalid range format for '${field}': expected [min, max] array.`,
+        });
+      }
       const [min, max] = range;
       if (min === max) {
         return { operator: 'eq', operands: [field, min] };
@@ -951,6 +1007,50 @@ export class YahooProvider implements FinanceDataProvider {
 
       const forwardDividendYieldNode = buildRange('forward_dividend_yield', eqInput.forwardDividendYieldRange);
       if (forwardDividendYieldNode) operands.push(forwardDividendYieldNode);
+      const operatingCashFlowToCurrentLiabilitiesLtmNode = buildRange('operatingcashflowtocurrentliabilities.lasttwelvemonths', eqInput.operatingCashFlowToCurrentLiabilitiesRange);
+      if (operatingCashFlowToCurrentLiabilitiesLtmNode) operands.push(operatingCashFlowToCurrentLiabilitiesLtmNode);
+      const ebitdaInterestExpenseLtmNode = buildRange('ebitdainterestexpense.lasttwelvemonths', eqInput.ebitdaInterestExpenseRange);
+      if (ebitdaInterestExpenseLtmNode) operands.push(ebitdaInterestExpenseLtmNode);
+      const ebitInterestExpenseLtmNode = buildRange('ebitinterestexpense.lasttwelvemonths', eqInput.ebitInterestExpenseRange);
+      if (ebitInterestExpenseLtmNode) operands.push(ebitInterestExpenseLtmNode);
+      const totalRevenue1YrGrowthPercentLtmNode = buildRange('totalrevenues1yrgrowth.lasttwelvemonths', eqInput.totalRevenue1YrGrowthRange);
+      if (totalRevenue1YrGrowthPercentLtmNode) operands.push(totalRevenue1YrGrowthPercentLtmNode);
+      const netIncome1YrGrowthPercentLtmNode = buildRange('netincome1yrgrowth.lasttwelvemonths', eqInput.netIncome1YrGrowthRange);
+      if (netIncome1YrGrowthPercentLtmNode) operands.push(netIncome1YrGrowthPercentLtmNode);
+      const basicEpsContinuingOperationsLtmNode = buildRange('basicepscontinuingoperations.lasttwelvemonths', eqInput.basicEpsContinuingOperationsRange);
+      if (basicEpsContinuingOperationsLtmNode) operands.push(basicEpsContinuingOperationsLtmNode);
+      const revenueGrowthPercentYoYQuarterlyNode = buildRange('quarterlyrevenuegrowth.quarterly', eqInput.revenueGrowthPercentYoYQuarterlyRange);
+      if (revenueGrowthPercentYoYQuarterlyNode) operands.push(revenueGrowthPercentYoYQuarterlyNode);
+      const totalRevenueLtmNode = buildRange('totalrevenues.lasttwelvemonths', eqInput.totalRevenueRange);
+      if (totalRevenueLtmNode) operands.push(totalRevenueLtmNode);
+      const totalRevenueAnnualMarketCurrencyNode = buildRange('total_revenue_market_currency.annual', eqInput.totalRevenueAnnualMarketCurrencyRange);
+      if (totalRevenueAnnualMarketCurrencyNode) operands.push(totalRevenueAnnualMarketCurrencyNode);
+      const totalRevenuePerEmployeeAnnualMarketCurrencyNode = buildRange('total_revenue_per_employee_annual_market_currency', eqInput.totalRevenuePerEmployeeAnnualMarketCurrencyRange);
+      if (totalRevenuePerEmployeeAnnualMarketCurrencyNode) operands.push(totalRevenuePerEmployeeAnnualMarketCurrencyNode);
+      const netEpsBasicLtmNode = buildRange('netepsbasic.lasttwelvemonths', eqInput.netEpsBasicRange);
+      if (netEpsBasicLtmNode) operands.push(netEpsBasicLtmNode);
+      const ebitda1YrGrowthPercentLtmNode = buildRange('ebitda1yrgrowth.lasttwelvemonths', eqInput.ebitda1YrGrowthRange);
+      if (ebitda1YrGrowthPercentLtmNode) operands.push(ebitda1YrGrowthPercentLtmNode);
+      const dilutedEps1YrGrowthPercentLtmNode = buildRange('dilutedeps1yrgrowth.lasttwelvemonths', eqInput.dilutedEps1YrGrowthRange);
+      if (dilutedEps1YrGrowthPercentLtmNode) operands.push(dilutedEps1YrGrowthPercentLtmNode);
+      const netEpsDilutedLtmNode = buildRange('netepsdiluted.lasttwelvemonths', eqInput.netEpsDilutedRange);
+      if (netEpsDilutedLtmNode) operands.push(netEpsDilutedLtmNode);
+      const netIncomeIsLtmNode = buildRange('netincomeis.lasttwelvemonths', eqInput.netIncomeIsRange);
+      if (netIncomeIsLtmNode) operands.push(netIncomeIsLtmNode);
+      const netIncomeIsAnnualMarketCurrencyNode = buildRange('netincomeismarketcurrency.annual', eqInput.netIncomeIsAnnualMarketCurrencyRange);
+      if (netIncomeIsAnnualMarketCurrencyNode) operands.push(netIncomeIsAnnualMarketCurrencyNode);
+      const netIncomePerEmployeeAnnualMarketCurrencyNode = buildRange('net_income_per_employee_annual_market_currency', eqInput.netIncomePerEmployeeAnnualMarketCurrencyRange);
+      if (netIncomePerEmployeeAnnualMarketCurrencyNode) operands.push(netIncomePerEmployeeAnnualMarketCurrencyNode);
+      const operatingIncomeLtmNode = buildRange('operatingincome.lasttwelvemonths', eqInput.operatingIncomeRange);
+      if (operatingIncomeLtmNode) operands.push(operatingIncomeLtmNode);
+      const grossProfitLtmNode = buildRange('grossprofit.lasttwelvemonths', eqInput.grossProfitRange);
+      if (grossProfitLtmNode) operands.push(grossProfitLtmNode);
+      const ebitdaLtmNode = buildRange('ebitda.lasttwelvemonths', eqInput.ebitdaRange);
+      if (ebitdaLtmNode) operands.push(ebitdaLtmNode);
+      const dilutedEpsContinuingOperationsLtmNode = buildRange('dilutedepscontinuingoperations.lasttwelvemonths', eqInput.dilutedEpsContinuingOperationsRange);
+      if (dilutedEpsContinuingOperationsLtmNode) operands.push(dilutedEpsContinuingOperationsLtmNode);
+      const ebitLtmNode = buildRange('ebit.lasttwelvemonths', eqInput.ebitRange);
+      if (ebitLtmNode) operands.push(ebitLtmNode);
     }
 
     // Complexity check
@@ -1143,6 +1243,72 @@ export class YahooProvider implements FinanceDataProvider {
             break;
           case 'forwardDividendYieldPercent':
             mapped.forwardDividendYieldPercent = lookup(['forwardDividendYieldPercent', 'forwarddividendyieldpercent']);
+            break;
+          case 'operatingCashFlowToCurrentLiabilitiesLtm':
+            mapped.operatingCashFlowToCurrentLiabilitiesLtm = lookup(['operatingCashFlowToCurrentLiabilitiesLtm', 'operatingcashflowtocurrentliabilitiesltm']);
+            break;
+          case 'ebitdaInterestExpenseLtm':
+            mapped.ebitdaInterestExpenseLtm = lookup(['ebitdaInterestExpenseLtm', 'ebitdainterestexpenseltm']);
+            break;
+          case 'ebitInterestExpenseLtm':
+            mapped.ebitInterestExpenseLtm = lookup(['ebitInterestExpenseLtm', 'ebitinterestexpenseltm']);
+            break;
+          case 'totalRevenue1YrGrowthPercentLtm':
+            mapped.totalRevenue1YrGrowthPercentLtm = lookup(['totalRevenue1YrGrowthPercentLtm', 'totalrevenue1yrgrowthpercentltm']);
+            break;
+          case 'netIncome1YrGrowthPercentLtm':
+            mapped.netIncome1YrGrowthPercentLtm = lookup(['netIncome1YrGrowthPercentLtm', 'netincome1yrgrowthpercentltm']);
+            break;
+          case 'basicEpsContinuingOperationsLtm':
+            mapped.basicEpsContinuingOperationsLtm = lookup(['basicEpsContinuingOperationsLtm', 'basicepscontinuingoperationsltm']);
+            break;
+          case 'revenueGrowthPercentYoYQuarterly':
+            mapped.revenueGrowthPercentYoYQuarterly = lookup(['revenueGrowthPercentYoYQuarterly', 'revenuegrowthpercentyoyquarterly']);
+            break;
+          case 'totalRevenueLtm':
+            mapped.totalRevenueLtm = lookup(['totalRevenueLtm', 'totalrevenueltm']);
+            break;
+          case 'totalRevenueAnnualMarketCurrency':
+            mapped.totalRevenueAnnualMarketCurrency = lookup(['totalRevenueAnnualMarketCurrency', 'totalrevenueannualmarketcurrency']);
+            break;
+          case 'totalRevenuePerEmployeeAnnualMarketCurrency':
+            mapped.totalRevenuePerEmployeeAnnualMarketCurrency = lookup(['totalRevenuePerEmployeeAnnualMarketCurrency', 'totalrevenueperemployeeannualmarketcurrency']);
+            break;
+          case 'netEpsBasicLtm':
+            mapped.netEpsBasicLtm = lookup(['netEpsBasicLtm', 'netepsbasicltm']);
+            break;
+          case 'ebitda1YrGrowthPercentLtm':
+            mapped.ebitda1YrGrowthPercentLtm = lookup(['ebitda1YrGrowthPercentLtm', 'ebitda1yrgrowthpercentltm']);
+            break;
+          case 'dilutedEps1YrGrowthPercentLtm':
+            mapped.dilutedEps1YrGrowthPercentLtm = lookup(['dilutedEps1YrGrowthPercentLtm', 'dilutedeps1yrgrowthpercentltm']);
+            break;
+          case 'netEpsDilutedLtm':
+            mapped.netEpsDilutedLtm = lookup(['netEpsDilutedLtm', 'netepsdilutedltm']);
+            break;
+          case 'netIncomeIsLtm':
+            mapped.netIncomeIsLtm = lookup(['netIncomeIsLtm', 'netincomeisltm']);
+            break;
+          case 'netIncomeIsAnnualMarketCurrency':
+            mapped.netIncomeIsAnnualMarketCurrency = lookup(['netIncomeIsAnnualMarketCurrency', 'netincomeisannualmarketcurrency']);
+            break;
+          case 'netIncomePerEmployeeAnnualMarketCurrency':
+            mapped.netIncomePerEmployeeAnnualMarketCurrency = lookup(['netIncomePerEmployeeAnnualMarketCurrency', 'netincomeperemployeeannualmarketcurrency']);
+            break;
+          case 'operatingIncomeLtm':
+            mapped.operatingIncomeLtm = lookup(['operatingIncomeLtm', 'operatingincomeltm']);
+            break;
+          case 'grossProfitLtm':
+            mapped.grossProfitLtm = lookup(['grossProfitLtm', 'grossprofitltm']);
+            break;
+          case 'ebitdaLtm':
+            mapped.ebitdaLtm = lookup(['ebitdaLtm', 'ebitdaltm']);
+            break;
+          case 'dilutedEpsContinuingOperationsLtm':
+            mapped.dilutedEpsContinuingOperationsLtm = lookup(['dilutedEpsContinuingOperationsLtm', 'dilutedepscontinuingoperationsltm']);
+            break;
+          case 'ebitLtm':
+            mapped.ebitLtm = lookup(['ebitLtm', 'ebitltm']);
             break;
           case 'sector':
             mapped.sector = lookup(['sector']);

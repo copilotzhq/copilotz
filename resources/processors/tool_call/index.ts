@@ -801,7 +801,8 @@ interface ToolCallValidation {
 export function formatDiscriminatedOneOfError(
   schema: any,
   args: any,
-  toolName: string = "tool"
+  toolName: string = "tool",
+  errors?: any[] | null
 ): string | null {
   if (!schema) return null;
 
@@ -866,7 +867,7 @@ export function formatDiscriminatedOneOfError(
     const branch = branchMap.get(val);
     
     if (branch && Array.isArray(branch.oneOf)) {
-      const nestedError = formatDiscriminatedOneOfError(branch, args, toolName);
+      const nestedError = formatDiscriminatedOneOfError(branch, args, toolName, errors);
       if (nestedError) {
         return nestedError;
       }
@@ -897,7 +898,21 @@ export function formatDiscriminatedOneOfError(
       }
     }
 
-    if (missingRequired.length > 0 || unexpectedFields.length > 0) {
+    // Format property-constraint violations
+    const constraintKeywords = [
+      "maximum", "minimum", "maxLength", "minLength", "pattern", 
+      "enum", "const", "type", "format", "exclusiveMaximum", "exclusiveMinimum"
+    ];
+    const constraintErrors = (errors || []).filter(err => 
+      constraintKeywords.includes(err.keyword) && 
+      err.instancePath
+    );
+    const constraints = constraintErrors.map(err => {
+      const propPath = err.instancePath.replace(/^\//, "");
+      return `Constraint: ${propPath} ${err.message}`;
+    });
+
+    if (missingRequired.length > 0 || unexpectedFields.length > 0 || constraints.length > 0) {
       let msg = `Invalid arguments for ${toolName} ${discriminatorName} '${val}'.`;
       if (requiredFields.length > 0) {
         msg += ` Required: ${requiredFields.join(", ")}.`;
@@ -907,6 +922,9 @@ export function formatDiscriminatedOneOfError(
       }
       if (unexpectedFields.length > 0) {
         msg += ` Unexpected: ${unexpectedFields.join(", ")}.`;
+      }
+      if (constraints.length > 0) {
+        msg += ` ${constraints.join(". ")}.`;
       }
       return msg;
     }
@@ -960,7 +978,7 @@ export const validateToolCall = (
     const valid = validate(args);
 
     if (!valid) {
-      const formattedError = formatDiscriminatedOneOfError(tool.inputSchema, args, toolCall.name);
+      const formattedError = formatDiscriminatedOneOfError(tool.inputSchema, args, toolCall.name, validate.errors);
       const errorMessage = formattedError || ajv.errorsText(validate.errors);
       return { valid: false, error: errorMessage };
     }

@@ -1,0 +1,2156 @@
+[
+  {
+    "name": "import_time_fetches",
+    "ok": true,
+    "count": 0,
+    "urls": []
+  },
+  {
+    "name": "search_assets",
+    "ok": true,
+    "durationMs": 220,
+    "topKeys": [
+      "query",
+      "total_results",
+      "returned",
+      "results"
+    ],
+    "rowCount": 7,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "query": "apple",
+      "total_results": 7,
+      "returned": 7,
+      "results": [
+        {
+          "symbol": "AAPL",
+          "short_name": "Apple Inc.",
+          "long_name": "Apple Inc.",
+          "exchange": "NMS",
+          "exchange_display": "NASDAQ",
+          "quote_type": "EQUITY",
+          "sector": "Technology",
+          "sector_display": "Technology",
+          "industry": "Consumer Electronics",
+          "industry_display": "Consumer Electronics",
+          "score": 30915,
+          "is_yahoo_finance": true
+        },
+        {
+          "symbol": "APLE",
+          "short_name": "Apple Hospitality REIT, Inc.",
+          "long_name": "Apple Hospitality REIT, Inc.",
+          "exchange": "NYQ",
+          "exchange_display": "NYSE",
+          "quote_type": "EQUITY",
+          "sector": "Real Estate",
+          "sector_display": "Real Estate",
+          "industry": "REIT—Hotel & Motel",
+          "industry_display": "REIT—Hotel & Motel",
+          "score": 20022,
+          "is_yahoo_finance": true
+        },
+        {
+          "symbol": "APC.F",
+          "short_name": "Apple Inc.                    R",
+          "long_name": "Apple Inc.",
+          "exchange": "FRA",
+          "exchange_display": "Frankfurt",
+          "quote_type": "EQUITY",
+          "sector": "Technology",
+          "sector_display": "Technology",
+          "industry": "Consumer Electronics",
+          "industry_display": "Consumer Electronics",
+          "score": 20015,
+          "is_yahoo_finance": true
+        },
+        {
+          "symbol": "AAPL.SW",
+          "short_name": "APPLE INC",
+          "exchange": "EBS",
+          "exchange_display": "Swiss",
+          "quote_type": "EQUITY",
+          "sector": "Technology",
+          "sector_display": "Technology",
+          "industry": "Consumer Electronics",
+          "industry_display": "Consumer Electronics",
+          "score": 20008,
+          "is_yahoo_finance": true
+        },
+        {
+          "symbol": "2788.T",
+          "short_name": "APPLE INTERNATIONAL CO LTD",
+          "long_name": "Apple International Co., Ltd.",
+          "exchange": "JPX",
+          "exchange_display": "Tokyo Stock Exchange",
+          "quote_type": "EQUITY",
+          "sector": "Consumer Cyclical",
+          "sector_display": "Consumer Cyclical",
+          "industry": "Auto & Truck Dealerships",
+          "industry_display": "Auto & Truck Dealerships",
+          "score": 20007,
+          "is_yahoo_finance": true
+        },
+        {
+          "symbol": "AAPL.NE",
+          "short_name": "APPLE CDR (CAD HEDGED)",
+          "long_name": "Apple Inc.",
+          "exchange": "NEO",
+          "exchange_display": "NEO",
+          "quote_type": "EQUITY",
+          "sector": "Technology",
+          "sector_display": "Technology",
+          "industry": "Consumer Electronics",
+          "industry_display": "Consumer Electronics",
+          "score": 20006,
+          "is_yahoo_finance": true
+        },
+        {
+          "symbol": "APC.DE",
+          "short_name": "Apple Inc.                    R",
+          "long_name": "Apple Inc.",
+          "exchange": "GER",
+          "exchange_display": "XETRA",
+          "quote_type": "EQUITY",
+          "sector": "Technology",
+          "sector_display": "Technology",
+          "industry": "Consumer Electronics",
+          "industry_display": "Consumer Electronics",
+          "score": 20006,
+          "is_yahoo_finance": true
+        }
+      ]
+    }
+  },
+  {
+    "name": "get_market_snapshot_AAPL",
+    "ok": true,
+    "durationMs": 322,
+    "topKeys": [
+      "symbol",
+      "as_of",
+      "price",
+      "key_stats",
+      "valuation"
+    ],
+    "rowCount": null,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "symbol": "AAPL",
+      "as_of": "2026-07-04T01:08:30.539Z",
+      "price": {
+        "currency": "USD",
+        "current_price": 308.63,
+        "previous_close": 294.38,
+        "day_high": 309.42,
+        "day_low": 293.68,
+        "open": 294.085,
+        "volume": 71897697,
+        "market_cap": 4532958920704
+      },
+      "key_stats": {
+        "beta": 1.097,
+        "fifty_two_week_change": 0.47001672,
+        "sand_p_fifty_two_week_change": 0.20116603,
+        "trailing_eps": 8.27,
+        "forward_eps": 9.60892,
+        "book_value": 7.26,
+        "price_to_book": 42.511017,
+        "shares_outstanding": 14687356000,
+        "float_shares": 14662534368,
+        "held_percent_insiders": 0.01631,
+        "held_percent_institutions": 0.65783
+      },
+      "valuation": {
+        "forward_pe": 32.119114,
+        "enterprise_value": 4549162565632,
+        "enterprise_to_revenue": 10.077,
+        "enterprise_to_ebitda": 28.437
+      }
+    }
+  },
+  {
+    "name": "get_market_snapshot_BTC-USD",
+    "ok": true,
+    "durationMs": 146,
+    "topKeys": [
+      "symbol",
+      "as_of",
+      "price"
+    ],
+    "rowCount": null,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "symbol": "BTC-USD",
+      "as_of": "2026-07-04T01:08:30.685Z",
+      "price": {
+        "currency": "USD",
+        "current_price": 62494.42,
+        "previous_close": 62548.598,
+        "day_high": 62856.25,
+        "day_low": 62489.38,
+        "open": 62548.598,
+        "volume": 26048360448,
+        "market_cap": 1253020925952
+      }
+    }
+  },
+  {
+    "name": "get_market_snapshot_^GSPC",
+    "ok": true,
+    "durationMs": 182,
+    "topKeys": [
+      "symbol",
+      "as_of",
+      "price",
+      "key_stats"
+    ],
+    "rowCount": null,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "symbol": "^GSPC",
+      "as_of": "2026-07-04T01:08:30.867Z",
+      "price": {
+        "currency": "USD",
+        "current_price": 7483.24,
+        "previous_close": 7483.23,
+        "day_high": 7540.75,
+        "day_low": 7427.55,
+        "open": 7495.14,
+        "volume": 3414978000
+      },
+      "key_stats": {
+        "fifty_two_week_change": 20.116604
+      }
+    }
+  },
+  {
+    "name": "get_company_profile_default",
+    "ok": true,
+    "durationMs": 150,
+    "topKeys": [
+      "symbol",
+      "profile",
+      "truncated"
+    ],
+    "rowCount": null,
+    "truncated": false,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "symbol": "AAPL",
+      "profile": {
+        "sector": "Technology",
+        "industry": "Consumer Electronics",
+        "country": "United States",
+        "state": "CA",
+        "city": "Cupertino",
+        "address1": "One Apple Park Way",
+        "zip": "95014",
+        "phone": "(408) 996-1010",
+        "website": "https://www.apple.com",
+        "description": "Apple Inc. designs, manufactures, and markets smartphones, personal computers, tablets, wearables, and accessories worldwide. The company offers iPhone, a line of smartphones; Mac, a line of personal computers; iPad, a line of multi-purpose tablets; and wearables, home, and accessories comprising AirPods, Apple Vision Pro, Apple TV, Apple Watch, Beats products, and HomePod, as well as Apple branded and third-party accessories. It also provides AppleCare support and cloud services; and operates various platforms, including the App Store that allow customers to discover and download applications and digital content, such as books, music, video, games, and podcasts, as well as advertising services include third-party licensing arrangements and its own advertising platforms. In addition, the company offers various subscription-based services, such as Apple Arcade, a game subscription service; Apple Fitness+, a personalized fitness service; Apple Music, which offers users a curated listening experience with on-demand radio stations; Apple News+, a subscription news and magazine service; Apple TV, which offers exclusive original content and live sports; Apple Card, a co-branded credit card; and Apple Pay, a cashless payment service, as well as licenses its intellectual property. The company serves consumers, and small and mid-sized businesses; and the education, enterprise, and government markets. It distributes third-party applications for its products through the App Store. The company also sells its products through its retail and online stores, and direct sales force; and third-party cellular network carriers and resellers. The company was formerly known as Apple Computer, Inc. and changed its name to Apple Inc. in January 2007. Apple Inc. was founded in 1976 and is headquartered in Cupertino, California.",
+        "employees": 166000,
+        "audit_risk": 2,
+        "board_risk": 1,
+        "compensation_risk": 7,
+        "shareholder_rights_risk": 1,
+        "overall_risk": 1
+      },
+      "truncated": false
+    }
+  },
+  {
+    "name": "get_historical_prices_daily",
+    "ok": true,
+    "durationMs": 129,
+    "topKeys": [
+      "symbol",
+      "frequency",
+      "currency",
+      "start_date",
+      "end_date",
+      "bars",
+      "corporate_actions",
+      "truncated",
+      "total_rows_available"
+    ],
+    "rowCount": null,
+    "truncated": true,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "symbol": "AAPL",
+      "frequency": "daily",
+      "currency": "USD",
+      "start_date": "2025-07-04",
+      "end_date": "2026-07-04",
+      "bars": [
+        {
+          "date": "2025-07-07",
+          "open": 212.67999267578125,
+          "high": 216.22999572753906,
+          "low": 208.8000030517578,
+          "close": 209.9499969482422,
+          "adj_close": 209.120361328125,
+          "volume": 50229000
+        },
+        {
+          "date": "2025-07-08",
+          "open": 210.10000610351562,
+          "high": 211.42999267578125,
+          "low": 208.4499969482422,
+          "close": 210.00999450683594,
+          "adj_close": 209.18014526367188,
+          "volume": 42848900
+        },
+        {
+          "date": "2025-07-09",
+          "open": 209.52999877929688,
+          "high": 211.3300018310547,
+          "low": 207.22000122070312,
+          "close": 211.13999938964844,
+          "adj_close": 210.30567932128906,
+          "volume": 48749400
+        },
+        {
+          "date": "2025-07-10",
+          "open": 210.50999450683594,
+          "high": 213.47999572753906,
+          "low": 210.02999877929688,
+          "close": 212.41000366210938,
+          "adj_close": 211.57064819335938,
+          "volume": 44443600
+        },
+        {
+          "date": "2025-07-11",
+          "open": 210.57000732421875,
+          "high": 212.1300048828125,
+          "low": 209.86000061035156,
+          "close": 211.16000366210938,
+          "adj_close": 210.32559204101562,
+          "volume": 39765800
+        }
+      ],
+      "corporate_actions": [
+        {
+          "date": "2025-08-11",
+          "type": "dividend",
+          "amount": 0.26
+        },
+        {
+          "date": "2025-11-10",
+          "type": "dividend",
+          "amount": 0.26
+        },
+        {
+          "date": "2026-02-09",
+          "type": "dividend",
+          "amount": 0.26
+        },
+        {
+          "date": "2026-05-11",
+          "type": "dividend",
+          "amount": 0.27
+        }
+      ],
+      "truncated": true,
+      "total_rows_available": 250
+    }
+  },
+  {
+    "name": "get_analyst_ratings",
+    "ok": true,
+    "durationMs": 149,
+    "topKeys": [
+      "symbol",
+      "recommendation_trend",
+      "recent_changes",
+      "target_price",
+      "consensus"
+    ],
+    "rowCount": null,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "symbol": "AAPL",
+      "recommendation_trend": [
+        {
+          "period": "0m",
+          "strong_buy": 6,
+          "buy": 22,
+          "hold": 16,
+          "sell": 1,
+          "strong_sell": 2
+        },
+        {
+          "period": "-1m",
+          "strong_buy": 6,
+          "buy": 22,
+          "hold": 16,
+          "sell": 1,
+          "strong_sell": 2
+        },
+        {
+          "period": "-2m",
+          "strong_buy": 7,
+          "buy": 23,
+          "hold": 15,
+          "sell": 1,
+          "strong_sell": 2
+        },
+        {
+          "period": "-3m",
+          "strong_buy": 7,
+          "buy": 25,
+          "hold": 14,
+          "sell": 1,
+          "strong_sell": 1
+        }
+      ],
+      "recent_changes": [
+        {
+          "date": "2026-06-25",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2026-06-25T17:20:41.000Z"
+        },
+        {
+          "date": "2026-06-22",
+          "action": "down",
+          "from_grade": "Outperform",
+          "to_grade": "Hold",
+          "epoch_grade_date": "2026-06-22T14:34:35.000Z"
+        },
+        {
+          "date": "2026-06-18",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2026-06-18T17:18:54.000Z"
+        },
+        {
+          "date": "2026-06-09",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2026-06-09T14:13:05.000Z"
+        },
+        {
+          "date": "2026-06-09",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2026-06-09T14:05:35.000Z"
+        },
+        {
+          "date": "2026-06-09",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2026-06-09T12:48:42.000Z"
+        },
+        {
+          "date": "2026-06-09",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2026-06-09T10:58:06.000Z"
+        },
+        {
+          "date": "2026-06-09",
+          "action": "main",
+          "from_grade": "Hold",
+          "to_grade": "Hold",
+          "epoch_grade_date": "2026-06-09T10:34:35.000Z"
+        },
+        {
+          "date": "2026-06-05",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2026-06-05T13:15:19.000Z"
+        },
+        {
+          "date": "2026-05-26",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2026-05-26T17:30:18.000Z"
+        },
+        {
+          "date": "2026-05-14",
+          "action": "main",
+          "from_grade": "Strong Buy",
+          "to_grade": "Strong Buy",
+          "epoch_grade_date": "2026-05-14T21:39:01.000Z"
+        },
+        {
+          "date": "2026-05-14",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2026-05-14T11:06:37.000Z"
+        },
+        {
+          "date": "2026-05-08",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2026-05-08T14:02:49.000Z"
+        },
+        {
+          "date": "2026-05-01",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2026-05-01T21:12:37.000Z"
+        },
+        {
+          "date": "2026-05-01",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2026-05-01T19:16:50.000Z"
+        },
+        {
+          "date": "2026-05-01",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2026-05-01T18:31:38.000Z"
+        },
+        {
+          "date": "2026-05-01",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2026-05-01T15:57:09.000Z"
+        },
+        {
+          "date": "2026-05-01",
+          "action": "main",
+          "from_grade": "Underweight",
+          "to_grade": "Underweight",
+          "epoch_grade_date": "2026-05-01T15:00:25.000Z"
+        },
+        {
+          "date": "2026-05-01",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2026-05-01T14:48:55.000Z"
+        },
+        {
+          "date": "2026-05-01",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2026-05-01T13:14:40.000Z"
+        },
+        {
+          "date": "2026-05-01",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2026-05-01T12:05:46.000Z"
+        },
+        {
+          "date": "2026-05-01",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2026-05-01T11:04:18.000Z"
+        },
+        {
+          "date": "2026-05-01",
+          "action": "main",
+          "from_grade": "Hold",
+          "to_grade": "Hold",
+          "epoch_grade_date": "2026-05-01T11:00:53.000Z"
+        },
+        {
+          "date": "2026-04-28",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2026-04-28T13:06:58.000Z"
+        },
+        {
+          "date": "2026-04-21",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2026-04-21T13:31:01.000Z"
+        },
+        {
+          "date": "2026-04-21",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2026-04-21T12:14:24.000Z"
+        },
+        {
+          "date": "2026-04-17",
+          "action": "up",
+          "from_grade": "Neutral",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2026-04-17T13:49:05.000Z"
+        },
+        {
+          "date": "2026-04-14",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2026-04-14T10:32:04.000Z"
+        },
+        {
+          "date": "2026-03-31",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2026-03-31T14:42:50.000Z"
+        },
+        {
+          "date": "2026-03-27",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2026-03-27T12:32:56.000Z"
+        },
+        {
+          "date": "2026-03-23",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2026-03-23T17:54:21.000Z"
+        },
+        {
+          "date": "2026-03-23",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2026-03-23T14:02:48.000Z"
+        },
+        {
+          "date": "2026-03-05",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2026-03-05T13:56:15.000Z"
+        },
+        {
+          "date": "2026-03-05",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2026-03-05T13:45:09.000Z"
+        },
+        {
+          "date": "2026-03-03",
+          "action": "main",
+          "from_grade": "Underweight",
+          "to_grade": "Underweight",
+          "epoch_grade_date": "2026-03-03T15:20:44.000Z"
+        },
+        {
+          "date": "2026-02-17",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2026-02-17T15:00:44.000Z"
+        },
+        {
+          "date": "2026-01-30",
+          "action": "main",
+          "from_grade": "Hold",
+          "to_grade": "Hold",
+          "epoch_grade_date": "2026-01-30T20:50:24.000Z"
+        },
+        {
+          "date": "2026-01-30",
+          "action": "up",
+          "from_grade": "Hold",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2026-01-30T20:47:29.000Z"
+        },
+        {
+          "date": "2026-01-30",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2026-01-30T20:44:54.000Z"
+        },
+        {
+          "date": "2026-01-30",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2026-01-30T17:45:26.000Z"
+        },
+        {
+          "date": "2026-01-30",
+          "action": "main",
+          "from_grade": "Underweight",
+          "to_grade": "Underweight",
+          "epoch_grade_date": "2026-01-30T15:49:07.000Z"
+        },
+        {
+          "date": "2026-01-30",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2026-01-30T14:56:34.000Z"
+        },
+        {
+          "date": "2026-01-30",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2026-01-30T14:41:01.000Z"
+        },
+        {
+          "date": "2026-01-30",
+          "action": "main",
+          "from_grade": "Hold",
+          "to_grade": "Hold",
+          "epoch_grade_date": "2026-01-30T13:51:44.000Z"
+        },
+        {
+          "date": "2026-01-30",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2026-01-30T12:58:32.000Z"
+        },
+        {
+          "date": "2026-01-26",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2026-01-26T15:05:59.000Z"
+        },
+        {
+          "date": "2026-01-26",
+          "action": "main",
+          "from_grade": "Hold",
+          "to_grade": "Hold",
+          "epoch_grade_date": "2026-01-26T15:00:02.000Z"
+        },
+        {
+          "date": "2026-01-20",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2026-01-20T17:58:17.000Z"
+        },
+        {
+          "date": "2026-01-20",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2026-01-20T12:22:33.000Z"
+        },
+        {
+          "date": "2026-01-13",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2026-01-13T13:54:14.000Z"
+        },
+        {
+          "date": "2026-01-12",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2026-01-12T13:59:33.000Z"
+        },
+        {
+          "date": "2026-01-09",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2026-01-09T16:37:16.000Z"
+        },
+        {
+          "date": "2025-12-17",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2025-12-17T12:06:28.000Z"
+        },
+        {
+          "date": "2025-12-09",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-12-09T19:46:05.000Z"
+        },
+        {
+          "date": "2025-12-08",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-12-08T14:24:59.000Z"
+        },
+        {
+          "date": "2025-12-08",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-12-08T14:14:28.000Z"
+        },
+        {
+          "date": "2025-12-05",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-12-05T13:35:45.000Z"
+        },
+        {
+          "date": "2025-12-02",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-12-02T14:47:28.000Z"
+        },
+        {
+          "date": "2025-11-04",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2025-11-04T13:18:21.000Z"
+        },
+        {
+          "date": "2025-10-31",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2025-10-31T21:07:13.000Z"
+        },
+        {
+          "date": "2025-10-31",
+          "action": "main",
+          "from_grade": "Underweight",
+          "to_grade": "Underweight",
+          "epoch_grade_date": "2025-10-31T20:39:47.000Z"
+        },
+        {
+          "date": "2025-10-31",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-10-31T19:38:32.000Z"
+        },
+        {
+          "date": "2025-10-31",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2025-10-31T18:18:23.000Z"
+        },
+        {
+          "date": "2025-10-31",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-10-31T17:29:44.000Z"
+        },
+        {
+          "date": "2025-10-31",
+          "action": "up",
+          "from_grade": "Underperform",
+          "to_grade": "Hold",
+          "epoch_grade_date": "2025-10-31T16:53:18.000Z"
+        },
+        {
+          "date": "2025-10-31",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-10-31T16:10:20.000Z"
+        },
+        {
+          "date": "2025-10-31",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-10-31T15:43:44.000Z"
+        },
+        {
+          "date": "2025-10-31",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2025-10-31T15:32:23.000Z"
+        },
+        {
+          "date": "2025-10-31",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2025-10-31T13:28:05.000Z"
+        },
+        {
+          "date": "2025-10-31",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-10-31T12:36:55.000Z"
+        },
+        {
+          "date": "2025-10-31",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2025-10-31T12:08:30.000Z"
+        },
+        {
+          "date": "2025-10-31",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2025-10-31T11:04:07.000Z"
+        },
+        {
+          "date": "2025-10-31",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-10-31T10:59:34.000Z"
+        },
+        {
+          "date": "2025-10-29",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-10-29T11:35:21.000Z"
+        },
+        {
+          "date": "2025-10-28",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-10-28T12:26:00.000Z"
+        },
+        {
+          "date": "2025-10-27",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2025-10-27T13:30:20.000Z"
+        },
+        {
+          "date": "2025-10-21",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-10-21T19:18:17.000Z"
+        },
+        {
+          "date": "2025-10-21",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2025-10-21T13:26:34.000Z"
+        },
+        {
+          "date": "2025-10-20",
+          "action": "up",
+          "from_grade": "Hold",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-10-20T13:11:59.000Z"
+        },
+        {
+          "date": "2025-10-03",
+          "action": "down",
+          "from_grade": "Hold",
+          "to_grade": "Underperform",
+          "epoch_grade_date": "2025-10-03T12:50:53.000Z"
+        },
+        {
+          "date": "2025-10-02",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2025-10-02T12:45:02.000Z"
+        },
+        {
+          "date": "2025-10-01",
+          "action": "init",
+          "from_grade": "",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-10-01T12:20:24.000Z"
+        },
+        {
+          "date": "2025-09-26",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-09-26T15:57:54.000Z"
+        },
+        {
+          "date": "2025-09-22",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-09-22T09:23:09.000Z"
+        },
+        {
+          "date": "2025-09-17",
+          "action": "main",
+          "from_grade": "Strong Buy",
+          "to_grade": "Strong Buy",
+          "epoch_grade_date": "2025-09-17T12:22:55.000Z"
+        },
+        {
+          "date": "2025-09-16",
+          "action": "init",
+          "from_grade": "",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-09-16T13:36:24.000Z"
+        },
+        {
+          "date": "2025-09-11",
+          "action": "down",
+          "from_grade": "Buy",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2025-09-11T13:32:30.000Z"
+        },
+        {
+          "date": "2025-09-11",
+          "action": "down",
+          "from_grade": "Neutral",
+          "to_grade": "Reduce",
+          "epoch_grade_date": "2025-09-11T11:17:31.000Z"
+        },
+        {
+          "date": "2025-09-10",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-09-10T17:51:03.000Z"
+        },
+        {
+          "date": "2025-09-10",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-09-10T14:07:00.000Z"
+        },
+        {
+          "date": "2025-09-10",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2025-09-10T11:13:20.000Z"
+        },
+        {
+          "date": "2025-09-10",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-09-10T10:47:00.000Z"
+        },
+        {
+          "date": "2025-09-09",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-09-09T12:29:18.000Z"
+        },
+        {
+          "date": "2025-09-08",
+          "action": "main",
+          "from_grade": "Hold",
+          "to_grade": "Hold",
+          "epoch_grade_date": "2025-09-08T10:10:47.000Z"
+        },
+        {
+          "date": "2025-09-04",
+          "action": "up",
+          "from_grade": "Sell",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2025-09-04T17:56:12.000Z"
+        },
+        {
+          "date": "2025-09-03",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-09-03T15:41:12.000Z"
+        },
+        {
+          "date": "2025-09-03",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-09-03T14:25:00.000Z"
+        },
+        {
+          "date": "2025-08-27",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-08-27T17:59:13.000Z"
+        },
+        {
+          "date": "2025-08-25",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-08-25T17:03:25.000Z"
+        },
+        {
+          "date": "2025-08-21",
+          "action": "main",
+          "from_grade": "Hold",
+          "to_grade": "Hold",
+          "epoch_grade_date": "2025-08-21T12:40:16.000Z"
+        },
+        {
+          "date": "2025-08-14",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-08-14T20:33:45.000Z"
+        },
+        {
+          "date": "2025-08-13",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-08-13T09:42:48.000Z"
+        },
+        {
+          "date": "2025-08-08",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-08-08T20:33:45.000Z"
+        },
+        {
+          "date": "2025-08-08",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-08-08T20:28:24.000Z"
+        },
+        {
+          "date": "2025-08-07",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-08-07T13:02:36.000Z"
+        },
+        {
+          "date": "2025-08-07",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-08-07T10:50:27.000Z"
+        },
+        {
+          "date": "2025-08-07",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2025-08-07T09:52:25.000Z"
+        },
+        {
+          "date": "2025-08-01",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-08-01T21:39:28.000Z"
+        },
+        {
+          "date": "2025-08-01",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-08-01T20:04:51.000Z"
+        },
+        {
+          "date": "2025-08-01",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2025-08-01T16:02:55.000Z"
+        },
+        {
+          "date": "2025-08-01",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2025-08-01T15:32:53.000Z"
+        },
+        {
+          "date": "2025-08-01",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-08-01T13:47:43.000Z"
+        },
+        {
+          "date": "2025-08-01",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-08-01T13:20:37.000Z"
+        },
+        {
+          "date": "2025-08-01",
+          "action": "main",
+          "from_grade": "Underweight",
+          "to_grade": "Underweight",
+          "epoch_grade_date": "2025-08-01T12:52:06.000Z"
+        },
+        {
+          "date": "2025-08-01",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2025-08-01T11:45:29.000Z"
+        },
+        {
+          "date": "2025-08-01",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2025-08-01T10:55:21.000Z"
+        },
+        {
+          "date": "2025-08-01",
+          "action": "main",
+          "from_grade": "Buy",
+          "to_grade": "Buy",
+          "epoch_grade_date": "2025-08-01T10:45:10.000Z"
+        },
+        {
+          "date": "2025-07-30",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-07-30T12:45:35.000Z"
+        },
+        {
+          "date": "2025-07-29",
+          "action": "main",
+          "from_grade": "Neutral",
+          "to_grade": "Neutral",
+          "epoch_grade_date": "2025-07-29T12:44:14.000Z"
+        },
+        {
+          "date": "2025-07-25",
+          "action": "main",
+          "from_grade": "Hold",
+          "to_grade": "Hold",
+          "epoch_grade_date": "2025-07-25T10:02:52.000Z"
+        },
+        {
+          "date": "2025-07-17",
+          "action": "main",
+          "from_grade": "Overweight",
+          "to_grade": "Overweight",
+          "epoch_grade_date": "2025-07-17T19:07:12.000Z"
+        },
+        {
+          "date": "2025-07-09",
+          "action": "main",
+          "from_grade": "Outperform",
+          "to_grade": "Outperform",
+          "epoch_grade_date": "2025-07-09T12:19:30.000Z"
+        }
+      ],
+      "target_price": {
+        "current": 308.63,
+        "high": 400,
+        "low": 215,
+        "mean": 315.09048,
+        "median": 315
+      },
+      "consensus": {
+        "mean_rating": "buy",
+        "mean_rating_value": 2.02128,
+        "total_analysts": 42
+      }
+    }
+  },
+  {
+    "name": "get_calendar_events",
+    "ok": true,
+    "durationMs": 218,
+    "topKeys": [
+      "symbol",
+      "earnings",
+      "dividends",
+      "truncated"
+    ],
+    "rowCount": null,
+    "truncated": false,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "symbol": "AAPL",
+      "earnings": [
+        {
+          "date": "2026-07-30",
+          "eps_estimate": 1.89429
+        }
+      ],
+      "dividends": [
+        {
+          "ex_date": "2026-05-01",
+          "amount": 0.27
+        },
+        {
+          "ex_date": "2026-02-01",
+          "amount": 0.26
+        },
+        {
+          "ex_date": "2025-11-01",
+          "amount": 0.26
+        },
+        {
+          "ex_date": "2025-08-01",
+          "amount": 0.26
+        }
+      ],
+      "truncated": false
+    }
+  },
+  {
+    "name": "get_ownership",
+    "ok": true,
+    "durationMs": 115,
+    "topKeys": [
+      "symbol",
+      "institutions",
+      "funds",
+      "insiders",
+      "major_holders_breakdown",
+      "insider_transactions",
+      "truncated"
+    ],
+    "rowCount": null,
+    "truncated": true,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "symbol": "AAPL",
+      "institutions": [
+        {
+          "holder": "Blackrock Inc.",
+          "shares": 1144695425,
+          "date_reported": "2026-03-31",
+          "pct_held": 0.0779,
+          "value": 353287354607
+        },
+        {
+          "holder": "Vanguard Capital Management LLC",
+          "shares": 953847648,
+          "date_reported": "2026-03-31",
+          "pct_held": 0.064899996,
+          "value": 294386004259
+        },
+        {
+          "holder": "State Street Corporation",
+          "shares": 602341409,
+          "date_reported": "2026-03-31",
+          "pct_held": 0.040999997,
+          "value": 185900632000
+        },
+        {
+          "holder": "Geode Capital Management, LLC",
+          "shares": 368616954,
+          "date_reported": "2026-03-31",
+          "pct_held": 0.0251,
+          "value": 113766252312
+        },
+        {
+          "holder": "Vanguard Portfolio Management LLC",
+          "shares": 331437055,
+          "date_reported": "2026-03-31",
+          "pct_held": 0.0226,
+          "value": 102291419902
+        }
+      ],
+      "insiders": [
+        {
+          "holder": "ADAMS KATHERINE L",
+          "date_reported": "2025-11-12"
+        },
+        {
+          "holder": "COOK TIMOTHY D",
+          "date_reported": "2026-04-02"
+        },
+        {
+          "holder": "JUNG ANDREA",
+          "date_reported": "2026-01-30"
+        },
+        {
+          "holder": "KHAN SABIH",
+          "date_reported": "2026-04-01"
+        },
+        {
+          "holder": "LEVINSON ARTHUR D",
+          "date_reported": "2026-05-27"
+        }
+      ],
+      "truncated": true
+    }
+  },
+  {
+    "name": "get_financial_statements_aapl",
+    "ok": true,
+    "durationMs": 271,
+    "topKeys": [
+      "symbol",
+      "statement_type",
+      "period_type",
+      "periods",
+      "coverage",
+      "truncated"
+    ],
+    "rowCount": 5,
+    "truncated": false,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "symbol": "AAPL",
+      "statement_type": "income_statement",
+      "period_type": "annual",
+      "periods": [
+        {
+          "period_end_date": "2025-09-30",
+          "tax_effect_of_unusual_items": 0,
+          "reconciled_cost_of_revenue": 220960000000,
+          "normalized_e_b_i_t_d_a": 144748000000,
+          "net_income_from_continuing_operation_net_minority_interest": 112010000000,
+          "e_b_i_t": 133050000000,
+          "total_operating_income_as_reported": 133050000000,
+          "tax_rate_for_calcs": 0.156,
+          "normalized_income": 112010000000,
+          "reconciled_depreciation": 11698000000,
+          "net_income_from_continuing_and_discontinued_operation": 112010000000,
+          "e_b_i_t_d_a": 144748000000,
+          "diluted_average_shares": 15004697000,
+          "total_expenses": 283111000000,
+          "net_income_continuous_operations": 112010000000,
+          "net_income_including_noncontrolling_interests": 112010000000,
+          "research_and_development": 34550000000,
+          "net_income": 112010000000,
+          "basic_e_p_s": 7.49,
+          "gross_profit": 195201000000,
+          "other_non_operating_income_expenses": -321000000,
+          "selling_general_and_administration": 27601000000,
+          "basic_average_shares": 14948500000,
+          "pretax_income": 132729000000,
+          "operating_income": 133050000000,
+          "net_income_common_stockholders": 112010000000,
+          "diluted_n_i_availto_com_stockholders": 112010000000,
+          "tax_provision": 20719000000,
+          "operating_expense": 62151000000,
+          "diluted_e_p_s": 7.46,
+          "total_revenue": 416161000000,
+          "operating_revenue": 416161000000,
+          "cost_of_revenue": 220960000000
+        },
+        {
+          "period_end_date": "2024-09-30",
+          "tax_effect_of_unusual_items": 0,
+          "reconciled_cost_of_revenue": 210352000000,
+          "normalized_e_b_i_t_d_a": 134661000000,
+          "net_income_from_continuing_operation_net_minority_interest": 93736000000,
+          "e_b_i_t": 123216000000,
+          "total_operating_income_as_reported": 123216000000,
+          "tax_rate_for_calcs": 0.241,
+          "normalized_income": 93736000000,
+          "reconciled_depreciation": 11445000000,
+          "net_income_from_continuing_and_discontinued_operation": 93736000000,
+          "e_b_i_t_d_a": 134661000000,
+          "diluted_average_shares": 15408095000,
+          "total_expenses": 267819000000,
+          "net_income_continuous_operations": 93736000000,
+          "net_income_including_noncontrolling_interests": 93736000000,
+          "research_and_development": 31370000000,
+          "net_income": 93736000000,
+          "basic_e_p_s": 6.11,
+          "gross_profit": 180683000000,
+          "other_non_operating_income_expenses": 269000000,
+          "selling_general_and_administration": 26097000000,
+          "basic_average_shares": 15343783000,
+          "pretax_income": 123485000000,
+          "operating_income": 123216000000,
+          "net_income_common_stockholders": 93736000000,
+          "diluted_n_i_availto_com_stockholders": 93736000000,
+          "tax_provision": 29749000000,
+          "operating_expense": 57467000000,
+          "diluted_e_p_s": 6.08,
+          "total_revenue": 391035000000,
+          "operating_revenue": 391035000000,
+          "cost_of_revenue": 210352000000
+        },
+        {
+          "period_end_date": "2023-09-30",
+          "tax_effect_of_unusual_items": 0,
+          "reconciled_cost_of_revenue": 214137000000,
+          "normalized_e_b_i_t_d_a": 125820000000,
+          "net_income_from_continuing_operation_net_minority_interest": 96995000000,
+          "e_b_i_t": 114301000000,
+          "total_operating_income_as_reported": 114301000000,
+          "tax_rate_for_calcs": 0.147,
+          "normalized_income": 96995000000,
+          "reconciled_depreciation": 11519000000,
+          "net_income_from_continuing_and_discontinued_operation": 96995000000,
+          "interest_expense": 3933000000,
+          "net_interest_income": -183000000,
+          "e_b_i_t_d_a": 125820000000,
+          "diluted_average_shares": 15812547000,
+          "interest_income": 3750000000,
+          "total_expenses": 268984000000,
+          "interest_income_non_operating": 3750000000,
+          "net_income_continuous_operations": 96995000000,
+          "net_income_including_noncontrolling_interests": 96995000000,
+          "research_and_development": 29915000000,
+          "net_income": 96995000000,
+          "basic_e_p_s": 6.16,
+          "gross_profit": 169148000000,
+          "other_non_operating_income_expenses": -565000000,
+          "selling_general_and_administration": 24932000000,
+          "basic_average_shares": 15744231000,
+          "pretax_income": 113736000000,
+          "operating_income": 114301000000,
+          "net_income_common_stockholders": 96995000000,
+          "diluted_n_i_availto_com_stockholders": 96995000000,
+          "tax_provision": 16741000000,
+          "operating_expense": 54847000000,
+          "interest_expense_non_operating": 3933000000,
+          "net_non_operating_interest_income_expense": -183000000,
+          "diluted_e_p_s": 6.13,
+          "total_revenue": 383285000000,
+          "operating_revenue": 383285000000,
+          "cost_of_revenue": 214137000000
+        },
+        {
+          "period_end_date": "2022-09-30",
+          "tax_effect_of_unusual_items": 0,
+          "reconciled_cost_of_revenue": 223546000000,
+          "normalized_e_b_i_t_d_a": 130541000000,
+          "net_income_from_continuing_operation_net_minority_interest": 99803000000,
+          "e_b_i_t": 119437000000,
+          "total_operating_income_as_reported": 119437000000,
+          "tax_rate_for_calcs": 0.162,
+          "normalized_income": 99803000000,
+          "reconciled_depreciation": 11104000000,
+          "net_income_from_continuing_and_discontinued_operation": 99803000000,
+          "interest_expense": 2931000000,
+          "net_interest_income": -106000000,
+          "e_b_i_t_d_a": 130541000000,
+          "diluted_average_shares": 16325819000,
+          "interest_income": 2825000000,
+          "total_expenses": 274891000000,
+          "interest_income_non_operating": 2825000000,
+          "net_income_continuous_operations": 99803000000,
+          "net_income_including_noncontrolling_interests": 99803000000,
+          "research_and_development": 26251000000,
+          "net_income": 99803000000,
+          "basic_e_p_s": 6.15,
+          "gross_profit": 170782000000,
+          "other_non_operating_income_expenses": -334000000,
+          "selling_general_and_administration": 25094000000,
+          "basic_average_shares": 16215963000,
+          "pretax_income": 119103000000,
+          "operating_income": 119437000000,
+          "net_income_common_stockholders": 99803000000,
+          "diluted_n_i_availto_com_stockholders": 99803000000,
+          "tax_provision": 19300000000,
+          "operating_expense": 51345000000,
+          "interest_expense_non_operating": 2931000000,
+          "net_non_operating_interest_income_expense": -106000000,
+          "diluted_e_p_s": 6.11,
+          "total_revenue": 394328000000,
+          "operating_revenue": 394328000000,
+          "cost_of_revenue": 223546000000
+        },
+        {
+          "period_end_date": "2021-09-30",
+          "interest_expense": 2645000000,
+          "net_interest_income": 198000000,
+          "interest_income": 2843000000,
+          "interest_income_non_operating": 2843000000,
+          "interest_expense_non_operating": 2645000000,
+          "net_non_operating_interest_income_expense": 198000000
+        }
+      ],
+      "coverage": {
+        "available": [
+          "TaxEffectOfUnusualItems",
+          "ReconciledCostOfRevenue",
+          "NormalizedEBITDA",
+          "NetIncomeFromContinuingOperationNetMinorityInterest",
+          "EBIT",
+          "TotalOperatingIncomeAsReported",
+          "TaxRateForCalcs",
+          "NormalizedIncome",
+          "ReconciledDepreciation",
+          "NetIncomeFromContinuingAndDiscontinuedOperation",
+          "InterestExpense",
+          "NetInterestIncome",
+          "EBITDA",
+          "DilutedAverageShares",
+          "InterestIncome",
+          "TotalExpenses",
+          "InterestIncomeNonOperating",
+          "NetIncomeContinuousOperations",
+          "NetIncomeIncludingNoncontrollingInterests",
+          "ResearchAndDevelopment",
+          "NetIncome",
+          "BasicEPS",
+          "GrossProfit",
+          "OtherNonOperatingIncomeExpenses",
+          "SellingGeneralAndAdministration",
+          "BasicAverageShares",
+          "PretaxIncome",
+          "OperatingIncome",
+          "NetIncomeCommonStockholders",
+          "DilutedNIAvailtoComStockholders",
+          "TaxProvision",
+          "OperatingExpense",
+          "InterestExpenseNonOperating",
+          "NetNonOperatingInterestIncomeExpense",
+          "DilutedEPS",
+          "TotalRevenue",
+          "OperatingRevenue",
+          "CostOfRevenue"
+        ],
+        "missing": [
+          "NormalizedDilutedEPS",
+          "NormalizedBasicEPS",
+          "TotalUnusualItems",
+          "TotalUnusualItemsExcludingGoodwill",
+          "SpecialIncomeCharges"
+        ]
+      },
+      "truncated": false
+    }
+  },
+  {
+    "name": "get_financial_statements_tsla",
+    "ok": true,
+    "durationMs": 142,
+    "topKeys": [
+      "symbol",
+      "statement_type",
+      "period_type",
+      "periods",
+      "coverage",
+      "truncated"
+    ],
+    "rowCount": 2,
+    "truncated": false,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "symbol": "TSLA",
+      "statement_type": "cash_flow",
+      "period_type": "trailing",
+      "periods": [
+        {
+          "period_end_date": "2026-03-31",
+          "depreciation_and_amortization": 6291000000,
+          "changes_in_cash": 321000000,
+          "capital_expenditure": -9528000000,
+          "financing_cash_flow": 2643000000,
+          "free_cash_flow": 7000000000,
+          "operating_cash_flow": 16528000000,
+          "deferred_tax": 30000000,
+          "stock_based_compensation": 3282000000,
+          "end_cash_position": 17571000000,
+          "depreciation": 6291000000,
+          "beginning_cash_position": 17250000000,
+          "repayment_of_debt": -7849000000,
+          "depreciation_amortization_depletion": 6291000000,
+          "net_income_from_continuing_operations": 3926000000,
+          "deferred_income_tax": 30000000,
+          "investing_cash_flow": -18850000000,
+          "issuance_of_debt": 9292000000
+        },
+        {
+          "period_end_date": "2025-06-30",
+          "depreciation_and_amortization": 5724000000,
+          "changes_in_cash": 1255000000,
+          "capital_expenditure": -10179000000,
+          "financing_cash_flow": 563000000,
+          "free_cash_flow": 5586000000,
+          "operating_cash_flow": 15765000000,
+          "deferred_tax": 301000000,
+          "stock_based_compensation": 2244000000,
+          "end_cash_position": 16609000000,
+          "depreciation": 5724000000,
+          "beginning_cash_position": 15354000000,
+          "repayment_of_debt": -5649000000,
+          "depreciation_amortization_depletion": 5724000000,
+          "net_income_from_continuing_operations": 5942000000,
+          "deferred_income_tax": 301000000,
+          "investing_cash_flow": -15073000000,
+          "issuance_of_debt": 4899000000
+        }
+      ],
+      "coverage": {
+        "available": [
+          "DepreciationAndAmortization",
+          "ChangesInCash",
+          "CapitalExpenditure",
+          "FinancingCashFlow",
+          "FreeCashFlow",
+          "OperatingCashFlow",
+          "DeferredTax",
+          "StockBasedCompensation",
+          "EndCashPosition",
+          "Depreciation",
+          "BeginningCashPosition",
+          "RepaymentOfDebt",
+          "DepreciationAmortizationDepletion",
+          "NetIncomeFromContinuingOperations",
+          "DeferredIncomeTax",
+          "InvestingCashFlow",
+          "IssuanceOfDebt"
+        ],
+        "missing": [
+          "RepurchaseOfCapitalStock",
+          "IssuanceOfCapitalStock"
+        ]
+      },
+      "truncated": false
+    }
+  },
+  {
+    "name": "bounds_ownership_max_rows_5",
+    "ok": true,
+    "durationMs": 154,
+    "topKeys": [
+      "symbol",
+      "institutions",
+      "funds",
+      "insiders",
+      "major_holders_breakdown",
+      "insider_transactions",
+      "truncated"
+    ],
+    "rowCount": null,
+    "truncated": true,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "symbol": "AAPL",
+      "institutions": [
+        {
+          "holder": "Blackrock Inc.",
+          "shares": 1144695425,
+          "date_reported": "2026-03-31",
+          "pct_held": 0.0779,
+          "value": 353287354607
+        },
+        {
+          "holder": "Vanguard Capital Management LLC",
+          "shares": 953847648,
+          "date_reported": "2026-03-31",
+          "pct_held": 0.064899996,
+          "value": 294386004259
+        },
+        {
+          "holder": "State Street Corporation",
+          "shares": 602341409,
+          "date_reported": "2026-03-31",
+          "pct_held": 0.040999997,
+          "value": 185900632000
+        },
+        {
+          "holder": "Geode Capital Management, LLC",
+          "shares": 368616954,
+          "date_reported": "2026-03-31",
+          "pct_held": 0.0251,
+          "value": 113766252312
+        },
+        {
+          "holder": "Vanguard Portfolio Management LLC",
+          "shares": 331437055,
+          "date_reported": "2026-03-31",
+          "pct_held": 0.0226,
+          "value": 102291419902
+        }
+      ],
+      "insiders": [
+        {
+          "holder": "ADAMS KATHERINE L",
+          "date_reported": "2025-11-12"
+        },
+        {
+          "holder": "COOK TIMOTHY D",
+          "date_reported": "2026-04-02"
+        },
+        {
+          "holder": "JUNG ANDREA",
+          "date_reported": "2026-01-30"
+        },
+        {
+          "holder": "KHAN SABIH",
+          "date_reported": "2026-04-01"
+        },
+        {
+          "holder": "LEVINSON ARTHUR D",
+          "date_reported": "2026-05-27"
+        }
+      ],
+      "truncated": true
+    }
+  },
+  {
+    "name": "bounds_company_profile_officers_3",
+    "ok": true,
+    "durationMs": 150,
+    "topKeys": [
+      "symbol",
+      "profile",
+      "truncated"
+    ],
+    "rowCount": null,
+    "truncated": true,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "symbol": "AAPL",
+      "profile": {
+        "sector": "Technology",
+        "industry": "Consumer Electronics",
+        "country": "United States",
+        "state": "CA",
+        "city": "Cupertino",
+        "address1": "One Apple Park Way",
+        "zip": "95014",
+        "phone": "(408) 996-1010",
+        "website": "https://www.apple.com",
+        "description": "Apple Inc. designs, manufactures, and markets smartphones, personal computers, tablets, wearables, and accessories worldwide. The company offers iPhone, a line of smartphones; Mac, a line of personal computers; iPad, a line of multi-purpose tablets; and wearables, home, and accessories comprising AirPods, Apple Vision Pro, Apple TV, Apple Watch, Beats products, and HomePod, as well as Apple branded and third-party accessories. It also provides AppleCare support and cloud services; and operates various platforms, including the App Store that allow customers to discover and download applications and digital content, such as books, music, video, games, and podcasts, as well as advertising services include third-party licensing arrangements and its own advertising platforms. In addition, the company offers various subscription-based services, such as Apple Arcade, a game subscription service; Apple Fitness+, a personalized fitness service; Apple Music, which offers users a curated listening experience with on-demand radio stations; Apple News+, a subscription news and magazine service; Apple TV, which offers exclusive original content and live sports; Apple Card, a co-branded credit card; and Apple Pay, a cashless payment service, as well as licenses its intellectual property. The company serves consumers, and small and mid-sized businesses; and the education, enterprise, and government markets. It distributes third-party applications for its products through the App Store. The company also sells its products through its retail and online stores, and direct sales force; and third-party cellular network carriers and resellers. The company was formerly known as Apple Computer, Inc. and changed its name to Apple Inc. in January 2007. Apple Inc. was founded in 1976 and is headquartered in Cupertino, California.",
+        "employees": 166000,
+        "company_officers": [
+          {
+            "name": "Mr. Timothy D. Cook",
+            "title": "CEO & Director",
+            "age": 64,
+            "year_born": 1961,
+            "total_pay": 16759518,
+            "exercised_value": 0,
+            "unexercised_value": 0
+          },
+          {
+            "name": "Mr. Kevan  Parekh",
+            "title": "Senior VP & CFO",
+            "age": 53,
+            "year_born": 1972,
+            "total_pay": 4034174,
+            "exercised_value": 0,
+            "unexercised_value": 0
+          },
+          {
+            "name": "Mr. Sabih  Khan",
+            "title": "Senior VP & Chief Operating Officer",
+            "age": 58,
+            "year_born": 1967,
+            "total_pay": 5021905,
+            "exercised_value": 0,
+            "unexercised_value": 0
+          }
+        ],
+        "audit_risk": 2,
+        "board_risk": 1,
+        "compensation_risk": 7,
+        "shareholder_rights_risk": 1,
+        "overall_risk": 1
+      },
+      "truncated": true
+    }
+  },
+  {
+    "name": "bounds_financials_max_periods_2",
+    "ok": true,
+    "durationMs": 302,
+    "topKeys": [
+      "symbol",
+      "statement_type",
+      "period_type",
+      "periods",
+      "coverage",
+      "truncated"
+    ],
+    "rowCount": 2,
+    "truncated": true,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "symbol": "AAPL",
+      "statement_type": "income_statement",
+      "period_type": "annual",
+      "periods": [
+        {
+          "period_end_date": "2025-09-30",
+          "tax_effect_of_unusual_items": 0,
+          "reconciled_cost_of_revenue": 220960000000,
+          "normalized_e_b_i_t_d_a": 144748000000,
+          "net_income_from_continuing_operation_net_minority_interest": 112010000000,
+          "e_b_i_t": 133050000000,
+          "total_operating_income_as_reported": 133050000000,
+          "tax_rate_for_calcs": 0.156,
+          "normalized_income": 112010000000,
+          "reconciled_depreciation": 11698000000,
+          "net_income_from_continuing_and_discontinued_operation": 112010000000,
+          "diluted_average_shares": 15004697000,
+          "e_b_i_t_d_a": 144748000000,
+          "total_expenses": 283111000000,
+          "net_income_including_noncontrolling_interests": 112010000000,
+          "net_income_continuous_operations": 112010000000,
+          "research_and_development": 34550000000,
+          "net_income": 112010000000,
+          "basic_e_p_s": 7.49,
+          "gross_profit": 195201000000,
+          "other_non_operating_income_expenses": -321000000,
+          "selling_general_and_administration": 27601000000,
+          "basic_average_shares": 14948500000,
+          "operating_income": 133050000000,
+          "pretax_income": 132729000000,
+          "net_income_common_stockholders": 112010000000,
+          "diluted_n_i_availto_com_stockholders": 112010000000,
+          "tax_provision": 20719000000,
+          "operating_expense": 62151000000,
+          "diluted_e_p_s": 7.46,
+          "total_revenue": 416161000000,
+          "operating_revenue": 416161000000,
+          "cost_of_revenue": 220960000000
+        },
+        {
+          "period_end_date": "2024-09-30",
+          "tax_effect_of_unusual_items": 0,
+          "reconciled_cost_of_revenue": 210352000000,
+          "normalized_e_b_i_t_d_a": 134661000000,
+          "net_income_from_continuing_operation_net_minority_interest": 93736000000,
+          "e_b_i_t": 123216000000,
+          "total_operating_income_as_reported": 123216000000,
+          "tax_rate_for_calcs": 0.241,
+          "normalized_income": 93736000000,
+          "reconciled_depreciation": 11445000000,
+          "net_income_from_continuing_and_discontinued_operation": 93736000000,
+          "diluted_average_shares": 15408095000,
+          "e_b_i_t_d_a": 134661000000,
+          "total_expenses": 267819000000,
+          "net_income_including_noncontrolling_interests": 93736000000,
+          "net_income_continuous_operations": 93736000000,
+          "research_and_development": 31370000000,
+          "net_income": 93736000000,
+          "basic_e_p_s": 6.11,
+          "gross_profit": 180683000000,
+          "other_non_operating_income_expenses": 269000000,
+          "selling_general_and_administration": 26097000000,
+          "basic_average_shares": 15343783000,
+          "operating_income": 123216000000,
+          "pretax_income": 123485000000,
+          "net_income_common_stockholders": 93736000000,
+          "diluted_n_i_availto_com_stockholders": 93736000000,
+          "tax_provision": 29749000000,
+          "operating_expense": 57467000000,
+          "diluted_e_p_s": 6.08,
+          "total_revenue": 391035000000,
+          "operating_revenue": 391035000000,
+          "cost_of_revenue": 210352000000
+        }
+      ],
+      "coverage": {
+        "available": [
+          "TaxEffectOfUnusualItems",
+          "ReconciledCostOfRevenue",
+          "NormalizedEBITDA",
+          "NetIncomeFromContinuingOperationNetMinorityInterest",
+          "EBIT",
+          "TotalOperatingIncomeAsReported",
+          "TaxRateForCalcs",
+          "NormalizedIncome",
+          "ReconciledDepreciation",
+          "InterestExpense",
+          "NetInterestIncome",
+          "NetIncomeFromContinuingAndDiscontinuedOperation",
+          "DilutedAverageShares",
+          "EBITDA",
+          "InterestIncome",
+          "TotalExpenses",
+          "InterestIncomeNonOperating",
+          "NetIncomeIncludingNoncontrollingInterests",
+          "NetIncomeContinuousOperations",
+          "ResearchAndDevelopment",
+          "NetIncome",
+          "BasicEPS",
+          "GrossProfit",
+          "OtherNonOperatingIncomeExpenses",
+          "SellingGeneralAndAdministration",
+          "BasicAverageShares",
+          "OperatingIncome",
+          "PretaxIncome",
+          "NetIncomeCommonStockholders",
+          "DilutedNIAvailtoComStockholders",
+          "TaxProvision",
+          "OperatingExpense",
+          "InterestExpenseNonOperating",
+          "NetNonOperatingInterestIncomeExpense",
+          "DilutedEPS",
+          "TotalRevenue",
+          "OperatingRevenue",
+          "CostOfRevenue"
+        ],
+        "missing": [
+          "NormalizedDilutedEPS",
+          "NormalizedBasicEPS",
+          "TotalUnusualItems",
+          "TotalUnusualItemsExcludingGoodwill",
+          "SpecialIncomeCharges"
+        ]
+      },
+      "truncated": true
+    }
+  },
+  {
+    "name": "bounds_calendar_events_2",
+    "ok": true,
+    "durationMs": 262,
+    "topKeys": [
+      "symbol",
+      "earnings",
+      "dividends",
+      "truncated"
+    ],
+    "rowCount": null,
+    "truncated": true,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "symbol": "AAPL",
+      "earnings": [
+        {
+          "date": "2026-07-30",
+          "eps_estimate": 1.89429
+        }
+      ],
+      "dividends": [
+        {
+          "ex_date": "2026-05-01",
+          "amount": 0.27
+        },
+        {
+          "ex_date": "2026-02-01",
+          "amount": 0.26
+        }
+      ],
+      "truncated": true
+    }
+  },
+  {
+    "name": "weekly_rejection",
+    "ok": true,
+    "durationMs": 1,
+    "topKeys": [
+      "threw",
+      "name",
+      "code",
+      "message"
+    ],
+    "rowCount": null,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "threw": true,
+      "name": "FinanceError",
+      "code": "bad_request",
+      "message": "Unsupported frequency: weekly. Only 'daily' and 'monthly' are supported."
+    }
+  },
+  {
+    "name": "upstream_not_found",
+    "ok": true,
+    "durationMs": 155,
+    "topKeys": [
+      "threw",
+      "name",
+      "code",
+      "message"
+    ],
+    "rowCount": null,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "threw": true,
+      "name": "FinanceError",
+      "code": "not_found",
+      "message": "Resource not found at https://query2.finance.yahoo.com/v10/finance/quoteSummary/ZZZZ_INVALID_SYMBOL_12345?modules=assetProfile%2CsummaryProfile&crumb=ZbVTi072j11"
+    }
+  },
+  {
+    "name": "cancellation_historical_prices",
+    "ok": true,
+    "durationMs": 8,
+    "topKeys": [
+      "cancelled",
+      "durationMs",
+      "name",
+      "code",
+      "message"
+    ],
+    "rowCount": null,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "cancelled": true,
+      "durationMs": 8,
+      "name": "FinanceError",
+      "code": "upstream_timeout",
+      "message": "Yahoo request timed out or was cancelled"
+    }
+  },
+  {
+    "name": "provider_seam_static",
+    "ok": true,
+    "durationMs": 0,
+    "topKeys": [
+      "usesGenericGetProvider",
+      "schemaHasOnlyYahoo",
+      "registryExportsFactory"
+    ],
+    "rowCount": null,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "usesGenericGetProvider": true,
+      "schemaHasOnlyYahoo": false,
+      "registryExportsFactory": true
+    }
+  },
+  {
+    "name": "provider_seam_stub_compiles",
+    "ok": true,
+    "durationMs": 0,
+    "topKeys": [
+      "hasAllMethods"
+    ],
+    "rowCount": null,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "hasAllMethods": true
+    }
+  },
+  {
+    "name": "provider_seam_empirical_execution",
+    "ok": true,
+    "durationMs": 1,
+    "topKeys": [
+      "executedStubSuccessfully",
+      "output"
+    ],
+    "rowCount": null,
+    "leakedYahooFlatKeys": [],
+    "output": {
+      "executedStubSuccessfully": true,
+      "output": {
+        "symbol": "IBM",
+        "price": {
+          "currency": "USD"
+        },
+        "key_stats": {},
+        "valuation": {},
+        "included": []
+      }
+    }
+  }
+]

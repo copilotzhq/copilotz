@@ -31,6 +31,7 @@ import load_skill from "@/resources/tools/load_skill/index.ts";
 import read_skill_resource from "@/resources/tools/read_skill_resource/index.ts";
 import read_tool_result from "@/resources/tools/read_tool_result/index.ts";
 import scheduled_jobs from "@/resources/tools/scheduled_jobs/index.ts";
+import finance from "@/resources/tools/finance/index.ts";
 
 export const nativeTools: { [key: string]: NewTool } = {
   delegate,
@@ -64,6 +65,7 @@ export const nativeTools: { [key: string]: NewTool } = {
   read_skill_resource,
   read_tool_result,
   scheduled_jobs,
+  finance,
 };
 
 /** Returns all built-in native tool definitions keyed by tool name. */

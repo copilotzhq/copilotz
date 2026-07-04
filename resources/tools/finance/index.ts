@@ -556,7 +556,14 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
           {
             properties: {
               action: { const: 'screen_securities' },
-              quoteType: { enum: ['ETF', 'MUTUALFUND'] }
+              quoteType: { const: 'ETF' }
+            },
+            additionalProperties: true
+          },
+          {
+            properties: {
+              action: { const: 'screen_securities' },
+              quoteType: { const: 'MUTUALFUND' }
             },
             additionalProperties: true
           }

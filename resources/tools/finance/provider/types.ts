@@ -7,6 +7,7 @@ export interface FinanceDataProvider {
   getCalendarEvents(input: GetCalendarEventsInput, signal?: AbortSignal): Promise<CalendarEvents>;
   getOwnership(input: GetOwnershipInput, signal?: AbortSignal): Promise<Ownership>;
   getFinancialStatements(input: GetFinancialStatementsInput, signal?: AbortSignal): Promise<FinancialStatements>;
+  screenSecurities(input: ScreenSecuritiesInput, signal?: AbortSignal): Promise<ScreenSecuritiesOutput>;
 }
 
 // 4.1 Search Assets
@@ -356,4 +357,32 @@ export interface FinancialStatements {
 export interface FinancialPeriod {
   period_end_date: string;
   [metric: string]: any;
+}
+
+
+// 4.9 Screen Securities
+export interface ScreenSecuritiesInput {
+  action: 'screen_securities';
+  quoteType: 'INDEX';
+  regions?: string[];
+  exchanges?: string[];
+  percentChangeRange?: [number, number];
+  fiftyTwoWeekPercentChangeRange?: [number, number];
+  intradayPriceRange?: [number, number];
+  eodPriceRange?: [number, number];
+  dayVolumeRange?: [number, number];
+  intradayPriceChangeRange?: [number, number];
+  averageDailyVolume3mAbove?: number;
+  size?: number;
+  offset?: number;
+  sortField?: string;
+  sortOrder?: 'asc' | 'desc';
+  fields?: string[];
+  provider?: string;
+}
+
+export interface ScreenSecuritiesOutput {
+  records: Record<string, any>[];
+  totalCount: number;
+  nextOffset: number | null;
 }

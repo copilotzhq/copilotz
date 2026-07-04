@@ -35,6 +35,7 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
           'get_calendar_events',
           'get_ownership',
           'get_financial_statements',
+          'screen_securities',
         ],
       },
     },
@@ -286,6 +287,128 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
         required: ['action', 'symbol', 'statement_type', 'period_type'],
         additionalProperties: false,
       },
+      {
+        title: 'screen_securities',
+        type: 'object',
+        properties: {
+          action: { const: 'screen_securities' },
+          quoteType: {
+            type: 'string',
+            enum: ['INDEX'],
+            description: 'The type of security to screen. Currently only INDEX is supported in v1.',
+          },
+          regions: {
+            type: 'array',
+            items: {
+              type: 'string',
+              enum: [
+                'us', 'ca', 'gb', 'fr', 'de', 'jp', 'hk', 'au', 'in', 'br', 'cn', 'kr', 'tw', 'ch', 'nl', 'se', 'es', 'it', 'sg', 'mx', 'za', 'ru', 'sa', 'tr', 'id', 'th', 'my', 'ph', 'vn', 'pl', 'be', 'at', 'fi', 'no', 'dk', 'ie', 'pt', 'gr', 'il', 'nz', 'co', 'cl', 'pe', 'ar', 'cz', 'hu', 'ro', 'ua', 'ae', 'qa'
+              ],
+            },
+            description: 'Filter by region/country codes (e.g. ["us", "ca"]).',
+          },
+          exchanges: {
+            type: 'array',
+            items: {
+              type: 'string',
+              enum: [
+                'nyq', 'nms', 'ams', 'par', 'ger', 'fra', 'stu', 'mun', 'ber', 'dus', 'ham', 'han', 'mil', 'mad', 'lis', 'bru', 'vie', 'zur', 'sto', 'osl', 'cph', 'hel', 'ice', 'ath', 'ist', 'lse', 'iob', 'dub', 'tae', 'jse', 'sau', 'dfm', 'adx', 'qse', 'tai', 'koe', 'hkg', 'shh', 'shz', 'bom', 'nse', 'asx', 'nze', 'sgx', 'kln', 'set', 'pse', 'jkt', 'vse', 'sao', 'mex', 'bue', 'sgo', 'col', 'lim', 'ccs', 'mte', 'wse', 'bud', 'pra', 'buh', 'mic', 'kse', 'cse', 'doh', 'bah', 'mus', 'cas', 'nig', 'gha', 'ken', 'uga', 'rwa', 'tzs', 'zim', 'bot', 'nam', 'mau', 'pal', 'amm', 'bei', 'dam', 'bag', 'teh', 'dse', 'hcm', 'hnx'
+              ],
+            },
+            description: 'Filter by exchange codes (e.g. ["nyq", "nms"]).',
+          },
+          percentChangeRange: {
+            type: 'array',
+            items: { type: 'number' },
+            minItems: 2,
+            maxItems: 2,
+            description: 'Filter by percent change range [min, max] (e.g. [-5, 5]).',
+          },
+          fiftyTwoWeekPercentChangeRange: {
+            type: 'array',
+            items: { type: 'number' },
+            minItems: 2,
+            maxItems: 2,
+            description: 'Filter by 52-week percent change range [min, max].',
+          },
+          intradayPriceRange: {
+            type: 'array',
+            items: { type: 'number' },
+            minItems: 2,
+            maxItems: 2,
+            description: 'Filter by intraday price range [min, max].',
+          },
+          eodPriceRange: {
+            type: 'array',
+            items: { type: 'number' },
+            minItems: 2,
+            maxItems: 2,
+            description: 'Filter by end-of-day price range [min, max].',
+          },
+          dayVolumeRange: {
+            type: 'array',
+            items: { type: 'number' },
+            minItems: 2,
+            maxItems: 2,
+            description: 'Filter by day volume range [min, max].',
+          },
+          intradayPriceChangeRange: {
+            type: 'array',
+            items: { type: 'number' },
+            minItems: 2,
+            maxItems: 2,
+            description: 'Filter by intraday price change range [min, max].',
+          },
+          averageDailyVolume3mAbove: {
+            type: 'number',
+            description: 'Filter by 3-month average daily volume above this value.',
+          },
+          size: {
+            type: 'number',
+            minimum: 1,
+            maximum: 100,
+            default: 25,
+            description: 'Max records to return. Default 25, max 100.',
+          },
+          offset: {
+            type: 'number',
+            minimum: 0,
+            default: 0,
+            description: 'Offset for pagination. Default 0.',
+          },
+          sortField: {
+            type: 'string',
+            enum: [
+              'symbol', 'shortName', 'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent', 'regularMarketVolume', 'averageDailyVolume3Month'
+            ],
+            default: 'regularMarketChangePercent',
+            description: 'Field to sort by.',
+          },
+          sortOrder: {
+            type: 'string',
+            enum: ['asc', 'desc'],
+            default: 'desc',
+            description: 'Sort order (asc or desc). Default desc.',
+          },
+          fields: {
+            type: 'array',
+            items: {
+              type: 'string',
+              enum: [
+                'symbol', 'shortName', 'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent', 'regularMarketVolume', 'averageDailyVolume3Month', 'fiftyTwoWeekPercentChange', 'exchange', 'region'
+              ],
+            },
+            description: 'Specific fields to return in the records.',
+          },
+          provider: {
+            type: 'string',
+            default: 'yahoo',
+            description: 'Optional provider override (e.g. "yahoo").',
+          },
+        },
+        required: ['action', 'quoteType'],
+        additionalProperties: false,
+      }
     ],
   },
 
@@ -305,18 +428,25 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
     const signal = controller.signal;
 
     // Action-specific validation
-    if (action !== 'search_assets') {
+    if (action !== 'search_assets' && action !== 'screen_securities') {
       if (!args.symbol) {
         throw new FinanceError({
           code: 'bad_request',
           message: `Parameter 'symbol' is required for action '${action}'`,
         });
       }
-    } else {
+    } else if (action === 'search_assets') {
       if (!args.query) {
         throw new FinanceError({
           code: 'bad_request',
           message: "Parameter 'query' is required for action 'search_assets'",
+        });
+      }
+    } else if (action === 'screen_securities') {
+      if (!args.quoteType) {
+        throw new FinanceError({
+          code: 'bad_request',
+          message: "Parameter 'quoteType' is required for action 'screen_securities'",
         });
       }
     }
@@ -346,6 +476,8 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
               });
             }
             return await provider.getFinancialStatements(args, signal);
+          case 'screen_securities':
+            return await provider.screenSecurities(args, signal);
           default:
             throw new FinanceError({
               code: 'bad_request',

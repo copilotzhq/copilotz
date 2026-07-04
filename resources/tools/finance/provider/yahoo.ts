@@ -1,4 +1,4 @@
-import { FinanceDataProvider, SearchAssetsInput, SearchAssetsOutput, MarketSnapshot, GetMarketSnapshotInput, CompanyProfile, GetCompanyProfileInput, HistoricalPrices, GetHistoricalPricesInput, PriceBar, CorporateAction, AnalystRatings, GetAnalystRatingsInput, CalendarEvents, GetCalendarEventsInput, EarningsEvent, DividendEvent, Ownership, GetOwnershipInput, InstitutionHolder, FundHolder, InsiderHolder, MajorHoldersBreakdown, InsiderTransaction, FinancialStatements, GetFinancialStatementsInput, FinancialPeriod } from './types.ts';
+import { FinanceDataProvider, SearchAssetsInput, SearchAssetsOutput, MarketSnapshot, GetMarketSnapshotInput, CompanyProfile, GetCompanyProfileInput, HistoricalPrices, GetHistoricalPricesInput, PriceBar, CorporateAction, AnalystRatings, GetAnalystRatingsInput, CalendarEvents, GetCalendarEventsInput, EarningsEvent, DividendEvent, Ownership, GetOwnershipInput, InstitutionHolder, FundHolder, InsiderHolder, MajorHoldersBreakdown, InsiderTransaction, FinancialStatements, GetFinancialStatementsInput, FinancialPeriod, ScreenSecuritiesInput, ScreenSecuritiesOutput } from './types.ts';
 import { acquireCookieAndCrumb, doYahooRequest, doAuthenticatedYahooRequest } from '../client/yahoo-client.ts';
 import { FinanceError } from '../client/errors.ts';
 
@@ -668,4 +668,248 @@ export class YahooProvider implements FinanceDataProvider {
       truncated,
     };
   }
+
+  async screenSecurities(input: ScreenSecuritiesInput, signal?: AbortSignal): Promise<ScreenSecuritiesOutput> {
+    // 1. Local validation
+    const size = input.size ?? 25;
+    const offset = input.offset ?? 0;
+    if (size < 1 || size > 100) {
+      throw new FinanceError({
+        code: 'bad_request',
+        message: `Parameter 'size' must be between 1 and 100. Got ${size}`,
+      });
+    }
+    if (offset < 0) {
+      throw new FinanceError({
+        code: 'bad_request',
+        message: `Parameter 'offset' must be non-negative. Got ${offset}`,
+      });
+    }
+
+    const sortField = input.sortField ?? 'regularMarketChangePercent';
+    const sortOrder = (input.sortOrder ?? 'desc').toUpperCase();
+
+    const SORT_FIELD_TO_YAHOO_INTERNAL: Record<string, string> = {
+      symbol: 'ticker',
+      shortName: 'companyshortname',
+      regularMarketPrice: 'intradayprice',
+      regularMarketChange: 'intradaypricechange',
+      regularMarketChangePercent: 'percentchange',
+      regularMarketVolume: 'dayvolume',
+      averageDailyVolume3Month: 'avgdailyvol3m',
+    };
+
+    const yahooSortField = SORT_FIELD_TO_YAHOO_INTERNAL[sortField];
+    if (!yahooSortField) {
+      throw new FinanceError({
+        code: 'bad_request',
+        message: `Unsupported sortField: '${sortField}'. Supported fields: ${Object.keys(SORT_FIELD_TO_YAHOO_INTERNAL).join(', ')}`,
+      });
+    }
+
+    // Validate ranges
+    const validateRange = (field: string, range?: [number, number]) => {
+      if (!range) return;
+      const [min, max] = range;
+      if (min > max) {
+        throw new FinanceError({
+          code: 'bad_request',
+          message: `Invalid range for '${field}': min (${min}) cannot be greater than max (${max})`,
+        });
+      }
+    };
+
+    validateRange('percentChangeRange', input.percentChangeRange);
+    validateRange('fiftyTwoWeekPercentChangeRange', input.fiftyTwoWeekPercentChangeRange);
+    validateRange('intradayPriceRange', input.intradayPriceRange);
+    validateRange('eodPriceRange', input.eodPriceRange);
+    validateRange('dayVolumeRange', input.dayVolumeRange);
+    validateRange('intradayPriceChangeRange', input.intradayPriceChangeRange);
+
+    // 2. Build AST
+    const operands: any[] = [];
+
+    // Helper to build categorical eq/or
+    const buildCategorical = (field: string, values?: string[]) => {
+      if (!values || values.length === 0) return null;
+      if (values.length === 1) {
+        return { operator: 'or', operands: [{ operator: 'eq', operands: [field, values[0].toLowerCase()] }] };
+      }
+      return {
+        operator: 'or',
+        operands: values.map(v => ({ operator: 'eq', operands: [field, v.toLowerCase()] })),
+      };
+    };
+
+    // Helper to build range btwn/eq
+    const buildRange = (field: string, range?: [number, number]) => {
+      if (!range) return null;
+      const [min, max] = range;
+      if (min === max) {
+        return { operator: 'or', operands: [{ operator: 'eq', operands: [field, min] }] };
+      }
+      return { operator: 'or', operands: [{ operator: 'btwn', operands: [field, min, max] }] };
+    };
+
+    const regionNode = buildCategorical('region', input.regions);
+    if (regionNode) operands.push(regionNode);
+
+    const exchangeNode = buildCategorical('exchange', input.exchanges);
+    if (exchangeNode) operands.push(exchangeNode);
+
+    const pctChangeNode = buildRange('percentchange', input.percentChangeRange);
+    if (pctChangeNode) operands.push(pctChangeNode);
+
+    const fiftyTwoWeekPctChangeNode = buildRange('fiftytwowkpercentchange', input.fiftyTwoWeekPercentChangeRange);
+    if (fiftyTwoWeekPctChangeNode) operands.push(fiftyTwoWeekPctChangeNode);
+
+    const intradayPriceNode = buildRange('intradayprice', input.intradayPriceRange);
+    if (intradayPriceNode) operands.push(intradayPriceNode);
+
+    const eodPriceNode = buildRange('eodprice', input.eodPriceRange);
+    if (eodPriceNode) operands.push(eodPriceNode);
+
+    const dayVolumeNode = buildRange('dayvolume', input.dayVolumeRange);
+    if (dayVolumeNode) operands.push(dayVolumeNode);
+
+    const intradayPriceChangeNode = buildRange('intradaypricechange', input.intradayPriceChangeRange);
+    if (intradayPriceChangeNode) operands.push(intradayPriceChangeNode);
+
+    if (input.averageDailyVolume3mAbove !== undefined) {
+      operands.push({
+        operator: 'or',
+        operands: [{ operator: 'gt', operands: ['avgdailyvol3m', input.averageDailyVolume3mAbove] }],
+      });
+    }
+
+    // 3. Map requested fields to Yahoo internal fields
+    const requestedFields = input.fields && input.fields.length > 0
+      ? input.fields
+      : ['symbol', 'shortName', 'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent', 'exchange', 'region'];
+
+    const FIELD_TO_YAHOO_INTERNAL: Record<string, string> = {
+      symbol: 'ticker',
+      shortName: 'companyshortname',
+      regularMarketPrice: 'intradayprice',
+      regularMarketChange: 'intradaypricechange',
+      regularMarketChangePercent: 'percentchange',
+      regularMarketVolume: 'dayvolume',
+      averageDailyVolume3Month: 'avgdailyvol3m',
+      fiftyTwoWeekPercentChange: 'fiftytwowkpercentchange',
+      exchange: 'exchange',
+      region: 'region',
+      currency: 'currency',
+    };
+
+    const includeFields = Array.from(new Set(
+      requestedFields.map(f => FIELD_TO_YAHOO_INTERNAL[f] || f)
+    ));
+
+    // 4. Construct request body
+    const body: Record<string, any> = {
+      size,
+      offset,
+      sortType: sortOrder,
+      sortField: yahooSortField,
+      includeFields,
+      topOperator: 'AND',
+      quoteType: 'INDEX',
+    };
+
+    if (operands.length > 0) {
+      body.query = {
+        operator: 'and',
+        operands,
+      };
+    }
+
+    // 5. Execute request
+    const { cookie, crumb } = await acquireCookieAndCrumb({ signal });
+    const url = new URL('https://query1.finance.yahoo.com/v1/finance/screener');
+    url.searchParams.set('formatted', 'true');
+    url.searchParams.set('useRecordsResponse', 'true');
+    url.searchParams.set('lang', 'en-US');
+    url.searchParams.set('region', 'US');
+    url.searchParams.set('crumb', crumb);
+
+    const res = await doYahooRequest<any>(url.toString(), cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    });
+
+    const result0 = res?.finance?.result?.[0];
+    const rawRecords = result0?.records || [];
+    const totalCount = result0?.total ?? result0?.count ?? 0;
+
+    // 6. Map records back to requested fields
+    const records = rawRecords.map((raw: any) => {
+      const mapped: Record<string, any> = {};
+      
+      const getVal = (v: any) => {
+        if (v && typeof v === 'object' && 'raw' in v) {
+          return v.raw;
+        }
+        return v;
+      };
+
+      const lookup = (keys: string[]) => {
+        for (const k of keys) {
+          if (raw[k] !== undefined) return getVal(raw[k]);
+        }
+        return undefined;
+      };
+
+      for (const field of requestedFields) {
+        switch (field) {
+          case 'symbol':
+            mapped.symbol = lookup(['ticker', 'symbol']);
+            break;
+          case 'shortName':
+            mapped.shortName = lookup(['companyName', 'companyshortname', 'shortName']);
+            break;
+          case 'regularMarketPrice':
+            mapped.regularMarketPrice = lookup(['regularMarketPrice', 'intradayprice', 'price']);
+            break;
+          case 'regularMarketChange':
+            mapped.regularMarketChange = lookup(['regularMarketChange', 'intradaypricechange', 'change']);
+            break;
+          case 'regularMarketChangePercent':
+            mapped.regularMarketChangePercent = lookup(['regularMarketChangePercent', 'percentchange', 'changePercent']);
+            break;
+          case 'regularMarketVolume':
+            mapped.regularMarketVolume = lookup(['regularMarketVolume', 'dayvolume', 'volume']);
+            break;
+          case 'averageDailyVolume3Month':
+            mapped.averageDailyVolume3Month = lookup(['avgDailyVol3m', 'avgdailyvol3m', 'averageDailyVolume3Month']);
+            break;
+          case 'fiftyTwoWeekPercentChange':
+            mapped.fiftyTwoWeekPercentChange = lookup(['fiftyTwoWeekChangePercent', 'fiftytwowkpercentchange']);
+            break;
+          case 'exchange':
+            mapped.exchange = lookup(['exchange']);
+            break;
+          case 'region':
+            mapped.region = lookup(['region']);
+            break;
+          case 'currency':
+            mapped.currency = lookup(['currency']);
+            break;
+          default:
+            mapped[field] = lookup([field]);
+        }
+      }
+      return mapped;
+    });
+
+    const nextOffset = offset + records.length < totalCount ? offset + records.length : null;
+
+    return {
+      records,
+      totalCount,
+      nextOffset,
+    };
+  }
+
 }

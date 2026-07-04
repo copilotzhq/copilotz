@@ -9,6 +9,8 @@ export interface RequestOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   headers?: Record<string, string>;
+  method?: string;
+  body?: string;
 }
 
 export async function acquireCookieAndCrumb(options: RequestOptions = {}): Promise<YahooCredentials> {
@@ -106,6 +108,7 @@ export async function doYahooRequest<T>(
 
   const headers: Record<string, string> = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    ...(options.method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
     ...(options.headers || {}),
   };
   if (cookie) {
@@ -121,6 +124,8 @@ export async function doYahooRequest<T>(
       attempts++;
       try {
         const response = await fetch(url, {
+          method: options.method || 'GET',
+          body: options.body,
           headers,
           signal: controller.signal,
         });

@@ -361,7 +361,9 @@ export interface FinancialPeriod {
 
 
 // 4.9 Screen Securities
-export interface ScreenSecuritiesInput {
+export type ScreenSecuritiesInput = ScreenSecuritiesIndexInput | ScreenSecuritiesEquityInput;
+
+export interface ScreenSecuritiesIndexInput {
   action: 'screen_securities';
   quoteType: 'INDEX';
   regions?: string[];
@@ -373,6 +375,30 @@ export interface ScreenSecuritiesInput {
   dayVolumeRange?: [number, number];
   intradayPriceChangeRange?: [number, number];
   averageDailyVolume3mAbove?: number;
+  size?: number;
+  offset?: number;
+  sortField?: string;
+  sortOrder?: 'asc' | 'desc';
+  fields?: string[];
+  provider?: string;
+}
+
+export interface ScreenSecuritiesEquityInput {
+  action: 'screen_securities';
+  quoteType: 'EQUITY' | 'ETF' | 'MUTUALFUND';
+  regions?: string[];
+  exchanges?: string[];
+  sectors?: string[];
+  industries?: string[];
+  marketCapRange?: [number, number];
+  peRatioRange?: [number, number];
+  priceRange?: [number, number];
+  percentChangeRange?: [number, number];
+  fiftyTwoWeekPercentChangeRange?: [number, number];
+  dayVolumeRange?: [number, number];
+  averageDailyVolume3MonthAbove?: number;
+  betaRange?: [number, number];
+  dividendYieldRange?: [number, number];
   size?: number;
   offset?: number;
   sortField?: string;

@@ -47,3 +47,6 @@ agents/examples/internal
 
 # database files
 *.db
+-e 
+# Probe scripts and artifacts
+probe/

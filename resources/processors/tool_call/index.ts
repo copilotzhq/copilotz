@@ -803,98 +803,113 @@ export function formatDiscriminatedOneOfError(
   args: any,
   toolName: string = "tool"
 ): string | null {
-  if (!schema || !Array.isArray(schema.oneOf)) {
-    return null;
-  }
+  if (!schema) return null;
 
-  let discriminatorName: string | null = null;
-  const allowedValues: string[] = [];
-  const branchMap = new Map<string, any>();
+  if (Array.isArray(schema.oneOf)) {
+    let discriminatorName: string | null = null;
+    const allowedValues: string[] = [];
+    const branchMap = new Map<string, any>();
 
-  const firstBranch = schema.oneOf[0];
-  if (!firstBranch || !firstBranch.properties) {
-    return null;
-  }
+    const firstBranch = schema.oneOf[0];
+    if (!firstBranch || !firstBranch.properties) {
+      return null;
+    }
 
-  const candidates = Object.keys(firstBranch.properties).filter(key => {
-    const prop = firstBranch.properties[key];
-    return prop && typeof prop === "object" && "const" in prop && typeof prop.const === "string";
-  });
+    const candidates = Object.keys(firstBranch.properties).filter(key => {
+      const prop = firstBranch.properties[key];
+      return prop && typeof prop === "object" && "const" in prop && typeof prop.const === "string";
+    });
 
-  for (const candidate of candidates) {
-    let isDiscriminator = true;
-    const values: string[] = [];
-    const tempBranchMap = new Map<string, any>();
+    for (const candidate of candidates) {
+      let isDiscriminator = true;
+      const values: string[] = [];
+      const tempBranchMap = new Map<string, any>();
 
-    for (const branch of schema.oneOf) {
-      if (!branch.properties || !branch.properties[candidate]) {
-        isDiscriminator = false;
+      for (const branch of schema.oneOf) {
+        if (!branch.properties || !branch.properties[candidate]) {
+          isDiscriminator = false;
+          break;
+        }
+        const prop = branch.properties[candidate];
+        if (!prop || typeof prop !== "object" || !("const" in prop) || typeof prop.const !== "string") {
+          isDiscriminator = false;
+          break;
+        }
+        values.push(prop.const);
+        tempBranchMap.set(prop.const, branch);
+      }
+
+      if (isDiscriminator) {
+        discriminatorName = candidate;
+        allowedValues.push(...values);
+        for (const [k, v] of tempBranchMap.entries()) {
+          branchMap.set(k, v);
+        }
         break;
       }
-      const prop = branch.properties[candidate];
-      if (!prop || typeof prop !== "object" || !("const" in prop) || typeof prop.const !== "string") {
-        isDiscriminator = false;
-        break;
+    }
+
+    if (!discriminatorName) {
+      return null;
+    }
+
+    const val = args[discriminatorName];
+
+    if (val === undefined || val === null) {
+      return `Missing required field '${discriminatorName}'. Allowed ${discriminatorName}s: ${allowedValues.join(", ")}`;
+    }
+
+    if (typeof val !== "string" || !branchMap.has(val)) {
+      return `Unknown ${discriminatorName} '${val}'. Allowed ${discriminatorName}s: ${allowedValues.join(", ")}`;
+    }
+
+    const branch = branchMap.get(val);
+    
+    if (branch && Array.isArray(branch.oneOf)) {
+      const nestedError = formatDiscriminatedOneOfError(branch, args, toolName);
+      if (nestedError) {
+        return nestedError;
       }
-      values.push(prop.const);
-      tempBranchMap.set(prop.const, branch);
     }
 
-    if (isDiscriminator) {
-      discriminatorName = candidate;
-      allowedValues.push(...values);
-      for (const [k, v] of tempBranchMap.entries()) {
-        branchMap.set(k, v);
+    const requiredFields = Array.isArray(branch.required) ? branch.required : [];
+    let allowedFields = branch.properties ? Object.keys(branch.properties) : [];
+    if (branch && Array.isArray(branch.oneOf)) {
+      for (const subBranch of branch.oneOf) {
+        if (subBranch.properties) {
+          allowedFields = Array.from(new Set([...allowedFields, ...Object.keys(subBranch.properties)]));
+        }
       }
-      break;
     }
-  }
+    
+    const missingRequired: string[] = [];
+    const unexpectedFields: string[] = [];
 
-  if (!discriminatorName) {
-    return null;
-  }
-
-  const val = args[discriminatorName];
-
-  if (val === undefined || val === null) {
-    return `Missing required field '${discriminatorName}'. Allowed ${discriminatorName}s: ${allowedValues.join(", ")}`;
-  }
-
-  if (typeof val !== "string" || !branchMap.has(val)) {
-    return `Unknown ${discriminatorName} '${val}'. Allowed ${discriminatorName}s: ${allowedValues.join(", ")}`;
-  }
-
-  const branch = branchMap.get(val);
-  const requiredFields = Array.isArray(branch.required) ? branch.required : [];
-  const allowedFields = branch.properties ? Object.keys(branch.properties) : [];
-  
-  const missingRequired: string[] = [];
-  const unexpectedFields: string[] = [];
-
-  for (const req of requiredFields) {
-    if (!(req in args)) {
-      missingRequired.push(req);
+    for (const req of requiredFields) {
+      if (!(req in args)) {
+        missingRequired.push(req);
+      }
     }
-  }
 
-  for (const key of Object.keys(args)) {
-    if (!allowedFields.includes(key)) {
-      unexpectedFields.push(key);
+    for (const key of Object.keys(args)) {
+      if (!allowedFields.includes(key)) {
+        unexpectedFields.push(key);
+      }
     }
-  }
 
-  if (missingRequired.length > 0 || unexpectedFields.length > 0) {
-    let msg = `Invalid arguments for ${toolName} ${discriminatorName} '${val}'.`;
-    if (requiredFields.length > 0) {
-      msg += ` Required: ${requiredFields.join(", ")}.`;
+    if (missingRequired.length > 0 || unexpectedFields.length > 0) {
+      let msg = `Invalid arguments for ${toolName} ${discriminatorName} '${val}'.`;
+      if (requiredFields.length > 0) {
+        msg += ` Required: ${requiredFields.join(", ")}.`;
+      }
+      if (allowedFields.length > 0) {
+        msg += ` Allowed: ${allowedFields.join(", ")}.`;
+      }
+      if (unexpectedFields.length > 0) {
+        msg += ` Unexpected: ${unexpectedFields.join(", ")}.`;
+      }
+      return msg;
     }
-    if (allowedFields.length > 0) {
-      msg += ` Allowed: ${allowedFields.join(", ")}.`;
-    }
-    if (unexpectedFields.length > 0) {
-      msg += ` Unexpected: ${unexpectedFields.join(", ")}.`;
-    }
-    return msg;
   }
 
   return null;

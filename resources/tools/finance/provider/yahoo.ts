@@ -670,40 +670,22 @@ export class YahooProvider implements FinanceDataProvider {
   }
 
   async screenSecurities(input: ScreenSecuritiesInput, signal?: AbortSignal): Promise<ScreenSecuritiesOutput> {
-    // 1. Local validation
+    const quoteType = input.quoteType || 'INDEX';
     const size = input.size ?? 25;
     const offset = input.offset ?? 0;
-    if (size < 1 || size > 100) {
+
+    // 1. Local validation
+    const maxSize = quoteType === 'EQUITY' ? 200 : 100;
+    if (size < 1 || size > maxSize) {
       throw new FinanceError({
         code: 'bad_request',
-        message: `Parameter 'size' must be between 1 and 100. Got ${size}`,
+        message: `Parameter 'size' must be between 1 and ${maxSize}. Got ${size}`,
       });
     }
     if (offset < 0) {
       throw new FinanceError({
         code: 'bad_request',
         message: `Parameter 'offset' must be non-negative. Got ${offset}`,
-      });
-    }
-
-    const sortField = input.sortField ?? 'regularMarketChangePercent';
-    const sortOrder = (input.sortOrder ?? 'desc').toUpperCase();
-
-    const SORT_FIELD_TO_YAHOO_INTERNAL: Record<string, string> = {
-      symbol: 'ticker',
-      shortName: 'companyshortname',
-      regularMarketPrice: 'intradayprice',
-      regularMarketChange: 'intradaypricechange',
-      regularMarketChangePercent: 'percentchange',
-      regularMarketVolume: 'dayvolume',
-      averageDailyVolume3Month: 'avgdailyvol3m',
-    };
-
-    const yahooSortField = SORT_FIELD_TO_YAHOO_INTERNAL[sortField];
-    if (!yahooSortField) {
-      throw new FinanceError({
-        code: 'bad_request',
-        message: `Unsupported sortField: '${sortField}'. Supported fields: ${Object.keys(SORT_FIELD_TO_YAHOO_INTERNAL).join(', ')}`,
       });
     }
 
@@ -719,75 +701,31 @@ export class YahooProvider implements FinanceDataProvider {
       }
     };
 
-    validateRange('percentChangeRange', input.percentChangeRange);
-    validateRange('fiftyTwoWeekPercentChangeRange', input.fiftyTwoWeekPercentChangeRange);
-    validateRange('intradayPriceRange', input.intradayPriceRange);
-    validateRange('eodPriceRange', input.eodPriceRange);
-    validateRange('dayVolumeRange', input.dayVolumeRange);
-    validateRange('intradayPriceChangeRange', input.intradayPriceChangeRange);
-
-    // 2. Build AST
-    const operands: any[] = [];
-
-    // Helper to build categorical eq/or
-    const buildCategorical = (field: string, values?: string[]) => {
-      if (!values || values.length === 0) return null;
-      if (values.length === 1) {
-        return { operator: 'or', operands: [{ operator: 'eq', operands: [field, values[0].toLowerCase()] }] };
-      }
-      return {
-        operator: 'or',
-        operands: values.map(v => ({ operator: 'eq', operands: [field, v.toLowerCase()] })),
-      };
-    };
-
-    // Helper to build range btwn/eq
-    const buildRange = (field: string, range?: [number, number]) => {
-      if (!range) return null;
-      const [min, max] = range;
-      if (min === max) {
-        return { operator: 'or', operands: [{ operator: 'eq', operands: [field, min] }] };
-      }
-      return { operator: 'or', operands: [{ operator: 'btwn', operands: [field, min, max] }] };
-    };
-
-    const regionNode = buildCategorical('region', input.regions);
-    if (regionNode) operands.push(regionNode);
-
-    const exchangeNode = buildCategorical('exchange', input.exchanges);
-    if (exchangeNode) operands.push(exchangeNode);
-
-    const pctChangeNode = buildRange('percentchange', input.percentChangeRange);
-    if (pctChangeNode) operands.push(pctChangeNode);
-
-    const fiftyTwoWeekPctChangeNode = buildRange('fiftytwowkpercentchange', input.fiftyTwoWeekPercentChangeRange);
-    if (fiftyTwoWeekPctChangeNode) operands.push(fiftyTwoWeekPctChangeNode);
-
-    const intradayPriceNode = buildRange('intradayprice', input.intradayPriceRange);
-    if (intradayPriceNode) operands.push(intradayPriceNode);
-
-    const eodPriceNode = buildRange('eodprice', input.eodPriceRange);
-    if (eodPriceNode) operands.push(eodPriceNode);
-
-    const dayVolumeNode = buildRange('dayvolume', input.dayVolumeRange);
-    if (dayVolumeNode) operands.push(dayVolumeNode);
-
-    const intradayPriceChangeNode = buildRange('intradaypricechange', input.intradayPriceChangeRange);
-    if (intradayPriceChangeNode) operands.push(intradayPriceChangeNode);
-
-    if (input.averageDailyVolume3mAbove !== undefined) {
-      operands.push({
-        operator: 'or',
-        operands: [{ operator: 'gt', operands: ['avgdailyvol3m', input.averageDailyVolume3mAbove] }],
-      });
+    if (quoteType === 'INDEX') {
+      const idxInput = input as any;
+      validateRange('percentChangeRange', idxInput.percentChangeRange);
+      validateRange('fiftyTwoWeekPercentChangeRange', idxInput.fiftyTwoWeekPercentChangeRange);
+      validateRange('intradayPriceRange', idxInput.intradayPriceRange);
+      validateRange('eodPriceRange', idxInput.eodPriceRange);
+      validateRange('dayVolumeRange', idxInput.dayVolumeRange);
+      validateRange('intradayPriceChangeRange', idxInput.intradayPriceChangeRange);
+    } else if (quoteType === 'EQUITY') {
+      const eqInput = input as any;
+      validateRange('marketCapRange', eqInput.marketCapRange);
+      validateRange('peRatioRange', eqInput.peRatioRange);
+      validateRange('priceRange', eqInput.priceRange);
+      validateRange('percentChangeRange', eqInput.percentChangeRange);
+      validateRange('fiftyTwoWeekPercentChangeRange', eqInput.fiftyTwoWeekPercentChangeRange);
+      validateRange('dayVolumeRange', eqInput.dayVolumeRange);
+      validateRange('betaRange', eqInput.betaRange);
+      validateRange('dividendYieldRange', eqInput.dividendYieldRange);
     }
 
-    // 3. Map requested fields to Yahoo internal fields
-    const requestedFields = input.fields && input.fields.length > 0
-      ? input.fields
-      : ['symbol', 'shortName', 'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent', 'exchange', 'region'];
+    // 2. Sort field mapping
+    const sortField = input.sortField ?? (quoteType === 'INDEX' ? 'regularMarketChangePercent' : 'marketCap');
+    const sortOrder = (input.sortOrder ?? 'desc').toUpperCase();
 
-    const FIELD_TO_YAHOO_INTERNAL: Record<string, string> = {
+    const INDEX_SORT_MAP: Record<string, string> = {
       symbol: 'ticker',
       shortName: 'companyshortname',
       regularMarketPrice: 'intradayprice',
@@ -795,17 +733,173 @@ export class YahooProvider implements FinanceDataProvider {
       regularMarketChangePercent: 'percentchange',
       regularMarketVolume: 'dayvolume',
       averageDailyVolume3Month: 'avgdailyvol3m',
-      fiftyTwoWeekPercentChange: 'fiftytwowkpercentchange',
-      exchange: 'exchange',
-      region: 'region',
-      currency: 'currency',
     };
 
+    const EQUITY_FIELD_MAP: Record<string, string> = {
+      symbol: 'ticker',
+      shortName: 'companyshortname',
+      regularMarketPrice: 'intradayprice',
+      regularMarketChange: 'intradaypricechange',
+      regularMarketChangePercent: 'percentchange',
+      marketCap: 'intradaymarketcap',
+      peRatioLtm: 'peratio.lasttwelvemonths',
+      regularMarketVolume: 'dayvolume',
+      averageDailyVolume3Month: 'avgdailyvol3m',
+      fiftyTwoWeekPercentChange: 'fiftytwowkpercentchange',
+      beta: 'beta',
+      dividendYield: 'dividendyield',
+      sector: 'sector',
+      industry: 'industry',
+      exchange: 'exchange',
+      region: 'region',
+    };
+
+    let yahooSortField = sortField;
+    if (quoteType === 'INDEX') {
+      yahooSortField = INDEX_SORT_MAP[sortField];
+      if (!yahooSortField) {
+        throw new FinanceError({
+          code: 'bad_request',
+          message: `Unsupported sortField: '${sortField}'. Supported fields: ${Object.keys(INDEX_SORT_MAP).join(', ')}`,
+        });
+      }
+    } else if (quoteType === 'EQUITY') {
+      yahooSortField = EQUITY_FIELD_MAP[sortField] || sortField;
+    }
+
+    // 3. Build AST
+    const operands: any[] = [];
+
+    const buildCategorical = (field: string, values?: string[]) => {
+      if (!values || values.length === 0) return null;
+      if (values.length === 1) {
+        return { operator: 'eq', operands: [field, values[0]] };
+      }
+      return {
+        operator: 'or',
+        operands: values.map(v => ({ operator: 'eq', operands: [field, v] })),
+      };
+    };
+
+    const buildRange = (field: string, range?: [number, number]) => {
+      if (!range) return null;
+      const [min, max] = range;
+      if (min === max) {
+        return { operator: 'eq', operands: [field, min] };
+      }
+      return { operator: 'btwn', operands: [field, min, max] };
+    };
+
+    if (quoteType === 'INDEX') {
+      const idxInput = input as any;
+      const regionNode = buildCategorical('region', idxInput.regions);
+      if (regionNode) operands.push(regionNode);
+
+      const exchangeNode = buildCategorical('exchange', idxInput.exchanges);
+      if (exchangeNode) operands.push(exchangeNode);
+
+      const pctChangeNode = buildRange('percentchange', idxInput.percentChangeRange);
+      if (pctChangeNode) operands.push(pctChangeNode);
+
+      const fiftyTwoWeekPctChangeNode = buildRange('fiftytwowkpercentchange', idxInput.fiftyTwoWeekPercentChangeRange);
+      if (fiftyTwoWeekPctChangeNode) operands.push(fiftyTwoWeekPctChangeNode);
+
+      const intradayPriceNode = buildRange('intradayprice', idxInput.intradayPriceRange);
+      if (intradayPriceNode) operands.push(intradayPriceNode);
+
+      const eodPriceNode = buildRange('eodprice', idxInput.eodPriceRange);
+      if (eodPriceNode) operands.push(eodPriceNode);
+
+      const dayVolumeNode = buildRange('dayvolume', idxInput.dayVolumeRange);
+      if (dayVolumeNode) operands.push(dayVolumeNode);
+
+      const intradayPriceChangeNode = buildRange('intradaypricechange', idxInput.intradayPriceChangeRange);
+      if (intradayPriceChangeNode) operands.push(intradayPriceChangeNode);
+
+      if (idxInput.averageDailyVolume3mAbove !== undefined) {
+        operands.push({
+          operator: 'gt',
+          operands: ['avgdailyvol3m', idxInput.averageDailyVolume3mAbove],
+        });
+      }
+    } else if (quoteType === 'EQUITY') {
+      const eqInput = input as any;
+      const regionNode = buildCategorical('region', eqInput.regions);
+      if (regionNode) operands.push(regionNode);
+
+      const exchangeNode = buildCategorical('exchange', eqInput.exchanges);
+      if (exchangeNode) operands.push(exchangeNode);
+
+      const sectorNode = buildCategorical('sector', eqInput.sectors);
+      if (sectorNode) operands.push(sectorNode);
+
+      const industryNode = buildCategorical('industry', eqInput.industries);
+      if (industryNode) operands.push(industryNode);
+
+      const marketCapNode = buildRange('intradaymarketcap', eqInput.marketCapRange);
+      if (marketCapNode) operands.push(marketCapNode);
+
+      const peRatioNode = buildRange('peratio.lasttwelvemonths', eqInput.peRatioRange);
+      if (peRatioNode) operands.push(peRatioNode);
+
+      const priceNode = buildRange('intradayprice', eqInput.priceRange);
+      if (priceNode) operands.push(priceNode);
+
+      const pctChangeNode = buildRange('percentchange', eqInput.percentChangeRange);
+      if (pctChangeNode) operands.push(pctChangeNode);
+
+      const fiftyTwoWeekPctChangeNode = buildRange('fiftytwowkpercentchange', eqInput.fiftyTwoWeekPercentChangeRange);
+      if (fiftyTwoWeekPctChangeNode) operands.push(fiftyTwoWeekPctChangeNode);
+
+      const dayVolumeNode = buildRange('dayvolume', eqInput.dayVolumeRange);
+      if (dayVolumeNode) operands.push(dayVolumeNode);
+
+      if (eqInput.averageDailyVolume3MonthAbove !== undefined) {
+        operands.push({
+          operator: 'gt',
+          operands: ['avgdailyvol3m', eqInput.averageDailyVolume3MonthAbove],
+        });
+      }
+
+      const betaNode = buildRange('beta', eqInput.betaRange);
+      if (betaNode) operands.push(betaNode);
+
+      const divYieldNode = buildRange('dividendyield', eqInput.dividendYieldRange);
+      if (divYieldNode) operands.push(divYieldNode);
+    }
+
+    // 4. Map requested fields to Yahoo internal fields
+    const defaultFields = quoteType === 'INDEX'
+      ? ['symbol', 'shortName', 'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent', 'exchange', 'region']
+      : ['symbol', 'shortName', 'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent', 'marketCap', 'peRatioLtm', 'sector', 'exchange'];
+
+    const requestedFields = input.fields && input.fields.length > 0
+      ? input.fields
+      : defaultFields;
+
     const includeFields = Array.from(new Set(
-      requestedFields.map(f => FIELD_TO_YAHOO_INTERNAL[f] || f)
+      requestedFields.map(f => {
+        if (quoteType === 'INDEX') {
+          const INDEX_FIELD_MAP: Record<string, string> = {
+            symbol: 'ticker',
+            shortName: 'companyshortname',
+            regularMarketPrice: 'intradayprice',
+            regularMarketChange: 'intradaypricechange',
+            regularMarketChangePercent: 'percentchange',
+            regularMarketVolume: 'dayvolume',
+            averageDailyVolume3Month: 'avgdailyvol3m',
+            fiftyTwoWeekPercentChange: 'fiftytwowkpercentchange',
+            exchange: 'exchange',
+            region: 'region',
+          };
+          return INDEX_FIELD_MAP[f] || f;
+        } else {
+          return EQUITY_FIELD_MAP[f] || f;
+        }
+      })
     ));
 
-    // 4. Construct request body
+    // 5. Construct request body
     const body: Record<string, any> = {
       size,
       offset,
@@ -813,7 +907,7 @@ export class YahooProvider implements FinanceDataProvider {
       sortField: yahooSortField,
       includeFields,
       topOperator: 'AND',
-      quoteType: 'INDEX',
+      quoteType,
     };
 
     if (operands.length > 0) {
@@ -823,7 +917,7 @@ export class YahooProvider implements FinanceDataProvider {
       };
     }
 
-    // 5. Execute request
+    // 6. Execute request
     const { cookie, crumb } = await acquireCookieAndCrumb({ signal });
     const url = new URL('https://query1.finance.yahoo.com/v1/finance/screener');
     url.searchParams.set('formatted', 'true');
@@ -843,7 +937,7 @@ export class YahooProvider implements FinanceDataProvider {
     const rawRecords = result0?.records || [];
     const totalCount = result0?.total ?? result0?.count ?? 0;
 
-    // 6. Map records back to requested fields
+    // 7. Map records back to requested fields
     const records = rawRecords.map((raw: any) => {
       const mapped: Record<string, any> = {};
       
@@ -867,7 +961,7 @@ export class YahooProvider implements FinanceDataProvider {
             mapped.symbol = lookup(['ticker', 'symbol']);
             break;
           case 'shortName':
-            mapped.shortName = lookup(['companyName', 'companyshortname', 'shortName']);
+            mapped.shortName = lookup(['companyName', 'companyshortname', 'shortName', 'shortname']);
             break;
           case 'regularMarketPrice':
             mapped.regularMarketPrice = lookup(['regularMarketPrice', 'intradayprice', 'price']);
@@ -886,6 +980,24 @@ export class YahooProvider implements FinanceDataProvider {
             break;
           case 'fiftyTwoWeekPercentChange':
             mapped.fiftyTwoWeekPercentChange = lookup(['fiftyTwoWeekChangePercent', 'fiftytwowkpercentchange']);
+            break;
+          case 'marketCap':
+            mapped.marketCap = lookup(['marketCap', 'intradaymarketcap', 'marketcap']);
+            break;
+          case 'peRatioLtm':
+            mapped.peRatioLtm = lookup(['peRatioLtm', 'peratio.lasttwelvemonths', 'peRatio']);
+            break;
+          case 'beta':
+            mapped.beta = lookup(['beta']);
+            break;
+          case 'dividendYield':
+            mapped.dividendYield = lookup(['dividendYield', 'dividendyield']);
+            break;
+          case 'sector':
+            mapped.sector = lookup(['sector']);
+            break;
+          case 'industry':
+            mapped.industry = lookup(['industry']);
             break;
           case 'exchange':
             mapped.exchange = lookup(['exchange']);

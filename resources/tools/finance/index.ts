@@ -294,120 +294,273 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
           action: { const: 'screen_securities' },
           quoteType: {
             type: 'string',
-            enum: ['INDEX'],
-            description: 'The type of security to screen. Currently only INDEX is supported in v1.',
-          },
-          regions: {
-            type: 'array',
-            items: {
-              type: 'string',
-              enum: [
-                'us', 'ca', 'gb', 'fr', 'de', 'jp', 'hk', 'au', 'in', 'br', 'cn', 'kr', 'tw', 'ch', 'nl', 'se', 'es', 'it', 'sg', 'mx', 'za', 'ru', 'sa', 'tr', 'id', 'th', 'my', 'ph', 'vn', 'pl', 'be', 'at', 'fi', 'no', 'dk', 'ie', 'pt', 'gr', 'il', 'nz', 'co', 'cl', 'pe', 'ar', 'cz', 'hu', 'ro', 'ua', 'ae', 'qa'
-              ],
-            },
-            description: 'Filter by region/country codes (e.g. ["us", "ca"]).',
-          },
-          exchanges: {
-            type: 'array',
-            items: {
-              type: 'string',
-              enum: [
-                'nyq', 'nms', 'ams', 'par', 'ger', 'fra', 'stu', 'mun', 'ber', 'dus', 'ham', 'han', 'mil', 'mad', 'lis', 'bru', 'vie', 'zur', 'sto', 'osl', 'cph', 'hel', 'ice', 'ath', 'ist', 'lse', 'iob', 'dub', 'tae', 'jse', 'sau', 'dfm', 'adx', 'qse', 'tai', 'koe', 'hkg', 'shh', 'shz', 'bom', 'nse', 'asx', 'nze', 'sgx', 'kln', 'set', 'pse', 'jkt', 'vse', 'sao', 'mex', 'bue', 'sgo', 'col', 'lim', 'ccs', 'mte', 'wse', 'bud', 'pra', 'buh', 'mic', 'kse', 'cse', 'doh', 'bah', 'mus', 'cas', 'nig', 'gha', 'ken', 'uga', 'rwa', 'tzs', 'zim', 'bot', 'nam', 'mau', 'pal', 'amm', 'bei', 'dam', 'bag', 'teh', 'dse', 'hcm', 'hnx'
-              ],
-            },
-            description: 'Filter by exchange codes (e.g. ["nyq", "nms"]).',
-          },
-          percentChangeRange: {
-            type: 'array',
-            items: { type: 'number' },
-            minItems: 2,
-            maxItems: 2,
-            description: 'Filter by percent change range [min, max] (e.g. [-5, 5]).',
-          },
-          fiftyTwoWeekPercentChangeRange: {
-            type: 'array',
-            items: { type: 'number' },
-            minItems: 2,
-            maxItems: 2,
-            description: 'Filter by 52-week percent change range [min, max].',
-          },
-          intradayPriceRange: {
-            type: 'array',
-            items: { type: 'number' },
-            minItems: 2,
-            maxItems: 2,
-            description: 'Filter by intraday price range [min, max].',
-          },
-          eodPriceRange: {
-            type: 'array',
-            items: { type: 'number' },
-            minItems: 2,
-            maxItems: 2,
-            description: 'Filter by end-of-day price range [min, max].',
-          },
-          dayVolumeRange: {
-            type: 'array',
-            items: { type: 'number' },
-            minItems: 2,
-            maxItems: 2,
-            description: 'Filter by day volume range [min, max].',
-          },
-          intradayPriceChangeRange: {
-            type: 'array',
-            items: { type: 'number' },
-            minItems: 2,
-            maxItems: 2,
-            description: 'Filter by intraday price change range [min, max].',
-          },
-          averageDailyVolume3mAbove: {
-            type: 'number',
-            description: 'Filter by 3-month average daily volume above this value.',
-          },
-          size: {
-            type: 'number',
-            minimum: 1,
-            maximum: 100,
-            default: 25,
-            description: 'Max records to return. Default 25, max 100.',
-          },
-          offset: {
-            type: 'number',
-            minimum: 0,
-            default: 0,
-            description: 'Offset for pagination. Default 0.',
-          },
-          sortField: {
-            type: 'string',
-            enum: [
-              'symbol', 'shortName', 'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent', 'regularMarketVolume', 'averageDailyVolume3Month'
-            ],
-            default: 'regularMarketChangePercent',
-            description: 'Field to sort by.',
-          },
-          sortOrder: {
-            type: 'string',
-            enum: ['asc', 'desc'],
-            default: 'desc',
-            description: 'Sort order (asc or desc). Default desc.',
-          },
-          fields: {
-            type: 'array',
-            items: {
-              type: 'string',
-              enum: [
-                'symbol', 'shortName', 'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent', 'regularMarketVolume', 'averageDailyVolume3Month', 'fiftyTwoWeekPercentChange', 'exchange', 'region'
-              ],
-            },
-            description: 'Specific fields to return in the records.',
-          },
-          provider: {
-            type: 'string',
-            default: 'yahoo',
-            description: 'Optional provider override (e.g. "yahoo").',
+            enum: ['INDEX', 'EQUITY', 'ETF', 'MUTUALFUND'],
+            description: 'The type of security to screen.',
           },
         },
         required: ['action', 'quoteType'],
-        additionalProperties: false,
+        oneOf: [
+          {
+            properties: {
+              action: { const: 'screen_securities' },
+              quoteType: { const: 'INDEX' },
+              regions: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                  enum: [
+                    'us', 'ca', 'gb', 'fr', 'de', 'jp', 'hk', 'au', 'in', 'br', 'cn', 'kr', 'tw', 'ch', 'nl', 'se', 'es', 'it', 'sg', 'mx', 'za', 'ru', 'sa', 'tr', 'id', 'th', 'my', 'ph', 'vn', 'pl', 'be', 'at', 'fi', 'no', 'dk', 'ie', 'pt', 'gr', 'il', 'nz', 'co', 'cl', 'pe', 'ar', 'cz', 'hu', 'ro', 'ua', 'ae', 'qa'
+                  ],
+                },
+                description: 'Filter by region/country codes (e.g. ["us", "ca"]).',
+              },
+              exchanges: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                  enum: [
+                    'nyq', 'nms', 'ams', 'par', 'ger', 'fra', 'stu', 'mun', 'ber', 'dus', 'ham', 'han', 'mil', 'mad', 'lis', 'bru', 'vie', 'zur', 'sto', 'osl', 'cph', 'hel', 'ice', 'ath', 'ist', 'lse', 'iob', 'dub', 'tae', 'jse', 'sau', 'dfm', 'adx', 'qse', 'tai', 'koe', 'hkg', 'shh', 'shz', 'bom', 'nse', 'asx', 'nze', 'sgx', 'kln', 'set', 'pse', 'jkt', 'vse', 'sao', 'mex', 'bue', 'sgo', 'col', 'lim', 'ccs', 'mte', 'wse', 'bud', 'pra', 'buh', 'mic', 'kse', 'cse', 'doh', 'bah', 'mus', 'cas', 'nig', 'gha', 'ken', 'uga', 'rwa', 'tzs', 'zim', 'bot', 'nam', 'mau', 'pal', 'amm', 'bei', 'dam', 'bag', 'teh', 'dse', 'hcm', 'hnx'
+                  ],
+                },
+                description: 'Filter by exchange codes (e.g. ["nyq", "nms"]).',
+              },
+              percentChangeRange: {
+                type: 'array',
+                items: { type: 'number' },
+                minItems: 2,
+                maxItems: 2,
+                description: 'Filter by percent change range [min, max] (e.g. [-5, 5]).',
+              },
+              fiftyTwoWeekPercentChangeRange: {
+                type: 'array',
+                items: { type: 'number' },
+                minItems: 2,
+                maxItems: 2,
+                description: 'Filter by 52-week percent change range [min, max].',
+              },
+              intradayPriceRange: {
+                type: 'array',
+                items: { type: 'number' },
+                minItems: 2,
+                maxItems: 2,
+                description: 'Filter by intraday price range [min, max].',
+              },
+              eodPriceRange: {
+                type: 'array',
+                items: { type: 'number' },
+                minItems: 2,
+                maxItems: 2,
+                description: 'Filter by end-of-day price range [min, max].',
+              },
+              dayVolumeRange: {
+                type: 'array',
+                items: { type: 'number' },
+                minItems: 2,
+                maxItems: 2,
+                description: 'Filter by day volume range [min, max].',
+              },
+              intradayPriceChangeRange: {
+                type: 'array',
+                items: { type: 'number' },
+                minItems: 2,
+                maxItems: 2,
+                description: 'Filter by intraday price change range [min, max].',
+              },
+              averageDailyVolume3mAbove: {
+                type: 'number',
+                description: 'Filter by 3-month average daily volume above this value.',
+              },
+              size: {
+                type: 'number',
+                minimum: 1,
+                maximum: 100,
+                default: 25,
+                description: 'Max records to return. Default 25, max 100.',
+              },
+              offset: {
+                type: 'number',
+                minimum: 0,
+                default: 0,
+                description: 'Offset for pagination. Default 0.',
+              },
+              sortField: {
+                type: 'string',
+                enum: [
+                  'symbol', 'shortName', 'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent', 'regularMarketVolume', 'averageDailyVolume3Month'
+                ],
+                default: 'regularMarketChangePercent',
+                description: 'Field to sort by.',
+              },
+              sortOrder: {
+                type: 'string',
+                enum: ['asc', 'desc'],
+                default: 'desc',
+                description: 'Sort order (asc or desc). Default desc.',
+              },
+              fields: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                  enum: [
+                    'symbol', 'shortName', 'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent', 'regularMarketVolume', 'averageDailyVolume3Month', 'fiftyTwoWeekPercentChange', 'exchange', 'region'
+                  ],
+                },
+                description: 'Specific fields to return in the records.',
+              },
+              provider: {
+                type: 'string',
+                default: 'yahoo',
+                description: 'Optional provider override (e.g. "yahoo").',
+              },
+            },
+            required: ['action', 'quoteType'],
+            additionalProperties: false,
+          },
+          {
+            properties: {
+              action: { const: 'screen_securities' },
+              quoteType: { const: 'EQUITY' },
+              regions: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                  enum: [
+                    'us', 'ca', 'gb', 'fr', 'de', 'jp', 'hk', 'au', 'in', 'br', 'cn', 'kr', 'tw', 'ch', 'nl', 'se', 'es', 'it', 'sg', 'mx', 'za', 'ru', 'sa', 'tr', 'id', 'th', 'my', 'ph', 'vn', 'pl', 'be', 'at', 'fi', 'no', 'dk', 'ie', 'pt', 'gr', 'il', 'nz', 'co', 'cl', 'pe', 'ar', 'cz', 'hu', 'ro', 'ua', 'ae', 'qa'
+                  ],
+                },
+                description: 'Filter by region/country codes (e.g. ["us", "ca"]).',
+              },
+              exchanges: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                  enum: [
+                    'nyq', 'nms', 'ams', 'par', 'ger', 'fra', 'stu', 'mun', 'ber', 'dus', 'ham', 'han', 'mil', 'mad', 'lis', 'bru', 'vie', 'zur', 'sto', 'osl', 'cph', 'hel', 'ice', 'ath', 'ist', 'lse', 'iob', 'dub', 'tae', 'jse', 'sau', 'dfm', 'adx', 'qse', 'tai', 'koe', 'hkg', 'shh', 'shz', 'bom', 'nse', 'asx', 'nze', 'sgx', 'kln', 'set', 'pse', 'jkt', 'vse', 'sao', 'mex', 'bue', 'sgo', 'col', 'lim', 'ccs', 'mte', 'wse', 'bud', 'pra', 'buh', 'mic', 'kse', 'cse', 'doh', 'bah', 'mus', 'cas', 'nig', 'gha', 'ken', 'uga', 'rwa', 'tzs', 'zim', 'bot', 'nam', 'mau', 'pal', 'amm', 'bei', 'dam', 'bag', 'teh', 'dse', 'hcm', 'hnx'
+                  ],
+                },
+                description: 'Filter by exchange codes (e.g. ["nyq", "nms"]).',
+              },
+              sectors: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Filter by sectors (e.g. ["Technology", "Healthcare"]).',
+              },
+              industries: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Filter by industries (e.g. ["Semiconductors", "Software"]).',
+              },
+              marketCapRange: {
+                type: 'array',
+                items: { type: 'number' },
+                minItems: 2,
+                maxItems: 2,
+                description: 'Filter by market cap range [min, max] in USD.',
+              },
+              peRatioRange: {
+                type: 'array',
+                items: { type: 'number' },
+                minItems: 2,
+                maxItems: 2,
+                description: 'Filter by PE ratio range [min, max].',
+              },
+              priceRange: {
+                type: 'array',
+                items: { type: 'number' },
+                minItems: 2,
+                maxItems: 2,
+                description: 'Filter by price range [min, max] in USD.',
+              },
+              percentChangeRange: {
+                type: 'array',
+                items: { type: 'number' },
+                minItems: 2,
+                maxItems: 2,
+                description: 'Filter by percent change range [min, max] (e.g. [-5, 5]).',
+              },
+              fiftyTwoWeekPercentChangeRange: {
+                type: 'array',
+                items: { type: 'number' },
+                minItems: 2,
+                maxItems: 2,
+                description: 'Filter by 52-week percent change range [min, max].',
+              },
+              dayVolumeRange: {
+                type: 'array',
+                items: { type: 'number' },
+                minItems: 2,
+                maxItems: 2,
+                description: 'Filter by day volume range [min, max].',
+              },
+              averageDailyVolume3MonthAbove: {
+                type: 'number',
+                description: 'Filter by 3-month average daily volume above this value.',
+              },
+              betaRange: {
+                type: 'array',
+                items: { type: 'number' },
+                minItems: 2,
+                maxItems: 2,
+                description: 'Filter by beta range [min, max].',
+              },
+              dividendYieldRange: {
+                type: 'array',
+                items: { type: 'number' },
+                minItems: 2,
+                maxItems: 2,
+                description: 'Filter by dividend yield range [min, max] as decimal percentage (e.g. [0.01, 0.05]).',
+              },
+              size: {
+                type: 'number',
+                minimum: 1,
+                maximum: 200,
+                default: 25,
+                description: 'Max records to return. Default 25, max 200.',
+              },
+              offset: {
+                type: 'number',
+                minimum: 0,
+                default: 0,
+                description: 'Offset for pagination. Default 0.',
+              },
+              sortField: {
+                type: 'string',
+                description: 'Field to sort by (e.g. "marketCap", "peRatioLtm", "regularMarketPrice"). Let Yahoo validate.',
+              },
+              sortOrder: {
+                type: 'string',
+                enum: ['asc', 'desc'],
+                default: 'desc',
+                description: 'Sort order (asc or desc). Default desc.',
+              },
+              fields: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                  enum: [
+                    'symbol', 'shortName', 'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent', 'marketCap', 'peRatioLtm', 'regularMarketVolume', 'averageDailyVolume3Month', 'fiftyTwoWeekPercentChange', 'beta', 'dividendYield', 'sector', 'industry', 'exchange', 'region'
+                  ],
+                  description: 'Requested fields. Enum values map to output keys: symbol (ticker), shortName (companyName), regularMarketPrice (intradayprice), regularMarketChange (intradaypricechange), regularMarketChangePercent (percentchange), marketCap (intradaymarketcap), peRatioLtm (peratio.lasttwelvemonths), regularMarketVolume (dayvolume), averageDailyVolume3Month (avgdailyvol3m), fiftyTwoWeekPercentChange (fiftytwowkpercentchange), beta (beta), dividendYield (dividendyield), sector (sector), industry (industry), exchange (exchange), region (region).',
+                },
+                description: 'Specific fields to return in the records.',
+              },
+              provider: {
+                type: 'string',
+                default: 'yahoo',
+                description: 'Optional provider override (e.g. "yahoo").',
+              },
+            },
+            required: ['action', 'quoteType'],
+            additionalProperties: false,
+          },
+          {
+            properties: {
+              action: { const: 'screen_securities' },
+              quoteType: { enum: ['ETF', 'MUTUALFUND'] }
+            },
+            additionalProperties: true
+          }
+        ],
       }
     ],
   },
@@ -477,6 +630,18 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
             }
             return await provider.getFinancialStatements(args, signal);
           case 'screen_securities':
+            if (args.quoteType === 'ETF') {
+              throw new FinanceError({
+                code: 'bad_request',
+                message: 'ETF support is not available in screen_securities v2.0; planned for v2.1',
+              });
+            }
+            if (args.quoteType === 'MUTUALFUND') {
+              throw new FinanceError({
+                code: 'bad_request',
+                message: 'MUTUALFUND support is not available in screen_securities v2.0; planned for v2.2',
+              });
+            }
             return await provider.screenSecurities(args, signal);
           default:
             throw new FinanceError({

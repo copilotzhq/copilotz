@@ -1,0 +1,2653 @@
+{
+  "generatedAt": "2026-07-04T17:37:49.254Z",
+  "cases": {
+    "A1_equity_shape_includeFields_empty": {
+      "ok": true,
+      "durationMs": 150,
+      "request": {
+        "offset": 0,
+        "size": 5,
+        "sortField": "ticker",
+        "sortType": "DESC",
+        "quoteType": "EQUITY",
+        "topOperator": "AND",
+        "includeFields": [],
+        "userId": "",
+        "userIdType": "guid",
+        "query": {
+          "operator": "and",
+          "operands": [
+            {
+              "operator": "eq",
+              "operands": [
+                "region",
+                "us"
+              ]
+            }
+          ]
+        }
+      },
+      "result0Keys": [
+        "start",
+        "count",
+        "total",
+        "records",
+        "userHasReadRecord",
+        "useRecords"
+      ],
+      "result0Meta": {
+        "start": 0,
+        "count": 5,
+        "total": 19893
+      },
+      "result0Raw": {
+        "start": 0,
+        "count": 5,
+        "total": 19893,
+        "records": [
+          {
+            "marketCap": {
+              "raw": 232748.6347976625,
+              "fmt": "232,748",
+              "longFmt": "232,748"
+            },
+            "ticker": "ZZZOF",
+            "avgDailyVol3m": {
+              "raw": 8.629032258064516,
+              "fmt": "8",
+              "longFmt": "8"
+            },
+            "regularMarketChange": {
+              "raw": 0,
+              "fmt": "0.00"
+            },
+            "companyName": "Zinc One Resources Inc.",
+            "regularMarketOpen": {
+              "raw": 0.1574,
+              "fmt": "0.16"
+            },
+            "industry": "Other Industrial Metals & Mining",
+            "percentOfSharesOutHeldByInstitutions": {
+              "raw": 0,
+              "fmt": "0.00%"
+            },
+            "regularMarketChangePercent": {
+              "raw": 0,
+              "fmt": "0.00%"
+            },
+            "fiftyTwoWeekChangePercent": {
+              "raw": 40.35088,
+              "fmt": "40.35%"
+            },
+            "regularMarketPrice": {
+              "raw": 0.12,
+              "fmt": "0.12"
+            },
+            "fiftyTwoWeekLow": {
+              "raw": 0.0855,
+              "fmt": "0.09"
+            },
+            "regularMarketVolume": {
+              "raw": 6,
+              "fmt": "6",
+              "longFmt": "6"
+            },
+            "lastCloseTevEbitLtm": {
+              "raw": -27.781567,
+              "fmt": "-27.78"
+            },
+            "exchange": "PNK",
+            "fiftyTwoWeekHigh": {
+              "raw": 0.39,
+              "fmt": "0.39"
+            },
+            "sector": "Basic Materials"
+          },
+          {
+            "marketCap": {
+              "raw": 2257649342.2366977,
+              "fmt": "2.258B",
+              "longFmt": "2,257,649,342"
+            },
+            "ticker": "ZZHGY",
+            "peRatioLtm": {
+              "raw": 11.155985,
+              "fmt": "11.16"
+            },
+            "avgDailyVol3m": {
+              "raw": 3.225806451612903,
+              "fmt": "3",
+              "longFmt": "3"
+            },
+            "regularMarketChange": {
+              "raw": 0,
+              "fmt": "0.00"
+            },
+            "companyName": "ZhongAn Online P & C Insurance Co., Ltd.",
+            "regularMarketOpen": {
+              "raw": 1.98,
+              "fmt": "1.98"
+            },
+            "industry": "Insurance—Property & Casualty",
+            "regularMarketChangePercent": {
+              "raw": 0,
+              "fmt": "0.00%"
+            },
+            "fiftyTwoWeekChangePercent": {
+              "raw": -46.399998,
+              "fmt": "-46.40%"
+            },
+            "regularMarketPrice": {
+              "raw": 1.34,
+              "fmt": "1.34"
+            },
+            "fiftyTwoWeekLow": {
+              "raw": 1.34,
+              "fmt": "1.34"
+            },
+            "regularMarketVolume": {
+              "raw": 100,
+              "fmt": "100",
+              "longFmt": "100"
+            },
+            "lastCloseTevEbitLtm": {
+              "raw": 10.481487,
+              "fmt": "10.48"
+            },
+            "exchange": "PNK",
+            "fiftyTwoWeekHigh": {
+              "raw": 2.5,
+              "fmt": "2.50"
+            },
+            "sector": "Financial Services"
+          },
+          {
+            "marketCap": {
+              "raw": 2527219350,
+              "fmt": "2.527B",
+              "longFmt": "2,527,219,350"
+            },
+            "ticker": "ZZHGF",
+            "peRatioLtm": {
+              "raw": 11.155985,
+              "fmt": "11.16"
+            },
+            "avgDailyVol3m": {
+              "raw": 8.064516129032258,
+              "fmt": "8",
+              "longFmt": "8"
+            },
+            "regularMarketChange": {
+              "raw": 0,
+              "fmt": "0.00"
+            },
+            "companyName": "ZhongAn Online P & C Insurance Co., Ltd.",
+            "regularMarketOpen": {
+              "raw": 2.4,
+              "fmt": "2.40"
+            },
+            "industry": "Insurance—Property & Casualty",
+            "percentOfSharesOutHeldByInstitutions": {
+              "raw": 24.46593301288484,
+              "fmt": "24.47%"
+            },
+            "regularMarketChangePercent": {
+              "raw": 0,
+              "fmt": "0.00%"
+            },
+            "fiftyTwoWeekChangePercent": {
+              "raw": 0,
+              "fmt": "0.00%"
+            },
+            "regularMarketPrice": {
+              "raw": 1.5,
+              "fmt": "1.50"
+            },
+            "fiftyTwoWeekLow": {
+              "raw": 1.5,
+              "fmt": "1.50"
+            },
+            "regularMarketVolume": {
+              "raw": 22,
+              "fmt": "22",
+              "longFmt": "22"
+            },
+            "lastCloseTevEbitLtm": {
+              "raw": 10.481487,
+              "fmt": "10.48"
+            },
+            "exchange": "PNK",
+            "fiftyTwoWeekHigh": {
+              "raw": 1.5,
+              "fmt": "1.50"
+            },
+            "sector": "Financial Services"
+          },
+          {
+            "marketCap": {
+              "raw": 1935730453.6572742,
+              "fmt": "1.936B",
+              "longFmt": "1,935,730,453"
+            },
+            "ticker": "ZYME",
+            "avgDailyVol3m": {
+              "raw": 664635.4838709678,
+              "fmt": "664,635",
+              "longFmt": "664,635"
+            },
+            "regularMarketChange": {
+              "raw": 0.59,
+              "fmt": "0.59"
+            },
+            "companyName": "Zymeworks Inc.",
+            "regularMarketOpen": {
+              "raw": 23.75,
+              "fmt": "23.75"
+            },
+            "industry": "Biotechnology",
+            "percentOfSharesOutHeldByInstitutions": {
+              "raw": 101.25177010897718,
+              "fmt": "101.25%"
+            },
+            "regularMarketChangePercent": {
+              "raw": 2.29394,
+              "fmt": "2.29%"
+            },
+            "fiftyTwoWeekChangePercent": {
+              "raw": 101.14679,
+              "fmt": "101.15%"
+            },
+            "regularMarketPrice": {
+              "raw": 26.31,
+              "fmt": "26.31"
+            },
+            "fiftyTwoWeekLow": {
+              "raw": 11.51,
+              "fmt": "11.51"
+            },
+            "regularMarketVolume": {
+              "raw": 443015,
+              "fmt": "443,015",
+              "longFmt": "443,015"
+            },
+            "indices": [
+              "^IXIC",
+              "^RUT"
+            ],
+            "lastCloseTevEbitLtm": {
+              "raw": -13.075842,
+              "fmt": "-13.08"
+            },
+            "averageRating": "Strong Buy",
+            "exchange": "NMS",
+            "fiftyTwoWeekHigh": {
+              "raw": 29.75,
+              "fmt": "29.75"
+            },
+            "sector": "Healthcare"
+          },
+          {
+            "marketCap": {
+              "raw": 0,
+              "fmt": "0",
+              "longFmt": "0"
+            },
+            "ticker": "ZYLM",
+            "avgDailyVol3m": {
+              "raw": 34580.645161290326,
+              "fmt": "34,580",
+              "longFmt": "34,580"
+            },
+            "regularMarketChange": {
+              "raw": 0,
+              "fmt": "0.00"
+            },
+            "regularMarketOpen": {
+              "raw": 0.0035,
+              "fmt": "0.00"
+            },
+            "industry": "Farm Products",
+            "percentOfSharesOutHeldByInstitutions": {
+              "raw": 0,
+              "fmt": "0.00%"
+            },
+            "regularMarketChangePercent": {
+              "raw": 0,
+              "fmt": "0.00%"
+            },
+            "fiftyTwoWeekChangePercent": {
+              "raw": 0,
+              "fmt": "0.00%"
+            },
+            "regularMarketPrice": {
+              "raw": 0.004,
+              "fmt": "0.00"
+            },
+            "fiftyTwoWeekLow": {
+              "raw": 0.003,
+              "fmt": "0.00"
+            },
+            "regularMarketVolume": {
+              "raw": 200000,
+              "fmt": "200,000",
+              "longFmt": "200,000"
+            },
+            "exchange": "OID",
+            "fiftyTwoWeekHigh": {
+              "raw": 0.018,
+              "fmt": "0.02"
+            },
+            "sector": "Consumer Defensive"
+          }
+        ],
+        "userHasReadRecord": false,
+        "useRecords": true
+      },
+      "sampleRecord": {
+        "marketCap": {
+          "raw": 232748.6347976625,
+          "fmt": "232,748",
+          "longFmt": "232,748"
+        },
+        "ticker": "ZZZOF",
+        "avgDailyVol3m": {
+          "raw": 8.629032258064516,
+          "fmt": "8",
+          "longFmt": "8"
+        },
+        "regularMarketChange": {
+          "raw": 0,
+          "fmt": "0.00"
+        },
+        "companyName": "Zinc One Resources Inc.",
+        "regularMarketOpen": {
+          "raw": 0.1574,
+          "fmt": "0.16"
+        },
+        "industry": "Other Industrial Metals & Mining",
+        "percentOfSharesOutHeldByInstitutions": {
+          "raw": 0,
+          "fmt": "0.00%"
+        },
+        "regularMarketChangePercent": {
+          "raw": 0,
+          "fmt": "0.00%"
+        },
+        "fiftyTwoWeekChangePercent": {
+          "raw": 40.35088,
+          "fmt": "40.35%"
+        },
+        "regularMarketPrice": {
+          "raw": 0.12,
+          "fmt": "0.12"
+        },
+        "fiftyTwoWeekLow": {
+          "raw": 0.0855,
+          "fmt": "0.09"
+        },
+        "regularMarketVolume": {
+          "raw": 6,
+          "fmt": "6",
+          "longFmt": "6"
+        },
+        "lastCloseTevEbitLtm": {
+          "raw": -27.781567,
+          "fmt": "-27.78"
+        },
+        "exchange": "PNK",
+        "fiftyTwoWeekHigh": {
+          "raw": 0.39,
+          "fmt": "0.39"
+        },
+        "sector": "Basic Materials"
+      }
+    },
+    "B3_sector_technology": {
+      "ok": true,
+      "durationMs": 63,
+      "request": {
+        "offset": 0,
+        "size": 5,
+        "sortField": "ticker",
+        "sortType": "DESC",
+        "quoteType": "EQUITY",
+        "topOperator": "AND",
+        "includeFields": [
+          "ticker",
+          "companyshortname",
+          "sector",
+          "industry",
+          "region"
+        ],
+        "query": {
+          "operator": "and",
+          "operands": [
+            {
+              "operator": "eq",
+              "operands": [
+                "region",
+                "us"
+              ]
+            },
+            {
+              "operator": "eq",
+              "operands": [
+                "sector",
+                "Technology"
+              ]
+            }
+          ]
+        }
+      },
+      "result0Keys": [
+        "start",
+        "count",
+        "total",
+        "records",
+        "userHasReadRecord",
+        "useRecords"
+      ],
+      "result0Meta": {
+        "start": 0,
+        "count": 5,
+        "total": 2041
+      },
+      "result0Raw": {
+        "start": 0,
+        "count": 5,
+        "total": 2041,
+        "records": [
+          {
+            "ticker": "ZVTK",
+            "companyName": "Zevotek, Inc.",
+            "industry": "Consumer Electronics",
+            "region": "us",
+            "sector": "Technology"
+          },
+          {
+            "ticker": "ZVLO",
+            "companyName": "zvelo, Inc.",
+            "industry": "Software—Infrastructure",
+            "region": "us",
+            "sector": "Technology"
+          },
+          {
+            "ticker": "ZTSTF",
+            "companyName": "ZTEST Electronics Inc.",
+            "industry": "Electronic Components",
+            "region": "us",
+            "sector": "Technology"
+          },
+          {
+            "ticker": "ZTNO",
+            "companyName": "ZOOM Technologies, Inc.",
+            "industry": "Communication Equipment",
+            "region": "us",
+            "sector": "Technology"
+          },
+          {
+            "ticker": "ZTLLF",
+            "companyName": "Zonetail Inc.",
+            "industry": "Software—Application",
+            "region": "us",
+            "sector": "Technology"
+          }
+        ],
+        "userHasReadRecord": false,
+        "useRecords": true
+      },
+      "sampleRecord": {
+        "ticker": "ZVTK",
+        "companyName": "Zevotek, Inc.",
+        "industry": "Consumer Electronics",
+        "region": "us",
+        "sector": "Technology"
+      }
+    },
+    "B4_industry_semiconductors": {
+      "ok": true,
+      "durationMs": 92,
+      "request": {
+        "offset": 0,
+        "size": 5,
+        "sortField": "ticker",
+        "sortType": "DESC",
+        "quoteType": "EQUITY",
+        "topOperator": "AND",
+        "includeFields": [
+          "ticker",
+          "companyshortname",
+          "sector",
+          "industry",
+          "region"
+        ],
+        "query": {
+          "operator": "and",
+          "operands": [
+            {
+              "operator": "eq",
+              "operands": [
+                "region",
+                "us"
+              ]
+            },
+            {
+              "operator": "eq",
+              "operands": [
+                "industry",
+                "Semiconductors"
+              ]
+            }
+          ]
+        }
+      },
+      "result0Keys": [
+        "start",
+        "count",
+        "total",
+        "records",
+        "userHasReadRecord",
+        "useRecords"
+      ],
+      "result0Meta": {
+        "start": 0,
+        "count": 5,
+        "total": 114
+      },
+      "result0Raw": {
+        "start": 0,
+        "count": 5,
+        "total": 114,
+        "records": [
+          {
+            "ticker": "XFABF",
+            "companyName": "X-FAB Silicon Foundries SE",
+            "industry": "Semiconductors",
+            "region": "us",
+            "sector": "Technology"
+          },
+          {
+            "ticker": "WSKEF",
+            "companyName": "WISeKey International Holding AG",
+            "industry": "Semiconductors",
+            "region": "us",
+            "sector": "Technology"
+          },
+          {
+            "ticker": "WOLF",
+            "companyName": "Wolfspeed, Inc.",
+            "industry": "Semiconductors",
+            "region": "us",
+            "sector": "Technology"
+          },
+          {
+            "ticker": "WKEY",
+            "companyName": "WISeKey International Holding AG",
+            "industry": "Semiconductors",
+            "region": "us",
+            "sector": "Technology"
+          },
+          {
+            "ticker": "WBTNF",
+            "companyName": "Weebit Nano Limited",
+            "industry": "Semiconductors",
+            "region": "us",
+            "sector": "Technology"
+          }
+        ],
+        "userHasReadRecord": false,
+        "useRecords": true
+      },
+      "sampleRecord": {
+        "ticker": "XFABF",
+        "companyName": "X-FAB Silicon Foundries SE",
+        "industry": "Semiconductors",
+        "region": "us",
+        "sector": "Technology"
+      }
+    },
+    "B5_multi_sector": {
+      "ok": true,
+      "durationMs": 92,
+      "request": {
+        "offset": 0,
+        "size": 5,
+        "sortField": "ticker",
+        "sortType": "DESC",
+        "quoteType": "EQUITY",
+        "topOperator": "AND",
+        "includeFields": [
+          "ticker",
+          "companyshortname",
+          "sector",
+          "industry",
+          "region"
+        ],
+        "query": {
+          "operator": "and",
+          "operands": [
+            {
+              "operator": "eq",
+              "operands": [
+                "region",
+                "us"
+              ]
+            },
+            {
+              "operator": "or",
+              "operands": [
+                {
+                  "operator": "eq",
+                  "operands": [
+                    "sector",
+                    "Technology"
+                  ]
+                },
+                {
+                  "operator": "eq",
+                  "operands": [
+                    "sector",
+                    "Healthcare"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "result0Keys": [
+        "start",
+        "count",
+        "total",
+        "records",
+        "userHasReadRecord",
+        "useRecords"
+      ],
+      "result0Meta": {
+        "start": 0,
+        "count": 5,
+        "total": 4611
+      },
+      "result0Raw": {
+        "start": 0,
+        "count": 5,
+        "total": 4611,
+        "records": [
+          {
+            "ticker": "ZYME",
+            "companyName": "Zymeworks Inc.",
+            "industry": "Biotechnology",
+            "region": "us",
+            "sector": "Healthcare"
+          },
+          {
+            "ticker": "ZYBT",
+            "companyName": "Zhengye Biotechnology Holding Limited",
+            "industry": "Drug Manufacturers—Specialty & Generic",
+            "region": "us",
+            "sector": "Healthcare"
+          },
+          {
+            "ticker": "ZVTK",
+            "companyName": "Zevotek, Inc.",
+            "industry": "Consumer Electronics",
+            "region": "us",
+            "sector": "Technology"
+          },
+          {
+            "ticker": "ZVSA",
+            "companyName": "ZyVersa Therapeutics, Inc.",
+            "industry": "Biotechnology",
+            "region": "us",
+            "sector": "Healthcare"
+          },
+          {
+            "ticker": "ZVRA",
+            "companyName": "Zevra Therapeutics, Inc.",
+            "industry": "Biotechnology",
+            "region": "us",
+            "sector": "Healthcare"
+          }
+        ],
+        "userHasReadRecord": false,
+        "useRecords": true
+      },
+      "sampleRecord": {
+        "ticker": "ZYME",
+        "companyName": "Zymeworks Inc.",
+        "industry": "Biotechnology",
+        "region": "us",
+        "sector": "Healthcare"
+      }
+    },
+    "C6_composite_fields": {
+      "ok": true,
+      "durationMs": 64,
+      "request": {
+        "offset": 0,
+        "size": 5,
+        "sortField": "ticker",
+        "sortType": "DESC",
+        "quoteType": "EQUITY",
+        "topOperator": "AND",
+        "includeFields": [
+          "ticker",
+          "peratio.lasttwelvemonths",
+          "returnonequity.lasttwelvemonths",
+          "esg_score",
+          "intradaymarketcap"
+        ],
+        "query": {
+          "operator": "and",
+          "operands": [
+            {
+              "operator": "eq",
+              "operands": [
+                "region",
+                "us"
+              ]
+            }
+          ]
+        }
+      },
+      "result0Keys": [
+        "start",
+        "count",
+        "total",
+        "records",
+        "userHasReadRecord",
+        "useRecords"
+      ],
+      "result0Meta": {
+        "start": 0,
+        "count": 5,
+        "total": 19893
+      },
+      "result0Raw": {
+        "start": 0,
+        "count": 5,
+        "total": 19893,
+        "records": [
+          {
+            "marketCap": {
+              "raw": 232748.6347976625,
+              "fmt": "232,748",
+              "longFmt": "232,748"
+            },
+            "ticker": "ZZZOF",
+            "returnOnEquityPercentLtm": {
+              "raw": 1.6883,
+              "fmt": "1.69%"
+            }
+          },
+          {
+            "marketCap": {
+              "raw": 2257649342.2366977,
+              "fmt": "2.258B",
+              "longFmt": "2,257,649,342"
+            },
+            "ticker": "ZZHGY",
+            "peRatioLtm": {
+              "raw": 11.155985,
+              "fmt": "11.16"
+            },
+            "returnOnEquityPercentLtm": {
+              "raw": 4.7507,
+              "fmt": "4.75%"
+            }
+          },
+          {
+            "marketCap": {
+              "raw": 2527219350,
+              "fmt": "2.527B",
+              "longFmt": "2,527,219,350"
+            },
+            "ticker": "ZZHGF",
+            "peRatioLtm": {
+              "raw": 11.155985,
+              "fmt": "11.16"
+            },
+            "returnOnEquityPercentLtm": {
+              "raw": 4.7507,
+              "fmt": "4.75%"
+            },
+            "esgScore": {
+              "raw": 30.06,
+              "fmt": "30.06"
+            }
+          },
+          {
+            "marketCap": {
+              "raw": 1935730453.6572742,
+              "fmt": "1.936B",
+              "longFmt": "1,935,730,453"
+            },
+            "ticker": "ZYME",
+            "returnOnEquityPercentLtm": {
+              "raw": -42.0242,
+              "fmt": "-42.02%"
+            },
+            "esgScore": {
+              "raw": 30.45,
+              "fmt": "30.45"
+            }
+          },
+          {
+            "marketCap": {
+              "raw": 0,
+              "fmt": "0",
+              "longFmt": "0"
+            },
+            "ticker": "ZYLM"
+          }
+        ],
+        "userHasReadRecord": false,
+        "useRecords": true
+      },
+      "sampleRecord": {
+        "marketCap": {
+          "raw": 232748.6347976625,
+          "fmt": "232,748",
+          "longFmt": "232,748"
+        },
+        "ticker": "ZZZOF",
+        "returnOnEquityPercentLtm": {
+          "raw": 1.6883,
+          "fmt": "1.69%"
+        }
+      }
+    },
+    "D7_sort_intradaymarketcap": {
+      "ok": true,
+      "durationMs": 92,
+      "request": {
+        "offset": 0,
+        "size": 5,
+        "sortField": "intradaymarketcap",
+        "sortType": "DESC",
+        "quoteType": "EQUITY",
+        "topOperator": "AND",
+        "includeFields": [
+          "ticker",
+          "intradaymarketcap"
+        ],
+        "query": {
+          "operator": "and",
+          "operands": [
+            {
+              "operator": "eq",
+              "operands": [
+                "region",
+                "us"
+              ]
+            }
+          ]
+        }
+      },
+      "result0Keys": [
+        "start",
+        "count",
+        "total",
+        "records",
+        "userHasReadRecord",
+        "useRecords"
+      ],
+      "result0Meta": {
+        "start": 0,
+        "count": 5,
+        "total": 19893
+      },
+      "result0Raw": {
+        "start": 0,
+        "count": 5,
+        "total": 19893,
+        "records": [
+          {
+            "marketCap": {
+              "raw": 4718977474349.976,
+              "fmt": "4.719T",
+              "longFmt": "4,718,977,474,349"
+            },
+            "ticker": "NVDA",
+            "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+          },
+          {
+            "marketCap": {
+              "raw": 4532958753995.605,
+              "fmt": "4.533T",
+              "longFmt": "4,532,958,753,995"
+            },
+            "ticker": "AAPL",
+            "logoUrl": "https://s.yimg.com/lb/brands/150x150_apple.png"
+          },
+          {
+            "marketCap": {
+              "raw": 4391828139545.5474,
+              "fmt": "4.392T",
+              "longFmt": "4,391,828,139,545"
+            },
+            "ticker": "GOOGL"
+          },
+          {
+            "marketCap": {
+              "raw": 4346312407712.9053,
+              "fmt": "4.346T",
+              "longFmt": "4,346,312,407,712"
+            },
+            "ticker": "GOOG",
+            "logoUrl": "https://s.yimg.com/lb/brands/150x150_google.png"
+          },
+          {
+            "marketCap": {
+              "raw": 2900729395021.6523,
+              "fmt": "2.901T",
+              "longFmt": "2,900,729,395,021"
+            },
+            "ticker": "MSFT",
+            "logoUrl": "https://s.yimg.com/lb/brands/150x150_microsoft.png"
+          }
+        ],
+        "userHasReadRecord": false,
+        "useRecords": true
+      },
+      "sampleRecord": {
+        "marketCap": {
+          "raw": 4718977474349.976,
+          "fmt": "4.719T",
+          "longFmt": "4,718,977,474,349"
+        },
+        "ticker": "NVDA",
+        "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+      }
+    },
+    "D7_sort_peratio_lasttwelvemonths": {
+      "ok": true,
+      "durationMs": 64,
+      "request": {
+        "offset": 0,
+        "size": 5,
+        "sortField": "peratio.lasttwelvemonths",
+        "sortType": "DESC",
+        "quoteType": "EQUITY",
+        "topOperator": "AND",
+        "includeFields": [
+          "ticker",
+          "peratio.lasttwelvemonths"
+        ],
+        "query": {
+          "operator": "and",
+          "operands": [
+            {
+              "operator": "eq",
+              "operands": [
+                "region",
+                "us"
+              ]
+            }
+          ]
+        }
+      },
+      "result0Keys": [
+        "start",
+        "count",
+        "total",
+        "records",
+        "userHasReadRecord",
+        "useRecords"
+      ],
+      "result0Meta": {
+        "start": 0,
+        "count": 5,
+        "total": 19893
+      },
+      "result0Raw": {
+        "start": 0,
+        "count": 5,
+        "total": 19893,
+        "records": [
+          {
+            "ticker": "BILL",
+            "peRatioLtm": {
+              "raw": 24101.926662,
+              "fmt": "24,101.93"
+            }
+          },
+          {
+            "ticker": "FMRRF",
+            "peRatioLtm": {
+              "raw": 22500,
+              "fmt": "22,500.00"
+            }
+          },
+          {
+            "ticker": "DDL",
+            "peRatioLtm": {
+              "raw": 14686.368995,
+              "fmt": "14,686.37"
+            }
+          },
+          {
+            "ticker": "CEV",
+            "peRatioLtm": {
+              "raw": 13607.188703,
+              "fmt": "13,607.19"
+            }
+          },
+          {
+            "ticker": "BE",
+            "peRatioLtm": {
+              "raw": 12154.162643,
+              "fmt": "12,154.16"
+            }
+          }
+        ],
+        "userHasReadRecord": false,
+        "useRecords": true
+      },
+      "sampleRecord": {
+        "ticker": "BILL",
+        "peRatioLtm": {
+          "raw": 24101.926662,
+          "fmt": "24,101.93"
+        }
+      }
+    },
+    "D8_sort_not_real": {
+      "ok": false,
+      "durationMs": 74,
+      "request": {
+        "offset": 0,
+        "size": 5,
+        "sortField": "not_a_real_field",
+        "sortType": "DESC",
+        "quoteType": "EQUITY",
+        "topOperator": "AND",
+        "includeFields": [
+          "ticker"
+        ],
+        "query": {
+          "operator": "and",
+          "operands": [
+            {
+              "operator": "eq",
+              "operands": [
+                "region",
+                "us"
+              ]
+            }
+          ]
+        }
+      },
+      "errorName": "FinanceError",
+      "errorMessage": "Yahoo upstream error: HTTP 400"
+    },
+    "E9_currency_field": {
+      "ok": false,
+      "durationMs": 37,
+      "request": {
+        "offset": 0,
+        "size": 5,
+        "sortField": "ticker",
+        "sortType": "DESC",
+        "quoteType": "EQUITY",
+        "topOperator": "AND",
+        "includeFields": [
+          "ticker",
+          "currency"
+        ],
+        "query": {
+          "operator": "and",
+          "operands": [
+            {
+              "operator": "eq",
+              "operands": [
+                "region",
+                "us"
+              ]
+            }
+          ]
+        }
+      },
+      "errorName": "FinanceError",
+      "errorMessage": "Yahoo upstream error: HTTP 400"
+    },
+    "F11_size_100": {
+      "ok": true,
+      "durationMs": 113,
+      "request": {
+        "offset": 0,
+        "size": 100,
+        "sortField": "ticker",
+        "sortType": "DESC",
+        "quoteType": "EQUITY",
+        "topOperator": "AND",
+        "includeFields": [
+          "ticker"
+        ],
+        "query": {
+          "operator": "and",
+          "operands": [
+            {
+              "operator": "eq",
+              "operands": [
+                "region",
+                "us"
+              ]
+            }
+          ]
+        }
+      },
+      "result0Keys": [
+        "start",
+        "count",
+        "total",
+        "records",
+        "userHasReadRecord",
+        "useRecords"
+      ],
+      "result0Meta": {
+        "start": 0,
+        "count": 100,
+        "total": 19893
+      },
+      "result0Raw": {
+        "start": 0,
+        "count": 100,
+        "total": 19893,
+        "records": [
+          {
+            "ticker": "ZZZOF"
+          },
+          {
+            "ticker": "ZZHGY"
+          },
+          {
+            "ticker": "ZZHGF"
+          },
+          {
+            "ticker": "ZYME"
+          },
+          {
+            "ticker": "ZYLM"
+          },
+          {
+            "ticker": "ZYBT"
+          },
+          {
+            "ticker": "ZWS"
+          },
+          {
+            "ticker": "ZVTK"
+          },
+          {
+            "ticker": "ZVSA"
+          },
+          {
+            "ticker": "ZVRA"
+          },
+          {
+            "ticker": "ZVOI"
+          },
+          {
+            "ticker": "ZVLO"
+          },
+          {
+            "ticker": "ZVIA",
+            "logoUrl": "https://s.yimg.com/lb/brands/150x150_zevia.png"
+          },
+          {
+            "ticker": "ZUUZF"
+          },
+          {
+            "ticker": "ZUUS"
+          },
+          {
+            "ticker": "ZURVY"
+          },
+          {
+            "ticker": "ZURA"
+          },
+          {
+            "ticker": "ZUMZ",
+            "logoUrl": "https://s.yimg.com/lb/brands/150x150_zumiez.png"
+          },
+          {
+            "ticker": "ZULU"
+          },
+          {
+            "ticker": "ZTSTF"
+          },
+          {
+            "ticker": "ZTST"
+          },
+          {
+            "ticker": "ZTS"
+          },
+          {
+            "ticker": "ZTR"
+          },
+          {
+            "ticker": "ZTOEF"
+          },
+          {
+            "ticker": "ZTO"
+          },
+          {
+            "ticker": "ZTNO"
+          },
+          {
+            "ticker": "ZTLLF"
+          },
+          {
+            "ticker": "ZTG"
+          },
+          {
+            "ticker": "ZTFMF"
+          },
+          {
+            "ticker": "ZTEK"
+          },
+          {
+            "ticker": "ZTCOF"
+          },
+          {
+            "ticker": "ZSYC"
+          },
+          {
+            "ticker": "ZSTN"
+          },
+          {
+            "ticker": "ZSTK"
+          },
+          {
+            "ticker": "ZSQR"
+          },
+          {
+            "ticker": "ZSPC"
+          },
+          {
+            "ticker": "ZSHOF"
+          },
+          {
+            "ticker": "ZSHGY"
+          },
+          {
+            "ticker": "ZS"
+          },
+          {
+            "ticker": "ZRVT"
+          },
+          {
+            "ticker": "ZRSEF"
+          },
+          {
+            "ticker": "ZRFY"
+          },
+          {
+            "ticker": "ZPTAF"
+          },
+          {
+            "ticker": "ZPTA"
+          },
+          {
+            "ticker": "ZPHYF"
+          },
+          {
+            "ticker": "ZPHRF"
+          },
+          {
+            "ticker": "ZPAS"
+          },
+          {
+            "ticker": "ZOOZW"
+          },
+          {
+            "ticker": "ZOOZ"
+          },
+          {
+            "ticker": "ZOONF"
+          },
+          {
+            "ticker": "ZONX"
+          },
+          {
+            "ticker": "ZONNF"
+          },
+          {
+            "ticker": "ZONE"
+          },
+          {
+            "ticker": "ZOMDF"
+          },
+          {
+            "ticker": "ZOJIF"
+          },
+          {
+            "ticker": "ZNZNF"
+          },
+          {
+            "ticker": "ZNXT"
+          },
+          {
+            "ticker": "ZNWLF"
+          },
+          {
+            "ticker": "ZNTL"
+          },
+          {
+            "ticker": "ZNOG"
+          },
+          {
+            "ticker": "ZNNGY"
+          },
+          {
+            "ticker": "ZNNC"
+          },
+          {
+            "ticker": "ZNKKY"
+          },
+          {
+            "ticker": "ZNGMF"
+          },
+          {
+            "ticker": "ZNCXF"
+          },
+          {
+            "ticker": "ZNB"
+          },
+          {
+            "ticker": "ZNAE"
+          },
+          {
+            "ticker": "ZMTBY"
+          },
+          {
+            "ticker": "ZMSPF"
+          },
+          {
+            "ticker": "ZMRK"
+          },
+          {
+            "ticker": "ZMPLF"
+          },
+          {
+            "ticker": "ZMMH"
+          },
+          {
+            "ticker": "ZMDTF"
+          },
+          {
+            "ticker": "ZM"
+          },
+          {
+            "ticker": "ZLSCF"
+          },
+          {
+            "ticker": "ZLNDY"
+          },
+          {
+            "ticker": "ZLME"
+          },
+          {
+            "ticker": "ZLIOY"
+          },
+          {
+            "ticker": "ZLIOF"
+          },
+          {
+            "ticker": "ZLDSF"
+          },
+          {
+            "ticker": "ZLDPY"
+          },
+          {
+            "ticker": "ZLDPF"
+          },
+          {
+            "ticker": "ZLDAF"
+          },
+          {
+            "ticker": "ZLAB"
+          },
+          {
+            "ticker": "ZKPW"
+          },
+          {
+            "ticker": "ZKP"
+          },
+          {
+            "ticker": "ZKIN"
+          },
+          {
+            "ticker": "ZKH"
+          },
+          {
+            "ticker": "ZJYL"
+          },
+          {
+            "ticker": "ZJLMF"
+          },
+          {
+            "ticker": "ZJK"
+          },
+          {
+            "ticker": "ZIZTF"
+          },
+          {
+            "ticker": "ZIVO"
+          },
+          {
+            "ticker": "ZIP",
+            "logoUrl": "https://s.yimg.com/lb/brands/150x150_ziprecruiter.png"
+          },
+          {
+            "ticker": "ZIONP"
+          },
+          {
+            "ticker": "ZION"
+          },
+          {
+            "ticker": "ZINC"
+          },
+          {
+            "ticker": "ZIMCF"
+          },
+          {
+            "ticker": "ZIM"
+          },
+          {
+            "ticker": "ZIJMY"
+          }
+        ],
+        "userHasReadRecord": false,
+        "useRecords": true
+      },
+      "sampleRecord": {
+        "ticker": "ZZZOF"
+      }
+    },
+    "F11_size_200": {
+      "ok": true,
+      "durationMs": 147,
+      "request": {
+        "offset": 0,
+        "size": 200,
+        "sortField": "ticker",
+        "sortType": "DESC",
+        "quoteType": "EQUITY",
+        "topOperator": "AND",
+        "includeFields": [
+          "ticker"
+        ],
+        "query": {
+          "operator": "and",
+          "operands": [
+            {
+              "operator": "eq",
+              "operands": [
+                "region",
+                "us"
+              ]
+            }
+          ]
+        }
+      },
+      "result0Keys": [
+        "start",
+        "count",
+        "total",
+        "records",
+        "userHasReadRecord",
+        "useRecords"
+      ],
+      "result0Meta": {
+        "start": 0,
+        "count": 200,
+        "total": 19893
+      },
+      "result0Raw": {
+        "start": 0,
+        "count": 200,
+        "total": 19893,
+        "records": [
+          {
+            "ticker": "ZZZOF"
+          },
+          {
+            "ticker": "ZZHGY"
+          },
+          {
+            "ticker": "ZZHGF"
+          },
+          {
+            "ticker": "ZYME"
+          },
+          {
+            "ticker": "ZYLM"
+          },
+          {
+            "ticker": "ZYBT"
+          },
+          {
+            "ticker": "ZWS"
+          },
+          {
+            "ticker": "ZVTK"
+          },
+          {
+            "ticker": "ZVSA"
+          },
+          {
+            "ticker": "ZVRA"
+          },
+          {
+            "ticker": "ZVOI"
+          },
+          {
+            "ticker": "ZVLO"
+          },
+          {
+            "ticker": "ZVIA",
+            "logoUrl": "https://s.yimg.com/lb/brands/150x150_zevia.png"
+          },
+          {
+            "ticker": "ZUUZF"
+          },
+          {
+            "ticker": "ZUUS"
+          },
+          {
+            "ticker": "ZURVY"
+          },
+          {
+            "ticker": "ZURA"
+          },
+          {
+            "ticker": "ZUMZ",
+            "logoUrl": "https://s.yimg.com/lb/brands/150x150_zumiez.png"
+          },
+          {
+            "ticker": "ZULU"
+          },
+          {
+            "ticker": "ZTSTF"
+          },
+          {
+            "ticker": "ZTST"
+          },
+          {
+            "ticker": "ZTS"
+          },
+          {
+            "ticker": "ZTR"
+          },
+          {
+            "ticker": "ZTOEF"
+          },
+          {
+            "ticker": "ZTO"
+          },
+          {
+            "ticker": "ZTNO"
+          },
+          {
+            "ticker": "ZTLLF"
+          },
+          {
+            "ticker": "ZTG"
+          },
+          {
+            "ticker": "ZTFMF"
+          },
+          {
+            "ticker": "ZTEK"
+          },
+          {
+            "ticker": "ZTCOF"
+          },
+          {
+            "ticker": "ZSYC"
+          },
+          {
+            "ticker": "ZSTN"
+          },
+          {
+            "ticker": "ZSTK"
+          },
+          {
+            "ticker": "ZSQR"
+          },
+          {
+            "ticker": "ZSPC"
+          },
+          {
+            "ticker": "ZSHOF"
+          },
+          {
+            "ticker": "ZSHGY"
+          },
+          {
+            "ticker": "ZS"
+          },
+          {
+            "ticker": "ZRVT"
+          },
+          {
+            "ticker": "ZRSEF"
+          },
+          {
+            "ticker": "ZRFY"
+          },
+          {
+            "ticker": "ZPTAF"
+          },
+          {
+            "ticker": "ZPTA"
+          },
+          {
+            "ticker": "ZPHYF"
+          },
+          {
+            "ticker": "ZPHRF"
+          },
+          {
+            "ticker": "ZPAS"
+          },
+          {
+            "ticker": "ZOOZW"
+          },
+          {
+            "ticker": "ZOOZ"
+          },
+          {
+            "ticker": "ZOONF"
+          },
+          {
+            "ticker": "ZONX"
+          },
+          {
+            "ticker": "ZONNF"
+          },
+          {
+            "ticker": "ZONE"
+          },
+          {
+            "ticker": "ZOMDF"
+          },
+          {
+            "ticker": "ZOJIF"
+          },
+          {
+            "ticker": "ZNZNF"
+          },
+          {
+            "ticker": "ZNXT"
+          },
+          {
+            "ticker": "ZNWLF"
+          },
+          {
+            "ticker": "ZNTL"
+          },
+          {
+            "ticker": "ZNOG"
+          },
+          {
+            "ticker": "ZNNGY"
+          },
+          {
+            "ticker": "ZNNC"
+          },
+          {
+            "ticker": "ZNKKY"
+          },
+          {
+            "ticker": "ZNGMF"
+          },
+          {
+            "ticker": "ZNCXF"
+          },
+          {
+            "ticker": "ZNB"
+          },
+          {
+            "ticker": "ZNAE"
+          },
+          {
+            "ticker": "ZMTBY"
+          },
+          {
+            "ticker": "ZMSPF"
+          },
+          {
+            "ticker": "ZMRK"
+          },
+          {
+            "ticker": "ZMPLF"
+          },
+          {
+            "ticker": "ZMMH"
+          },
+          {
+            "ticker": "ZMDTF"
+          },
+          {
+            "ticker": "ZM"
+          },
+          {
+            "ticker": "ZLSCF"
+          },
+          {
+            "ticker": "ZLNDY"
+          },
+          {
+            "ticker": "ZLME"
+          },
+          {
+            "ticker": "ZLIOY"
+          },
+          {
+            "ticker": "ZLIOF"
+          },
+          {
+            "ticker": "ZLDSF"
+          },
+          {
+            "ticker": "ZLDPY"
+          },
+          {
+            "ticker": "ZLDPF"
+          },
+          {
+            "ticker": "ZLDAF"
+          },
+          {
+            "ticker": "ZLAB"
+          },
+          {
+            "ticker": "ZKPW"
+          },
+          {
+            "ticker": "ZKP"
+          },
+          {
+            "ticker": "ZKIN"
+          },
+          {
+            "ticker": "ZKH"
+          },
+          {
+            "ticker": "ZJYL"
+          },
+          {
+            "ticker": "ZJLMF"
+          },
+          {
+            "ticker": "ZJK"
+          },
+          {
+            "ticker": "ZIZTF"
+          },
+          {
+            "ticker": "ZIVO"
+          },
+          {
+            "ticker": "ZIP",
+            "logoUrl": "https://s.yimg.com/lb/brands/150x150_ziprecruiter.png"
+          },
+          {
+            "ticker": "ZIONP"
+          },
+          {
+            "ticker": "ZION"
+          },
+          {
+            "ticker": "ZINC"
+          },
+          {
+            "ticker": "ZIMCF"
+          },
+          {
+            "ticker": "ZIM"
+          },
+          {
+            "ticker": "ZIJMY"
+          },
+          {
+            "ticker": "ZIJMF"
+          },
+          {
+            "ticker": "ZICX"
+          },
+          {
+            "ticker": "ZHYLF"
+          },
+          {
+            "ticker": "ZHYBF"
+          },
+          {
+            "ticker": "ZHUZY"
+          },
+          {
+            "ticker": "ZHUD"
+          },
+          {
+            "ticker": "ZHSHF"
+          },
+          {
+            "ticker": "ZHJD"
+          },
+          {
+            "ticker": "ZHIXF"
+          },
+          {
+            "ticker": "ZHHJY"
+          },
+          {
+            "ticker": "ZHGWF"
+          },
+          {
+            "ticker": "ZHEXF"
+          },
+          {
+            "ticker": "ZHDM"
+          },
+          {
+            "ticker": "ZHCLF"
+          },
+          {
+            "ticker": "ZHAOF"
+          },
+          {
+            "ticker": "ZH"
+          },
+          {
+            "ticker": "ZGXNF"
+          },
+          {
+            "ticker": "ZGN"
+          },
+          {
+            "ticker": "ZG"
+          },
+          {
+            "ticker": "ZFSVF"
+          },
+          {
+            "ticker": "ZEVY"
+          },
+          {
+            "ticker": "ZETX"
+          },
+          {
+            "ticker": "ZETA"
+          },
+          {
+            "ticker": "ZEPP"
+          },
+          {
+            "ticker": "ZEOX"
+          },
+          {
+            "ticker": "ZEOWW"
+          },
+          {
+            "ticker": "ZEOOY"
+          },
+          {
+            "ticker": "ZEOOF"
+          },
+          {
+            "ticker": "ZEON"
+          },
+          {
+            "ticker": "ZEO"
+          },
+          {
+            "ticker": "ZENVF"
+          },
+          {
+            "ticker": "ZENG"
+          },
+          {
+            "ticker": "ZENAF"
+          },
+          {
+            "ticker": "ZENA"
+          },
+          {
+            "ticker": "ZEGLF"
+          },
+          {
+            "ticker": "ZEFIF"
+          },
+          {
+            "ticker": "ZDZT"
+          },
+          {
+            "ticker": "ZDPY"
+          },
+          {
+            "ticker": "ZDGGF"
+          },
+          {
+            "ticker": "ZDGE"
+          },
+          {
+            "ticker": "ZDEC"
+          },
+          {
+            "ticker": "ZDCAF"
+          },
+          {
+            "ticker": "ZDAI"
+          },
+          {
+            "ticker": "ZD"
+          },
+          {
+            "ticker": "ZCTSF"
+          },
+          {
+            "ticker": "ZCRMF"
+          },
+          {
+            "ticker": "ZCOM"
+          },
+          {
+            "ticker": "ZCMD"
+          },
+          {
+            "ticker": "ZCCMF"
+          },
+          {
+            "ticker": "ZCBD"
+          },
+          {
+            "ticker": "ZCAR"
+          },
+          {
+            "ticker": "ZBRA"
+          },
+          {
+            "ticker": "ZBNIF"
+          },
+          {
+            "ticker": "ZBIO"
+          },
+          {
+            "ticker": "ZBH"
+          },
+          {
+            "ticker": "ZBAO"
+          },
+          {
+            "ticker": "ZAZA"
+          },
+          {
+            "ticker": "ZAUIF"
+          },
+          {
+            "ticker": "ZAPPF"
+          },
+          {
+            "ticker": "ZAIRF"
+          },
+          {
+            "ticker": "ZAHA"
+          },
+          {
+            "ticker": "ZAAGD"
+          },
+          {
+            "ticker": "Z"
+          },
+          {
+            "ticker": "YZOFF"
+          },
+          {
+            "ticker": "YZCFF"
+          },
+          {
+            "ticker": "YZCAY"
+          },
+          {
+            "ticker": "YYYH"
+          },
+          {
+            "ticker": "YYGH"
+          },
+          {
+            "ticker": "YYAI"
+          },
+          {
+            "ticker": "YXT"
+          },
+          {
+            "ticker": "YWRLF"
+          },
+          {
+            "ticker": "YWGRF"
+          },
+          {
+            "ticker": "YVRLF"
+          },
+          {
+            "ticker": "YUZHF"
+          },
+          {
+            "ticker": "YUXXF"
+          },
+          {
+            "ticker": "YUPRF"
+          },
+          {
+            "ticker": "YUMM"
+          },
+          {
+            "ticker": "YUMFF"
+          },
+          {
+            "ticker": "YUMC"
+          },
+          {
+            "ticker": "YUMAQ"
+          },
+          {
+            "ticker": "YUM",
+            "logoUrl": "https://s.yimg.com/lb/brands/150x150_yum.png"
+          },
+          {
+            "ticker": "YUKA"
+          },
+          {
+            "ticker": "YUII"
+          },
+          {
+            "ticker": "YUGVF"
+          },
+          {
+            "ticker": "YUEIY"
+          },
+          {
+            "ticker": "YUEIF"
+          },
+          {
+            "ticker": "YUBCF"
+          },
+          {
+            "ticker": "YTRA"
+          },
+          {
+            "ticker": "YTOEF"
+          },
+          {
+            "ticker": "YTLPF"
+          },
+          {
+            "ticker": "YTLCF"
+          },
+          {
+            "ticker": "YTFD"
+          },
+          {
+            "ticker": "YTESTQFTACHYON"
+          },
+          {
+            "ticker": "YTENQ"
+          },
+          {
+            "ticker": "YSXT"
+          },
+          {
+            "ticker": "YSWY"
+          },
+          {
+            "ticker": "YSS"
+          },
+          {
+            "ticker": "YSHLF"
+          },
+          {
+            "ticker": "YSG"
+          },
+          {
+            "ticker": "YSASF"
+          }
+        ],
+        "userHasReadRecord": false,
+        "useRecords": true
+      },
+      "sampleRecord": {
+        "ticker": "ZZZOF"
+      }
+    },
+    "G12_gt_pe_ratio": {
+      "ok": true,
+      "durationMs": 99,
+      "request": {
+        "offset": 0,
+        "size": 5,
+        "sortField": "peratio.lasttwelvemonths",
+        "sortType": "DESC",
+        "quoteType": "EQUITY",
+        "topOperator": "AND",
+        "includeFields": [
+          "ticker",
+          "peratio.lasttwelvemonths"
+        ],
+        "query": {
+          "operator": "and",
+          "operands": [
+            {
+              "operator": "eq",
+              "operands": [
+                "region",
+                "us"
+              ]
+            },
+            {
+              "operator": "gt",
+              "operands": [
+                "peratio.lasttwelvemonths",
+                15
+              ]
+            }
+          ]
+        }
+      },
+      "result0Keys": [
+        "start",
+        "count",
+        "total",
+        "records",
+        "userHasReadRecord",
+        "useRecords"
+      ],
+      "result0Meta": {
+        "start": 0,
+        "count": 5,
+        "total": 5000
+      },
+      "result0Raw": {
+        "start": 0,
+        "count": 5,
+        "total": 5000,
+        "records": [
+          {
+            "ticker": "BILL",
+            "peRatioLtm": {
+              "raw": 24101.926662,
+              "fmt": "24,101.93"
+            }
+          },
+          {
+            "ticker": "FMRRF",
+            "peRatioLtm": {
+              "raw": 22500,
+              "fmt": "22,500.00"
+            }
+          },
+          {
+            "ticker": "DDL",
+            "peRatioLtm": {
+              "raw": 14686.368995,
+              "fmt": "14,686.37"
+            }
+          },
+          {
+            "ticker": "CEV",
+            "peRatioLtm": {
+              "raw": 13607.188703,
+              "fmt": "13,607.19"
+            }
+          },
+          {
+            "ticker": "BE",
+            "peRatioLtm": {
+              "raw": 12154.162643,
+              "fmt": "12,154.16"
+            }
+          }
+        ],
+        "userHasReadRecord": false,
+        "useRecords": true
+      },
+      "sampleRecord": {
+        "ticker": "BILL",
+        "peRatioLtm": {
+          "raw": 24101.926662,
+          "fmt": "24,101.93"
+        }
+      }
+    },
+    "G13_btwn_marketcap": {
+      "ok": true,
+      "durationMs": 91,
+      "request": {
+        "offset": 0,
+        "size": 5,
+        "sortField": "intradaymarketcap",
+        "sortType": "DESC",
+        "quoteType": "EQUITY",
+        "topOperator": "AND",
+        "includeFields": [
+          "ticker",
+          "intradaymarketcap"
+        ],
+        "query": {
+          "operator": "and",
+          "operands": [
+            {
+              "operator": "eq",
+              "operands": [
+                "region",
+                "us"
+              ]
+            },
+            {
+              "operator": "btwn",
+              "operands": [
+                "intradaymarketcap",
+                1000000000,
+                100000000000
+              ]
+            }
+          ]
+        }
+      },
+      "result0Keys": [
+        "start",
+        "count",
+        "total",
+        "records",
+        "userHasReadRecord",
+        "useRecords"
+      ],
+      "result0Meta": {
+        "start": 0,
+        "count": 5,
+        "total": 6246
+      },
+      "result0Raw": {
+        "start": 0,
+        "count": 5,
+        "total": 6246,
+        "records": [
+          {
+            "marketCap": {
+              "raw": 99955577594.83502,
+              "fmt": "99.956B",
+              "longFmt": "99,955,577,594"
+            },
+            "ticker": "RCRUY"
+          },
+          {
+            "marketCap": {
+              "raw": 99925181295.17105,
+              "fmt": "99.925B",
+              "longFmt": "99,925,181,295"
+            },
+            "ticker": "SPOT",
+            "logoUrl": "https://s.yimg.com/lb/brands/150x150_spotify.png"
+          },
+          {
+            "marketCap": {
+              "raw": 99775838784.75,
+              "fmt": "99.776B",
+              "longFmt": "99,775,838,784"
+            },
+            "ticker": "MSBHF"
+          },
+          {
+            "marketCap": {
+              "raw": 99715179832.5,
+              "fmt": "99.715B",
+              "longFmt": "99,715,179,832"
+            },
+            "ticker": "ZIJMF"
+          },
+          {
+            "marketCap": {
+              "raw": 99411390392.56552,
+              "fmt": "99.411B",
+              "longFmt": "99,411,390,392"
+            },
+            "ticker": "PBR-A"
+          }
+        ],
+        "userHasReadRecord": false,
+        "useRecords": true
+      },
+      "sampleRecord": {
+        "marketCap": {
+          "raw": 99955577594.83502,
+          "fmt": "99.956B",
+          "longFmt": "99,955,577,594"
+        },
+        "ticker": "RCRUY"
+      }
+    },
+    "H14_etf_shape": {
+      "ok": true,
+      "durationMs": 87,
+      "request": {
+        "offset": 0,
+        "size": 5,
+        "sortField": "ticker",
+        "sortType": "DESC",
+        "quoteType": "ETF",
+        "topOperator": "AND",
+        "includeFields": [],
+        "query": {
+          "operator": "and",
+          "operands": [
+            {
+              "operator": "eq",
+              "operands": [
+                "region",
+                "us"
+              ]
+            }
+          ]
+        }
+      },
+      "result0Keys": [
+        "start",
+        "count",
+        "total",
+        "records",
+        "userHasReadRecord",
+        "useRecords"
+      ],
+      "result0Meta": {
+        "start": 0,
+        "count": 5,
+        "total": 5644
+      },
+      "result0Raw": {
+        "start": 0,
+        "count": 5,
+        "total": 5644,
+        "records": [
+          {
+            "ticker": "^ZAP",
+            "regularMarketChange": {
+              "raw": 0.28160095,
+              "fmt": "0.28"
+            },
+            "companyName": "GLOBAL X FDS",
+            "regularMarketOpen": {
+              "raw": 34.959,
+              "fmt": "34.96"
+            },
+            "exchange": "NIM",
+            "regularMarketChangePercent": {
+              "raw": 0.8303335,
+              "fmt": "0.83%"
+            },
+            "regularMarketPrice": {
+              "raw": 34.1958,
+              "fmt": "34.20"
+            }
+          },
+          {
+            "ticker": "^XYLD-IV",
+            "regularMarketChange": {
+              "raw": 0.027397156,
+              "fmt": "0.03"
+            },
+            "companyName": "GLOBAL X FDS S&P 500 COVERED CA",
+            "regularMarketOpen": {
+              "raw": 40.7762,
+              "fmt": "40.78"
+            },
+            "exchange": "ASE",
+            "regularMarketChangePercent": {
+              "raw": 0.06711123,
+              "fmt": "0.07%"
+            },
+            "regularMarketPrice": {
+              "raw": 40.8509,
+              "fmt": "40.85"
+            }
+          },
+          {
+            "ticker": "^XOMX",
+            "regularMarketChange": {
+              "raw": -0.03530121,
+              "fmt": "-0.04"
+            },
+            "companyName": "DIREXION SH ETF TR",
+            "regularMarketOpen": {
+              "raw": 35.2194,
+              "fmt": "35.22"
+            },
+            "exchange": "NIM",
+            "regularMarketChangePercent": {
+              "raw": -0.10219852,
+              "fmt": "-0.10%"
+            },
+            "regularMarketPrice": {
+              "raw": 34.5065,
+              "fmt": "34.51"
+            }
+          },
+          {
+            "ticker": "^WSML",
+            "regularMarketChange": {
+              "raw": -0.053100586,
+              "fmt": "-0.05"
+            },
+            "companyName": "ISHARES TRUST",
+            "regularMarketOpen": {
+              "raw": 34.5456,
+              "fmt": "34.55"
+            },
+            "exchange": "NIM",
+            "regularMarketChangePercent": {
+              "raw": -0.15256728,
+              "fmt": "-0.15%"
+            },
+            "regularMarketPrice": {
+              "raw": 34.7516,
+              "fmt": "34.75"
+            }
+          },
+          {
+            "ticker": "^WOOD",
+            "regularMarketChange": {
+              "raw": 1.199707,
+              "fmt": "1.20"
+            },
+            "companyName": "ISHARES TRUST",
+            "regularMarketOpen": {
+              "raw": 67.0887,
+              "fmt": "67.09"
+            },
+            "exchange": "NIM",
+            "regularMarketChangePercent": {
+              "raw": 1.8248966,
+              "fmt": "1.82%"
+            },
+            "regularMarketPrice": {
+              "raw": 66.9408,
+              "fmt": "66.94"
+            }
+          }
+        ],
+        "userHasReadRecord": false,
+        "useRecords": true
+      },
+      "sampleRecord": {
+        "ticker": "^ZAP",
+        "regularMarketChange": {
+          "raw": 0.28160095,
+          "fmt": "0.28"
+        },
+        "companyName": "GLOBAL X FDS",
+        "regularMarketOpen": {
+          "raw": 34.959,
+          "fmt": "34.96"
+        },
+        "exchange": "NIM",
+        "regularMarketChangePercent": {
+          "raw": 0.8303335,
+          "fmt": "0.83%"
+        },
+        "regularMarketPrice": {
+          "raw": 34.1958,
+          "fmt": "34.20"
+        }
+      }
+    },
+    "H14_mutualfund_shape": {
+      "ok": true,
+      "durationMs": 76,
+      "request": {
+        "offset": 0,
+        "size": 5,
+        "sortField": "ticker",
+        "sortType": "DESC",
+        "quoteType": "MUTUALFUND",
+        "topOperator": "AND",
+        "includeFields": [],
+        "query": {
+          "operator": "and",
+          "operands": [
+            {
+              "operator": "eq",
+              "operands": [
+                "region",
+                "us"
+              ]
+            }
+          ]
+        }
+      },
+      "result0Keys": [
+        "start",
+        "count",
+        "total",
+        "records",
+        "userHasReadRecord",
+        "useRecords"
+      ],
+      "result0Meta": {
+        "start": 0,
+        "count": 5,
+        "total": 152297
+      },
+      "result0Raw": {
+        "start": 0,
+        "count": 5,
+        "total": 152297,
+        "records": [
+          {
+            "ticker": "ZZZZIX",
+            "regularMarketChange": {
+              "raw": 0,
+              "fmt": "0.00"
+            },
+            "companyName": "Nasdaq Test - AIP Managed Future Fund - ABTC",
+            "exchange": "NAS",
+            "regularMarketChangePercent": {
+              "raw": 0,
+              "fmt": "0.00%"
+            },
+            "regularMarketPrice": {
+              "raw": 10.999,
+              "fmt": "11.00"
+            }
+          },
+          {
+            "ticker": "ZZZAX",
+            "regularMarketChange": {
+              "raw": 0,
+              "fmt": "0.00"
+            },
+            "companyName": "Test Demand Deposit Account - TEST",
+            "exchange": "NAS",
+            "regularMarketChangePercent": {
+              "raw": 0,
+              "fmt": "0.00%"
+            },
+            "regularMarketPrice": {
+              "raw": 1,
+              "fmt": "1.00"
+            }
+          },
+          {
+            "ticker": "ZZYYX",
+            "regularMarketChange": {
+              "raw": 0.21,
+              "fmt": "0.21"
+            },
+            "companyName": "Test Mutual Fund - PARA",
+            "exchange": "NAS",
+            "regularMarketChangePercent": {
+              "raw": 2.748691,
+              "fmt": "2.75%"
+            },
+            "regularMarketPrice": {
+              "raw": 7.85,
+              "fmt": "7.85"
+            }
+          },
+          {
+            "ticker": "ZZWWX",
+            "regularMarketChange": {
+              "raw": 0,
+              "fmt": "0.00"
+            },
+            "companyName": "Test Mutual Fund Interval 2 - FIAM",
+            "exchange": "NAS",
+            "regularMarketChangePercent": {
+              "raw": 0,
+              "fmt": "0.00%"
+            },
+            "regularMarketPrice": {
+              "raw": 10,
+              "fmt": "10.00"
+            }
+          },
+          {
+            "ticker": "ZYXZZX",
+            "regularMarketChange": {
+              "raw": 0.77,
+              "fmt": "0.77"
+            },
+            "exchange": "NAS",
+            "regularMarketChangePercent": {
+              "raw": 62.601624,
+              "fmt": "62.60%"
+            },
+            "regularMarketPrice": {
+              "raw": 2,
+              "fmt": "2.00"
+            }
+          }
+        ],
+        "userHasReadRecord": false,
+        "useRecords": true
+      },
+      "sampleRecord": {
+        "ticker": "ZZZZIX",
+        "regularMarketChange": {
+          "raw": 0,
+          "fmt": "0.00"
+        },
+        "companyName": "Nasdaq Test - AIP Managed Future Fund - ABTC",
+        "exchange": "NAS",
+        "regularMarketChangePercent": {
+          "raw": 0,
+          "fmt": "0.00%"
+        },
+        "regularMarketPrice": {
+          "raw": 10.999,
+          "fmt": "11.00"
+        }
+      }
+    }
+  }
+}

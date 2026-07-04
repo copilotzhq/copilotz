@@ -910,6 +910,13 @@ export class YahooProvider implements FinanceDataProvider {
       quoteType,
     };
 
+    if (operands.length === 0) {
+      operands.push({
+        operator: 'gt',
+        operands: ['intradayprice', 0],
+      });
+    }
+
     if (operands.length > 0) {
       body.query = {
         operator: 'and',

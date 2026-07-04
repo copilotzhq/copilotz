@@ -1,0 +1,1431 @@
+{
+  "results": [
+    {
+      "field": "operatingcashflowtocurrentliabilities.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "operatingCashFlowToCurrentLiabilitiesLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "operatingCashFlowToCurrentLiabilitiesLtm": 24
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "companyName": "NVIDIA Corporation",
+          "operatingCashFlowToCurrentLiabilitiesLtm": {
+            "raw": 2.863184,
+            "fmt": "2.86"
+          },
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "operatingCashFlowToCurrentLiabilitiesLtm": {
+            "raw": 2.863184,
+            "fmt": "2.86"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "operatingCashFlowToCurrentLiabilitiesLtm": [
+            {
+              "raw": 7248.428571,
+              "fmt": "7,248.43"
+            },
+            {
+              "raw": 3115.037698,
+              "fmt": "3,115.04"
+            },
+            {
+              "raw": 1422.447283,
+              "fmt": "1,422.45"
+            },
+            {
+              "raw": 317.776972,
+              "fmt": "317.78"
+            },
+            {
+              "raw": 317.776972,
+              "fmt": "317.78"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "ebitdainterestexpense.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "ebitdaInterestExpenseLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "ebitdaInterestExpenseLtm": 24
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "ebitdaInterestExpenseLtm": {
+            "raw": 557.201342,
+            "fmt": "557.20"
+          },
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "ebitdaInterestExpenseLtm": {
+            "raw": 557.201342,
+            "fmt": "557.20"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "ebitdaInterestExpenseLtm": [
+            {
+              "raw": 368573,
+              "fmt": "368,573.00"
+            },
+            {
+              "raw": 287031,
+              "fmt": "287,031.00"
+            },
+            {
+              "raw": 161165.789473,
+              "fmt": "161,165.79"
+            },
+            {
+              "raw": 124887.25,
+              "fmt": "124,887.25"
+            },
+            {
+              "raw": 88496.5,
+              "fmt": "88,496.50"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "ebitinterestexpense.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "ebitInterestExpenseLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "ebitInterestExpenseLtm": 24
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "ebitInterestExpenseLtm": {
+            "raw": 544.580536,
+            "fmt": "544.58"
+          },
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "ebitInterestExpenseLtm": {
+            "raw": 544.580536,
+            "fmt": "544.58"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "ebitInterestExpenseLtm": [
+            {
+              "raw": 365352,
+              "fmt": "365,352.00"
+            },
+            {
+              "raw": 133440.578947,
+              "fmt": "133,440.58"
+            },
+            {
+              "raw": 118361,
+              "fmt": "118,361.00"
+            },
+            {
+              "raw": 82729,
+              "fmt": "82,729.00"
+            },
+            {
+              "raw": 75491.560759,
+              "fmt": "75,491.56"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "totalrevenues1yrgrowth.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "totalRevenue1YrGrowthPercentLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "totalRevenue1YrGrowthPercentLtm": 24
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "totalRevenue1YrGrowthPercentLtm": {
+            "raw": 70.6837,
+            "fmt": "70.68%"
+          },
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "totalRevenue1YrGrowthPercentLtm": {
+            "raw": 70.6837,
+            "fmt": "70.68%"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "totalRevenue1YrGrowthPercentLtm": [
+            {
+              "raw": 201620687.5,
+              "fmt": "201,620,687.50%"
+            },
+            {
+              "raw": 6979126.6666,
+              "fmt": "6,979,126.56%"
+            },
+            {
+              "raw": 6652284,
+              "fmt": "6,652,284.38%"
+            },
+            {
+              "raw": 2797800,
+              "fmt": "2,797,800.00%"
+            },
+            {
+              "raw": 725862.3703,
+              "fmt": "725,862.35%"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "netincome1yrgrowth.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "netIncome1YrGrowthPercentLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "netIncome1YrGrowthPercentLtm": 24
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "netIncome1YrGrowthPercentLtm": {
+            "raw": 107.8998,
+            "fmt": "107.90%"
+          },
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "netIncome1YrGrowthPercentLtm": {
+            "raw": 107.8998,
+            "fmt": "107.90%"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "netIncome1YrGrowthPercentLtm": [
+            {
+              "raw": 3370011.5702,
+              "fmt": "3,370,011.33%"
+            },
+            {
+              "raw": 241153.3614,
+              "fmt": "241,153.37%"
+            },
+            {
+              "raw": 221901.0895,
+              "fmt": "221,901.10%"
+            },
+            {
+              "raw": 157934.7826,
+              "fmt": "157,934.78%"
+            },
+            {
+              "raw": 136118.1153,
+              "fmt": "136,118.12%"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "basicepscontinuingoperations.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "basicEpsContinuingOperationsLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "basicEpsContinuingOperationsLtm": 25
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png",
+          "basicEpsContinuingOperationsLtm": {
+            "raw": 6.562967,
+            "fmt": "6.56"
+          }
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "basicEpsContinuingOperationsLtm": {
+            "raw": 6.562967,
+            "fmt": "6.56"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "basicEpsContinuingOperationsLtm": [
+            {
+              "raw": 189675,
+              "fmt": "189,675.00"
+            },
+            {
+              "raw": 50390.140995,
+              "fmt": "50,390.14"
+            },
+            {
+              "raw": 50390.140995,
+              "fmt": "50,390.14"
+            },
+            {
+              "raw": 16114.989851,
+              "fmt": "16,114.99"
+            },
+            {
+              "raw": 13566.83078,
+              "fmt": "13,566.83"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "quarterlyrevenuegrowth.quarterly",
+      "inferredResponseKeys": [
+        "revenueGrowthPercentYoYQuarterly"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "revenueGrowthPercentYoYQuarterly": 25
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "revenueGrowthPercentYoYQuarterly": {
+            "raw": 85.2276,
+            "fmt": "85.23%"
+          },
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "revenueGrowthPercentYoYQuarterly": {
+            "raw": 85.2276,
+            "fmt": "85.23%"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "revenueGrowthPercentYoYQuarterly": [
+            {
+              "raw": 119417887.5,
+              "fmt": "119,417,887.50%"
+            },
+            {
+              "raw": 3489566.6666,
+              "fmt": "3,489,566.80%"
+            },
+            {
+              "raw": 1697491.2,
+              "fmt": "1,697,491.21%"
+            },
+            {
+              "raw": 416400,
+              "fmt": "416,400.00%"
+            },
+            {
+              "raw": 392698.822,
+              "fmt": "392,698.80%"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "totalrevenues.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "totalRevenueLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "totalRevenueLtm": 25
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "totalRevenueLtm": {
+            "raw": 253491000000,
+            "fmt": "253.491B",
+            "longFmt": "253,491,000,000"
+          },
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "totalRevenueLtm": {
+            "raw": 253491000000,
+            "fmt": "253.491B",
+            "longFmt": "253,491,000,000"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "totalRevenueLtm": [
+            {
+              "raw": 388338879000000,
+              "fmt": "388.339T",
+              "longFmt": "388,338,879,000,000"
+            },
+            {
+              "raw": 318699000000000,
+              "fmt": "318.699T",
+              "longFmt": "318,699,000,000,000"
+            },
+            {
+              "raw": 318699000000000,
+              "fmt": "318.699T",
+              "longFmt": "318,699,000,000,000"
+            },
+            {
+              "raw": 147292000000000,
+              "fmt": "147.292T",
+              "longFmt": "147,292,000,000,000"
+            },
+            {
+              "raw": 147292000000000,
+              "fmt": "147.292T",
+              "longFmt": "147,292,000,000,000"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "total_revenue_market_currency.annual",
+      "inferredResponseKeys": [
+        "totalRevenueAnnualMarketCurrency"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "totalRevenueAnnualMarketCurrency": 25
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "companyName": "NVIDIA Corporation",
+          "totalRevenueAnnualMarketCurrency": {
+            "raw": 215938000000,
+            "fmt": "215.938B",
+            "longFmt": "215,938,000,000"
+          },
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "totalRevenueAnnualMarketCurrency": {
+            "raw": 215938000000,
+            "fmt": "215.938B",
+            "longFmt": "215,938,000,000"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "totalRevenueAnnualMarketCurrency": [
+            {
+              "raw": 717100000000,
+              "fmt": "717.1B",
+              "longFmt": "717,100,000,000"
+            },
+            {
+              "raw": 717100000000,
+              "fmt": "717.1B",
+              "longFmt": "717,100,000,000"
+            },
+            {
+              "raw": 716924000000,
+              "fmt": "716.924B",
+              "longFmt": "716,924,000,000"
+            },
+            {
+              "raw": 713163000000,
+              "fmt": "713.163B",
+              "longFmt": "713,163,000,000"
+            },
+            {
+              "raw": 447567000000,
+              "fmt": "447.567B",
+              "longFmt": "447,567,000,000"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "total_revenue_per_employee_annual_market_currency",
+      "inferredResponseKeys": [
+        "totalRevenuePerEmployeeAnnualMarketCurrency"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "totalRevenuePerEmployeeAnnualMarketCurrency": 24
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "totalRevenuePerEmployeeAnnualMarketCurrency": {
+            "raw": 3624916.666667,
+            "fmt": "3.625M",
+            "longFmt": "3,624,916"
+          },
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "totalRevenuePerEmployeeAnnualMarketCurrency": {
+            "raw": 3624916.666667,
+            "fmt": "3.625M",
+            "longFmt": "3,624,916"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "totalRevenuePerEmployeeAnnualMarketCurrency": [
+            {
+              "raw": 210695941176.47058,
+              "fmt": "210.696B",
+              "longFmt": "210,695,941,176"
+            },
+            {
+              "raw": 210695941176.47058,
+              "fmt": "210.696B",
+              "longFmt": "210,695,941,176"
+            },
+            {
+              "raw": 163319630769.23077,
+              "fmt": "163.32B",
+              "longFmt": "163,319,630,769"
+            },
+            {
+              "raw": 105090514285.71428,
+              "fmt": "105.091B",
+              "longFmt": "105,090,514,285"
+            },
+            {
+              "raw": 33442291189.25326,
+              "fmt": "33.442B",
+              "longFmt": "33,442,291,189"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "netepsbasic.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "netEpsBasicLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "netEpsBasicLtm": 25
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png",
+          "netEpsBasicLtm": {
+            "raw": 6.562967,
+            "fmt": "6.56"
+          }
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "netEpsBasicLtm": {
+            "raw": 6.562967,
+            "fmt": "6.56"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "netEpsBasicLtm": [
+            {
+              "raw": 189675,
+              "fmt": "189,675.00"
+            },
+            {
+              "raw": 50390.140995,
+              "fmt": "50,390.14"
+            },
+            {
+              "raw": 50390.140995,
+              "fmt": "50,390.14"
+            },
+            {
+              "raw": 22169.201005,
+              "fmt": "22,169.20"
+            },
+            {
+              "raw": 16114.989851,
+              "fmt": "16,114.99"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "ebitda1yrgrowth.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "ebitda1YrGrowthPercentLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "ebitda1YrGrowthPercentLtm": 23
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "companyName": "NVIDIA Corporation",
+          "ebitda1YrGrowthPercentLtm": {
+            "raw": 87.5576,
+            "fmt": "87.56%"
+          },
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "ebitda1YrGrowthPercentLtm": {
+            "raw": 87.5576,
+            "fmt": "87.56%"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "ebitda1YrGrowthPercentLtm": [
+            {
+              "raw": 41575.8436,
+              "fmt": "41,575.84%"
+            },
+            {
+              "raw": 35362.7415,
+              "fmt": "35,362.74%"
+            },
+            {
+              "raw": 26868.7678,
+              "fmt": "26,868.77%"
+            },
+            {
+              "raw": 24762.8156,
+              "fmt": "24,762.82%"
+            },
+            {
+              "raw": 20541.2938,
+              "fmt": "20,541.29%"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "dilutedeps1yrgrowth.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "dilutedEps1YrGrowthPercentLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "dilutedEps1YrGrowthPercentLtm": 24
+        },
+        "sample": {
+          "dilutedEps1YrGrowthPercentLtm": {
+            "raw": 110.5846,
+            "fmt": "110.58%"
+          },
+          "ticker": "NVDA",
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "dilutedEps1YrGrowthPercentLtm": {
+            "raw": 110.5846,
+            "fmt": "110.58%"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "dilutedEps1YrGrowthPercentLtm": [
+            {
+              "raw": 330728,
+              "fmt": "330,728.00%"
+            },
+            {
+              "raw": 222473.471,
+              "fmt": "222,473.46%"
+            },
+            {
+              "raw": 157648.0215,
+              "fmt": "157,648.01%"
+            },
+            {
+              "raw": 141391.3433,
+              "fmt": "141,391.35%"
+            },
+            {
+              "raw": 69425,
+              "fmt": "69,425.00%"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "netepsdiluted.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "netEpsDilutedLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "netEpsDilutedLtm": 25
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "netEpsDilutedLtm": {
+            "raw": 6.52965,
+            "fmt": "6.53"
+          },
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "netEpsDilutedLtm": {
+            "raw": 6.52965,
+            "fmt": "6.53"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "netEpsDilutedLtm": [
+            {
+              "raw": 189675,
+              "fmt": "189,675.00"
+            },
+            {
+              "raw": 50390.140995,
+              "fmt": "50,390.14"
+            },
+            {
+              "raw": 50390.140995,
+              "fmt": "50,390.14"
+            },
+            {
+              "raw": 22169.201005,
+              "fmt": "22,169.20"
+            },
+            {
+              "raw": 15964.763157,
+              "fmt": "15,964.76"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "netincomeis.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "netIncomeIsLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "netIncomeIsLtm": 25
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "netIncomeIsLtm": {
+            "raw": 159613000000,
+            "fmt": "159.613B",
+            "longFmt": "159,613,000,000"
+          },
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "netIncomeIsLtm": {
+            "raw": 159613000000,
+            "fmt": "159.613B",
+            "longFmt": "159,613,000,000"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "netIncomeIsLtm": [
+            {
+              "raw": 83333739000000,
+              "fmt": "83.334T",
+              "longFmt": "83,333,739,000,000"
+            },
+            {
+              "raw": 58523545000000,
+              "fmt": "58.524T",
+              "longFmt": "58,523,545,000,000"
+            },
+            {
+              "raw": 58523545000000,
+              "fmt": "58.524T",
+              "longFmt": "58,523,545,000,000"
+            },
+            {
+              "raw": 58480822000000,
+              "fmt": "58.481T",
+              "longFmt": "58,480,822,000,000"
+            },
+            {
+              "raw": 58480822000000,
+              "fmt": "58.481T",
+              "longFmt": "58,480,822,000,000"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "netincomeismarketcurrency.annual",
+      "inferredResponseKeys": [
+        "netIncomeIsAnnualMarketCurrency"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "netIncomeIsAnnualMarketCurrency": 25
+        },
+        "sample": {
+          "netIncomeIsAnnualMarketCurrency": {
+            "raw": 120067000000,
+            "fmt": "120.067B",
+            "longFmt": "120,067,000,000"
+          },
+          "ticker": "NVDA",
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "netIncomeIsAnnualMarketCurrency": {
+            "raw": 120067000000,
+            "fmt": "120.067B",
+            "longFmt": "120,067,000,000"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "netIncomeIsAnnualMarketCurrency": [
+            {
+              "raw": 132170000000,
+              "fmt": "132.17B",
+              "longFmt": "132,170,000,000"
+            },
+            {
+              "raw": 132170000000,
+              "fmt": "132.17B",
+              "longFmt": "132,170,000,000"
+            },
+            {
+              "raw": 120067000000,
+              "fmt": "120.067B",
+              "longFmt": "120,067,000,000"
+            },
+            {
+              "raw": 112010000000,
+              "fmt": "112.01B",
+              "longFmt": "112,010,000,000"
+            },
+            {
+              "raw": 101832000000,
+              "fmt": "101.832B",
+              "longFmt": "101,832,000,000"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "net_income_per_employee_annual_market_currency",
+      "inferredResponseKeys": [
+        "netIncomePerEmployeeAnnualMarketCurrency"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "netIncomePerEmployeeAnnualMarketCurrency": 24
+        },
+        "sample": {
+          "netIncomePerEmployeeAnnualMarketCurrency": {
+            "raw": 2024444.444444,
+            "fmt": "2.024M",
+            "longFmt": "2,024,444"
+          },
+          "ticker": "NVDA",
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "netIncomePerEmployeeAnnualMarketCurrency": {
+            "raw": 2024444.444444,
+            "fmt": "2.024M",
+            "longFmt": "2,024,444"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "netIncomePerEmployeeAnnualMarketCurrency": [
+            {
+              "raw": 295272259.5820427,
+              "fmt": "295.272M",
+              "longFmt": "295,272,259"
+            },
+            {
+              "raw": 295272259.5820427,
+              "fmt": "295.272M",
+              "longFmt": "295,272,259"
+            },
+            {
+              "raw": 256315297.94683063,
+              "fmt": "256.315M",
+              "longFmt": "256,315,297"
+            },
+            {
+              "raw": 256276877.19762328,
+              "fmt": "256.277M",
+              "longFmt": "256,276,877"
+            },
+            {
+              "raw": 211074421.46855593,
+              "fmt": "211.074M",
+              "longFmt": "211,074,421"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "operatingincome.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "operatingIncomeLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "operatingIncomeLtm": 25
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "companyName": "NVIDIA Corporation",
+          "operatingIncomeLtm": {
+            "raw": 162285000000,
+            "fmt": "162.285B",
+            "longFmt": "162,285,000,000"
+          },
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "operatingIncomeLtm": {
+            "raw": 162285000000,
+            "fmt": "162.285B",
+            "longFmt": "162,285,000,000"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "operatingIncomeLtm": [
+            {
+              "raw": 94148576000000,
+              "fmt": "94.149T",
+              "longFmt": "94,148,576,000,000"
+            },
+            {
+              "raw": 78190726000000,
+              "fmt": "78.191T",
+              "longFmt": "78,190,726,000,000"
+            },
+            {
+              "raw": 78190726000000,
+              "fmt": "78.191T",
+              "longFmt": "78,190,726,000,000"
+            },
+            {
+              "raw": 71882286000000,
+              "fmt": "71.882T",
+              "longFmt": "71,882,286,000,000"
+            },
+            {
+              "raw": 71882286000000,
+              "fmt": "71.882T",
+              "longFmt": "71,882,286,000,000"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "grossprofit.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "grossProfitLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "grossProfitLtm": 25
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "grossProfitLtm": {
+            "raw": 187952000000,
+            "fmt": "187.952B",
+            "longFmt": "187,952,000,000"
+          },
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "grossProfitLtm": {
+            "raw": 187952000000,
+            "fmt": "187.952B",
+            "longFmt": "187,952,000,000"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "grossProfitLtm": [
+            {
+              "raw": 185153026000000,
+              "fmt": "185.153T",
+              "longFmt": "185,153,026,000,000"
+            },
+            {
+              "raw": 143549687000000,
+              "fmt": "143.55T",
+              "longFmt": "143,549,687,000,000"
+            },
+            {
+              "raw": 143549687000000,
+              "fmt": "143.55T",
+              "longFmt": "143,549,687,000,000"
+            },
+            {
+              "raw": 142823847000000,
+              "fmt": "142.824T",
+              "longFmt": "142,823,847,000,000"
+            },
+            {
+              "raw": 142823847000000,
+              "fmt": "142.824T",
+              "longFmt": "142,823,847,000,000"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "ebitda.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "ebitdaLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "ebitdaLtm": 24
+        },
+        "sample": {
+          "ebitdaLtm": {
+            "raw": 165514000000,
+            "fmt": "165.514B",
+            "longFmt": "165,514,000,000"
+          },
+          "ticker": "NVDA",
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "ebitdaLtm": {
+            "raw": 165514000000,
+            "fmt": "165.514B",
+            "longFmt": "165,514,000,000"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "ebitdaLtm": [
+            {
+              "raw": 140632367000000,
+              "fmt": "140.632T",
+              "longFmt": "140,632,367,000,000"
+            },
+            {
+              "raw": 63443000000000,
+              "fmt": "63.443T",
+              "longFmt": "63,443,000,000,000"
+            },
+            {
+              "raw": 63443000000000,
+              "fmt": "63.443T",
+              "longFmt": "63,443,000,000,000"
+            },
+            {
+              "raw": 57192000000000,
+              "fmt": "57.192T",
+              "longFmt": "57,192,000,000,000"
+            },
+            {
+              "raw": 57192000000000,
+              "fmt": "57.192T",
+              "longFmt": "57,192,000,000,000"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "dilutedepscontinuingoperations.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "dilutedEpsContinuingOperationsLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "dilutedEpsContinuingOperationsLtm": 25
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "dilutedEpsContinuingOperationsLtm": {
+            "raw": 6.52965,
+            "fmt": "6.53"
+          },
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "dilutedEpsContinuingOperationsLtm": {
+            "raw": 6.52965,
+            "fmt": "6.53"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "dilutedEpsContinuingOperationsLtm": [
+            {
+              "raw": 189675,
+              "fmt": "189,675.00"
+            },
+            {
+              "raw": 50390.140995,
+              "fmt": "50,390.14"
+            },
+            {
+              "raw": 50390.140995,
+              "fmt": "50,390.14"
+            },
+            {
+              "raw": 15964.763157,
+              "fmt": "15,964.76"
+            },
+            {
+              "raw": 13566.585913,
+              "fmt": "13,566.59"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "ebit.lasttwelvemonths",
+      "inferredResponseKeys": [
+        "ebitLtm"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "ebitLtm": 24
+        },
+        "sample": {
+          "ebitLtm": {
+            "raw": 162285000000,
+            "fmt": "162.285B",
+            "longFmt": "162,285,000,000"
+          },
+          "ticker": "NVDA",
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "ebitLtm": {
+            "raw": 162285000000,
+            "fmt": "162.285B",
+            "longFmt": "162,285,000,000"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "ebitLtm": [
+            {
+              "raw": 94148576000000,
+              "fmt": "94.149T",
+              "longFmt": "94,148,576,000,000"
+            },
+            {
+              "raw": 36787000000000,
+              "fmt": "36.787T",
+              "longFmt": "36,787,000,000,000"
+            },
+            {
+              "raw": 36787000000000,
+              "fmt": "36.787T",
+              "longFmt": "36,787,000,000,000"
+            },
+            {
+              "raw": 34791000000000,
+              "fmt": "34.791T",
+              "longFmt": "34,791,000,000,000"
+            },
+            {
+              "raw": 34791000000000,
+              "fmt": "34.791T",
+              "longFmt": "34,791,000,000,000"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "field": "forward_dividend_yield",
+      "inferredResponseKeys": [
+        "forwardDividendYieldPercent"
+      ],
+      "stageA": {
+        "ok": true,
+        "recordCount": 25,
+        "nonNullCounts": {
+          "forwardDividendYieldPercent": 24
+        },
+        "sample": {
+          "ticker": "NVDA",
+          "forwardDividendYieldPercent": {
+            "raw": 0.51,
+            "fmt": "0.51%"
+          },
+          "companyName": "NVIDIA Corporation",
+          "logoUrl": "https://s.yimg.com/lb/brands/150x150_nvidia.png"
+        }
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValues": {
+          "forwardDividendYieldPercent": {
+            "raw": 0.51,
+            "fmt": "0.51%"
+          }
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": {
+          "forwardDividendYieldPercent": [
+            {
+              "raw": 7650000,
+              "fmt": "7,650,000.00%"
+            },
+            {
+              "raw": 2312400,
+              "fmt": "2,312,400.00%"
+            },
+            {
+              "raw": 216200,
+              "fmt": "216,200.00%"
+            },
+            {
+              "raw": 44000,
+              "fmt": "44,000.00%"
+            },
+            {
+              "raw": 26256.82,
+              "fmt": "26,256.82%"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

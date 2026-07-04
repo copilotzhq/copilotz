@@ -1,0 +1,591 @@
+{
+  "tranche": "pass2",
+  "testedCount": 10,
+  "fullWins": 10,
+  "fullWinRate": 1,
+  "partialOrUnsupported": 0,
+  "stopRuleTriggered": false,
+  "hardCapHit": true,
+  "results": [
+    {
+      "requestField": "epsgrowth.lasttwelvemonths",
+      "alias": "epsGrowthPercentLtm",
+      "stageA": {
+        "totalRecords": 25,
+        "presentCount": 25,
+        "nonNullCount": 25,
+        "sampleNonNullValues": [
+          {
+            "ticker": "XOM",
+            "value": {
+              "raw": -21.3393,
+              "fmt": "-21.34%"
+            }
+          },
+          {
+            "ticker": "ABBV",
+            "value": {
+              "raw": -13.2428,
+              "fmt": "-13.24%"
+            }
+          },
+          {
+            "ticker": "CVX",
+            "value": {
+              "raw": -34.2634,
+              "fmt": "-34.26%"
+            }
+          }
+        ]
+      },
+      "stageB": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "epsGrowthPercentLtm",
+            "logoUrl",
+            "ticker"
+          ]
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "epsGrowthPercentLtm",
+            "ticker"
+          ]
+        }
+      },
+      "disposition": "✅ filter+sort capable"
+    },
+    {
+      "requestField": "ltdebtequity.lasttwelvemonths",
+      "alias": "longTermDebtEquityPercentLtm",
+      "stageA": {
+        "totalRecords": 25,
+        "presentCount": 25,
+        "nonNullCount": 25,
+        "sampleNonNullValues": [
+          {
+            "ticker": "XOM",
+            "value": {
+              "raw": 12.6936,
+              "fmt": "12.69%"
+            }
+          },
+          {
+            "ticker": "ABBV",
+            "value": {
+              "raw": -976.588,
+              "fmt": "-976.59%"
+            }
+          },
+          {
+            "ticker": "CVX",
+            "value": {
+              "raw": 20.9113,
+              "fmt": "20.91%"
+            }
+          }
+        ]
+      },
+      "stageB": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "logoUrl",
+            "longTermDebtEquityPercentLtm",
+            "ticker"
+          ]
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "longTermDebtEquityPercentLtm",
+            "ticker"
+          ]
+        }
+      },
+      "disposition": "✅ filter+sort capable"
+    },
+    {
+      "requestField": "returnontotalcapital.lasttwelvemonths",
+      "alias": "returnOnTotalCapitalLtm",
+      "stageA": {
+        "totalRecords": 25,
+        "presentCount": 25,
+        "nonNullCount": 25,
+        "sampleNonNullValues": [
+          {
+            "ticker": "XOM",
+            "value": {
+              "raw": 6.2792,
+              "fmt": "6.28"
+            }
+          },
+          {
+            "ticker": "ABBV",
+            "value": {
+              "raw": 19.8487,
+              "fmt": "19.85"
+            }
+          },
+          {
+            "ticker": "CVX",
+            "value": {
+              "raw": 4.891,
+              "fmt": "4.89"
+            }
+          }
+        ]
+      },
+      "stageB": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "logoUrl",
+            "returnOnTotalCapitalLtm",
+            "ticker"
+          ]
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "returnOnTotalCapitalLtm",
+            "ticker"
+          ]
+        }
+      },
+      "disposition": "✅ filter+sort capable"
+    },
+    {
+      "requestField": "netincomemargin.lasttwelvemonths",
+      "alias": "netIncomeMarginPercentLtm",
+      "stageA": {
+        "totalRecords": 25,
+        "presentCount": 25,
+        "nonNullCount": 25,
+        "sampleNonNullValues": [
+          {
+            "ticker": "XOM",
+            "value": {
+              "raw": 7.7648,
+              "fmt": "7.76%"
+            }
+          },
+          {
+            "ticker": "ABBV",
+            "value": {
+              "raw": 5.7864,
+              "fmt": "5.79%"
+            }
+          },
+          {
+            "ticker": "CVX",
+            "value": {
+              "raw": 5.9271,
+              "fmt": "5.93%"
+            }
+          }
+        ]
+      },
+      "stageB": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "logoUrl",
+            "netIncomeMarginPercentLtm",
+            "ticker"
+          ]
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "netIncomeMarginPercentLtm",
+            "ticker"
+          ]
+        }
+      },
+      "disposition": "✅ filter+sort capable"
+    },
+    {
+      "requestField": "altmanzscoreusingtheaveragestockinformationforaperiod.lasttwelvemonths",
+      "alias": "altmanZScoreLtm",
+      "stageA": {
+        "totalRecords": 25,
+        "presentCount": 25,
+        "nonNullCount": 25,
+        "sampleNonNullValues": [
+          {
+            "ticker": "XOM",
+            "value": {
+              "raw": 3.885471,
+              "fmt": "3.89"
+            }
+          },
+          {
+            "ticker": "ABBV",
+            "value": {
+              "raw": 2.285717,
+              "fmt": "2.29"
+            }
+          },
+          {
+            "ticker": "CVX",
+            "value": {
+              "raw": 2.899835,
+              "fmt": "2.90"
+            }
+          }
+        ]
+      },
+      "stageB": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "altmanZScoreLtm",
+            "companyName",
+            "logoUrl",
+            "ticker"
+          ]
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "altmanZScoreLtm",
+            "companyName",
+            "ticker"
+          ]
+        }
+      },
+      "disposition": "✅ filter+sort capable"
+    },
+    {
+      "requestField": "dividendyield",
+      "alias": "dividendYieldPercent",
+      "stageA": {
+        "totalRecords": 25,
+        "presentCount": 25,
+        "nonNullCount": 25,
+        "sampleNonNullValues": [
+          {
+            "ticker": "XOM",
+            "value": {
+              "raw": 3.0231,
+              "fmt": "3.02%"
+            }
+          },
+          {
+            "ticker": "ABBV",
+            "value": {
+              "raw": 2.7563,
+              "fmt": "2.76%"
+            }
+          },
+          {
+            "ticker": "CVX",
+            "value": {
+              "raw": 4.2971,
+              "fmt": "4.30%"
+            }
+          }
+        ]
+      },
+      "stageB": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "dividendYieldPercent",
+            "logoUrl",
+            "ticker"
+          ]
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "dividendYieldPercent",
+            "ticker"
+          ]
+        }
+      },
+      "disposition": "✅ filter+sort capable"
+    },
+    {
+      "requestField": "quickratio.lasttwelvemonths",
+      "alias": "quickRatioLtm",
+      "stageA": {
+        "totalRecords": 25,
+        "presentCount": 25,
+        "nonNullCount": 25,
+        "sampleNonNullValues": [
+          {
+            "ticker": "XOM",
+            "value": {
+              "raw": 0.744008,
+              "fmt": "0.74"
+            }
+          },
+          {
+            "ticker": "ABBV",
+            "value": {
+              "raw": 0.519477,
+              "fmt": "0.52"
+            }
+          },
+          {
+            "ticker": "CVX",
+            "value": {
+              "raw": 0.725104,
+              "fmt": "0.73"
+            }
+          }
+        ]
+      },
+      "stageB": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "logoUrl",
+            "quickRatioLtm",
+            "ticker"
+          ]
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "quickRatioLtm",
+            "ticker"
+          ]
+        }
+      },
+      "disposition": "✅ filter+sort capable"
+    },
+    {
+      "requestField": "totaldebtebitda.lasttwelvemonths",
+      "alias": "totalDebtEbitdaLtm",
+      "stageA": {
+        "totalRecords": 25,
+        "presentCount": 25,
+        "nonNullCount": 25,
+        "sampleNonNullValues": [
+          {
+            "ticker": "XOM",
+            "value": {
+              "raw": 0.795052,
+              "fmt": "0.80"
+            }
+          },
+          {
+            "ticker": "ABBV",
+            "value": {
+              "raw": 2.40578,
+              "fmt": "2.41"
+            }
+          },
+          {
+            "ticker": "CVX",
+            "value": {
+              "raw": 1.198438,
+              "fmt": "1.20"
+            }
+          }
+        ]
+      },
+      "stageB": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "logoUrl",
+            "ticker",
+            "totalDebtEbitdaLtm"
+          ]
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "ticker",
+            "totalDebtEbitdaLtm"
+          ]
+        }
+      },
+      "disposition": "✅ filter+sort capable"
+    },
+    {
+      "requestField": "ebitdamargin.lasttwelvemonths",
+      "alias": "ebitdaMarginPercentLtm",
+      "stageA": {
+        "totalRecords": 25,
+        "presentCount": 25,
+        "nonNullCount": 25,
+        "sampleNonNullValues": [
+          {
+            "ticker": "XOM",
+            "value": {
+              "raw": 17.1796,
+              "fmt": "17.18%"
+            }
+          },
+          {
+            "ticker": "ABBV",
+            "value": {
+              "raw": 47.6209,
+              "fmt": "47.62%"
+            }
+          },
+          {
+            "ticker": "CVX",
+            "value": {
+              "raw": 20.408,
+              "fmt": "20.41%"
+            }
+          }
+        ]
+      },
+      "stageB": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "ebitdaMarginPercentLtm",
+            "logoUrl",
+            "ticker"
+          ]
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "ebitdaMarginPercentLtm",
+            "ticker"
+          ]
+        }
+      },
+      "disposition": "✅ filter+sort capable"
+    },
+    {
+      "requestField": "netdebtebitda.lasttwelvemonths",
+      "alias": "netDebtEbitdaLtm",
+      "stageA": {
+        "totalRecords": 25,
+        "presentCount": 25,
+        "nonNullCount": 25,
+        "sampleNonNullValues": [
+          {
+            "ticker": "XOM",
+            "value": {
+              "raw": 0.654344,
+              "fmt": "0.65"
+            }
+          },
+          {
+            "ticker": "ABBV",
+            "value": {
+              "raw": 2.095918,
+              "fmt": "2.10"
+            }
+          },
+          {
+            "ticker": "CVX",
+            "value": {
+              "raw": 1.057906,
+              "fmt": "1.06"
+            }
+          }
+        ]
+      },
+      "stageB": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "logoUrl",
+            "netDebtEbitdaLtm",
+            "ticker"
+          ]
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "netDebtEbitdaLtm",
+            "ticker"
+          ]
+        }
+      },
+      "disposition": "✅ filter+sort capable"
+    }
+  ]
+}

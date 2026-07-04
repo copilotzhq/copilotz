@@ -1,0 +1,659 @@
+{
+  "inventorySummary": {
+    "path": "./equity_screener_payload.json",
+    "includeFieldsCount": 112,
+    "queryOperandCount": 106,
+    "containsCandidates": {
+      "lastclosepricebookvalue.lasttwelvemonths": true,
+      "pegratio_5y": true,
+      "currentratio.lasttwelvemonths": true,
+      "grossprofitmargin.lasttwelvemonths": true,
+      "returnonassets.lasttwelvemonths": true
+    }
+  },
+  "workingShapeSummary": {
+    "includeFieldsCount": 37,
+    "topLevelOperandCount": 20
+  },
+  "newLivePopulatedWins": 5,
+  "stopRuleTriggered": false,
+  "results": [
+    {
+      "requestField": "lastclosepricebookvalue.lasttwelvemonths",
+      "alias": "lastClosePriceBookValueLtm",
+      "stageA": {
+        "totalRecords": 25,
+        "presentCount": 25,
+        "nonNullCount": 25,
+        "sampleNonNullValues": [
+          {
+            "ticker": "XOM",
+            "value": {
+              "raw": 2.22058,
+              "fmt": "2.22"
+            }
+          },
+          {
+            "ticker": "ABBV",
+            "value": {
+              "raw": -66.639999,
+              "fmt": "-66.64"
+            }
+          },
+          {
+            "ticker": "CVX",
+            "value": {
+              "raw": 1.783416,
+              "fmt": "1.78"
+            }
+          },
+          {
+            "ticker": "PCCYF",
+            "value": {
+              "raw": 0.827645,
+              "fmt": "0.83"
+            }
+          },
+          {
+            "ticker": "BABAF",
+            "value": {
+              "raw": 1.457545,
+              "fmt": "1.46"
+            }
+          }
+        ],
+        "firstRecordKeys": [
+          "altmanZScoreLtm",
+          "avgDailyVol3m",
+          "companyName",
+          "currentRatioLtm",
+          "dividendYieldPercent",
+          "ebitInterestExpenseLtm",
+          "ebitdaInterestExpenseLtm",
+          "ebitdaMarginPercentLtm",
+          "epsGrowthPercentLtm",
+          "fiftyTwoWeekHigh",
+          "fiftyTwoWeekLow",
+          "financialCurrency",
+          "forwardDividendYieldPercent",
+          "grossProfitMarginPercentLtm",
+          "indices",
+          "industry",
+          "lastClosePriceBookValueLtm",
+          "longTermDebtEquityPercentLtm",
+          "marketCap",
+          "netDebtEbitdaLtm",
+          "netIncomeMarginPercentLtm",
+          "operatingCashFlowToCurrentLiabilitiesLtm",
+          "peRatioLtm",
+          "quickRatioLtm",
+          "quotesCurrency",
+          "region",
+          "regularMarketChange",
+          "regularMarketChangePercent",
+          "regularMarketOpen",
+          "regularMarketPrice",
+          "regularMarketVolume",
+          "returnOnAssetsPercentLtm",
+          "returnOnEquityPercentLtm",
+          "returnOnTotalCapitalLtm",
+          "sector",
+          "ticker",
+          "totalDebtEbitdaLtm",
+          "totalDebtEquityPercentLtm"
+        ]
+      },
+      "stageB": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "topKeys": [
+            "count",
+            "records",
+            "start",
+            "total",
+            "useRecords",
+            "userHasReadRecord"
+          ],
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "lastClosePriceBookValueLtm",
+            "logoUrl",
+            "ticker"
+          ]
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "topKeys": [
+            "count",
+            "records",
+            "start",
+            "total",
+            "useRecords",
+            "userHasReadRecord"
+          ],
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "lastClosePriceBookValueLtm",
+            "ticker"
+          ]
+        }
+      },
+      "disposition": "✅ filter+sort capable"
+    },
+    {
+      "requestField": "pegratio_5y",
+      "alias": "pegRatio5Yr",
+      "stageA": {
+        "totalRecords": 25,
+        "presentCount": 18,
+        "nonNullCount": 18,
+        "sampleNonNullValues": [
+          {
+            "ticker": "XOM",
+            "value": {
+              "raw": 4.909999847412109,
+              "fmt": "4.91"
+            }
+          },
+          {
+            "ticker": "ABBV",
+            "value": {
+              "raw": 2.390000104904175,
+              "fmt": "2.39"
+            }
+          },
+          {
+            "ticker": "CVX",
+            "value": {
+              "raw": 25.030000686645508,
+              "fmt": "25.03"
+            }
+          },
+          {
+            "ticker": "BABA",
+            "value": {
+              "raw": 64.0199966430664,
+              "fmt": "64.02"
+            }
+          },
+          {
+            "ticker": "MCD",
+            "value": {
+              "raw": 5.71999979019165,
+              "fmt": "5.72"
+            }
+          }
+        ],
+        "firstRecordKeys": [
+          "altmanZScoreLtm",
+          "avgDailyVol3m",
+          "companyName",
+          "currentRatioLtm",
+          "dividendYieldPercent",
+          "ebitInterestExpenseLtm",
+          "ebitdaInterestExpenseLtm",
+          "ebitdaMarginPercentLtm",
+          "epsGrowthPercentLtm",
+          "fiftyTwoWeekHigh",
+          "fiftyTwoWeekLow",
+          "financialCurrency",
+          "forwardDividendYieldPercent",
+          "grossProfitMarginPercentLtm",
+          "indices",
+          "industry",
+          "longTermDebtEquityPercentLtm",
+          "marketCap",
+          "netDebtEbitdaLtm",
+          "netIncomeMarginPercentLtm",
+          "operatingCashFlowToCurrentLiabilitiesLtm",
+          "peRatioLtm",
+          "pegRatio5Yr",
+          "quickRatioLtm",
+          "quotesCurrency",
+          "region",
+          "regularMarketChange",
+          "regularMarketChangePercent",
+          "regularMarketOpen",
+          "regularMarketPrice",
+          "regularMarketVolume",
+          "returnOnAssetsPercentLtm",
+          "returnOnEquityPercentLtm",
+          "returnOnTotalCapitalLtm",
+          "sector",
+          "ticker",
+          "totalDebtEbitdaLtm",
+          "totalDebtEquityPercentLtm"
+        ]
+      },
+      "stageB": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "topKeys": [
+            "count",
+            "records",
+            "start",
+            "total",
+            "useRecords",
+            "userHasReadRecord"
+          ],
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "logoUrl",
+            "pegRatio5Yr",
+            "ticker"
+          ]
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "topKeys": [
+            "count",
+            "records",
+            "start",
+            "total",
+            "useRecords",
+            "userHasReadRecord"
+          ],
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "pegRatio5Yr",
+            "ticker"
+          ]
+        }
+      },
+      "disposition": "⚠️ partial coverage"
+    },
+    {
+      "requestField": "currentratio.lasttwelvemonths",
+      "alias": "currentRatioLtm",
+      "stageA": {
+        "totalRecords": 25,
+        "presentCount": 25,
+        "nonNullCount": 25,
+        "sampleNonNullValues": [
+          {
+            "ticker": "XOM",
+            "value": {
+              "raw": 1.03612,
+              "fmt": "1.04"
+            }
+          },
+          {
+            "ticker": "ABBV",
+            "value": {
+              "raw": 0.796413,
+              "fmt": "0.80"
+            }
+          },
+          {
+            "ticker": "CVX",
+            "value": {
+              "raw": 1.094461,
+              "fmt": "1.09"
+            }
+          },
+          {
+            "ticker": "PCCYF",
+            "value": {
+              "raw": 1.133449,
+              "fmt": "1.13"
+            }
+          },
+          {
+            "ticker": "BABAF",
+            "value": {
+              "raw": 1.282056,
+              "fmt": "1.28"
+            }
+          }
+        ],
+        "firstRecordKeys": [
+          "altmanZScoreLtm",
+          "avgDailyVol3m",
+          "companyName",
+          "currentRatioLtm",
+          "dividendYieldPercent",
+          "ebitInterestExpenseLtm",
+          "ebitdaInterestExpenseLtm",
+          "ebitdaMarginPercentLtm",
+          "epsGrowthPercentLtm",
+          "fiftyTwoWeekHigh",
+          "fiftyTwoWeekLow",
+          "financialCurrency",
+          "forwardDividendYieldPercent",
+          "grossProfitMarginPercentLtm",
+          "indices",
+          "industry",
+          "longTermDebtEquityPercentLtm",
+          "marketCap",
+          "netDebtEbitdaLtm",
+          "netIncomeMarginPercentLtm",
+          "operatingCashFlowToCurrentLiabilitiesLtm",
+          "peRatioLtm",
+          "quickRatioLtm",
+          "quotesCurrency",
+          "region",
+          "regularMarketChange",
+          "regularMarketChangePercent",
+          "regularMarketOpen",
+          "regularMarketPrice",
+          "regularMarketVolume",
+          "returnOnAssetsPercentLtm",
+          "returnOnEquityPercentLtm",
+          "returnOnTotalCapitalLtm",
+          "sector",
+          "ticker",
+          "totalDebtEbitdaLtm",
+          "totalDebtEquityPercentLtm"
+        ]
+      },
+      "stageB": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "topKeys": [
+            "count",
+            "records",
+            "start",
+            "total",
+            "useRecords",
+            "userHasReadRecord"
+          ],
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "currentRatioLtm",
+            "logoUrl",
+            "ticker"
+          ]
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "topKeys": [
+            "count",
+            "records",
+            "start",
+            "total",
+            "useRecords",
+            "userHasReadRecord"
+          ],
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "currentRatioLtm",
+            "ticker"
+          ]
+        }
+      },
+      "disposition": "✅ filter+sort capable"
+    },
+    {
+      "requestField": "grossprofitmargin.lasttwelvemonths",
+      "alias": "grossProfitMarginPercentLtm",
+      "stageA": {
+        "totalRecords": 25,
+        "presentCount": 25,
+        "nonNullCount": 25,
+        "sampleNonNullValues": [
+          {
+            "ticker": "XOM",
+            "value": {
+              "raw": 29.7676,
+              "fmt": "29.77%"
+            }
+          },
+          {
+            "ticker": "ABBV",
+            "value": {
+              "raw": 72.0259,
+              "fmt": "72.03%"
+            }
+          },
+          {
+            "ticker": "CVX",
+            "value": {
+              "raw": 42.4211,
+              "fmt": "42.42%"
+            }
+          },
+          {
+            "ticker": "PCCYF",
+            "value": {
+              "raw": 34.1653,
+              "fmt": "34.17%"
+            }
+          },
+          {
+            "ticker": "BABAF",
+            "value": {
+              "raw": 39.811,
+              "fmt": "39.81%"
+            }
+          }
+        ],
+        "firstRecordKeys": [
+          "altmanZScoreLtm",
+          "avgDailyVol3m",
+          "companyName",
+          "currentRatioLtm",
+          "dividendYieldPercent",
+          "ebitInterestExpenseLtm",
+          "ebitdaInterestExpenseLtm",
+          "ebitdaMarginPercentLtm",
+          "epsGrowthPercentLtm",
+          "fiftyTwoWeekHigh",
+          "fiftyTwoWeekLow",
+          "financialCurrency",
+          "forwardDividendYieldPercent",
+          "grossProfitMarginPercentLtm",
+          "indices",
+          "industry",
+          "longTermDebtEquityPercentLtm",
+          "marketCap",
+          "netDebtEbitdaLtm",
+          "netIncomeMarginPercentLtm",
+          "operatingCashFlowToCurrentLiabilitiesLtm",
+          "peRatioLtm",
+          "quickRatioLtm",
+          "quotesCurrency",
+          "region",
+          "regularMarketChange",
+          "regularMarketChangePercent",
+          "regularMarketOpen",
+          "regularMarketPrice",
+          "regularMarketVolume",
+          "returnOnAssetsPercentLtm",
+          "returnOnEquityPercentLtm",
+          "returnOnTotalCapitalLtm",
+          "sector",
+          "ticker",
+          "totalDebtEbitdaLtm",
+          "totalDebtEquityPercentLtm"
+        ]
+      },
+      "stageB": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "topKeys": [
+            "count",
+            "records",
+            "start",
+            "total",
+            "useRecords",
+            "userHasReadRecord"
+          ],
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "grossProfitMarginPercentLtm",
+            "logoUrl",
+            "ticker"
+          ]
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "topKeys": [
+            "count",
+            "records",
+            "start",
+            "total",
+            "useRecords",
+            "userHasReadRecord"
+          ],
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "grossProfitMarginPercentLtm",
+            "ticker"
+          ]
+        }
+      },
+      "disposition": "✅ filter+sort capable"
+    },
+    {
+      "requestField": "returnonassets.lasttwelvemonths",
+      "alias": "returnOnAssetsPercentLtm",
+      "stageA": {
+        "totalRecords": 25,
+        "presentCount": 25,
+        "nonNullCount": 25,
+        "sampleNonNullValues": [
+          {
+            "ticker": "XOM",
+            "value": {
+              "raw": 4.2213,
+              "fmt": "4.22%"
+            }
+          },
+          {
+            "ticker": "ABBV",
+            "value": {
+              "raw": 10.0315,
+              "fmt": "10.03%"
+            }
+          },
+          {
+            "ticker": "CVX",
+            "value": {
+              "raw": 3.4604,
+              "fmt": "3.46%"
+            }
+          },
+          {
+            "ticker": "PCCYF",
+            "value": {
+              "raw": 4.9007,
+              "fmt": "4.90%"
+            }
+          },
+          {
+            "ticker": "BABAF",
+            "value": {
+              "raw": 2.1198,
+              "fmt": "2.12%"
+            }
+          }
+        ],
+        "firstRecordKeys": [
+          "altmanZScoreLtm",
+          "avgDailyVol3m",
+          "companyName",
+          "currentRatioLtm",
+          "dividendYieldPercent",
+          "ebitInterestExpenseLtm",
+          "ebitdaInterestExpenseLtm",
+          "ebitdaMarginPercentLtm",
+          "epsGrowthPercentLtm",
+          "fiftyTwoWeekHigh",
+          "fiftyTwoWeekLow",
+          "financialCurrency",
+          "forwardDividendYieldPercent",
+          "grossProfitMarginPercentLtm",
+          "indices",
+          "industry",
+          "longTermDebtEquityPercentLtm",
+          "marketCap",
+          "netDebtEbitdaLtm",
+          "netIncomeMarginPercentLtm",
+          "operatingCashFlowToCurrentLiabilitiesLtm",
+          "peRatioLtm",
+          "quickRatioLtm",
+          "quotesCurrency",
+          "region",
+          "regularMarketChange",
+          "regularMarketChangePercent",
+          "regularMarketOpen",
+          "regularMarketPrice",
+          "regularMarketVolume",
+          "returnOnAssetsPercentLtm",
+          "returnOnEquityPercentLtm",
+          "returnOnTotalCapitalLtm",
+          "sector",
+          "ticker",
+          "totalDebtEbitdaLtm",
+          "totalDebtEquityPercentLtm"
+        ]
+      },
+      "stageB": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "topKeys": [
+            "count",
+            "records",
+            "start",
+            "total",
+            "useRecords",
+            "userHasReadRecord"
+          ],
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "logoUrl",
+            "returnOnAssetsPercentLtm",
+            "ticker"
+          ]
+        }
+      },
+      "stageC": {
+        "ok": true,
+        "summary": {
+          "hasResult": true,
+          "topKeys": [
+            "count",
+            "records",
+            "start",
+            "total",
+            "useRecords",
+            "userHasReadRecord"
+          ],
+          "recordsLen": 25,
+          "firstRecordKeys": [
+            "companyName",
+            "returnOnAssetsPercentLtm",
+            "ticker"
+          ]
+        }
+      },
+      "disposition": "✅ filter+sort capable"
+    }
+  ]
+}

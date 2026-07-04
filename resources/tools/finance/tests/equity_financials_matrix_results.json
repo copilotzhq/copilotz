@@ -1,0 +1,581 @@
+{
+  "fields": [
+    "operatingcashflowtocurrentliabilities.lasttwelvemonths",
+    "ebitdainterestexpense.lasttwelvemonths",
+    "ebitinterestexpense.lasttwelvemonths",
+    "totalrevenues1yrgrowth.lasttwelvemonths",
+    "netincome1yrgrowth.lasttwelvemonths",
+    "basicepscontinuingoperations.lasttwelvemonths",
+    "quarterlyrevenuegrowth.quarterly",
+    "totalrevenues.lasttwelvemonths",
+    "total_revenue_market_currency.annual",
+    "total_revenue_per_employee_annual_market_currency",
+    "netepsbasic.lasttwelvemonths",
+    "ebitda1yrgrowth.lasttwelvemonths",
+    "dilutedeps1yrgrowth.lasttwelvemonths",
+    "netepsdiluted.lasttwelvemonths",
+    "netincomeis.lasttwelvemonths",
+    "netincomeismarketcurrency.annual",
+    "net_income_per_employee_annual_market_currency",
+    "operatingincome.lasttwelvemonths",
+    "grossprofit.lasttwelvemonths",
+    "ebitda.lasttwelvemonths",
+    "dilutedepscontinuingoperations.lasttwelvemonths",
+    "ebit.lasttwelvemonths",
+    "forward_dividend_yield"
+  ],
+  "results": [
+    {
+      "field": "operatingcashflowtocurrentliabilities.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "ebitdainterestexpense.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "ebitinterestexpense.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "totalrevenues1yrgrowth.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 0,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "netincome1yrgrowth.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "basicepscontinuingoperations.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "quarterlyrevenuegrowth.quarterly",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "totalrevenues.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "total_revenue_market_currency.annual",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "total_revenue_per_employee_annual_market_currency",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "netepsbasic.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "ebitda1yrgrowth.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "dilutedeps1yrgrowth.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "netepsdiluted.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "netincomeis.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "netincomeismarketcurrency.annual",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "net_income_per_employee_annual_market_currency",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "operatingincome.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "grossprofit.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "ebitda.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "dilutedepscontinuingoperations.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "ebit.lasttwelvemonths",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "field": "forward_dividend_yield",
+      "stageA": {
+        "ok": true,
+        "presentCount": 0,
+        "nonNullCount": 0,
+        "sampleValue": null
+      },
+      "stageB": {
+        "ok": true,
+        "returnedCount": 10,
+        "sampleValue": null
+      },
+      "stageC": {
+        "ok": true,
+        "firstValues": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      }
+    }
+  ]
+}

@@ -37,6 +37,7 @@ export default {
       "read_skill_resource",
       "read_tool_result",
       "scheduled_jobs",
+      "finance",
     ],
     processors: [
       "new_message",
@@ -158,6 +159,9 @@ export default {
     ],
     admin: [
       "features.admin",
+    ],
+    finance: [
+      "tools.finance",
     ],
     code: [
       "tools.read_file",

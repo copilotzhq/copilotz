@@ -810,6 +810,7 @@ export function formatDiscriminatedOneOfError(
     let discriminatorName: string | null = null;
     const allowedValues: string[] = [];
     const branchMap = new Map<string, any>();
+    const branchIndexMap = new Map<string, number>();
 
     const firstBranch = schema.oneOf[0];
     if (!firstBranch || !firstBranch.properties) {
@@ -825,8 +826,10 @@ export function formatDiscriminatedOneOfError(
       let isDiscriminator = true;
       const values: string[] = [];
       const tempBranchMap = new Map<string, any>();
+      const tempBranchIndexMap = new Map<string, number>();
 
-      for (const branch of schema.oneOf) {
+      for (let idx = 0; idx < schema.oneOf.length; idx++) {
+        const branch = schema.oneOf[idx];
         if (!branch.properties || !branch.properties[candidate]) {
           isDiscriminator = false;
           break;
@@ -838,6 +841,7 @@ export function formatDiscriminatedOneOfError(
         }
         values.push(prop.const);
         tempBranchMap.set(prop.const, branch);
+        tempBranchIndexMap.set(prop.const, idx);
       }
 
       if (isDiscriminator && tempBranchMap.size > 1) {
@@ -845,6 +849,9 @@ export function formatDiscriminatedOneOfError(
         allowedValues.push(...values);
         for (const [k, v] of tempBranchMap.entries()) {
           branchMap.set(k, v);
+        }
+        for (const [k, idx] of tempBranchIndexMap.entries()) {
+          branchIndexMap.set(k, idx);
         }
         break;
       }
@@ -865,9 +872,15 @@ export function formatDiscriminatedOneOfError(
     }
 
     const branch = branchMap.get(val);
-    
+    const selectedIdx = branchIndexMap.get(val)!;
+
+    // Filter errors to only those originating from the selected branch
+    const branchErrors = (errors || []).filter(err => 
+      err.schemaPath && err.schemaPath.includes(`/oneOf/${selectedIdx}/`)
+    );
+
     if (branch && Array.isArray(branch.oneOf)) {
-      const nestedError = formatDiscriminatedOneOfError(branch, args, toolName, errors);
+      const nestedError = formatDiscriminatedOneOfError(branch, args, toolName, branchErrors);
       if (nestedError) {
         return nestedError;
       }
@@ -898,12 +911,11 @@ export function formatDiscriminatedOneOfError(
       }
     }
 
-    // Format property-constraint violations
     const constraintKeywords = [
       "maximum", "minimum", "maxLength", "minLength", "pattern", 
       "enum", "const", "type", "format", "exclusiveMaximum", "exclusiveMinimum"
     ];
-    const constraintErrors = (errors || []).filter(err => 
+    const constraintErrors = branchErrors.filter(err => 
       constraintKeywords.includes(err.keyword) && 
       err.instancePath
     );

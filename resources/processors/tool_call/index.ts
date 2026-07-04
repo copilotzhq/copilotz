@@ -839,7 +839,7 @@ export function formatDiscriminatedOneOfError(
         tempBranchMap.set(prop.const, branch);
       }
 
-      if (isDiscriminator) {
+      if (isDiscriminator && tempBranchMap.size > 1) {
         discriminatorName = candidate;
         allowedValues.push(...values);
         for (const [k, v] of tempBranchMap.entries()) {

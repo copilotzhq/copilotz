@@ -764,6 +764,26 @@ export class YahooProvider implements FinanceDataProvider {
       validateRange('ebitdaRange', eqInput.ebitdaRange);
       validateRange('dilutedEpsContinuingOperationsRange', eqInput.dilutedEpsContinuingOperationsRange);
       validateRange('ebitRange', eqInput.ebitRange);
+      validateRange('bookValueShareRange', eqInput.bookValueShareRange);
+      validateRange('totalSharesOutstandingRange', eqInput.totalSharesOutstandingRange);
+      validateRange('totalDebtRange', eqInput.totalDebtRange);
+      validateRange('totalAssetsRange', eqInput.totalAssetsRange);
+      validateRange('totalCashAndShortTermInvestmentsRange', eqInput.totalCashAndShortTermInvestmentsRange);
+      validateRange('totalCurrentAssetsRange', eqInput.totalCurrentAssetsRange);
+      validateRange('totalEquityRange', eqInput.totalEquityRange);
+      validateRange('totalCommonSharesOutstandingRange', eqInput.totalCommonSharesOutstandingRange);
+      validateRange('totalCurrentLiabilitiesRange', eqInput.totalCurrentLiabilitiesRange);
+      validateRange('totalCommonEquityRange', eqInput.totalCommonEquityRange);
+      validateRange('fullTimeEmployeesRange', eqInput.fullTimeEmployeesRange);
+      validateRange('cashOnHandQuarterlyMarketCurrencyRange', eqInput.cashOnHandQuarterlyMarketCurrencyRange);
+      validateRange('cashFromOperations1YrGrowthPercentRange', eqInput.cashFromOperations1YrGrowthPercentRange);
+      validateRange('unleveredFreeCashFlowRange', eqInput.unleveredFreeCashFlowRange);
+      validateRange('leveredFreeCashFlowRange', eqInput.leveredFreeCashFlowRange);
+      validateRange('leveredFreeCashFlow1YrGrowthPercentRange', eqInput.leveredFreeCashFlow1YrGrowthPercentRange);
+      validateRange('dividendPerShareRange', eqInput.dividendPerShareRange);
+      validateRange('capitalExpenditureRange', eqInput.capitalExpenditureRange);
+      validateRange('forwardDividendPerShareRange', eqInput.forwardDividendPerShareRange);
+      validateRange('cashFromOperationsRange', eqInput.cashFromOperationsRange);
     }
 
     // 2. Sort field mapping
@@ -836,6 +856,26 @@ export class YahooProvider implements FinanceDataProvider {
       ebitdaLtm: 'ebitda.lasttwelvemonths',
       dilutedEpsContinuingOperationsLtm: 'dilutedepscontinuingoperations.lasttwelvemonths',
       ebitLtm: 'ebit.lasttwelvemonths',
+      bookValueShareLtm: 'bookvalueshare.lasttwelvemonths',
+      totalSharesOutstanding: 'totalsharesoutstanding',
+      totalDebtLtm: 'totaldebt.lasttwelvemonths',
+      totalAssetsLtm: 'totalassets.lasttwelvemonths',
+      totalCashAndShortTermInvestmentsLtm: 'totalcashandshortterminvestments.lasttwelvemonths',
+      totalCurrentAssetsLtm: 'totalcurrentassets.lasttwelvemonths',
+      totalEquityLtm: 'totalequity.lasttwelvemonths',
+      totalCommonSharesOutstandingLtm: 'totalcommonsharesoutstanding.lasttwelvemonths',
+      totalCurrentLiabilitiesLtm: 'totalcurrentliabilities.lasttwelvemonths',
+      totalCommonEquityLtm: 'totalcommonequity.lasttwelvemonths',
+      fullTimeEmployees: 'fulltimeemployees.annual',
+      cashOnHandQuarterlyMarketCurrency: 'cash_on_hand_quarterly_market_currency',
+      cashFromOperations1YrGrowthPercentLtm: 'cashfromoperations1yrgrowth.lasttwelvemonths',
+      unleveredFreeCashFlowLtm: 'unleveredfreecashflow.lasttwelvemonths',
+      leveredFreeCashFlowLtm: 'leveredfreecashflow.lasttwelvemonths',
+      leveredFreeCashFlow1YrGrowthPercentLtm: 'leveredfreecashflow1yrgrowth.lasttwelvemonths',
+      dividendPerShareLtm: 'dividendpershare.lasttwelvemonths',
+      capitalExpenditureLtm: 'capitalexpenditure.lasttwelvemonths',
+      forwardDividendPerShare: 'forward_dividend_per_share',
+      cashFromOperationsLtm: 'cashfromoperations.lasttwelvemonths',
     };
 
     let yahooSortField = sortField;
@@ -1051,6 +1091,47 @@ export class YahooProvider implements FinanceDataProvider {
       if (dilutedEpsContinuingOperationsLtmNode) operands.push(dilutedEpsContinuingOperationsLtmNode);
       const ebitLtmNode = buildRange('ebit.lasttwelvemonths', eqInput.ebitRange);
       if (ebitLtmNode) operands.push(ebitLtmNode);
+
+      const bookValueShareNode = buildRange('bookvalueshare.lasttwelvemonths', eqInput.bookValueShareRange);
+      if (bookValueShareNode) operands.push(bookValueShareNode);
+      const totalSharesOutstandingNode = buildRange('totalsharesoutstanding', eqInput.totalSharesOutstandingRange);
+      if (totalSharesOutstandingNode) operands.push(totalSharesOutstandingNode);
+      const totalDebtNode = buildRange('totaldebt.lasttwelvemonths', eqInput.totalDebtRange);
+      if (totalDebtNode) operands.push(totalDebtNode);
+      const totalAssetsNode = buildRange('totalassets.lasttwelvemonths', eqInput.totalAssetsRange);
+      if (totalAssetsNode) operands.push(totalAssetsNode);
+      const totalCashAndShortTermInvestmentsNode = buildRange('totalcashandshortterminvestments.lasttwelvemonths', eqInput.totalCashAndShortTermInvestmentsRange);
+      if (totalCashAndShortTermInvestmentsNode) operands.push(totalCashAndShortTermInvestmentsNode);
+      const totalCurrentAssetsNode = buildRange('totalcurrentassets.lasttwelvemonths', eqInput.totalCurrentAssetsRange);
+      if (totalCurrentAssetsNode) operands.push(totalCurrentAssetsNode);
+      const totalEquityNode = buildRange('totalequity.lasttwelvemonths', eqInput.totalEquityRange);
+      if (totalEquityNode) operands.push(totalEquityNode);
+      const totalCommonSharesOutstandingNode = buildRange('totalcommonsharesoutstanding.lasttwelvemonths', eqInput.totalCommonSharesOutstandingRange);
+      if (totalCommonSharesOutstandingNode) operands.push(totalCommonSharesOutstandingNode);
+      const totalCurrentLiabilitiesNode = buildRange('totalcurrentliabilities.lasttwelvemonths', eqInput.totalCurrentLiabilitiesRange);
+      if (totalCurrentLiabilitiesNode) operands.push(totalCurrentLiabilitiesNode);
+      const totalCommonEquityNode = buildRange('totalcommonequity.lasttwelvemonths', eqInput.totalCommonEquityRange);
+      if (totalCommonEquityNode) operands.push(totalCommonEquityNode);
+      const fullTimeEmployeesNode = buildRange('fulltimeemployees.annual', eqInput.fullTimeEmployeesRange);
+      if (fullTimeEmployeesNode) operands.push(fullTimeEmployeesNode);
+      const cashOnHandQuarterlyMarketCurrencyNode = buildRange('cash_on_hand_quarterly_market_currency', eqInput.cashOnHandQuarterlyMarketCurrencyRange);
+      if (cashOnHandQuarterlyMarketCurrencyNode) operands.push(cashOnHandQuarterlyMarketCurrencyNode);
+      const cashFromOperations1YrGrowthPercentNode = buildRange('cashfromoperations1yrgrowth.lasttwelvemonths', eqInput.cashFromOperations1YrGrowthPercentRange);
+      if (cashFromOperations1YrGrowthPercentNode) operands.push(cashFromOperations1YrGrowthPercentNode);
+      const unleveredFreeCashFlowNode = buildRange('unleveredfreecashflow.lasttwelvemonths', eqInput.unleveredFreeCashFlowRange);
+      if (unleveredFreeCashFlowNode) operands.push(unleveredFreeCashFlowNode);
+      const leveredFreeCashFlowNode = buildRange('leveredfreecashflow.lasttwelvemonths', eqInput.leveredFreeCashFlowRange);
+      if (leveredFreeCashFlowNode) operands.push(leveredFreeCashFlowNode);
+      const leveredFreeCashFlow1YrGrowthPercentNode = buildRange('leveredfreecashflow1yrgrowth.lasttwelvemonths', eqInput.leveredFreeCashFlow1YrGrowthPercentRange);
+      if (leveredFreeCashFlow1YrGrowthPercentNode) operands.push(leveredFreeCashFlow1YrGrowthPercentNode);
+      const dividendPerShareNode = buildRange('dividendpershare.lasttwelvemonths', eqInput.dividendPerShareRange);
+      if (dividendPerShareNode) operands.push(dividendPerShareNode);
+      const capitalExpenditureNode = buildRange('capitalexpenditure.lasttwelvemonths', eqInput.capitalExpenditureRange);
+      if (capitalExpenditureNode) operands.push(capitalExpenditureNode);
+      const forwardDividendPerShareNode = buildRange('forward_dividend_per_share', eqInput.forwardDividendPerShareRange);
+      if (forwardDividendPerShareNode) operands.push(forwardDividendPerShareNode);
+      const cashFromOperationsNode = buildRange('cashfromoperations.lasttwelvemonths', eqInput.cashFromOperationsRange);
+      if (cashFromOperationsNode) operands.push(cashFromOperationsNode);
     }
 
     // Complexity check
@@ -1309,6 +1390,66 @@ export class YahooProvider implements FinanceDataProvider {
             break;
           case 'ebitLtm':
             mapped.ebitLtm = lookup(['ebitLtm', 'ebitltm']);
+            break;
+          case 'bookValueShareLtm':
+            mapped.bookValueShareLtm = lookup(['bookValueShareLtm', 'bookvalueshareltm']);
+            break;
+          case 'totalSharesOutstanding':
+            mapped.totalSharesOutstanding = lookup(['totalSharesOutstanding', 'totalsharesoutstanding']);
+            break;
+          case 'totalDebtLtm':
+            mapped.totalDebtLtm = lookup(['totalDebtLtm', 'totaldebtltm']);
+            break;
+          case 'totalAssetsLtm':
+            mapped.totalAssetsLtm = lookup(['totalAssetsLtm', 'totalassetsltm']);
+            break;
+          case 'totalCashAndShortTermInvestmentsLtm':
+            mapped.totalCashAndShortTermInvestmentsLtm = lookup(['totalCashAndShortTermInvestmentsLtm', 'totalcashandshortterminvestmentsltm']);
+            break;
+          case 'totalCurrentAssetsLtm':
+            mapped.totalCurrentAssetsLtm = lookup(['totalCurrentAssetsLtm', 'totalcurrentassetsltm']);
+            break;
+          case 'totalEquityLtm':
+            mapped.totalEquityLtm = lookup(['totalEquityLtm', 'totalequityltm']);
+            break;
+          case 'totalCommonSharesOutstandingLtm':
+            mapped.totalCommonSharesOutstandingLtm = lookup(['totalCommonSharesOutstandingLtm', 'totalcommonsharesoutstandingltm']);
+            break;
+          case 'totalCurrentLiabilitiesLtm':
+            mapped.totalCurrentLiabilitiesLtm = lookup(['totalCurrentLiabilitiesLtm', 'totalcurrentliabilitiesltm']);
+            break;
+          case 'totalCommonEquityLtm':
+            mapped.totalCommonEquityLtm = lookup(['totalCommonEquityLtm', 'totalcommonequityltm']);
+            break;
+          case 'fullTimeEmployees':
+            mapped.fullTimeEmployees = lookup(['fullTimeEmployees', 'fulltimeemployees']);
+            break;
+          case 'cashOnHandQuarterlyMarketCurrency':
+            mapped.cashOnHandQuarterlyMarketCurrency = lookup(['cashOnHandQuarterlyMarketCurrency', 'cashonhandquarterlymarketcurrency']);
+            break;
+          case 'cashFromOperations1YrGrowthPercentLtm':
+            mapped.cashFromOperations1YrGrowthPercentLtm = lookup(['cashFromOperations1YrGrowthPercentLtm', 'cashfromoperations1yrgrowthpercentltm']);
+            break;
+          case 'unleveredFreeCashFlowLtm':
+            mapped.unleveredFreeCashFlowLtm = lookup(['unleveredFreeCashFlowLtm', 'unleveredfreecashflowltm']);
+            break;
+          case 'leveredFreeCashFlowLtm':
+            mapped.leveredFreeCashFlowLtm = lookup(['leveredFreeCashFlowLtm', 'leveredfreecashflowltm']);
+            break;
+          case 'leveredFreeCashFlow1YrGrowthPercentLtm':
+            mapped.leveredFreeCashFlow1YrGrowthPercentLtm = lookup(['leveredFreeCashFlow1YrGrowthPercentLtm', 'leveredfreecashflow1yrgrowthpercentltm']);
+            break;
+          case 'dividendPerShareLtm':
+            mapped.dividendPerShareLtm = lookup(['dividendPerShareLtm', 'dividendpershareltm']);
+            break;
+          case 'capitalExpenditureLtm':
+            mapped.capitalExpenditureLtm = lookup(['capitalExpenditureLtm', 'capitalexpenditureltm']);
+            break;
+          case 'forwardDividendPerShare':
+            mapped.forwardDividendPerShare = lookup(['forwardDividendPerShare', 'forwarddividendpershare']);
+            break;
+          case 'cashFromOperationsLtm':
+            mapped.cashFromOperationsLtm = lookup(['cashFromOperationsLtm', 'cashfromoperationsltm']);
             break;
           case 'sector':
             mapped.sector = lookup(['sector']);

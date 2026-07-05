@@ -397,7 +397,7 @@ export interface ScreenSecuritiesMutualFundInput {
   [key: string]: any;
 }
 
-export type ScreenSecuritiesEquityInput = ScreenSecuritiesEquityStandardInput | ScreenSecuritiesEquityRatiosInput | ScreenSecuritiesEquityFinancialsInput;
+export type ScreenSecuritiesEquityInput = ScreenSecuritiesEquityStandardInput | ScreenSecuritiesEquityRatiosInput | ScreenSecuritiesEquityFinancialsInput | ScreenSecuritiesEquityBalanceSheetCashFlowInput;
 
 export interface ScreenSecuritiesEquityStandardInput {
   action: 'screen_securities';
@@ -504,6 +504,48 @@ export interface ScreenSecuritiesEquityFinancialsInput {
   dilutedEpsContinuingOperationsRange?: [number, number];
   ebitRange?: [number, number];
   forwardDividendYieldRange?: [number, number];
+  size?: number;
+  offset?: number;
+  sortField?: string;
+  sortOrder?: 'asc' | 'desc';
+  fields?: string[];
+  provider?: string;
+}
+
+export interface ScreenSecuritiesEquityBalanceSheetCashFlowInput {
+  action: 'screen_securities';
+  quoteType: 'EQUITY';
+  fieldProfile: 'balanceSheetCashFlow';
+  regions?: string[];
+  exchanges?: string[];
+  sectors?: string[];
+  industries?: string[];
+  marketCapRange?: [number, number];
+  priceRange?: [number, number];
+  percentChangeRange?: [number, number];
+  fiftyTwoWeekPercentChangeRange?: [number, number];
+  dayVolumeRange?: [number, number];
+  averageDailyVolume3MonthAbove?: number;
+  bookValueShareRange?: [number, number];
+  totalSharesOutstandingRange?: [number, number];
+  totalDebtRange?: [number, number];
+  totalAssetsRange?: [number, number];
+  totalCashAndShortTermInvestmentsRange?: [number, number];
+  totalCurrentAssetsRange?: [number, number];
+  totalEquityRange?: [number, number];
+  totalCommonSharesOutstandingRange?: [number, number];
+  totalCurrentLiabilitiesRange?: [number, number];
+  totalCommonEquityRange?: [number, number];
+  fullTimeEmployeesRange?: [number, number];
+  cashOnHandQuarterlyMarketCurrencyRange?: [number, number];
+  cashFromOperations1YrGrowthPercentRange?: [number, number];
+  unleveredFreeCashFlowRange?: [number, number];
+  leveredFreeCashFlowRange?: [number, number];
+  leveredFreeCashFlow1YrGrowthPercentRange?: [number, number];
+  dividendPerShareRange?: [number, number];
+  capitalExpenditureRange?: [number, number];
+  forwardDividendPerShareRange?: [number, number];
+  cashFromOperationsRange?: [number, number];
   size?: number;
   offset?: number;
   sortField?: string;

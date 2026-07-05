@@ -62,6 +62,16 @@ export class LLMStreamTimeoutError extends Error {
   }
 }
 
+export class LLMTranscriptError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message);
+    this.name = "LLMTranscriptError";
+    if (options && "cause" in options) {
+      (this as Error & { cause?: unknown }).cause = options.cause;
+    }
+  }
+}
+
 export function classifyLLMError(
   error: unknown,
 ): ProviderFallbackReason | null {
@@ -71,6 +81,10 @@ export function classifyLLMError(
     name?: string;
     message?: string;
   };
+
+  if (error instanceof LLMTranscriptError) {
+    return "invalid_transcript";
+  }
 
   if (requestError?.status === 401 || requestError?.status === 403) {
     return "auth_error";

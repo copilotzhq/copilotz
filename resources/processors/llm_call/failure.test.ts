@@ -95,6 +95,72 @@ Deno.test("llm_call processor converts provider failures into failed LLM_RESULT 
   }
 });
 
+Deno.test("llm_call processor reports transcript construction failures as local and non-retryable", async () => {
+  const circularOutput: Record<string, unknown> = {};
+  circularOutput.self = circularOutput;
+
+  const result = await process(
+    {
+      id: "evt-invalid-transcript",
+      threadId: "thread-1",
+      type: "LLM_CALL",
+      payload: {
+        agent: { id: "researcher", name: "Researcher" },
+        messages: [{
+          role: "assistant",
+          content: "",
+          toolCalls: [{
+            id: "legacy-result",
+            tool: { id: "search" },
+            args: "{}",
+            output: circularOutput,
+            status: "completed",
+          }],
+        }],
+        tools: [],
+        config: {
+          provider: "anthropic",
+          model: "claude-test",
+          apiKey: "test",
+        },
+      },
+      parentEventId: null,
+      traceId: "trace-invalid-transcript",
+      priority: 1000,
+      metadata: { targetId: "user-1" },
+      ttlMs: null,
+      expiresAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: "processing",
+    } as never,
+    {
+      context: {
+        stream: false,
+        llmProviders: registry,
+      },
+    } as unknown as ProcessorDeps,
+  );
+
+  assertExists(result);
+  if (!("producedEvents" in result) || !result.producedEvents) {
+    throw new Error("Expected producedEvents");
+  }
+
+  const produced = result.producedEvents[0] as {
+    payload: Record<string, unknown>;
+  };
+  const error = produced.payload.error as Record<string, unknown>;
+  assertEquals(produced.payload.status, "failed");
+  assertEquals(
+    produced.payload.answer,
+    "The conversation history could not be prepared for the model.",
+  );
+  assertEquals(error.reason, "invalid_transcript");
+  assertEquals(error.retryable, false);
+  assertEquals(error.fallbackAttempted, false);
+});
+
 Deno.test("llm_call processor persists one llm_usage node per provider attempt", async () => {
   const db = await createDatabase({ url: ":memory:" });
   const thread = await db.ops.findOrCreateThread(undefined, {

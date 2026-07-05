@@ -103,6 +103,9 @@ function normalizeExtractedTagTargets(value: unknown): string[] {
 }
 
 function getProviderFailureMessage(error: LLMProviderError): string {
+  if (error.reason === "invalid_transcript") {
+    return "The conversation history could not be prepared for the model.";
+  }
   if (error.reason === "rate_limit") {
     return "Model is temporarily unavailable. Please try again in a few moments.";
   }

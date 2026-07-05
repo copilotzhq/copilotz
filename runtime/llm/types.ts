@@ -85,6 +85,7 @@ export type ProviderFallbackReason =
   | "rate_limit"
   | "server_error"
   | "provider_error"
+  | "invalid_transcript"
   | "unknown";
 
 export interface ProviderConfigBase {

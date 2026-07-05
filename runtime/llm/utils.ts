@@ -14,6 +14,7 @@ import type {
   ToolInvocation,
   WireChatMessage,
 } from "@/runtime/llm/types.ts";
+import { LLMTranscriptError } from "@/runtime/llm/errors.ts";
 import {
   type ChatTokenEstimate,
   estimateChatMessages,
@@ -365,6 +366,9 @@ const WIRE_STRIP_TAG_NAMES = [
   "ask_to",
   "tool_calls",
   "tool_results",
+  "tool_result",
+  "result",
+  "continue_after_tool_results",
 ] as const;
 
 const OMITTED_PEER_TOOL_VALUE = {
@@ -392,10 +396,12 @@ function stripTaggedBlocksFromText(text: string, tagNames: string[]): string {
   let stripped = text;
   for (const tagName of normalizeStructuredTagNames(tagNames)) {
     const tag = escapeRegex(tagName);
-    stripped = stripped.replace(
-      new RegExp(`<${tag}>[\\s\\S]*?(?:<\\/${tag}>|$)`, "g"),
-      "",
+    const block = new RegExp(
+      `<${tag}\\b(?:[^>]*>[\\s\\S]*?(?:<\\/${tag}\\s*>|$)|[^>]*$)`,
+      "gi",
     );
+    const strayClosingTag = new RegExp(`<\\/${tag}\\s*>`, "gi");
+    stripped = stripped.replace(block, "").replace(strayClosingTag, "");
   }
   return stripped;
 }
@@ -523,13 +529,24 @@ function truncateReasoningForWire(
   return "[reasoning truncated]";
 }
 
+function escapeWireTextPayload(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 export function buildRedactedThinkingBlock(
   reasoning: string,
   maxEstimatedTokens?: number,
 ): string {
   const trimmed = reasoning.trim();
   if (!trimmed) return "";
-  const capped = truncateReasoningForWire(trimmed, maxEstimatedTokens);
+  // Reasoning is payload inside an XML-like protocol envelope. Encode it
+  // before applying the wire budget so arbitrary model text cannot close the
+  // thinking block or impersonate a control segment.
+  const escaped = escapeWireTextPayload(trimmed);
+  const capped = truncateReasoningForWire(escaped, maxEstimatedTokens);
   return `<think>\n${capped}\n</think>`;
 }
 
@@ -537,7 +554,7 @@ export function buildAskToBlock(askTargets: string[]): string {
   return extractRoutingTargetsFromMetadata({
     routing: { askTo: askTargets },
   }, "askTo")
-    .map((target) => `<ask_to>${target}</ask_to>`)
+    .map((target) => `<ask_to>${escapeWireTextPayload(target)}</ask_to>`)
     .join("\n");
 }
 
@@ -555,6 +572,26 @@ function parseToolCallArgs(args: ToolInvocation["args"]): unknown {
     return JSON.parse(args);
   } catch {
     return args;
+  }
+}
+
+function stringifyWireJson(value: unknown): string {
+  try {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized !== "string") {
+      throw new TypeError("Wire payload is not JSON serializable");
+    }
+    // JSON semantics are unchanged, while protocol-looking strings remain
+    // data even when tool output contains literal closing/opening tags.
+    return serialized
+      .replace(/&/g, "\\u0026")
+      .replace(/</g, "\\u003c")
+      .replace(/>/g, "\\u003e");
+  } catch (error) {
+    throw new LLMTranscriptError(
+      "Failed to serialize structured provider transcript payload",
+      { cause: error },
+    );
   }
 }
 
@@ -826,7 +863,7 @@ function shouldMaterializeWireContent(message: ChatMessage): boolean {
     message.reasoning.trim().length > 0;
   const rawText = contentToText(message.content);
   const hasProtocolTags =
-    /<(redacted_thinking|route_to|ask_to|tool_calls|tool_results|no_response)\b/i
+    /<\/?(redacted_thinking|route_to|ask_to|tool_calls|tool_results?|result|continue_after_tool_results|no_response)\b/i
       .test(rawText);
 
   if (message.role === "assistant" || message.role === "user") {
@@ -850,18 +887,28 @@ function applyComposedWireContent(
 }
 
 function prefixSpeakerLabel(label: string, body: string): string {
+  const safeLabel = escapeWireTextPayload(label);
   const trimmed = body.trim();
-  if (!trimmed) return `[${label}]:`;
+  if (!trimmed) return `[${safeLabel}]:`;
   if (trimmed.startsWith("<") || trimmed.includes("\n")) {
-    return `[${label}]:\n${trimmed}`;
+    return `[${safeLabel}]:\n${trimmed}`;
   }
-  return `[${label}]: ${trimmed}`;
+  return `[${safeLabel}]: ${trimmed}`;
 }
 
 function toWireRole(
   role: ChatMessage["role"],
 ): WireChatMessage["role"] {
   return isToolResultRole(role) ? "user" : role;
+}
+
+function materializedWireRole(
+  message: ChatMessage,
+  segments: ComposeWireContentInput,
+): WireChatMessage["role"] {
+  return Array.isArray(segments.toolResults) && segments.toolResults.length > 0
+    ? "user"
+    : toWireRole(message.role);
 }
 
 function lowerUnmaterializedMessage(message: ChatMessage): WireChatMessage {
@@ -883,7 +930,8 @@ function materializeWireContent(message: ChatMessage): WireChatMessage {
   }
 
   try {
-    let composed = composeWireContent(collectWireSegmentsFromMessage(message));
+    const segments = collectWireSegmentsFromMessage(message);
+    let composed = composeWireContent(segments);
     const speakerLabel = message.metadata &&
         typeof message.metadata === "object" &&
         typeof (message.metadata as { speakerLabel?: unknown }).speakerLabel ===
@@ -894,7 +942,7 @@ function materializeWireContent(message: ChatMessage): WireChatMessage {
       composed = prefixSpeakerLabel(speakerLabel, composed);
     }
 
-    const role = toWireRole(message.role);
+    const role = materializedWireRole(message, segments);
 
     const nextMetadata = message.metadata &&
         typeof message.metadata === "object"
@@ -917,8 +965,12 @@ function materializeWireContent(message: ChatMessage): WireChatMessage {
       reasoningMaxEstimatedTokens: undefined,
       tool_call_id: undefined,
     };
-  } catch {
-    return lowerUnmaterializedMessage(message);
+  } catch (error) {
+    if (error instanceof LLMTranscriptError) throw error;
+    throw new LLMTranscriptError(
+      "Failed to materialize provider transcript",
+      { cause: error },
+    );
   }
 }
 
@@ -928,7 +980,7 @@ export function buildRouteToBlock(routeTargets: string[]): string {
   }, "routeTo");
 
   return normalizedTargets
-    .map((target) => `<route_to>${target}</route_to>`)
+    .map((target) => `<route_to>${escapeWireTextPayload(target)}</route_to>`)
     .join("\n");
 }
 
@@ -982,19 +1034,11 @@ function assertWireMessageInvariants(
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
     if (
-      message.role === "assistant" &&
-      /<tool_results?\b/i.test(contentToText(message.content))
-    ) {
-      throw new Error(
-        "Invalid provider transcript: assistant messages cannot contain tool results",
-      );
-    }
-    if (
       index > 0 &&
       message.role !== "system" &&
       messages[index - 1]?.role === message.role
     ) {
-      throw new Error(
+      throw new LLMTranscriptError(
         `Invalid provider transcript: consecutive ${message.role} turns were not coalesced`,
       );
     }
@@ -2111,7 +2155,7 @@ export function buildToolCallsBlock(
           : OMITTED_PEER_TOOL_VALUE,
       };
       if (call.id) obj.tool_call_id = call.id;
-      return [JSON.stringify(obj)];
+      return [stringifyWireJson(obj)];
     }
 
     let args: unknown;
@@ -2125,7 +2169,7 @@ export function buildToolCallsBlock(
       arguments: args,
     };
     if (call.id) obj.tool_call_id = call.id;
-    return [JSON.stringify(obj)];
+    return [stringifyWireJson(obj)];
   });
 
   if (objects.length === 0) return "";
@@ -2165,7 +2209,7 @@ export function buildToolResultsBlock(
           : OMITTED_PEER_TOOL_VALUE,
       };
       if (call.id) obj.tool_call_id = call.id;
-      return [JSON.stringify(obj)];
+      return [stringifyWireJson(obj)];
     }
 
     const obj: Record<string, unknown> = {
@@ -2180,7 +2224,7 @@ export function buildToolResultsBlock(
     }
     if (call.id) obj.tool_call_id = call.id;
     if (call.status) obj.status = call.status;
-    return [JSON.stringify(obj)];
+    return [stringifyWireJson(obj)];
   });
 
   if (objects.length === 0) return "";

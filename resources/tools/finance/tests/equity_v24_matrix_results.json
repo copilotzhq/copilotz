@@ -1,0 +1,219 @@
+{
+  "generatedAt": "2026-07-05T01:42:52.295Z",
+  "dedupeFindings": [
+    {
+      "requestKey": "lastclosepricebookvalue.lasttwelvemonths",
+      "currentPublicName": "lastClosePriceBookValueLtm"
+    }
+  ],
+  "rows": [
+    {
+      "category": "valuation",
+      "requestKey": "lastclosemarketcap.lasttwelvemonths",
+      "verifiedResponseAlias": "lastCloseMarketCapLtm",
+      "proposedPublicName": "lastCloseMarketCapLtm",
+      "stageA": "✅",
+      "stageB": "✅",
+      "stageC": "✅",
+      "disposition": "✅",
+      "coverageRate": "25/25"
+    },
+    {
+      "category": "valuation",
+      "requestKey": "lastclosetevebitda.lasttwelvemonths",
+      "verifiedResponseAlias": "lastCloseTevEbitdaLtm",
+      "proposedPublicName": "lastCloseTevEbitdaLtm",
+      "stageA": "✅",
+      "stageB": "✅",
+      "stageC": "✅",
+      "disposition": "✅",
+      "coverageRate": "24/25"
+    },
+    {
+      "category": "valuation",
+      "requestKey": "lastclosepricetangiblebookvalue.lasttwelvemonths",
+      "verifiedResponseAlias": "lastClosePriceTangibleBookValueLtm",
+      "proposedPublicName": "lastClosePriceTangibleBookValueLtm",
+      "stageA": "✅",
+      "stageB": "✅",
+      "stageC": "✅",
+      "disposition": "✅",
+      "coverageRate": "25/25"
+    },
+    {
+      "category": "valuation",
+      "requestKey": "lastclosetevebit.lasttwelvemonths",
+      "verifiedResponseAlias": "lastCloseTevEbitLtm",
+      "proposedPublicName": "lastCloseTevEbitLtm",
+      "stageA": "✅",
+      "stageB": "✅",
+      "stageC": "✅",
+      "disposition": "✅",
+      "coverageRate": "24/25"
+    },
+    {
+      "category": "valuation",
+      "requestKey": "lastclosemarketcaptotalrevenue.lasttwelvemonths",
+      "verifiedResponseAlias": "priceSalesRatioLtm",
+      "proposedPublicName": "priceSalesRatioLtm",
+      "stageA": "✅",
+      "stageB": "✅",
+      "stageC": "✅",
+      "disposition": "✅",
+      "coverageRate": "25/25"
+    },
+    {
+      "category": "valuation",
+      "requestKey": "lastclosetevtotalrevenue.lasttwelvemonths",
+      "verifiedResponseAlias": "lastCloseTevTotalRevenueLtm",
+      "proposedPublicName": "lastCloseTevTotalRevenueLtm",
+      "stageA": "✅",
+      "stageB": "✅",
+      "stageC": "✅",
+      "disposition": "✅",
+      "coverageRate": "24/25"
+    },
+    {
+      "category": "valuation",
+      "requestKey": "lastclosepricebookvalue.lasttwelvemonths",
+      "verifiedResponseAlias": "lastClosePriceBookValueLtm",
+      "proposedPublicName": "lastClosePriceBookValueLtm",
+      "stageA": "✅",
+      "stageB": "✅",
+      "stageC": "✅",
+      "disposition": "DROPPED_ALREADY_SHIPPED",
+      "notes": "Exact raw key already shipped; regression control only"
+    },
+    {
+      "category": "valuation",
+      "requestKey": "lastclosepriceearnings.lasttwelvemonths",
+      "verifiedResponseAlias": "lastClosePriceEarningsRatioLtm",
+      "proposedPublicName": "lastClosePriceEarningsRatioLtm",
+      "stageA": "✅",
+      "stageB": "✅",
+      "stageC": "✅",
+      "disposition": "✅",
+      "coverageRate": "25/25"
+    },
+    {
+      "category": "valuation",
+      "requestKey": "pricebookratio.quarterly",
+      "verifiedResponseAlias": "priceBookRatioQuarterly",
+      "proposedPublicName": "priceBookRatioQuarterly",
+      "stageA": "✅",
+      "stageB": "✅",
+      "stageC": "✅",
+      "disposition": "✅",
+      "coverageRate": "25/25"
+    },
+    {
+      "category": "esgOwnership",
+      "requestKey": "environmental_score",
+      "verifiedResponseAlias": "environmentalScore",
+      "proposedPublicName": "environmentalScore",
+      "stageA": "✅",
+      "stageB": "✅",
+      "stageC": "✅",
+      "disposition": "✅",
+      "coverageRate": "21/25"
+    },
+    {
+      "category": "esgOwnership",
+      "requestKey": "esg_score",
+      "verifiedResponseAlias": "esgScore",
+      "proposedPublicName": "esgScore",
+      "stageA": "✅",
+      "stageB": "✅",
+      "stageC": "✅",
+      "disposition": "✅",
+      "coverageRate": "21/25"
+    },
+    {
+      "category": "esgOwnership",
+      "requestKey": "governance_score",
+      "verifiedResponseAlias": "governanceScore",
+      "proposedPublicName": "governanceScore",
+      "stageA": "✅",
+      "stageB": "✅",
+      "stageC": "✅",
+      "disposition": "✅",
+      "coverageRate": "21/25"
+    },
+    {
+      "category": "esgOwnership",
+      "requestKey": "social_score",
+      "verifiedResponseAlias": "socialScore",
+      "proposedPublicName": "socialScore",
+      "stageA": "✅",
+      "stageB": "✅",
+      "stageC": "✅",
+      "disposition": "✅",
+      "coverageRate": "21/25"
+    },
+    {
+      "category": "esgOwnership",
+      "requestKey": "highest_controversy",
+      "verifiedResponseAlias": "highestControversy",
+      "proposedPublicName": "highestControversy",
+      "stageA": "✅",
+      "stageB": "✅",
+      "stageC": "✅",
+      "disposition": "✅",
+      "coverageRate": "18/25"
+    },
+    {
+      "category": "esgOwnership",
+      "requestKey": "pctheldinsider",
+      "verifiedResponseAlias": "percentOfSharesOutHeldByInsider",
+      "proposedPublicName": "percentOfSharesOutHeldByInsider",
+      "stageA": "✅",
+      "stageB": "✅",
+      "stageC": "✅",
+      "disposition": "✅",
+      "coverageRate": "25/25"
+    },
+    {
+      "category": "esgOwnership",
+      "requestKey": "pctheldinst",
+      "verifiedResponseAlias": "percentOfSharesOutHeldByInstitutions",
+      "proposedPublicName": "percentOfSharesOutHeldByInstitutions",
+      "stageA": "✅",
+      "stageB": "✅",
+      "stageC": "✅",
+      "disposition": "✅",
+      "coverageRate": "25/25"
+    }
+  ],
+  "specialHighestControversy": {
+    "invalid7": {
+      "finance": {
+        "result": [
+          {
+            "start": 0,
+            "count": 0,
+            "total": 0,
+            "records": [],
+            "userHasReadRecord": false,
+            "useRecords": true
+          }
+        ],
+        "error": null
+      }
+    },
+    "invalidNeg1": {
+      "finance": {
+        "result": [
+          {
+            "start": 0,
+            "count": 0,
+            "total": 0,
+            "records": [],
+            "userHasReadRecord": false,
+            "useRecords": true
+          }
+        ],
+        "error": null
+      }
+    }
+  }
+}

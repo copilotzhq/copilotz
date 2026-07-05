@@ -426,6 +426,8 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
               {
                 properties: {
                   fieldProfile: { const: 'standard' },
+                  action: { const: 'screen_securities' },
+                  quoteType: { const: 'EQUITY' },
                   regions: {
                     type: 'array',
                     items: {
@@ -561,6 +563,8 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
               {
                 properties: {
                   fieldProfile: { const: 'ratios' },
+                  action: { const: 'screen_securities' },
+                  quoteType: { const: 'EQUITY' },
                   regions: {
                     type: 'array',
                     items: {
@@ -770,6 +774,62 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
                     maxItems: 2,
                     description: 'Filter by forward dividend yield range [min, max].',
                   },
+                  lastCloseMarketCapRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by last close market cap range [min, max].',
+                  },
+                  lastCloseTevEbitdaRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by last close TEV to EBITDA ratio range [min, max].',
+                  },
+                  lastClosePriceTangibleBookValueRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by last close price to tangible book value ratio range [min, max].',
+                  },
+                  lastCloseTevEbitRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by last close TEV to EBIT ratio range [min, max].',
+                  },
+                  priceSalesRatioRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by price to sales ratio range [min, max].',
+                  },
+                  lastCloseTevTotalRevenueRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by last close TEV to total revenue ratio range [min, max].',
+                  },
+                  lastClosePriceEarningsRatioRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by last close price to earnings ratio range [min, max].',
+                  },
+                  priceBookRatioQuarterlyRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by quarterly price to book ratio range [min, max].',
+                  },
                   size: {
                     type: 'number',
                     minimum: 1,
@@ -799,7 +859,8 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
                       type: 'string',
                       enum: [
                         'symbol', 'shortName', 'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent', 'marketCap', 'peRatioLtm', 'regularMarketVolume', 'averageDailyVolume3Month', 'fiftyTwoWeekPercentChange', 'beta', 'dividendYield', 'sector', 'industry', 'exchange', 'region',
-                        'lastClosePriceBookValueLtm', 'pegRatio5Yr', 'currentRatioLtm', 'grossProfitMarginPercentLtm', 'returnOnAssetsPercentLtm', 'returnOnEquityPercentLtm', 'totalDebtEquityPercentLtm', 'longTermDebtEquityPercentLtm', 'returnOnTotalCapitalLtm', 'netIncomeMarginPercentLtm', 'altmanZScoreLtm', 'quickRatioLtm', 'totalDebtEbitdaLtm', 'ebitdaMarginPercentLtm', 'netDebtEbitdaLtm', 'epsGrowthPercentLtm', 'forwardDividendYieldPercent'
+                        'lastClosePriceBookValueLtm', 'pegRatio5Yr', 'currentRatioLtm', 'grossProfitMarginPercentLtm', 'returnOnAssetsPercentLtm', 'returnOnEquityPercentLtm', 'totalDebtEquityPercentLtm', 'longTermDebtEquityPercentLtm', 'returnOnTotalCapitalLtm', 'netIncomeMarginPercentLtm', 'altmanZScoreLtm', 'quickRatioLtm', 'totalDebtEbitdaLtm', 'ebitdaMarginPercentLtm', 'netDebtEbitdaLtm', 'epsGrowthPercentLtm', 'forwardDividendYieldPercent',
+                        'lastCloseMarketCapLtm', 'lastCloseTevEbitdaLtm', 'lastClosePriceTangibleBookValueLtm', 'lastCloseTevEbitLtm', 'priceSalesRatioLtm', 'lastCloseTevTotalRevenueLtm', 'lastClosePriceEarningsRatioLtm', 'priceBookRatioQuarterly'
                       ],
                     },
                     description: 'Specific fields to return in the records.',
@@ -816,6 +877,8 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
               {
                 properties: {
                   fieldProfile: { const: 'financials' },
+                  action: { const: 'screen_securities' },
+                  quoteType: { const: 'EQUITY' },
                   regions: {
                     type: 'array',
                     items: {
@@ -1092,6 +1155,8 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
               {
                 properties: {
                   fieldProfile: { const: 'balanceSheetCashFlow' },
+                  action: { const: 'screen_securities' },
+                  quoteType: { const: 'EQUITY' },
                   regions: {
                     type: 'array',
                     items: {
@@ -1343,7 +1408,177 @@ Always returns bounded outputs. Supports cancellation via framework context.onCa
                 },
                 required: ['fieldProfile'],
                 additionalProperties: false,
-              }
+              },
+              {
+                properties: {
+                  fieldProfile: { const: 'esgOwnership' },
+                  action: { const: 'screen_securities' },
+                  quoteType: { const: 'EQUITY' },
+                  regions: {
+                    type: 'array',
+                    items: {
+                      type: 'string',
+                      enum: [
+                        'us', 'ca', 'gb', 'fr', 'de', 'jp', 'hk', 'au', 'in', 'br', 'cn', 'kr', 'tw', 'ch', 'nl', 'se', 'es', 'it', 'sg', 'mx', 'za', 'ru', 'sa', 'tr', 'id', 'th', 'my', 'ph', 'vn', 'pl', 'be', 'at', 'fi', 'no', 'dk', 'ie', 'pt', 'gr', 'il', 'nz', 'co', 'cl', 'pe', 'ar', 'cz', 'hu', 'ro', 'ua', 'ae', 'qa'
+                      ],
+                    },
+                    description: 'Filter by region/country codes (e.g. ["us", "ca"]).',
+                  },
+                  exchanges: {
+                    type: 'array',
+                    items: {
+                      type: 'string',
+                      enum: [
+                        'nyq', 'nms', 'ams', 'par', 'ger', 'fra', 'stu', 'mun', 'ber', 'dus', 'ham', 'han', 'mil', 'mad', 'lis', 'bru', 'vie', 'zur', 'sto', 'osl', 'cph', 'hel', 'ice', 'ath', 'ist', 'lse', 'iob', 'dub', 'tae', 'jse', 'sau', 'dfm', 'adx', 'qse', 'tai', 'koe', 'hkg', 'shh', 'shz', 'bom', 'nse', 'asx', 'nze', 'sgx', 'kln', 'set', 'pse', 'jkt', 'vse', 'sao', 'mex', 'bue', 'sgo', 'col', 'lim', 'ccs', 'mte', 'wse', 'bud', 'pra', 'buh', 'mic', 'kse', 'cse', 'doh', 'bah', 'mus', 'cas', 'nig', 'gha', 'ken', 'uga', 'rwa', 'tzs', 'zim', 'bot', 'nam', 'mau', 'pal', 'amm', 'bei', 'dam', 'bag', 'teh', 'dse', 'hcm', 'hnx'
+                      ],
+                    },
+                    description: 'Filter by exchange codes (e.g. ["nyq", "nms"]).',
+                  },
+                  sectors: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Filter by sector names (e.g. ["Technology"]).',
+                  },
+                  industries: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Filter by industry names (e.g. ["Software—Application"]).',
+                  },
+                  marketCapRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by market capitalization range [min, max].',
+                  },
+                  priceRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by regular market price range [min, max].',
+                  },
+                  percentChangeRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by regular market change percent range [min, max].',
+                  },
+                  fiftyTwoWeekPercentChangeRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by 52-week percent change range [min, max].',
+                  },
+                  dayVolumeRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by regular market volume range [min, max].',
+                  },
+                  averageDailyVolume3MonthAbove: {
+                    type: 'number',
+                    description: 'Filter by 3-month average daily volume above a threshold.',
+                  },
+                  environmentalScoreRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by environmental score range [min, max]. Yahoo ESG score as provided; interpretation is provider-dependent.',
+                  },
+                  esgScoreRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by total ESG score range [min, max]. Yahoo ESG score as provided; interpretation is provider-dependent.',
+                  },
+                  governanceScoreRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by governance score range [min, max]. Yahoo ESG score as provided; interpretation is provider-dependent.',
+                  },
+                  socialScoreRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by social score range [min, max]. Yahoo ESG score as provided; interpretation is provider-dependent.',
+                  },
+                  highestControversyIn: {
+                    type: 'array',
+                    items: {
+                      type: 'integer',
+                      minimum: 0,
+                      maximum: 5
+                    },
+                    minItems: 1,
+                    uniqueItems: true,
+                    description: 'Filter by highest controversy level (discrete values 0-5). Yahoo controversy score as provided; interpretation is provider-dependent.',
+                  },
+                  insiderOwnershipPercentRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by percentage of shares held by insiders range [min, max].',
+                  },
+                  institutionalOwnershipPercentRange: {
+                    type: 'array',
+                    items: { type: 'number' },
+                    minItems: 2,
+                    maxItems: 2,
+                    description: 'Filter by percentage of shares held by institutions range [min, max].',
+                  },
+                  size: {
+                    type: 'number',
+                    minimum: 1,
+                    maximum: 200,
+                    default: 25,
+                    description: 'Max records to return. Default 25, max 200.',
+                  },
+                  offset: {
+                    type: 'number',
+                    minimum: 0,
+                    default: 0,
+                    description: 'Offset for pagination. Default 0.',
+                  },
+                  sortField: {
+                    type: 'string',
+                    description: 'Field to sort by (e.g. "marketCap", "esgScore", "regularMarketPrice"). Let Yahoo validate.',
+                  },
+                  sortOrder: {
+                    type: 'string',
+                    enum: ['asc', 'desc'],
+                    default: 'desc',
+                    description: 'Sort order (asc or desc). Default desc.',
+                  },
+                  fields: {
+                    type: 'array',
+                    items: {
+                      type: 'string',
+                      enum: [
+                        'symbol', 'shortName', 'regularMarketPrice', 'regularMarketChange', 'regularMarketChangePercent', 'marketCap', 'peRatioLtm', 'regularMarketVolume', 'averageDailyVolume3Month', 'fiftyTwoWeekPercentChange', 'beta', 'dividendYield', 'sector', 'industry', 'exchange', 'region',
+                        'environmentalScore', 'esgScore', 'governanceScore', 'socialScore', 'highestControversy', 'insiderOwnershipPercent', 'institutionalOwnershipPercent'
+                      ]
+                    },
+                    description: 'Specific fields to return in the records.',
+                  },
+                  provider: {
+                    type: 'string',
+                    default: 'yahoo',
+                    description: 'Optional provider override (e.g. "yahoo").',
+                  },
+                },
+                required: ['fieldProfile'],
+                additionalProperties: false,
+              },
             ],
           },
           {

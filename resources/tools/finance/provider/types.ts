@@ -397,7 +397,7 @@ export interface ScreenSecuritiesMutualFundInput {
   [key: string]: any;
 }
 
-export type ScreenSecuritiesEquityInput = ScreenSecuritiesEquityStandardInput | ScreenSecuritiesEquityRatiosInput | ScreenSecuritiesEquityFinancialsInput | ScreenSecuritiesEquityBalanceSheetCashFlowInput;
+export type ScreenSecuritiesEquityInput = ScreenSecuritiesEquityStandardInput | ScreenSecuritiesEquityRatiosInput | ScreenSecuritiesEquityFinancialsInput | ScreenSecuritiesEquityBalanceSheetCashFlowInput | ScreenSecuritiesEquityEsgOwnershipInput;
 
 export interface ScreenSecuritiesEquityStandardInput {
   action: 'screen_securities';
@@ -459,6 +459,15 @@ export interface ScreenSecuritiesEquityRatiosInput {
   netDebtEbitdaRange?: [number, number];
   epsGrowthRange?: [number, number];
   forwardDividendYieldRange?: [number, number];
+  // v2.4 Valuation additions:
+  lastCloseMarketCapRange?: [number, number];
+  lastCloseTevEbitdaRange?: [number, number];
+  lastClosePriceTangibleBookValueRange?: [number, number];
+  lastCloseTevEbitRange?: [number, number];
+  priceSalesRatioRange?: [number, number];
+  lastCloseTevTotalRevenueRange?: [number, number];
+  lastClosePriceEarningsRatioRange?: [number, number];
+  priceBookRatioQuarterlyRange?: [number, number];
   size?: number;
   offset?: number;
   sortField?: string;
@@ -546,6 +555,35 @@ export interface ScreenSecuritiesEquityBalanceSheetCashFlowInput {
   capitalExpenditureRange?: [number, number];
   forwardDividendPerShareRange?: [number, number];
   cashFromOperationsRange?: [number, number];
+  size?: number;
+  offset?: number;
+  sortField?: string;
+  sortOrder?: 'asc' | 'desc';
+  fields?: string[];
+  provider?: string;
+}
+
+export interface ScreenSecuritiesEquityEsgOwnershipInput {
+  action: 'screen_securities';
+  quoteType: 'EQUITY';
+  fieldProfile: 'esgOwnership';
+  regions?: string[];
+  exchanges?: string[];
+  sectors?: string[];
+  industries?: string[];
+  marketCapRange?: [number, number];
+  priceRange?: [number, number];
+  percentChangeRange?: [number, number];
+  fiftyTwoWeekPercentChangeRange?: [number, number];
+  dayVolumeRange?: [number, number];
+  averageDailyVolume3MonthAbove?: number;
+  environmentalScoreRange?: [number, number];
+  esgScoreRange?: [number, number];
+  governanceScoreRange?: [number, number];
+  socialScoreRange?: [number, number];
+  highestControversyIn?: number[];
+  insiderOwnershipPercentRange?: [number, number];
+  institutionalOwnershipPercentRange?: [number, number];
   size?: number;
   offset?: number;
   sortField?: string;

@@ -726,6 +726,22 @@ export class YahooProvider implements FinanceDataProvider {
       validateRange('betaRange', eqInput.betaRange);
       validateRange('dividendYieldRange', eqInput.dividendYieldRange);
       validateRange('lastClosePriceBookValueRange', eqInput.lastClosePriceBookValueRange);
+      // v2.4 Valuation range validations:
+      validateRange('lastCloseMarketCapRange', eqInput.lastCloseMarketCapRange);
+      validateRange('lastCloseTevEbitdaRange', eqInput.lastCloseTevEbitdaRange);
+      validateRange('lastClosePriceTangibleBookValueRange', eqInput.lastClosePriceTangibleBookValueRange);
+      validateRange('lastCloseTevEbitRange', eqInput.lastCloseTevEbitRange);
+      validateRange('priceSalesRatioRange', eqInput.priceSalesRatioRange);
+      validateRange('lastCloseTevTotalRevenueRange', eqInput.lastCloseTevTotalRevenueRange);
+      validateRange('lastClosePriceEarningsRatioRange', eqInput.lastClosePriceEarningsRatioRange);
+      validateRange('priceBookRatioQuarterlyRange', eqInput.priceBookRatioQuarterlyRange);
+      // v2.4 ESG & Ownership range validations:
+      validateRange('environmentalScoreRange', eqInput.environmentalScoreRange);
+      validateRange('esgScoreRange', eqInput.esgScoreRange);
+      validateRange('governanceScoreRange', eqInput.governanceScoreRange);
+      validateRange('socialScoreRange', eqInput.socialScoreRange);
+      validateRange('insiderOwnershipPercentRange', eqInput.insiderOwnershipPercentRange);
+      validateRange('institutionalOwnershipPercentRange', eqInput.institutionalOwnershipPercentRange);
       validateRange('pegRatio5YrRange', eqInput.pegRatio5YrRange);
       validateRange('currentRatioRange', eqInput.currentRatioRange);
       validateRange('grossProfitMarginRange', eqInput.grossProfitMarginRange);
@@ -818,6 +834,23 @@ export class YahooProvider implements FinanceDataProvider {
       exchange: 'exchange',
       region: 'region',
       lastClosePriceBookValueLtm: 'lastclosepricebookvalue.lasttwelvemonths',
+      // v2.4 Valuation additions:
+      lastCloseMarketCapLtm: 'lastclosemarketcap.lasttwelvemonths',
+      lastCloseTevEbitdaLtm: 'lastclosetevebitda.lasttwelvemonths',
+      lastClosePriceTangibleBookValueLtm: 'lastclosepricetangiblebookvalue.lasttwelvemonths',
+      lastCloseTevEbitLtm: 'lastclosetevebit.lasttwelvemonths',
+      priceSalesRatioLtm: 'lastclosemarketcaptotalrevenue.lasttwelvemonths',
+      lastCloseTevTotalRevenueLtm: 'lastclosetevtotalrevenue.lasttwelvemonths',
+      lastClosePriceEarningsRatioLtm: 'lastclosepriceearnings.lasttwelvemonths',
+      priceBookRatioQuarterly: 'pricebookratio.quarterly',
+      // v2.4 ESG & Ownership additions:
+      environmentalScore: 'environmental_score',
+      esgScore: 'esg_score',
+      governanceScore: 'governance_score',
+      socialScore: 'social_score',
+      highestControversy: 'highest_controversy',
+      insiderOwnershipPercent: 'pctheldinsider',
+      institutionalOwnershipPercent: 'pctheldinst',
       pegRatio5Yr: 'pegratio_5y',
       currentRatioLtm: 'currentratio.lasttwelvemonths',
       grossProfitMarginPercentLtm: 'grossprofitmargin.lasttwelvemonths',
@@ -894,7 +927,7 @@ export class YahooProvider implements FinanceDataProvider {
     // 3. Build AST
     const operands: any[] = [];
 
-    const buildCategorical = (field: string, values?: string[]) => {
+    const buildCategorical = (field: string, values?: (string | number)[]) => {
       if (!values || values.length === 0) return null;
       if (values.length === 1) {
         return { operator: 'eq', operands: [field, values[0]] };
@@ -1000,6 +1033,31 @@ export class YahooProvider implements FinanceDataProvider {
       const lastClosePriceBookValueNode = buildRange('lastclosepricebookvalue.lasttwelvemonths', eqInput.lastClosePriceBookValueRange);
       if (lastClosePriceBookValueNode) operands.push(lastClosePriceBookValueNode);
 
+      // v2.4 Valuation AST builders:
+      const lastCloseMarketCapNode = buildRange('lastclosemarketcap.lasttwelvemonths', eqInput.lastCloseMarketCapRange);
+      if (lastCloseMarketCapNode) operands.push(lastCloseMarketCapNode);
+
+      const lastCloseTevEbitdaNode = buildRange('lastclosetevebitda.lasttwelvemonths', eqInput.lastCloseTevEbitdaRange);
+      if (lastCloseTevEbitdaNode) operands.push(lastCloseTevEbitdaNode);
+
+      const lastClosePriceTangibleBookValueNode = buildRange('lastclosepricetangiblebookvalue.lasttwelvemonths', eqInput.lastClosePriceTangibleBookValueRange);
+      if (lastClosePriceTangibleBookValueNode) operands.push(lastClosePriceTangibleBookValueNode);
+
+      const lastCloseTevEbitNode = buildRange('lastclosetevebit.lasttwelvemonths', eqInput.lastCloseTevEbitRange);
+      if (lastCloseTevEbitNode) operands.push(lastCloseTevEbitNode);
+
+      const priceSalesRatioNode = buildRange('lastclosemarketcaptotalrevenue.lasttwelvemonths', eqInput.priceSalesRatioRange);
+      if (priceSalesRatioNode) operands.push(priceSalesRatioNode);
+
+      const lastCloseTevTotalRevenueNode = buildRange('lastclosetevtotalrevenue.lasttwelvemonths', eqInput.lastCloseTevTotalRevenueRange);
+      if (lastCloseTevTotalRevenueNode) operands.push(lastCloseTevTotalRevenueNode);
+
+      const lastClosePriceEarningsRatioNode = buildRange('lastclosepriceearnings.lasttwelvemonths', eqInput.lastClosePriceEarningsRatioRange);
+      if (lastClosePriceEarningsRatioNode) operands.push(lastClosePriceEarningsRatioNode);
+
+      const priceBookRatioQuarterlyNode = buildRange('pricebookratio.quarterly', eqInput.priceBookRatioQuarterlyRange);
+      if (priceBookRatioQuarterlyNode) operands.push(priceBookRatioQuarterlyNode);
+
       const pegRatio5YrNode = buildRange('pegratio_5y', eqInput.pegRatio5YrRange);
       if (pegRatio5YrNode) operands.push(pegRatio5YrNode);
 
@@ -1047,6 +1105,28 @@ export class YahooProvider implements FinanceDataProvider {
 
       const forwardDividendYieldNode = buildRange('forward_dividend_yield', eqInput.forwardDividendYieldRange);
       if (forwardDividendYieldNode) operands.push(forwardDividendYieldNode);
+
+      // v2.4 ESG & Ownership AST builders:
+      const environmentalScoreNode = buildRange('environmental_score', eqInput.environmentalScoreRange);
+      if (environmentalScoreNode) operands.push(environmentalScoreNode);
+
+      const esgScoreNode = buildRange('esg_score', eqInput.esgScoreRange);
+      if (esgScoreNode) operands.push(esgScoreNode);
+
+      const governanceScoreNode = buildRange('governance_score', eqInput.governanceScoreRange);
+      if (governanceScoreNode) operands.push(governanceScoreNode);
+
+      const socialScoreNode = buildRange('social_score', eqInput.socialScoreRange);
+      if (socialScoreNode) operands.push(socialScoreNode);
+
+      const insiderOwnershipPercentNode = buildRange('pctheldinsider', eqInput.insiderOwnershipPercentRange);
+      if (insiderOwnershipPercentNode) operands.push(insiderOwnershipPercentNode);
+
+      const institutionalOwnershipPercentNode = buildRange('pctheldinst', eqInput.institutionalOwnershipPercentRange);
+      if (institutionalOwnershipPercentNode) operands.push(institutionalOwnershipPercentNode);
+
+      const highestControversyNode = buildCategorical('highest_controversy', eqInput.highestControversyIn);
+      if (highestControversyNode) operands.push(highestControversyNode);
       const operatingCashFlowToCurrentLiabilitiesLtmNode = buildRange('operatingcashflowtocurrentliabilities.lasttwelvemonths', eqInput.operatingCashFlowToCurrentLiabilitiesRange);
       if (operatingCashFlowToCurrentLiabilitiesLtmNode) operands.push(operatingCashFlowToCurrentLiabilitiesLtmNode);
       const ebitdaInterestExpenseLtmNode = buildRange('ebitdainterestexpense.lasttwelvemonths', eqInput.ebitdaInterestExpenseRange);
@@ -1276,6 +1356,53 @@ export class YahooProvider implements FinanceDataProvider {
             break;
           case 'lastClosePriceBookValueLtm':
             mapped.lastClosePriceBookValueLtm = lookup(['lastClosePriceBookValueLtm', 'lastclosepricebookvalueltm']);
+            break;
+          // v2.4 Valuation response mappings:
+          case 'lastCloseMarketCapLtm':
+            mapped.lastCloseMarketCapLtm = lookup(['lastCloseMarketCapLtm', 'lastclosemarketcapltm']);
+            break;
+          case 'lastCloseTevEbitdaLtm':
+            mapped.lastCloseTevEbitdaLtm = lookup(['lastCloseTevEbitdaLtm', 'lastclosetevebitdaltm']);
+            break;
+          case 'lastClosePriceTangibleBookValueLtm':
+            mapped.lastClosePriceTangibleBookValueLtm = lookup(['lastClosePriceTangibleBookValueLtm', 'lastclosepricetangiblebookvalueltm']);
+            break;
+          case 'lastCloseTevEbitLtm':
+            mapped.lastCloseTevEbitLtm = lookup(['lastCloseTevEbitLtm', 'lastclosetevebitltm']);
+            break;
+          case 'priceSalesRatioLtm':
+            mapped.priceSalesRatioLtm = lookup(['priceSalesRatioLtm', 'pricesalesratioltm']);
+            break;
+          case 'lastCloseTevTotalRevenueLtm':
+            mapped.lastCloseTevTotalRevenueLtm = lookup(['lastCloseTevTotalRevenueLtm', 'lastclosetevtotalrevenueltm']);
+            break;
+          case 'lastClosePriceEarningsRatioLtm':
+            mapped.lastClosePriceEarningsRatioLtm = lookup(['lastClosePriceEarningsRatioLtm', 'lastclosepriceearningsratioltm']);
+            break;
+          case 'priceBookRatioQuarterly':
+            mapped.priceBookRatioQuarterly = lookup(['priceBookRatioQuarterly', 'pricebookratioquarterly']);
+            break;
+          // v2.4 ESG & Ownership response mappings:
+          case 'environmentalScore':
+            mapped.environmentalScore = lookup(['environmentalScore', 'environmentalscore']);
+            break;
+          case 'esgScore':
+            mapped.esgScore = lookup(['esgScore', 'esgscore']);
+            break;
+          case 'governanceScore':
+            mapped.governanceScore = lookup(['governanceScore', 'governancescore']);
+            break;
+          case 'socialScore':
+            mapped.socialScore = lookup(['socialScore', 'socialscore']);
+            break;
+          case 'highestControversy':
+            mapped.highestControversy = lookup(['highestControversy', 'highestcontroversy']);
+            break;
+          case 'insiderOwnershipPercent':
+            mapped.insiderOwnershipPercent = lookup(['insiderOwnershipPercent', 'insiderownershippercent', 'percentOfSharesOutHeldByInsider']);
+            break;
+          case 'institutionalOwnershipPercent':
+            mapped.institutionalOwnershipPercent = lookup(['institutionalOwnershipPercent', 'institutionalownershippercent', 'percentOfSharesOutHeldByInstitutions']);
             break;
           case 'pegRatio5Yr':
             mapped.pegRatio5Yr = lookup(['pegRatio5Yr', 'pegratio5yr']);

@@ -20,7 +20,6 @@ import {
   readRuntimeEnvironment,
   toLLMConfig,
 } from "@/runtime/llm/config.ts";
-import { withAutomaticOpenAIPromptCacheKeys } from "@/runtime/llm/prompt-cache.ts";
 import type {
   AgentLlmOptionsResolverArgs,
   Event,
@@ -401,19 +400,11 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         deps,
       });
 
-    const configForCall: ProviderConfig =
-      await withAutomaticOpenAIPromptCacheKeys(
-        mergeLLMRuntimeConfig(
-          persistedConfig,
-          agentRuntimeConfig,
-          securityRuntimeConfig,
-        ),
-        {
-          namespace: context.namespace ?? "default",
-          threadId,
-          agentId: String(payload.agent.id ?? payload.agent.name),
-        },
-      );
+    const configForCall: ProviderConfig = mergeLLMRuntimeConfig(
+      persistedConfig,
+      agentRuntimeConfig,
+      securityRuntimeConfig,
+    );
 
     assertAgentLLMConfig(
       { id: payload.agent.id ?? null, name: payload.agent.name },

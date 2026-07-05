@@ -27,6 +27,7 @@ Deno.test("openaiProvider auto-selects Responses API for current OpenAI model fa
   assertEquals(body.truncation, "disabled");
   assertEquals(body.max_output_tokens, 123);
   assertEquals(body.reasoning, { summary: "auto" });
+  assertEquals("prompt_cache_key" in body, false);
 });
 
 Deno.test("openaiProvider builds GPT-5 Responses body with Responses field names", () => {

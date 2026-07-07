@@ -157,7 +157,7 @@ Deno.test("createCopilotz keeps loading user features from resources.path when i
   }
 });
 
-Deno.test("createCopilotz loads manifest feature barrels and exposes opt-in admin routes", async () => {
+Deno.test("createCopilotz merges manifest feature actions and exposes opt-in admin routes", async () => {
   const tempDir = await Deno.makeTempDir();
   const resourcesDir = join(tempDir, "resources");
   const featuresDir = join(resourcesDir, "features");
@@ -199,7 +199,15 @@ Deno.test("createCopilotz loads manifest feature barrels and exposes opt-in admi
         feature.name === "admin"
       );
       assert(adminFeature);
-      assertEquals(Object.keys(adminFeature.actions), ["agents"]);
+      assertEquals(Object.keys(adminFeature.actions).sort(), [
+        "activity",
+        "agents",
+        "events",
+        "overview",
+        "participants",
+        "threads",
+        "usage",
+      ]);
 
       const extended = withApp(copilotz, { exposeAdminRoutes: true });
       const result = await extended.app.handle({

@@ -1258,6 +1258,25 @@ const isInitDebugEnabled = () => Deno.env.get("COPILOTZ_INIT_DEBUG") === "1";
 const elapsedMs = (startedAt: number) =>
   Number((performance.now() - startedAt).toFixed(1));
 
+function mergeFeatureEntries(features: FeatureEntry[]): FeatureEntry[] {
+  const byName = new Map<string, FeatureEntry>();
+  for (const feature of features) {
+    const existing = byName.get(feature.name);
+    if (!existing) {
+      byName.set(feature.name, {
+        ...feature,
+        actions: { ...feature.actions },
+      });
+      continue;
+    }
+    byName.set(feature.name, {
+      ...existing,
+      actions: { ...feature.actions, ...existing.actions },
+    });
+  }
+  return [...byName.values()];
+}
+
 /**
  * Creates and initializes a Copilotz runtime from agents, tools, resources,
  * database settings, and optional runtime adapters.
@@ -1456,14 +1475,7 @@ export async function createCopilotz(
     ...(config.features ?? []),
     ...(bundledResources.features ?? []),
   ];
-  // Deduplicate by name (first wins)
-  const featuresByName = new Map<string, (typeof resolvedFeatures)[0]>();
-  for (const f of resolvedFeatures) {
-    if (!featuresByName.has(f.name)) {
-      featuresByName.set(f.name, f);
-    }
-  }
-  let mergedFeatures = [...featuresByName.values()];
+  let mergedFeatures = mergeFeatureEntries(resolvedFeatures);
 
   // 1e. Resolve channels (user/config first, bundled last — first wins per side)
   let mergedChannels = mergeChannelEntries(

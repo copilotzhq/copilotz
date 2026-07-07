@@ -1,10 +1,11 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.52.19",
+  "version": "0.52.20",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
+    "./resources": "./resources/index.ts",
     "./tokens": "./runtime/tokens/index.ts",
     "./server": "./server/index.ts",
     "./create": "./create/mod.ts",

@@ -67,7 +67,7 @@ Deno.test("admin brain returns scoped nodes, semantic edges, clusters, and stats
   await db.ops.unsafeGraph.createEdge({
     sourceNodeId: knowledgeId,
     targetNodeId: workingId,
-    type: GRAPH_EDGE.RELATED_TO,
+    type: GRAPH_EDGE.MENTIONS,
   });
 
   const result = await brain({
@@ -85,7 +85,7 @@ Deno.test("admin brain returns scoped nodes, semantic edges, clusters, and stats
     true,
   );
   assertEquals(data.edges.length, 1);
-  assertEquals(data.edges[0].type, GRAPH_EDGE.RELATED_TO);
+  assertEquals(data.edges[0].type, GRAPH_EDGE.MENTIONS);
   assertEquals(data.stats.total, 2);
   assertEquals(data.stats.byLayer, { knowledge: 1, working: 1 });
   assertEquals(data.stats.byKind.decision, 1);
@@ -232,7 +232,7 @@ Deno.test("admin brain returns focus related and similar nodes", async () => {
   await db.ops.unsafeGraph.createEdge({
     sourceNodeId: focusId,
     targetNodeId: relatedId,
-    type: GRAPH_EDGE.SUPPORTS,
+    type: GRAPH_EDGE.MENTIONS,
   });
 
   const result = await brain({
@@ -248,6 +248,7 @@ Deno.test("admin brain returns focus related and similar nodes", async () => {
 
   assertEquals(data.related.length, 1);
   assertEquals(data.related[0].node.id, relatedId);
+  assertEquals(data.related[0].edge.type, GRAPH_EDGE.MENTIONS);
   assertEquals(data.related[0].direction, "out");
   assertEquals(data.similar.length, 1);
   assertEquals(data.similar[0].node.id, similarId);

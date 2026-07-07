@@ -125,8 +125,15 @@ entity, fact, claim, decision, preference, task, event, constraint
 Relations between items use native graph edges:
 
 ```text
-related_to, supports, contradicts, depends_on, supersedes
+mentions, related_to, supports, contradicts, depends_on, supersedes
 ```
+
+Entity nodes are first-class anchors. Consolidation should create durable
+`entity` nodes for important people, organizations, tenants, projects, products,
+agents, tools, APIs, providers, models, credentials, code modules, concepts,
+policies, goals, and recurring workstreams, then connect facts, decisions,
+tasks, preferences, events, and constraints back to those entities with
+`mentions`.
 
 Items are append-only. Changed knowledge creates a new item and, when known, a
 `supersedes` edge to the older item. The LLM may supersede only an older item

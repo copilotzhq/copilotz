@@ -8,6 +8,7 @@ import {
 } from "./_helpers.ts";
 
 const RELATION_EDGE_TYPES = new Set([
+  "mentions",
   "related_to",
   "supports",
   "contradicts",
@@ -652,6 +653,7 @@ async function loadEdgesForNodes(
   const nodeIds = nodes.map((node) => node.id);
   if (nodeIds.length === 0) return [];
   const placeholders = nodeIds.map((_, index) => `$${index + 1}`).join(", ");
+  const relationTypesParam = nodeIds.length + 1;
   const edgeResult = await copilotz.ops.query<BrainEdgeRow>(
     `SELECT
        e."id"::text AS "id",
@@ -664,9 +666,9 @@ async function loadEdgesForNodes(
      FROM "edges" AS e
      WHERE e."source_node_id"::text IN (${placeholders})
        AND e."target_node_id"::text IN (${placeholders})
-       AND e."type" IN ('related_to', 'supports', 'contradicts', 'depends_on', 'supersedes')
+       AND e."type" = ANY($${relationTypesParam})
      ORDER BY e."created_at" DESC, e."id" DESC`,
-    nodeIds,
+    [...nodeIds, [...RELATION_EDGE_TYPES]],
   );
   return edgeResult.rows
     .filter((edge) => RELATION_EDGE_TYPES.has(edge.type))

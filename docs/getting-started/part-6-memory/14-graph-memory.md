@@ -334,12 +334,20 @@ Each item is a standalone graph node with:
 Relations are native graph edges:
 
 ```text
+mentions
 related_to
 supports
 contradicts
 depends_on
 supersedes
 ```
+
+`entity` nodes are the stable anchors that make the Brain browsable. During
+consolidation, Copilotz asks the model to preserve durable entities such as
+people, organizations, tenants, projects, products, agents, tools, APIs,
+providers, models, credentials, code modules, concepts, policies, goals, and
+recurring workstreams. Durable facts, decisions, tasks, preferences, events, and
+constraints should connect back to the entities they are about with `mentions`.
 
 Items are append-only. When knowledge changes, the processor creates a new item
 and can connect it to an older visible item with `supersedes`. This preserves

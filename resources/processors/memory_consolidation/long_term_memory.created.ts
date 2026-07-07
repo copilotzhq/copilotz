@@ -111,7 +111,7 @@ const CONSOLIDATE_MEMORY_TOOL: ToolDefinition = {
   relations: Array<{
     /** localId of the source node. */
     source: string;
-    /** One of: related_to, supports, contradicts, depends_on, supersedes */
+    /** One of: mentions, related_to, supports, contradicts, depends_on, supersedes */
     type: string;
     /** localId or visible previous-checkpoint node ID of the target. */
     target: string;
@@ -165,6 +165,7 @@ const WORKING_BRAIN_NODE_FIELD_META = {
 >;
 
 const RELATION_TYPES: ReadonlySet<string> = new Set([
+  GRAPH_EDGE.MENTIONS,
   GRAPH_EDGE.RELATED_TO,
   GRAPH_EDGE.SUPPORTS,
   GRAPH_EDGE.CONTRADICTS,
@@ -1186,11 +1187,29 @@ function buildMemoryConsolidationInstruction(args: {
     "Never infer missing intent. Use null or [] only when this history range explicitly clears a value.",
     "Keep the challenge distinct from the current task and the desired outcome distinct from an activity.",
     "Keep unresolved blockers, questions, and actions until the history explicitly changes or resolves them.",
+    "",
+    "Entity preservation:",
+    "Before writing facts, decisions, tasks, preferences, events, or constraints, identify the durable entities that organize this memory.",
+    "Create entity brain nodes for people, organizations, tenants, projects, products, agents, tools, APIs, providers, models, credentials, code modules, documents, workflows, concepts, policies, goals, and recurring workstreams when they are central to the durable memory.",
+    "Every non-entity node that is about a durable entity must include a mentions relation to that entity or to a visible older entity node.",
+    "Prefer canonical entity names. Put aliases in content only when useful.",
+    "Do not create entity nodes for generic nouns, pronouns, transient wording, or one-off details.",
+    "Reuse visible older entity nodes by relating to their IDs instead of duplicating them.",
+    "If a durable entity materially changed, create a new entity node and supersede the visible older entity node.",
+    "",
+    "Relation coverage:",
+    "Use mentions when a durable memory is about an entity.",
+    "Use depends_on when one node cannot progress or be true without another.",
+    "Use supports when one node is evidence for another.",
+    "Use contradicts when one node conflicts with another.",
+    "Use related_to only when the relationship is real but more specific wording is unavailable.",
+    "Use supersedes only when replacing an older visible brain node.",
     reconciliationInstruction,
     "Every sourceMessageIds entry must be a messageId from the source message map.",
     "Assign every new brain node to exactly one writable memory space from this catalog.",
     `Writable memory spaces: ${JSON.stringify(writableMemorySpaces)}`,
     `If uncertain, use the default memory space ID: ${args.defaultWriteMemorySpaceId}`,
+    "Before returning JSON, verify that important entities are represented, durable non-entity nodes are linked to their main entities, and no duplicate entity was created when a visible previous entity node could be reused.",
     "Output ONLY the JSON object — no markdown, no explanation.",
     "",
     "Schema:",

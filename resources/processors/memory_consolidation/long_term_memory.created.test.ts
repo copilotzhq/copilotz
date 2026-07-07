@@ -193,6 +193,72 @@ Deno.test("memory candidate fusion preserves strong matches and rewards consensu
   );
 });
 
+Deno.test("consolidation accepts mentions relations and rejects unknown relation types", () => {
+  const parsed = parseConsolidationProposal(
+    JSON.stringify({
+      continuityPatch: {},
+      nodes: [{
+        localId: "entity-compass",
+        kind: "entity",
+        name: "Compass",
+        content: "Compass is the workspace being improved.",
+        sourceMessageIds: ["message-1"],
+      }, {
+        localId: "decision-admin",
+        kind: "decision",
+        name: "Admin decision",
+        content: "Admin memory should be entity-anchored.",
+        sourceMessageIds: ["message-1"],
+      }],
+      relations: [{
+        source: "decision-admin",
+        type: GRAPH_EDGE.MENTIONS,
+        target: "entity-compass",
+      }, {
+        source: "decision-admin",
+        type: "owns",
+        target: "entity-compass",
+      }],
+    }),
+    new Set(["message-1"]),
+    new Set(),
+  );
+
+  assertEquals(parsed.relations, [{
+    source: "decision-admin",
+    type: GRAPH_EDGE.MENTIONS,
+    target: "entity-compass",
+  }]);
+});
+
+Deno.test("consolidation relations may target visible older brain nodes", () => {
+  const parsed = parseConsolidationProposal(
+    JSON.stringify({
+      continuityPatch: {},
+      nodes: [{
+        localId: "task-credentials",
+        kind: "task",
+        name: "Credentials task",
+        content: "Build the tenant credentials admin.",
+        sourceMessageIds: ["message-1"],
+      }],
+      relations: [{
+        source: "task-credentials",
+        type: GRAPH_EDGE.MENTIONS,
+        target: "older-entity",
+      }],
+    }),
+    new Set(["message-1"]),
+    new Set(["older-entity"]),
+  );
+
+  assertEquals(parsed.relations, [{
+    source: "task-credentials",
+    type: GRAPH_EDGE.MENTIONS,
+    target: "older-entity",
+  }]);
+});
+
 Deno.test("consolidation may supersede only a visible checkpoint brain node", () => {
   const proposal = JSON.stringify({
     continuityPatch: currentStatePatch(
@@ -801,6 +867,86 @@ Deno.test("long-term-memory processor finalizes the reserved node atomically", a
   }
 });
 
+Deno.test("long-term-memory processor persists entity-anchored mentions edges", async () => {
+  const fixture = await createPendingCheckpoint();
+  const proposal = {
+    continuityPatch: currentStatePatch(
+      fixture.last.id,
+      "Compass admin memory is being made entity-anchored.",
+    ),
+    items: [{
+      localId: "entity-compass",
+      kind: "entity",
+      name: "Compass",
+      content:
+        "Compass is the tenant-aware workspace using Copilotz admin features.",
+      confidence: 0.95,
+      sourceMessageIds: [fixture.first.id],
+    }, {
+      localId: "decision-admin",
+      kind: "decision",
+      name: "Entity-anchored brain",
+      content:
+        "Brain consolidation should connect durable decisions back to entity nodes.",
+      confidence: 0.97,
+      sourceMessageIds: [fixture.last.id],
+    }],
+    relations: [{
+      source: "decision-admin",
+      type: GRAPH_EDGE.MENTIONS,
+      target: "entity-compass",
+    }],
+  };
+  const registries = mockRegistries(JSON.stringify(proposal));
+  try {
+    const event = {
+      id: `event-${crypto.randomUUID()}`,
+      type: "long_term_memory.created",
+      threadId: fixture.threadId,
+      subjectType: "long_term_memory",
+      subjectId: fixture.checkpoint.id,
+      payload: fixture.checkpoint,
+    } as unknown as Event;
+    await process(event, createDeps(fixture, registries));
+
+    const brainNodes = await fixture.db.ops.unsafeGraph.getNodesByNamespace(
+      fixture.namespace,
+      "brain_node",
+    );
+    const entity = brainNodes.find((node) =>
+      (node.data as Record<string, unknown>).kind === "entity" &&
+      node.name === "Compass"
+    );
+    const decision = brainNodes.find((node) =>
+      (node.data as Record<string, unknown>).kind === "decision" &&
+      node.name === "Entity-anchored brain"
+    );
+    if (!entity || !decision) {
+      throw new Error("Expected entity and decision brain nodes.");
+    }
+    assertEquals(entity.name, "Compass");
+    assertEquals(decision.name, "Entity-anchored brain");
+    const mentions = await fixture.db.ops.unsafeGraph.getEdgesForNode(
+      String(decision.id),
+      "out",
+      [GRAPH_EDGE.MENTIONS],
+    );
+    assertEquals(mentions.length, 1);
+    assertEquals(String(mentions[0].targetNodeId), String(entity.id));
+
+    const checkpoint = await fixture.db.ops.unsafeGraph.getNodeById(
+      String(fixture.checkpoint.id),
+    );
+    assertStringIncludes(checkpoint?.content ?? "", "[entity] Compass");
+    assertStringIncludes(
+      checkpoint?.content ?? "",
+      "Entity-anchored brain --mentions--> Compass",
+    );
+  } finally {
+    registries.restore();
+  }
+});
+
 Deno.test("long-term-memory consolidation appends one instruction to shared agent input", async () => {
   const fixture = await createPendingCheckpoint();
   const proposal = {
@@ -885,6 +1031,26 @@ Deno.test("long-term-memory consolidation appends one instruction to shared agen
     assertStringIncludes(
       finalInstruction.content ?? "",
       "Do not answer the user, do not route the conversation, and do not call tools.",
+    );
+    assertStringIncludes(
+      finalInstruction.content ?? "",
+      "Entity preservation:",
+    );
+    assertStringIncludes(
+      finalInstruction.content ?? "",
+      "Every non-entity node that is about a durable entity must include a mentions relation",
+    );
+    assertStringIncludes(
+      finalInstruction.content ?? "",
+      "Reuse visible older entity nodes by relating to their IDs instead of duplicating them.",
+    );
+    assertStringIncludes(
+      finalInstruction.content ?? "",
+      "mentions, related_to, supports, contradicts, depends_on, supersedes",
+    );
+    assertStringIncludes(
+      finalInstruction.content ?? "",
+      "Before returning JSON, verify that important entities are represented",
     );
     assertEquals(
       (finalInstruction.content ?? "").includes(

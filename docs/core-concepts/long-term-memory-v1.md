@@ -455,16 +455,16 @@ Embeddings reuse Copilotz's existing `embeddingConfig`.
 
 ## Estimated-token threshold
 
-The observer counts the same text eligible for normal model history:
+The observer estimates the persisted message-range footprint, not the final
+provider-specific prompt. It counts sender identity, message content, top-level
+tool calls, structured tool-call/tool-result metadata, and persisted reasoning
+text when those fields are stored on the message.
 
-- visible user and agent content;
-- projected tool results allowed by history policy;
-- no private reasoning or hidden framework metadata.
-
-The same dependency-free estimator used by request limiting counts text,
-protocol structure, tool calls/results, and supported media metadata. Provider
-usage calibrates it per process. `limitEstimatedInputTokens` remains the final
-budget for the complete request.
+This differs from normal LLM-visible history projection, which can omit
+requester-only peer tool results and can gate reasoning history. The rollover
+threshold is intentionally driven by the stored range that will be consolidated.
+`limitEstimatedInputTokens` remains the final budget for an individual LLM
+request.
 
 For the first checkpoint, the observer pages backward from the triggering
 message and stops once the threshold is reached. For later checkpoints,

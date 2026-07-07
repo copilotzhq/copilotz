@@ -154,14 +154,15 @@ message.created
             +-- failure --> status: "failed"
 ```
 
-Reservation is deliberately cheap. The `message.created` observer counts visible
-tokens and creates the pending node; it does not call an LLM or an embedding
-provider.
+Reservation is deliberately cheap. The `message.created` observer estimates the
+persisted message-range footprint and creates the pending node; it does not call
+an LLM or an embedding provider.
 
 The background processor then:
 
 1. loads the exact reserved message range;
-2. projects only content eligible for shared conversation memory;
+2. builds the reserved agent's normal LLM input for that range, using the same
+   history policy as an agent turn;
 3. shows the reserved agent's LLM the previous checkpoint and asks for a
    continuity patch, structured brain nodes, and relations;
 4. validates relations and supersession against item IDs visible in that
@@ -219,35 +220,43 @@ This is tail retention, not duplicated overlap.
 
 ## Configuration reference
 
-| Option                        | Meaning                                                                                         | Bundled default |
-| ----------------------------- | ----------------------------------------------------------------------------------------------- | --------------: |
-| `triggerEstimatedTokens`      | Start a rollover when model-visible messages since the active checkpoint reach this estimate    |        `20_000` |
-| `retainRecentEstimatedTokens` | Keep at least this many newest estimated tokens as complete raw messages outside the checkpoint |             `0` |
-| `maxContentEstimatedTokens`   | Maximum estimated tokens in the rendered checkpoint, preserving complete blocks                 |        `12_000` |
-| `retrievalLimit`              | Maximum older brain nodes selected after continuity and item retrieval                          |            `20` |
+| Option                        | Meaning                                                                                             | Bundled default |
+| ----------------------------- | --------------------------------------------------------------------------------------------------- | --------------: |
+| `triggerEstimatedTokens`      | Start a rollover when the persisted message range since the active checkpoint reaches this estimate |        `20_000` |
+| `retainRecentEstimatedTokens` | Keep at least this many newest estimated tokens as complete raw messages outside the checkpoint     |             `0` |
+| `maxContentEstimatedTokens`   | Maximum estimated tokens in the rendered checkpoint, preserving complete blocks                     |        `12_000` |
+| `retrievalLimit`              | Maximum older brain nodes selected after continuity and item retrieval                              |            `20` |
 
 ### `triggerEstimatedTokens`
 
-This uses Copilotz's lightweight universal token estimator.
+This uses Copilotz's lightweight universal token estimator over persisted
+messages, not the final provider-specific prompt.
 
-Copilotz counts the same shared content that is eligible for conversation
-memory:
+The threshold estimate counts:
 
-- visible user and agent messages;
-- permitted tool-result projections;
-- no private reasoning;
-- no requester-only tool output;
-- no hidden framework metadata.
+- sender type and sender ID;
+- message content;
+- top-level tool calls persisted on the message;
+- structured tool-call/tool-result metadata persisted on the message;
+- persisted reasoning text.
 
-Characters make the rollover deterministic and cheap. Token limits remain a
-separate final safety mechanism.
+It does not count arbitrary hidden framework metadata, but it does include large
+persisted tool outputs and reasoning when they are stored in the message record.
+That is intentional: rollover is driven by the stored range that will be
+consolidated, not by the narrower per-agent history projection used for a single
+LLM request.
+
+The dependency-free estimate makes rollover deterministic and cheap. Provider
+token limits remain a separate final safety mechanism.
 
 Only an agent-authored `message.created` event attempts checkpoint reservation.
 Crossing the threshold on a user message alone does not start consolidation
 until an agent response is created.
 
-Consolidation runs immediately on a dedicated child-thread queue, so it does not
-block tool settlements or agent continuations in the conversation queue.
+Reservation records the pending checkpoint from a long-term-memory child thread
+and emits `long_term_memory.created` through the normal outbox. Consolidation is
+asynchronous relative to the interactive response path, so it does not block the
+agent response that crossed the threshold.
 
 ### `retainRecentEstimatedTokens`
 
@@ -414,11 +423,12 @@ checkpoint 4 and reuse the new prefix.
 This design trades one cache miss per rollover for stable reuse between
 rollovers.
 
-Consolidation follows the same cache-aware layout. It builds the system prompt
-with the reserved agent's normal context and active checkpoint, then places the
-closing conversation, retrieved items, and output schema in the dynamic user
-message. The consolidation call can therefore reuse the same stable agent prefix
-instead of introducing a separate memory-agent prompt.
+Consolidation follows the same cache-aware layout. It builds the reserved
+agent's normal context, renders the reserved message range through the same
+history generator used by agent turns, and appends one dynamic instruction with
+the previous checkpoint, source-message map, writable memory-space catalog, and
+output schema. The consolidation call can therefore reuse the same stable agent
+prefix instead of introducing a separate memory-agent prompt.
 
 ## Interaction with `limitEstimatedInputTokens`
 

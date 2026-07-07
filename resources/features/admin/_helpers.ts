@@ -24,6 +24,10 @@ export interface AdminUsageBreakdown {
 
 export interface AdminUsageTotals extends AdminUsageBreakdown {
   totalCalls: number;
+  failedCalls: number;
+  unpricedCalls: number;
+  totalDurationMs: number;
+  totalCredits: number;
 }
 
 export interface AdminOverview {
@@ -144,11 +148,54 @@ export function buildUsageCoalesceSelects(alias: string): string {
     .join(",\n         ");
 }
 
+function usageMetricExpr(dataColumn: string, metric: string): string {
+  return `NULLIF(${dataColumn}->'metrics'->>'${metric}', '')::float8`;
+}
+
+function usageCallsExpr(dataColumn: string): string {
+  return `COALESCE(${usageMetricExpr(dataColumn, "calls")}, 1)`;
+}
+
+function usageCostExpr(dataColumn: string): string {
+  return `NULLIF(${dataColumn}->>'totalCostUsd', '')::float8`;
+}
+
+export function buildUsageMeteringSumSelects(dataColumn: string): string {
+  const callsExpr = usageCallsExpr(dataColumn);
+  const failedStatuses = "'failed', 'cancelled', 'aborted', 'error'";
+  return [
+    `COALESCE(SUM(${callsExpr}), 0)::float8 AS "totalCalls"`,
+    `COALESCE(SUM(COALESCE(${
+      usageMetricExpr(dataColumn, "durationMs")
+    }, 0)), 0)::float8 AS "totalDurationMs"`,
+    `COALESCE(SUM(COALESCE(${
+      usageMetricExpr(dataColumn, "credits")
+    }, 0)), 0)::float8 AS "totalCredits"`,
+    `COALESCE(SUM(CASE WHEN COALESCE(${dataColumn}->>'status', '') IN (${failedStatuses}) THEN ${callsExpr} ELSE 0 END), 0)::float8 AS "failedCalls"`,
+    `COALESCE(SUM(CASE WHEN ${
+      usageCostExpr(dataColumn)
+    } IS NULL THEN ${callsExpr} ELSE 0 END), 0)::float8 AS "unpricedCalls"`,
+  ].join(",\n         ");
+}
+
+export function buildUsageMeteringCoalesceSelects(alias: string): string {
+  return [
+    "totalCalls",
+    "totalDurationMs",
+    "totalCredits",
+    "failedCalls",
+    "unpricedCalls",
+  ].map((key) => `COALESCE("${alias}"."${key}", 0)::float8 AS "${key}"`)
+    .join(",\n         ");
+}
+
 export interface AdminUsageSourceScope {
   namespacePlaceholder?: string;
   fromPlaceholder?: string;
   toPlaceholder?: string;
   threadIdPlaceholder?: string;
+  kindPlaceholder?: string;
+  includeAllKinds?: boolean;
 }
 
 export function pushAdminUsageSourceScope(
@@ -157,6 +204,7 @@ export function pushAdminUsageSourceScope(
   from?: string | null,
   to?: string | null,
   threadId?: string,
+  kind?: string | null,
 ): AdminUsageSourceScope {
   const scope: AdminUsageSourceScope = {};
   if (namespace) {
@@ -177,6 +225,12 @@ export function pushAdminUsageSourceScope(
     params.push(threadId);
     scope.threadIdPlaceholder = `$${params.length}`;
   }
+  if (kind === null || kind === "all") {
+    scope.includeAllKinds = true;
+  } else if (kind && kind !== "llm") {
+    params.push(kind);
+    scope.kindPlaceholder = `$${params.length}`;
+  }
   return scope;
 }
 
@@ -184,13 +238,17 @@ function buildUsageSourceNodeFilters(
   alias: string,
   scope: AdminUsageSourceScope,
 ): string {
-  // Aggregate from the lightweight unified usage ledger (scoped to LLM usage
-  // to preserve the LLM-centric semantics of these dashboards). Usage rows are
-  // tiny and flat, so this avoids detoasting full conversation payloads.
-  const filters = [
-    `${alias}."type" = 'usage'`,
-    `${alias}."data"->>'kind' = 'llm'`,
-  ];
+  // Aggregate from the lightweight unified usage ledger. By default admin
+  // aggregate surfaces remain LLM-scoped for compatibility; callers can opt
+  // into a specific kind or all kinds for the generic Usage explorer.
+  const filters = [`${alias}."type" = 'usage'`];
+  if (!scope.includeAllKinds) {
+    filters.push(
+      scope.kindPlaceholder
+        ? `${alias}."data"->>'kind' = ${scope.kindPlaceholder}`
+        : `${alias}."data"->>'kind' = 'llm'`,
+    );
+  }
   if (scope.namespacePlaceholder) {
     filters.push(`${alias}."namespace" = ${scope.namespacePlaceholder}`);
   }
@@ -220,6 +278,10 @@ export function buildAdminUsageSourceCte(
          a."created_at",
          COALESCE(a."data"->>'threadId', a."source_id") AS "threadId",
          NULLIF(a."data"->>'eventId', '') AS "eventId",
+         COALESCE(a."data"->>'kind', 'unknown') AS "kind",
+         COALESCE(a."data"->>'resource', '') AS "resource",
+         COALESCE(a."data"->>'operation', '') AS "operation",
+         COALESCE(a."data"->>'status', '') AS "status",
          COALESCE(a."data"->>'agentId', '') AS "agentId",
          COALESCE(a."data"->>'initiatedById', '') AS "initiatedById",
          COALESCE(a."data"->>'provider', '') AS "provider",
@@ -280,7 +342,14 @@ export function emptyUsageBreakdown(): AdminUsageBreakdown {
 }
 
 export function emptyUsageTotals(): AdminUsageTotals {
-  return { totalCalls: 0, ...emptyUsageBreakdown() };
+  return {
+    totalCalls: 0,
+    failedCalls: 0,
+    unpricedCalls: 0,
+    totalDurationMs: 0,
+    totalCredits: 0,
+    ...emptyUsageBreakdown(),
+  };
 }
 
 export function sumUsageTotalsFromPoints(
@@ -289,6 +358,10 @@ export function sumUsageTotalsFromPoints(
   return points.reduce<AdminUsageTotals>(
     (acc, point) => ({
       totalCalls: acc.totalCalls + toNum(point.totalCalls),
+      failedCalls: acc.failedCalls + toNum(point.failedCalls),
+      unpricedCalls: acc.unpricedCalls + toNum(point.unpricedCalls),
+      totalDurationMs: acc.totalDurationMs + toNum(point.totalDurationMs),
+      totalCredits: acc.totalCredits + toNum(point.totalCredits),
       inputTokens: acc.inputTokens + toNum(point.inputTokens),
       outputTokens: acc.outputTokens + toNum(point.outputTokens),
       reasoningTokens: acc.reasoningTokens + toNum(point.reasoningTokens),
@@ -335,6 +408,10 @@ export function toUsageTotals(
 ): AdminUsageTotals {
   return {
     totalCalls: toNum((row as Record<string, unknown>)?.[callCountKey]),
+    failedCalls: toNum(row?.failedCalls),
+    unpricedCalls: toNum(row?.unpricedCalls),
+    totalDurationMs: toNum(row?.totalDurationMs),
+    totalCredits: toNum(row?.totalCredits),
     ...toUsageBreakdown(row),
   };
 }

@@ -7,6 +7,8 @@ import {
   type AdminUsageTotals,
   buildAdminUsageSourceCte,
   buildUsageCoalesceSelects,
+  buildUsageMeteringCoalesceSelects,
+  buildUsageMeteringSumSelects,
   buildUsageSumSelects,
   pushAdminUsageSourceScope,
   sumUsageTotalsFromPoints,
@@ -17,6 +19,10 @@ import {
 
 type UsageInterval = "minute" | "hour" | "day" | "week" | "month";
 type UsageGroupBy =
+  | "kind"
+  | "resource"
+  | "operation"
+  | "status"
   | "thread"
   | "participant"
   | "namespace"
@@ -45,6 +51,10 @@ const INTERVALS = new Set<UsageInterval>([
 ]);
 
 const GROUPS = new Set<UsageGroupBy>([
+  "kind",
+  "resource",
+  "operation",
+  "status",
   "thread",
   "participant",
   "namespace",
@@ -75,6 +85,19 @@ function normalizeAttribution(value: unknown): UsageAttribution {
     : "generatedBy";
 }
 
+function normalizeKind(value: unknown): string | null {
+  if (value === "all") return null;
+  if (typeof value !== "string" || value.trim().length === 0) return "llm";
+  const trimmed = value.trim();
+  return /^[A-Za-z0-9_.:-]+$/.test(trimmed) ? trimmed : "llm";
+}
+
+function normalizeExactFilter(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
 export default async function (
   request: { query?: Record<string, unknown> },
   copilotz: Copilotz,
@@ -84,6 +107,7 @@ export default async function (
   const interval = normalizeInterval(query.interval);
   const groupBy = normalizeGroupBy(query.groupBy);
   const attribution = normalizeAttribution(query.attribution);
+  const kind = normalizeKind(query.kind);
   const participantEdgeTypes = attribution === "initiatedBy"
     ? USAGE_INITIATOR_EDGE_TYPES
     : USAGE_GENERATOR_EDGE_TYPES;
@@ -102,6 +126,7 @@ export default async function (
     query.from as string | undefined,
     query.to as string | undefined,
     threadId,
+    kind,
   );
 
   const namespace = typeof query.namespace === "string"
@@ -117,23 +142,37 @@ export default async function (
     filters.push(`u."created_at" <= ${sourceScope.toPlaceholder}`);
   }
 
-  const provider = typeof query.provider === "string"
-    ? query.provider
-    : undefined;
+  const provider = normalizeExactFilter(query.provider);
   if (provider) {
     params.push(provider);
     filters.push(`u."provider" = $${params.length}`);
   }
 
-  const model = typeof query.model === "string" ? query.model : undefined;
+  const model = normalizeExactFilter(query.model);
   if (model) {
     params.push(model);
     filters.push(`u."model" = $${params.length}`);
   }
 
-  const participantId = typeof query.participantId === "string"
-    ? query.participantId
-    : undefined;
+  const resource = normalizeExactFilter(query.resource);
+  if (resource) {
+    params.push(resource);
+    filters.push(`u."resource" = $${params.length}`);
+  }
+
+  const operation = normalizeExactFilter(query.operation);
+  if (operation) {
+    params.push(operation);
+    filters.push(`u."operation" = $${params.length}`);
+  }
+
+  const status = normalizeExactFilter(query.status);
+  if (status && status !== "all") {
+    params.push(status);
+    filters.push(`u."status" = $${params.length}`);
+  }
+
+  const participantId = normalizeExactFilter(query.participantId);
   const participantType = typeof query.participantType === "string" &&
       query.participantType !== "all"
     ? query.participantType
@@ -176,7 +215,7 @@ export default async function (
          SELECT
            DATE_TRUNC('${interval}', u."created_at") AS "bucket",
            COALESCE(${participantKeyExpr}, 'unknown') AS "groupKey",
-           COUNT(*)::int AS "totalCalls",
+           ${buildUsageMeteringSumSelects(`u."data"`)},
            ${buildUsageSumSelects(`u."data"`)}
          FROM "admin_usage_source" u
          WHERE ${whereClause}
@@ -197,10 +236,10 @@ export default async function (
          "bucket",
          "groupKey",
          "groupLabel",
-         COALESCE("totalCalls", 0)::int AS "totalCalls",
+         ${buildUsageMeteringCoalesceSelects("usage_with_participant")},
          ${buildUsageCoalesceSelects("usage_with_participant")}
        FROM "usage_with_participant"
-       ORDER BY "bucket" ASC, "totalCostUsd" DESC, "totalTokens" DESC`,
+       ORDER BY "bucket" ASC, "totalCostUsd" DESC, "totalCalls" DESC, "totalTokens" DESC`,
       params,
     );
 
@@ -251,7 +290,15 @@ export default async function (
     ? `LEFT JOIN "threads" t ON t."id" = u."threadId"`
     : "";
 
-  const groupExpr = groupBy === "thread"
+  const groupExpr = groupBy === "kind"
+    ? `COALESCE(NULLIF(u."kind", ''), 'unknown')`
+    : groupBy === "resource"
+    ? `COALESCE(NULLIF(u."resource", ''), 'unknown')`
+    : groupBy === "operation"
+    ? `COALESCE(NULLIF(u."operation", ''), 'unknown')`
+    : groupBy === "status"
+    ? `COALESCE(NULLIF(u."status", ''), 'unknown')`
+    : groupBy === "thread"
     ? `COALESCE(u."threadId", 'unknown')`
     : groupBy === "namespace"
     ? `COALESCE(u."namespace", 'unknown')`
@@ -277,7 +324,7 @@ export default async function (
          DATE_TRUNC('${interval}', u."created_at") AS "bucket",
          ${groupExpr} AS "groupKey",
          ${labelExpr} AS "groupLabel",
-         COUNT(*)::int AS "totalCalls",
+         ${buildUsageMeteringSumSelects(`u."data"`)},
          ${buildUsageSumSelects(`u."data"`)}
        FROM "admin_usage_source" u
        ${participantJoins}
@@ -289,10 +336,10 @@ export default async function (
        "bucket",
        "groupKey",
        "groupLabel",
-       COALESCE("totalCalls", 0)::int AS "totalCalls",
+       ${buildUsageMeteringCoalesceSelects("usage_series")},
        ${buildUsageCoalesceSelects("usage_series")}
      FROM "usage_series"
-     ORDER BY "bucket" ASC, "totalCostUsd" DESC, "totalTokens" DESC`,
+     ORDER BY "bucket" ASC, "totalCostUsd" DESC, "totalCalls" DESC, "totalTokens" DESC`,
     params,
   );
 

@@ -287,6 +287,129 @@ Deno.test("admin usage reads flat metrics from the usage ledger", async () => {
   assertEquals(data.totals.totalCostUsd, 0.03);
 });
 
+Deno.test("admin usage aggregates mixed LLM and tool usage ledger rows", async () => {
+  const db = await createDatabase({ url: ":memory:" });
+  const namespace = "tenant-usage-mixed";
+  const threadId = crypto.randomUUID();
+  await db.ops.findOrCreateThread(threadId, {
+    namespace,
+    name: "Mixed Usage Thread",
+    participants: ["user-mixed", "agent-mixed"],
+  });
+
+  const manager = createCollectionsManager(db, [participantCollection]);
+  const collections = manager.withNamespace(namespace);
+  await collections.participant.upsertIdentity({
+    externalId: "agent-mixed",
+    participantType: "agent",
+    name: "Mixed Agent",
+    agentId: "agent-mixed",
+  });
+  await collections.participant.upsertIdentity({
+    externalId: "user-mixed",
+    participantType: "human",
+    name: "Mixed User",
+  });
+
+  const usageService = createUsageService({ ops: db.ops });
+  await usageService.createUsageRecord({
+    threadId,
+    eventId: "mixed-llm",
+    agentId: "agent-mixed",
+    runSender: { externalId: "user-mixed" },
+    provider: "openai",
+    model: "gpt-mixed",
+    usage: {
+      inputTokens: 30,
+      outputTokens: 10,
+      totalTokens: 40,
+      source: "provider",
+      status: "completed",
+    },
+    cost: {
+      source: "openrouter",
+      currency: "USD",
+      pricingModelId: "openai/gpt-mixed",
+      inputCostUsd: 0.03,
+      outputCostUsd: 0.02,
+      totalCostUsd: 0.05,
+    },
+  });
+  await usageService.recordUsage({
+    kind: "tool",
+    resource: "kanban.create_card",
+    operation: "tool.exec",
+    status: "completed",
+    threadId,
+    eventId: "mixed-tool-1",
+    agentId: "agent-mixed",
+    initiatedById: "user-mixed",
+    metrics: { calls: 1, durationMs: 1200 },
+    cost: { currency: "USD", total: 0.2, source: "custom" },
+    dedupeKey: "tool-1",
+  });
+  await usageService.recordUsage({
+    kind: "tool",
+    resource: "sandbox.exec",
+    operation: "tool.exec",
+    status: "failed",
+    threadId,
+    eventId: "mixed-tool-2",
+    agentId: "agent-mixed",
+    initiatedById: "user-mixed",
+    metrics: { calls: 1, durationMs: 300, credits: 2 },
+    dedupeKey: "tool-2",
+  });
+
+  const defaultResult = await usage({
+    query: { namespace, groupBy: "kind" },
+  }, { ops: db.ops } as any);
+  const defaultData = defaultResult.data as any;
+  assertEquals(defaultData.points.length, 1);
+  assertEquals(defaultData.points[0].groupKey, "llm");
+  assertEquals(defaultData.totals.totalCalls, 1);
+
+  const allKindsResult = await usage({
+    query: { namespace, kind: "all", groupBy: "kind" },
+  }, { ops: db.ops } as any);
+  const allKindsData = allKindsResult.data as any;
+  const totalsByKind = new Map(
+    allKindsData.points.map((point: any) => [point.groupKey, point]),
+  );
+
+  assertEquals(allKindsData.totals.totalCalls, 3);
+  assertEquals(allKindsData.totals.totalTokens, 40);
+  assertEquals(allKindsData.totals.totalCostUsd, 0.25);
+  assertEquals(allKindsData.totals.totalDurationMs, 1500);
+  assertEquals(allKindsData.totals.failedCalls, 1);
+  assertEquals(allKindsData.totals.unpricedCalls, 1);
+  assertEquals(allKindsData.totals.totalCredits, 2);
+  assertEquals((totalsByKind.get("llm") as any).totalCalls, 1);
+  assertEquals((totalsByKind.get("tool") as any).totalCalls, 2);
+
+  const toolResult = await usage({
+    query: { namespace, kind: "tool", groupBy: "resource" },
+  }, { ops: db.ops } as any);
+  const toolData = toolResult.data as any;
+  const totalsByResource = new Map(
+    toolData.points.map((point: any) => [point.groupKey, point]),
+  );
+  assertEquals(toolData.totals.totalCalls, 2);
+  assertEquals(
+    (totalsByResource.get("kanban.create_card") as any).totalCostUsd,
+    0.2,
+  );
+  assertEquals((totalsByResource.get("sandbox.exec") as any).failedCalls, 1);
+
+  const failedToolResult = await usage({
+    query: { namespace, kind: "tool", groupBy: "status", status: "failed" },
+  }, { ops: db.ops } as any);
+  const failedToolData = failedToolResult.data as any;
+  assertEquals(failedToolData.points.length, 1);
+  assertEquals(failedToolData.points[0].groupKey, "failed");
+  assertEquals(failedToolData.totals.totalDurationMs, 300);
+});
+
 Deno.test("admin aggregate endpoints read the usage ledger", async () => {
   const db = await createDatabase({ url: ":memory:" });
   const namespace = "tenant-admin-aggregates";

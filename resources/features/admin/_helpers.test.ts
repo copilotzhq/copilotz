@@ -5,6 +5,7 @@ import {
 import {
   buildAdminUsageSourceCte,
   buildAttemptUsageSumSelects,
+  buildUsageMeteringSumSelects,
   buildUsageSumSelects,
 } from "./_helpers.ts";
 
@@ -53,6 +54,16 @@ Deno.test("admin attempt usage sums read nested canonical fields", () => {
   assert(!sql.includes(`legacy_usage`));
 });
 
+Deno.test("admin usage metering sums read generic metrics", () => {
+  const sql = buildUsageMeteringSumSelects('u."data"');
+
+  assertStringIncludes(sql, `->'metrics'->>'calls'`);
+  assertStringIncludes(sql, `->'metrics'->>'durationMs'`);
+  assertStringIncludes(sql, `->'metrics'->>'credits'`);
+  assertStringIncludes(sql, `"failedCalls"`);
+  assertStringIncludes(sql, `"unpricedCalls"`);
+});
+
 Deno.test("admin usage source reads canonical usage ledger rows", () => {
   const sql = buildAdminUsageSourceCte();
 
@@ -61,9 +72,30 @@ Deno.test("admin usage source reads canonical usage ledger rows", () => {
   // Flat passthrough — no per-row jsonb rebuild of nested usage/cost.
   assert(!sql.includes(`jsonb_build_object(`));
   assertStringIncludes(sql, `a."data" AS "data"`);
+  assertStringIncludes(sql, `a."data"->>'resource'`);
+  assertStringIncludes(sql, `a."data"->>'operation'`);
+  assertStringIncludes(sql, `a."data"->>'status'`);
   assertStringIncludes(sql, `a."data"->>'initiatedById'`);
   assert(!sql.includes(`legacy_usage`));
   assertStringIncludes(sql, `a."data"->>'eventId'`);
+});
+
+Deno.test("admin usage source can opt into all usage kinds", () => {
+  const sql = buildAdminUsageSourceCte(`"admin_usage_source"`, {
+    includeAllKinds: true,
+  });
+
+  assertStringIncludes(sql, `a."type" = 'usage'`);
+  assert(!sql.includes(`a."data"->>'kind' = 'llm'`));
+});
+
+Deno.test("admin usage source can filter a specific non-LLM kind", () => {
+  const sql = buildAdminUsageSourceCte(`"admin_usage_source"`, {
+    kindPlaceholder: "$1",
+  });
+
+  assertStringIncludes(sql, `a."data"->>'kind' = $1`);
+  assert(!sql.includes(`a."data"->>'kind' = 'llm'`));
 });
 
 Deno.test("admin usage source can push threadId into source scans", () => {

@@ -35,6 +35,18 @@ CREATE INDEX IF NOT EXISTS "idx_nodes_usage_thread_time"
   ON "nodes" ("namespace", ("data"->>'threadId'), "created_at")
   WHERE "type" = 'usage';
 
+CREATE INDEX IF NOT EXISTS "idx_nodes_usage_resource_time"
+  ON "nodes" ("namespace", ("data"->>'resource'), "created_at")
+  WHERE "type" = 'usage';
+
+CREATE INDEX IF NOT EXISTS "idx_nodes_usage_operation_time"
+  ON "nodes" ("namespace", ("data"->>'operation'), "created_at")
+  WHERE "type" = 'usage';
+
+CREATE INDEX IF NOT EXISTS "idx_nodes_usage_status_time"
+  ON "nodes" ("namespace", ("data"->>'status'), "created_at")
+  WHERE "type" = 'usage';
+
 CREATE INDEX IF NOT EXISTS "idx_nodes_usage_dedupe"
   ON "nodes" ("namespace", ("data"->>'dedupeKey'))
   WHERE "type" = 'usage' AND ("data"->>'dedupeKey') IS NOT NULL;

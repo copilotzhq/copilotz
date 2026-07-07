@@ -148,6 +148,15 @@ const REQUIRED_RUNTIME_INDEXES = [
   `CREATE INDEX IF NOT EXISTS "idx_nodes_usage_thread_time"
      ON "nodes" ("namespace", ("data"->>'threadId'), "created_at")
      WHERE "type" = 'usage'`,
+  `CREATE INDEX IF NOT EXISTS "idx_nodes_usage_resource_time"
+     ON "nodes" ("namespace", ("data"->>'resource'), "created_at")
+     WHERE "type" = 'usage'`,
+  `CREATE INDEX IF NOT EXISTS "idx_nodes_usage_operation_time"
+     ON "nodes" ("namespace", ("data"->>'operation'), "created_at")
+     WHERE "type" = 'usage'`,
+  `CREATE INDEX IF NOT EXISTS "idx_nodes_usage_status_time"
+     ON "nodes" ("namespace", ("data"->>'status'), "created_at")
+     WHERE "type" = 'usage'`,
 ] as const;
 
 const REQUIRED_RUNTIME_DATA_MIGRATIONS = [

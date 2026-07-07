@@ -99,6 +99,7 @@ import type {
   ChatContext,
   CopilotzDb,
   DatabaseConfig,
+  EmbeddingConfig,
   EventProcessor,
   HistoryTransform,
   LlmCallEventPayload,
@@ -118,6 +119,7 @@ import type {
 } from "@/types/index.ts";
 
 import type { UsageOptions } from "@/runtime/usage/types.ts";
+import type { EmbeddingResponse } from "@/runtime/embeddings/types.ts";
 
 import defaultBanner from "@/runtime/banner.ts";
 import { startInteractiveCli } from "@/runtime/cli.ts";
@@ -1104,6 +1106,18 @@ export interface Copilotz {
       refOrId: string,
       options?: { namespace?: string },
     ) => Promise<string>;
+  };
+  /** Embedding utilities backed by the resolved project embedding providers. */
+  embeddings: {
+    /**
+     * Embeds text using this Copilotz instance's RAG embedding config by
+     * default, with optional per-call overrides.
+     */
+    embed: (
+      texts: string[],
+      embeddingConfig?: Partial<EmbeddingConfig>,
+      options?: { env?: Record<string, string> },
+    ) => Promise<EmbeddingResponse>;
   };
   /**
    * Custom collections for application data storage.
@@ -2203,6 +2217,30 @@ export async function createCopilotz(
         const { bytes, mime } = await store.get(id);
         const base64 = bytesToBase64(bytes);
         return `data:${mime};base64,${base64}`;
+      },
+    },
+    embeddings: {
+      embed: async (
+        texts: string[],
+        embeddingConfig?: Partial<EmbeddingConfig>,
+        options?: { env?: Record<string, string> },
+      ) => {
+        const effectiveConfig = {
+          ...(config.rag?.embedding ?? {}),
+          ...(embeddingConfig ?? {}),
+        } as Partial<EmbeddingConfig>;
+        if (!effectiveConfig.provider || !effectiveConfig.model) {
+          throw new Error(
+            "Embedding configuration is required to embed text.",
+          );
+        }
+        const { embed } = await import("@/runtime/embeddings/index.ts");
+        return await embed(
+          texts,
+          effectiveConfig as EmbeddingConfig,
+          options?.env ?? {},
+          embeddingProviderRegistry,
+        );
       },
     },
     collections: collectionsManager,

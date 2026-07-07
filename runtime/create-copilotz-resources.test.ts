@@ -202,6 +202,7 @@ Deno.test("createCopilotz merges manifest feature actions and exposes opt-in adm
       assertEquals(Object.keys(adminFeature.actions).sort(), [
         "activity",
         "agents",
+        "brain",
         "events",
         "overview",
         "participants",
@@ -221,6 +222,69 @@ Deno.test("createCopilotz merges manifest feature actions and exposes opt-in adm
       await copilotz.shutdown();
     }
   } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("createCopilotz exposes embeddings helper backed by resolved providers", async () => {
+  const tempDir = await Deno.makeTempDir();
+  const resourcesDir = join(tempDir, "resources");
+  const embeddingsDir = join(resourcesDir, "embeddings");
+  const originalFetch = globalThis.fetch;
+
+  try {
+    await Deno.mkdir(embeddingsDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(embeddingsDir, "openai.ts"),
+      `export default function mockOpenAiEmbeddingProvider() {
+  return {
+    endpoint: "https://mock.local/embeddings",
+    headers: () => ({ "content-type": "application/json" }),
+    body: (texts) => ({ texts }),
+    extractEmbeddings: (data) => data.embeddings,
+  };
+}
+`,
+    );
+    globalThis.fetch = ((input, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            embeddings: (body.texts ?? []).map(() => [0.25, 0.75]),
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      );
+    }) as typeof fetch;
+
+    const copilotz = await createCopilotz({
+      dbConfig: { url: ":memory:" },
+      agents: [TEST_AGENT],
+      rag: {
+        embedding: {
+          provider: "openai",
+          model: "mock-embedding",
+        },
+      },
+      resources: {
+        path: [resourcesDir],
+      },
+    });
+
+    try {
+      const result = await copilotz.embeddings.embed(["tenant policy"]);
+      assertEquals(result.model, "mock-embedding");
+      assertEquals(result.dimensions, 2);
+      assertEquals(result.embeddings, [[0.25, 0.75]]);
+    } finally {
+      await copilotz.shutdown();
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
     await Deno.remove(tempDir, { recursive: true });
   }
 });

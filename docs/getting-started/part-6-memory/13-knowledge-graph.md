@@ -14,23 +14,36 @@ status: stable
 
 RAG is great for factual lookup. But it breaks down on relational questions.
 
-"Find all documents about authentication" — RAG handles this fine.  
-"Who is the owner of the authentication service?" — RAG might find a document that mentions it, but only if the exact phrasing matches.  
-"List all services owned by engineers who joined in Q1" — RAG can't answer this at all. It doesn't know about relationships.
+"Find all documents about authentication" — RAG handles this fine.\
+"Who is the owner of the authentication service?" — RAG might find a document
+that mentions it, but only if the exact phrasing matches.\
+"List all services owned by engineers who joined in Q1" — RAG can't answer this
+at all. It doesn't know about relationships.
 
-A vector database stores blobs of text and their similarity scores. It has no concept of "Alice *works on* Project X" or "Service Y *depends on* Service Z." For relationship-aware queries, you need a graph.
+A vector database stores blobs of text and their similarity scores. It has no
+concept of "Alice _works on_ Project X" or "Service Y _depends on_ Service Z."
+For relationship-aware queries, you need a graph.
 
-But graph databases are a separate, heavyweight system — a new query language to learn, a new server to operate, a new integration to maintain.
+But graph databases are a separate, heavyweight system — a new query language to
+learn, a new server to operate, a new integration to maintain.
 
 ## The solution
 
-Copilotz's knowledge graph is already there. It's what RAG uses to store document chunks. The underlying tables — `knowledge_nodes` and `knowledge_edges` — are a general-purpose graph store. The **Collections API** gives you a clean, type-safe interface on top of it.
+Copilotz's knowledge graph is already there. It's what RAG uses to store
+document chunks. The underlying tables — `knowledge_nodes` and `knowledge_edges`
+— are a general-purpose graph store. The **Collections API** gives you a clean,
+type-safe interface on top of it.
 
-Every collection is a type of graph node. Relations between collections are edges. You get a proper knowledge graph with the same database you're already using.
+Every collection is a type of graph node. Relations between collections are
+edges. You get a proper knowledge graph with the same database you're already
+using.
 
 ## Defining a collection
 
-Relations are declared using the `relation` helper. The supported types are `hasMany` and `belongsTo` — the two sides of a foreign-key relationship. Edges between nodes are created automatically when a record with a `belongsTo` foreign key is inserted.
+Relations are declared using the `relation` helper. The supported types are
+`hasMany` and `belongsTo` — the two sides of a foreign-key relationship. Edges
+between nodes are created automatically when a record with a `belongsTo` foreign
+key is inserted.
 
 ```typescript
 import { createCopilotz, defineCollection, relation } from "@copilotz/copilotz";
@@ -39,18 +52,18 @@ import { createCopilotz, defineCollection, relation } from "@copilotz/copilotz";
 const employeeSchema = {
   type: "object",
   properties: {
-    id:         { type: "string", readOnly: true },
-    name:       { type: "string" },
-    email:      { type: "string" },
+    id: { type: "string", readOnly: true },
+    name: { type: "string" },
+    email: { type: "string" },
     department: { type: "string" },
-    role:       { type: "string" },
-    managerId:  { type: "string" },             // Foreign key for the manager relation
-    startDate:  { type: "string", format: "date" },
-    createdAt:  { type: "string", format: "date-time", readOnly: true },
-    updatedAt:  { type: "string", format: "date-time", readOnly: true },
+    role: { type: "string" },
+    managerId: { type: "string" }, // Foreign key for the manager relation
+    startDate: { type: "string", format: "date" },
+    createdAt: { type: "string", format: "date-time", readOnly: true },
+    updatedAt: { type: "string", format: "date-time", readOnly: true },
   },
   required: ["name", "email"],
-} as const;  // "as const" is required for type inference
+} as const; // "as const" is required for type inference
 
 const employees = defineCollection({
   name: "employee",
@@ -58,20 +71,20 @@ const employees = defineCollection({
   indexes: ["email", "department", "managerId"],
   search: { enabled: true, fields: ["name", "email", "role"] },
   relations: {
-    manages:       relation.hasMany("employee", "managerId"),    // Manager → reports
-    manager:       relation.belongsTo("employee", "managerId"),  // Report → manager
-    ownedProjects: relation.hasMany("project", "ownerId"),       // Employee → projects they own
+    manages: relation.hasMany("employee", "managerId"), // Manager → reports
+    manager: relation.belongsTo("employee", "managerId"), // Report → manager
+    ownedProjects: relation.hasMany("project", "ownerId"), // Employee → projects they own
   },
 });
 
 const projectSchema = {
   type: "object",
   properties: {
-    id:          { type: "string", readOnly: true },
-    name:        { type: "string" },
-    status:      { type: "string", enum: ["active", "completed", "paused"] },
-    ownerId:     { type: "string" },
-    createdAt:   { type: "string", format: "date-time", readOnly: true },
+    id: { type: "string", readOnly: true },
+    name: { type: "string" },
+    status: { type: "string", enum: ["active", "completed", "paused"] },
+    ownerId: { type: "string" },
+    createdAt: { type: "string", format: "date-time", readOnly: true },
   },
   required: ["name", "status"],
 } as const;
@@ -81,7 +94,7 @@ const projects = defineCollection({
   schema: projectSchema,
   indexes: ["status", "ownerId"],
   relations: {
-    owner: relation.belongsTo("employee", "ownerId"),  // Project → owning employee
+    owner: relation.belongsTo("employee", "ownerId"), // Project → owning employee
   },
 });
 ```
@@ -142,7 +155,10 @@ await db.employee.delete({ id: alice.id });
 
 ## Working with relationships
 
-Edges are created automatically — no separate API call needed. When you create a record that has a `belongsTo` relation and set the foreign key, Copilotz writes the edge immediately. To traverse relations, pass `populate` in the query options:
+Edges are created automatically — no separate API call needed. When you create a
+record that has a `belongsTo` relation and set the foreign key, Copilotz writes
+the edge immediately. To traverse relations, pass `populate` in the query
+options:
 
 ```typescript
 // Create a project owned by Alice.
@@ -157,14 +173,14 @@ const authService = await db.project.create({
 // Query: who owns the auth service project? Traverse the belongsTo edge.
 const projectWithOwner = await db.project.findById(
   authService.id,
-  { populate: ["owner"] }
+  { populate: ["owner"] },
 );
 console.log(projectWithOwner.owner.name); // "Alice Chen"
 
 // Query: which projects does Alice own? Traverse the hasMany edge.
 const aliceWithProjects = await db.employee.find(
   { id: alice.id },
-  { populate: ["ownedProjects"] }
+  { populate: ["ownedProjects"] },
 );
 console.log(aliceWithProjects[0].ownedProjects); // [{ name: "Auth Service Redesign", ... }]
 
@@ -172,7 +188,7 @@ console.log(aliceWithProjects[0].ownedProjects); // [{ name: "Auth Service Redes
 // Alice was created with managerId: bob.id, so bob's "manages" edge already exists.
 const bobWithTeam = await db.employee.find(
   { id: bob.id },
-  { populate: ["manages"] }
+  { populate: ["manages"] },
 );
 console.log(bobWithTeam[0].manages); // [{ name: "Alice Chen", ... }]
 ```
@@ -225,6 +241,7 @@ export default defineCollection({
 ## The graph underneath
 
 Under the hood, each collection record is a `knowledge_node` with:
+
 - `id` — ULID
 - `type` — the collection name
 - `data` — your record data (JSONB)
@@ -232,12 +249,14 @@ Under the hood, each collection record is a `knowledge_node` with:
 - `namespace` — tenant partition
 
 Relations between collections are `knowledge_edges`:
+
 - `fromNodeId` — source node
 - `toNodeId` — target node
 - `relation` — edge type (your relation name)
 - `namespace` — tenant partition
 
-This means your custom data participates in the same graph as RAG documents and automatically extracted entities. You can query across all of them.
+This means your custom data participates in the same graph as RAG documents and
+automatically extracted entities. You can query across all of them.
 
 ## What this unlocks
 
@@ -252,6 +271,6 @@ This means your custom data participates in the same graph as RAG documents and 
 The knowledge graph gives your application durable structure. Conversation
 history has the opposite problem: it is detailed and useful, but grows without
 bound. Next, you will use the same graph foundations to consolidate a long
-thread into cache-stable checkpoints, immutable memory items, and relations.
+thread into cache-stable checkpoints, immutable brain nodes, and relations.
 
 → **[Chapter 14: Long-Term Conversation Memory](./14-graph-memory.md)**

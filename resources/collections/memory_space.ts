@@ -17,10 +17,10 @@ export default defineCollection({
   } as const,
   indexes: [["scopeType", "scopeId"], ["kind", "ownerNodeId"], "threadId"],
   relations: {
-    items: relation.hasMany(
-      "memory_item",
+    brainNodes: relation.hasMany(
+      "brain_node",
       "memorySpaceId",
-      GRAPH_EDGE.HAS_MEMORY_ITEM,
+      GRAPH_EDGE.HAS_BRAIN_NODE,
     ),
   },
 });

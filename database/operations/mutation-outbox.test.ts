@@ -221,7 +221,7 @@ Deno.test({
       createNodes: [{
         id: itemId,
         namespace,
-        type: "memory_item",
+        type: "brain_node",
         name: "item",
         content: "remembered",
         data: { kind: "fact" },
@@ -232,7 +232,7 @@ Deno.test({
         id: edgeId,
         sourceNodeId: String(checkpoint.id),
         targetNodeId: itemId,
-        type: "includes_memory_item",
+        type: "includes_brain_node",
       }],
       updateNodes: [{
         id: String(checkpoint.id),
@@ -268,7 +268,7 @@ Deno.test({
         "edge.created",
         "long_term_memory.created",
         "long_term_memory.updated",
-        "memory_item.created",
+        "brain_node.created",
       ].sort(),
     );
     assertEquals(
@@ -282,13 +282,13 @@ Deno.test({
         createNodes: [{
           id: rollbackNodeId,
           namespace,
-          type: "memory_item",
+          type: "brain_node",
           name: "rollback",
           data: {},
         }, {
           id: itemId,
           namespace,
-          type: "memory_item",
+          type: "brain_node",
           name: "duplicate",
           data: {},
         }],

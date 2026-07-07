@@ -15,7 +15,7 @@ import {
   buildContinuityRetrievalTexts,
   chunkLinesForEmbedding,
   createEmptyContinuity,
-  extractVisibleMemoryItemIds,
+  extractVisibleBrainNodeIds,
   fuseMemoryCandidateRanks,
   parseConsolidationProposal,
   process,
@@ -81,12 +81,12 @@ Deno.test("checkpoint rendering omits oversized blocks instead of slicing them",
   const rendered = renderLongTermMemory({
     proposal: {
       continuityPatch: {},
-      items: [],
+      nodes: [],
       relations: [],
     },
     continuity,
-    newItemNodes: new Map(),
-    olderItems: [],
+    newBrainNodes: new Map(),
+    olderBrainNodes: [],
     olderRelations: [],
     maxContentEstimatedTokens: 30,
   });
@@ -170,12 +170,12 @@ Deno.test("continuity updates require provenance from the reserved range", () =>
 
 Deno.test("checkpoint item IDs are extractable only when fully rendered", () => {
   assertEquals(
-    extractVisibleMemoryItemIds(
+    extractVisibleBrainNodeIds(
       "- [id:item-1] [fact] One\n- [id:item-2] [task] Two\n[id:item-1]",
     ),
     ["item-1", "item-2"],
   );
-  assertEquals(extractVisibleMemoryItemIds("- [id:truncated"), []);
+  assertEquals(extractVisibleBrainNodeIds("- [id:truncated"), []);
 });
 
 Deno.test("memory candidate fusion preserves strong matches and rewards consensus", () => {
@@ -191,7 +191,7 @@ Deno.test("memory candidate fusion preserves strong matches and rewards consensu
   );
 });
 
-Deno.test("consolidation may supersede only a visible checkpoint item", () => {
+Deno.test("consolidation may supersede only a visible checkpoint brain node", () => {
   const proposal = JSON.stringify({
     continuityPatch: currentStatePatch(
       "message-1",
@@ -220,8 +220,8 @@ Deno.test("consolidation may supersede only a visible checkpoint item", () => {
     new Set(["visible-item"]),
   );
 
-  assertEquals(parsed.items[0].supersedesItemId, "visible-item");
-  assertEquals(parsed.items[1].supersedesItemId, undefined);
+  assertEquals(parsed.nodes[0].supersedesNodeId, "visible-item");
+  assertEquals(parsed.nodes[1].supersedesNodeId, undefined);
 });
 
 Deno.test("consolidation routes invalid memory-space targets to the default", () => {
@@ -246,7 +246,7 @@ Deno.test("consolidation routes invalid memory-space targets to the default", ()
     },
   );
 
-  assertEquals(parsed.items[0].memorySpaceId, "default-space");
+  assertEquals(parsed.nodes[0].memorySpaceId, "default-space");
 });
 
 function mockRegistries(answer: string | string[]): MockRegistries {
@@ -486,7 +486,7 @@ async function createPendingCheckpoint(
     await db.ops.mutate.graph.createNode({
       id: sharedItemId,
       namespace,
-      type: "memory_item",
+      type: "brain_node",
       name: "Cross-thread preference",
       content: "The user prefers memories shared across threads.",
       embedding: Array.from(
@@ -532,7 +532,7 @@ async function createPendingCheckpoint(
     await db.ops.mutate.graph.createNode({
       id: previousItemId,
       namespace,
-      type: "memory_item",
+      type: "brain_node",
       name: "Previous decision",
       content: "Use the previous approach.",
       embedding: Array.from(
@@ -573,7 +573,7 @@ async function createPendingCheckpoint(
         metadata: {
           continuityVersion: "1",
           continuity: previousContinuity,
-          visibleItemIds: [previousItemId],
+          visibleBrainNodeIds: [previousItemId],
         },
       },
       sourceType: "thread",
@@ -585,7 +585,7 @@ async function createPendingCheckpoint(
     await db.ops.mutate.graph.createNode({
       id: foreignItemId,
       namespace,
-      type: "memory_item",
+      type: "brain_node",
       name: "Other agent memory",
       content: "Only the other agent should recall this.",
       embedding: Array.from(
@@ -737,19 +737,35 @@ Deno.test("long-term-memory processor finalizes the reserved node atomically", a
       "ready",
     );
     assertStringIncludes(checkpoint?.content ?? "", "Lifecycle trigger");
-    const items = await fixture.db.ops.unsafeGraph.getNodesByNamespace(
+    const brainNodes = await fixture.db.ops.unsafeGraph.getNodesByNamespace(
       fixture.namespace,
-      "memory_item",
+      "brain_node",
     );
-    assertEquals(items.length, 1);
-    assertEquals(items[0].content, proposal.items[0].content);
+    const knowledgeNodes = brainNodes.filter((node) =>
+      (node.data as Record<string, unknown>).layer === "knowledge"
+    );
+    const workingNodes = brainNodes.filter((node) =>
+      (node.data as Record<string, unknown>).layer === "working"
+    );
+    assertEquals(knowledgeNodes.length, 1);
+    assertEquals(workingNodes.length, 1);
+    assertEquals(knowledgeNodes[0].content, proposal.items[0].content);
     assertEquals(
-      (items[0].data as Record<string, unknown>).createdByAgentId,
+      workingNodes[0].content,
+      proposal.continuityPatch.state
+        ?.currentState?.value,
+    );
+    assertEquals(
+      (knowledgeNodes[0].data as Record<string, unknown>).createdByAgentId,
       "agent",
+    );
+    assertEquals(
+      (knowledgeNodes[0].data as Record<string, unknown>).status,
+      "active",
     );
     assertStringIncludes(
       checkpoint?.content ?? "",
-      `[id:${items[0].id}]`,
+      `[id:${knowledgeNodes[0].id}]`,
     );
     assertEquals(
       (
@@ -757,11 +773,12 @@ Deno.test("long-term-memory processor finalizes the reserved node atomically", a
           string,
           unknown
         >
-      ).visibleItemIds,
-      [items[0].id],
+      ).visibleBrainNodeIds,
+      [knowledgeNodes[0].id],
     );
     assertEquals(registries.embeddingRequests[0], [
       proposal.items[0].content,
+      proposal.continuityPatch.state?.currentState?.value,
       "currentState: The lifecycle-based memory processor is being implemented.",
     ]);
     assertEquals(
@@ -770,19 +787,19 @@ Deno.test("long-term-memory processor finalizes the reserved node atomically", a
     );
 
     await process(event, deps);
-    const itemsAfterRetry = await fixture.db.ops.unsafeGraph
+    const brainNodesAfterRetry = await fixture.db.ops.unsafeGraph
       .getNodesByNamespace(
         fixture.namespace,
-        "memory_item",
+        "brain_node",
       );
-    assertEquals(itemsAfterRetry.length, 1);
+    assertEquals(brainNodesAfterRetry.length, 2);
     assertEquals(registries.chatRequests.length, 1);
   } finally {
     registries.restore();
   }
 });
 
-Deno.test("processor may supersede an item visible in the previous checkpoint", async () => {
+Deno.test("processor may supersede a brain node visible in the previous checkpoint", async () => {
   const fixture = await createPendingCheckpoint({ withPrevious: true });
   const proposal = {
     continuityPatch: currentStatePatch(
@@ -818,7 +835,7 @@ Deno.test("processor may supersede an item visible in the previous checkpoint", 
     );
     const items = await fixture.db.ops.unsafeGraph.getNodesByNamespace(
       fixture.namespace,
-      "memory_item",
+      "brain_node",
     );
     const replacement = items.find((item) =>
       item.name === "Replacement decision"
@@ -838,13 +855,13 @@ Deno.test("processor may supersede an item visible in the previous checkpoint", 
         string,
         unknown
       >;
-    assertEquals(metadata.retrievedItemIds, [fixture.previousItemId]);
+    assertEquals(metadata.retrievedBrainNodeIds, [fixture.previousItemId]);
   } finally {
     registries.restore();
   }
 });
 
-Deno.test("processor retains prior intent and retrieves memory without new items", async () => {
+Deno.test("processor retains prior intent and retrieves memory without new knowledge nodes", async () => {
   const fixture = await createPendingCheckpoint({ withPrevious: true });
   const proposal = {
     continuityPatch: currentStatePatch(
@@ -886,7 +903,7 @@ Deno.test("processor retains prior intent and retrieves memory without new items
       continuity.state.currentState.value,
       "Implementation details are being reviewed.",
     );
-    assertEquals(metadata.retrievedItemIds, [fixture.previousItemId]);
+    assertEquals(metadata.retrievedBrainNodeIds, [fixture.previousItemId]);
     assertStringIncludes(
       checkpoint?.content ?? "",
       "Keep long-running work aligned with the user's goal.",
@@ -896,6 +913,8 @@ Deno.test("processor retains prior intent and retrieves memory without new items
       "Previous decision",
     );
     assertEquals(registries.embeddingRequests[0], [
+      "Keep long-running work aligned with the user's goal.",
+      "Implementation details are being reviewed.",
       "challenge: Keep long-running work aligned with the user's goal.",
       [
         "currentState: Implementation details are being reviewed.",
@@ -906,7 +925,7 @@ Deno.test("processor retains prior intent and retrieves memory without new items
   }
 });
 
-Deno.test("processor retrieves only memory items created by its agent", async () => {
+Deno.test("processor retrieves only brain nodes created by its agent", async () => {
   const fixture = await createPendingCheckpoint({ withForeignItem: true });
   const proposal = {
     continuityPatch: currentStatePatch(
@@ -948,7 +967,7 @@ Deno.test("processor retrieves only memory items created by its agent", async ()
           string,
           unknown
         >
-      ).retrievedItemIds,
+      ).retrievedBrainNodeIds,
       [],
     );
   } finally {
@@ -988,7 +1007,7 @@ Deno.test("processor reads and writes across attached memory spaces", async () =
 
     const items = await fixture.db.ops.unsafeGraph.getNodesByNamespace(
       fixture.namespace,
-      "memory_item",
+      "brain_node",
     );
     const created = items.find((item) => item.name === "Shared decision");
     const createdData = created?.data as Record<string, unknown>;
@@ -1004,7 +1023,7 @@ Deno.test("processor reads and writes across attached memory spaces", async () =
     );
     const metadata = (checkpoint?.data as Record<string, unknown>)
       .metadata as Record<string, unknown>;
-    assertEquals(metadata.retrievedItemIds, [fixture.sharedItemId]);
+    assertEquals(metadata.retrievedBrainNodeIds, [fixture.sharedItemId]);
     assertStringIncludes(
       JSON.stringify(registries.chatRequests[0]?.messages),
       String(fixture.sharedMemorySpaceId),

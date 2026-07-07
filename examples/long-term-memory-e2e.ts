@@ -5,7 +5,7 @@
  *   1. Agent replies accumulate in the hot window.
  *   2. When the character threshold is crossed the trigger reserves a pending
  *      long_term_memory node (boundary committed before any LLM work).
- *   3. The bundled processor consolidates that range into memory items and
+ *   3. The bundled processor consolidates that range into brain nodes and
  *      finalizes the node as ready.
  *   4. The next LLM call sees the stored memory content in the system prompt
  *      instead of the archived message history.
@@ -394,7 +394,7 @@ try {
   );
   assert(
     memoryContent.includes("## RELEVANT MEMORY"),
-    "Expected memory content to include memory items section",
+    "Expected memory content to include brain nodes section",
   );
   assertEquals(
     memoryData.status,
@@ -412,22 +412,23 @@ try {
     "Expected contentHash to be set",
   );
 
-  // Verify the memory items were persisted in the graph.
+  // Verify the brain nodes were persisted in the graph.
   const itemRows = await copilotz.db.query<{ id: string; name: string }>(
     `SELECT "id", "name"
      FROM "nodes"
      WHERE "namespace" = $1
-       AND "type" = 'memory_item'
+       AND "type" = 'brain_node'
+       AND COALESCE("data"->>'layer', 'knowledge') = 'knowledge'
        AND "source_type" = 'long_term_memory'
      ORDER BY "created_at" ASC`,
     ["example-long-term-memory"],
   );
   assert(
     itemRows.rows.length >= 1,
-    `Expected at least one memory_item node, got ${itemRows.rows.length}`,
+    `Expected at least one brain_node node, got ${itemRows.rows.length}`,
   );
   console.log(
-    `Memory items persisted: ${itemRows.rows.map((r) => r.name).join(", ")}`,
+    `Brain nodes persisted: ${itemRows.rows.map((r) => r.name).join(", ")}`,
   );
 
   // Turn 4 — memory is now ready. The next LLM call should include the
@@ -456,7 +457,7 @@ try {
   if (!LIVE_MODE) {
     assert(
       systemMessage.content.includes("Memory checkpoint design"),
-      "Expected turn 4 system prompt to contain memory item names",
+      "Expected turn 4 system prompt to contain brain node names",
     );
 
     // History after the memory boundary should NOT include messages from before it.

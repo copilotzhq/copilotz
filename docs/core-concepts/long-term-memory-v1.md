@@ -18,7 +18,7 @@ which finalizes that same node from:
 
 - structured continuity updated from the preceding checkpoint;
 - memory-item nodes extracted from the closed history;
-- relevant older memory items found from continuity and item embeddings;
+- relevant older brain nodes found from continuity and item embeddings;
 - relations between those items.
 
 The node is single-assignment: it moves from `pending` to `ready` exactly once
@@ -87,14 +87,14 @@ Thread ──owns_memory_space──> Memory Space
 `namespace` is the tenant boundary. `memory_space` is the memory scope. Future
 participant, agent, and shared spaces reuse this node type.
 
-### Memory item
+### Brain node
 
 Each item is a small, standalone, searchable statement:
 
 ```ts
 {
   namespace,
-  type: "memory_item",
+  type: "brain_node",
   name: "Short stable label",
   content: "Self-contained statement about the conversation.",
   embedding: [/* vector */],
@@ -113,7 +113,7 @@ Each item is a small, standalone, searchable statement:
 ```
 
 ```text
-Memory Space ──has_memory_item──> Memory Item
+Memory Space ──has_brain_node──> Brain Node
 ```
 
 Supported item kinds:
@@ -213,20 +213,20 @@ The memory processor finalizes that same node:
       processorVersion: "v2",
       continuityVersion: "1",
       continuity: { /* materialized continuity */ },
-      retrievedItemIds: ["..."],
-      visibleItemIds: ["..."]
+      retrievedBrainNodeIds: ["..."],
+      visibleBrainNodeIds: ["..."]
     }
   }
 }
 ```
 
-Every rendered memory item includes its canonical ID. `visibleItemIds` records
-the IDs that survived the rendered-content budget and are therefore legal
-targets for relations or supersession during the next consolidation.
+Every rendered brain node includes its canonical ID. `visibleBrainNodeIds`
+records the IDs that survived the rendered-content budget and are therefore
+legal targets for relations or supersession during the next consolidation.
 
 ```text
 Memory Space ──has_long_term_memory──> Long-Term Memory
-Long-Term Memory ──includes_memory_item──> Memory Item
+Long-Term Memory ──includes_brain_node──> Brain Node
 ```
 
 The active version is the linked, ready node with the highest sequence. Pending
@@ -281,7 +281,7 @@ When assembling an LLM request, `new_message`:
 
 If no memory exists, full-history behavior remains unchanged.
 
-The read path does not inspect the strategy, memory items, or relations.
+The read path does not inspect the strategy, brain nodes, or relations.
 
 ### Threshold observer
 
@@ -330,12 +330,12 @@ The bundled processor handles `long_term_memory.created`. It:
 7. Applies the continuity patch to the previous structured continuity. Omitted
    fields retain their values exactly; explicit updates carry source message
    IDs.
-8. Embeds each proposed memory item plus one combined intent query and one
+8. Embeds each proposed brain node plus one combined intent query and one
    combined current-state query.
 9. Uses those embeddings to retrieve older memory candidates, combines their
    rankings, and applies `retrievalLimit` globally.
-10. Renders continuity first, followed by memory items and relations.
-11. Atomically creates the memory items and relation edges, updates the
+10. Renders continuity first, followed by brain nodes and relations.
+11. Atomically creates the brain nodes and relation edges, updates the
     checkpoint node with `status: "ready"`, content, embedding, `contentHash`,
     and derived metadata.
 
@@ -472,7 +472,7 @@ Those messages remain part of the next checkpoint delta and are consolidated
 once they are no longer in the retained tail. Set it to `0` to retain no
 overlap; the bundled default is `0` for backward compatibility.
 
-Older-item retrieval uses the embeddings of the newly consolidated memory items,
+Older-item retrieval uses the embeddings of the newly consolidated brain nodes,
 a combined continuity-intent query, and a combined continuity-state query.
 Results from the individual searches are fused using maximum similarity with a
 reciprocal-rank-based consensus bonus, then limited globally. Because continuity
@@ -515,8 +515,8 @@ backfilled.
 
 Older ready checkpoints that do not render canonical item IDs remain readable.
 They simply provide no legal supersession targets. The next finalized checkpoint
-adds IDs and `visibleItemIds`, enabling normal reconciliation from the following
-epoch without a migration.
+adds IDs and `visibleBrainNodeIds`, enabling normal reconciliation from the
+following epoch without a migration.
 
 ## File structure
 

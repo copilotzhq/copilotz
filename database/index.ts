@@ -36,6 +36,7 @@ import { generateAdminLlmAttemptIndexesV2Migrations } from "./migrations/migrati
 import { generateUsageLedgerIndexesMigrations } from "./migrations/migration_0012_usage_ledger_indexes.ts";
 import { generateAgentMemoryOwnershipMigrations } from "./migrations/migration_0013_agent_memory_ownership.ts";
 import { generateMemorySpaceAccessMigrations } from "./migrations/migration_0014_memory_space_access.ts";
+import { generateBrainNodeMigrations } from "./migrations/migration_0015_brain_nodes.ts";
 import { getCurrentSchema } from "./schema-context.ts";
 import {
   ensureSchemaProvisioned,
@@ -59,7 +60,8 @@ const migrations: string = generateMigrations() + "\n" +
   generateAdminLlmAttemptIndexesV2Migrations() + "\n" +
   generateUsageLedgerIndexesMigrations() + "\n" +
   generateAgentMemoryOwnershipMigrations() + "\n" +
-  generateMemorySpaceAccessMigrations() + "\n";
+  generateMemorySpaceAccessMigrations() + "\n" +
+  generateBrainNodeMigrations() + "\n";
 
 /**
  * Configuration options for creating a database connection.

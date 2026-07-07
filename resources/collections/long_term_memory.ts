@@ -48,10 +48,10 @@ export default defineCollection({
     ["memorySpaceId", "status", "sequence"],
   ],
   relations: {
-    items: relation.hasMany(
-      "memory_item",
+    brainNodes: relation.hasMany(
+      "brain_node",
       "checkpointId",
-      GRAPH_EDGE.INCLUDES_MEMORY_ITEM,
+      GRAPH_EDGE.INCLUDES_BRAIN_NODE,
     ),
   },
 });

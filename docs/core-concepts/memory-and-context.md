@@ -60,7 +60,7 @@ range in the background.
 The checkpoint combines:
 
 - structured continuity for intent and current state;
-- newly extracted immutable memory items;
+- newly extracted immutable brain nodes;
 - relevant older items retrieved from both continuity and new-item embeddings;
 - graph relations between those items.
 
@@ -113,7 +113,7 @@ Use RAG for product documentation, policies, manuals, research, and other source
 material whose lifecycle is independent of a conversation.
 
 Long-term conversation memory also uses embeddings, but for a different purpose:
-it retrieves prior memory items from the current thread's memory space.
+it retrieves prior brain nodes from the current thread's memory space.
 
 ## Skills
 

@@ -87,7 +87,7 @@ const CONSOLIDATE_MEMORY_TOOL: ToolDefinition = {
       nextActions?: SourcedValue<string[]>;
     };
   };
-  items: Array<{
+  nodes: Array<{
     /** Unique local identifier for cross-referencing in relations. */
     localId: string;
     /** One of: entity, fact, claim, decision, preference, task, event, constraint */
@@ -98,19 +98,19 @@ const CONSOLIDATE_MEMORY_TOOL: ToolDefinition = {
     content: string;
     /** Confidence 0–1. */
     confidence: number;
-    /** IDs of source messages that support this item. */
+    /** IDs of source messages that support this node. */
     sourceMessageIds: string[];
-    /** ID of the writable memory space where this item belongs. */
+    /** ID of the writable memory space where this node belongs. */
     memorySpaceId: string;
-    /** ID of an item visible in the previous checkpoint that this supersedes (optional). */
-    supersedesItemId?: string;
+    /** ID of a node visible in the previous checkpoint that this supersedes (optional). */
+    supersedesNodeId?: string;
   }>;
   relations: Array<{
-    /** localId of the source item. */
+    /** localId of the source node. */
     source: string;
     /** One of: related_to, supports, contradicts, depends_on, supersedes */
     type: string;
-    /** localId or visible previous-checkpoint item ID of the target. */
+    /** localId or visible previous-checkpoint node ID of the target. */
     target: string;
   }>;
 };
@@ -123,7 +123,7 @@ type SourcedValue<T> = {
   },
 };
 
-const ITEM_KINDS = new Set([
+const KNOWLEDGE_BRAIN_NODE_KINDS = new Set([
   "entity",
   "fact",
   "claim",
@@ -133,6 +133,33 @@ const ITEM_KINDS = new Set([
   "event",
   "constraint",
 ]);
+
+const WORKING_BRAIN_NODE_FIELD_META = {
+  intent: {
+    challenge: { kind: "challenge", label: "Challenge" },
+    purpose: { kind: "purpose", label: "Purpose" },
+    desiredOutcome: { kind: "desired_outcome", label: "Desired outcome" },
+    successCriteria: {
+      kind: "success_criterion",
+      label: "Success criterion",
+    },
+    decisionCriteria: {
+      kind: "decision_criterion",
+      label: "Decision criterion",
+    },
+    constraints: { kind: "constraint", label: "Constraint" },
+  },
+  state: {
+    currentState: { kind: "current_state", label: "Current state" },
+    activeApproach: { kind: "active_approach", label: "Active approach" },
+    risksAndBlockers: { kind: "risk", label: "Risk or blocker" },
+    openQuestions: { kind: "open_question", label: "Open question" },
+    nextActions: { kind: "next_action", label: "Next action" },
+  },
+} as const satisfies Record<
+  "intent" | "state",
+  Record<string, { kind: string; label: string }>
+>;
 
 const RELATION_TYPES: ReadonlySet<string> = new Set([
   GRAPH_EDGE.RELATED_TO,
@@ -172,7 +199,7 @@ export interface LongTermMemoryContinuityPatch {
 
 interface ConsolidationProposal {
   continuityPatch: LongTermMemoryContinuityPatch;
-  items: Array<{
+  nodes: Array<{
     localId: string;
     kind: string;
     name: string;
@@ -180,7 +207,7 @@ interface ConsolidationProposal {
     confidence?: number;
     sourceMessageIds?: string[];
     memorySpaceId?: string;
-    supersedesItemId?: string;
+    supersedesNodeId?: string;
   }>;
   relations: Array<{
     source: string;
@@ -189,12 +216,22 @@ interface ConsolidationProposal {
   }>;
 }
 
-interface RetrievedMemoryItem {
+interface RetrievedBrainNode {
   node: KnowledgeNode;
   similarity: number;
 }
 
-const MEMORY_ITEM_ID_PATTERN = /^- \[id:([^\]\s]+)\]/gm;
+interface WorkingBrainNodeDraft {
+  localId: string;
+  kind: string;
+  name: string;
+  content: string;
+  sourceMessageIds: string[];
+  memorySpaceId: string;
+  sourceField: string;
+}
+
+const BRAIN_NODE_ID_PATTERN = /^- \[id:([^\]\s]+)\]/gm;
 const RRF_K = 60;
 const RRF_WEIGHT = 0.1;
 const CONTINUITY_VERSION = "1";
@@ -445,25 +482,59 @@ export function buildContinuityRetrievalTexts(
   ].filter(Boolean);
 }
 
-export function extractVisibleMemoryItemIds(content: string): string[] {
-  return [...content.matchAll(MEMORY_ITEM_ID_PATTERN)]
+function createWorkingBrainNodeDrafts(args: {
+  continuity: LongTermMemoryContinuity;
+  memorySpaceId: string;
+}): WorkingBrainNodeDraft[] {
+  const drafts: WorkingBrainNodeDraft[] = [];
+  for (const section of ["intent", "state"] as const) {
+    const fields = WORKING_BRAIN_NODE_FIELD_META[section];
+    for (const [field, meta] of Object.entries(fields)) {
+      const value = (args.continuity[section] as Record<
+        string,
+        SourcedContinuityValue<string | null | string[]>
+      >)[field];
+      if (!value) continue;
+      const texts = continuityValueText(value);
+      texts.forEach((content, index) => {
+        const trimmed = content.trim();
+        if (!trimmed) return;
+        drafts.push({
+          localId: `working:${section}.${field}:${index}`,
+          kind: meta.kind,
+          name: texts.length > 1 ? `${meta.label} ${index + 1}` : meta.label,
+          content: trimmed,
+          sourceMessageIds: value.sourceMessageIds,
+          memorySpaceId: args.memorySpaceId,
+          sourceField: `${section}.${field}`,
+        });
+      });
+    }
+  }
+  return drafts;
+}
+
+export function extractVisibleBrainNodeIds(content: string): string[] {
+  return [...content.matchAll(BRAIN_NODE_ID_PATTERN)]
     .map((match) => match[1])
     .filter((id, index, ids) => ids.indexOf(id) === index);
 }
 
-function getVisibleMemoryItemIds(
+function getVisibleBrainNodeIds(
   memory: Awaited<ReturnType<typeof getLatestReadyLongTermMemory>>,
 ): Set<string> {
   if (!memory) return new Set();
   const metadata = isRecord(memory.data.metadata) ? memory.data.metadata : {};
-  const persisted = Array.isArray(metadata.visibleItemIds)
-    ? metadata.visibleItemIds.filter((id): id is string =>
-      typeof id === "string" && id.length > 0
-    )
+  const candidateIds = Array.isArray(metadata.visibleBrainNodeIds)
+    ? metadata.visibleBrainNodeIds
+    : Array.isArray(metadata.visibleItemIds)
+    ? metadata.visibleItemIds
     : [];
+  const persisted = candidateIds
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
   return new Set([
     ...persisted,
-    ...extractVisibleMemoryItemIds(memory.node.content ?? ""),
+    ...extractVisibleBrainNodeIds(memory.node.content ?? ""),
   ]);
 }
 
@@ -585,7 +656,7 @@ function parseJsonObject(value: string): Record<string, unknown> | null {
 export function parseConsolidationProposal(
   value: string,
   allowedSourceMessageIds: Set<string>,
-  allowedOlderItemIds: Set<string>,
+  allowedOlderNodeIds: Set<string>,
   routing?: {
     writableMemorySpaceIds: Set<string>;
     defaultWriteMemorySpaceId: string;
@@ -600,9 +671,14 @@ export function parseConsolidationProposal(
     allowedSourceMessageIds,
   );
 
+  const rawNodes = Array.isArray(parsed.nodes)
+    ? parsed.nodes
+    : Array.isArray(parsed.items)
+    ? parsed.items
+    : [];
   const localIds = new Set<string>();
-  const items = (Array.isArray(parsed.items) ? parsed.items : []).flatMap(
-    (candidate): ConsolidationProposal["items"] => {
+  const nodes = rawNodes.flatMap(
+    (candidate): ConsolidationProposal["nodes"] => {
       if (!isRecord(candidate)) return [];
       const localId = typeof candidate.localId === "string"
         ? candidate.localId.trim()
@@ -617,8 +693,8 @@ export function parseConsolidationProposal(
         ? candidate.content.trim()
         : "";
       if (
-        !localId || localIds.has(localId) || !ITEM_KINDS.has(kind) || !name ||
-        !content
+        !localId || localIds.has(localId) ||
+        !KNOWLEDGE_BRAIN_NODE_KINDS.has(kind) || !name || !content
       ) {
         return [];
       }
@@ -628,10 +704,16 @@ export function parseConsolidationProposal(
           typeof id === "string" && allowedSourceMessageIds.has(id)
         )
         : [];
-      const supersedesItemId = typeof candidate.supersedesItemId === "string" &&
-          allowedOlderItemIds.has(candidate.supersedesItemId)
-        ? candidate.supersedesItemId
-        : undefined;
+      const requestedSupersedesNodeId =
+        typeof candidate.supersedesNodeId === "string"
+          ? candidate.supersedesNodeId
+          : typeof candidate.supersedesItemId === "string"
+          ? candidate.supersedesItemId
+          : "";
+      const supersedesNodeId =
+        allowedOlderNodeIds.has(requestedSupersedesNodeId)
+          ? requestedSupersedesNodeId
+          : undefined;
       const confidence = clampConfidence(candidate.confidence);
       const requestedMemorySpaceId = typeof candidate.memorySpaceId === "string"
         ? candidate.memorySpaceId.trim()
@@ -649,12 +731,12 @@ export function parseConsolidationProposal(
         ...(confidence !== null ? { confidence } : {}),
         sourceMessageIds,
         ...(memorySpaceId ? { memorySpaceId } : {}),
-        ...(supersedesItemId ? { supersedesItemId } : {}),
+        ...(supersedesNodeId ? { supersedesNodeId } : {}),
       }];
     },
   );
 
-  const validTargets = new Set([...localIds, ...allowedOlderItemIds]);
+  const validTargets = new Set([...localIds, ...allowedOlderNodeIds]);
   const relations = (Array.isArray(parsed.relations) ? parsed.relations : [])
     .flatMap((candidate): ConsolidationProposal["relations"] => {
       if (!isRecord(candidate)) return [];
@@ -678,7 +760,7 @@ export function parseConsolidationProposal(
 
   return {
     continuityPatch,
-    items,
+    nodes,
     relations,
   };
 }
@@ -763,7 +845,7 @@ function buildConsolidationRepairMessages(
         "Your previous consolidation response failed validation.",
         `Validation error: ${message}`,
         "Return the complete corrected JSON object now.",
-        "Preserve every valid memory item and relation from the previous response.",
+        "Preserve every valid brain node and relation from the previous response.",
         "Every changed continuity field must use { value, sourceMessageIds }, and sourceMessageIds must come from the conversation range.",
         "Output ONLY the JSON object — no markdown, no explanation.",
       ].join("\n"),
@@ -834,9 +916,9 @@ function serializeConsolidationError(
   };
 }
 
-function itemLabel(node: KnowledgeNode): string {
+function brainNodeLabel(node: KnowledgeNode): string {
   const data = isRecord(node.data) ? node.data : {};
-  const kind = typeof data.kind === "string" ? data.kind : "memory";
+  const kind = typeof data.kind === "string" ? data.kind : "knowledge";
   return `[id:${node.id}] [${kind}] ${node.name}: ${node.content ?? ""}`.trim();
 }
 
@@ -912,47 +994,48 @@ function renderContinuityBlocks(
 export function renderLongTermMemory(args: {
   proposal: ConsolidationProposal;
   continuity: LongTermMemoryContinuity;
-  newItemNodes: Map<string, KnowledgeNode>;
-  olderItems: RetrievedMemoryItem[];
+  newBrainNodes: Map<string, KnowledgeNode>;
+  olderBrainNodes: RetrievedBrainNode[];
   olderRelations: KnowledgeEdge[];
   maxContentEstimatedTokens: number;
 }): string {
-  const { proposal, newItemNodes, olderItems, olderRelations } = args;
-  const olderItemNames = new Map(
-    olderItems.map((item) => [String(item.node.id), item.node.name]),
+  const { proposal, newBrainNodes, olderBrainNodes, olderRelations } = args;
+  const olderBrainNodeNames = new Map(
+    olderBrainNodes.map((item) => [String(item.node.id), item.node.name]),
   );
   const superseded = new Set(
-    proposal.items.flatMap((item) =>
-      item.supersedesItemId ? [item.supersedesItemId] : []
+    proposal.nodes.flatMap((node) =>
+      node.supersedesNodeId ? [node.supersedesNodeId] : []
     ),
   );
   const relevant = [
-    ...proposal.items.map((item) => {
-      const node = newItemNodes.get(item.localId);
+    ...proposal.nodes.map((item) => {
+      const node = newBrainNodes.get(item.localId);
       return `- [id:${
         node?.id ?? item.localId
       }] [${item.kind}] ${item.name}: ${item.content}`;
     }),
-    ...olderItems
+    ...olderBrainNodes
       .filter((item) => !superseded.has(String(item.node.id)))
-      .map((item) => `- ${itemLabel(item.node)}`),
+      .map((item) => `- ${brainNodeLabel(item.node)}`),
   ];
 
   const relationLines = [
     ...proposal.relations.map((relation) => {
-      const source = newItemNodes.get(relation.source)?.name ?? relation.source;
-      const target = newItemNodes.get(relation.target)?.name ??
-        olderItems.find((item) => String(item.node.id) === relation.target)
+      const source = newBrainNodes.get(relation.source)?.name ??
+        relation.source;
+      const target = newBrainNodes.get(relation.target)?.name ??
+        olderBrainNodes.find((item) => String(item.node.id) === relation.target)
           ?.node.name ??
         relation.target;
       return renderRelationship(source, relation.type, target);
     }),
     ...olderRelations.map((edge) =>
       renderRelationship(
-        olderItemNames.get(String(edge.sourceNodeId)) ??
+        olderBrainNodeNames.get(String(edge.sourceNodeId)) ??
           String(edge.sourceNodeId),
         String(edge.type),
-        olderItemNames.get(String(edge.targetNodeId)) ??
+        olderBrainNodeNames.get(String(edge.targetNodeId)) ??
           String(edge.targetNodeId),
       )
     ),
@@ -962,7 +1045,7 @@ export function renderLongTermMemory(args: {
     "## LONG-TERM CONVERSATION MEMORY",
     ...renderContinuityBlocks(args.continuity),
     "## RELEVANT MEMORY",
-    ...(relevant.length > 0 ? relevant : ["- No durable memory items."]),
+    ...(relevant.length > 0 ? relevant : ["- No durable brain nodes."]),
     "## RELATIONSHIPS",
     ...(relationLines.length > 0
       ? relationLines
@@ -1068,7 +1151,7 @@ async function buildConsolidationContext(args: {
   // returns structured data without needing any format training in the
   // system prompt.
   const reconciliationInstruction = args.previousMemory?.node.content
-    ? "You may supersede or relate only older memory item IDs shown in the previous checkpoint above."
+    ? "You may supersede or relate only older brain node IDs shown in the previous checkpoint above."
     : "There is no previous checkpoint; relations may target only new localIds.";
   const writableMemorySpaces = args.memorySpaces
     .filter((space) => space.access === "read_write")
@@ -1105,7 +1188,7 @@ async function buildConsolidationContext(args: {
     "Keep the challenge distinct from the current task and the desired outcome distinct from an activity.",
     "Keep unresolved blockers, questions, and actions until the range explicitly changes or resolves them.",
     reconciliationInstruction,
-    "Assign every new item to exactly one writable memory space from this catalog.",
+    "Assign every new brain node to exactly one writable memory space from this catalog.",
     `Writable memory spaces: ${JSON.stringify(writableMemorySpaces)}`,
     `If uncertain, use the default memory space ID: ${args.defaultWriteMemorySpaceId}`,
     "Output ONLY the JSON object — no markdown, no explanation.",
@@ -1168,10 +1251,10 @@ async function retrieveOlderMemory(args: {
   memorySpaceIds: string[];
   agentId: string;
   queryEmbeddings: number[][];
-  pinnedItemIds?: string[];
+  pinnedBrainNodeIds?: string[];
   limit: number;
 }): Promise<{
-  items: RetrievedMemoryItem[];
+  nodes: RetrievedBrainNode[];
   relations: KnowledgeEdge[];
 }> {
   const memorySpaceIds = new Set(args.memorySpaceIds);
@@ -1180,7 +1263,7 @@ async function retrieveOlderMemory(args: {
       args.deps.db.ops.unsafeGraph.searchNodes({
         embedding,
         namespaces: [args.namespace],
-        nodeTypes: ["memory_item"],
+        nodeTypes: ["brain_node"],
         dataFilters: {
           createdByAgentId: args.agentId,
         },
@@ -1194,16 +1277,18 @@ async function retrieveOlderMemory(args: {
     ),
   );
   const candidateLists = resultLists.map((results) =>
-    results.flatMap((result): RetrievedMemoryItem[] => {
+    results.flatMap((result): RetrievedBrainNode[] => {
       const data = isRecord(result.node.data) ? result.node.data : {};
       return typeof data.memorySpaceId === "string" &&
           memorySpaceIds.has(data.memorySpaceId) &&
-          data.createdByAgentId === args.agentId
+          data.createdByAgentId === args.agentId &&
+          (data.layer ?? "knowledge") === "knowledge" &&
+          (data.status ?? "active") === "active"
         ? [{ node: result.node, similarity: result.similarity ?? 0 }]
         : [];
     })
   );
-  const candidateById = new Map<string, RetrievedMemoryItem>();
+  const candidateById = new Map<string, RetrievedBrainNode>();
   for (const candidate of candidateLists.flat()) {
     const id = String(candidate.node.id);
     const current = candidateById.get(id);
@@ -1221,8 +1306,8 @@ async function retrieveOlderMemory(args: {
     args.limit,
   );
 
-  const itemById = new Map<string, RetrievedMemoryItem>();
-  const pinnedIds = [...new Set(args.pinnedItemIds ?? [])];
+  const nodeById = new Map<string, RetrievedBrainNode>();
+  const pinnedIds = [...new Set(args.pinnedBrainNodeIds ?? [])];
   const pinnedNodes = await Promise.all(
     pinnedIds.map((id) => args.deps.db.ops.unsafeGraph.getNodeById(id)),
   );
@@ -1236,27 +1321,29 @@ async function retrieveOlderMemory(args: {
       )
       : [];
     if (
-      node?.type === "memory_item" &&
+      node?.type === "brain_node" &&
       node.namespace === args.namespace &&
       typeof data.memorySpaceId === "string" &&
       memorySpaceIds.has(data.memorySpaceId) &&
       data.createdByAgentId === args.agentId &&
+      (data.layer ?? "knowledge") === "knowledge" &&
+      (data.status ?? "active") === "active" &&
       supersedingEdges.length === 0
     ) {
-      itemById.set(String(node.id), {
+      nodeById.set(String(node.id), {
         node,
         similarity: candidateById.get(String(node.id))?.similarity ?? 0,
       });
     }
   }
   for (const id of rankedIds) {
-    if (itemById.size >= args.limit) break;
+    if (nodeById.size >= args.limit) break;
     const candidate = candidateById.get(id);
-    if (candidate) itemById.set(id, candidate);
+    if (candidate) nodeById.set(id, candidate);
   }
 
   const relationById = new Map<string, KnowledgeEdge>();
-  for (const item of [...itemById.values()]) {
+  for (const item of [...nodeById.values()]) {
     const edges = await args.deps.db.ops.unsafeGraph.getEdgesForNode(
       String(item.node.id),
       "both",
@@ -1266,44 +1353,46 @@ async function retrieveOlderMemory(args: {
       const sourceId = String(edge.sourceNodeId);
       const targetId = String(edge.targetNodeId);
       const otherId = sourceId === String(item.node.id) ? targetId : sourceId;
-      const pointsToSupersededItem = edge.type === GRAPH_EDGE.SUPERSEDES &&
+      const pointsToSupersededNode = edge.type === GRAPH_EDGE.SUPERSEDES &&
         sourceId === String(item.node.id);
       if (
-        !pointsToSupersededItem &&
-        !itemById.has(otherId) &&
-        itemById.size < args.limit
+        !pointsToSupersededNode &&
+        !nodeById.has(otherId) &&
+        nodeById.size < args.limit
       ) {
         const related = await args.deps.db.ops.unsafeGraph.getNodeById(otherId);
         const relatedData = related && isRecord(related.data)
           ? related.data
           : {};
         if (
-          related?.type === "memory_item" &&
+          related?.type === "brain_node" &&
           typeof relatedData.memorySpaceId === "string" &&
           memorySpaceIds.has(relatedData.memorySpaceId) &&
-          relatedData.memorySpaceId === memoryItemSpaceId(item.node) &&
-          relatedData.createdByAgentId === args.agentId
+          relatedData.memorySpaceId === brainNodeSpaceId(item.node) &&
+          relatedData.createdByAgentId === args.agentId &&
+          (relatedData.layer ?? "knowledge") === "knowledge" &&
+          (relatedData.status ?? "active") === "active"
         ) {
-          itemById.set(otherId, { node: related, similarity: 0 });
+          nodeById.set(otherId, { node: related, similarity: 0 });
         }
       }
       if (
-        itemById.has(sourceId) &&
-        itemById.has(targetId) &&
-        memoryItemSpaceId(itemById.get(sourceId)?.node) ===
-          memoryItemSpaceId(itemById.get(targetId)?.node)
+        nodeById.has(sourceId) &&
+        nodeById.has(targetId) &&
+        brainNodeSpaceId(nodeById.get(sourceId)?.node) ===
+          brainNodeSpaceId(nodeById.get(targetId)?.node)
       ) {
         relationById.set(String(edge.id), edge);
       }
     }
   }
   return {
-    items: [...itemById.values()],
+    nodes: [...nodeById.values()],
     relations: [...relationById.values()],
   };
 }
 
-function memoryItemSpaceId(
+function brainNodeSpaceId(
   node: KnowledgeNode | null | undefined,
 ): string | null {
   const data = node && isRecord(node.data) ? node.data : {};
@@ -1312,26 +1401,26 @@ function memoryItemSpaceId(
 
 function constrainProposalToMemorySpaces(
   proposal: ConsolidationProposal,
-  olderItems: RetrievedMemoryItem[],
+  olderBrainNodes: RetrievedBrainNode[],
 ): ConsolidationProposal {
   const localSpaces = new Map(
-    proposal.items.map((item) => [item.localId, item.memorySpaceId ?? null]),
+    proposal.nodes.map((node) => [node.localId, node.memorySpaceId ?? null]),
   );
   const olderSpaces = new Map(
-    olderItems.map((item) => [
-      String(item.node.id),
-      memoryItemSpaceId(item.node),
+    olderBrainNodes.map((node) => [
+      String(node.node.id),
+      brainNodeSpaceId(node.node),
     ]),
   );
-  const items = proposal.items.map((item) => {
+  const nodes = proposal.nodes.map((node) => {
     if (
-      item.supersedesItemId &&
-      olderSpaces.get(item.supersedesItemId) !== item.memorySpaceId
+      node.supersedesNodeId &&
+      olderSpaces.get(node.supersedesNodeId) !== node.memorySpaceId
     ) {
-      const { supersedesItemId: _supersedesItemId, ...rest } = item;
+      const { supersedesNodeId: _supersedesNodeId, ...rest } = node;
       return rest;
     }
-    return item;
+    return node;
   });
   const relations = proposal.relations.filter((relation) => {
     const sourceSpace = localSpaces.get(relation.source);
@@ -1339,7 +1428,7 @@ function constrainProposalToMemorySpaces(
       olderSpaces.get(relation.target);
     return Boolean(sourceSpace && sourceSpace === targetSpace);
   });
-  return { ...proposal, items, relations };
+  return { ...proposal, nodes, relations };
 }
 
 async function persistAttemptStart(args: {
@@ -1504,7 +1593,7 @@ export const longTermMemoryProcessor: EventProcessor<
         ? previousMemoryCandidate
         : null;
       const previousContinuity = readPersistedContinuity(previousMemory);
-      const allowedVisibleItemIds = getVisibleMemoryItemIds(previousMemory);
+      const allowedVisibleItemIds = getVisibleBrainNodeIds(previousMemory);
       const { messages: llmMessages, tools: llmTools } =
         await buildConsolidationContext({
           agent,
@@ -1584,12 +1673,17 @@ export const longTermMemoryProcessor: EventProcessor<
         previousContinuity,
         proposal.continuityPatch,
       );
+      const workingBrainNodeDrafts = createWorkingBrainNodeDrafts({
+        continuity,
+        memorySpaceId: defaultWriteMemorySpaceId,
+      });
 
       const continuityRetrievalTexts = buildContinuityRetrievalTexts(
         continuity,
       );
       const retrievalTexts = [
-        ...proposal.items.map((item) => item.content),
+        ...proposal.nodes.map((node) => node.content),
+        ...workingBrainNodeDrafts.map((node) => node.content),
         ...continuityRetrievalTexts,
       ];
       const retrievalEmbeddingResult = retrievalTexts.length > 0
@@ -1609,16 +1703,20 @@ export const longTermMemoryProcessor: EventProcessor<
           "Failed to generate one or more memory retrieval embeddings.",
         );
       }
-      const itemEmbeddings = retrievalEmbeddingResult.embeddings.slice(
+      const knowledgeNodeEmbeddings = retrievalEmbeddingResult.embeddings.slice(
         0,
-        proposal.items.length,
+        proposal.nodes.length,
       );
-      const pinnedItemIds = [
+      const workingNodeEmbeddings = retrievalEmbeddingResult.embeddings.slice(
+        proposal.nodes.length,
+        proposal.nodes.length + workingBrainNodeDrafts.length,
+      );
+      const pinnedBrainNodeIds = [
         ...proposal.relations.flatMap((relation) =>
           allowedVisibleItemIds.has(relation.target) ? [relation.target] : []
         ),
-        ...proposal.items.flatMap((item) =>
-          item.supersedesItemId ? [item.supersedesItemId] : []
+        ...proposal.nodes.flatMap((node) =>
+          node.supersedesNodeId ? [node.supersedesNodeId] : []
         ),
       ];
       const older = await retrieveOlderMemory({
@@ -1627,46 +1725,75 @@ export const longTermMemoryProcessor: EventProcessor<
         memorySpaceIds: readMemorySpaceIds,
         agentId: checkpointData.agentId,
         queryEmbeddings: retrievalEmbeddingResult.embeddings,
-        pinnedItemIds,
+        pinnedBrainNodeIds,
         limit: config.retrievalLimit,
       });
-      proposal = constrainProposalToMemorySpaces(proposal, older.items);
-      const localItemNodes = new Map<string, KnowledgeNode>();
-      const createNodes: Array<
+      proposal = constrainProposalToMemorySpaces(proposal, older.nodes);
+      const localBrainNodes = new Map<string, KnowledgeNode>();
+      const knowledgeCreateNodes: Array<
         Omit<NewKnowledgeNode, "id"> & { id?: string }
-      > = proposal.items.map((item, index) => {
+      > = proposal.nodes.map((node, index) => {
         const id = ulid();
-        const node = {
+        const knowledgeNode = {
           id,
           namespace,
-          type: "memory_item",
-          name: item.name,
-          content: item.content,
-          embedding: itemEmbeddings[index] ?? null,
+          type: "brain_node",
+          name: node.name,
+          content: node.content,
+          embedding: knowledgeNodeEmbeddings[index] ?? null,
           data: {
-            memorySpaceId: item.memorySpaceId ??
+            memorySpaceId: node.memorySpaceId ??
               defaultWriteMemorySpaceId,
             checkpointId,
             createdByAgentId: checkpointData.agentId,
             originThreadId: threadId,
-            kind: item.kind,
-            name: item.name,
-            content: item.content,
-            confidence: item.confidence ?? null,
-            sourceMessageIds: item.sourceMessageIds ?? [],
+            layer: "knowledge",
+            status: "active",
+            kind: node.kind,
+            name: node.name,
+            content: node.content,
+            confidence: node.confidence ?? null,
+            sourceMessageIds: node.sourceMessageIds ?? [],
           },
           sourceType: "long_term_memory",
           sourceId: checkpointId,
         };
-        localItemNodes.set(item.localId, node as KnowledgeNode);
-        return node;
+        localBrainNodes.set(node.localId, knowledgeNode as KnowledgeNode);
+        return knowledgeNode;
       });
+      const workingCreateNodes: Array<
+        Omit<NewKnowledgeNode, "id"> & { id?: string }
+      > = workingBrainNodeDrafts.map((node, index) => ({
+        id: ulid(),
+        namespace,
+        type: "brain_node",
+        name: node.name,
+        content: node.content,
+        embedding: workingNodeEmbeddings[index] ?? null,
+        data: {
+          memorySpaceId: node.memorySpaceId,
+          checkpointId,
+          createdByAgentId: checkpointData.agentId,
+          originThreadId: threadId,
+          layer: "working",
+          status: "active",
+          kind: node.kind,
+          name: node.name,
+          content: node.content,
+          confidence: null,
+          sourceMessageIds: node.sourceMessageIds,
+          sourceField: node.sourceField,
+        },
+        sourceType: "long_term_memory",
+        sourceId: checkpointId,
+      }));
+      const createNodes = [...knowledgeCreateNodes, ...workingCreateNodes];
 
       const content = renderLongTermMemory({
         proposal,
         continuity,
-        newItemNodes: localItemNodes,
-        olderItems: older.items,
+        newBrainNodes: localBrainNodes,
+        olderBrainNodes: older.nodes,
         olderRelations: older.relations,
         maxContentEstimatedTokens: config.maxContentEstimatedTokens,
       });
@@ -1698,23 +1825,23 @@ export const longTermMemoryProcessor: EventProcessor<
           id: ulid(),
           sourceNodeId: String(nodeData.memorySpaceId),
           targetNodeId: String(node.id),
-          type: GRAPH_EDGE.HAS_MEMORY_ITEM,
+          type: GRAPH_EDGE.HAS_BRAIN_NODE,
         }, {
           id: ulid(),
           sourceNodeId: checkpointId,
           targetNodeId: String(node.id),
-          type: GRAPH_EDGE.INCLUDES_MEMORY_ITEM,
+          type: GRAPH_EDGE.INCLUDES_BRAIN_NODE,
         });
       }
       const relationKeys = new Set<string>();
-      const resolveItemId = (value: string): string | null =>
-        localItemNodes.get(value)?.id as string | undefined ??
-          (older.items.some((item) => String(item.node.id) === value)
+      const resolveBrainNodeId = (value: string): string | null =>
+        localBrainNodes.get(value)?.id as string | undefined ??
+          (older.nodes.some((item) => String(item.node.id) === value)
             ? value
             : null);
       for (const relation of proposal.relations) {
-        const sourceNodeId = resolveItemId(relation.source);
-        const targetNodeId = resolveItemId(relation.target);
+        const sourceNodeId = resolveBrainNodeId(relation.source);
+        const targetNodeId = resolveBrainNodeId(relation.target);
         if (!sourceNodeId || !targetNodeId) continue;
         const key = `${sourceNodeId}:${relation.type}:${targetNodeId}`;
         if (relationKeys.has(key)) continue;
@@ -1726,18 +1853,18 @@ export const longTermMemoryProcessor: EventProcessor<
           type: relation.type,
         });
       }
-      for (const item of proposal.items) {
-        if (!item.supersedesItemId) continue;
-        const sourceNodeId = resolveItemId(item.localId);
+      for (const node of proposal.nodes) {
+        if (!node.supersedesNodeId) continue;
+        const sourceNodeId = resolveBrainNodeId(node.localId);
         if (!sourceNodeId) continue;
         const key =
-          `${sourceNodeId}:${GRAPH_EDGE.SUPERSEDES}:${item.supersedesItemId}`;
+          `${sourceNodeId}:${GRAPH_EDGE.SUPERSEDES}:${node.supersedesNodeId}`;
         if (relationKeys.has(key)) continue;
         relationKeys.add(key);
         createEdges.push({
           id: ulid(),
           sourceNodeId,
-          targetNodeId: item.supersedesItemId,
+          targetNodeId: node.supersedesNodeId,
           type: GRAPH_EDGE.SUPERSEDES,
         });
       }
@@ -1753,8 +1880,10 @@ export const longTermMemoryProcessor: EventProcessor<
           processorVersion: "v2",
           continuityVersion: CONTINUITY_VERSION,
           continuity,
-          retrievedItemIds: older.items.map((item) => String(item.node.id)),
-          visibleItemIds: extractVisibleMemoryItemIds(content),
+          retrievedBrainNodeIds: older.nodes.map((item) =>
+            String(item.node.id)
+          ),
+          visibleBrainNodeIds: extractVisibleBrainNodeIds(content),
         },
       };
       await deps.db.ops.mutate.graph.mutateMany({

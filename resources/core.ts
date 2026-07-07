@@ -41,7 +41,7 @@ import llmUsageCollection from "@/resources/collections/llm_usage.ts";
 import usageCollection from "@/resources/collections/usage.ts";
 import scheduledJobCollection from "@/resources/collections/scheduled_job.ts";
 import memorySpaceCollection from "@/resources/collections/memory_space.ts";
-import memoryItemCollection from "@/resources/collections/memory_item.ts";
+import brainNodeCollection from "@/resources/collections/brain_node.ts";
 import longTermMemoryCollection from "@/resources/collections/long_term_memory.ts";
 
 // ---- Core: memory ----------------------------------------------------------
@@ -330,7 +330,7 @@ function buildCoreCollections(): CollectionDefinition[] {
     usageCollection as unknown as CollectionDefinition,
     scheduledJobCollection as unknown as CollectionDefinition,
     memorySpaceCollection as unknown as CollectionDefinition,
-    memoryItemCollection as unknown as CollectionDefinition,
+    brainNodeCollection as unknown as CollectionDefinition,
     longTermMemoryCollection as unknown as CollectionDefinition,
   ];
 }

@@ -48,7 +48,7 @@ checkpoint and retains the newest complete messages as raw conversation.
 The checkpoint contains:
 
 - structured continuity covering durable intent and current working state;
-- new durable memory items extracted from the closed conversation range;
+- new durable brain nodes extracted from the closed conversation range;
 - relevant items retrieved from continuity and new-item queries;
 - relationships between those items.
 
@@ -163,13 +163,13 @@ The background processor then:
 1. loads the exact reserved message range;
 2. projects only content eligible for shared conversation memory;
 3. shows the reserved agent's LLM the previous checkpoint and asks for a
-   continuity patch, structured memory items, and relations;
+   continuity patch, structured brain nodes, and relations;
 4. validates relations and supersession against item IDs visible in that
    checkpoint;
 5. applies continuity updates while retaining omitted fields;
 6. embeds the new items plus combined intent and current-state queries;
 7. uses those embeddings to retrieve relevant earlier memory;
-8. renders continuity before optional memory items and relations;
+8. renders continuity before optional brain nodes and relations;
 9. atomically stores the new nodes, edges, and ready checkpoint.
 
 Only the latest `ready` checkpoint is inserted into model context. A `pending`
@@ -224,7 +224,7 @@ This is tail retention, not duplicated overlap.
 | `triggerEstimatedTokens`      | Start a rollover when model-visible messages since the active checkpoint reach this estimate    |        `20_000` |
 | `retainRecentEstimatedTokens` | Keep at least this many newest estimated tokens as complete raw messages outside the checkpoint |             `0` |
 | `maxContentEstimatedTokens`   | Maximum estimated tokens in the rendered checkpoint, preserving complete blocks                 |        `12_000` |
-| `retrievalLimit`              | Maximum older memory items selected after continuity and item retrieval                         |            `20` |
+| `retrievalLimit`              | Maximum older brain nodes selected after continuity and item retrieval                          |            `20` |
 
 ### `triggerEstimatedTokens`
 
@@ -278,8 +278,8 @@ items cannot displace it. Choose a value that leaves room for:
 
 ### `retrievalLimit`
 
-After consolidation materializes continuity and embeds the new memory items,
-Copilotz searches older `memory_item` nodes using each item embedding plus one
+After consolidation materializes continuity and embeds the new brain nodes,
+Copilotz searches older `brain_node` nodes using each node embedding plus one
 combined intent query and one combined current-state query. The results are
 fused and `retrievalLimit` is applied to the combined older set, not separately
 to every query.
@@ -304,7 +304,7 @@ An older item discovered for the first time by the post-consolidation retrieval
 can enter the new checkpoint, but cannot be superseded until the next epoch,
 after its ID has become visible to the LLM.
 
-## What becomes a memory item
+## What becomes a brain node
 
 The consolidation LLM returns structured data rather than writing prose directly
 into the database.
@@ -482,8 +482,8 @@ Later checkpoints use the complete delta after the previous ready
 
 Checkpoints created before canonical item IDs were rendered have no legal
 cross-epoch supersession targets. The first checkpoint produced by the new
-strategy adds IDs and `visibleItemIds`; normal reconciliation begins with the
-following epoch. No data migration is required.
+strategy adds IDs and `visibleBrainNodeIds`; normal reconciliation begins with
+the following epoch. No data migration is required.
 
 ## Inspecting checkpoints
 
@@ -516,7 +516,8 @@ SELECT
   "data"->'sourceMessageIds' AS "sourceMessageIds",
   "embedding" IS NOT NULL AS "hasEmbedding"
 FROM "nodes"
-WHERE "type" = 'memory_item'
+WHERE "type" = 'brain_node'
+  AND COALESCE("data"->>'layer', 'knowledge') = 'knowledge'
   AND "data"->>'checkpointId' = $1
 ORDER BY "created_at";
 ```

@@ -33,8 +33,12 @@ export const GRAPH_EDGE = {
   USES_MEMORY_SPACE: "uses_memory_space",
   /** @deprecated Use {@link GRAPH_EDGE.USES_MEMORY_SPACE}. */
   OWNS_MEMORY_SPACE: "owns_memory_space",
+  HAS_BRAIN_NODE: "has_brain_node",
+  /** @deprecated Use {@link GRAPH_EDGE.HAS_BRAIN_NODE}. */
   HAS_MEMORY_ITEM: "has_memory_item",
   HAS_LONG_TERM_MEMORY: "has_long_term_memory",
+  INCLUDES_BRAIN_NODE: "includes_brain_node",
+  /** @deprecated Use {@link GRAPH_EDGE.INCLUDES_BRAIN_NODE}. */
   INCLUDES_MEMORY_ITEM: "includes_memory_item",
   RELATED_TO: "related_to",
   SUPPORTS: "supports",

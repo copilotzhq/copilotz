@@ -2,7 +2,7 @@ import { defineCollection, relation } from "@/database/collections/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 export default defineCollection({
-  name: "memory_item",
+  name: "brain_node",
   schema: {
     type: "object",
     properties: {
@@ -11,6 +11,14 @@ export default defineCollection({
       checkpointId: { type: "string" },
       createdByAgentId: { type: "string" },
       originThreadId: { type: "string" },
+      layer: {
+        type: "string",
+        enum: ["knowledge", "working"],
+      },
+      status: {
+        type: "string",
+        enum: ["active", "superseded", "archived"],
+      },
       kind: {
         type: "string",
         enum: [
@@ -22,12 +30,23 @@ export default defineCollection({
           "task",
           "event",
           "constraint",
+          "challenge",
+          "purpose",
+          "desired_outcome",
+          "success_criterion",
+          "decision_criterion",
+          "current_state",
+          "active_approach",
+          "risk",
+          "open_question",
+          "next_action",
         ],
       },
       name: { type: "string" },
       content: { type: "string" },
       confidence: { type: ["number", "null"] },
       sourceMessageIds: { type: "array", items: { type: "string" } },
+      sourceField: { type: ["string", "null"] },
       embedding: { type: ["array", "null"] },
     },
     required: [
@@ -35,6 +54,8 @@ export default defineCollection({
       "checkpointId",
       "createdByAgentId",
       "originThreadId",
+      "layer",
+      "status",
       "kind",
       "name",
       "content",
@@ -47,18 +68,20 @@ export default defineCollection({
     "createdByAgentId",
     "originThreadId",
     ["memorySpaceId", "createdByAgentId"],
+    ["layer", "kind"],
+    "status",
     "kind",
   ],
   relations: {
     memorySpace: relation.belongsTo(
       "memory_space",
       "memorySpaceId",
-      GRAPH_EDGE.HAS_MEMORY_ITEM,
+      GRAPH_EDGE.HAS_BRAIN_NODE,
     ),
     checkpoint: relation.belongsTo(
       "long_term_memory",
       "checkpointId",
-      GRAPH_EDGE.INCLUDES_MEMORY_ITEM,
+      GRAPH_EDGE.INCLUDES_BRAIN_NODE,
     ),
   },
   search: {

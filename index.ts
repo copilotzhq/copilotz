@@ -1874,6 +1874,10 @@ export async function createCopilotz(
     // Resolve tools: RunOptions > CopilotzConfig
     // If RunOptions provides tools, they completely override config tools
     const resolvedTools = options?.tools ?? baseConfig.tools;
+    const resolvedApis = options?.apis ?? baseConfig.apis;
+    const resolvedMcpServers = options?.mcpServers ?? baseConfig.mcpServers;
+    const resolvedMemory = options?.memory ?? baseConfig.memory;
+    const resolvedSkills = options?.skills ?? baseConfig.skills;
 
     const assetStoreForRun = getAssetStoreForNamespace(resolvedNamespace);
     const agentsFileInstructions = await loadAgentsFileInstructions(
@@ -1894,10 +1898,10 @@ export async function createCopilotz(
     const ctx: ChatContext = {
       agents: resolvedAgents,
       tools: resolvedTools,
-      apis: baseConfig.apis,
-      mcpServers: baseConfig.mcpServers,
-      memory: baseConfig.memory,
-      skills: baseConfig.skills,
+      apis: resolvedApis,
+      mcpServers: resolvedMcpServers,
+      memory: resolvedMemory,
+      skills: resolvedSkills,
       historyTransform: baseConfig.historyTransform,
       usage: baseConfig.usage,
       dbConfig: baseConfig.dbConfig,

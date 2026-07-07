@@ -186,7 +186,7 @@ Deno.test("loadResources applies dot-notation imports to local directory discove
   }
 });
 
-Deno.test("loadResources preserves dotted lifecycle processor event names", async () => {
+Deno.test("loadResources preserves event-named processor files", async () => {
   const tempDir = await Deno.makeTempDir();
 
   try {
@@ -194,27 +194,33 @@ Deno.test("loadResources preserves dotted lifecycle processor event names", asyn
       `${tempDir}/manifest.ts`,
       `export default {
         provides: {
-          processors: ["long_term_memory_handler", "message.created"],
+          processors: [
+            "memory_consolidation/long_term_memory.created",
+            "message_router/message.created",
+          ],
         },
       };`,
     );
     await writeFixtureFile(
-      `${tempDir}/processors/long_term_memory_handler/index.ts`,
-      `export const eventType = "long_term_memory.created";
+      `${tempDir}/processors/memory_consolidation/long_term_memory.created.ts`,
+      `export const processorId = "memory_consolidation";
+       export const eventTypes = ["long_term_memory.created"];
        export const shouldProcess = () => true;
        export const process = () => ({ producedEvents: [] });`,
     );
     await writeFixtureFile(
-      `${tempDir}/processors/message.created/index.ts`,
-      `export const shouldProcess = () => true;
+      `${tempDir}/processors/message_router/message.created.ts`,
+      `export const processorId = "message_router";
+       export const eventTypes = ["message.created"];
+       export const shouldProcess = () => true;
        export const process = () => undefined;`,
     );
 
     const resources = await loadResources({
       path: tempDir,
       imports: [
-        "processors.long_term_memory_handler",
-        "processors.message.created",
+        "processors.memory_consolidation/long_term_memory.created",
+        "processors.message_router/message.created",
       ],
     });
 
@@ -222,9 +228,34 @@ Deno.test("loadResources preserves dotted lifecycle processor event names", asyn
       resources.processors?.map((processor) => processor.eventType).sort(),
       ["long_term_memory.created", "message.created"],
     );
+    assertEquals(
+      resources.processors?.map((processor) => processor.id).sort(),
+      ["memory_consolidation", "message_router"],
+    );
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }
+});
+
+Deno.test("loadResources loads bundled core processor files from manifest preset", async () => {
+  const resources = await loadResources({
+    path: "resources",
+    preset: ["core"],
+  });
+  const processors = resources.processors ?? [];
+
+  assertEquals(
+    processors
+      .filter((processor) => processor.eventType === "message.created")
+      .map((processor) => processor.id),
+    ["memory_reservation", "message_router"],
+  );
+  assertExists(
+    processors.find((processor) =>
+      processor.eventType === "long_term_memory.created" &&
+      processor.id === "memory_consolidation"
+    ),
+  );
 });
 
 Deno.test("loadResources accepts index.ts tool modules as a fallback format", async () => {

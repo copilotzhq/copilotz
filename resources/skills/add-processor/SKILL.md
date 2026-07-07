@@ -20,22 +20,23 @@ compatibility, but it should not be the first choice for durable workflow state.
 ## Directory Structure
 
 ```
-resources/event-processors/{EVENT_TYPE}/
-  processor.ts    # Required: exports shouldProcess + process
+resources/processors/{purpose}/{event_subject}.{operation}.ts
 ```
 
-The legacy directory name is the event type (for example `NEW_MESSAGE` or
-`CUSTOM_EVENT`). Core lifecycle processors use durable dot-case events such as
-`message.created`, `llm_attempt.completed`, and `tool_execution.failed`.
+The directory is the processor purpose. The file name mirrors the durable event,
+for example `message.created.ts`, `llm_attempt.completed.ts`, or
+`tool_execution.failed.ts`. Legacy `eventType`/`index.ts` processors still load
+for compatibility, but new processors should export `eventTypes`.
 
-## Create processor.ts
+## Create the event file
 
 ```typescript
 import type { EventProcessor, ProcessorDeps } from "copilotz";
 
-const processor: EventProcessor = {
-  eventType: "NEW_MESSAGE",
+export const processorId = "message_moderation";
+export const eventTypes = ["message.created"] as const;
 
+const processor: EventProcessor = {
   shouldProcess: (event, deps: ProcessorDeps) => {
     // Return true to handle this event
     return event.payload.metadata?.requiresModeration === true;
@@ -49,16 +50,20 @@ const processor: EventProcessor = {
     const isOk = await moderateContent(content);
 
     if (!isOk) {
-      await db.ops.mutate.messages.create({
-        threadId: event.threadId,
-        senderType: "system",
-        senderId: "moderator",
-        content: "This message was flagged.",
-        metadata: { causationId: event.id },
-      }, context.namespace, {
-        traceId: event.traceId,
-        causationId: event.id,
-      });
+      await db.ops.mutate.messages.create(
+        {
+          threadId: event.threadId,
+          senderType: "system",
+          senderId: "moderator",
+          content: "This message was flagged.",
+          metadata: { causationId: event.id },
+        },
+        context.namespace,
+        {
+          traceId: event.traceId,
+          causationId: event.id,
+        },
+      );
     }
 
     return {};
@@ -101,7 +106,7 @@ export const priority = 10; // Runs before priority 0 (default)
 
 ## Notes
 
-- Processors are loaded from `resources/event-processors/` automatically
+- Processors are loaded from `resources/processors/` automatically
 - Multiple processors can handle the same event type
 - Use `ops.mutate.*` for durable state changes and outbox facts
 - Return `producedEvents` only for legacy compatibility or deliberate stream

@@ -10,7 +10,7 @@ export interface LLMContextData {
   systemPrompt: string;
 }
 
-function isDirectConversationThread(
+export function isDirectConversationThread(
   thread: Thread,
   availableAgents: Agent[],
   currentAgent: Agent,
@@ -118,7 +118,7 @@ export function contextGenerator(
       "",
       `You are in a direct conversation with the user in thread: "${thread.name}"`,
       "",
-      "Respond directly to the user. There are no other active agent participants in this thread.",
+      "There are no other active agent participants in this thread.",
     ].join("\n")
     : [
       "## CONVERSATION CONTEXT",
@@ -139,9 +139,6 @@ export function contextGenerator(
       "- Prefer a single <ask_to> block per response",
       "- Never route to yourself",
       "- To respond to the person who addressed you, reply normally without any <route_to> tag unless you want to hand off",
-      "",
-      "### Current Turn",
-      "You were just addressed. Respond normally. Only include <route_to>agent-id</route_to> if you want to explicitly hand off the next turn.",
       ...(otherAvailableAgents.length > 0
         ? [
           "",

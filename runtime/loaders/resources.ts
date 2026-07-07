@@ -41,8 +41,30 @@ type ProcessorEntry = EventProcessor<unknown, ProcessorDeps> & {
   id?: string;
 };
 
+type ProcessorModule = Record<string, unknown> & {
+  eventType?: string;
+  eventTypes?: readonly string[];
+  processorId?: string;
+  id?: string;
+};
+
 function normalizeProcessorEventType(eventType: string): string {
   return eventType.includes(".") ? eventType : eventType.toUpperCase();
+}
+
+function resolveProcessorEventTypes(
+  mod: ProcessorModule,
+  fallbackEventType: string,
+): string[] {
+  if (Array.isArray(mod.eventTypes) && mod.eventTypes.length > 0) {
+    return mod.eventTypes.filter((eventType): eventType is string =>
+      typeof eventType === "string" && eventType.length > 0
+    );
+  }
+  if (typeof mod.eventType === "string" && mod.eventType.length > 0) {
+    return [mod.eventType];
+  }
+  return [fallbackEventType];
 }
 
 /** A loaded feature with named action handlers. */
@@ -474,14 +496,17 @@ async function loadApisByManifest(
 
 async function loadProcessorsByManifest(
   baseUrl: string,
-  eventTypes: string[],
+  names: string[],
 ): Promise<ProcessorEntry[]> {
-  const settled = await Promise.all(eventTypes.map(async (eventType) => {
-    const processorUrl = joinUrl(baseUrl, "processors", eventType);
+  const settled = await Promise.all(names.map(async (name) => {
+    const processorUrl = joinUrl(baseUrl, "processors", name);
 
     const mod = (await importModuleSafe(
-      joinUrl(processorUrl, "index.ts"),
-    )) as Record<string, unknown> | undefined;
+      processorUrl.endsWith(".ts") ? processorUrl : `${processorUrl}.ts`,
+    ) ??
+      await importModuleSafe(
+        joinUrl(processorUrl, "index.ts"),
+      )) as ProcessorModule | undefined;
     if (!mod) return null;
 
     const maybeShouldProcess = mod.shouldProcess;
@@ -490,10 +515,12 @@ async function loadProcessorsByManifest(
       typeof maybeShouldProcess === "function" &&
       typeof maybeProcess === "function"
     ) {
-      const configuredEventType = typeof mod.eventType === "string"
-        ? mod.eventType
-        : eventType;
-      return {
+      const fallbackEventType = name.includes("/")
+        ? name.slice(name.lastIndexOf("/") + 1)
+        : name;
+      return resolveProcessorEventTypes(mod, fallbackEventType).map((
+        eventType,
+      ) => ({
         shouldProcess: coerceProcessorShouldProcess(
           maybeShouldProcess as (
             event: unknown,
@@ -506,13 +533,18 @@ async function loadProcessorsByManifest(
             deps?: unknown,
           ) => unknown | Promise<unknown>,
         ),
-        eventType: normalizeProcessorEventType(configuredEventType),
+        eventType: normalizeProcessorEventType(eventType),
         priority: typeof mod.priority === "number" ? mod.priority : 0,
-      } as ProcessorEntry;
+        id: typeof mod.processorId === "string"
+          ? mod.processorId
+          : typeof mod.id === "string"
+          ? mod.id
+          : undefined,
+      } as ProcessorEntry));
     }
     return null;
   }));
-  return settled.filter((r): r is ProcessorEntry => r !== null);
+  return settled.flatMap((r) => r ?? []);
 }
 
 async function loadMcpServersByManifest(
@@ -1241,13 +1273,7 @@ async function loadFromDirectory(
       const s = performance.now();
       const processorsUrl = joinUrl(baseUrl, "processors");
       try {
-        const evtDirs = await collectEntries(processorsUrl);
-        const allowedEventTypes = new Set(
-          filterNames(
-            "processors",
-            evtDirs.filter((e) => e.isDirectory).map((entry) => entry.name),
-          ),
-        );
+        const processorDirs = await collectEntries(processorsUrl);
 
         type Discovered = {
           shouldProcess: (
@@ -1260,78 +1286,155 @@ async function loadFromDirectory(
           ) => unknown | Promise<unknown>;
           priority?: number;
           name?: string;
-          eventType?: string;
+          eventTypes: string[];
+          processorId?: string;
         };
 
+        const processorFiles: Array<{
+          purpose: string;
+          file: Deno.DirEntry;
+          dirUrl: string;
+          name: string;
+          fallbackEventType: string;
+        }> = [];
+
+        for (
+          const processorDir of processorDirs.filter((entry) =>
+            entry.isDirectory
+          )
+        ) {
+          const dirUrl = joinUrl(processorsUrl, processorDir.name);
+          const files = await collectEntries(dirUrl);
+          for (
+            const file of files.filter((entry) =>
+              entry.isFile &&
+              entry.name.endsWith(".ts") &&
+              !entry.name.endsWith(".test.ts") &&
+              !entry.name.startsWith("_")
+            )
+          ) {
+            const basename = file.name.replace(/\.ts$/, "");
+            processorFiles.push({
+              purpose: processorDir.name,
+              file,
+              dirUrl,
+              name: basename === "index"
+                ? processorDir.name
+                : `${processorDir.name}/${basename}`,
+              fallbackEventType: basename === "index"
+                ? processorDir.name
+                : basename,
+            });
+          }
+        }
+        processorFiles.sort((a, b) =>
+          a.name.localeCompare(b.name, "en", { sensitivity: "base" })
+        );
+
+        const allowedProcessorNames = new Set(
+          filterNames(
+            "processors",
+            processorFiles.map((file) => file.name),
+          ),
+        );
+        const allowPurposeNames = new Set(
+          filterNames(
+            "processors",
+            processorDirs.filter((entry) => entry.isDirectory).map((entry) =>
+              entry.name
+            ),
+          ),
+        );
+
+        const filteredProcessorFiles = processorFiles.filter((file) =>
+          allowedProcessorNames.has(file.name) ||
+          allowPurposeNames.has(file.purpose)
+        );
+
         const allProcessors = await Promise.all(
-          evtDirs.filter((e) => e.isDirectory && allowedEventTypes.has(e.name))
-            .map(async (evtDir) => {
-              const eventTypeKey = normalizeProcessorEventType(evtDir.name);
-              const dirUrl = joinUrl(processorsUrl, evtDir.name);
-              const files = await collectEntries(dirUrl);
+          filteredProcessorFiles.map(async (processorFile) => {
+            const { dirUrl, file, fallbackEventType, name } = processorFile;
+            const files = await collectEntries(dirUrl);
 
-              const discovered = (
-                await Promise.all(
-                  files
-                    .filter((f) => f.isFile && f.name.endsWith(".ts"))
-                    .map(async (file): Promise<Discovered | null> => {
-                      const specifierUrl = joinUrl(dirUrl, file.name);
-                      let mod: Record<string, unknown> | undefined;
-                      try {
-                        mod = (await import(specifierUrl)) as Record<
-                          string,
-                          unknown
-                        >;
-                      } catch (error) {
-                        console.warn(
-                          `[copilotz:resources] Failed to load processor: ${specifierUrl}`,
-                          error,
-                        );
-                        return null;
-                      }
-                      const maybeShouldProcess = mod?.shouldProcess;
-                      const maybeProcess = mod?.process || mod?.default;
-                      const maybePriority = mod?.priority;
-                      if (
-                        typeof maybeShouldProcess === "function" &&
-                        typeof maybeProcess === "function"
-                      ) {
-                        return {
-                          shouldProcess:
-                            maybeShouldProcess as Discovered["shouldProcess"],
-                          process: maybeProcess as Discovered["process"],
-                          priority: typeof maybePriority === "number"
-                            ? maybePriority
-                            : 0,
-                          name: file.name,
-                          eventType: typeof mod?.eventType === "string"
-                            ? mod.eventType
-                            : undefined,
-                        };
-                      }
+            const discovered = (
+              await Promise.all(
+                files
+                  .filter((candidate) => candidate.name === file.name)
+                  .map(async (file): Promise<Discovered | null> => {
+                    const specifierUrl = joinUrl(dirUrl, file.name);
+                    let mod: ProcessorModule | undefined;
+                    let imported: ProcessorModule | undefined;
+                    try {
+                      imported = (await import(
+                        specifierUrl
+                      )) as ProcessorModule;
+                      const defaultExport = imported.default;
+                      mod = defaultExport && typeof defaultExport === "object"
+                        ? defaultExport as ProcessorModule
+                        : imported;
+                    } catch (error) {
+                      console.warn(
+                        `[copilotz:resources] Failed to load processor: ${specifierUrl}`,
+                        error,
+                      );
                       return null;
-                    }),
-                )
-              ).filter((d): d is Discovered => d !== null);
+                    }
+                    const maybeShouldProcess = mod?.shouldProcess ??
+                      imported?.shouldProcess;
+                    const maybeProcess = mod?.process ??
+                      imported?.process ??
+                      (typeof imported?.default === "function"
+                        ? imported.default
+                        : undefined);
+                    const maybePriority = mod?.priority ??
+                      imported?.priority;
+                    if (
+                      typeof maybeShouldProcess === "function" &&
+                      typeof maybeProcess === "function"
+                    ) {
+                      return {
+                        shouldProcess:
+                          maybeShouldProcess as Discovered["shouldProcess"],
+                        process: maybeProcess as Discovered["process"],
+                        priority: typeof maybePriority === "number"
+                          ? maybePriority
+                          : 0,
+                        name,
+                        eventTypes: resolveProcessorEventTypes(
+                          mod,
+                          fallbackEventType,
+                        ),
+                        processorId: typeof mod?.processorId === "string"
+                          ? mod.processorId
+                          : typeof mod?.id === "string"
+                          ? mod.id
+                          : undefined,
+                      };
+                    }
+                    return null;
+                  }),
+              )
+            ).filter((d): d is Discovered => d !== null);
 
-              discovered.sort((a, b) => {
-                if (b.priority !== a.priority) {
-                  return (b.priority ?? 0) - (a.priority ?? 0);
-                }
-                return (a.name ?? "").localeCompare(b.name ?? "", "en", {
-                  sensitivity: "base",
-                });
+            discovered.sort((a, b) => {
+              if (b.priority !== a.priority) {
+                return (b.priority ?? 0) - (a.priority ?? 0);
+              }
+              return (a.name ?? "").localeCompare(b.name ?? "", "en", {
+                sensitivity: "base",
               });
+            });
 
-              return discovered.map((d) => ({
+            return discovered.flatMap((d) =>
+              d.eventTypes.map((eventType) => ({
                 shouldProcess: coerceProcessorShouldProcess(d.shouldProcess),
                 process: coerceProcessorProcess(d.process),
-                eventType: normalizeProcessorEventType(
-                  d.eventType ?? eventTypeKey,
-                ),
+                eventType: normalizeProcessorEventType(eventType),
                 priority: d.priority,
-              })) as ProcessorEntry[];
-            }),
+                id: d.processorId,
+              } as ProcessorEntry))
+            );
+          }),
         );
 
         resources.processors = allProcessors.flat();

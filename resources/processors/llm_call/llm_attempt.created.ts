@@ -42,6 +42,9 @@ import {
   setRuntimeThreadMetadata,
 } from "@/runtime/thread-metadata.ts";
 
+export const processorId = "llm_call";
+export const eventTypes = ["llm_attempt.created"] as const;
+
 export type { ChatMessage };
 
 export type LLMCallPayload = LlmCallEventPayload;

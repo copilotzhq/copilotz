@@ -4,7 +4,7 @@ import {
   buildAssetRefForStore,
   resolveAssetIdForStore,
 } from "@/runtime/storage/assets.ts";
-import type { ToolExecutionContext } from "@/resources/processors/tool_call/index.ts";
+import type { ToolExecutionContext } from "@/runtime/tools/types.ts";
 import { dirname, isAbsolute, relative, resolve } from "@std/path";
 
 // ---------------------------------------------------------------------------

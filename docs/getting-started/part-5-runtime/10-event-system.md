@@ -262,13 +262,13 @@ Your processors can intercept any event type. Here's a processor that forwards
 LLM result metadata without creating duplicate accounting rows:
 
 ```typescript
-// resources/processors/usage-logger/index.ts
+// resources/processors/usage_logger/llm_attempt.completed.ts
 export default {
-  eventType: "LLM_RESULT",
-  id: "usage-logger",
+  eventTypes: ["llm_attempt.completed"],
+  id: "usage_logger",
   priority: 50, // Run before built-in but don't claim
 
-  shouldProcess: (event) => event.type === "LLM_RESULT",
+  shouldProcess: (event) => event.type === "llm_attempt.completed",
 
   process: async (event, deps) => {
     const usage = event.payload?.usage;
@@ -291,10 +291,10 @@ export default {
 A processor that intercepts incoming messages to add context:
 
 ```typescript
-// resources/processors/context-injector/index.ts
+// resources/processors/context_injector/message.created.ts
 export default {
-  eventType: "NEW_MESSAGE",
-  id: "context-injector",
+  eventTypes: ["message.created"],
+  id: "context_injector",
   priority: 200, // Run first
 
   shouldProcess: (event) => event.payload?.sender?.type === "user",

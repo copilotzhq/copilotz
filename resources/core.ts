@@ -53,15 +53,17 @@ import longTermMemory from "@/resources/memory/long_term.ts";
 import { nativeTools } from "@/resources/tools/_registry.ts";
 
 // ---- Core: processors ------------------------------------------------------
-import * as newMessageProcessor from "@/resources/processors/new_message/index.ts";
-import * as llmCallProcessor from "@/resources/processors/llm_call/index.ts";
-import * as llmResultProcessor from "@/resources/processors/llm_result/index.ts";
-import * as toolCallProcessor from "@/resources/processors/tool_call/index.ts";
-import * as toolResultProcessor from "@/resources/processors/tool_result/index.ts";
-import * as ragIngestProcessor from "@/resources/processors/rag_ingest/index.ts";
-import * as entityExtractProcessor from "@/resources/processors/entity_extract/index.ts";
-import * as longTermMemoryTriggerProcessor from "@/resources/processors/long_term_memory_trigger/index.ts";
-import * as longTermMemoryProcessor from "@/resources/processors/long_term_memory/index.ts";
+import * as messageRouterMessageCreatedProcessor from "@/resources/processors/message_router/message.created.ts";
+import * as llmCallLlmAttemptCreatedProcessor from "@/resources/processors/llm_call/llm_attempt.created.ts";
+import * as llmResultLlmAttemptCompletedProcessor from "@/resources/processors/llm_result/llm_attempt.completed.ts";
+import * as llmResultLlmAttemptFailedProcessor from "@/resources/processors/llm_result/llm_attempt.failed.ts";
+import * as toolCallToolExecutionCreatedProcessor from "@/resources/processors/tool_call/tool_execution.created.ts";
+import * as toolResultToolExecutionCompletedProcessor from "@/resources/processors/tool_result/tool_execution.completed.ts";
+import * as toolResultToolExecutionFailedProcessor from "@/resources/processors/tool_result/tool_execution.failed.ts";
+import * as ragIngestRagIngestionCreatedProcessor from "@/resources/processors/rag_ingest/rag_ingestion.created.ts";
+import * as entityExtractionCreatedProcessor from "@/resources/processors/entity_extract/entity_extraction.created.ts";
+import * as longTermMemoryTriggerMessageCreatedProcessor from "@/resources/processors/memory_reservation/message.created.ts";
+import * as longTermMemoryConsolidationCreatedProcessor from "@/resources/processors/memory_consolidation/long_term_memory.created.ts";
 
 // ---- Core: llm providers + storage adapters --------------------------------
 import * as llmProviders from "@/resources/llm/mod.ts";
@@ -129,9 +131,16 @@ type ProcessorEntry = EventProcessor<unknown, ProcessorDeps> & {
   id?: string;
 };
 
+type ProcessorModule = Record<string, unknown> & {
+  eventTypes?: readonly string[];
+  eventType?: string;
+  processorId?: string;
+  id?: string;
+};
+
 function toProcessorEntry(
   eventType: string,
-  mod: Record<string, unknown>,
+  mod: ProcessorModule,
 ): ProcessorEntry {
   const maybeShouldProcess = mod.shouldProcess;
   const maybeProcess = mod.process || mod.default;
@@ -156,7 +165,21 @@ function toProcessorEntry(
     ),
     eventType: eventType.includes(".") ? eventType : eventType.toUpperCase(),
     priority: typeof mod.priority === "number" ? mod.priority : 0,
+    id: typeof mod.processorId === "string"
+      ? mod.processorId
+      : typeof mod.id === "string"
+      ? mod.id
+      : undefined,
   };
+}
+
+function toProcessorEntries(mod: ProcessorModule): ProcessorEntry[] {
+  const eventTypes = Array.isArray(mod.eventTypes) && mod.eventTypes.length > 0
+    ? mod.eventTypes
+    : typeof mod.eventType === "string"
+    ? [mod.eventType]
+    : [];
+  return eventTypes.map((eventType) => toProcessorEntry(eventType, mod));
 }
 
 const coreTools = [
@@ -344,74 +367,31 @@ function buildCoreMemory(): MemoryResource[] {
 }
 
 function buildCoreProcessors(): ProcessorEntry[] {
-  return [
-    toProcessorEntry(
-      "message.created",
-      longTermMemoryTriggerProcessor as Record<string, unknown>,
-    ),
-    toProcessorEntry(
-      "message.created",
-      newMessageProcessor as Record<string, unknown>,
-    ),
-    toProcessorEntry(
-      "llm_attempt.created",
-      llmCallProcessor as Record<string, unknown>,
-    ),
-    toProcessorEntry(
-      "llm_attempt.completed",
-      llmResultProcessor as Record<string, unknown>,
-    ),
-    toProcessorEntry(
-      "llm_attempt.failed",
-      llmResultProcessor as Record<string, unknown>,
-    ),
-    toProcessorEntry(
-      "tool_execution.created",
-      toolCallProcessor as Record<string, unknown>,
-    ),
-    toProcessorEntry(
-      "tool_execution.completed",
-      toolResultProcessor as Record<string, unknown>,
-    ),
-    toProcessorEntry(
-      "tool_execution.failed",
-      toolResultProcessor as Record<string, unknown>,
-    ),
-    toProcessorEntry(
-      "rag_ingestion.created",
-      ragIngestProcessor as Record<string, unknown>,
-    ),
-    toProcessorEntry(
-      "entity_extraction.created",
-      entityExtractProcessor as Record<string, unknown>,
-    ),
-    toProcessorEntry(
-      "long_term_memory.created",
-      longTermMemoryProcessor as Record<string, unknown>,
-    ),
-    toProcessorEntry(
-      "new_message",
-      newMessageProcessor as Record<string, unknown>,
-    ),
-    toProcessorEntry("llm_call", llmCallProcessor as Record<string, unknown>),
-    toProcessorEntry(
-      "llm_result",
-      llmResultProcessor as Record<string, unknown>,
-    ),
-    toProcessorEntry("tool_call", toolCallProcessor as Record<string, unknown>),
-    toProcessorEntry(
-      "tool_result",
-      toolResultProcessor as Record<string, unknown>,
-    ),
-    toProcessorEntry(
-      "rag_ingest",
-      ragIngestProcessor as Record<string, unknown>,
-    ),
-    toProcessorEntry(
-      "entity_extract",
-      entityExtractProcessor as Record<string, unknown>,
-    ),
+  const durableProcessors = [
+    longTermMemoryTriggerMessageCreatedProcessor,
+    messageRouterMessageCreatedProcessor,
+    llmCallLlmAttemptCreatedProcessor,
+    llmResultLlmAttemptCompletedProcessor,
+    llmResultLlmAttemptFailedProcessor,
+    toolCallToolExecutionCreatedProcessor,
+    toolResultToolExecutionCompletedProcessor,
+    toolResultToolExecutionFailedProcessor,
+    ragIngestRagIngestionCreatedProcessor,
+    entityExtractionCreatedProcessor,
+    longTermMemoryConsolidationCreatedProcessor,
+  ].flatMap((mod) => toProcessorEntries(mod as ProcessorModule));
+
+  const legacyProcessors = [
+    toProcessorEntry("new_message", messageRouterMessageCreatedProcessor),
+    toProcessorEntry("llm_call", llmCallLlmAttemptCreatedProcessor),
+    toProcessorEntry("llm_result", llmResultLlmAttemptFailedProcessor),
+    toProcessorEntry("tool_call", toolCallToolExecutionCreatedProcessor),
+    toProcessorEntry("tool_result", toolResultToolExecutionFailedProcessor),
+    toProcessorEntry("rag_ingest", ragIngestRagIngestionCreatedProcessor),
+    toProcessorEntry("entity_extract", entityExtractionCreatedProcessor),
   ];
+
+  return [...durableProcessors, ...legacyProcessors];
 }
 
 function buildCoreLlm(): Array<{ name: string; factory: ProviderFactory }> {

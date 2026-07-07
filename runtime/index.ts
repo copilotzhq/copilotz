@@ -1,16 +1,17 @@
 import type { CopilotzDb } from "@/database/index.ts";
 import type {
   Agent,
+  API,
   ChatContext,
   Event,
+  MCPServer,
+  MemoryResource,
   MessagePayload,
   Tool,
 } from "@/types/index.ts";
+import type { Skill } from "@/runtime/loaders/skill-types.ts";
 import type { EventBase } from "@/database/schemas/index.ts";
-import {
-  getCurrentSchema,
-  withSchema,
-} from "@/database/schema-context.ts";
+import { getCurrentSchema, withSchema } from "@/database/schema-context.ts";
 import { startThreadEventWorker } from "@/runtime/event-engine.ts";
 import { redactEventForStream } from "@/runtime/stream-redaction.ts";
 import {
@@ -141,6 +142,20 @@ export type RunOptions = {
    * Useful for loading tools dynamically from a database.
    */
   tools?: Tool[];
+  /**
+   * API resources for this run. Overrides the APIs from config.
+   * Useful for tenant-scoped OpenAPI tool catalogs.
+   */
+  apis?: API[];
+  /**
+   * MCP servers for this run. Overrides the MCP servers from config.
+   * Useful for tenant-scoped MCP tool catalogs.
+   */
+  mcpServers?: MCPServer[];
+  /** Memory resources for this run. Overrides memory from config. */
+  memory?: MemoryResource[];
+  /** Skill resources for this run. Overrides skills from config. */
+  skills?: Skill[];
 };
 
 export type RecoverStuckThreadsOptions = {

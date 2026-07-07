@@ -3,7 +3,7 @@ import {
   assertExists,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import { process } from "./index.ts";
+import { process } from "./llm_attempt.completed.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
 import type { ProcessorDeps } from "@/types/index.ts";
 

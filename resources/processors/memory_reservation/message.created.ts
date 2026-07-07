@@ -2,6 +2,7 @@ import { ulid } from "ulid";
 import type { Event, EventProcessor, ProcessorDeps } from "@/types/index.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
+import { createMessageService } from "@/runtime/collections/native.ts";
 import {
   getLatestReadyLongTermMemory,
   getLongTermMemoryConfig,
@@ -43,8 +44,9 @@ async function getTriggerMessageId(
   return typeof data.messageId === "string" ? data.messageId : subjectId;
 }
 
+export const processorId = "memory_reservation";
+export const eventTypes = ["message.created"] as const;
 export const priority = 10;
-export const eventType = "message.created";
 
 export const longTermMemoryTriggerProcessor: EventProcessor<
   unknown,
@@ -69,7 +71,7 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
       if (!config || !agentId || !threadId || !namespace) return;
       if (!deps.context.embeddingConfig) {
         console.warn(
-          "[long_term_memory_trigger] Long-term memory requires embedding configuration.",
+          "[memory_reservation] Long-term memory requires embedding configuration.",
         );
         return;
       }
@@ -90,15 +92,17 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
         namespace,
         agentId,
       );
+      const messageService = createMessageService({
+        collections: deps.context.collections,
+        ops: deps.db.ops,
+      });
+      const history = await messageService.getHistory(threadId, agentId);
       const range = await selectLongTermMemoryRange({
-        db: deps.db,
-        threadId,
+        messages: history,
         triggerMessageId,
         previous,
         triggerEstimatedTokens: config.triggerEstimatedTokens,
         retainRecentEstimatedTokens: config.retainRecentEstimatedTokens,
-        maxToolResultEstimatedTokens:
-          deps.context.toolResultHistoryMaxEstimatedTokens,
       });
       if (!range) return;
 
@@ -221,7 +225,7 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
       return { backgroundThreadIds: [backgroundThreadId] };
     } catch (error) {
       console.warn(
-        "[long_term_memory_trigger] Failed to reserve checkpoint:",
+        "[memory_reservation] Failed to reserve checkpoint:",
         error,
       );
     }

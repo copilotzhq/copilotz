@@ -6,7 +6,7 @@ import {
 import { createDatabase } from "@/database/index.ts";
 import type { Event, ProcessorDeps } from "@/types/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
-import { messageProcessor } from "./index.ts";
+import { messageProcessor } from "./message.created.ts";
 
 Deno.test("new_message injects ready memory and keeps only messages after its boundary", async () => {
   const db = await createDatabase({ url: ":memory:" });

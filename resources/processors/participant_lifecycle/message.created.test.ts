@@ -4,11 +4,8 @@ import { createDatabase } from "@/database/index.ts";
 import { createCollectionsManager } from "@/database/collections/index.ts";
 import loadResources from "@/runtime/loaders/resources.ts";
 import participantCollection from "@/resources/collections/participant.ts";
-import {
-  participantLifecycleProcessor,
-  priority,
-} from "./participant_lifecycle.ts";
-import { messageProcessor } from "./index.ts";
+import { participantLifecycleProcessor, priority } from "./message.created.ts";
+import { messageProcessor } from "../message_router/message.created.ts";
 import type { Event, ProcessorDeps } from "@/types/index.ts";
 
 type TestDb = Awaited<ReturnType<typeof createDatabase>>;

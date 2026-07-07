@@ -2,7 +2,7 @@ import { assertEquals, assertExists } from "@std/assert";
 import { createDatabase } from "@/database/index.ts";
 import type { Event, ProcessorDeps } from "@/types/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
-import { process, shouldProcess } from "./index.ts";
+import { process, shouldProcess } from "./message.created.ts";
 
 Deno.test("long-term-memory trigger reserves one pending checkpoint and outbox event", async () => {
   const db = await createDatabase({ url: ":memory:" });

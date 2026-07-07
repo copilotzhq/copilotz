@@ -6,7 +6,6 @@ import {
   isLongTermMemoryAccessible,
   type LongTermMemoryData,
   type LongTermMemoryRecord,
-  projectMessageForSharedMemory,
   resolveThreadMemorySpaces,
   selectLongTermMemoryRange,
   sliceMessagesAfterLongTermMemory,
@@ -41,17 +40,31 @@ async function createThreadMessages() {
   return { db, namespace, threadId, messages };
 }
 
+function estimateRangeMessageTokensForTest(message: Message): number {
+  const metadata = message.metadata && typeof message.metadata === "object" &&
+      !Array.isArray(message.metadata)
+    ? message.metadata as Record<string, unknown>
+    : {};
+  const parts = [
+    message.senderType,
+    message.senderId,
+    typeof message.content === "string" ? message.content : "",
+    Array.isArray(message.toolCalls) ? JSON.stringify(message.toolCalls) : "",
+    Array.isArray(metadata.toolCalls) ? JSON.stringify(metadata.toolCalls) : "",
+    typeof message.reasoning === "string" ? message.reasoning : "",
+  ].filter((part) => part.length > 0);
+  return estimateTextTokens(parts.join("\n"));
+}
+
 Deno.test("first long-term-memory range scans only the recent threshold suffix", async () => {
-  const { db, threadId, messages } = await createThreadMessages();
+  const { messages } = await createThreadMessages();
   const last = messages.at(-1)!;
-  const projectedLast = estimateTextTokens(projectMessageForSharedMemory(last));
+  const lastTokens = estimateRangeMessageTokensForTest(last);
   const range = await selectLongTermMemoryRange({
-    db,
-    threadId,
+    messages,
     triggerMessageId: last.id,
     previous: null,
-    triggerEstimatedTokens: projectedLast + 1,
-    pageSize: 2,
+    triggerEstimatedTokens: lastTokens + 1,
   });
 
   assertEquals(range?.sourceStartMessageId, messages.at(-2)?.id);
@@ -63,7 +76,7 @@ Deno.test("first long-term-memory range scans only the recent threshold suffix",
 });
 
 Deno.test("later long-term-memory ranges preserve the complete prior-boundary delta", async () => {
-  const { db, namespace, threadId, messages } = await createThreadMessages();
+  const { namespace, threadId, messages } = await createThreadMessages();
   const previous = {
     node: {
       id: "memory-1",
@@ -89,12 +102,10 @@ Deno.test("later long-term-memory ranges preserve the complete prior-boundary de
     },
   } as LongTermMemoryRecord;
   const range = await selectLongTermMemoryRange({
-    db,
-    threadId,
+    messages,
     triggerMessageId: messages[4].id,
     previous,
     triggerEstimatedTokens: 1,
-    pageSize: 2,
   });
 
   assertEquals(range?.messages.map((message) => message.id), [
@@ -111,24 +122,21 @@ Deno.test("later long-term-memory ranges preserve the complete prior-boundary de
 });
 
 Deno.test("long-term-memory range retains a complete recent-message tail", async () => {
-  const { db, namespace, threadId, messages } = await createThreadMessages();
+  const { namespace, threadId, messages } = await createThreadMessages();
   const selected = messages.slice(-3);
   const triggerEstimatedTokens = selected.reduce(
-    (total, message) =>
-      total + estimateTextTokens(projectMessageForSharedMemory(message)),
+    (total, message) => total + estimateRangeMessageTokensForTest(message),
     0,
   );
-  const retainedEstimatedTokens = estimateTextTokens(
-    projectMessageForSharedMemory(messages.at(-1)!),
+  const retainedEstimatedTokens = estimateRangeMessageTokensForTest(
+    messages.at(-1)!,
   );
   const range = await selectLongTermMemoryRange({
-    db,
-    threadId,
+    messages,
     triggerMessageId: messages.at(-1)!.id,
     previous: null,
     triggerEstimatedTokens,
     retainRecentEstimatedTokens: retainedEstimatedTokens,
-    pageSize: 2,
   });
 
   assertEquals(
@@ -171,41 +179,19 @@ Deno.test("long-term-memory range retains a complete recent-message tail", async
   );
 });
 
-Deno.test("shared-memory projection hides requester-only tool output", () => {
-  const message = {
-    id: "tool-message",
-    threadId: "thread",
-    senderId: "agent",
-    senderType: "tool",
-    content: "secret",
-    metadata: {
-      toolCalls: [{
-        id: "call",
-        tool: { id: "private_tool" },
-        output: { secret: true },
-        visibility: "requester_only",
-      }],
-    },
-  } satisfies Message;
+Deno.test("long-term-memory range uses the provided branch-aware history only", async () => {
+  const { messages } = await createThreadMessages();
+  const branchHistory = [messages[0], messages[2], messages[4]];
+  const range = await selectLongTermMemoryRange({
+    messages: branchHistory,
+    triggerMessageId: messages[4].id,
+    previous: null,
+    triggerEstimatedTokens: 1,
+  });
 
-  assertEquals(projectMessageForSharedMemory(message), "");
-});
-
-Deno.test("shared-memory projection counts agent tool calls and arguments", () => {
-  const projected = projectMessageForSharedMemory({
-    threadId: "thread",
-    senderId: "agent",
-    senderType: "agent",
-    content: "Checking.",
-    toolCalls: [{
-      id: "call",
-      tool: { id: "sandbox" },
-      args: { command: "deno test" },
-    }],
-  } as Message);
-
-  assertEquals(projected.includes("[Tool call sandbox]"), true);
-  assertEquals(projected.includes("deno test"), true);
+  assertEquals(range?.messages.map((message) => message.id), [
+    messages[4].id,
+  ]);
 });
 
 Deno.test("thread memory spaces resolve one default writer and additional readable spaces", async () => {

@@ -1,9 +1,9 @@
 import { ulid } from "ulid";
 import type {
   Agent,
-  AgentLlmOptionsResolverArgs,
   Event,
   EventProcessor,
+  NewMessage,
   ProcessorDeps,
 } from "@/types/index.ts";
 import type {
@@ -21,11 +21,10 @@ import {
 import type {
   ChatMessage,
   ChatResponse,
-  LLMRuntimeConfig,
   ProviderConfig,
   ToolDefinition,
 } from "@/runtime/llm/types.ts";
-import { assertAgentLLMConfig } from "@/resources/processors/llm_call/index.ts";
+import { assertAgentLLMConfig } from "@/resources/processors/llm_call/llm_attempt.created.ts";
 import {
   DEFAULT_EMBEDDING_MAX_INPUT_TOKENS,
   embed,
@@ -38,13 +37,17 @@ import {
   getLongTermMemoryConfig,
   getLongTermMemoryData,
   isLongTermMemoryAccessible,
-  loadMessagesInLongTermMemoryRange,
-  projectMessageForSharedMemory,
   resolveThreadMemorySpaces,
   type ThreadMemorySpaceAccess,
 } from "@/runtime/memory/index.ts";
-import { contextGenerator } from "@/resources/processors/new_message/generators/context-generator.ts";
 import { estimateTextTokens } from "@/runtime/tokens/index.ts";
+import {
+  type AgentLlmInput,
+  buildAgentLlmInput,
+} from "@/runtime/agent-llm-input/index.ts";
+
+export const processorId = "memory_consolidation";
+export const eventTypes = ["long_term_memory.created"] as const;
 
 const CONSOLIDATE_MEMORY_TOOL: ToolDefinition = {
   type: "function",
@@ -847,10 +850,19 @@ function buildConsolidationRepairMessages(
         "Return the complete corrected JSON object now.",
         "Preserve every valid brain node and relation from the previous response.",
         "Every changed continuity field must use { value, sourceMessageIds }, and sourceMessageIds must come from the conversation range.",
+        "Do not call tools.",
         "Output ONLY the JSON object — no markdown, no explanation.",
       ].join("\n"),
     },
   ];
+}
+
+function assertNoConsolidationToolCalls(response: ChatResponse): void {
+  if (Array.isArray(response.toolCalls) && response.toolCalls.length > 0) {
+    throw new Error(
+      "Long-term-memory consolidation must return JSON and must not call tools.",
+    );
+  }
 }
 
 function isRetryableLlmReason(reason: string | null): boolean {
@@ -1073,29 +1085,12 @@ async function sha256(value: string): Promise<string> {
 
 async function resolveMemoryLlmConfig(args: {
   agent: Agent;
-  messages: ChatMessage[];
+  input: AgentLlmInput;
   event: Event;
   deps: ProcessorDeps;
 }): Promise<ProviderConfig> {
-  const { agent, messages, event, deps } = args;
-  let agentRuntimeConfig: LLMRuntimeConfig = {};
-  if (typeof agent.llmOptions === "function") {
-    const payload = {
-      agent: { id: agent.id, name: agent.name },
-      messages,
-      tools: [],
-      config: {},
-    } as AgentLlmOptionsResolverArgs["payload"];
-    agentRuntimeConfig = await agent.llmOptions({
-      payload,
-      sourceEvent: event,
-      deps,
-    });
-  } else if (agent.llmOptions) {
-    agentRuntimeConfig = agent.llmOptions;
-  }
-
-  const persistedConfig = toLLMConfig(agentRuntimeConfig);
+  const { agent, input, event, deps } = args;
+  const persistedConfig = input.config;
   const securityRuntimeConfig = await deps.context.security
     ?.resolveLLMRuntimeConfig?.({
       provider: persistedConfig.provider,
@@ -1107,7 +1102,7 @@ async function resolveMemoryLlmConfig(args: {
     });
   const resolved = mergeLLMRuntimeConfig(
     persistedConfig,
-    agentRuntimeConfig,
+    input.runtimeConfig,
     securityRuntimeConfig,
     {
       outputReasoning: false,
@@ -1118,38 +1113,35 @@ async function resolveMemoryLlmConfig(args: {
   return resolved;
 }
 
-async function buildConsolidationContext(args: {
-  agent: Agent;
-  deps: ProcessorDeps;
-  conversation: string;
+function compactSourcePreview(message: NewMessage): string | null {
+  if (message.senderType === "tool") return "[tool result]";
+  const content = typeof message.content === "string" ? message.content : "";
+  const compact = content.replace(/\s+/g, " ").trim();
+  if (!compact) return null;
+  return compact.length > 160 ? `${compact.slice(0, 157)}...` : compact;
+}
+
+function buildSourceMessageMap(messages: NewMessage[]) {
+  return messages.map((message, index) => ({
+    label: `M${index + 1}`,
+    messageId: message.id,
+    senderType: message.senderType,
+    senderId: message.senderId,
+    ...(compactSourcePreview(message)
+      ? { preview: compactSourcePreview(message) }
+      : {}),
+  }));
+}
+
+function buildMemoryConsolidationInstruction(args: {
   memorySpaces: ThreadMemorySpaceAccess[];
   defaultWriteMemorySpaceId: string;
   previousMemory: Awaited<
     ReturnType<typeof getLatestReadyLongTermMemory>
   >;
   previousContinuity: LongTermMemoryContinuity;
-}): Promise<{ messages: ChatMessage[]; tools: ToolDefinition[] }> {
-  const { agent, deps } = args;
-
-  // Build exactly the same system prompt the agent uses in regular chat turns
-  // (no consolidation-specific additions) so the provider can reuse its KV
-  // cache on the full stable prefix.
-  const llmContext = contextGenerator(
-    agent,
-    deps.thread,
-    deps.context.agents ?? [],
-    deps.context.agents ?? [],
-  );
-  let systemPrompt = llmContext.systemPrompt;
-  if (args.previousMemory?.node.content) {
-    systemPrompt = `${systemPrompt}\n\n${args.previousMemory.node.content}`;
-  }
-
-  // All consolidation-specific content lives in the user message so the
-  // system prompt above stays cache-stable across consolidation calls.
-  // We use JSON output mode (responseType:"json") so the model reliably
-  // returns structured data without needing any format training in the
-  // system prompt.
+  sourceMessages: NewMessage[];
+}): string {
   const reconciliationInstruction = args.previousMemory?.node.content
     ? "You may supersede or relate only older brain node IDs shown in the previous checkpoint above."
     : "There is no previous checkpoint; relations may target only new localIds.";
@@ -1170,24 +1162,32 @@ async function buildConsolidationContext(args: {
           args.defaultWriteMemorySpaceId,
       };
     });
-  const userContent = [
+  return [
+    "You are performing long-term memory consolidation for the agent history immediately above.",
+    "Do not answer the user, do not route the conversation, and do not call tools.",
+    "Use the preceding agent-visible history as the conversation content to consolidate.",
+    "",
     "Previous structured continuity:",
     JSON.stringify(args.previousContinuity),
     "",
-    "Conversation range to consolidate:",
-    args.conversation,
+    "Previous long-term memory checkpoint:",
+    args.previousMemory?.node.content ?? "None",
+    "",
+    "Source message map for provenance:",
+    JSON.stringify(buildSourceMessageMap(args.sourceMessages)),
     "",
     "---",
-    "Update continuity and extract durable memory from the conversation range above.",
+    "Update continuity and extract durable memory from the preceding history.",
     "Continuity must let another capable agent resume the work after archived messages are unavailable.",
     "Do not produce a chronological summary.",
-    "For continuity, emit only fields introduced, refined, changed, or explicitly cleared by this range.",
+    "For continuity, emit only fields introduced, refined, changed, or explicitly cleared by this history range.",
     "Omit unchanged continuity fields so the processor retains their previous values exactly.",
     "When updating a list field, return its complete new value, including prior entries that remain active.",
-    "Never infer missing intent. Use null or [] only when this range explicitly clears a value.",
+    "Never infer missing intent. Use null or [] only when this history range explicitly clears a value.",
     "Keep the challenge distinct from the current task and the desired outcome distinct from an activity.",
-    "Keep unresolved blockers, questions, and actions until the range explicitly changes or resolves them.",
+    "Keep unresolved blockers, questions, and actions until the history explicitly changes or resolves them.",
     reconciliationInstruction,
+    "Every sourceMessageIds entry must be a messageId from the source message map.",
     "Assign every new brain node to exactly one writable memory space from this catalog.",
     `Writable memory spaces: ${JSON.stringify(writableMemorySpaces)}`,
     `If uncertain, use the default memory space ID: ${args.defaultWriteMemorySpaceId}`,
@@ -1196,14 +1196,6 @@ async function buildConsolidationContext(args: {
     "Schema:",
     CONSOLIDATE_MEMORY_TOOL.function.inputTypes,
   ].join("\n");
-
-  return {
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userContent },
-    ],
-    tools: [],
-  };
 }
 
 export interface RankedMemoryCandidate {
@@ -1439,6 +1431,7 @@ async function persistAttemptStart(args: {
   agent: Agent;
   config: ProviderConfig;
   messages: ChatMessage[];
+  tools: ToolDefinition[];
 }): Promise<string | null> {
   try {
     const attempt = await args.deps.db.ops.mutate.llmAttempts.create({
@@ -1450,7 +1443,7 @@ async function persistAttemptStart(args: {
       model: args.config.model ?? null,
       config: toLLMConfig(args.config) as Record<string, unknown>,
       messages: args.messages,
-      tools: [],
+      tools: args.tools,
       status: "processing",
       namespace: args.namespace,
       metadata: {
@@ -1559,26 +1552,6 @@ export const longTermMemoryProcessor: EventProcessor<
         return space ? [space] : [];
       });
 
-      const sourceMessages = await loadMessagesInLongTermMemoryRange(
-        deps.db,
-        threadId,
-        checkpointData.sourceStartMessageId,
-        checkpointData.sourceEndMessageId,
-      );
-      const conversationLines = sourceMessages.flatMap((message): string[] => {
-        const projected = projectMessageForSharedMemory(
-          message,
-          deps.context.toolResultHistoryMaxEstimatedTokens,
-        );
-        return projected
-          ? [JSON.stringify({ messageId: message.id, content: projected })]
-          : [];
-      });
-      const conversation = conversationLines.join("\n");
-      if (!conversation) {
-        throw new Error("The reserved memory range has no shared content.");
-      }
-
       const previousMemoryCandidate = await getLatestReadyLongTermMemory(
         deps.db,
         threadId,
@@ -1594,19 +1567,38 @@ export const longTermMemoryProcessor: EventProcessor<
         : null;
       const previousContinuity = readPersistedContinuity(previousMemory);
       const allowedVisibleItemIds = getVisibleBrainNodeIds(previousMemory);
-      const { messages: llmMessages, tools: llmTools } =
-        await buildConsolidationContext({
-          agent,
-          deps: memoryDeps,
-          conversation,
-          memorySpaces,
-          defaultWriteMemorySpaceId,
-          previousMemory,
-          previousContinuity,
-        });
+      const llmInput = await buildAgentLlmInput({
+        deps: memoryDeps,
+        event,
+        threadId,
+        agent,
+        historyMode: {
+          type: "range",
+          startMessageId: checkpointData.sourceStartMessageId,
+          endMessageId: checkpointData.sourceEndMessageId,
+        },
+      });
+      const sourceMessages = llmInput.rawHistory;
+      if (sourceMessages.length === 0) {
+        throw new Error("The reserved memory range has no shared content.");
+      }
+      const llmMessages: ChatMessage[] = [
+        ...llmInput.messages,
+        {
+          role: "user",
+          content: buildMemoryConsolidationInstruction({
+            memorySpaces,
+            defaultWriteMemorySpaceId,
+            previousMemory,
+            previousContinuity,
+            sourceMessages,
+          }),
+        },
+      ];
+      const llmTools = llmInput.tools;
       llmConfig = await resolveMemoryLlmConfig({
         agent,
-        messages: llmMessages,
+        input: llmInput,
         event,
         deps: memoryDeps,
       });
@@ -1618,6 +1610,7 @@ export const longTermMemoryProcessor: EventProcessor<
         agent,
         config: llmConfig,
         messages: llmMessages,
+        tools: llmTools,
       });
 
       const runtimeEnvironment = readRuntimeEnvironment();
@@ -1629,7 +1622,9 @@ export const longTermMemoryProcessor: EventProcessor<
         deps.context.llmProviders,
       );
       const allowedSourceMessageIds = new Set(
-        sourceMessages.map((message) => message.id),
+        sourceMessages
+          .map((message) => message.id)
+          .filter((id): id is string => typeof id === "string"),
       );
       const proposalRouting = {
         writableMemorySpaceIds: new Set(writeMemorySpaceIds),
@@ -1637,6 +1632,7 @@ export const longTermMemoryProcessor: EventProcessor<
       };
       let proposal: ConsolidationProposal;
       try {
+        assertNoConsolidationToolCalls(response);
         proposal = parseConsolidationProposal(
           response.answer,
           allowedSourceMessageIds,
@@ -1662,6 +1658,7 @@ export const longTermMemoryProcessor: EventProcessor<
           undefined,
           deps.context.llmProviders,
         );
+        assertNoConsolidationToolCalls(response);
         proposal = parseConsolidationProposal(
           response.answer,
           allowedSourceMessageIds,
@@ -2005,5 +2002,4 @@ export const longTermMemoryProcessor: EventProcessor<
   },
 };
 
-export const eventType = "long_term_memory.created";
 export const { shouldProcess, process } = longTermMemoryProcessor;

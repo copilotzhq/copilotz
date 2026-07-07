@@ -26,17 +26,17 @@ import type {
 
 type EventType = Event["type"];
 
-import type { LLMCallPayload } from "@/resources/processors/llm_call/index.ts";
+import type { LLMCallPayload } from "@/resources/processors/llm_call/llm_attempt.created.ts";
 import type {
   ToolCallPayload,
   ToolExecutionContext,
-} from "@/resources/processors/tool_call/index.ts";
+} from "@/runtime/tools/types.ts";
 import type { ChatContext } from "@/types/index.ts";
 
 import type {
   ExecutableTool,
   ToolExecutor,
-} from "@/resources/processors/tool_call/types.ts";
+} from "@/runtime/tools/types.ts";
 
 export type {
   /** Tool with an execute function. */

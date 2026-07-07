@@ -1,15 +1,9 @@
 // Import Event Queue
 import type { EventProcessor, NewEvent } from "@/types/index.ts";
 
-// Import Tools
-import { generateAllApiTools } from "@/runtime/api/index.ts";
-import { generateAllMcpTools } from "@/runtime/mcp/index.ts";
-
 // Import Agent Interfaces
 import type {
   Agent,
-  AgentLlmOptionsResolverArgs,
-  ChatContext,
   Event,
   LlmCallEventPayload,
   MessagePayload,
@@ -18,51 +12,21 @@ import type {
   Thread,
   ToolCallEventPayload,
 } from "@/types/index.ts";
-import type {
-  EntityExtractPayload,
-  KnowledgeNode,
-} from "@/database/schemas/index.ts";
+import type { EntityExtractPayload } from "@/database/schemas/index.ts";
 import { createMessageService } from "@/runtime/collections/native.ts";
-
-// Import tool types from their source
-import type {
-  ExecutableTool,
-  ToolExecutor,
-} from "@/resources/processors/tool_call/types.ts";
 
 type Operations = ProcessorDeps["db"]["ops"];
 
-import type {
-  ChatMessage,
-  LLMConfig,
-  LLMRuntimeConfig,
-  ToolDefinition,
-  ToolInvocation,
-} from "@/runtime/llm/types.ts";
-import { toLLMConfig } from "@/runtime/llm/config.ts";
-import { formatToolsForPrompt } from "@/runtime/tools/format-tools-for-prompt.ts";
+import type { ToolInvocation } from "@/runtime/llm/types.ts";
 
 import type { NewMessageEventPayload } from "@/database/schemas/index.ts";
 
 // Import Generators
-import {
-  contextGenerator,
-  generateRagContext,
-  getLatestReadyLongTermMemory,
-  getLongTermMemoryConfig,
-  getUserExternalId,
-  historyGenerator,
-  isLongTermMemoryAccessible,
-  type LLMContextData,
-  resolveParticipantCollection,
-  resolveThreadMemorySpaces,
-  sliceMessagesAfterLongTermMemory,
-} from "@/runtime/memory/index.ts";
+import { getUserExternalId } from "@/runtime/memory/index.ts";
 
-import { processAssetsForNewMessage } from "./generators/asset-generator.ts";
-import { filterSkillsForAgent } from "@/runtime/loaders/skill-loader.ts";
+import { processAssetsForNewMessage } from "@/runtime/agent-llm-input/asset-generator.ts";
+import { buildAgentLlmInput } from "@/runtime/agent-llm-input/index.ts";
 import {
-  getPublicThreadMetadata,
   getRuntimeThreadMetadata,
   getSerializableThreadMetadata,
   setRuntimeThreadMetadata,
@@ -84,6 +48,9 @@ import {
   extractMentionNames,
 } from "@/utils/mentions.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
+
+export const processorId = "message_router";
+export const eventTypes = ["message.created"] as const;
 
 // ============================================================================
 // Tool Result Batch Aggregation
@@ -800,38 +767,6 @@ export function buildToolReplyRoutingMetadata(
   };
 }
 
-function isDirectConversationThread(
-  thread: Thread,
-  availableAgents: Agent[],
-  currentAgent: Agent,
-): boolean {
-  const participants = Array.isArray(thread.participants)
-    ? thread.participants.filter((p): p is string => typeof p === "string")
-    : [];
-
-  const agentParticipantIds = new Set<string>();
-  const userParticipants: string[] = [];
-
-  for (const participant of participants) {
-    const participantLower = participant.toLowerCase();
-    const matchedAgent = availableAgents.find((a) =>
-      (typeof a.name === "string" &&
-        a.name.toLowerCase() === participantLower) ||
-      (typeof a.id === "string" && a.id.toLowerCase() === participantLower)
-    );
-
-    if (matchedAgent) {
-      agentParticipantIds.add((matchedAgent.id ?? matchedAgent.name) as string);
-    } else {
-      userParticipants.push(participant);
-    }
-  }
-
-  return agentParticipantIds.size === 1 &&
-    agentParticipantIds.has((currentAgent.id ?? currentAgent.name) as string) &&
-    userParticipants.length === 1;
-}
-
 /**
  * Check and update agent turn counter for loop prevention.
  *
@@ -918,53 +853,6 @@ async function checkAndUpdateAgentTurns(
   }
 
   return { shouldForceUserTarget: false };
-}
-
-function toExecutableTool(tool: unknown): ExecutableTool | null {
-  if (!tool || typeof tool !== "object") return null;
-  const maybe = tool as Partial<ExecutableTool>;
-
-  const executeSource = maybe.execute;
-  if (typeof executeSource !== "function") return null;
-
-  const executor: ToolExecutor = (args, context) =>
-    executeSource.call(tool, args, context) as Promise<unknown> | unknown;
-
-  const key = maybe.key;
-  const name = maybe.name;
-  const description = maybe.description;
-  if (
-    typeof key !== "string" || typeof name !== "string" ||
-    typeof description !== "string"
-  ) {
-    return null;
-  }
-
-  const toDate = (value: unknown): Date => {
-    if (value instanceof Date) return value;
-    if (typeof value === "string" || typeof value === "number") {
-      const parsed = new Date(value);
-      if (!Number.isNaN(parsed.getTime())) return parsed;
-    }
-    return new Date();
-  };
-
-  return {
-    id: typeof maybe.id === "string" ? maybe.id : crypto.randomUUID(),
-    key,
-    name,
-    description,
-    externalId: typeof maybe.externalId === "string" ? maybe.externalId : null,
-    metadata: (maybe.metadata && typeof maybe.metadata === "object")
-      ? maybe.metadata
-      : null,
-    createdAt: toDate(maybe.createdAt),
-    updatedAt: toDate(maybe.updatedAt),
-    inputSchema: maybe.inputSchema ?? null,
-    outputSchema: maybe.outputSchema ?? null,
-    historyPolicy: maybe.historyPolicy,
-    execute: executor,
-  };
 }
 
 type NormalizedToolCall = {
@@ -1098,7 +986,7 @@ function resolveStoredSender(
 }
 
 // Import Participant Lifecycle logic
-import { process as ensureParticipants } from "./participant_lifecycle.ts";
+import { process as ensureParticipants } from "../participant_lifecycle/message.created.ts";
 
 export const messageProcessor: EventProcessor<
   NewMessageEventPayload,
@@ -1932,189 +1820,21 @@ export const messageProcessor: EventProcessor<
 
       /** If the message is not a tool call, we need to add the message to the LLM context */
 
-      // Build processing context (include agent ID for fetching agent's participant node)
       const agentId = (agent.id ?? agent.name) as string;
-      const ctx = await buildProcessingContext(
-        ops,
+      const llmInput = await buildAgentLlmInput({
+        deps,
+        event,
         threadId,
-        context,
-        agentId,
-        agentId,
-      );
-      const longTermMemoryConfig = getLongTermMemoryConfig(context.memory);
-      const longTermMemoryNamespace = context.namespace ??
-        (typeof thread.namespace === "string" ? thread.namespace : null);
-      const candidateLongTermMemory =
-        longTermMemoryConfig && longTermMemoryNamespace
-          ? await getLatestReadyLongTermMemory(
-            deps.db,
-            threadId,
-            longTermMemoryNamespace,
-            agentId,
-          )
-          : null;
-      const longTermMemory = candidateLongTermMemory &&
-          longTermMemoryNamespace &&
-          isLongTermMemoryAccessible(
-            candidateLongTermMemory.data,
-            await resolveThreadMemorySpaces(
-              deps.db,
-              threadId,
-              longTermMemoryNamespace,
-            ),
-          )
-        ? candidateLongTermMemory
-        : null;
-      const recentChatHistory = sliceMessagesAfterLongTermMemory(
-        ctx.chatHistory,
-        longTermMemory,
-      );
-
-      // Filter skills for this agent and build compact index for system prompt
-      const agentSkills = filterSkillsForAgent(context.skills ?? [], agent);
-      const agentSkillIndex = agentSkills.length > 0
-        ? agentSkills.map((s) => ({
-          name: s.name,
-          description: s.description,
-          tags: s.tags,
-        }))
-        : undefined;
-
-      // Build LLM request (pass agent node for persistent memory injection)
-      const llmContext: LLMContextData = contextGenerator(
         agent,
-        thread,
-        ctx.availableAgents,
-        availableAgents,
-        ctx.userMetadata,
-        ctx.agentNode,
-        agentSkillIndex,
-        context.agentsFileInstructions,
-      );
-
-      // Generate history with target context for multi-agent awareness
-      const includeTargetContext = context.multiAgent?.includeTargetContext ??
-        true;
-      const directConversation = isDirectConversationThread(
-        thread,
-        availableAgents,
-        agent,
-      );
-      const generatedHistory: ChatMessage[] = historyGenerator(
-        recentChatHistory,
-        agent,
-        {
-          includeTargetContext: includeTargetContext && !directConversation,
-          directConversation,
-          maxToolResultEstimatedTokens:
-            context.toolResultHistoryMaxEstimatedTokens,
-          reasoningHistory: context.reasoningHistory,
-        },
-      );
-      const llmHistory: ChatMessage[] = context.historyTransform
-        ? await context.historyTransform({
-          messages: generatedHistory,
-          rawHistory: recentChatHistory,
-          thread,
-          agent,
-          sourceEvent: event,
-          deps,
-        })
-        : generatedHistory;
-
-      // Select tools available to this agent
-      const allowedToolKeys: string[] = Array.isArray(agent.allowedTools)
-        ? agent.allowedTools
-        : agent.allowedTools === null
-        ? []
-        : ctx.allTools.map((t) => t.key);
-      const agentTools: ExecutableTool[] = allowedToolKeys
-        .map((key) => ctx.allTools.find((t) => t.key === key))
-        .filter((t): t is ExecutableTool => Boolean(t))
-        // Keep the prompt prefix stable when agents expose the same tools in
-        // different config orders. Tool calls are resolved by key at execution.
-        .sort((a, b) => a.key.localeCompare(b.key));
-      const llmTools: ToolDefinition[] = formatToolsForPrompt(agentTools);
-
-      // Build system prompt
-      let systemPrompt = typeof llmContext.systemPrompt === "string"
-        ? llmContext.systemPrompt
-        : JSON.stringify(llmContext.systemPrompt ?? {});
-      if (longTermMemory?.node.content) {
-        systemPrompt = `${systemPrompt}\n\n${longTermMemory.node.content}`;
-      }
-
-      // Auto-inject RAG context if agent has ragOptions.mode === "auto"
-      if (agent.ragOptions?.mode === "auto" && context.embeddingConfig) {
-        try {
-          const userId = getUserExternalId(thread.metadata);
-
-          const ragResult = await generateRagContext({
-            agent,
-            query: messageContext.contentText,
-            ops,
-            collections: context.collections,
-            embeddingConfig: context.embeddingConfig,
-            embeddingProviders: context.embeddingProviders,
-            namespace: context.namespace,
-            threadId,
-            userId,
-          });
-
-          if (ragResult.context) {
-            systemPrompt = `${systemPrompt}\n\n${ragResult.context}`;
-          }
-        } catch (error) {
-          console.warn(
-            `[new_message] Failed to generate RAG context for agent "${agent.name}":`,
-            error,
-          );
-        }
-      }
-
-      const llmMessages: ChatMessage[] = [
-        { role: "system", content: systemPrompt },
-        ...llmHistory,
-      ];
-
-      const resolverPayload = {
-        agent: { id: agent.id ?? undefined, name: agent.name },
-        messages: llmMessages,
-        tools: llmTools,
-      } as AgentLlmOptionsResolverArgs["payload"];
-
-      let providerConfig: LLMRuntimeConfig = {};
-      const agentLlmOptions = agent.llmOptions;
-      if (agentLlmOptions) {
-        if (typeof agentLlmOptions === "function") {
-          try {
-            const dynamicConfig = await agentLlmOptions({
-              payload: resolverPayload,
-              sourceEvent: event,
-              deps,
-            });
-            if (dynamicConfig && typeof dynamicConfig === "object") {
-              providerConfig = dynamicConfig;
-            }
-          } catch (error) {
-            console.warn(
-              `[new_message] Failed to resolve dynamic llmOptions for agent "${
-                agent.name ?? agent.id
-              }":`,
-              error,
-            );
-          }
-        } else {
-          providerConfig = agentLlmOptions;
-        }
-      }
-
-      const llmConfig = toLLMConfig(providerConfig);
-      resolverPayload.config = llmConfig;
+        historyMode: "afterReadyLongTermMemory",
+        ragQuery: messageContext.contentText,
+      });
 
       const llmPayload = {
-        ...resolverPayload,
-        config: llmConfig as LLMConfig,
+        agent: { id: agent.id ?? undefined, name: agent.name },
+        messages: llmInput.messages,
+        tools: llmInput.tools,
+        config: llmInput.config,
       } as LlmCallEventPayload;
 
       const llmEventMetadata = {
@@ -2143,11 +1863,11 @@ export const messageProcessor: EventProcessor<
           eventId: typeof event.id === "string" ? event.id : null,
           agentId: agent.id ?? agent.name ?? null,
           agentName: agent.name,
-          provider: llmConfig.provider ?? null,
-          model: llmConfig.model ?? null,
-          config: llmConfig as unknown as Record<string, unknown>,
-          messages: llmMessages,
-          tools: llmTools,
+          provider: llmInput.config.provider ?? null,
+          model: llmInput.config.model ?? null,
+          config: llmInput.config as unknown as Record<string, unknown>,
+          messages: llmInput.messages,
+          tools: llmInput.tools,
           status: "processing",
           runSender: isRecord(eventMetadata.runSender)
             ? eventMetadata.runSender as Record<string, unknown>
@@ -2188,130 +1908,5 @@ export const messageProcessor: EventProcessor<
     };
   },
 };
-
-async function buildProcessingContext(
-  ops: Operations,
-  threadId: string,
-  context: ChatContext,
-  senderIdForHistory: string,
-  targetAgentId?: string,
-) {
-  const thread: Thread | undefined = await ops.getThreadById(threadId);
-  if (!thread) throw new Error(`Thread not found: ${threadId}`);
-
-  const messageService = createMessageService({
-    collections: context.collections,
-    ops,
-  });
-  const participantCollection = resolveParticipantCollection(context);
-  const chatHistory = await messageService.getHistory(
-    threadId,
-    senderIdForHistory,
-  );
-
-  const availableAgents = context.agents || [];
-  if (availableAgents.length === 0) {
-    throw new Error("No agents provided in context for this session");
-  }
-
-  const loadedTools = (context.tools || [])
-    .map(toExecutableTool)
-    .filter((tool): tool is ExecutableTool => Boolean(tool));
-  const apiTools = context.apis ? generateAllApiTools(context.apis) : [];
-  const mcpTools = context.mcpServers
-    ? await generateAllMcpTools(context.mcpServers)
-    : [];
-  const allTools: ExecutableTool[] = [
-    ...loadedTools,
-    ...apiTools,
-    ...mcpTools,
-  ];
-
-  let userMetadata = context.userMetadata;
-  const publicThreadMetadata = getPublicThreadMetadata(thread.metadata);
-  const userExternalId = getUserExternalId(thread.metadata);
-
-  if (!userMetadata && publicThreadMetadata) {
-    const stored = publicThreadMetadata.userContext;
-    if (stored && typeof stored === "object") {
-      userMetadata = stored as Record<string, unknown>;
-    }
-  }
-
-  if (!userMetadata && userExternalId) {
-    const externalId = userExternalId;
-    try {
-      if (
-        participantCollection &&
-        typeof (participantCollection as any).resolveByExternalId === "function"
-      ) {
-        const participant = await (participantCollection as any)
-          .resolveByExternalId(externalId);
-        if (participant?.metadata && typeof participant.metadata === "object") {
-          userMetadata = participant.metadata as Record<string, unknown>;
-        }
-      }
-    } catch (error) {
-      console.warn(
-        `buildProcessingContext: failed to load user metadata for ${externalId}`,
-        error,
-      );
-    }
-  }
-
-  if (userMetadata && !context.userMetadata) {
-    context.userMetadata = userMetadata;
-  }
-
-  // Fetch agent's participant node for persistent memory (if target agent specified)
-  let agentNode: KnowledgeNode | undefined = undefined;
-  if (targetAgentId) {
-    try {
-      if (
-        participantCollection &&
-        typeof (participantCollection as any).resolveByExternalId === "function"
-      ) {
-        const participant = await (participantCollection as any)
-          .resolveByExternalId(targetAgentId);
-        if (participant) {
-          agentNode = {
-            id: participant.id,
-            namespace: participant.namespace ?? context.namespace,
-            type: "participant",
-            name: participant.name ?? targetAgentId,
-            content: null,
-            embedding: null,
-            data: {
-              ...participant,
-              metadata: participant.metadata ?? null,
-            },
-            sourceType: "participant",
-            sourceId: participant.externalId,
-            createdAt: participant.createdAt as Date | undefined,
-            updatedAt: participant.updatedAt as Date | undefined,
-          } as KnowledgeNode;
-        }
-      }
-    } catch {
-      // Ignore errors - agent node might not exist
-    }
-  }
-
-  return {
-    thread,
-    chatHistory,
-    availableAgents,
-    allTools,
-    userMetadata,
-    agentNode,
-  } as {
-    thread: Thread;
-    chatHistory: NewMessage[];
-    availableAgents: Agent[];
-    allTools: ExecutableTool[];
-    userMetadata?: Record<string, unknown>;
-    agentNode?: KnowledgeNode;
-  };
-}
 
 export const { shouldProcess, process } = messageProcessor;

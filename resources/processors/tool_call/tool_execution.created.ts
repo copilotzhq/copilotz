@@ -4,8 +4,6 @@ import { getUserExternalId } from "@/runtime/memory/identity.ts";
 
 import type {
   Agent,
-  ChatContext,
-  CopilotzDb,
   Event,
   EventProcessor,
   NewEvent,
@@ -14,7 +12,11 @@ import type {
   ToolHistoryVisibility,
   ToolResultEventPayload,
 } from "@/types/index.ts";
-import type { ExecutableTool } from "./types.ts";
+import type {
+  ExecutableTool,
+  ToolCallPayload,
+  ToolExecutionContext,
+} from "@/runtime/tools/types.ts";
 import type { ToolInvocation } from "@/runtime/llm/types.ts";
 import {
   DEFAULT_TOOL_HISTORY_VISIBILITY,
@@ -31,65 +33,8 @@ import Ajv from "npm:ajv@^8.17.1";
 import addFormats from "npm:ajv-formats@^3.0.1";
 import { resolveAssetIdForStore } from "@/runtime/storage/assets.ts";
 
-export interface ToolCallPayload {
-  agent: { id?: string; name: string }; // agent that requested the tool
-  senderId: string;
-  senderType: "user" | "agent" | "tool" | "system" | "job";
-  toolCall: ToolInvocation;
-}
-
-export interface ToolResultPayload {
-  agent: { id?: string; name: string }; // agent that requested the tool
-  toolCallId: string;
-  tool: { id: string; name?: string | null };
-  args: unknown;
-  status: "completed" | "failed" | "cancelled";
-  output?: unknown;
-  error?: unknown;
-  // Optional convenience content (already formatted) for logs/messages
-  content?: string | null;
-  historyVisibility?: ToolHistoryVisibility;
-  batchId?: string | null;
-  batchSize?: number | null;
-  batchIndex?: number | null;
-  startedAt?: string;
-  finishedAt: string;
-  durationMs?: number | null;
-  resultMessageId?: string | null;
-}
-
-/** Context passed to native and user-defined tool execution handlers. */
-export interface ToolExecutionContext extends ChatContext {
-  senderId?: string;
-  senderType?: "user" | "agent" | "tool" | "system" | "job";
-  threadId?: string;
-  /** The external ID of the human user in this conversation. Resolved from thread metadata by the framework. */
-  userExternalId?: string;
-  /** Agent currently executing the tool, when available. */
-  agent?: Agent | null;
-  agents?: Agent[];
-  db?: CopilotzDb;
-  embeddingConfig?: {
-    provider: "openai" | "ollama" | "cohere";
-    model: string;
-    apiKey?: string;
-    baseUrl?: string;
-    dimensions?: number;
-  };
-  /**
-   * Register a callback that will be invoked if the framework cancels
-   * the current tool execution (e.g. due to timeout).
-   *
-   * @returns unsubscribe function
-   */
-  onCancel?: (cb: () => void) => () => void;
-  /** Whether the current tool execution has been cancelled. */
-  cancelled?: boolean;
-  /** Optional cancellation reason (e.g. "timeout"). */
-  cancelReason?: string;
-  // Collections is inherited from ChatContext, but we re-declare for clarity
-  // collections?: CollectionsManager;
-}
+export const processorId = "tool_call";
+export const eventTypes = ["tool_execution.created"] as const;
 
 type ProcessedToolCallResult = {
   tool_call_id?: string;
@@ -389,7 +334,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
 
       const resultMetadata = withRunSenderMetadata(
         toolExecutionId || replyToParticipantId ||
-            replyToTargetQueue.length > 0
+          replyToTargetQueue.length > 0
           ? {
             ...(toolExecutionId ? { toolExecutionId } : {}),
             replyToParticipantId,
@@ -797,12 +742,11 @@ interface ToolCallValidation {
   arguments: unknown;
 }
 
-
 export function formatDiscriminatedOneOfError(
   schema: any,
   args: any,
   toolName: string = "tool",
-  errors?: any[] | null
+  errors?: any[] | null,
 ): string | null {
   if (!schema) return null;
 
@@ -817,9 +761,10 @@ export function formatDiscriminatedOneOfError(
       return null;
     }
 
-    const candidates = Object.keys(firstBranch.properties).filter(key => {
+    const candidates = Object.keys(firstBranch.properties).filter((key) => {
       const prop = firstBranch.properties[key];
-      return prop && typeof prop === "object" && "const" in prop && typeof prop.const === "string";
+      return prop && typeof prop === "object" && "const" in prop &&
+        typeof prop.const === "string";
     });
 
     for (const candidate of candidates) {
@@ -835,7 +780,10 @@ export function formatDiscriminatedOneOfError(
           break;
         }
         const prop = branch.properties[candidate];
-        if (!prop || typeof prop !== "object" || !("const" in prop) || typeof prop.const !== "string") {
+        if (
+          !prop || typeof prop !== "object" || !("const" in prop) ||
+          typeof prop.const !== "string"
+        ) {
           isDiscriminator = false;
           break;
         }
@@ -864,38 +812,51 @@ export function formatDiscriminatedOneOfError(
     const val = args[discriminatorName];
 
     if (val === undefined || val === null) {
-      return `Missing required field '${discriminatorName}'. Allowed ${discriminatorName}s: ${allowedValues.join(", ")}`;
+      return `Missing required field '${discriminatorName}'. Allowed ${discriminatorName}s: ${
+        allowedValues.join(", ")
+      }`;
     }
 
     if (typeof val !== "string" || !branchMap.has(val)) {
-      return `Unknown ${discriminatorName} '${val}'. Allowed ${discriminatorName}s: ${allowedValues.join(", ")}`;
+      return `Unknown ${discriminatorName} '${val}'. Allowed ${discriminatorName}s: ${
+        allowedValues.join(", ")
+      }`;
     }
 
     const branch = branchMap.get(val);
     const selectedIdx = branchIndexMap.get(val)!;
 
     // Filter errors to only those originating from the selected branch
-    const branchErrors = (errors || []).filter(err => 
+    const branchErrors = (errors || []).filter((err) =>
       err.schemaPath && err.schemaPath.includes(`/oneOf/${selectedIdx}/`)
     );
 
     if (branch && Array.isArray(branch.oneOf)) {
-      const nestedError = formatDiscriminatedOneOfError(branch, args, toolName, branchErrors);
+      const nestedError = formatDiscriminatedOneOfError(
+        branch,
+        args,
+        toolName,
+        branchErrors,
+      );
       if (nestedError) {
         return nestedError;
       }
     }
 
-    const requiredFields = Array.isArray(branch.required) ? branch.required : [];
+    const requiredFields = Array.isArray(branch.required)
+      ? branch.required
+      : [];
     let allowedFields = branch.properties ? Object.keys(branch.properties) : [];
     if (branch && Array.isArray(branch.oneOf)) {
       for (const subBranch of branch.oneOf) {
         if (subBranch.properties) {
-          allowedFields = Array.from(new Set([...allowedFields, ...Object.keys(subBranch.properties)]));
+          allowedFields = Array.from(
+            new Set([...allowedFields, ...Object.keys(subBranch.properties)]),
+          );
         }
       }
     }
-    
+
     const missingRequired: string[] = [];
     const unexpectedFields: string[] = [];
 
@@ -912,20 +873,33 @@ export function formatDiscriminatedOneOfError(
     }
 
     const constraintKeywords = [
-      "maximum", "minimum", "maxLength", "minLength", "pattern", 
-      "enum", "const", "type", "format", "exclusiveMaximum", "exclusiveMinimum"
+      "maximum",
+      "minimum",
+      "maxLength",
+      "minLength",
+      "pattern",
+      "enum",
+      "const",
+      "type",
+      "format",
+      "exclusiveMaximum",
+      "exclusiveMinimum",
     ];
-    const constraintErrors = branchErrors.filter(err => 
-      constraintKeywords.includes(err.keyword) && 
+    const constraintErrors = branchErrors.filter((err) =>
+      constraintKeywords.includes(err.keyword) &&
       err.instancePath
     );
-    const constraints = constraintErrors.map(err => {
+    const constraints = constraintErrors.map((err) => {
       const propPath = err.instancePath.replace(/^\//, "");
       return `Constraint: ${propPath} ${err.message}`;
     });
 
-    if (missingRequired.length > 0 || unexpectedFields.length > 0 || constraints.length > 0) {
-      let msg = `Invalid arguments for ${toolName} ${discriminatorName} '${val}'.`;
+    if (
+      missingRequired.length > 0 || unexpectedFields.length > 0 ||
+      constraints.length > 0
+    ) {
+      let msg =
+        `Invalid arguments for ${toolName} ${discriminatorName} '${val}'.`;
       if (requiredFields.length > 0) {
         msg += ` Required: ${requiredFields.join(", ")}.`;
       }
@@ -967,8 +941,7 @@ export const validateToolCall = (
 
   // If the schema has no properties and no required fields, accept empty arguments
   // ONLY if it does not contain any schema combinators (oneOf, anyOf, allOf, if, then, else, not)
-  const hasCombinators = 
-    "oneOf" in tool.inputSchema ||
+  const hasCombinators = "oneOf" in tool.inputSchema ||
     "anyOf" in tool.inputSchema ||
     "allOf" in tool.inputSchema ||
     "if" in tool.inputSchema ||
@@ -990,7 +963,12 @@ export const validateToolCall = (
     const valid = validate(args);
 
     if (!valid) {
-      const formattedError = formatDiscriminatedOneOfError(tool.inputSchema, args, toolCall.name, validate.errors);
+      const formattedError = formatDiscriminatedOneOfError(
+        tool.inputSchema,
+        args,
+        toolCall.name,
+        validate.errors,
+      );
       const errorMessage = formattedError || ajv.errorsText(validate.errors);
       return { valid: false, error: errorMessage };
     }

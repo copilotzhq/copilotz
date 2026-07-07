@@ -1,4 +1,4 @@
-import type { ToolExecutionContext } from "@/resources/processors/tool_call/index.ts";
+import type { ToolExecutionContext } from "@/runtime/tools/types.ts";
 import { base64ToBytes, buildAssetRefForStore, resolveAssetIdForStore } from "@/runtime/storage/assets.ts";
 
 interface SaveAssetParams {

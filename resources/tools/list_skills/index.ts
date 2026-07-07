@@ -1,4 +1,4 @@
-import type { ToolExecutionContext } from "@/resources/processors/tool_call/index.ts";
+import type { ToolExecutionContext } from "@/runtime/tools/types.ts";
 import { filterSkillsForAgent } from "@/runtime/loaders/skill-loader.ts";
 
 export default {

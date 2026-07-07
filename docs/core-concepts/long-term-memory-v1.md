@@ -523,14 +523,14 @@ following epoch without a migration.
 ```text
 resources/
   processors/
-    long_term_memory_trigger/
-      index.ts        — message.created observer; reserves pending node
-    long_term_memory/
-      index.ts        — long_term_memory.created handler; finalizes node
+    memory_reservation/
+      message.created.ts            — message.created observer; reserves pending node
+    memory_consolidation/
+      long_term_memory.created.ts   — long_term_memory.created handler; finalizes node
 
 runtime/
   memory/
-    long-term.ts      — strategy-neutral read helpers used by new_message
+    long-term.ts      — strategy-neutral read helpers used by message routing
     resources.ts      — MemoryResource config helpers
     identity.ts       — participant identity helpers
 ```

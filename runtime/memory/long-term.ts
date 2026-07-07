@@ -59,8 +59,6 @@ export interface LongTermMemoryRange {
   sourceEndMessageId: string;
 }
 
-type ProjectableMessage = Omit<Message, "id"> & { id?: string };
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -87,32 +85,6 @@ function mapNodeRow(row: Record<string, unknown>): KnowledgeNode {
     createdAt: (row.created_at ?? row.createdAt) as Date | string,
     updatedAt: (row.updated_at ?? row.updatedAt) as Date | string,
   } as KnowledgeNode;
-}
-
-function mapMessageNode(row: Record<string, unknown>): Message {
-  const node = mapNodeRow(row);
-  const data = isRecord(node.data) ? node.data : {};
-  return {
-    id: String(data.messageId ?? node.id),
-    threadId: String(data.threadId ?? node.sourceId ?? ""),
-    senderId: String(data.senderId ?? ""),
-    senderType: data.senderType as Message["senderType"],
-    senderUserId: typeof data.senderUserId === "string"
-      ? data.senderUserId
-      : null,
-    externalId: typeof data.externalId === "string" ? data.externalId : null,
-    content: typeof node.content === "string"
-      ? node.content
-      : typeof data.content === "string"
-      ? data.content
-      : "",
-    toolCallId: typeof data.toolCallId === "string" ? data.toolCallId : null,
-    toolCalls: Array.isArray(data.toolCalls) ? data.toolCalls : null,
-    reasoning: typeof data.reasoning === "string" ? data.reasoning : null,
-    metadata: isRecord(data.metadata) ? data.metadata : null,
-    createdAt: node.createdAt,
-    updatedAt: node.updatedAt,
-  };
 }
 
 export function getLongTermMemoryData(
@@ -362,169 +334,56 @@ export function isLongTermMemoryAccessible(
   );
 }
 
-function stringifyToolOutput(value: unknown): string {
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value ?? "");
-  }
-}
-
-function stringifyToolArgs(value: unknown): string {
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value ?? {});
-  } catch {
-    return String(value ?? "");
-  }
-}
-
-export function projectMessageForSharedMemory(
-  message: ProjectableMessage,
-  maxToolResultEstimatedTokens = 2_500,
-): string {
+function estimateRangeMessageTokens(message: Message): number {
   const metadata = isRecord(message.metadata) ? message.metadata : {};
-  if (
-    metadata.visibility === "private" ||
-    metadata.visibility === "requester_only"
-  ) {
-    return "";
-  }
-
-  if (message.senderType === "tool") {
-    const calls = Array.isArray(metadata.toolCalls) ? metadata.toolCalls : [];
-    const projected = calls.flatMap((call): string[] => {
-      if (!isRecord(call)) return [];
-      const visibility = call.visibility === "public"
-        ? "public"
-        : call.visibility === "requester_only"
-        ? "requester_only"
-        : "public_status";
-      if (visibility === "requester_only") return [];
-      const tool = isRecord(call.tool) ? call.tool : {};
-      const name = String(tool.name ?? tool.id ?? "tool");
-      const status = typeof call.status === "string"
-        ? call.status
-        : "completed";
-      if (visibility === "public_status") {
-        return [`[Tool ${name}: ${status}]`];
-      }
-      const output = stringifyToolOutput(call.output ?? call.error ?? "");
-      let capped = output;
-      if (
-        maxToolResultEstimatedTokens > 0 &&
-        estimateTextTokens(capped) > maxToolResultEstimatedTokens
-      ) {
-        let length = Math.min(
-          capped.length,
-          maxToolResultEstimatedTokens * 4,
-        );
-        while (
-          length > 0 &&
-          estimateTextTokens(capped.slice(0, length)) >
-            maxToolResultEstimatedTokens
-        ) {
-          length = Math.floor(length * 0.88);
-        }
-        capped = capped.slice(0, length);
-      }
-      return [`[Tool ${name}: ${status}] ${capped}`.trim()];
-    });
-    return projected.join("\n");
-  }
-
-  if (
-    message.senderType !== "user" &&
-    message.senderType !== "agent" &&
-    message.senderType !== "job"
-  ) {
-    return "";
-  }
-
-  const content = typeof message.content === "string"
-    ? message.content.trim()
-    : "";
-  const toolCalls = message.senderType === "agent" &&
-      Array.isArray(message.toolCalls)
-    ? message.toolCalls.flatMap((call): string[] => {
-      if (!isRecord(call) || call.visibility === "requester_only") return [];
-      const tool = isRecord(call.tool) ? call.tool : {};
-      const name = String(tool.name ?? tool.id ?? "tool");
-      return [`[Tool call ${name}] ${stringifyToolArgs(call.args)}`.trim()];
-    })
-    : [];
-  return [
-    content ? `[${message.senderType}:${message.senderId}] ${content}` : "",
-    ...toolCalls,
-  ].filter(Boolean).join("\n");
+  const parts = [
+    message.senderType,
+    message.senderId,
+    typeof message.content === "string" ? message.content : "",
+    Array.isArray(message.toolCalls) ? JSON.stringify(message.toolCalls) : "",
+    Array.isArray(metadata.toolCalls) ? JSON.stringify(metadata.toolCalls) : "",
+    typeof message.reasoning === "string" ? message.reasoning : "",
+  ].filter((part) => part.length > 0);
+  return estimateTextTokens(parts.join("\n"));
 }
 
 export async function selectLongTermMemoryRange(args: {
-  db: CopilotzDb;
-  threadId: string;
+  messages: Message[];
   triggerMessageId: string;
   previous: LongTermMemoryRecord | null;
   triggerEstimatedTokens: number;
   retainRecentEstimatedTokens?: number;
-  maxToolResultEstimatedTokens?: number;
-  pageSize?: number;
 }): Promise<LongTermMemoryRange | null> {
   const {
-    db,
-    threadId,
+    messages: inputMessages,
     triggerMessageId,
     previous,
     triggerEstimatedTokens,
     retainRecentEstimatedTokens = 0,
-    maxToolResultEstimatedTokens,
-    pageSize = 100,
   } = args;
   const selectedNewestFirst: Message[] = [];
   let estimatedTokens = 0;
-  let before: string | null = null;
   let foundPreviousBoundary = previous === null;
-  let reachedTriggerMessage = false;
+  const triggerIndex = inputMessages.findIndex((message) =>
+    message.id === triggerMessageId
+  );
+  if (triggerIndex < 0) return null;
 
-  while (true) {
-    const page = await db.ops.getMessageHistoryPageFromGraph(threadId, {
-      limit: pageSize,
-      before,
-    });
-    if (page.data.length === 0) break;
-
-    for (let index = page.data.length - 1; index >= 0; index--) {
-      const message = page.data[index];
-      if (!reachedTriggerMessage) {
-        if (message.id !== triggerMessageId) continue;
-        reachedTriggerMessage = true;
-      }
-      if (
-        previous &&
-        message.id === previous.data.sourceEndMessageId
-      ) {
-        foundPreviousBoundary = true;
-        break;
-      }
-      selectedNewestFirst.push(message);
-      estimatedTokens += estimateTextTokens(
-        projectMessageForSharedMemory(message, maxToolResultEstimatedTokens),
-      );
-      if (!previous && estimatedTokens >= triggerEstimatedTokens) break;
-    }
-
+  for (let index = triggerIndex; index >= 0; index--) {
+    const message = inputMessages[index];
     if (
-      (previous && foundPreviousBoundary) ||
-      (!previous && estimatedTokens >= triggerEstimatedTokens) ||
-      !page.pageInfo.hasMoreBefore
+      previous &&
+      message.id === previous.data.sourceEndMessageId
     ) {
+      foundPreviousBoundary = true;
       break;
     }
-    before = page.pageInfo.oldestMessageId;
+    selectedNewestFirst.push(message);
+    estimatedTokens += estimateRangeMessageTokens(message);
+    if (!previous && estimatedTokens >= triggerEstimatedTokens) break;
   }
 
   if (
-    !reachedTriggerMessage ||
     (previous && !foundPreviousBoundary) ||
     estimatedTokens < triggerEstimatedTokens ||
     selectedNewestFirst.length === 0
@@ -552,14 +411,7 @@ export async function selectLongTermMemoryRange(args: {
     ) {
       const unit = units[index];
       retainedEstimatedTokens += unit.reduce(
-        (sum, message) =>
-          sum +
-          estimateTextTokens(
-            projectMessageForSharedMemory(
-              message,
-              maxToolResultEstimatedTokens,
-            ),
-          ),
+        (sum, message) => sum + estimateRangeMessageTokens(message),
         0,
       );
       retainedMessageCount += unit.length;
@@ -579,50 +431,6 @@ export async function selectLongTermMemoryRange(args: {
     sourceStartMessageId: messages[0].id,
     sourceEndMessageId: messages.at(-1)!.id,
   };
-}
-
-export async function loadMessagesInLongTermMemoryRange(
-  db: CopilotzDb,
-  threadId: string,
-  sourceStartMessageId: string,
-  sourceEndMessageId: string,
-): Promise<Message[]> {
-  const result = await db.query<Record<string, unknown>>(
-    `WITH start_boundary AS (
-       SELECT "created_at", "id"
-       FROM "nodes"
-       WHERE "type" = 'message'
-         AND "source_type" = 'thread'
-         AND "source_id" = $1
-         AND COALESCE("data"->>'messageId', "id") = $2
-       LIMIT 1
-     ),
-     end_boundary AS (
-       SELECT "created_at", "id"
-       FROM "nodes"
-       WHERE "type" = 'message'
-         AND "source_type" = 'thread'
-         AND "source_id" = $1
-         AND COALESCE("data"->>'messageId', "id") = $3
-       LIMIT 1
-     )
-     SELECT n.*
-     FROM "nodes" n, start_boundary s, end_boundary e
-     WHERE n."type" = 'message'
-       AND n."source_type" = 'thread'
-       AND n."source_id" = $1
-       AND (
-         n."created_at" > s."created_at"
-         OR (n."created_at" = s."created_at" AND n."id" >= s."id")
-       )
-       AND (
-         n."created_at" < e."created_at"
-         OR (n."created_at" = e."created_at" AND n."id" <= e."id")
-       )
-     ORDER BY n."created_at" ASC, n."id" ASC`,
-    [threadId, sourceStartMessageId, sourceEndMessageId],
-  );
-  return result.rows.map(mapMessageNode);
 }
 
 export function sliceMessagesAfterLongTermMemory<

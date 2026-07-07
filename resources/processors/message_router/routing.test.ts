@@ -4,7 +4,7 @@ import {
   buildToolReplyRoutingMetadata,
   resolveNextTurn,
   resolveThreadParticipantTarget,
-} from "./index.ts";
+} from "./message.created.ts";
 import type { Agent, Thread } from "@/types/index.ts";
 
 const agents: Agent[] = [

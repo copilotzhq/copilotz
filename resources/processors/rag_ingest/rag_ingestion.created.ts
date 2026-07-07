@@ -22,6 +22,9 @@ import { embed } from "@/runtime/embeddings/index.ts";
 import { createRagDataServices } from "@/runtime/collections/native.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
+export const processorId = "rag_ingest";
+export const eventTypes = ["rag_ingestion.created"] as const;
+
 export type { RagIngestPayload };
 
 // Local Document type to avoid circular dependency issues

@@ -6,7 +6,7 @@ import type {
   CopilotzDb,
 } from "@/types/index.ts";
 import { parse as parseYaml } from "yaml";
-import type { ExecutableTool } from "../types.ts";
+import type { ExecutableTool } from "@/runtime/tools/types.ts";
 
 type AuthConfig = NonNullable<API["auth"]>;
 type DynamicAuth = Extract<AuthConfig, { type: "dynamic" }>;

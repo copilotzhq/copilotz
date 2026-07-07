@@ -5,18 +5,18 @@ import manifest from "@/resources/manifest.ts";
 import { loadBundledSkills } from "@/resources/skills/index.ts";
 
 const RESOURCE_SKILL_COVERAGE = new Map<string, string>([
-  ["agents.md", "create-agent"],
-  ["tools.md", "create-tool"],
-  ["features.md", "create-feature"],
-  ["collections.md", "setup-collection"],
-  ["processors.md", "add-processor"],
-  ["channels.md", "create-channel"],
-  ["llm.md", "create-llm-provider"],
-  ["memory.md", "create-memory"],
-  ["embeddings.md", "create-embedding-provider"],
-  ["storage.md", "create-storage-adapter"],
-  ["apis.md", "add-api-integration"],
-  ["mcp-servers.md", "configure-mcp"],
+  ["agents", "create-agent"],
+  ["tools", "create-tool"],
+  ["features", "create-feature"],
+  ["collections", "setup-collection"],
+  ["processors", "add-processor"],
+  ["channels", "create-channel"],
+  ["llm", "create-llm-provider"],
+  ["memory", "create-memory"],
+  ["embeddings", "create-embedding-provider"],
+  ["storage", "create-storage-adapter"],
+  ["apis", "add-api-integration"],
+  ["mcp servers", "configure-mcp"],
 ]);
 
 Deno.test("bundled skills are registered consistently across directories, index, and manifest", async () => {
@@ -44,19 +44,23 @@ Deno.test("bundled skills are registered consistently across directories, index,
 });
 
 Deno.test("bundled skill catalog covers every first-class documented resource type", async () => {
-  const readmePath = fromFileUrl(
-    new URL("../../docs/resources/README.md", import.meta.url),
+  const resourceTypesPath = fromFileUrl(
+    new URL("../../docs/resources/resource-types.md", import.meta.url),
   );
-  const readme = await Deno.readTextFile(readmePath);
-  const documentedPages = Array.from(
-    readme.matchAll(/^- \[.+?\]\(\.\/([^)]+)\)$/gm),
-    (match) => match[1],
+  const resourceTypes = await Deno.readTextFile(resourceTypesPath);
+  const documentedResourceTypes = Array.from(
+    resourceTypes.matchAll(/^\|\s*([^|]+?)\s*\|/gm),
+    (match) => match[1].trim().toLowerCase(),
   )
-    .filter((page) => page !== "skills.md")
+    .filter((resource) =>
+      resource !== "resource" &&
+      !resource.startsWith("---") &&
+      resource !== "skills"
+    )
     .sort();
 
-  const mappedPages = [...RESOURCE_SKILL_COVERAGE.keys()].sort();
-  assertEquals(mappedPages, documentedPages);
+  const mappedResourceTypes = [...RESOURCE_SKILL_COVERAGE.keys()].sort();
+  assertEquals(mappedResourceTypes, documentedResourceTypes);
 
   const bundledSkillNames = new Set(
     (await loadBundledSkills()).map((skill) => skill.name),
@@ -65,7 +69,7 @@ Deno.test("bundled skill catalog covers every first-class documented resource ty
   for (const [page, skill] of RESOURCE_SKILL_COVERAGE) {
     assert(
       bundledSkillNames.has(skill),
-      `Expected resource page ${
+      `Expected resource type ${
         basename(page)
       } to be covered by skill ${skill}.`,
     );

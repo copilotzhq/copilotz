@@ -8,7 +8,7 @@ import {
 import { createDatabase } from "@/database/index.ts";
 import { createMemoryAssetStore } from "@/runtime/storage/assets.ts";
 import type { Event, ProcessorDeps } from "@/types/index.ts";
-import { messageProcessor } from "./index.ts";
+import { messageProcessor } from "./message.created.ts";
 
 Deno.test("message coalescing normalizes absorbed data URL attachments before persistence", async () => {
   const tempDir = await Deno.makeTempDir();

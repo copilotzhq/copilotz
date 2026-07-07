@@ -1,7 +1,7 @@
 import type { MCPServer } from "@/types/index.ts";
 import { Client } from "modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "modelcontextprotocol/sdk/client/stdio.js";
-import type { ExecutableTool } from "../types.ts";
+import type { ExecutableTool } from "@/runtime/tools/types.ts";
 
 interface MCPTool {
     name: string;

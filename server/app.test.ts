@@ -1195,6 +1195,56 @@ Deno.test("withApp — handle() routes and Deno.serve integration", async (t) =>
     );
 
     await t.step(
+      "POST /channels/web merges resolved run options without overriding tenant scope",
+      async () => {
+        const { copilotz, calls } = createMockCopilotz();
+        withApp(copilotz as any, {
+          resolveRunOptions: (_request, context) => ({
+            namespace: "ignored-namespace",
+            schema: "ignored_schema",
+            agents: [{
+              id: "tenant-agent",
+              name: "Tenant Agent",
+              role: "Tenant Agent",
+            }],
+            tools: [],
+            userMetadata: {
+              route: context.route.ingress,
+            },
+          }),
+        });
+
+        await (copilotz as any).app.handle({
+          resource: "channels",
+          method: "POST",
+          path: ["web"],
+          body: { content: "hi" },
+          context: {
+            namespace: "tenant-channel",
+            schema: "tenant_channel",
+          },
+          callback: () => {},
+        });
+
+        const runCall = calls.find((call) => call.method === "run");
+        assertExists(runCall);
+        assertEquals(runCall.args[1], {
+          agents: [{
+            id: "tenant-agent",
+            name: "Tenant Agent",
+            role: "Tenant Agent",
+          }],
+          tools: [],
+          userMetadata: {
+            route: "web",
+          },
+          namespace: "tenant-channel",
+          schema: "tenant_channel",
+        });
+      },
+    );
+
+    await t.step(
       "POST /channels/inspect passes optional request context to channel adapters",
       async () => {
         const { copilotz } = createMockCopilotz();

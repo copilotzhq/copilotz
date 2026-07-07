@@ -3,6 +3,8 @@ import type { NewMessageEventPayload } from "@/database/schemas/index.ts";
 import { hasParticipantCollection } from "@/runtime/collections/native.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
+export const processorId = "participant_lifecycle";
+export const eventTypes = ["message.created"] as const;
 export const priority = 100;
 
 async function createEdgeIfMissing(args: {

@@ -3,7 +3,7 @@ import {
   assertExists,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import { process } from "./index.ts";
+import { process } from "./llm_attempt.created.ts";
 import { createDatabase } from "@/database/index.ts";
 import type { Event, ProcessorDeps } from "@/types/index.ts";
 import type { ProviderRegistry } from "@/runtime/llm/types.ts";

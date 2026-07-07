@@ -83,7 +83,7 @@ Deno.test("processAssetsForNewMessage persists generated agent attachments by de
 });
 
 Deno.test("processAssetsForNewMessage creates asset graph records without a stream", async () => {
-  const createdNodes: Array<Record<string, unknown>> = [];
+  const createdAssets: Array<Record<string, unknown>> = [];
   const createdEdges: Array<Record<string, unknown>> = [];
   const context = {
     ...createTestContext(),
@@ -106,14 +106,23 @@ Deno.test("processAssetsForNewMessage creates asset graph records without a stre
     senderType: "agent",
     context,
     ops: {
-      getNodeById: async () => undefined,
-      createNode: async (node: Record<string, unknown>) => {
-        createdNodes.push(node);
-        return node;
+      unsafeGraph: {
+        getNodeById: async () => undefined,
+        getEdgesForNode: async () => [],
       },
-      createEdge: async (edge: Record<string, unknown>) => {
-        createdEdges.push(edge);
-        return edge;
+      mutate: {
+        assets: {
+          create: async (asset: Record<string, unknown>) => {
+            createdAssets.push(asset);
+            return asset;
+          },
+        },
+        graph: {
+          createEdge: async (edge: Record<string, unknown>) => {
+            createdEdges.push(edge);
+            return edge;
+          },
+        },
       },
     } as never,
     event: createTestEvent(),
@@ -125,9 +134,9 @@ Deno.test("processAssetsForNewMessage creates asset graph records without a stre
   >;
   assertEquals(attachments.length, 1);
   assertExists(attachments[0]?.assetRef);
-  assertEquals(createdNodes.length, 1);
-  assertEquals(createdNodes[0]?.namespace, "tenant-1");
-  assertEquals(createdNodes[0]?.type, "asset");
+  assertEquals(createdAssets.length, 1);
+  assertEquals(createdAssets[0]?.namespace, "tenant-1");
+  assertEquals(createdAssets[0]?.threadId, "thread-1");
   assertEquals(createdEdges.length, 1);
   assertEquals(createdEdges[0]?.sourceNodeId, "thread-1");
   assertEquals(createdEdges[0]?.type, "has_asset");

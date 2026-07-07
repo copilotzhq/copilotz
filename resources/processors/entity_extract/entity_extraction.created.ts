@@ -21,6 +21,11 @@ import { embed } from "@/runtime/embeddings/index.ts";
 import { chat } from "@/runtime/llm/index.ts";
 import type { ChatMessage, ProviderConfig } from "@/runtime/llm/types.ts";
 
+export const processorId = "entity_extraction";
+export const eventTypes = [
+  "entity_extraction.created",
+] as const;
+
 export type { EntityExtractPayload };
 
 // Extracted entity structure from LLM

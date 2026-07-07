@@ -194,7 +194,7 @@ warehouse — write a processor that intercepts `LLM_RESULT` events and forwards
 what you need:
 
 ```typescript
-// resources/processors/observability/index.ts
+// resources/processors/observability/llm_attempt.completed.ts
 import type { EventProcessor, ProcessorDeps } from "@copilotz/copilotz";
 
 export const observabilityProcessor: EventProcessor = {

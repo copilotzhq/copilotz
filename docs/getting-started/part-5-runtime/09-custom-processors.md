@@ -12,15 +12,27 @@ status: stable
 
 ## The pain
 
-Your agent can call tools. Some of those tools are powerful — they can write files, execute shell commands, call external APIs, delete records. The LLM is generally good at deciding when to use them, but "generally good" is not "always safe."
+Your agent can call tools. Some of those tools are powerful — they can write
+files, execute shell commands, call external APIs, delete records. The LLM is
+generally good at deciding when to use them, but "generally good" is not "always
+safe."
 
-You want a review step. Before the `delete_record` tool actually runs, you want to check: is this a legitimate deletion, or did the LLM hallucinate a reason? Before `run_command` executes a shell command, you want to validate it isn't destructive. You need middleware — a way to intercept what the agent is about to do and make a decision.
+You want a review step. Before the `delete_record` tool actually runs, you want
+to check: is this a legitimate deletion, or did the LLM hallucinate a reason?
+Before `run_command` executes a shell command, you want to validate it isn't
+destructive. You need middleware — a way to intercept what the agent is about to
+do and make a decision.
 
-There's no hook in the LLM API for this. The standard tool-calling flow goes from "LLM produces tool call" to "tool executes" with nothing in between.
+There's no hook in the LLM API for this. The standard tool-calling flow goes
+from "LLM produces tool call" to "tool executes" with nothing in between.
 
 ## The solution
 
-Copilotz processes every agent action through an **event processor chain**. When the LLM decides to call a tool, a `TOOL_CALL` event is created and passed through registered processors in priority order. You can insert your own processor anywhere in that chain — inspect the event, block it, modify it, or let it through.
+Copilotz processes every agent action through an **event processor chain**. When
+the LLM decides to call a tool, a `TOOL_CALL` event is created and passed
+through registered processors in priority order. You can insert your own
+processor anywhere in that chain — inspect the event, block it, modify it, or
+let it through.
 
 This chapter describes the legacy uppercase processor contract that remains
 supported for compatibility. For new durable workflow state, prefer
@@ -30,17 +42,17 @@ you intentionally want to claim a legacy event or emit compatibility work.
 
 This is middleware for agent actions.
 
-Create `resources/processors/safety-guard/index.ts`:
+Create `resources/processors/safety_guard/tool_execution.created.ts`:
 
 ```typescript
 export default {
-  eventType: "TOOL_CALL",
-  id: "safety-guard",
-  priority: 100,  // Higher number = runs before built-in processors
+  eventTypes: ["tool_execution.created"],
+  id: "safety_guard",
+  priority: 100, // Higher number = runs before built-in processors
 
   shouldProcess: (event) => {
-    // Only intercept tool calls — let everything else through
-    return event.type === "TOOL_CALL";
+    // Only intercept tool execution lifecycle events — let everything else through
+    return event.type === "tool_execution.created";
   },
 
   process: async (event, deps) => {
@@ -51,7 +63,7 @@ export default {
     if (toolKey === "run_command") {
       const command = toolCall?.args?.command ?? "";
       const blocked = ["rm -rf", "drop table", "format", "mkfs"].some(
-        (pattern) => command.toLowerCase().includes(pattern)
+        (pattern) => command.toLowerCase().includes(pattern),
       );
 
       if (blocked) {
@@ -74,7 +86,9 @@ export default {
 };
 ```
 
-That's it. Place this file in `resources/processors/safety-guard/` and Copilotz auto-loads it (assuming `resources.path` is configured). The safety guard runs before every tool call.
+That's it. Place this file in `resources/processors/safety-guard/` and Copilotz
+auto-loads it (assuming `resources.path` is configured). The safety guard runs
+before every tool call.
 
 ## How processors work
 
@@ -93,13 +107,14 @@ A processor is an object with three fields:
 
 **Return values control the chain:**
 
-| What you return | What happens |
-|----------------|-------------|
-| `undefined` / `void` | **Pass** — this processor passes; the next processor runs |
-| `{ producedEvents: [event1, event2] }` | **Claim** — enqueue these events; remaining processors are skipped |
-| `{ producedEvents: [] }` | **Swallow** — claim without producing anything; the original event is consumed |
+| What you return                        | What happens                                                                   |
+| -------------------------------------- | ------------------------------------------------------------------------------ |
+| `undefined` / `void`                   | **Pass** — this processor passes; the next processor runs                      |
+| `{ producedEvents: [event1, event2] }` | **Claim** — enqueue these events; remaining processors are skipped             |
+| `{ producedEvents: [] }`               | **Swallow** — claim without producing anything; the original event is consumed |
 
-The first processor to return `producedEvents` wins. Everything after it is skipped for this event.
+The first processor to return `producedEvents` wins. Everything after it is
+skipped for this event.
 
 ## The `deps` object
 
@@ -107,19 +122,20 @@ Your processor receives `deps` with useful references:
 
 ```typescript
 type ProcessorDeps = {
-  db: CopilotzDb;           // Database access — read/write any table
-  thread: Thread;           // Current thread metadata
-  context: ChatContext;     // Full request context
-  emitToStream: (event) => void;  // Emit to real-time stream (for TOKEN, ASSET_CREATED, etc.)
+  db: CopilotzDb; // Database access — read/write any table
+  thread: Thread; // Current thread metadata
+  context: ChatContext; // Full request context
+  emitToStream: (event) => void; // Emit to real-time stream (for TOKEN, ASSET_CREATED, etc.)
 };
 ```
 
-Use `deps.db` to query the database, `deps.thread` to inspect thread metadata, and `deps.emitToStream` to push ephemeral events to the client stream.
+Use `deps.db` to query the database, `deps.thread` to inspect thread metadata,
+and `deps.emitToStream` to push ephemeral events to the client stream.
 
 ## A more complete example: approval workflow
 
 ```typescript
-// resources/processors/require-approval/index.ts
+// resources/processors/require_approval/tool_execution.created.ts
 export default {
   eventType: "TOOL_CALL",
   id: "require-approval",
@@ -162,11 +178,16 @@ export default {
 };
 ```
 
-Your frontend listens for `APPROVAL_REQUIRED` events and shows the user a confirmation dialog. When approved, it sends a new message with the approval token, which a second processor picks up and re-enqueues the original tool call.
+Your frontend listens for `APPROVAL_REQUIRED` events and shows the user a
+confirmation dialog. When approved, it sends a new message with the approval
+token, which a second processor picks up and re-enqueues the original tool call.
 
 ## Processors as resource files
 
-Processors follow the same resource file convention. Create them in `resources/processors/{name}/index.ts` and they're auto-loaded.
+Processors follow the purpose/event file convention. Create them in
+`resources/processors/{purpose}/{event_subject}.{operation}.ts` and export
+`eventTypes` from the file. Legacy `eventType`/`index.ts` processors still load
+for compatibility.
 
 You can also register them inline:
 
@@ -187,6 +208,9 @@ const copilotz = await createCopilotz({
 
 ## What's next
 
-We've now seen `TOOL_CALL` processors in action. But there are many more event types — messages, LLM calls, results, streaming tokens. Understanding the full picture of how events flow through Copilotz unlocks the ability to hook into *any* part of the lifecycle.
+We've now seen `TOOL_CALL` processors in action. But there are many more event
+types — messages, LLM calls, results, streaming tokens. Understanding the full
+picture of how events flow through Copilotz unlocks the ability to hook into
+_any_ part of the lifecycle.
 
 → **[Chapter 10: The Event System](./10-event-system.md)**

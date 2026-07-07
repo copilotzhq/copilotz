@@ -40,18 +40,16 @@
   so retrieval-based memory can coexist with other strategies such as history,
   summaries, participant memory, and working memory.
 - Revisit `update_my_memory`, prompt/history injection, and memory retrieval
-  APIs so they compose around one explicit resource model instead of separate
-  ad hoc mechanisms.
-- Extract shared memory-oriented generation logic out of
-  `resources/processors/new_message/generators` and into a runtime layer such
-  as `runtime/memory`, similar to how LLM and storage logic already live under
-  `runtime/*`.
+  APIs so they compose around one explicit resource model instead of separate ad
+  hoc mechanisms.
+- Keep shared memory-oriented generation logic in a runtime layer such as
+  `runtime/agent-llm-input`/`runtime/memory`, similar to how LLM and storage
+  logic already live under `runtime/*`.
 - Apply the same organizational boundary to API and MCP execution helpers so
-  resource-family runtime logic can move toward `runtime/api` and
-  `runtime/mcp`, leaving processors focused on orchestration rather than owning
-  resource internals.
-- Define clear boundaries:
-  `collections` = durable app state,
-  `memory` = contextual recall and prompt injection.
+  resource-family runtime logic can move toward `runtime/api` and `runtime/mcp`,
+  leaving processors focused on orchestration rather than owning resource
+  internals.
+- Define clear boundaries: `collections` = durable app state, `memory` =
+  contextual recall and prompt injection.
 - Plan the migration carefully so existing RAG and agent-memory features keep
   working while the higher-level `memory` abstraction is introduced.

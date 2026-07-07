@@ -2,7 +2,7 @@ import { ulid } from "ulid";
 import type { MessagePayload } from "@/types/index.ts";
 import type { RunOptions } from "@/runtime/index.ts";
 import { runThread } from "@/runtime/index.ts";
-import type { ToolExecutionContext } from "@/resources/processors/tool_call/index.ts";
+import type { ToolExecutionContext } from "@/runtime/tools/types.ts";
 import {
   base64ToBytes,
   buildAssetRefForStore,

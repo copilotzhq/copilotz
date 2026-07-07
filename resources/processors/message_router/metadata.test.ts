@@ -5,7 +5,7 @@ import {
 
 import { createDatabase } from "@/database/index.ts";
 import type { Event, ProcessorDeps } from "@/types/index.ts";
-import { messageProcessor } from "./index.ts";
+import { messageProcessor } from "./message.created.ts";
 
 Deno.test("new_message persists LLM result usage metadata on assistant messages", async () => {
   const db = await createDatabase({ url: ":memory:" });

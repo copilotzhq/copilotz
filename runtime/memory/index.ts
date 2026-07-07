@@ -1,16 +1,16 @@
 export {
   contextGenerator,
   type LLMContextData,
-} from "@/resources/processors/new_message/generators/context-generator.ts";
+} from "@/runtime/agent-llm-input/context-generator.ts";
 export {
   historyGenerator,
   type HistoryGeneratorOptions,
-} from "@/resources/processors/new_message/generators/history-generator.ts";
+} from "@/runtime/agent-llm-input/history-generator.ts";
 export {
   generateRagContext,
   type RagContextOptions,
   type RagContextResult,
-} from "@/resources/processors/new_message/generators/rag-context-generator.ts";
+} from "@/runtime/agent-llm-input/rag-context-generator.ts";
 export {
   getUserExternalId,
   resolveParticipantCollection,
@@ -33,7 +33,6 @@ export {
   getNextLongTermMemorySequence,
   getPendingLongTermMemory,
   isLongTermMemoryAccessible,
-  loadMessagesInLongTermMemoryRange,
   type LongTermMemoryData,
   type LongTermMemoryDataV1,
   type LongTermMemoryDataV2,
@@ -41,7 +40,6 @@ export {
   type LongTermMemoryRecord,
   type LongTermMemoryStatus,
   type MemorySpaceAccessMode,
-  projectMessageForSharedMemory,
   resolveThreadMemorySpaces,
   selectLongTermMemoryRange,
   sliceMessagesAfterLongTermMemory,

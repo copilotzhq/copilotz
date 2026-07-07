@@ -1,5 +1,5 @@
 import { runThread } from "@/runtime/index.ts";
-import type { ToolExecutionContext } from "@/resources/processors/tool_call/index.ts";
+import type { ToolExecutionContext } from "@/runtime/tools/types.ts";
 
 interface CreateThreadParams {
     name: string;

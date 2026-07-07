@@ -20,7 +20,9 @@ import {
   parseConsolidationProposal,
   process,
   renderLongTermMemory,
-} from "./index.ts";
+} from "./long_term_memory.created.ts";
+import { buildAgentLlmInput } from "@/runtime/agent-llm-input/index.ts";
+import { formatMessagesDetailed } from "@/runtime/llm/utils.ts";
 
 function currentStatePatch(sourceMessageId: string, value: string | null) {
   return {
@@ -794,6 +796,162 @@ Deno.test("long-term-memory processor finalizes the reserved node atomically", a
       );
     assertEquals(brainNodesAfterRetry.length, 2);
     assertEquals(registries.chatRequests.length, 1);
+  } finally {
+    registries.restore();
+  }
+});
+
+Deno.test("long-term-memory consolidation appends one instruction to shared agent input", async () => {
+  const fixture = await createPendingCheckpoint();
+  const proposal = {
+    continuityPatch: currentStatePatch(
+      fixture.last.id,
+      "The shared agent input path is used for consolidation.",
+    ),
+    items: [],
+    relations: [],
+  };
+  const registries = mockRegistries(JSON.stringify(proposal));
+  try {
+    const event = {
+      id: `event-${crypto.randomUUID()}`,
+      type: "long_term_memory.created",
+      threadId: fixture.threadId,
+      subjectType: "long_term_memory",
+      subjectId: fixture.checkpoint.id,
+      payload: fixture.checkpoint,
+    } as unknown as Event;
+    const deps = createDeps(fixture, registries);
+    deps.context.tools = [{
+      id: "lookup-tool",
+      key: "lookup_tool",
+      name: "Lookup Tool",
+      description: "Looks up supporting information.",
+      inputSchema: "type Input = { query: string }",
+      execute: () => ({ ok: true }),
+    } as never];
+    const agent = deps.context.agents![0];
+    const sharedInput = await buildAgentLlmInput({
+      deps,
+      event,
+      threadId: fixture.threadId,
+      agent,
+      historyMode: {
+        type: "range",
+        startMessageId: fixture.first.id,
+        endMessageId: fixture.last.id,
+      },
+    });
+
+    await process(event, deps);
+
+    const promptFingerprint = (messages: unknown[]) =>
+      messages.map((message) => {
+        const typed = message as {
+          role?: string;
+          content?: unknown;
+          senderId?: string;
+          metadata?: { sourceMessageId?: string };
+        };
+        return {
+          role: typed.role,
+          content: typed.content,
+          senderId: typed.senderId,
+          sourceMessageId: typed.metadata?.sourceMessageId,
+        };
+      });
+    const sentMessages = registries.chatRequests[0]?.messages as unknown[];
+    const expectedPrefix = formatMessagesDetailed({
+      messages: sharedInput.messages,
+      tools: sharedInput.tools,
+      config: sharedInput.config,
+    }).messages;
+    assertEquals(
+      promptFingerprint(sentMessages.slice(0, expectedPrefix.length)),
+      promptFingerprint(expectedPrefix),
+    );
+
+    const finalInstruction = sentMessages.at(-1) as {
+      role?: string;
+      content?: string;
+    };
+    assertEquals(finalInstruction.role, "user");
+    assertStringIncludes(
+      finalInstruction.content ?? "",
+      "Source message map for provenance",
+    );
+    assertStringIncludes(finalInstruction.content ?? "", fixture.first.id);
+    assertStringIncludes(finalInstruction.content ?? "", fixture.last.id);
+    assertStringIncludes(
+      finalInstruction.content ?? "",
+      "Do not answer the user, do not route the conversation, and do not call tools.",
+    );
+    assertEquals(
+      (finalInstruction.content ?? "").includes(
+        ["Conversation range", "to consolidate"].join(" "),
+      ),
+      false,
+    );
+    assertStringIncludes(
+      JSON.stringify(registries.chatRequests[0]?.messages),
+      "lookup_tool",
+    );
+  } finally {
+    registries.restore();
+  }
+});
+
+Deno.test("long-term-memory consolidation rejects tool calls and repairs", async () => {
+  const fixture = await createPendingCheckpoint();
+  const proposal = {
+    continuityPatch: currentStatePatch(
+      fixture.last.id,
+      "The repaired consolidation avoided tool calls.",
+    ),
+    items: [],
+    relations: [],
+  };
+  const registries = mockRegistries([
+    [
+      "<tool_calls>",
+      '{"name":"lookup_tool","arguments":{"query":"memory"}}',
+      "</tool_calls>",
+    ].join("\n"),
+    JSON.stringify(proposal),
+  ]);
+  try {
+    const event = {
+      id: `event-${crypto.randomUUID()}`,
+      type: "long_term_memory.created",
+      threadId: fixture.threadId,
+      subjectType: "long_term_memory",
+      subjectId: fixture.checkpoint.id,
+      payload: fixture.checkpoint,
+    } as unknown as Event;
+    const deps = createDeps(fixture, registries);
+    deps.context.tools = [{
+      id: "lookup-tool",
+      key: "lookup_tool",
+      name: "Lookup Tool",
+      description: "Looks up supporting information.",
+      inputSchema: "type Input = { query: string }",
+      execute: () => ({ ok: true }),
+    } as never];
+
+    await process(event, deps);
+
+    assertEquals(registries.chatRequests.length, 2);
+    assertStringIncludes(
+      JSON.stringify(registries.chatRequests[1]?.messages),
+      "Do not call tools.",
+    );
+    const checkpoint = await fixture.db.ops.unsafeGraph.getNodeById(
+      String(fixture.checkpoint.id),
+    );
+    assertEquals(
+      (checkpoint?.data as Record<string, unknown>).status,
+      "ready",
+    );
   } finally {
     registries.restore();
   }

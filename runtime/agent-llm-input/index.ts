@@ -35,11 +35,7 @@ import {
   isDirectConversationThread,
 } from "@/runtime/agent-llm-input/context-generator.ts";
 import { historyGenerator } from "@/runtime/agent-llm-input/history-generator.ts";
-import { generateRagContext } from "@/runtime/agent-llm-input/rag-context-generator.ts";
-import type {
-  ExecutableTool,
-  ToolExecutor,
-} from "@/runtime/tools/types.ts";
+import type { ExecutableTool, ToolExecutor } from "@/runtime/tools/types.ts";
 
 type Operations = ProcessorDeps["db"]["ops"];
 
@@ -51,6 +47,8 @@ export type AgentHistoryMode =
     startMessageId: string;
     endMessageId: string;
   };
+
+export type AgentLongTermMemoryMode = "auto" | "include" | "omit";
 
 export interface AgentLlmInput {
   thread: Thread;
@@ -69,7 +67,7 @@ export interface BuildAgentLlmInputOptions {
   threadId: string;
   agent: Agent;
   historyMode: AgentHistoryMode;
-  ragQuery?: string;
+  longTermMemoryMode?: AgentLongTermMemoryMode;
 }
 
 function toExecutableTool(tool: unknown): ExecutableTool | null {
@@ -117,28 +115,6 @@ function toExecutableTool(tool: unknown): ExecutableTool | null {
     historyPolicy: maybe.historyPolicy,
     execute: executor,
   };
-}
-
-function textFromMessage(message: NewMessage | undefined): string {
-  if (!message) return "";
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content.map((part) => {
-    if (!part || typeof part !== "object") return "";
-    const typed = part as { type?: string; text?: string; value?: unknown };
-    if (typed.type === "text" && typeof typed.text === "string") {
-      return typed.text;
-    }
-    if (typed.type === "json") {
-      try {
-        return JSON.stringify(typed.value ?? "");
-      } catch {
-        return "";
-      }
-    }
-    return "";
-  }).filter(Boolean).join("\n");
 }
 
 function sliceMessagesInRange(
@@ -410,7 +386,12 @@ export async function buildAgentLlmInput(
     ? llmContext.systemPrompt
     : JSON.stringify(llmContext.systemPrompt ?? {});
 
-  if (options.historyMode === "afterReadyLongTermMemory") {
+  const longTermMemoryMode = options.longTermMemoryMode ?? "auto";
+  const includeLongTermMemory = longTermMemoryMode === "include" ||
+    (longTermMemoryMode === "auto" &&
+      options.historyMode === "afterReadyLongTermMemory");
+
+  if (includeLongTermMemory) {
     const longTermMemoryConfig = getLongTermMemoryConfig(context.memory);
     const longTermMemoryNamespace = context.namespace ??
       (typeof ctx.thread.namespace === "string" ? ctx.thread.namespace : null);
@@ -437,36 +418,6 @@ export async function buildAgentLlmInput(
       : null;
     if (longTermMemory?.node.content) {
       systemPrompt = `${systemPrompt}\n\n${longTermMemory.node.content}`;
-    }
-  }
-
-  const ragQuery = options.ragQuery ?? textFromMessage(selectedHistory.at(-1));
-  if (
-    agent.ragOptions?.mode === "auto" && context.embeddingConfig && ragQuery
-  ) {
-    try {
-      const userId = getUserExternalId(ctx.thread.metadata);
-
-      const ragResult = await generateRagContext({
-        agent,
-        query: ragQuery,
-        ops: deps.db.ops,
-        collections: context.collections,
-        embeddingConfig: context.embeddingConfig,
-        embeddingProviders: context.embeddingProviders,
-        namespace: context.namespace,
-        threadId,
-        userId,
-      });
-
-      if (ragResult.context) {
-        systemPrompt = `${systemPrompt}\n\n${ragResult.context}`;
-      }
-    } catch (error) {
-      console.warn(
-        `[agent_llm_input] Failed to generate RAG context for agent "${agent.name}":`,
-        error,
-      );
     }
   }
 

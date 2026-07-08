@@ -523,12 +523,10 @@ export interface EntityExtractionConfig {
  * RAG options specific to an individual agent.
  */
 export interface AgentRagOptions {
-  /** RAG mode for this agent. "tool" adds search tools, "auto" injects context, "disabled" turns off RAG. */
-  mode?: "tool" | "auto" | "disabled";
+  /** RAG mode for this agent. "tool" exposes search tools, "disabled" turns off RAG. */
+  mode?: "tool" | "disabled";
   /** Graph scope this agent can search. Namespace remains the tenant partition. */
   scope?: RagScope;
-  /** Number of chunks to auto-inject when mode is "auto". */
-  autoInjectLimit?: number;
   /** Entity extraction configuration. */
   entityExtraction?: EntityExtractionConfig;
 }

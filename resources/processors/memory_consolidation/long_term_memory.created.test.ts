@@ -97,6 +97,52 @@ Deno.test("checkpoint rendering omits oversized blocks instead of slicing them",
   assertEquals(rendered.includes("OVERSIZED_MEMORY_BLOCK_"), false);
 });
 
+Deno.test("checkpoint rendering exposes stable continuity refs", () => {
+  const continuity = applyContinuityPatch(createEmptyContinuity(), {
+    intent: {
+      challenge: {
+        value: "Preserve the user's goal across rollovers.",
+        sourceMessageIds: ["message-1"],
+      },
+      successCriteria: {
+        value: ["Resume without re-reading archived messages."],
+        sourceMessageIds: ["message-1"],
+      },
+    },
+    state: {
+      currentState: {
+        value: "The consolidation prompt uses the shared memory prefix.",
+        sourceMessageIds: ["message-2"],
+      },
+    },
+  });
+  const rendered = renderLongTermMemory({
+    proposal: {
+      continuityPatch: {},
+      nodes: [],
+      relations: [],
+    },
+    continuity,
+    newBrainNodes: new Map(),
+    olderBrainNodes: [],
+    olderRelations: [],
+    maxContentEstimatedTokens: 2_000,
+  });
+
+  assertStringIncludes(
+    rendered,
+    "[continuity:intent.challenge] Challenge: Preserve the user's goal across rollovers.",
+  );
+  assertStringIncludes(
+    rendered,
+    "[continuity:intent.successCriteria] Success criteria: Resume without re-reading archived messages.",
+  );
+  assertStringIncludes(
+    rendered,
+    "[continuity:state.currentState] Current state: The consolidation prompt uses the shared memory prefix.",
+  );
+});
+
 Deno.test("continuity patches retain omitted fields and explicitly clear values", () => {
   const initial = applyContinuityPatch(createEmptyContinuity(), {
     intent: {
@@ -625,8 +671,16 @@ async function createPendingCheckpoint(
       namespace,
       type: "long_term_memory",
       name: `thread:${threadId}:memory:1`,
-      content:
-        `## LONG-TERM CONVERSATION MEMORY\n\n### Relevant memory\n- [id:${previousItemId}] [decision] Previous decision: Use the previous approach.`,
+      content: [
+        "## LONG-TERM CONVERSATION MEMORY",
+        "## CONTINUITY",
+        "### Intent",
+        "- [continuity:intent.challenge] Challenge: Keep long-running work aligned with the user's goal.",
+        "### Current state",
+        "- [continuity:state.currentState] Current state: A previous implementation decision is active.",
+        "## RELEVANT MEMORY",
+        `- [id:${previousItemId}] [decision] Previous decision: Use the previous approach.`,
+      ].join("\n"),
       embedding: null,
       data: {
         schemaVersion: "1",
@@ -948,7 +1002,7 @@ Deno.test("long-term-memory processor persists entity-anchored mentions edges", 
 });
 
 Deno.test("long-term-memory consolidation appends one instruction to shared agent input", async () => {
-  const fixture = await createPendingCheckpoint();
+  const fixture = await createPendingCheckpoint({ withPrevious: true });
   const proposal = {
     continuityPatch: currentStatePatch(
       fixture.last.id,
@@ -987,6 +1041,7 @@ Deno.test("long-term-memory consolidation appends one instruction to shared agen
         startMessageId: fixture.first.id,
         endMessageId: fixture.last.id,
       },
+      longTermMemoryMode: "include",
     });
 
     await process(event, deps);
@@ -1021,7 +1076,35 @@ Deno.test("long-term-memory consolidation appends one instruction to shared agen
       role?: string;
       content?: string;
     };
+    const serializedMessages = JSON.stringify(
+      registries.chatRequests[0]?.messages,
+    );
+    const countOccurrences = (text: string, pattern: string) =>
+      text.split(pattern).length - 1;
+    assertEquals(
+      countOccurrences(serializedMessages, "## LONG-TERM CONVERSATION MEMORY"),
+      1,
+    );
+    assertStringIncludes(serializedMessages, fixture.previousItemId!);
+    assertStringIncludes(serializedMessages, "continuity:intent.challenge");
+    assertStringIncludes(serializedMessages, "continuity:state.currentState");
     assertEquals(finalInstruction.role, "user");
+    assertEquals(
+      (finalInstruction.content ?? "").includes(
+        "Previous long-term memory checkpoint:",
+      ),
+      false,
+    );
+    assertEquals(
+      (finalInstruction.content ?? "").includes(
+        "Previous structured continuity:",
+      ),
+      false,
+    );
+    assertEquals(
+      (finalInstruction.content ?? "").includes(fixture.previousItemId!),
+      false,
+    );
     assertStringIncludes(
       finalInstruction.content ?? "",
       "Source message map for provenance",

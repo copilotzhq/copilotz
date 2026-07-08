@@ -26,11 +26,10 @@ const copilotz = await createCopilotz({
       "list_knowledge_spaces",
     ],
     ragOptions: {
-      mode: "auto", // "auto" | "tool" | "disabled"
+      mode: "tool", // "tool" | "disabled"
       scope: {
         knowledgeSpaceIds: ["ks-docs"],
       },
-      autoInjectLimit: 5, // Max chunks to inject automatically
     },
   }],
   rag: {
@@ -55,10 +54,9 @@ const copilotz = await createCopilotz({
 
 ## RAG Modes
 
-- **auto**: Relevant chunks are automatically injected into the system prompt
-  before each LLM call
 - **tool**: Agent must explicitly use `search_knowledge` tool to retrieve
   context
+- **disabled**: Agent does not use RAG retrieval
 
 ## RAG Tools
 
@@ -75,11 +73,10 @@ Each agent can have different RAG settings:
 
 ```typescript
 ragOptions: {
-    mode: "auto",
+    mode: "tool",
     scope: {
         knowledgeSpaceIds: ["ks-docs", "ks-faq"],
     },
-    autoInjectLimit: 3,
     entityExtraction: { enabled: true },
 }
 ```

@@ -58,7 +58,7 @@ export default {
   },
   allowedTools: ["*"], // Or specific: ["search_knowledge", "http_request"]
   // allowedAgents: ["other-agent"],  // For multi-agent setups
-  // ragOptions: { mode: "auto", scope: { knowledgeSpaceIds: ["ks-docs"] } },
+  // ragOptions: { mode: "tool", scope: { knowledgeSpaceIds: ["ks-docs"] } },
 } as Agent;
 ```
 
@@ -69,7 +69,7 @@ export default {
 | `llmOptions`    | object           | LLM provider config (required)                      |
 | `allowedTools`  | string[] \| null | Tool whitelist. `null` = no tools, omit = all tools |
 | `allowedAgents` | string[]         | Which other agents this one can communicate with    |
-| `ragOptions`    | object           | RAG settings: `mode`, `scope`, `autoInjectLimit`    |
+| `ragOptions`    | object           | RAG settings: `mode`, `scope`, `entityExtraction`   |
 | `assetOptions`  | object           | Asset generation settings                           |
 | `description`   | string           | Public description (shown in agent listings)        |
 
@@ -82,11 +82,10 @@ export default {
   llmOptions: { provider: "openai", model: "gpt-4o-mini" },
   allowedTools: ["search_knowledge", "ingest_document"],
   ragOptions: {
-    mode: "auto",
+    mode: "tool",
     scope: {
       knowledgeSpaceIds: ["ks-docs", "ks-faq"],
     },
-    autoInjectLimit: 5,
   },
 } as Agent;
 ```

@@ -167,11 +167,11 @@ This happens asynchronously — ingestion returns immediately, embedding happens
 
 ### Step 3: Retrieval
 
-When the agent calls `search_knowledge` (in `tool` mode) or automatically (in `auto` mode), Copilotz:
+When the agent calls `search_knowledge`, Copilotz:
 1. Embeds the query using the same embedding model
 2. Performs a cosine similarity search against stored chunk vectors
 3. Returns the top-N most relevant chunks above the similarity threshold
-4. Injects them into the LLM prompt as context
+4. Returns them to the agent as tool output
 
 ## RAG configuration
 
@@ -204,19 +204,13 @@ Each agent can have its own RAG behavior:
 // Tool mode: agent explicitly calls search_knowledge
 ragOptions: { mode: "tool" }
 
-// Auto mode: relevant chunks are injected automatically into every LLM call
-ragOptions: {
-  mode: "auto",
-  autoInjectLimit: 3,   // Inject top 3 chunks
-}
-
 // Disabled: this agent doesn't use RAG
 ragOptions: { mode: "disabled" }
 ```
 
 **When to use each:**
 - `tool` — Best when RAG is situational. The agent decides when to search. Saves tokens on calls where search isn't needed.
-- `auto` — Best when the agent should always have context (e.g., a support agent that always needs the knowledge base).
+- `disabled` — Best when the agent should not retrieve from the knowledge base.
 
 ## Scoping retrieval
 

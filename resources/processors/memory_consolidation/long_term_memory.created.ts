@@ -944,18 +944,20 @@ function renderRelationship(
 }
 
 function renderContinuityScalar(
+  ref: string,
   label: string,
   value: SourcedContinuityValue<string | null>,
 ): string[] {
-  return value.value ? [`- ${label}: ${value.value}`] : [];
+  return value.value ? [`- [continuity:${ref}] ${label}: ${value.value}`] : [];
 }
 
 function renderContinuityList(
+  ref: string,
   label: string,
   value: SourcedContinuityValue<string[]>,
 ): string[] {
   return value.value.length > 0
-    ? value.value.map((entry) => `- ${label}: ${entry}`)
+    ? [`- [continuity:${ref}] ${label}: ${value.value.join("; ")}`]
     : [];
 }
 
@@ -963,37 +965,63 @@ function renderContinuityBlocks(
   continuity: LongTermMemoryContinuity,
 ): string[] {
   const intent = [
-    ...renderContinuityScalar("Challenge", continuity.intent.challenge),
-    ...renderContinuityScalar("Purpose", continuity.intent.purpose),
     ...renderContinuityScalar(
+      "intent.challenge",
+      "Challenge",
+      continuity.intent.challenge,
+    ),
+    ...renderContinuityScalar(
+      "intent.purpose",
+      "Purpose",
+      continuity.intent.purpose,
+    ),
+    ...renderContinuityScalar(
+      "intent.desiredOutcome",
       "Desired outcome",
       continuity.intent.desiredOutcome,
     ),
     ...renderContinuityList(
+      "intent.successCriteria",
       "Success criteria",
       continuity.intent.successCriteria,
     ),
     ...renderContinuityList(
+      "intent.decisionCriteria",
       "Decision criteria",
       continuity.intent.decisionCriteria,
     ),
-    ...renderContinuityList("Constraints", continuity.intent.constraints),
+    ...renderContinuityList(
+      "intent.constraints",
+      "Constraints",
+      continuity.intent.constraints,
+    ),
   ];
   const state = [
-    ...renderContinuityScalar("Current state", continuity.state.currentState),
     ...renderContinuityScalar(
+      "state.currentState",
+      "Current state",
+      continuity.state.currentState,
+    ),
+    ...renderContinuityScalar(
+      "state.activeApproach",
       "Active approach",
       continuity.state.activeApproach,
     ),
     ...renderContinuityList(
+      "state.risksAndBlockers",
       "Risks and blockers",
       continuity.state.risksAndBlockers,
     ),
     ...renderContinuityList(
+      "state.openQuestions",
       "Open questions",
       continuity.state.openQuestions,
     ),
-    ...renderContinuityList("Next actions", continuity.state.nextActions),
+    ...renderContinuityList(
+      "state.nextActions",
+      "Next actions",
+      continuity.state.nextActions,
+    ),
   ];
   return [
     "## CONTINUITY",
@@ -1137,15 +1165,12 @@ function buildSourceMessageMap(messages: NewMessage[]) {
 function buildMemoryConsolidationInstruction(args: {
   memorySpaces: ThreadMemorySpaceAccess[];
   defaultWriteMemorySpaceId: string;
-  previousMemory: Awaited<
-    ReturnType<typeof getLatestReadyLongTermMemory>
-  >;
-  previousContinuity: LongTermMemoryContinuity;
+  hasPreviousMemoryCheckpoint: boolean;
   sourceMessages: NewMessage[];
 }): string {
-  const reconciliationInstruction = args.previousMemory?.node.content
-    ? "You may supersede or relate only older brain node IDs shown in the previous checkpoint above."
-    : "There is no previous checkpoint; relations may target only new localIds.";
+  const reconciliationInstruction = args.hasPreviousMemoryCheckpoint
+    ? "You may supersede or relate only older brain node IDs shown in the long-term memory section above."
+    : "There is no previous long-term memory section; relations may target only new localIds.";
   const writableMemorySpaces = args.memorySpaces
     .filter((space) => space.access === "read_write")
     .map((space) => {
@@ -1168,19 +1193,15 @@ function buildMemoryConsolidationInstruction(args: {
     "Do not answer the user, do not route the conversation, and do not call tools.",
     "Use the preceding agent-visible history as the conversation content to consolidate.",
     "",
-    "Previous structured continuity:",
-    JSON.stringify(args.previousContinuity),
-    "",
-    "Previous long-term memory checkpoint:",
-    args.previousMemory?.node.content ?? "None",
-    "",
     "Source message map for provenance:",
     JSON.stringify(buildSourceMessageMap(args.sourceMessages)),
     "",
     "---",
     "Update continuity and extract durable memory from the preceding history.",
+    "Use any [continuity:...] entries in the long-term memory section above as the previous continuity state.",
     "Continuity must let another capable agent resume the work after archived messages are unavailable.",
     "Do not produce a chronological summary.",
+    "Do not copy unchanged continuity fields into continuityPatch.",
     "For continuity, emit only fields introduced, refined, changed, or explicitly cleared by this history range.",
     "Omit unchanged continuity fields so the processor retains their previous values exactly.",
     "When updating a list field, return its complete new value, including prior entries that remain active.",
@@ -1596,6 +1617,7 @@ export const longTermMemoryProcessor: EventProcessor<
           startMessageId: checkpointData.sourceStartMessageId,
           endMessageId: checkpointData.sourceEndMessageId,
         },
+        longTermMemoryMode: "include",
       });
       const sourceMessages = llmInput.rawHistory;
       if (sourceMessages.length === 0) {
@@ -1608,8 +1630,7 @@ export const longTermMemoryProcessor: EventProcessor<
           content: buildMemoryConsolidationInstruction({
             memorySpaces,
             defaultWriteMemorySpaceId,
-            previousMemory,
-            previousContinuity,
+            hasPreviousMemoryCheckpoint: Boolean(previousMemory?.node.content),
             sourceMessages,
           }),
         },

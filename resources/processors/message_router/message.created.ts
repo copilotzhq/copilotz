@@ -1827,7 +1827,6 @@ export const messageProcessor: EventProcessor<
         threadId,
         agent,
         historyMode: "afterReadyLongTermMemory",
-        ragQuery: messageContext.contentText,
       });
 
       const llmPayload = {

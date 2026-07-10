@@ -95,6 +95,28 @@ Legacy custom processors that return `producedEvents` are still supported during
 the migration. New core runtime code should prefer `ops.mutate.*` so state and
 outbox facts are committed atomically.
 
+For the legacy processor contract, the return value controls the remainder of
+the processor chain:
+
+| Return value                       | Behavior                                                    |
+| ---------------------------------- | ----------------------------------------------------------- |
+| `undefined` / `void`               | Pass to the next matching processor                         |
+| `{ producedEvents: [event, ...] }` | Claim the event, enqueue new events, and skip the remainder |
+| `{ producedEvents: [] }`           | Claim the event, enqueue nothing, and skip the remainder    |
+
+Claiming an event changes its downstream handling; it does not replace or delete
+the original queue row. The original row remains durable and is normally marked
+`completed`, while each produced event is inserted as a new queue row. Likewise,
+swallowing a lifecycle event does not roll back the domain mutation that created
+that lifecycle fact—the mutation and outbox row may already have committed in
+the same transaction.
+
+Public stream events are emitted before their processor chain runs. A processor
+can therefore prevent built-in processing and follow-up work, but it cannot
+retract an original public event that has already been delivered to a run's live
+event stream. Use transport/UI interception when an event must be hidden from a
+client.
+
 ## Related Pages
 
 - [Runs](../runtime/runs.md)

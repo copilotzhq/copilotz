@@ -568,6 +568,11 @@ export interface Agent {
   personality?: string | null;
   instructions?: string | null;
   description?: string | null;
+  /**
+   * Agents this agent may ask or hand off to.
+   * `undefined` allows every eligible agent; `null` and `[]` allow none.
+   * Thread routing still requires the target to be a participant.
+   */
   allowedAgents?: string[] | null;
   allowedTools?: string[] | null;
   metadata?: Record<string, unknown> | null;
@@ -703,10 +708,6 @@ export interface MemoryComposition {
  * Stored directly in thread.metadata for persistence.
  */
 export interface ThreadMetadata {
-  /** Per-participant target state: senderId → targetId */
-  participantTargets?: {
-    [senderId: string]: string;
-  };
   /** Agent turn counter for loop prevention */
   agentTurnCount?: number;
   /** Max agent turns config (per-thread override) */

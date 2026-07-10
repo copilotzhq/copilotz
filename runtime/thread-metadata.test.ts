@@ -37,9 +37,7 @@ Deno.test("thread metadata separates public and system fields", () => {
     topic: "support",
     locale: "en-US",
   });
-  assertEquals(normalized.system?.runtime, {
-    participantTargets: { user: "agent-1" },
-  });
+  assertEquals(normalized.system?.runtime, {});
   assertEquals(normalized.system?.memory, {
     identity: {},
   });
@@ -86,7 +84,28 @@ Deno.test("public metadata excludes runtime and channel routing state", () => {
       channels: {
         whatsapp: { recipientPhone: "+5511999999999" },
       },
-      routing: {},
+    },
+  });
+});
+
+Deno.test("deprecated participant targets and system routing metadata are dropped", () => {
+  const normalized = normalizeThreadMetadata({
+    participantTargets: { user: "agent-1" },
+    system: {
+      runtime: {
+        participantTargets: { user: "agent-2" },
+        agentTurnCount: 1,
+      },
+      routing: { staleTarget: "agent-3" },
+    },
+  });
+
+  assertEquals(normalized, {
+    public: {},
+    system: {
+      runtime: { agentTurnCount: 1 },
+      memory: { identity: {} },
+      channels: {},
     },
   });
 });

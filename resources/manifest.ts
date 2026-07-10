@@ -6,7 +6,7 @@ export default {
   provides: {
     agents: ["copilotz", "west", "north", "east", "south"],
     tools: [
-      "delegate",
+      "delegate_task",
       "create_thread",
       "end_thread",
       "web_search",
@@ -191,7 +191,7 @@ export default {
       "agents.east",
       "agents.south",
       // Tools
-      "tools.delegate",
+      "tools.delegate_task",
       "tools.create_thread",
       "tools.end_thread",
       "tools.web_search",

@@ -20,8 +20,8 @@ function extractTextContent(content: unknown): string {
 }
 
 export default {
-    key: "delegate",
-    name: "Delegate",
+    key: "delegate_task",
+    name: "Delegate Task",
     description: "Delegate a focused subtask to another agent in a separate thread and wait for that agent's final answer.",
     inputSchema: {
         type: "object",
@@ -54,10 +54,39 @@ export default {
         }
 
         const availableAgents = context.agents || [];
-        const targetAgentConfig = availableAgents.find((agent: Agent) => agent.name === normalizedTargetAgent);
+        const targetLower = normalizedTargetAgent.toLowerCase();
+        const targetAgentConfig = availableAgents.find((agent: Agent) =>
+            agent.id.toLowerCase() === targetLower ||
+            agent.name.toLowerCase() === targetLower
+        );
 
         if (!targetAgentConfig) {
-            throw new Error(`Target agent "${normalizedTargetAgent}" not found in available agents: ${availableAgents.map((a: Agent) => a.name).join(', ')}`);
+            throw new Error(`Target agent "${normalizedTargetAgent}" not found in available agents: ${availableAgents.map((a: Agent) => a.id).join(', ')}`);
+        }
+
+        const senderAgent = context.agent ?? availableAgents.find((agent: Agent) =>
+            agent.id === context.senderId || agent.name === context.senderId
+        );
+        if (
+            senderAgent &&
+            (senderAgent.id === targetAgentConfig.id ||
+                senderAgent.name === targetAgentConfig.name)
+        ) {
+            throw new Error("An agent cannot delegate a task to itself");
+        }
+
+        const allowedAgents = senderAgent?.allowedAgents;
+        if (allowedAgents === null || (Array.isArray(allowedAgents) && allowedAgents.length === 0)) {
+            throw new Error(`Agent "${senderAgent?.id ?? context.senderId}" is not allowed to delegate tasks`);
+        }
+        if (Array.isArray(allowedAgents)) {
+            const allowed = new Set(allowedAgents.map((value) => value.trim().toLowerCase()));
+            if (
+                !allowed.has(targetAgentConfig.id.toLowerCase()) &&
+                !allowed.has(targetAgentConfig.name.toLowerCase())
+            ) {
+                throw new Error(`Agent "${senderAgent?.id ?? context.senderId}" is not allowed to delegate to "${targetAgentConfig.id}"`);
+            }
         }
 
         const delegatedThreadId = crypto.randomUUID();
@@ -76,7 +105,7 @@ export default {
                     thread: {
                         id: delegatedThreadId,
                         name: `Delegated task from ${context.senderId}`,
-                        participants: [normalizedTargetAgent],
+                        participants: [targetAgentConfig.id],
                     },
                 },
                 { stream: true },

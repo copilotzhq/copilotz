@@ -107,14 +107,34 @@ A processor is an object with three fields:
 
 **Return values control the chain:**
 
-| What you return                        | What happens                                                                   |
-| -------------------------------------- | ------------------------------------------------------------------------------ |
-| `undefined` / `void`                   | **Pass** — this processor passes; the next processor runs                      |
-| `{ producedEvents: [event1, event2] }` | **Claim** — enqueue these events; remaining processors are skipped             |
-| `{ producedEvents: [] }`               | **Swallow** — claim without producing anything; the original event is consumed |
+| What you return                        | What happens                                                                     |
+| -------------------------------------- | -------------------------------------------------------------------------------- |
+| `undefined` / `void`                   | **Pass** — this processor passes; the next processor runs                        |
+| `{ producedEvents: [event1, event2] }` | **Claim** — enqueue these events; remaining processors are skipped               |
+| `{ producedEvents: [] }`               | **Swallow** — claim without producing anything; remaining processors are skipped |
 
 The first processor to return `producedEvents` wins. Everything after it is
 skipped for this event.
+
+Here, **claim**, **swallow**, and **override** describe control of downstream
+processing. They do not mutate or delete the original event. The original queue
+row remains durable and is normally marked `completed`; values returned in
+`producedEvents` become new queue rows. If the input is a lifecycle event such
+as `message.created`, the associated domain mutation may already have committed
+and swallowing the event does not undo it.
+
+Public stream events are emitted before processors execute. Swallowing one stops
+later processors and built-in behavior, but does not retract it from clients
+that already received it through `run.events`.
+
+### Processor ordering
+
+Processors loaded from `resources/processors/` are sorted by exported `priority`
+within that loaded resource set (higher first, then filename). The final runtime
+chain is assembled by source: file-loaded user processors first, inline
+`config.processors` next, and bundled processors last. Inline processors
+preserve their array order; their `priority` fields are not globally re-sorted
+across those source groups.
 
 ## The `deps` object
 

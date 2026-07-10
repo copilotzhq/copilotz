@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import {
   buildToolReplyRoutingMetadata,
+  normalizeRoutingDecision,
   resolveNextTurn,
   resolveThreadParticipantTarget,
 } from "./message.created.ts";
@@ -33,6 +34,41 @@ function thread(metadata: unknown = {}): Thread {
   } as unknown as Thread;
 }
 
+const decision = (action: "ask" | "handoff", targetId: string) => ({
+  action,
+  targetId,
+  source: "model_control" as const,
+});
+
+Deno.test("normalizeRoutingDecision accepts only the singular ask/handoff contract", () => {
+  assertEquals(
+    normalizeRoutingDecision({
+      action: "ask",
+      targetId: " south ",
+      source: "model_control",
+      controlCallId: " call-1 ",
+    }),
+    {
+      action: "ask",
+      targetId: "south",
+      source: "model_control",
+      controlCallId: "call-1",
+    },
+  );
+  assertEquals(
+    normalizeRoutingDecision({ routeTo: ["south"] }),
+    null,
+  );
+  assertEquals(
+    normalizeRoutingDecision({ action: "ask", targetId: "south" }),
+    null,
+  );
+  assertEquals(
+    normalizeRoutingDecision({ action: "broadcast", targetId: "south" }),
+    null,
+  );
+});
+
 Deno.test("resolveThreadParticipantTarget preserves a user return target for legacy threads with one human participant", () => {
   const availableAgents: Agent[] = [
     agent("reviewer"),
@@ -60,38 +96,38 @@ Deno.test("resolveThreadParticipantTarget preserves a user return target for leg
   );
 });
 
-Deno.test("resolveNextTurn routes ask_to to the asked agent and queues the asker", () => {
+Deno.test("resolveNextTurn applies ask and prepends the asker to the return path", () => {
   assertEquals(
     resolveNextTurn({
       sender: { id: "north", name: "north", type: "agent" },
       thread: thread(),
       availableAgents: agents,
-      inbound: { targetId: "north", targetQueue: ["vfssantos"] },
-      routingIntent: { askTo: ["south"] },
+      inbound: { targetId: "north", returnPath: ["vfssantos"] },
+      routingDecision: decision("ask", "south"),
       multiAgentEnabled: true,
     }),
     {
       kind: "agent",
       targetId: "south",
-      targetQueue: ["north", "vfssantos"],
+      returnPath: ["north", "vfssantos"],
     },
   );
 });
 
-Deno.test("resolveNextTurn routes route_to without queuing the sender", () => {
+Deno.test("resolveNextTurn applies handoff without adding the sender to the return path", () => {
   assertEquals(
     resolveNextTurn({
       sender: { id: "north", name: "north", type: "agent" },
       thread: thread(),
       availableAgents: agents,
-      inbound: { targetId: "north", targetQueue: ["vfssantos"] },
-      routingIntent: { routeTo: ["south"] },
+      inbound: { targetId: "north", returnPath: ["vfssantos"] },
+      routingDecision: decision("handoff", "south"),
       multiAgentEnabled: true,
     }),
     {
       kind: "agent",
       targetId: "south",
-      targetQueue: ["vfssantos"],
+      returnPath: ["vfssantos"],
     },
   );
 });
@@ -102,13 +138,13 @@ Deno.test("resolveNextTurn advances an agent reply through the queued return pat
       sender: { id: "south", name: "south", type: "agent" },
       thread: thread(),
       availableAgents: agents,
-      inbound: { targetId: "south", targetQueue: ["north", "vfssantos"] },
+      inbound: { targetId: "south", returnPath: ["north", "vfssantos"] },
       multiAgentEnabled: true,
     }),
     {
       kind: "agent",
       targetId: "north",
-      targetQueue: ["vfssantos"],
+      returnPath: ["vfssantos"],
     },
   );
 });
@@ -119,7 +155,7 @@ Deno.test("resolveNextTurn exits to the human when the queue resolves to a user 
       sender: { id: "north", name: "north", type: "agent" },
       thread: thread(),
       availableAgents: agents,
-      inbound: { targetId: "north", targetQueue: ["vfssantos"] },
+      inbound: { targetId: "north", returnPath: ["vfssantos"] },
       multiAgentEnabled: true,
     }),
     {
@@ -135,31 +171,28 @@ Deno.test("resolveNextTurn preserves deferred agent routing after a tool-result 
       sender: { id: "north", name: "north", type: "agent" },
       thread: thread(),
       availableAgents: agents,
-      inbound: { targetId: "north", targetQueue: ["south", "vfssantos"] },
+      inbound: { targetId: "north", returnPath: ["south", "vfssantos"] },
       multiAgentEnabled: true,
     }),
     {
       kind: "agent",
       targetId: "south",
-      targetQueue: ["vfssantos"],
+      returnPath: ["vfssantos"],
     },
   );
 });
 
-Deno.test("resolveNextTurn treats route_to user as an explicit human handoff", () => {
+Deno.test("resolveNextTurn treats handoff to user as an explicit human handoff", () => {
   assertEquals(
     resolveNextTurn({
       sender: { id: "north", name: "north", type: "agent" },
       thread: thread(),
       availableAgents: agents,
-      inbound: { targetId: "north", targetQueue: [] },
-      routingIntent: { routeTo: ["user"] },
+      inbound: { targetId: "north", returnPath: [] },
+      routingDecision: decision("handoff", "user"),
       multiAgentEnabled: true,
     }),
-    {
-      kind: "human",
-      targetId: "vfssantos",
-    },
+    { kind: "stop" },
   );
 });
 
@@ -173,14 +206,61 @@ Deno.test("resolveNextTurn enforces allowedAgents for explicit agent routing", (
         agent("south"),
         agent("east"),
       ],
-      inbound: { targetId: "north", targetQueue: ["vfssantos"] },
-      routingIntent: { routeTo: ["south"] },
+      inbound: { targetId: "north", returnPath: ["vfssantos"] },
+      routingDecision: decision("handoff", "south"),
       multiAgentEnabled: true,
     }),
     {
       kind: "human",
       targetId: "vfssantos",
     },
+  );
+});
+
+Deno.test("resolveNextTurn treats null and empty allowedAgents as no agent routes", () => {
+  for (const allowedAgents of [null, [] as string[]]) {
+    assertEquals(
+      resolveNextTurn({
+        sender: { id: "north", name: "north", type: "agent" },
+        thread: thread(),
+        availableAgents: [
+          { ...agent("north"), allowedAgents },
+          agent("south"),
+        ],
+        inbound: { targetId: "north", returnPath: ["vfssantos"] },
+        routingDecision: decision("handoff", "south"),
+        multiAgentEnabled: true,
+      }),
+      { kind: "stop" },
+    );
+  }
+});
+
+Deno.test("resolveNextTurn rejects self-routing decisions", () => {
+  assertEquals(
+    resolveNextTurn({
+      sender: { id: "north", name: "north", type: "agent" },
+      thread: thread(),
+      availableAgents: agents,
+      inbound: { targetId: "north", returnPath: ["vfssantos"] },
+      routingDecision: decision("handoff", "north"),
+      multiAgentEnabled: true,
+    }),
+    { kind: "stop" },
+  );
+});
+
+Deno.test("resolveNextTurn rejects asking a human because no automatic return can be guaranteed", () => {
+  assertEquals(
+    resolveNextTurn({
+      sender: { id: "north", name: "north", type: "agent" },
+      thread: thread(),
+      availableAgents: agents,
+      inbound: { targetId: "north", returnPath: ["vfssantos"] },
+      routingDecision: decision("ask", "user"),
+      multiAgentEnabled: true,
+    }),
+    { kind: "stop" },
   );
 });
 
@@ -193,18 +273,15 @@ Deno.test("resolveNextTurn ignores explicit agent routes outside the thread part
         participants: ["north", "vfssantos"],
       } as Thread,
       availableAgents: agents,
-      inbound: { targetId: "north", targetQueue: ["vfssantos"] },
-      routingIntent: { routeTo: ["south"] },
+      inbound: { targetId: "north", returnPath: ["vfssantos"] },
+      routingDecision: decision("handoff", "south"),
       multiAgentEnabled: true,
     }),
-    {
-      kind: "human",
-      targetId: "vfssantos",
-    },
+    { kind: "stop" },
   );
 });
 
-Deno.test("resolveNextTurn honors persisted user targets only for user-originated messages", () => {
+Deno.test("resolveNextTurn ignores removed participantTargets metadata", () => {
   assertEquals(
     resolveNextTurn({
       sender: { id: "vfssantos", name: "Vitor", type: "user" },
@@ -214,8 +291,8 @@ Deno.test("resolveNextTurn honors persisted user targets only for user-originate
     }),
     {
       kind: "agent",
-      targetId: "east",
-      targetQueue: [],
+      targetId: "north",
+      returnPath: [],
     },
   );
 });
@@ -226,7 +303,7 @@ Deno.test("resolveNextTurn does not self-route agent messages when multi-agent r
       sender: { id: "north", name: "north", type: "agent" },
       thread: thread(),
       availableAgents: agents,
-      inbound: { targetId: "north", targetQueue: [] },
+      inbound: { targetId: "north", returnPath: [] },
       multiAgentEnabled: false,
     }),
     { kind: "stop" },
@@ -239,13 +316,13 @@ Deno.test("resolveNextTurn still routes tool results back to the requesting agen
       sender: { id: "north", name: "Tool result", type: "tool" },
       thread: thread(),
       availableAgents: agents,
-      inbound: { replyToParticipantId: "north", replyToTargetQueue: [] },
+      inbound: { replyToParticipantId: "north", replyToReturnPath: [] },
       multiAgentEnabled: false,
     }),
     {
       kind: "agent",
       targetId: "north",
-      targetQueue: [],
+      returnPath: [],
     },
   );
 });
@@ -255,7 +332,7 @@ Deno.test("buildToolReplyRoutingMetadata returns tool results to the emitter whi
     buildToolReplyRoutingMetadata("north", {
       kind: "agent",
       targetId: "south",
-      targetQueue: ["vfssantos"],
+      returnPath: ["vfssantos"],
     }),
     {
       replyToParticipantId: "north",

@@ -99,3 +99,51 @@ Deno.test("contextGenerator places stable local instructions before volatile thr
   assert(metadataIndex > threadIndex);
   assert(userMetadataIndex > metadataIndex);
 });
+
+Deno.test("contextGenerator advertises reserved controls only when multi-agent routing is enabled", () => {
+  const lead: Agent = {
+    id: "lead",
+    name: "Lead",
+    role: "assistant",
+    instructions: "Coordinate the team.",
+  };
+  const reviewer: Agent = {
+    id: "reviewer",
+    name: "Reviewer",
+    role: "critic",
+    instructions: "Review work.",
+  };
+  const thread = {
+    id: "thread-1",
+    name: "Team",
+    participants: ["user-1", "lead", "reviewer"],
+  } as Thread;
+
+  const disabled = contextGenerator(
+    lead,
+    thread,
+    [lead, reviewer],
+    [lead, reviewer],
+  );
+  assert(!disabled.systemPrompt.includes("ask_in_thread"));
+  assert(!disabled.systemPrompt.includes("handoff_in_thread"));
+  assert(!disabled.systemPrompt.includes("<route_to>"));
+  assert(!disabled.systemPrompt.includes("<ask_to>"));
+
+  const enabled = contextGenerator(
+    lead,
+    thread,
+    [lead, reviewer],
+    [lead, reviewer],
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    true,
+  );
+  assertStringIncludes(enabled.systemPrompt, "ask_in_thread");
+  assertStringIncludes(enabled.systemPrompt, "handoff_in_thread");
+  assertStringIncludes(enabled.systemPrompt, "target and message");
+  assert(!enabled.systemPrompt.includes("<route_to>"));
+  assert(!enabled.systemPrompt.includes("<ask_to>"));
+});

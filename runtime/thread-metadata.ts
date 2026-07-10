@@ -1,8 +1,11 @@
 const LEGACY_RUNTIME_KEYS = new Set([
-  "participantTargets",
   "agentTurnCount",
   "maxAgentTurns",
   "pendingToolBatches",
+]);
+
+const DROPPED_LEGACY_KEYS = new Set([
+  "participantTargets",
 ]);
 
 const LEGACY_MEMORY_KEYS = new Set([
@@ -10,7 +13,6 @@ const LEGACY_MEMORY_KEYS = new Set([
 ]);
 
 export interface RuntimeThreadMetadata {
-  participantTargets?: Record<string, string>;
   agentTurnCount?: number;
   maxAgentTurns?: number;
   pendingToolBatches?: Record<string, unknown>;
@@ -30,7 +32,6 @@ export interface SystemThreadMetadata {
   runtime?: RuntimeThreadMetadata;
   memory?: MemoryThreadMetadata;
   channels?: Record<string, Record<string, unknown>>;
-  routing?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -84,7 +85,7 @@ export function normalizeThreadMetadata(
   if (!isRecord(raw)) {
     return {
       public: {},
-      system: { runtime: {}, memory: {}, channels: {}, routing: {} },
+      system: { runtime: {}, memory: {}, channels: {} },
     };
   }
 
@@ -95,10 +96,10 @@ export function normalizeThreadMetadata(
   const memoryMetadata = cloneRecord(systemMetadata.memory);
   const memoryIdentity = cloneRecord(memoryMetadata.identity);
   const channelMetadata = cloneRecord(systemMetadata.channels);
-  const routingMetadata = cloneRecord(systemMetadata.routing);
 
   for (const [key, value] of Object.entries(topLevel)) {
     if (key === "public" || key === "system") continue;
+    if (DROPPED_LEGACY_KEYS.has(key)) continue;
     if (LEGACY_RUNTIME_KEYS.has(key)) {
       runtimeMetadata[key] = value;
       continue;
@@ -109,6 +110,7 @@ export function normalizeThreadMetadata(
     }
     publicMetadata[key] = value;
   }
+  for (const key of DROPPED_LEGACY_KEYS) delete runtimeMetadata[key];
 
   const legacyRuntimeUserExternalId = runtimeMetadata.userExternalId;
   if (
@@ -141,7 +143,6 @@ export function normalizeThreadMetadata(
         identity: removeUndefinedKeys(memoryIdentity),
       }),
       channels: removeUndefinedKeys(normalizedChannels),
-      routing: removeUndefinedKeys(routingMetadata),
     }),
   };
 }
@@ -186,10 +187,6 @@ export function mergeThreadMetadata(
       }
       return removeUndefinedKeys(mergedChannels);
     })(),
-    routing: mergeRecord(
-      cloneRecord(normalizedBase.system?.routing),
-      cloneRecord(normalizedPatch.system?.routing),
-    ),
   };
 
   return {
@@ -364,19 +361,17 @@ export function getSerializableThreadMetadata(
   const hasRuntime = Object.keys(normalized.system?.runtime ?? {}).length > 0;
   const hasMemory = Object.keys(normalized.system?.memory ?? {}).length > 0;
   const hasChannels = Object.keys(normalized.system?.channels ?? {}).length > 0;
-  const hasRouting = Object.keys(normalized.system?.routing ?? {}).length > 0;
   const hasOtherSystemKeys = Object.keys(
     removeUndefinedKeys({
       ...cloneRecord(normalized.system),
       runtime: undefined,
       memory: undefined,
       channels: undefined,
-      routing: undefined,
     }),
   ).length > 0;
 
   if (
-    !hasPublic && !hasRuntime && !hasMemory && !hasChannels && !hasRouting &&
+    !hasPublic && !hasRuntime && !hasMemory && !hasChannels &&
     !hasOtherSystemKeys
   ) {
     return null;
@@ -384,8 +379,7 @@ export function getSerializableThreadMetadata(
 
   return removeUndefinedKeys({
     public: hasPublic ? normalized.public : undefined,
-    system: hasRuntime || hasMemory || hasChannels || hasRouting ||
-        hasOtherSystemKeys
+    system: hasRuntime || hasMemory || hasChannels || hasOtherSystemKeys
       ? removeUndefinedKeys(normalized.system ?? {})
       : undefined,
   });

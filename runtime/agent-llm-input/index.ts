@@ -36,6 +36,11 @@ import {
 } from "@/runtime/agent-llm-input/context-generator.ts";
 import { historyGenerator } from "@/runtime/agent-llm-input/history-generator.ts";
 import type { ExecutableTool, ToolExecutor } from "@/runtime/tools/types.ts";
+import {
+  assertNoRoutingControlToolCollisions,
+  buildRoutingControlToolDefinitions,
+  resolveAllowedInThreadRoutingTargets,
+} from "@/runtime/routing/index.ts";
 
 type Operations = ProcessorDeps["db"]["ops"];
 
@@ -332,6 +337,13 @@ export async function buildAgentLlmInput(
       tags: skill.tags,
     }))
     : undefined;
+  const routingTargets = context.multiAgent?.enabled === true
+    ? resolveAllowedInThreadRoutingTargets(
+      agent,
+      ctx.thread,
+      ctx.availableAgents,
+    )
+    : [];
 
   const llmContext = contextGenerator(
     agent,
@@ -342,6 +354,7 @@ export async function buildAgentLlmInput(
     ctx.agentNode,
     agentSkillIndex,
     context.agentsFileInstructions,
+    routingTargets.length > 0,
   );
 
   const includeTargetContext = context.multiAgent?.includeTargetContext ?? true;
@@ -380,7 +393,14 @@ export async function buildAgentLlmInput(
     .map((key) => ctx.allTools.find((tool) => tool.key === key))
     .filter((tool): tool is ExecutableTool => Boolean(tool))
     .sort((a, b) => a.key.localeCompare(b.key));
-  const llmTools: ToolDefinition[] = formatToolsForPrompt(agentTools);
+  assertNoRoutingControlToolCollisions(ctx.allTools);
+  const routingControlTools = buildRoutingControlToolDefinitions(
+    routingTargets,
+  );
+  const llmTools: ToolDefinition[] = [
+    ...routingControlTools,
+    ...formatToolsForPrompt(agentTools),
+  ];
 
   let systemPrompt = typeof llmContext.systemPrompt === "string"
     ? llmContext.systemPrompt

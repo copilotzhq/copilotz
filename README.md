@@ -315,11 +315,18 @@ const copilotz = await createCopilotz({
     eventType: "NEW_MESSAGE",
     shouldProcess: (event) => event.payload.needsApproval,
     process: async (event, deps) => {
+      // Claim the event and skip remaining processors without enqueueing
+      // follow-up events. The original durable queue row is not deleted.
       return { producedEvents: [] };
     },
   }],
 });
 ```
+
+Returning `{ producedEvents: [event, ...] }` instead claims the input and
+enqueues those values as new events. Public events are streamed before processor
+execution, so claiming changes downstream behavior but cannot retract an event
+already delivered to a client.
 
 ### Production Infrastructure, Not Prototypes
 

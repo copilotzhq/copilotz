@@ -39,8 +39,6 @@ const INTERNAL_LITERAL_CONTROL_TAGS = [
 export const COPILOTZ_CONTROL_TAGS = [
   "tool_calls",
   "tool_results",
-  "route_to",
-  "ask_to",
   "no_response",
   "continue_after_tool_results",
 ] as const;
@@ -362,8 +360,6 @@ function mergeMessageContent(
 
 const WIRE_STRIP_TAG_NAMES = [
   "redacted_thinking",
-  "route_to",
-  "ask_to",
   "tool_calls",
   "tool_results",
   "tool_result",
@@ -383,8 +379,6 @@ export type ComposeWireContentInput = {
   reasoningMaxEstimatedTokens?: number;
   noResponse?: boolean;
   visible?: string;
-  routeTo?: string[];
-  askTo?: string[];
   toolCalls?: ToolInvocation[];
   toolResults?: ToolInvocation[];
   toolCallFormat?: WireToolFormat;
@@ -430,75 +424,6 @@ function contentToText(content: ChatMessage["content"]): string {
     .filter((part) => part.type === "text")
     .map((part) => (part as Extract<ChatContentPart, { type: "text" }>).text)
     .join("");
-}
-
-function extractRoutingTargetsFromMetadata(
-  metadata: ChatMessage["metadata"],
-  key: "routeTo" | "askTo",
-): string[] {
-  if (!metadata || typeof metadata !== "object") return [];
-
-  const routing = (metadata as { routing?: unknown }).routing;
-  if (!routing || typeof routing !== "object") return [];
-
-  const values = (routing as Record<string, unknown>)[key];
-  if (!Array.isArray(values)) return [];
-
-  const seen = new Set<string>();
-  const targets: string[] = [];
-
-  for (const candidate of values) {
-    if (typeof candidate !== "string") continue;
-    const trimmed = candidate.trim();
-    if (trimmed.length === 0) continue;
-    const lower = trimmed.toLowerCase();
-    if (seen.has(lower)) continue;
-    seen.add(lower);
-    targets.push(trimmed);
-  }
-
-  return targets;
-}
-
-function extractInlineRoutingTargets(
-  text: string,
-  tagName: "route_to" | "ask_to",
-): string[] {
-  const pattern = new RegExp(
-    `<${tagName}>([\\s\\S]*?)<\\/${tagName}>`,
-    "gi",
-  );
-  const seen = new Set<string>();
-  const targets: string[] = [];
-
-  for (const match of text.matchAll(pattern)) {
-    const value = match[1]?.trim();
-    if (!value) continue;
-    const lower = value.toLowerCase();
-    if (seen.has(lower)) continue;
-    seen.add(lower);
-    targets.push(value);
-  }
-
-  return targets;
-}
-
-function mergeRoutingTargets(
-  ...groups: string[][]
-): string[] {
-  const seen = new Set<string>();
-  const merged: string[] = [];
-
-  for (const group of groups) {
-    for (const target of group) {
-      const lower = target.toLowerCase();
-      if (seen.has(lower)) continue;
-      seen.add(lower);
-      merged.push(target);
-    }
-  }
-
-  return merged;
 }
 
 function hasNoResponseMarker(text: string): boolean {
@@ -548,14 +473,6 @@ export function buildRedactedThinkingBlock(
   const escaped = escapeWireTextPayload(trimmed);
   const capped = truncateReasoningForWire(escaped, maxEstimatedTokens);
   return `<think>\n${capped}\n</think>`;
-}
-
-export function buildAskToBlock(askTargets: string[]): string {
-  return extractRoutingTargetsFromMetadata({
-    routing: { askTo: askTargets },
-  }, "askTo")
-    .map((target) => `<ask_to>${escapeWireTextPayload(target)}</ask_to>`)
-    .join("\n");
 }
 
 export function stripWireProtocolFromText(text: string): string {
@@ -626,16 +543,6 @@ export function composeWireContent(input: ComposeWireContentInput): string {
 
   if (typeof input.visible === "string" && input.visible.trim().length > 0) {
     parts.push(input.visible.trim());
-  }
-
-  const routeTo = mergeRoutingTargets(input.routeTo ?? []);
-  if (routeTo.length > 0) {
-    parts.push(buildRouteToBlock(routeTo));
-  }
-
-  const askTo = mergeRoutingTargets(input.askTo ?? []);
-  if (askTo.length > 0) {
-    parts.push(buildAskToBlock(askTo));
   }
 
   if (Array.isArray(input.toolCalls) && input.toolCalls.length > 0) {
@@ -787,15 +694,6 @@ function collectWireSegmentsFromMessage(
   const wireToolFormat = readWireToolFormat(message.metadata);
   const strippedVisible = stripWireProtocolFromText(rawText);
 
-  const routeTo = mergeRoutingTargets(
-    extractRoutingTargetsFromMetadata(message.metadata, "routeTo"),
-    extractInlineRoutingTargets(rawText, "route_to"),
-  );
-  const askTo = mergeRoutingTargets(
-    extractRoutingTargetsFromMetadata(message.metadata, "askTo"),
-    extractInlineRoutingTargets(rawText, "ask_to"),
-  );
-
   const base: ComposeWireContentInput = {
     reasoning: typeof message.reasoning === "string"
       ? message.reasoning
@@ -806,8 +704,6 @@ function collectWireSegmentsFromMessage(
         : undefined,
     noResponse: hasNoResponseMarker(rawText),
     visible: strippedVisible.length > 0 ? strippedVisible : undefined,
-    routeTo,
-    askTo,
     toolCallFormat: wireToolFormat,
     toolResultFormat: wireToolFormat,
   };
@@ -856,18 +752,15 @@ function shouldMaterializeWireContent(message: ChatMessage): boolean {
 
   const toolCalls = Array.isArray(message.toolCalls) &&
     message.toolCalls.length > 0;
-  const routing =
-    extractRoutingTargetsFromMetadata(message.metadata, "routeTo").length > 0 ||
-    extractRoutingTargetsFromMetadata(message.metadata, "askTo").length > 0;
   const reasoning = typeof message.reasoning === "string" &&
     message.reasoning.trim().length > 0;
   const rawText = contentToText(message.content);
   const hasProtocolTags =
-    /<\/?(redacted_thinking|route_to|ask_to|tool_calls|tool_results?|result|continue_after_tool_results|no_response)\b/i
+    /<\/?(redacted_thinking|tool_calls|tool_results?|result|continue_after_tool_results|no_response)\b/i
       .test(rawText);
 
   if (message.role === "assistant" || message.role === "user") {
-    return toolCalls || routing || reasoning || hasProtocolTags;
+    return toolCalls || reasoning || hasProtocolTags;
   }
 
   return false;
@@ -972,16 +865,6 @@ function materializeWireContent(message: ChatMessage): WireChatMessage {
       { cause: error },
     );
   }
-}
-
-export function buildRouteToBlock(routeTargets: string[]): string {
-  const normalizedTargets = extractRoutingTargetsFromMetadata({
-    routing: { routeTo: routeTargets },
-  }, "routeTo");
-
-  return normalizedTargets
-    .map((target) => `<route_to>${escapeWireTextPayload(target)}</route_to>`)
-    .join("\n");
 }
 
 function materializeHistoryMessage(message: ChatMessage): WireChatMessage {
@@ -2066,9 +1949,6 @@ ${toolCatalog}`;
     extraRules.push(
       "When a tool result is needed before answering, do not include the final answer in the same assistant message as the tool call. Wait for it will be provided as <tool_results> in next turn, then answer from those results.",
     );
-    extraRules.push(
-      "When your response includes multiple sections, emit them in this order: optional visible text, then any <route_to> or <ask_to> tags, then <tool_calls>. Never place routing or tool blocks before visible text unless there is no visible text.",
-    );
   }
   if (variant === "lifecycle-explicit") {
     extraRules.push(
@@ -2076,8 +1956,8 @@ ${toolCatalog}`;
     );
   }
   const ruleOne = variant === "baseline" || variant === "no-visible-ack"
-    ? "You may talk to the human normally and call tools in the same response. Put visible text first, then any routing tags, then <tool_calls>."
-    : "You may answer the human normally when no tool is needed. When a tool is needed, put visible text first, then any routing tags, then <tool_calls>.";
+    ? "You may talk to the human normally and call tools in the same response. Put visible text first, then <tool_calls>."
+    : "You may answer the human normally when no tool is needed. When a tool is needed, put visible text first, then <tool_calls>.";
   const extraRuleText = extraRules.length > 0
     ? "\n" +
       extraRules.map((rule, index) => `${4 + index}. ${rule}`).join("\n") +
@@ -2099,8 +1979,7 @@ Your previous thinking traces may appear as <think> ... </think> blocks. Do not 
 
 When a response includes multiple sections, emit them in this order:
 1. Visible text for the user (if any)
-2. <route_to>agent-id</route_to> and/or <ask_to>agent-id</ask_to> (if routing)
-3. <tool_calls> ... </tool_calls> (if calling tools)
+2. <tool_calls> ... </tool_calls> (if calling tools)
 Copilotz inserts <tool_results> later in user turns; never emit tool results yourself.
 If no visible reply is needed, respond with <no_response/>.
 

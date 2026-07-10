@@ -48,6 +48,10 @@ import {
   extractMentionNames,
 } from "@/utils/mentions.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
+import {
+  ROUTING_CONTROL_SOURCE,
+  type RoutingControlMetadata,
+} from "@/runtime/routing/index.ts";
 
 export const processorId = "message_router";
 export const eventTypes = ["message.created"] as const;
@@ -245,7 +249,7 @@ function parseMentions(
  */
 interface TargetResolution {
   targetId: string;
-  targetQueue: string[];
+  returnPath: string[];
 }
 
 export interface ToolReplyRoutingMetadata extends Record<string, unknown> {
@@ -358,13 +362,8 @@ export function resolveThreadParticipantTarget(
   return null;
 }
 
-export interface RoutingIntent {
-  routeTo: string[];
-  askTo: string[];
-}
-
 export type NextTurn =
-  | { kind: "agent"; targetId: string; targetQueue: string[] }
+  | { kind: "agent"; targetId: string; returnPath: string[] }
   | { kind: "human"; targetId: string }
   | { kind: "stop" };
 
@@ -378,11 +377,11 @@ export interface ResolveNextTurnInput {
   availableAgents: Agent[];
   inbound?: {
     targetId?: string | null;
-    targetQueue?: string[] | null;
+    returnPath?: string[] | null;
     replyToParticipantId?: string | null;
-    replyToTargetQueue?: string[] | null;
+    replyToReturnPath?: string[] | null;
   };
-  routingIntent?: Partial<RoutingIntent> | null;
+  routingDecision?: RoutingControlMetadata | null;
   userMentionTargets?: string[];
   multiAgentEnabled?: boolean;
 }
@@ -437,7 +436,7 @@ function resolveHumanParticipant(
 
 function resolveParticipantTurn(
   targetId: string | null | undefined,
-  targetQueue: string[],
+  returnPath: string[],
   thread: Thread,
   availableAgents: Agent[],
 ): NextTurn {
@@ -454,7 +453,7 @@ function resolveParticipantTurn(
 
   const agentTarget = resolveAgentParticipant(resolvedTarget, availableAgents);
   if (agentTarget) {
-    return { kind: "agent", targetId: agentTarget, targetQueue };
+    return { kind: "agent", targetId: agentTarget, returnPath };
   }
 
   const humanTarget = resolveHumanParticipant(
@@ -467,24 +466,32 @@ function resolveParticipantTurn(
     : { kind: "stop" };
 }
 
-function normalizeRoutingIntent(value: unknown): RoutingIntent {
+export function normalizeRoutingDecision(
+  value: unknown,
+): RoutingControlMetadata | null {
   const record = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
-  const normalize = (candidate: unknown): string[] =>
-    Array.isArray(candidate)
-      ? candidate.filter((item): item is string =>
-        typeof item === "string" && item.trim().length > 0
-      ).map((item) => item.trim())
-      : [];
+  const action = record.action === "ask" || record.action === "handoff"
+    ? record.action
+    : null;
+  const targetId = normalizeRoutingTarget(record.targetId);
+  if (!action || !targetId || record.source !== ROUTING_CONTROL_SOURCE) {
+    return null;
+  }
 
   return {
-    routeTo: normalize(record.routeTo),
-    askTo: normalize(record.askTo),
+    action,
+    targetId,
+    source: ROUTING_CONTROL_SOURCE,
+    ...(typeof record.controlCallId === "string" &&
+        record.controlCallId.trim().length > 0
+      ? { controlCallId: record.controlCallId.trim() }
+      : {}),
   };
 }
 
-function normalizeParticipantQueue(
+function normalizeReturnPath(
   value: unknown,
   thread: Thread,
   availableAgents: Agent[],
@@ -496,46 +503,33 @@ function normalizeParticipantQueue(
     .filter((candidate): candidate is string => candidate !== null);
 }
 
-function consumeCurrentFromQueue(
-  targetQueue: string[],
+function consumeCurrentFromReturnPath(
+  returnPath: string[],
   currentTargetId: string | null | undefined,
 ): string[] {
   if (
     typeof currentTargetId !== "string" || currentTargetId.trim().length === 0
   ) {
-    return targetQueue;
+    return returnPath;
   }
 
   const currentLower = currentTargetId.trim().toLowerCase();
   let firstUnconsumed = 0;
   while (
-    firstUnconsumed < targetQueue.length &&
-    targetQueue[firstUnconsumed].trim().toLowerCase() === currentLower
+    firstUnconsumed < returnPath.length &&
+    returnPath[firstUnconsumed].trim().toLowerCase() === currentLower
   ) {
     firstUnconsumed++;
   }
 
-  return targetQueue.slice(firstUnconsumed);
+  return returnPath.slice(firstUnconsumed);
 }
 
-function prependQueueTarget(targetQueue: string[], targetId: string): string[] {
+function prependReturnTarget(returnPath: string[], targetId: string): string[] {
   const targetLower = targetId.trim().toLowerCase();
-  if (targetLower.length === 0) return targetQueue;
-  if (targetQueue[0]?.trim().toLowerCase() === targetLower) return targetQueue;
-  return [targetId, ...targetQueue];
-}
-
-function resolvePersistedUserTarget(
-  senderId: string,
-  thread: Thread,
-  availableAgents: Agent[],
-): string | null {
-  const metadata = getRuntimeThreadMetadata(thread.metadata);
-  const persistedTarget = metadata.participantTargets?.[senderId];
-  if (typeof persistedTarget !== "string") return null;
-
-  const resolved = resolveAgentParticipant(persistedTarget, availableAgents);
-  return resolved;
+  if (targetLower.length === 0) return returnPath;
+  if (returnPath[0]?.trim().toLowerCase() === targetLower) return returnPath;
+  return [targetId, ...returnPath];
 }
 
 function resolveSenderAgent(
@@ -560,12 +554,14 @@ function resolveSenderAgent(
   ) ?? null;
 }
 
-function isAllowedExplicitRoutingTarget(
+function isAllowedRoutingDecision(
   input: ResolveNextTurnInput,
-  targetId: string,
+  decision: RoutingControlMetadata,
 ): boolean {
+  if (input.sender.type !== "agent") return false;
+
   const resolvedTarget = resolveThreadParticipantTarget(
-    targetId,
+    decision.targetId,
     input.thread,
     input.availableAgents,
   );
@@ -575,14 +571,21 @@ function isAllowedExplicitRoutingTarget(
     resolvedTarget,
     input.availableAgents,
   );
-  if (!targetAgent) return true;
+  if (!targetAgent) return decision.action === "handoff";
 
   const senderAgent = resolveSenderAgent(input.sender, input.availableAgents);
+  if (!senderAgent) return false;
+  const senderAgentId = (senderAgent.id ?? senderAgent.name).toLowerCase();
+  if (targetAgent.toLowerCase() === senderAgentId) return false;
+
   const allowedAgents = senderAgent?.allowedAgents;
-  if (!Array.isArray(allowedAgents) || allowedAgents.length === 0) return true;
+  if (allowedAgents === undefined) return true;
+  if (!Array.isArray(allowedAgents) || allowedAgents.length === 0) return false;
 
   const allowed = new Set(
-    allowedAgents.map((candidate) => candidate.trim().toLowerCase()),
+    allowedAgents.map((candidate) => candidate.trim().toLowerCase()).filter(
+      Boolean,
+    ),
   );
   if (allowed.has(targetAgent.toLowerCase())) return true;
 
@@ -598,29 +601,20 @@ function isAllowedExplicitRoutingTarget(
   );
 }
 
-function firstAllowedExplicitRoutingTarget(
-  input: ResolveNextTurnInput,
-  targets: string[],
-): string | null {
-  return targets.find((target) =>
-    isAllowedExplicitRoutingTarget(input, target)
-  ) ?? null;
-}
-
 export function resolveNextTurn(input: ResolveNextTurnInput): NextTurn {
   const senderActsLikeUser = input.sender.type === "user" ||
     input.sender.type === "job";
 
   if (input.sender.type === "tool") {
     const replyTarget = input.inbound?.replyToParticipantId ?? input.sender.id;
-    const replyQueue = normalizeParticipantQueue(
-      input.inbound?.replyToTargetQueue ?? [],
+    const replyReturnPath = normalizeReturnPath(
+      input.inbound?.replyToReturnPath ?? [],
       input.thread,
       input.availableAgents,
     );
     return resolveParticipantTurn(
       replyTarget,
-      replyQueue,
+      replyReturnPath,
       input.thread,
       input.availableAgents,
     );
@@ -643,39 +637,30 @@ export function resolveNextTurn(input: ResolveNextTurnInput): NextTurn {
   }
 
   const inboundTargetId = input.inbound?.targetId ?? null;
-  const inboundQueue = normalizeParticipantQueue(
-    input.inbound?.targetQueue ?? [],
+  const inboundReturnPath = normalizeReturnPath(
+    input.inbound?.returnPath ?? [],
     input.thread,
     input.availableAgents,
   );
-  const baseQueue = consumeCurrentFromQueue(inboundQueue, inboundTargetId);
-  const routingIntent = {
-    routeTo: input.routingIntent?.routeTo ?? [],
-    askTo: input.routingIntent?.askTo ?? [],
-  };
-
-  const askTarget = firstAllowedExplicitRoutingTarget(
-    input,
-    routingIntent.askTo,
+  const baseReturnPath = consumeCurrentFromReturnPath(
+    inboundReturnPath,
+    inboundTargetId,
   );
-  if (askTarget) {
-    const askQueue = prependQueueTarget(baseQueue, input.sender.id);
-    return resolveParticipantTurn(
-      askTarget,
-      askQueue,
-      input.thread,
-      input.availableAgents,
-    );
-  }
 
-  const routeTarget = firstAllowedExplicitRoutingTarget(
-    input,
-    routingIntent.routeTo,
-  );
-  if (routeTarget) {
+  const routingDecision = input.routingDecision;
+  if (routingDecision) {
+    if (!isAllowedRoutingDecision(input, routingDecision)) {
+      return { kind: "stop" };
+    }
+    const senderAgent = resolveSenderAgent(input.sender, input.availableAgents);
+    const senderId =
+      (senderAgent?.id ?? senderAgent?.name ?? input.sender.id) as string;
+    const returnPath = routingDecision.action === "ask"
+      ? prependReturnTarget(baseReturnPath, senderId)
+      : baseReturnPath;
     return resolveParticipantTurn(
-      routeTarget,
-      baseQueue,
+      routingDecision.targetId,
+      returnPath,
       input.thread,
       input.availableAgents,
     );
@@ -698,27 +683,13 @@ export function resolveNextTurn(input: ResolveNextTurnInput): NextTurn {
   if (senderActsLikeUser && inboundTargetId) {
     return resolveParticipantTurn(
       inboundTargetId,
-      baseQueue,
+      baseReturnPath,
       input.thread,
       input.availableAgents,
     );
   }
 
   if (senderActsLikeUser) {
-    const persistedTarget = resolvePersistedUserTarget(
-      input.sender.id,
-      input.thread,
-      input.availableAgents,
-    );
-    if (persistedTarget) {
-      return resolveParticipantTurn(
-        persistedTarget,
-        [],
-        input.thread,
-        input.availableAgents,
-      );
-    }
-
     const senderLower = input.sender.id.trim().toLowerCase();
     const defaultAgentParticipant = Array.isArray(input.thread.participants)
       ? input.thread.participants.find((participant) => {
@@ -737,11 +708,11 @@ export function resolveNextTurn(input: ResolveNextTurnInput): NextTurn {
     }
   }
 
-  if (baseQueue.length > 0) {
-    const [nextTarget, ...remainingQueue] = baseQueue;
+  if (baseReturnPath.length > 0) {
+    const [nextTarget, ...remainingReturnPath] = baseReturnPath;
     return resolveParticipantTurn(
       nextTarget,
-      remainingQueue,
+      remainingReturnPath,
       input.thread,
       input.availableAgents,
     );
@@ -756,7 +727,7 @@ export function buildToolReplyRoutingMetadata(
 ): ToolReplyRoutingMetadata {
   const emitterId = toolEmitterId.trim();
   const replyToTargetQueue = nextTurn.kind === "agent"
-    ? prependQueueTarget(nextTurn.targetQueue, nextTurn.targetId)
+    ? prependReturnTarget(nextTurn.returnPath, nextTurn.targetId)
     : nextTurn.kind === "human"
     ? [nextTurn.targetId]
     : [];
@@ -1427,12 +1398,14 @@ export const messageProcessor: EventProcessor<
         !Array.isArray(event.metadata)
       ? event.metadata as Record<string, unknown>
       : {};
-    const routingIntent = normalizeRoutingIntent(eventMetadata.routing);
+    const routingDecision = normalizeRoutingDecision(eventMetadata.routing);
     const inboundRouting = {
       targetId: typeof eventMetadata.targetId === "string"
         ? eventMetadata.targetId
         : null,
-      targetQueue: Array.isArray(eventMetadata.targetQueue)
+      // `targetQueue` remains the transport boundary for public/programmatic
+      // routing. Internally it is an explicit return path, next participant first.
+      returnPath: Array.isArray(eventMetadata.targetQueue)
         ? eventMetadata.targetQueue.filter((candidate): candidate is string =>
           typeof candidate === "string"
         )
@@ -1441,7 +1414,7 @@ export const messageProcessor: EventProcessor<
         typeof eventMetadata.replyToParticipantId === "string"
           ? eventMetadata.replyToParticipantId
           : null,
-      replyToTargetQueue: Array.isArray(eventMetadata.replyToTargetQueue)
+      replyToReturnPath: Array.isArray(eventMetadata.replyToTargetQueue)
         ? eventMetadata.replyToTargetQueue.filter((
           candidate,
         ): candidate is string => typeof candidate === "string")
@@ -1481,7 +1454,7 @@ export const messageProcessor: EventProcessor<
         thread,
         availableAgents,
         inbound: inboundRouting,
-        routingIntent,
+        routingDecision,
         multiAgentEnabled: context.multiAgent?.enabled === true,
       });
       const toolReplyMetadata = buildToolReplyRoutingMetadata(
@@ -1602,7 +1575,7 @@ export const messageProcessor: EventProcessor<
       thread,
       availableAgents,
       inbound: inboundRouting,
-      routingIntent,
+      routingDecision,
       userMentionTargets,
       multiAgentEnabled: context.multiAgent?.enabled === true,
     });
@@ -1613,7 +1586,7 @@ export const messageProcessor: EventProcessor<
 
     let targetResolution: TargetResolution = {
       targetId: nextTurn.targetId,
-      targetQueue: nextTurn.targetQueue,
+      returnPath: nextTurn.returnPath,
     };
 
     // Check for loop prevention (agent-to-agent turn limit)
@@ -1637,7 +1610,6 @@ export const messageProcessor: EventProcessor<
 
       // Persist reset to break the agent loop for future messages
       const updatedMetadata = setRuntimeThreadMetadata(thread.metadata, {
-        participantTargets: {},
         agentTurnCount: 0,
       });
       await ops.updateThread(thread.id as string, {
@@ -1651,7 +1623,7 @@ export const messageProcessor: EventProcessor<
         // reply to the user.
         targetResolution = {
           targetId: (fallbackAgent.id ?? fallbackAgent.name) as string,
-          targetQueue: [],
+          returnPath: [],
         };
         console.warn(
           `[multi-agent] Max agent turns (${maxAgentTurns}) reached, routing to fallback agent: ${
@@ -1838,7 +1810,9 @@ export const messageProcessor: EventProcessor<
 
       const llmEventMetadata = {
         targetId: targetResolution.targetId,
-        targetQueue: targetResolution.targetQueue,
+        // Keep the established queue field on event boundaries while the
+        // resolver uses return-path terminology internally.
+        targetQueue: targetResolution.returnPath,
         sourceMessageId: createdMessage.id,
         sourceMessageSenderId: messageContext.senderId,
         sourceMessageSenderType: messageContext.senderType,

@@ -6,7 +6,7 @@ export default {
   personality:
     "Calm, decisive, pattern-recognizer. Absorbs debates without getting pulled in. Knows when a discussion has matured and when it's spinning. Moves the team forward without ego.",
   allowedTools: [
-    "delegate",
+    "delegate_task",
     "create_thread",
     "end_thread",
     "fetch_text",

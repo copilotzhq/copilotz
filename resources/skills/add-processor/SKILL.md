@@ -104,6 +104,27 @@ Export a `priority` number (higher runs first):
 export const priority = 10; // Runs before priority 0 (default)
 ```
 
+This sorting applies within processors discovered from the resource filesystem.
+The final chain places file-loaded user processors before inline config
+processors and bundled processors. Inline processors preserve array order and
+are not globally re-sorted by their `priority` fields.
+
+## Claiming and swallowing
+
+For the compatibility `producedEvents` contract:
+
+- Return `undefined` or `void` to continue to the next processor.
+- Return `{ producedEvents: [...] }` to enqueue new events and skip the rest of
+  the chain.
+- Return `{ producedEvents: [] }` to skip the rest of the chain without
+  enqueueing anything.
+
+This overrides downstream handling, not the original durable fact. The input
+queue row remains and is normally completed; produced events are separate queue
+rows. Swallowing does not undo an already-committed domain mutation. Public
+stream events are also emitted before processor execution, so swallowing cannot
+retract an event already delivered to a client.
+
 ## Notes
 
 - Processors are loaded from `resources/processors/` automatically

@@ -256,7 +256,7 @@ export interface ChatRequest {
   tool_call_id?: string;
   /**
    * Custom XML-like block tags to extract and remove from assistant output.
-   * Example: ["route_to"] extracts `<route_to>writer</route_to>`.
+   * Example: ["think"] extracts `<think>...</think>`.
    */
   extractTags?: string[];
   /**

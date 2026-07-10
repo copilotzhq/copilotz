@@ -1,6 +1,6 @@
 import type { NewTool } from "@/types/index.ts";
 
-import delegate from "@/resources/tools/delegate/index.ts";
+import delegate_task from "@/resources/tools/delegate_task/index.ts";
 import create_thread from "@/resources/tools/create_thread/index.ts";
 import end_thread from "@/resources/tools/end_thread/index.ts";
 import web_search from "@/resources/tools/web_search/index.ts";
@@ -34,7 +34,7 @@ import scheduled_jobs from "@/resources/tools/scheduled_jobs/index.ts";
 import finance from "@/resources/tools/finance/index.ts";
 
 export const nativeTools: { [key: string]: NewTool } = {
-  delegate,
+  delegate_task,
   create_thread,
   end_thread,
   web_search,

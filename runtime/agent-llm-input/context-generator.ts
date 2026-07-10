@@ -74,6 +74,7 @@ export function contextGenerator(
   agentNode?: KnowledgeNode,
   availableSkills?: SkillIndexEntry[],
   agentsFileInstructions?: AgentsFileInstructions | null,
+  routingControlsEnabled = false,
 ): LLMContextData {
   const directConversation = isDirectConversationThread(
     thread,
@@ -130,15 +131,17 @@ export function contextGenerator(
       "",
       "### Conversation Rules",
       "- Messages from others are prefixed with [SpeakerName]: so you know who said what",
-      "- To hand off the next turn to another agent in this same thread, include exactly <route_to>agent-id</route_to> after your visible message",
-      "- To return control to the human and stop agent-to-agent back-and-forth, include exactly <route_to>user</route_to> after your visible message",
-      "- To ask another agent something in this same thread and then resume after their answer, include exactly <ask_to>agent-id</ask_to> after your visible message",
-      "- The <ask_to> tag only names the next agent; the visible text before it is what that agent sees and responds to next",
-      "- After that agent replies, their reply routes back to you so you can continue",
-      "- Prefer a single <route_to> tag per response",
-      "- Prefer a single <ask_to> block per response",
-      "- Never route to yourself",
-      "- To respond to the person who addressed you, reply normally without any <route_to> tag unless you want to hand off",
+      ...(routingControlsEnabled
+        ? [
+          "- Use ask_in_thread to send an atomic message to another agent and resume after its reply",
+          "- Use handoff_in_thread to send an atomic message and transfer the next turn without automatically returning control",
+          "- Both routing controls require exactly target and message; the message argument is what the target receives",
+          "- Use at most one in-thread routing control per response and never target yourself",
+          "- Reply normally without a routing control when the response should return to the person who addressed you",
+        ]
+        : [
+          "- Reply normally to the person who addressed you",
+        ]),
       ...(otherAvailableAgents.length > 0
         ? [
           "",

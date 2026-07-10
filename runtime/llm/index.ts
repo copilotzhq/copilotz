@@ -58,7 +58,7 @@ const RECOVERABLE_FINISH_REASONS: ReadonlySet<ProviderFinishReason> = new Set([
 ]);
 
 const INTENTIONAL_EMPTY_PATTERN =
-  /<(no_response|route_to|ask_to|continue_after_tool_results)[\s/>]/;
+  /<(no_response|continue_after_tool_results)[\s/>]/;
 const REASONING_HISTORY_TAGS = [
   "think",
   "thought",

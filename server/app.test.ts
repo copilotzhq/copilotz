@@ -1,7 +1,4 @@
-import {
-  assertEquals,
-  assertExists,
-} from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assertEquals, assertExists } from "@std/assert";
 import { withApp } from "./app.ts";
 import type { AppRequest } from "./app.ts";
 
@@ -195,6 +192,17 @@ function createMockCopilotz() {
       record("deleteNode", id);
     },
     mutate: {
+      messages: {
+        create: async (message: Record<string, unknown>) => {
+          record("mutate.messages.create", message);
+          return {
+            id: "msg-user-edit",
+            ...message,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        },
+      },
       graph: {
         updateNode: async (
           id: string,
@@ -207,6 +215,40 @@ function createMockCopilotz() {
         deleteNode: async (id: string, options: unknown) => {
           record("mutate.graph.deleteNode", id, options);
         },
+      },
+    },
+    unsafeGraph: {
+      getNodeById: async (id: string) => {
+        record("unsafeGraph.getNodeById", id);
+        return { id, type: "test", namespace: "ns", data: {} };
+      },
+      getNodesByNamespace: async (ns: string, type?: string) => {
+        record("unsafeGraph.getNodesByNamespace", ns, type);
+        return [{ id: "n-1", namespace: ns }];
+      },
+      getEdgesForNode: async (
+        nodeId: string,
+        direction?: string,
+        types?: string[],
+      ) => {
+        record("unsafeGraph.getEdgesForNode", nodeId, direction, types);
+        return [];
+      },
+      traverseGraph: async (
+        nodeId: string,
+        edgeTypes?: string[],
+        depth?: number,
+      ) => {
+        record("unsafeGraph.traverseGraph", nodeId, edgeTypes, depth);
+        return { nodes: [], edges: [] };
+      },
+      findRelatedNodes: async (nodeId: string, depth?: number) => {
+        record("unsafeGraph.findRelatedNodes", nodeId, depth);
+        return [];
+      },
+      searchNodes: async (options: unknown) => {
+        record("unsafeGraph.searchNodes", options);
+        return [{ id: "result-1" }];
       },
     },
   };

@@ -26,7 +26,6 @@ const copilotz = await createCopilotz({
   multiAgent: {
     enabled: true,
     maxAgentTurns: 10,
-    includeTargetContext: true,
   },
   agent: {
     llmOptions: {
@@ -50,7 +49,7 @@ const copilotz = await createCopilotz({
     },
   },
   security: {
-    resolveLLMRuntimeConfig: async ({ provider }) => {
+    resolveLLMRuntimeConfig: ({ provider }) => {
       switch (provider) {
         case "minimax":
           return {

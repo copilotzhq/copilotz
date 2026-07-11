@@ -302,25 +302,25 @@ const copilotz = await createCopilotz({
 When the limit is reached, the next response is directed to the original human
 user rather than another agent.
 
-### Ask Question Tool
+### Separate-Thread Delegation
 
-Agents can programmatically ask questions to other agents:
+Agents can delegate a focused task to another agent in a child thread:
 
 ```typescript
 const agent = {
   id: "main-agent",
-  allowedTools: ["ask_question"],
+  allowedTools: ["delegate_task"],
   allowedAgents: ["expert-agent"],
   // ...
 };
 
-// The agent can now call ask_question to get answers from expert-agent
+// The agent can now call delegate_task for work outside the shared thread
 ```
 
-The `ask_question` tool:
+The `delegate_task` tool:
 
 1. Creates a temporary thread
-2. Sends the question to the target agent
+2. Sends the task to the target agent
 3. Waits for the response
 4. Returns the answer to the calling agent
 

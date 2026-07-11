@@ -346,7 +346,9 @@ function transcriptMessageFromEvent(
   turn: number,
   phase: GoalPhase,
 ): GoalTranscriptMessage | undefined {
-  if (event.type !== "NEW_MESSAGE") return undefined;
+  if (event.type !== "NEW_MESSAGE" && event.type !== "message.created") {
+    return undefined;
+  }
   const payload = event.payload as MessagePayload;
   const content = contentToText(payload.content);
   if (!content) return undefined;
@@ -455,7 +457,7 @@ async function collectRun(
   };
 }
 
-export async function createGoalHandle(
+export function createGoalHandle(
   options: CreateGoalHandleOptions,
 ): Promise<GoalHandle> {
   const goalId = crypto.randomUUID();
@@ -735,7 +737,7 @@ export async function createGoalHandle(
 
   done.catch((error) => queue.error(error));
 
-  return {
+  return Promise.resolve({
     id: goalId,
     threadId: mainThreadId || initialMainThreadExternalId,
     leadThreadId,
@@ -746,5 +748,5 @@ export async function createGoalHandle(
       cancelled = true;
       for (const controller of controllers) controller.cancel();
     },
-  };
+  });
 }

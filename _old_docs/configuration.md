@@ -602,9 +602,8 @@ assets: {
 
 ```typescript
 multiAgent: {
-  enabled: true,              // Required to allow agent-to-agent delegation
-  maxAgentTurns: 5,           // Max consecutive agent-to-agent turns before forcing user target
-  includeTargetContext: true, // Include "(addressed to: X)" in history for multi-agent awareness
+  enabled: true,    // Expose ask_in_thread and handoff_in_thread controls
+  maxAgentTurns: 5, // Max consecutive agent-to-agent turns before forcing user target
 }
 ```
 
@@ -628,20 +627,6 @@ const copilotz = await createCopilotz({
 - When the counter reaches `maxAgentTurns`, the next message targets the
   original human user
 - Human messages reset the counter to 0
-
-### Target Context in History
-
-When `includeTargetContext` is true (default), chat history includes addressing
-info:
-
-```
-[User]: @Researcher, what's the data on climate change?
-[Researcher]: (addressed to: User) Here's what I found...
-[User]: @Writer, can you summarize that?
-[Writer]: (addressed to: User) Here's a summary...
-```
-
-This helps agents understand conversation flow and who is speaking to whom.
 
 ## Runtime Defaults
 

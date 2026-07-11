@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "@/runtime/llm/types.ts";
+import type { ToolDefinition, ToolInvocation } from "@/runtime/llm/types.ts";
 import { generateAgentTypesFromSchema } from "@/runtime/tools/schema-to-agent-types.ts";
 import type { Agent, Thread } from "@/types/index.ts";
 
@@ -32,6 +32,11 @@ export interface InThreadRoutingTarget {
   name: string;
 }
 
+export interface InThreadRoutingTargets {
+  ask: InThreadRoutingTarget[];
+  handoff: InThreadRoutingTarget[];
+}
+
 export type RoutingControlValidationErrorCode =
   | "not_routing_control"
   | "invalid_call"
@@ -44,6 +49,18 @@ export type RoutingControlParseResult =
   | {
     ok: false;
     code: RoutingControlValidationErrorCode;
+    message: string;
+  };
+
+export type RoutingControlSelection =
+  | { kind: "none"; executableCalls: ToolInvocation[] }
+  | { kind: "routing"; intent: RoutingControlIntent }
+  | {
+    kind: "invalid";
+    code:
+      | RoutingControlValidationErrorCode
+      | "mixed_routing_and_tools"
+      | "multiple_routing_controls";
     message: string;
   };
 
@@ -117,6 +134,38 @@ export function resolveAllowedInThreadRoutingTargets(
   return targets;
 }
 
+/**
+ * Resolve the complete target catalog for the two controls.
+ * Asking is agent-only. A handoff may additionally use the stable `user`
+ * alias when the thread contains exactly one human participant.
+ */
+export function resolveInThreadRoutingTargets(
+  currentAgent: Agent,
+  thread: Thread,
+  availableAgents: Agent[],
+): InThreadRoutingTargets {
+  const agentTargets = resolveAllowedInThreadRoutingTargets(
+    currentAgent,
+    thread,
+    availableAgents,
+  );
+  const participants = Array.isArray(thread.participants)
+    ? thread.participants
+      .map(normalizeIdentity)
+      .filter((value): value is string => value !== null)
+    : [];
+  const humanParticipants = participants.filter((participant) =>
+    !availableAgents.some((agent) => identityMatches(participant, agent))
+  );
+
+  return {
+    ask: agentTargets,
+    handoff: humanParticipants.length === 1
+      ? [...agentTargets, { id: "user", name: "User" }]
+      : [...agentTargets],
+  };
+}
+
 export function buildRoutingControlInputSchema(
   allowedTargetIds: readonly string[],
 ): Record<string, unknown> {
@@ -155,40 +204,39 @@ function renderControlInputTypes(
 
 /** Build the two reserved, non-executable routing controls for the LLM catalog. */
 export function buildRoutingControlToolDefinitions(
-  allowedTargets: readonly InThreadRoutingTarget[],
+  allowedTargets: InThreadRoutingTargets,
 ): ToolDefinition[] {
-  if (allowedTargets.length === 0) return [];
-
-  const allowedTargetIds = allowedTargets.map((target) => target.id);
-  const schema = buildRoutingControlInputSchema(allowedTargetIds);
-  const targetSummary = allowedTargets
-    .map((target) =>
-      target.name === target.id ? target.id : `${target.id} (${target.name})`
-    )
-    .join(", ");
+  const buildDefinition = (
+    name: RoutingControlName,
+    targets: readonly InThreadRoutingTarget[],
+  ): ToolDefinition | null => {
+    if (targets.length === 0) return null;
+    const schema = buildRoutingControlInputSchema(
+      targets.map((target) => target.id),
+    );
+    const targetSummary = targets
+      .map((target) =>
+        target.name === target.id ? target.id : `${target.id} (${target.name})`
+      )
+      .join(", ");
+    const description = name === ASK_IN_THREAD_CONTROL
+      ? "Ask another agent in this thread a question, then resume after its reply. "
+      : "Transfer the next turn to another participant in this thread without automatically returning control. ";
+    return {
+      type: "function",
+      function: {
+        name,
+        description: description +
+          `Allowed targets: ${targetSummary}. The message argument is delivered atomically; do not duplicate it as visible text.`,
+        inputTypes: renderControlInputTypes(name, schema),
+      },
+    };
+  };
 
   return [
-    {
-      type: "function",
-      function: {
-        name: ASK_IN_THREAD_CONTROL,
-        description:
-          "Ask another agent in this thread a question, then resume after its reply. " +
-          `Allowed targets: ${targetSummary}. The message argument is delivered atomically; do not duplicate it as visible text.`,
-        inputTypes: renderControlInputTypes(ASK_IN_THREAD_CONTROL, schema),
-      },
-    },
-    {
-      type: "function",
-      function: {
-        name: HANDOFF_IN_THREAD_CONTROL,
-        description:
-          "Transfer the next turn to another agent in this thread without automatically returning control. " +
-          `Allowed targets: ${targetSummary}. The message argument is delivered atomically; do not duplicate it as visible text.`,
-        inputTypes: renderControlInputTypes(HANDOFF_IN_THREAD_CONTROL, schema),
-      },
-    },
-  ];
+    buildDefinition(ASK_IN_THREAD_CONTROL, allowedTargets.ask),
+    buildDefinition(HANDOFF_IN_THREAD_CONTROL, allowedTargets.handoff),
+  ].filter((definition): definition is ToolDefinition => definition !== null);
 }
 
 export function isRoutingControlName(
@@ -221,7 +269,7 @@ function parseArguments(value: unknown): Record<string, unknown> | null {
 /** Parse and validate one reserved routing control call without throwing. */
 export function parseRoutingControlCall(
   call: unknown,
-  allowedTargetIds: readonly string[],
+  allowedTargets: InThreadRoutingTargets,
 ): RoutingControlParseResult {
   if (!call || typeof call !== "object" || Array.isArray(call)) {
     return {
@@ -265,6 +313,8 @@ export function parseRoutingControlCall(
   }
 
   const requestedTarget = normalizeIdentity(args.target);
+  const action = routingControlActionForName(controlName);
+  const allowedTargetIds = allowedTargets[action].map((target) => target.id);
   const targetId = requestedTarget
     ? allowedTargetIds.find((candidate) =>
       candidate.toLowerCase() === requestedTarget.toLowerCase()
@@ -293,12 +343,51 @@ export function parseRoutingControlCall(
   return {
     ok: true,
     intent: {
-      action: routingControlActionForName(controlName),
+      action,
       targetId,
       message,
       source: ROUTING_CONTROL_SOURCE,
       ...(controlCallId ? { controlCallId } : {}),
     },
+  };
+}
+
+/**
+ * Enforce the terminal/exclusive routing-control contract before any tool
+ * events can be materialized.
+ */
+export function selectRoutingControl(
+  calls: readonly ToolInvocation[] | null | undefined,
+  allowedTargets: InThreadRoutingTargets,
+): RoutingControlSelection {
+  const toolCalls = Array.isArray(calls) ? [...calls] : [];
+  const routingCalls = toolCalls.filter((call) =>
+    isRoutingControlName(call?.tool?.id)
+  );
+  if (routingCalls.length === 0) {
+    return { kind: "none", executableCalls: toolCalls };
+  }
+  if (routingCalls.length > 1) {
+    return {
+      kind: "invalid",
+      code: "multiple_routing_controls",
+      message: "A response may contain exactly one in-thread routing control.",
+    };
+  }
+  if (toolCalls.length > 1) {
+    return {
+      kind: "invalid",
+      code: "mixed_routing_and_tools",
+      message:
+        "An in-thread routing control cannot be combined with executable tool calls.",
+    };
+  }
+
+  const parsed = parseRoutingControlCall(routingCalls[0], allowedTargets);
+  return parsed.ok ? { kind: "routing", intent: parsed.intent } : {
+    kind: "invalid",
+    code: parsed.code,
+    message: parsed.message,
   };
 }
 

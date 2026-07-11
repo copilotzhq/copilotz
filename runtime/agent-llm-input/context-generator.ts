@@ -65,6 +65,11 @@ interface AgentMemory {
   [key: string]: unknown;
 }
 
+interface RoutingControlAvailability {
+  ask?: boolean;
+  handoff?: boolean;
+}
+
 export function contextGenerator(
   agent: Agent,
   thread: Thread,
@@ -74,7 +79,7 @@ export function contextGenerator(
   agentNode?: KnowledgeNode,
   availableSkills?: SkillIndexEntry[],
   agentsFileInstructions?: AgentsFileInstructions | null,
-  routingControlsEnabled = false,
+  routingControls: RoutingControlAvailability = {},
 ): LLMContextData {
   const directConversation = isDirectConversationThread(
     thread,
@@ -131,11 +136,19 @@ export function contextGenerator(
       "",
       "### Conversation Rules",
       "- Messages from others are prefixed with [SpeakerName]: so you know who said what",
-      ...(routingControlsEnabled
+      ...(routingControls.ask || routingControls.handoff
         ? [
-          "- Use ask_in_thread to send an atomic message to another agent and resume after its reply",
-          "- Use handoff_in_thread to send an atomic message and transfer the next turn without automatically returning control",
-          "- Both routing controls require exactly target and message; the message argument is what the target receives",
+          ...(routingControls.ask
+            ? [
+              "- Use ask_in_thread to send an atomic message to another agent and resume after its reply",
+            ]
+            : []),
+          ...(routingControls.handoff
+            ? [
+              "- Use handoff_in_thread to send an atomic message and transfer the next turn without automatically returning control",
+            ]
+            : []),
+          "- Each routing control requires exactly target and message; the message argument is what the target receives",
           "- Use at most one in-thread routing control per response and never target yourself",
           "- Reply normally without a routing control when the response should return to the person who addressed you",
         ]
@@ -148,7 +161,7 @@ export function contextGenerator(
           "Other available agents (not in current thread):",
           `- ${availableAgentsInfo}`,
           "",
-          "NOTE: You can communicate with these agents using tools like 'delegate' for focused offloaded work or 'create_thread' for longer discussions.",
+          "NOTE: Use 'delegate_task' for focused work in a separate child thread, or 'create_thread' for longer separate discussions.",
         ]
         : []),
     ].filter(Boolean).join("\n");

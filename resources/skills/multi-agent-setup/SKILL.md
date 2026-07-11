@@ -1,14 +1,14 @@
 ---
 name: multi-agent-setup
-description: Configure multi-agent communication with routing, delegation, and loop prevention.
+description: Configure same-thread routing, child-thread delegation, and loop prevention.
 allowed-tools: [read_file, write_file]
 tags: [framework, agent, multi-agent]
 ---
 
 # Multi-Agent Setup
 
-Configure multiple agents that communicate, delegate, and collaborate within a
-conversation.
+Configure multiple agents that communicate and collaborate in one conversation,
+with optional child-thread delegation for isolated work.
 
 ## Enable Multi-Agent
 
@@ -47,7 +47,7 @@ const copilotz = await createCopilotz({
   multiAgent: {
     enabled: true,
     maxAgentTurns: 5, // Prevent infinite loops
-    includeTargetContext: true, // Show "(addressed to: X)" in history
+    maxTurnsFallbackAgent: "coordinator",
   },
   dbConfig: { url: "..." },
 });
@@ -58,7 +58,12 @@ const copilotz = await createCopilotz({
 - **@mentions**: Users type `@Researcher, find info on X` to target a specific
   agent
 - **Programmatic**: Use `target` or `targetQueue` in run options
-- **Agent delegation**: Agents use `ask_question` tool to query other agents
+- **Same-thread consultation**: Agents call `ask_in_thread` with atomic
+  `{ target, message }`; control returns after the target replies
+- **Same-thread handoff**: Agents call `handoff_in_thread` with atomic
+  `{ target, message }`; the next turn transfers without automatic return
+- **Child-thread delegation**: Agents call the regular `delegate_task` tool for
+  an isolated subtask and wait for its final answer
 
 ```typescript
 // Programmatic routing
@@ -76,12 +81,18 @@ await copilotz.run({
 });
 ```
 
+The routing controls are injected automatically for allowed agent participants.
+Do not add them to `allowedTools` or `resources.imports`, and do not duplicate
+their `message` argument as visible text. `delegate_task` is an executable tool
+and must be imported and allowed when used.
+
 ## Loop Prevention
 
 `maxAgentTurns` prevents infinite agent-to-agent conversations:
 
 - Each consecutive agent turn increments a counter
-- When the counter reaches `maxAgentTurns`, the next message targets the user
+- When the counter reaches `maxAgentTurns`, routing uses
+  `maxTurnsFallbackAgent` once when configured; otherwise it hard-stops
 - User messages reset the counter
 
 ## allowedAgents
@@ -91,11 +102,11 @@ Controls which agents can communicate with each other:
 ```typescript
 allowedAgents: ["researcher", "writer"]; // Can only talk to these
 allowedAgents: undefined; // Can talk to all (default)
+allowedAgents: null; // Cannot route to another agent
 ```
 
 ## Notes
 
 - Each agent can have different LLM providers and models
-- `includeTargetContext: true` helps agents understand conversation flow
 - Agents maintain persistent memory across conversations via `update_my_memory`
   tool

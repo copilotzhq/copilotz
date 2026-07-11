@@ -1,4 +1,4 @@
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assertEquals } from "@std/assert";
 
 import {
   buildToolReplyRoutingMetadata,
@@ -192,7 +192,10 @@ Deno.test("resolveNextTurn treats handoff to user as an explicit human handoff",
       routingDecision: decision("handoff", "user"),
       multiAgentEnabled: true,
     }),
-    { kind: "stop" },
+    {
+      kind: "human",
+      targetId: "vfssantos",
+    },
   );
 });
 
@@ -210,10 +213,7 @@ Deno.test("resolveNextTurn enforces allowedAgents for explicit agent routing", (
       routingDecision: decision("handoff", "south"),
       multiAgentEnabled: true,
     }),
-    {
-      kind: "human",
-      targetId: "vfssantos",
-    },
+    { kind: "stop" },
   );
 });
 

@@ -147,7 +147,7 @@ and can generate more from OpenAPI specs and MCP servers.
 - HTTP: `http_request`, `fetch_text`
 - RAG: `search_knowledge`, `ingest_document`, `list_knowledge_spaces`
 - System: `run_command`, `get_current_time`, `wait`
-- Agent: `ask_question`, `create_thread`, `end_thread`, `update_my_memory`
+- Agent: `delegate_task`, `create_thread`, `end_thread`, `update_my_memory`
 - Assets: `save_asset`, `fetch_asset`
 
 ### Multi-Tenancy

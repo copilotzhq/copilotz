@@ -441,10 +441,9 @@ const copilotz = await createCopilotz({
   multiAgent: {
     enabled: true,
     maxAgentTurns: 4,
-    includeTargetContext: true,
   },
   security: {
-    resolveLLMRuntimeConfig: async ({ provider }) => {
+    resolveLLMRuntimeConfig: ({ provider }) => {
       if (provider === "openai") return { apiKey: OPENAI_API_KEY };
       return { apiKey: Deno.env.get("LLM_API_KEY") };
     },

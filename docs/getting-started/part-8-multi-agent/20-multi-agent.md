@@ -18,7 +18,7 @@ Specialization works. A team of agents, each expert in their domain, coordinatin
 
 ## The solution
 
-Copilotz has native multi-agent support built on the same event system you already understand. Agents can delegate to other agents using the `delegate` tool. Routing happens automatically based on agent `allowedAgents` and the `target` field on messages.
+Copilotz has native multi-agent support built on the same event system you already understand. Agents use the reserved `ask_in_thread` and `handoff_in_thread` controls to communicate inside the current thread. Routing is validated against thread participants and the sender's `allowedAgents`; applications still use the `target` field to choose the first agent.
 
 ## A minimal multi-agent setup
 
@@ -33,15 +33,16 @@ const copilotz = await createCopilotz({
       role: "A coordinator that routes tasks to the appropriate specialist.",
       instructions: `
         You route incoming requests to the right specialist:
-        - For customer billing questions → delegate to the billing-agent
-        - For technical issues → delegate to the technical-agent
+        - For customer billing questions → call ask_in_thread with target
+          "billing-agent" and a complete question in message
+        - For technical issues → call ask_in_thread with target
+          "technical-agent" and a complete question in message
         - For anything else → handle it yourself
 
-        After delegating, summarize the specialist's response for the user.
+        After the consulted agent replies, summarize the result for the user.
       `,
       llmOptions: { provider: "openai", model: "gpt-4o" },
-      allowedAgents: ["billing-agent", "technical-agent"],  // Can delegate to these
-      allowedTools: ["delegate"],
+      allowedAgents: ["billing-agent", "technical-agent"],
     },
     {
       id: "billing-agent",
@@ -50,7 +51,7 @@ const copilotz = await createCopilotz({
       instructions: "You are an expert in billing matters. Be precise and cite specific amounts when possible.",
       llmOptions: { provider: "openai", model: "gpt-4o-mini" },  // Cheaper model for specialists
       allowedTools: ["lookup_customer", "http_request"],
-      // No allowedAgents — this agent cannot delegate further
+      allowedAgents: null, // Cannot route to another agent
     },
     {
       id: "technical-agent",
@@ -59,15 +60,16 @@ const copilotz = await createCopilotz({
       instructions: "You are a technical expert. Provide step-by-step troubleshooting instructions.",
       llmOptions: { provider: "openai", model: "gpt-4o" },
       allowedTools: ["http_request", "search_knowledge"],
+      allowedAgents: null,
     },
   ],
   multiAgent: {
     enabled: true,
-    maxAgentTurns: 5,             // Prevent infinite delegation loops
-    includeTargetContext: true,    // Agents know they're part of a delegation chain
+    maxAgentTurns: 5,                 // Prevent infinite agent loops
+    maxTurnsFallbackAgent: "coordinator",
   },
   resources: {
-    imports: ["tools.delegate", "tools.http_request", "tools.search_knowledge"],
+    imports: ["tools.http_request", "tools.search_knowledge"],
   },
   // ...
 });
@@ -75,15 +77,34 @@ const copilotz = await createCopilotz({
 copilotz.start();
 ```
 
-When a user asks "Why was I charged twice this month?", the coordinator delegates to the billing-agent, which handles the question and responds. The coordinator summarizes and replies to the user.
+When a user asks "Why was I charged twice this month?", the coordinator asks the billing agent in the same thread, receives its reply, then summarizes for the user.
 
-## How delegation works
+## How in-thread routing works
 
-When an agent calls the `delegate` tool:
+Both routing controls require one atomic object:
+
+```typescript
+{ target: "billing-agent", message: "Explain why this customer was charged twice." }
+```
+
+- `ask_in_thread` delivers `message` to `target`, then returns control to the
+  asking agent after the target replies.
+- `handoff_in_thread` delivers `message` and transfers the next turn without an
+  automatic return.
+- `handoff_in_thread` can target `user` when the thread has exactly one human
+  participant.
+
+The `message` argument is the complete message the target receives. Do not
+duplicate it as visible text. Copilotz injects these controls automatically when
+multi-agent routing is enabled and the control has an eligible same-thread
+target; they are not regular executable tools and do not belong in
+`allowedTools` or `resources.imports`.
+
+An `ask_in_thread` flow looks like this:
 
 ```
 User message → Coordinator
-Coordinator calls delegate(agent: "billing-agent", message: "User asks: why was I charged twice?")
+Coordinator calls ask_in_thread({ target: "billing-agent", message: "Why was this customer charged twice?" })
   → NEW_MESSAGE event: sender=coordinator, target=billing-agent
   → billing-agent processes, responds
   → NEW_MESSAGE event: sender=billing-agent, target=coordinator
@@ -91,22 +112,41 @@ Coordinator receives billing-agent's response
 Coordinator replies to user
 ```
 
-Each hop is a `NEW_MESSAGE` event in the same thread. The `agentTurnCount` in thread metadata increments with each hop. When it exceeds `maxAgentTurns`, the current agent's response goes directly to the user, breaking any potential loop.
+Each hop is a `NEW_MESSAGE` event in the same thread. The `agentTurnCount` in
+thread metadata increments with each hop. At `maxAgentTurns`, Copilotz uses the
+configured fallback agent once or hard-stops routing when no fallback is set.
+
+## Separate child-thread delegation
+
+`delegate_task` is different from the in-thread routing controls. It starts an
+isolated child thread for a focused subtask, waits for that agent's final answer,
+and returns the answer as a normal tool result. Import and allow it like any
+other executable tool:
+
+```typescript
+allowedTools: ["delegate_task"],
+resources: { imports: ["tools.delegate_task"] },
+```
+
+Use `delegate_task` for isolated work that should not join the current
+conversation. Use `ask_in_thread` or `handoff_in_thread` for turn-taking among
+participants in the current thread.
 
 ## Direct routing
 
 Skip the coordinator and route directly to a specialist:
 
 ```typescript
-const result = await copilotz.run(
-  { content: "My invoice is wrong", sender: { type: "user", name: "Alice" } },
-  { target: "billing-agent" }  // Route directly — bypasses coordinator
-);
+const result = await copilotz.run({
+  content: "My invoice is wrong",
+  sender: { type: "user", name: "Alice" },
+  target: "billing-agent", // Route directly — bypasses coordinator
+});
 ```
 
 ## The skunk-works preset
 
-Copilotz ships a pre-configured multi-agent topology called `skunk-works` — four specialized agents (west, north, east, south) with a delegation mesh:
+Copilotz ships a pre-configured multi-agent topology called `skunk-works` — four specialized agents (west, north, east, south) with an in-thread routing mesh:
 
 ```typescript
 const copilotz = await createCopilotz({
@@ -149,19 +189,24 @@ The coordinator thinks carefully. The formatter executes cheaply. The reviewer u
 ```typescript
 multiAgent: {
   enabled: true,
-  maxAgentTurns: 3,   // coordinator → specialist → back to coordinator = 3 turns
+  maxAgentTurns: 3,   // Allow up to three consecutive agent-to-agent hops
 }
 ```
 
-When the counter hits the limit, the active agent's response goes directly to the user. You'll see a note in the thread metadata that the turn limit was reached.
+When the counter hits the limit, Copilotz routes once to
+`maxTurnsFallbackAgent` when configured. Without a fallback agent, routing hard
+stops so an agent loop cannot continue.
 
-## Seeing the delegation chain
+## Atomic routing messages
 
-Enable `includeTargetContext: true` to give each agent visibility into the delegation chain. This lets specialists know they're responding to another agent (not the end user) and adjust their response format accordingly:
+Every in-thread control carries its own complete `message`. This makes the next
+step explicit and keeps routing metadata out of visible conversation text:
 
 ```typescript
-// Specialist knows it's replying to the coordinator, not the user
-// Can respond with structured data instead of natural language
+ask_in_thread({
+  target: "billing-agent",
+  message: "Check invoice inv_123 and report duplicate charge evidence.",
+});
 ```
 
 ## What this unlocks
@@ -169,7 +214,7 @@ Enable `includeTargetContext: true` to give each agent visibility into the deleg
 - Specialized agents — each focused, each excellent at its domain
 - Cost optimization — use powerful models only where necessary
 - Supervisor/worker patterns — coordinator routes, specialists execute
-- Parallel task execution — multiple specialists working simultaneously
+- Isolated subtask execution — use `delegate_task` when work belongs in a child thread
 - Loop prevention built in — no infinite delegation cycles
 
 ## What's next

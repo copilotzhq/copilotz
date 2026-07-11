@@ -47,7 +47,6 @@ import {
   buildMentionTargetRoute,
   extractMentionNames,
 } from "@/utils/mentions.ts";
-import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 import {
   ROUTING_CONTROL_SOURCE,
   type RoutingControlMetadata,
@@ -1363,7 +1362,7 @@ export const messageProcessor: EventProcessor<
           content: messageContext.contentText,
         };
 
-        const { batch, isComplete } = await storeToolResultInBatch(
+        const { isComplete } = await storeToolResultInBatch(
           ops,
           thread,
           batchInfo.batchId,
@@ -1792,7 +1791,6 @@ export const messageProcessor: EventProcessor<
 
       /** If the message is not a tool call, we need to add the message to the LLM context */
 
-      const agentId = (agent.id ?? agent.name) as string;
       const llmInput = await buildAgentLlmInput({
         deps,
         event,

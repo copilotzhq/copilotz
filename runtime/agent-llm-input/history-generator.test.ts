@@ -1,4 +1,4 @@
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assertEquals } from "@std/assert";
 
 import type { Agent, NewMessage } from "@/types/index.ts";
 import { formatMessages } from "@/runtime/llm/utils.ts";
@@ -40,9 +40,7 @@ Deno.test("historyGenerator uses sender display names instead of graph ids in pr
     },
   ];
 
-  const generated = historyGenerator(chatHistory, currentAgent, {
-    includeTargetContext: true,
-  });
+  const generated = historyGenerator(chatHistory, currentAgent);
 
   assertEquals(generated[0]?.role, "assistant");
   assertEquals(generated[0]?.content, "I am right here!");
@@ -199,7 +197,6 @@ Deno.test("historyGenerator truncates large tool outputs at an estimated-token c
   ];
 
   const generated = historyGenerator(chatHistory, currentAgent, {
-    includeTargetContext: false,
     maxToolResultEstimatedTokens: 30,
   });
 
@@ -243,9 +240,7 @@ Deno.test("historyGenerator defaults tool output cap to 2_500 estimated tokens",
     },
   ];
 
-  const generated = historyGenerator(chatHistory, currentAgent, {
-    includeTargetContext: false,
-  });
+  const generated = historyGenerator(chatHistory, currentAgent);
   const out = generated[0]?.toolCalls?.[0]?.output as Record<string, unknown>;
   assertEquals(out._copilotz_history_truncated, true);
   assertEquals(
@@ -283,9 +278,7 @@ Deno.test("historyGenerator renders peer public_status tool result as attributed
     },
   ];
 
-  const generated = historyGenerator(chatHistory, currentAgent, {
-    includeTargetContext: false,
-  });
+  const generated = historyGenerator(chatHistory, currentAgent);
 
   assertEquals(generated.length, 1);
   assertEquals(generated[0]?.role, "user");
@@ -338,9 +331,7 @@ Deno.test("historyGenerator keeps full default tool result for requesting agent"
     },
   ];
 
-  const generated = historyGenerator(chatHistory, currentAgent, {
-    includeTargetContext: false,
-  });
+  const generated = historyGenerator(chatHistory, currentAgent);
 
   assertEquals(generated.length, 1);
   assertEquals(generated[0]?.toolCalls?.[0], {
@@ -403,7 +394,6 @@ Deno.test("historyGenerator renders peer public tool calls and results fully as 
       },
     ],
     currentAgent,
-    { includeTargetContext: false },
   );
 
   assertEquals(generated.length, 2);
@@ -483,7 +473,6 @@ Deno.test("formatMessages merges human and peer user turns into one user message
       },
     ],
     currentAgent,
-    { includeTargetContext: false },
   );
 
   const formatted = formatMessages({ messages: generated });
@@ -545,7 +534,6 @@ Deno.test("historyGenerator omits peer requester_only tool activity and empty pl
       },
     ],
     currentAgent,
-    { includeTargetContext: false },
   );
 
   assertEquals(generated, []);

@@ -110,7 +110,7 @@ apply_patch({
 | --------------- | ---------------------------------------------------------------------------------------- |
 | `create_thread` | Create a new conversation thread                                                         |
 | `end_thread`    | Archive a thread with a summary                                                          |
-| `delegate`      | Delegate a focused subtask to another agent in a separate thread and wait for the answer |
+| `delegate_task` | Delegate a focused subtask to another agent in a separate thread and wait for the answer |
 
 ### Agent Memory
 

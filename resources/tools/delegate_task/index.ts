@@ -3,167 +3,214 @@ import type { Agent } from "@/types/index.ts";
 import type { ToolExecutionContext } from "@/runtime/tools/types.ts";
 
 interface DelegateParams {
-    task: string;
-    targetAgent: string;
-    timeout?: number;
+  task: string;
+  targetAgent: string;
+  timeout?: number;
 }
 
 function extractTextContent(content: unknown): string {
-    if (typeof content === "string") return content;
-    if (Array.isArray(content)) {
-        return content
-            .filter((p: { type?: string }) => p.type === "text")
-            .map((p: { text?: string }) => p.text ?? "")
-            .join("");
-    }
-    return String(content ?? "");
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((p: { type?: string }) => p.type === "text")
+      .map((p: { text?: string }) => p.text ?? "")
+      .join("");
+  }
+  return String(content ?? "");
 }
 
 export default {
-    key: "delegate_task",
-    name: "Delegate Task",
-    description: "Delegate a focused subtask to another agent in a separate thread and wait for that agent's final answer.",
-    inputSchema: {
-        type: "object",
-        properties: {
-            task: { type: "string", minLength: 1, description: "The focused task or request to delegate." },
-            targetAgent: { type: "string", minLength: 1, description: "The name or id of the agent to delegate the task to." },
-            timeout: { type: "number", description: "Maximum time to wait for the delegated answer in seconds (default: 30)." },
+  key: "delegate_task",
+  name: "Delegate Task",
+  description:
+    "Delegate a focused subtask to another agent in a separate thread and wait for that agent's final answer.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      task: {
+        type: "string",
+        minLength: 1,
+        description: "The focused task or request to delegate.",
+      },
+      targetAgent: {
+        type: "string",
+        minLength: 1,
+        description: "The name or id of the agent to delegate the task to.",
+      },
+      timeout: {
+        type: "number",
+        description:
+          "Maximum time to wait for the delegated answer in seconds (default: 30).",
+      },
+    },
+    required: ["task", "targetAgent"],
+  },
+  execute: async (
+    { task, targetAgent, timeout = 30 }: DelegateParams,
+    context?: ToolExecutionContext,
+  ) => {
+    const normalizedTask = typeof task === "string" ? task.trim() : "";
+    const normalizedTargetAgent = typeof targetAgent === "string"
+      ? targetAgent.trim()
+      : "";
+
+    if (!normalizedTask) {
+      throw new Error("Task is required and cannot be empty");
+    }
+
+    if (!normalizedTargetAgent) {
+      throw new Error("Target agent is required and cannot be empty");
+    }
+
+    if (!context?.senderId) {
+      throw new Error("Sender ID is required to delegate work");
+    }
+
+    const db = context.db ?? context.dbInstance;
+    if (!db) {
+      throw new Error("Database instance is required for delegation");
+    }
+
+    const availableAgents = context.agents || [];
+    const targetLower = normalizedTargetAgent.toLowerCase();
+    const targetAgentConfig = availableAgents.find((agent: Agent) =>
+      agent.id.toLowerCase() === targetLower ||
+      agent.name.toLowerCase() === targetLower
+    );
+
+    if (!targetAgentConfig) {
+      throw new Error(
+        `Target agent "${normalizedTargetAgent}" not found in available agents: ${
+          availableAgents.map((a: Agent) => a.id).join(", ")
+        }`,
+      );
+    }
+
+    const senderAgent = context.agent ??
+      availableAgents.find((agent: Agent) =>
+        agent.id === context.senderId || agent.name === context.senderId
+      );
+    if (
+      senderAgent &&
+      (senderAgent.id === targetAgentConfig.id ||
+        senderAgent.name === targetAgentConfig.name)
+    ) {
+      throw new Error("An agent cannot delegate a task to itself");
+    }
+
+    const allowedAgents = senderAgent?.allowedAgents;
+    if (
+      allowedAgents === null ||
+      (Array.isArray(allowedAgents) && allowedAgents.length === 0)
+    ) {
+      throw new Error(
+        `Agent "${
+          senderAgent?.id ?? context.senderId
+        }" is not allowed to delegate tasks`,
+      );
+    }
+    if (Array.isArray(allowedAgents)) {
+      const allowed = new Set(
+        allowedAgents.map((value) => value.trim().toLowerCase()),
+      );
+      if (
+        !allowed.has(targetAgentConfig.id.toLowerCase()) &&
+        !allowed.has(targetAgentConfig.name.toLowerCase())
+      ) {
+        throw new Error(
+          `Agent "${
+            senderAgent?.id ?? context.senderId
+          }" is not allowed to delegate to "${targetAgentConfig.id}"`,
+        );
+      }
+    }
+
+    const delegatedThreadId = crypto.randomUUID();
+
+    try {
+      const handle = await runThread(
+        db,
+        {
+          ...context,
+          agents: [targetAgentConfig],
+          multiAgent: undefined,
         },
-        required: ["task", "targetAgent"],
-    },
-    execute: async ({ task, targetAgent, timeout = 30 }: DelegateParams, context?: ToolExecutionContext) => {
-        const normalizedTask = typeof task === "string" ? task.trim() : "";
-        const normalizedTargetAgent = typeof targetAgent === "string" ? targetAgent.trim() : "";
+        {
+          content: normalizedTask,
+          sender: {
+            type: "job",
+            id: context.senderId,
+            name: context.senderId ?? null,
+          },
+          target: targetAgentConfig.id,
+          thread: {
+            id: delegatedThreadId,
+            name: `Delegated task from ${context.senderId}`,
+            participants: [targetAgentConfig.id],
+          },
+        },
+        { stream: true },
+      );
 
-        if (!normalizedTask) {
-            throw new Error("Task is required and cannot be empty");
-        }
+      let answer: string | null = null;
 
-        if (!normalizedTargetAgent) {
-            throw new Error("Target agent is required and cannot be empty");
-        }
-
-        if (!context?.senderId) {
-            throw new Error("Sender ID is required to delegate work");
-        }
-
-        const db = context.db ?? context.dbInstance;
-        if (!db) {
-            throw new Error("Database instance is required for delegation");
-        }
-
-        const availableAgents = context.agents || [];
-        const targetLower = normalizedTargetAgent.toLowerCase();
-        const targetAgentConfig = availableAgents.find((agent: Agent) =>
-            agent.id.toLowerCase() === targetLower ||
-            agent.name.toLowerCase() === targetLower
-        );
-
-        if (!targetAgentConfig) {
-            throw new Error(`Target agent "${normalizedTargetAgent}" not found in available agents: ${availableAgents.map((a: Agent) => a.id).join(', ')}`);
-        }
-
-        const senderAgent = context.agent ?? availableAgents.find((agent: Agent) =>
-            agent.id === context.senderId || agent.name === context.senderId
-        );
-        if (
-            senderAgent &&
-            (senderAgent.id === targetAgentConfig.id ||
-                senderAgent.name === targetAgentConfig.name)
-        ) {
-            throw new Error("An agent cannot delegate a task to itself");
-        }
-
-        const allowedAgents = senderAgent?.allowedAgents;
-        if (allowedAgents === null || (Array.isArray(allowedAgents) && allowedAgents.length === 0)) {
-            throw new Error(`Agent "${senderAgent?.id ?? context.senderId}" is not allowed to delegate tasks`);
-        }
-        if (Array.isArray(allowedAgents)) {
-            const allowed = new Set(allowedAgents.map((value) => value.trim().toLowerCase()));
-            if (
-                !allowed.has(targetAgentConfig.id.toLowerCase()) &&
-                !allowed.has(targetAgentConfig.name.toLowerCase())
-            ) {
-                throw new Error(`Agent "${senderAgent?.id ?? context.senderId}" is not allowed to delegate to "${targetAgentConfig.id}"`);
-            }
-        }
-
-        const delegatedThreadId = crypto.randomUUID();
-
-        try {
-            const handle = await runThread(
-                db,
-                { ...context, agents: [targetAgentConfig] },
-                {
-                    content: normalizedTask,
-                    sender: {
-                        type: (context.senderType ?? "user") as "agent" | "user" | "tool" | "system" | "job",
-                        id: context.senderId,
-                        name: context.senderId ?? null,
-                    },
-                    thread: {
-                        id: delegatedThreadId,
-                        name: `Delegated task from ${context.senderId}`,
-                        participants: [targetAgentConfig.id],
-                    },
-                },
-                { stream: true },
+      const collectEvents = (async () => {
+        for await (const event of handle.events) {
+          if (
+            event.type === "NEW_MESSAGE" &&
+            (event.payload as { sender?: { type?: string } })?.sender?.type ===
+              "agent" &&
+            (event.payload as { content?: unknown })?.content
+          ) {
+            const text = extractTextContent(
+              (event.payload as { content?: unknown }).content,
             );
-
-            let answer: string | null = null;
-
-            const collectEvents = (async () => {
-                for await (const event of handle.events) {
-                    if (
-                        event.type === "NEW_MESSAGE" &&
-                        (event.payload as { sender?: { type?: string } })?.sender?.type === "agent" &&
-                        (event.payload as { content?: unknown })?.content
-                    ) {
-                        const text = extractTextContent((event.payload as { content?: unknown }).content);
-                        if (text.trim()) {
-                            answer = text;
-                        }
-                    }
-                }
-            })();
-
-            const timeoutPromise = new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error("timeout")), timeout * 1000),
-            );
-
-            try {
-                await Promise.race([collectEvents, timeoutPromise]);
-            } catch {
-                handle.cancel();
+            if (text.trim()) {
+              answer = text;
             }
-
-            const finalAnswer = answer as string | null;
-            const summary = finalAnswer
-                ? `Delegated task: "${normalizedTask}" - Answer: "${finalAnswer.substring(0, 100)}${finalAnswer.length > 100 ? '...' : ''}"`
-                : `Delegated task: "${normalizedTask}" - No answer received (timeout)`;
-
-            await db.ops?.archiveThread(delegatedThreadId, summary);
-
-            if (!finalAnswer) {
-                throw new Error(`No answer received from ${normalizedTargetAgent} within ${timeout} seconds`);
-            }
-
-            return {
-                success: true,
-                task: normalizedTask,
-                answer: finalAnswer,
-                targetAgent: normalizedTargetAgent,
-                threadId: delegatedThreadId,
-            };
-
-        } catch (error) {
-            return {
-                success: false,
-                error: error instanceof Error ? error.message : String(error),
-                task: normalizedTask,
-                targetAgent: normalizedTargetAgent,
-            };
+          }
         }
-    },
+      })();
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("timeout")), timeout * 1000)
+      );
+
+      try {
+        await Promise.race([collectEvents, timeoutPromise]);
+      } catch {
+        handle.cancel();
+      }
+
+      const finalAnswer = answer as string | null;
+      const summary = finalAnswer
+        ? `Delegated task: "${normalizedTask}" - Answer: "${
+          finalAnswer.substring(0, 100)
+        }${finalAnswer.length > 100 ? "..." : ""}"`
+        : `Delegated task: "${normalizedTask}" - No answer received (timeout)`;
+
+      await db.ops?.archiveThread(delegatedThreadId, summary);
+
+      if (!finalAnswer) {
+        throw new Error(
+          `No answer received from ${normalizedTargetAgent} within ${timeout} seconds`,
+        );
+      }
+
+      return {
+        success: true,
+        task: normalizedTask,
+        answer: finalAnswer,
+        targetAgent: normalizedTargetAgent,
+        threadId: delegatedThreadId,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        task: normalizedTask,
+        targetAgent: normalizedTargetAgent,
+      };
+    }
+  },
 };

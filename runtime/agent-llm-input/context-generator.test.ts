@@ -1,7 +1,4 @@
-import {
-  assert,
-  assertStringIncludes,
-} from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assert, assertStringIncludes } from "@std/assert";
 
 import type { Agent, Thread } from "@/types/index.ts";
 import { contextGenerator } from "./context-generator.ts";
@@ -139,11 +136,25 @@ Deno.test("contextGenerator advertises reserved controls only when multi-agent r
     undefined,
     undefined,
     undefined,
-    true,
+    { ask: true, handoff: true },
   );
   assertStringIncludes(enabled.systemPrompt, "ask_in_thread");
   assertStringIncludes(enabled.systemPrompt, "handoff_in_thread");
   assertStringIncludes(enabled.systemPrompt, "target and message");
   assert(!enabled.systemPrompt.includes("<route_to>"));
   assert(!enabled.systemPrompt.includes("<ask_to>"));
+
+  const handoffOnly = contextGenerator(
+    lead,
+    thread,
+    [lead, reviewer],
+    [lead, reviewer],
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { handoff: true },
+  );
+  assert(!handoffOnly.systemPrompt.includes("ask_in_thread"));
+  assertStringIncludes(handoffOnly.systemPrompt, "handoff_in_thread");
 });

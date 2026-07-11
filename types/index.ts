@@ -12,7 +12,6 @@ import type {
   LLMConfig,
   LLMRuntimeConfig,
   ToolDefinition,
-  ToolInvocation,
 } from "@/runtime/llm/types.ts";
 
 import type {
@@ -872,12 +871,6 @@ export interface ChatContext {
      * reply to the user. When unset, the loop hard-stops with no response.
      */
     maxTurnsFallbackAgent?: string;
-    /**
-     * Whether to include target info in conversation history.
-     * Helps agents understand conversation flow.
-     * Default: true
-     */
-    includeTargetContext?: boolean;
   };
 }
 

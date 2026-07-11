@@ -28,10 +28,6 @@ type StoredAttachment = {
 
 type MessageMetadata = Record<string, unknown> & {
   attachments?: StoredAttachment[];
-  routing?: {
-    routeTo?: string[];
-    askTo?: string[];
-  };
   senderDisplayName?: string;
   senderExternalId?: string;
   senderParticipantId?: string;
@@ -229,8 +225,6 @@ const buildAttachmentParts = (
  * Options for history generation.
  */
 export interface HistoryGeneratorOptions {
-  /** Whether to include target info in message context */
-  includeTargetContext?: boolean;
   /** Whether this is a simple direct user-agent conversation */
   directConversation?: boolean;
   /**
@@ -329,17 +323,6 @@ function applyToolHistoryTokenCap(
       references,
     ),
   };
-}
-
-/**
- * Resolve a target ID to a display name.
- */
-function resolveTargetName(
-  targetId: string | null | undefined,
-  _metadata?: MessageMetadata,
-): string {
-  if (!targetId) return "unknown";
-  return targetId;
 }
 
 type ParsedToolCall = ToolInvocation & {
@@ -477,7 +460,6 @@ export function historyGenerator(
   currentAgent: Agent,
   options?: HistoryGeneratorOptions,
 ): ChatMessage[] {
-  const includeTargetContext = options?.includeTargetContext ?? true;
   const directConversation = options?.directConversation === true;
   const maxToolResultEstimatedTokens =
     typeof options?.maxToolResultEstimatedTokens === "number"
@@ -629,21 +611,6 @@ export function historyGenerator(
     ) {
       if (content.trim().length === 0 && parsedToolCalls.length === 0) {
         if (msg.senderType === "agent") return [];
-      }
-    }
-
-    // Include target info for context (who they were addressing)
-    // This helps agents understand the conversation flow in multi-agent scenarios
-    if (includeTargetContext && !isCurrentAgent && !isToolResult) {
-      const msgWithTarget = msg as NewMessage & { targetId?: string | null };
-      if (msgWithTarget.targetId) {
-        const targetName = resolveTargetName(msgWithTarget.targetId, metadata);
-        // Only add if it's meaningful context
-        if (
-          targetName !== currentAgent.name && targetName !== currentAgent.id
-        ) {
-          content = `${content}\n(addressed to: ${targetName})`;
-        }
       }
     }
 

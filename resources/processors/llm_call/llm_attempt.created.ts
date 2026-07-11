@@ -26,7 +26,6 @@ import type {
   EventProcessor,
   LlmCallEventPayload,
   LlmResultEventPayload,
-  MessagePayload,
   NewEvent,
   ProcessorDeps,
   TokenEventPayload,
@@ -41,6 +40,13 @@ import {
   getSerializableThreadMetadata,
   setRuntimeThreadMetadata,
 } from "@/runtime/thread-metadata.ts";
+import {
+  isRoutingControlName,
+  resolveInThreadRoutingTargets,
+  type RoutingControlIntent,
+  type RoutingControlSelection,
+  selectRoutingControl,
+} from "@/runtime/routing/index.ts";
 
 export const processorId = "llm_call";
 export const eventTypes = ["llm_attempt.created"] as const;
@@ -63,20 +69,6 @@ function envFlagEnabled(name: string): boolean {
   }
 }
 
-export function shouldEmitAgentMessage(
-  answer: string | undefined,
-  toolCalls: ToolInvocation[] | undefined,
-  routeTargets: string[],
-  askTargets: string[],
-): boolean {
-  return Boolean(
-    (typeof answer === "string" && answer.length > 0) ||
-      (Array.isArray(toolCalls) && toolCalls.length > 0) ||
-      routeTargets.length > 0 ||
-      askTargets.length > 0,
-  );
-}
-
 export function assertAgentLLMConfig(
   agent: { id?: string | null; name?: string | null },
   config: Partial<LLMRuntimeConfig> | undefined,
@@ -94,14 +86,6 @@ export function assertAgentLLMConfig(
       `Configure llmOptions on that agent, or provide shared defaults with ` +
       `createCopilotz({ agent: { llmOptions: { provider, model, ... } } }).`,
   );
-}
-
-function normalizeExtractedTagTargets(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((target): target is string =>
-      typeof target === "string" && target.trim().length > 0
-    ).map((target) => target.trim())
-    : [];
 }
 
 function getProviderFailureMessage(error: LLMProviderError): string {
@@ -260,7 +244,37 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       }
     }
 
-    const streamCallback = (context.stream && deps.emitToStream)
+    const promptToolDefinitions = payload.tools as unknown as Array<{
+      function?: { name?: unknown };
+    }>;
+    const routingControlsExposed = Array.isArray(promptToolDefinitions) &&
+      promptToolDefinitions.some((definition) =>
+        isRoutingControlName(definition?.function?.name)
+      );
+    const routingAgent = context.agents?.find((agent) => {
+      const agentId = payload.agent.id?.toLowerCase();
+      const agentName = payload.agent.name.toLowerCase();
+      return (typeof agent.id === "string" &&
+        (agent.id.toLowerCase() === agentId ||
+          agent.id.toLowerCase() === agentName)) ||
+        agent.name.toLowerCase() === agentName ||
+        agent.name.toLowerCase() === agentId;
+    });
+    const routingTargets = context.multiAgent?.enabled === true && routingAgent
+      ? resolveInThreadRoutingTargets(
+        routingAgent,
+        deps.thread,
+        context.agents ?? [],
+      )
+      : { ask: [], handoff: [] };
+
+    type BufferedStreamToken = {
+      token: string;
+      options?: { isReasoning?: boolean };
+    };
+    let bufferedStreamTokens: BufferedStreamToken[] = [];
+
+    const processStreamToken = (context.stream && deps.emitToStream)
       ? (token: string, options?: { isReasoning?: boolean }) => {
         const filtered = options?.isReasoning
           ? token
@@ -287,6 +301,26 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         );
       }
       : undefined;
+    const streamCallback = processStreamToken
+      ? (routingControlsExposed
+        ? (token: string, options?: { isReasoning?: boolean }) => {
+          bufferedStreamTokens.push({ token, options });
+        }
+        : processStreamToken)
+      : undefined;
+    const flushBufferedStream = () => {
+      if (!processStreamToken) return;
+      for (const chunk of bufferedStreamTokens) {
+        processStreamToken(chunk.token, chunk.options);
+      }
+      bufferedStreamTokens = [];
+    };
+    const discardBufferedStream = () => {
+      bufferedStreamTokens = [];
+      toolCallFilterState.inside = false;
+      toolCallFilterState.pending = "";
+      toolCallFilterState.controlPending = "";
+    };
 
     const envVars = readRuntimeEnvironment();
 
@@ -826,6 +860,12 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     };
 
     let response: ChatResponse;
+    let routingSelection: RoutingControlSelection = {
+      kind: "none",
+      executableCalls: [],
+    };
+    let routingCorrectionAttempted = false;
+    const discardedRoutingResponses: ChatResponse[] = [];
     const runtimeMetadata = getRuntimeThreadMetadata(deps.thread?.metadata);
     const historyCutoffs = runtimeMetadata.promptHistoryCutoffs &&
         typeof runtimeMetadata.promptHistoryCutoffs === "object" &&
@@ -856,31 +896,74 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         ),
       });
     };
-    const chatPromise = chat(
-      {
-        messages: baseMessages,
-        tools: payload.tools,
-        extractTags: ["route_to", "ask_to", "think"],
-        reasoningHistory: context.reasoningHistory,
-        historyCutoffs,
-        historyCutoffNamespace: String(
-          payload.agent.id ?? payload.agent.name,
-        ),
-        onHistoryCutoff,
-        ...(materializeMessages ? { materializeMessages } : {}),
-      } as ChatRequest,
-      configForCall,
-      envVars,
-      streamCallback,
-      context.llmProviders,
-    );
+    const startChat = (messages: ChatMessage[]) =>
+      chat(
+        {
+          messages,
+          tools: payload.tools,
+          extractTags: ["think"],
+          reasoningHistory: context.reasoningHistory,
+          historyCutoffs,
+          historyCutoffNamespace: String(
+            payload.agent.id ?? payload.agent.name,
+          ),
+          onHistoryCutoff,
+          ...(materializeMessages ? { materializeMessages } : {}),
+        } as ChatRequest,
+        configForCall,
+        envVars,
+        streamCallback,
+        context.llmProviders,
+      );
+    let chatPromise = startChat(baseMessages);
     try {
-      const settled = await awaitChatOrSupersession(chatPromise);
+      let settled = await awaitChatOrSupersession(chatPromise);
       if (settled === "superseded") {
         detachSupersededDrain(chatPromise);
         return { producedEvents: [] };
       }
       response = settled;
+      routingSelection = selectRoutingControl(
+        response.toolCalls,
+        routingTargets,
+      );
+
+      if (routingSelection.kind === "invalid") {
+        routingCorrectionAttempted = true;
+        discardedRoutingResponses.push(response);
+        discardBufferedStream();
+        const askTargets = routingTargets.ask.map((target) => target.id);
+        const handoffTargets = routingTargets.handoff.map((target) =>
+          target.id
+        );
+        const correctionPrompt: ChatMessage = {
+          role: "user",
+          content: [
+            "[Private Copilotz routing correction]",
+            routingSelection.message,
+            "Respond again using exactly one valid routing control by itself, or reply normally without a routing control.",
+            "Never combine ask_in_thread or handoff_in_thread with another tool call or a second routing control.",
+            `ask_in_thread targets: ${askTargets.join(", ") || "none"}.`,
+            `handoff_in_thread targets: ${
+              handoffTargets.join(", ") || "none"
+            }.`,
+          ].join("\n"),
+        };
+        chatPromise = startChat([...baseMessages, correctionPrompt]);
+        settled = await awaitChatOrSupersession(chatPromise);
+        if (settled === "superseded") {
+          detachSupersededDrain(chatPromise);
+          return { producedEvents: [] };
+        }
+        response = settled;
+        routingSelection = selectRoutingControl(
+          response.toolCalls,
+          routingTargets,
+        );
+      }
+
+      if (routingSelection.kind === "none") flushBufferedStream();
+      else discardBufferedStream();
     } catch (error) {
       if (isSuperseded()) {
         void persistSupersededError(error).catch((persistError) => {
@@ -1063,9 +1146,23 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     const reasoning: string | undefined = ("reasoning" in llmResponse)
       ? (llmResponse as unknown as { reasoning?: string }).reasoning
       : undefined;
-    const toolCalls: ToolInvocation[] | undefined = ("toolCalls" in llmResponse)
-      ? (llmResponse as unknown as { toolCalls?: ToolInvocation[] }).toolCalls
-      : undefined;
+    const responseToolCalls: ToolInvocation[] | undefined =
+      ("toolCalls" in llmResponse)
+        ? (llmResponse as unknown as { toolCalls?: ToolInvocation[] }).toolCalls
+        : undefined;
+    const routingIntent: RoutingControlIntent | null =
+      routingSelection.kind === "routing" ? routingSelection.intent : null;
+    const routingFailure = routingSelection.kind === "invalid"
+      ? {
+        code: routingSelection.code,
+        message: routingSelection.message,
+        correctionAttempted: routingCorrectionAttempted,
+      }
+      : null;
+    const toolCalls: ToolInvocation[] | undefined =
+      routingSelection.kind === "none"
+        ? routingSelection.executableCalls
+        : undefined;
     const extractedTags: Record<string, string[]> | undefined =
       ("extractedTags" in llmResponse)
         ? (llmResponse as unknown as {
@@ -1085,8 +1182,53 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       ? (llmResponse as unknown as { cost?: CostBreakdown }).cost
       : undefined;
 
-    const usageRecords =
-      Array.isArray(usageAttempts) && usageAttempts.length > 0
+    const usageRecordsForResponse = (
+      candidate: ChatResponse,
+    ): LLMUsageAttempt[] => {
+      if (
+        Array.isArray(candidate.usageAttempts) &&
+        candidate.usageAttempts.length > 0
+      ) {
+        return candidate.usageAttempts.map((record, index, records) =>
+          index === records.length - 1
+            ? {
+              ...record,
+              usage: {
+                ...record.usage,
+                statusReason: "malformed_tool_call" as const,
+              },
+              error: {
+                reason: "provider_error" as const,
+                message:
+                  "The model response violated the routing-control contract and was corrected internally.",
+              },
+            }
+            : record
+        );
+      }
+      return candidate.usage
+        ? [{
+          provider: candidate.provider,
+          model: candidate.model,
+          usage: {
+            ...candidate.usage,
+            statusReason: "malformed_tool_call" as const,
+          },
+          error: {
+            reason: "provider_error" as const,
+            message:
+              "The model response violated the routing-control contract and was corrected internally.",
+          },
+          ...(candidate.cost ? { cost: candidate.cost } : {}),
+          ...(candidate.usageFinalized
+            ? { usageFinalized: candidate.usageFinalized }
+            : {}),
+        }]
+        : [];
+    };
+    const usageRecords = [
+      ...discardedRoutingResponses.flatMap(usageRecordsForResponse),
+      ...(Array.isArray(usageAttempts) && usageAttempts.length > 0
         ? usageAttempts
         : usage
         ? [{
@@ -1095,7 +1237,8 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           usage,
           ...(cost ? { cost } : {}),
         }]
-        : [];
+        : []),
+    ];
 
     await persistUsageRecords(usageRecords, usageFinalized);
     if (terminalLlmAttemptId) {
@@ -1105,8 +1248,15 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     if (envFlagEnabled("COPILOTZ_DEBUG")) {
       console.log("answer", answer);
       console.log("reasoning", reasoning);
-      console.log("toolCalls", toolCalls);
+      console.log("toolCalls", responseToolCalls);
       console.log("extractedTags", extractedTags);
+      console.log("routingSelection", routingSelection);
+    }
+
+    if (routingIntent) {
+      answer = routingIntent.message;
+    } else if (routingFailure) {
+      answer = "The model could not produce a valid in-thread routing control.";
     }
 
     if (answer) {
@@ -1149,19 +1299,15 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       })
       : undefined;
 
-    const routeTargets = normalizeExtractedTagTargets(
-      extractedTags?.route_to,
-    );
-    const askTargets = normalizeExtractedTagTargets(extractedTags?.ask_to);
-
     if (isSuperseded()) {
       await markAttemptSuperseded({
         provider: llmResponse.provider ?? null,
         model: llmResponse.model ?? null,
-        finishReason:
-          Array.isArray(normalizedToolCalls) && normalizedToolCalls.length > 0
-            ? "tool_calls"
-            : llmResponse.finishReason ?? "stop",
+        finishReason: routingFailure ? "error" : routingIntent ||
+            (Array.isArray(normalizedToolCalls) &&
+              normalizedToolCalls.length > 0)
+          ? "tool_calls"
+          : llmResponse.finishReason ?? "stop",
         answer: answer ?? null,
         reasoning: reasoning ?? null,
         messages: llmResponse.prompt,
@@ -1181,15 +1327,38 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       },
       provider: llmResponse.provider ?? null,
       model: llmResponse.model ?? null,
-      status: "completed",
-      finishReason:
-        Array.isArray(normalizedToolCalls) && normalizedToolCalls.length > 0
-          ? "tool_calls"
-          : llmResponse.finishReason ?? "stop",
+      status: routingFailure ? "failed" : "completed",
+      finishReason: routingFailure ? "error" : routingIntent ||
+          (Array.isArray(normalizedToolCalls) &&
+            normalizedToolCalls.length > 0)
+        ? "tool_calls"
+        : llmResponse.finishReason ?? "stop",
       answer: answer ?? null,
       reasoning: reasoning ?? null,
       toolCalls: normalizedToolCalls ?? null,
       extractedTags: extractedTags ?? null,
+      ...(routingFailure
+        ? {
+          error: {
+            message: routingFailure.message,
+            reason: "invalid_routing_control",
+            provider: llmResponse.provider ?? null,
+            model: llmResponse.model ?? null,
+            status: null,
+            retryable: false,
+            fallbackAttempted: false,
+            fallbackCount: 0,
+            visibleStreamStarted: false,
+            attempts: [{
+              provider: llmResponse.provider ?? configuredProvider,
+              model: llmResponse.model ?? configForCall.model ?? null,
+              reason: "invalid_routing_control",
+              status: null,
+              message: routingFailure.message,
+            }],
+          },
+        }
+        : {}),
       ...(usage ? { usage } : {}),
       ...(cost ? { cost } : {}),
       ...(usageNodeId ? { usageNodeId } : {}),
@@ -1198,21 +1367,19 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
 
     const resultMetadata: Record<string, unknown> = {
       ...baseResultMetadata,
-      ...(routeTargets.length > 0
+      ...(routingIntent
         ? {
           routing: {
-            routeTo: routeTargets,
+            action: routingIntent.action,
+            targetId: routingIntent.targetId,
+            source: routingIntent.source,
+            ...(routingIntent.controlCallId
+              ? { controlCallId: routingIntent.controlCallId }
+              : {}),
           },
         }
         : {}),
-      ...(askTargets.length > 0
-        ? {
-          routing: {
-            ...(routeTargets.length > 0 ? { routeTo: routeTargets } : {}),
-            askTo: askTargets,
-          },
-        }
-        : {}),
+      ...(routingFailure ? { routingError: routingFailure } : {}),
     };
 
     const completionAttemptId = terminalLlmAttemptId ?? llmAttemptId;
@@ -1221,38 +1388,49 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         if (completionAttemptId === llmAttemptId) {
           await persistPartialAttempt(true);
         }
-        await deps.db.ops.mutate.llmAttempts.complete(
-          completionAttemptId,
-          {
-            provider: llmResponse.provider ?? null,
-            model: llmResponse.model ?? null,
-            finishReason: llmResultPayload.finishReason,
-            answer: answer ?? null,
-            reasoning: reasoning ?? null,
-            messages: llmResponse.prompt,
-            debug: llmResponse.debug ?? null,
-            partialAnswer,
-            partialReasoning,
-            toolCalls: normalizedToolCalls ?? null,
-            usage: usage ?? null,
-            cost: cost ?? null,
-            finishedAt: llmResultPayload.finishedAt,
-          },
-          {
-            threadId,
-            traceId: typeof event.traceId === "string" ? event.traceId : null,
-            causationId: typeof event.id === "string" ? event.id : null,
-            namespace: context.namespace,
-            status: isLifecycleAttemptCreated ? "pending" : undefined,
-            priority: isLifecycleAttemptCreated
-              ? EVENT_PRIORITIES.SETTLEMENT
-              : undefined,
-            metadata: isLifecycleAttemptCreated ? resultMetadata : null,
-            eventPayload: isLifecycleAttemptCreated
-              ? llmResultPayload as unknown as Record<string, unknown>
-              : null,
-          },
-        );
+        const attemptPatch = {
+          provider: llmResponse.provider ?? null,
+          model: llmResponse.model ?? null,
+          finishReason: llmResultPayload.finishReason,
+          answer: answer ?? null,
+          reasoning: reasoning ?? null,
+          messages: llmResponse.prompt,
+          debug: llmResponse.debug ?? null,
+          partialAnswer,
+          partialReasoning,
+          toolCalls: normalizedToolCalls ?? null,
+          usage: usage ?? null,
+          cost: cost ?? null,
+          ...(routingFailure ? { error: llmResultPayload.error } : {}),
+          finishedAt: llmResultPayload.finishedAt,
+        };
+        const mutationOptions = {
+          threadId,
+          traceId: typeof event.traceId === "string" ? event.traceId : null,
+          causationId: typeof event.id === "string" ? event.id : null,
+          namespace: context.namespace,
+          status: isLifecycleAttemptCreated ? "pending" as const : undefined,
+          priority: isLifecycleAttemptCreated
+            ? EVENT_PRIORITIES.SETTLEMENT
+            : undefined,
+          metadata: isLifecycleAttemptCreated ? resultMetadata : null,
+          eventPayload: isLifecycleAttemptCreated
+            ? llmResultPayload as unknown as Record<string, unknown>
+            : null,
+        };
+        if (routingFailure) {
+          await deps.db.ops.mutate.llmAttempts.fail(
+            completionAttemptId,
+            attemptPatch,
+            mutationOptions,
+          );
+        } else {
+          await deps.db.ops.mutate.llmAttempts.complete(
+            completionAttemptId,
+            attemptPatch,
+            mutationOptions,
+          );
+        }
       } catch (attemptError) {
         console.warn(
           "[LLM_CALL] Failed to mark llm_attempt completed:",

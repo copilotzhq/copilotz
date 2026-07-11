@@ -178,9 +178,18 @@ This is essential for workflows like: start a dev server → make changes → ru
 
 | Tool | What it does |
 |------|-------------|
-| `delegate` | Delegate a task to another agent |
+| `ask_in_thread` | Send an atomic `{ target, message }` to an agent participant, then resume after its reply |
+| `handoff_in_thread` | Send an atomic `{ target, message }` and transfer the next turn without automatic return |
+| `delegate_task` | Run a focused task in a separate child thread and wait for its final answer |
 | `create_thread` | Create a new conversation thread |
 | `end_thread` | Close an active thread |
+
+`ask_in_thread` and `handoff_in_thread` are reserved routing controls. Copilotz
+injects them dynamically for allowed agent participants when multi-agent routing
+is enabled, so they do not need `resources.imports` or `allowedTools` entries.
+Their `message` argument is delivered atomically and should not be duplicated as
+visible text. `delegate_task` is a regular executable tool: import and allow it
+when an isolated child-thread subtask is the desired behavior.
 
 ### Skills
 

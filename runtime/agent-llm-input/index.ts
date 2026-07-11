@@ -39,7 +39,7 @@ import type { ExecutableTool, ToolExecutor } from "@/runtime/tools/types.ts";
 import {
   assertNoRoutingControlToolCollisions,
   buildRoutingControlToolDefinitions,
-  resolveAllowedInThreadRoutingTargets,
+  resolveInThreadRoutingTargets,
 } from "@/runtime/routing/index.ts";
 
 type Operations = ProcessorDeps["db"]["ops"];
@@ -191,6 +191,20 @@ interface ProcessingContext {
   agentNode?: KnowledgeNode;
 }
 
+interface ParticipantLookupRecord extends Record<string, unknown> {
+  id: string;
+  namespace?: string;
+  externalId: string;
+  name?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+type ParticipantResolver = {
+  resolveByExternalId?: (
+    externalId: string,
+  ) => Promise<ParticipantLookupRecord | null>;
+};
+
 export async function buildProcessingContext(
   ops: Operations,
   threadId: string,
@@ -205,7 +219,9 @@ export async function buildProcessingContext(
     collections: context.collections,
     ops,
   });
-  const participantCollection = resolveParticipantCollection(context);
+  const participantCollection = resolveParticipantCollection(context) as
+    | ParticipantResolver
+    | undefined;
   const chatHistory = await messageService.getHistory(
     threadId,
     senderIdForHistory,
@@ -245,10 +261,11 @@ export async function buildProcessingContext(
     try {
       if (
         participantCollection &&
-        typeof (participantCollection as any).resolveByExternalId === "function"
+        typeof participantCollection.resolveByExternalId === "function"
       ) {
-        const participant = await (participantCollection as any)
-          .resolveByExternalId(externalId);
+        const participant = await participantCollection.resolveByExternalId(
+          externalId,
+        );
         if (participant?.metadata && typeof participant.metadata === "object") {
           userMetadata = participant.metadata as Record<string, unknown>;
         }
@@ -270,10 +287,11 @@ export async function buildProcessingContext(
     try {
       if (
         participantCollection &&
-        typeof (participantCollection as any).resolveByExternalId === "function"
+        typeof participantCollection.resolveByExternalId === "function"
       ) {
-        const participant = await (participantCollection as any)
-          .resolveByExternalId(targetAgentId);
+        const participant = await participantCollection.resolveByExternalId(
+          targetAgentId,
+        );
         if (participant) {
           agentNode = {
             id: participant.id,
@@ -338,13 +356,12 @@ export async function buildAgentLlmInput(
     }))
     : undefined;
   const routingTargets = context.multiAgent?.enabled === true
-    ? resolveAllowedInThreadRoutingTargets(
+    ? resolveInThreadRoutingTargets(
       agent,
       ctx.thread,
       ctx.availableAgents,
     )
-    : [];
-
+    : { ask: [], handoff: [] };
   const llmContext = contextGenerator(
     agent,
     ctx.thread,
@@ -354,10 +371,12 @@ export async function buildAgentLlmInput(
     ctx.agentNode,
     agentSkillIndex,
     context.agentsFileInstructions,
-    routingTargets.length > 0,
+    {
+      ask: routingTargets.ask.length > 0,
+      handoff: routingTargets.handoff.length > 0,
+    },
   );
 
-  const includeTargetContext = context.multiAgent?.includeTargetContext ?? true;
   const directConversation = isDirectConversationThread(
     ctx.thread,
     ctx.availableAgents,
@@ -367,7 +386,6 @@ export async function buildAgentLlmInput(
     selectedHistory,
     agent,
     {
-      includeTargetContext: includeTargetContext && !directConversation,
       directConversation,
       maxToolResultEstimatedTokens: context.toolResultHistoryMaxEstimatedTokens,
       reasoningHistory: context.reasoningHistory,

@@ -8,6 +8,8 @@ import {
   HANDOFF_IN_THREAD_CONTROL,
   parseRoutingControlCall,
   resolveAllowedInThreadRoutingTargets,
+  resolveInThreadRoutingTargets,
+  selectRoutingControl,
 } from "./index.ts";
 
 function agent(
@@ -77,10 +79,17 @@ Deno.test("resolveAllowedInThreadRoutingTargets applies strict allowedAgents sem
 });
 
 Deno.test("routing control definitions expose two atomic controls with dynamic targets", () => {
-  const targets = [
-    { id: "reviewer", name: "Reviewer" },
-    { id: "builder", name: "Builder" },
-  ];
+  const targets = {
+    ask: [
+      { id: "reviewer", name: "Reviewer" },
+      { id: "builder", name: "Builder" },
+    ],
+    handoff: [
+      { id: "reviewer", name: "Reviewer" },
+      { id: "builder", name: "Builder" },
+      { id: "user", name: "User" },
+    ],
+  };
   const definitions = buildRoutingControlToolDefinitions(targets);
 
   assertEquals(
@@ -94,7 +103,32 @@ Deno.test("routing control definitions expose two atomic controls with dynamic t
     assertStringIncludes(definition.function.inputTypes, '"builder"');
     assertStringIncludes(definition.function.description, "atomically");
   }
-  assertEquals(buildRoutingControlToolDefinitions([]), []);
+  assertStringIncludes(definitions[1].function.inputTypes, '"user"');
+  assertEquals(
+    buildRoutingControlToolDefinitions({ ask: [], handoff: [] }),
+    [],
+  );
+});
+
+Deno.test("resolveInThreadRoutingTargets exposes user only for handoff with one human", () => {
+  const current = agent("lead");
+  const reviewer = agent("reviewer");
+  const thread = {
+    id: "thread-1",
+    name: "Team",
+    participants: ["lead", "reviewer", "human-1"],
+  } as Thread;
+
+  assertEquals(
+    resolveInThreadRoutingTargets(current, thread, [current, reviewer]),
+    {
+      ask: [{ id: "reviewer", name: "reviewer" }],
+      handoff: [
+        { id: "reviewer", name: "reviewer" },
+        { id: "user", name: "User" },
+      ],
+    },
+  );
 });
 
 Deno.test("buildRoutingControlInputSchema requires target and non-empty message", () => {
@@ -124,7 +158,10 @@ Deno.test("parseRoutingControlCall validates and canonicalizes atomic control ca
       id: "call-1",
       tool: { id: ASK_IN_THREAD_CONTROL },
       args: JSON.stringify({ target: "REVIEWER", message: " Check this. " }),
-    }, ["reviewer", "builder"]),
+    }, {
+      ask: [{ id: "reviewer", name: "Reviewer" }],
+      handoff: [{ id: "builder", name: "Builder" }],
+    }),
     {
       ok: true,
       intent: {
@@ -141,7 +178,10 @@ Deno.test("parseRoutingControlCall validates and canonicalizes atomic control ca
     parseRoutingControlCall({
       tool: { id: HANDOFF_IN_THREAD_CONTROL },
       args: { target: "builder", message: "Implement this." },
-    }, ["reviewer", "builder"]),
+    }, {
+      ask: [{ id: "reviewer", name: "Reviewer" }],
+      handoff: [{ id: "builder", name: "Builder" }],
+    }),
     {
       ok: true,
       intent: {
@@ -159,14 +199,20 @@ Deno.test("parseRoutingControlCall rejects missing messages, invalid targets, an
     parseRoutingControlCall({
       tool: { id: ASK_IN_THREAD_CONTROL },
       args: { target: "reviewer", message: "  " },
-    }, ["reviewer"]).ok,
+    }, {
+      ask: [{ id: "reviewer", name: "Reviewer" }],
+      handoff: [{ id: "reviewer", name: "Reviewer" }],
+    }).ok,
     false,
   );
   assertEquals(
     parseRoutingControlCall({
       tool: { id: ASK_IN_THREAD_CONTROL },
       args: { target: "outside", message: "Hello" },
-    }, ["reviewer"]),
+    }, {
+      ask: [{ id: "reviewer", name: "Reviewer" }],
+      handoff: [{ id: "reviewer", name: "Reviewer" }],
+    }),
     {
       ok: false,
       code: "invalid_target",
@@ -177,8 +223,46 @@ Deno.test("parseRoutingControlCall rejects missing messages, invalid targets, an
     parseRoutingControlCall({
       tool: { id: HANDOFF_IN_THREAD_CONTROL },
       args: { target: "reviewer", message: "Hello", extra: true },
-    }, ["reviewer"]).ok,
+    }, {
+      ask: [{ id: "reviewer", name: "Reviewer" }],
+      handoff: [{ id: "reviewer", name: "Reviewer" }],
+    }).ok,
     false,
+  );
+});
+
+Deno.test("selectRoutingControl keeps controls exclusive from executable tools", () => {
+  const targets = {
+    ask: [{ id: "reviewer", name: "Reviewer" }],
+    handoff: [{ id: "reviewer", name: "Reviewer" }],
+  };
+  const control = {
+    id: "route-1",
+    tool: { id: ASK_IN_THREAD_CONTROL },
+    args: JSON.stringify({ target: "reviewer", message: "Review this." }),
+  };
+
+  assertEquals(selectRoutingControl([control], targets), {
+    kind: "routing",
+    intent: {
+      action: "ask",
+      targetId: "reviewer",
+      message: "Review this.",
+      source: "model_control",
+      controlCallId: "route-1",
+    },
+  });
+  assertEquals(
+    selectRoutingControl([
+      control,
+      { id: "tool-1", tool: { id: "search" }, args: "{}" },
+    ], targets).kind,
+    "invalid",
+  );
+  assertEquals(
+    selectRoutingControl([control, { ...control, id: "route-2" }], targets)
+      .kind,
+    "invalid",
   );
 });
 

@@ -52,10 +52,9 @@ const copilotz = await createCopilotz({
       role: "planning coordinator",
       instructions: [
         "You are Planner in a two-agent smoke test.",
-        "For each new user request, first write one short sentence beginning PLANNER_DRAFT:",
-        "Then hand the next turn to Reviewer by including exactly <route_to>reviewer</route_to>.",
-        "If the immediately previous agent message starts with REVIEWER_FEEDBACK:, write one short sentence beginning PLANNER_FINAL: and do not include any route tag.",
-        "Never route to yourself.",
+        "For each new user request, call ask_in_thread with target reviewer.",
+        "Set message to one short sentence beginning PLANNER_DRAFT: followed by a request for review; do not duplicate that message as visible text.",
+        "If the immediately previous agent message starts with REVIEWER_FEEDBACK:, write one short sentence beginning PLANNER_FINAL: and do not call a routing control.",
       ].join("\n"),
       allowedAgents: ["reviewer"],
       allowedTools: null,
@@ -75,8 +74,7 @@ const copilotz = await createCopilotz({
       instructions: [
         "You are Reviewer in a two-agent smoke test.",
         "Reply with exactly one short sentence beginning REVIEWER_FEEDBACK:",
-        "Then hand control back to Planner by including exactly <route_to>planner</route_to>.",
-        "Never route to yourself.",
+        "Do not call a routing control; ask_in_thread returns your reply to Planner automatically.",
       ].join("\n"),
       allowedAgents: ["planner"],
       allowedTools: null,
@@ -93,10 +91,9 @@ const copilotz = await createCopilotz({
   multiAgent: {
     enabled: true,
     maxAgentTurns: 6,
-    includeTargetContext: true,
   },
   security: {
-    resolveLLMRuntimeConfig: async () => ({ apiKey: API_KEY }),
+    resolveLLMRuntimeConfig: () => ({ apiKey: API_KEY }),
   },
   dbConfig: { url: ":memory:" },
 });

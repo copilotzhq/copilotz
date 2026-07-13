@@ -1,6 +1,7 @@
 import {
   assertEquals,
   assertObjectMatch,
+  assertRejects,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import type { API } from "@/types/index.ts";
@@ -314,6 +315,8 @@ Deno.test("API prepareRequest can inject trusted runtime context into request bo
               userId: context.userExternalId,
               threadId: context.threadId,
               agentId: context.senderId,
+              toolCallId: context.toolCallId,
+              traceId: context.traceId,
             },
           },
         };
@@ -332,6 +335,8 @@ Deno.test("API prepareRequest can inject trusted runtime context into request bo
         threadId: "thread-1",
         senderId: "east",
         senderType: "agent",
+        toolCallId: "call-123",
+        traceId: "trace-456",
       },
     );
 
@@ -343,8 +348,65 @@ Deno.test("API prepareRequest can inject trusted runtime context into request bo
         userId: "user-1",
         threadId: "thread-1",
         agentId: "east",
+        toolCallId: "call-123",
+        traceId: "trace-456",
       },
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("API fetch failure always clears timeout and cancellation subscription", async () => {
+  const originalFetch = globalThis.fetch;
+  let abortsAfterFailure = 0;
+  let unsubscribeCount = 0;
+  globalThis.fetch = (_input, init) => {
+    init?.signal?.addEventListener("abort", () => abortsAfterFailure++);
+    throw new Error("network failed");
+  };
+
+  try {
+    const [tool] = generateApiTools(buildApiConfig({ timeout: 0.01 }));
+    await assertRejects(
+      () =>
+        Promise.resolve(tool.execute({}, {
+          onCancel: () => () => unsubscribeCount++,
+        })),
+      Error,
+      "network failed",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assertEquals(abortsAfterFailure, 0);
+    assertEquals(unsubscribeCount, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("API external cancellation is not reported as a timeout", async () => {
+  const originalFetch = globalThis.fetch;
+  let unsubscribeCount = 0;
+  globalThis.fetch = (_input, init) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () =>
+        reject(new DOMException("Aborted", "AbortError")));
+    });
+
+  try {
+    const [tool] = generateApiTools(buildApiConfig({ timeout: 30 }));
+    await assertRejects(
+      () =>
+        Promise.resolve(tool.execute({}, {
+          onCancel: (callback: () => void) => {
+            queueMicrotask(callback);
+            return () => unsubscribeCount++;
+          },
+        })),
+      Error,
+      "Request cancelled",
+    );
+    assertEquals(unsubscribeCount, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

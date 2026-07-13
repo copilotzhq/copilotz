@@ -45,6 +45,8 @@ interface OpenAPISchema {
 }
 
 type ApiToolExecutionContext = {
+  toolCallId?: string;
+  traceId?: string;
   onCancel?: (cb: () => void) => () => void;
   cancelled?: boolean;
   threadId?: string;
@@ -563,6 +565,9 @@ function createApiExecutor(
     args: unknown,
     context?: unknown,
   ) => {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let unsubscribe: (() => void) | undefined;
+    let abortReason: "timeout" | "cancelled" | undefined;
     try {
       const executionContext = context as ApiToolExecutionContext | undefined;
       const params = (args && typeof args === "object")
@@ -641,6 +646,8 @@ function createApiExecutor(
         const prepareContext: APIPrepareRequestContext = {
           apiName: apiConfig.name,
           toolKey,
+          toolCallId: executionContext?.toolCallId,
+          traceId: executionContext?.traceId,
           threadId: executionContext?.threadId,
           senderId: executionContext?.senderId,
           senderType: executionContext?.senderType,
@@ -678,20 +685,26 @@ function createApiExecutor(
 
       // Set cancellation / timeout
       const controller = new AbortController();
-      const unsubscribe = executionContext?.onCancel?.(() =>
-        controller.abort()
-      );
-      const timeoutId =
-        typeof apiConfig.timeout === "number" && apiConfig.timeout > 0
-          ? setTimeout(() => controller.abort(), apiConfig.timeout * 1000)
-          : undefined;
+      unsubscribe = executionContext?.onCancel?.(() => {
+        abortReason = "cancelled";
+        controller.abort();
+      });
+      timeoutId = typeof apiConfig.timeout === "number" && apiConfig.timeout > 0
+        ? setTimeout(() => {
+          if (!controller.signal.aborted) {
+            abortReason = "timeout";
+            controller.abort();
+          }
+        }, apiConfig.timeout * 1000)
+        : undefined;
       requestOptions.signal = controller.signal;
-      if (executionContext?.cancelled) controller.abort();
+      if (executionContext?.cancelled) {
+        abortReason = "cancelled";
+        controller.abort();
+      }
 
       // Make the request
       const response = await fetch(url, requestOptions);
-      if (timeoutId) clearTimeout(timeoutId);
-      unsubscribe?.();
 
       // Parse response
       const contentType = response.headers.get("content-type") || "";
@@ -725,12 +738,15 @@ function createApiExecutor(
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         throw new Error(
-          typeof apiConfig.timeout === "number"
+          abortReason === "timeout"
             ? `Request timeout after ${apiConfig.timeout} seconds`
             : `Request cancelled`,
         );
       }
       throw error;
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      unsubscribe?.();
     }
   };
 }

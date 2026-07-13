@@ -12,17 +12,26 @@ status: stable
 
 ## The pain
 
-Service X has a thorough REST API. It's well-documented, with an OpenAPI spec. But it doesn't have an MCP server. You need your agent to search their catalog, create records, and trigger webhooks.
+Service X has a thorough REST API. It's well-documented, with an OpenAPI spec.
+But it doesn't have an MCP server. You need your agent to search their catalog,
+create records, and trigger webhooks.
 
-So you start writing tool wrappers. One for the search endpoint. One for create. One for update. One for list. The service has 40 endpoints and you need 12 of them. Each wrapper has the same structure: validate inputs, call the API, handle errors, format the response.
+So you start writing tool wrappers. One for the search endpoint. One for create.
+One for update. One for list. The service has 40 endpoints and you need 12 of
+them. Each wrapper has the same structure: validate inputs, call the API, handle
+errors, format the response.
 
 This is mechanical work that a machine should do.
 
 ## The solution
 
-Copilotz can read an OpenAPI 3.x spec and auto-generate a typed tool for every operation — authentication, parameter handling, and response formatting included. You provide the spec inline (or via the resource filesystem), and the agent gains access to the entire API.
+Copilotz can read an OpenAPI 3.x spec and auto-generate a typed tool for every
+operation — authentication, parameter handling, and response formatting
+included. You provide the spec inline (or via the resource filesystem), and the
+agent gains access to the entire API.
 
-The spec is passed via the `openApiSchema` field — either as a parsed JavaScript object or as a YAML/JSON string.
+The spec is passed via the `openApiSchema` field — either as a parsed JavaScript
+object or as a YAML/JSON string.
 
 ## Inline configuration
 
@@ -49,7 +58,7 @@ const copilotz = await createCopilotz({
     {
       id: "petstore",
       name: "Petstore API",
-      openApiSchema: petstoreSpec,      // Pass the parsed spec object directly
+      openApiSchema: petstoreSpec, // Pass the parsed spec object directly
       baseUrl: "https://petstore3.swagger.io/api/v3",
       auth: {
         type: "bearer",
@@ -77,11 +86,11 @@ apis: [
   {
     id: "myservice",
     name: "My Service",
-    openApiSchema: specYaml,   // YAML string — Copilotz parses it
+    openApiSchema: specYaml, // YAML string — Copilotz parses it
     baseUrl: "https://api.myservice.com",
     auth: { type: "bearer", token: Deno.env.get("MYSERVICE_TOKEN") ?? "" },
   },
-]
+];
 ```
 
 ## File-based configuration (recommended for larger projects)
@@ -97,6 +106,7 @@ resources/
 ```
 
 **`resources/apis/petstore/config.ts`:**
+
 ```typescript
 export default {
   name: "Petstore API",
@@ -112,6 +122,7 @@ export default {
 ```
 
 **`resources/apis/petstore/openApiSchema.json`:**
+
 ```json
 {
   "openapi": "3.0.0",
@@ -132,7 +143,8 @@ export default {
 }
 ```
 
-Copilotz discovers this automatically when `resources.path` is configured — no registration needed.
+Copilotz discovers this automatically when `resources.path` is configured — no
+registration needed.
 
 ## Authentication options
 
@@ -190,9 +202,11 @@ paths:
       operationId: getPetById
 ```
 
-Copilotz generates tools with keys `listPets`, `createPet`, and `getPetById`. These are the values you reference in `allowedTools`.
+Copilotz generates tools with keys `listPets`, `createPet`, and `getPetById`.
+These are the values you reference in `allowedTools`.
 
-If an operation has no `operationId`, Copilotz skips it — so make sure your spec has them.
+If an operation has no `operationId`, Copilotz skips it — so make sure your spec
+has them.
 
 ## Scoping with `allowedTools`
 
@@ -211,11 +225,13 @@ For large APIs you only need a subset of, use `allowedTools` on the agent:
 }
 ```
 
-The agent can only call those operations. All others in the spec are generated but unreachable for this agent.
+The agent can only call those operations. All others in the spec are generated
+but unreachable for this agent.
 
 ## Custom request preparation
 
-For advanced cases — injecting per-request context, transforming URLs, adding dynamic headers based on thread state — use `prepareRequest`:
+For advanced cases — injecting per-request context, transforming URLs, adding
+dynamic headers based on thread state — use `prepareRequest`:
 
 ```typescript
 apis: [
@@ -225,7 +241,7 @@ apis: [
     openApiSchema: spec,
     baseUrl: "https://api.myservice.com",
     prepareRequest: async (request, context) => {
-      // context has: apiName, toolKey, threadId, senderId, agent, db, threadMetadata
+      // context also includes stable toolCallId and traceId attribution.
       const tenantId = context.threadMetadata?.tenantId as string;
       return {
         ...request,
@@ -236,8 +252,15 @@ apis: [
       };
     },
   },
-]
+];
 ```
+
+`prepareRequest` runs after model-visible OpenAPI validation. Treat the model
+body as untrusted: remove or overwrite protected identity, tenant, session,
+workspace, credential, placement, and idempotency fields before sending the
+request. Derive those values from the trusted context, including `toolCallId`
+for stable request idempotency and `traceId` for observability. Do not merely
+merge trusted fields underneath model-provided values.
 
 ## Multiple APIs
 
@@ -262,18 +285,25 @@ apis: [
 ],
 ```
 
-Operation IDs are namespaced by `id` internally, so there are no collisions even if two specs share operation names.
+Operation IDs are namespaced by `id` internally, so there are no collisions even
+if two specs share operation names.
 
 ## What this unlocks
 
 - Any OpenAPI 3.x spec becomes a full set of agent tools — no wrapper code
-- Specs provided as JS objects, YAML strings, or JSON files in the resource filesystem
+- Specs provided as JS objects, YAML strings, or JSON files in the resource
+  filesystem
 - Rich auth options including dynamic OAuth token fetching with caching
 - Custom request preparation hooks for per-request context injection
 - Multiple APIs, each independently scoped to specific agents via `allowedTools`
 
 ## What's next
 
-Between native tools, MCP servers, and OpenAPI specs, your agent might now have 50 or more tools available. Here's the problem: every tool description goes into the system prompt. At 50 tools, you're spending thousands of tokens on tool descriptions before the user even says hello — and LLMs measurably perform worse when choosing from too many options. This needs to be fixed.
+Between native tools, MCP servers, and OpenAPI specs, your agent might now have
+50 or more tools available. Here's the problem: every tool description goes into
+the system prompt. At 50 tools, you're spending thousands of tokens on tool
+descriptions before the user even says hello — and LLMs measurably perform worse
+when choosing from too many options. This needs to be fixed.
 
-→ **[Chapter 6: Tool Sprawl & Custom Skills](../part-3-skills/06-tool-sprawl-and-skills.md)**
+→
+**[Chapter 6: Tool Sprawl & Custom Skills](../part-3-skills/06-tool-sprawl-and-skills.md)**

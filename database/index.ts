@@ -126,6 +126,8 @@ export interface DatabaseConfig {
   useWorker?: boolean;
   /** Whether to log database performance metrics. */
   logMetrics?: boolean;
+  /** Direct PostgreSQL pool size. Use at least 2 with LISTEN/NOTIFY. */
+  pgPoolMax?: number;
   /** Custom schema definitions. */
   schemas?: typeof baseSchema;
   /**
@@ -365,6 +367,7 @@ const createDbInstance = async (
     schemaSQL: finalConfig.schemaSQL,
     useWorker: finalConfig.useWorker,
     logMetrics: finalConfig.logMetrics,
+    pgPoolMax: finalConfig.pgPoolMax,
     pgliteMemoryProfile: finalConfig.pgliteMemoryProfile,
   });
 
@@ -723,6 +726,7 @@ export async function createDatabase(
     schemaSQL: createSchemaSQL(config),
     useWorker: isPgLite ? config?.useWorker || false : false,
     logMetrics: config?.logMetrics,
+    pgPoolMax: config?.pgPoolMax,
     schemas: config?.schemas,
     staleProcessingThresholdMs: config?.staleProcessingThresholdMs,
     threadLeaseMs: config?.threadLeaseMs,
@@ -734,7 +738,9 @@ export async function createDatabase(
   const pgliteConfigCacheToken = getDatabasePGliteCacheToken(finalConfig);
   const cacheKey = `${finalConfig.url}|${
     finalConfig.syncUrl || ""
-  }|${schemaCacheToken}|${pgliteConfigCacheToken}`;
+  }|${schemaCacheToken}|${pgliteConfigCacheToken}|pool:${
+    finalConfig.pgPoolMax ?? 5
+  }`;
   const debug = getEnvVar("COPILOTZ_DB_DEBUG") === "1";
   if (debug) {
     console.log(

@@ -269,6 +269,9 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
           agents: availableAgents,
           tools: allTools,
           db,
+          traceId: typeof event.traceId === "string"
+            ? event.traceId
+            : undefined,
           onCancel: deps.cancellation?.onCancel,
           cancelled: deps.cancellation?.isAborted(),
           cancelReason: deps.cancellation?.reason(),
@@ -626,6 +629,8 @@ export const processToolCalls = async (
 
       const toolContext: ToolExecutionContext = {
         ...context,
+        toolCallId: toolCall.id,
+        traceId: context.traceId,
         agent: context.agent ?? null,
         onCancel: cancellation.onCancel,
         cancelled: false,

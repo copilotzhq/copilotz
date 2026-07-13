@@ -44,6 +44,10 @@ export interface ToolResultPayload {
 
 /** Context passed to native and user-defined tool execution handlers. */
 export interface ToolExecutionContext extends ChatContext {
+  /** Stable ID assigned to this individual tool invocation. */
+  toolCallId?: string;
+  /** Trace containing the tool invocation, when available. */
+  traceId?: string;
   senderId?: string;
   senderType?: "user" | "agent" | "tool" | "system" | "job";
   threadId?: string;

@@ -329,6 +329,8 @@ export interface APIPrepareRequestInput {
 export interface APIPrepareRequestContext {
   apiName: string;
   toolKey: string;
+  toolCallId?: string;
+  traceId?: string;
   threadId?: string;
   senderId?: string;
   senderType?: "user" | "agent" | "tool" | "system" | "job";

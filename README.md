@@ -255,6 +255,19 @@ const copilotz = await createCopilotz({
 });
 ```
 
+Tools can also be composed into sequential pipelines. New JSONL lines run in
+parallel, while `|` passes structured output through jq or into another tool:
+
+```xml
+<tool_calls>
+{"name":"extract","arguments":{"source":"crm"}} | {"jq":"{records:.items}"} | {"name":"analyze","arguments":{"mode":"deep"}}
+</tool_calls>
+```
+
+See
+[Chain Tools with Pipelines](./docs/build-guides/chain-tools-with-pipelines.md)
+for merge rules, lifecycle behavior, and a runnable live-model example.
+
 ### Multi-Tenant From Day One
 
 Schema-level isolation for hard boundaries. Namespace-level isolation for
@@ -430,8 +443,10 @@ Seamless resolution for vision LLMs.
 **Core Concepts**
 
 - [Agents](./docs/agents.md) — Multi-agent configuration and communication
-- [Events](./docs/core-concepts/events.md) — Mutation outbox and live stream projections
-- [Tools](./docs/tools.md) — Native tools, APIs, and MCP integration
+- [Events](./docs/core-concepts/events.md) — Mutation outbox and live stream
+  projections
+- [Tools](./docs/resources/tools.md) — Native tools, pipelines, APIs, and MCP
+  integration
 
 **Data Layer**
 

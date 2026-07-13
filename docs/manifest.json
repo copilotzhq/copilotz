@@ -209,6 +209,11 @@
           "description": "Define application code that an agent can call."
         },
         {
+          "title": "Chain Tools with Pipelines",
+          "slug": "build-guides/chain-tools-with-pipelines",
+          "description": "Compose tool calls with terminal-style pipes and jq transforms."
+        },
+        {
           "title": "Build a Feature Endpoint",
           "slug": "build-guides/build-feature-endpoint",
           "description": "Expose app-owned backend behavior through withApp."

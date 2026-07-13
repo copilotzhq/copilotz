@@ -12,6 +12,7 @@ import type {
   TokenUsage,
   ToolDefinition,
   ToolInvocation,
+  ToolPipelineStage,
   WireChatMessage,
 } from "@/runtime/llm/types.ts";
 import { LLMTranscriptError } from "@/runtime/llm/errors.ts";
@@ -1906,9 +1907,14 @@ You have access to tools. Copilotz, not the provider, executes tools.
 When a tool is needed, emit optional visible text first, then exactly one <tool_calls> block. Inside it, emit one JSON object per line:
 { "name": "tool_name", "arguments": { ... } }
 
+To pipe one tool into another on the same line, separate stages with |. Use { "jq": "filter" } to reshape JSON between tools:
+{ "name": "first_tool", "arguments": { ... } } | { "jq": "{input:.data}" } | { "name": "next_tool", "arguments": { ... } }
+
 Rules:
 - Each object must have exactly "name" and "arguments".
 - "arguments" must be a JSON object.
+- New lines run in parallel; stages joined by | run sequentially.
+- A piped object is deep-merged into the next tool's arguments; the next tool's explicit arguments win.
 - Use only tool names from the catalog.
 - Do not use provider-native tool syntax or any non-Copilotz tool format.
 - Do not emit <tool_results>; Copilotz provides tool results as external input in a later user turn.
@@ -1993,7 +1999,12 @@ In this environment you have access to a set of tools you can use to answer the 
 2. To call a tool, emit one JSON object per line between a single <tool_calls> ... </tool_calls> block.
    - Each object has exactly two keys: "name" (string) and "arguments" (object). No other keys.
    - "arguments" is a JSON object and may contain nested objects/arrays.
-3. Use ONLY this <tool_calls> JSON format for tool calls..
+   - New lines run in parallel.
+   - Join JSON stages with | on the same line to run them sequentially.
+   - A transform stage has exactly one key: { "jq": "filter" }.
+   - A piped object is deep-merged into the next tool's arguments; explicit arguments in the later stage win.
+   - If a piped value is not an object, use jq to shape it into one before the next tool.
+3. Use ONLY this <tool_calls> JSON format for tool calls.
 ${extraRuleText}${exampleRuleNumber}. 
 
 ##### Example (note the nested arguments object):
@@ -2035,6 +2046,27 @@ export function buildToolCallsBlock(
       };
       if (call.id) obj.tool_call_id = call.id;
       return [stringifyWireJson(obj)];
+    }
+
+    if (call.pipeline?.stages?.length) {
+      return [
+        call.pipeline.stages.map((stage) => {
+          if (stage.type === "jq") {
+            return stringifyWireJson({ jq: stage.filter });
+          }
+          let stageArgs: unknown;
+          try {
+            stageArgs = JSON.parse(stage.args);
+          } catch {
+            stageArgs = stage.args;
+          }
+          return stringifyWireJson({
+            name: stage.tool.id,
+            arguments: stageArgs,
+            tool_call_id: stage.id,
+          });
+        }).join(" | "),
+      ];
     }
 
     let args: unknown;
@@ -2161,47 +2193,112 @@ function parseCanonicalToolCallLines(blockContent: string): ToolInvocation[] {
 
   const calls: ToolInvocation[] = [];
   for (const line of lines) {
-    let obj: unknown;
-    try {
-      obj = JSON.parse(line);
-    } catch {
-      const repaired = closeTruncatedJsonContainers(line);
-      if (!repaired) return [];
+    const segments = splitPipelineSegments(line);
+    if (!segments || segments.length === 0) return [];
+
+    const stages: ToolPipelineStage[] = [];
+    for (let index = 0; index < segments.length; index += 1) {
+      let obj: unknown;
       try {
-        obj = JSON.parse(repaired);
+        obj = JSON.parse(segments[index]);
       } catch {
+        if (segments.length !== 1) return [];
+        const repaired = closeTruncatedJsonContainers(segments[index]);
+        if (!repaired) return [];
+        try {
+          obj = JSON.parse(repaired);
+        } catch {
+          return [];
+        }
+      }
+
+      if (!isPlainJsonObject(obj)) return [];
+      const keys = Object.keys(obj).sort();
+      if (keys.length === 1 && keys[0] === "jq") {
+        if (index === 0 || typeof obj.jq !== "string" || !obj.jq.trim()) {
+          return [];
+        }
+        stages.push({ type: "jq", filter: obj.jq });
+        continue;
+      }
+
+      const hasOnlyCanonicalKeys =
+        (keys.length === 2 && keys[0] === "arguments" && keys[1] === "name") ||
+        (keys.length === 3 && keys[0] === "arguments" && keys[1] === "name" &&
+          keys[2] === "tool_call_id");
+      if (!hasOnlyCanonicalKeys) return [];
+      if (typeof obj.name !== "string" || !isPlainJsonObject(obj.arguments)) {
         return [];
       }
+      if (
+        "tool_call_id" in obj && typeof obj.tool_call_id !== "string"
+      ) return [];
+
+      stages.push({
+        type: "tool",
+        id: typeof obj.tool_call_id === "string"
+          ? obj.tool_call_id
+          : crypto.randomUUID(),
+        tool: { id: obj.name },
+        args: JSON.stringify(obj.arguments),
+      });
     }
 
-    if (!isPlainJsonObject(obj)) return [];
-    const keys = Object.keys(obj).sort();
-    const hasOnlyCanonicalKeys =
-      (keys.length === 2 && keys[0] === "arguments" && keys[1] === "name") ||
-      (keys.length === 3 && keys[0] === "arguments" && keys[1] === "name" &&
-        keys[2] === "tool_call_id");
-    if (!hasOnlyCanonicalKeys) {
-      return [];
-    }
-    if (typeof obj.name !== "string" || !isPlainJsonObject(obj.arguments)) {
-      return [];
-    }
-    if (
-      "tool_call_id" in obj && typeof obj.tool_call_id !== "string"
-    ) {
-      return [];
-    }
-
+    const root = stages[0];
+    if (root.type !== "tool") return [];
     calls.push({
-      id: typeof obj.tool_call_id === "string"
-        ? obj.tool_call_id
-        : crypto.randomUUID(),
-      tool: { id: obj.name },
-      args: JSON.stringify(obj.arguments),
+      id: root.id,
+      tool: root.tool,
+      args: root.args,
+      ...(stages.length > 1
+        ? { pipeline: { id: crypto.randomUUID(), stages } }
+        : {}),
     });
   }
 
   return calls;
+}
+
+function splitPipelineSegments(line: string): string[] | null {
+  const segments: string[] = [];
+  let start = 0;
+  let objectDepth = 0;
+  let arrayDepth = 0;
+  let inString = false;
+  let escaped = false;
+  let sawSeparator = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === "{") objectDepth += 1;
+    else if (char === "}") objectDepth -= 1;
+    else if (char === "[") arrayDepth += 1;
+    else if (char === "]") arrayDepth -= 1;
+    else if (char === "|" && objectDepth === 0 && arrayDepth === 0) {
+      const segment = line.slice(start, index).trim();
+      if (!segment) return null;
+      segments.push(segment);
+      start = index + 1;
+      sawSeparator = true;
+    }
+    if (objectDepth < 0 || arrayDepth < 0) {
+      return sawSeparator ? null : [line];
+    }
+  }
+  if (inString || objectDepth !== 0 || arrayDepth !== 0) {
+    return sawSeparator ? null : [line];
+  }
+  const finalSegment = line.slice(start).trim();
+  if (!finalSegment) return null;
+  segments.push(finalSegment);
+  return segments;
 }
 
 /** Remove the structural special-token literals that some servers leak. */

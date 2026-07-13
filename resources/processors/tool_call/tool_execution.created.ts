@@ -181,6 +181,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       const sourceMessageId = typeof eventMetadata?.sourceMessageId === "string"
         ? eventMetadata.sourceMessageId
         : null;
+      const toolPipeline = eventMetadata?.toolPipeline;
       // Agent may be absent if filtered out by env config — fall back to payload data
       const agent =
         availableAgents.find((a: Agent) =>
@@ -333,10 +334,13 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       };
 
       const resultMetadata = withRunSenderMetadata(
-        toolExecutionId || replyToParticipantId ||
+        toolExecutionId || sourceMessageId || toolPipeline ||
+          replyToParticipantId ||
           replyToTargetQueue.length > 0
           ? {
             ...(toolExecutionId ? { toolExecutionId } : {}),
+            ...(sourceMessageId ? { sourceMessageId } : {}),
+            ...(toolPipeline ? { toolPipeline } : {}),
             replyToParticipantId,
             replyToTargetQueue,
           }

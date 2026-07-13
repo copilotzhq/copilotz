@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.53.0",
+  "version": "0.54.0",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -37,6 +37,7 @@
     "ajv-formats": "npm:ajv-formats@3.0.1",
     "croner": "npm:croner@9.0.0",
     "json-schema-to-ts": "npm:json-schema-to-ts@3.1.1",
+    "jq-wasm": "npm:jq-wasm@3.0.0-jq-1.8.2/inline",
     "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client",
     "omnipg": "jsr:@oxian/ominipg@0.8.0",
     "omnipg/auto": "jsr:@oxian/ominipg@0.8.0/auto",

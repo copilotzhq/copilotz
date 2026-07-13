@@ -114,6 +114,49 @@ export const ToolInvocationSchema = {
     batchId: { type: ["string", "null"] },
     batchSize: { type: ["number", "null"] },
     batchIndex: { type: ["number", "null"] },
+    pipeline: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      properties: {
+        id: { type: "string" },
+        stages: {
+          type: "array",
+          items: {
+            anyOf: [
+              {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  type: { const: "tool" },
+                  id: { type: "string" },
+                  tool: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {
+                      id: { type: "string" },
+                      name: { type: ["string", "null"] },
+                    },
+                    required: ["id"],
+                  },
+                  args: { type: "string" },
+                },
+                required: ["type", "id", "tool", "args"],
+              },
+              {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  type: { const: "jq" },
+                  filter: { type: "string" },
+                },
+                required: ["type", "filter"],
+              },
+            ],
+          },
+        },
+      },
+      required: ["id", "stages"],
+    },
   },
   required: ["id", "tool", "args"],
 } as const;

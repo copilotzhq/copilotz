@@ -4,6 +4,56 @@ import type { Agent, NewMessage } from "@/types/index.ts";
 import { formatMessages } from "@/runtime/llm/utils.ts";
 import { historyGenerator } from "./history-generator.ts";
 
+Deno.test("historyGenerator preserves pipeline plans for wire rehydration", () => {
+  const currentAgent = {
+    id: "researcher",
+    name: "researcher",
+    role: "assistant",
+    instructions: "Research.",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  } as Agent;
+  const stages = [
+    {
+      type: "tool" as const,
+      id: "call-1",
+      tool: { id: "extract" },
+      args: "{}",
+    },
+    { type: "jq" as const, filter: "{records:.items}" },
+    {
+      type: "tool" as const,
+      id: "call-2",
+      tool: { id: "analyze" },
+      args: '{"mode":"deep"}',
+    },
+  ];
+  const generated = historyGenerator([{
+    id: "message-1",
+    threadId: "thread-1",
+    senderId: "researcher",
+    senderType: "agent",
+    content: "",
+    toolCalls: [{
+      id: "call-1",
+      tool: { id: "extract" },
+      args: "{}",
+      pipeline: { id: "pipeline-1", stages },
+    }],
+  } as NewMessage], currentAgent);
+
+  assertEquals(generated[0].toolCalls?.[0].pipeline, {
+    id: "pipeline-1",
+    stages,
+  });
+  const formatted = formatMessages({ messages: generated });
+  assertEquals(
+    String(formatted[0].content).includes(
+      '{"jq":"{records:.items}"}',
+    ),
+    true,
+  );
+});
+
 Deno.test("historyGenerator uses sender display names instead of graph ids in prefixes", () => {
   const currentAgent: Agent = {
     id: "generalist-genius",

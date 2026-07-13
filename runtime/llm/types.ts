@@ -290,6 +290,28 @@ export interface ChatRequest {
   signal?: AbortSignal;
 }
 
+export interface ToolPipelineToolStage {
+  type: "tool";
+  id: string;
+  tool: {
+    id: string;
+    name?: string;
+  };
+  args: string;
+}
+
+export interface ToolPipelineJqStage {
+  type: "jq";
+  filter: string;
+}
+
+export type ToolPipelineStage = ToolPipelineToolStage | ToolPipelineJqStage;
+
+export interface ToolPipeline {
+  id: string;
+  stages: ToolPipelineStage[];
+}
+
 // Unified Tool Invocation payload mapping executions end-to-end
 export interface ToolInvocation {
   id: string; // The LLM-assigned unique execution ID (e.g. call_12345)
@@ -310,6 +332,8 @@ export interface ToolInvocation {
   batchId?: string | null;
   batchSize?: number | null;
   batchIndex?: number | null;
+  /** Internal sequential pipeline plan. Present only on the root tool call. */
+  pipeline?: ToolPipeline;
 }
 
 // Response from chat completions with media processing results

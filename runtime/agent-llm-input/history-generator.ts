@@ -438,6 +438,7 @@ function stripParsedToolCall(
     ...("status" in call && typeof call.status === "string"
       ? { status: call.status }
       : {}),
+    ...(call.pipeline ? { pipeline: call.pipeline } : {}),
     ...(options?.includeVisibility && call.visibility
       ? { visibility: call.visibility }
       : {}),
@@ -522,6 +523,7 @@ export function historyGenerator(
           output?: unknown;
           status?: ToolInvocation["status"];
           visibility?: ToolHistoryVisibility;
+          pipeline?: ToolInvocation["pipeline"];
         };
 
         const toolId = maybeCall.tool?.id ?? maybeCall.name ?? "";
@@ -556,6 +558,7 @@ export function historyGenerator(
           ...("status" in maybeCall && typeof maybeCall.status === "string"
             ? { status: maybeCall.status }
             : {}),
+          ...(maybeCall.pipeline ? { pipeline: maybeCall.pipeline } : {}),
           visibility: normalizeToolVisibility(
             maybeCall.visibility ?? toolVisibilityByCallId.get(callId),
           ),

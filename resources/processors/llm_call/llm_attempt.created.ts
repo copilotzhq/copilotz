@@ -1291,6 +1291,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           id: call?.id ?? null,
           tool: { id: call?.tool?.id ?? "", name: call?.tool?.name },
           args: parsedArgs,
+          ...(call?.pipeline ? { pipeline: call.pipeline } : {}),
           // Include batch info for tool call aggregation
           batchId,
           batchSize,

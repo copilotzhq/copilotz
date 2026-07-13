@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import {
+  buildToolCallsBlock,
   composeWireContent,
   detectDegenerateRepetition,
   filterTaggedControlTokensStreaming,
@@ -727,6 +728,49 @@ Deno.test("parseToolCallsFromResponse only accepts strict JSON-lines calls", () 
     ).toolCalls.length,
     0,
   );
+});
+
+Deno.test("parseToolCallsFromResponse parses sequential pipelines and parallel lines", () => {
+  const response =
+    '<tool_calls>\n{"name":"extract","arguments":{"source":"crm"}} | {"jq":".items | map({id})"} | {"name":"analyze","arguments":{"mode":"deep"}}\n{"name":"independent","arguments":{}}\n</tool_calls>';
+
+  const parsed = parseToolCallsFromResponse(response);
+
+  assertEquals(parsed.toolCalls.length, 2);
+  assertEquals(parsed.toolCalls[0].tool.id, "extract");
+  assertEquals(parsed.toolCalls[0].pipeline?.stages.length, 3);
+  assertEquals(parsed.toolCalls[0].pipeline?.stages[1], {
+    type: "jq",
+    filter: ".items | map({id})",
+  });
+  assertEquals(parsed.toolCalls[1].tool.id, "independent");
+  assertEquals(parsed.toolCalls[1].pipeline, undefined);
+});
+
+Deno.test("pipeline tool calls rehydrate to canonical pipe syntax", () => {
+  const parsed = parseToolCallsFromResponse(
+    '<tool_calls>\n{"name":"extract","arguments":{}} | {"jq":".items[] | select(.active) | {item:.}"} | {"name":"save","arguments":{"notify":true}}\n</tool_calls>',
+  );
+
+  const block = buildToolCallsBlock(parsed.toolCalls);
+  const reparsed = parseToolCallsFromResponse(block);
+
+  assertEquals(reparsed.toolCalls.length, 1);
+  assertEquals(
+    reparsed.toolCalls[0].pipeline?.stages.map((stage) => stage.type),
+    ["tool", "jq", "tool"],
+  );
+  assertEquals(
+    reparsed.toolCalls[0].pipeline?.stages[1],
+    { type: "jq", filter: ".items[] | select(.active) | {item:.}" },
+  );
+});
+
+Deno.test("parseToolCallsFromResponse rejects jq as the first pipeline stage", () => {
+  const parsed = parseToolCallsFromResponse(
+    '<tool_calls>\n{"jq":"."} | {"name":"save","arguments":{}}\n</tool_calls>',
+  );
+  assertEquals(parsed.toolCalls.length, 0);
 });
 
 Deno.test("parseToolCallsFromResponse closes truncated JSON-line containers", () => {

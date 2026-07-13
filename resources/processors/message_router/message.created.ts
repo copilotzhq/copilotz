@@ -833,6 +833,7 @@ type NormalizedToolCall = {
   batchId?: string | null;
   batchSize?: number | null;
   batchIndex?: number | null;
+  pipeline?: import("@/runtime/llm/types.ts").ToolPipeline;
 };
 
 interface MessageContextDetails {
@@ -900,6 +901,7 @@ function normalizeToolCalls(
         batchId?: string | null;
         batchSize?: number | null;
         batchIndex?: number | null;
+        pipeline?: import("@/runtime/llm/types.ts").ToolPipeline;
       };
 
       let parsedArgs: Record<string, unknown> = {};
@@ -918,6 +920,7 @@ function normalizeToolCalls(
         batchId: callWithBatch.batchId ?? null,
         batchSize: callWithBatch.batchSize ?? null,
         batchIndex: callWithBatch.batchIndex ?? null,
+        ...(callWithBatch.pipeline ? { pipeline: callWithBatch.pipeline } : {}),
       };
     });
 }
@@ -1485,10 +1488,21 @@ export const messageProcessor: EventProcessor<
             batchId: call.batchId ?? null,
             batchSize: call.batchSize ?? null,
             batchIndex: call.batchIndex ?? null,
+            ...(call.pipeline ? { pipeline: call.pipeline } : {}),
           },
         } as ToolCallEventPayload;
         const toolMetadata = withRunSenderMetadata({
           sourceMessageId: createdMessage.id,
+          ...(call.pipeline
+            ? {
+              toolPipeline: {
+                id: call.pipeline.id,
+                stages: call.pipeline.stages,
+                stageIndex: 0,
+                rootToolCallId: call.id,
+              },
+            }
+            : {}),
           ...(call.batchId ? { batchId: call.batchId } : {}),
           ...(typeof call.batchSize === "number"
             ? { batchSize: call.batchSize }

@@ -671,13 +671,46 @@ function costBreakdownToUsageCost(
   };
 }
 
+type CreateUsageRecordInput = {
+  threadId: string;
+  eventId: string | null;
+  agentId: string | null;
+  runSender?: Record<string, unknown> | null;
+  provider: string | null;
+  model: string | null;
+  usage: TokenUsage;
+  cost?: CostBreakdown | null;
+  dedupeKey?: string | null;
+};
+
+type UpdateUsageRecordMetricsInput = {
+  usageNodeId: string;
+  threadId: string;
+  eventId: string | null;
+  agentId: string | null;
+  runSender?: Record<string, unknown> | null;
+  provider: string | null;
+  model: string | null;
+  usage: TokenUsage;
+  cost?: CostBreakdown | null;
+  finalizedAt: string;
+};
+
+type UsageService = {
+  createUsageRecord(input: CreateUsageRecordInput): Promise<string | null>;
+  recordUsage(event: UsageEvent): Promise<string | null>;
+  updateUsageRecordMetrics(
+    input: UpdateUsageRecordMetricsInput,
+  ): Promise<void>;
+};
+
 export function createUsageService(
   deps: {
     collections?: CollectionAccessor;
     ops: CopilotzDb["ops"];
     usageOptions?: UsageOptions;
   },
-) {
+): UsageService {
   const { ops, usageOptions } = deps;
 
   const createUsageParticipantEdges = async (
@@ -893,17 +926,9 @@ export function createUsageService(
   };
 
   return {
-    async createUsageRecord(input: {
-      threadId: string;
-      eventId: string | null;
-      agentId: string | null;
-      runSender?: Record<string, unknown> | null;
-      provider: string | null;
-      model: string | null;
-      usage: TokenUsage;
-      cost?: CostBreakdown | null;
-      dedupeKey?: string | null;
-    }): Promise<string | null> {
+    async createUsageRecord(
+      input: CreateUsageRecordInput,
+    ): Promise<string | null> {
       const { namespace, threadMetadata } = await resolveThreadContext(
         input.threadId,
       );
@@ -1019,18 +1044,9 @@ export function createUsageService(
         initiatedById,
       });
     },
-    async updateUsageRecordMetrics(input: {
-      usageNodeId: string;
-      threadId: string;
-      eventId: string | null;
-      agentId: string | null;
-      runSender?: Record<string, unknown> | null;
-      provider: string | null;
-      model: string | null;
-      usage: TokenUsage;
-      cost?: CostBreakdown | null;
-      finalizedAt: string;
-    }): Promise<void> {
+    async updateUsageRecordMetrics(
+      input: UpdateUsageRecordMetricsInput,
+    ): Promise<void> {
       const { threadMetadata } = await resolveThreadContext(input.threadId);
       const initiatedById = resolveInitiatedById({
         runSender: input.runSender ?? null,

@@ -17,6 +17,32 @@ const EFFORT_BUDGET_MAP: Record<string, number> = {
   high: 65536,
 };
 
+const ADAPTIVE_EFFORT_MAP: Record<string, string> = {
+  // Anthropic's adaptive API accepts low/medium/high (and newer levels such
+  // as xhigh/max), but not Copilotz's provider-neutral "minimal" label.
+  minimal: "low",
+  low: "low",
+  medium: "medium",
+  high: "high",
+};
+
+function isAdaptiveThinkingModel(model: string): boolean {
+  const normalized = model.trim().toLowerCase();
+  return [
+    /^claude-(?:fable|mythos)-5(?:-|$)/,
+    /^claude-mythos-preview(?:-|$)/,
+    /^claude-opus-4-(?:6|7|8)(?:-|$)/,
+    /^claude-sonnet-(?:4-6|5)(?:-|$)/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function isAlwaysOnAdaptiveThinkingModel(model: string): boolean {
+  const normalized = model.trim().toLowerCase();
+  return /^claude-(?:fable|mythos)-5(?:-|$)/.test(normalized) ||
+    /^claude-mythos-preview(?:-|$)/.test(normalized) ||
+    /^claude-sonnet-5(?:-|$)/.test(normalized);
+}
+
 function getPromptCacheConfig(config: ProviderConfig) {
   const promptCache = config.promptCache;
   if (promptCache === false) return { enabled: false };
@@ -144,26 +170,37 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
 
     body: (messages: ChatMessage[], config: ProviderConfig) => {
       const transformed = transformMessages(messages);
+      const model = config.model || "claude-3-haiku-20240307";
+      const adaptiveThinking = isAdaptiveThinkingModel(model);
+      const alwaysOnAdaptiveThinking = isAlwaysOnAdaptiveThinkingModel(model);
+      const adaptiveThinkingRequested = adaptiveThinking &&
+        (alwaysOnAdaptiveThinking || Boolean(config.reasoningEffort));
 
-      const budgetTokens = config.reasoningEffort
+      const budgetTokens = !adaptiveThinking && config.reasoningEffort
         ? EFFORT_BUDGET_MAP[config.reasoningEffort]
         : undefined;
       const maxTokens = config.maxTokens || 1000;
 
       const body: Record<string, unknown> = {
-        model: config.model || "claude-3-haiku-20240307",
+        model,
         messages: transformed.messages,
         stream: true,
-        temperature: config.temperature || 0,
         max_tokens: budgetTokens
           ? Math.max(maxTokens, budgetTokens + 1)
           : maxTokens,
-        top_p: config.topP,
-        top_k: config.topK,
         stop_sequences: resolveProviderStopSequences(config),
         system: transformed.system,
         metadata: config.metadata,
       };
+
+      // Claude Fable 5, Opus 4.8, and the other adaptive-thinking models
+      // reject non-default sampling parameters, including temperature 0.
+      // Omit all of them rather than serializing an invalid request.
+      if (!adaptiveThinking) {
+        body.temperature = config.temperature || 0;
+        body.top_p = config.topP;
+        body.top_k = config.topK;
+      }
 
       const promptCache = getPromptCacheConfig(config);
       if (promptCache.enabled) {
@@ -173,7 +210,13 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
         };
       }
 
-      if (budgetTokens) {
+      if (adaptiveThinkingRequested) {
+        body.thinking = { type: "adaptive" };
+        const effort = config.reasoningEffort
+          ? ADAPTIVE_EFFORT_MAP[config.reasoningEffort]
+          : undefined;
+        if (effort) body.output_config = { effort };
+      } else if (budgetTokens) {
         body.thinking = { type: "enabled", budget_tokens: budgetTokens };
         delete body.temperature;
       }

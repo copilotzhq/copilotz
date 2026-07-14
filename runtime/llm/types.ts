@@ -191,7 +191,9 @@ export interface ProviderConfigBase {
    * Unified reasoning effort across providers. Each provider maps this to its native param:
    * - OpenAI: `reasoning_effort`
    * - Gemini 3.x: `thinkingConfig.thinkingLevel`
-   * - Anthropic: `thinking.budget_tokens` (approximate mapping)
+   * - Anthropic legacy models: `thinking.budget_tokens` (approximate mapping)
+   * - Anthropic adaptive-thinking models: `thinking.type="adaptive"` plus
+   *   `output_config.effort`
    *
    * Provider-specific overrides (geminiThinkingConfig, etc.) take precedence when set.
    */

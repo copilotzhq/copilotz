@@ -311,7 +311,9 @@ Deno.test("API prepareRequest can inject trusted runtime context into request bo
               body.sessionId,
             ].join(":"),
             actor: {
-              tenantId: context.namespacePrefix,
+              tenantId: context.namespace,
+              schema: context.schema,
+              toolExecutionId: context.toolExecutionId,
               userId: context.userExternalId,
               threadId: context.threadId,
               agentId: context.senderId,
@@ -330,12 +332,14 @@ Deno.test("API prepareRequest can inject trusted runtime context into request bo
         actions: [{ action: "read" }],
       },
       {
-        namespacePrefix: "compass",
+        namespace: "compass",
+        schema: "tenant_compass",
         userExternalId: "user-1",
         threadId: "thread-1",
         senderId: "east",
         senderType: "agent",
         toolCallId: "call-123",
+        toolExecutionId: "execution-123",
         traceId: "trace-456",
       },
     );
@@ -345,6 +349,8 @@ Deno.test("API prepareRequest can inject trusted runtime context into request bo
       sessionId: "compass:user-1:thread-1:east:main",
       actor: {
         tenantId: "compass",
+        schema: "tenant_compass",
+        toolExecutionId: "execution-123",
         userId: "user-1",
         threadId: "thread-1",
         agentId: "east",

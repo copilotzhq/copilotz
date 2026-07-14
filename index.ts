@@ -447,6 +447,7 @@ export type {
   UsageRecord,
   UsageResolveCost,
 } from "@/runtime/usage/types.ts";
+export { createUsageService } from "@/runtime/collections/native.ts";
 
 import type { AssetConfig, AssetStore } from "@/runtime/storage/assets.ts";
 import {

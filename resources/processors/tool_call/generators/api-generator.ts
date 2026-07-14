@@ -45,6 +45,7 @@ interface OpenAPISchema {
 }
 
 type ApiToolExecutionContext = {
+  toolExecutionId?: string;
   toolCallId?: string;
   traceId?: string;
   onCancel?: (cb: () => void) => () => void;
@@ -54,7 +55,9 @@ type ApiToolExecutionContext = {
   senderType?: "user" | "agent" | "tool" | "system" | "job";
   userExternalId?: string;
   agent?: Agent | null;
+  namespace?: string;
   namespacePrefix?: string;
+  schema?: string;
   userMetadata?: Record<string, unknown>;
   threadMetadata?: Record<string, unknown>;
   db?: CopilotzDb;
@@ -646,6 +649,7 @@ function createApiExecutor(
         const prepareContext: APIPrepareRequestContext = {
           apiName: apiConfig.name,
           toolKey,
+          toolExecutionId: executionContext?.toolExecutionId,
           toolCallId: executionContext?.toolCallId,
           traceId: executionContext?.traceId,
           threadId: executionContext?.threadId,
@@ -653,7 +657,10 @@ function createApiExecutor(
           senderType: executionContext?.senderType,
           userExternalId: executionContext?.userExternalId,
           agent: executionContext?.agent ?? null,
-          namespacePrefix: executionContext?.namespacePrefix,
+          namespace: executionContext?.namespace,
+          namespacePrefix: executionContext?.namespacePrefix ??
+            executionContext?.namespace,
+          schema: executionContext?.schema,
           userMetadata: executionContext?.userMetadata,
           threadMetadata: executionContext?.threadMetadata,
           db: executionContext?.db,

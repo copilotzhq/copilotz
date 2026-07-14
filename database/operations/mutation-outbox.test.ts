@@ -67,8 +67,47 @@ Deno.test({
       toolCallId: `tool-call-${suffix}`,
       tool: { id: "lookup", name: "Lookup" },
       args: { q: "x" },
+      metadata: { framework: { retained: true } },
       namespace,
     });
+
+    await db.ops.mutate.toolExecutions.mergeMetadata(
+      String(execution.id),
+      { state: "queued", generation: 1 },
+      { path: ["extension", "dispatch"], threadId, namespace },
+    );
+    await db.ops.mutate.toolExecutions.mergeMetadata(
+      String(execution.id),
+      { state: "running" },
+      { path: ["extension", "dispatch"], threadId, namespace },
+    );
+
+    const mergedExecution = await db.ops.unsafeGraph.getNodeById(
+      String(execution.id),
+    );
+    assertEquals(mergedExecution?.data?.metadata, {
+      framework: { retained: true },
+      extension: { dispatch: { state: "running", generation: 1 } },
+    });
+
+    const nullMetadataExecution = await db.ops.mutate.toolExecutions.create({
+      threadId,
+      agentId: "assistant",
+      toolCallId: `tool-call-null-metadata-${suffix}`,
+      tool: { id: "lookup", name: "Lookup" },
+      args: { q: "y" },
+      namespace,
+    });
+    await db.ops.mutate.toolExecutions.mergeMetadata(
+      String(nullMetadataExecution.id),
+      { state: "queued" },
+      { path: ["extension", "dispatch"], threadId, namespace },
+    );
+    assertEquals(
+      (await db.ops.unsafeGraph.getNodeById(String(nullMetadataExecution.id)))
+        ?.data?.metadata,
+      { extension: { dispatch: { state: "queued" } } },
+    );
 
     await db.ops.mutate.toolExecutions.complete(String(execution.id), {
       output: { ok: true },
@@ -126,6 +165,7 @@ Deno.test({
         "message.updated",
         "thread.created",
         "tool_execution.completed",
+        "tool_execution.created",
         "tool_execution.created",
       ].sort(),
     );

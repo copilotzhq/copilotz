@@ -324,6 +324,14 @@ export interface ToolExecutionPatch {
   metadata?: Record<string, unknown> | null;
 }
 
+export interface ToolExecutionMetadataMergeOptions
+  extends WorkflowMutationOptions {
+  /** Optional path below metadata. An empty path merges the metadata root. */
+  path?: string[];
+  /** Queue topic for the emitted lifecycle event, when one is desired. */
+  threadId?: string | null;
+}
+
 export interface ThreadMutationOptions {
   traceId?: string | null;
   causationId?: string | null;
@@ -446,6 +454,11 @@ export interface DomainMutationOperations {
       id: string,
       patch: ToolExecutionPatch,
       options?: WorkflowMutationOptions & { threadId?: string | null },
+    ) => Promise<KnowledgeNode | undefined>;
+    mergeMetadata: (
+      id: string,
+      patch: Record<string, unknown>,
+      options?: ToolExecutionMetadataMergeOptions,
     ) => Promise<KnowledgeNode | undefined>;
     getOutput: (
       id: string,
@@ -4076,6 +4089,110 @@ export function createOperations(
       };
     });
 
+  const mergeToolExecutionMetadata = async (
+    id: string,
+    patch: Record<string, unknown>,
+    options: ToolExecutionMetadataMergeOptions = {},
+  ): Promise<KnowledgeNode | undefined> => {
+    const path = options.path ?? [];
+    if (
+      path.length > 8 ||
+      path.some((segment) =>
+        typeof segment !== "string" || segment.length === 0 ||
+        segment.length > 128 || segment.includes("\0")
+      )
+    ) {
+      throw new Error("Tool execution metadata path is invalid");
+    }
+    return await domainMutation(async () => {
+      const jsonPath = ["metadata", ...path];
+      const params: unknown[] = [id];
+      const ctes = [
+        `base AS (
+           SELECT "id", jsonb_set(
+             COALESCE("data", '{}'::jsonb),
+             '{metadata}',
+             CASE
+               WHEN jsonb_typeof("data"->'metadata') = 'object'
+                 THEN "data"->'metadata'
+               ELSE '{}'::jsonb
+             END,
+             true
+           ) AS "data"
+           FROM "nodes"
+           WHERE "id" = $1 AND "type" = 'tool_execution'
+         )`,
+      ];
+      let source = "base";
+      for (let index = 0; index < path.length - 1; index++) {
+        const prefix = ["metadata", ...path.slice(0, index + 1)];
+        params.push(prefix);
+        const parameter = `$${params.length}::text[]`;
+        const next = `parent_${index}`;
+        ctes.push(
+          `${next} AS (
+             SELECT "id", jsonb_set(
+               "data", ${parameter},
+               CASE
+                 WHEN jsonb_typeof("data" #> ${parameter}) = 'object'
+                   THEN "data" #> ${parameter}
+                 ELSE '{}'::jsonb
+               END, true
+             ) AS "data"
+             FROM ${source}
+           )`,
+        );
+        source = next;
+      }
+      params.push(jsonPath);
+      const pathParameter = `$${params.length}::text[]`;
+      params.push(JSON.stringify(patch));
+      const patchParameter = `$${params.length}::jsonb`;
+      const result = await db.query<Record<string, unknown>>(
+        `WITH ${ctes.join(",\n")}
+         UPDATE "nodes" AS target SET
+           "data" = jsonb_set(
+             source."data",
+             ${pathParameter},
+             CASE
+               WHEN jsonb_typeof(source."data" #> ${pathParameter}) = 'object'
+                 THEN source."data" #> ${pathParameter}
+               ELSE '{}'::jsonb
+             END ||
+               ${patchParameter},
+             true
+           ),
+           "updated_at" = NOW()
+         FROM ${source} AS source
+         WHERE target."id" = source."id"
+         RETURNING target.*`,
+        params,
+      );
+      const updated = result.rows[0] ? mapNodeRow(result.rows[0]) : undefined;
+      return {
+        result: updated,
+        event: options.threadId && updated
+          ? {
+            threadId: options.threadId,
+            subjectType: "tool_execution",
+            subjectId: id,
+            operation: "updated",
+            payload: options.eventPayload ?? {
+              metadataPath: path,
+              metadataPatch: patch,
+            },
+            traceId: options.traceId ?? null,
+            causationId: options.causationId ?? null,
+            priority: options.priority ?? null,
+            status: options.status,
+            metadata: options.metadata ?? null,
+            namespace: options.namespace ?? null,
+          }
+          : null,
+      };
+    });
+  };
+
   const getToolExecutionOutput = async (
     id: string,
     threadId: string,
@@ -4221,6 +4338,7 @@ export function createOperations(
       create: createToolExecution,
       update: (id, patch, options) =>
         updateToolExecution(id, patch, "updated", options),
+      mergeMetadata: mergeToolExecutionMetadata,
       complete: (id, patch, options) =>
         updateToolExecution(
           id,

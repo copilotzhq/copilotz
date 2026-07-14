@@ -269,6 +269,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
           agents: availableAgents,
           tools: allTools,
           db,
+          toolExecutionId: toolExecutionId ?? undefined,
           traceId: typeof event.traceId === "string"
             ? event.traceId
             : undefined,

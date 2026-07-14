@@ -114,6 +114,8 @@ export const METRIC_DESCRIPTORS: Record<string, MetricDescriptor> = {
   totalTokens: { unit: "tokens", label: "Total tokens", kind: "llm" },
   calls: { unit: "calls", label: "Calls" },
   durationMs: { unit: "ms", label: "Duration" },
+  cpuMs: { unit: "ms", label: "CPU runtime", kind: "compute" },
+  gpuMs: { unit: "ms", label: "GPU runtime", kind: "compute" },
   bytes: { unit: "bytes", label: "Payload size" },
 };
 

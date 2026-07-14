@@ -44,6 +44,8 @@ export interface ToolResultPayload {
 
 /** Context passed to native and user-defined tool execution handlers. */
 export interface ToolExecutionContext extends ChatContext {
+  /** Canonical durable tool_execution node ID, when database persistence is enabled. */
+  toolExecutionId?: string;
   /** Stable ID assigned to this individual tool invocation. */
   toolCallId?: string;
   /** Trace containing the tool invocation, when available. */

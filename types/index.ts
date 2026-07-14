@@ -329,6 +329,8 @@ export interface APIPrepareRequestInput {
 export interface APIPrepareRequestContext {
   apiName: string;
   toolKey: string;
+  /** Canonical durable tool_execution node ID, when available. */
+  toolExecutionId?: string;
   toolCallId?: string;
   traceId?: string;
   threadId?: string;
@@ -336,7 +338,12 @@ export interface APIPrepareRequestContext {
   senderType?: "user" | "agent" | "tool" | "system" | "job";
   userExternalId?: string;
   agent?: Agent | null;
+  /** Resolved namespace for the active run. */
+  namespace?: string;
+  /** @deprecated Use namespace. Retained for request-preparation compatibility. */
   namespacePrefix?: string;
+  /** Resolved PostgreSQL schema for the active run. */
+  schema?: string;
   userMetadata?: Record<string, unknown>;
   threadMetadata?: Record<string, unknown>;
   db?: CopilotzDb;

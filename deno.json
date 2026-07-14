@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.54.4",
+  "version": "0.54.5",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -39,10 +39,10 @@
     "json-schema-to-ts": "npm:json-schema-to-ts@3.1.1",
     "jq-wasm": "npm:jq-wasm@3.0.0-jq-1.8.2/inline",
     "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client",
-    "omnipg": "jsr:@oxian/ominipg@0.8.2",
-    "omnipg/auto": "jsr:@oxian/ominipg@0.8.2/auto",
-    "omnipg/pglite": "jsr:@oxian/ominipg@0.8.2/pglite",
-    "omnipg/worker": "jsr:@oxian/ominipg@0.8.2/worker",
+    "omnipg": "jsr:@oxian/ominipg@0.8.3",
+    "omnipg/auto": "jsr:@oxian/ominipg@0.8.3/auto",
+    "omnipg/pglite": "jsr:@oxian/ominipg@0.8.3/pglite",
+    "omnipg/worker": "jsr:@oxian/ominipg@0.8.3/worker",
     "ulid": "jsr:@std/ulid@1.0.0",
     "yaml": "npm:yaml@2.8.0",
     "zod": "npm:zod@3.23.8"

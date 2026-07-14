@@ -1,7 +1,33 @@
 import { assertEquals } from "jsr:@std/assert@1.0.13";
 import { join } from "jsr:@std/path@1.1.2";
+import { createDatabase } from "../index.ts";
 
 const repoRoot = join(import.meta.dirname!, "..");
+
+async function verifySourceConsumerTypes(): Promise<void> {
+  const db = await createDatabase({ url: ":memory:" });
+  const namespace: string = "tenant-a";
+  await db.ops.findOrCreateThread("thread-a", {
+    namespace,
+    name: "Sandbox job",
+    participants: ["user-a", "agent-a"],
+  });
+  await db.ops.mutate.toolExecutions.create({
+    id: crypto.randomUUID(),
+    threadId: "thread-a",
+    agentId: "agent-a",
+    toolCallId: "call-a",
+    tool: { id: "terminal", name: "Terminal" },
+    args: { stdin: "pwd" },
+    namespace,
+  });
+  const node = await db.ops.unsafeGraph.getNodeById("execution-a");
+  const metadata = node?.data?.metadata as Record<string, unknown> | undefined;
+  console.log(metadata);
+  await db.close();
+}
+
+void verifySourceConsumerTypes;
 
 Deno.test({
   name: "packed package preserves database operation types for consumers",

@@ -50,10 +50,10 @@ const ULID_SCHEMA: JsonSchema = {
   type: "string",
 };
 
-const READONLY_ULID_SCHEMA: JsonSchema = {
-  ...ULID_SCHEMA,
+const READONLY_ULID_SCHEMA = {
+  type: "string",
   readOnly: true,
-};
+} as const satisfies JsonSchema;
 
 const JSON_ANY_SCHEMA: JsonSchema = {
   anyOf: [

@@ -1,5 +1,6 @@
 import {
   assertEquals,
+  assertExists,
   assertObjectMatch,
   assertRejects,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
@@ -361,6 +362,39 @@ Deno.test("API prepareRequest can inject trusted runtime context into request bo
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+Deno.test("API tools preserve closed OpenAPI request bodies", () => {
+  const [tool] = generateApiTools(buildApiConfig({
+    openApiSchema: {
+      openapi: "3.1.0",
+      info: { title: "Closed API", version: "1.0.0" },
+      paths: {
+        "/v1/terminal": {
+          post: {
+            operationId: "terminal",
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["stdin"],
+                    properties: { stdin: { type: "string" } },
+                  },
+                },
+              },
+            },
+            responses: { "200": { description: "OK" } },
+          },
+        },
+      },
+    },
+  }));
+
+  assertExists(tool.inputSchema);
+  assertEquals(tool.inputSchema.additionalProperties, false);
 });
 
 Deno.test("API fetch failure always clears timeout and cancellation subscription", async () => {

@@ -85,6 +85,7 @@ function convertParameterToJsonSchema(
   const queryParams = new Set<string>();
   const bodyParams = new Set<string>();
   let isObjectBody = false;
+  let additionalProperties: unknown = undefined;
 
   // Process path, query, and header parameters
   parameters.forEach((param) => {
@@ -117,6 +118,7 @@ function convertParameterToJsonSchema(
         jsonContent.schema.type === "object" && jsonContent.schema.properties
       ) {
         isObjectBody = true;
+        additionalProperties = jsonContent.schema.additionalProperties;
         Object.keys(jsonContent.schema.properties).forEach((propName) => {
           properties[propName] = jsonContent.schema.properties[propName];
           bodyParams.add(propName);
@@ -140,6 +142,7 @@ function convertParameterToJsonSchema(
       type: "object",
       properties,
       required: required.length > 0 ? required : undefined,
+      ...(additionalProperties !== undefined ? { additionalProperties } : {}),
     },
     parameterMetadata: {
       pathParams,

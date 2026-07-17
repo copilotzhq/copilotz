@@ -397,6 +397,70 @@ Deno.test("API tools preserve closed OpenAPI request bodies", () => {
   assertEquals(tool.inputSchema.additionalProperties, false);
 });
 
+Deno.test("API prepareRequest receives the runtime asset resolver", async () => {
+  const originalFetch = globalThis.fetch;
+  let resolved = "";
+  let preparedMime = "";
+  globalThis.fetch = (_input, init) => {
+    preparedMime = String(
+      (JSON.parse(String(init?.body)) as Record<string, unknown>).mimeType,
+    );
+    return Promise.resolve(Response.json({ ok: true }));
+  };
+
+  try {
+    const [tool] = generateApiTools(buildApiConfig({
+      openApiSchema: {
+        openapi: "3.1.0",
+        info: { title: "Asset API", version: "1.0.0" },
+        paths: {
+          "/v1/assets/import": {
+            post: {
+              operationId: "asset_import",
+              requestBody: {
+                required: true,
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["assetId"],
+                      properties: { assetId: { type: "string" } },
+                    },
+                  },
+                },
+              },
+              responses: { "200": { description: "OK" } },
+            },
+          },
+        },
+      },
+      prepareRequest: async (request, context) => {
+        const body = request.body as Record<string, unknown>;
+        const asset = await context.resolveAsset?.(String(body.assetId));
+        return { ...request, body: { ...body, mimeType: asset?.mime } };
+      },
+    }));
+
+    await tool.execute(
+      { assetId: "asset://brief" },
+      {
+        resolveAsset: async (ref: string) => {
+          resolved = ref;
+          return {
+            bytes: new TextEncoder().encode("brief"),
+            mime: "text/plain",
+          };
+        },
+      },
+    );
+
+    assertEquals(resolved, "asset://brief");
+    assertEquals(preparedMime, "text/plain");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("API fetch failure always clears timeout and cancellation subscription", async () => {
   const originalFetch = globalThis.fetch;
   let abortsAfterFailure = 0;

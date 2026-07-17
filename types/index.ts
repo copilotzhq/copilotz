@@ -347,6 +347,8 @@ export interface APIPrepareRequestContext {
   userMetadata?: Record<string, unknown>;
   threadMetadata?: Record<string, unknown>;
   db?: CopilotzDb;
+  /** Read-only resolver for assets attached to the active runtime namespace. */
+  resolveAsset?: (ref: string) => Promise<{ bytes: Uint8Array; mime: string }>;
 }
 
 export type APIPrepareRequest = (

@@ -61,6 +61,7 @@ type ApiToolExecutionContext = {
   userMetadata?: Record<string, unknown>;
   threadMetadata?: Record<string, unknown>;
   db?: CopilotzDb;
+  resolveAsset?: (ref: string) => Promise<{ bytes: Uint8Array; mime: string }>;
 };
 
 /**
@@ -667,6 +668,7 @@ function createApiExecutor(
           userMetadata: executionContext?.userMetadata,
           threadMetadata: executionContext?.threadMetadata,
           db: executionContext?.db,
+          resolveAsset: executionContext?.resolveAsset,
         };
         preparedRequest =
           (await apiConfig.prepareRequest(preparedRequest, prepareContext)) ??

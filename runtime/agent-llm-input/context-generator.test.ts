@@ -141,6 +141,14 @@ Deno.test("contextGenerator advertises reserved controls only when multi-agent r
   assertStringIncludes(enabled.systemPrompt, "ask_in_thread");
   assertStringIncludes(enabled.systemPrompt, "handoff_in_thread");
   assertStringIncludes(enabled.systemPrompt, "target and message");
+  assertStringIncludes(
+    enabled.systemPrompt,
+    "Visible text before a routing control is public",
+  );
+  assertStringIncludes(
+    enabled.systemPrompt,
+    "never combine it with another tool call",
+  );
   assert(!enabled.systemPrompt.includes("<route_to>"));
   assert(!enabled.systemPrompt.includes("<ask_to>"));
 

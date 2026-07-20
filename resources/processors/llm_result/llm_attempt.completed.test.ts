@@ -95,6 +95,62 @@ Deno.test("llm_result processor converts lifecycle payload to NEW_MESSAGE artifa
   });
 });
 
+Deno.test("llm_result persists public content separately from routing delivery", async () => {
+  const result = await process(
+    {
+      id: "evt-routed-result",
+      threadId: "thread-1",
+      type: "LLM_RESULT",
+      payload: {
+        llmCallId: "llm-routed",
+        agent: { id: "planner", name: "Planner" },
+        provider: "openai",
+        model: "gpt-5-mini",
+        status: "completed",
+        finishReason: "tool_calls",
+        answer: "Public framing for the team.",
+        reasoning: null,
+        toolCalls: null,
+        extractedTags: null,
+        finishedAt: new Date().toISOString(),
+      },
+      parentEventId: null,
+      traceId: null,
+      priority: 1000,
+      metadata: {
+        routing: {
+          action: "handoff",
+          targetId: "reviewer",
+          source: "model_control",
+          message: "Review the implementation in detail.",
+        },
+      },
+      ttlMs: null,
+      expiresAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: "completed",
+    } as never,
+    {} as never,
+  );
+
+  assertExists(result);
+  if (!("producedEvents" in result) || !result.producedEvents) {
+    throw new Error("Expected producedEvents");
+  }
+  const produced = result.producedEvents[0] as {
+    payload: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  };
+  assertEquals(produced.payload.content, "Public framing for the team.");
+  assertEquals(produced.metadata?.routing, {
+    action: "handoff",
+    targetId: "reviewer",
+    source: "model_control",
+    message: "Review the implementation in detail.",
+  });
+});
+
 Deno.test("llm_result processor renders failed LLM results as assistant messages", async () => {
   const result = await process(
     {

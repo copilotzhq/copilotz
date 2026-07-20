@@ -38,6 +38,12 @@ type MessageMetadata = Record<string, unknown> & {
   toolExecutionId?: string;
   /** TOOL_RESULT queue row id (for read_tool_result after history truncation). */
   toolResultQueueEventId?: string;
+  routing?: {
+    action?: unknown;
+    targetId?: unknown;
+    source?: unknown;
+    message?: unknown;
+  };
 };
 
 const toDataUrl = (
@@ -335,6 +341,7 @@ function sanitizeMetadataForHistory(
   if (!metadata) return undefined;
   const {
     toolCalls: _toolCalls,
+    routing: _routing,
     speakerLabel: _speakerLabel,
     wireToolFormat: _wireToolFormat,
     wireSegment: _wireSegment,
@@ -402,6 +409,40 @@ function matchesAgentIdentity(
   return candidates.some((candidate) =>
     candidate === agent.id || candidate === agent.name
   );
+}
+
+function routingContentForAgent(
+  agent: Agent,
+  visibleContent: string,
+  isCurrentAgent: boolean,
+  metadata?: MessageMetadata,
+): string | null {
+  const routing = metadata?.routing;
+  if (
+    !routing ||
+    routing.source !== "model_control" ||
+    (routing.action !== "ask" && routing.action !== "handoff") ||
+    typeof routing.targetId !== "string" ||
+    typeof routing.message !== "string"
+  ) {
+    return null;
+  }
+
+  const targetId = routing.targetId.trim().toLowerCase();
+  const matchesTarget = [agent.id, agent.name].some((candidate) =>
+    typeof candidate === "string" &&
+    candidate.trim().toLowerCase() === targetId
+  );
+  const message = routing.message.trim();
+  if (message.length === 0) return null;
+  if (isCurrentAgent) {
+    const routingNote =
+      `[In-thread ${routing.action} to ${routing.targetId.trim()}]: ${message}`;
+    return visibleContent.trim().length > 0
+      ? `${visibleContent}\n\n${routingNote}`
+      : routingNote;
+  }
+  return matchesTarget ? message : null;
 }
 
 function resolveSpeakerLabel(
@@ -505,6 +546,12 @@ export function historyGenerator(
       metadataToolCalls.length > 0;
 
     let content = normalizeVisibleContent(msg.content || "");
+    const routedContent = !isToolResult
+      ? routingContentForAgent(currentAgent, content, isCurrentAgent, metadata)
+      : null;
+    if (routedContent) {
+      content = routedContent;
+    }
 
     // Prefer persisted tool-result metadata for tool result messages. For
     // agent messages, top-level toolCalls are the model-requested calls.

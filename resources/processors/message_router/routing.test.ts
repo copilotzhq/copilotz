@@ -46,12 +46,14 @@ Deno.test("normalizeRoutingDecision accepts only the singular ask/handoff contra
       action: "ask",
       targetId: " south ",
       source: "model_control",
+      message: " Please review this. ",
       controlCallId: " call-1 ",
     }),
     {
       action: "ask",
       targetId: "south",
       source: "model_control",
+      message: "Please review this.",
       controlCallId: "call-1",
     },
   );

@@ -1733,22 +1733,6 @@ export async function processStream(
   };
 }
 
-export function filterToolCallTokensStreaming(
-  input: string,
-  state: { inside: boolean; pending: string; controlPending?: string },
-): string {
-  const nextState = {
-    activeTag: state.inside ? "tool_calls" : null,
-    pending: state.pending,
-    controlPending: state.controlPending ?? "",
-  };
-  const filtered = filterTaggedControlTokensStreaming(input, nextState, []);
-  state.inside = nextState.activeTag === "tool_calls";
-  state.pending = nextState.pending;
-  state.controlPending = nextState.controlPending;
-  return filtered;
-}
-
 export function filterTaggedControlTokensStreaming(
   input: string,
   state: { activeTag: string | null; pending: string; controlPending?: string },

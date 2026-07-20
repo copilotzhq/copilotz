@@ -95,10 +95,12 @@ Both routing controls require one atomic object:
   participant.
 
 The `message` argument is the complete message the target receives. Do not
-duplicate it as visible text. Copilotz injects these controls automatically when
+duplicate it as visible text. Text outside the control remains public, streams
+normally, and is persisted as conversation content; the control block and its
+arguments remain hidden. Copilotz injects these controls automatically when
 multi-agent routing is enabled and the control has an eligible same-thread
-target; they are not regular executable tools and do not belong in
-`allowedTools` or `resources.imports`.
+target; they are not regular executable tools and do not belong in `allowedTools`
+or `resources.imports`.
 
 An `ask_in_thread` flow looks like this:
 

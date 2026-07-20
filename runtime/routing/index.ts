@@ -18,6 +18,8 @@ export interface RoutingControlMetadata {
   action: RoutingControlAction;
   targetId: string;
   source: typeof ROUTING_CONTROL_SOURCE;
+  /** Complete hidden delivery payload. Optional for legacy metadata. */
+  message?: string;
   controlCallId?: string;
 }
 

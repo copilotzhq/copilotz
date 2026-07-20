@@ -478,11 +478,15 @@ export function normalizeRoutingDecision(
   if (!action || !targetId || record.source !== ROUTING_CONTROL_SOURCE) {
     return null;
   }
+  const message = typeof record.message === "string"
+    ? record.message.trim()
+    : "";
 
   return {
     action,
     targetId,
     source: ROUTING_CONTROL_SOURCE,
+    ...(message.length > 0 ? { message } : {}),
     ...(typeof record.controlCallId === "string" &&
         record.controlCallId.trim().length > 0
       ? { controlCallId: record.controlCallId.trim() }

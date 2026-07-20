@@ -926,6 +926,28 @@ Deno.test("filterTaggedControlTokensStreaming hides native tool dialect and leak
   assertEquals(out.includes("world"), true);
 });
 
+Deno.test("filterTaggedControlTokensStreaming hides tool blocks split across chunks", () => {
+  const state = {
+    activeTag: null as string | null,
+    pending: "",
+    controlPending: "",
+  };
+  const chunks = [
+    "Public ",
+    "text<tool_",
+    'calls>{"name":"handoff_in_thread"}</tool_',
+    "calls> remains visible.",
+  ];
+
+  const visible = chunks.map((chunk) =>
+    filterTaggedControlTokensStreaming(chunk, state, [])
+  ).join("");
+
+  assertEquals(visible, "Public text remains visible.");
+  assertEquals(state.activeTag, null);
+  assertEquals(state.pending, "");
+});
+
 Deno.test("formatMessages canonicalizes structured assistant tool calls over pre-rendered blocks", () => {
   const formatted = formatMessages({
     messages: [{

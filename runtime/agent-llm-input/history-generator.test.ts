@@ -107,6 +107,57 @@ Deno.test("historyGenerator uses sender display names instead of graph ids in pr
   );
 });
 
+Deno.test("historyGenerator delivers routing content to the target and preserves sender context", () => {
+  const routedMessage = {
+    id: "m-routing",
+    threadId: "thread-1",
+    senderId: "planner",
+    senderType: "agent",
+    content: "Public framing for the team.",
+    metadata: {
+      senderDisplayName: "Planner",
+      routing: {
+        action: "handoff",
+        targetId: "reviewer",
+        source: "model_control",
+        message: "Review the implementation against the acceptance criteria.",
+      },
+    },
+  } as NewMessage;
+  const reviewer = {
+    id: "reviewer",
+    name: "Reviewer",
+    role: "assistant",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  } as Agent;
+  const observer = {
+    id: "observer",
+    name: "Observer",
+    role: "assistant",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  } as Agent;
+  const planner = {
+    id: "planner",
+    name: "Planner",
+    role: "assistant",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  } as Agent;
+
+  const targetHistory = historyGenerator([routedMessage], reviewer);
+  const observerHistory = historyGenerator([routedMessage], observer);
+  const senderHistory = historyGenerator([routedMessage], planner);
+
+  assertEquals(
+    targetHistory[0]?.content,
+    "Review the implementation against the acceptance criteria.",
+  );
+  assertEquals(observerHistory[0]?.content, "Public framing for the team.");
+  assertEquals(
+    senderHistory[0]?.content,
+    "Public framing for the team.\n\n[In-thread handoff to reviewer]: Review the implementation against the acceptance criteria.",
+  );
+});
+
 Deno.test("historyGenerator includes only current agent reasoning by default", () => {
   const currentAgent: Agent = {
     id: "agent-1",

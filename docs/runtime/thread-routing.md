@@ -58,8 +58,11 @@ asking agent so control returns after one reply. `handoff_in_thread` transfers
 the next turn without adding that automatic return. Agent targets must be
 participants in the current thread and must pass the sender's `allowedAgents`
 policy. `handoff_in_thread` may also target `user` when the thread has exactly
-one human participant. The controls are runtime-provided and are not executable
-tools to add to `resources.imports` or `allowedTools`.
+one human participant. Visible text outside the control streams and persists as
+public conversation content, while the control block and its `message` argument
+remain hidden and are delivered through routing metadata. The controls are
+runtime-provided and are not executable tools to add to `resources.imports` or
+`allowedTools`.
 
 For isolated work outside the current conversation, use the regular
 `delegate_task` tool. It creates a separate child thread, waits for the delegated

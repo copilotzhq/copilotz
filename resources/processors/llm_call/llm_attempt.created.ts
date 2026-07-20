@@ -32,7 +32,6 @@ import type {
 } from "@/types/index.ts";
 import { ulid } from "ulid";
 import { materializeAssetRefsForProvider } from "@/runtime/llm/asset-materialization.ts";
-import { filterToolCallTokensStreaming } from "@/runtime/llm/utils.ts";
 import { createLlmUsageService } from "@/runtime/collections/native.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
 import {
@@ -41,7 +40,6 @@ import {
   setRuntimeThreadMetadata,
 } from "@/runtime/thread-metadata.ts";
 import {
-  isRoutingControlName,
   resolveInThreadRoutingTargets,
   type RoutingControlIntent,
   type RoutingControlSelection,
@@ -141,25 +139,14 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       });
     };
 
-    // Defense-in-depth: the shared processStream already filters
-    // <tool_calls> blocks, but we keep a second pass here in case
-    // any slip through (e.g. non-standard provider integration).
-    // TODO: Revisit tool-call block handling separately from routing.
-    const toolCallFilterState: {
-      inside: boolean;
-      pending: string;
-      controlPending: string;
-    } = {
-      inside: false,
-      pending: "",
-      controlPending: "",
-    };
     let llmAttemptId: string | null = null;
     let terminalLlmAttemptId: string | null = null;
     let partialAnswer = "";
     let partialReasoning = "";
     let lastPartialPersistedAt = 0;
     let lastPartialPersistPromise: Promise<void> = Promise.resolve();
+    let partialPersistRequested = false;
+    let partialPersistRunning = false;
     const isSuperseded = () => deps.cancellation?.isAborted() === true;
     const cancellationReason = () => deps.cancellation?.reason?.() ?? null;
 
@@ -171,28 +158,47 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       if (
         !force &&
         now - lastPartialPersistedAt < LLM_PARTIAL_PERSIST_INTERVAL_MS
-      ) return Promise.resolve();
+      ) return lastPartialPersistPromise;
       lastPartialPersistedAt = now;
-      const promise = deps.db.ops.mutate.llmAttempts.update(
-        llmAttemptId,
-        {
-          status: "processing",
-          partialAnswer,
-          partialReasoning,
-        },
-        {
-          threadId,
-          traceId: typeof event.traceId === "string" ? event.traceId : null,
-          causationId: typeof event.id === "string" ? event.id : null,
-          namespace: context.namespace,
-        },
-      ).catch((error: unknown) => {
-        console.warn(
-          "[LLM_CALL] Failed to persist llm_attempt partial:",
-          error,
-        );
-      });
-      lastPartialPersistPromise = promise.then(() => undefined);
+      partialPersistRequested = true;
+      if (partialPersistRunning) return lastPartialPersistPromise;
+
+      partialPersistRunning = true;
+      lastPartialPersistPromise = (async () => {
+        try {
+          while (partialPersistRequested) {
+            partialPersistRequested = false;
+            const snapshot = {
+              partialAnswer,
+              partialReasoning,
+            };
+            try {
+              await deps.db.ops.mutate.llmAttempts.update(
+                llmAttemptId,
+                {
+                  status: "processing",
+                  ...snapshot,
+                },
+                {
+                  threadId,
+                  traceId: typeof event.traceId === "string"
+                    ? event.traceId
+                    : null,
+                  causationId: typeof event.id === "string" ? event.id : null,
+                  namespace: context.namespace,
+                },
+              );
+            } catch (error) {
+              console.warn(
+                "[LLM_CALL] Failed to persist llm_attempt partial:",
+                error,
+              );
+            }
+          }
+        } finally {
+          partialPersistRunning = false;
+        }
+      })();
       return lastPartialPersistPromise;
     };
 
@@ -244,13 +250,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       }
     }
 
-    const promptToolDefinitions = payload.tools as unknown as Array<{
-      function?: { name?: unknown };
-    }>;
-    const routingControlsExposed = Array.isArray(promptToolDefinitions) &&
-      promptToolDefinitions.some((definition) =>
-        isRoutingControlName(definition?.function?.name)
-      );
     const routingAgent = context.agents?.find((agent) => {
       const agentId = payload.agent.id?.toLowerCase();
       const agentName = payload.agent.name.toLowerCase();
@@ -268,59 +267,29 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       )
       : { ask: [], handoff: [] };
 
-    type BufferedStreamToken = {
-      token: string;
-      options?: { isReasoning?: boolean };
-    };
-    let bufferedStreamTokens: BufferedStreamToken[] = [];
-
     const processStreamToken = (context.stream && deps.emitToStream)
       ? (token: string, options?: { isReasoning?: boolean }) => {
-        const filtered = options?.isReasoning
-          ? token
-          : filterToolCallTokensStreaming(token, toolCallFilterState);
-
         if (
           !options?.isReasoning &&
-          typeof filtered === "string" &&
-          filtered.trim().length > 0
+          token.trim().length > 0
         ) {
           markVisibleOutputStarted();
         }
         if (options?.isReasoning) {
           partialReasoning += token;
-        } else if (filtered) {
-          partialAnswer += filtered;
+        } else if (token) {
+          partialAnswer += token;
         }
-        if (!isSuperseded() && (token || filtered)) persistPartialAttempt();
+        if (!isSuperseded() && token) persistPartialAttempt();
 
         if (isSuperseded()) return;
 
         deps.emitToStream(
-          buildTokenEvent(filtered, false, options?.isReasoning),
+          buildTokenEvent(token, false, options?.isReasoning),
         );
       }
       : undefined;
-    const streamCallback = processStreamToken
-      ? (routingControlsExposed
-        ? (token: string, options?: { isReasoning?: boolean }) => {
-          bufferedStreamTokens.push({ token, options });
-        }
-        : processStreamToken)
-      : undefined;
-    const flushBufferedStream = () => {
-      if (!processStreamToken) return;
-      for (const chunk of bufferedStreamTokens) {
-        processStreamToken(chunk.token, chunk.options);
-      }
-      bufferedStreamTokens = [];
-    };
-    const discardBufferedStream = () => {
-      bufferedStreamTokens = [];
-      toolCallFilterState.inside = false;
-      toolCallFilterState.pending = "";
-      toolCallFilterState.controlPending = "";
-    };
+    const streamCallback = processStreamToken;
 
     const envVars = readRuntimeEnvironment();
 
@@ -896,7 +865,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         ),
       });
     };
-    const startChat = (messages: ChatMessage[]) =>
+    const startChat = (
+      messages: ChatMessage[],
+      callback = streamCallback,
+    ) =>
       chat(
         {
           messages,
@@ -912,7 +884,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         } as ChatRequest,
         configForCall,
         envVars,
-        streamCallback,
+        callback,
         context.llmProviders,
       );
     let chatPromise = startChat(baseMessages);
@@ -931,7 +903,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       if (routingSelection.kind === "invalid") {
         routingCorrectionAttempted = true;
         discardedRoutingResponses.push(response);
-        discardBufferedStream();
         const askTargets = routingTargets.ask.map((target) => target.id);
         const handoffTargets = routingTargets.handoff.map((target) =>
           target.id
@@ -949,7 +920,24 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             }.`,
           ].join("\n"),
         };
-        chatPromise = startChat([...baseMessages, correctionPrompt]);
+        let correctionVisibleStarted = false;
+        const correctionStreamCallback = processStreamToken
+          ? (token: string, options?: { isReasoning?: boolean }) => {
+            if (
+              !options?.isReasoning &&
+              token.length > 0 &&
+              !correctionVisibleStarted
+            ) {
+              correctionVisibleStarted = true;
+              if (partialAnswer.length > 0) processStreamToken("\n\n");
+            }
+            processStreamToken(token, options);
+          }
+          : undefined;
+        chatPromise = startChat(
+          [...baseMessages, correctionPrompt],
+          correctionStreamCallback,
+        );
         settled = await awaitChatOrSupersession(chatPromise);
         if (settled === "superseded") {
           detachSupersededDrain(chatPromise);
@@ -961,9 +949,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           routingTargets,
         );
       }
-
-      if (routingSelection.kind === "none") flushBufferedStream();
-      else discardBufferedStream();
     } catch (error) {
       if (isSuperseded()) {
         void persistSupersededError(error).catch((persistError) => {
@@ -1143,6 +1128,17 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     let answer: string | undefined = ("answer" in llmResponse)
       ? (llmResponse as unknown as { answer?: string }).answer
       : undefined;
+    const visibleAnswerParts = [
+      ...discardedRoutingResponses,
+      llmResponse,
+    ].flatMap((candidate) =>
+      typeof candidate.answer === "string" && candidate.answer.length > 0
+        ? [candidate.answer]
+        : []
+    );
+    if (visibleAnswerParts.length > 0) {
+      answer = visibleAnswerParts.join("\n\n");
+    }
     const reasoning: string | undefined = ("reasoning" in llmResponse)
       ? (llmResponse as unknown as { reasoning?: string }).reasoning
       : undefined;
@@ -1253,9 +1249,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       console.log("routingSelection", routingSelection);
     }
 
-    if (routingIntent) {
-      answer = routingIntent.message;
-    } else if (routingFailure) {
+    if (routingFailure && !answer?.trim()) {
       answer = "The model could not produce a valid in-thread routing control.";
     }
 
@@ -1374,6 +1368,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             action: routingIntent.action,
             targetId: routingIntent.targetId,
             source: routingIntent.source,
+            message: routingIntent.message,
             ...(routingIntent.controlCallId
               ? { controlCallId: routingIntent.controlCallId }
               : {}),

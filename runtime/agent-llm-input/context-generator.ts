@@ -149,7 +149,9 @@ export function contextGenerator(
             ]
             : []),
           "- Each routing control requires exactly target and message; the message argument is what the target receives",
-          "- Use at most one in-thread routing control per response and never target yourself",
+          "- Visible text before a routing control is public and remains in the conversation; do not duplicate the routing message verbatim as visible text",
+          "- Use at most one in-thread routing control per response, never combine it with another tool call, and never target yourself",
+          "- Do not narrate routing mechanics or print routing markup outside the control call",
           "- Reply normally without a routing control when the response should return to the person who addressed you",
         ]
         : [

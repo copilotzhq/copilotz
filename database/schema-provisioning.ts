@@ -102,6 +102,8 @@ const REQUIRED_RUNTIME_COLUMNS = [
 ] as const;
 
 const REQUIRED_RUNTIME_INDEXES = [
+  `CREATE INDEX IF NOT EXISTS "idx_events_trace_status"
+     ON "events" ("traceId", "status")`,
   `CREATE INDEX IF NOT EXISTS "idx_nodes_admin_llm_attempt_time"
      ON "nodes" ("namespace", "created_at")
      WHERE "type" = 'llm_attempt'`,

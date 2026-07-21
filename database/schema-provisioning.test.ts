@@ -131,6 +131,13 @@ Deno.test("ensureSchemaProvisioned runs runtime index DDL on existing schemas", 
   assertEquals(
     db.calls.some((call) =>
       call.sql.includes("CREATE INDEX") &&
+      call.sql.includes("idx_events_trace_status")
+    ),
+    true,
+  );
+  assertEquals(
+    db.calls.some((call) =>
+      call.sql.includes("CREATE INDEX") &&
       call.sql.includes("idx_nodes_admin_llm_attempt_time")
     ),
     true,

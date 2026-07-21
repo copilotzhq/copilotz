@@ -9,6 +9,11 @@ import type {
   ChatMessage,
   ToolInvocation,
 } from "@/runtime/llm/types.ts";
+import {
+  ASK_IN_THREAD_CONTROL,
+  HANDOFF_IN_THREAD_CONTROL,
+  ROUTING_CONTROL_SOURCE,
+} from "@/runtime/routing/index.ts";
 import { extractAssetId, isAssetRef } from "@/runtime/storage/assets.ts";
 import { estimateTextTokens } from "@/runtime/tokens/index.ts";
 
@@ -43,6 +48,7 @@ type MessageMetadata = Record<string, unknown> & {
     targetId?: unknown;
     source?: unknown;
     message?: unknown;
+    controlCallId?: unknown;
   };
 };
 
@@ -411,16 +417,22 @@ function matchesAgentIdentity(
   );
 }
 
-function routingContentForAgent(
+type RoutingHistoryProjection = {
+  content: string;
+  toolCall?: ToolInvocation;
+};
+
+function projectRoutingHistoryForAgent(
   agent: Agent,
   visibleContent: string,
   isCurrentAgent: boolean,
+  sourceMessageId?: string,
   metadata?: MessageMetadata,
-): string | null {
+): RoutingHistoryProjection | null {
   const routing = metadata?.routing;
   if (
     !routing ||
-    routing.source !== "model_control" ||
+    routing.source !== ROUTING_CONTROL_SOURCE ||
     (routing.action !== "ask" && routing.action !== "handoff") ||
     typeof routing.targetId !== "string" ||
     typeof routing.message !== "string"
@@ -435,14 +447,30 @@ function routingContentForAgent(
   );
   const message = routing.message.trim();
   if (message.length === 0) return null;
+
   if (isCurrentAgent) {
-    const routingNote =
-      `[In-thread ${routing.action} to ${routing.targetId.trim()}]: ${message}`;
-    return visibleContent.trim().length > 0
-      ? `${visibleContent}\n\n${routingNote}`
-      : routingNote;
+    const controlName = routing.action === "ask"
+      ? ASK_IN_THREAD_CONTROL
+      : HANDOFF_IN_THREAD_CONTROL;
+    const persistedCallId = typeof routing.controlCallId === "string"
+      ? routing.controlCallId.trim()
+      : "";
+
+    return {
+      content: visibleContent,
+      toolCall: {
+        id: persistedCallId ||
+          `routing_${sourceMessageId ?? `${routing.action}_${targetId}`}`,
+        tool: { id: controlName },
+        args: JSON.stringify({
+          target: routing.targetId.trim(),
+          message,
+        }),
+      },
+    };
   }
-  return matchesTarget ? message : null;
+
+  return { content: matchesTarget ? message : visibleContent };
 }
 
 function resolveSpeakerLabel(
@@ -546,11 +574,17 @@ export function historyGenerator(
       metadataToolCalls.length > 0;
 
     let content = normalizeVisibleContent(msg.content || "");
-    const routedContent = !isToolResult
-      ? routingContentForAgent(currentAgent, content, isCurrentAgent, metadata)
+    const routingProjection = !isToolResult
+      ? projectRoutingHistoryForAgent(
+        currentAgent,
+        content,
+        isCurrentAgent,
+        msg.id,
+        metadata,
+      )
       : null;
-    if (routedContent) {
-      content = routedContent;
+    if (routingProjection) {
+      content = routingProjection.content;
     }
 
     // Prefer persisted tool-result metadata for tool result messages. For
@@ -730,8 +764,24 @@ export function historyGenerator(
       }
 
       toolCalls = visibleToolCalls;
-    } else if (role === "assistant" && parsedToolCalls.length > 0) {
-      toolCalls = parsedToolCalls.map((call) => stripParsedToolCall(call));
+    } else if (role === "assistant") {
+      const assistantToolCalls = parsedToolCalls.map((call) =>
+        stripParsedToolCall(call)
+      );
+      const routingToolCall = routingProjection?.toolCall;
+      if (
+        routingToolCall &&
+        !assistantToolCalls.some((call) =>
+          call.id === routingToolCall.id ||
+          (call.tool.id === routingToolCall.tool.id &&
+            call.args === routingToolCall.args)
+        )
+      ) {
+        assistantToolCalls.push(routingToolCall);
+      }
+      if (assistantToolCalls.length > 0) {
+        toolCalls = assistantToolCalls;
+      }
     } else if (
       peerSpeakerLabel &&
       parsedToolCalls.length > 0 &&

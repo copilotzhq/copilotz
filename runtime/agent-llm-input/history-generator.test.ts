@@ -121,6 +121,7 @@ Deno.test("historyGenerator delivers routing content to the target and preserves
         targetId: "reviewer",
         source: "model_control",
         message: "Review the implementation against the acceptance criteria.",
+        controlCallId: "route-to-reviewer",
       },
     },
   } as NewMessage;
@@ -152,9 +153,78 @@ Deno.test("historyGenerator delivers routing content to the target and preserves
     "Review the implementation against the acceptance criteria.",
   );
   assertEquals(observerHistory[0]?.content, "Public framing for the team.");
+  assertEquals(senderHistory[0]?.content, "Public framing for the team.");
+  assertEquals(senderHistory[0]?.toolCalls, [{
+    id: "route-to-reviewer",
+    tool: { id: "handoff_in_thread" },
+    args: JSON.stringify({
+      target: "reviewer",
+      message: "Review the implementation against the acceptance criteria.",
+    }),
+  }]);
+
+  const senderWire = String(
+    formatMessages({ messages: senderHistory })[0]?.content,
+  );
+  assertEquals(senderWire.includes("<tool_calls>"), true);
+  assertEquals(senderWire.includes('"name":"handoff_in_thread"'), true);
+  assertEquals(senderWire.includes("[In-thread"), false);
+});
+
+Deno.test("historyGenerator reconstructs production routing history as a real tool call", () => {
+  const north = {
+    id: "north",
+    name: "North",
+    role: "assistant",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  } as Agent;
+  const generated = historyGenerator([
+    {
+      id: "north-route-message",
+      threadId: "thread-1",
+      senderId: "north",
+      senderType: "agent",
+      content: "I’ll ask East for an independent assessment.",
+      metadata: {
+        senderDisplayName: "North",
+        routing: {
+          action: "ask",
+          targetId: "east",
+          source: "model_control",
+          message: "Analyze the draft independently.",
+        },
+      },
+    },
+    {
+      id: "east-response",
+      threadId: "thread-1",
+      senderId: "east",
+      senderType: "agent",
+      content: "Independent assessment complete.",
+      metadata: { senderDisplayName: "East" },
+    },
+  ] as NewMessage[], north);
+
+  assertEquals(generated[0]?.toolCalls, [{
+    id: "routing_north-route-message",
+    tool: { id: "ask_in_thread" },
+    args: JSON.stringify({
+      target: "east",
+      message: "Analyze the draft independently.",
+    }),
+  }]);
+  assertEquals(generated[1]?.role, "user");
+  assertEquals(generated[1]?.metadata?.speakerLabel, "East");
+
+  const formatted = formatMessages({ messages: generated });
+  const routeWire = String(formatted[0]?.content);
+  assertEquals(routeWire.includes("<tool_calls>"), true);
+  assertEquals(routeWire.includes('"name":"ask_in_thread"'), true);
+  assertEquals(routeWire.includes('"target":"east"'), true);
+  assertEquals(routeWire.includes("[In-thread"), false);
   assertEquals(
-    senderHistory[0]?.content,
-    "Public framing for the team.\n\n[In-thread handoff to reviewer]: Review the implementation against the acceptance criteria.",
+    formatted[1]?.content,
+    "[East]: Independent assessment complete.",
   );
 });
 

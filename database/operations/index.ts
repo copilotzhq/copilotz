@@ -85,6 +85,11 @@ export interface NewerInterruptingEventOptions {
   interruptMode?: "abort" | "soft";
 }
 
+export interface QueueTraceState extends Record<string, unknown> {
+  id: string;
+  status: Queue["status"];
+}
+
 // RAG types
 export interface ChunkSearchOptions {
   query?: string;
@@ -582,6 +587,9 @@ export interface DatabaseOperations {
   addToQueue: (threadId: string, event: QueueEventInput) => Promise<NewQueue>;
   getQueueItemById: (queueId: string) => Promise<Queue | undefined>;
   getQueueItemsByTraceId: (traceId: string) => Promise<Queue[]>;
+  getQueueTraceState: (
+    traceId: string,
+  ) => Promise<QueueTraceState | undefined>;
   getNewerInterruptingEvent: (
     threadId: string,
     since: string | Date,
@@ -976,6 +984,27 @@ export function createOperations(
   ): Promise<Queue[]> => {
     const items = await crud.events.find({ traceId }) as Queue[];
     return items;
+  };
+
+  const getQueueTraceState = async (
+    traceId: string,
+  ): Promise<QueueTraceState | undefined> => {
+    const result = await db.query<QueueTraceState>(
+      `SELECT "id", "status"
+       FROM "events"
+       WHERE "traceId" = $1
+         AND "status" IN ('failed', 'expired', 'pending', 'processing')
+       ORDER BY CASE "status"
+         WHEN 'failed' THEN 0
+         WHEN 'expired' THEN 1
+         ELSE 2
+       END,
+       "createdAt",
+       "id"
+       LIMIT 1`,
+      [traceId],
+    );
+    return result.rows[0];
   };
 
   const getNewerInterruptingEvent = async (
@@ -4398,6 +4427,7 @@ export function createOperations(
     addToQueue,
     getQueueItemById,
     getQueueItemsByTraceId,
+    getQueueTraceState,
     getNewerInterruptingEvent,
     hasNewerHumanInput,
     overwritePendingAgentContinuations,

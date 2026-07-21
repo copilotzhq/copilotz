@@ -323,33 +323,22 @@ async function waitForTraceTerminalState(
   traceId: string,
   options?: { isCancelled?: () => boolean; pollIntervalMs?: number },
 ): Promise<void> {
-  const pollIntervalMs = options?.pollIntervalMs ?? 100;
+  const pollIntervalMs = options?.pollIntervalMs ?? 500;
 
   while (!options?.isCancelled?.()) {
-    const items = await ops.getQueueItemsByTraceId(traceId);
-    if (items.length === 0) {
-      throw new Error(`Queue trace not found: ${traceId}`);
-    }
+    const state = await ops.getQueueTraceState(traceId);
+    if (!state) return;
 
-    const failedItem = items.find((item) => item.status === "failed");
-    if (failedItem) {
+    if (state.status === "failed") {
       throw new Error(
-        `Queue trace failed: ${traceId} (event ${String(failedItem.id)})`,
+        `Queue trace failed: ${traceId} (event ${String(state.id)})`,
       );
     }
 
-    const expiredItem = items.find((item) => item.status === "expired");
-    if (expiredItem) {
+    if (state.status === "expired") {
       throw new Error(
-        `Queue trace expired: ${traceId} (event ${String(expiredItem.id)})`,
+        `Queue trace expired: ${traceId} (event ${String(state.id)})`,
       );
-    }
-
-    const hasActiveWork = items.some((item) =>
-      item.status === "pending" || item.status === "processing"
-    );
-    if (!hasActiveWork) {
-      return;
     }
 
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));

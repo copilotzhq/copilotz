@@ -377,6 +377,73 @@ Deno.test("startEventWorker emits message.created lifecycle rows", async () => {
   }]);
 });
 
+Deno.test("startEventWorker emits durable ACTION events to the public stream", async () => {
+  const threadId = "thread-action-stream";
+  const queuedEvent = {
+    id: "event-action",
+    threadId,
+    eventType: "ACTION",
+    payload: {
+      action: "reply_buttons",
+      buttons: [{ id: "confirm", title: "Confirmar" }],
+    },
+    parentEventId: null,
+    traceId: null,
+    priority: 0,
+    metadata: null,
+    ttlMs: null,
+    expiresAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    status: "pending",
+  };
+  let nextCalls = 0;
+  const emittedEvents: Array<{ type: string; payload: unknown }> = [];
+  const ops = {
+    getThreadWorkerLeaseConfig: () => ({
+      leaseMs: 60_000,
+      heartbeatMs: 60_000,
+    }),
+    acquireThreadWorkerLease: async () => true,
+    renewThreadWorkerLease: async () => true,
+    isThreadWorkerLeaseOwner: async () => true,
+    recoverThreadProcessingQueueItems: async () => 0,
+    getNextPendingQueueItem: async () => {
+      nextCalls += 1;
+      return nextCalls === 1 ? queuedEvent : undefined;
+    },
+    getNewerInterruptingEvent: async () => undefined,
+    updateQueueItemStatus: async () => {},
+    releaseThreadWorkerLeaseIfNoPendingWork: async () => true,
+    releaseThreadWorkerLease: async () => {},
+  };
+  const fakeDb = { ops };
+
+  await startEventWorker(
+    fakeDb as never,
+    threadId,
+    {
+      processors: { ACTION: [] },
+      emitToStream: (event) => {
+        emittedEvents.push({ type: event.type, payload: event.payload });
+      },
+      stream: true,
+    },
+    async () =>
+      ({
+        db: fakeDb,
+        thread: { id: threadId },
+        context: {},
+        emitToStream: () => {},
+      }) as never,
+  );
+
+  assertEquals(emittedEvents, [{
+    type: "ACTION",
+    payload: queuedEvent.payload,
+  }]);
+});
+
 Deno.test("startEventWorker marks active interruptible work overwritten when newer abort input arrives", async () => {
   const threadId = "thread-interrupt";
   const queuedEvent = {

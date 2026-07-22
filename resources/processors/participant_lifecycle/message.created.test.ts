@@ -87,6 +87,80 @@ Deno.test("participant lifecycle processor upserts sender and configured agents"
   }
 });
 
+Deno.test("participant lifecycle preserves private state and merges safe sender metadata", async () => {
+  const { db, tempDir } = await createTestDb("participant-lifecycle-metadata");
+  const manager = createCollectionsManager(db, [participantCollection]);
+  const collections = manager.withNamespace("tenant-a");
+
+  await collections.participant.upsertIdentity({
+    externalId: "user-metadata",
+    participantType: "human",
+    metadata: {
+      _private: {
+        ab_tests: { booking_ux_bundle: { variant: "A" } },
+        accessToken: "trusted-token",
+      },
+      mobizap_booking_memory: { buyer: { cpf: "12345678900" } },
+      profile: { locale: "pt-BR", preferences: ["aisle"] },
+    },
+  });
+
+  const event = {
+    id: "evt-metadata",
+    threadId: "thread-metadata",
+    type: "message.created",
+    payload: {
+      content: "hello",
+      sender: {
+        type: "user",
+        externalId: "user-metadata",
+        metadata: {
+          phone: "5511999999999",
+          profile: { timezone: "America/Sao_Paulo", preferences: ["window"] },
+          _private: {
+            ab_tests: { booking_ux_bundle: { variant: "B" } },
+            accessToken: "untrusted-token",
+          },
+        },
+      },
+    },
+  } as unknown as Event;
+
+  const deps = {
+    db,
+    thread: { id: "thread-metadata" },
+    context: {
+      namespace: "tenant-a",
+      collections,
+      agents: [],
+    },
+    emitToStream: () => {},
+  } as unknown as ProcessorDeps;
+
+  try {
+    await participantLifecycleProcessor.process(event, deps);
+    const participant = await collections.participant.findOne({
+      externalId: "user-metadata",
+    });
+
+    assertEquals(participant?.metadata, {
+      _private: {
+        ab_tests: { booking_ux_bundle: { variant: "A" } },
+        accessToken: "trusted-token",
+      },
+      mobizap_booking_memory: { buyer: { cpf: "12345678900" } },
+      profile: {
+        locale: "pt-BR",
+        preferences: ["window"],
+        timezone: "America/Sao_Paulo",
+      },
+      phone: "5511999999999",
+    });
+  } finally {
+    await closeTestDb(db, tempDir);
+  }
+});
+
 Deno.test("participant lifecycle processor no-ops when participant collection is absent", async () => {
   const { db, tempDir } = await createTestDb("participant-lifecycle-noop");
   const event = {

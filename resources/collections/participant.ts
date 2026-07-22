@@ -5,6 +5,34 @@
 import { defineCollection, relation } from "@/database/collections/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
+function deepMergeReplaceArrays(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...target };
+
+  for (const [key, value] of Object.entries(source)) {
+    const existing = result[key];
+    if (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      existing &&
+      typeof existing === "object" &&
+      !Array.isArray(existing)
+    ) {
+      result[key] = deepMergeReplaceArrays(
+        existing as Record<string, unknown>,
+        value as Record<string, unknown>,
+      );
+    } else if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+
+  return result;
+}
+
 export default defineCollection({
   name: "participant",
   schema: {
@@ -118,6 +146,26 @@ export default defineCollection({
         agentId?: string | null;
         metadata?: Record<string, unknown> | null;
       }, options?: any) {
+        const existing = await base.findOne(
+          { externalId: input.externalId },
+          options,
+        );
+        const existingMetadata = existing?.metadata &&
+            typeof existing.metadata === "object" &&
+            !Array.isArray(existing.metadata)
+          ? existing.metadata as Record<string, unknown>
+          : null;
+        const incomingMetadata = input.metadata &&
+            typeof input.metadata === "object" &&
+            !Array.isArray(input.metadata)
+          ? input.metadata
+          : null;
+        const metadata = existingMetadata
+          ? incomingMetadata
+            ? deepMergeReplaceArrays(existingMetadata, incomingMetadata)
+            : existingMetadata
+          : incomingMetadata;
+
         return await base.upsert(
           { externalId: input.externalId },
           {
@@ -127,7 +175,7 @@ export default defineCollection({
             name: input.name ?? null,
             email: input.email ?? null,
             agentId: input.agentId ?? null,
-            metadata: input.metadata ?? null,
+            metadata,
           },
         );
       },

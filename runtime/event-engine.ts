@@ -33,10 +33,7 @@ import type {
 } from "@/runtime/tools/types.ts";
 import type { ChatContext } from "@/types/index.ts";
 
-import type {
-  ExecutableTool,
-  ToolExecutor,
-} from "@/runtime/tools/types.ts";
+import type { ExecutableTool, ToolExecutor } from "@/runtime/tools/types.ts";
 
 export type {
   /** Tool with an execute function. */
@@ -286,6 +283,7 @@ function isPublicStreamEventType(eventType: string): boolean {
     eventType === "LLM_RESULT" ||
     eventType === "TOOL_CALL" ||
     eventType === "TOOL_RESULT" ||
+    eventType === "ACTION" ||
     eventType === "ASSET_CREATED" ||
     eventType === "ASSET_ERROR" ||
     eventType === "GOAL_STOPPED" ||

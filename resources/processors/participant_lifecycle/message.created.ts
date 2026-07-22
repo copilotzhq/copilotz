@@ -76,6 +76,20 @@ function buildSenderIdentity(payload: NewMessageEventPayload): {
   return null;
 }
 
+function publicSenderMetadata(
+  metadata: unknown,
+): Record<string, unknown> | undefined {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return undefined;
+  }
+
+  const { _private: _ignored, ...publicMetadata } = metadata as Record<
+    string,
+    unknown
+  >;
+  return publicMetadata;
+}
+
 export const participantLifecycleProcessor: EventProcessor<
   NewMessageEventPayload,
   ProcessorDeps
@@ -97,10 +111,7 @@ export const participantLifecycleProcessor: EventProcessor<
 
     const senderIdentity = buildSenderIdentity(payload);
     if (senderIdentity) {
-      const metadata = payload.sender?.metadata &&
-          typeof payload.sender.metadata === "object"
-        ? payload.sender.metadata as Record<string, unknown>
-        : undefined;
+      const metadata = publicSenderMetadata(payload.sender?.metadata);
       const email = senderIdentity.participantType === "human" &&
           typeof metadata?.email === "string"
         ? metadata.email

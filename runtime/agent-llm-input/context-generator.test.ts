@@ -97,6 +97,43 @@ Deno.test("contextGenerator places stable local instructions before volatile thr
   assert(userMetadataIndex > metadataIndex);
 });
 
+Deno.test("contextGenerator excludes private participant metadata from the LLM context", () => {
+  const agent: Agent = {
+    id: "assistant",
+    name: "Assistant",
+    role: "assistant",
+    instructions: "Help the user.",
+  };
+  const thread = {
+    id: "thread-1",
+    name: "Private metadata test",
+    participants: ["user-1", "assistant"],
+  } as Thread;
+  const participantMetadata = {
+    displayName: "Ada",
+    preferences: { language: "en" },
+    _private: {
+      internalCustomerId: "customer-secret",
+      accessToken: "token-secret",
+    },
+  };
+
+  const generated = contextGenerator(
+    agent,
+    thread,
+    [agent],
+    [agent],
+    participantMetadata,
+  );
+
+  assertStringIncludes(generated.systemPrompt, '"displayName": "Ada"');
+  assertStringIncludes(generated.systemPrompt, '"language": "en"');
+  assert(!generated.systemPrompt.includes('"_private"'));
+  assert(!generated.systemPrompt.includes("customer-secret"));
+  assert(!generated.systemPrompt.includes("token-secret"));
+  assert(participantMetadata._private.accessToken === "token-secret");
+});
+
 Deno.test("contextGenerator advertises reserved controls only when multi-agent routing is enabled", () => {
   const lead: Agent = {
     id: "lead",

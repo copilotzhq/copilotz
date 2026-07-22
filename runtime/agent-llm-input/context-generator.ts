@@ -70,6 +70,15 @@ interface RoutingControlAvailability {
   handoff?: boolean;
 }
 
+function getLlmVisibleParticipantMetadata(
+  metadata?: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!metadata) return {};
+  return Object.fromEntries(
+    Object.entries(metadata).filter(([key]) => key !== "_private"),
+  );
+}
+
 export function contextGenerator(
   agent: Agent,
   thread: Thread,
@@ -188,10 +197,13 @@ export function contextGenerator(
     ? ["## THREAD METADATA", threadMetadata].join("\n")
     : "";
 
-  const userMetadataSection =
-    userMetadata && Object.keys(userMetadata).length > 0
-      ? ["## USER METADATA", JSON.stringify(userMetadata, null, 2)].join("\n")
-      : "";
+  const visibleUserMetadata = getLlmVisibleParticipantMetadata(userMetadata);
+  const userMetadataSection = Object.keys(visibleUserMetadata).length > 0
+    ? [
+      "## USER METADATA",
+      JSON.stringify(visibleUserMetadata, null, 2),
+    ].join("\n")
+    : "";
 
   // Agent's persistent memory (from participant node)
   const agentData = agentNode?.data as Record<string, unknown> | undefined;

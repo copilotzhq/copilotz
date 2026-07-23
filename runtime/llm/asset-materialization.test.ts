@@ -93,6 +93,44 @@ Deno.test("materializeAssetRefsForProvider keeps ZIP attachments marker-only", a
   }
 });
 
+Deno.test("materializeAssetRefsForProvider accepts WhatsApp OGG/Opus audio", async () => {
+  const restore = mockCatalog(["text", "audio"]);
+
+  try {
+    for (const mime of ["audio/ogg; codecs=opus", "audio/opus"]) {
+      const store = createMemoryAssetStore();
+      const { assetId } = await store.save(
+        new Uint8Array([79, 103, 103, 83]),
+        mime,
+      );
+      const ref = buildAssetRefForStore(store, assetId);
+      const messages: ChatMessage[] = [{
+        role: "user",
+        content: [{
+          type: "input_audio",
+          input_audio: { data: ref, format: "ogg" },
+        }],
+      }];
+
+      const result = await materializeAssetRefsForProvider(
+        messages,
+        { provider: "gemini", model: "gemini-test" },
+        store,
+      );
+
+      assert(Array.isArray(result[0].content));
+      const audioPart = result[0].content.find((part) =>
+        part.type === "input_audio"
+      );
+      assertExists(audioPart);
+      assertEquals(audioPart.type, "input_audio");
+      assertEquals(audioPart.input_audio.format, "ogg");
+    }
+  } finally {
+    restore();
+  }
+});
+
 Deno.test("materializeAssetRefsForProvider preserves Gemini PDF data URLs when catalog supports files", async () => {
   const restore = mockCatalog(["text", "file"]);
   const pdfDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";

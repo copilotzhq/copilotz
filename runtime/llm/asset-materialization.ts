@@ -40,6 +40,7 @@ const SUPPORTED_AUDIO_MIME = new Set([
   "audio/aiff",
   "audio/aac",
   "audio/ogg",
+  "audio/opus",
   "audio/flac",
 ]);
 
@@ -135,7 +136,7 @@ function isSupportedImageMime(mime?: string): mime is string {
 
 function isSupportedAudioMime(mime?: string): mime is string {
   return typeof mime === "string" &&
-    SUPPORTED_AUDIO_MIME.has(mime.toLowerCase());
+    SUPPORTED_AUDIO_MIME.has(mime.split(";")[0].trim().toLowerCase());
 }
 
 function isSupportedFileMime(mime?: string): mime is string {
@@ -153,8 +154,11 @@ function isArchiveMime(mime?: string): boolean {
 }
 
 function audioFormatFromMime(mime?: string): string | undefined {
-  const lower = typeof mime === "string" ? mime.toLowerCase() : "";
+  const lower = typeof mime === "string"
+    ? mime.split(";")[0].trim().toLowerCase()
+    : "";
   if (lower === "audio/mpeg") return "mp3";
+  if (lower === "audio/opus") return "ogg";
   if (lower === "audio/x-wav" || lower === "audio/wave") return "wav";
   if (!lower.includes("/")) return undefined;
   return lower.split("/")[1];

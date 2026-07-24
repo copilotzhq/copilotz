@@ -21,6 +21,19 @@ const registry: ProviderRegistry = {
     extractFinishReason: (data: any) =>
       data?.choices?.[0]?.finish_reason ?? null,
   }),
+  openai: () => ({
+    endpoint: "https://example.test/openai",
+    headers: () => ({}),
+    body: () => ({}),
+    extractContent: (data: any) => {
+      const content = data?.choices?.[0]?.delta?.content;
+      return typeof content === "string" && content.length > 0
+        ? [{ text: content }]
+        : null;
+    },
+    extractFinishReason: (data: any) =>
+      data?.choices?.[0]?.finish_reason ?? null,
+  }),
 };
 
 Deno.test("chat wraps provider rate limits as structured LLMProviderError when no fallback is configured", async () => {
@@ -123,6 +136,53 @@ Deno.test("chat attempts fallback for any provider error when fallbacks are conf
   }
 });
 
+Deno.test("chat records content-free full and reusable-prefix fingerprints", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(
+        `data: ${
+          JSON.stringify({
+            choices: [{ delta: { content: "ok" }, finish_reason: "stop" }],
+          })
+        }\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+
+  try {
+    const response = await chat(
+      {
+        messages: [
+          { role: "system", content: "stable-prefix" },
+          { role: "user", content: "changing-suffix" },
+        ],
+        debugPromptPrefixMessageCount: 1,
+      },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+      },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(response.debug?.promptFingerprint?.length, 64);
+    assertEquals(response.debug?.promptPrefixFingerprint?.length, 64);
+    assertEquals(response.debug?.promptPrefixMessageCount, 1);
+    assertEquals(
+      response.debug?.promptFingerprint ===
+        response.debug?.promptPrefixFingerprint,
+      false,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("chat materializes messages separately for each provider attempt", async () => {
   const originalFetch = globalThis.fetch;
   const seenContents: string[] = [];
@@ -203,7 +263,7 @@ Deno.test("chat materializes messages separately for each provider attempt", asy
   }
 });
 
-Deno.test("chat falls back for auth failures and logs a warning", async () => {
+Deno.test("chat skips same-provider fallbacks for auth failures", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
   const warnings: unknown[][] = [];
@@ -242,7 +302,10 @@ Deno.test("chat falls back for auth failures and logs a warning", async () => {
         model: "primary",
         apiKey: "test",
         estimateCost: false,
-        fallbacks: [{ provider: "anthropic", model: "fallback" }],
+        fallbacks: [
+          { provider: "anthropic", model: "same-provider-fallback" },
+          { provider: "openai", model: "cross-provider-fallback" },
+        ],
       },
       {},
       undefined,
@@ -250,7 +313,8 @@ Deno.test("chat falls back for auth failures and logs a warning", async () => {
     );
 
     assertEquals(response.answer, "ok");
-    assertEquals(response.model, "fallback");
+    assertEquals(response.provider, "openai");
+    assertEquals(response.model, "cross-provider-fallback");
     assertEquals(calls, 2);
     assertEquals(warnings.length, 1);
     assertEquals(
@@ -259,8 +323,83 @@ Deno.test("chat falls back for auth failures and logs a warning", async () => {
     );
     assertEquals(
       (warnings[0][1] as Record<string, unknown>).nextModel,
-      "fallback",
+      "cross-provider-fallback",
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
+Deno.test("chat preserves safe billing details and skips same-provider fallbacks", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const calls: string[] = [];
+  console.warn = () => {};
+  globalThis.fetch = (url) => {
+    calls.push(String(url));
+    if (String(url).includes("/anthropic")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            error: {
+              type: "billing_error",
+              code: "insufficient_quota",
+              message: "Credit balance is too low",
+              param: "account",
+              internal_secret: "must-not-be-retained",
+            },
+          }),
+          {
+            status: 400,
+            statusText: "Bad Request",
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      );
+    }
+    return Promise.resolve(
+      new Response(
+        `data: ${
+          JSON.stringify({
+            choices: [{ delta: { content: "ok" }, finish_reason: "stop" }],
+          })
+        }\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+        fallbacks: [
+          { provider: "anthropic", model: "same-provider-fallback" },
+          { provider: "openai", model: "cross-provider-fallback" },
+        ],
+      },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(response.answer, "ok");
+    assertEquals(calls, [
+      "https://example.test/anthropic",
+      "https://example.test/openai",
+    ]);
+    assertEquals(response.usageAttempts?.[0]?.error?.reason, "billing_error");
+    assertEquals(response.usageAttempts?.[0]?.error?.details, {
+      type: "billing_error",
+      code: "insufficient_quota",
+      message: "Credit balance is too low",
+      param: "account",
+    });
   } finally {
     globalThis.fetch = originalFetch;
     console.warn = originalWarn;
@@ -1441,6 +1580,58 @@ const searchTool = {
     inputTypes: "export interface SearchInput { query?: string; }\n",
   },
 };
+
+Deno.test("chat recovers a complete trailing tool call after a normal stop", async () => {
+  const originalFetch = globalThis.fetch;
+  const streamed: string[] = [];
+  let calls = 0;
+
+  globalThis.fetch = () => {
+    calls += 1;
+    return Promise.resolve(
+      sse([
+        {
+          choices: [{
+            delta: {
+              content:
+                'I found the next step.\n<tool_calls>\n{"name":"search","arguments":{"query":"next"},"tool_call_id":"call-1"}',
+            },
+          }],
+        },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      {
+        messages: [{ role: "user", content: "continue" }],
+        tools: [searchTool],
+      },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+      },
+      {},
+      (chunk, options) => {
+        if (!options?.isReasoning) streamed.push(chunk);
+      },
+      registry,
+    );
+
+    assertEquals(calls, 1);
+    assertEquals(response.answer.trim(), "I found the next step.");
+    assertEquals(response.toolCalls?.length, 1);
+    assertEquals(response.toolCalls?.[0]?.id, "call-1");
+    assertEquals(response.toolCalls?.[0]?.tool.id, "search");
+    assertEquals(streamed.join(""), "I found the next step.\n");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 Deno.test("chat quarantines and retries a tagless orphaned tool-result tail", async () => {
   const originalFetch = globalThis.fetch;

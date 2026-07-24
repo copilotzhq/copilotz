@@ -192,6 +192,7 @@ function directDataPart(
   fileData: string,
   mime: string | undefined,
   support: AdapterAssetSupport,
+  filename?: string,
 ): ChatContentPart[] {
   const parsed = fileData.startsWith("data:") ? parseDataUrl(fileData) : null;
   const actualMime = mime ?? parsed?.mime;
@@ -211,6 +212,7 @@ function directDataPart(
         ...(audioFormatFromMime(parsed.mime)
           ? { format: audioFormatFromMime(parsed.mime) }
           : {}),
+        ...(filename ? { filename } : {}),
       },
     }];
   }
@@ -218,7 +220,11 @@ function directDataPart(
   if (parsed && isSupportedFileMime(actualMime) && support.file) {
     return [{
       type: "file",
-      file: { file_data: fileData, mime_type: actualMime },
+      file: {
+        file_data: fileData,
+        mime_type: actualMime,
+        ...(filename ? { filename } : {}),
+      },
     }];
   }
 
@@ -241,6 +247,7 @@ async function resolveAssetRefPart(
   support: AdapterAssetSupport,
   store?: AssetStore,
   explicitMime?: string,
+  filename?: string,
 ): Promise<ChatContentPart[]> {
   if (!store) {
     return [{ type: "text", text: unavailableAssetText(assetRef) }];
@@ -271,6 +278,7 @@ async function resolveAssetRefPart(
           ...(audioFormatFromMime(actualMime)
             ? { format: audioFormatFromMime(actualMime) }
             : {}),
+          ...(filename ? { filename } : {}),
         },
       }];
     }
@@ -280,6 +288,7 @@ async function resolveAssetRefPart(
         file: {
           file_data: toDataUrl(bytes, actualMime),
           mime_type: actualMime,
+          ...(filename ? { filename } : {}),
         },
       }];
     }
@@ -353,7 +362,14 @@ async function materializePart(
   if (part.type === "input_audio" && part.input_audio?.data) {
     const data = part.input_audio.data;
     if (isAssetRef(data)) {
-      return await resolveAssetRefPart(data, "audio", support, store);
+      return await resolveAssetRefPart(
+        data,
+        "audio",
+        support,
+        store,
+        undefined,
+        part.input_audio.filename,
+      );
     }
     return support.audio ? [part] : [{
       type: "text",
@@ -375,6 +391,7 @@ async function materializePart(
         support,
         store,
         part.file.mime_type,
+        part.file.filename,
       );
     }
     if (fileData.startsWith("data:")) {
@@ -382,6 +399,7 @@ async function materializePart(
         fileData,
         part.file.mime_type ?? dataUrlMime(fileData),
         support,
+        part.file.filename,
       );
     }
     return [{

@@ -709,3 +709,47 @@ Deno.test("historyGenerator omits peer requester_only tool activity and empty pl
 
   assertEquals(generated, []);
 });
+
+Deno.test("historyGenerator preserves attachment filenames for provider materialization", () => {
+  const currentAgent = {
+    id: "north",
+    name: "North",
+    role: "assistant",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  } as Agent;
+  const generated = historyGenerator([{
+    id: "message-with-assets",
+    threadId: "thread-1",
+    senderId: "user-1",
+    senderType: "user",
+    content: "Inspect the attachments.",
+    metadata: {
+      attachments: [{
+        kind: "file",
+        mimeType: "application/pdf",
+        fileName: "generated-report.pdf",
+        assetRef: "asset://tenant/generated-report",
+      }, {
+        kind: "audio",
+        mimeType: "audio/ogg",
+        format: "ogg",
+        fileName: "voice-note.ogg",
+        assetRef: "asset://tenant/voice-note",
+      }],
+    },
+  } as NewMessage], currentAgent);
+
+  const content = generated[0]?.content;
+  assertEquals(Array.isArray(content), true);
+  if (!Array.isArray(content)) throw new Error("Expected multimodal content");
+  const file = content.find((part) => part.type === "file");
+  const audio = content.find((part) => part.type === "input_audio");
+  assertEquals(
+    file?.type === "file" ? file.file.filename : undefined,
+    "generated-report.pdf",
+  );
+  assertEquals(
+    audio?.type === "input_audio" ? audio.input_audio.filename : undefined,
+    "voice-note.ogg",
+  );
+});

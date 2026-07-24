@@ -13,6 +13,7 @@ import type {
   NewKnowledgeNode,
 } from "@/database/schemas/index.ts";
 import { chat, LLMProviderError } from "@/runtime/llm/index.ts";
+import { prepareAgentChatRequest } from "@/runtime/llm/agent-request.ts";
 import {
   mergeLLMRuntimeConfig,
   readRuntimeEnvironment,
@@ -798,9 +799,11 @@ function responseDebugSnapshot(
 function buildConsolidationDebug(
   response: ChatResponse | null,
   validationFailures: ConsolidationValidationFailure[],
+  error?: unknown,
 ): Record<string, unknown> | null {
-  if (!response) return null;
-  const providerAttempts = (response.usageAttempts ?? []).map((attempt) => ({
+  const usageAttempts = response?.usageAttempts ??
+    (error instanceof LLMProviderError ? error.usageAttempts : []);
+  const providerAttempts = usageAttempts.map((attempt) => ({
     provider: attempt.provider ?? null,
     model: attempt.model ?? null,
     usage: attempt.usage,
@@ -811,6 +814,17 @@ function buildConsolidationDebug(
     error: attempt.error ?? null,
     debug: attempt.debug ?? null,
   }));
+  if (!response) {
+    return providerAttempts.length > 0
+      ? {
+        consolidation: {
+          repairAttempted: validationFailures.length > 0,
+          providerAttempts,
+          rejectedValidationAttempts: [],
+        },
+      }
+      : null;
+  }
   if (validationFailures.length === 0 && providerAttempts.length <= 1) {
     return responseDebugSnapshot(response);
   }
@@ -894,12 +908,14 @@ function serializeConsolidationError(
       fallbackAttempted: error.fallbackAttempted,
       fallbackCount: Math.max(0, error.attempts.length - 1),
       visibleStreamStarted: error.visibleStreamStarted,
+      providerError: error.providerError ? { ...error.providerError } : null,
       attempts: error.attempts.map((attempt) => ({
         provider: attempt.provider,
         model: attempt.model ?? null,
         reason: attempt.reason ?? null,
         status: attempt.status ?? null,
         message: attempt.message ?? null,
+        details: attempt.details ? { ...attempt.details } : null,
       })),
       validationRepairAttempted: validationFailures.length > 0,
     };
@@ -911,6 +927,7 @@ function serializeConsolidationError(
     reason: attempt.error?.reason ?? attempt.usage.statusReason ?? null,
     status: attempt.error?.status ?? null,
     message: attempt.error?.message ?? null,
+    details: attempt.error?.details ? { ...attempt.error.details } : null,
   }));
   return {
     message,
@@ -1151,8 +1168,7 @@ function compactSourcePreview(message: NewMessage): string | null {
 }
 
 function buildSourceMessageMap(messages: NewMessage[]) {
-  return messages.map((message, index) => ({
-    label: `M${index + 1}`,
+  return messages.map((message) => ({
     messageId: message.id,
     senderType: message.senderType,
     senderId: message.senderId,
@@ -1636,6 +1652,14 @@ export const longTermMemoryProcessor: EventProcessor<
         },
       ];
       const llmTools = llmInput.tools;
+      const preparedChat = prepareAgentChatRequest({
+        messages: llmMessages,
+        tools: llmTools,
+        agent,
+        assetConfig: deps.context.assetConfig,
+        assetStore: deps.context.assetStore,
+        debugLabel: "memory_consolidation",
+      });
       llmConfig = await resolveMemoryLlmConfig({
         agent,
         input: llmInput,
@@ -1655,7 +1679,10 @@ export const longTermMemoryProcessor: EventProcessor<
 
       const runtimeEnvironment = readRuntimeEnvironment();
       response = await chat(
-        { messages: llmMessages, tools: llmTools },
+        {
+          ...preparedChat.request,
+          debugPromptPrefixMessageCount: llmInput.messages.length,
+        },
         llmConfig,
         runtimeEnvironment,
         undefined,
@@ -1687,12 +1714,16 @@ export const longTermMemoryProcessor: EventProcessor<
           response,
         });
         const repairMessages = buildConsolidationRepairMessages(
-          llmMessages,
+          preparedChat.request.messages,
           response,
           validationError,
         );
         response = await chat(
-          { messages: repairMessages, tools: llmTools },
+          {
+            ...preparedChat.request,
+            messages: repairMessages,
+            debugPromptPrefixMessageCount: llmInput.messages.length,
+          },
           llmConfig,
           runtimeEnvironment,
           undefined,
@@ -2000,7 +2031,11 @@ export const longTermMemoryProcessor: EventProcessor<
           answer: response?.answer ?? null,
           reasoning: response?.reasoning ?? null,
           messages: response?.prompt,
-          debug: buildConsolidationDebug(response, validationFailures),
+          debug: buildConsolidationDebug(
+            response,
+            validationFailures,
+            error,
+          ),
           provider: error instanceof LLMProviderError
             ? error.provider
             : response?.provider ?? llmConfig?.provider ?? null,

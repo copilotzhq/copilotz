@@ -203,10 +203,20 @@ Deno.test("openaiProvider maps multimodal content for Responses input", () => {
       content: [
         { type: "text", text: "Describe this." },
         { type: "image_url", image_url: { url: "https://example.com/a.png" } },
-        { type: "input_audio", input_audio: { data: "abc", format: "mp3" } },
+        {
+          type: "input_audio",
+          input_audio: {
+            data: "abc",
+            format: "mp3",
+            filename: "voice-note.mp3",
+          },
+        },
         {
           type: "file",
-          file: { file_data: "data:application/pdf;base64,abc" },
+          file: {
+            file_data: "data:application/pdf;base64,abc",
+            filename: "exported-report.pdf",
+          },
         },
       ],
     },
@@ -217,8 +227,16 @@ Deno.test("openaiProvider maps multimodal content for Responses input", () => {
     content: [
       { type: "input_text", text: "Describe this." },
       { type: "input_image", image_url: "https://example.com/a.png" },
-      { type: "input_file", file_data: "data:audio/mp3;base64,abc" },
-      { type: "input_file", file_data: "data:application/pdf;base64,abc" },
+      {
+        type: "input_file",
+        file_data: "data:audio/mp3;base64,abc",
+        filename: "voice-note.mp3",
+      },
+      {
+        type: "input_file",
+        file_data: "data:application/pdf;base64,abc",
+        filename: "exported-report.pdf",
+      },
     ],
   }]);
 });

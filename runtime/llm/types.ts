@@ -31,12 +31,12 @@ export type ChatContentPart =
   }
   | {
     type: "input_audio";
-    input_audio: { data: string; format?: string };
+    input_audio: { data: string; format?: string; filename?: string };
     tokenMetadata?: TokenMediaMetadata;
   }
   | {
     type: "file";
-    file: { file_data: string; mime_type?: string };
+    file: { file_data: string; mime_type?: string; filename?: string };
     tokenMetadata?: TokenMediaMetadata;
   };
 
@@ -82,6 +82,7 @@ export type ProviderFallbackReason =
   | "timeout"
   | "network"
   | "auth_error"
+  | "billing_error"
   | "rate_limit"
   | "server_error"
   | "provider_error"
@@ -270,6 +271,11 @@ export interface ChatRequest {
     messages: ChatMessage[],
     config: ProviderConfig,
   ) => Promise<ChatMessage[]> | ChatMessage[];
+  /**
+   * Number of leading provider-ready messages expected to be reusable.
+   * Used only for content-free cache diagnostics.
+   */
+  debugPromptPrefixMessageCount?: number;
   /** Internal persisted prompt-history boundaries keyed by provider profile. */
   historyCutoffs?: Record<string, string>;
   /** Internal namespace used to isolate persisted cutoffs (normally agent id). */
@@ -364,6 +370,11 @@ export interface ChatResponse {
 export interface LLMDebugSnapshot {
   inputMessages: ChatMessage[];
   inputTokenEstimate?: ChatTokenEstimate;
+  /** SHA-256 of the provider-ready input. Contains no prompt content. */
+  promptFingerprint?: string;
+  /** SHA-256 of the reusable provider-ready prefix. */
+  promptPrefixFingerprint?: string;
+  promptPrefixMessageCount?: number;
   rawOutput: {
     /** Raw assistant content after continuation-prefix join, before parser cleanup. */
     content: string;
@@ -438,6 +449,7 @@ export type TokenUsageStatusReason =
   | "timeout"
   | "network"
   | "auth_error"
+  | "billing_error"
   | "rate_limit"
   | "server_error"
   | "provider_error"
@@ -459,6 +471,7 @@ export interface LLMUsageAttempt {
     reason: ProviderFallbackReason | null;
     status?: number;
     message: string;
+    details?: ProviderErrorDetails;
   };
   usage: TokenUsage;
   cost?: CostBreakdown;
@@ -466,6 +479,13 @@ export interface LLMUsageAttempt {
   partialAnswer?: string;
   partialReasoning?: string;
   usageFinalized?: Promise<FinalizedTokenUsage | null>;
+}
+
+export interface ProviderErrorDetails {
+  type?: string;
+  code?: string;
+  message?: string;
+  param?: string;
 }
 
 export interface FinalizedTokenUsage {

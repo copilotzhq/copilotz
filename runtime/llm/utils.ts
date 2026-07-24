@@ -2243,6 +2243,27 @@ function parseCanonicalToolCallLines(blockContent: string): ToolInvocation[] {
   return calls;
 }
 
+function hasOnlyCompleteJsonPipelineSegments(blockContent: string): boolean {
+  const lines = blockContent
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length === 0) return false;
+
+  return lines.every((line) => {
+    const segments = splitPipelineSegments(line);
+    if (!segments || segments.length === 0) return false;
+    return segments.every((segment) => {
+      try {
+        JSON.parse(segment);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  });
+}
+
 function splitPipelineSegments(line: string): string[] | null {
   const segments: string[] = [];
   let start = 0;
@@ -2389,29 +2410,44 @@ export function responseHasOrphanedToolResult(text: string): boolean {
  */
 export function parseToolCallsFromResponse(
   response: string,
-  _knownToolNames?: string[],
+  knownToolNames: string[] = [],
+  options?: { recoverCompleteUnclosed?: boolean },
 ): { cleanResponse: string; toolCalls: ToolInvocation[] } {
   const toolCalls: ToolInvocation[] = [];
   let cleanResponse = response;
 
-  // 1) Recover missing closing tags by balancing braces inside the last <tool_calls>
-  //    If we find an opening tag without a closing one, attempt to extract until balanced JSON objects are complete,
-  //    then synthetically append the closing tag to allow the standard parser to run.
+  // Recover only a complete canonical block that is missing its closing tag
+  // at the end of an otherwise normally finished response. Partial or unknown
+  // calls remain malformed and use the existing corrective retry path.
   const startTag = "<tool_calls>";
   const endTag = "</tool_calls>";
-  const hasStart = response.includes(startTag);
-  const hasEnd = response.includes(endTag);
+  const startIdx = response.lastIndexOf(startTag);
+  const endIdx = response.lastIndexOf(endTag);
 
-  if (hasStart && !hasEnd) {
-    const startIdx = response.lastIndexOf(startTag);
-    if (startIdx !== -1) {
-      const after = response.slice(startIdx + startTag.length);
-      // Never expose partial protocol markup to users. If the model was cut off
-      // before a complete canonical block, drop the dangling block and let the
-      // malformed-tool recovery path correct the next attempt.
-      const rebuilt = response.slice(0, startIdx);
-      response = rebuilt;
-      cleanResponse = rebuilt;
+  if (startIdx > endIdx) {
+    const blockContent = response.slice(startIdx + startTag.length).trim();
+    const parsedCalls = parseCanonicalToolCallLines(blockContent);
+    const knownNames = new Set(knownToolNames);
+    const usesOnlyKnownTools = knownNames.size > 0 &&
+      parsedCalls.every((call) =>
+        knownNames.has(call.tool.id) &&
+        (call.pipeline?.stages ?? []).every((stage) =>
+          stage.type !== "tool" || knownNames.has(stage.tool.id)
+        )
+      );
+
+    if (
+      options?.recoverCompleteUnclosed === true &&
+      hasOnlyCompleteJsonPipelineSegments(blockContent) &&
+      parsedCalls.length > 0 &&
+      usesOnlyKnownTools
+    ) {
+      response = `${response}\n${endTag}`;
+      cleanResponse = response;
+    } else {
+      // Never expose incomplete protocol markup to users.
+      response = response.slice(0, startIdx);
+      cleanResponse = response;
     }
   }
 

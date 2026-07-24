@@ -557,6 +557,16 @@ const schemaDefinition = {
                 fallbackAttempted: { type: "boolean" },
                 fallbackCount: { type: "number" },
                 visibleStreamStarted: { type: "boolean" },
+                providerError: {
+                  type: ["object", "null"],
+                  additionalProperties: false,
+                  properties: {
+                    type: { type: "string" },
+                    code: { type: "string" },
+                    message: { type: "string" },
+                    param: { type: "string" },
+                  },
+                },
                 attempts: {
                   type: "array",
                   items: {
@@ -568,6 +578,16 @@ const schemaDefinition = {
                       reason: { type: ["string", "null"] },
                       status: { type: ["number", "null"] },
                       message: { type: ["string", "null"] },
+                      details: {
+                        type: ["object", "null"],
+                        additionalProperties: false,
+                        properties: {
+                          type: { type: "string" },
+                          code: { type: "string" },
+                          message: { type: "string" },
+                          param: { type: "string" },
+                        },
+                      },
                     },
                     required: ["provider"],
                   },

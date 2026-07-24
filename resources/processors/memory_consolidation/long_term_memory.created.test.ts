@@ -1111,6 +1111,10 @@ Deno.test("long-term-memory consolidation appends one instruction to shared agen
     );
     assertStringIncludes(finalInstruction.content ?? "", fixture.first.id);
     assertStringIncludes(finalInstruction.content ?? "", fixture.last.id);
+    assertEquals(
+      (finalInstruction.content ?? "").includes('"label":"M'),
+      false,
+    );
     assertStringIncludes(
       finalInstruction.content ?? "",
       "Do not answer the user, do not route the conversation, and do not call tools.",
@@ -1510,7 +1514,8 @@ Deno.test("long-term-memory processor authenticates cross-provider fallbacks fro
       {
         reason: "provider_error",
         status: 400,
-        message: "Request failed with status 400",
+        message: "primary unavailable",
+        details: { message: "primary unavailable" },
       },
     );
   } finally {
@@ -1582,6 +1587,21 @@ Deno.test("long-term-memory processor persists the complete failed fallback chai
       (attempts[0].data as Record<string, unknown>).error,
       checkpointError,
     );
+    const debug = (attempts[0].data as Record<string, unknown>)
+      .debug as Record<string, unknown>;
+    const consolidation = debug.consolidation as Record<string, unknown>;
+    const debugAttempts = consolidation.providerAttempts as Array<
+      Record<string, unknown>
+    >;
+    assertEquals(debugAttempts.length, 2);
+    for (const debugAttempt of debugAttempts) {
+      const snapshot = debugAttempt.debug as Record<string, unknown>;
+      assertEquals(
+        typeof snapshot.promptPrefixFingerprint === "string" &&
+          String(snapshot.promptPrefixFingerprint).length === 64,
+        true,
+      );
+    }
   } finally {
     if (previousOpenAiKey === undefined) Deno.env.delete("OPENAI_API_KEY");
     else Deno.env.set("OPENAI_API_KEY", previousOpenAiKey);

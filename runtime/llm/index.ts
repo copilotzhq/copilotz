@@ -44,6 +44,8 @@ import {
   classifyLLMError,
   getErrorMessage,
   getErrorStatus,
+  getProviderErrorDetails,
+  isProviderGlobalLLMFailure,
   type LLMProviderAttempt,
   LLMProviderError,
 } from "@/runtime/llm/errors.ts";
@@ -210,6 +212,7 @@ function parseAssistantResponse(
   response: string,
   extractedBlockTags: string[] = [],
   knownToolNames: string[] = [],
+  recoverCompleteUnclosedToolCalls = false,
 ): {
   cleanResponse: string;
   toolCalls: ToolInvocation[];
@@ -220,7 +223,9 @@ function parseAssistantResponse(
   let extractedTags: Record<string, string[]> = {};
 
   {
-    const parsed = parseToolCallsFromResponse(response, knownToolNames);
+    const parsed = parseToolCallsFromResponse(response, knownToolNames, {
+      recoverCompleteUnclosed: recoverCompleteUnclosedToolCalls,
+    });
     cleanResponse = parsed.cleanResponse;
     toolCalls = parsed.toolCalls;
   }
@@ -260,6 +265,9 @@ function parseAssistantResponse(
 
 function buildDebugSnapshot(args: {
   inputMessages: ChatMessage[];
+  promptFingerprint?: string;
+  promptPrefixFingerprint?: string;
+  promptPrefixMessageCount?: number;
   rawContent: string;
   currentAttemptContent: string;
   reasoning?: string;
@@ -271,6 +279,15 @@ function buildDebugSnapshot(args: {
 }): LLMDebugSnapshot {
   return {
     inputMessages: args.inputMessages,
+    ...(args.promptFingerprint
+      ? { promptFingerprint: args.promptFingerprint }
+      : {}),
+    ...(args.promptPrefixFingerprint
+      ? { promptPrefixFingerprint: args.promptPrefixFingerprint }
+      : {}),
+    ...(args.promptPrefixMessageCount !== undefined
+      ? { promptPrefixMessageCount: args.promptPrefixMessageCount }
+      : {}),
     ...(args.inputTokenEstimate
       ? { inputTokenEstimate: args.inputTokenEstimate }
       : {}),
@@ -287,6 +304,14 @@ function buildDebugSnapshot(args: {
       finishReason: args.finishReason,
     },
   };
+}
+
+async function fingerprintMessages(messages: ChatMessage[]): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify(messages));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function promptProfileKey(
@@ -361,6 +386,7 @@ function toUsageStatusReason(
     case "timeout":
     case "network":
     case "auth_error":
+    case "billing_error":
     case "rate_limit":
     case "server_error":
     case "provider_error":
@@ -384,6 +410,7 @@ function usageStatusForReason(
     case "timeout":
     case "network":
     case "auth_error":
+    case "billing_error":
     case "rate_limit":
     case "server_error":
     case "provider_error":
@@ -560,6 +587,19 @@ export async function chat(
         },
       ]
       : messages;
+    const promptPrefixMessageCount = Math.min(
+      Math.max(
+        request.debugPromptPrefixMessageCount ?? attemptMessages.length,
+        0,
+      ),
+      attemptMessages.length,
+    );
+    const [promptFingerprint, promptPrefixFingerprint] = await Promise.all([
+      fingerprintMessages(attemptMessages),
+      fingerprintMessages(
+        attemptMessages.slice(0, promptPrefixMessageCount),
+      ),
+    ]);
     const attemptInputEstimate = estimateChatMessages(
       attemptMessages,
       attemptConfig,
@@ -581,6 +621,9 @@ export async function chat(
       const hasOrphanedToolResult = responseHasOrphanedToolResult(
         streamResult.content,
       );
+      const mayRecoverCompleteUnclosedToolCalls =
+        streamResult.finishReason === "stop" ||
+        streamResult.finishReason === "tool_calls";
       if (
         leadingVisibleBuffer.length > 0 &&
         !hasOrphanedToolResult &&
@@ -604,6 +647,7 @@ export async function chat(
           rawContent,
           extractedBlockTags,
           knownToolNames,
+          mayRecoverCompleteUnclosedToolCalls,
         );
         const reasoningForDebug = mergeReasoningParts(
           recoveryReasoning,
@@ -679,6 +723,9 @@ export async function chat(
           messages: attemptMessages,
           debug: buildDebugSnapshot({
             inputMessages: attemptMessages,
+            promptFingerprint,
+            promptPrefixFingerprint,
+            promptPrefixMessageCount,
             rawContent,
             currentAttemptContent: streamResult.content,
             reasoning: reasoningForDebug,
@@ -762,6 +809,7 @@ export async function chat(
         fullContent,
         extractedBlockTags,
         knownToolNames,
+        mayRecoverCompleteUnclosedToolCalls,
       );
       const reasoning = mergeReasoningParts(
         recoveryReasoning,
@@ -771,6 +819,7 @@ export async function chat(
         streamResult.content,
         extractedBlockTags,
         knownToolNames,
+        mayRecoverCompleteUnclosedToolCalls,
       );
 
       // Detect a malformed tool-call attempt: the model emitted tool-call
@@ -1002,6 +1051,9 @@ export async function chat(
       const finalAttempt = await buildUsageAttempt(finalStatusReason);
       finalAttempt.debug = buildDebugSnapshot({
         inputMessages: attemptMessages,
+        promptFingerprint,
+        promptPrefixFingerprint,
+        promptPrefixMessageCount,
         rawContent: fullContent,
         currentAttemptContent: streamResult.content,
         reasoning,
@@ -1054,6 +1106,7 @@ export async function chat(
 
       lastError = error;
       lastRecoveryReason = classifyLLMError(error);
+      const providerErrorDetails = getProviderErrorDetails(error);
       sameModelRetried = false;
       const failedStatusReason = toUsageStatusReason(lastRecoveryReason);
       const failedUsage = await estimateUsage(
@@ -1068,10 +1121,26 @@ export async function chat(
         attemptId,
         provider: attemptProvider,
         model: attemptConfig.model,
+        messages: attemptMessages,
+        debug: buildDebugSnapshot({
+          inputMessages: attemptMessages,
+          promptFingerprint,
+          promptPrefixFingerprint,
+          promptPrefixMessageCount,
+          rawContent: attemptVisibleOutput,
+          currentAttemptContent: attemptVisibleOutput,
+          reasoning: attemptReasoningOutput,
+          answer: sanitizeUserFacingText(attemptVisibleOutput),
+          toolCalls: [],
+          extractedTags: {},
+          finishReason: "error",
+          inputTokenEstimate: attemptInputEstimate,
+        }),
         error: {
           reason: classifyLLMError(error),
           status: getErrorStatus(error),
           message: getErrorMessage(error),
+          ...(providerErrorDetails ? { details: providerErrorDetails } : {}),
         },
         usage: failedUsage,
         ...(failedCost ? { cost: failedCost } : {}),
@@ -1086,6 +1155,7 @@ export async function chat(
         reason: classifyLLMError(error),
         status: getErrorStatus(error),
         message: getErrorMessage(error),
+        ...(providerErrorDetails ? { details: providerErrorDetails } : {}),
       });
 
       const hasPartialAttemptContext = attemptVisibleOutput.trim().length > 0 ||
@@ -1136,16 +1206,25 @@ export async function chat(
         };
       }
 
-      if (index < attemptConfigs.length - 1) {
+      let nextIndex = index + 1;
+      if (isProviderGlobalLLMFailure(error)) {
+        while (
+          nextIndex < attemptConfigs.length &&
+          attemptConfigs[nextIndex].provider === attemptProvider
+        ) {
+          nextIndex++;
+        }
+      }
+      if (nextIndex < attemptConfigs.length) {
         warnRecoveryAttempt(
           lastRecoveryReason,
           attemptConfig,
-          attemptConfigs[index + 1],
+          attemptConfigs[nextIndex],
           getErrorMessage(error),
         );
       }
 
-      index++;
+      index = nextIndex;
     }
   }
 
@@ -1160,6 +1239,7 @@ export async function chat(
       fallbackAttempted: attempts.length > 1,
       visibleStreamStarted: visibleOutputStarted,
       usageAttempts,
+      providerError: lastAttempt?.details,
       cause: lastError,
     });
   }

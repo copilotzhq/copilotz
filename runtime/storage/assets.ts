@@ -780,7 +780,14 @@ export async function resolveAssetRefsInMessages(
 					if (documentPart) return documentPart;
 					const dataUrl = toDataUrl(bytes, mime);
 					referenced.add(fileData as AssetRef);
-					return { type: "file", file: { file_data: dataUrl, mime_type: mime } };
+					return {
+						type: "file",
+						file: {
+							file_data: dataUrl,
+							mime_type: mime,
+							...(part.file.filename ? { filename: part.file.filename } : {}),
+						},
+					};
 				} catch {
 					// Asset not found - return text fallback
 					return { type: "text", text: `[unresolved file: ${fileData}]` };
@@ -802,7 +809,16 @@ export async function resolveAssetRefsInMessages(
 					const { bytes, mime } = await store.get(id);
 					const format = mime.includes("/") ? mime.split("/")[1] : part.input_audio.format;
 					referenced.add(dataVal as AssetRef);
-					return { type: "input_audio", input_audio: { data: bytesToBase64(bytes), ...(format ? { format } : {}) } };
+					return {
+						type: "input_audio",
+						input_audio: {
+							data: bytesToBase64(bytes),
+							...(format ? { format } : {}),
+							...(part.input_audio.filename
+								? { filename: part.input_audio.filename }
+								: {}),
+						},
+					};
 				} catch {
 					// Asset not found - return text fallback
 					return { type: "text", text: `[unresolved audio: ${dataVal}]` };

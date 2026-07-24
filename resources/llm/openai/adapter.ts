@@ -256,6 +256,47 @@ function toResponsesRole(role: ChatMessage["role"]): string {
   return role;
 }
 
+function mimeFromDataUrl(value: string): string | undefined {
+  const match = /^data:([^;,]+)/i.exec(value);
+  return match?.[1]?.toLowerCase();
+}
+
+function extensionForMime(mime?: string): string {
+  const normalized = mime?.split(";")[0]?.trim().toLowerCase();
+  const known: Record<string, string> = {
+    "application/pdf": "pdf",
+    "application/json": "json",
+    "text/csv": "csv",
+    "text/plain": "txt",
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/ogg": "ogg",
+    "audio/opus": "opus",
+    "audio/flac": "flac",
+  };
+  if (normalized && known[normalized]) return known[normalized];
+  const subtype = normalized?.split("/")[1]?.replace(/^x-/, "")
+    .replace(/[^a-z0-9]+/g, "");
+  return subtype || "bin";
+}
+
+function safeInputFilename(
+  filename: string | undefined,
+  mime: string | undefined,
+  stem = "attachment",
+): string {
+  const basename = filename?.replaceAll("\\", "/").split("/").at(-1)?.trim();
+  const sanitized = basename
+    ?.replace(/[^A-Za-z0-9._ -]+/g, "_")
+    .replace(/^\.+/, "")
+    .slice(0, 180);
+  if (sanitized && /\.[A-Za-z0-9]{1,12}$/.test(sanitized)) return sanitized;
+  const base = sanitized || stem;
+  return `${base}.${extensionForMime(mime)}`;
+}
+
 function toResponsesContent(
   content: ChatMessage["content"],
 ): string | any[] {
@@ -273,9 +314,15 @@ function toResponsesContent(
     }
     if (part.type === "input_audio" && part.input_audio?.data) {
       const format = part.input_audio.format || "wav";
+      const mime = `audio/${format}`;
       return [{
         type: "input_file",
-        file_data: `data:audio/${format};base64,${part.input_audio.data}`,
+        file_data: `data:${mime};base64,${part.input_audio.data}`,
+        filename: safeInputFilename(
+          part.input_audio.filename,
+          mime,
+          "audio",
+        ),
       }];
     }
     if (part.type === "file" && part.file?.file_data) {
@@ -287,6 +334,10 @@ function toResponsesContent(
       return [{
         type: "input_file",
         file_data: data,
+        filename: safeInputFilename(
+          part.file.filename,
+          part.file.mime_type ?? mimeFromDataUrl(data),
+        ),
       }];
     }
     return [] as any[];

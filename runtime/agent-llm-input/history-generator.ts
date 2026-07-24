@@ -139,6 +139,9 @@ const buildAttachmentParts = (
           input_audio: {
             data: attachment.assetRef,
             ...(format ? { format } : {}),
+            ...(typeof attachment.fileName === "string"
+              ? { filename: attachment.fileName }
+              : {}),
           },
           ...(hasTokenMetadata ? { tokenMetadata } : {}),
         });
@@ -151,6 +154,9 @@ const buildAttachmentParts = (
           file_data: attachment.assetRef,
           mime_type: typeof attachment.mimeType === "string"
             ? attachment.mimeType
+            : undefined,
+          filename: typeof attachment.fileName === "string"
+            ? attachment.fileName
             : undefined,
         },
         ...(hasTokenMetadata ? { tokenMetadata } : {}),
@@ -199,6 +205,9 @@ const buildAttachmentParts = (
         input_audio: {
           data: dataInfo.data,
           ...(format ? { format } : {}),
+          ...(typeof attachment.fileName === "string"
+            ? { filename: attachment.fileName }
+            : {}),
         },
         ...(hasTokenMetadata ? { tokenMetadata } : {}),
       });
@@ -212,6 +221,9 @@ const buildAttachmentParts = (
         file: {
           file_data,
           mime_type: dataInfo.mimeType,
+          filename: typeof attachment.fileName === "string"
+            ? attachment.fileName
+            : undefined,
         },
         ...(hasTokenMetadata ? { tokenMetadata } : {}),
       });
@@ -225,6 +237,9 @@ const buildAttachmentParts = (
       file: {
         file_data: fallback,
         mime_type: dataInfo.mimeType,
+        filename: typeof attachment.fileName === "string"
+          ? attachment.fileName
+          : undefined,
       },
       ...(hasTokenMetadata ? { tokenMetadata } : {}),
     });

@@ -694,6 +694,45 @@ Deno.test("parseToolCallsFromResponse rejects incomplete canonical tool calls", 
   assertEquals(parsed.toolCalls.length, 0);
 });
 
+Deno.test("parseToolCallsFromResponse closes a complete canonical response tail when enabled", () => {
+  const parsed = parseToolCallsFromResponse(
+    'I will ask West.\n<tool_calls>\n{"name":"ask_in_thread","arguments":{"target":"west","message":"Review this."},"tool_call_id":"call-1"}',
+    ["ask_in_thread"],
+    { recoverCompleteUnclosed: true },
+  );
+
+  assertEquals(parsed.cleanResponse, "I will ask West.\n");
+  assertEquals(parsed.toolCalls.length, 1);
+  assertEquals(parsed.toolCalls[0].id, "call-1");
+  assertEquals(parsed.toolCalls[0].tool.id, "ask_in_thread");
+  assertEquals(
+    JSON.parse(parsed.toolCalls[0].args),
+    { target: "west", message: "Review this." },
+  );
+});
+
+Deno.test("parseToolCallsFromResponse does not close partial or unknown response tails", () => {
+  const partial = parseToolCallsFromResponse(
+    '<tool_calls>\n{"name":"ask_in_thread","arguments":{',
+    ["ask_in_thread"],
+    { recoverCompleteUnclosed: true },
+  );
+  const unknown = parseToolCallsFromResponse(
+    '<tool_calls>\n{"name":"unknown","arguments":{}}',
+    ["ask_in_thread"],
+    { recoverCompleteUnclosed: true },
+  );
+  const trailingText = parseToolCallsFromResponse(
+    '<tool_calls>\n{"name":"ask_in_thread","arguments":{}}\nmore text',
+    ["ask_in_thread"],
+    { recoverCompleteUnclosed: true },
+  );
+
+  assertEquals(partial.toolCalls.length, 0);
+  assertEquals(unknown.toolCalls.length, 0);
+  assertEquals(trailingText.toolCalls.length, 0);
+});
+
 Deno.test("parseToolCallsFromResponse strips unrecoverable partial tool calls", () => {
   const parsed = parseToolCallsFromResponse(
     'I will check that.\n<tool_calls>\n{"name":"sandbox_session","arguments":{',

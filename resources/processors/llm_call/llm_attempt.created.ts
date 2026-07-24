@@ -31,7 +31,8 @@ import type {
   TokenEventPayload,
 } from "@/types/index.ts";
 import { ulid } from "ulid";
-import { materializeAssetRefsForProvider } from "@/runtime/llm/asset-materialization.ts";
+import { prepareAgentChatRequest } from "@/runtime/llm/agent-request.ts";
+import { getProviderErrorDetails } from "@/runtime/llm/errors.ts";
 import { createLlmUsageService } from "@/runtime/collections/native.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
 import {
@@ -293,80 +294,18 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
 
     const envVars = readRuntimeEnvironment();
 
-    // Per-agent resolveInLLM takes precedence over the global asset config.
     const agentForAssets = context.agents?.find((a) =>
       a.id === payload.agent.id
     );
-    const perAgentResolve = agentForAssets?.assetOptions?.resolveInLLM;
-    const shouldResolve = perAgentResolve !== undefined
-      ? perAgentResolve
-      : context.assetConfig?.resolveInLLM !== false;
-    if (shouldResolve && !context.assetStore) {
-      try {
-        const anyGlobal = globalThis as unknown as {
-          Deno?: { env?: { get?: (key: string) => string | undefined } };
-          console?: { warn?: (...args: unknown[]) => void };
-        };
-        const debugFlag = anyGlobal?.Deno?.env?.get?.("COPILOTZ_DEBUG");
-        if (debugFlag === "1" && anyGlobal.console?.warn) {
-          anyGlobal.console.warn(
-            "[llm_call] resolveInLLM is true but assetStore is undefined - asset refs will be omitted from provider media parts",
-          );
-        }
-      } catch {
-        // ignore logging failures
-      }
-    }
-
-    const baseMessages = shouldResolve
-      ? payload.messages as ChatMessage[]
-      : (payload.messages as ChatMessage[]).map((m) => {
-        if (Array.isArray(m.content)) {
-          const textOnly = m.content
-            .map((p) =>
-              (p && typeof p === "object" &&
-                  (p as { type?: string }).type === "text")
-                ? (p as { text?: string }).text ?? ""
-                : ""
-            )
-            .join("");
-          return { ...m, content: textOnly };
-        }
-        return m;
-      });
-
-    const materializeMessages = shouldResolve
-      ? async (messages: ChatMessage[], providerConfig: ProviderConfig) => {
-        try {
-          return await materializeAssetRefsForProvider(
-            messages,
-            providerConfig,
-            context.assetStore,
-          );
-        } catch (err) {
-          // In debug mode, surface the underlying error so asset resolution issues are visible.
-          try {
-            const anyGlobal = globalThis as unknown as {
-              Deno?: {
-                env?: { get?: (key: string) => string | undefined };
-                stderr?: { writeSync?: (data: Uint8Array) => unknown };
-              };
-              console?: { warn?: (...args: unknown[]) => void };
-            };
-            const debugFlag = anyGlobal?.Deno?.env?.get?.("COPILOTZ_DEBUG");
-            if (debugFlag === "1" && anyGlobal.console?.warn) {
-              anyGlobal.console.warn(
-                "[llm_call] materializeAssetRefsForProvider failed:",
-                err,
-              );
-            }
-          } catch {
-            // ignore logging failures
-          }
-          return messages;
-        }
-      }
-      : undefined;
+    const preparedChat = prepareAgentChatRequest({
+      messages: payload.messages as ChatMessage[],
+      tools: payload.tools,
+      agent: agentForAssets,
+      assetConfig: context.assetConfig,
+      assetStore: context.assetStore,
+      debugLabel: "llm_call",
+    });
+    const baseMessages = preparedChat.request.messages;
 
     const agentForCall = context.agents?.find((a) => a.id === payload.agent.id);
     const persistedConfig = (payload.config ?? {}) as LLMConfig;
@@ -419,7 +358,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     const configuredProvider = configForCall.provider!;
 
     if (envFlagEnabled("COPILOTZ_DEBUG")) {
-      console.log("shouldResolve", shouldResolve);
+      console.log("shouldResolve", preparedChat.resolvesAssets);
       console.log("hasAssetStore", !!context.assetStore);
       console.log("configForCall", toLLMConfig(configForCall));
       console.log("baseMessages", baseMessages);
@@ -745,6 +684,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     };
 
     const persistSupersededError = async (error: unknown): Promise<void> => {
+      const providerErrorDetails = getProviderErrorDetails(error);
       const providerError = error instanceof LLMProviderError
         ? error
         : new LLMProviderError(
@@ -765,7 +705,11 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
                   ? (error as { status: number }).status
                   : undefined,
               message: error instanceof Error ? error.message : String(error),
+              ...(providerErrorDetails
+                ? { details: providerErrorDetails }
+                : {}),
             }],
+            providerError: providerErrorDetails,
             cause: error,
           },
         );
@@ -788,12 +732,16 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           fallbackAttempted: providerError.fallbackAttempted,
           fallbackCount: Math.max(0, providerError.attempts.length - 1),
           visibleStreamStarted: providerError.visibleStreamStarted,
+          providerError: providerError.providerError
+            ? { ...providerError.providerError }
+            : null,
           attempts: providerError.attempts.map((attempt) => ({
             provider: attempt.provider,
             model: attempt.model ?? null,
             reason: attempt.reason ?? null,
             status: attempt.status ?? null,
             message: attempt.message ?? null,
+            details: attempt.details ? { ...attempt.details } : null,
           })),
         },
       });
@@ -871,8 +819,8 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     ) =>
       chat(
         {
+          ...preparedChat.request,
           messages,
-          tools: payload.tools,
           extractTags: ["think"],
           reasoningHistory: context.reasoningHistory,
           historyCutoffs,
@@ -880,7 +828,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             payload.agent.id ?? payload.agent.name,
           ),
           onHistoryCutoff,
-          ...(materializeMessages ? { materializeMessages } : {}),
         } as ChatRequest,
         configForCall,
         envVars,
@@ -964,6 +911,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         deps.emitToStream(buildTokenEvent("", true));
       }
 
+      const providerErrorDetails = getProviderErrorDetails(error);
       const providerError = error instanceof LLMProviderError
         ? error
         : new LLMProviderError(
@@ -984,7 +932,11 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
                   ? (error as { status: number }).status
                   : undefined,
               message: error instanceof Error ? error.message : String(error),
+              ...(providerErrorDetails
+                ? { details: providerErrorDetails }
+                : {}),
             }],
+            providerError: providerErrorDetails,
             cause: error,
           },
         );
@@ -1014,12 +966,16 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           fallbackAttempted: providerError.fallbackAttempted,
           fallbackCount: Math.max(0, providerError.attempts.length - 1),
           visibleStreamStarted: providerError.visibleStreamStarted,
+          providerError: providerError.providerError
+            ? { ...providerError.providerError }
+            : null,
           attempts: providerError.attempts.map((attempt) => ({
             provider: attempt.provider,
             model: attempt.model ?? null,
             reason: attempt.reason ?? null,
             status: attempt.status ?? null,
             message: attempt.message ?? null,
+            details: attempt.details ? { ...attempt.details } : null,
           })),
         },
         finishedAt: new Date().toISOString(),

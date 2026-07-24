@@ -108,7 +108,11 @@ Deno.test("materializeAssetRefsForProvider accepts WhatsApp OGG/Opus audio", asy
         role: "user",
         content: [{
           type: "input_audio",
-          input_audio: { data: ref, format: "ogg" },
+          input_audio: {
+            data: ref,
+            format: "ogg",
+            filename: "whatsapp-note.ogg",
+          },
         }],
       }];
 
@@ -125,6 +129,7 @@ Deno.test("materializeAssetRefsForProvider accepts WhatsApp OGG/Opus audio", asy
       assertExists(audioPart);
       assertEquals(audioPart.type, "input_audio");
       assertEquals(audioPart.input_audio.format, "ogg");
+      assertEquals(audioPart.input_audio.filename, "whatsapp-note.ogg");
     }
   } finally {
     restore();
@@ -182,6 +187,7 @@ Deno.test("materializeAssetRefsForProvider resolves Gemini PDF refs when catalog
         file: {
           file_data: ref,
           mime_type: "application/pdf",
+          filename: "report.pdf",
         },
       },
     ],
@@ -203,6 +209,7 @@ Deno.test("materializeAssetRefsForProvider resolves Gemini PDF refs when catalog
       "data:application/pdf;base64,",
     );
     assertEquals(filePart.file.mime_type, "application/pdf");
+    assertEquals(filePart.file.filename, "report.pdf");
   } finally {
     restore();
   }

@@ -1,10 +1,14 @@
-import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertStringIncludes,
+} from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import { formatToolsForPrompt } from "./format-tools-for-prompt.ts";
 import { generateAgentTypesFromSchema } from "./schema-to-agent-types.ts";
 import {
   formatMessages,
   generateToolSystemPrompt,
+  generateToolSystemPromptVariant,
 } from "@/runtime/llm/utils.ts";
 
 Deno.test("generateAgentTypesFromSchema renders nested oneOf action unions", () => {
@@ -59,7 +63,10 @@ Deno.test("formatToolsForPrompt generates TypeScript catalog entries", () => {
   assertEquals(tools.length, 1);
   assertEquals(tools[0]?.function.name, "get_current_time");
   assertStringIncludes(tools[0]?.function.inputTypes ?? "", "export interface");
-  assertStringIncludes(tools[0]?.function.inputTypes ?? "", "timezone?: string");
+  assertStringIncludes(
+    tools[0]?.function.inputTypes ?? "",
+    "timezone?: string",
+  );
 });
 
 Deno.test("generateToolSystemPrompt renders typescript catalog sections", () => {
@@ -77,6 +84,36 @@ Deno.test("generateToolSystemPrompt renders typescript catalog sections", () => 
   assertStringIncludes(prompt, "```typescript");
   assertStringIncludes(prompt, "export interface ExampleToolInput");
   assertEquals(prompt.includes('"type":"function"'), false);
+});
+
+Deno.test("tool prompts make the response lifecycle explicit", () => {
+  const tools = [{
+    type: "function" as const,
+    function: {
+      name: "example_tool",
+      description: "Example tool.",
+      inputTypes: "export interface ExampleToolInput { id: string; }\n",
+    },
+  }];
+
+  for (
+    const variant of [
+      "baseline",
+      "useful-visible-contract",
+      "strict-minimal",
+    ] as const
+  ) {
+    const prompt = generateToolSystemPromptVariant(tools, variant);
+    assertStringIncludes(
+      prompt,
+      "A response without a tool call ends the current run.",
+    );
+    assertStringIncludes(
+      prompt,
+      "Never promise a future action unless its tool call is included in that same response.",
+    );
+    assertStringIncludes(prompt, "visible text may appear before or after");
+  }
 });
 
 Deno.test("formatMessages prepends typescript tool catalog into system prompt", () => {

@@ -1881,6 +1881,8 @@ export function generateToolSystemPromptVariant(
   variant: ToolSystemPromptVariant = "baseline",
 ): string {
   const toolCatalog = renderToolCatalog(tools);
+  const runLifecycleRule =
+    "A response without a tool call ends the current run. Never promise a future action unless its tool call is included in that same response. If you cannot call the tool now, state the blocker instead of promising the action.";
 
   if (variant === "strict-minimal") {
     return `
@@ -1888,7 +1890,7 @@ export function generateToolSystemPromptVariant(
 
 You have access to tools. Copilotz, not the provider, executes tools.
 
-When a tool is needed, emit optional visible text first, then exactly one <tool_calls> block. Inside it, emit one JSON object per line:
+When a tool is needed, emit exactly one <tool_calls> block. Optional visible text may appear before or after it. Inside the block, emit one JSON object per line:
 { "name": "tool_name", "arguments": { ... } }
 
 To pipe one tool into another on the same line, separate stages with |. Use { "jq": "filter" } to reshape JSON between tools:
@@ -1902,6 +1904,7 @@ Rules:
 - Use only tool names from the catalog.
 - Do not use provider-native tool syntax or any non-Copilotz tool format.
 - Do not emit <tool_results>; Copilotz provides tool results as external input in a later user turn.
+- ${runLifecycleRule}
 
 Example:
 Sure — checking that now.
@@ -1915,7 +1918,7 @@ Sure — checking that now.
 ${toolCatalog}`;
   }
 
-  const extraRules: string[] = [];
+  const extraRules: string[] = [runLifecycleRule];
   if (variant === "tool-only-turn") {
     extraRules.push(
       "When calling tools, emit only the <tool_calls> block in that assistant message. Do not add acknowledgements, explanations, markdown, or filler text before or after the block.",
@@ -1934,7 +1937,7 @@ ${toolCatalog}`;
   }
   if (variant === "useful-visible-contract") {
     extraRules.push(
-      'Visible text before a tool call is allowed only when it is useful to the user, such as a brief requested explanation. Merely saying which tools you will call is not useful. Do not emit generic acknowledgements, status narration, or filler such as "Sure", "I\'ll call the tool", or "running that now".',
+      'Visible text accompanying a tool call is allowed only when it is useful to the user, such as a brief requested explanation. Merely saying which tools you will call is not useful. Do not emit generic acknowledgements, status narration, or filler such as "Sure", "I\'ll call the tool", or "running that now".',
     );
     extraRules.push(
       "When a tool result is needed before answering, do not include the final answer in the same assistant message as the tool call. Wait for it will be provided as <tool_results> in next turn, then answer from those results.",
@@ -1946,8 +1949,8 @@ ${toolCatalog}`;
     );
   }
   const ruleOne = variant === "baseline" || variant === "no-visible-ack"
-    ? "You may talk to the human normally and call tools in the same response. Put visible text first, then <tool_calls>."
-    : "You may answer the human normally when no tool is needed. When a tool is needed, put visible text first, then <tool_calls>.";
+    ? "You may talk to the human normally and call tools in the same response. Visible text may appear before or after <tool_calls>."
+    : "You may answer the human normally when no tool is needed. When a tool is needed, include <tool_calls> in the same response; unless a later rule requires tool-only output, visible text may appear before or after it.";
   const extraRuleText = extraRules.length > 0
     ? "\n" +
       extraRules.map((rule, index) => `${4 + index}. ${rule}`).join("\n") +
@@ -1967,9 +1970,7 @@ Your previous thinking traces may appear as <think> ... </think> blocks. Do not 
 
 === RESPONSE STRUCTURE ===
 
-When a response includes multiple sections, emit them in this order:
-1. Visible text for the user (if any)
-2. <tool_calls> ... </tool_calls> (if calling tools)
+When a response includes visible text and tool calls, the visible text may appear before or after the single <tool_calls> ... </tool_calls> block.
 Copilotz inserts <tool_results> later in user turns; never emit tool results yourself.
 If no visible reply is needed, respond with <no_response/>.
 

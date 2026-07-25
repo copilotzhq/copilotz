@@ -254,6 +254,7 @@ Deno.test("llm_call processor persists one llm_usage node per provider attempt",
     const produced = result.producedEvents[0] as {
       type: string;
       payload: Record<string, unknown>;
+      metadata?: Record<string, unknown>;
     };
     assertEquals(produced.type, "LLM_RESULT");
     assertEquals(produced.payload.status, "completed");
@@ -281,6 +282,25 @@ Deno.test("llm_call processor persists one llm_usage node per provider attempt",
     assertEquals(usageRows.rows[1].data.statusReason, null);
     assertEquals(usageRows.rows[1].data.model, "fallback");
     assertEquals(produced.payload.usageNodeId, usageRows.rows[1].id);
+
+    const attemptRows = await db.query<{
+      id: string;
+      data: Record<string, unknown>;
+    }>(
+      `SELECT "id", "data"
+       FROM "nodes"
+       WHERE "source_type" = 'llm_attempt'
+         AND "type" = 'llm_attempt'
+         AND "data"->>'threadId' = $1
+       ORDER BY "created_at" ASC`,
+      [thread.id as string],
+    );
+    assertEquals(attemptRows.rows.length, 2);
+    assertEquals(
+      produced.metadata?.streamLlmAttemptId,
+      attemptRows.rows[0].id,
+    );
+    assertEquals(produced.metadata?.llmAttemptId, attemptRows.rows[1].id);
   } finally {
     globalThis.fetch = originalFetch;
   }

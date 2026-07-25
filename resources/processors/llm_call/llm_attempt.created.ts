@@ -142,6 +142,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
 
     let llmAttemptId: string | null = null;
     let terminalLlmAttemptId: string | null = null;
+    let streamLlmAttemptId: string | null = null;
     let partialAnswer = "";
     let partialReasoning = "";
     let lastPartialPersistedAt = 0;
@@ -226,7 +227,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         parentEventId: null,
         traceId: null,
         priority: null,
-        metadata: null,
+        metadata: streamLlmAttemptId ? { streamLlmAttemptId } : null,
         ttlMs: null,
         expiresAt: null,
         createdAt: new Date(),
@@ -242,6 +243,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           ? (event as unknown as { subjectId: string }).subjectId
           : null;
       terminalLlmAttemptId = llmAttemptId;
+      streamLlmAttemptId = llmAttemptId;
       if (llmAttemptId) {
         deps.emitToStream({
           ...event,
@@ -391,6 +393,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           !Array.isArray(eventMetadata.runSender)
         ? { runSender: eventMetadata.runSender }
         : {}),
+      ...(streamLlmAttemptId ? { streamLlmAttemptId } : {}),
     };
 
     const sourceMessageId = typeof eventMetadata.sourceMessageId === "string"
@@ -423,6 +426,8 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         });
         llmAttemptId = String(attempt.id);
         terminalLlmAttemptId = llmAttemptId;
+        streamLlmAttemptId = llmAttemptId;
+        baseResultMetadata.streamLlmAttemptId = streamLlmAttemptId;
         baseResultMetadata.llmAttemptId = terminalLlmAttemptId;
       } catch (error) {
         console.warn("[LLM_CALL] Failed to create llm_attempt node:", error);

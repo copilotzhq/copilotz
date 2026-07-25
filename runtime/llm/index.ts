@@ -201,11 +201,109 @@ function buildAttemptConfig(
     ...(fallbackChangesProvider && !override?.apiKey
       ? { apiKey: undefined }
       : {}),
+    ...(fallbackChangesProvider && !override?.runtimeDiagnostics
+      ? { runtimeDiagnostics: undefined }
+      : {}),
     fallbacks: undefined,
   } as ProviderConfig;
 
   candidate.apiKey = resolveProviderApiKey(candidate, env);
   return withDefaultStopSequences(candidate);
+}
+
+function normalizedProviderEndpoint(config: ProviderConfig): string {
+  const configured = config.baseUrl?.trim();
+  const raw = configured ||
+    (config.provider === "openai" ? "https://api.openai.com/v1" : "default");
+  if (raw === "default") return raw;
+
+  try {
+    const url = new URL(raw);
+    const pathname = url.pathname.replace(/\/+$/, "") || "/";
+    return `${url.protocol.toLowerCase()}//${url.host.toLowerCase()}${pathname}`;
+  } catch {
+    return raw.replace(/\/+$/, "").toLowerCase();
+  }
+}
+
+function providerTransport(config: ProviderConfig): string {
+  if (config.provider !== "openai") {
+    return config.provider ? `${config.provider}_api` : "unknown";
+  }
+
+  const endpoint = normalizedProviderEndpoint(config);
+  if (
+    endpoint === "https://chatgpt.com/backend-api/codex" ||
+    endpoint.startsWith("https://chatgpt.com/backend-api/codex/")
+  ) {
+    return "chatgpt_codex";
+  }
+  if (
+    endpoint === "https://api.openai.com/v1" ||
+    endpoint.startsWith("https://api.openai.com/v1/")
+  ) {
+    return "openai_api";
+  }
+  return "openai_compatible";
+}
+
+function sharesProviderFailureScope(
+  current: ProviderConfig,
+  candidate: ProviderConfig,
+): boolean {
+  return current.provider === candidate.provider &&
+    normalizedProviderEndpoint(current) ===
+      normalizedProviderEndpoint(candidate) &&
+    (current.runtimeDiagnostics?.credentialSource ?? null) ===
+      (candidate.runtimeDiagnostics?.credentialSource ?? null);
+}
+
+function logProviderAttempt(
+  phase: "started" | "completed" | "failed",
+  config: ProviderConfig,
+  context: {
+    llmCallId: string;
+    attemptId: string;
+    attemptNumber: number;
+    finishReason?: ProviderFinishReason | null;
+    reason?: string | null;
+    status?: number;
+    visibleOutputStarted?: boolean;
+  },
+): void {
+  if (config.runtimeDiagnostics?.enabled !== true) return;
+
+  const payload = {
+    severity: phase === "failed" ? "WARNING" : "INFO",
+    message: `[llm] Provider attempt ${phase}`,
+    llmCallId: context.llmCallId,
+    attemptId: context.attemptId,
+    attemptNumber: context.attemptNumber,
+    provider: config.provider ?? null,
+    model: config.model ?? null,
+    transport: providerTransport(config),
+    credentialSource: config.runtimeDiagnostics.credentialSource ??
+      "unspecified",
+    ...(context.finishReason !== undefined
+      ? { finishReason: context.finishReason }
+      : {}),
+    ...(context.reason !== undefined ? { reason: context.reason } : {}),
+    ...(context.status !== undefined ? { status: context.status } : {}),
+    ...(context.visibleOutputStarted !== undefined
+      ? { visibleOutputStarted: context.visibleOutputStarted }
+      : {}),
+  };
+
+  try {
+    const entry = JSON.stringify(payload);
+    if (phase === "failed") {
+      console.warn(entry);
+    } else {
+      console.info(entry);
+    }
+  } catch {
+    // Diagnostics must never affect provider execution.
+  }
 }
 
 function parseAssistantResponse(
@@ -462,6 +560,7 @@ export async function chat(
   ];
 
   const registry = await getProviderRegistry(providerRegistry);
+  const llmCallId = crypto.randomUUID();
   const knownToolNames = (request.tools ?? [])
     .map((tool) => tool?.function?.name)
     .filter((name): name is string =>
@@ -478,6 +577,7 @@ export async function chat(
   let silentRepairNextAttempt = false;
   let forceRecoveryCueNextAttempt = false;
   let recoveryReasoning = "";
+  let attemptSequence = 0;
 
   let index = 0;
   while (index < attemptConfigs.length) {
@@ -527,6 +627,7 @@ export async function chat(
     }
     const messages = formatted.messages;
     const attemptId = crypto.randomUUID();
+    const attemptNumber = ++attemptSequence;
     let attemptVisibleOutputStarted = false;
     let attemptVisibleOutput = "";
     let attemptReasoningOutput = "";
@@ -610,6 +711,11 @@ export async function chat(
         ...(request.extractTags ?? []),
         ...REASONING_HISTORY_TAGS,
       ];
+      logProviderAttempt("started", attemptConfig, {
+        llmCallId,
+        attemptId,
+        attemptNumber,
+      });
       const streamResult = await runProviderStream(
         attemptMessages,
         trackedStream,
@@ -1076,6 +1182,13 @@ export async function chat(
         );
       const usageFinalized = finalAttempt.usageFinalized;
 
+      logProviderAttempt("completed", attemptConfig, {
+        llmCallId,
+        attemptId,
+        attemptNumber,
+        finishReason: streamResult.finishReason,
+      });
+
       return {
         prompt: attemptMessages,
         answer: parsed.cleanResponse,
@@ -1106,6 +1219,15 @@ export async function chat(
 
       lastError = error;
       lastRecoveryReason = classifyLLMError(error);
+      const errorStatus = getErrorStatus(error);
+      logProviderAttempt("failed", attemptConfig, {
+        llmCallId,
+        attemptId,
+        attemptNumber,
+        reason: lastRecoveryReason,
+        ...(errorStatus !== undefined ? { status: errorStatus } : {}),
+        visibleOutputStarted: attemptVisibleOutputStarted,
+      });
       const providerErrorDetails = getProviderErrorDetails(error);
       sameModelRetried = false;
       const failedStatusReason = toUsageStatusReason(lastRecoveryReason);
@@ -1210,7 +1332,10 @@ export async function chat(
       if (isProviderGlobalLLMFailure(error)) {
         while (
           nextIndex < attemptConfigs.length &&
-          attemptConfigs[nextIndex].provider === attemptProvider
+          sharesProviderFailureScope(
+            attemptConfig,
+            attemptConfigs[nextIndex],
+          )
         ) {
           nextIndex++;
         }

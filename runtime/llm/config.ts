@@ -37,6 +37,7 @@ export function toLLMConfig(
 
   const {
     apiKey: _apiKey,
+    runtimeDiagnostics: _runtimeDiagnostics,
     fallbacks,
     ...rest
   } = config;
@@ -45,6 +46,7 @@ export function toLLMConfig(
     ? fallbacks.map((fallback) => {
       const {
         apiKey: _fallbackApiKey,
+        runtimeDiagnostics: _fallbackRuntimeDiagnostics,
         ...safeFallback
       } = fallback as ProviderFallbackConfig;
       return safeFallback as LLMFallbackConfig;

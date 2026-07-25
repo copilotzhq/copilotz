@@ -331,6 +331,99 @@ Deno.test("chat skips same-provider fallbacks for auth failures", async () => {
   }
 });
 
+Deno.test("chat retries a different same-provider credential scope and logs the successful transport", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalInfo = console.info;
+  const originalWarn = console.warn;
+  const logEntries: Array<Record<string, unknown>> = [];
+  let calls = 0;
+
+  const captureStructuredLog = (...args: unknown[]) => {
+    if (typeof args[0] !== "string" || !args[0].startsWith("{")) return;
+    try {
+      logEntries.push(JSON.parse(args[0]));
+    } catch {
+      // Ignore unrelated non-JSON logs.
+    }
+  };
+  console.info = captureStructuredLog;
+  console.warn = captureStructuredLog;
+  globalThis.fetch = () => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.resolve(
+        new Response("forbidden", {
+          status: 403,
+          statusText: "Forbidden",
+        }),
+      );
+    }
+    return Promise.resolve(
+      new Response(
+        `data: ${
+          JSON.stringify({
+            choices: [{ delta: { content: "ok" }, finish_reason: "stop" }],
+          })
+        }\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "openai",
+        model: "gpt-test",
+        apiKey: "oauth-token",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        runtimeDiagnostics: {
+          enabled: true,
+          credentialSource: "connected_account",
+        },
+        estimateCost: false,
+        fallbacks: [{
+          provider: "openai",
+          model: "gpt-test",
+          apiKey: "service-key",
+          baseUrl: undefined,
+          extraHeaders: {},
+          runtimeDiagnostics: {
+            enabled: true,
+            credentialSource: "service_api_key",
+          },
+        }],
+      },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(response.answer, "ok");
+    assertEquals(calls, 2);
+
+    const failed = logEntries.find((entry) =>
+      entry.message === "[llm] Provider attempt failed"
+    );
+    const completed = logEntries.find((entry) =>
+      entry.message === "[llm] Provider attempt completed"
+    );
+    assertEquals(failed?.transport, "chatgpt_codex");
+    assertEquals(failed?.credentialSource, "connected_account");
+    assertEquals(failed?.reason, "auth_error");
+    assertEquals(failed?.status, 403);
+    assertEquals(completed?.transport, "openai_api");
+    assertEquals(completed?.credentialSource, "service_api_key");
+    assertEquals(completed?.finishReason, "stop");
+    assertEquals(completed?.llmCallId, failed?.llmCallId);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.info = originalInfo;
+    console.warn = originalWarn;
+  }
+});
+
 Deno.test("chat preserves safe billing details and skips same-provider fallbacks", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;

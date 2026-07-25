@@ -89,10 +89,26 @@ export type ProviderFallbackReason =
   | "invalid_transcript"
   | "unknown";
 
+export type LLMCredentialSource =
+  | "connected_account"
+  | "service_api_key"
+  | "environment"
+  | "explicit";
+
+/**
+ * Opt-in, runtime-only provider-attempt diagnostics. These fields are safe to
+ * log and are removed by `toLLMConfig` before configuration is persisted.
+ */
+export interface LLMRuntimeDiagnostics {
+  enabled?: boolean;
+  credentialSource?: LLMCredentialSource;
+}
+
 export interface ProviderConfigBase {
   // Provider selection
   provider?: ProviderName;
   apiKey?: string;
+  runtimeDiagnostics?: LLMRuntimeDiagnostics;
 
   // Model configuration
   model?: string;
@@ -213,7 +229,10 @@ export interface ProviderConfigBase {
   verbosity?: "none" | "low" | "medium" | "high"; // OpenAI reasoning models (o3, o4)
 }
 
-export type LLMConfigBase = Omit<ProviderConfigBase, "apiKey">;
+export type LLMConfigBase = Omit<
+  ProviderConfigBase,
+  "apiKey" | "runtimeDiagnostics"
+>;
 
 export type LLMFallbackConfig =
   & Omit<LLMConfigBase, "provider">

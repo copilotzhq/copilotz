@@ -12,11 +12,19 @@ Deno.test("toLLMConfig removes apiKey from primary config and fallbacks", () => 
     model: "gpt-4.1",
     temperature: 0.2,
     apiKey: "secret-primary",
+    runtimeDiagnostics: {
+      enabled: true,
+      credentialSource: "connected_account",
+    },
     fallbacks: [
       {
         provider: "anthropic",
         model: "claude-sonnet-4-5-20241022",
         apiKey: "secret-fallback",
+        runtimeDiagnostics: {
+          enabled: true,
+          credentialSource: "service_api_key",
+        },
       },
     ],
   });

@@ -2,29 +2,34 @@ import type { ToolDefinition, ToolInvocation } from "@/runtime/llm/types.ts";
 import { generateAgentTypesFromSchema } from "@/runtime/tools/schema-to-agent-types.ts";
 import type { Agent, Thread } from "@/types/index.ts";
 
+export const CONSULT_AGENT_CONTROL = "consult_agent" as const;
+/** @deprecated Read-only compatibility alias for historical model output. */
 export const ASK_IN_THREAD_CONTROL = "ask_in_thread" as const;
+/** @deprecated Read-only compatibility alias for historical model output. */
 export const HANDOFF_IN_THREAD_CONTROL = "handoff_in_thread" as const;
 export const ROUTING_CONTROL_SOURCE = "model_control" as const;
 
 export const ROUTING_CONTROL_NAMES = [
+  CONSULT_AGENT_CONTROL,
   ASK_IN_THREAD_CONTROL,
   HANDOFF_IN_THREAD_CONTROL,
 ] as const;
 
 export type RoutingControlName = typeof ROUTING_CONTROL_NAMES[number];
-export type RoutingControlAction = "ask" | "handoff";
+export type RoutingControlAction = "consult" | "ask" | "handoff";
 
 export interface RoutingControlMetadata {
   action: RoutingControlAction;
   targetId: string;
   source: typeof ROUTING_CONTROL_SOURCE;
-  /** Complete hidden delivery payload. Optional for legacy metadata. */
+  /** Complete visible consultation message. Optional for legacy metadata. */
   message?: string;
   controlCallId?: string;
 }
 
 /** Validated atomic control intent parsed from a model tool call. */
 export interface RoutingControlIntent extends RoutingControlMetadata {
+  action: "consult";
   /** Complete message to deliver to the target participant. */
   message: string;
 }
@@ -35,8 +40,7 @@ export interface InThreadRoutingTarget {
 }
 
 export interface InThreadRoutingTargets {
-  ask: InThreadRoutingTarget[];
-  handoff: InThreadRoutingTarget[];
+  consult: InThreadRoutingTarget[];
 }
 
 export type RoutingControlValidationErrorCode =
@@ -136,35 +140,18 @@ export function resolveAllowedInThreadRoutingTargets(
   return targets;
 }
 
-/**
- * Resolve the complete target catalog for the two controls.
- * Asking is agent-only. A handoff may additionally use the stable `user`
- * alias when the thread contains exactly one human participant.
- */
+/** Resolve the agent-only target catalog for the consult-and-return control. */
 export function resolveInThreadRoutingTargets(
   currentAgent: Agent,
   thread: Thread,
   availableAgents: Agent[],
 ): InThreadRoutingTargets {
-  const agentTargets = resolveAllowedInThreadRoutingTargets(
-    currentAgent,
-    thread,
-    availableAgents,
-  );
-  const participants = Array.isArray(thread.participants)
-    ? thread.participants
-      .map(normalizeIdentity)
-      .filter((value): value is string => value !== null)
-    : [];
-  const humanParticipants = participants.filter((participant) =>
-    !availableAgents.some((agent) => identityMatches(participant, agent))
-  );
-
   return {
-    ask: agentTargets,
-    handoff: humanParticipants.length === 1
-      ? [...agentTargets, { id: "user", name: "User" }]
-      : [...agentTargets],
+    consult: resolveAllowedInThreadRoutingTargets(
+      currentAgent,
+      thread,
+      availableAgents,
+    ),
   };
 }
 
@@ -195,7 +182,9 @@ function renderControlInputTypes(
   name: RoutingControlName,
   schema: Record<string, unknown>,
 ): string {
-  const rootName = name === ASK_IN_THREAD_CONTROL
+  const rootName = name === CONSULT_AGENT_CONTROL
+    ? "ConsultAgentInput"
+    : name === ASK_IN_THREAD_CONTROL
     ? "AskInThreadInput"
     : "HandoffInThreadInput";
   return generateAgentTypesFromSchema(schema, {
@@ -204,53 +193,44 @@ function renderControlInputTypes(
   });
 }
 
-/** Build the two reserved, non-executable routing controls for the LLM catalog. */
+/** Build the single reserved, non-executable routing control for the LLM. */
 export function buildRoutingControlToolDefinitions(
   allowedTargets: InThreadRoutingTargets,
 ): ToolDefinition[] {
-  const buildDefinition = (
-    name: RoutingControlName,
-    targets: readonly InThreadRoutingTarget[],
-  ): ToolDefinition | null => {
-    if (targets.length === 0) return null;
-    const schema = buildRoutingControlInputSchema(
-      targets.map((target) => target.id),
-    );
-    const targetSummary = targets
-      .map((target) =>
-        target.name === target.id ? target.id : `${target.id} (${target.name})`
-      )
-      .join(", ");
-    const description = name === ASK_IN_THREAD_CONTROL
-      ? "Ask another agent in this thread a question, then resume after its reply. "
-      : "Transfer the next turn to another participant in this thread without automatically returning control. ";
-    return {
-      type: "function",
-      function: {
-        name,
-        description: description +
-          `Allowed targets: ${targetSummary}. The message argument is delivered atomically; do not duplicate it as visible text.`,
-        inputTypes: renderControlInputTypes(name, schema),
-      },
-    };
-  };
+  if (allowedTargets.consult.length === 0) return [];
+  const schema = buildRoutingControlInputSchema(
+    allowedTargets.consult.map((target) => target.id),
+  );
+  const targetSummary = allowedTargets.consult
+    .map((target) =>
+      target.name === target.id ? target.id : `${target.id} (${target.name})`
+    )
+    .join(", ");
 
-  return [
-    buildDefinition(ASK_IN_THREAD_CONTROL, allowedTargets.ask),
-    buildDefinition(HANDOFF_IN_THREAD_CONTROL, allowedTargets.handoff),
-  ].filter((definition): definition is ToolDefinition => definition !== null);
+  return [{
+    type: "function",
+    function: {
+      name: CONSULT_AGENT_CONTROL,
+      description:
+        "Ask another agent in this thread for one bounded turn, then automatically resume after its reply. " +
+        `Allowed targets: ${targetSummary}. The message is visible in the shared conversation and is delivered atomically.`,
+      inputTypes: renderControlInputTypes(CONSULT_AGENT_CONTROL, schema),
+    },
+  }];
 }
 
 export function isRoutingControlName(
   value: unknown,
 ): value is RoutingControlName {
-  return value === ASK_IN_THREAD_CONTROL || value === HANDOFF_IN_THREAD_CONTROL;
+  return value === CONSULT_AGENT_CONTROL ||
+    value === ASK_IN_THREAD_CONTROL ||
+    value === HANDOFF_IN_THREAD_CONTROL;
 }
 
 export function routingControlActionForName(
-  name: RoutingControlName,
-): RoutingControlAction {
-  return name === ASK_IN_THREAD_CONTROL ? "ask" : "handoff";
+  _name: RoutingControlName,
+): "consult" {
+  return "consult";
 }
 
 function parseArguments(value: unknown): Record<string, unknown> | null {
@@ -316,7 +296,7 @@ export function parseRoutingControlCall(
 
   const requestedTarget = normalizeIdentity(args.target);
   const action = routingControlActionForName(controlName);
-  const allowedTargetIds = allowedTargets[action].map((target) => target.id);
+  const allowedTargetIds = allowedTargets.consult.map((target) => target.id);
   const targetId = requestedTarget
     ? allowedTargetIds.find((candidate) =>
       candidate.toLowerCase() === requestedTarget.toLowerCase()

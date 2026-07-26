@@ -268,7 +268,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         deps.thread,
         context.agents ?? [],
       )
-      : { ask: [], handoff: [] };
+      : { consult: [] };
 
     const processStreamToken = (context.stream && deps.emitToStream)
       ? (token: string, options?: { isReasoning?: boolean }) => {
@@ -855,8 +855,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       if (routingSelection.kind === "invalid") {
         routingCorrectionAttempted = true;
         discardedRoutingResponses.push(response);
-        const askTargets = routingTargets.ask.map((target) => target.id);
-        const handoffTargets = routingTargets.handoff.map((target) =>
+        const consultTargets = routingTargets.consult.map((target) =>
           target.id
         );
         const correctionPrompt: ChatMessage = {
@@ -865,11 +864,8 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             "[Private Copilotz routing correction]",
             routingSelection.message,
             "Respond again using exactly one valid routing control by itself, or reply normally without a routing control.",
-            "Never combine ask_in_thread or handoff_in_thread with another tool call or a second routing control.",
-            `ask_in_thread targets: ${askTargets.join(", ") || "none"}.`,
-            `handoff_in_thread targets: ${
-              handoffTargets.join(", ") || "none"
-            }.`,
+            "Never combine consult_agent with another tool call or a second routing control.",
+            `consult_agent targets: ${consultTargets.join(", ") || "none"}.`,
           ].join("\n"),
         };
         let correctionVisibleStarted = false;
@@ -1109,6 +1105,15 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         : undefined;
     const routingIntent: RoutingControlIntent | null =
       routingSelection.kind === "routing" ? routingSelection.intent : null;
+    if (routingIntent) {
+      const visibleQuestion = routingIntent.message.trim();
+      const visibleAnswer = answer?.trim() ?? "";
+      if (visibleAnswer.length === 0) {
+        answer = visibleQuestion;
+      } else if (!visibleAnswer.includes(visibleQuestion)) {
+        answer = `${visibleAnswer}\n\n${visibleQuestion}`;
+      }
+    }
     const routingFailure = routingSelection.kind === "invalid"
       ? {
         code: routingSelection.code,

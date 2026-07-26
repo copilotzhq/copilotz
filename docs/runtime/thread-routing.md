@@ -38,30 +38,22 @@ uses initial routing metadata to preserve intended targets across turns.
 
 ## Multi-Agent Flows
 
-When multi-agent routing is enabled, Copilotz injects two reserved controls for
+When multi-agent routing is enabled, Copilotz injects one reserved control for
 the current agent's allowed agent participants:
 
 ```ts
-ask_in_thread({
+consult_agent({
   target: "researcher",
   message: "Check the evidence for this claim and report your confidence.",
 });
-
-handoff_in_thread({
-  target: "writer",
-  message: "Turn the validated findings into the final brief.",
-});
 ```
 
-Both controls require an atomic `{ target, message }`. `ask_in_thread` queues the
-asking agent so control returns after one reply. `handoff_in_thread` transfers
-the next turn without adding that automatic return. Agent targets must be
+`consult_agent` requires an atomic `{ target, message }` and queues the calling
+agent so control returns after one reply. Agent targets must be
 participants in the current thread and must pass the sender's `allowedAgents`
-policy. `handoff_in_thread` may also target `user` when the thread has exactly
-one human participant. Visible text outside the control streams and persists as
-public conversation content, while the control block and its `message` argument
-remain hidden and are delivered through routing metadata. The controls are
-runtime-provided and are not executable tools to add to `resources.imports` or
+policy. The consultation message is visible and persists as public conversation
+content, while the control block remains hidden. The control is
+runtime-provided and is not an executable tool to add to `resources.imports` or
 `allowedTools`.
 
 For isolated work outside the current conversation, use the regular

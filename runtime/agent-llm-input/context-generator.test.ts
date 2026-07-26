@@ -134,7 +134,7 @@ Deno.test("contextGenerator excludes private participant metadata from the LLM c
   assert(participantMetadata._private.accessToken === "token-secret");
 });
 
-Deno.test("contextGenerator advertises reserved controls only when multi-agent routing is enabled", () => {
+Deno.test("contextGenerator advertises the reserved control only when multi-agent routing is enabled", () => {
   const lead: Agent = {
     id: "lead",
     name: "Lead",
@@ -159,8 +159,7 @@ Deno.test("contextGenerator advertises reserved controls only when multi-agent r
     [lead, reviewer],
     [lead, reviewer],
   );
-  assert(!disabled.systemPrompt.includes("ask_in_thread"));
-  assert(!disabled.systemPrompt.includes("handoff_in_thread"));
+  assert(!disabled.systemPrompt.includes("consult_agent"));
   assert(!disabled.systemPrompt.includes("<route_to>"));
   assert(!disabled.systemPrompt.includes("<ask_to>"));
 
@@ -173,14 +172,13 @@ Deno.test("contextGenerator advertises reserved controls only when multi-agent r
     undefined,
     undefined,
     undefined,
-    { ask: true, handoff: true },
+    { consult: true },
   );
-  assertStringIncludes(enabled.systemPrompt, "ask_in_thread");
-  assertStringIncludes(enabled.systemPrompt, "handoff_in_thread");
+  assertStringIncludes(enabled.systemPrompt, "consult_agent");
   assertStringIncludes(enabled.systemPrompt, "target and message");
   assertStringIncludes(
     enabled.systemPrompt,
-    "Visible text before a routing control is public",
+    "shown in the shared conversation",
   );
   assertStringIncludes(
     enabled.systemPrompt,
@@ -188,18 +186,4 @@ Deno.test("contextGenerator advertises reserved controls only when multi-agent r
   );
   assert(!enabled.systemPrompt.includes("<route_to>"));
   assert(!enabled.systemPrompt.includes("<ask_to>"));
-
-  const handoffOnly = contextGenerator(
-    lead,
-    thread,
-    [lead, reviewer],
-    [lead, reviewer],
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    { handoff: true },
-  );
-  assert(!handoffOnly.systemPrompt.includes("ask_in_thread"));
-  assertStringIncludes(handoffOnly.systemPrompt, "handoff_in_thread");
 });

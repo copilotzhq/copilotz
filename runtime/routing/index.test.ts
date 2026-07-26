@@ -5,6 +5,7 @@ import {
   assertNoRoutingControlToolCollisions,
   buildRoutingControlInputSchema,
   buildRoutingControlToolDefinitions,
+  CONSULT_AGENT_CONTROL,
   HANDOFF_IN_THREAD_CONTROL,
   parseRoutingControlCall,
   resolveAllowedInThreadRoutingTargets,
@@ -78,39 +79,33 @@ Deno.test("resolveAllowedInThreadRoutingTargets applies strict allowedAgents sem
   );
 });
 
-Deno.test("routing control definitions expose two atomic controls with dynamic targets", () => {
+Deno.test("routing control definitions expose one consult-and-return control", () => {
   const targets = {
-    ask: [
+    consult: [
       { id: "reviewer", name: "Reviewer" },
       { id: "builder", name: "Builder" },
-    ],
-    handoff: [
-      { id: "reviewer", name: "Reviewer" },
-      { id: "builder", name: "Builder" },
-      { id: "user", name: "User" },
     ],
   };
   const definitions = buildRoutingControlToolDefinitions(targets);
 
   assertEquals(
     definitions.map((definition) => definition.function.name),
-    [ASK_IN_THREAD_CONTROL, HANDOFF_IN_THREAD_CONTROL],
+    [CONSULT_AGENT_CONTROL],
   );
   for (const definition of definitions) {
     assertStringIncludes(definition.function.inputTypes, "target");
     assertStringIncludes(definition.function.inputTypes, "message");
     assertStringIncludes(definition.function.inputTypes, '"reviewer"');
     assertStringIncludes(definition.function.inputTypes, '"builder"');
-    assertStringIncludes(definition.function.description, "atomically");
+    assertStringIncludes(definition.function.description, "automatically");
   }
-  assertStringIncludes(definitions[1].function.inputTypes, '"user"');
   assertEquals(
-    buildRoutingControlToolDefinitions({ ask: [], handoff: [] }),
+    buildRoutingControlToolDefinitions({ consult: [] }),
     [],
   );
 });
 
-Deno.test("resolveInThreadRoutingTargets exposes user only for handoff with one human", () => {
+Deno.test("resolveInThreadRoutingTargets exposes only other allowed agents", () => {
   const current = agent("lead");
   const reviewer = agent("reviewer");
   const thread = {
@@ -122,11 +117,7 @@ Deno.test("resolveInThreadRoutingTargets exposes user only for handoff with one 
   assertEquals(
     resolveInThreadRoutingTargets(current, thread, [current, reviewer]),
     {
-      ask: [{ id: "reviewer", name: "reviewer" }],
-      handoff: [
-        { id: "reviewer", name: "reviewer" },
-        { id: "user", name: "User" },
-      ],
+      consult: [{ id: "reviewer", name: "reviewer" }],
     },
   );
 });
@@ -152,20 +143,22 @@ Deno.test("buildRoutingControlInputSchema requires target and non-empty message"
   });
 });
 
-Deno.test("parseRoutingControlCall validates and canonicalizes atomic control calls", () => {
+Deno.test("parseRoutingControlCall validates canonical and legacy control calls as consultations", () => {
   assertEquals(
     parseRoutingControlCall({
       id: "call-1",
-      tool: { id: ASK_IN_THREAD_CONTROL },
+      tool: { id: CONSULT_AGENT_CONTROL },
       args: JSON.stringify({ target: "REVIEWER", message: " Check this. " }),
     }, {
-      ask: [{ id: "reviewer", name: "Reviewer" }],
-      handoff: [{ id: "builder", name: "Builder" }],
+      consult: [
+        { id: "reviewer", name: "Reviewer" },
+        { id: "builder", name: "Builder" },
+      ],
     }),
     {
       ok: true,
       intent: {
-        action: "ask",
+        action: "consult",
         targetId: "reviewer",
         message: "Check this.",
         source: "model_control",
@@ -179,13 +172,12 @@ Deno.test("parseRoutingControlCall validates and canonicalizes atomic control ca
       tool: { id: HANDOFF_IN_THREAD_CONTROL },
       args: { target: "builder", message: "Implement this." },
     }, {
-      ask: [{ id: "reviewer", name: "Reviewer" }],
-      handoff: [{ id: "builder", name: "Builder" }],
+      consult: [{ id: "builder", name: "Builder" }],
     }),
     {
       ok: true,
       intent: {
-        action: "handoff",
+        action: "consult",
         targetId: "builder",
         message: "Implement this.",
         source: "model_control",
@@ -200,8 +192,7 @@ Deno.test("parseRoutingControlCall rejects missing messages, invalid targets, an
       tool: { id: ASK_IN_THREAD_CONTROL },
       args: { target: "reviewer", message: "  " },
     }, {
-      ask: [{ id: "reviewer", name: "Reviewer" }],
-      handoff: [{ id: "reviewer", name: "Reviewer" }],
+      consult: [{ id: "reviewer", name: "Reviewer" }],
     }).ok,
     false,
   );
@@ -210,8 +201,7 @@ Deno.test("parseRoutingControlCall rejects missing messages, invalid targets, an
       tool: { id: ASK_IN_THREAD_CONTROL },
       args: { target: "outside", message: "Hello" },
     }, {
-      ask: [{ id: "reviewer", name: "Reviewer" }],
-      handoff: [{ id: "reviewer", name: "Reviewer" }],
+      consult: [{ id: "reviewer", name: "Reviewer" }],
     }),
     {
       ok: false,
@@ -224,8 +214,7 @@ Deno.test("parseRoutingControlCall rejects missing messages, invalid targets, an
       tool: { id: HANDOFF_IN_THREAD_CONTROL },
       args: { target: "reviewer", message: "Hello", extra: true },
     }, {
-      ask: [{ id: "reviewer", name: "Reviewer" }],
-      handoff: [{ id: "reviewer", name: "Reviewer" }],
+      consult: [{ id: "reviewer", name: "Reviewer" }],
     }).ok,
     false,
   );
@@ -233,19 +222,18 @@ Deno.test("parseRoutingControlCall rejects missing messages, invalid targets, an
 
 Deno.test("selectRoutingControl keeps controls exclusive from executable tools", () => {
   const targets = {
-    ask: [{ id: "reviewer", name: "Reviewer" }],
-    handoff: [{ id: "reviewer", name: "Reviewer" }],
+    consult: [{ id: "reviewer", name: "Reviewer" }],
   };
   const control = {
     id: "route-1",
-    tool: { id: ASK_IN_THREAD_CONTROL },
+    tool: { id: CONSULT_AGENT_CONTROL },
     args: JSON.stringify({ target: "reviewer", message: "Review this." }),
   };
 
   assertEquals(selectRoutingControl([control], targets), {
     kind: "routing",
     intent: {
-      action: "ask",
+      action: "consult",
       targetId: "reviewer",
       message: "Review this.",
       source: "model_control",

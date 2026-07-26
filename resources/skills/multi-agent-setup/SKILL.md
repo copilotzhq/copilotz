@@ -58,10 +58,8 @@ const copilotz = await createCopilotz({
 - **@mentions**: Users type `@Researcher, find info on X` to target a specific
   agent
 - **Programmatic**: Use `target` or `targetQueue` in run options
-- **Same-thread consultation**: Agents call `ask_in_thread` with atomic
+- **Same-thread consultation**: Agents call `consult_agent` with atomic
   `{ target, message }`; control returns after the target replies
-- **Same-thread handoff**: Agents call `handoff_in_thread` with atomic
-  `{ target, message }`; the next turn transfers without automatic return
 - **Child-thread delegation**: Agents call the regular `delegate_task` tool for
   an isolated subtask and wait for its final answer
 

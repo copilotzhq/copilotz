@@ -18,7 +18,7 @@ Specialization works. A team of agents, each expert in their domain, coordinatin
 
 ## The solution
 
-Copilotz has native multi-agent support built on the same event system you already understand. Agents use the reserved `ask_in_thread` and `handoff_in_thread` controls to communicate inside the current thread. Routing is validated against thread participants and the sender's `allowedAgents`; applications still use the `target` field to choose the first agent.
+Copilotz has native multi-agent support built on the same event system you already understand. Agents use the reserved `consult_agent` control to request one bounded contribution inside the current thread. Routing is validated against thread participants and the sender's `allowedAgents`; applications still use the `target` field to choose the first agent.
 
 ## A minimal multi-agent setup
 
@@ -33,9 +33,9 @@ const copilotz = await createCopilotz({
       role: "A coordinator that routes tasks to the appropriate specialist.",
       instructions: `
         You route incoming requests to the right specialist:
-        - For customer billing questions → call ask_in_thread with target
+        - For customer billing questions → call consult_agent with target
           "billing-agent" and a complete question in message
-        - For technical issues → call ask_in_thread with target
+        - For technical issues → call consult_agent with target
           "technical-agent" and a complete question in message
         - For anything else → handle it yourself
 
@@ -81,32 +81,27 @@ When a user asks "Why was I charged twice this month?", the coordinator asks the
 
 ## How in-thread routing works
 
-Both routing controls require one atomic object:
+The routing control requires one atomic object:
 
 ```typescript
 { target: "billing-agent", message: "Explain why this customer was charged twice." }
 ```
 
-- `ask_in_thread` delivers `message` to `target`, then returns control to the
+- `consult_agent` delivers `message` to `target`, then returns control to the
   asking agent after the target replies.
-- `handoff_in_thread` delivers `message` and transfers the next turn without an
-  automatic return.
-- `handoff_in_thread` can target `user` when the thread has exactly one human
-  participant.
 
-The `message` argument is the complete message the target receives. Do not
-duplicate it as visible text. Text outside the control remains public, streams
-normally, and is persisted as conversation content; the control block and its
-arguments remain hidden. Copilotz injects these controls automatically when
-multi-agent routing is enabled and the control has an eligible same-thread
-target; they are not regular executable tools and do not belong in `allowedTools`
+The `message` argument is the complete message the target receives and is
+shown in the shared conversation. The control block remains hidden. Copilotz
+injects this control automatically when multi-agent routing is enabled and it
+has an eligible same-thread target; it is not a regular executable tool and
+does not belong in `allowedTools`
 or `resources.imports`.
 
-An `ask_in_thread` flow looks like this:
+A `consult_agent` flow looks like this:
 
 ```
 User message → Coordinator
-Coordinator calls ask_in_thread({ target: "billing-agent", message: "Why was this customer charged twice?" })
+Coordinator calls consult_agent({ target: "billing-agent", message: "Why was this customer charged twice?" })
   → NEW_MESSAGE event: sender=coordinator, target=billing-agent
   → billing-agent processes, responds
   → NEW_MESSAGE event: sender=billing-agent, target=coordinator
@@ -131,8 +126,8 @@ resources: { imports: ["tools.delegate_task"] },
 ```
 
 Use `delegate_task` for isolated work that should not join the current
-conversation. Use `ask_in_thread` or `handoff_in_thread` for turn-taking among
-participants in the current thread.
+conversation. Use `consult_agent` for a bounded contribution from another
+participant while retaining ownership of the current task.
 
 ## Direct routing
 
@@ -205,7 +200,7 @@ Every in-thread control carries its own complete `message`. This makes the next
 step explicit and keeps routing metadata out of visible conversation text:
 
 ```typescript
-ask_in_thread({
+consult_agent({
   target: "billing-agent",
   message: "Check invoice inv_123 and report duplicate charge evidence.",
 });

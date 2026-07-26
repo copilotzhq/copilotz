@@ -471,7 +471,9 @@ export function normalizeRoutingDecision(
   const record = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
-  const action = record.action === "ask" || record.action === "handoff"
+  const action = record.action === "consult" ||
+      record.action === "ask" ||
+      record.action === "handoff"
     ? record.action
     : null;
   const targetId = normalizeRoutingTarget(record.targetId);
@@ -658,7 +660,8 @@ export function resolveNextTurn(input: ResolveNextTurnInput): NextTurn {
     const senderAgent = resolveSenderAgent(input.sender, input.availableAgents);
     const senderId =
       (senderAgent?.id ?? senderAgent?.name ?? input.sender.id) as string;
-    const returnPath = routingDecision.action === "ask"
+    const returnPath = routingDecision.action === "consult" ||
+        routingDecision.action === "ask"
       ? prependReturnTarget(baseReturnPath, senderId)
       : baseReturnPath;
     return resolveParticipantTurn(
@@ -1809,9 +1812,17 @@ export const messageProcessor: EventProcessor<
 
       /** If the message is not a tool call, we need to add the message to the LLM context */
 
+      const llmInputEvent = {
+        ...event,
+        metadata: {
+          ...eventMetadata,
+          targetId: targetResolution.targetId,
+          targetQueue: targetResolution.returnPath,
+        },
+      } as Event;
       const llmInput = await buildAgentLlmInput({
         deps,
-        event,
+        event: llmInputEvent,
         threadId,
         agent,
         historyMode: "afterReadyLongTermMemory",

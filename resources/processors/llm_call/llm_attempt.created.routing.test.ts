@@ -20,11 +20,7 @@ const agents = [
 ];
 
 const routingTools = buildRoutingControlToolDefinitions({
-  ask: [{ id: "reviewer", name: "Reviewer" }],
-  handoff: [
-    { id: "reviewer", name: "Reviewer" },
-    { id: "user", name: "User" },
-  ],
+  consult: [{ id: "reviewer", name: "Reviewer" }],
 });
 
 const searchTool: ToolDefinition = {
@@ -187,7 +183,7 @@ Deno.test("llm_call materializes one routing control without tool artifacts", as
   const originalFetch = globalThis.fetch;
   globalThis.fetch = () =>
     Promise.resolve(
-      sse(toolBlock("ask_in_thread", {
+      sse(toolBlock("consult_agent", {
         target: "reviewer",
         message: "Please review the proposed design.",
       }, "route-1")),
@@ -200,10 +196,10 @@ Deno.test("llm_call materializes one routing control without tool artifacts", as
 
     assertEquals(payload.status, "completed");
     assertEquals(payload.finishReason, "tool_calls");
-    assertEquals(payload.answer, "");
+    assertEquals(payload.answer, "Please review the proposed design.");
     assertEquals(payload.toolCalls, null);
     assertEquals(produced.metadata?.routing, {
-      action: "ask",
+      action: "consult",
       targetId: "reviewer",
       source: "model_control",
       message: "Please review the proposed design.",
@@ -221,7 +217,7 @@ Deno.test("llm_call privately corrects a mixed routing/tool response once", asyn
     calls += 1;
     if (calls === 1) {
       return Promise.resolve(sse([
-        toolBlock("ask_in_thread", {
+        toolBlock("consult_agent", {
           target: "reviewer",
           message: "Review this.",
         }, "route-invalid"),
@@ -229,7 +225,7 @@ Deno.test("llm_call privately corrects a mixed routing/tool response once", asyn
       ].join("\n")));
     }
     return Promise.resolve(
-      sse(toolBlock("handoff_in_thread", {
+      sse(toolBlock("consult_agent", {
         target: "reviewer",
         message: "Take over and finish the review.",
       }, "route-corrected")),
@@ -243,10 +239,10 @@ Deno.test("llm_call privately corrects a mixed routing/tool response once", asyn
 
     assertEquals(calls, 2);
     assertEquals(payload.status, "completed");
-    assertEquals(payload.answer, "");
+    assertEquals(payload.answer, "Take over and finish the review.");
     assertEquals(payload.toolCalls, null);
     assertEquals(produced.metadata?.routing, {
-      action: "handoff",
+      action: "consult",
       targetId: "reviewer",
       source: "model_control",
       message: "Take over and finish the review.",
@@ -337,7 +333,7 @@ Deno.test("llm_call hides split routing markup while preserving visible text", a
       "<tool_",
       "calls>\n",
       JSON.stringify({
-        name: "handoff_in_thread",
+        name: "consult_agent",
         arguments: {
           target: "reviewer",
           message: "Private implementation brief.",
@@ -367,10 +363,10 @@ Deno.test("llm_call hides split routing markup while preserving visible text", a
     assertEquals(visibleTokens.includes("Private implementation brief"), false);
     assertEquals(
       (produced.payload as Record<string, unknown>).answer,
-      "Public framing.",
+      "Public framing.\n\nPrivate implementation brief.",
     );
     assertEquals(produced.metadata?.routing, {
-      action: "handoff",
+      action: "consult",
       targetId: "reviewer",
       source: "model_control",
       message: "Private implementation brief.",
@@ -440,7 +436,7 @@ Deno.test("llm_call emits a typed failure after one invalid correction", async (
   let calls = 0;
   globalThis.fetch = () => {
     calls += 1;
-    return Promise.resolve(sse(toolBlock("ask_in_thread", {
+    return Promise.resolve(sse(toolBlock("consult_agent", {
       target: "outside-thread",
       message: "This must not route.",
     }, `route-invalid-${calls}`)));

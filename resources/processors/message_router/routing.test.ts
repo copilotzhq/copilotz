@@ -34,13 +34,16 @@ function thread(metadata: unknown = {}): Thread {
   } as unknown as Thread;
 }
 
-const decision = (action: "ask" | "handoff", targetId: string) => ({
+const decision = (
+  action: "consult" | "ask" | "handoff",
+  targetId: string,
+) => ({
   action,
   targetId,
   source: "model_control" as const,
 });
 
-Deno.test("normalizeRoutingDecision accepts only the singular ask/handoff contract", () => {
+Deno.test("normalizeRoutingDecision accepts consult and legacy routing contracts", () => {
   assertEquals(
     normalizeRoutingDecision({
       action: "ask",
@@ -55,6 +58,20 @@ Deno.test("normalizeRoutingDecision accepts only the singular ask/handoff contra
       source: "model_control",
       message: "Please review this.",
       controlCallId: "call-1",
+    },
+  );
+  assertEquals(
+    normalizeRoutingDecision({
+      action: "consult",
+      targetId: "east",
+      source: "model_control",
+      message: "Implement this.",
+    }),
+    {
+      action: "consult",
+      targetId: "east",
+      source: "model_control",
+      message: "Implement this.",
     },
   );
   assertEquals(
@@ -98,14 +115,14 @@ Deno.test("resolveThreadParticipantTarget preserves a user return target for leg
   );
 });
 
-Deno.test("resolveNextTurn applies ask and prepends the asker to the return path", () => {
+Deno.test("resolveNextTurn applies consultation and prepends the caller to the return path", () => {
   assertEquals(
     resolveNextTurn({
       sender: { id: "north", name: "north", type: "agent" },
       thread: thread(),
       availableAgents: agents,
       inbound: { targetId: "north", returnPath: ["vfssantos"] },
-      routingDecision: decision("ask", "south"),
+      routingDecision: decision("consult", "south"),
       multiAgentEnabled: true,
     }),
     {

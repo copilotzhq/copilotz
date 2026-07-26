@@ -156,7 +156,7 @@ Deno.test("historyGenerator delivers routing content to the target and preserves
   assertEquals(senderHistory[0]?.content, "Public framing for the team.");
   assertEquals(senderHistory[0]?.toolCalls, [{
     id: "route-to-reviewer",
-    tool: { id: "handoff_in_thread" },
+    tool: { id: "consult_agent" },
     args: JSON.stringify({
       target: "reviewer",
       message: "Review the implementation against the acceptance criteria.",
@@ -167,7 +167,7 @@ Deno.test("historyGenerator delivers routing content to the target and preserves
     formatMessages({ messages: senderHistory })[0]?.content,
   );
   assertEquals(senderWire.includes("<tool_calls>"), true);
-  assertEquals(senderWire.includes('"name":"handoff_in_thread"'), true);
+  assertEquals(senderWire.includes('"name":"consult_agent"'), true);
   assertEquals(senderWire.includes("[In-thread"), false);
 });
 
@@ -207,7 +207,7 @@ Deno.test("historyGenerator reconstructs production routing history as a real to
 
   assertEquals(generated[0]?.toolCalls, [{
     id: "routing_north-route-message",
-    tool: { id: "ask_in_thread" },
+    tool: { id: "consult_agent" },
     args: JSON.stringify({
       target: "east",
       message: "Analyze the draft independently.",
@@ -219,7 +219,7 @@ Deno.test("historyGenerator reconstructs production routing history as a real to
   const formatted = formatMessages({ messages: generated });
   const routeWire = String(formatted[0]?.content);
   assertEquals(routeWire.includes("<tool_calls>"), true);
-  assertEquals(routeWire.includes('"name":"ask_in_thread"'), true);
+  assertEquals(routeWire.includes('"name":"consult_agent"'), true);
   assertEquals(routeWire.includes('"target":"east"'), true);
   assertEquals(routeWire.includes("[In-thread"), false);
   assertEquals(

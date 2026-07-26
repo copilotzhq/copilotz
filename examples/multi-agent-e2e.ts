@@ -52,8 +52,8 @@ const copilotz = await createCopilotz({
       role: "planning coordinator",
       instructions: [
         "You are Planner in a two-agent smoke test.",
-        "For each new user request, call ask_in_thread with target reviewer.",
-        "Set message to one short sentence beginning PLANNER_DRAFT: followed by a request for review; do not duplicate that message as visible text.",
+        "For each new user request, call consult_agent with target reviewer.",
+        "Set message to one short sentence beginning PLANNER_DRAFT: followed by a request for review; it will be visible in the conversation.",
         "If the immediately previous agent message starts with REVIEWER_FEEDBACK:, write one short sentence beginning PLANNER_FINAL: and do not call a routing control.",
       ].join("\n"),
       allowedAgents: ["reviewer"],
@@ -74,7 +74,7 @@ const copilotz = await createCopilotz({
       instructions: [
         "You are Reviewer in a two-agent smoke test.",
         "Reply with exactly one short sentence beginning REVIEWER_FEEDBACK:",
-        "Do not call a routing control; ask_in_thread returns your reply to Planner automatically.",
+        "Do not call a routing control; consult_agent returns your reply to Planner automatically.",
       ].join("\n"),
       allowedAgents: ["planner"],
       allowedTools: null,

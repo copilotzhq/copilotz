@@ -75,6 +75,43 @@ export interface BuildAgentLlmInputOptions {
   longTermMemoryMode?: AgentLongTermMemoryMode;
 }
 
+function normalizeStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+      .filter((item): item is string =>
+        typeof item === "string" && item.trim().length > 0
+      )
+      .map((item) => item.trim())
+    : [];
+}
+
+export function buildTurnControlMessage(
+  agent: Agent,
+  event: Event,
+  canConsult: boolean,
+): ChatMessage {
+  const metadata = event.metadata && typeof event.metadata === "object"
+    ? event.metadata as Record<string, unknown>
+    : {};
+  const returnPath = normalizeStringList(metadata.targetQueue);
+  const agentId = (agent.id ?? agent.name) as string;
+  const lines = [
+    "<turn_control>",
+    `active_agent: ${agentId}`,
+    `returns_to: ${returnPath[0] ?? "requester"}`,
+    "You own the current turn.",
+    "Calling a normal tool keeps you active after its result.",
+    ...(canConsult
+      ? [
+        "To consult another agent for one bounded turn, call consult_agent. Control returns to you after their reply.",
+      ]
+      : []),
+    "When your work is finished, reply normally without a routing call.",
+    "</turn_control>",
+  ];
+  return { role: "user", content: lines.join("\n") };
+}
+
 function toExecutableTool(tool: unknown): ExecutableTool | null {
   if (!tool || typeof tool !== "object") return null;
   const maybe = tool as Partial<ExecutableTool>;
@@ -361,7 +398,7 @@ export async function buildAgentLlmInput(
       ctx.thread,
       ctx.availableAgents,
     )
-    : { ask: [], handoff: [] };
+    : { consult: [] };
   const llmContext = contextGenerator(
     agent,
     ctx.thread,
@@ -372,8 +409,7 @@ export async function buildAgentLlmInput(
     agentSkillIndex,
     context.agentsFileInstructions,
     {
-      ask: routingTargets.ask.length > 0,
-      handoff: routingTargets.handoff.length > 0,
+      consult: routingTargets.consult.length > 0,
     },
   );
 
@@ -462,6 +498,15 @@ export async function buildAgentLlmInput(
   const messages: ChatMessage[] = [
     { role: "system", content: systemPrompt },
     ...llmHistory,
+    ...(context.multiAgent?.enabled === true
+      ? [
+        buildTurnControlMessage(
+          agent,
+          event,
+          routingTargets.consult.length > 0,
+        ),
+      ]
+      : []),
   ];
 
   const resolverPayload = {

@@ -66,8 +66,7 @@ interface AgentMemory {
 }
 
 interface RoutingControlAvailability {
-  ask?: boolean;
-  handoff?: boolean;
+  consult?: boolean;
 }
 
 function getLlmVisibleParticipantMetadata(
@@ -145,23 +144,13 @@ export function contextGenerator(
       "",
       "### Conversation Rules",
       "- Messages from others are prefixed with [SpeakerName]: so you know who said what",
-      ...(routingControls.ask || routingControls.handoff
+      ...(routingControls.consult
         ? [
-          ...(routingControls.ask
-            ? [
-              "- Use ask_in_thread to send an atomic message to another agent and resume after its reply",
-            ]
-            : []),
-          ...(routingControls.handoff
-            ? [
-              "- Use handoff_in_thread to send an atomic message and transfer the next turn without automatically returning control",
-            ]
-            : []),
-          "- Each routing control requires exactly target and message; the message argument is what the target receives",
-          "- Visible text before a routing control is public and remains in the conversation; do not duplicate the routing message verbatim as visible text",
-          "- Use at most one in-thread routing control per response, never combine it with another tool call, and never target yourself",
+          "- Use consult_agent to give another agent one bounded turn; control automatically returns to you after its reply",
+          "- consult_agent requires exactly target and message; the message is delivered atomically and shown in the shared conversation",
+          "- Use at most one consult_agent call per response, never combine it with another tool call, and never target yourself",
           "- Do not narrate routing mechanics or print routing markup outside the control call",
-          "- Reply normally without a routing control when the response should return to the person who addressed you",
+          "- Reply normally without consult_agent when your work is finished",
         ]
         : [
           "- Reply normally to the person who addressed you",

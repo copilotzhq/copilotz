@@ -10,8 +10,7 @@ import type {
   ToolInvocation,
 } from "@/runtime/llm/types.ts";
 import {
-  ASK_IN_THREAD_CONTROL,
-  HANDOFF_IN_THREAD_CONTROL,
+  CONSULT_AGENT_CONTROL,
   ROUTING_CONTROL_SOURCE,
 } from "@/runtime/routing/index.ts";
 import { extractAssetId, isAssetRef } from "@/runtime/storage/assets.ts";
@@ -448,7 +447,9 @@ function projectRoutingHistoryForAgent(
   if (
     !routing ||
     routing.source !== ROUTING_CONTROL_SOURCE ||
-    (routing.action !== "ask" && routing.action !== "handoff") ||
+    (routing.action !== "consult" &&
+      routing.action !== "ask" &&
+      routing.action !== "handoff") ||
     typeof routing.targetId !== "string" ||
     typeof routing.message !== "string"
   ) {
@@ -464,9 +465,6 @@ function projectRoutingHistoryForAgent(
   if (message.length === 0) return null;
 
   if (isCurrentAgent) {
-    const controlName = routing.action === "ask"
-      ? ASK_IN_THREAD_CONTROL
-      : HANDOFF_IN_THREAD_CONTROL;
     const persistedCallId = typeof routing.controlCallId === "string"
       ? routing.controlCallId.trim()
       : "";
@@ -476,7 +474,7 @@ function projectRoutingHistoryForAgent(
       toolCall: {
         id: persistedCallId ||
           `routing_${sourceMessageId ?? `${routing.action}_${targetId}`}`,
-        tool: { id: controlName },
+        tool: { id: CONSULT_AGENT_CONTROL },
         args: JSON.stringify({
           target: routing.targetId.trim(),
           message,

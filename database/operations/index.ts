@@ -25,6 +25,31 @@ import { sanitizePostgresParam } from "../postgres-json-safety.ts";
 const MAX_EXPIRED_CLEANUP_BATCH = 100;
 const EXPIRED_RETENTION_INTERVAL = "1 day";
 
+export class StaleRunGenerationError extends Error {
+  readonly code = "STALE_RUN_GENERATION";
+
+  constructor(
+    readonly threadId: string,
+    readonly expected: number,
+    readonly actual: number,
+  ) {
+    super(
+      `Run generation ${expected} for thread ${threadId} was superseded by generation ${actual}`,
+    );
+    this.name = "StaleRunGenerationError";
+  }
+}
+
+export function isStaleRunGenerationError(
+  error: unknown,
+): error is StaleRunGenerationError {
+  return error instanceof StaleRunGenerationError ||
+    (
+      error instanceof Error &&
+      (error as Error & { code?: unknown }).code === "STALE_RUN_GENERATION"
+    );
+}
+
 type MessageInsert =
   & Omit<NewMessage, "id">
   & { id?: string };
@@ -42,6 +67,9 @@ export interface QueueEventInput {
   payload: Queue["payload"];
   parentEventId?: string;
   traceId?: string;
+  runGeneration?: number;
+  /** Reject the insert unless this is still the thread's current generation. */
+  expectedRunGeneration?: number;
   priority?: number;
   metadata?: Queue["metadata"] | undefined;
   ttlMs?: number;
@@ -230,6 +258,7 @@ export interface OutboxEventInput {
   patch?: unknown;
   parentEventId?: string | null;
   traceId?: string | null;
+  runGeneration?: number | null;
   causationId?: string | null;
   correlationId?: string | null;
   dedupeKey?: string | null;
@@ -258,6 +287,10 @@ type DomainMutationCommit<T> = {
 
 type WorkflowMutationOptions = {
   traceId?: string | null;
+  /** Generation recorded on the emitted lifecycle event. */
+  runGeneration?: number | null;
+  /** Atomically reject continuation creation when the run was superseded. */
+  expectedRunGeneration?: number | null;
   causationId?: string | null;
   namespace?: string | null;
   status?: Queue["status"];
@@ -604,6 +637,15 @@ export interface DatabaseOperations {
   getQueueTraceState: (
     traceId: string,
   ) => Promise<QueueTraceState | undefined>;
+  /** Atomically start a new abort generation for a thread. */
+  advanceThreadRunGeneration: (threadId: string) => Promise<number>;
+  /** Read the currently active run generation for a thread. */
+  getThreadRunGeneration: (threadId: string) => Promise<number>;
+  /** Check whether work from a generation may still create continuations. */
+  isThreadRunGenerationCurrent: (
+    threadId: string,
+    runGeneration: number,
+  ) => Promise<boolean>;
   getNewerInterruptingEvent: (
     threadId: string,
     since: string | Date,
@@ -960,31 +1002,45 @@ export function createOperations(
     threadId: string,
     event: QueueEventInput,
   ): Promise<NewQueue> => {
-    const ttlMs = typeof event.ttlMs === "number" && event.ttlMs > 0
-      ? Math.floor(event.ttlMs)
-      : null;
+    const insert = async (): Promise<NewQueue> => {
+      if (typeof event.expectedRunGeneration === "number") {
+        await assertExpectedRunGeneration(
+          threadId,
+          event.expectedRunGeneration,
+        );
+      }
 
-    const expiresAt = event.expiresAt
-      ? toIsoString(event.expiresAt)
-      : ttlMs
-      ? new Date(Date.now() + ttlMs).toISOString()
-      : null;
+      const ttlMs = typeof event.ttlMs === "number" && event.ttlMs > 0
+        ? Math.floor(event.ttlMs)
+        : null;
 
-    const insertQueueItem = {
-      threadId,
-      eventType: event.eventType,
-      payload: sanitizePostgresParam(event.payload),
-      parentEventId: event.parentEventId ?? null,
-      traceId: event.traceId ?? null,
-      priority: event.priority ?? null,
-      ttlMs,
-      expiresAt: expiresAt ? new Date(expiresAt) : null,
-      status: event.status ?? "pending",
-      metadata: event.metadata ? sanitizePostgresParam(event.metadata) : null,
-      namespace: event.namespace ?? null,
+      const expiresAt = event.expiresAt
+        ? toIsoString(event.expiresAt)
+        : ttlMs
+        ? new Date(Date.now() + ttlMs).toISOString()
+        : null;
+
+      const insertQueueItem = {
+        threadId,
+        eventType: event.eventType,
+        payload: sanitizePostgresParam(event.payload),
+        parentEventId: event.parentEventId ?? null,
+        traceId: event.traceId ?? null,
+        runGeneration: event.runGeneration ?? null,
+        priority: event.priority ?? null,
+        ttlMs,
+        expiresAt: expiresAt ? new Date(expiresAt) : null,
+        status: event.status ?? "pending",
+        metadata: event.metadata ? sanitizePostgresParam(event.metadata) : null,
+        namespace: event.namespace ?? null,
+      };
+
+      return await crud.events.create(insertQueueItem);
     };
 
-    const newQueueItem = await crud.events.create(insertQueueItem);
+    const newQueueItem = typeof event.expectedRunGeneration === "number"
+      ? await transaction(async () => await insert())
+      : await insert();
 
     await cleanupExpiredQueueItems();
     return newQueueItem;
@@ -1627,6 +1683,56 @@ export function createOperations(
     threadId: string,
   ): Promise<number> => {
     return await recoverStaleProcessingQueueItems(threadId);
+  };
+
+  const advanceThreadRunGeneration = async (
+    threadId: string,
+  ): Promise<number> => {
+    const result = await db.query<{ runGeneration: number }>(
+      `UPDATE "threads"
+       SET "runGeneration" = COALESCE("runGeneration", 0) + 1,
+           "updatedAt" = NOW()
+       WHERE "id" = $1
+       RETURNING "runGeneration"`,
+      [threadId],
+    );
+    const generation = result.rows[0]?.runGeneration;
+    if (typeof generation !== "number") {
+      throw new Error(`Thread not found while advancing run: ${threadId}`);
+    }
+    return generation;
+  };
+
+  const getThreadRunGeneration = async (
+    threadId: string,
+  ): Promise<number> => {
+    const result = await db.query<{ runGeneration: number }>(
+      `SELECT COALESCE("runGeneration", 0)::integer AS "runGeneration"
+       FROM "threads"
+       WHERE "id" = $1`,
+      [threadId],
+    );
+    const generation = result.rows[0]?.runGeneration;
+    if (typeof generation !== "number") {
+      throw new Error(`Thread not found while reading run: ${threadId}`);
+    }
+    return generation;
+  };
+
+  const isThreadRunGenerationCurrent = async (
+    threadId: string,
+    runGeneration: number,
+  ): Promise<boolean> => {
+    const result = await db.query<{ current: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM "threads"
+         WHERE "id" = $1
+           AND COALESCE("runGeneration", 0) = $2
+       ) AS "current"`,
+      [threadId, runGeneration],
+    );
+    return result.rows[0]?.current === true;
   };
 
   const getThreadById = async (
@@ -3560,6 +3666,26 @@ export function createOperations(
     return result.nodes.filter((n) => n.id !== nodeId);
   };
 
+  const assertExpectedRunGeneration = async (
+    threadId: string,
+    expected: number,
+  ): Promise<void> => {
+    const result = await db.query<{ runGeneration: number }>(
+      `SELECT COALESCE("runGeneration", 0)::integer AS "runGeneration"
+       FROM "threads"
+       WHERE "id" = $1
+       FOR UPDATE`,
+      [threadId],
+    );
+    const actual = result.rows[0]?.runGeneration;
+    if (typeof actual !== "number") {
+      throw new Error(`Thread not found while guarding run: ${threadId}`);
+    }
+    if (actual !== expected) {
+      throw new StaleRunGenerationError(threadId, expected, actual);
+    }
+  };
+
   const transaction = async <T>(
     fn: (ops: DatabaseOperations) => Promise<T>,
   ): Promise<T> => {
@@ -3601,6 +3727,7 @@ export function createOperations(
       payload: sanitizePostgresParam(eventPayload),
       parentEventId: event.parentEventId ?? null,
       traceId: event.traceId ?? null,
+      runGeneration: event.runGeneration ?? null,
       priority: event.priority ?? null,
       ttlMs,
       expiresAt: expiresAt ? new Date(expiresAt) : null,
@@ -3636,8 +3763,15 @@ export function createOperations(
 
   const domainMutation = async <T>(
     fn: () => Promise<DomainMutationCommit<T>>,
+    guard?: { threadId: string; expectedRunGeneration?: number | null },
   ): Promise<T> =>
     await transaction(async () => {
+      if (typeof guard?.expectedRunGeneration === "number") {
+        await assertExpectedRunGeneration(
+          guard.threadId,
+          guard.expectedRunGeneration,
+        );
+      }
       const { result, event, events } = await fn();
       const lifecycleEvents = events ?? (event ? [event] : []);
       for (const event of lifecycleEvents) await lifecycleEvent(event);
@@ -4067,6 +4201,7 @@ export function createOperations(
           payload: options?.eventPayload ??
             (message as Record<string, unknown>),
           traceId: options?.traceId ?? null,
+          runGeneration: options?.runGeneration ?? null,
           causationId: options?.causationId ?? null,
           priority: options?.priority ?? null,
           status: options?.status,
@@ -4074,6 +4209,9 @@ export function createOperations(
           namespace,
         },
       };
+    }, {
+      threadId: message.threadId,
+      expectedRunGeneration: options?.expectedRunGeneration,
     });
 
   const appendMessageSegments = async (
@@ -4180,6 +4318,7 @@ export function createOperations(
           payload: options.eventPayload ??
             (input as unknown as Record<string, unknown>),
           traceId: options.traceId ?? null,
+          runGeneration: options.runGeneration ?? null,
           causationId: options.causationId ?? input.eventId ?? null,
           priority: options.priority ?? null,
           status: options.status,
@@ -4187,6 +4326,9 @@ export function createOperations(
           namespace: input.namespace ?? null,
         },
       };
+    }, {
+      threadId: input.threadId,
+      expectedRunGeneration: options.expectedRunGeneration,
     });
 
   const updateLlmAttempt = async (
@@ -4223,6 +4365,7 @@ export function createOperations(
             operation,
             payload: options.eventPayload ?? dataPatch,
             traceId: options.traceId ?? null,
+            runGeneration: options.runGeneration ?? null,
             causationId: options.causationId ?? null,
             priority: options.priority ?? null,
             status: options.status,
@@ -4277,6 +4420,7 @@ export function createOperations(
           payload: options.eventPayload ??
             (input as unknown as Record<string, unknown>),
           traceId: options.traceId ?? null,
+          runGeneration: options.runGeneration ?? null,
           causationId: options.causationId ?? input.eventId ?? null,
           priority: options.priority ?? null,
           status: options.status,
@@ -4284,6 +4428,9 @@ export function createOperations(
           namespace: input.namespace ?? null,
         },
       };
+    }, {
+      threadId: input.threadId,
+      expectedRunGeneration: options.expectedRunGeneration,
     });
 
   const updateToolExecution = async (
@@ -4315,6 +4462,7 @@ export function createOperations(
             operation,
             payload: options.eventPayload ?? dataPatch,
             traceId: options.traceId ?? null,
+            runGeneration: options.runGeneration ?? null,
             causationId: options.causationId ?? null,
             priority: options.priority ?? null,
             status: options.status,
@@ -4636,6 +4784,9 @@ export function createOperations(
     getQueueItemById,
     getQueueItemsByTraceId,
     getQueueTraceState,
+    advanceThreadRunGeneration,
+    getThreadRunGeneration,
+    isThreadRunGenerationCurrent,
     getNewerInterruptingEvent,
     hasNewerHumanInput,
     overwritePendingAgentContinuations,

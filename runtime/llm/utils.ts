@@ -274,7 +274,11 @@ export function formatMessagesDetailed(
     ...messages.filter((m) => m.role !== "system"),
   ];
   const orderedHistory = orderCompletedToolCycles(formattedMessages);
-  formattedMessages = orderedHistory.messages;
+  const coalescedHistory = coalesceBatchedToolResults(
+    orderedHistory.messages,
+    orderedHistory.unitKeys,
+  );
+  formattedMessages = coalescedHistory.messages;
 
   const systemEstimatedTokens = estimateChatMessages(systemMessage, config)
     .estimatedTokens;
@@ -301,7 +305,7 @@ export function formatMessagesDetailed(
       formattedMessages,
       historyTarget,
       config,
-      orderedHistory.unitKeys,
+      coalescedHistory.unitKeys,
     );
     normalizedMessages = limited.messages;
     cutoffSourceMessageId = limited.cutoffSourceMessageId;
@@ -460,6 +464,12 @@ function escapeWireTextPayload(value: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+function escapeWireAttribute(value: string): string {
+  return escapeWireTextPayload(value)
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
 export function buildRedactedThinkingBlock(
@@ -685,6 +695,76 @@ function orderCompletedToolCycles(messages: ChatMessage[]): {
     }
   });
   return { messages: ordered, unitKeys };
+}
+
+function commonBatchId(toolCalls: ToolInvocation[]): string | null {
+  const first = toolCalls[0]?.batchId;
+  if (typeof first !== "string" || first.length === 0) return null;
+  return toolCalls.every((call) => call.batchId === first) ? first : null;
+}
+
+/**
+ * Lifecycle tool results are persisted independently as they settle. Collapse
+ * adjacent slots from the same batch for the model-facing transcript, sorting
+ * by the framework-owned slot rather than completion time.
+ */
+function coalesceBatchedToolResults(
+  messages: ChatMessage[],
+  unitKeys: Array<string | undefined>,
+): { messages: ChatMessage[]; unitKeys: Array<string | undefined> } {
+  const coalesced: ChatMessage[] = [];
+  const coalescedUnitKeys: Array<string | undefined> = [];
+
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    const calls = isToolResultRole(message.role) &&
+        Array.isArray(message.toolCalls)
+      ? message.toolCalls
+      : [];
+    const batchId = commonBatchId(calls);
+    if (!batchId) {
+      coalesced.push(message);
+      coalescedUnitKeys.push(unitKeys[index]);
+      continue;
+    }
+
+    const batchMessages = [message];
+    let nextIndex = index + 1;
+    while (nextIndex < messages.length) {
+      const candidate = messages[nextIndex];
+      const candidateCalls = isToolResultRole(candidate.role) &&
+          Array.isArray(candidate.toolCalls)
+        ? candidate.toolCalls
+        : [];
+      if (commonBatchId(candidateCalls) !== batchId) break;
+      batchMessages.push(candidate);
+      nextIndex += 1;
+    }
+
+    const batchCalls = batchMessages
+      .flatMap((candidate) =>
+        (candidate.toolCalls ?? []).map((call) =>
+          typeof call.output === "undefined" &&
+            typeof candidate.content === "string" &&
+            candidate.content.length > 0
+            ? { ...call, output: candidate.content }
+            : call
+        )
+      )
+      .toSorted((left, right) =>
+        (left.batchIndex ?? Number.MAX_SAFE_INTEGER) -
+        (right.batchIndex ?? Number.MAX_SAFE_INTEGER)
+      );
+    coalesced.push({
+      ...message,
+      content: "",
+      toolCalls: batchCalls,
+    });
+    coalescedUnitKeys.push(unitKeys[index]);
+    index = nextIndex - 1;
+  }
+
+  return { messages: coalesced, unitKeys: coalescedUnitKeys };
 }
 
 function collectWireSegmentsFromMessage(
@@ -1899,6 +1979,7 @@ To pipe one tool into another on the same line, separate stages with |. Use { "j
 Rules:
 - Each object must have exactly "name" and "arguments".
 - "arguments" must be a JSON object.
+- Never emit batch_id or tool_call_id; Copilotz owns correlation metadata.
 - New lines run in parallel; stages joined by | run sequentially.
 - A piped object is deep-merged into the next tool's arguments; the next tool's explicit arguments win.
 - Use only tool names from the catalog.
@@ -1984,6 +2065,7 @@ In this environment you have access to a set of tools you can use to answer the 
 2. To call a tool, emit one JSON object per line between a single <tool_calls> ... </tool_calls> block.
    - Each object has exactly two keys: "name" (string) and "arguments" (object). No other keys.
    - "arguments" is a JSON object and may contain nested objects/arrays.
+   - Never emit batch_id or tool_call_id. Batch attributes in history are framework-owned.
    - New lines run in parallel.
    - Join JSON stages with | on the same line to run them sequentially.
    - A transform stage has exactly one key: { "jq": "filter" }.
@@ -2018,6 +2100,7 @@ export function buildToolCallsBlock(
   toolCalls: ToolInvocation[],
   format: WireToolFormat = "request",
 ): string {
+  const batchId = commonBatchId(toolCalls);
   const objects = toolCalls.flatMap((call) => {
     if (format === "peer") {
       const visibility = readPeerToolVisibility(call);
@@ -2029,7 +2112,7 @@ export function buildToolCallsBlock(
           ? parseToolCallArgs(call.args)
           : OMITTED_PEER_TOOL_VALUE,
       };
-      if (call.id) obj.tool_call_id = call.id;
+      if (!batchId && call.id) obj.tool_call_id = call.id;
       return [stringifyWireJson(obj)];
     }
 
@@ -2048,7 +2131,7 @@ export function buildToolCallsBlock(
           return stringifyWireJson({
             name: stage.tool.id,
             arguments: stageArgs,
-            tool_call_id: stage.id,
+            ...(!batchId && stage.id ? { tool_call_id: stage.id } : {}),
           });
         }).join(" | "),
       ];
@@ -2064,13 +2147,16 @@ export function buildToolCallsBlock(
       name: call.tool.id,
       arguments: args,
     };
-    if (call.id) obj.tool_call_id = call.id;
+    if (!batchId && call.id) obj.tool_call_id = call.id;
     return [stringifyWireJson(obj)];
   });
 
   if (objects.length === 0) return "";
 
-  return [`<tool_calls>`, ...objects, `</tool_calls>`].join("\n");
+  const openTag = batchId
+    ? `<tool_calls batch_id="${escapeWireAttribute(batchId)}">`
+    : "<tool_calls>";
+  return [openTag, ...objects, `</tool_calls>`].join("\n");
 }
 
 function normalizeToolResultOutput(
@@ -2093,6 +2179,7 @@ export function buildToolResultsBlock(
   fallbackContent?: string,
   format: WireToolFormat = "request",
 ): string {
+  const batchId = commonBatchId(toolResults);
   const objects = toolResults.flatMap((call) => {
     if (format === "peer") {
       const visibility = readPeerToolVisibility(call);
@@ -2104,7 +2191,7 @@ export function buildToolResultsBlock(
           ? ("output" in call ? call.output : null)
           : OMITTED_PEER_TOOL_VALUE,
       };
-      if (call.id) obj.tool_call_id = call.id;
+      if (!batchId && call.id) obj.tool_call_id = call.id;
       return [stringifyWireJson(obj)];
     }
 
@@ -2118,14 +2205,17 @@ export function buildToolResultsBlock(
     ) {
       obj.output = normalizeToolResultOutput(call, fallback);
     }
-    if (call.id) obj.tool_call_id = call.id;
+    if (!batchId && call.id) obj.tool_call_id = call.id;
     if (call.status) obj.status = call.status;
     return [stringifyWireJson(obj)];
   });
 
   if (objects.length === 0) return "";
 
-  return [`<tool_results>`, ...objects, `</tool_results>`].join("\n");
+  const openTag = batchId
+    ? `<tool_results batch_id="${escapeWireAttribute(batchId)}">`
+    : "<tool_results>";
+  return [openTag, ...objects, `</tool_results>`].join("\n");
 }
 
 function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
@@ -2221,9 +2311,9 @@ function parseCanonicalToolCallLines(blockContent: string): ToolInvocation[] {
 
       stages.push({
         type: "tool",
-        id: typeof obj.tool_call_id === "string"
-          ? obj.tool_call_id
-          : crypto.randomUUID(),
+        // Provider/model IDs are accepted for backwards-compatible parsing
+        // but never trusted as orchestration identity.
+        id: crypto.randomUUID(),
         tool: { id: obj.name },
         args: JSON.stringify(obj.arguments),
       });

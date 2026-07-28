@@ -221,12 +221,12 @@ Deno.test("llm_result processor renders failed LLM results as assistant messages
   );
 });
 
-Deno.test("llm_result processor drops superseded assistant tool calls", async () => {
+Deno.test("llm_result processor follows lifecycle causation when dropping superseded tool calls", async () => {
   const result = await process(
     {
       id: "evt-llm-result-stale-tools",
       threadId: "thread-1",
-      type: "LLM_RESULT",
+      type: "llm_attempt.completed",
       payload: {
         llmCallId: "llm-123",
         agent: { id: "researcher", name: "Researcher" },
@@ -243,7 +243,8 @@ Deno.test("llm_result processor drops superseded assistant tool calls", async ()
         }],
         finishedAt: new Date().toISOString(),
       },
-      parentEventId: "evt-llm-call",
+      parentEventId: null,
+      causationId: "evt-llm-call",
       traceId: null,
       priority: 1000,
       metadata: {},

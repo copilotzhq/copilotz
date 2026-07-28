@@ -26,7 +26,10 @@ function eventCreatedAt(event: Queue): string | null {
 }
 
 function eventParentId(event: Queue): string | null {
-  return typeof event.parentEventId === "string" ? event.parentEventId : null;
+  if (typeof event.parentEventId === "string") return event.parentEventId;
+  return typeof (event as { causationId?: unknown }).causationId === "string"
+    ? (event as { causationId: string }).causationId
+    : null;
 }
 
 async function resolveContinuationSource(
@@ -38,7 +41,14 @@ async function resolveContinuationSource(
     return null;
   }
 
-  if (parent.eventType !== "LLM_RESULT" && parent.eventType !== "TOOL_RESULT") {
+  if (
+    parent.eventType !== "LLM_RESULT" &&
+    parent.eventType !== "TOOL_RESULT" &&
+    parent.eventType !== "llm_attempt.completed" &&
+    parent.eventType !== "llm_attempt.failed" &&
+    parent.eventType !== "tool_execution.completed" &&
+    parent.eventType !== "tool_execution.failed"
+  ) {
     return parent;
   }
 

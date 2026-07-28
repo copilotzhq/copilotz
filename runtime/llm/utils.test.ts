@@ -179,8 +179,22 @@ Deno.test("formatMessages batches parallel results into one user turn before pee
         senderId: "east",
         content: "",
         toolCalls: [
-          { id: "call-1", tool: { id: "first" }, args: "{}" },
-          { id: "call-2", tool: { id: "second" }, args: "{}" },
+          {
+            id: "call-1",
+            tool: { id: "first" },
+            args: "{}",
+            batchId: "batch-1",
+            batchSize: 2,
+            batchIndex: 0,
+          },
+          {
+            id: "call-2",
+            tool: { id: "second" },
+            args: "{}",
+            batchId: "batch-1",
+            batchSize: 2,
+            batchIndex: 1,
+          },
         ],
       },
       {
@@ -193,11 +207,14 @@ Deno.test("formatMessages batches parallel results into one user turn before pee
         senderId: "east",
         content: "",
         toolCalls: [{
-          id: "call-1",
-          tool: { id: "first" },
+          id: "call-2",
+          tool: { id: "second" },
           args: "{}",
-          output: { first: true },
+          output: { second: true },
           status: "completed",
+          batchId: "batch-1",
+          batchSize: 2,
+          batchIndex: 1,
         }],
       },
       {
@@ -205,19 +222,29 @@ Deno.test("formatMessages batches parallel results into one user turn before pee
         senderId: "east",
         content: "",
         toolCalls: [{
-          id: "call-2",
-          tool: { id: "second" },
+          id: "call-1",
+          tool: { id: "first" },
           args: "{}",
-          output: { second: true },
+          output: { first: true },
           status: "completed",
+          batchId: "batch-1",
+          batchSize: 2,
+          batchIndex: 0,
         }],
       },
     ],
   });
 
   assertEquals(formatted.map((message) => message.role), ["assistant", "user"]);
+  const callTurn = formatted[0]?.content as string;
+  assertEquals(callTurn.includes('<tool_calls batch_id="batch-1">'), true);
+  assertEquals(callTurn.includes("tool_call_id"), false);
   const resultTurn = formatted[1]?.content as string;
-  assertEquals((resultTurn.match(/<tool_results>/g) ?? []).length, 2);
+  assertEquals(
+    (resultTurn.match(/<tool_results batch_id="batch-1">/g) ?? []).length,
+    1,
+  );
+  assertEquals(resultTurn.includes("tool_call_id"), false);
   assertEquals(
     resultTurn.indexOf('"first":true') < resultTurn.indexOf('"second":true'),
     true,
@@ -703,7 +730,7 @@ Deno.test("parseToolCallsFromResponse closes a complete canonical response tail 
 
   assertEquals(parsed.cleanResponse, "I will ask West.\n");
   assertEquals(parsed.toolCalls.length, 1);
-  assertEquals(parsed.toolCalls[0].id, "call-1");
+  assertEquals(parsed.toolCalls[0].id === "call-1", false);
   assertEquals(parsed.toolCalls[0].tool.id, "ask_in_thread");
   assertEquals(
     JSON.parse(parsed.toolCalls[0].args),
@@ -834,15 +861,17 @@ Deno.test("parseToolCallsFromResponse does not repair truncated strings", () => 
   assertEquals(parseToolCallsFromResponse(response).toolCalls.length, 0);
 });
 
-Deno.test("parseToolCallsFromResponse accepts optional tool_call_id after visible punctuation", () => {
+Deno.test("parseToolCallsFromResponse replaces duplicate model call ids with framework ids", () => {
   const response =
-    'I will do it.<tool_calls>\n{"name":"kanban","arguments":{"action":"move_card","stage":"done"},"tool_call_id":"call-1"}\n{"name":"update_user_memory","arguments":{"content":"context","category":"context"}}\n</tool_calls>';
+    'I will do it.<tool_calls>\n{"name":"kanban","arguments":{"action":"move_card","stage":"done"},"tool_call_id":"call-1"}\n{"name":"update_user_memory","arguments":{"content":"context","category":"context"},"tool_call_id":"call-1"}\n</tool_calls>';
 
   const parsed = parseToolCallsFromResponse(response);
 
   assertEquals(parsed.cleanResponse, "I will do it.");
   assertEquals(parsed.toolCalls.length, 2);
-  assertEquals(parsed.toolCalls[0].id, "call-1");
+  assertEquals(parsed.toolCalls[0].id === "call-1", false);
+  assertEquals(parsed.toolCalls[1].id === "call-1", false);
+  assertEquals(parsed.toolCalls[0].id === parsed.toolCalls[1].id, false);
   assertEquals(parsed.toolCalls[0].tool.id, "kanban");
   assertEquals(
     JSON.parse(parsed.toolCalls[0].args),
@@ -859,7 +888,7 @@ Deno.test("parseToolCallsFromResponse salvages restarted canonical block after m
 
   assertEquals(parsed.cleanResponse, "Visible answer");
   assertEquals(parsed.toolCalls.length, 1);
-  assertEquals(parsed.toolCalls[0].id, "call-1");
+  assertEquals(parsed.toolCalls[0].id === "call-1", false);
   assertEquals(parsed.toolCalls[0].tool.id, "kanban");
   assertEquals(
     JSON.parse(parsed.toolCalls[0].args),

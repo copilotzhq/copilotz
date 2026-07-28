@@ -39,6 +39,7 @@ import { generateMemorySpaceAccessMigrations } from "./migrations/migration_0014
 import { generateBrainNodeMigrations } from "./migrations/migration_0015_brain_nodes.ts";
 import { generateTraceWaitIndexMigrations } from "./migrations/migration_0016_trace_wait_index.ts";
 import { generateParticipantIdentityMigrations } from "./migrations/migration_0017_participant_identity.ts";
+import { generateRunGenerationMigrations } from "./migrations/migration_0018_run_generation.ts";
 import { getCurrentSchema } from "./schema-context.ts";
 import {
   ensureSchemaProvisioned,
@@ -65,7 +66,8 @@ const migrations: string = generateMigrations() + "\n" +
   generateMemorySpaceAccessMigrations() + "\n" +
   generateBrainNodeMigrations() + "\n" +
   generateTraceWaitIndexMigrations() + "\n" +
-  generateParticipantIdentityMigrations() + "\n";
+  generateParticipantIdentityMigrations() + "\n" +
+  generateRunGenerationMigrations() + "\n";
 
 /**
  * Configuration options for creating a database connection.

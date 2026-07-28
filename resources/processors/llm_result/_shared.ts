@@ -29,8 +29,13 @@ export const llmResultProcessor: EventProcessor<
       : (() => {
         throw new Error("Invalid thread id for LLM result event");
       })();
+    const runGeneration = typeof event.runGeneration === "number"
+      ? event.runGeneration
+      : null;
     const parentEventId = typeof event.parentEventId === "string"
       ? event.parentEventId
+      : typeof event.causationId === "string"
+      ? event.causationId
       : null;
     const superseded = parentEventId
       ? await detectNewerHumanInputSupersession(
@@ -99,6 +104,8 @@ export const llmResultProcessor: EventProcessor<
         deps.context.namespace,
         {
           traceId: typeof event.traceId === "string" ? event.traceId : null,
+          runGeneration,
+          expectedRunGeneration: runGeneration,
           causationId: typeof event.id === "string" ? event.id : null,
           priority: EVENT_PRIORITIES.SETTLEMENT,
           status: "pending",

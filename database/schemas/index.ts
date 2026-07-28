@@ -641,6 +641,7 @@ const schemaDefinition = {
           ],
         },
         traceId: { type: ["string", "null"], maxLength: 255 },
+        runGeneration: { type: ["integer", "null"], minimum: 0 },
         priority: { type: ["integer", "null"] },
         ttlMs: { type: ["integer", "null"] },
         expiresAt: { type: ["string", "null"], format: "date-time" },
@@ -784,6 +785,12 @@ const schemaDefinition = {
         },
         lastEventId: { type: ["string", "null"], maxLength: 255 },
         lastEventAt: { type: ["string", "null"], format: "date-time" },
+        runGeneration: {
+          type: "integer",
+          minimum: 0,
+          default: 0,
+          readOnly: true,
+        },
         parentThread: {
           readOnly: true,
           anyOf: [
@@ -1057,6 +1064,7 @@ export type NewEvent = {
     payload: EventPayloadMap[K];
     parentEventId?: string;
     traceId?: string;
+    runGeneration?: number;
     priority?: number;
     metadata?: Record<string, unknown> | null;
     ttlMs?: number;
@@ -1083,6 +1091,7 @@ export type NewEventOfMap<TCustom extends Record<string, unknown>> = {
     payload: (EventPayloadMapBase & TCustom)[K];
     parentEventId?: string;
     traceId?: string;
+    runGeneration?: number;
     priority?: number;
     metadata?: Record<string, unknown> | null;
     ttlMs?: number;
@@ -1104,6 +1113,7 @@ export type NewUnknownEvent = {
   payload: Record<string, unknown>;
   parentEventId?: string;
   traceId?: string;
+  runGeneration?: number;
   priority?: number;
   metadata?: Record<string, unknown> | null;
   ttlMs?: number;

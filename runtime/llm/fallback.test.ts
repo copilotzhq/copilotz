@@ -1,6 +1,7 @@
 import {
   assertEquals,
   assertInstanceOf,
+  assertNotEquals,
   assertRejects,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
@@ -1718,7 +1719,7 @@ Deno.test("chat recovers a complete trailing tool call after a normal stop", asy
     assertEquals(calls, 1);
     assertEquals(response.answer.trim(), "I found the next step.");
     assertEquals(response.toolCalls?.length, 1);
-    assertEquals(response.toolCalls?.[0]?.id, "call-1");
+    assertNotEquals(response.toolCalls?.[0]?.id, "call-1");
     assertEquals(response.toolCalls?.[0]?.tool.id, "search");
     assertEquals(streamed.join(""), "I found the next step.\n");
   } finally {

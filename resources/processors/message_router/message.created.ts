@@ -63,7 +63,7 @@ export const eventTypes = ["message.created"] as const;
 // the LLM sees partial results and may re-issue the same tool calls.
 // ============================================================================
 
-interface StoredToolResult {
+export interface StoredToolResult {
   callId: string;
   name: string;
   args: string;
@@ -99,7 +99,7 @@ function getPendingBatches(thread: Thread): PendingBatches {
  * Store a tool result in the pending batch
  * Returns the updated batch and whether it's now complete
  */
-async function storeToolResultInBatch(
+export async function storeToolResultInBatch(
   ops: Operations,
   thread: Thread,
   batchId: string,
@@ -123,9 +123,10 @@ async function storeToolResultInBatch(
 
   const batch = pendingBatches[batchId];
 
-  // Check if this result is already stored (deduplication)
+  // The framework-owned slot is the correlation key. Model-supplied call IDs
+  // are diagnostic only and may be duplicated.
   const existingIdx = batch.results.findIndex((r) =>
-    r.callId === result.callId
+    r.batchIndex === result.batchIndex
   );
   if (existingIdx >= 0) {
     // Already have this result, just return current state
@@ -993,18 +994,26 @@ export const messageProcessor: EventProcessor<
       : (() => {
         throw new Error("Invalid thread id for message event");
       })();
+    const runGeneration = typeof event.runGeneration === "number"
+      ? event.runGeneration
+      : null;
 
     const messageContext = getMessageContext(payload);
 
     if (
       (messageContext.senderType === "agent" ||
         messageContext.senderType === "tool") &&
-      typeof event.parentEventId === "string"
+      (
+        typeof event.parentEventId === "string" ||
+        typeof event.causationId === "string"
+      )
     ) {
       const superseded = await detectNewerHumanInputSupersession(
         ops,
         threadId,
-        event.parentEventId,
+        typeof event.parentEventId === "string"
+          ? event.parentEventId
+          : event.causationId,
         context.namespace,
       );
 
@@ -1500,6 +1509,10 @@ export const messageProcessor: EventProcessor<
         } as ToolCallEventPayload;
         const toolMetadata = withRunSenderMetadata({
           sourceMessageId: createdMessage.id,
+          ...(typeof eventMetadata.runId === "string"
+            ? { runId: eventMetadata.runId }
+            : {}),
+          ...(runGeneration !== null ? { runGeneration } : {}),
           ...(call.pipeline
             ? {
               toolPipeline: {
@@ -1540,6 +1553,8 @@ export const messageProcessor: EventProcessor<
             namespace: context.namespace,
           }, {
             traceId: typeof event.traceId === "string" ? event.traceId : null,
+            runGeneration,
+            expectedRunGeneration: runGeneration,
             causationId: typeof event.id === "string" ? event.id : null,
             priority: EVENT_PRIORITIES.SETTLEMENT,
             status: "pending",
@@ -1809,6 +1824,11 @@ export const messageProcessor: EventProcessor<
     for (let idx = 0; idx < targets.length; idx++) {
       const agent = targets[idx];
       if (!agent) continue;
+      if (deps.cancellation?.isAborted()) {
+        return {
+          producedEvents: entityExtractEvents as unknown as NewEvent[],
+        };
+      }
 
       /** If the message is not a tool call, we need to add the message to the LLM context */
 
@@ -1827,6 +1847,11 @@ export const messageProcessor: EventProcessor<
         agent,
         historyMode: "afterReadyLongTermMemory",
       });
+      if (deps.cancellation?.isAborted()) {
+        return {
+          producedEvents: entityExtractEvents as unknown as NewEvent[],
+        };
+      }
 
       const llmPayload = {
         agent: { id: agent.id ?? undefined, name: agent.name },
@@ -1843,6 +1868,10 @@ export const messageProcessor: EventProcessor<
         sourceMessageId: createdMessage.id,
         sourceMessageSenderId: messageContext.senderId,
         sourceMessageSenderType: messageContext.senderType,
+        ...(typeof eventMetadata.runId === "string"
+          ? { runId: eventMetadata.runId }
+          : {}),
+        ...(runGeneration !== null ? { runGeneration } : {}),
         ...(isRecord(eventMetadata.runSender)
           ? { runSender: eventMetadata.runSender }
           : {}),
@@ -1878,6 +1907,8 @@ export const messageProcessor: EventProcessor<
           namespace: context.namespace,
         }, {
           traceId: typeof event.traceId === "string" ? event.traceId : null,
+          runGeneration,
+          expectedRunGeneration: runGeneration,
           causationId: typeof event.id === "string" ? event.id : null,
           priority: priorityForAgentLlmCall(payload),
           status: "pending",

@@ -1,4 +1,4 @@
-import { assertEquals, assertExists } from "@std/assert";
+import { assertEquals, assertExists, assertNotEquals } from "@std/assert";
 import { createDatabase } from "@/database/index.ts";
 import type { Event, NewEvent, ProcessorDeps, Thread } from "@/types/index.ts";
 import type { ProviderRegistry, ToolDefinition } from "@/runtime/llm/types.ts";
@@ -198,13 +198,17 @@ Deno.test("llm_call materializes one routing control without tool artifacts", as
     assertEquals(payload.finishReason, "tool_calls");
     assertEquals(payload.answer, "Please review the proposed design.");
     assertEquals(payload.toolCalls, null);
-    assertEquals(produced.metadata?.routing, {
+    const { controlCallId, ...routing } = produced.metadata?.routing as {
+      controlCallId: string;
+      [key: string]: unknown;
+    };
+    assertEquals(routing, {
       action: "consult",
       targetId: "reviewer",
       source: "model_control",
       message: "Please review the proposed design.",
-      controlCallId: "route-1",
     });
+    assertNotEquals(controlCallId, "route-1");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -241,13 +245,17 @@ Deno.test("llm_call privately corrects a mixed routing/tool response once", asyn
     assertEquals(payload.status, "completed");
     assertEquals(payload.answer, "Take over and finish the review.");
     assertEquals(payload.toolCalls, null);
-    assertEquals(produced.metadata?.routing, {
+    const { controlCallId, ...routing } = produced.metadata?.routing as {
+      controlCallId: string;
+      [key: string]: unknown;
+    };
+    assertEquals(routing, {
       action: "consult",
       targetId: "reviewer",
       source: "model_control",
       message: "Take over and finish the review.",
-      controlCallId: "route-corrected",
     });
+    assertNotEquals(controlCallId, "route-corrected");
     assertEquals(produced.metadata?.routingError, undefined);
   } finally {
     globalThis.fetch = originalFetch;
@@ -365,13 +373,17 @@ Deno.test("llm_call hides split routing markup while preserving visible text", a
       (produced.payload as Record<string, unknown>).answer,
       "Public framing.\n\nPrivate implementation brief.",
     );
-    assertEquals(produced.metadata?.routing, {
+    const { controlCallId, ...routing } = produced.metadata?.routing as {
+      controlCallId: string;
+      [key: string]: unknown;
+    };
+    assertEquals(routing, {
       action: "consult",
       targetId: "reviewer",
       source: "model_control",
       message: "Private implementation brief.",
-      controlCallId: "route-split",
     });
+    assertNotEquals(controlCallId, "route-split");
   } finally {
     globalThis.fetch = originalFetch;
   }

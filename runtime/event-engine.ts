@@ -9,6 +9,7 @@
  */
 
 import { type CopilotzDb, createDatabase } from "@/database/index.ts";
+import { isStaleRunGenerationError } from "@/database/operations/index.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
 
 import type {
@@ -79,7 +80,9 @@ export type ProcessorDeps = {
 
 type Operations = CopilotzDb["ops"];
 
-export type ProcessorCancellationReason = "newer_interrupting_event";
+export type ProcessorCancellationReason =
+  | "newer_interrupting_event"
+  | "stale_run_generation";
 
 export interface ProcessorCancellation {
   signal: AbortSignal;
@@ -118,6 +121,8 @@ export async function enqueueEvent(
     payload: event.payload as Record<string, unknown>,
     parentEventId,
     traceId,
+    runGeneration: event.runGeneration,
+    expectedRunGeneration: event.runGeneration,
     priority: event.priority ?? undefined,
     metadata: event.metadata,
     ttlMs: event.ttlMs ?? undefined,
@@ -267,6 +272,8 @@ function eventPriority(event: Event): number {
 function isInterruptibleForegroundEvent(event: Event): boolean {
   const type = (event as unknown as { type?: string }).type;
   return (
+    type === "NEW_MESSAGE" ||
+    type === "message.created" ||
     type === "LLM_CALL" ||
     type === "TOOL_CALL" ||
     type === "llm_attempt.created" ||
@@ -327,6 +334,18 @@ function createEventCancellationScope(
   const check = async (): Promise<void> => {
     if (stopped || controller.signal.aborted) return;
     try {
+      if (
+        typeof event.runGeneration === "number" &&
+        typeof ops.isThreadRunGenerationCurrent === "function" &&
+        !await ops.isThreadRunGenerationCurrent(
+          threadId,
+          event.runGeneration,
+        )
+      ) {
+        abort("stale_run_generation");
+        return;
+      }
+      if (typeof ops.getNewerInterruptingEvent !== "function") return;
       const interrupting = await ops.getNewerInterruptingEvent(
         threadId,
         createdAt,
@@ -484,6 +503,8 @@ export async function startEventWorker(
           null,
         correlationId:
           (next as { correlationId?: string | null }).correlationId ?? null,
+        runGeneration:
+          (next as { runGeneration?: number | null }).runGeneration ?? null,
       };
 
       let event: Event;
@@ -546,6 +567,17 @@ export async function startEventWorker(
       }
 
       const queueId = typeof next.id === "string" ? next.id : String(next.id);
+
+      if (
+        typeof event.runGeneration === "number" &&
+        !await ops.isThreadRunGenerationCurrent(
+          threadId,
+          event.runGeneration,
+        )
+      ) {
+        await ops.updateQueueItemStatus(queueId, "overwritten");
+        continue;
+      }
 
       await assertLeaseOwnership();
       await ops.updateQueueItemStatus(queueId, "processing");
@@ -637,6 +669,11 @@ export async function startEventWorker(
           continue;
         }
 
+        if (isStaleRunGenerationError(lastProcessorError)) {
+          await ops.updateQueueItemStatus(queueId, "overwritten");
+          continue;
+        }
+
         if (lastProcessorError && finalEvents.length === 0) {
           throw lastProcessorError;
         }
@@ -651,6 +688,10 @@ export async function startEventWorker(
               db,
               {
                 ...e,
+                runGeneration: e.runGeneration ??
+                  (e.threadId === threadId
+                    ? event.runGeneration ?? undefined
+                    : undefined),
                 namespace: (e as { namespace?: string }).namespace ??
                   context.namespace,
               } as NewEvent | NewUnknownEvent,
@@ -673,6 +714,10 @@ export async function startEventWorker(
 
         await ops.updateQueueItemStatus(queueId, "completed");
       } catch (err) {
+        if (isStaleRunGenerationError(err)) {
+          await ops.updateQueueItemStatus(queueId, "overwritten");
+          continue;
+        }
         console.error("Event worker failed:", err);
         if (!leaseLost) {
           await ops.updateQueueItemStatus(queueId, "failed");

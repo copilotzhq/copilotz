@@ -535,6 +535,84 @@ Deno.test("startEventWorker marks active interruptible work overwritten when new
   ]);
 });
 
+Deno.test("startEventWorker never processes a stale message generation", async () => {
+  const threadId = "thread-stale-message";
+  const queuedEvent = {
+    id: "event-stale-message",
+    threadId,
+    eventType: "message.created",
+    payload: {
+      content: "stale assistant continuation",
+      sender: { type: "agent", id: "east" },
+    },
+    parentEventId: null,
+    traceId: "trace-stale",
+    runGeneration: 4,
+    priority: 1000,
+    metadata: null,
+    ttlMs: null,
+    expiresAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    status: "pending",
+  };
+
+  let nextCalls = 0;
+  let processed = false;
+  const statusUpdates: Array<{ id: string; status: string }> = [];
+  const ops = {
+    getThreadWorkerLeaseConfig: () => ({
+      leaseMs: 60_000,
+      heartbeatMs: 60_000,
+    }),
+    acquireThreadWorkerLease: async () => true,
+    renewThreadWorkerLease: async () => true,
+    isThreadWorkerLeaseOwner: async () => true,
+    recoverThreadProcessingQueueItems: async () => 0,
+    getNextPendingQueueItem: async () => {
+      nextCalls += 1;
+      return nextCalls === 1 ? queuedEvent : undefined;
+    },
+    isThreadRunGenerationCurrent: async () => false,
+    updateQueueItemStatus: async (id: string, status: string) => {
+      statusUpdates.push({ id, status });
+    },
+    releaseThreadWorkerLeaseIfNoPendingWork: async () => true,
+    releaseThreadWorkerLease: async () => {},
+  };
+  const fakeDb = { ops };
+
+  await startEventWorker(
+    fakeDb as never,
+    threadId,
+    {
+      processors: {
+        "message.created": [{
+          shouldProcess: () => true,
+          process: () => {
+            processed = true;
+            return { producedEvents: [] };
+          },
+        }],
+      },
+      emitToStream: () => {},
+      stream: false,
+    },
+    async () =>
+      ({
+        db: fakeDb,
+        thread: { id: threadId },
+        context: {},
+        emitToStream: () => {},
+      }) as never,
+  );
+
+  assertEquals(processed, false);
+  assertEquals(statusUpdates, [
+    { id: "event-stale-message", status: "overwritten" },
+  ]);
+});
+
 Deno.test("startEventWorker marks the queue item failed when no processor recovers from an error", async () => {
   const threadId = "thread-failure";
   const queuedEvent = {

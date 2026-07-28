@@ -54,6 +54,7 @@ Deno.test("contextGenerator places stable local instructions before volatile thr
     participants: ["User", "assistant"],
     status: "active",
     mode: "multi-agent",
+    runGeneration: 0,
     metadata: {
       public: {
         userContext: { accountId: "acct-dynamic" },

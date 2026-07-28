@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS "threads" (
   "summary" text,
   "parentThreadId" varchar(255),
   "metadata" jsonb,
+  "runGeneration" integer DEFAULT 0 NOT NULL,
   "createdAt" timestamp DEFAULT now() NOT NULL,
   "updatedAt" timestamp DEFAULT now() NOT NULL
 );
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS "events" (
   "payload" jsonb NOT NULL,
   "parentEventId" varchar(255),
   "traceId" varchar(255),
+  "runGeneration" integer,
   "priority" integer,
   "ttlMs" integer,
   "expiresAt" timestamp,
@@ -45,3 +47,4 @@ CREATE INDEX IF NOT EXISTS "idx_events_pending_order" ON "events" (
   "id" ASC
 ) WHERE "status" = 'pending';
 CREATE INDEX IF NOT EXISTS "idx_events_status_expires_at" ON "events" ("status", "expiresAt");
+CREATE INDEX IF NOT EXISTS "idx_events_thread_run_generation_status" ON "events" ("threadId", "runGeneration", "status");

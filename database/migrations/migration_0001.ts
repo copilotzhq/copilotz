@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS "threads" (
   "rootThreadId" varchar(255),
   "lastEventId" varchar(255),
   "lastEventAt" timestamp,
+  "runGeneration" integer DEFAULT 0 NOT NULL,
   "workerLockedBy" varchar(255),
   "workerLeaseExpiresAt" timestamp,
   "createdAt" timestamp DEFAULT now() NOT NULL,
@@ -30,6 +31,7 @@ CREATE TABLE IF NOT EXISTS "events" (
   "payload" jsonb NOT NULL,
   "parentEventId" varchar(255),
   "traceId" varchar(255),
+  "runGeneration" integer,
   "priority" integer,
   "ttlMs" integer,
   "expiresAt" timestamp,
@@ -59,6 +61,7 @@ CREATE INDEX IF NOT EXISTS "idx_events_pending_order" ON "events" (
   "id" ASC
 ) WHERE "status" = 'pending';
 CREATE INDEX IF NOT EXISTS "idx_events_status_expires_at" ON "events" ("status", "expiresAt");
+CREATE INDEX IF NOT EXISTS "idx_events_thread_run_generation_status" ON "events" ("threadId", "runGeneration", "status");
 `);
 
 // Re-export RAG migrations for unified migration runner

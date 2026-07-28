@@ -28,6 +28,7 @@ import {
   withRunSenderMetadata,
 } from "@/runtime/usage/attribution.ts";
 import { createUsageService } from "@/runtime/collections/native.ts";
+import { isStaleRunGenerationError } from "@/database/operations/index.ts";
 
 import Ajv from "npm:ajv@^8.17.1";
 import addFormats from "npm:ajv-formats@^3.0.1";
@@ -161,6 +162,9 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       if (!threadId) {
         throw new Error("Invalid thread id for tool call event");
       }
+      const runGeneration = typeof event.runGeneration === "number"
+        ? event.runGeneration
+        : null;
 
       const availableAgents = context.agents || [];
       const eventMetadata =
@@ -240,9 +244,16 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
             args: call.args,
             status: "processing",
             namespace: context.namespace,
+          }, {
+            traceId: typeof event.traceId === "string" ? event.traceId : null,
+            runGeneration,
+            expectedRunGeneration: runGeneration,
+            causationId: typeof event.id === "string" ? event.id : null,
+            namespace: context.namespace,
           });
           toolExecutionId = String(execution.id);
         } catch (error) {
+          if (isStaleRunGenerationError(error)) throw error;
           console.warn(
             "[TOOL_CALL] Failed to create tool_execution node:",
             error,
@@ -364,6 +375,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
         const mutationOptions = {
           threadId,
           traceId: typeof event.traceId === "string" ? event.traceId : null,
+          runGeneration,
           causationId: typeof event.id === "string" ? event.id : null,
           namespace: context.namespace,
           status: isLifecycleToolExecutionCreated

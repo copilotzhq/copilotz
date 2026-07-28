@@ -95,6 +95,9 @@ Deno.test("tool_result processor converts lifecycle payload to NEW_MESSAGE artif
       args: { query: "copilotz" },
       output: { ok: true },
       status: "completed",
+      batchId: "batch-1",
+      batchSize: 2,
+      batchIndex: 0,
       visibility: "public",
     },
   );

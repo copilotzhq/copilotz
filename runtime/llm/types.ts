@@ -341,7 +341,8 @@ export interface ToolPipeline {
 
 // Unified Tool Invocation payload mapping executions end-to-end
 export interface ToolInvocation {
-  id: string; // The LLM-assigned unique execution ID (e.g. call_12345)
+  /** Framework-owned correlation ID. Model/provider-supplied IDs are ignored. */
+  id: string;
   tool: {
     id: string; // The programmatic tool key
     name?: string; // Optional human-readable tool title

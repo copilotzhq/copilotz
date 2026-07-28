@@ -34,6 +34,7 @@ import { ulid } from "ulid";
 import { prepareAgentChatRequest } from "@/runtime/llm/agent-request.ts";
 import { getProviderErrorDetails } from "@/runtime/llm/errors.ts";
 import { createLlmUsageService } from "@/runtime/collections/native.ts";
+import { isStaleRunGenerationError } from "@/database/operations/index.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
 import {
   getRuntimeThreadMetadata,
@@ -122,6 +123,9 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       : (() => {
         throw new Error("Invalid thread id for LLM call event");
       })();
+    const runGeneration = typeof event.runGeneration === "number"
+      ? event.runGeneration
+      : null;
 
     // Get context from dependencies
     const context = deps.context;
@@ -186,6 +190,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
                   traceId: typeof event.traceId === "string"
                     ? event.traceId
                     : null,
+                  runGeneration,
                   causationId: typeof event.id === "string" ? event.id : null,
                   namespace: context.namespace,
                 },
@@ -393,6 +398,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           !Array.isArray(eventMetadata.runSender)
         ? { runSender: eventMetadata.runSender }
         : {}),
+      ...(typeof eventMetadata.runId === "string"
+        ? { runId: eventMetadata.runId }
+        : {}),
+      ...(runGeneration !== null ? { runGeneration } : {}),
       ...(streamLlmAttemptId ? { streamLlmAttemptId } : {}),
     };
 
@@ -423,6 +432,12 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           metadata: {
             sourceEventType: event.type,
           },
+        }, {
+          traceId: typeof event.traceId === "string" ? event.traceId : null,
+          runGeneration,
+          expectedRunGeneration: runGeneration,
+          causationId: typeof event.id === "string" ? event.id : null,
+          namespace: context.namespace,
         });
         llmAttemptId = String(attempt.id);
         terminalLlmAttemptId = llmAttemptId;
@@ -430,6 +445,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         baseResultMetadata.streamLlmAttemptId = streamLlmAttemptId;
         baseResultMetadata.llmAttemptId = terminalLlmAttemptId;
       } catch (error) {
+        if (isStaleRunGenerationError(error)) throw error;
         console.warn("[LLM_CALL] Failed to create llm_attempt node:", error);
       }
     }
@@ -828,6 +844,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           messages,
           extractTags: ["think"],
           reasoningHistory: context.reasoningHistory,
+          signal: deps.cancellation?.signal,
           historyCutoffs,
           historyCutoffNamespace: String(
             payload.agent.id ?? payload.agent.name,
@@ -1020,6 +1037,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             {
               threadId,
               traceId: typeof event.traceId === "string" ? event.traceId : null,
+              runGeneration,
               causationId: typeof event.id === "string" ? event.id : null,
               namespace: context.namespace,
               status: isLifecycleAttemptCreated ? "pending" : undefined,
@@ -1230,10 +1248,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     }
 
     // Generate batch metadata for multiple tool calls
-    const batchId = Array.isArray(toolCalls) && toolCalls.length > 1
+    const batchId = Array.isArray(toolCalls) && toolCalls.length > 0
       ? crypto.randomUUID()
       : null;
-    const batchSize = Array.isArray(toolCalls) && toolCalls.length > 1
+    const batchSize = Array.isArray(toolCalls) && toolCalls.length > 0
       ? toolCalls.length
       : null;
 
@@ -1369,6 +1387,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         const mutationOptions = {
           threadId,
           traceId: typeof event.traceId === "string" ? event.traceId : null,
+          runGeneration,
           causationId: typeof event.id === "string" ? event.id : null,
           namespace: context.namespace,
           status: isLifecycleAttemptCreated ? "pending" as const : undefined,

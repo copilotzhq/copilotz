@@ -44,6 +44,18 @@ const REQUIRED_TABLES = ["threads", "events", "nodes", "edges"] as const;
 
 const REQUIRED_RUNTIME_COLUMNS = [
   {
+    table: "threads",
+    column: "runGeneration",
+    sql:
+      `ALTER TABLE "threads" ADD COLUMN IF NOT EXISTS "runGeneration" integer DEFAULT 0 NOT NULL`,
+  },
+  {
+    table: "events",
+    column: "runGeneration",
+    sql:
+      `ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "runGeneration" integer`,
+  },
+  {
     table: "events",
     column: "subjectType",
     sql:
@@ -102,6 +114,8 @@ const REQUIRED_RUNTIME_COLUMNS = [
 ] as const;
 
 const REQUIRED_RUNTIME_INDEXES = [
+  `CREATE INDEX IF NOT EXISTS "idx_events_thread_run_generation_status"
+     ON "events" ("threadId", "runGeneration", "status")`,
   `CREATE INDEX IF NOT EXISTS "idx_events_trace_status"
      ON "events" ("traceId", "status")`,
   `CREATE INDEX IF NOT EXISTS "idx_nodes_admin_llm_attempt_time"

@@ -551,44 +551,67 @@ export async function runThread(
   );
   const interruptsActiveWork = normalizedSender.type === "user" ||
     normalizedSender.type === "job";
-  const runSenderMetadata = buildRunSenderMetadata(normalizedSender);
-  const queueEventMetadata = interruptsActiveWork
-    ? {
-      ...(initialEventMetadata ?? {}),
-      ...(runSenderMetadata ? { runSender: runSenderMetadata } : {}),
-      interruptsActiveWork: true,
-      interruptMode: options?.interruptMode === "soft" ? "soft" : "abort",
-    }
-    : {
-      ...(initialEventMetadata ?? {}),
-      ...(runSenderMetadata ? { runSender: runSenderMetadata } : {}),
-    };
+  const interruptMode = options?.interruptMode === "soft" ? "soft" : "abort";
   const traceId = options?.traceId ?? crypto.randomUUID();
+  const runSenderMetadata = buildRunSenderMetadata(normalizedSender);
   const messageNamespace = baseContext.namespace ??
     (typeof ensuredThread.namespace === "string" &&
         ensuredThread.namespace.length > 0
       ? ensuredThread.namespace
       : "default");
 
-  const createdInputMessage = await ops.mutate.messages.create(
-    {
-      threadId,
-      senderId: normalizedSender.id ?? normalizedSender.externalId ??
-        normalizedSender.name ?? "user",
-      senderType: normalizedSender.type ?? "user",
-      content: messageContentToText(normalizedMessage.content),
-      toolCalls: normalizedMessage.toolCalls ?? null,
-      metadata: normalizedMessage.metadata ?? null,
-    },
-    messageNamespace,
-    {
-      traceId,
-      priority: priorityForInboundMessage(normalizedMessage),
-      status: "pending",
-      metadata: queueEventMetadata,
-      eventPayload: normalizedMessage as Record<string, unknown>,
-    },
-  );
+  const createInputMessage = async (
+    writeOps: typeof ops,
+    runGeneration: number,
+  ) => {
+    const queueEventMetadata = interruptsActiveWork
+      ? {
+        ...(initialEventMetadata ?? {}),
+        ...(runSenderMetadata ? { runSender: runSenderMetadata } : {}),
+        runId: traceId,
+        runGeneration,
+        interruptsActiveWork: true,
+        interruptMode,
+      }
+      : {
+        ...(initialEventMetadata ?? {}),
+        ...(runSenderMetadata ? { runSender: runSenderMetadata } : {}),
+        runId: traceId,
+        runGeneration,
+      };
+    const createdInputMessage = await writeOps.mutate.messages.create(
+      {
+        threadId,
+        senderId: normalizedSender.id ?? normalizedSender.externalId ??
+          normalizedSender.name ?? "user",
+        senderType: normalizedSender.type ?? "user",
+        content: messageContentToText(normalizedMessage.content),
+        toolCalls: normalizedMessage.toolCalls ?? null,
+        metadata: normalizedMessage.metadata ?? null,
+      },
+      messageNamespace,
+      {
+        traceId,
+        runGeneration,
+        priority: priorityForInboundMessage(normalizedMessage),
+        status: "pending",
+        metadata: queueEventMetadata,
+        eventPayload: normalizedMessage as Record<string, unknown>,
+      },
+    );
+    return { createdInputMessage, queueEventMetadata, runGeneration };
+  };
+
+  const { createdInputMessage } =
+    interruptsActiveWork && interruptMode === "abort"
+      ? await ops.transaction(async (writeOps) => {
+        const generation = await writeOps.advanceThreadRunGeneration(threadId);
+        return await createInputMessage(writeOps, generation);
+      })
+      : await createInputMessage(
+        ops,
+        await ops.getThreadRunGeneration(threadId),
+      );
 
   const traceItems = await ops.getQueueItemsByTraceId(traceId);
   const newQueueItem =
@@ -601,7 +624,10 @@ export async function runThread(
     throw new Error(`Queue trace not found after message mutation: ${traceId}`);
   }
 
-  if (normalizedSender.type === "user" || normalizedSender.type === "job") {
+  if (
+    (normalizedSender.type === "user" || normalizedSender.type === "job") &&
+    interruptMode === "abort"
+  ) {
     await ops.overwritePendingAgentContinuations(
       threadId,
       newQueueItem.createdAt instanceof Date ||

@@ -1,6 +1,70 @@
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertRejects,
+} from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import { createDatabase } from "../index.ts";
+import { StaleRunGenerationError } from "./index.ts";
+
+Deno.test({
+  name: "run generation atomically rejects stale continuation inserts",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({ url: ":memory:" });
+    const thread = await db.ops.findOrCreateThread(undefined, {
+      name: "Run Generation Test",
+      participants: ["user-1"],
+      status: "active",
+      mode: "immediate",
+    });
+    const threadId = thread.id as string;
+
+    assertEquals(await db.ops.getThreadRunGeneration(threadId), 0);
+    assertEquals(await db.ops.advanceThreadRunGeneration(threadId), 1);
+    assertEquals(await db.ops.advanceThreadRunGeneration(threadId), 2);
+    assertEquals(await db.ops.isThreadRunGenerationCurrent(threadId, 1), false);
+    assertEquals(await db.ops.isThreadRunGenerationCurrent(threadId, 2), true);
+
+    await assertRejects(
+      () =>
+        db.ops.addToQueue(threadId, {
+          eventType: "LLM_CALL",
+          payload: { agent: { name: "East" } },
+          runGeneration: 1,
+          expectedRunGeneration: 1,
+          status: "pending",
+        }),
+      StaleRunGenerationError,
+    );
+
+    await assertRejects(
+      () =>
+        db.ops.mutate.llmAttempts.create({
+          threadId,
+          agentId: "east",
+          agentName: "East",
+          status: "processing",
+          namespace: "default",
+        }, {
+          runGeneration: 1,
+          expectedRunGeneration: 1,
+          status: "pending",
+        }),
+      StaleRunGenerationError,
+    );
+
+    const staleRows = await db.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS "count"
+       FROM "events"
+       WHERE "threadId" = $1
+         AND "runGeneration" = 1`,
+      [threadId],
+    );
+    assertEquals(staleRows.rows[0]?.count, "0");
+  },
+});
 
 Deno.test({
   name:

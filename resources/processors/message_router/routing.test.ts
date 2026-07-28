@@ -5,8 +5,10 @@ import {
   normalizeRoutingDecision,
   resolveNextTurn,
   resolveThreadParticipantTarget,
+  storeToolResultInBatch,
 } from "./message.created.ts";
 import type { Agent, Thread } from "@/types/index.ts";
+import { createDatabase } from "@/database/index.ts";
 
 const agents: Agent[] = [
   agent("north"),
@@ -41,6 +43,59 @@ const decision = (
   action,
   targetId,
   source: "model_control" as const,
+});
+
+Deno.test("tool batches correlate duplicate model call ids by framework slot", async () => {
+  const db = await createDatabase({ url: ":memory:" });
+  const batchThread = await db.ops.findOrCreateThread("thread-batch-slots", {
+    name: "Batch slot test",
+    participants: ["east"],
+    status: "active",
+    mode: "immediate",
+  });
+
+  const first = await storeToolResultInBatch(
+    db.ops,
+    batchThread,
+    "batch-1",
+    2,
+    { id: "east", name: "East" },
+    "east",
+    {
+      callId: "duplicated-model-id",
+      name: "search",
+      args: "{}",
+      output: { slot: 0 },
+      status: "completed",
+      batchIndex: 0,
+      content: "first",
+    },
+  );
+  const second = await storeToolResultInBatch(
+    db.ops,
+    batchThread,
+    "batch-1",
+    2,
+    { id: "east", name: "East" },
+    "east",
+    {
+      callId: "duplicated-model-id",
+      name: "search",
+      args: "{}",
+      output: { slot: 1 },
+      status: "completed",
+      batchIndex: 1,
+      content: "second",
+    },
+  );
+
+  assertEquals(first.isComplete, false);
+  assertEquals(second.isComplete, true);
+  assertEquals(
+    second.batch.results.map((result) => result.batchIndex),
+    [0, 1],
+  );
+  await (db as { close?: () => Promise<void> | void }).close?.();
 });
 
 Deno.test("normalizeRoutingDecision accepts consult and legacy routing contracts", () => {

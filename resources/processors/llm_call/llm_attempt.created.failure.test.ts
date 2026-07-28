@@ -306,7 +306,7 @@ Deno.test("llm_call processor persists one llm_usage node per provider attempt",
   }
 });
 
-Deno.test("llm_call processor drains superseded LLM streams for usage and debug", async () => {
+Deno.test("llm_call processor aborts and supersedes interrupted provider streams", async () => {
   const db = await createDatabase({ url: ":memory:" });
   const thread = await db.ops.findOrCreateThread(undefined, {
     namespace: "tenant-test",
@@ -450,7 +450,7 @@ Deno.test("llm_call processor drains superseded LLM streams for usage and debug"
       throw new Error("Expected producedEvents");
     }
     assertEquals(result.producedEvents, []);
-    assertEquals(providerSignal?.aborted, false);
+    assertEquals(providerSignal?.aborted, true);
 
     const emittedTokens = emitted
       .filter((event) => event.type === "TOKEN")
@@ -477,11 +477,7 @@ Deno.test("llm_call processor drains superseded LLM streams for usage and debug"
 
     assertExists(attempt);
     assertEquals(attempt.status, "superseded");
-    assertEquals(attempt.partialAnswer, "first second");
-    assertEquals(attempt.usage.status, "completed");
-    assertEquals(attempt.usage.totalTokens, 12);
-    assertEquals(attempt.debug.rawOutput.content, "first second");
-    assertEquals(attempt.debug.parsedOutput.answer, "first second");
+    assertEquals(attempt.partialAnswer, "first ");
     assertEquals(attempt.metadata.superseded, true);
     assertEquals(
       attempt.metadata.cancellationReason,

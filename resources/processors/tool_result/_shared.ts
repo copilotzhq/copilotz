@@ -60,8 +60,13 @@ export const toolResultProcessor: EventProcessor<
       : (() => {
         throw new Error("Invalid thread id for tool result event");
       })();
+    const runGeneration = typeof event.runGeneration === "number"
+      ? event.runGeneration
+      : null;
     const parentEventId = typeof event.parentEventId === "string"
       ? event.parentEventId
+      : typeof event.causationId === "string"
+      ? event.causationId
       : null;
     const superseded = parentEventId
       ? await detectNewerHumanInputSupersession(
@@ -194,6 +199,8 @@ export const toolResultProcessor: EventProcessor<
               namespace: deps.context.namespace,
             }, {
               traceId: typeof event.traceId === "string" ? event.traceId : null,
+              runGeneration,
+              expectedRunGeneration: runGeneration,
               causationId: typeof event.id === "string" ? event.id : null,
               priority: EVENT_PRIORITIES.SETTLEMENT,
               status: "pending",
@@ -290,6 +297,13 @@ export const toolResultProcessor: EventProcessor<
               ? { error: payload.error }
               : {}),
             status: normalizeToolStatus(payload.status),
+            ...(payload.batchId ? { batchId: payload.batchId } : {}),
+            ...(typeof payload.batchSize === "number"
+              ? { batchSize: payload.batchSize }
+              : {}),
+            ...(typeof payload.batchIndex === "number"
+              ? { batchIndex: payload.batchIndex }
+              : {}),
             ...(typeof payload.historyVisibility === "string"
               ? { visibility: payload.historyVisibility }
               : {}),
@@ -326,6 +340,8 @@ export const toolResultProcessor: EventProcessor<
         deps.context.namespace,
         {
           traceId: typeof event.traceId === "string" ? event.traceId : null,
+          runGeneration,
+          expectedRunGeneration: runGeneration,
           causationId: typeof event.id === "string" ? event.id : null,
           priority: EVENT_PRIORITIES.SETTLEMENT,
           status: "pending",

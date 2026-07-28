@@ -106,3 +106,14 @@ Deno.test("redactEventForStream skips TOKEN events entirely", () => {
 
   assertEquals(redactEventForStream(event), event);
 });
+
+Deno.test("redactEventForStream preserves exact TOOL_CALL_DELTA text", () => {
+  const event = {
+    type: "TOOL_CALL_DELTA",
+    payload: {
+      delta: '{"arguments":{"password":"literal model text"}}',
+    },
+  };
+
+  assertEquals(redactEventForStream(event), event);
+});

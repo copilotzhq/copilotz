@@ -21,6 +21,7 @@ import type {
   NewUnknownEvent,
   Thread,
   TokenEventPayload,
+  ToolCallDeltaEventPayload,
   ToolCallEventPayload,
   ToolResultEventPayload,
 } from "@/types/index.ts";
@@ -107,8 +108,10 @@ export async function enqueueEvent(
     throw new Error("Invalid thread id for event");
   }
 
-  if (event.type === "TOKEN") {
-    throw new Error("TOKEN events are ephemeral and must not be enqueued");
+  if (event.type === "TOKEN" || event.type === "TOOL_CALL_DELTA") {
+    throw new Error(
+      `${event.type} events are ephemeral and must not be enqueued`,
+    );
   }
 
   const parentEventId = typeof event.parentEventId === "string"
@@ -286,6 +289,7 @@ function isPublicStreamEventType(eventType: string): boolean {
   return eventType === "NEW_MESSAGE" ||
     eventType === "message.created" ||
     eventType === "TOKEN" ||
+    eventType === "TOOL_CALL_DELTA" ||
     eventType === "LLM_CALL" ||
     eventType === "LLM_RESULT" ||
     eventType === "TOOL_CALL" ||
@@ -549,6 +553,13 @@ export async function startEventWorker(
             ...baseEvent,
             type: "TOKEN",
             payload: castPayload<TokenEventPayload>(next.payload),
+          };
+          break;
+        case "TOOL_CALL_DELTA":
+          event = {
+            ...baseEvent,
+            type: "TOOL_CALL_DELTA",
+            payload: castPayload<ToolCallDeltaEventPayload>(next.payload),
           };
           break;
         default:

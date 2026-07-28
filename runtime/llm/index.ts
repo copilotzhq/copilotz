@@ -17,6 +17,7 @@ import type {
 import { estimateUsageCost } from "@/runtime/llm/pricing.ts";
 import { resolveProviderApiKey, toLLMConfig } from "@/runtime/llm/config.ts";
 import {
+  CanonicalToolCallDraftTracker,
   composeWireContent,
   countTokens,
   createMockResponse,
@@ -636,6 +637,12 @@ export async function chat(
     const silentRepairAttempt = silentRepairNextAttempt;
     silentRepairNextAttempt = false;
     const prefixBeforeAttempt = recoveryPrefix;
+    let toolDraftsAccepted = false;
+    const toolDraftTracker = new CanonicalToolCallDraftTracker({
+      knownToolNames,
+      providerAttemptId: attemptId,
+      emit: silentRepairAttempt ? undefined : request.onToolCallDelta,
+    });
 
     const emitVisibleChunk = (chunk: string) => {
       if (!stream || chunk.length === 0) return;
@@ -643,7 +650,7 @@ export async function chat(
         attemptVisibleOutputStarted = true;
         visibleOutputStarted = true;
       }
-      stream(chunk);
+      stream(chunk, { isReasoning: false });
     };
 
     const trackedStream = stream && !silentRepairAttempt
@@ -723,6 +730,8 @@ export async function chat(
         providerAPI,
         extractedBlockTags,
         request.signal,
+        (tagName, chunk, phase) =>
+          toolDraftTracker.observe(tagName, chunk, phase),
       );
       const hasOrphanedToolResult = responseHasOrphanedToolResult(
         streamResult.content,
@@ -1188,6 +1197,8 @@ export async function chat(
         attemptNumber,
         finishReason: streamResult.finishReason,
       });
+      toolDraftTracker.complete(parsed.toolCalls);
+      toolDraftsAccepted = true;
 
       return {
         prompt: attemptMessages,
@@ -1350,6 +1361,8 @@ export async function chat(
       }
 
       index = nextIndex;
+    } finally {
+      if (!toolDraftsAccepted) toolDraftTracker.discardAll();
     }
   }
 

@@ -10,6 +10,7 @@ import type {
   ProviderUsageUpdate,
   StreamCallback,
   TokenUsage,
+  ToolCallStreamDelta,
   ToolDefinition,
   ToolInvocation,
   ToolPipelineStage,
@@ -1472,6 +1473,256 @@ export function parseSSEData(line: string): any | null {
   }
 }
 
+interface CanonicalToolCallDraft {
+  draftId: string;
+  callIndex: number;
+  toolName: string;
+  sequence: number;
+  rawLine: string;
+  terminal: boolean;
+}
+
+function readCompleteJsonString(
+  text: string,
+  start: number,
+): { value: unknown; end: number } | null {
+  if (text[start] !== '"') return null;
+  let escaped = false;
+  for (let index = start + 1; index < text.length; index += 1) {
+    const char = text[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char !== '"') continue;
+    try {
+      return {
+        value: JSON.parse(text.slice(start, index + 1)),
+        end: index + 1,
+      };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function readCanonicalToolName(line: string): string | null {
+  let objectDepth = 0;
+  let arrayDepth = 0;
+  let inString = false;
+  let escaped = false;
+  let expectingTopLevelKey = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+
+    if (
+      char === '"' && objectDepth === 1 && arrayDepth === 0 &&
+      expectingTopLevelKey
+    ) {
+      const key = readCompleteJsonString(line, index);
+      if (!key) return null;
+      let colon = key.end;
+      while (colon < line.length && /\s/.test(line[colon])) colon += 1;
+      if (line[colon] !== ":") return null;
+      let valueStart = colon + 1;
+      while (valueStart < line.length && /\s/.test(line[valueStart])) {
+        valueStart += 1;
+      }
+      if (key.value === "name") {
+        const value = readCompleteJsonString(line, valueStart);
+        return value && typeof value.value === "string" &&
+            value.value.length > 0
+          ? value.value
+          : null;
+      }
+      expectingTopLevelKey = false;
+      index = colon;
+      continue;
+    }
+
+    if (char === '"') inString = true;
+    else if (char === "{") {
+      objectDepth += 1;
+      if (objectDepth === 1 && arrayDepth === 0) expectingTopLevelKey = true;
+    } else if (char === "}") objectDepth -= 1;
+    else if (char === "[") arrayDepth += 1;
+    else if (char === "]") arrayDepth -= 1;
+    else if (
+      char === "," && objectDepth === 1 && arrayDepth === 0
+    ) {
+      expectingTopLevelKey = true;
+    }
+  }
+  return null;
+}
+
+/**
+ * Tracks one draft per non-empty canonical JSON line while preserving the
+ * exact text produced inside `<tool_calls>`. Unknown tool names stay private.
+ */
+export class CanonicalToolCallDraftTracker {
+  readonly #knownToolNames: Set<string>;
+  readonly #providerAttemptId: string;
+  readonly #emit?: (delta: ToolCallStreamDelta) => void;
+  readonly #drafts: CanonicalToolCallDraft[] = [];
+  #line = "";
+  #activeDraft: CanonicalToolCallDraft | null = null;
+  #nextCallIndex = 0;
+
+  constructor(options: {
+    knownToolNames: Iterable<string>;
+    providerAttemptId: string;
+    emit?: (delta: ToolCallStreamDelta) => void;
+  }) {
+    this.#knownToolNames = new Set(options.knownToolNames);
+    this.#providerAttemptId = options.providerAttemptId;
+    this.#emit = options.emit;
+  }
+
+  observe(
+    tagName: string,
+    chunk: string,
+    phase: "start" | "content" | "end",
+  ): void {
+    if (tagName !== "tool_calls") return;
+    if (phase === "start") {
+      this.#finishLine();
+      return;
+    }
+    if (phase === "end") {
+      this.#finishLine();
+      return;
+    }
+
+    let start = 0;
+    for (let index = 0; index < chunk.length; index += 1) {
+      if (chunk[index] !== "\n") continue;
+      this.#append(chunk.slice(start, index));
+      this.#finishLine();
+      start = index + 1;
+    }
+    this.#append(chunk.slice(start));
+  }
+
+  complete(toolCalls: ToolInvocation[]): void {
+    this.#finishLine();
+    const usedCallIds = new Set<string>();
+
+    for (const draft of this.#drafts) {
+      if (draft.terminal) continue;
+      const toolCall = toolCalls.find((candidate) =>
+        candidate.tool.id === draft.toolName && !usedCallIds.has(candidate.id)
+      );
+      if (toolCall) {
+        usedCallIds.add(toolCall.id);
+        draft.sequence += 1;
+        draft.terminal = true;
+        this.#emit?.({
+          providerAttemptId: this.#providerAttemptId,
+          draftId: draft.draftId,
+          callIndex: draft.callIndex,
+          sequence: draft.sequence,
+          toolName: draft.toolName,
+          phase: "complete",
+          delta: "",
+          toolCallId: toolCall.id,
+        });
+      } else {
+        this.#discard(draft);
+      }
+    }
+  }
+
+  discardAll(): void {
+    this.#finishLine();
+    for (const draft of this.#drafts) this.#discard(draft);
+  }
+
+  #append(text: string): void {
+    if (!text) return;
+    const previousLength = this.#line.length;
+    this.#line += text;
+
+    if (!this.#activeDraft) {
+      const toolName = readCanonicalToolName(this.#line);
+      if (!toolName || !this.#knownToolNames.has(toolName)) return;
+      const draft: CanonicalToolCallDraft = {
+        draftId: `${this.#providerAttemptId}:${this.#nextCallIndex}`,
+        callIndex: this.#nextCallIndex,
+        toolName,
+        sequence: 0,
+        rawLine: this.#line,
+        terminal: false,
+      };
+      this.#activeDraft = draft;
+      this.#drafts.push(draft);
+      this.#emit?.({
+        providerAttemptId: this.#providerAttemptId,
+        draftId: draft.draftId,
+        callIndex: draft.callIndex,
+        sequence: draft.sequence,
+        toolName,
+        phase: "start",
+        delta: this.#line,
+      });
+      return;
+    }
+
+    const delta = this.#line.slice(previousLength);
+    if (!delta) return;
+    this.#activeDraft.rawLine = this.#line;
+    this.#activeDraft.sequence += 1;
+    this.#emit?.({
+      providerAttemptId: this.#providerAttemptId,
+      draftId: this.#activeDraft.draftId,
+      callIndex: this.#activeDraft.callIndex,
+      sequence: this.#activeDraft.sequence,
+      toolName: this.#activeDraft.toolName,
+      phase: "delta",
+      delta,
+    });
+  }
+
+  #finishLine(): void {
+    if (!this.#line.trim()) {
+      this.#line = "";
+      this.#activeDraft = null;
+      return;
+    }
+    if (this.#activeDraft) this.#activeDraft.rawLine = this.#line;
+    this.#nextCallIndex += 1;
+    this.#line = "";
+    this.#activeDraft = null;
+  }
+
+  #discard(draft: CanonicalToolCallDraft): void {
+    if (draft.terminal) return;
+    draft.sequence += 1;
+    draft.terminal = true;
+    this.#emit?.({
+      providerAttemptId: this.#providerAttemptId,
+      draftId: draft.draftId,
+      callIndex: draft.callIndex,
+      sequence: draft.sequence,
+      toolName: draft.toolName,
+      phase: "discarded",
+      delta: "",
+    });
+  }
+}
+
 /**
  * Parses a single line according to the stream format.
  * SSE: expects `data: {...}` prefix.  JSONL: raw JSON per line.
@@ -1583,8 +1834,9 @@ export async function processStream(
       text,
       filterState,
       options?.extractedBlockTags ?? [],
+      options?.onHiddenBlockChunk,
     );
-    if (filtered) onChunk(filtered);
+    if (filtered) onChunk(filtered, { isReasoning: false });
   };
 
   const flushLocalStopPending = () => {
@@ -1817,6 +2069,11 @@ export function filterTaggedControlTokensStreaming(
   input: string,
   state: { activeTag: string | null; pending: string; controlPending?: string },
   extractedBlockTags: string[],
+  onHiddenBlockChunk?: (
+    tagName: string,
+    chunk: string,
+    phase: "start" | "content" | "end",
+  ) => void,
 ): string {
   const structuredTags = normalizeStructuredTagNames([
     ...COPILOTZ_CONTROL_TAGS,
@@ -1869,6 +2126,7 @@ export function filterTaggedControlTokensStreaming(
         output += s.slice(0, nextMatch.index);
         s = s.slice(nextMatch.index + nextMatch.tagLength);
         state.activeTag = nextMatch.tagName;
+        onHiddenBlockChunk?.(nextMatch.tagName, "", "start");
       }
     } else {
       const activeTag = structuredTags.find((tag) =>
@@ -1881,10 +2139,19 @@ export function filterTaggedControlTokensStreaming(
       const endIdx = s.indexOf(activeTag.endTag);
       if (endIdx === -1) {
         const overlap = suffixPrefix(s, activeTag.endTag);
+        const hiddenContent = s.slice(0, s.length - overlap);
+        if (hiddenContent) {
+          onHiddenBlockChunk?.(activeTag.name, hiddenContent, "content");
+        }
         state.pending = s.slice(s.length - overlap);
         s = "";
       } else {
+        const hiddenContent = s.slice(0, endIdx);
+        if (hiddenContent) {
+          onHiddenBlockChunk?.(activeTag.name, hiddenContent, "content");
+        }
         s = s.slice(endIdx + activeTag.endTag.length);
+        onHiddenBlockChunk?.(activeTag.name, "", "end");
         state.activeTag = null;
       }
     }

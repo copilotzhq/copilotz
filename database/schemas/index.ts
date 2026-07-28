@@ -357,7 +357,50 @@ const schemaDefinition = {
             isComplete: { type: "boolean" },
             isReasoning: { type: "boolean" },
           },
-          required: ["threadId", "agent", "token", "isComplete"],
+          required: [
+            "threadId",
+            "agent",
+            "token",
+            "isComplete",
+            "isReasoning",
+          ],
+        },
+        ToolCallDeltaEventPayload: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            threadId: { type: "string" },
+            agent: {
+              type: "object",
+              properties: {
+                id: { type: ["string", "null"] },
+                name: { type: "string" },
+              },
+              required: ["name"],
+            },
+            llmAttemptId: { type: "string" },
+            draftId: { type: "string" },
+            callIndex: { type: "number", minimum: 0 },
+            sequence: { type: "number", minimum: 0 },
+            toolName: { type: "string" },
+            phase: {
+              type: "string",
+              enum: ["start", "delta", "complete", "discarded"],
+            },
+            delta: { type: "string" },
+            toolCallId: { type: "string" },
+          },
+          required: [
+            "threadId",
+            "agent",
+            "llmAttemptId",
+            "draftId",
+            "callIndex",
+            "sequence",
+            "toolName",
+            "phase",
+            "delta",
+          ],
         },
         ChatContentPart: {
           anyOf: [
@@ -740,6 +783,16 @@ const schemaDefinition = {
             },
           },
         },
+        {
+          if: {
+            properties: { eventType: { const: "TOOL_CALL_DELTA" } },
+          },
+          then: {
+            properties: {
+              payload: { $ref: "#/$defs/ToolCallDeltaEventPayload" },
+            },
+          },
+        },
       ],
     },
     keys: [{ property: "id" }],
@@ -991,6 +1044,10 @@ export type LlmResultEventPayload = FromSchema<
 export type TokenEventPayload = FromSchema<
   typeof schemaDefinition.events.schema.$defs.TokenEventPayload
 >;
+/** Stream-only payload containing incremental canonical tool-call JSON. */
+export type ToolCallDeltaEventPayload = FromSchema<
+  typeof schemaDefinition.events.schema.$defs.ToolCallDeltaEventPayload
+>;
 
 export type EventPayloadMapBase = {
   NEW_MESSAGE: MessagePayload;
@@ -999,6 +1056,7 @@ export type EventPayloadMapBase = {
   TOOL_RESULT: ToolResultEventPayload;
   LLM_RESULT: LlmResultEventPayload;
   TOKEN: TokenEventPayload;
+  TOOL_CALL_DELTA: ToolCallDeltaEventPayload;
 };
 
 type EventPayloadMap = EventPayloadMapBase;
@@ -1051,6 +1109,12 @@ export type LlmResultEvent = EventBase & {
 export type TokenEvent = EventBase & {
   type: "TOKEN";
   payload: TokenEventPayload;
+};
+
+/** Specific stream-only TOOL_CALL_DELTA event with typed payload. */
+export type ToolCallDeltaEvent = EventBase & {
+  type: "TOOL_CALL_DELTA";
+  payload: ToolCallDeltaEventPayload;
 };
 
 /**

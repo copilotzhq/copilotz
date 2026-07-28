@@ -1248,7 +1248,11 @@ function withGeneratedEventLogging(
   };
 }
 
-const DEFAULT_EXCLUDED_EVENT_TYPES = new Set(["TOKEN", "ASSET_CREATED"]);
+const DEFAULT_EXCLUDED_EVENT_TYPES = new Set([
+  "TOKEN",
+  "TOOL_CALL_DELTA",
+  "ASSET_CREATED",
+]);
 
 async function logGeneratedEvent(
   logger: AppGeneratedEventLogger,

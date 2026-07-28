@@ -30,6 +30,8 @@ import type {
   Thread,
   TokenEvent,
   TokenEventPayload,
+  ToolCallDeltaEvent,
+  ToolCallDeltaEventPayload,
   ToolCallEvent,
   ToolCallEventPayload,
   ToolResultEvent,
@@ -67,6 +69,10 @@ export type {
   TokenEvent,
   /** Payload for streaming token events. */
   TokenEventPayload,
+  /** Specific stream-only TOOL_CALL_DELTA event. */
+  ToolCallDeltaEvent,
+  /** Payload for incremental canonical tool-call JSON. */
+  ToolCallDeltaEventPayload,
   /** Specific TOOL_CALL event with typed payload. */
   ToolCallEvent,
   /** Payload for tool call events. */
@@ -923,4 +929,11 @@ export interface ScopedCollectionsManager {
  */
 export function isTokenEvent(event: Event): event is TokenEvent {
   return event?.type === "TOKEN";
+}
+
+/** Type guard for stream-only incremental tool-call events. */
+export function isToolCallDeltaEvent(
+  event: Event,
+): event is ToolCallDeltaEvent {
+  return event?.type === "TOOL_CALL_DELTA";
 }

@@ -51,7 +51,8 @@ export function redactEventForStream<T>(event: T): T {
     event &&
     typeof event === "object" &&
     "type" in (event as Record<string, unknown>) &&
-    (event as Record<string, unknown>).type === "TOKEN"
+    ((event as Record<string, unknown>).type === "TOKEN" ||
+      (event as Record<string, unknown>).type === "TOOL_CALL_DELTA")
   ) {
     return event;
   }

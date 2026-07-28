@@ -238,6 +238,9 @@ Deno.test("llm_call privately corrects a mixed routing/tool response once", asyn
 
   try {
     const { event, deps } = await setup();
+    const emitted: Event[] = [];
+    deps.context.stream = true;
+    deps.emitToStream = (streamEvent: Event) => emitted.push(streamEvent);
     const produced = onlyResult(await process(event, deps));
     const payload = produced.payload as Record<string, unknown>;
 
@@ -257,6 +260,15 @@ Deno.test("llm_call privately corrects a mixed routing/tool response once", asyn
     });
     assertNotEquals(controlCallId, "route-corrected");
     assertEquals(produced.metadata?.routingError, undefined);
+    const executableDraftPhases = emitted
+      .filter((streamEvent) =>
+        streamEvent.type === "TOOL_CALL_DELTA" &&
+        (streamEvent.payload as Record<string, unknown>).toolName === "search"
+      )
+      .map((streamEvent) =>
+        (streamEvent.payload as Record<string, unknown>).phase
+      );
+    assertEquals(executableDraftPhases, ["start", "discarded"]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -370,6 +382,10 @@ Deno.test("llm_call hides split routing markup while preserving visible text", a
     assertEquals(visibleTokens.includes("tool_calls"), false);
     assertEquals(visibleTokens.includes("Private implementation brief"), false);
     assertEquals(
+      emitted.some((streamEvent) => streamEvent.type === "TOOL_CALL_DELTA"),
+      false,
+    );
+    assertEquals(
       (produced.payload as Record<string, unknown>).answer,
       "Public framing.\n\nPrivate implementation brief.",
     );
@@ -384,6 +400,86 @@ Deno.test("llm_call hides split routing markup while preserving visible text", a
       message: "Private implementation brief.",
     });
     assertNotEquals(controlCallId, "route-split");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("llm_call streams canonical executable tool JSON and reconciles its id", async () => {
+  const originalFetch = globalThis.fetch;
+  const jsonLine = JSON.stringify({
+    name: "search",
+    arguments: { query: "streamed request" },
+  });
+  globalThis.fetch = () =>
+    Promise.resolve(sseChunks([
+      "<tool_",
+      "calls>\n",
+      jsonLine.slice(0, 28),
+      jsonLine.slice(28, 43),
+      jsonLine.slice(43),
+      "\n</tool_",
+      "calls>",
+    ]));
+
+  try {
+    const { event, deps } = await setup();
+    const emitted: Event[] = [];
+    deps.context.stream = true;
+    deps.emitToStream = (streamEvent: Event) => emitted.push(streamEvent);
+
+    const produced = onlyResult(await process(event, deps));
+    const toolDeltas = emitted
+      .filter((streamEvent) => streamEvent.type === "TOOL_CALL_DELTA")
+      .map((streamEvent) => streamEvent.payload as Record<string, unknown>);
+    const finalizedCalls = (produced.payload as Record<string, unknown>)
+      .toolCalls as Array<{ id: string }>;
+
+    assertEquals(
+      toolDeltas.map((delta) => delta.phase),
+      ["start", "delta", "delta", "complete"],
+    );
+    assertEquals(
+      toolDeltas
+        .filter((delta) => delta.phase !== "complete")
+        .map((delta) => String(delta.delta))
+        .join(""),
+      jsonLine,
+    );
+    assertEquals(toolDeltas.at(-1)?.toolCallId, finalizedCalls[0]?.id);
+    assertEquals(
+      toolDeltas.every((delta, index) => delta.sequence === index),
+      true,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("llm_call marks reasoning, answer, and completion channels explicitly", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(sseDeltas([
+      { reasoning: "Think" },
+      { content: "Answer" },
+    ]));
+
+  try {
+    const { event, deps } = await setup();
+    const emitted: Event[] = [];
+    deps.context.stream = true;
+    deps.emitToStream = (streamEvent: Event) => emitted.push(streamEvent);
+
+    await process(event, deps);
+    const tokens = emitted
+      .filter((streamEvent) => streamEvent.type === "TOKEN")
+      .map((streamEvent) => streamEvent.payload as Record<string, unknown>);
+
+    assertEquals(tokens.map((token) => token.token), ["Think", "Answer", ""]);
+    assertEquals(
+      tokens.map((token) => token.isReasoning),
+      [true, false, false],
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -13,6 +13,7 @@ import type {
   LLMUsageAttempt,
   ProviderConfig,
   TokenUsage,
+  ToolCallStreamDelta,
   ToolInvocation,
 } from "@/runtime/llm/types.ts";
 import {
@@ -29,6 +30,7 @@ import type {
   NewEvent,
   ProcessorDeps,
   TokenEventPayload,
+  ToolCallDeltaEventPayload,
 } from "@/types/index.ts";
 import { ulid } from "ulid";
 import { prepareAgentChatRequest } from "@/runtime/llm/agent-request.ts";
@@ -43,6 +45,7 @@ import {
 } from "@/runtime/thread-metadata.ts";
 import {
   resolveInThreadRoutingTargets,
+  ROUTING_CONTROL_NAMES,
   type RoutingControlIntent,
   type RoutingControlSelection,
   selectRoutingControl,
@@ -149,6 +152,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     let streamLlmAttemptId: string | null = null;
     let partialAnswer = "";
     let partialReasoning = "";
+    let lastStreamTokenIsReasoning = false;
     let lastPartialPersistedAt = 0;
     let lastPartialPersistPromise: Promise<void> = Promise.resolve();
     let partialPersistRequested = false;
@@ -212,7 +216,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     const buildTokenEvent = (
       token: string,
       isComplete: boolean,
-      isReasoning?: boolean,
+      isReasoning: boolean,
     ): Event => {
       const tokenPayload: TokenEventPayload = {
         threadId,
@@ -240,6 +244,26 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         status: isComplete ? "completed" : "processing",
       };
     };
+
+    const buildToolCallDeltaEvent = (
+      delta: ToolCallDeltaEventPayload,
+    ): Event => ({
+      id: ulid(),
+      threadId,
+      type: "TOOL_CALL_DELTA",
+      payload: delta,
+      parentEventId: null,
+      traceId: null,
+      priority: null,
+      metadata: streamLlmAttemptId ? { streamLlmAttemptId } : null,
+      ttlMs: null,
+      expiresAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      status: delta.phase === "complete" || delta.phase === "discarded"
+        ? "completed"
+        : "processing",
+    });
 
     if (isLifecycleAttemptCreated) {
       llmAttemptId =
@@ -277,13 +301,15 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
 
     const processStreamToken = (context.stream && deps.emitToStream)
       ? (token: string, options?: { isReasoning?: boolean }) => {
+        const isReasoning = options?.isReasoning === true;
+        if (token.length > 0) lastStreamTokenIsReasoning = isReasoning;
         if (
-          !options?.isReasoning &&
+          !isReasoning &&
           token.trim().length > 0
         ) {
           markVisibleOutputStarted();
         }
-        if (options?.isReasoning) {
+        if (isReasoning) {
           partialReasoning += token;
         } else if (token) {
           partialAnswer += token;
@@ -293,7 +319,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         if (isSuperseded()) return;
 
         deps.emitToStream(
-          buildTokenEvent(token, false, options?.isReasoning),
+          buildTokenEvent(token, false, isReasoning),
         );
       }
       : undefined;
@@ -313,6 +339,78 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       debugLabel: "llm_call",
     });
     const baseMessages = preparedChat.request.messages;
+    const executableToolNames = new Set(
+      (preparedChat.request.tools ?? [])
+        .map((tool) => tool.function.name)
+        .filter((name) =>
+          !ROUTING_CONTROL_NAMES.includes(
+            name as typeof ROUTING_CONTROL_NAMES[number],
+          )
+        ),
+    );
+    const activeToolDrafts = new Map<string, ToolCallStreamDelta>();
+    const pendingCompleteToolDrafts = new Map<string, ToolCallStreamDelta>();
+    const emitPublicToolCallDelta = context.stream
+      ? (delta: ToolCallStreamDelta) => {
+        const publicAttemptId = streamLlmAttemptId ?? llmAttemptId ??
+          (typeof event.id === "string" ? event.id : delta.providerAttemptId);
+        deps.emitToStream(buildToolCallDeltaEvent({
+          threadId,
+          agent: {
+            id: payload.agent.id ?? undefined,
+            name: payload.agent.name,
+          },
+          llmAttemptId: publicAttemptId,
+          draftId: delta.draftId,
+          callIndex: delta.callIndex,
+          sequence: delta.sequence,
+          toolName: delta.toolName,
+          phase: delta.phase,
+          delta: delta.delta,
+          ...(delta.toolCallId ? { toolCallId: delta.toolCallId } : {}),
+        }));
+      }
+      : undefined;
+    const processToolCallDelta = context.stream
+      ? (delta: ToolCallStreamDelta) => {
+        if (
+          !executableToolNames.has(delta.toolName) ||
+          (isSuperseded() && delta.phase !== "discarded")
+        ) {
+          return;
+        }
+        if (delta.phase === "discarded") {
+          activeToolDrafts.delete(delta.draftId);
+          pendingCompleteToolDrafts.delete(delta.draftId);
+        } else {
+          activeToolDrafts.set(delta.draftId, delta);
+        }
+        if (delta.phase === "complete") {
+          pendingCompleteToolDrafts.set(delta.draftId, delta);
+          return;
+        }
+        emitPublicToolCallDelta?.(delta);
+      }
+      : undefined;
+    const completeActiveToolDrafts = () => {
+      for (const draft of pendingCompleteToolDrafts.values()) {
+        emitPublicToolCallDelta?.(draft);
+      }
+      pendingCompleteToolDrafts.clear();
+    };
+    const discardActiveToolDrafts = () => {
+      for (const draft of activeToolDrafts.values()) {
+        processToolCallDelta?.({
+          ...draft,
+          phase: "discarded",
+          sequence: draft.sequence + 1,
+          delta: "",
+          toolCallId: undefined,
+        });
+      }
+      activeToolDrafts.clear();
+      pendingCompleteToolDrafts.clear();
+    };
 
     const agentForCall = context.agents?.find((a) => a.id === payload.agent.id);
     const persistedConfig = (payload.config ?? {}) as LLMConfig;
@@ -837,6 +935,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     const startChat = (
       messages: ChatMessage[],
       callback = streamCallback,
+      includeToolDeltas = true,
     ) =>
       chat(
         {
@@ -850,6 +949,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             payload.agent.id ?? payload.agent.name,
           ),
           onHistoryCutoff,
+          onToolCallDelta: includeToolDeltas ? processToolCallDelta : undefined,
         } as ChatRequest,
         configForCall,
         envVars,
@@ -860,6 +960,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     try {
       let settled = await awaitChatOrSupersession(chatPromise);
       if (settled === "superseded") {
+        discardActiveToolDrafts();
         detachSupersededDrain(chatPromise);
         return { producedEvents: [] };
       }
@@ -870,6 +971,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       );
 
       if (routingSelection.kind === "invalid") {
+        discardActiveToolDrafts();
         routingCorrectionAttempted = true;
         discardedRoutingResponses.push(response);
         const consultTargets = routingTargets.consult.map((target) =>
@@ -902,9 +1004,11 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         chatPromise = startChat(
           [...baseMessages, correctionPrompt],
           correctionStreamCallback,
+          false,
         );
         settled = await awaitChatOrSupersession(chatPromise);
         if (settled === "superseded") {
+          discardActiveToolDrafts();
           detachSupersededDrain(chatPromise);
           return { producedEvents: [] };
         }
@@ -915,6 +1019,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         );
       }
     } catch (error) {
+      discardActiveToolDrafts();
       if (isSuperseded()) {
         void persistSupersededError(error).catch((persistError) => {
           console.warn(
@@ -926,7 +1031,9 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       }
 
       if (!isSuperseded() && streamCallback && deps.emitToStream) {
-        deps.emitToStream(buildTokenEvent("", true));
+        deps.emitToStream(
+          buildTokenEvent("", true, lastStreamTokenIsReasoning),
+        );
       }
 
       const providerErrorDetails = getProviderErrorDetails(error);
@@ -1091,12 +1198,17 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         }],
       };
     }
+    if (routingSelection.kind === "none") completeActiveToolDrafts();
+    activeToolDrafts.clear();
+    pendingCompleteToolDrafts.clear();
 
     const llmResponse = response as unknown as ChatResponse;
 
     // finalize stream
     if (!isSuperseded() && streamCallback && deps.emitToStream) {
-      deps.emitToStream(buildTokenEvent("", true));
+      deps.emitToStream(
+        buildTokenEvent("", true, lastStreamTokenIsReasoning),
+      );
     }
 
     // Clean response

@@ -115,6 +115,7 @@ import type {
   ResolveLLMRuntimeConfig,
   TokenEventPayload,
   Tool,
+  ToolCallDeltaEventPayload,
   ToolCallEventPayload,
 } from "@/types/index.ts";
 
@@ -239,6 +240,8 @@ export type {
   TokenEventPayload,
   /** Tool definition with input/output schemas for agent capabilities. */
   Tool,
+  /** Payload structure for incremental stream-only tool-call JSON. */
+  ToolCallDeltaEventPayload,
   /** Specific TOOL_CALL event type with typed payload. */
   ToolCallEvent,
   /** Payload structure for tool call events. */
@@ -530,7 +533,8 @@ export type CopilotzEvent =
   | { type: "RAG_INGEST"; payload: RagIngestPayload }
   | { type: "ASSET_CREATED"; payload: AssetCreatedEventPayload }
   | { type: "ASSET_ERROR"; payload: AssetErrorEventPayload }
-  | { type: "TOKEN"; payload: TokenEventPayload };
+  | { type: "TOKEN"; payload: TokenEventPayload }
+  | { type: "TOOL_CALL_DELTA"; payload: ToolCallDeltaEventPayload };
 
 /** Alias for Agent type, used in configuration. */
 export type AgentConfig = Agent;

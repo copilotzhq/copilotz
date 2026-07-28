@@ -1,6 +1,44 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import { startEventWorker } from "./event-engine.ts";
+import { enqueueEvent, startEventWorker } from "./event-engine.ts";
+
+Deno.test("enqueueEvent rejects stream-only tool call deltas", async () => {
+  let enqueued = false;
+  const db = {
+    ops: {
+      addToQueue: () => {
+        enqueued = true;
+      },
+    },
+  };
+
+  let message = "";
+  try {
+    await enqueueEvent(db as never, {
+      threadId: "thread-delta",
+      type: "TOOL_CALL_DELTA",
+      payload: {
+        threadId: "thread-delta",
+        agent: { name: "Agent" },
+        llmAttemptId: "attempt-1",
+        draftId: "draft-1",
+        callIndex: 0,
+        sequence: 0,
+        toolName: "terminal",
+        phase: "start",
+        delta: '{"name":"terminal"',
+      },
+    });
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+
+  assertEquals(
+    message,
+    "TOOL_CALL_DELTA events are ephemeral and must not be enqueued",
+  );
+  assertEquals(enqueued, false);
+});
 
 Deno.test("startEventWorker lets a void observer pass to the claiming processor", async () => {
   const threadId = "thread-observer";

@@ -315,6 +315,29 @@ export interface ChatRequest {
   };
   /** Optional external signal for cancelling active provider work. */
   signal?: AbortSignal;
+  /**
+   * Internal stream-only hook for canonical tool-call JSON drafts. Drafts are
+   * never persisted and may be discarded when a provider attempt is retried.
+   */
+  onToolCallDelta?: (delta: ToolCallStreamDelta) => void;
+}
+
+export type ToolCallStreamDeltaPhase =
+  | "start"
+  | "delta"
+  | "complete"
+  | "discarded";
+
+/** Internal canonical tool-call draft emitted while provider text is parsed. */
+export interface ToolCallStreamDelta {
+  providerAttemptId: string;
+  draftId: string;
+  callIndex: number;
+  sequence: number;
+  toolName: string;
+  phase: ToolCallStreamDeltaPhase;
+  delta: string;
+  toolCallId?: string;
 }
 
 export interface ToolPipelineToolStage {
@@ -547,6 +570,12 @@ export interface ProcessStreamOptions {
   extractUsage?: (data: any) => ProviderUsageUpdate | null;
   /** Extract provider finish reason from a parsed SSE or JSONL event. */
   extractFinishReason?: (data: any) => ProviderFinishReason | null;
+  /** Observe exact text hidden inside structured protocol blocks. */
+  onHiddenBlockChunk?: (
+    tagName: string,
+    chunk: string,
+    phase: "start" | "content" | "end",
+  ) => void;
 }
 
 // Provider API interface with multimodal support

@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import {
   buildToolCallsBlock,
+  CanonicalToolCallDraftTracker,
   composeWireContent,
   detectDegenerateRepetition,
   filterTaggedControlTokensStreaming,
@@ -1014,6 +1015,129 @@ Deno.test("filterTaggedControlTokensStreaming hides tool blocks split across chu
   assertEquals(visible, "Public text remains visible.");
   assertEquals(state.activeTag, null);
   assertEquals(state.pending, "");
+});
+
+Deno.test("canonical tool draft tracker preserves escaped JSON across chunks", () => {
+  const deltas: Array<{
+    phase: string;
+    delta: string;
+    toolCallId?: string;
+  }> = [];
+  const tracker = new CanonicalToolCallDraftTracker({
+    knownToolNames: ["terminal"],
+    providerAttemptId: "attempt-1",
+    emit: (delta) => deltas.push(delta),
+  });
+  const line =
+    '{"name":"terminal","arguments":{"stdin":"printf \\"a\\\\nb\\""}}';
+
+  tracker.observe("tool_calls", "", "start");
+  tracker.observe("tool_calls", line.slice(0, 31), "content");
+  tracker.observe("tool_calls", line.slice(31), "content");
+  tracker.observe("tool_calls", "", "end");
+  tracker.complete([{
+    id: "call-1",
+    tool: { id: "terminal" },
+    args: '{"stdin":"printf \\"a\\\\nb\\""}',
+  }]);
+
+  assertEquals(deltas.map((delta) => delta.phase), [
+    "start",
+    "delta",
+    "complete",
+  ]);
+  assertEquals(
+    deltas
+      .filter((delta) => delta.phase === "start" || delta.phase === "delta")
+      .map((delta) => delta.delta)
+      .join(""),
+    line,
+  );
+  assertEquals(deltas.at(-1)?.toolCallId, "call-1");
+});
+
+Deno.test("canonical tool draft tracker handles calls, pipelines, and private names", () => {
+  const deltas: Array<{
+    callIndex: number;
+    toolName: string;
+    phase: string;
+  }> = [];
+  const tracker = new CanonicalToolCallDraftTracker({
+    knownToolNames: ["search", "terminal"],
+    providerAttemptId: "attempt-many",
+    emit: (delta) => deltas.push(delta),
+  });
+  tracker.observe("tool_calls", "", "start");
+  tracker.observe(
+    "tool_calls",
+    [
+      '{"name":"unknown","arguments":{}}',
+      '{"name":"search","arguments":{"q":"one"}}',
+      '{"name":"terminal","arguments":{"stdin":"pwd"}} | {"jq":"{cwd:.stdout}"}',
+    ].join("\n"),
+    "content",
+  );
+  tracker.observe("tool_calls", "", "end");
+  tracker.complete([
+    { id: "unknown-id", tool: { id: "unknown" }, args: "{}" },
+    { id: "search-id", tool: { id: "search" }, args: '{"q":"one"}' },
+    { id: "terminal-id", tool: { id: "terminal" }, args: '{"stdin":"pwd"}' },
+  ]);
+
+  assertEquals(
+    deltas.filter((delta) => delta.phase === "start").map((delta) => ({
+      callIndex: delta.callIndex,
+      toolName: delta.toolName,
+    })),
+    [
+      { callIndex: 1, toolName: "search" },
+      { callIndex: 2, toolName: "terminal" },
+    ],
+  );
+  assertEquals(
+    deltas.filter((delta) => delta.phase === "complete").map((delta) =>
+      delta.toolName
+    ),
+    ["search", "terminal"],
+  );
+});
+
+Deno.test("canonical tool draft tracker recognizes a top-level name after arguments", () => {
+  const deltas: Array<{ phase: string; delta: string }> = [];
+  const tracker = new CanonicalToolCallDraftTracker({
+    knownToolNames: ["terminal"],
+    providerAttemptId: "attempt-key-order",
+    emit: (delta) => deltas.push(delta),
+  });
+  const line =
+    '{"arguments":{"stdin":"pwd","nested":{"name":"private"}},"name":"terminal"}';
+
+  tracker.observe("tool_calls", line, "content");
+  tracker.complete([{
+    id: "call-key-order",
+    tool: { id: "terminal" },
+    args: '{"stdin":"pwd","nested":{"name":"private"}}',
+  }]);
+
+  assertEquals(deltas.map((delta) => delta.phase), ["start", "complete"]);
+  assertEquals(deltas[0]?.delta, line);
+});
+
+Deno.test("canonical tool draft tracker discards abandoned malformed drafts", () => {
+  const phases: string[] = [];
+  const tracker = new CanonicalToolCallDraftTracker({
+    knownToolNames: ["terminal"],
+    providerAttemptId: "attempt-discard",
+    emit: (delta) => phases.push(delta.phase),
+  });
+  tracker.observe(
+    "tool_calls",
+    '{"name":"terminal","arguments":{"stdin":"unterminated',
+    "content",
+  );
+  tracker.discardAll();
+
+  assertEquals(phases, ["start", "discarded"]);
 });
 
 Deno.test("formatMessages canonicalizes structured assistant tool calls over pre-rendered blocks", () => {

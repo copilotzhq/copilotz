@@ -49,6 +49,11 @@ export async function runProviderStream(
   providerAPI: ProviderAPI,
   extractTags?: string[],
   signal?: AbortSignal,
+  onHiddenBlockChunk?: (
+    tagName: string,
+    chunk: string,
+    phase: "start" | "content" | "end",
+  ) => void,
 ): Promise<StreamResult> {
   const localStopSequences = getLocalStopSequences(config);
   const finalMessages = providerAPI.transformMessages
@@ -220,6 +225,7 @@ export async function runProviderStream(
         extractFinishReason: providerAPI.extractFinishReason,
         localStopSequences,
         continueAfterLocalStop: true,
+        onHiddenBlockChunk,
       },
     );
     return await Promise.race([streamPromise, timeoutPromise]);

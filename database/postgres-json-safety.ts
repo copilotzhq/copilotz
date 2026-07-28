@@ -1,3 +1,5 @@
+import { toWellFormedUnicode } from "@/utils/unicode.ts";
+
 const NULL_CHAR_PATTERN = /\u0000|\\u0000/gi;
 
 function isBinaryLike(value: unknown): boolean {
@@ -9,7 +11,9 @@ function sanitizeValueForPostgres<T>(
   seen: WeakMap<object, unknown>,
 ): T {
   if (typeof value === "string") {
-    return value.replace(NULL_CHAR_PATTERN, "") as T;
+    return toWellFormedUnicode(
+      value.replace(NULL_CHAR_PATTERN, ""),
+    ) as T;
   }
 
   if (value === null || typeof value !== "object") return value;
@@ -30,10 +34,11 @@ function sanitizeValueForPostgres<T>(
   const next: Record<string, unknown> = {};
   seen.set(value, next);
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    next[key.replace(NULL_CHAR_PATTERN, "")] = sanitizeValueForPostgres(
-      child,
-      seen,
-    );
+    next[toWellFormedUnicode(key.replace(NULL_CHAR_PATTERN, ""))] =
+      sanitizeValueForPostgres(
+        child,
+        seen,
+      );
   }
   return next as T;
 }

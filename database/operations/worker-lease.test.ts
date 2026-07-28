@@ -153,7 +153,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "database query boundary strips NUL chars from queued event payloads",
+  name: "database query boundary sanitizes invalid JSON text in queued events",
   sanitizeExit: false,
   sanitizeOps: false,
   sanitizeResources: false,
@@ -164,9 +164,17 @@ Deno.test({
       eventType: "NEW_MESSAGE",
       payload: {
         content: "before\u0000after",
-        nested: { "bad\u0000key": "ok\u0000now" },
+        nested: {
+          "bad\u0000key": "ok\u0000now",
+          loneHigh: "before\uD835after",
+          loneLow: "before\uDC5Bafter",
+          paired: "𝑛",
+        },
       },
-      metadata: { reason: "meta\u0000data" },
+      metadata: {
+        reason: "meta\u0000data",
+        malformed: "\uD835",
+      },
       priority: 0,
     });
 
@@ -174,9 +182,17 @@ Deno.test({
     assertExists(persisted);
     assertEquals(persisted.payload, {
       content: "beforeafter",
-      nested: { badkey: "oknow" },
+      nested: {
+        badkey: "oknow",
+        loneHigh: "before�after",
+        loneLow: "before�after",
+        paired: "𝑛",
+      },
     });
-    assertEquals(persisted.metadata, { reason: "metadata" });
+    assertEquals(persisted.metadata, {
+      reason: "metadata",
+      malformed: "�",
+    });
   },
 });
 

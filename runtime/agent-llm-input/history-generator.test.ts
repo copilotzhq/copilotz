@@ -383,6 +383,59 @@ Deno.test("historyGenerator truncates large tool outputs at an estimated-token c
   assertEquals((out.preview as string).length < huge.length, true);
 });
 
+Deno.test("historyGenerator keeps truncated astral Unicode well formed", () => {
+  const currentAgent: Agent = {
+    id: "agent-1",
+    name: "agent-1",
+    role: "assistant",
+    instructions: "Do work.",
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  };
+
+  const chatHistory: NewMessage[] = [
+    {
+      id: "m-tool",
+      threadId: "t-1",
+      senderId: "agent-1",
+      senderType: "tool",
+      content: "",
+      metadata: {
+        toolCalls: [{
+          id: "c1",
+          tool: { id: "browser_session" },
+          args: "{}",
+          output: { body: `x${"𝑛".repeat(10_000)}` },
+        }],
+      },
+    },
+  ];
+
+  const generated = historyGenerator(chatHistory, currentAgent, {
+    maxToolResultEstimatedTokens: 2_500,
+  });
+  const output = generated[0]?.toolCalls?.[0]?.output as {
+    preview?: unknown;
+  };
+  const preview = String(output.preview ?? "");
+
+  assertEquals(output.preview !== undefined, true);
+  assertEquals(JSON.parse(JSON.stringify({ preview })), { preview });
+  assertEquals(
+    Array.from(preview).some((character) => character === "𝑛"),
+    true,
+  );
+  for (let index = 0; index < preview.length; index++) {
+    const codeUnit = preview.charCodeAt(index);
+    if (codeUnit >= 0xD800 && codeUnit <= 0xDBFF) {
+      const next = preview.charCodeAt(index + 1);
+      assertEquals(next >= 0xDC00 && next <= 0xDFFF, true);
+      index++;
+    } else {
+      assertEquals(codeUnit >= 0xDC00 && codeUnit <= 0xDFFF, false);
+    }
+  }
+});
+
 Deno.test("historyGenerator defaults tool output cap to 2_500 estimated tokens", () => {
   const currentAgent: Agent = {
     id: "agent-1",

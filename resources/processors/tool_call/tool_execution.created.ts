@@ -363,6 +363,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
         pickRunSenderFromMetadata(eventMetadata),
       );
 
+      let lifecycleResultPersisted = false;
       if (toolExecutionId && db?.ops?.mutate?.toolExecutions) {
         const finishPatch = {
           status: terminalStatus,
@@ -405,7 +406,11 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
               mutationOptions,
             );
           }
+          lifecycleResultPersisted = isLifecycleToolExecutionCreated;
         } catch (toolExecutionError) {
+          if (isStaleRunGenerationError(toolExecutionError)) {
+            throw toolExecutionError;
+          }
           console.warn(
             "[TOOL_CALL] Failed to finalize tool_execution node:",
             toolExecutionError,
@@ -456,7 +461,28 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
           metadata: resultMetadata ?? null,
           status: "completed",
         } as Event);
-        return { producedEvents: [] };
+        if (lifecycleResultPersisted) {
+          return { producedEvents: [] };
+        }
+
+        console.warn(
+          "[TOOL_CALL] Enqueuing fallback lifecycle result after tool_execution finalization failed.",
+        );
+        return {
+          producedEvents: [{
+            threadId,
+            type: terminalStatus === "completed"
+              ? "tool_execution.completed"
+              : "tool_execution.failed",
+            payload: toolResultPayload,
+            parentEventId: typeof event.id === "string" ? event.id : undefined,
+            traceId: typeof event.traceId === "string"
+              ? event.traceId
+              : undefined,
+            priority: EVENT_PRIORITIES.SETTLEMENT,
+            metadata: resultMetadata,
+          } as unknown as NewEvent],
+        };
       }
 
       const producedEvents: NewEvent[] = [

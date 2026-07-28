@@ -37,3 +37,21 @@ Deno.test("sanitizePostgresParams replaces circular references", () => {
     self: "[Circular]",
   }]);
 });
+
+Deno.test("sanitizePostgresParams repairs unpaired UTF-16 surrogates", () => {
+  const params = sanitizePostgresParams([
+    {
+      paired: "𝑛",
+      loneHigh: "before\uD835after",
+      loneLow: "before\uDC5Bafter",
+      "key\uD835": ["\uDC5B", "\uD835\uDC5B"],
+    },
+  ]);
+
+  assertEquals(params, [{
+    paired: "𝑛",
+    loneHigh: "before�after",
+    loneLow: "before�after",
+    "key�": ["�", "𝑛"],
+  }]);
+});

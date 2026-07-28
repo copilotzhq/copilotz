@@ -15,6 +15,7 @@ import {
 } from "@/runtime/routing/index.ts";
 import { extractAssetId, isAssetRef } from "@/runtime/storage/assets.ts";
 import { estimateTextTokens } from "@/runtime/tokens/index.ts";
+import { wellFormedUnicodePrefix } from "@/utils/unicode.ts";
 
 type StoredAttachment = {
   kind?: string;
@@ -314,7 +315,9 @@ function truncateToolOutputForHistory(
 
   let previewLen = Math.max(0, maxEstimatedTokens * 4 - 200);
   while (previewLen > 0) {
-    const surrogate = envelope(serialized.slice(0, previewLen));
+    const surrogate = envelope(
+      wellFormedUnicodePrefix(serialized, previewLen),
+    );
     if (
       estimateTextTokens(JSON.stringify(surrogate)) <= maxEstimatedTokens
     ) {

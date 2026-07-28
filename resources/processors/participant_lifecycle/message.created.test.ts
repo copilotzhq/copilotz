@@ -5,6 +5,7 @@ import { createCollectionsManager } from "@/database/collections/index.ts";
 import loadResources from "@/runtime/loaders/resources.ts";
 import participantCollection from "@/resources/collections/participant.ts";
 import { participantLifecycleProcessor, priority } from "./message.created.ts";
+import { threadParticipantLifecycleProcessor } from "./thread.created.ts";
 import { messageProcessor } from "../message_router/message.created.ts";
 import type { Event, ProcessorDeps } from "@/types/index.ts";
 
@@ -27,10 +28,28 @@ async function closeTestDb(db: TestDb, tempDir: string): Promise<void> {
   }
 }
 
-Deno.test("participant lifecycle processor upserts sender and configured agents", async () => {
+async function createThreadNode(
+  db: TestDb,
+  id: string,
+  namespace = "tenant-a",
+): Promise<void> {
+  await db.ops.unsafeGraph.createNode({
+    id,
+    namespace,
+    type: "thread",
+    name: id,
+    content: null,
+    data: {},
+    sourceType: "thread",
+    sourceId: id,
+  });
+}
+
+Deno.test("participant lifecycle initializes thread agents once and message senders lazily", async () => {
   const { db, tempDir } = await createTestDb("participant-lifecycle-upsert");
   const manager = createCollectionsManager(db, [participantCollection]);
   const collections = manager.withNamespace("tenant-a");
+  await createThreadNode(db, "thread-1");
 
   const event = {
     id: "evt-1",
@@ -65,6 +84,7 @@ Deno.test("participant lifecycle processor upserts sender and configured agents"
   } as unknown as ProcessorDeps;
 
   try {
+    await threadParticipantLifecycleProcessor.process(event, deps);
     const result = await participantLifecycleProcessor.process(
       event,
       deps,
@@ -82,6 +102,17 @@ Deno.test("participant lifecycle processor upserts sender and configured agents"
     assertEquals(user?.email, "user@example.com");
     assertEquals(agent?.participantType, "agent");
     assertEquals(agent?.agentId, "agent-1");
+
+    await threadParticipantLifecycleProcessor.process(event, deps);
+    await participantLifecycleProcessor.process(event, deps);
+    const memberships = await db.query<{ count: string }>(
+      `SELECT COUNT(*) AS "count"
+       FROM "edges"
+       WHERE "target_node_id" = $1
+         AND "type" = 'participates_in'`,
+      ["thread-1"],
+    );
+    assertEquals(Number(memberships.rows[0]?.count), 2);
   } finally {
     await closeTestDb(db, tempDir);
   }
@@ -91,6 +122,7 @@ Deno.test("participant lifecycle preserves private state and merges safe sender 
   const { db, tempDir } = await createTestDb("participant-lifecycle-metadata");
   const manager = createCollectionsManager(db, [participantCollection]);
   const collections = manager.withNamespace("tenant-a");
+  await createThreadNode(db, "thread-metadata");
 
   await collections.participant.upsertIdentity({
     externalId: "user-metadata",
@@ -196,6 +228,7 @@ Deno.test("participant lifecycle processor treats agent senders as agent partici
   const { db, tempDir } = await createTestDb("participant-lifecycle-agent");
   const manager = createCollectionsManager(db, [participantCollection]);
   const collections = manager.withNamespace("tenant-a");
+  await createThreadNode(db, "thread-1");
 
   const event = {
     id: "evt-3",
@@ -254,6 +287,7 @@ Deno.test("participant lifecycle processor treats job senders as job participant
   const { db, tempDir } = await createTestDb("participant-lifecycle-job");
   const manager = createCollectionsManager(db, [participantCollection]);
   const collections = manager.withNamespace("tenant-a");
+  await createThreadNode(db, "thread-1");
 
   const event = {
     id: "evt-job",

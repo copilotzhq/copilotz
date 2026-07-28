@@ -149,6 +149,12 @@ export interface MessageHistoryPage {
   pageInfo: MessageHistoryPageInfo;
 }
 
+export interface MessageHistoryWindowOptions {
+  after?: string | null;
+  start?: string | null;
+  end?: string | null;
+}
+
 // ============================================
 // KNOWLEDGE GRAPH TYPES
 // ============================================
@@ -506,6 +512,14 @@ export interface DomainMutationOperations {
       edge: Omit<NewKnowledgeEdge, "id"> & { id?: string },
       options: GraphMutationOptions,
     ) => Promise<KnowledgeEdge>;
+    /** Atomically ensure one participant-to-thread membership edge. */
+    ensureParticipation: (
+      input: {
+        participantNodeId: string;
+        threadNodeId: string;
+      },
+      options: GraphMutationOptions,
+    ) => Promise<KnowledgeEdge>;
     deleteEdge: (
       id: string,
       options: GraphMutationOptions,
@@ -811,6 +825,10 @@ export interface DatabaseOperations {
     threadId: string,
     options?: MessageHistoryPageOptions,
   ) => Promise<MessageHistoryPage>;
+  getMessageHistoryWindowFromGraph: (
+    threadIds: string[],
+    options?: MessageHistoryWindowOptions,
+  ) => Promise<Message[] | null>;
   // Get the last message node in a thread
   getLastMessageNode: (threadId: string) => Promise<KnowledgeNode | undefined>;
 
@@ -1707,10 +1725,9 @@ export function createOperations(
       for (const participantId of domain.participants) {
         const participant = await getParticipantNode(participantId, namespace);
         if (participant) {
-          await createEdge({
-            sourceNodeId: participant.id as string,
-            targetNodeId: threadId,
-            type: GRAPH_EDGE.PARTICIPATES_IN,
+          await ensureParticipationEdge({
+            participantNodeId: participant.id as string,
+            threadNodeId: threadId,
           });
         }
       }
@@ -2211,6 +2228,99 @@ export function createOperations(
         ...getPageEdgeMessageIds(data),
       },
     };
+  };
+
+  const getMessageHistoryWindowFromGraph = async (
+    threadIds: string[],
+    options?: MessageHistoryWindowOptions,
+  ): Promise<Message[] | null> => {
+    const scopedThreadIds = [
+      ...new Set(
+        threadIds.filter((threadId) => threadId.trim().length > 0),
+      ),
+    ];
+    if (scopedThreadIds.length === 0) return [];
+
+    type MessageCursor = {
+      id: string;
+      created_at: Date | string;
+    };
+    const resolveCursor = async (
+      messageId: string | null | undefined,
+    ): Promise<MessageCursor | null> => {
+      if (!messageId) return null;
+      const cursorThreadPlaceholders = scopedThreadIds.map((_, index) =>
+        `$${index + 2}`
+      ).join(", ");
+      const result = await db.query<MessageCursor>(
+        `SELECT "id", "created_at"
+         FROM "nodes"
+         WHERE "type" = 'message'
+           AND "source_type" = 'thread'
+           AND "source_id" IN (${cursorThreadPlaceholders})
+           AND (COALESCE("data"->>'messageId', "id") = $1 OR "id" = $1)
+         LIMIT 1`,
+        [messageId, ...scopedThreadIds],
+      );
+      return result.rows[0] ?? null;
+    };
+
+    const [after, start, end] = await Promise.all([
+      resolveCursor(options?.after),
+      resolveCursor(options?.start),
+      resolveCursor(options?.end),
+    ]);
+    if (
+      (options?.after && !after) ||
+      (options?.start && !start) ||
+      (options?.end && !end)
+    ) {
+      return null;
+    }
+
+    const params: unknown[] = [...scopedThreadIds];
+    const threadPlaceholders = scopedThreadIds.map((_, index) =>
+      `$${index + 1}`
+    ).join(", ");
+    const predicates = [
+      `"source_type" = 'thread'`,
+      `"source_id" IN (${threadPlaceholders})`,
+      `"type" = 'message'`,
+    ];
+    const addCursorPredicate = (
+      cursor: MessageCursor,
+      operator: ">" | ">=" | "<=",
+    ) => {
+      params.push(cursor.created_at, cursor.id);
+      const dateParam = `$${params.length - 1}`;
+      const idParam = `$${params.length}`;
+      if (operator === ">") {
+        predicates.push(
+          `("created_at" > ${dateParam} OR ("created_at" = ${dateParam} AND "id" > ${idParam}))`,
+        );
+      } else if (operator === ">=") {
+        predicates.push(
+          `("created_at" > ${dateParam} OR ("created_at" = ${dateParam} AND "id" >= ${idParam}))`,
+        );
+      } else {
+        predicates.push(
+          `("created_at" < ${dateParam} OR ("created_at" = ${dateParam} AND "id" <= ${idParam}))`,
+        );
+      }
+    };
+
+    if (after) addCursorPredicate(after, ">");
+    if (start) addCursorPredicate(start, ">=");
+    if (end) addCursorPredicate(end, "<=");
+
+    const result = await db.query<KnowledgeNode>(
+      `SELECT *
+       FROM "nodes"
+       WHERE ${predicates.join("\n         AND ")}
+       ORDER BY "created_at" ASC, "id" ASC`,
+      params,
+    );
+    return result.rows.map(nodeToMessage);
   };
 
   // ============================================
@@ -3090,6 +3200,70 @@ export function createOperations(
     return result.rows[0];
   };
 
+  const ensureParticipationEdge = async (input: {
+    participantNodeId: string;
+    threadNodeId: string;
+  }): Promise<{ edge: KnowledgeEdge; created: boolean }> => {
+    type EdgeRow = {
+      id: string;
+      source_node_id: string;
+      target_node_id: string;
+      type: string;
+      data: Record<string, unknown> | null;
+      weight: number | null;
+      created_at: Date;
+    };
+
+    const mapRow = (row: EdgeRow): KnowledgeEdge => ({
+      id: row.id,
+      sourceNodeId: row.source_node_id,
+      targetNodeId: row.target_node_id,
+      type: row.type,
+      data: row.data,
+      weight: row.weight,
+      createdAt: row.created_at,
+    });
+
+    const inserted = await db.query<EdgeRow>(
+      `INSERT INTO "edges" (
+        "id", "source_node_id", "target_node_id", "type", "data", "weight", "created_at"
+      ) VALUES (
+        $1, $2, $3, $4, '{}', 1.0, NOW()
+      )
+      ON CONFLICT ("source_node_id", "target_node_id", "type")
+        WHERE "type" = 'participates_in'
+      DO NOTHING
+      RETURNING *`,
+      [
+        ulid(),
+        input.participantNodeId,
+        input.threadNodeId,
+        GRAPH_EDGE.PARTICIPATES_IN,
+      ],
+    );
+    if (inserted.rows[0]) {
+      return { edge: mapRow(inserted.rows[0]), created: true };
+    }
+
+    const existing = await db.query<EdgeRow>(
+      `SELECT *
+       FROM "edges"
+       WHERE "source_node_id" = $1
+         AND "target_node_id" = $2
+         AND "type" = $3
+       LIMIT 1`,
+      [
+        input.participantNodeId,
+        input.threadNodeId,
+        GRAPH_EDGE.PARTICIPATES_IN,
+      ],
+    );
+    if (!existing.rows[0]) {
+      throw new Error("Failed to ensure participant thread membership");
+    }
+    return { edge: mapRow(existing.rows[0]), created: false };
+  };
+
   const createEdges = async (
     edges: Array<Omit<NewKnowledgeEdge, "id"> & { id?: string }>,
   ): Promise<KnowledgeEdge[]> => {
@@ -3679,6 +3853,39 @@ export function createOperations(
             edgeType: after.type ?? edge.type,
           },
         },
+      };
+    });
+
+  const ensureGraphParticipation = async (
+    input: {
+      participantNodeId: string;
+      threadNodeId: string;
+    },
+    options: GraphMutationOptions,
+  ): Promise<KnowledgeEdge> =>
+    await domainMutation(async () => {
+      const { edge, created } = await ensureParticipationEdge(input);
+      return {
+        result: edge,
+        event: created
+          ? {
+            ...graphMutationEventBase(
+              options,
+              "edge",
+              String(edge.id),
+              "created",
+            ),
+            payload: {
+              sourceNodeId: input.participantNodeId,
+              targetNodeId: input.threadNodeId,
+              type: GRAPH_EDGE.PARTICIPATES_IN,
+            },
+            metadata: {
+              ...(options.metadata ?? {}),
+              edgeType: GRAPH_EDGE.PARTICIPATES_IN,
+            },
+          }
+          : null,
       };
     });
 
@@ -4393,6 +4600,7 @@ export function createOperations(
       updateNode: updateGraphNode,
       deleteNode: deleteGraphNode,
       createEdge: createGraphEdge,
+      ensureParticipation: ensureGraphParticipation,
       deleteEdge: deleteGraphEdge,
     },
   };
@@ -4465,6 +4673,7 @@ export function createOperations(
     createMessageNode,
     getMessageHistoryFromGraph,
     getMessageHistoryPageFromGraph,
+    getMessageHistoryWindowFromGraph,
     getLastMessageNode,
     // Chunk as node operations
     searchChunksFromGraph,

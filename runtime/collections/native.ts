@@ -10,6 +10,7 @@ import type {
   ChunkSearchResult,
   MessageHistoryPage,
   MessageHistoryPageOptions,
+  MessageHistoryWindowOptions,
 } from "@/database/operations/index.ts";
 import type { CostBreakdown, TokenUsage } from "@/runtime/llm/types.ts";
 import type {
@@ -27,11 +28,10 @@ import type {
   NewDocumentChunk,
   NewMessage,
   ScopedCollectionsManager,
+  Thread,
 } from "@/types/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
-import {
-  resolveInitiatedById,
-} from "@/runtime/usage/attribution.ts";
+import { resolveInitiatedById } from "@/runtime/usage/attribution.ts";
 
 type CollectionAccessor =
   | CollectionsManager
@@ -361,6 +361,37 @@ export function createMessageService(
   deps: { collections?: CollectionAccessor; ops: CopilotzDb["ops"] },
 ) {
   const { ops } = deps;
+  const resolveHistoryScope = async (
+    threadId: string,
+    userId: string,
+  ): Promise<Array<{ thread: Thread; level: number }>> => {
+    const scope: Array<{ thread: Thread; level: number }> = [];
+    let currentThreadId: string | null = threadId;
+    let level = 0;
+
+    while (currentThreadId) {
+      const thread = await ops.getThreadById(currentThreadId);
+      if (!thread) break;
+      const participants = Array.isArray(thread.participants)
+        ? thread.participants.filter((value): value is string =>
+          typeof value === "string"
+        )
+        : [];
+      if (
+        !participants.some((participant) =>
+          participant.toLowerCase() === userId.toLowerCase()
+        )
+      ) {
+        break;
+      }
+      scope.push({ thread, level });
+      currentThreadId = typeof thread.parentThreadId === "string"
+        ? thread.parentThreadId
+        : null;
+      level += 1;
+    }
+    return scope;
+  };
 
   return {
     async create(
@@ -407,34 +438,15 @@ export function createMessageService(
       limit?: number,
     ): Promise<Message[]> {
       const allMessages: { message: Message; threadLevel: number }[] = [];
-      let currentThreadId: string | null = threadId;
-      let level = 0;
-
-      while (currentThreadId) {
-        const thread = await ops.getThreadById(currentThreadId);
-        if (!thread) break;
-        const participants = Array.isArray(thread.participants)
-          ? thread.participants.filter((value): value is string =>
-            typeof value === "string"
-          )
-          : [];
-        if (
-          !participants.some((participant) =>
-            participant.toLowerCase() === userId.toLowerCase()
-          )
-        ) {
-          break;
-        }
-
-        const threadMessages = await this.listHistory(currentThreadId, limit);
+      const scope = await resolveHistoryScope(threadId, userId);
+      for (const { thread, level } of scope) {
+        const threadMessages = await this.listHistory(
+          String(thread.id),
+          limit,
+        );
         for (const message of threadMessages) {
           allMessages.push({ message, threadLevel: level });
         }
-
-        currentThreadId = typeof thread.parentThreadId === "string"
-          ? thread.parentThreadId
-          : null;
-        level += 1;
       }
 
       allMessages.sort((a, b) => {
@@ -447,6 +459,51 @@ export function createMessageService(
       return limit !== undefined
         ? allMessages.slice(-limit).map((entry) => entry.message)
         : allMessages.map((entry) => entry.message);
+    },
+
+    async getHistoryWindow(
+      threadId: string,
+      userId: string,
+      options: MessageHistoryWindowOptions,
+    ): Promise<Message[] | null> {
+      const scope = await resolveHistoryScope(threadId, userId);
+      if (scope.length === 0) return [];
+
+      const hasEditedThread = scope.some(({ thread }) => {
+        const editState = getMessageEditState(thread.metadata);
+        return Boolean(
+          editState.activeRootMessageId &&
+            editState.activeRevisionMessageId,
+        );
+      });
+      if (!hasEditedThread) {
+        return await ops.getMessageHistoryWindowFromGraph(
+          scope.map(({ thread }) => String(thread.id)),
+          options,
+        );
+      }
+
+      // Edited histories need branch projection before applying the window.
+      // They are uncommon, so preserve correctness with the existing path.
+      const history = await this.getHistory(threadId, userId);
+      const afterIndex = options.after
+        ? history.findIndex((message) => message.id === options.after)
+        : -1;
+      const startIndex = options.start
+        ? history.findIndex((message) => message.id === options.start)
+        : 0;
+      const endIndex = options.end
+        ? history.findIndex((message) => message.id === options.end)
+        : history.length - 1;
+      if (
+        (options.after && afterIndex < 0) ||
+        (options.start && startIndex < 0) ||
+        (options.end && endIndex < 0)
+      ) {
+        return null;
+      }
+      const from = options.after ? afterIndex + 1 : startIndex;
+      return from <= endIndex ? history.slice(from, endIndex + 1) : [];
     },
 
     async deleteForThread(threadId: string): Promise<void> {
@@ -850,7 +907,9 @@ export function createUsageService(
   const applyHooks = async (
     event: UsageEvent,
     source: unknown,
-  ): Promise<{ cost: UsageCost | null; metrics: Record<string, number> } | null> => {
+  ): Promise<
+    { cost: UsageCost | null; metrics: Record<string, number> } | null
+  > => {
     if (!usageOptions?.resolveCost && !usageOptions?.onRecord) {
       return { cost: event.cost ?? null, metrics: event.metrics };
     }
@@ -867,7 +926,10 @@ export function createUsageService(
       if (!out) return null;
       record = { ...out, cost: out.cost ?? null };
     }
-    return { cost: record.cost ?? null, metrics: record.metrics ?? event.metrics };
+    return {
+      cost: record.cost ?? null,
+      metrics: record.metrics ?? event.metrics,
+    };
   };
 
   const resolveThreadContext = async (
@@ -957,9 +1019,10 @@ export function createUsageService(
       const hooked = await applyHooks(event, input.usage);
       if (!hooked) return null;
 
-      const effectiveCost = (usageOptions?.resolveCost || usageOptions?.onRecord)
-        ? usageCostToBreakdown(hooked.cost)
-        : input.cost ?? null;
+      const effectiveCost =
+        (usageOptions?.resolveCost || usageOptions?.onRecord)
+          ? usageCostToBreakdown(hooked.cost)
+          : input.cost ?? null;
 
       const data = buildUsageData({
         ...input,
@@ -1017,7 +1080,8 @@ export function createUsageService(
         outputTokens: hooked.metrics.outputTokens ?? null,
         reasoningTokens: hooked.metrics.reasoningTokens ?? null,
         cacheReadInputTokens: hooked.metrics.cacheReadInputTokens ?? null,
-        cacheCreationInputTokens: hooked.metrics.cacheCreationInputTokens ?? null,
+        cacheCreationInputTokens: hooked.metrics.cacheCreationInputTokens ??
+          null,
         totalTokens: hooked.metrics.totalTokens ?? null,
         // Flat cost fields.
         inputCostUsd: cost?.breakdown?.inputCostUsd ?? null,

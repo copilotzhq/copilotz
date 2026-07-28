@@ -64,6 +64,7 @@ import * as ragIngestRagIngestionCreatedProcessor from "@/resources/processors/r
 import * as entityExtractionCreatedProcessor from "@/resources/processors/entity_extract/entity_extraction.created.ts";
 import * as longTermMemoryTriggerMessageCreatedProcessor from "@/resources/processors/memory_reservation/message.created.ts";
 import * as longTermMemoryConsolidationCreatedProcessor from "@/resources/processors/memory_consolidation/long_term_memory.created.ts";
+import * as participantLifecycleThreadCreatedProcessor from "@/resources/processors/participant_lifecycle/thread.created.ts";
 
 // ---- Core: llm providers + storage adapters --------------------------------
 import * as llmProviders from "@/resources/llm/mod.ts";
@@ -368,6 +369,7 @@ function buildCoreMemory(): MemoryResource[] {
 
 function buildCoreProcessors(): ProcessorEntry[] {
   const durableProcessors = [
+    participantLifecycleThreadCreatedProcessor,
     longTermMemoryTriggerMessageCreatedProcessor,
     messageRouterMessageCreatedProcessor,
     llmCallLlmAttemptCreatedProcessor,

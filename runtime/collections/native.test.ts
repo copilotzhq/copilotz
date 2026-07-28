@@ -203,31 +203,31 @@ Deno.test({
     await db.ops.findOrCreateThread(threadId, {
       namespace,
       name: "Edit Thread",
-      participants: ["user-1", "assistant"],
+      participants: ["edit-user-1", "edit-assistant"],
     });
     await db.ops.createNode({
       namespace,
       type: "participant",
       name: "User 1",
       data: {
-        externalId: "user-1",
+        externalId: "edit-user-1",
         participantType: "human",
         name: "User 1",
       },
       sourceType: "user",
-      sourceId: "user-1",
+      sourceId: "edit-user-1",
     });
 
     const original = await messageService.create({
       threadId,
-      senderId: "user-1",
+      senderId: "edit-user-1",
       senderType: "user",
       content: "original question",
       metadata: {},
     }, namespace);
     await messageService.create({
       threadId,
-      senderId: "assistant",
+      senderId: "edit-assistant",
       senderType: "agent",
       content: "old answer",
       metadata: {},
@@ -240,7 +240,7 @@ Deno.test({
     );
     const newAnswer = await messageService.create({
       threadId,
-      senderId: "assistant",
+      senderId: "edit-assistant",
       senderType: "agent",
       content: "new answer",
       metadata: {},
@@ -412,7 +412,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "createUsageRecord falls back to thread user identity without runSender",
+  name:
+    "createUsageRecord falls back to thread user identity without runSender",
   fn: async () => {
     const db = await createDatabase({ url: ":memory:" });
     const namespace = "tenant-fallback";
@@ -461,6 +462,9 @@ Deno.test({
     });
     assert(usageId);
     const node = await db.ops.getNodeById(usageId);
-    assertEquals((node?.data as Record<string, unknown>).initiatedById, "user-1");
+    assertEquals(
+      (node?.data as Record<string, unknown>).initiatedById,
+      "user-1",
+    );
   },
 });

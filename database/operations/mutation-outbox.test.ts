@@ -479,6 +479,71 @@ Deno.test({
 });
 
 Deno.test({
+  name: "participant membership mutation is atomic and emits only once",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({ url: ":memory:" });
+    const suffix = crypto.randomUUID();
+    const namespace = `membership-${suffix}`;
+    const thread = await db.ops.mutate.threads.create(undefined, {
+      namespace,
+      name: "Membership Test",
+      participants: [],
+      status: "active",
+      mode: "immediate",
+    });
+    const threadId = String(thread.id);
+    const participantId = `participant-${suffix}`;
+
+    await db.ops.unsafeGraph.createNode({
+      id: participantId,
+      namespace,
+      type: "participant",
+      name: "Participant",
+      content: null,
+      data: {
+        externalId: `external-${suffix}`,
+        participantType: "human",
+      },
+      sourceType: "user",
+      sourceId: `external-${suffix}`,
+    });
+
+    const first = await db.ops.mutate.graph.ensureParticipation({
+      participantNodeId: participantId,
+      threadNodeId: threadId,
+    }, { threadId, namespace });
+    const second = await db.ops.mutate.graph.ensureParticipation({
+      participantNodeId: participantId,
+      threadNodeId: threadId,
+    }, { threadId, namespace });
+
+    assertEquals(second.id, first.id);
+    const edges = await db.query<{ count: string }>(
+      `SELECT COUNT(*) AS "count"
+       FROM "edges"
+       WHERE "source_node_id" = $1
+         AND "target_node_id" = $2
+         AND "type" = 'participates_in'`,
+      [participantId, threadId],
+    );
+    assertEquals(Number(edges.rows[0]?.count), 1);
+
+    const events = await db.query<{ count: string }>(
+      `SELECT COUNT(*) AS "count"
+       FROM "events"
+       WHERE "threadId" = $1
+         AND "eventType" = 'edge.created'
+         AND "subjectId" = $2`,
+      [threadId, String(first.id)],
+    );
+    assertEquals(Number(events.rows[0]?.count), 1);
+  },
+});
+
+Deno.test({
   name: "thread mutations create update and fork lifecycle events",
   sanitizeExit: false,
   sanitizeOps: false,

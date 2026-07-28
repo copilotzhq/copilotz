@@ -10,6 +10,7 @@ Deno.test("coreResources registers built-in processors in stable event order", (
   assertEquals(
     coreResources.processors.map((processor) => processor.eventType),
     [
+      "thread.created",
       "message.created",
       "message.created",
       "llm_attempt.created",

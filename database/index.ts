@@ -38,6 +38,7 @@ import { generateAgentMemoryOwnershipMigrations } from "./migrations/migration_0
 import { generateMemorySpaceAccessMigrations } from "./migrations/migration_0014_memory_space_access.ts";
 import { generateBrainNodeMigrations } from "./migrations/migration_0015_brain_nodes.ts";
 import { generateTraceWaitIndexMigrations } from "./migrations/migration_0016_trace_wait_index.ts";
+import { generateParticipantIdentityMigrations } from "./migrations/migration_0017_participant_identity.ts";
 import { getCurrentSchema } from "./schema-context.ts";
 import {
   ensureSchemaProvisioned,
@@ -63,7 +64,8 @@ const migrations: string = generateMigrations() + "\n" +
   generateAgentMemoryOwnershipMigrations() + "\n" +
   generateMemorySpaceAccessMigrations() + "\n" +
   generateBrainNodeMigrations() + "\n" +
-  generateTraceWaitIndexMigrations() + "\n";
+  generateTraceWaitIndexMigrations() + "\n" +
+  generateParticipantIdentityMigrations() + "\n";
 
 /**
  * Configuration options for creating a database connection.

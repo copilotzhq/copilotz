@@ -578,12 +578,18 @@ export async function startEventWorker(
         try {
           const processorList = context.processors[event.type] ?? [];
           for (const p of processorList) {
+            const processorId = (p as { id?: string }).id;
+            const timedLifecycle = processorId === "participant_lifecycle" ||
+              processorId === "memory_reservation";
+            const processorStartedAt = timedLifecycle ? performance.now() : 0;
+            let processorOutcome = "skipped";
             try {
               if (deps.cancellation?.isAborted()) {
                 break;
               }
               const ok = await p.shouldProcess(event, deps);
               if (!ok) continue;
+              processorOutcome = "completed";
               if (deps.cancellation?.isAborted()) {
                 break;
               }
@@ -599,11 +605,27 @@ export async function startEventWorker(
             } catch (err) {
               if (deps.cancellation?.isAborted()) {
                 lastProcessorError = err;
+                processorOutcome = "failed";
                 break;
               }
               // Allow later processors to recover, but if nobody claims the event
               // we should fail the queue item instead of silently dropping the error.
               lastProcessorError = err;
+              processorOutcome = "failed";
+            } finally {
+              if (timedLifecycle) {
+                console.info(JSON.stringify({
+                  event: "event_processor.phase",
+                  phase: processorId,
+                  durationMs: Number(
+                    (performance.now() - processorStartedAt).toFixed(1),
+                  ),
+                  outcome: processorOutcome,
+                  eventType: event.type,
+                  threadId: event.threadId ?? null,
+                  traceId: event.traceId ?? null,
+                }));
+              }
             }
           }
         } finally {

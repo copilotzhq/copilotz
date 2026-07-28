@@ -1,47 +1,13 @@
 import type { Event, EventProcessor, ProcessorDeps } from "@/types/index.ts";
 import type { NewMessageEventPayload } from "@/database/schemas/index.ts";
-import { hasParticipantCollection } from "@/runtime/collections/native.ts";
-import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
+import {
+  ensureParticipantMembership,
+  getParticipantCollection,
+} from "./_shared.ts";
 
 export const processorId = "participant_lifecycle";
 export const eventTypes = ["message.created"] as const;
 export const priority = 100;
-
-async function createEdgeIfMissing(args: {
-  deps: ProcessorDeps;
-  event: Event;
-  sourceExternalId: string;
-  targetNodeId: string;
-  type: string;
-}): Promise<void> {
-  const { deps, event, sourceExternalId, targetNodeId, type } = args;
-  const threadId = typeof deps.thread?.id === "string" ? deps.thread.id : null;
-  if (!threadId) return;
-  const sourceNode = await deps.db.ops.getParticipantNode(
-    sourceExternalId,
-    deps.context.namespace ?? null,
-  ).catch(() => undefined);
-  const sourceNodeId = sourceNode?.id;
-  if (typeof sourceNodeId !== "string") return;
-
-  const existing = await deps.db.ops.unsafeGraph.getEdgesForNode(
-    sourceNodeId,
-    "out",
-    [type],
-  ).catch(() => []);
-  if (existing.some((edge) => edge.targetNodeId === targetNodeId)) return;
-
-  await deps.db.ops.mutate.graph.createEdge({
-    sourceNodeId,
-    targetNodeId,
-    type,
-  }, {
-    threadId,
-    namespace: deps.context.namespace ?? null,
-    traceId: typeof event.traceId === "string" ? event.traceId : null,
-    causationId: typeof event.id === "string" ? event.id : null,
-  }).catch(() => undefined);
-}
 
 function buildSenderIdentity(payload: NewMessageEventPayload): {
   externalId: string;
@@ -96,14 +62,8 @@ export const participantLifecycleProcessor: EventProcessor<
 > = {
   shouldProcess: () => true,
   process: async (event: Event, deps: ProcessorDeps) => {
-    if (!hasParticipantCollection(deps.context.collections)) return;
-
-    const participantCollection = (deps.context.collections as any)
-      ?.participant;
-    if (
-      !participantCollection ||
-      typeof participantCollection.upsertIdentity !== "function"
-    ) return;
+    const participantCollection = getParticipantCollection(deps);
+    if (!participantCollection) return;
 
     const payload = event.payload as NewMessageEventPayload;
 
@@ -125,35 +85,11 @@ export const participantLifecycleProcessor: EventProcessor<
         agentId: senderIdentity.agentId ?? null,
         ...(metadata !== undefined ? { metadata } : {}),
       });
-      if (senderRecord?.id && typeof deps.thread?.id === "string") {
-        await createEdgeIfMissing({
+      if (senderRecord?.id) {
+        await ensureParticipantMembership({
           deps,
           event,
-          sourceExternalId: senderIdentity.externalId,
-          targetNodeId: deps.thread.id,
-          type: GRAPH_EDGE.PARTICIPATES_IN,
-        });
-      }
-    }
-
-    for (const agent of deps.context.agents ?? []) {
-      const externalId = agent.id ?? agent.name;
-      if (!externalId) continue;
-
-      const agentRecord = await participantCollection.upsertIdentity({
-        externalId,
-        participantType: "agent",
-        name: agent.name,
-        agentId: agent.id ?? agent.name,
-        metadata: null,
-      });
-      if (agentRecord?.id && typeof deps.thread?.id === "string") {
-        await createEdgeIfMissing({
-          deps,
-          event,
-          sourceExternalId: externalId,
-          targetNodeId: deps.thread.id,
-          type: GRAPH_EDGE.PARTICIPATES_IN,
+          participantNodeId: senderRecord.id,
         });
       }
     }

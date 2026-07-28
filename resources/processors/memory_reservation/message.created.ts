@@ -96,7 +96,16 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
         collections: deps.context.collections,
         ops: deps.db.ops,
       });
-      const history = await messageService.getHistory(threadId, agentId);
+      const boundedHistory = await messageService.getHistoryWindow(
+        threadId,
+        agentId,
+        {
+          ...(previous ? { start: previous.data.sourceEndMessageId } : {}),
+          end: triggerMessageId,
+        },
+      );
+      const history = boundedHistory ??
+        await messageService.getHistory(threadId, agentId);
       const range = await selectLongTermMemoryRange({
         messages: history,
         triggerMessageId,

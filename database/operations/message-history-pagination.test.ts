@@ -141,3 +141,40 @@ Deno.test({
     assertEquals(page.data[0]?.content, "");
   },
 });
+
+Deno.test({
+  name: "getMessageHistoryWindowFromGraph bounds history at message cursors",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const { db, threadId } = await createThreadWithMessages();
+    const history = await db.ops.getMessageHistoryFromGraph(threadId);
+
+    const after = await db.ops.getMessageHistoryWindowFromGraph(
+      [threadId],
+      { after: history[1].id },
+    );
+    assertEquals(after?.map((message) => message.content), [
+      "Message 3",
+      "Message 4",
+    ]);
+
+    const range = await db.ops.getMessageHistoryWindowFromGraph(
+      [threadId],
+      { start: history[1].id, end: history[2].id },
+    );
+    assertEquals(range?.map((message) => message.content), [
+      "Message 2",
+      "Message 3",
+    ]);
+
+    assertEquals(
+      await db.ops.getMessageHistoryWindowFromGraph(
+        [threadId],
+        { after: "missing-message" },
+      ),
+      null,
+    );
+  },
+});

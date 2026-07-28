@@ -3,7 +3,39 @@
  * Replaces the deprecated relational `users` table.
  */
 import { defineCollection, relation } from "@/database/collections/index.ts";
+import type { DatabaseOperations } from "@/database/operations/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
+import { ulid } from "ulid";
+
+type ParticipantNodeRow = {
+  id: string;
+  namespace: string;
+  type: string;
+  name: string;
+  content: string | null;
+  data: Record<string, unknown> | null;
+  source_type: string | null;
+  source_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+function mapParticipantNode(row: ParticipantNodeRow): Record<string, unknown> {
+  return {
+    ...(row.data ?? {}),
+    id: row.id,
+    namespace: row.namespace,
+    content: row.content,
+    sourceType: row.source_type,
+    sourceId: row.source_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 
 function deepMergeReplaceArrays(
   target: Record<string, unknown>,
@@ -65,7 +97,8 @@ export default defineCollection({
   relations: {
     sentMessages: relation.hasMany("message", "senderId", GRAPH_EDGE.SENT_BY),
   },
-  methods: ({ collection }) => {
+  methods: ({ collection, namespace, ops }) => {
+    const databaseOps = ops as DatabaseOperations;
     // Store references to base CRUD methods to avoid infinite recursion
     const base = {
       create: collection.create.bind(collection),
@@ -146,38 +179,138 @@ export default defineCollection({
         agentId?: string | null;
         metadata?: Record<string, unknown> | null;
       }, options?: any) {
-        const existing = await base.findOne(
-          { externalId: input.externalId },
-          options,
-        );
-        const existingMetadata = existing?.metadata &&
-            typeof existing.metadata === "object" &&
-            !Array.isArray(existing.metadata)
-          ? existing.metadata as Record<string, unknown>
-          : null;
-        const incomingMetadata = input.metadata &&
-            typeof input.metadata === "object" &&
-            !Array.isArray(input.metadata)
-          ? input.metadata
-          : null;
-        const metadata = existingMetadata
-          ? incomingMetadata
-            ? deepMergeReplaceArrays(existingMetadata, incomingMetadata)
-            : existingMetadata
-          : incomingMetadata;
+        void options;
+        const externalId = input.externalId.trim();
+        if (!externalId) {
+          throw new Error("Participant externalId is required");
+        }
 
-        return await base.upsert(
-          { externalId: input.externalId },
-          {
-            ...(input.id ? { id: input.id } : {}),
-            externalId: input.externalId,
+        return await databaseOps.transaction(async (transactionOps) => {
+          const findIdentity = async () =>
+            await transactionOps.query<ParticipantNodeRow>(
+              `SELECT *
+               FROM "nodes"
+               WHERE "namespace" = $1
+                 AND "type" = 'participant'
+                 AND COALESCE("data" ->> 'externalId', "source_id") = $2
+               ORDER BY "created_at" DESC, "id" DESC
+               LIMIT 1
+               FOR UPDATE`,
+              [namespace, externalId],
+            );
+
+          let existingRow = (await findIdentity()).rows[0];
+          if (!existingRow) {
+            const now = new Date().toISOString();
+            const id = input.id ?? ulid();
+            const data = {
+              id,
+              externalId,
+              participantType: input.participantType,
+              name: input.name ?? null,
+              email: input.email ?? null,
+              agentId: input.agentId ?? null,
+              metadata: input.metadata ?? null,
+              createdAt: now,
+              updatedAt: now,
+            };
+            const inserted = await transactionOps.query<ParticipantNodeRow>(
+              `INSERT INTO "nodes" (
+                "id", "namespace", "type", "name", "content", "data",
+                "source_type", "source_id", "created_at", "updated_at"
+               ) VALUES (
+                $1, $2, 'participant', $3, NULL, $4, $5, $6, NOW(), NOW()
+               )
+               ON CONFLICT (
+                 "namespace",
+                 (COALESCE("data" ->> 'externalId', "source_id"))
+               )
+               WHERE
+                 "type" = 'participant'
+                 AND COALESCE("data" ->> 'externalId', "source_id") IS NOT NULL
+                 AND COALESCE("data" ->> 'externalId', "source_id") <> ''
+               DO NOTHING
+               RETURNING *`,
+              [
+                id,
+                namespace,
+                input.name ?? externalId,
+                data,
+                input.participantType === "human"
+                  ? "user"
+                  : input.participantType,
+                externalId,
+              ],
+            );
+            if (inserted.rows[0]) {
+              return mapParticipantNode(inserted.rows[0]);
+            }
+
+            existingRow = (await findIdentity()).rows[0];
+            if (!existingRow) {
+              throw new Error(`Failed to upsert participant: ${externalId}`);
+            }
+          }
+
+          const existingData = existingRow.data ?? {};
+          const existingMetadata = existingData.metadata &&
+              typeof existingData.metadata === "object" &&
+              !Array.isArray(existingData.metadata)
+            ? existingData.metadata as Record<string, unknown>
+            : null;
+          const incomingMetadata = input.metadata &&
+              typeof input.metadata === "object" &&
+              !Array.isArray(input.metadata)
+            ? input.metadata
+            : null;
+          const metadata = existingMetadata
+            ? incomingMetadata
+              ? deepMergeReplaceArrays(existingMetadata, incomingMetadata)
+              : existingMetadata
+            : incomingMetadata;
+          const sourceType = input.participantType === "human"
+            ? "user"
+            : input.participantType;
+          const nextData: Record<string, unknown> = {
+            ...existingData,
+            externalId,
             participantType: input.participantType,
             name: input.name ?? null,
             email: input.email ?? null,
             agentId: input.agentId ?? null,
             metadata,
-          },
-        );
+          };
+          const nodeName = input.name ?? externalId;
+          const changed = !sameJsonValue(existingData, nextData) ||
+            existingRow.name !== nodeName ||
+            existingRow.source_type !== sourceType ||
+            existingRow.source_id !== externalId;
+          if (!changed) return mapParticipantNode(existingRow);
+
+          nextData.updatedAt = new Date().toISOString();
+          const updated = await transactionOps.query<ParticipantNodeRow>(
+            `UPDATE "nodes"
+             SET
+               "name" = $1,
+               "data" = $2,
+               "source_type" = $3,
+               "source_id" = $4,
+               "updated_at" = NOW()
+             WHERE "id" = $5
+             RETURNING *`,
+            [
+              nodeName,
+              nextData,
+              sourceType,
+              externalId,
+              existingRow.id,
+            ],
+          );
+          if (!updated.rows[0]) {
+            throw new Error(`Failed to update participant: ${externalId}`);
+          }
+          return mapParticipantNode(updated.rows[0]);
+        });
       },
     };
   },

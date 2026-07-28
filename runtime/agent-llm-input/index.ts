@@ -6,9 +6,9 @@ import {
   getLongTermMemoryConfig,
   getUserExternalId,
   isLongTermMemoryAccessible,
+  type LongTermMemoryRecord,
   resolveParticipantCollection,
   resolveThreadMemorySpaces,
-  sliceMessagesAfterLongTermMemory,
 } from "@/runtime/memory/index.ts";
 import { toLLMConfig } from "@/runtime/llm/config.ts";
 import type {
@@ -174,27 +174,36 @@ function sliceMessagesInRange(
   return messages.slice(start, end + 1);
 }
 
-async function resolveHistoryForMode(args: {
-  deps: ProcessorDeps;
-  ctx: ProcessingContext;
+function logAgentInputPhase(args: {
+  event: Event;
   threadId: string;
   agentId: string;
-  historyMode: AgentHistoryMode;
-}): Promise<NewMessage[]> {
-  const { deps, ctx, threadId, agentId, historyMode } = args;
-  if (historyMode === "full") return ctx.chatHistory;
-  if (typeof historyMode === "object" && historyMode.type === "range") {
-    return sliceMessagesInRange(
-      ctx.chatHistory,
-      historyMode.startMessageId,
-      historyMode.endMessageId,
-    );
-  }
+  phase: "history_loading" | "prompt_construction";
+  startedAt: number;
+  detail?: Record<string, unknown>;
+}): void {
+  console.info(JSON.stringify({
+    event: "agent_llm_input.phase",
+    phase: args.phase,
+    durationMs: Number((performance.now() - args.startedAt).toFixed(1)),
+    threadId: args.threadId,
+    agentId: args.agentId,
+    traceId: typeof args.event.traceId === "string" ? args.event.traceId : null,
+    ...args.detail,
+  }));
+}
 
+async function resolveApplicableLongTermMemory(args: {
+  deps: ProcessorDeps;
+  thread: Thread;
+  threadId: string;
+  agentId: string;
+}): Promise<LongTermMemoryRecord | null> {
+  const { deps, thread, threadId, agentId } = args;
   const context = deps.context;
   const longTermMemoryConfig = getLongTermMemoryConfig(context.memory);
   const longTermMemoryNamespace = context.namespace ??
-    (typeof ctx.thread.namespace === "string" ? ctx.thread.namespace : null);
+    (typeof thread.namespace === "string" ? thread.namespace : null);
   const candidateLongTermMemory =
     longTermMemoryConfig && longTermMemoryNamespace
       ? await getLatestReadyLongTermMemory(
@@ -216,12 +225,13 @@ async function resolveHistoryForMode(args: {
       )
     ? candidateLongTermMemory
     : null;
-  return sliceMessagesAfterLongTermMemory(ctx.chatHistory, longTermMemory);
+  return longTermMemory;
 }
 
 interface ProcessingContext {
   thread: Thread;
   chatHistory: NewMessage[];
+  longTermMemory: LongTermMemoryRecord | null;
   availableAgents: Agent[];
   allTools: ExecutableTool[];
   userMetadata?: Record<string, unknown>;
@@ -248,8 +258,13 @@ export async function buildProcessingContext(
   context: ChatContext,
   senderIdForHistory: string,
   targetAgentId?: string,
+  historyMode: AgentHistoryMode = "full",
+  event?: Event,
+  longTermMemory: LongTermMemoryRecord | null = null,
+  preloadedThread?: Thread,
 ): Promise<ProcessingContext> {
-  const thread: Thread | undefined = await ops.getThreadById(threadId);
+  const thread: Thread | undefined = preloadedThread ??
+    await ops.getThreadById(threadId);
   if (!thread) throw new Error(`Thread not found: ${threadId}`);
 
   const messageService = createMessageService({
@@ -259,10 +274,63 @@ export async function buildProcessingContext(
   const participantCollection = resolveParticipantCollection(context) as
     | ParticipantResolver
     | undefined;
-  const chatHistory = await messageService.getHistory(
-    threadId,
-    senderIdForHistory,
-  );
+  const historyStartedAt = performance.now();
+  let chatHistory: NewMessage[] | null;
+  if (typeof historyMode === "object" && historyMode.type === "range") {
+    chatHistory = await messageService.getHistoryWindow(
+      threadId,
+      senderIdForHistory,
+      {
+        start: historyMode.startMessageId,
+        end: historyMode.endMessageId,
+      },
+    );
+  } else if (
+    historyMode === "afterReadyLongTermMemory" && longTermMemory
+  ) {
+    chatHistory = await messageService.getHistoryWindow(
+      threadId,
+      senderIdForHistory,
+      { after: longTermMemory.data.sourceEndMessageId },
+    );
+  } else {
+    chatHistory = await messageService.getHistory(
+      threadId,
+      senderIdForHistory,
+    );
+  }
+  if (chatHistory === null) {
+    const fullHistory = await messageService.getHistory(
+      threadId,
+      senderIdForHistory,
+    );
+    chatHistory = typeof historyMode === "object"
+      ? sliceMessagesInRange(
+        fullHistory,
+        historyMode.startMessageId,
+        historyMode.endMessageId,
+      )
+      : historyMode === "afterReadyLongTermMemory" && longTermMemory
+      ? fullHistory.slice(
+        fullHistory.findIndex((message) =>
+          message.id === longTermMemory.data.sourceEndMessageId
+        ) + 1,
+      )
+      : fullHistory;
+  }
+  if (event && targetAgentId) {
+    logAgentInputPhase({
+      event,
+      threadId,
+      agentId: targetAgentId,
+      phase: "history_loading",
+      startedAt: historyStartedAt,
+      detail: {
+        messageCount: chatHistory.length,
+        bounded: historyMode !== "full",
+      },
+    });
+  }
 
   const availableAgents = context.agents || [];
   if (availableAgents.length === 0) {
@@ -356,6 +424,7 @@ export async function buildProcessingContext(
   return {
     thread,
     chatHistory,
+    longTermMemory,
     availableAgents,
     allTools,
     userMetadata,
@@ -369,20 +438,33 @@ export async function buildAgentLlmInput(
   const { deps, event, threadId, agent } = options;
   const context = deps.context;
   const agentId = (agent.id ?? agent.name) as string;
+  const thread = await deps.db.ops.getThreadById(threadId);
+  if (!thread) throw new Error(`Thread not found: ${threadId}`);
+  const longTermMemoryMode = options.longTermMemoryMode ?? "auto";
+  const shouldResolveLongTermMemory =
+    options.historyMode === "afterReadyLongTermMemory" ||
+    longTermMemoryMode === "include";
+  const longTermMemory = shouldResolveLongTermMemory
+    ? await resolveApplicableLongTermMemory({
+      deps,
+      thread,
+      threadId,
+      agentId,
+    })
+    : null;
   const ctx = await buildProcessingContext(
     deps.db.ops,
     threadId,
     context,
     agentId,
     agentId,
+    options.historyMode,
+    event,
+    longTermMemory,
+    thread,
   );
-  const selectedHistory = await resolveHistoryForMode({
-    deps,
-    ctx,
-    threadId,
-    agentId,
-    historyMode: options.historyMode,
-  });
+  const selectedHistory = ctx.chatHistory;
+  const promptStartedAt = performance.now();
 
   const agentSkills = filterSkillsForAgent(context.skills ?? [], agent);
   const agentSkillIndex = agentSkills.length > 0
@@ -460,36 +542,12 @@ export async function buildAgentLlmInput(
     ? llmContext.systemPrompt
     : JSON.stringify(llmContext.systemPrompt ?? {});
 
-  const longTermMemoryMode = options.longTermMemoryMode ?? "auto";
   const includeLongTermMemory = longTermMemoryMode === "include" ||
     (longTermMemoryMode === "auto" &&
       options.historyMode === "afterReadyLongTermMemory");
 
   if (includeLongTermMemory) {
-    const longTermMemoryConfig = getLongTermMemoryConfig(context.memory);
-    const longTermMemoryNamespace = context.namespace ??
-      (typeof ctx.thread.namespace === "string" ? ctx.thread.namespace : null);
-    const candidateLongTermMemory =
-      longTermMemoryConfig && longTermMemoryNamespace
-        ? await getLatestReadyLongTermMemory(
-          deps.db,
-          threadId,
-          longTermMemoryNamespace,
-          agentId,
-        )
-        : null;
-    const longTermMemory = candidateLongTermMemory &&
-        longTermMemoryNamespace &&
-        isLongTermMemoryAccessible(
-          candidateLongTermMemory.data,
-          await resolveThreadMemorySpaces(
-            deps.db,
-            threadId,
-            longTermMemoryNamespace,
-          ),
-        )
-      ? candidateLongTermMemory
-      : null;
+    const longTermMemory = ctx.longTermMemory;
     if (longTermMemory?.node.content) {
       systemPrompt = `${systemPrompt}\n\n${longTermMemory.node.content}`;
     }
@@ -508,6 +566,18 @@ export async function buildAgentLlmInput(
       ]
       : []),
   ];
+  logAgentInputPhase({
+    event,
+    threadId,
+    agentId,
+    phase: "prompt_construction",
+    startedAt: promptStartedAt,
+    detail: {
+      rawHistoryCount: selectedHistory.length,
+      promptMessageCount: messages.length,
+      toolCount: llmTools.length,
+    },
+  });
 
   const resolverPayload = {
     agent: { id: agent.id ?? undefined, name: agent.name },

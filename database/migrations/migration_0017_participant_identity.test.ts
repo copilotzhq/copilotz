@@ -1,11 +1,24 @@
 import {
   assertEquals,
   assertRejects,
+  assertStringIncludes,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import { createDatabase } from "@/database/index.ts";
 import { splitSQLStatements } from "./utils.ts";
 import { generateParticipantIdentityMigrations } from "./migration_0017_participant_identity.ts";
+
+Deno.test("participant identity migration checks indexes in the active tenant schema", () => {
+  const sql = generateParticipantIdentityMigrations();
+  assertStringIncludes(
+    sql,
+    "format('%I.%I', current_schema(), 'uidx_nodes_participant_identity')",
+  );
+  assertStringIncludes(
+    sql,
+    "format('%I.%I', current_schema(), 'uidx_edges_participates_in')",
+  );
+});
 
 Deno.test("participant identity migration consolidates nodes and memberships before enforcing uniqueness", async () => {
   const tempDir = await Deno.makeTempDir();

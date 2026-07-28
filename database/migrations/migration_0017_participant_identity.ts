@@ -61,8 +61,12 @@ DECLARE
   "merged_data" JSONB;
 BEGIN
   IF
-    to_regclass('"uidx_nodes_participant_identity"') IS NOT NULL
-    AND to_regclass('"uidx_edges_participates_in"') IS NOT NULL
+    to_regclass(
+      format('%I.%I', current_schema(), 'uidx_nodes_participant_identity')
+    ) IS NOT NULL
+    AND to_regclass(
+      format('%I.%I', current_schema(), 'uidx_edges_participates_in')
+    ) IS NOT NULL
   THEN
     RETURN;
   END IF;

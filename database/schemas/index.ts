@@ -379,6 +379,7 @@ const schemaDefinition = {
               required: ["name"],
             },
             llmAttemptId: { type: "string" },
+            providerAttemptId: { type: "string" },
             draftId: { type: "string" },
             callIndex: { type: "number", minimum: 0 },
             sequence: { type: "number", minimum: 0 },

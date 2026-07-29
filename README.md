@@ -157,17 +157,18 @@ const copilotz = await createCopilotz({
 ### Usage and Cost Tracking
 
 Copilotz records provider-native LLM usage when the upstream provider exposes
-it, and can estimate per-call cost using OpenRouter model pricing. New
-accounting is canonical in `llm_attempt` graph nodes, one node per provider
-attempt.
+it, and can estimate per-call cost using OpenRouter model pricing. Each logical
+run has one stable `llm_attempt` root, with one canonical child node per actual
+provider invocation.
 
 - Cost estimation is enabled by default with `llmOptions.estimateCost !== false`
 - Use `llmOptions.pricingModelId` to override the OpenRouter model id when
   automatic mapping is not enough
 - Cost is only estimated when usage came from the provider, not from Copilotz's
   rough fallback token heuristic
-- `llm_attempt` stores prompt snapshots, partial output, usage, cost, status,
-  errors, and recovery linkage
+- Child `llm_attempt` nodes store prompt snapshots, partial output, usage, cost,
+  status, errors, and recovery linkage; the root keeps stable stream/result
+  correlation
 - `llm_usage` remains a compatibility projection for admin screens and older
   integrations during the migration
 

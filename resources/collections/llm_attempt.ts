@@ -1,6 +1,6 @@
 /**
- * LLM attempt collection: canonical accounting and recovery record for each
- * provider attempt.
+ * LLM attempt collection: one stable logical-run root plus canonical child
+ * records for every provider invocation.
  */
 import { defineCollection, relation } from "@/database/collections/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";

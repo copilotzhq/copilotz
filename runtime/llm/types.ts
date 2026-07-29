@@ -127,6 +127,10 @@ export interface ProviderConfigBase {
   firstTokenTimeoutMs?: number;
   /** Abort a provider attempt if model stream activity stalls for this many milliseconds after the first activity. Defaults to 30_000. Set <= 0 to disable. */
   streamIdleTimeoutMs?: number;
+  /** Abort one provider attempt after this absolute duration even while reasoning/activity continues. Defaults to 300_000. Set <= 0 to disable. */
+  attemptTimeoutMs?: number;
+  /** Bound the complete logical chat, including retries, fallbacks, and routing correction. Defaults to 600_000. Set <= 0 to disable. */
+  totalTimeoutMs?: number;
   outputReasoning?: boolean; // Whether to output thinking/reasoning tokens during stream (default true)
   estimateCost?: boolean; // Whether to estimate cost using OpenRouter pricing data (default true)
   pricingModelId?: string; // Explicit OpenRouter model id override for cost estimation
@@ -316,6 +320,18 @@ export interface ChatRequest {
   /** Optional external signal for cancelling active provider work. */
   signal?: AbortSignal;
   /**
+   * Internal absolute deadline shared by multiple `chat()` calls that belong
+   * to one logical run (for example a routing correction).
+   */
+  deadlineAt?: number;
+  /**
+   * Internal provider-attempt lifecycle hook. The runtime owns attempt IDs;
+   * persistence adapters may use them as durable child record IDs.
+   */
+  onAttemptLifecycle?: (
+    event: LLMAttemptLifecycleEvent,
+  ) => Promise<void> | void;
+  /**
    * Internal stream-only hook for canonical tool-call JSON drafts. Drafts are
    * never persisted and may be discarded when a provider attempt is retried.
    */
@@ -496,6 +512,7 @@ export type TokenUsageStatusReason =
   | "rate_limit"
   | "server_error"
   | "provider_error"
+  | "invalid_transcript"
   | "unknown"
   | "content_filter"
   | "empty_response"
@@ -504,8 +521,40 @@ export type TokenUsageStatusReason =
   | "visible_reasoning_markup"
   | "degenerate_repetition";
 
+export type LLMRecoveryAction =
+  | "accept"
+  | "retry_same"
+  | "fallback"
+  | "finalize_partial"
+  | "fail";
+
+export type LLMAttemptLifecycleEvent =
+  | {
+    phase: "started";
+    attemptId: string;
+    attemptIndex: number;
+    provider?: ProviderName;
+    model?: string;
+    config: LLMConfig;
+    messages: ChatMessage[];
+    startedAt: string;
+  }
+  | {
+    phase: "settled";
+    attemptId: string;
+    attemptIndex: number;
+    provider?: ProviderName;
+    model?: string;
+    status: "completed" | "failed" | "superseded";
+    statusReason?: TokenUsageStatusReason;
+    recoveryAction: LLMRecoveryAction;
+    record: LLMUsageAttempt;
+    finishedAt: string;
+  };
+
 export interface LLMUsageAttempt {
   attemptId?: string;
+  attemptIndex?: number;
   provider?: ProviderName;
   model?: string;
   messages?: ChatMessage[];
@@ -521,6 +570,10 @@ export interface LLMUsageAttempt {
   visibleOutputStarted?: boolean;
   partialAnswer?: string;
   partialReasoning?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  status?: "completed" | "failed" | "superseded";
+  recoveryAction?: LLMRecoveryAction;
   usageFinalized?: Promise<FinalizedTokenUsage | null>;
 }
 

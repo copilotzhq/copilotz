@@ -16,6 +16,7 @@ import { streamPost, type StreamResponse } from "@/runtime/http.ts";
 
 const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 90_000;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 30_000;
+const DEFAULT_ATTEMPT_TIMEOUT_MS = 300_000;
 
 export interface StreamResult {
   content: string;
@@ -92,13 +93,18 @@ export async function runProviderStream(
     config.streamIdleTimeoutMs,
     DEFAULT_STREAM_IDLE_TIMEOUT_MS,
   );
+  const attemptTimeoutMs = resolveTimeoutMs(
+    config.attemptTimeoutMs,
+    DEFAULT_ATTEMPT_TIMEOUT_MS,
+  );
 
   let firstTokenTimer: number | undefined;
   let streamIdleTimer: number | undefined;
+  let attemptTimer: number | undefined;
   let rejectTimeout: ((error: Error) => void) | undefined;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let streamTimeout:
-    | { kind: "first_token" | "idle"; timeoutMs: number }
+    | { kind: "first_token" | "idle" | "attempt"; timeoutMs: number }
     | undefined;
   let firstContentReceived = false;
 
@@ -114,13 +120,19 @@ export async function runProviderStream(
       streamIdleTimer = undefined;
     }
   };
+  const clearAttemptTimer = () => {
+    if (attemptTimer !== undefined) {
+      clearTimeout(attemptTimer);
+      attemptTimer = undefined;
+    }
+  };
 
   const timeoutPromise = new Promise<never>((_, reject) => {
     rejectTimeout = reject;
   });
 
   const abortForTimeout = (
-    kind: "first_token" | "idle",
+    kind: "first_token" | "idle" | "attempt",
     timeoutMs: number,
   ) => {
     if (streamTimeout) return;
@@ -173,6 +185,11 @@ export async function runProviderStream(
   };
 
   startFirstTokenTimer();
+  if (attemptTimeoutMs) {
+    attemptTimer = setTimeout(() => {
+      abortForTimeout("attempt", attemptTimeoutMs);
+    }, attemptTimeoutMs) as unknown as number;
+  }
   try {
     const response = await Promise.race([
       streamPost(
@@ -228,7 +245,12 @@ export async function runProviderStream(
         onHiddenBlockChunk,
       },
     );
-    return await Promise.race([streamPromise, timeoutPromise]);
+    const result = await Promise.race([streamPromise, timeoutPromise]);
+    if (signal?.aborted) {
+      throw signal.reason ??
+        new DOMException("LLM request aborted", "AbortError");
+    }
+    return result;
   } catch (error) {
     if (streamTimeout) {
       throw new LLMStreamTimeoutError(
@@ -240,6 +262,7 @@ export async function runProviderStream(
   } finally {
     clearFirstTokenTimer();
     clearStreamIdleTimer();
+    clearAttemptTimer();
     signal?.removeEventListener("abort", abortForExternalSignal);
   }
 }

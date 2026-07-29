@@ -8,6 +8,7 @@ import type {
   ChatRequest,
   ChatResponse,
   CostBreakdown,
+  LLMAttemptLifecycleEvent,
   LLMConfig,
   LLMRuntimeConfig,
   LLMUsageAttempt,
@@ -150,8 +151,13 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     let llmAttemptId: string | null = null;
     let terminalLlmAttemptId: string | null = null;
     let streamLlmAttemptId: string | null = null;
+    let activeProviderAttemptId: string | null = null;
     let partialAnswer = "";
     let partialReasoning = "";
+    let providerPartialAnswer = "";
+    let providerPartialReasoning = "";
+    let lastPersistedPartialAnswer = "";
+    let lastPersistedPartialReasoning = "";
     let lastStreamTokenIsReasoning = false;
     let lastPartialPersistedAt = 0;
     let lastPartialPersistPromise: Promise<void> = Promise.resolve();
@@ -183,22 +189,47 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
               partialReasoning,
             };
             try {
-              await deps.db.ops.mutate.llmAttempts.update(
-                llmAttemptId,
-                {
-                  status: "processing",
-                  ...snapshot,
-                },
-                {
-                  threadId,
-                  traceId: typeof event.traceId === "string"
-                    ? event.traceId
-                    : null,
-                  runGeneration,
-                  causationId: typeof event.id === "string" ? event.id : null,
-                  namespace: context.namespace,
-                },
-              );
+              if (
+                snapshot.partialAnswer !== lastPersistedPartialAnswer ||
+                snapshot.partialReasoning !== lastPersistedPartialReasoning
+              ) {
+                await deps.db.ops.mutate.llmAttempts.update(
+                  llmAttemptId,
+                  {
+                    status: "processing",
+                    ...snapshot,
+                  },
+                  {
+                    threadId,
+                    traceId: typeof event.traceId === "string"
+                      ? event.traceId
+                      : null,
+                    runGeneration,
+                    causationId: typeof event.id === "string" ? event.id : null,
+                    namespace: context.namespace,
+                  },
+                );
+                lastPersistedPartialAnswer = snapshot.partialAnswer;
+                lastPersistedPartialReasoning = snapshot.partialReasoning;
+              }
+              if (activeProviderAttemptId) {
+                await deps.db.ops.mutate.llmAttempts.update(
+                  activeProviderAttemptId,
+                  {
+                    status: "processing",
+                    partialAnswer: providerPartialAnswer,
+                    partialReasoning: providerPartialReasoning,
+                  },
+                  {
+                    threadId,
+                    traceId: typeof event.traceId === "string"
+                      ? event.traceId
+                      : null,
+                    causationId: typeof event.id === "string" ? event.id : null,
+                    namespace: context.namespace,
+                  },
+                );
+              }
             } catch (error) {
               console.warn(
                 "[LLM_CALL] Failed to persist llm_attempt partial:",
@@ -236,7 +267,14 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         parentEventId: null,
         traceId: null,
         priority: null,
-        metadata: streamLlmAttemptId ? { streamLlmAttemptId } : null,
+        metadata: streamLlmAttemptId
+          ? {
+            streamLlmAttemptId,
+            ...(activeProviderAttemptId
+              ? { providerAttemptId: activeProviderAttemptId }
+              : {}),
+          }
+          : null,
         ttlMs: null,
         expiresAt: null,
         createdAt: new Date(),
@@ -255,7 +293,14 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       parentEventId: null,
       traceId: null,
       priority: null,
-      metadata: streamLlmAttemptId ? { streamLlmAttemptId } : null,
+      metadata: streamLlmAttemptId
+        ? {
+          streamLlmAttemptId,
+          ...(delta.providerAttemptId
+            ? { providerAttemptId: delta.providerAttemptId }
+            : {}),
+        }
+        : null,
       ttlMs: null,
       expiresAt: null,
       createdAt: new Date(),
@@ -311,8 +356,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         }
         if (isReasoning) {
           partialReasoning += token;
+          providerPartialReasoning += token;
         } else if (token) {
           partialAnswer += token;
+          providerPartialAnswer += token;
         }
         if (!isSuperseded() && token) persistPartialAttempt();
 
@@ -361,6 +408,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             name: payload.agent.name,
           },
           llmAttemptId: publicAttemptId,
+          providerAttemptId: delta.providerAttemptId,
           draftId: delta.draftId,
           callIndex: delta.callIndex,
           sequence: delta.sequence,
@@ -529,6 +577,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           namespace: context.namespace,
           metadata: {
             sourceEventType: event.type,
+            attemptKind: "logical_run",
           },
         }, {
           traceId: typeof event.traceId === "string" ? event.traceId : null,
@@ -557,16 +606,33 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         usageOptions: deps.context.usage,
       })
       : null;
+    const persistedProviderAttemptIds = new Set<string>();
+    const providerAttemptIndexes = new Map<string, number>();
+    const providerAttemptRuntimeIndexes = new Map<string, number>();
+    const providerAttemptPhases = new Map<
+      string,
+      "initial" | "routing_correction"
+    >();
+    let providerAttemptSequence = 0;
     const persistUsageRecords = async (
       records: LLMUsageAttempt[],
       fallbackFinalized?: ChatResponse["usageFinalized"],
     ): Promise<void> => {
       for (let index = 0; index < records.length; index += 1) {
         const record = records[index];
-        let canonicalAttemptId = index === 0 ? llmAttemptId : null;
-        if (!canonicalAttemptId && deps.db?.ops?.mutate?.llmAttempts) {
+        let canonicalAttemptId = record.attemptId ?? crypto.randomUUID();
+        if (
+          canonicalAttemptId &&
+          !persistedProviderAttemptIds.has(canonicalAttemptId) &&
+          deps.db?.ops?.mutate?.llmAttempts
+        ) {
           try {
+            const durableIndex = providerAttemptIndexes.get(
+              canonicalAttemptId,
+            ) ?? providerAttemptSequence++;
+            providerAttemptIndexes.set(canonicalAttemptId, durableIndex);
             const attempt = await deps.db.ops.mutate.llmAttempts.create({
+              id: canonicalAttemptId,
               threadId,
               messageId: sourceMessageId,
               eventId: typeof event.id === "string" ? event.id : null,
@@ -575,18 +641,25 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
               provider: record.provider ?? null,
               model: record.model ?? null,
               messages: record.messages ?? null,
-              status: "completed",
-              attemptIndex: index,
+              status: record.status ?? "completed",
+              attemptIndex: durableIndex,
               parentAttemptId: llmAttemptId,
               runSender,
               namespace: context.namespace,
               debug: record.debug ?? null,
               metadata: {
                 sourceEventType: event.type,
-                usageOnly: true,
+                attemptKind: "provider_attempt",
+                recoveredFromUsageRecord: true,
+                chatPhase: providerAttemptPhases.get(canonicalAttemptId) ??
+                  "initial",
+                runtimeAttemptIndex: providerAttemptRuntimeIndexes.get(
+                  canonicalAttemptId,
+                ) ?? record.attemptIndex ?? null,
               },
             });
             canonicalAttemptId = String(attempt.id);
+            persistedProviderAttemptIds.add(canonicalAttemptId);
           } catch (error) {
             console.warn(
               "[LLM_CALL] Failed to create usage llm_attempt node:",
@@ -596,14 +669,14 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         }
 
         if (canonicalAttemptId && deps.db?.ops?.mutate?.llmAttempts) {
-          terminalLlmAttemptId = canonicalAttemptId;
           try {
             const usageStatusReason = record.usage &&
                 typeof record.usage === "object"
               ? (record.usage as { statusReason?: unknown }).statusReason
               : undefined;
-            const isRecoveredFailure = index < records.length - 1 &&
-              typeof usageStatusReason === "string";
+            const isRecoveredFailure = record.status === "failed" ||
+              record.recoveryAction === "retry_same" ||
+              record.recoveryAction === "fallback";
             const attemptPatch = {
               provider: record.provider ?? null,
               model: record.model ?? null,
@@ -619,6 +692,18 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
               ...(record.partialReasoning !== undefined
                 ? { partialReasoning: record.partialReasoning }
                 : {}),
+              metadata: {
+                attemptKind: "provider_attempt",
+                chatPhase: providerAttemptPhases.get(canonicalAttemptId) ??
+                  "initial",
+                runtimeAttemptIndex: providerAttemptRuntimeIndexes.get(
+                  canonicalAttemptId,
+                ) ?? record.attemptIndex ?? null,
+                recoveryAction: record.recoveryAction ?? "accept",
+                statusReason: typeof usageStatusReason === "string"
+                  ? usageStatusReason
+                  : null,
+              },
             };
             const mutationOptions = {
               threadId,
@@ -639,7 +724,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
                     recovered: true,
                     visibleOutputStarted: record.visibleOutputStarted ?? false,
                   },
-                  finishedAt: new Date().toISOString(),
+                  finishedAt: record.finishedAt ?? new Date().toISOString(),
                 },
                 mutationOptions,
               );
@@ -749,6 +834,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             partialAnswer,
             partialReasoning,
             metadata: {
+              attemptKind: "logical_run",
               superseded: true,
               cancellationReason: cancellationReason(),
             },
@@ -932,23 +1018,198 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         ),
       });
     };
+    let activeChatPhase: "initial" | "routing_correction" = "initial";
+    const onAttemptLifecycle = async (
+      lifecycle: LLMAttemptLifecycleEvent,
+    ): Promise<void> => {
+      if (!llmAttemptId || !deps.db?.ops?.mutate?.llmAttempts) return;
+
+      if (lifecycle.phase === "started") {
+        const durableIndex = providerAttemptSequence++;
+        providerAttemptIndexes.set(lifecycle.attemptId, durableIndex);
+        providerAttemptRuntimeIndexes.set(
+          lifecycle.attemptId,
+          lifecycle.attemptIndex,
+        );
+        providerAttemptPhases.set(lifecycle.attemptId, activeChatPhase);
+        activeProviderAttemptId = lifecycle.attemptId;
+        providerPartialAnswer = "";
+        providerPartialReasoning = "";
+        try {
+          await deps.db.ops.mutate.llmAttempts.create({
+            id: lifecycle.attemptId,
+            threadId,
+            messageId: sourceMessageId,
+            eventId: typeof event.id === "string" ? event.id : null,
+            agentId: payload.agent.id ?? payload.agent.name ?? null,
+            agentName: payload.agent.name,
+            provider: lifecycle.provider ?? null,
+            model: lifecycle.model ?? null,
+            config: lifecycle.config as Record<string, unknown>,
+            messages: lifecycle.messages,
+            tools: payload.tools,
+            status: "processing",
+            attemptIndex: durableIndex,
+            parentAttemptId: llmAttemptId,
+            runSender,
+            namespace: context.namespace,
+            metadata: {
+              attemptKind: "provider_attempt",
+              chatPhase: activeChatPhase,
+              runtimeAttemptIndex: lifecycle.attemptIndex,
+            },
+          }, {
+            traceId: typeof event.traceId === "string" ? event.traceId : null,
+            causationId: typeof event.id === "string" ? event.id : null,
+            namespace: context.namespace,
+          });
+          persistedProviderAttemptIds.add(lifecycle.attemptId);
+          await deps.db.ops.mutate.llmAttempts.update(
+            llmAttemptId,
+            {
+              status: "processing",
+              metadata: {
+                ...eventMetadata,
+                attemptKind: "logical_run",
+                activeProviderAttemptId: lifecycle.attemptId,
+                providerAttemptCount: durableIndex + 1,
+              },
+            },
+            {
+              threadId,
+              traceId: typeof event.traceId === "string" ? event.traceId : null,
+              causationId: typeof event.id === "string" ? event.id : null,
+              namespace: context.namespace,
+            },
+          );
+        } catch (error) {
+          console.warn(
+            "[LLM_CALL] Failed to persist provider attempt start:",
+            error,
+          );
+        }
+        return;
+      }
+
+      if (activeProviderAttemptId === lifecycle.attemptId) {
+        await persistPartialAttempt(true);
+      }
+      const record = lifecycle.record;
+      const parsed = record.debug?.parsedOutput;
+      const chatPhase = providerAttemptPhases.get(lifecycle.attemptId) ??
+        activeChatPhase;
+      const patch = {
+        provider: lifecycle.provider ?? null,
+        model: lifecycle.model ?? null,
+        messages: record.messages ?? null,
+        debug: record.debug ?? null,
+        finishReason: parsed?.finishReason ?? null,
+        answer: parsed?.answer ?? record.partialAnswer ?? null,
+        reasoning: parsed?.reasoning ?? record.partialReasoning ?? null,
+        toolCalls: parsed?.toolCalls ?? null,
+        partialAnswer: record.partialAnswer ?? null,
+        partialReasoning: record.partialReasoning ?? null,
+        usage: record.usage,
+        cost: record.cost ?? null,
+        error: record.error ?? (lifecycle.statusReason
+          ? {
+            reason: lifecycle.statusReason,
+            recovered: lifecycle.recoveryAction === "retry_same" ||
+              lifecycle.recoveryAction === "fallback",
+          }
+          : null),
+        metadata: {
+          attemptKind: "provider_attempt",
+          chatPhase,
+          runtimeAttemptIndex: lifecycle.attemptIndex,
+          recoveryAction: lifecycle.recoveryAction,
+          statusReason: lifecycle.statusReason ?? null,
+        },
+        finishedAt: lifecycle.finishedAt,
+      };
+      const options = {
+        threadId,
+        traceId: typeof event.traceId === "string" ? event.traceId : null,
+        causationId: typeof event.id === "string" ? event.id : null,
+        namespace: context.namespace,
+      };
+      try {
+        if (lifecycle.status === "completed") {
+          await deps.db.ops.mutate.llmAttempts.complete(
+            lifecycle.attemptId,
+            patch,
+            options,
+          );
+        } else if (lifecycle.status === "failed") {
+          await deps.db.ops.mutate.llmAttempts.fail(
+            lifecycle.attemptId,
+            patch,
+            options,
+          );
+        } else {
+          await deps.db.ops.mutate.llmAttempts.update(
+            lifecycle.attemptId,
+            { ...patch, status: "superseded" },
+            options,
+          );
+        }
+        await deps.db.ops.mutate.llmAttempts.update(
+          llmAttemptId,
+          {
+            metadata: {
+              ...eventMetadata,
+              attemptKind: "logical_run",
+              activeProviderAttemptId: null,
+              lastProviderAttemptId: lifecycle.attemptId,
+              providerAttemptCount: providerAttemptSequence,
+              lastRecoveryAction: lifecycle.recoveryAction,
+            },
+          },
+          options,
+        );
+      } catch (error) {
+        console.warn(
+          "[LLM_CALL] Failed to persist provider attempt settlement:",
+          error,
+        );
+      } finally {
+        if (activeProviderAttemptId === lifecycle.attemptId) {
+          activeProviderAttemptId = null;
+          providerPartialAnswer = "";
+          providerPartialReasoning = "";
+        }
+      }
+    };
+    const configuredTotalTimeoutMs = configForCall.totalTimeoutMs === undefined
+      ? 600_000
+      : Number.isFinite(configForCall.totalTimeoutMs) &&
+          configForCall.totalTimeoutMs > 0
+      ? configForCall.totalTimeoutMs
+      : undefined;
+    const logicalDeadlineAt = configuredTotalTimeoutMs
+      ? Date.now() + configuredTotalTimeoutMs
+      : undefined;
     const startChat = (
       messages: ChatMessage[],
       callback = streamCallback,
       includeToolDeltas = true,
-    ) =>
-      chat(
+      phase: "initial" | "routing_correction" = "initial",
+    ) => {
+      activeChatPhase = phase;
+      return chat(
         {
           ...preparedChat.request,
           messages,
           extractTags: ["think"],
           reasoningHistory: context.reasoningHistory,
           signal: deps.cancellation?.signal,
+          ...(logicalDeadlineAt ? { deadlineAt: logicalDeadlineAt } : {}),
           historyCutoffs,
           historyCutoffNamespace: String(
             payload.agent.id ?? payload.agent.name,
           ),
           onHistoryCutoff,
+          onAttemptLifecycle,
           onToolCallDelta: includeToolDeltas ? processToolCallDelta : undefined,
         } as ChatRequest,
         configForCall,
@@ -956,6 +1217,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         callback,
         context.llmProviders,
       );
+    };
     let chatPromise = startChat(baseMessages);
     try {
       let settled = await awaitChatOrSupersession(chatPromise);
@@ -1005,6 +1267,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           [...baseMessages, correctionPrompt],
           correctionStreamCallback,
           false,
+          "routing_correction",
         );
         settled = await awaitChatOrSupersession(chatPromise);
         if (settled === "superseded") {
@@ -1285,6 +1548,8 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           index === records.length - 1
             ? {
               ...record,
+              status: "failed" as const,
+              recoveryAction: "retry_same" as const,
               usage: {
                 ...record.usage,
                 statusReason: "malformed_tool_call" as const,

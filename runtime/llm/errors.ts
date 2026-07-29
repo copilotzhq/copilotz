@@ -106,12 +106,24 @@ export function isProviderGlobalLLMFailure(error: unknown): boolean {
 }
 
 export class LLMStreamTimeoutError extends Error {
-  constructor(kind: "first_token" | "idle", timeoutMs: number) {
+  readonly kind: "first_token" | "idle" | "attempt" | "total";
+  readonly timeoutMs: number;
+
+  constructor(
+    kind: "first_token" | "idle" | "attempt" | "total",
+    timeoutMs: number,
+  ) {
     const label = kind === "first_token"
       ? "first token timeout"
-      : "stream idle timeout";
+      : kind === "idle"
+      ? "stream idle timeout"
+      : kind === "attempt"
+      ? "provider attempt timeout"
+      : "logical chat timeout";
     super(`LLM ${label} after ${timeoutMs}ms`);
     this.name = "AbortError";
+    this.kind = kind;
+    this.timeoutMs = timeoutMs;
   }
 }
 

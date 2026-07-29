@@ -295,12 +295,32 @@ Deno.test("llm_call processor persists one llm_usage node per provider attempt",
        ORDER BY "created_at" ASC`,
       [thread.id as string],
     );
-    assertEquals(attemptRows.rows.length, 2);
+    assertEquals(attemptRows.rows.length, 3);
     assertEquals(
       produced.metadata?.streamLlmAttemptId,
       attemptRows.rows[0].id,
     );
-    assertEquals(produced.metadata?.llmAttemptId, attemptRows.rows[1].id);
+    assertEquals(produced.metadata?.llmAttemptId, attemptRows.rows[0].id);
+    assertEquals(attemptRows.rows[0].data.attemptKind, undefined);
+    assertEquals(
+      (attemptRows.rows[0].data.metadata as Record<string, unknown>)
+        .attemptKind,
+      "logical_run",
+    );
+    assertEquals(
+      attemptRows.rows[1].data.parentAttemptId,
+      attemptRows.rows[0].id,
+    );
+    assertEquals(attemptRows.rows[1].data.attemptIndex, 0);
+    assertEquals(attemptRows.rows[1].data.model, "primary");
+    assertEquals(attemptRows.rows[1].data.status, "failed");
+    assertEquals(
+      attemptRows.rows[2].data.parentAttemptId,
+      attemptRows.rows[0].id,
+    );
+    assertEquals(attemptRows.rows[2].data.attemptIndex, 1);
+    assertEquals(attemptRows.rows[2].data.model, "fallback");
+    assertEquals(attemptRows.rows[2].data.status, "completed");
   } finally {
     globalThis.fetch = originalFetch;
   }

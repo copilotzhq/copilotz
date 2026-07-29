@@ -51,8 +51,9 @@ they are not always meant to be displayed as chat.
 
 Agent output is stored as a durable message and enriched by child graph nodes:
 
-- `llm_attempt` records every provider attempt, prompt snapshot, partial
-  content/reasoning, usage, cost, status, and recovery linkage.
+- `llm_attempt` uses a stable logical root and child records for every provider
+  attempt, prompt snapshot, partial content/reasoning, usage, cost, status, and
+  recovery linkage.
 - `tool_execution` records tool call arguments, output, errors, visibility, and
   large-result lookup state.
 - `asset` records files and media produced during the turn.

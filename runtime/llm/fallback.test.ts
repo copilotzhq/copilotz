@@ -1431,12 +1431,13 @@ Deno.test("chat does NOT retry when empty response is intentional (no_response)"
   }
 });
 
-Deno.test("chat strips visible reasoning markup without retrying after streamed text", async () => {
+Deno.test("chat accepts cleaned output after extracting reasoning markup", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
   const warnings: unknown[][] = [];
   let calls = 0;
   let streamed = "";
+  const lifecycle: Array<{ phase: string; recoveryAction?: string }> = [];
 
   console.warn = (...args: unknown[]) => {
     warnings.push(args);
@@ -1474,7 +1475,17 @@ Deno.test("chat strips visible reasoning markup without retrying after streamed 
 
   try {
     const response = await chat(
-      { messages: [{ role: "user", content: "hello" }] },
+      {
+        messages: [{ role: "user", content: "hello" }],
+        onAttemptLifecycle: (event) => {
+          lifecycle.push({
+            phase: event.phase,
+            ...(event.phase === "settled"
+              ? { recoveryAction: event.recoveryAction }
+              : {}),
+          });
+        },
+      },
       {
         provider: "anthropic",
         model: "primary",
@@ -1490,7 +1501,7 @@ Deno.test("chat strips visible reasoning markup without retrying after streamed 
 
     assertEquals(calls, 1);
     assertEquals(response.answer, "Visible answer");
-    assertEquals(response.usage?.statusReason, "visible_reasoning_markup");
+    assertEquals(response.usage?.statusReason, undefined);
     assertEquals(response.usageAttempts?.length, 1);
     assertEquals(response.usageAttempts?.[0]?.visibleOutputStarted, true);
     assertEquals(streamed.includes("<thought>"), false);
@@ -1502,6 +1513,10 @@ Deno.test("chat strips visible reasoning markup without retrying after streamed 
       ),
       false,
     );
+    assertEquals(lifecycle, [
+      { phase: "started" },
+      { phase: "settled", recoveryAction: "accept" },
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
     console.warn = originalWarn;

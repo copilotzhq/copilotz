@@ -512,8 +512,12 @@ Deno.test("llm_call coalesces partial answer and reasoning persistence", async (
       ) => Promise<unknown>;
       complete: (...args: unknown[]) => Promise<unknown>;
     };
-    llmAttemptMutations.update = async (_id, patch, _options) => {
-      if (patch.status !== "processing") return;
+    llmAttemptMutations.update = async (id, patch, _options) => {
+      if (
+        id !== "attempt-partial" ||
+        patch.status !== "processing" ||
+        patch.partialAnswer === undefined
+      ) return;
       concurrentWrites += 1;
       maxConcurrentWrites = Math.max(maxConcurrentWrites, concurrentWrites);
       snapshots.push({ ...patch });

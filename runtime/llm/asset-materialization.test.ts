@@ -525,3 +525,36 @@ Deno.test("materializeAssetRefsForProvider omits images when catalog says text-o
     restore();
   }
 });
+
+Deno.test("materializeAssetRefsForProvider transfers a breakpoint to resolved media", async () => {
+  const restore = mockCatalog([]);
+  const store = createMemoryAssetStore();
+  const { assetId } = await store.save(
+    new Uint8Array([137, 80, 78, 71]),
+    "image/png",
+  );
+  const ref = buildAssetRefForStore(store, assetId);
+  const messages: ChatMessage[] = [{
+    role: "user",
+    content: [{
+      type: "image_url",
+      image_url: { url: ref },
+      promptCacheBreakpoint: { mode: "explicit" },
+    }],
+  }];
+
+  try {
+    const result = await materializeAssetRefsForProvider(
+      messages,
+      { provider: "openai", model: "gpt-5.6" },
+      store,
+    );
+
+    assert(Array.isArray(result[0].content));
+    assertEquals(result[0].content[0].promptCacheBreakpoint, {
+      mode: "explicit",
+    });
+  } finally {
+    restore();
+  }
+});

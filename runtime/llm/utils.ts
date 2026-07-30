@@ -252,21 +252,30 @@ export function formatMessagesDetailed(
   { messages, instructions, config, tools }: ChatRequest,
 ): FormattedMessagesResult {
   // Build system content with instructions and tool definitions
-  let systemContent = instructions ||
-    messages.filter((m) => m.role === "system").map((m) => m.content).join(
-      "\n\n",
-    );
+  let systemContent: ChatMessage["content"] = instructions ?? "";
+  if (instructions === undefined) {
+    systemContent = messages
+      .filter((message) => message.role === "system")
+      .reduce<ChatMessage["content"]>(
+        (combined, message) =>
+          isEmptyContent(combined)
+            ? message.content
+            : mergeMessageContent(combined, message.content),
+        "",
+      );
+  }
 
   // Add tool definitions to system prompt if tools are provided
   if (tools && tools.length > 0) {
     const toolSystemPrompt = generateToolSystemPrompt(tools);
-    systemContent = systemContent
-      ? `${toolSystemPrompt}\n\n${systemContent}`
-      : toolSystemPrompt;
+    systemContent = isEmptyContent(systemContent)
+      ? toolSystemPrompt
+      : mergeMessageContent(toolSystemPrompt, systemContent);
   }
 
   // Add system message if content exists
-  const systemMessage: ChatMessage[] = systemContent
+  const hasSystemContent = !isEmptyContent(systemContent);
+  const systemMessage: ChatMessage[] = hasSystemContent
     ? [{ role: "system", content: systemContent }]
     : [];
 
@@ -313,7 +322,7 @@ export function formatMessagesDetailed(
   }
 
   // Ensure system message is first if it exists
-  if (systemContent && normalizedMessages[0]?.role !== "system") {
+  if (hasSystemContent && normalizedMessages[0]?.role !== "system") {
     normalizedMessages = [
       { role: "system", content: systemContent },
       ...normalizedMessages,
@@ -855,10 +864,20 @@ function applyComposedWireContent(
   if (typeof original === "string") return composed;
 
   const nonTextParts = original.filter((part) => part.type !== "text");
-  if (nonTextParts.length === 0) return composed;
+  const textBreakpoint = original.some((part) =>
+      part.type === "text" &&
+      part.promptCacheBreakpoint?.mode === "explicit"
+    )
+    ? { promptCacheBreakpoint: { mode: "explicit" } as const }
+    : {};
+  if (nonTextParts.length === 0) {
+    return Object.keys(textBreakpoint).length > 0
+      ? [{ type: "text", text: composed, ...textBreakpoint }]
+      : composed;
+  }
   if (!composed) return nonTextParts;
 
-  return [{ type: "text", text: composed }, ...nonTextParts];
+  return [{ type: "text", text: composed, ...textBreakpoint }, ...nonTextParts];
 }
 
 function prefixSpeakerLabel(label: string, body: string): string {

@@ -70,6 +70,48 @@ Deno.test("formatMessages merges consecutive user turns from different senders",
   );
 });
 
+Deno.test("formatMessages preserves the stable system breakpoint after prepended tools", () => {
+  const formatted = formatMessages({
+    messages: [
+      {
+        role: "system",
+        content: [{
+          type: "text",
+          text: "Stable context",
+          promptCacheBreakpoint: { mode: "explicit" },
+        }],
+      },
+      { role: "system", content: "Current date: 2026-07-30" },
+      { role: "system", content: "<turn_control>dynamic</turn_control>" },
+      { role: "user", content: "Hello" },
+    ],
+    tools: [{
+      type: "function",
+      function: {
+        name: "lookup",
+        description: "Look something up",
+        inputTypes: "{}",
+      },
+    }],
+  });
+
+  assertEquals(Array.isArray(formatted[0].content), true);
+  const parts = formatted[0].content as Array<Record<string, unknown>>;
+  const breakpointIndex = parts.findIndex((part) =>
+    part.promptCacheBreakpoint !== undefined
+  );
+  assertEquals(breakpointIndex > 0, true);
+  assertEquals(parts[breakpointIndex], {
+    type: "text",
+    text: "Stable context",
+    promptCacheBreakpoint: { mode: "explicit" },
+  });
+  assertEquals(
+    parts.slice(breakpointIndex + 1).map((part) => part.text).join(""),
+    "\n\nCurrent date: 2026-07-30\n\n<turn_control>dynamic</turn_control>",
+  );
+});
+
 Deno.test("formatMessages emits current-agent tool results as the following user turn", () => {
   const formatted = formatMessages({
     messages: [

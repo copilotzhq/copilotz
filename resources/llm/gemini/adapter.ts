@@ -217,9 +217,10 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
     messages.forEach((msg) => {
       if (msg.role === "system") {
         systemPrompts.push(
-          typeof msg.content === "string"
-            ? msg.content
-            : JSON.stringify(msg.content),
+          typeof msg.content === "string" ? msg.content : msg.content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join(""),
         );
       } else {
         const parts: GeminiPart[] = [];

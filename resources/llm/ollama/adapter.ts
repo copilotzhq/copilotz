@@ -32,7 +32,7 @@ export const ollamaProvider: ProviderFactory = (config: ProviderConfig) => {
           const text = parts
             .filter((p) => p.type === "text")
             .map((p) => (p as Extract<ChatContentPart, { type: "text" }>).text)
-            .join("\n");
+            .join("");
           const images: string[] = [];
           for (const p of parts) {
             if (

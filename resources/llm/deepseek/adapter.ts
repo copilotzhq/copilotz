@@ -62,7 +62,7 @@ export const deepseekProvider: ProviderFactory = (config: ProviderConfig) => {
           const text = (msg.content as ChatContentPart[])
             .filter((p) => p.type === "text")
             .map((p) => (p as Extract<ChatContentPart, { type: "text" }>).text)
-            .join("\n");
+            .join("");
           return { role: msg.role, content: text } as any;
         }
         return { role: msg.role, content: msg.content } as any;

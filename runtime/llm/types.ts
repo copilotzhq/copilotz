@@ -14,30 +14,43 @@
 import type { TokenMediaMetadata } from "@/runtime/tokens/estimate.ts";
 import type { ChatTokenEstimate } from "@/runtime/tokens/chat.ts";
 
+export type PromptCacheBreakpoint = {
+  mode: "explicit";
+};
+
 export type ChatContentPart =
-  | { type: "text"; text: string }
-  | {
-    type: "image_url";
-    image_url: {
-      url: string;
-      detail?: "low" | "high" | "original" | "auto";
-    };
-    tokenMetadata?: TokenMediaMetadata;
-  }
-  | {
-    type: "video";
-    video: { url: string; mime_type?: string };
-    tokenMetadata?: TokenMediaMetadata;
-  }
-  | {
-    type: "input_audio";
-    input_audio: { data: string; format?: string; filename?: string };
-    tokenMetadata?: TokenMediaMetadata;
-  }
-  | {
-    type: "file";
-    file: { file_data: string; mime_type?: string; filename?: string };
-    tokenMetadata?: TokenMediaMetadata;
+  & (
+    | { type: "text"; text: string }
+    | {
+      type: "image_url";
+      image_url: {
+        url: string;
+        detail?: "low" | "high" | "original" | "auto";
+      };
+      tokenMetadata?: TokenMediaMetadata;
+    }
+    | {
+      type: "video";
+      video: { url: string; mime_type?: string };
+      tokenMetadata?: TokenMediaMetadata;
+    }
+    | {
+      type: "input_audio";
+      input_audio: { data: string; format?: string; filename?: string };
+      tokenMetadata?: TokenMediaMetadata;
+    }
+    | {
+      type: "file";
+      file: { file_data: string; mime_type?: string; filename?: string };
+      tokenMetadata?: TokenMediaMetadata;
+    }
+  )
+  & {
+    /**
+     * Provider-neutral cache boundary. Adapters only serialize this for
+     * providers/models that support explicit prompt-cache breakpoints.
+     */
+    promptCacheBreakpoint?: PromptCacheBreakpoint;
   };
 
 export interface ChatMessage {
@@ -146,8 +159,8 @@ export interface ProviderConfigBase {
   promptCache?: {
     enabled?: boolean;
     mode?: "auto" | "implicit" | "explicit";
-    /** Anthropic supports `5m` (default) and `1h`; Gemini explicit cache accepts duration strings like `300s`. */
-    ttl?: "5m" | "1h" | `${number}s`;
+    /** Provider cache TTL. OpenAI explicit breakpoints use `30m` (the current default). */
+    ttl?: "5m" | "30m" | "1h" | `${number}s`;
     /** Gemini cached content resource, e.g. `cachedContents/abc123`. */
     cachedContent?: string;
     /** Gemini display name when Copilotz creates a best-effort explicit cache. */

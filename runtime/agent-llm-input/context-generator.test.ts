@@ -1,4 +1,4 @@
-import { assert, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 
 import type { Agent, Thread } from "@/types/index.ts";
 import { contextGenerator } from "./context-generator.ts";
@@ -96,6 +96,12 @@ Deno.test("contextGenerator places stable local instructions before volatile thr
   assert(threadIndex > identityIndex);
   assert(metadataIndex > threadIndex);
   assert(userMetadataIndex > metadataIndex);
+  assert(!generated.stableSystemPrompt.includes("Current date:"));
+  assertStringIncludes(generated.dynamicSystemPrompt, "Current date:");
+  assertEquals(
+    generated.systemPrompt,
+    `${generated.stableSystemPrompt}\n\n${generated.dynamicSystemPrompt}`,
+  );
 });
 
 Deno.test("contextGenerator excludes private participant metadata from the LLM context", () => {

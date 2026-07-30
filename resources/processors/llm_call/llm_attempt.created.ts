@@ -36,6 +36,7 @@ import type {
 import { ulid } from "ulid";
 import { prepareAgentChatRequest } from "@/runtime/llm/agent-request.ts";
 import { getProviderErrorDetails } from "@/runtime/llm/errors.ts";
+import { withoutPromptCacheBreakpoint } from "@/runtime/llm/prompt-cache.ts";
 import { createLlmUsageService } from "@/runtime/collections/native.ts";
 import { isStaleRunGenerationError } from "@/database/operations/index.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
@@ -1288,7 +1289,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           target.id
         );
         const correctionPrompt: ChatMessage = {
-          role: "user",
+          role: "system",
           content: [
             "[Private Copilotz routing correction]",
             routingSelection.message,
@@ -1311,8 +1312,14 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             processStreamToken(token, options);
           }
           : undefined;
+        const correctionBaseMessages = baseMessages.map((message) =>
+          message.role === "system" ? message : {
+            ...message,
+            content: withoutPromptCacheBreakpoint(message.content),
+          }
+        );
         chatPromise = startChat(
-          [...baseMessages, correctionPrompt],
+          [...correctionBaseMessages, correctionPrompt],
           correctionStreamCallback,
           false,
           "routing_correction",

@@ -59,6 +59,145 @@ Deno.test("openaiProvider builds GPT-5 Responses body with Responses field names
   assertEquals("response_format" in body, false);
 });
 
+Deno.test("openaiProvider serializes GPT-5.6 explicit breakpoints for Responses", () => {
+  const config: ProviderConfig = {
+    provider: "openai",
+    model: "gpt-5.6-sol",
+    apiKey: "test",
+    openaiApi: "responses",
+    openaiPromptCacheKey: "compass:thread-1:east",
+    openaiPromptCacheRetention: "24h",
+    promptCache: { enabled: true, mode: "explicit" },
+  };
+  const provider = openaiProvider(config);
+  const body = provider.body([
+    {
+      role: "system",
+      content: [{
+        type: "text",
+        text: "Stable context",
+        promptCacheBreakpoint: { mode: "explicit" },
+      }],
+    },
+    {
+      role: "user",
+      content: [{
+        type: "text",
+        text: "Initiating request",
+        promptCacheBreakpoint: { mode: "explicit" },
+      }],
+    },
+    { role: "user", content: "Unmarked continuation" },
+  ], config) as Record<string, any>;
+
+  assertEquals(body.prompt_cache_key, "compass:thread-1:east");
+  assertEquals(body.prompt_cache_options, { mode: "explicit" });
+  assertEquals("prompt_cache_retention" in body, false);
+  assertEquals(body.input, [
+    {
+      role: "system",
+      content: [{
+        type: "input_text",
+        text: "Stable context",
+        prompt_cache_breakpoint: { mode: "explicit" },
+      }],
+    },
+    {
+      role: "user",
+      content: [{
+        type: "input_text",
+        text: "Initiating request",
+        prompt_cache_breakpoint: { mode: "explicit" },
+      }],
+    },
+    { role: "user", content: "Unmarked continuation" },
+  ]);
+});
+
+Deno.test("openaiProvider serializes GPT-5.6 explicit breakpoints for Chat Completions", () => {
+  const config: ProviderConfig = {
+    provider: "openai",
+    model: "gpt-5.6",
+    apiKey: "test",
+    openaiApi: "chat_completions",
+    promptCache: { enabled: true, mode: "explicit", ttl: "30m" },
+  };
+  const body = openaiProvider(config).body([
+    {
+      role: "user",
+      content: [{
+        type: "text",
+        text: "Stable request",
+        promptCacheBreakpoint: { mode: "explicit" },
+      }],
+    },
+  ], config) as Record<string, any>;
+
+  assertEquals(body.prompt_cache_options, {
+    mode: "explicit",
+    ttl: "30m",
+  });
+  assertEquals(body.messages, [{
+    role: "user",
+    content: [{
+      type: "text",
+      text: "Stable request",
+      prompt_cache_breakpoint: { mode: "explicit" },
+    }],
+  }]);
+});
+
+Deno.test("openaiProvider suppresses explicit fields and markers before GPT-5.6", () => {
+  const config: ProviderConfig = {
+    provider: "openai",
+    model: "gpt-5.5",
+    apiKey: "test",
+    openaiApi: "responses",
+    promptCache: { enabled: true, mode: "explicit" },
+  };
+  const body = openaiProvider(config).body([
+    {
+      role: "user",
+      content: [{
+        type: "text",
+        text: "Request",
+        promptCacheBreakpoint: { mode: "explicit" },
+      }],
+    },
+  ], config) as Record<string, any>;
+
+  assertEquals("prompt_cache_options" in body, false);
+  assertEquals(body.input[0].content[0], {
+    type: "input_text",
+    text: "Request",
+  });
+});
+
+Deno.test("openaiProvider suppresses explicit fields when prompt caching is disabled", () => {
+  const config: ProviderConfig = {
+    provider: "openai",
+    model: "gpt-5.6",
+    apiKey: "test",
+    promptCache: false,
+  };
+  const body = openaiProvider(config).body([
+    {
+      role: "user",
+      content: [{
+        type: "text",
+        text: "Request",
+        promptCacheBreakpoint: { mode: "explicit" },
+      }],
+    },
+  ], config) as Record<string, any>;
+
+  assertEquals("prompt_cache_options" in body, false);
+  assertEquals(body.input[0].content[0], {
+    type: "input_text",
+    text: "Request",
+  });
+});
+
 Deno.test("openaiProvider omits unsupported fields for ChatGPT Codex OAuth transport", () => {
   const config: ProviderConfig = {
     provider: "openai",
@@ -120,6 +259,47 @@ Deno.test("openaiProvider keeps Chat Completions for older models in auto mode",
   assertEquals(body.max_completion_tokens, 321);
   assertEquals(body.prompt_cache_key, "legacy-cache-key");
   assertEquals(body.prompt_cache_retention, "in_memory");
+});
+
+Deno.test("openaiProvider extracts Chat Completions cache read and write tokens", () => {
+  const config: ProviderConfig = {
+    provider: "openai",
+    model: "gpt-5.6",
+    apiKey: "test",
+    openaiApi: "chat_completions",
+  };
+  const provider = openaiProvider(config);
+
+  assertEquals(
+    provider.extractUsage?.({
+      usage: {
+        prompt_tokens: 20,
+        completion_tokens: 4,
+        total_tokens: 24,
+        prompt_tokens_details: {
+          cached_tokens: 12,
+          cache_write_tokens: 6,
+        },
+      },
+    }),
+    {
+      inputTokens: 20,
+      outputTokens: 4,
+      reasoningTokens: undefined,
+      cacheReadInputTokens: 12,
+      cacheCreationInputTokens: 6,
+      totalTokens: 24,
+      rawUsage: {
+        prompt_tokens: 20,
+        completion_tokens: 4,
+        total_tokens: 24,
+        prompt_tokens_details: {
+          cached_tokens: 12,
+          cache_write_tokens: 6,
+        },
+      },
+    },
+  );
 });
 
 Deno.test("openaiProvider allows forcing Chat Completions for a Responses-capable model", () => {
@@ -307,7 +487,10 @@ Deno.test("openaiProvider extracts Responses text, reasoning, finish reason, and
           input_tokens: 10,
           output_tokens: 7,
           total_tokens: 17,
-          input_tokens_details: { cached_tokens: 3 },
+          input_tokens_details: {
+            cached_tokens: 3,
+            cache_write_tokens: 5,
+          },
           output_tokens_details: { reasoning_tokens: 4 },
         },
       },
@@ -317,12 +500,16 @@ Deno.test("openaiProvider extracts Responses text, reasoning, finish reason, and
       outputTokens: 7,
       reasoningTokens: 4,
       cacheReadInputTokens: 3,
+      cacheCreationInputTokens: 5,
       totalTokens: 17,
       rawUsage: {
         input_tokens: 10,
         output_tokens: 7,
         total_tokens: 17,
-        input_tokens_details: { cached_tokens: 3 },
+        input_tokens_details: {
+          cached_tokens: 3,
+          cache_write_tokens: 5,
+        },
         output_tokens_details: { reasoning_tokens: 4 },
       },
     },

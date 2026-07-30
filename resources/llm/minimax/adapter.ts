@@ -64,7 +64,7 @@ function textOf(parts: ChatContentPart[]): string {
       p.type === "text"
     )
     .map((p) => p.text)
-    .join("\n");
+    .join("");
 }
 
 function transformMessages(

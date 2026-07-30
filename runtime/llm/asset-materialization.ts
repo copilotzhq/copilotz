@@ -434,7 +434,7 @@ export async function materializeAssetRefsForProvider(
     const parts: ChatContentPart[] = [];
     for (const part of message.content) {
       const materialized = await materializePart(part, support, store);
-      parts.push(...materialized.map((candidate): ChatContentPart => {
+      const candidates = materialized.map((candidate): ChatContentPart => {
         if (
           part.type !== "text" &&
           part.tokenMetadata &&
@@ -444,7 +444,17 @@ export async function materializeAssetRefsForProvider(
           return { ...candidate, tokenMetadata: part.tokenMetadata };
         }
         return candidate;
-      }));
+      });
+      if (part.promptCacheBreakpoint?.mode === "explicit") {
+        if (candidates.length > 0) {
+          const lastIndex = candidates.length - 1;
+          candidates[lastIndex] = {
+            ...candidates[lastIndex],
+            promptCacheBreakpoint: part.promptCacheBreakpoint,
+          };
+        }
+      }
+      parts.push(...candidates);
     }
 
     out.push({

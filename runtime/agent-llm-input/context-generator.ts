@@ -7,6 +7,11 @@ import { getPublicThreadMetadata } from "@/runtime/thread-metadata.ts";
 export interface LLMContextData {
   threadContext: string;
   agentContext: string;
+  /** Long-lived prefix eligible for explicit provider prompt caching. */
+  stableSystemPrompt: string;
+  /** Per-request context that must remain after the stable cache boundary. */
+  dynamicSystemPrompt: string;
+  /** Backward-compatible flattened prompt. */
   systemPrompt: string;
 }
 
@@ -240,8 +245,7 @@ export function contextGenerator(
     ].join("\n")
     : "";
 
-  const systemPrompt = [
-    // Keep stable, shared instructions first for provider prompt caching.
+  const stableSystemPrompt = [
     agentsFileSection,
     skillsSection,
     agentContext,
@@ -249,14 +253,19 @@ export function contextGenerator(
     threadContext,
     metadataSection,
     userMetadataSection,
-    dateContext,
   ]
+    .filter(Boolean)
+    .join("\n\n");
+  const dynamicSystemPrompt = dateContext;
+  const systemPrompt = [stableSystemPrompt, dynamicSystemPrompt]
     .filter(Boolean)
     .join("\n\n");
 
   return {
     threadContext,
     agentContext,
+    stableSystemPrompt,
+    dynamicSystemPrompt,
     systemPrompt,
   };
 }

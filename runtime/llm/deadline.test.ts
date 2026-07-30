@@ -48,13 +48,13 @@ const registry: ProviderRegistry = {
   }),
 };
 
-Deno.test("absolute attempt timeout falls back despite continuous reasoning", async () => {
+Deno.test("absolute attempt timeout continues from continuous reasoning", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = () => {
     calls += 1;
     return Promise.resolve(
-      calls === 1 ? reasoningForever() : answerResponse("fallback answer"),
+      calls === 1 ? reasoningForever() : answerResponse("continued answer"),
     );
   };
 
@@ -78,9 +78,81 @@ Deno.test("absolute attempt timeout falls back despite continuous reasoning", as
     );
 
     assertEquals(calls, 2);
-    assertEquals(response.model, "fallback");
-    assertEquals(response.answer, "fallback answer");
-    assertEquals(response.usageAttempts?.[0]?.recoveryAction, "fallback");
+    assertEquals(response.model, "primary");
+    assertEquals(response.answer, "continued answer");
+    assertEquals(response.reasoning?.includes("working"), true);
+    assertEquals(response.usageAttempts?.[0]?.recoveryAction, "retry_same");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("same-model transport fallback preserves continuation", async () => {
+  const originalFetch = globalThis.fetch;
+  const seenMessages: unknown[][] = [];
+  let calls = 0;
+  const continuationRegistry: ProviderRegistry = {
+    anthropic: () => ({
+      endpoint: "https://example.test/llm",
+      headers: () => ({}),
+      body: (messages) => {
+        seenMessages.push(messages);
+        return {};
+      },
+      extractContent: (data: Record<string, unknown>) => {
+        if (typeof data.reasoning === "string") {
+          return [{ text: data.reasoning, isReasoning: true }];
+        }
+        return typeof data.content === "string"
+          ? [{ text: data.content }]
+          : null;
+      },
+      isStreamActivity: () => true,
+      extractFinishReason: (data: Record<string, unknown>) =>
+        data.finishReason === "stop" ? "stop" : null,
+    }),
+  };
+  globalThis.fetch = () => {
+    calls += 1;
+    return Promise.resolve(
+      calls <= 2 ? reasoningForever() : answerResponse("done"),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hello" }] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "connected",
+        estimateCost: false,
+        attemptTimeoutMs: 25,
+        totalTimeoutMs: 250,
+        firstTokenTimeoutMs: 1_000,
+        streamIdleTimeoutMs: 1_000,
+        fallbacks: [{
+          provider: "anthropic",
+          model: "primary",
+          apiKey: "service",
+          baseUrl: "https://alternate.example.test/llm",
+        }],
+      },
+      {},
+      undefined,
+      continuationRegistry,
+    );
+
+    assertEquals(calls, 3);
+    assertEquals(response.answer, "done");
+    assertEquals(
+      response.usageAttempts?.map((attempt) => attempt.recoveryAction),
+      ["retry_same", "fallback", "accept"],
+    );
+    const fallbackPrompt = JSON.stringify(seenMessages[2]);
+    assertEquals(fallbackPrompt.includes("<think>"), true);
+    assertEquals(fallbackPrompt.includes("working"), true);
+    assertEquals(fallbackPrompt.includes("<recovery_cue>"), true);
   } finally {
     globalThis.fetch = originalFetch;
   }

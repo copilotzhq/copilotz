@@ -125,11 +125,11 @@ export interface ProviderConfigBase {
   stream?: boolean;
   /** Abort a provider attempt if no model stream activity arrives before this many milliseconds. Defaults to 90_000. Set <= 0 to disable. */
   firstTokenTimeoutMs?: number;
-  /** Abort a provider attempt if model stream activity stalls for this many milliseconds after the first activity. Defaults to 30_000. Set <= 0 to disable. */
+  /** Abort a provider attempt if model stream activity stalls for this many milliseconds after the first activity. Defaults to 120_000. Set <= 0 to disable. */
   streamIdleTimeoutMs?: number;
-  /** Abort one provider attempt after this absolute duration even while reasoning/activity continues. Defaults to 300_000. Set <= 0 to disable. */
+  /** Abort one provider attempt after this absolute duration even while reasoning/activity continues. Defaults to 1_800_000. Set <= 0 to disable. */
   attemptTimeoutMs?: number;
-  /** Bound the complete logical chat, including retries, fallbacks, and routing correction. Defaults to 600_000. Set <= 0 to disable. */
+  /** Bound the complete logical chat, including retries, fallbacks, and routing correction. Defaults to 3_600_000. Set <= 0 to disable. */
   totalTimeoutMs?: number;
   outputReasoning?: boolean; // Whether to output thinking/reasoning tokens during stream (default true)
   estimateCost?: boolean; // Whether to estimate cost using OpenRouter pricing data (default true)
@@ -316,6 +316,15 @@ export interface ChatRequest {
   reasoningHistory?: {
     include?: "none" | "self" | "all";
     maxEstimatedTokens?: number;
+  };
+  /**
+   * Internal durable checkpoint used only when a logical LLM event is replayed
+   * after losing its in-memory provider attempt.
+   */
+  continuation?: {
+    partialAnswer?: string;
+    partialReasoning?: string;
+    reason?: TokenUsageStatusReason;
   };
   /** Optional external signal for cancelling active provider work. */
   signal?: AbortSignal;

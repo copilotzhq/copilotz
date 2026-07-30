@@ -6,31 +6,38 @@ const baseState = {
   sameProviderRecoveryUsed: false,
   streamContinuationUsed: false,
   hasFallback: true,
+  hasSameModelFallback: false,
 };
 
-Deno.test("hard attempt timeout falls back despite reasoning-only activity", () => {
+Deno.test("attempt timeout continues from reasoning-only activity", () => {
   assertEquals(
     decideRecovery({
       kind: "provider_failure",
       reason: "timeout",
-      hasMeaningfulPartialAnswer: false,
-      hasReasoningOnlyPartial: true,
-      hardTimeout: true,
+      hasPartialOutput: true,
     }, baseState),
-    { action: "fallback", reason: "timeout" },
+    {
+      action: "retry_same",
+      mode: "continuation",
+      silent: false,
+      reason: "timeout",
+    },
   );
 });
 
-Deno.test("hard attempt timeout finalizes already-visible output", () => {
+Deno.test("attempt timeout continues from visible output", () => {
   assertEquals(
     decideRecovery({
       kind: "provider_failure",
       reason: "timeout",
-      hasMeaningfulPartialAnswer: true,
-      hasReasoningOnlyPartial: false,
-      hardTimeout: true,
+      hasPartialOutput: true,
     }, { ...baseState, visibleOutputStarted: true }),
-    { action: "finalize_partial", reason: "timeout" },
+    {
+      action: "retry_same",
+      mode: "continuation",
+      silent: false,
+      reason: "timeout",
+    },
   );
 });
 
@@ -39,9 +46,7 @@ Deno.test("ordinary interrupted visible stream receives one continuation", () =>
     decideRecovery({
       kind: "provider_failure",
       reason: "network",
-      hasMeaningfulPartialAnswer: true,
-      hasReasoningOnlyPartial: false,
-      hardTimeout: false,
+      hasPartialOutput: true,
     }, baseState),
     {
       action: "retry_same",
@@ -49,6 +54,22 @@ Deno.test("ordinary interrupted visible stream receives one continuation", () =>
       silent: false,
       reason: "network",
     },
+  );
+});
+
+Deno.test("exhausted continuation can use an equivalent model fallback", () => {
+  assertEquals(
+    decideRecovery({
+      kind: "provider_failure",
+      reason: "timeout",
+      hasPartialOutput: true,
+    }, {
+      ...baseState,
+      visibleOutputStarted: true,
+      streamContinuationUsed: true,
+      hasSameModelFallback: true,
+    }),
+    { action: "fallback", reason: "timeout" },
   );
 });
 

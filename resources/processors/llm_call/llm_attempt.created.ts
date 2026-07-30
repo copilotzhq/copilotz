@@ -163,6 +163,8 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     let lastPartialPersistPromise: Promise<void> = Promise.resolve();
     let partialPersistRequested = false;
     let partialPersistRunning = false;
+    let persistedContinuation: ChatRequest["continuation"];
+    let persistedProviderAttemptCount = 0;
     const isSuperseded = () => deps.cancellation?.isAborted() === true;
     const cancellationReason = () => deps.cancellation?.reason?.() ?? null;
 
@@ -319,6 +321,49 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       terminalLlmAttemptId = llmAttemptId;
       streamLlmAttemptId = llmAttemptId;
       if (llmAttemptId) {
+        try {
+          const attempt = await deps.db?.ops?.unsafeGraph?.getNodeById(
+            llmAttemptId,
+          );
+          const data = attempt?.data &&
+              typeof attempt.data === "object" &&
+              !Array.isArray(attempt.data)
+            ? attempt.data as Record<string, unknown>
+            : {};
+          const savedAnswer = typeof data.partialAnswer === "string"
+            ? data.partialAnswer
+            : "";
+          const savedReasoning = typeof data.partialReasoning === "string"
+            ? data.partialReasoning
+            : "";
+          const metadata = data.metadata &&
+              typeof data.metadata === "object" &&
+              !Array.isArray(data.metadata)
+            ? data.metadata as Record<string, unknown>
+            : {};
+          persistedProviderAttemptCount =
+            typeof metadata.providerAttemptCount === "number"
+              ? metadata.providerAttemptCount
+              : 0;
+          if (
+            savedAnswer.trim().length > 0 || savedReasoning.trim().length > 0
+          ) {
+            partialAnswer = savedAnswer;
+            partialReasoning = savedReasoning;
+            lastPersistedPartialAnswer = savedAnswer;
+            lastPersistedPartialReasoning = savedReasoning;
+            persistedContinuation = {
+              partialAnswer: savedAnswer,
+              partialReasoning: savedReasoning,
+              reason: "error",
+            };
+          }
+        } catch (error) {
+          console.warn(
+            "[LLM_CALL] Failed to restore persisted continuation:",
+            error,
+          );
+        }
         deps.emitToStream({
           ...event,
           type: "LLM_CALL",
@@ -613,7 +658,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       string,
       "initial" | "routing_correction"
     >();
-    let providerAttemptSequence = 0;
+    let providerAttemptSequence = persistedProviderAttemptCount;
     const persistUsageRecords = async (
       records: LLMUsageAttempt[],
       fallbackFinalized?: ChatResponse["usageFinalized"],
@@ -1181,7 +1226,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       }
     };
     const configuredTotalTimeoutMs = configForCall.totalTimeoutMs === undefined
-      ? 600_000
+      ? 3_600_000
       : Number.isFinite(configForCall.totalTimeoutMs) &&
           configForCall.totalTimeoutMs > 0
       ? configForCall.totalTimeoutMs
@@ -1202,6 +1247,9 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           messages,
           extractTags: ["think"],
           reasoningHistory: context.reasoningHistory,
+          ...(phase === "initial" && persistedContinuation
+            ? { continuation: persistedContinuation }
+            : {}),
           signal: deps.cancellation?.signal,
           ...(logicalDeadlineAt ? { deadlineAt: logicalDeadlineAt } : {}),
           historyCutoffs,

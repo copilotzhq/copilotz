@@ -543,6 +543,71 @@ Deno.test("llm_call coalesces partial answer and reasoning persistence", async (
   }
 });
 
+Deno.test("llm_call restores a persisted continuation after replay", async () => {
+  const originalFetch = globalThis.fetch;
+  const seenMessages: unknown[][] = [];
+  globalThis.fetch = () =>
+    Promise.resolve(sseDeltas([{ content: " completed" }]));
+
+  try {
+    const { event, deps } = await setup();
+    const attemptId = "attempt-replay";
+    await deps.db.ops.unsafeGraph.createNode({
+      id: attemptId,
+      namespace: "routing-test",
+      type: "llm_attempt",
+      name: "Planner:anthropic/routing-test-model",
+      sourceType: "llm_attempt",
+      sourceId: String(event.id),
+      data: {
+        status: "processing",
+        partialAnswer: "Persisted answer",
+        partialReasoning: "Persisted reasoning",
+        metadata: {
+          attemptKind: "logical_run",
+          providerAttemptCount: 1,
+        },
+      },
+    });
+    Object.assign(event, {
+      type: "llm_attempt.created",
+      subjectId: attemptId,
+    });
+    deps.context.stream = true;
+    deps.context.llmProviders = {
+      anthropic: () => ({
+        endpoint: "https://example.test/anthropic",
+        headers: () => ({}),
+        body: (messages) => {
+          seenMessages.push(messages);
+          return {};
+        },
+        extractContent: (data: unknown) => {
+          const delta = (data as {
+            choices?: Array<{ delta?: { content?: unknown } }>;
+          })?.choices?.[0]?.delta;
+          return typeof delta?.content === "string"
+            ? [{ text: delta.content }]
+            : null;
+        },
+        extractFinishReason: (data: unknown) =>
+          (data as {
+            choices?: Array<{ finish_reason?: "stop" | null }>;
+          })?.choices?.[0]?.finish_reason ?? null,
+      }),
+    };
+
+    await process(event, deps);
+
+    const prompt = JSON.stringify(seenMessages[0]);
+    assertEquals(prompt.includes("Persisted answer"), true);
+    assertEquals(prompt.includes("Persisted reasoning"), true);
+    assertEquals(prompt.includes("<recovery_cue>"), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("llm_call emits a typed failure after one invalid correction", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;

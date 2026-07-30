@@ -230,6 +230,14 @@ function sharesProviderFailureScope(
       (candidate.runtimeDiagnostics?.credentialSource ?? null);
 }
 
+function sharesProviderModel(
+  current: ProviderConfig,
+  candidate: ProviderConfig,
+): boolean {
+  return current.provider === candidate.provider &&
+    current.model === candidate.model;
+}
+
 function logProviderAttempt(
   phase: "started" | "completed" | "failed",
   config: ProviderConfig,
@@ -384,24 +392,40 @@ export async function chat(
   ];
   const attempts: LLMProviderAttempt[] = [];
   const usageAttempts: LLMUsageAttempt[] = [];
+  const initialContinuationAnswer = sanitizeUserFacingText(
+    request.continuation?.partialAnswer ?? "",
+  );
+  const initialContinuationReasoning =
+    request.continuation?.partialReasoning?.trim() ?? "";
+  const hasInitialContinuation = initialContinuationAnswer.trim().length > 0 ||
+    initialContinuationReasoning.length > 0;
   const state = {
     providerIndex: 0,
     attemptSequence: 0,
-    recoveryContext: "",
-    recoveryReasoning: "",
-    lastRecoveryReason: null as string | null,
+    recoveryContext: hasInitialContinuation
+      ? buildRecoveryAssistantContext(
+        "",
+        initialContinuationAnswer,
+        initialContinuationReasoning,
+        request.reasoningHistory,
+      )
+      : "",
+    recoveryReasoning: initialContinuationReasoning,
+    lastRecoveryReason: hasInitialContinuation
+      ? request.continuation?.reason ?? "error"
+      : null as string | null,
     sameProviderRecoveryUsed: false,
-    streamContinuationUsed: false,
-    visibleOutputStarted: false,
+    streamContinuationUsed: hasInitialContinuation,
+    visibleOutputStarted: initialContinuationAnswer.trim().length > 0,
     silentNextAttempt: false,
-    forceRecoveryCue: false,
+    forceRecoveryCue: hasInitialContinuation,
   };
   let lastError: unknown = null;
   let lastUsageRecord: LLMUsageAttempt | undefined;
   let lastPrompt: ChatMessage[] = request.messages;
   let lastAttemptConfig = attemptConfigs[0];
 
-  const DEFAULT_TOTAL_TIMEOUT_MS = 600_000;
+  const DEFAULT_TOTAL_TIMEOUT_MS = 3_600_000;
   const configuredTotalTimeoutMs = baseConfig.totalTimeoutMs === undefined
     ? DEFAULT_TOTAL_TIMEOUT_MS
     : Number.isFinite(baseConfig.totalTimeoutMs) &&
@@ -619,6 +643,7 @@ export async function chat(
           sameProviderRecoveryUsed: state.sameProviderRecoveryUsed,
           streamContinuationUsed: state.streamContinuationUsed,
           hasFallback: state.providerIndex < attemptConfigs.length - 1,
+          hasSameModelFallback: false,
         });
         const statusReason = decision.action === "accept"
           ? undefined
@@ -849,17 +874,20 @@ export async function chat(
         totalTimedOut ? { kind: "total_timeout" } : {
           kind: "provider_failure",
           reason: classifyLLMError(error),
-          hasMeaningfulPartialAnswer: capture.visibleOutput.trim().length > 0,
-          hasReasoningOnlyPartial: capture.visibleOutput.trim().length === 0 &&
+          hasPartialOutput: capture.visibleOutput.trim().length > 0 ||
             capture.reasoningOutput.trim().length > 0,
-          hardTimeout: error instanceof LLMStreamTimeoutError &&
-            error.kind === "attempt",
         },
         {
           visibleOutputStarted: state.visibleOutputStarted,
           sameProviderRecoveryUsed: state.sameProviderRecoveryUsed,
           streamContinuationUsed: state.streamContinuationUsed,
           hasFallback: !totalTimedOut && nextIndex < attemptConfigs.length,
+          hasSameModelFallback: !totalTimedOut &&
+            nextIndex < attemptConfigs.length &&
+            sharesProviderModel(
+              attemptConfig,
+              attemptConfigs[nextIndex],
+            ),
         },
       );
       const finishedAt = new Date().toISOString();
@@ -905,7 +933,7 @@ export async function chat(
         ...(providerErrorDetails ? { details: providerErrorDetails } : {}),
       });
 
-      if (decision.action === "retry_same") {
+      const continueFromCapture = () => {
         state.recoveryReasoning = mergeReasoningParts(
           state.recoveryReasoning,
           capture.reasoningOutput,
@@ -918,6 +946,10 @@ export async function chat(
         );
         state.streamContinuationUsed = true;
         state.forceRecoveryCue = true;
+      };
+
+      if (decision.action === "retry_same") {
+        continueFromCapture();
         warnRecoveryAttempt(
           state.lastRecoveryReason,
           attemptConfig,
@@ -928,16 +960,21 @@ export async function chat(
       }
 
       if (decision.action === "fallback") {
+        const nextConfig = attemptConfigs[nextIndex];
         warnRecoveryAttempt(
           state.lastRecoveryReason,
           attemptConfig,
-          attemptConfigs[nextIndex],
+          nextConfig,
           getErrorMessage(error),
         );
         state.providerIndex = nextIndex;
         state.sameProviderRecoveryUsed = false;
-        state.recoveryContext = prefixBeforeAttempt;
-        state.recoveryReasoning = "";
+        if (sharesProviderModel(attemptConfig, nextConfig)) {
+          continueFromCapture();
+        } else {
+          state.recoveryContext = prefixBeforeAttempt;
+          state.recoveryReasoning = "";
+        }
         continue;
       }
 

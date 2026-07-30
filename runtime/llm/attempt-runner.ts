@@ -90,31 +90,35 @@ export async function runProviderAttempt(args: {
     }
     args.stream(chunk, { isReasoning: false });
   };
-  const trackedStream = args.stream && !args.silent
-    ? ((chunk: string, options?: { isReasoning?: boolean }) => {
-      if (chunk.length > 0 && options?.isReasoning) {
-        reasoningOutput += chunk;
-      }
-      if (chunk.length > 0 && !options?.isReasoning) {
-        visibleOutput += chunk;
-        if (leadingVisibleProtocol === "pass") {
-          emitVisible(chunk);
-          return;
-        }
-        leadingVisibleBuffer += chunk;
-        leadingVisibleProtocol = classifyLeadingVisibleProtocol(
-          leadingVisibleBuffer,
-        );
-        if (leadingVisibleProtocol === "pass") {
-          const buffered = leadingVisibleBuffer;
-          leadingVisibleBuffer = "";
-          emitVisible(buffered);
-        }
+  const trackedStream = (
+    chunk: string,
+    options?: { isReasoning?: boolean },
+  ) => {
+    if (chunk.length > 0 && options?.isReasoning) {
+      reasoningOutput += chunk;
+      if (!args.silent) args.stream?.(chunk, options);
+      return;
+    }
+    if (chunk.length > 0 && !options?.isReasoning) {
+      visibleOutput += chunk;
+      if (args.silent) return;
+      if (leadingVisibleProtocol === "pass") {
+        emitVisible(chunk);
         return;
       }
-      args.stream?.(chunk, options);
-    })
-    : undefined;
+      leadingVisibleBuffer += chunk;
+      leadingVisibleProtocol = classifyLeadingVisibleProtocol(
+        leadingVisibleBuffer,
+      );
+      if (leadingVisibleProtocol === "pass") {
+        const buffered = leadingVisibleBuffer;
+        leadingVisibleBuffer = "";
+        emitVisible(buffered);
+      }
+      return;
+    }
+    if (!args.silent) args.stream?.(chunk, options);
+  };
 
   try {
     const streamResult = await runProviderStream(

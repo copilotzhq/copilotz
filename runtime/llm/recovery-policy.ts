@@ -10,6 +10,7 @@ export interface RecoveryPolicyState {
   sameProviderRecoveryUsed: boolean;
   streamContinuationUsed: boolean;
   hasFallback: boolean;
+  hasSameModelFallback: boolean;
 }
 
 export type AttemptAssessment =
@@ -25,9 +26,7 @@ export type AttemptAssessment =
   | {
     kind: "provider_failure";
     reason: ProviderFallbackReason | null;
-    hasMeaningfulPartialAnswer: boolean;
-    hasReasoningOnlyPartial: boolean;
-    hardTimeout: boolean;
+    hasPartialOutput: boolean;
   }
   | { kind: "total_timeout" };
 
@@ -118,12 +117,8 @@ export function decideRecovery(
     case "provider_failure": {
       const reason = assessment.reason ?? "unknown";
 
-      // A hard attempt deadline means the provider already consumed its full
-      // budget. Reasoning-only activity is not useful continuation context.
       if (
-        !assessment.hardTimeout &&
-        assessment.hasMeaningfulPartialAnswer &&
-        !assessment.hasReasoningOnlyPartial &&
+        assessment.hasPartialOutput &&
         !state.streamContinuationUsed
       ) {
         return {
@@ -132,6 +127,9 @@ export function decideRecovery(
           silent: false,
           reason,
         };
+      }
+      if (state.hasSameModelFallback) {
+        return { action: "fallback", reason };
       }
       if (state.visibleOutputStarted) {
         return { action: "finalize_partial", reason };

@@ -81,10 +81,22 @@ export async function prepareAttemptTranscript(args: {
       args.config,
     )
     : cutoffApplied.messages;
+  const config = toLLMConfig(args.config);
+  const recoveryMessages = args.recoveryMessages ?? [];
+  const recoveryEstimatedTokens = recoveryMessages.length > 0
+    ? estimateChatMessages(recoveryMessages, args.config).estimatedTokens
+    : 0;
+  const baseInputLimit = typeof config.limitEstimatedInputTokens === "number" &&
+      config.limitEstimatedInputTokens > 0
+    ? Math.max(1, config.limitEstimatedInputTokens - recoveryEstimatedTokens)
+    : config.limitEstimatedInputTokens;
   const formatted = formatMessagesDetailed({
     ...args.request,
     messages: materialized,
-    config: toLLMConfig(args.config),
+    config: {
+      ...config,
+      limitEstimatedInputTokens: baseInputLimit,
+    },
   });
   if (
     formatted.cutoffSourceMessageId &&
@@ -98,7 +110,7 @@ export async function prepareAttemptTranscript(args: {
 
   const messages = [
     ...formatted.messages,
-    ...(args.recoveryMessages ?? []),
+    ...recoveryMessages,
   ];
   const promptPrefixMessageCount = Math.min(
     Math.max(

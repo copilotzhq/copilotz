@@ -15,8 +15,8 @@ import {
 import { streamPost, type StreamResponse } from "@/runtime/http.ts";
 
 const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 90_000;
-const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 30_000;
-const DEFAULT_ATTEMPT_TIMEOUT_MS = 300_000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
+const DEFAULT_ATTEMPT_TIMEOUT_MS = 1_800_000;
 
 export interface StreamResult {
   content: string;

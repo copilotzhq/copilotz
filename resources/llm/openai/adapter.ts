@@ -478,7 +478,12 @@ function buildChatCompletionsBody(
   config: ProviderConfig,
 ): Record<string, unknown> {
   const modelName = config.model || "gpt-4o-mini";
-  const promptCacheOptions = explicitPromptCacheOptions(config);
+  const chatGPTCodex = isChatGPTCodexTransport(config);
+  // The private ChatGPT Codex backend accepts cache routing keys but rejects
+  // the public API's explicit cache controls.
+  const promptCacheOptions = chatGPTCodex
+    ? null
+    : explicitPromptCacheOptions(config);
   const bodyConfig: Record<string, unknown> = {
     model: modelName,
     messages: toChatCompletionsMessages(
@@ -512,7 +517,7 @@ function buildChatCompletionsBody(
   }
   if (promptCacheOptions) {
     bodyConfig.prompt_cache_options = promptCacheOptions;
-  } else if (config.openaiPromptCacheRetention) {
+  } else if (!chatGPTCodex && config.openaiPromptCacheRetention) {
     bodyConfig.prompt_cache_retention = config.openaiPromptCacheRetention;
   }
 
@@ -525,7 +530,9 @@ function buildResponsesBody(
 ): Record<string, unknown> {
   const modelName = config.model || "gpt-4o-mini";
   const chatGPTCodex = isChatGPTCodexTransport(config);
-  const promptCacheOptions = explicitPromptCacheOptions(config);
+  const promptCacheOptions = chatGPTCodex
+    ? null
+    : explicitPromptCacheOptions(config);
   const bodyConfig: Record<string, unknown> = {
     model: modelName,
     input: toResponsesInput(messages, promptCacheOptions !== null),
@@ -550,7 +557,7 @@ function buildResponsesBody(
   }
   if (promptCacheOptions) {
     bodyConfig.prompt_cache_options = promptCacheOptions;
-  } else if (config.openaiPromptCacheRetention) {
+  } else if (!chatGPTCodex && config.openaiPromptCacheRetention) {
     bodyConfig.prompt_cache_retention = config.openaiPromptCacheRetention;
   }
 

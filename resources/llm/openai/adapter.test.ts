@@ -198,25 +198,44 @@ Deno.test("openaiProvider suppresses explicit fields when prompt caching is disa
   });
 });
 
-Deno.test("openaiProvider omits unsupported fields for ChatGPT Codex OAuth transport", () => {
+Deno.test("openaiProvider keeps the cache key but omits explicit caching for ChatGPT Codex OAuth", () => {
   const config: ProviderConfig = {
     provider: "openai",
-    model: "gpt-5.4",
+    model: "gpt-5.6-terra",
     apiKey: "oauth-token",
     baseUrl: "https://chatgpt.com/backend-api/codex",
     extraHeaders: { "ChatGPT-Account-ID": "account-1" },
     openaiApi: "responses",
     temperature: 0.7,
     maxCompletionTokens: 456,
+    openaiPromptCacheKey: "compass:thread-1:east",
+    openaiPromptCacheRetention: "24h",
+    promptCache: { enabled: true, mode: "explicit" },
   };
   const provider = openaiProvider(config);
-  const body = provider.body(messages, config) as Record<string, any>;
+  const body = provider.body([
+    {
+      role: "user",
+      content: [{
+        type: "text",
+        text: "Stable request",
+        promptCacheBreakpoint: { mode: "explicit" },
+      }],
+    },
+  ], config) as Record<string, any>;
 
   assertEquals(
     provider.endpoint,
     "https://chatgpt.com/backend-api/codex/responses",
   );
   assertEquals(provider.headers(config)["ChatGPT-Account-ID"], "account-1");
+  assertEquals(body.prompt_cache_key, "compass:thread-1:east");
+  assertEquals("prompt_cache_options" in body, false);
+  assertEquals("prompt_cache_retention" in body, false);
+  assertEquals(body.input[0].content[0], {
+    type: "input_text",
+    text: "Stable request",
+  });
   assertEquals("temperature" in body, false);
   assertEquals("truncation" in body, false);
   assertEquals("max_output_tokens" in body, false);

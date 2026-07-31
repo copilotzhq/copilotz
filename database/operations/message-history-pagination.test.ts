@@ -1,6 +1,7 @@
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assertEquals } from "@std/assert";
 
 import { createDatabase } from "../index.ts";
+import { createOperations } from "./index.ts";
 
 async function createThreadWithMessages() {
   const db = await createDatabase({ url: ":memory:" });
@@ -150,6 +151,20 @@ Deno.test({
   fn: async () => {
     const { db, threadId } = await createThreadWithMessages();
     const history = await db.ops.getMessageHistoryFromGraph(threadId);
+    const timestamps = [
+      "2026-07-31T18:28:45.297001Z",
+      "2026-07-31T18:28:45.297017Z",
+      "2026-07-31T18:28:45.297031Z",
+      "2026-07-31T18:28:45.297049Z",
+    ];
+    for (let index = 0; index < history.length; index += 1) {
+      await db.query(
+        `UPDATE "nodes"
+         SET "created_at" = $1::timestamptz
+         WHERE "id" = $2`,
+        [timestamps[index], history[index].id],
+      );
+    }
 
     const after = await db.ops.getMessageHistoryWindowFromGraph(
       [threadId],
@@ -177,4 +192,101 @@ Deno.test({
       null,
     );
   },
+});
+
+Deno.test("message history cursor query keeps timestamps inside the database", async () => {
+  type QueryCall = { sql: string; params?: unknown[] };
+  const queryCalls: QueryCall[] = [];
+  let omitEndBoundary = false;
+  const fakeDb = {
+    crud: {},
+    query: <T extends Record<string, unknown>>(
+      sql: string,
+      params?: unknown[],
+    ): Promise<{ rows: T[] }> => {
+      queryCalls.push({ sql, params });
+      if (sql.includes("COALESCE")) {
+        return Promise.resolve({
+          rows: [{ id: `node-${String(params?.[0])}` }] as unknown as T[],
+        });
+      }
+      if (sql.includes('FROM "nodes" AS "message"')) {
+        const rows = [{
+          id: "node-start",
+          namespace: "tenant-test",
+          type: "message",
+          name: "start",
+          content: "start",
+          data: {
+            messageId: "start",
+            threadId: "thread",
+            senderId: "user",
+            senderType: "user",
+          },
+          sourceType: "thread",
+          sourceId: "thread",
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
+        }, {
+          id: "node-end",
+          namespace: "tenant-test",
+          type: "message",
+          name: "end",
+          content: "end",
+          data: {
+            messageId: "end",
+            threadId: "thread",
+            senderId: "agent",
+            senderType: "agent",
+          },
+          sourceType: "thread",
+          sourceId: "thread",
+          createdAt: new Date(1),
+          updatedAt: new Date(1),
+        }];
+        return Promise.resolve({
+          rows: (omitEndBoundary ? rows.slice(0, 1) : rows) as unknown as T[],
+        });
+      }
+      return Promise.resolve({ rows: [] });
+    },
+  };
+  const ops = createOperations(fakeDb as never);
+
+  const range = await ops.getMessageHistoryWindowFromGraph(
+    ["thread"],
+    { start: "start", end: "end" },
+  );
+  assertEquals(range?.map((message) => message.id), ["start", "end"]);
+  const cursorLookups = queryCalls.filter((call) =>
+    call.sql.includes("COALESCE")
+  );
+  assertEquals(cursorLookups.length, 2);
+  assertEquals(
+    cursorLookups.every((call) => !call.sql.includes('"created_at"')),
+    true,
+  );
+  assertEquals(
+    queryCalls.flatMap((call) => call.params ?? []).some((param) =>
+      param instanceof Date
+    ),
+    false,
+  );
+  assertEquals(
+    queryCalls.some((call) =>
+      call.sql.includes('FROM "nodes" AS "cursor"') &&
+      call.sql.includes('"message"."created_at"') &&
+      call.sql.includes('"cursor"."created_at"')
+    ),
+    true,
+  );
+
+  omitEndBoundary = true;
+  assertEquals(
+    await ops.getMessageHistoryWindowFromGraph(
+      ["thread"],
+      { start: "start", end: "end" },
+    ),
+    null,
+  );
 });

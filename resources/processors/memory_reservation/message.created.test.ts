@@ -164,6 +164,189 @@ Deno.test("long-term-memory trigger reserves one pending checkpoint and outbox e
   }]);
 });
 
+Deno.test("long-term-memory trigger advances from an existing ready checkpoint", async () => {
+  const db = await createDatabase({ url: ":memory:" });
+  const suffix = crypto.randomUUID();
+  const namespace = `long-term-trigger-rollover-${suffix}`;
+  const thread = await db.ops.mutate.threads.create(undefined, {
+    namespace,
+    name: "Long-term rollover",
+    participants: ["user", "agent"],
+    status: "active",
+    mode: "immediate",
+  });
+  const threadId = String(thread.id);
+  const boundary = await db.ops.mutate.messages.create({
+    id: `boundary-${suffix}`,
+    threadId,
+    senderId: "agent",
+    senderType: "agent",
+    content: "Previous checkpoint boundary",
+  }, namespace);
+  const memorySpace = await db.ops.mutate.graph.createNode({
+    namespace,
+    type: "memory_space",
+    name: `thread:${threadId}`,
+    data: { scopeType: "thread", scopeId: threadId },
+    sourceType: "thread",
+    sourceId: threadId,
+  }, { threadId, namespace });
+  await db.ops.mutate.graph.createEdge({
+    sourceNodeId: threadId,
+    targetNodeId: String(memorySpace.id),
+    type: GRAPH_EDGE.USES_MEMORY_SPACE,
+    data: { access: "read_write", defaultWrite: true },
+  }, { threadId, namespace });
+  await db.ops.mutate.graph.createNode({
+    namespace,
+    type: "long_term_memory",
+    name: `thread:${threadId}:agent:agent:memory:1`,
+    content: "Previous consolidated memory",
+    data: {
+      schemaVersion: "2",
+      strategy: "checkpointed_graph",
+      status: "ready",
+      threadId,
+      readMemorySpaceIds: [String(memorySpace.id)],
+      writeMemorySpaceIds: [String(memorySpace.id)],
+      defaultWriteMemorySpaceId: String(memorySpace.id),
+      sequence: 1,
+      agentId: "agent",
+      sourceStartMessageId: boundary.id,
+      sourceEndMessageId: boundary.id,
+    },
+    sourceType: "thread",
+    sourceId: threadId,
+  }, { threadId, namespace });
+  const nextUserMessage = await db.ops.mutate.messages.create({
+    id: `user-after-boundary-${suffix}`,
+    threadId,
+    senderId: "user",
+    senderType: "user",
+    content: "A".repeat(50),
+  }, namespace);
+  const triggerMessage = await db.ops.mutate.messages.create({
+    id: `agent-after-boundary-${suffix}`,
+    threadId,
+    senderId: "agent",
+    senderType: "agent",
+    content: "B".repeat(50),
+  }, namespace);
+  const event = {
+    id: `event-${suffix}`,
+    type: "message.created",
+    threadId,
+    subjectType: "message",
+    subjectId: triggerMessage.id,
+    payload: {
+      content: triggerMessage.content,
+      senderId: "agent",
+      senderType: "agent",
+    },
+  } as unknown as Event;
+  const deps = {
+    db,
+    thread,
+    context: {
+      namespace,
+      memory: [{
+        name: "long_term",
+        kind: "long_term",
+        enabled: true,
+        config: {
+          triggerEstimatedTokens: 1,
+          maxContentEstimatedTokens: 2_500,
+          retrievalLimit: 5,
+        },
+      }],
+      embeddingConfig: { provider: "openai", model: "mock" },
+    },
+    emitToStream: () => {},
+  } as ProcessorDeps;
+
+  const result = await process(event, deps);
+  assertEquals(result?.backgroundThreadIds?.length, 1);
+  const checkpoints = await db.ops.unsafeGraph.getNodesByNamespace(
+    namespace,
+    "long_term_memory",
+  );
+  const checkpointData = checkpoints.map((checkpoint) =>
+    checkpoint.data as Record<string, unknown>
+  );
+  const pending = checkpointData.find((data) => data.status === "pending");
+  assertExists(pending);
+  assertEquals(pending.sequence, 2);
+  assertEquals(pending.sourceStartMessageId, nextUserMessage.id);
+  assertEquals(pending.sourceEndMessageId, triggerMessage.id);
+
+  const pendingNode = checkpoints.find((checkpoint) =>
+    (checkpoint.data as Record<string, unknown>).status === "pending"
+  );
+  assertExists(pendingNode);
+  await db.ops.unsafeGraph.updateNode(String(pendingNode.id), {
+    content: "Second consolidated memory",
+    data: { ...pending, status: "ready" },
+  });
+  await db.ops.mutate.messages.create({
+    id: `user-after-second-boundary-${suffix}`,
+    threadId,
+    senderId: "user",
+    senderType: "user",
+    content: "C".repeat(50),
+  }, namespace);
+  const nextTriggerMessage = await db.ops.mutate.messages.create({
+    id: `agent-after-second-boundary-${suffix}`,
+    threadId,
+    senderId: "agent",
+    senderType: "agent",
+    content: "D".repeat(50),
+  }, namespace);
+  const nextEvent = {
+    ...event,
+    id: `fallback-event-${suffix}`,
+    subjectId: nextTriggerMessage.id,
+    payload: {
+      content: nextTriggerMessage.content,
+      senderId: "agent",
+      senderType: "agent",
+    },
+  } as unknown as Event;
+  const originalGetHistoryWindow = db.ops.getMessageHistoryWindowFromGraph.bind(
+    db.ops,
+  );
+  const originalWarn = console.warn;
+  const warnings: string[] = [];
+  db.ops.getMessageHistoryWindowFromGraph = () => Promise.resolve([]);
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map(String).join(" "));
+  };
+  let fallbackResult: Awaited<ReturnType<typeof process>> = undefined;
+  try {
+    fallbackResult = await process(nextEvent, deps);
+  } finally {
+    db.ops.getMessageHistoryWindowFromGraph = originalGetHistoryWindow;
+    console.warn = originalWarn;
+  }
+  assertEquals(fallbackResult?.backgroundThreadIds?.length, 1);
+  assertEquals(
+    warnings.some((warning) =>
+      warning.includes("memory_reservation.history_window_fallback") &&
+      warning.includes("missing_trigger")
+    ),
+    true,
+  );
+  const advancedCheckpoints = await db.ops.unsafeGraph.getNodesByNamespace(
+    namespace,
+    "long_term_memory",
+  );
+  const nextPending = advancedCheckpoints
+    .map((checkpoint) => checkpoint.data as Record<string, unknown>)
+    .find((data) => data.status === "pending");
+  assertExists(nextPending);
+  assertEquals(nextPending.sequence, 3);
+  assertEquals(nextPending.sourceEndMessageId, nextTriggerMessage.id);
+});
+
 Deno.test("long-term-memory trigger keeps agent checkpoints independent in one thread space", async () => {
   const db = await createDatabase({ url: ":memory:" });
   const suffix = crypto.randomUUID();

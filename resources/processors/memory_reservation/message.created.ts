@@ -1,5 +1,10 @@
 import { ulid } from "ulid";
-import type { Event, EventProcessor, ProcessorDeps } from "@/types/index.ts";
+import type {
+  Event,
+  EventProcessor,
+  Message,
+  ProcessorDeps,
+} from "@/types/index.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 import { createMessageService } from "@/runtime/collections/native.ts";
@@ -40,6 +45,29 @@ function isInternalRecoveryMessage(event: Event): boolean {
     : {};
   return metadata.visibility === "internal" &&
     isRecord(metadata.recovery);
+}
+
+type HistoryBoundaryIssue =
+  | "window_unavailable"
+  | "missing_trigger"
+  | "missing_previous_boundary";
+
+function getHistoryBoundaryIssue(
+  history: Message[] | null,
+  triggerMessageId: string,
+  previousBoundaryMessageId: string | null,
+): HistoryBoundaryIssue | null {
+  if (history === null) return "window_unavailable";
+  if (!history.some((message) => message.id === triggerMessageId)) {
+    return "missing_trigger";
+  }
+  if (
+    previousBoundaryMessageId &&
+    !history.some((message) => message.id === previousBoundaryMessageId)
+  ) {
+    return "missing_previous_boundary";
+  }
+  return null;
 }
 
 async function getTriggerMessageId(
@@ -116,8 +144,42 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
           end: triggerMessageId,
         },
       );
-      const history = boundedHistory ??
-        await messageService.getHistory(threadId, agentId);
+      const previousBoundaryMessageId = previous?.data.sourceEndMessageId ??
+        null;
+      const boundedHistoryIssue = getHistoryBoundaryIssue(
+        boundedHistory,
+        triggerMessageId,
+        previousBoundaryMessageId,
+      );
+      if (boundedHistoryIssue) {
+        console.warn(JSON.stringify({
+          event: "memory_reservation.history_window_fallback",
+          reason: boundedHistoryIssue,
+          threadId,
+          agentId,
+          triggerMessageId,
+          previousBoundaryMessageId,
+        }));
+      }
+      const history = boundedHistory === null || boundedHistoryIssue !== null
+        ? await messageService.getHistory(threadId, agentId)
+        : boundedHistory;
+      const fullHistoryIssue = getHistoryBoundaryIssue(
+        history,
+        triggerMessageId,
+        previousBoundaryMessageId,
+      );
+      if (fullHistoryIssue) {
+        console.warn(JSON.stringify({
+          event: "memory_reservation.history_incomplete",
+          reason: fullHistoryIssue,
+          threadId,
+          agentId,
+          triggerMessageId,
+          previousBoundaryMessageId,
+        }));
+        return;
+      }
       const range = await selectLongTermMemoryRange({
         messages: history,
         triggerMessageId,

@@ -2349,7 +2349,6 @@ export function createOperations(
 
     type MessageCursor = {
       id: string;
-      created_at: Date | string;
     };
     const resolveCursor = async (
       messageId: string | null | undefined,
@@ -2359,7 +2358,7 @@ export function createOperations(
         `$${index + 2}`
       ).join(", ");
       const result = await db.query<MessageCursor>(
-        `SELECT "id", "created_at"
+        `SELECT "id"
          FROM "nodes"
          WHERE "type" = 'message'
            AND "source_type" = 'thread'
@@ -2389,30 +2388,35 @@ export function createOperations(
       `$${index + 1}`
     ).join(", ");
     const predicates = [
-      `"source_type" = 'thread'`,
-      `"source_id" IN (${threadPlaceholders})`,
-      `"type" = 'message'`,
+      `"message"."source_type" = 'thread'`,
+      `"message"."source_id" IN (${threadPlaceholders})`,
+      `"message"."type" = 'message'`,
     ];
     const addCursorPredicate = (
       cursor: MessageCursor,
       operator: ">" | ">=" | "<=",
     ) => {
-      params.push(cursor.created_at, cursor.id);
-      const dateParam = `$${params.length - 1}`;
+      params.push(cursor.id);
       const idParam = `$${params.length}`;
+      let comparison: string;
       if (operator === ">") {
-        predicates.push(
-          `("created_at" > ${dateParam} OR ("created_at" = ${dateParam} AND "id" > ${idParam}))`,
-        );
+        comparison =
+          `("message"."created_at" > "cursor"."created_at" OR ("message"."created_at" = "cursor"."created_at" AND "message"."id" > "cursor"."id"))`;
       } else if (operator === ">=") {
-        predicates.push(
-          `("created_at" > ${dateParam} OR ("created_at" = ${dateParam} AND "id" >= ${idParam}))`,
-        );
+        comparison =
+          `("message"."created_at" > "cursor"."created_at" OR ("message"."created_at" = "cursor"."created_at" AND "message"."id" >= "cursor"."id"))`;
       } else {
-        predicates.push(
-          `("created_at" < ${dateParam} OR ("created_at" = ${dateParam} AND "id" <= ${idParam}))`,
-        );
+        comparison =
+          `("message"."created_at" < "cursor"."created_at" OR ("message"."created_at" = "cursor"."created_at" AND "message"."id" <= "cursor"."id"))`;
       }
+      predicates.push(
+        `EXISTS (
+           SELECT 1
+           FROM "nodes" AS "cursor"
+           WHERE "cursor"."id" = ${idParam}
+             AND ${comparison}
+         )`,
+      );
     };
 
     if (after) addCursorPredicate(after, ">");
@@ -2420,12 +2424,21 @@ export function createOperations(
     if (end) addCursorPredicate(end, "<=");
 
     const result = await db.query<KnowledgeNode>(
-      `SELECT *
-       FROM "nodes"
+      `SELECT "message".*
+       FROM "nodes" AS "message"
        WHERE ${predicates.join("\n         AND ")}
-       ORDER BY "created_at" ASC, "id" ASC`,
+       ORDER BY "message"."created_at" ASC, "message"."id" ASC`,
       params,
     );
+    const containsCursor = (cursor: MessageCursor) =>
+      result.rows.some((row) => String(row.id) === cursor.id);
+    if (
+      (after && containsCursor(after)) ||
+      (start && !containsCursor(start)) ||
+      (end && !containsCursor(end))
+    ) {
+      return null;
+    }
     return result.rows.map(nodeToMessage);
   };
 

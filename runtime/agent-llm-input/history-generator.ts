@@ -856,11 +856,12 @@ export function historyGenerator(
         : {}),
     };
 
+    const projectedContent = hideToolResultContent ? "" : finalContent;
+
     return [{
-      content: appendMessageTimestamp(
-        hideToolResultContent ? "" : finalContent,
-        msg.createdAt,
-      ),
+      content: msg.senderType === "user"
+        ? appendMessageTimestamp(projectedContent, msg.createdAt)
+        : projectedContent,
       role: role,
       senderId: msg.senderId || undefined,
       ...(Object.keys(wireMetadata).length > 0

@@ -1,4 +1,4 @@
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals } from "@std/assert";
 
 import { createDatabase } from "@/database/index.ts";
 import type { ChatMessage } from "@/runtime/llm/types.ts";
@@ -100,9 +100,9 @@ Deno.test("internal recovery cue follows the normal router into one continuation
     assertEquals(fragmentIndex >= 0, true);
     assertEquals(cueIndex > fragmentIndex, true);
     assertEquals(messages[cueIndex].role, "user");
-    assertStringIncludes(
-      String(messages[cueIndex].content),
-      "<message_timestamp>",
+    assertEquals(
+      String(messages[cueIndex].content).includes("<message_timestamp>"),
+      false,
     );
   } finally {
     await db.close();

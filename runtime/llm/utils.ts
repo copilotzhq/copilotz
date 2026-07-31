@@ -73,6 +73,7 @@ const STREAMING_HIDDEN_PROTOCOL_TAGS = [
   "recovery_required_action",
   "recovery_tool_call_rules",
   "recovery_problem",
+  "message_timestamp",
 ] as const;
 
 /**
@@ -200,7 +201,7 @@ function normalizeStructuredTagNames(tagNames: string[]): string[] {
 function findStructuredStartTag(
   input: string,
   tagName: string,
-): { index: number; length: number } | null {
+): { index: number; length: number; selfClosing: boolean } | null {
   const lowerInput = input.toLowerCase();
   const lowerTag = tagName.toLowerCase();
   const needle = `<${lowerTag}`;
@@ -218,6 +219,8 @@ function findStructuredStartTag(
       return {
         index,
         length: closeIdx === -1 ? needle.length : closeIdx - index + 1,
+        selfClosing: closeIdx !== -1 &&
+          /\/\s*>$/.test(input.slice(index, closeIdx + 1)),
       };
     }
     index = lowerInput.indexOf(needle, index + 1);
@@ -2060,7 +2063,12 @@ export function filterTaggedControlTokensStreaming(
   while (s.length > 0) {
     if (!state.activeTag) {
       let nextMatch:
-        | { index: number; tagName: string; tagLength: number }
+        | {
+          index: number;
+          tagName: string;
+          tagLength: number;
+          selfClosing: boolean;
+        }
         | null = null;
 
       for (const tag of structuredTags) {
@@ -2072,6 +2080,7 @@ export function filterTaggedControlTokensStreaming(
             index,
             tagName: tag.name,
             tagLength: match?.length ?? 0,
+            selfClosing: match?.selfClosing ?? false,
           };
         }
       }
@@ -2094,8 +2103,12 @@ export function filterTaggedControlTokensStreaming(
       } else {
         output += s.slice(0, nextMatch.index);
         s = s.slice(nextMatch.index + nextMatch.tagLength);
-        state.activeTag = nextMatch.tagName;
         onHiddenBlockChunk?.(nextMatch.tagName, "", "start");
+        if (nextMatch.selfClosing) {
+          onHiddenBlockChunk?.(nextMatch.tagName, "", "end");
+        } else {
+          state.activeTag = nextMatch.tagName;
+        }
       }
     } else {
       const activeTag = structuredTags.find((tag) =>
@@ -2649,6 +2662,11 @@ export function stripStructuralLeakTokens(text: string): string {
  */
 export function sanitizeUserFacingText(text: string): string {
   let out = text
+    .replace(/<message_timestamp\b[^>]*\/\s*>/gi, "")
+    .replace(
+      /<message_timestamp\b[^>]*>[\s\S]*?(?:<\/message_timestamp>|$)/gi,
+      "",
+    )
     .replace(/<minimax:tool_call>[\s\S]*?<\/minimax:tool_call>/gi, "")
     .replace(/<function_calls>[\s\S]*?<\/function_calls>/gi, "")
     .replace(/<invoke\b[\s\S]*?<\/invoke>/gi, "")
@@ -2675,7 +2693,7 @@ export function sanitizeUserFacingText(text: string): string {
   // Remove any residual stray dialect tags (open or close) that survived,
   // e.g. mismatched </tool_calls>, dangling <invoke ...> / <parameter ...>.
   out = out.replace(
-    /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids|think|thought|thinking|reasoning|malformed_tool_call_recovery|visible_reasoning_markup_recovery|recovery_previous_response_context|recovery_required_action|recovery_tool_call_rules|recovery_problem)(?:\b[^>]*)?>/gi,
+    /<\/?(?:[a-z0-9_]+:)?(?:tool_call|tool_calls|function_call|function_calls|invoke|parameter|tool_use|tool|tool_result|tool_results|result|continue_after_tool_results|target_ids|think|thought|thinking|reasoning|malformed_tool_call_recovery|visible_reasoning_markup_recovery|recovery_previous_response_context|recovery_required_action|recovery_tool_call_rules|recovery_problem|message_timestamp)(?:\b[^>]*)?>/gi,
     "",
   );
   const firstProtocolMarker = out.search(USER_FACING_PROTOCOL_MARKER_PATTERN);

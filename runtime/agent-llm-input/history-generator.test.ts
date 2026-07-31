@@ -40,6 +40,7 @@ Deno.test("historyGenerator appends immutable timestamps and preserves exact pre
     firstProjection[0].content,
     "Hello\n\n<message_timestamp>2026-07-30T12:34:56.789Z</message_timestamp>",
   );
+  assertEquals(nextProjection[1].content, "Hi there");
 });
 
 Deno.test("historyGenerator omits timestamps for invalid legacy dates", () => {
@@ -61,6 +62,7 @@ Deno.test("historyGenerator projects recovery cues as unprefixed user turns", ()
     senderId: "copilotz-recovery",
     senderType: "job",
     content: "<recovery_cue>Continue.</recovery_cue>",
+    createdAt: "2026-07-30T12:36:00.000Z",
     metadata: {
       visibility: "internal",
       recovery: { kind: "cue", chainId: "chain-1" },
@@ -69,6 +71,60 @@ Deno.test("historyGenerator projects recovery cues as unprefixed user turns", ()
   assertEquals(projected[0].role, "user");
   assertEquals(projected[0].content, "<recovery_cue>Continue.</recovery_cue>");
   assertEquals(projected[0].metadata?.speakerLabel, undefined);
+});
+
+Deno.test("historyGenerator timestamps only persisted human user messages", () => {
+  const currentAgent = {
+    id: "assistant",
+    name: "Assistant",
+    role: "assistant",
+  } as Agent;
+  const createdAt = "2026-07-30T12:34:56.789Z";
+  const projected = historyGenerator([
+    {
+      id: "user-message",
+      threadId: "thread-1",
+      senderId: "user-1",
+      senderType: "user",
+      content: "Human input",
+      createdAt,
+    },
+    {
+      id: "assistant-message",
+      threadId: "thread-1",
+      senderId: "assistant",
+      senderType: "agent",
+      content: "Assistant output",
+      createdAt,
+    },
+    {
+      id: "peer-message",
+      threadId: "thread-1",
+      senderId: "peer",
+      senderType: "agent",
+      content: "Peer output",
+      createdAt,
+      metadata: { senderDisplayName: "Peer" },
+    },
+    {
+      id: "job-message",
+      threadId: "thread-1",
+      senderId: "copilotz-job",
+      senderType: "job",
+      content: "Internal continuation",
+      createdAt,
+    },
+  ] as NewMessage[], currentAgent);
+
+  assertEquals(
+    projected[0].content,
+    `Human input\n\n<message_timestamp>${createdAt}</message_timestamp>`,
+  );
+  assertEquals(projected[1].content, "Assistant output");
+  assertEquals(projected[2].role, "user");
+  assertEquals(projected[2].content, "Peer output");
+  assertEquals(projected[3].role, "user");
+  assertEquals(projected[3].content, "Internal continuation");
 });
 
 Deno.test("historyGenerator preserves pipeline plans for wire rehydration", () => {

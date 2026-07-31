@@ -73,6 +73,84 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+export interface LLMStreamDiagnostics {
+  responseStatus: number;
+  responseStatusText?: string;
+  requestIds?: Record<string, string>;
+  requestDurationMs: number;
+  responseHeadersAfterMs: number;
+  streamDurationMs: number;
+  timeSinceLastActivityMs?: number;
+  contentReceived: boolean;
+}
+
+export interface SafeLLMErrorLog {
+  name?: string;
+  message: string;
+  code?: string;
+  cause?: {
+    name?: string;
+    message?: string;
+    code?: string;
+  };
+  stream?: LLMStreamDiagnostics;
+}
+
+const streamDiagnostics = new WeakMap<object, LLMStreamDiagnostics>();
+
+/** Attach safe response/timing context to a stream failure without mutating it. */
+export function attachLLMStreamDiagnostics(
+  error: unknown,
+  diagnostics: LLMStreamDiagnostics,
+): unknown {
+  if (error && (typeof error === "object" || typeof error === "function")) {
+    streamDiagnostics.set(error as object, diagnostics);
+    return error;
+  }
+
+  const wrapped = new Error(String(error));
+  (wrapped as Error & { cause?: unknown }).cause = error;
+  streamDiagnostics.set(wrapped, diagnostics);
+  return wrapped;
+}
+
+export function getLLMStreamDiagnostics(
+  error: unknown,
+): LLMStreamDiagnostics | undefined {
+  return error && (typeof error === "object" || typeof error === "function")
+    ? streamDiagnostics.get(error as object)
+    : undefined;
+}
+
+/** Build a bounded, credential-safe structure for provider failure logs. */
+export function getSafeLLMErrorLog(error: unknown): SafeLLMErrorLog {
+  const record = asRecord(error);
+  const cause = asRecord(record?.cause);
+  const details = getProviderErrorDetails(error);
+  const causeDetails = cause
+    ? {
+      name: boundedString(cause.name),
+      message: boundedString(cause.message),
+      code: boundedString(cause.code),
+    }
+    : undefined;
+  const safeCause = causeDetails && Object.values(causeDetails).some(Boolean)
+    ? causeDetails
+    : undefined;
+
+  return {
+    name: boundedString(record?.name),
+    message: boundedString(details?.message) ??
+      boundedString(record?.message) ??
+      String(error).slice(0, MAX_PROVIDER_ERROR_FIELD_LENGTH),
+    code: boundedString(details?.code ?? record?.code),
+    ...(safeCause ? { cause: safeCause } : {}),
+    ...(getLLMStreamDiagnostics(error)
+      ? { stream: getLLMStreamDiagnostics(error) }
+      : {}),
+  };
+}
+
 /**
  * Extracts only common, non-secret provider error fields. Raw response bodies,
  * headers, request payloads, and credentials are never retained.

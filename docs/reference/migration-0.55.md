@@ -13,8 +13,9 @@ Remove these LLM configuration fields:
 Remove application cache switches and Gemini cached-content lifecycle scripts.
 OpenAI cache routing is now internal and scoped by namespace, thread, and agent.
 
-Dynamic date and `<turn_control>` system messages are gone. Models receive
-immutable per-message timestamps in projected history instead. Long-term-memory
+Dynamic date and `<turn_control>` system messages are gone. Models receive an
+immutable timestamp on each persisted human user message in projected history;
+assistant and framework-generated history is not tagged. Long-term-memory
 rollover remains an expected cache reset.
 
 Recovery fragments and cues are now durable graph messages. Adapters must keep

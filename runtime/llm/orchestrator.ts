@@ -25,6 +25,7 @@ import {
   getErrorMessage,
   getErrorStatus,
   getProviderErrorDetails,
+  getSafeLLMErrorLog,
   isProviderGlobalLLMFailure,
   type LLMProviderAttempt,
   LLMProviderError,
@@ -249,6 +250,9 @@ function logProviderAttempt(
     reason?: string | null;
     status?: number;
     visibleOutputStarted?: boolean;
+    visibleOutputChars?: number;
+    reasoningOutputChars?: number;
+    error?: ReturnType<typeof getSafeLLMErrorLog>;
   },
 ): void {
   if (config.runtimeDiagnostics?.enabled !== true) return;
@@ -272,6 +276,13 @@ function logProviderAttempt(
     ...(context.visibleOutputStarted !== undefined
       ? { visibleOutputStarted: context.visibleOutputStarted }
       : {}),
+    ...(context.visibleOutputChars !== undefined
+      ? { visibleOutputChars: context.visibleOutputChars }
+      : {}),
+    ...(context.reasoningOutputChars !== undefined
+      ? { reasoningOutputChars: context.reasoningOutputChars }
+      : {}),
+    ...(context.error ? { error: context.error } : {}),
   };
 
   try {
@@ -928,6 +939,9 @@ export async function chat(
         reason: state.lastRecoveryReason,
         ...(errorStatus !== undefined ? { status: errorStatus } : {}),
         visibleOutputStarted: capture.visibleOutputStarted,
+        visibleOutputChars: capture.visibleOutput.length,
+        reasoningOutputChars: capture.reasoningOutput.length,
+        error: getSafeLLMErrorLog(error),
       });
       const providerErrorDetails = getProviderErrorDetails(error);
       const failedStatusReason = totalTimedOut

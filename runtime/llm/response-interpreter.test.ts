@@ -44,3 +44,24 @@ Deno.test("interpreter keeps canonical tool calls as intentional output", () => 
   assertEquals(result.issue, undefined);
   assertEquals(result.parsed.toolCalls.length, 1);
 });
+
+Deno.test("interpreter strips an imitated timestamp while preserving a later tool call", () => {
+  const response = [
+    "<message_timestamp>2026-07-31T21:19:51.611Z</message_timestamp>",
+    "<tool_calls>",
+    '{"name":"terminal","arguments":{"cmd":"pwd"}}',
+    "</tool_calls>",
+  ].join("\n");
+  const result = interpretAssistantResponse({
+    fullContent: response,
+    currentAttemptContent: response,
+    extractedBlockTags: [...REASONING_HISTORY_TAGS],
+    knownToolNames: ["terminal"],
+    finishReason: "tool_calls",
+  });
+
+  assertEquals(result.issue, undefined);
+  assertEquals(result.parsed.cleanResponse, "");
+  assertEquals(result.parsed.toolCalls.length, 1);
+  assertEquals(result.parsed.toolCalls[0].tool.id, "terminal");
+});

@@ -439,6 +439,118 @@ Deno.test("chat retries a different same-provider credential scope and logs the 
   }
 });
 
+Deno.test("chat logs safe response diagnostics when a stream body connection fails", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalInfo = console.info;
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  const encoder = new TextEncoder();
+  const logEntries: Array<Record<string, unknown>> = [];
+  const captureStructuredLog = (value: unknown) => {
+    if (typeof value !== "string") return;
+    try {
+      logEntries.push(JSON.parse(value));
+    } catch {
+      // Ignore unrelated non-JSON logs.
+    }
+  };
+  console.info = captureStructuredLog;
+  console.warn = captureStructuredLog;
+  console.error = () => {};
+
+  const cause = Object.assign(new Error("peer reset the connection"), {
+    code: "ECONNRESET",
+  });
+  const bodyError = new TypeError("error reading a body from connection");
+  (bodyError as Error & { cause?: unknown }).cause = cause;
+  let pullCount = 0;
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (pullCount++ === 0) {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${
+                    JSON.stringify({
+                      choices: [{ delta: { content: "partial" } }],
+                    })
+                  }\n\n`,
+                ),
+              );
+              return;
+            }
+            return new Promise<void>((resolve) => {
+              setTimeout(() => {
+                controller.error(bodyError);
+                resolve();
+              }, 5);
+            });
+          },
+        }),
+        {
+          status: 200,
+          statusText: "OK",
+          headers: {
+            "content-type": "text/event-stream",
+            "x-request-id": "req-safe-123",
+            "authorization": "do-not-log",
+          },
+        },
+      ),
+    );
+
+  try {
+    await assertRejects(() =>
+      chat(
+        { messages: [{ role: "user", content: "hello" }] },
+        {
+          provider: "openai",
+          model: "gpt-test",
+          apiKey: "oauth-token",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          runtimeDiagnostics: {
+            enabled: true,
+            credentialSource: "connected_account",
+          },
+          estimateCost: false,
+        },
+        {},
+        undefined,
+        registry,
+      )
+    );
+
+    const failed = logEntries.find((entry) =>
+      entry.message === "[llm] Provider attempt failed"
+    );
+    const error = failed?.error as Record<string, unknown> | undefined;
+    const causeLog = error?.cause as Record<string, unknown> | undefined;
+    const stream = error?.stream as Record<string, unknown> | undefined;
+    const requestIds = stream?.requestIds as
+      | Record<string, unknown>
+      | undefined;
+
+    assertEquals(failed?.transport, "chatgpt_codex");
+    assertEquals(failed?.visibleOutputStarted, false);
+    assertEquals(failed?.visibleOutputChars, 7);
+    assertEquals(error?.name, "TypeError");
+    assertEquals(error?.message, "error reading a body from connection");
+    assertEquals(causeLog?.message, "peer reset the connection");
+    assertEquals(causeLog?.code, "ECONNRESET");
+    assertEquals(stream?.responseStatus, 200);
+    assertEquals(stream?.contentReceived, true);
+    assertEquals(requestIds?.["x-request-id"], "req-safe-123");
+    assertEquals(JSON.stringify(failed).includes("do-not-log"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.info = originalInfo;
+    console.warn = originalWarn;
+    console.error = originalError;
+  }
+});
+
 Deno.test("chat preserves safe billing details and skips same-provider fallbacks", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;

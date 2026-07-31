@@ -134,6 +134,14 @@ Every provider attempt writes an `llm_attempt` graph node. It is the canonical
 record for prompt snapshots, partial visible output, reasoning, tool calls,
 usage, cost, status, provider/model, errors, and recovery linkage.
 
+When runtime provider diagnostics are enabled, a failed streaming attempt also
+emits a structured log with the transport, credential source, bounded error and
+nested-cause fields, response status, allowlisted provider request IDs, stream
+timings, and captured visible/reasoning character counts. Request/response
+bodies, authorization headers, and arbitrary response headers are never logged.
+This distinguishes a rejected HTTP request from a connection failure that occurs
+after successful response headers.
+
 `llm_usage` remains as a compatibility projection for admin screens and older
 integrations while the migration completes:
 

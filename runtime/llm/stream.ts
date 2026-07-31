@@ -6,7 +6,10 @@ import type {
   ProviderUsageUpdate,
   StreamCallback,
 } from "@/runtime/llm/types.ts";
-import { LLMStreamTimeoutError } from "@/runtime/llm/errors.ts";
+import {
+  attachLLMStreamDiagnostics,
+  LLMStreamTimeoutError,
+} from "@/runtime/llm/errors.ts";
 import {
   getLocalStopSequences,
   isStopDebugEnabled,
@@ -17,6 +20,26 @@ import { streamPost, type StreamResponse } from "@/runtime/http.ts";
 const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 90_000;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 1_800_000;
+const SAFE_RESPONSE_ID_HEADERS = [
+  "x-request-id",
+  "request-id",
+  "openai-request-id",
+  "x-openai-request-id",
+  "cf-ray",
+  "traceparent",
+] as const;
+
+function safeResponseRequestIds(
+  headers: Headers,
+): Record<string, string> | undefined {
+  const requestIds = Object.fromEntries(
+    SAFE_RESPONSE_ID_HEADERS.flatMap((name) => {
+      const value = headers.get(name)?.trim();
+      return value ? [[name, value.slice(0, 512)]] : [];
+    }),
+  );
+  return Object.keys(requestIds).length > 0 ? requestIds : undefined;
+}
 
 export interface StreamResult {
   content: string;
@@ -56,6 +79,7 @@ export async function runProviderStream(
     phase: "start" | "content" | "end",
   ) => void,
 ): Promise<StreamResult> {
+  const requestStartedAtMs = Date.now();
   const localStopSequences = getLocalStopSequences(config);
   const finalMessages = providerAPI.transformMessages
     ? providerAPI.transformMessages(messages)
@@ -107,6 +131,9 @@ export async function runProviderStream(
     | { kind: "first_token" | "idle" | "attempt"; timeoutMs: number }
     | undefined;
   let firstContentReceived = false;
+  let response: StreamResponse | undefined;
+  let responseHeadersAtMs: number | undefined;
+  let lastStreamActivityAtMs: number | undefined;
 
   const clearFirstTokenTimer = () => {
     if (firstTokenTimer !== undefined) {
@@ -169,6 +196,7 @@ export async function runProviderStream(
   // Provider is alive (metadata events) — reset the first-token timer
   // to extend the deadline, but don't switch to idle mode yet.
   const recordStreamActivity = () => {
+    lastStreamActivityAtMs = Date.now();
     if (!firstContentReceived) {
       startFirstTokenTimer();
     }
@@ -177,6 +205,7 @@ export async function runProviderStream(
 
   // Actual content extracted — switch from first-token to idle mode.
   const recordContentReceived = () => {
+    lastStreamActivityAtMs = Date.now();
     if (!firstContentReceived) {
       firstContentReceived = true;
       clearFirstTokenTimer();
@@ -191,7 +220,7 @@ export async function runProviderStream(
     }, attemptTimeoutMs) as unknown as number;
   }
   try {
-    const response = await Promise.race([
+    response = await Promise.race([
       streamPost(
         providerAPI.endpoint,
         await providerAPI.body(
@@ -205,6 +234,7 @@ export async function runProviderStream(
       ) as Promise<StreamResponse>,
       timeoutPromise,
     ]);
+    responseHeadersAtMs = Date.now();
 
     reader = response.stream.getReader();
     const streamPromise = processStream(
@@ -252,13 +282,47 @@ export async function runProviderStream(
     }
     return result;
   } catch (error) {
+    const failedAtMs = Date.now();
+    const receivedResponse = response;
+    const headersReceivedAtMs = responseHeadersAtMs;
+    const responseRequestIds = receivedResponse
+      ? safeResponseRequestIds(receivedResponse.headers)
+      : undefined;
+    const withStreamDiagnostics = receivedResponse &&
+        headersReceivedAtMs !== undefined
+      ? (failure: unknown) =>
+        attachLLMStreamDiagnostics(failure, {
+          responseStatus: receivedResponse.status,
+          ...(receivedResponse.statusText
+            ? { responseStatusText: receivedResponse.statusText }
+            : {}),
+          ...(responseRequestIds ? { requestIds: responseRequestIds } : {}),
+          requestDurationMs: Math.max(0, failedAtMs - requestStartedAtMs),
+          responseHeadersAfterMs: Math.max(
+            0,
+            headersReceivedAtMs - requestStartedAtMs,
+          ),
+          streamDurationMs: Math.max(0, failedAtMs - headersReceivedAtMs),
+          ...(lastStreamActivityAtMs !== undefined
+            ? {
+              timeSinceLastActivityMs: Math.max(
+                0,
+                failedAtMs - lastStreamActivityAtMs,
+              ),
+            }
+            : {}),
+          contentReceived: firstContentReceived,
+        })
+      : (failure: unknown) => failure;
     if (streamTimeout) {
-      throw new LLMStreamTimeoutError(
-        streamTimeout.kind,
-        streamTimeout.timeoutMs,
+      throw withStreamDiagnostics(
+        new LLMStreamTimeoutError(
+          streamTimeout.kind,
+          streamTimeout.timeoutMs,
+        ),
       );
     }
-    throw error;
+    throw withStreamDiagnostics(error);
   } finally {
     clearFirstTokenTimer();
     clearStreamIdleTimer();

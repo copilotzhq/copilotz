@@ -1002,6 +1002,18 @@ Deno.test("sanitizeUserFacingText strips leaked tool-call protocol markup", () =
   assertEquals(clean, "I have the abstract.");
 });
 
+Deno.test("sanitizeUserFacingText strips leaked message timestamps without truncating later output", () => {
+  const clean = sanitizeUserFacingText(
+    "Before\n<message_timestamp>2026-07-31T21:19:51.611Z</message_timestamp>\nAfter",
+  );
+
+  assertEquals(clean, "Before\n\nAfter");
+  assertEquals(
+    sanitizeUserFacingText("Before <message_timestamp/> After"),
+    "Before  After",
+  );
+});
+
 Deno.test("filterTaggedControlTokensStreaming hides native tool dialect and leak tokens", () => {
   const state = {
     activeTag: null as string | null,
@@ -1039,6 +1051,45 @@ Deno.test("filterTaggedControlTokensStreaming hides tool blocks split across chu
   ).join("");
 
   assertEquals(visible, "Public text remains visible.");
+  assertEquals(state.activeTag, null);
+  assertEquals(state.pending, "");
+});
+
+Deno.test("filterTaggedControlTokensStreaming hides leaked message timestamps across chunks", () => {
+  const state = {
+    activeTag: null as string | null,
+    pending: "",
+    controlPending: "",
+  };
+  const chunks = [
+    "Before <message_time",
+    "stamp>2026-07-31T21:19:51.611Z</message_",
+    "timestamp> after",
+  ];
+
+  const visible = chunks.map((chunk) =>
+    filterTaggedControlTokensStreaming(chunk, state, [])
+  ).join("");
+
+  assertEquals(visible, "Before  after");
+  assertEquals(state.activeTag, null);
+  assertEquals(state.pending, "");
+});
+
+Deno.test("filterTaggedControlTokensStreaming preserves output after a self-closing timestamp", () => {
+  const state = {
+    activeTag: null as string | null,
+    pending: "",
+    controlPending: "",
+  };
+
+  const visible = filterTaggedControlTokensStreaming(
+    "Before <message_timestamp/> after",
+    state,
+    [],
+  );
+
+  assertEquals(visible, "Before  after");
   assertEquals(state.activeTag, null);
   assertEquals(state.pending, "");
 });

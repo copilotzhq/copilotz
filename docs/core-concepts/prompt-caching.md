@@ -14,10 +14,12 @@ The provider transcript is built in this order:
 3. final same-role coalescing required by providers that require alternating
    user and assistant roles.
 
-Each projected message ends with
-`<message_timestamp>ISO-8601</message_timestamp>`, derived from that message's
-immutable `createdAt`. Invalid legacy dates are omitted. Database and UI content
-are unchanged.
+Each persisted human user message ends with
+`<message_timestamp>ISO-8601</message_timestamp>` in LLM history, derived from
+that message's immutable `createdAt`. Assistant, peer-agent, tool, system, and
+internal job messages are not tagged. Invalid legacy dates are omitted. Database
+and UI content are unchanged, and model-imitated timestamp tags are filtered
+from generated output.
 
 Tool results are never moved beside earlier calls. Input trimming may treat a
 completed tool cycle as one atomic unit, but it preserves graph order. A

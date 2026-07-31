@@ -1,6 +1,7 @@
 import type { Copilotz } from "@/index.ts";
 import {
   type AdminThreadSummary,
+  buildVisibleMessagePredicate,
   normalizeLimit,
   normalizeOffset,
   normalizeSearch,
@@ -79,6 +80,7 @@ export default async function (
        WHERE m."type" = 'message'
          AND m."source_type" = 'thread'
          AND m."source_id" = t."id"
+         AND ${buildVisibleMessagePredicate(`m."data"`)}
      ) AS "ms" ON TRUE
      ${whereClause}
      ORDER BY COALESCE("ms"."lastActivityAt", t."updatedAt") DESC, t."updatedAt" DESC

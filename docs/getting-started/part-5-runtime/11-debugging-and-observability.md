@@ -248,6 +248,12 @@ track prompt snapshots, partial output, usage, cost, and recovery state. When
 something went wrong an hour ago, the `events` table shows the mutation outbox
 facts that led to the current graph state.
 
+Append-only recovery stores sanitized assistant fragments and internal recovery
+cues as messages. Correlate them with `metadata.recovery.chainId`; inspect the
+provider attempt's raw-output diagnostics when the malformed bytes themselves
+are needed. Cache efficiency is reported through `cacheReadInputTokens` and
+cache-creation/write input tokens on every attempt.
+
 Modern rows include `type`, `subjectType`, `subjectId`, `operation`,
 `causationId`, `correlationId`, compact mutation `payload`, `metadata`,
 `status`, `traceId`, `parentEventId`, `namespace`, and `createdAt`. Snapshot

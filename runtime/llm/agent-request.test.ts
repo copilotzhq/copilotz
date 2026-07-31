@@ -130,7 +130,7 @@ Deno.test("prepareAgentChatRequest uses text-only messages when asset resolution
   assertEquals(prepared.request.materializeMessages, undefined);
 });
 
-Deno.test("prepareAgentChatRequest preserves a breakpoint in text-only fallback", () => {
+Deno.test("prepareAgentChatRequest reduces unresolved media to canonical text", () => {
   const prepared = prepareAgentChatRequest({
     messages: [{
       role: "user",
@@ -142,7 +142,6 @@ Deno.test("prepareAgentChatRequest preserves a breakpoint in text-only fallback"
             file_data: "asset://tenant/file",
             filename: "file.zip",
           },
-          promptCacheBreakpoint: { mode: "explicit" },
         },
       ],
     }],
@@ -150,9 +149,5 @@ Deno.test("prepareAgentChatRequest preserves a breakpoint in text-only fallback"
     assetConfig: { resolveInLLM: false },
   });
 
-  assertEquals(prepared.request.messages[0]?.content, [{
-    type: "text",
-    text: "Keep this marker.",
-    promptCacheBreakpoint: { mode: "explicit" },
-  }]);
+  assertEquals(prepared.request.messages[0]?.content, "Keep this marker.");
 });

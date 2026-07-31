@@ -4,6 +4,7 @@ import type {
   LLMRuntimeConfig,
   ProviderFallbackConfig,
 } from "@/runtime/llm/types.ts";
+import { stripInternalPromptCacheKey } from "@/runtime/llm/internal-cache-key.ts";
 
 const DEFAULT_LIMIT_ESTIMATED_INPUT_TOKENS = 150_000;
 
@@ -39,8 +40,11 @@ export function toLLMConfig(
     apiKey: _apiKey,
     runtimeDiagnostics: _runtimeDiagnostics,
     fallbacks,
-    ...rest
+    ...unsafeRest
   } = config;
+  const rest = stripInternalPromptCacheKey(
+    unsafeRest as Record<string, unknown>,
+  ) as Omit<LLMRuntimeConfig, "apiKey" | "runtimeDiagnostics" | "fallbacks">;
 
   const sanitizedFallbacks = Array.isArray(fallbacks)
     ? fallbacks.map((fallback) => {

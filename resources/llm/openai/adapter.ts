@@ -11,8 +11,8 @@ import {
   isOpenAIReasoningModel,
   type OpenAIApiMode,
   resolveOpenAIApiMode,
-  supportsOpenAIExplicitPromptCaching,
 } from "@/runtime/llm/openai-api-mode.ts";
+import { readInternalPromptCacheKey } from "@/runtime/llm/internal-cache-key.ts";
 
 interface OpenAIResponsesExtractionState {
   reasoningDeltaReceived: boolean;
@@ -51,29 +51,7 @@ function summarizeBodyForDebug(
     responseFormat: body.response_format,
     hasStop: body.stop !== undefined,
     hasPromptCacheKey: body.prompt_cache_key !== undefined,
-    hasPromptCacheRetention: body.prompt_cache_retention !== undefined,
-    hasPromptCacheOptions: body.prompt_cache_options !== undefined,
-    promptCacheBreakpointCount: countPromptCacheBreakpoints(body),
   };
-}
-
-function countPromptCacheBreakpoints(value: unknown): number {
-  if (Array.isArray(value)) {
-    return value.reduce(
-      (total, item) => total + countPromptCacheBreakpoints(item),
-      0,
-    );
-  }
-  if (!value || typeof value !== "object") return 0;
-  const record = value as Record<string, unknown>;
-  return (record.prompt_cache_breakpoint ? 1 : 0) +
-    Object.entries(record).reduce(
-      (total, [key, item]) =>
-        key === "prompt_cache_breakpoint"
-          ? total
-          : total + countPromptCacheBreakpoints(item),
-      0,
-    );
 }
 
 function summarizeOpenAIStreamError(data: any): Record<string, unknown> {
@@ -245,78 +223,53 @@ function isChatGPTCodexTransport(config: ProviderConfig): boolean {
   }
 }
 
-function withPromptCacheBreakpoint(
-  block: Record<string, unknown>,
-  part: ChatContentPart,
-  enabled: boolean,
-): Record<string, unknown> {
-  return enabled && part.promptCacheBreakpoint?.mode === "explicit"
-    ? {
-      ...block,
-      prompt_cache_breakpoint: { mode: "explicit" },
-    }
-    : block;
+function supportsChatCompletionsFileInput(model: string): boolean {
+  const normalized = model.toLowerCase().replace(/^openai\//, "");
+  const version = /^gpt-(\d+)\.(\d+)(?:-|$)/.exec(normalized);
+  if (!version) return false;
+  const major = Number(version[1]);
+  const minor = Number(version[2]);
+  return major > 5 || (major === 5 && minor >= 6);
 }
 
 function toChatCompletionsMessages(
   messages: ChatMessage[],
-  explicitBreakpoints: boolean,
   supportsFile: boolean,
 ): any[] {
   return messages.map((msg) => {
     if (Array.isArray(msg.content)) {
       const parts = (msg.content as ChatContentPart[]).flatMap((p) => {
         if (p.type === "text") {
-          return [withPromptCacheBreakpoint(
-            { type: "text", text: p.text },
-            p,
-            explicitBreakpoints,
-          )];
+          return [{ type: "text", text: p.text }];
         }
         if (p.type === "image_url" && p.image_url?.url) {
-          return [withPromptCacheBreakpoint(
-            {
-              type: "image_url",
-              image_url: { url: p.image_url.url },
-            },
-            p,
-            explicitBreakpoints,
-          )];
+          return [{
+            type: "image_url",
+            image_url: { url: p.image_url.url },
+          }];
         }
         if (p.type === "input_audio" && p.input_audio?.data) {
-          return [withPromptCacheBreakpoint(
-            {
-              type: "input_audio",
-              input_audio: {
-                data: p.input_audio.data,
-                format: p.input_audio.format || "wav",
-              },
+          return [{
+            type: "input_audio",
+            input_audio: {
+              data: p.input_audio.data,
+              format: p.input_audio.format || "wav",
             },
-            p,
-            explicitBreakpoints,
-          )];
+          }];
         }
         if (p.type === "file" && p.file?.file_data) {
           const data = p.file.file_data;
           if (typeof data === "string" && data.startsWith("data:image/")) {
-            return [withPromptCacheBreakpoint(
-              { type: "image_url", image_url: { url: data } },
-              p,
-              explicitBreakpoints,
-            )];
+            return [{ type: "image_url", image_url: { url: data } }];
           }
           if (supportsFile) {
-            return [withPromptCacheBreakpoint(
-              {
-                type: "file",
-                file: {
-                  file_data: data,
-                  ...(p.file.filename ? { filename: p.file.filename } : {}),
-                },
+            return [{
+              type: "file",
+              file: {
+                file_data: data,
+                ...(p.file.filename ? { filename: p.file.filename } : {}),
               },
-              p,
-              explicitBreakpoints,
-            )];
+            }];
           }
         }
         return [] as any[];
@@ -375,67 +328,46 @@ function safeInputFilename(
 
 function toResponsesContent(
   content: ChatMessage["content"],
-  explicitBreakpoints: boolean,
 ): string | any[] {
   if (typeof content === "string") return content;
 
   return (content as ChatContentPart[]).flatMap((part) => {
     if (part.type === "text") {
-      return [withPromptCacheBreakpoint(
-        { type: "input_text", text: part.text },
-        part,
-        explicitBreakpoints,
-      )];
+      return [{ type: "input_text", text: part.text }];
     }
     if (part.type === "image_url" && part.image_url?.url) {
-      return [withPromptCacheBreakpoint(
-        {
-          type: "input_image",
-          image_url: part.image_url.url,
-        },
-        part,
-        explicitBreakpoints,
-      )];
+      return [{
+        type: "input_image",
+        image_url: part.image_url.url,
+      }];
     }
     if (part.type === "input_audio" && part.input_audio?.data) {
       const format = part.input_audio.format || "wav";
       const mime = `audio/${format}`;
-      return [withPromptCacheBreakpoint(
-        {
-          type: "input_file",
-          file_data: `data:${mime};base64,${part.input_audio.data}`,
-          filename: safeInputFilename(
-            part.input_audio.filename,
-            mime,
-            "audio",
-          ),
-        },
-        part,
-        explicitBreakpoints,
-      )];
+      return [{
+        type: "input_file",
+        file_data: `data:${mime};base64,${part.input_audio.data}`,
+        filename: safeInputFilename(
+          part.input_audio.filename,
+          mime,
+          "audio",
+        ),
+      }];
     }
     if (part.type === "file" && part.file?.file_data) {
       const data = part.file.file_data;
       if (typeof data !== "string" || data.length === 0) return [] as any[];
       if (data.startsWith("data:image/")) {
-        return [withPromptCacheBreakpoint(
-          { type: "input_image", image_url: data },
-          part,
-          explicitBreakpoints,
-        )];
+        return [{ type: "input_image", image_url: data }];
       }
-      return [withPromptCacheBreakpoint(
-        {
-          type: "input_file",
-          file_data: data,
-          filename: safeInputFilename(
-            part.file.filename,
-            part.file.mime_type ?? mimeFromDataUrl(data),
-          ),
-        },
-        part,
-        explicitBreakpoints,
-      )];
+      return [{
+        type: "input_file",
+        file_data: data,
+        filename: safeInputFilename(
+          part.file.filename,
+          part.file.mime_type ?? mimeFromDataUrl(data),
+        ),
+      }];
     }
     return [] as any[];
   });
@@ -443,34 +375,11 @@ function toResponsesContent(
 
 function toResponsesInput(
   messages: ChatMessage[],
-  explicitBreakpoints: boolean,
 ): any[] {
   return messages.map((message) => ({
     role: toResponsesRole(message.role),
-    content: toResponsesContent(message.content, explicitBreakpoints),
+    content: toResponsesContent(message.content),
   }));
-}
-
-function explicitPromptCacheOptions(
-  config: ProviderConfig,
-): Record<string, unknown> | null {
-  if (!supportsOpenAIExplicitPromptCaching(config.model)) return null;
-  const promptCache = config.promptCache;
-  const enabled = promptCache === true ||
-    (
-      promptCache !== false &&
-      typeof promptCache === "object" &&
-      promptCache.enabled !== false &&
-      promptCache.mode === "explicit"
-    );
-  if (!enabled) return null;
-
-  return {
-    mode: "explicit",
-    ...(typeof promptCache === "object" && promptCache.ttl === "30m"
-      ? { ttl: "30m" }
-      : {}),
-  };
 }
 
 function buildChatCompletionsBody(
@@ -478,18 +387,11 @@ function buildChatCompletionsBody(
   config: ProviderConfig,
 ): Record<string, unknown> {
   const modelName = config.model || "gpt-4o-mini";
-  const chatGPTCodex = isChatGPTCodexTransport(config);
-  // The private ChatGPT Codex backend accepts cache routing keys but rejects
-  // the public API's explicit cache controls.
-  const promptCacheOptions = chatGPTCodex
-    ? null
-    : explicitPromptCacheOptions(config);
   const bodyConfig: Record<string, unknown> = {
     model: modelName,
     messages: toChatCompletionsMessages(
       messages,
-      promptCacheOptions !== null,
-      supportsOpenAIExplicitPromptCaching(modelName),
+      supportsChatCompletionsFileInput(modelName),
     ),
     stream: true,
     stream_options: { include_usage: true },
@@ -511,15 +413,8 @@ function buildChatCompletionsBody(
   if (typeof maxComp === "number") {
     bodyConfig.max_completion_tokens = maxComp;
   }
-  if (typeof config.openaiPromptCacheKey === "string") {
-    const key = config.openaiPromptCacheKey.trim();
-    if (key.length > 0) bodyConfig.prompt_cache_key = key;
-  }
-  if (promptCacheOptions) {
-    bodyConfig.prompt_cache_options = promptCacheOptions;
-  } else if (!chatGPTCodex && config.openaiPromptCacheRetention) {
-    bodyConfig.prompt_cache_retention = config.openaiPromptCacheRetention;
-  }
+  const promptCacheKey = readInternalPromptCacheKey(config);
+  if (promptCacheKey) bodyConfig.prompt_cache_key = promptCacheKey;
 
   return bodyConfig;
 }
@@ -530,12 +425,9 @@ function buildResponsesBody(
 ): Record<string, unknown> {
   const modelName = config.model || "gpt-4o-mini";
   const chatGPTCodex = isChatGPTCodexTransport(config);
-  const promptCacheOptions = chatGPTCodex
-    ? null
-    : explicitPromptCacheOptions(config);
   const bodyConfig: Record<string, unknown> = {
     model: modelName,
-    input: toResponsesInput(messages, promptCacheOptions !== null),
+    input: toResponsesInput(messages),
     stream: true,
     store: false,
     top_p: config.topP,
@@ -551,15 +443,8 @@ function buildResponsesBody(
   if (!chatGPTCodex && typeof maxOutput === "number") {
     bodyConfig.max_output_tokens = maxOutput;
   }
-  if (typeof config.openaiPromptCacheKey === "string") {
-    const key = config.openaiPromptCacheKey.trim();
-    if (key.length > 0) bodyConfig.prompt_cache_key = key;
-  }
-  if (promptCacheOptions) {
-    bodyConfig.prompt_cache_options = promptCacheOptions;
-  } else if (!chatGPTCodex && config.openaiPromptCacheRetention) {
-    bodyConfig.prompt_cache_retention = config.openaiPromptCacheRetention;
-  }
+  const promptCacheKey = readInternalPromptCacheKey(config);
+  if (promptCacheKey) bodyConfig.prompt_cache_key = promptCacheKey;
 
   if (config.seed !== undefined) bodyConfig.seed = config.seed;
   if (config.user) bodyConfig.safety_identifier = config.user;

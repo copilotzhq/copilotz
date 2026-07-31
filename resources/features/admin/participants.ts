@@ -1,6 +1,7 @@
 import type { Copilotz } from "@/index.ts";
 import {
   type AdminParticipantSummary,
+  buildVisibleMessagePredicate,
   normalizeLimit,
   normalizeOffset,
   normalizeSearch,
@@ -50,7 +51,10 @@ export default async function (
   params.push(offset);
   const oi = params.length;
 
-  const msgScope: string[] = [`m."type" = 'message'`];
+  const msgScope: string[] = [
+    `m."type" = 'message'`,
+    buildVisibleMessagePredicate(`m."data"`),
+  ];
   if (namespace) {
     params.push(namespace);
     msgScope.push(`m."namespace" = $${params.length}`);

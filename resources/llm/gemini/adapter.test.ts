@@ -31,21 +31,6 @@ Deno.test("geminiProvider leaves implicit caching native by default", async () =
   });
 });
 
-Deno.test("geminiProvider supports explicit cachedContent references", async () => {
-  const config: ProviderConfig = {
-    provider: "gemini",
-    apiKey: "test",
-    promptCache: {
-      mode: "explicit",
-      cachedContent: "cachedContents/cache-123",
-    },
-  };
-  const body = await geminiProvider(config).body(messages, config);
-
-  assertEquals(body.cachedContent, "cachedContents/cache-123");
-  assertEquals("systemInstruction" in body, false);
-});
-
 Deno.test("geminiProvider forwards resolved native stop sequences", async () => {
   const config: ProviderConfig = {
     provider: "gemini",

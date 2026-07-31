@@ -51,7 +51,6 @@ Deno.test("minimaxProvider omits ignored Anthropic-only params", () => {
   const config: ProviderConfig = {
     ...baseConfig,
     topK: 40,
-    promptCache: { ttl: "1h" },
   };
   const body = minimaxProvider(config).body(
     [{ role: "user", content: "Hi" }],

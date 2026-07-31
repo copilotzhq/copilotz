@@ -977,8 +977,17 @@ export const messageProcessor: EventProcessor<
   process: async (event: Event, deps: ProcessorDeps) => {
     const eventType = (event as unknown as { type?: string }).type;
     const isLifecycleMessageCreated = eventType === "message.created";
+    const payload = event.payload as NewMessageEventPayload;
+    const payloadMetadata = isRecord(payload.metadata)
+      ? payload.metadata as Record<string, unknown>
+      : null;
+    const isRecoveryMessage = isRecord(payloadMetadata?.recovery);
+    const isInternalRecovery = isRecoveryMessage &&
+      payloadMetadata?.visibility === "internal";
     // 1. Ensure participants exist (Identity Lifecycle Side-effect)
-    const senderIdentity = await ensureParticipants(event, deps);
+    const senderIdentity = isInternalRecovery
+      ? null
+      : await ensureParticipants(event, deps);
 
     const { db, thread, context } = deps;
     const ops = db.ops;
@@ -986,8 +995,6 @@ export const messageProcessor: EventProcessor<
       collections: context.collections,
       ops,
     });
-
-    const payload = event.payload as NewMessageEventPayload;
 
     const threadId = typeof event.threadId === "string"
       ? event.threadId
@@ -1173,7 +1180,7 @@ export const messageProcessor: EventProcessor<
         namespace?: string;
       }
     > = [];
-    const agentsForExtraction = context.agents || [];
+    const agentsForExtraction = isInternalRecovery ? [] : context.agents || [];
 
     // Group agents by their extraction config to deduplicate
     // Key: JSON-serialized config (entityTypes + thresholds)
@@ -1626,14 +1633,16 @@ export const messageProcessor: EventProcessor<
 
     // Check for loop prevention (agent-to-agent turn limit)
     const maxAgentTurns = context.multiAgent?.maxAgentTurns ?? 5;
-    const loopCheck = await checkAndUpdateAgentTurns(
-      ops,
-      thread,
-      messageContext.senderType,
-      targetResolution.targetId,
-      availableAgents,
-      maxAgentTurns,
-    );
+    const loopCheck = isInternalRecovery
+      ? { shouldForceUserTarget: false }
+      : await checkAndUpdateAgentTurns(
+        ops,
+        thread,
+        messageContext.senderType,
+        targetResolution.targetId,
+        availableAgents,
+        maxAgentTurns,
+      );
 
     if (loopCheck.shouldForceUserTarget) {
       const fallbackAgentId = context.multiAgent?.maxTurnsFallbackAgent;
@@ -1690,7 +1699,8 @@ export const messageProcessor: EventProcessor<
     // LLM sees all concurrent inputs in a single context window instead of
     // spawning separate chains.
     if (
-      normalizedToolCalls.length === 0 && messageContext.senderType !== "tool"
+      !isRecoveryMessage && normalizedToolCalls.length === 0 &&
+      messageContext.senderType !== "tool"
     ) {
       const eventId = typeof event.id === "string" ? event.id : "";
       const targetIdLowerCoalesce =
@@ -1882,6 +1892,9 @@ export const messageProcessor: EventProcessor<
         ...(isRecord(messageMetadata) &&
             isRecord(messageMetadata.internalConversation)
           ? { internalConversation: messageMetadata.internalConversation }
+          : {}),
+        ...(isRecord(messageMetadata) && isRecord(messageMetadata.recovery)
+          ? { recovery: messageMetadata.recovery }
           : {}),
       };
 

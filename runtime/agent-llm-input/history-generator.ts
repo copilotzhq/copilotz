@@ -389,6 +389,30 @@ function normalizeVisibleContent(content: string): string {
     .trim();
 }
 
+function messageTimestamp(createdAt: unknown): string | null {
+  if (
+    !(createdAt instanceof Date) && typeof createdAt !== "string" &&
+    typeof createdAt !== "number"
+  ) {
+    return null;
+  }
+  const date = createdAt instanceof Date ? createdAt : new Date(createdAt);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+function appendMessageTimestamp(
+  content: string | ChatContentPart[],
+  createdAt: unknown,
+): string | ChatContentPart[] {
+  const timestamp = messageTimestamp(createdAt);
+  if (!timestamp) return content;
+  const marker = `<message_timestamp>${timestamp}</message_timestamp>`;
+  if (typeof content === "string") {
+    return content.length > 0 ? `${content}\n\n${marker}` : marker;
+  }
+  return [...content, { type: "text", text: marker }];
+}
+
 function collectToolVisibilityByCallId(
   chatHistory: NewMessage[],
 ): Map<string, ToolHistoryVisibility> {
@@ -723,7 +747,12 @@ export function historyGenerator(
       ? reasoningHistory.maxEstimatedTokens
       : undefined;
 
-    const peerSpeakerLabel = !directConversation && !isCurrentAgent &&
+    const isRecoveryCue = metadata?.recovery &&
+      typeof metadata.recovery === "object" &&
+      !Array.isArray(metadata.recovery) &&
+      (metadata.recovery as { kind?: unknown }).kind === "cue";
+    const peerSpeakerLabel = !isRecoveryCue && !directConversation &&
+        !isCurrentAgent &&
         msg.senderType !== "system" && !isToolResult
       ? resolveSpeakerLabel(msg, metadata)
       : undefined;
@@ -828,7 +857,10 @@ export function historyGenerator(
     };
 
     return [{
-      content: hideToolResultContent ? "" : finalContent,
+      content: appendMessageTimestamp(
+        hideToolResultContent ? "" : finalContent,
+        msg.createdAt,
+      ),
       role: role,
       senderId: msg.senderId || undefined,
       ...(Object.keys(wireMetadata).length > 0

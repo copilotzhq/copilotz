@@ -224,6 +224,56 @@ Deno.test("participant lifecycle processor no-ops when participant collection is
   }
 });
 
+Deno.test("participant lifecycle ignores internal recovery actors", async () => {
+  const { db, tempDir } = await createTestDb("participant-recovery-internal");
+  const manager = createCollectionsManager(db, [participantCollection]);
+  const collections = manager.withNamespace("tenant-a");
+  await createThreadNode(db, "thread-recovery");
+
+  const event = {
+    id: "evt-recovery",
+    threadId: "thread-recovery",
+    type: "message.created",
+    payload: {
+      content: "<recovery_cue>Continue.</recovery_cue>",
+      sender: {
+        type: "job",
+        id: "copilotz-recovery",
+        name: "Copilotz Recovery",
+      },
+      metadata: {
+        visibility: "internal",
+        recovery: { kind: "cue", chainId: "chain-1" },
+      },
+    },
+  } as unknown as Event;
+  const deps = {
+    db,
+    thread: { id: "thread-recovery" },
+    context: { namespace: "tenant-a", collections, agents: [] },
+    emitToStream: () => {},
+  } as unknown as ProcessorDeps;
+
+  try {
+    assertEquals(
+      participantLifecycleProcessor.shouldProcess(event, deps),
+      false,
+    );
+    assertEquals(
+      await participantLifecycleProcessor.process(event, deps),
+      undefined,
+    );
+    assertEquals(
+      await collections.participant.findOne({
+        externalId: "copilotz-recovery",
+      }),
+      null,
+    );
+  } finally {
+    await closeTestDb(db, tempDir);
+  }
+});
+
 Deno.test("participant lifecycle processor treats agent senders as agent participants", async () => {
   const { db, tempDir } = await createTestDb("participant-lifecycle-agent");
   const manager = createCollectionsManager(db, [participantCollection]);

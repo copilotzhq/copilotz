@@ -4,6 +4,73 @@ import type { Agent, NewMessage } from "@/types/index.ts";
 import { formatMessages } from "@/runtime/llm/utils.ts";
 import { historyGenerator } from "./history-generator.ts";
 
+Deno.test("historyGenerator appends immutable timestamps and preserves exact prefixes", () => {
+  const agent = {
+    id: "assistant",
+    name: "Assistant",
+    role: "assistant",
+  } as Agent;
+  const firstTurn: NewMessage[] = [{
+    id: "m-1",
+    threadId: "thread-1",
+    senderId: "user-1",
+    senderType: "user",
+    content: "Hello",
+    createdAt: "2026-07-30T12:34:56.789Z",
+  }];
+  const nextTurn: NewMessage[] = [
+    ...firstTurn,
+    {
+      id: "m-2",
+      threadId: "thread-1",
+      senderId: "assistant",
+      senderType: "agent",
+      content: "Hi there",
+      createdAt: "2026-07-30T12:35:00.000Z",
+    },
+  ];
+
+  const firstProjection = historyGenerator(firstTurn, agent);
+  const nextProjection = historyGenerator(nextTurn, agent);
+  assertEquals(
+    JSON.stringify(nextProjection.slice(0, firstProjection.length)),
+    JSON.stringify(firstProjection),
+  );
+  assertEquals(
+    firstProjection[0].content,
+    "Hello\n\n<message_timestamp>2026-07-30T12:34:56.789Z</message_timestamp>",
+  );
+});
+
+Deno.test("historyGenerator omits timestamps for invalid legacy dates", () => {
+  const projected = historyGenerator([{
+    id: "legacy",
+    threadId: "thread-1",
+    senderId: "user-1",
+    senderType: "user",
+    content: "Legacy",
+    createdAt: "not-a-date",
+  }], { id: "assistant", name: "Assistant", role: "assistant" } as Agent);
+  assertEquals(projected[0].content, "Legacy");
+});
+
+Deno.test("historyGenerator projects recovery cues as unprefixed user turns", () => {
+  const projected = historyGenerator([{
+    id: "cue",
+    threadId: "thread-1",
+    senderId: "copilotz-recovery",
+    senderType: "job",
+    content: "<recovery_cue>Continue.</recovery_cue>",
+    metadata: {
+      visibility: "internal",
+      recovery: { kind: "cue", chainId: "chain-1" },
+    },
+  }], { id: "assistant", name: "Assistant", role: "assistant" } as Agent);
+  assertEquals(projected[0].role, "user");
+  assertEquals(projected[0].content, "<recovery_cue>Continue.</recovery_cue>");
+  assertEquals(projected[0].metadata?.speakerLabel, undefined);
+});
+
 Deno.test("historyGenerator preserves pipeline plans for wire rehydration", () => {
   const currentAgent = {
     id: "researcher",

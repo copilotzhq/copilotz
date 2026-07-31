@@ -3,6 +3,7 @@ import {
   type AdminOverview,
   buildAdminUsageSourceCte,
   buildUsageSumSelects,
+  buildVisibleMessagePredicate,
   emptyUsageTotals,
   pushAdminUsageSourceScope,
   pushScopedThreadNode,
@@ -71,7 +72,10 @@ export default async function (
 
   // Message totals
   const mp: unknown[] = [];
-  const mf: string[] = [`"type" = 'message'`];
+  const mf: string[] = [
+    `"type" = 'message'`,
+    buildVisibleMessagePredicate(`"data"`),
+  ];
   pushScopedThreadNode(mp, mf, `"namespace"`, namespace);
   pushTimeRange(mp, mf, `"created_at"`, from, to);
   const messageResult = await q<{ total: number; toolCallMessages: number }>(
@@ -118,9 +122,7 @@ export default async function (
   const usageWhere = uf.length ? uf.join(" AND ") : "TRUE";
   const usageResult = await q<AdminUsageTotalsRow>(
     `WITH ${buildAdminUsageSourceCte(`"admin_usage_source"`, usageScope)}
-     SELECT COUNT(*)::int AS "totalCalls", ${
-      buildUsageSumSelects(`"data"`)
-    }
+     SELECT COUNT(*)::int AS "totalCalls", ${buildUsageSumSelects(`"data"`)}
      FROM "admin_usage_source" WHERE ${usageWhere}`,
     up,
   );

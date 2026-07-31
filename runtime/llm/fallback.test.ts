@@ -15,9 +15,16 @@ const registry: ProviderRegistry = {
     body: () => ({}),
     extractContent: (data: any) => {
       const content = data?.choices?.[0]?.delta?.content;
-      return typeof content === "string" && content.length > 0
-        ? [{ text: content }]
-        : null;
+      const reasoning = data?.choices?.[0]?.delta?.reasoning;
+      const parts = [
+        ...(typeof reasoning === "string" && reasoning.length > 0
+          ? [{ text: reasoning, isReasoning: true }]
+          : []),
+        ...(typeof content === "string" && content.length > 0
+          ? [{ text: content }]
+          : []),
+      ];
+      return parts.length > 0 ? parts : null;
     },
     extractFinishReason: (data: any) =>
       data?.choices?.[0]?.finish_reason ?? null,
@@ -28,9 +35,16 @@ const registry: ProviderRegistry = {
     body: () => ({}),
     extractContent: (data: any) => {
       const content = data?.choices?.[0]?.delta?.content;
-      return typeof content === "string" && content.length > 0
-        ? [{ text: content }]
-        : null;
+      const reasoning = data?.choices?.[0]?.delta?.reasoning;
+      const parts = [
+        ...(typeof reasoning === "string" && reasoning.length > 0
+          ? [{ text: reasoning, isReasoning: true }]
+          : []),
+        ...(typeof content === "string" && content.length > 0
+          ? [{ text: content }]
+          : []),
+      ];
+      return parts.length > 0 ? parts : null;
     },
     extractFinishReason: (data: any) =>
       data?.choices?.[0]?.finish_reason ?? null,
@@ -1282,6 +1296,126 @@ Deno.test("chat returns visible partial on finishReason=error without fallback",
 // ---------------------------------------------------------------------------
 // Empty-response recovery
 // ---------------------------------------------------------------------------
+
+Deno.test("durable recovery returns reusable partial output without a synthetic retry", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = () => {
+    calls += 1;
+    return Promise.resolve(sse([
+      { choices: [{ delta: { content: "partial answer" } }] },
+      { choices: [{ delta: {}, finish_reason: "length" }] },
+    ]));
+  };
+
+  try {
+    const response = await chat(
+      {
+        messages: [{ role: "user", content: "hello" }],
+        durableRecovery: { enabled: true, count: 0 },
+      },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+      },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(calls, 1);
+    assertEquals(response.recovery?.answer, "partial answer");
+    assertEquals(response.recovery?.reason, "length");
+    assertEquals(response.recovery?.cue.includes("<recovery_cue>"), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("durable recovery preserves reasoning-only partial output", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(sse([
+      { choices: [{ delta: { reasoning: "useful reasoning" } }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+    ]));
+
+  try {
+    const response = await chat(
+      {
+        messages: [{ role: "user", content: "hello" }],
+        durableRecovery: { enabled: true, count: 0 },
+      },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+      },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(response.recovery?.answer, "");
+    assertEquals(response.recovery?.reasoning, "useful reasoning");
+    assertEquals(response.recovery?.reason, "empty_response");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("durable recovery sends zero-output fallback the unchanged transcript", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  const attemptMessages: unknown[] = [];
+  globalThis.fetch = () => {
+    calls += 1;
+    if (calls === 1) {
+      return Promise.resolve(
+        sse([{ choices: [{ delta: {}, finish_reason: "stop" }] }]),
+      );
+    }
+    return Promise.resolve(sse([
+      { choices: [{ delta: { content: "fallback answer" } }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+    ]));
+  };
+
+  try {
+    const response = await chat(
+      {
+        messages: [{ role: "user", content: "hello" }],
+        durableRecovery: { enabled: true, count: 0 },
+        onAttemptLifecycle: (event) => {
+          if (event.phase === "started") attemptMessages.push(event.messages);
+        },
+      },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+        fallbacks: [{ provider: "anthropic", model: "fallback" }],
+      },
+      {},
+      undefined,
+      registry,
+    );
+
+    assertEquals(calls, 2);
+    assertEquals(response.answer, "fallback answer");
+    assertEquals(attemptMessages[0], attemptMessages[1]);
+    assertEquals(
+      JSON.stringify(attemptMessages).includes("recovery_cue"),
+      false,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 Deno.test("chat retries then falls back when model produces empty response", async () => {
   const originalFetch = globalThis.fetch;

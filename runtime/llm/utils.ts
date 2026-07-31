@@ -283,10 +283,10 @@ export function formatMessagesDetailed(
     ...systemMessage,
     ...messages.filter((m) => m.role !== "system"),
   ];
-  const orderedHistory = orderCompletedToolCycles(formattedMessages);
+  const toolCycleUnitKeys = buildToolCycleUnitKeys(formattedMessages);
   const coalescedHistory = coalesceBatchedToolResults(
-    orderedHistory.messages,
-    orderedHistory.unitKeys,
+    formattedMessages,
+    toolCycleUnitKeys,
   );
   formattedMessages = coalescedHistory.messages;
 
@@ -610,8 +610,7 @@ function requestedToolCallIds(message: ChatMessage): string[] {
     return [];
   }
   return message.toolCalls.flatMap((call) =>
-    typeof call.id === "string" &&
-      call.id.length > 0 &&
+    typeof call.id === "string" && call.id.length > 0 &&
       typeof call.output === "undefined"
       ? [call.id]
       : []
@@ -628,83 +627,42 @@ function resultToolCallIds(message: ChatMessage): string[] {
 }
 
 /**
- * Keep a completed current-agent tool cycle causally adjacent on the provider
- * wire even when peer/user events landed while tools were running.
- *
- * Peer tool activity is already represented as attributed `user` transcript,
- * so only internal `tool`/`tool_result` messages can satisfy a current
- * assistant request. A result message is moved only when all of its call ids
- * belong to that request and every requested call has a terminal result.
+ * Keep input trimming from splitting a completed tool cycle while preserving
+ * every message's original graph position.
  */
-function orderCompletedToolCycles(messages: ChatMessage[]): {
-  messages: ChatMessage[];
-  unitKeys: Array<string | undefined>;
-} {
-  const consumedResultIndexes = new Set<number>();
-  const resultsByRequestIndex = new Map<number, number[]>();
-  const unitKeyByOriginalIndex = new Map<number, string>();
-
+function buildToolCycleUnitKeys(
+  messages: ChatMessage[],
+): Array<string | undefined> {
+  const unitKeys: Array<string | undefined> = messages.map(() => undefined);
   for (let requestIndex = 0; requestIndex < messages.length; requestIndex++) {
-    const requestIds = requestedToolCallIds(messages[requestIndex]);
-    if (requestIds.length === 0) continue;
-
-    const requestIdSet = new Set(requestIds);
-    const foundIds = new Set<string>();
-    const resultIndexes: number[] = [];
-
+    const requestedIds = requestedToolCallIds(messages[requestIndex]);
+    if (requestedIds.length === 0) continue;
+    const requested = new Set(requestedIds);
+    const found = new Set<string>();
+    let lastResultIndex = -1;
     for (
       let candidateIndex = requestIndex + 1;
       candidateIndex < messages.length;
       candidateIndex++
     ) {
-      const candidate = messages[candidateIndex];
-      // A later current-agent assistant turn closes this tool cycle. Do not
-      // reach across it to claim a delayed or duplicate result.
-      if (candidate.role === "assistant") break;
-      if (consumedResultIndexes.has(candidateIndex)) continue;
-
-      const candidateIds = resultToolCallIds(candidate);
+      if (messages[candidateIndex].role === "assistant") break;
+      const resultIds = resultToolCallIds(messages[candidateIndex]);
       if (
-        candidateIds.length === 0 ||
-        candidateIds.some((id) => !requestIdSet.has(id))
+        resultIds.length === 0 || resultIds.some((id) => !requested.has(id))
       ) {
         continue;
       }
-
-      resultIndexes.push(candidateIndex);
-      candidateIds.forEach((id) => foundIds.add(id));
-      if (requestIds.every((id) => foundIds.has(id))) break;
+      resultIds.forEach((id) => found.add(id));
+      lastResultIndex = candidateIndex;
+      if (requestedIds.every((id) => found.has(id))) break;
     }
-
-    if (!requestIds.every((id) => foundIds.has(id))) continue;
-    resultsByRequestIndex.set(requestIndex, resultIndexes);
-    resultIndexes.forEach((index) => consumedResultIndexes.add(index));
-    const lastResultIndex = Math.max(...resultIndexes);
-    const unitKey = `tool-cycle:${requestIndex}`;
+    if (!requestedIds.every((id) => found.has(id))) continue;
+    const key = `tool-cycle:${requestIndex}`;
     for (let index = requestIndex; index <= lastResultIndex; index++) {
-      unitKeyByOriginalIndex.set(index, unitKey);
+      unitKeys[index] = key;
     }
   }
-
-  if (consumedResultIndexes.size === 0) {
-    return {
-      messages,
-      unitKeys: messages.map(() => undefined),
-    };
-  }
-
-  const ordered: ChatMessage[] = [];
-  const unitKeys: Array<string | undefined> = [];
-  messages.forEach((message, index) => {
-    if (consumedResultIndexes.has(index)) return;
-    ordered.push(message);
-    unitKeys.push(unitKeyByOriginalIndex.get(index));
-    for (const resultIndex of resultsByRequestIndex.get(index) ?? []) {
-      ordered.push(messages[resultIndex]);
-      unitKeys.push(unitKeyByOriginalIndex.get(resultIndex));
-    }
-  });
-  return { messages: ordered, unitKeys };
+  return unitKeys;
 }
 
 function commonBatchId(toolCalls: ToolInvocation[]): string | null {
@@ -864,20 +822,12 @@ function applyComposedWireContent(
   if (typeof original === "string") return composed;
 
   const nonTextParts = original.filter((part) => part.type !== "text");
-  const textBreakpoint = original.some((part) =>
-      part.type === "text" &&
-      part.promptCacheBreakpoint?.mode === "explicit"
-    )
-    ? { promptCacheBreakpoint: { mode: "explicit" } as const }
-    : {};
   if (nonTextParts.length === 0) {
-    return Object.keys(textBreakpoint).length > 0
-      ? [{ type: "text", text: composed, ...textBreakpoint }]
-      : composed;
+    return composed;
   }
   if (!composed) return nonTextParts;
 
-  return [{ type: "text", text: composed, ...textBreakpoint }, ...nonTextParts];
+  return [{ type: "text", text: composed }, ...nonTextParts];
 }
 
 function prefixSpeakerLabel(label: string, body: string): string {

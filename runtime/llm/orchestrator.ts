@@ -400,7 +400,13 @@ export async function chat(
   const hasInitialContinuation = initialContinuationAnswer.trim().length > 0 ||
     initialContinuationReasoning.length > 0;
   const state = {
-    providerIndex: 0,
+    providerIndex: Math.max(
+      0,
+      Math.min(
+        request.durableRecovery?.providerIndex ?? 0,
+        attemptConfigs.length - 1,
+      ),
+    ),
     attemptSequence: 0,
     recoveryContext: hasInitialContinuation
       ? buildRecoveryAssistantContext(
@@ -414,8 +420,9 @@ export async function chat(
     lastRecoveryReason: hasInitialContinuation
       ? request.continuation?.reason ?? "error"
       : null as string | null,
-    sameProviderRecoveryUsed: false,
-    streamContinuationUsed: hasInitialContinuation,
+    sameProviderRecoveryUsed: (request.durableRecovery?.count ?? 0) > 0,
+    streamContinuationUsed: hasInitialContinuation ||
+      (request.durableRecovery?.count ?? 0) > 0,
     visibleOutputStarted: initialContinuationAnswer.trim().length > 0,
     silentNextAttempt: false,
     forceRecoveryCue: hasInitialContinuation,
@@ -483,6 +490,7 @@ export async function chat(
       toolCalls: ToolInvocation[];
       extractedTags: Record<string, string[]>;
     },
+    recovery?: ChatResponse["recovery"],
   ): ChatResponse => ({
     prompt,
     answer,
@@ -502,6 +510,7 @@ export async function chat(
     ...(parsed && Object.keys(parsed.extractedTags).length > 0
       ? { extractedTags: parsed.extractedTags }
       : {}),
+    ...(recovery ? { recovery } : {}),
     metadata: {
       provider: attemptConfig.provider,
       timestamp: new Date().toISOString(),
@@ -739,6 +748,72 @@ export async function chat(
           );
         }
 
+        if (
+          request.durableRecovery?.enabled === true &&
+          (request.durableRecovery.count ?? 0) === 0
+        ) {
+          let fragmentAnswer = interpretation.currentAttempt.cleanResponse;
+          let fragmentReasoning: string | undefined = streamResult.reasoning;
+          if (issue?.kind === "malformed_tool_call") {
+            fragmentAnswer = getSafeVisiblePrefixBeforeProtocol(
+              streamResult.content,
+            );
+            fragmentReasoning = mergeReasoningParts(
+              streamResult.reasoning,
+              extractVisibleReasoningMarkup(streamResult.content),
+            );
+          } else if (issue?.kind === "degenerate_repetition") {
+            fragmentAnswer = sanitizeUserFacingText(
+              streamResult.content.slice(0, issue.startIndex),
+            );
+          } else if (issue?.kind === "orphaned_tool_result") {
+            fragmentAnswer = "";
+          }
+          fragmentAnswer = sanitizeUserFacingText(fragmentAnswer);
+          const fragmentToolCalls = interpretation.parsed.toolCalls;
+          const hasReusableOutput = fragmentAnswer.trim().length > 0 ||
+            Boolean(fragmentReasoning?.trim()) ||
+            fragmentToolCalls.length > 0;
+
+          if (hasReusableOutput) {
+            const nextProviderIndex = decision.action === "fallback"
+              ? Math.min(state.providerIndex + 1, attemptConfigs.length - 1)
+              : state.providerIndex;
+            return finalResponse(
+              record,
+              attemptConfig,
+              attemptMessages,
+              fragmentAnswer,
+              fragmentReasoning,
+              streamResult.finishReason,
+              undefined,
+              {
+                reason: toUsageStatusReason(decision.reason) ?? "unknown",
+                cue: buildRecoveryCue(decision.reason),
+                answer: fragmentAnswer,
+                ...(fragmentReasoning ? { reasoning: fragmentReasoning } : {}),
+                ...(fragmentToolCalls.length > 0
+                  ? { toolCalls: fragmentToolCalls }
+                  : {}),
+                joinSeparator: fragmentAnswer ? " " : "",
+                nextProviderIndex,
+              },
+            );
+          }
+
+          if (state.providerIndex < attemptConfigs.length - 1) {
+            state.providerIndex++;
+            state.recoveryContext = prefixBeforeAttempt;
+            state.recoveryReasoning = "";
+            state.forceRecoveryCue = false;
+            continue;
+          }
+          lastError = new Error(
+            `LLM attempt produced no reusable output (${decision.reason})`,
+          );
+          break;
+        }
+
         if (decision.action === "retry_same") {
           state.recoveryContext = nextRecoveryContext;
           state.lastRecoveryReason = decision.reason;
@@ -947,6 +1022,47 @@ export async function chat(
         state.streamContinuationUsed = true;
         state.forceRecoveryCue = true;
       };
+
+      if (
+        request.durableRecovery?.enabled === true &&
+        (request.durableRecovery.count ?? 0) === 0
+      ) {
+        const fragmentAnswer = sanitizeUserFacingText(capture.visibleOutput);
+        const fragmentReasoning = capture.reasoningOutput.trim() || undefined;
+        const hasReusableOutput = fragmentAnswer.trim().length > 0 ||
+          Boolean(fragmentReasoning);
+        if (hasReusableOutput) {
+          const nextProviderIndex = decision.action === "fallback"
+            ? Math.min(nextIndex, attemptConfigs.length - 1)
+            : state.providerIndex;
+          return finalResponse(
+            failedRecord,
+            attemptConfig,
+            attemptMessages,
+            fragmentAnswer,
+            fragmentReasoning,
+            "error",
+            undefined,
+            {
+              reason: failedStatusReason,
+              cue: buildRecoveryCue(failedStatusReason),
+              answer: fragmentAnswer,
+              ...(fragmentReasoning ? { reasoning: fragmentReasoning } : {}),
+              joinSeparator: fragmentAnswer ? " " : "",
+              nextProviderIndex,
+            },
+          );
+        }
+
+        if (!totalTimedOut && nextIndex < attemptConfigs.length) {
+          state.providerIndex = nextIndex;
+          state.recoveryContext = prefixBeforeAttempt;
+          state.recoveryReasoning = "";
+          state.forceRecoveryCue = false;
+          continue;
+        }
+        break;
+      }
 
       if (decision.action === "retry_same") {
         continueFromCapture();

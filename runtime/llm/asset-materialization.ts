@@ -445,15 +445,6 @@ export async function materializeAssetRefsForProvider(
         }
         return candidate;
       });
-      if (part.promptCacheBreakpoint?.mode === "explicit") {
-        if (candidates.length > 0) {
-          const lastIndex = candidates.length - 1;
-          candidates[lastIndex] = {
-            ...candidates[lastIndex],
-            promptCacheBreakpoint: part.promptCacheBreakpoint,
-          };
-        }
-      }
       parts.push(...candidates);
     }
 

@@ -214,26 +214,18 @@ Deno.test("llm_call materializes one routing control without tool artifacts", as
   }
 });
 
-Deno.test("llm_call privately corrects a mixed routing/tool response once", async () => {
+Deno.test("llm_call persists invalid routing recovery as append-only messages", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = () => {
     calls += 1;
-    if (calls === 1) {
-      return Promise.resolve(sse([
-        toolBlock("consult_agent", {
-          target: "reviewer",
-          message: "Review this.",
-        }, "route-invalid"),
-        toolBlock("search", { query: "should not run" }, "tool-invalid"),
-      ].join("\n")));
-    }
-    return Promise.resolve(
-      sse(toolBlock("consult_agent", {
+    return Promise.resolve(sse([
+      toolBlock("consult_agent", {
         target: "reviewer",
-        message: "Take over and finish the review.",
-      }, "route-corrected")),
-    );
+        message: "Review this.",
+      }, "route-invalid"),
+      toolBlock("search", { query: "should not run" }, "tool-invalid"),
+    ].join("\n")));
   };
 
   try {
@@ -241,25 +233,30 @@ Deno.test("llm_call privately corrects a mixed routing/tool response once", asyn
     const emitted: Event[] = [];
     deps.context.stream = true;
     deps.emitToStream = (streamEvent: Event) => emitted.push(streamEvent);
-    const produced = onlyResult(await process(event, deps));
-    const payload = produced.payload as Record<string, unknown>;
+    const result = await process(event, deps);
+    assertEquals(result?.producedEvents, []);
+    assertEquals(calls, 1);
+    const history = await deps.db.ops.getMessageHistoryFromGraph(
+      String(event.threadId),
+    );
+    assertEquals(history.length, 2);
+    assertEquals(history[0].metadata?.visibility, "internal");
+    assertEquals(history[0].metadata?.skipRouting, true);
+    assertEquals(history[1].senderType, "job");
+    assertEquals(history[1].metadata?.visibility, "internal");
+    assertEquals(history[1].content?.includes("<recovery_cue>"), true);
 
+    await process(event, deps);
+    const replayedHistory = await deps.db.ops.getMessageHistoryFromGraph(
+      String(event.threadId),
+    );
     assertEquals(calls, 2);
-    assertEquals(payload.status, "completed");
-    assertEquals(payload.answer, "Take over and finish the review.");
-    assertEquals(payload.toolCalls, null);
-    const { controlCallId, ...routing } = produced.metadata?.routing as {
-      controlCallId: string;
-      [key: string]: unknown;
-    };
-    assertEquals(routing, {
-      action: "consult",
-      targetId: "reviewer",
-      source: "model_control",
-      message: "Take over and finish the review.",
-    });
-    assertNotEquals(controlCallId, "route-corrected");
-    assertEquals(produced.metadata?.routingError, undefined);
+    assertEquals(replayedHistory.length, 2);
+    assertEquals(
+      replayedHistory.map((message) => message.id),
+      history.map((message) => message.id),
+    );
+
     const executableDraftPhases = emitted
       .filter((streamEvent) =>
         streamEvent.type === "TOOL_CALL_DELTA" &&
@@ -268,7 +265,12 @@ Deno.test("llm_call privately corrects a mixed routing/tool response once", asyn
       .map((streamEvent) =>
         (streamEvent.payload as Record<string, unknown>).phase
       );
-    assertEquals(executableDraftPhases, ["start", "discarded"]);
+    assertEquals(executableDraftPhases, [
+      "start",
+      "discarded",
+      "start",
+      "discarded",
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -603,41 +605,6 @@ Deno.test("llm_call restores a persisted continuation after replay", async () =>
     assertEquals(prompt.includes("Persisted answer"), true);
     assertEquals(prompt.includes("Persisted reasoning"), true);
     assertEquals(prompt.includes("<recovery_cue>"), true);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-Deno.test("llm_call emits a typed failure after one invalid correction", async () => {
-  const originalFetch = globalThis.fetch;
-  let calls = 0;
-  globalThis.fetch = () => {
-    calls += 1;
-    return Promise.resolve(sse(toolBlock("consult_agent", {
-      target: "outside-thread",
-      message: "This must not route.",
-    }, `route-invalid-${calls}`)));
-  };
-
-  try {
-    const { event, deps } = await setup();
-    const produced = onlyResult(await process(event, deps));
-    const payload = produced.payload as Record<string, unknown>;
-    const error = payload.error as Record<string, unknown>;
-
-    assertEquals(calls, 2);
-    assertEquals(payload.status, "failed");
-    assertEquals(payload.finishReason, "error");
-    assertEquals(payload.toolCalls, null);
-    assertEquals(error.reason, "invalid_routing_control");
-    assertEquals(error.retryable, false);
-    assertEquals(produced.metadata?.routing, undefined);
-    assertExists(produced.metadata?.routingError);
-    assertEquals(
-      (produced.metadata?.routingError as Record<string, unknown>)
-        .correctionAttempted,
-      true,
-    );
   } finally {
     globalThis.fetch = originalFetch;
   }

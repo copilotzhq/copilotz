@@ -184,6 +184,11 @@
           "description": "Participant memory, history, retrieval, skills, and generated context."
         },
         {
+          "title": "Prompt Caching",
+          "slug": "core-concepts/prompt-caching",
+          "description": "Append-only history, provider defaults, durable recovery, and cache metrics."
+        },
+        {
           "title": "Data and Tenancy",
           "slug": "core-concepts/data-and-tenancy",
           "description": "Collections, namespaces, schemas, and production isolation."
@@ -323,6 +328,11 @@
     {
       "title": "Reference",
       "items": [
+        {
+          "title": "Migrating to 0.55",
+          "slug": "reference/migration-0.55",
+          "description": "Removed cache configuration and append-only history migration notes."
+        },
         {
           "title": "createCopilotz",
           "slug": "reference/create-copilotz",

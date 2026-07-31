@@ -107,6 +107,10 @@ export interface AdminAgentSummary {
   lastActivityAt: string | null;
 }
 
+export function buildVisibleMessagePredicate(dataColumn: string): string {
+  return `COALESCE(${dataColumn}->'metadata'->>'visibility', '') <> 'internal'`;
+}
+
 // ---------------------------------------------------------------------------
 // LLM usage field definitions
 // ---------------------------------------------------------------------------

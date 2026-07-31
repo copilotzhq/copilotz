@@ -6,6 +6,7 @@ import {
   buildAdminUsageSourceCte,
   buildUsageCoalesceSelects,
   buildUsageSumSelects,
+  buildVisibleMessagePredicate,
   emptyUsageBreakdown,
   normalizeLimit,
   normalizeOffset,
@@ -58,7 +59,10 @@ export default async function (
     );
   }
 
-  const msgScope: string[] = [`m."type" = 'message'`];
+  const msgScope: string[] = [
+    `m."type" = 'message'`,
+    buildVisibleMessagePredicate(`m."data"`),
+  ];
   const usageScope: string[] = [];
   const usageSourceScope = pushAdminUsageSourceScope(
     params,

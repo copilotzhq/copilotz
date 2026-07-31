@@ -31,6 +31,17 @@ function getAgentId(event: Event): string | null {
   return id || name || senderId || null;
 }
 
+function isInternalRecoveryMessage(event: Event): boolean {
+  const payload: Record<string, unknown> = isRecord(event.payload)
+    ? event.payload
+    : {};
+  const metadata: Record<string, unknown> = isRecord(payload.metadata)
+    ? payload.metadata
+    : {};
+  return metadata.visibility === "internal" &&
+    isRecord(metadata.recovery);
+}
+
 async function getTriggerMessageId(
   event: Event,
   deps: ProcessorDeps,
@@ -54,6 +65,7 @@ export const longTermMemoryTriggerProcessor: EventProcessor<
 > = {
   shouldProcess: (event, deps) =>
     (event as unknown as { type: string }).type === "message.created" &&
+    !isInternalRecoveryMessage(event) &&
     getAgentId(event) !== null &&
     getLongTermMemoryConfig(deps.context.memory) !== null,
 

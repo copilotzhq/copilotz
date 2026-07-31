@@ -4,6 +4,7 @@ import {
   buildAdminUsageSourceCte,
   buildUsageCoalesceSelects,
   buildUsageSumSelects,
+  buildVisibleMessagePredicate,
   pushAdminUsageSourceScope,
   pushScopedThreadNode,
   pushTimeRange,
@@ -24,7 +25,10 @@ export default async function (
   const q = copilotz.ops.query;
 
   const params: unknown[] = [];
-  const mf: string[] = [`"type" = 'message'`];
+  const mf: string[] = [
+    `"type" = 'message'`,
+    buildVisibleMessagePredicate(`"data"`),
+  ];
   pushScopedThreadNode(params, mf, `"namespace"`, namespace);
   pushTimeRange(params, mf, `"created_at"`, from, to);
   const messageWhere = `WHERE ${mf.join(" AND ")}`;

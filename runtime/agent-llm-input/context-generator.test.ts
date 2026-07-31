@@ -97,11 +97,7 @@ Deno.test("contextGenerator places stable local instructions before volatile thr
   assert(metadataIndex > threadIndex);
   assert(userMetadataIndex > metadataIndex);
   assert(!generated.stableSystemPrompt.includes("Current date:"));
-  assertStringIncludes(generated.dynamicSystemPrompt, "Current date:");
-  assertEquals(
-    generated.systemPrompt,
-    `${generated.stableSystemPrompt}\n\n${generated.dynamicSystemPrompt}`,
-  );
+  assertEquals(generated.systemPrompt, generated.stableSystemPrompt);
 });
 
 Deno.test("contextGenerator excludes private participant metadata from the LLM context", () => {

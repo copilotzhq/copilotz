@@ -43,18 +43,6 @@ function isAlwaysOnAdaptiveThinkingModel(model: string): boolean {
     /^claude-sonnet-5(?:-|$)/.test(normalized);
 }
 
-function getPromptCacheConfig(config: ProviderConfig) {
-  const promptCache = config.promptCache;
-  if (promptCache === false) return { enabled: false };
-  if (promptCache && typeof promptCache === "object") {
-    return {
-      enabled: promptCache.enabled !== false,
-      ttl: promptCache.ttl,
-    };
-  }
-  return { enabled: true };
-}
-
 function extractAnthropicFinishReason(data: any): ProviderFinishReason | null {
   const reason = data?.delta?.stop_reason ?? data?.message?.stop_reason;
   if (reason === "max_tokens") return "length";
@@ -200,14 +188,6 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
         body.temperature = config.temperature || 0;
         body.top_p = config.topP;
         body.top_k = config.topK;
-      }
-
-      const promptCache = getPromptCacheConfig(config);
-      if (promptCache.enabled) {
-        body.cache_control = {
-          type: "ephemeral",
-          ...(promptCache.ttl === "1h" ? { ttl: "1h" } : {}),
-        };
       }
 
       if (adaptiveThinkingRequested) {

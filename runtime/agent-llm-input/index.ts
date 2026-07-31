@@ -11,7 +11,6 @@ import {
   resolveThreadMemorySpaces,
 } from "@/runtime/memory/index.ts";
 import { toLLMConfig } from "@/runtime/llm/config.ts";
-import { withExplicitPromptCacheBreakpoint } from "@/runtime/llm/prompt-cache.ts";
 import type {
   ChatMessage,
   LLMConfig,
@@ -74,87 +73,6 @@ export interface BuildAgentLlmInputOptions {
   agent: Agent;
   historyMode: AgentHistoryMode;
   longTermMemoryMode?: AgentLongTermMemoryMode;
-}
-
-function normalizeStringList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value
-      .filter((item): item is string =>
-        typeof item === "string" && item.trim().length > 0
-      )
-      .map((item) => item.trim())
-    : [];
-}
-
-export function buildTurnControlMessage(
-  agent: Agent,
-  event: Event,
-  canConsult: boolean,
-): ChatMessage {
-  const metadata = event.metadata && typeof event.metadata === "object"
-    ? event.metadata as Record<string, unknown>
-    : {};
-  const returnPath = normalizeStringList(metadata.targetQueue);
-  const agentId = (agent.id ?? agent.name) as string;
-  const lines = [
-    "<turn_control>",
-    `active_agent: ${agentId}`,
-    `returns_to: ${returnPath[0] ?? "requester"}`,
-    "You own the current turn.",
-    "Calling a normal tool keeps you active after its result.",
-    ...(canConsult
-      ? [
-        "To consult another agent for one bounded turn, call consult_agent. Control returns to you after their reply.",
-      ]
-      : []),
-    "When your work is finished, reply normally without a routing call.",
-    "</turn_control>",
-  ];
-  return { role: "system", content: lines.join("\n") };
-}
-
-function matchesCurrentAgent(agent: Agent, senderId: string): boolean {
-  const normalizedSender = senderId.trim().toLowerCase();
-  return [agent.id, agent.name].some((identity) =>
-    typeof identity === "string" &&
-    identity.trim().toLowerCase() === normalizedSender
-  );
-}
-
-function latestExternalRequestMessageId(
-  history: NewMessage[],
-  agent: Agent,
-): string | null {
-  for (let index = history.length - 1; index >= 0; index--) {
-    const message = history[index];
-    const isExternal = message.senderType === "user" ||
-      message.senderType === "job" ||
-      (message.senderType === "agent" &&
-        !matchesCurrentAgent(agent, message.senderId));
-    if (isExternal && typeof message.id === "string") return message.id;
-  }
-  return null;
-}
-
-export function markLatestExternalRequest(
-  messages: ChatMessage[],
-  history: NewMessage[],
-  agent: Agent,
-): ChatMessage[] {
-  const messageId = latestExternalRequestMessageId(history, agent);
-  if (!messageId) return messages;
-
-  let marked = false;
-  return messages.map((message) => {
-    if (marked || message.metadata?.sourceMessageId !== messageId) {
-      return message;
-    }
-    marked = true;
-    return {
-      ...message,
-      content: withExplicitPromptCacheBreakpoint(message.content),
-    };
-  });
 }
 
 function toExecutableTool(tool: unknown): ExecutableTool | null {
@@ -564,11 +482,7 @@ export async function buildAgentLlmInput(
       deps,
     })
     : generatedHistory;
-  const llmHistory = markLatestExternalRequest(
-    transformedHistory,
-    selectedHistory,
-    agent,
-  );
+  const llmHistory = transformedHistory;
 
   const allowedToolKeys: string[] = Array.isArray(agent.allowedTools)
     ? agent.allowedTools
@@ -602,26 +516,8 @@ export async function buildAgentLlmInput(
     }
   }
 
-  const stableSystemContent = withExplicitPromptCacheBreakpoint(
-    stableSystemPrompt,
-  );
-  const dynamicSystemMessages: ChatMessage[] = [
-    ...(llmContext.dynamicSystemPrompt
-      ? [{ role: "system" as const, content: llmContext.dynamicSystemPrompt }]
-      : []),
-    ...(context.multiAgent?.enabled === true
-      ? [
-        buildTurnControlMessage(
-          agent,
-          event,
-          routingTargets.consult.length > 0,
-        ),
-      ]
-      : []),
-  ];
   const messages: ChatMessage[] = [
-    { role: "system", content: stableSystemContent },
-    ...dynamicSystemMessages,
+    { role: "system", content: stableSystemPrompt },
     ...llmHistory,
   ];
   logAgentInputPhase({

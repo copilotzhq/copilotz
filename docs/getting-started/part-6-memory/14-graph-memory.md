@@ -442,6 +442,11 @@ The long-term-memory checkpoint is inserted into the system context.
 `limitEstimatedInputTokens` preserves that system context and trims older raw
 history from the remaining budget.
 
+Messages inside an epoch are projected in graph creation order with immutable
+per-message timestamps. Tool cycles are never retroactively reordered. See
+[Prompt caching](../../core-concepts/prompt-caching.md) for the complete
+append-only invariant and rollover behavior.
+
 It does not divide the budget between checkpoint and hot history for you. Plan
 the combined request:
 

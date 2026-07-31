@@ -7,10 +7,8 @@ import { getPublicThreadMetadata } from "@/runtime/thread-metadata.ts";
 export interface LLMContextData {
   threadContext: string;
   agentContext: string;
-  /** Long-lived prefix eligible for explicit provider prompt caching. */
+  /** Long-lived deterministic provider prefix. */
   stableSystemPrompt: string;
-  /** Per-request context that must remain after the stable cache boundary. */
-  dynamicSystemPrompt: string;
   /** Backward-compatible flattened prompt. */
   systemPrompt: string;
 }
@@ -179,9 +177,6 @@ export function contextGenerator(
     agent.instructions && `Your instructions are: ${agent.instructions}`,
   ].filter(Boolean).join("\n");
 
-  const currentDate = new Date().toISOString().slice(0, 10);
-  const dateContext = `Current date: ${currentDate}`;
-
   const publicThreadMetadata = getPublicThreadMetadata(thread.metadata);
   const threadMetadata = Object.keys(publicThreadMetadata).length > 0
     ? JSON.stringify(publicThreadMetadata, null, 2)
@@ -256,16 +251,12 @@ export function contextGenerator(
   ]
     .filter(Boolean)
     .join("\n\n");
-  const dynamicSystemPrompt = dateContext;
-  const systemPrompt = [stableSystemPrompt, dynamicSystemPrompt]
-    .filter(Boolean)
-    .join("\n\n");
+  const systemPrompt = stableSystemPrompt;
 
   return {
     threadContext,
     agentContext,
     stableSystemPrompt,
-    dynamicSystemPrompt,
     systemPrompt,
   };
 }

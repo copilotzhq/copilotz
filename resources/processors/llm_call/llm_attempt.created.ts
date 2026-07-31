@@ -36,15 +36,13 @@ import type {
 import { ulid } from "ulid";
 import { prepareAgentChatRequest } from "@/runtime/llm/agent-request.ts";
 import { getProviderErrorDetails } from "@/runtime/llm/errors.ts";
-import { withoutPromptCacheBreakpoint } from "@/runtime/llm/prompt-cache.ts";
+import {
+  deriveInternalPromptCacheKey,
+  withInternalPromptCacheKey,
+} from "@/runtime/llm/internal-cache-key.ts";
 import { createLlmUsageService } from "@/runtime/collections/native.ts";
 import { isStaleRunGenerationError } from "@/database/operations/index.ts";
 import { EVENT_PRIORITIES } from "@/runtime/event-priority.ts";
-import {
-  getRuntimeThreadMetadata,
-  getSerializableThreadMetadata,
-  setRuntimeThreadMetadata,
-} from "@/runtime/thread-metadata.ts";
 import {
   resolveInThreadRoutingTargets,
   ROUTING_CONTROL_NAMES,
@@ -544,10 +542,18 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         deps,
       });
 
-    const configForCall: ProviderConfig = mergeLLMRuntimeConfig(
-      persistedConfig,
-      agentRuntimeConfig,
-      securityRuntimeConfig,
+    const promptCacheKey = await deriveInternalPromptCacheKey(
+      context.namespace ?? "default",
+      threadId,
+      String(payload.agent.id ?? payload.agent.name),
+    );
+    const configForCall: ProviderConfig = withInternalPromptCacheKey(
+      mergeLLMRuntimeConfig(
+        persistedConfig,
+        agentRuntimeConfig,
+        securityRuntimeConfig,
+      ),
+      promptCacheKey,
     );
 
     assertAgentLLMConfig(
@@ -568,6 +574,14 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         !Array.isArray(event.metadata)
       ? event.metadata as Record<string, unknown>
       : {};
+    const recoveryMetadata = eventMetadata.recovery &&
+        typeof eventMetadata.recovery === "object" &&
+        !Array.isArray(eventMetadata.recovery)
+      ? eventMetadata.recovery as Record<string, unknown>
+      : null;
+    const recoveryCount = typeof recoveryMetadata?.count === "number"
+      ? recoveryMetadata.count
+      : 0;
     const baseResultMetadata: Record<string, unknown> = {
       ...(typeof eventMetadata.targetId === "string"
         ? { targetId: eventMetadata.targetId }
@@ -595,6 +609,14 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         : {}),
       ...(runGeneration !== null ? { runGeneration } : {}),
       ...(streamLlmAttemptId ? { streamLlmAttemptId } : {}),
+      ...(recoveryMetadata
+        ? {
+          recovery: {
+            ...recoveryMetadata,
+            kind: "continuation",
+          },
+        }
+        : {}),
     };
 
     const sourceMessageId = typeof eventMetadata.sourceMessageId === "string"
@@ -655,10 +677,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     const persistedProviderAttemptIds = new Set<string>();
     const providerAttemptIndexes = new Map<string, number>();
     const providerAttemptRuntimeIndexes = new Map<string, number>();
-    const providerAttemptPhases = new Map<
-      string,
-      "initial" | "routing_correction"
-    >();
     let providerAttemptSequence = persistedProviderAttemptCount;
     const persistUsageRecords = async (
       records: LLMUsageAttempt[],
@@ -697,8 +715,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
                 sourceEventType: event.type,
                 attemptKind: "provider_attempt",
                 recoveredFromUsageRecord: true,
-                chatPhase: providerAttemptPhases.get(canonicalAttemptId) ??
-                  "initial",
                 runtimeAttemptIndex: providerAttemptRuntimeIndexes.get(
                   canonicalAttemptId,
                 ) ?? record.attemptIndex ?? null,
@@ -740,8 +756,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
                 : {}),
               metadata: {
                 attemptKind: "provider_attempt",
-                chatPhase: providerAttemptPhases.get(canonicalAttemptId) ??
-                  "initial",
                 runtimeAttemptIndex: providerAttemptRuntimeIndexes.get(
                   canonicalAttemptId,
                 ) ?? record.attemptIndex ?? null,
@@ -1032,39 +1046,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       kind: "none",
       executableCalls: [],
     };
-    let routingCorrectionAttempted = false;
-    const discardedRoutingResponses: ChatResponse[] = [];
-    const runtimeMetadata = getRuntimeThreadMetadata(deps.thread?.metadata);
-    const historyCutoffs = runtimeMetadata.promptHistoryCutoffs &&
-        typeof runtimeMetadata.promptHistoryCutoffs === "object" &&
-        !Array.isArray(runtimeMetadata.promptHistoryCutoffs)
-      ? runtimeMetadata.promptHistoryCutoffs as Record<string, string>
-      : {};
-    const onHistoryCutoff = async (
-      profileKey: string,
-      sourceEndMessageId: string | null,
-    ) => {
-      const latestThread = await deps.db.ops.getThreadById(threadId);
-      const latestRuntime = getRuntimeThreadMetadata(latestThread?.metadata);
-      const current = latestRuntime.promptHistoryCutoffs &&
-          typeof latestRuntime.promptHistoryCutoffs === "object" &&
-          !Array.isArray(latestRuntime.promptHistoryCutoffs)
-        ? latestRuntime.promptHistoryCutoffs as Record<string, string>
-        : {};
-      const next = { ...current };
-      if (sourceEndMessageId) next[profileKey] = sourceEndMessageId;
-      else delete next[profileKey];
-      await deps.db.ops.updateThread(threadId, {
-        metadata: getSerializableThreadMetadata(
-          setRuntimeThreadMetadata(latestThread?.metadata, {
-            promptHistoryCutoffs: Object.keys(next).length > 0
-              ? next
-              : undefined,
-          }),
-        ),
-      });
-    };
-    let activeChatPhase: "initial" | "routing_correction" = "initial";
     const onAttemptLifecycle = async (
       lifecycle: LLMAttemptLifecycleEvent,
     ): Promise<void> => {
@@ -1077,7 +1058,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           lifecycle.attemptId,
           lifecycle.attemptIndex,
         );
-        providerAttemptPhases.set(lifecycle.attemptId, activeChatPhase);
         activeProviderAttemptId = lifecycle.attemptId;
         providerPartialAnswer = "";
         providerPartialReasoning = "";
@@ -1101,7 +1081,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             namespace: context.namespace,
             metadata: {
               attemptKind: "provider_attempt",
-              chatPhase: activeChatPhase,
               runtimeAttemptIndex: lifecycle.attemptIndex,
             },
           }, {
@@ -1142,8 +1121,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       }
       const record = lifecycle.record;
       const parsed = record.debug?.parsedOutput;
-      const chatPhase = providerAttemptPhases.get(lifecycle.attemptId) ??
-        activeChatPhase;
       const patch = {
         provider: lifecycle.provider ?? null,
         model: lifecycle.model ?? null,
@@ -1166,7 +1143,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
           : null),
         metadata: {
           attemptKind: "provider_attempt",
-          chatPhase,
           runtimeAttemptIndex: lifecycle.attemptIndex,
           recoveryAction: lifecycle.recoveryAction,
           statusReason: lifecycle.statusReason ?? null,
@@ -1235,35 +1211,65 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     const logicalDeadlineAt = configuredTotalTimeoutMs
       ? Date.now() + configuredTotalTimeoutMs
       : undefined;
+    const inheritedRecoveryDeadlineAt =
+      typeof recoveryMetadata?.deadlineAt === "number" &&
+        Number.isFinite(recoveryMetadata.deadlineAt)
+        ? recoveryMetadata.deadlineAt
+        : undefined;
+    const effectiveDeadlineAt = logicalDeadlineAt !== undefined &&
+        inheritedRecoveryDeadlineAt !== undefined
+      ? Math.min(logicalDeadlineAt, inheritedRecoveryDeadlineAt)
+      : logicalDeadlineAt ?? inheritedRecoveryDeadlineAt;
     const startChat = (
       messages: ChatMessage[],
       callback = streamCallback,
       includeToolDeltas = true,
-      phase: "initial" | "routing_correction" = "initial",
     ) => {
-      activeChatPhase = phase;
+      let recoverySeparatorEmitted = false;
+      const recoveryJoinSeparator = typeof recoveryMetadata?.joinSeparator ===
+          "string"
+        ? recoveryMetadata.joinSeparator
+        : "";
+      const callbackWithRecoverySeparator = callback && recoveryMetadata
+        ? (token: string, options?: { isReasoning?: boolean }) => {
+          if (
+            !recoverySeparatorEmitted &&
+            options?.isReasoning !== true &&
+            token.length > 0
+          ) {
+            recoverySeparatorEmitted = true;
+            if (recoveryJoinSeparator) callback(recoveryJoinSeparator);
+          }
+          callback(token, options);
+        }
+        : callback;
       return chat(
         {
           ...preparedChat.request,
           messages,
           extractTags: ["think"],
           reasoningHistory: context.reasoningHistory,
-          ...(phase === "initial" && persistedContinuation
+          ...(persistedContinuation
             ? { continuation: persistedContinuation }
             : {}),
           signal: deps.cancellation?.signal,
-          ...(logicalDeadlineAt ? { deadlineAt: logicalDeadlineAt } : {}),
-          historyCutoffs,
-          historyCutoffNamespace: String(
-            payload.agent.id ?? payload.agent.name,
-          ),
-          onHistoryCutoff,
+          ...(effectiveDeadlineAt ? { deadlineAt: effectiveDeadlineAt } : {}),
+          durableRecovery: {
+            enabled: true,
+            ...(typeof recoveryMetadata?.chainId === "string"
+              ? { chainId: recoveryMetadata.chainId }
+              : {}),
+            count: recoveryCount,
+            providerIndex: typeof recoveryMetadata?.providerIndex === "number"
+              ? recoveryMetadata.providerIndex
+              : 0,
+          },
           onAttemptLifecycle,
           onToolCallDelta: includeToolDeltas ? processToolCallDelta : undefined,
         } as ChatRequest,
         configForCall,
         envVars,
-        callback,
+        callbackWithRecoverySeparator,
         context.llmProviders,
       );
     };
@@ -1281,61 +1287,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         routingTargets,
       );
 
-      if (routingSelection.kind === "invalid") {
-        discardActiveToolDrafts();
-        routingCorrectionAttempted = true;
-        discardedRoutingResponses.push(response);
-        const consultTargets = routingTargets.consult.map((target) =>
-          target.id
-        );
-        const correctionPrompt: ChatMessage = {
-          role: "system",
-          content: [
-            "[Private Copilotz routing correction]",
-            routingSelection.message,
-            "Respond again using exactly one valid routing control by itself, or reply normally without a routing control.",
-            "Never combine consult_agent with another tool call or a second routing control.",
-            `consult_agent targets: ${consultTargets.join(", ") || "none"}.`,
-          ].join("\n"),
-        };
-        let correctionVisibleStarted = false;
-        const correctionStreamCallback = processStreamToken
-          ? (token: string, options?: { isReasoning?: boolean }) => {
-            if (
-              !options?.isReasoning &&
-              token.length > 0 &&
-              !correctionVisibleStarted
-            ) {
-              correctionVisibleStarted = true;
-              if (partialAnswer.length > 0) processStreamToken("\n\n");
-            }
-            processStreamToken(token, options);
-          }
-          : undefined;
-        const correctionBaseMessages = baseMessages.map((message) =>
-          message.role === "system" ? message : {
-            ...message,
-            content: withoutPromptCacheBreakpoint(message.content),
-          }
-        );
-        chatPromise = startChat(
-          [...correctionBaseMessages, correctionPrompt],
-          correctionStreamCallback,
-          false,
-          "routing_correction",
-        );
-        settled = await awaitChatOrSupersession(chatPromise);
-        if (settled === "superseded") {
-          discardActiveToolDrafts();
-          detachSupersededDrain(chatPromise);
-          return { producedEvents: [] };
-        }
-        response = settled;
-        routingSelection = selectRoutingControl(
-          response.toolCalls,
-          routingTargets,
-        );
-      }
+      if (routingSelection.kind === "invalid") discardActiveToolDrafts();
     } catch (error) {
       discardActiveToolDrafts();
       if (isSuperseded()) {
@@ -1533,17 +1485,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     let answer: string | undefined = ("answer" in llmResponse)
       ? (llmResponse as unknown as { answer?: string }).answer
       : undefined;
-    const visibleAnswerParts = [
-      ...discardedRoutingResponses,
-      llmResponse,
-    ].flatMap((candidate) =>
-      typeof candidate.answer === "string" && candidate.answer.length > 0
-        ? [candidate.answer]
-        : []
-    );
-    if (visibleAnswerParts.length > 0) {
-      answer = visibleAnswerParts.join("\n\n");
-    }
     const reasoning: string | undefined = ("reasoning" in llmResponse)
       ? (llmResponse as unknown as { reasoning?: string }).reasoning
       : undefined;
@@ -1566,7 +1507,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       ? {
         code: routingSelection.code,
         message: routingSelection.message,
-        correctionAttempted: routingCorrectionAttempted,
+        correctionAttempted: false,
       }
       : null;
     const toolCalls: ToolInvocation[] | undefined =
@@ -1592,54 +1533,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       ? (llmResponse as unknown as { cost?: CostBreakdown }).cost
       : undefined;
 
-    const usageRecordsForResponse = (
-      candidate: ChatResponse,
-    ): LLMUsageAttempt[] => {
-      if (
-        Array.isArray(candidate.usageAttempts) &&
-        candidate.usageAttempts.length > 0
-      ) {
-        return candidate.usageAttempts.map((record, index, records) =>
-          index === records.length - 1
-            ? {
-              ...record,
-              status: "failed" as const,
-              recoveryAction: "retry_same" as const,
-              usage: {
-                ...record.usage,
-                statusReason: "malformed_tool_call" as const,
-              },
-              error: {
-                reason: "provider_error" as const,
-                message:
-                  "The model response violated the routing-control contract and was corrected internally.",
-              },
-            }
-            : record
-        );
-      }
-      return candidate.usage
-        ? [{
-          provider: candidate.provider,
-          model: candidate.model,
-          usage: {
-            ...candidate.usage,
-            statusReason: "malformed_tool_call" as const,
-          },
-          error: {
-            reason: "provider_error" as const,
-            message:
-              "The model response violated the routing-control contract and was corrected internally.",
-          },
-          ...(candidate.cost ? { cost: candidate.cost } : {}),
-          ...(candidate.usageFinalized
-            ? { usageFinalized: candidate.usageFinalized }
-            : {}),
-        }]
-        : [];
-    };
     const usageRecords = [
-      ...discardedRoutingResponses.flatMap(usageRecordsForResponse),
       ...(Array.isArray(usageAttempts) && usageAttempts.length > 0
         ? usageAttempts
         : usage
@@ -1665,10 +1559,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
       console.log("routingSelection", routingSelection);
     }
 
-    if (routingFailure && !answer?.trim()) {
-      answer = "The model could not produce a valid in-thread routing control.";
-    }
-
     if (answer) {
       const selfPrefixPattern = new RegExp(
         `^(\\[${escapeRegex(payload.agent.name)}\\]:\\s*|@${
@@ -1677,6 +1567,179 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         "i",
       );
       answer = answer.replace(selfPrefixPattern, "");
+    }
+
+    const durableRecovery = llmResponse.recovery ??
+      (routingFailure && recoveryCount === 0
+        ? {
+          reason: "malformed_tool_call" as const,
+          cue: [
+            "<recovery_cue>",
+            routingFailure.message,
+            "Reply normally, or emit exactly one valid routing control by itself.",
+            "Never combine consult_agent with another tool call or routing control.",
+            "</recovery_cue>",
+          ].join("\n"),
+          answer: answer ?? "",
+          ...(reasoning ? { reasoning } : {}),
+          joinSeparator: answer?.trim() ? " " : "",
+          nextProviderIndex: typeof recoveryMetadata?.providerIndex === "number"
+            ? recoveryMetadata.providerIndex
+            : 0,
+        }
+        : null);
+
+    if (durableRecovery && deps.db?.ops?.mutate?.messages) {
+      if (isSuperseded()) {
+        await markAttemptSuperseded({
+          provider: llmResponse.provider ?? null,
+          model: llmResponse.model ?? null,
+          finishReason: llmResponse.finishReason ?? "error",
+          answer: durableRecovery.answer,
+          reasoning: durableRecovery.reasoning ?? null,
+          messages: llmResponse.prompt,
+          debug: llmResponse.debug ?? null,
+          toolCalls: durableRecovery.toolCalls ?? null,
+          usage: usage ?? null,
+          cost: cost ?? null,
+        });
+        return { producedEvents: [] };
+      }
+
+      const chainId = typeof recoveryMetadata?.chainId === "string"
+        ? recoveryMetadata.chainId
+        : `recovery-${
+          event.subjectId ?? event.id ?? llmAttemptId ?? crypto.randomUUID()
+        }`;
+      const nextRecoveryCount = recoveryCount + 1;
+      const safeChainId = chainId.replace(/[^A-Za-z0-9_-]/g, "_");
+      const fragmentMessageId = `${safeChainId}-${nextRecoveryCount}-fragment`;
+      const cueMessageId = `${safeChainId}-${nextRecoveryCount}-cue`;
+      const recoveryControl = {
+        chainId,
+        count: nextRecoveryCount,
+        reason: durableRecovery.reason,
+        joinSeparator: durableRecovery.joinSeparator,
+        providerIndex: durableRecovery.nextProviderIndex,
+        ...(effectiveDeadlineAt ? { deadlineAt: effectiveDeadlineAt } : {}),
+      };
+      const agentId = String(payload.agent.id ?? payload.agent.name);
+      const fragmentMetadata: Record<string, unknown> = {
+        skipRouting: true,
+        ...(!durableRecovery.answer.trim() ? { visibility: "internal" } : {}),
+        recovery: {
+          ...recoveryControl,
+          kind: "fragment",
+          sequence: nextRecoveryCount * 2 - 1,
+        },
+      };
+      const cueMetadata: Record<string, unknown> = {
+        visibility: "internal",
+        recovery: {
+          ...recoveryControl,
+          kind: "cue",
+          sequence: nextRecoveryCount * 2,
+        },
+      };
+      const mutationOptions = {
+        traceId: typeof event.traceId === "string" ? event.traceId : null,
+        runGeneration,
+        expectedRunGeneration: runGeneration,
+        causationId: typeof event.id === "string" ? event.id : null,
+        namespace: context.namespace,
+      };
+
+      if (!await deps.db.ops.unsafeGraph.getNodeById(fragmentMessageId)) {
+        await deps.db.ops.mutate.messages.create(
+          {
+            id: fragmentMessageId,
+            threadId,
+            senderId: agentId,
+            senderType: "agent",
+            content: durableRecovery.answer,
+            reasoning: durableRecovery.reasoning ?? null,
+            toolCalls: durableRecovery.toolCalls ?? null,
+            metadata: fragmentMetadata,
+          },
+          context.namespace,
+          {
+            ...mutationOptions,
+            priority: EVENT_PRIORITIES.SETTLEMENT,
+            status: "pending",
+            metadata: fragmentMetadata,
+            eventPayload: {
+              content: durableRecovery.answer,
+              sender: {
+                id: agentId,
+                type: "agent",
+                name: payload.agent.name,
+              },
+              ...(durableRecovery.reasoning
+                ? { reasoning: durableRecovery.reasoning }
+                : {}),
+              ...(durableRecovery.toolCalls
+                ? { toolCalls: durableRecovery.toolCalls }
+                : {}),
+              metadata: fragmentMetadata,
+            },
+          },
+        );
+      }
+
+      if (!await deps.db.ops.unsafeGraph.getNodeById(cueMessageId)) {
+        await deps.db.ops.mutate.messages.create(
+          {
+            id: cueMessageId,
+            threadId,
+            senderId: "copilotz-recovery",
+            senderType: "job",
+            content: durableRecovery.cue,
+            metadata: cueMetadata,
+          },
+          context.namespace,
+          {
+            ...mutationOptions,
+            priority: EVENT_PRIORITIES.AGENT_CONTINUATION,
+            status: "pending",
+            metadata: {
+              ...cueMetadata,
+              targetId: agentId,
+              sourceMessageSenderId: "copilotz-recovery",
+              sourceMessageSenderType: "job",
+            },
+            eventPayload: {
+              content: durableRecovery.cue,
+              sender: {
+                id: "copilotz-recovery",
+                type: "job",
+                name: "Copilotz Recovery",
+              },
+              metadata: cueMetadata,
+            },
+          },
+        );
+      }
+
+      if (llmAttemptId && deps.db.ops.mutate.llmAttempts) {
+        await deps.db.ops.mutate.llmAttempts.update(llmAttemptId, {
+          status: "superseded",
+          answer: durableRecovery.answer,
+          reasoning: durableRecovery.reasoning ?? null,
+          messages: llmResponse.prompt,
+          debug: llmResponse.debug ?? null,
+          usage: usage ?? null,
+          cost: cost ?? null,
+          metadata: {
+            ...eventMetadata,
+            recovery: recoveryControl,
+          },
+        }, mutationOptions);
+      }
+      return { producedEvents: [] };
+    }
+
+    if (routingFailure && !answer?.trim()) {
+      answer = "The model could not produce a valid in-thread routing control.";
     }
 
     // Generate batch metadata for multiple tool calls

@@ -24,35 +24,6 @@ async function fingerprintMessages(messages: ChatMessage[]): Promise<string> {
     .join("");
 }
 
-function promptProfileKey(
-  config: ProviderConfig,
-  namespace = "default",
-): string {
-  return `${namespace}:${config.provider ?? "unknown"}:${
-    config.model ?? "default"
-  }:${config.limitEstimatedInputTokens ?? 0}`;
-}
-
-function applyHistoryCutoff(
-  messages: ChatMessage[],
-  sourceEndMessageId: string | undefined,
-): { messages: ChatMessage[]; found: boolean } {
-  if (!sourceEndMessageId) return { messages, found: false };
-  const boundary = messages.findIndex((message) =>
-    message.metadata?.sourceMessageId === sourceEndMessageId
-  );
-  if (boundary < 0) return { messages, found: false };
-  return {
-    messages: [
-      ...messages.filter((message, index) =>
-        message.role === "system" && index <= boundary
-      ),
-      ...messages.slice(boundary + 1),
-    ],
-    found: true,
-  };
-}
-
 /**
  * Provider-attempt transcript seam. The existing normalization/budgeting
  * implementation remains untouched behind this boundary.
@@ -62,25 +33,12 @@ export async function prepareAttemptTranscript(args: {
   config: ProviderConfig;
   recoveryMessages?: ChatMessage[];
 }): Promise<PreparedAttemptTranscript> {
-  const profileKey = promptProfileKey(
-    args.config,
-    args.request.historyCutoffNamespace,
-  );
-  const persistedCutoff = args.request.historyCutoffs?.[profileKey];
-  const cutoffApplied = applyHistoryCutoff(
-    args.request.messages,
-    persistedCutoff,
-  );
-  if (persistedCutoff && !cutoffApplied.found) {
-    await args.request.onHistoryCutoff?.(profileKey, null);
-  }
-
   const materialized = args.request.materializeMessages
     ? await args.request.materializeMessages(
-      cutoffApplied.messages,
+      args.request.messages,
       args.config,
     )
-    : cutoffApplied.messages;
+    : args.request.messages;
   const config = toLLMConfig(args.config);
   const recoveryMessages = args.recoveryMessages ?? [];
   const recoveryEstimatedTokens = recoveryMessages.length > 0
@@ -98,16 +56,6 @@ export async function prepareAttemptTranscript(args: {
       limitEstimatedInputTokens: baseInputLimit,
     },
   });
-  if (
-    formatted.cutoffSourceMessageId &&
-    formatted.cutoffSourceMessageId !== persistedCutoff
-  ) {
-    await args.request.onHistoryCutoff?.(
-      profileKey,
-      formatted.cutoffSourceMessageId,
-    );
-  }
-
   const messages = [
     ...formatted.messages,
     ...recoveryMessages,

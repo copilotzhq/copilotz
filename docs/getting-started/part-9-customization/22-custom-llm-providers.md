@@ -12,19 +12,26 @@ status: stable
 
 ## The pain
 
-A new LLM provider launches. The benchmarks look good. The price is 40% lower than what you're currently paying. You want to test it.
+A new LLM provider launches. The benchmarks look good. The price is 40% lower
+than what you're currently paying. You want to test it.
 
-But Copilotz doesn't have a built-in integration yet. You could wait for a PR to get merged. Or you could swap out the framework entirely. Neither is acceptable.
+But Copilotz doesn't have a built-in integration yet. You could wait for a PR to
+get merged. Or you could swap out the framework entirely. Neither is acceptable.
 
-The same problem applies to private deployments — an on-premises model behind a corporate firewall, or a custom fine-tuned model hosted on your own infrastructure. These will never have first-party framework support.
+The same problem applies to private deployments — an on-premises model behind a
+corporate firewall, or a custom fine-tuned model hosted on your own
+infrastructure. These will never have first-party framework support.
 
 ## The solution
 
-Copilotz's LLM integration is a resource, just like agents and tools. Define a provider adapter with a small set of primitives and it's available to any agent. No framework modification required.
+Copilotz's LLM integration is a resource, just like agents and tools. Define a
+provider adapter with a small set of primitives and it's available to any agent.
+No framework modification required.
 
 ## The provider interface
 
 A provider factory is a function that returns four things:
+
 1. `endpoint` — where to send requests
 2. `headers()` — how to authenticate
 3. `body()` — how to format the request
@@ -83,7 +90,8 @@ export default (config) => {
 };
 ```
 
-Place this file in `resources/llm/my-provider/adapter.ts`. With `resources.path` configured, Copilotz auto-loads it.
+Place this file in `resources/llm/my-provider/adapter.ts`. With `resources.path`
+configured, Copilotz auto-loads it.
 
 ## Using your custom provider
 
@@ -95,7 +103,7 @@ const copilotz = await createCopilotz({
       name: "Assistant",
       role: "A helpful assistant.",
       llmOptions: {
-        provider: "my-provider",  // Must match the directory name
+        provider: "my-provider", // Must match the directory name
         model: "my-model-v2",
         temperature: 0.7,
       },
@@ -115,7 +123,8 @@ const copilotz = await createCopilotz({
 
 ## A complete example: OpenAI-compatible provider
 
-Many providers (Groq, Together AI, Fireworks, LM Studio, etc.) implement the OpenAI API. Here's a generic adapter for any OpenAI-compatible endpoint:
+Many providers (Groq, Together AI, Fireworks, LM Studio, etc.) implement the
+OpenAI API. Here's a generic adapter for any OpenAI-compatible endpoint:
 
 ```typescript
 // resources/llm/openai-compatible/adapter.ts
@@ -163,6 +172,18 @@ export default (config) => {
 };
 ```
 
+## Prompt caching and usage
+
+Provider adapters receive deterministic, append-only message history. Use the
+provider's default prompt-caching behavior; adapters must not add public cache
+modes, explicit breakpoints, TTLs, or provider cache-resource lifecycle code.
+OpenAI's stable cache-routing key is framework-internal.
+
+Normalize every reported attempt into `inputTokens`, `outputTokens`,
+`cacheReadInputTokens`, and the provider's cache-creation/write token field when
+available. Keep `rawUsage` so unsupported provider details remain observable.
+See [Prompt Caching](../../core-concepts/prompt-caching.md).
+
 Use it for any compatible provider by passing `baseUrl`:
 
 ```typescript
@@ -178,7 +199,8 @@ llmOptions: { provider: "openai-compatible", model: "mistralai/Mixtral-8x7B", ba
 
 ## Handling non-streaming providers
 
-Some providers don't support streaming. Return the full response from `extractContent`:
+Some providers don't support streaming. Return the full response from
+`extractContent`:
 
 ```typescript
 // For non-streaming: body sends stream: false
@@ -217,7 +239,9 @@ extractContent: (chunk) => {
 },
 ```
 
-The `isReasoning: true` flag causes Copilotz to emit `TOKEN` events with `isReasoning: true`, which clients can use to render reasoning in a collapsible section.
+The `isReasoning: true` flag causes Copilotz to emit `TOKEN` events with
+`isReasoning: true`, which clients can use to render reasoning in a collapsible
+section.
 
 ## What this unlocks
 
@@ -228,6 +252,10 @@ The `isReasoning: true` flag causes Copilotz to emit `TOKEN` events with `isReas
 
 ## What's next
 
-You've reached the end of the core guide. There are three more extension points worth knowing about — Collections (for typed application data), Features (for custom API endpoints), and Web Libraries (for client-side integration). The next chapter gives you an orientation to all three and points you toward the full documentation.
+You've reached the end of the core guide. There are three more extension points
+worth knowing about — Collections (for typed application data), Features (for
+custom API endpoints), and Web Libraries (for client-side integration). The next
+chapter gives you an orientation to all three and points you toward the full
+documentation.
 
 → **[Chapter 23: What's Next](./23-whats-next.md)****

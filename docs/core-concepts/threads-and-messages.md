@@ -70,6 +70,18 @@ visible chat bubble. The live stream still receives a terminal empty
 Visible text after a tool call in the same assistant response is preserved as
 ordered message content. It is not treated as a recovery condition by itself.
 
+## Durable Recovery Messages
+
+When a provider stops after producing reusable output, Copilotz persists that
+sanitized assistant fragment and an internal user-role `<recovery_cue>` as two
+ordinary `message.created` records. The normal router then creates the
+continuation attempt. Internal recovery messages are excluded from participant
+creation, extraction, user-turn counters, message counts, and chat rendering.
+
+Visible fragments and their continuation carry only correlation metadata; the
+message text remains canonical in `node.content`. Clients use the recovery chain
+ID and stored join separator to hydrate the fragments as one bubble.
+
 ## Targets
 
 `target` tells Copilotz which agent should handle the message.

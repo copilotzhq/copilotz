@@ -8,18 +8,6 @@ function normalizedOpenAIModelName(model: string | undefined): string {
     .replace(/^openai\//, "");
 }
 
-/** OpenAI explicit prompt-cache breakpoints are available on GPT-5.6+. */
-export function supportsOpenAIExplicitPromptCaching(
-  model: string | undefined,
-): boolean {
-  const normalized = normalizedOpenAIModelName(model);
-  const version = /^gpt-(\d+)\.(\d+)(?:-|$)/.exec(normalized);
-  if (!version) return false;
-  const major = Number(version[1]);
-  const minor = Number(version[2]);
-  return major > 5 || (major === 5 && minor >= 6);
-}
-
 export function isOpenAIResponsesAutoModel(model: string | undefined): boolean {
   const normalized = normalizedOpenAIModelName(model);
   if (normalized.includes("audio")) return false;

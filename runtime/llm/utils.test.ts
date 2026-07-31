@@ -18,6 +18,7 @@ import {
   responseHasToolIntent,
   sanitizeUserFacingText,
 } from "./utils.ts";
+import type { ChatRequest } from "./types.ts";
 import { classifyLLMError, LLMTranscriptError } from "./errors.ts";
 
 Deno.test("estimated input limiting reports and reuses a whole-message boundary", () => {
@@ -70,19 +71,10 @@ Deno.test("formatMessages merges consecutive user turns from different senders",
   );
 });
 
-Deno.test("formatMessages preserves the stable system breakpoint after prepended tools", () => {
-  const formatted = formatMessages({
+Deno.test("formatMessages keeps deterministic system and tool ordering", () => {
+  const request = {
     messages: [
-      {
-        role: "system",
-        content: [{
-          type: "text",
-          text: "Stable context",
-          promptCacheBreakpoint: { mode: "explicit" },
-        }],
-      },
-      { role: "system", content: "Current date: 2026-07-30" },
-      { role: "system", content: "<turn_control>dynamic</turn_control>" },
+      { role: "system" as const, content: "Stable context" },
       { role: "user", content: "Hello" },
     ],
     tools: [{
@@ -93,23 +85,15 @@ Deno.test("formatMessages preserves the stable system breakpoint after prepended
         inputTypes: "{}",
       },
     }],
-  });
+  } satisfies ChatRequest;
+  const first = formatMessages(request);
+  const second = formatMessages(request);
 
-  assertEquals(Array.isArray(formatted[0].content), true);
-  const parts = formatted[0].content as Array<Record<string, unknown>>;
-  const breakpointIndex = parts.findIndex((part) =>
-    part.promptCacheBreakpoint !== undefined
-  );
-  assertEquals(breakpointIndex > 0, true);
-  assertEquals(parts[breakpointIndex], {
-    type: "text",
-    text: "Stable context",
-    promptCacheBreakpoint: { mode: "explicit" },
-  });
-  assertEquals(
-    parts.slice(breakpointIndex + 1).map((part) => part.text).join(""),
-    "\n\nCurrent date: 2026-07-30\n\n<turn_control>dynamic</turn_control>",
-  );
+  assertEquals(first, second);
+  assertEquals(first[0].role, "system");
+  assertEquals(String(first[0].content).endsWith("Stable context"), true);
+  assertEquals(JSON.stringify(first).includes("turn_control"), false);
+  assertEquals(JSON.stringify(first).includes("prompt_cache"), false);
 });
 
 Deno.test("formatMessages emits current-agent tool results as the following user turn", () => {
@@ -154,7 +138,7 @@ Deno.test("formatMessages emits current-agent tool results as the following user
   assertEquals(resultWire.includes("<continue_after_tool_results>"), false);
 });
 
-Deno.test("formatMessages places completed results before interleaved multi-agent user events", () => {
+Deno.test("formatMessages preserves graph chronology across interleaved tool cycles", () => {
   const formatted = formatMessages({
     messages: [
       {
@@ -202,8 +186,8 @@ Deno.test("formatMessages places completed results before interleaved multi-agen
   );
   const userContinuation = formatted[2]?.content as string;
   assertEquals(
-    userContinuation.indexOf("<tool_results>") <
-      userContinuation.indexOf("[North]"),
+    userContinuation.indexOf("[North]") <
+      userContinuation.indexOf("<tool_results>"),
     true,
   );
   assertEquals(
@@ -214,7 +198,7 @@ Deno.test("formatMessages places completed results before interleaved multi-agen
   assertEquals(formatted[2]?.senderId, undefined);
 });
 
-Deno.test("formatMessages batches parallel results into one user turn before peer text", () => {
+Deno.test("formatMessages batches adjacent parallel results without moving peer text", () => {
   const formatted = formatMessages({
     messages: [
       {
@@ -293,7 +277,7 @@ Deno.test("formatMessages batches parallel results into one user turn before pee
     true,
   );
   assertEquals(
-    resultTurn.indexOf('"second":true') < resultTurn.indexOf("[North]"),
+    resultTurn.indexOf("[North]") < resultTurn.indexOf('"first":true'),
     true,
   );
 });

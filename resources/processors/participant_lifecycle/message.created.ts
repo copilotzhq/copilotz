@@ -56,16 +56,29 @@ function publicSenderMetadata(
   return publicMetadata;
 }
 
+function isInternalRecoveryMessage(payload: NewMessageEventPayload): boolean {
+  const metadata = payload.metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return false;
+  }
+  const record = metadata as Record<string, unknown>;
+  return record.visibility === "internal" &&
+    record.recovery !== null && typeof record.recovery === "object" &&
+    !Array.isArray(record.recovery);
+}
+
 export const participantLifecycleProcessor: EventProcessor<
   NewMessageEventPayload,
   ProcessorDeps
 > = {
-  shouldProcess: () => true,
+  shouldProcess: (event) =>
+    !isInternalRecoveryMessage(event.payload as NewMessageEventPayload),
   process: async (event: Event, deps: ProcessorDeps) => {
+    const payload = event.payload as NewMessageEventPayload;
+    if (isInternalRecoveryMessage(payload)) return;
+
     const participantCollection = getParticipantCollection(deps);
     if (!participantCollection) return;
-
-    const payload = event.payload as NewMessageEventPayload;
 
     let senderRecord: any = null;
 

@@ -14,43 +14,30 @@
 import type { TokenMediaMetadata } from "@/runtime/tokens/estimate.ts";
 import type { ChatTokenEstimate } from "@/runtime/tokens/chat.ts";
 
-export type PromptCacheBreakpoint = {
-  mode: "explicit";
-};
-
 export type ChatContentPart =
-  & (
-    | { type: "text"; text: string }
-    | {
-      type: "image_url";
-      image_url: {
-        url: string;
-        detail?: "low" | "high" | "original" | "auto";
-      };
-      tokenMetadata?: TokenMediaMetadata;
-    }
-    | {
-      type: "video";
-      video: { url: string; mime_type?: string };
-      tokenMetadata?: TokenMediaMetadata;
-    }
-    | {
-      type: "input_audio";
-      input_audio: { data: string; format?: string; filename?: string };
-      tokenMetadata?: TokenMediaMetadata;
-    }
-    | {
-      type: "file";
-      file: { file_data: string; mime_type?: string; filename?: string };
-      tokenMetadata?: TokenMediaMetadata;
-    }
-  )
-  & {
-    /**
-     * Provider-neutral cache boundary. Adapters only serialize this for
-     * providers/models that support explicit prompt-cache breakpoints.
-     */
-    promptCacheBreakpoint?: PromptCacheBreakpoint;
+  | { type: "text"; text: string }
+  | {
+    type: "image_url";
+    image_url: {
+      url: string;
+      detail?: "low" | "high" | "original" | "auto";
+    };
+    tokenMetadata?: TokenMediaMetadata;
+  }
+  | {
+    type: "video";
+    video: { url: string; mime_type?: string };
+    tokenMetadata?: TokenMediaMetadata;
+  }
+  | {
+    type: "input_audio";
+    input_audio: { data: string; format?: string; filename?: string };
+    tokenMetadata?: TokenMediaMetadata;
+  }
+  | {
+    type: "file";
+    file: { file_data: string; mime_type?: string; filename?: string };
+    tokenMetadata?: TokenMediaMetadata;
   };
 
 export interface ChatMessage {
@@ -147,26 +134,6 @@ export interface ProviderConfigBase {
   outputReasoning?: boolean; // Whether to output thinking/reasoning tokens during stream (default true)
   estimateCost?: boolean; // Whether to estimate cost using OpenRouter pricing data (default true)
   pricingModelId?: string; // Explicit OpenRouter model id override for cost estimation
-  /**
-   * Provider prompt/context cache controls.
-   *
-   * Defaults to provider-native automatic caching when available:
-   * - Anthropic: top-level automatic prompt caching (`cache_control`)
-   * - Gemini 2.5+: implicit context caching
-   *
-   * Set `enabled: false` to avoid sending explicit cache directives.
-   */
-  promptCache?: {
-    enabled?: boolean;
-    mode?: "auto" | "implicit" | "explicit";
-    /** Provider cache TTL. OpenAI explicit breakpoints use `30m` (the current default). */
-    ttl?: "5m" | "30m" | "1h" | `${number}s`;
-    /** Gemini cached content resource, e.g. `cachedContents/abc123`. */
-    cachedContent?: string;
-    /** Gemini display name when Copilotz creates a best-effort explicit cache. */
-    displayName?: string;
-  } | boolean;
-
   // Advanced sampling parameters
   topP?: number;
   topK?: number;
@@ -239,10 +206,6 @@ export interface ProviderConfigBase {
   openaiApi?: "auto" | "responses" | "chat_completions";
   /** OpenAI Responses reasoning summary mode. Defaults to `auto` for reasoning-capable Responses models; set false to omit. */
   openaiReasoningSummary?: "auto" | "concise" | "detailed" | false;
-  /** OpenAI `prompt_cache_key`, used to route requests that share common prompt prefixes. */
-  openaiPromptCacheKey?: string;
-  /** OpenAI `prompt_cache_retention` policy. */
-  openaiPromptCacheRetention?: "in_memory" | "24h";
   verbosity?: "none" | "low" | "medium" | "high"; // OpenAI reasoning models (o3, o4)
 }
 
@@ -312,15 +275,6 @@ export interface ChatRequest {
    * Used only for content-free cache diagnostics.
    */
   debugPromptPrefixMessageCount?: number;
-  /** Internal persisted prompt-history boundaries keyed by provider profile. */
-  historyCutoffs?: Record<string, string>;
-  /** Internal namespace used to isolate persisted cutoffs (normally agent id). */
-  historyCutoffNamespace?: string;
-  /** Internal persistence hook invoked when a stable cutoff changes. */
-  onHistoryCutoff?: (
-    profileKey: string,
-    sourceEndMessageId: string | null,
-  ) => Promise<void> | void;
   /**
    * Controls whether reasoning from an interrupted/recovered same-agent attempt
    * is included in the synthetic retry context. Defaults to the framework
@@ -338,6 +292,13 @@ export interface ChatRequest {
     partialAnswer?: string;
     partialReasoning?: string;
     reason?: TokenUsageStatusReason;
+  };
+  /** Internal durable recovery state propagated by persisted recovery cues. */
+  durableRecovery?: {
+    enabled: true;
+    chainId?: string;
+    count?: number;
+    providerIndex?: number;
   };
   /** Optional external signal for cancelling active provider work. */
   signal?: AbortSignal;
@@ -440,6 +401,16 @@ export interface ChatResponse {
   model?: string;
   toolCalls?: ToolInvocation[];
   extractedTags?: Record<string, string[]>;
+  /** Internal instruction for the event runtime to persist and resume output. */
+  recovery?: {
+    reason: TokenUsageStatusReason;
+    cue: string;
+    answer: string;
+    reasoning?: string;
+    toolCalls?: ToolInvocation[];
+    joinSeparator: string;
+    nextProviderIndex: number;
+  };
   debug?: LLMDebugSnapshot;
   metadata?: {
     provider?: ProviderName;

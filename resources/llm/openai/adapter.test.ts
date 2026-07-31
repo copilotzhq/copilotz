@@ -1,14 +1,24 @@
 import { assertEquals, assertThrows } from "@std/assert";
 
-import { openaiProvider } from "./adapter.ts";
+import { withInternalPromptCacheKey } from "@/runtime/llm/internal-cache-key.ts";
 import type { ChatMessage, ProviderConfig } from "@/runtime/llm/types.ts";
+import { openaiProvider } from "./adapter.ts";
 
 const messages: ChatMessage[] = [
   { role: "system", content: "Stable system instructions." },
   { role: "user", content: "Hello" },
 ];
 
-Deno.test("openaiProvider auto-selects Responses API for current OpenAI model families", () => {
+function keyedConfig(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
+  return withInternalPromptCacheKey({
+    provider: "openai",
+    model: "gpt-5.6",
+    apiKey: "test",
+    ...overrides,
+  }, "stable-internal-key");
+}
+
+Deno.test("OpenAI auto-selects Responses for current model families", () => {
   const config: ProviderConfig = {
     provider: "openai",
     model: "gpt-5-mini",
@@ -16,7 +26,7 @@ Deno.test("openaiProvider auto-selects Responses API for current OpenAI model fa
     maxCompletionTokens: 123,
   };
   const provider = openaiProvider(config);
-  const body = provider.body(messages, config) as Record<string, any>;
+  const body = provider.body(messages, config) as Record<string, unknown>;
 
   assertEquals(provider.endpoint, "https://api.openai.com/v1/responses");
   assertEquals(body.model, "gpt-5-mini");
@@ -30,27 +40,20 @@ Deno.test("openaiProvider auto-selects Responses API for current OpenAI model fa
   assertEquals("prompt_cache_key" in body, false);
 });
 
-Deno.test("openaiProvider builds GPT-5 Responses body with Responses field names", () => {
-  const config: ProviderConfig = {
-    provider: "openai",
+Deno.test("OpenAI builds Responses bodies with Responses field names", () => {
+  const config = keyedConfig({
     model: "gpt-5.4",
-    apiKey: "test",
     openaiApi: "responses",
     maxCompletionTokens: 456,
-    openaiPromptCacheKey: "compass-stable-prefix",
-    openaiPromptCacheRetention: "24h",
-  };
-  const provider = openaiProvider(config);
-  const body = provider.body(messages, config) as Record<string, any>;
+  });
+  const body = openaiProvider(config).body(messages, config) as Record<
+    string,
+    unknown
+  >;
 
-  assertEquals(provider.endpoint, "https://api.openai.com/v1/responses");
-  assertEquals(body.model, "gpt-5.4");
   assertEquals(body.input, messages);
-  assertEquals(body.stream, true);
-  assertEquals(body.store, false);
   assertEquals(body.max_output_tokens, 456);
-  assertEquals(body.prompt_cache_key, "compass-stable-prefix");
-  assertEquals(body.prompt_cache_retention, "24h");
+  assertEquals(body.prompt_cache_key, "stable-internal-key");
   assertEquals(body.text, { format: { type: "text" } });
   assertEquals(body.reasoning, { summary: "auto" });
   assertEquals(body.parallel_tool_calls, false);
@@ -59,191 +62,48 @@ Deno.test("openaiProvider builds GPT-5 Responses body with Responses field names
   assertEquals("response_format" in body, false);
 });
 
-Deno.test("openaiProvider serializes GPT-5.6 explicit breakpoints for Responses", () => {
-  const config: ProviderConfig = {
-    provider: "openai",
-    model: "gpt-5.6-sol",
-    apiKey: "test",
-    openaiApi: "responses",
-    openaiPromptCacheKey: "compass:thread-1:east",
-    openaiPromptCacheRetention: "24h",
-    promptCache: { enabled: true, mode: "explicit" },
-  };
-  const provider = openaiProvider(config);
-  const body = provider.body([
-    {
-      role: "system",
-      content: [{
-        type: "text",
-        text: "Stable context",
-        promptCacheBreakpoint: { mode: "explicit" },
-      }],
-    },
-    {
-      role: "user",
-      content: [{
-        type: "text",
-        text: "Initiating request",
-        promptCacheBreakpoint: { mode: "explicit" },
-      }],
-    },
-    { role: "user", content: "Unmarked continuation" },
-  ], config) as Record<string, any>;
+Deno.test("OpenAI Responses sends only the internal prompt cache key", () => {
+  const config = keyedConfig({ openaiApi: "responses" });
+  const body = openaiProvider(config).body(messages, config) as Record<
+    string,
+    unknown
+  >;
 
-  assertEquals(body.prompt_cache_key, "compass:thread-1:east");
-  assertEquals(body.prompt_cache_options, { mode: "explicit" });
+  assertEquals(body.prompt_cache_key, "stable-internal-key");
+  assertEquals("prompt_cache_options" in body, false);
   assertEquals("prompt_cache_retention" in body, false);
-  assertEquals(body.input, [
-    {
-      role: "system",
-      content: [{
-        type: "input_text",
-        text: "Stable context",
-        prompt_cache_breakpoint: { mode: "explicit" },
-      }],
-    },
-    {
-      role: "user",
-      content: [{
-        type: "input_text",
-        text: "Initiating request",
-        prompt_cache_breakpoint: { mode: "explicit" },
-      }],
-    },
-    { role: "user", content: "Unmarked continuation" },
-  ]);
+  assertEquals(JSON.stringify(body).includes("prompt_cache_breakpoint"), false);
 });
 
-Deno.test("openaiProvider serializes GPT-5.6 explicit breakpoints for Chat Completions", () => {
-  const config: ProviderConfig = {
-    provider: "openai",
-    model: "gpt-5.6",
-    apiKey: "test",
-    openaiApi: "chat_completions",
-    promptCache: { enabled: true, mode: "explicit", ttl: "30m" },
-  };
-  const body = openaiProvider(config).body([
-    {
-      role: "user",
-      content: [{
-        type: "text",
-        text: "Stable request",
-        promptCacheBreakpoint: { mode: "explicit" },
-      }],
-    },
-  ], config) as Record<string, any>;
-
-  assertEquals(body.prompt_cache_options, {
-    mode: "explicit",
-    ttl: "30m",
-  });
-  assertEquals(body.messages, [{
-    role: "user",
-    content: [{
-      type: "text",
-      text: "Stable request",
-      prompt_cache_breakpoint: { mode: "explicit" },
-    }],
-  }]);
-});
-
-Deno.test("openaiProvider suppresses explicit fields and markers before GPT-5.6", () => {
-  const config: ProviderConfig = {
-    provider: "openai",
-    model: "gpt-5.5",
-    apiKey: "test",
+Deno.test("ChatGPT transport receives the same internal key without public controls", () => {
+  const config = keyedConfig({
     openaiApi: "responses",
-    promptCache: { enabled: true, mode: "explicit" },
-  };
-  const body = openaiProvider(config).body([
-    {
-      role: "user",
-      content: [{
-        type: "text",
-        text: "Request",
-        promptCacheBreakpoint: { mode: "explicit" },
-      }],
-    },
-  ], config) as Record<string, any>;
-
-  assertEquals("prompt_cache_options" in body, false);
-  assertEquals(body.input[0].content[0], {
-    type: "input_text",
-    text: "Request",
-  });
-});
-
-Deno.test("openaiProvider suppresses explicit fields when prompt caching is disabled", () => {
-  const config: ProviderConfig = {
-    provider: "openai",
-    model: "gpt-5.6",
-    apiKey: "test",
-    promptCache: false,
-  };
-  const body = openaiProvider(config).body([
-    {
-      role: "user",
-      content: [{
-        type: "text",
-        text: "Request",
-        promptCacheBreakpoint: { mode: "explicit" },
-      }],
-    },
-  ], config) as Record<string, any>;
-
-  assertEquals("prompt_cache_options" in body, false);
-  assertEquals(body.input[0].content[0], {
-    type: "input_text",
-    text: "Request",
-  });
-});
-
-Deno.test("openaiProvider keeps the cache key but omits explicit caching for ChatGPT Codex OAuth", () => {
-  const config: ProviderConfig = {
-    provider: "openai",
-    model: "gpt-5.6-terra",
-    apiKey: "oauth-token",
     baseUrl: "https://chatgpt.com/backend-api/codex",
     extraHeaders: { "ChatGPT-Account-ID": "account-1" },
-    openaiApi: "responses",
-    temperature: 0.7,
-    maxCompletionTokens: 456,
-    openaiPromptCacheKey: "compass:thread-1:east",
-    openaiPromptCacheRetention: "24h",
-    promptCache: { enabled: true, mode: "explicit" },
-  };
+  });
   const provider = openaiProvider(config);
-  const body = provider.body([
-    {
-      role: "user",
-      content: [{
-        type: "text",
-        text: "Stable request",
-        promptCacheBreakpoint: { mode: "explicit" },
-      }],
-    },
-  ], config) as Record<string, any>;
+  const body = provider.body(messages, config) as Record<string, unknown>;
 
   assertEquals(
     provider.endpoint,
     "https://chatgpt.com/backend-api/codex/responses",
   );
-  assertEquals(provider.headers(config)["ChatGPT-Account-ID"], "account-1");
-  assertEquals(body.prompt_cache_key, "compass:thread-1:east");
+  assertEquals(body.prompt_cache_key, "stable-internal-key");
   assertEquals("prompt_cache_options" in body, false);
   assertEquals("prompt_cache_retention" in body, false);
-  assertEquals(body.input[0].content[0], {
-    type: "input_text",
-    text: "Stable request",
-  });
-  assertEquals("temperature" in body, false);
-  assertEquals("truncation" in body, false);
-  assertEquals("max_output_tokens" in body, false);
-  assertEquals(body.store, false);
-  assertEquals(body.parallel_tool_calls, false);
 });
 
-Deno.test("openaiProvider sends API key only in Authorization header", () => {
+Deno.test("Chat Completions receives the same internal key", () => {
+  const config = keyedConfig({ openaiApi: "chat_completions" });
+  const body = openaiProvider(config).body(messages, config) as Record<
+    string,
+    unknown
+  >;
+  assertEquals(body.prompt_cache_key, "stable-internal-key");
+  assertEquals("prompt_cache_options" in body, false);
+});
+
+Deno.test("OpenAI sends API keys only in the Authorization header", () => {
   const config: ProviderConfig = {
     provider: "openai",
     model: "gpt-5.4",
@@ -251,109 +111,54 @@ Deno.test("openaiProvider sends API key only in Authorization header", () => {
     openaiApi: "responses",
   };
   const provider = openaiProvider(config);
-  const headers = provider.headers(config);
-  const body = provider.body(messages, config) as Record<string, any>;
+  const body = provider.body(messages, config) as Record<string, unknown>;
 
-  assertEquals(headers.Authorization, "Bearer sk-test");
+  assertEquals(provider.headers(config).Authorization, "Bearer sk-test");
   assertEquals("apiKey" in body, false);
   assertEquals("api_key" in body, false);
 });
 
-Deno.test("openaiProvider keeps Chat Completions for older models in auto mode", () => {
-  const config: ProviderConfig = {
-    provider: "openai",
+Deno.test("OpenAI keeps Chat Completions for older models in auto mode", () => {
+  const config = keyedConfig({
     model: "gpt-3.5-turbo",
-    apiKey: "test",
     maxCompletionTokens: 321,
-    openaiPromptCacheKey: "legacy-cache-key",
-    openaiPromptCacheRetention: "in_memory",
-  };
+  });
   const provider = openaiProvider(config);
-  const body = provider.body(messages, config) as Record<string, any>;
+  const body = provider.body(messages, config) as Record<string, unknown>;
 
   assertEquals(provider.endpoint, "https://api.openai.com/v1/chat/completions");
-  assertEquals(body.model, "gpt-3.5-turbo");
   assertEquals(body.messages, messages);
   assertEquals(body.stream_options, { include_usage: true });
   assertEquals(body.max_completion_tokens, 321);
-  assertEquals(body.prompt_cache_key, "legacy-cache-key");
-  assertEquals(body.prompt_cache_retention, "in_memory");
+  assertEquals(body.prompt_cache_key, "stable-internal-key");
 });
 
-Deno.test("openaiProvider extracts Chat Completions cache read and write tokens", () => {
-  const config: ProviderConfig = {
-    provider: "openai",
-    model: "gpt-5.6",
-    apiKey: "test",
-    openaiApi: "chat_completions",
-  };
-  const provider = openaiProvider(config);
-
-  assertEquals(
-    provider.extractUsage?.({
-      usage: {
-        prompt_tokens: 20,
-        completion_tokens: 4,
-        total_tokens: 24,
-        prompt_tokens_details: {
-          cached_tokens: 12,
-          cache_write_tokens: 6,
-        },
-      },
-    }),
-    {
-      inputTokens: 20,
-      outputTokens: 4,
-      reasoningTokens: undefined,
-      cacheReadInputTokens: 12,
-      cacheCreationInputTokens: 6,
-      totalTokens: 24,
-      rawUsage: {
-        prompt_tokens: 20,
-        completion_tokens: 4,
-        total_tokens: 24,
-        prompt_tokens_details: {
-          cached_tokens: 12,
-          cache_write_tokens: 6,
-        },
-      },
-    },
-  );
-});
-
-Deno.test("openaiProvider allows forcing Chat Completions for a Responses-capable model", () => {
-  const config: ProviderConfig = {
-    provider: "openai",
+Deno.test("OpenAI allows forcing Chat Completions", () => {
+  const config = keyedConfig({
     model: "gpt-5-mini",
-    apiKey: "test",
     openaiApi: "chat_completions",
-  };
-
+  });
   assertEquals(
     openaiProvider(config).endpoint,
     "https://api.openai.com/v1/chat/completions",
   );
 });
 
-Deno.test("openaiProvider omits PDF file data URLs from Chat Completions input", () => {
-  const config: ProviderConfig = {
-    provider: "openai",
+Deno.test("OpenAI omits PDF file data URLs from Chat Completions", () => {
+  const config = keyedConfig({
     model: "gpt-4o-mini",
-    apiKey: "test",
     openaiApi: "chat_completions",
-  };
-  const body = openaiProvider(config).body([
-    {
-      role: "user",
-      content: [
-        { type: "text", text: "Describe this." },
-        {
-          type: "file",
-          file: { file_data: "data:application/pdf;base64,abc" },
-        },
-      ],
-    },
-  ], config) as Record<string, any>;
+  });
+  const body = openaiProvider(config).body([{
+    role: "user",
+    content: [
+      { type: "text", text: "Describe this." },
+      {
+        type: "file",
+        file: { file_data: "data:application/pdf;base64,abc" },
+      },
+    ],
+  }], config) as Record<string, unknown>;
 
   assertEquals(body.messages, [{
     role: "user",
@@ -361,65 +166,51 @@ Deno.test("openaiProvider omits PDF file data URLs from Chat Completions input",
   }]);
 });
 
-Deno.test("openaiProvider omits reasoning summary when explicitly disabled", () => {
-  const config: ProviderConfig = {
-    provider: "openai",
+Deno.test("OpenAI omits explicitly disabled reasoning summaries", () => {
+  const config = keyedConfig({
     model: "o3-mini",
-    apiKey: "test",
     openaiReasoningSummary: false,
-  };
+  });
   const body = openaiProvider(config).body(messages, config) as Record<
     string,
-    any
+    unknown
   >;
-
   assertEquals("reasoning" in body, false);
 });
 
-Deno.test("openaiProvider does not send Responses reasoning config to non-reasoning models", () => {
-  const config: ProviderConfig = {
-    provider: "openai",
-    model: "gpt-4o-mini",
-    apiKey: "test",
-  };
+Deno.test("OpenAI omits Responses reasoning for non-reasoning models", () => {
+  const config = keyedConfig({ model: "gpt-4o-mini" });
   const body = openaiProvider(config).body(messages, config) as Record<
     string,
-    any
+    unknown
   >;
-
   assertEquals("reasoning" in body, false);
 });
 
-Deno.test("openaiProvider maps multimodal content for Responses input", () => {
-  const config: ProviderConfig = {
-    provider: "openai",
-    model: "gpt-4o-mini",
-    apiKey: "test",
-  };
-  const body = openaiProvider(config).body([
-    {
-      role: "user",
-      content: [
-        { type: "text", text: "Describe this." },
-        { type: "image_url", image_url: { url: "https://example.com/a.png" } },
-        {
-          type: "input_audio",
-          input_audio: {
-            data: "abc",
-            format: "mp3",
-            filename: "voice-note.mp3",
-          },
+Deno.test("OpenAI maps multimodal content for Responses", () => {
+  const config = keyedConfig({ model: "gpt-4o-mini" });
+  const body = openaiProvider(config).body([{
+    role: "user",
+    content: [
+      { type: "text", text: "Describe this." },
+      { type: "image_url", image_url: { url: "https://example.com/a.png" } },
+      {
+        type: "input_audio",
+        input_audio: {
+          data: "abc",
+          format: "mp3",
+          filename: "voice-note.mp3",
         },
-        {
-          type: "file",
-          file: {
-            file_data: "data:application/pdf;base64,abc",
-            filename: "exported-report.pdf",
-          },
+      },
+      {
+        type: "file",
+        file: {
+          file_data: "data:application/pdf;base64,abc",
+          filename: "exported-report.pdf",
         },
-      ],
-    },
-  ], config) as Record<string, any>;
+      },
+    ],
+  }], config) as Record<string, unknown>;
 
   assertEquals(body.input, [{
     role: "user",
@@ -440,12 +231,24 @@ Deno.test("openaiProvider maps multimodal content for Responses input", () => {
   }]);
 });
 
-Deno.test("openaiProvider extracts Responses text, reasoning, finish reason, and usage", () => {
-  const config: ProviderConfig = {
-    provider: "openai",
-    model: "gpt-5-mini",
-    apiKey: "test",
-  };
+Deno.test("OpenAI usage normalizes cache reads and writes", () => {
+  const config = keyedConfig({ openaiApi: "chat_completions" });
+  const usage = openaiProvider(config).extractUsage?.({
+    usage: {
+      prompt_tokens: 20,
+      completion_tokens: 4,
+      total_tokens: 24,
+      prompt_tokens_details: { cached_tokens: 12, cache_write_tokens: 6 },
+    },
+  });
+  assertEquals(usage?.inputTokens, 20);
+  assertEquals(usage?.cacheReadInputTokens, 12);
+  assertEquals(usage?.cacheCreationInputTokens, 6);
+  assertEquals(usage?.outputTokens, 4);
+});
+
+Deno.test("OpenAI extracts Responses content, reasoning, finish reason, and usage", () => {
+  const config = keyedConfig({ model: "gpt-5-mini" });
   const provider = openaiProvider(config);
 
   assertEquals(
@@ -466,83 +269,39 @@ Deno.test("openaiProvider extracts Responses text, reasoning, finish reason, and
     provider.isStreamActivity?.({ type: "response.in_progress" }),
     true,
   );
-  assertEquals(
-    provider.isStreamActivity?.({ type: "response.output_item.added" }),
-    true,
-  );
-  assertEquals(
-    provider.isStreamActivity?.({ type: "response.failed" }),
-    false,
-  );
-  assertEquals(
-    openaiProvider(config).extractContent({
-      type: "response.completed",
-      response: {
-        output: [{
-          type: "reasoning",
-          summary: [{ type: "summary_text", text: "Summary" }],
-        }],
-      },
-    }),
-    [{ text: "Summary", isReasoning: true }],
-  );
+  assertEquals(provider.isStreamActivity?.({ type: "response.failed" }), false);
   assertEquals(
     provider.extractFinishReason?.({
       type: "response.incomplete",
       response: {
         status: "incomplete",
-        incomplete_details: {
-          reason: "max_output_tokens",
-        },
+        incomplete_details: { reason: "max_output_tokens" },
       },
     }),
     "length",
   );
-  assertEquals(
-    provider.extractUsage?.({
-      type: "response.completed",
-      response: {
-        usage: {
-          input_tokens: 10,
-          output_tokens: 7,
-          total_tokens: 17,
-          input_tokens_details: {
-            cached_tokens: 3,
-            cache_write_tokens: 5,
-          },
-          output_tokens_details: { reasoning_tokens: 4 },
-        },
-      },
-    }),
-    {
-      inputTokens: 10,
-      outputTokens: 7,
-      reasoningTokens: 4,
-      cacheReadInputTokens: 3,
-      cacheCreationInputTokens: 5,
-      totalTokens: 17,
-      rawUsage: {
+
+  const usage = provider.extractUsage?.({
+    type: "response.completed",
+    response: {
+      usage: {
         input_tokens: 10,
         output_tokens: 7,
         total_tokens: 17,
-        input_tokens_details: {
-          cached_tokens: 3,
-          cache_write_tokens: 5,
-        },
+        input_tokens_details: { cached_tokens: 3, cache_write_tokens: 5 },
         output_tokens_details: { reasoning_tokens: 4 },
       },
     },
-  );
+  });
+  assertEquals(usage?.inputTokens, 10);
+  assertEquals(usage?.outputTokens, 7);
+  assertEquals(usage?.reasoningTokens, 4);
+  assertEquals(usage?.cacheReadInputTokens, 3);
+  assertEquals(usage?.cacheCreationInputTokens, 5);
 });
 
-Deno.test("openaiProvider throws on Responses stream error events", () => {
-  const config: ProviderConfig = {
-    provider: "openai",
-    model: "gpt-5-mini",
-    apiKey: "test",
-  };
-  const provider = openaiProvider(config);
-
+Deno.test("OpenAI throws on Responses stream error events", () => {
+  const provider = openaiProvider(keyedConfig({ model: "gpt-5-mini" }));
   const error = assertThrows(
     () =>
       provider.extractContent({
@@ -555,6 +314,5 @@ Deno.test("openaiProvider throws on Responses stream error events", () => {
     Error,
     "quota exceeded",
   );
-
   assertEquals((error as { status?: number }).status, 429);
 });

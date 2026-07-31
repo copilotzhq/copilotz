@@ -1,5 +1,6 @@
 import {
   assert,
+  assertEquals,
   assertStringIncludes,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
@@ -7,7 +8,15 @@ import {
   buildAttemptUsageSumSelects,
   buildUsageMeteringSumSelects,
   buildUsageSumSelects,
+  buildVisibleMessagePredicate,
 } from "./_helpers.ts";
+
+Deno.test("admin message counts exclude internal recovery messages", () => {
+  assertEquals(
+    buildVisibleMessagePredicate(`m."data"`),
+    `COALESCE(m."data"->'metadata'->>'visibility', '') <> 'internal'`,
+  );
+});
 
 Deno.test("admin usage sums read only canonical flattened fields", () => {
   const sql = buildUsageSumSelects('u."data"');

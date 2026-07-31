@@ -4,7 +4,6 @@ import type {
   ToolDefinition,
 } from "@/runtime/llm/types.ts";
 import { materializeAssetRefsForProvider } from "@/runtime/llm/asset-materialization.ts";
-import { withExplicitPromptCacheBreakpoint } from "@/runtime/llm/prompt-cache.ts";
 import type { AssetConfig, AssetStore } from "@/runtime/storage/assets.ts";
 import type { Agent } from "@/types/index.ts";
 
@@ -36,14 +35,9 @@ function textOnlyMessages(messages: ChatMessage[]): ChatMessage[] {
     const content = message.content
       .map((part) => part.type === "text" ? part.text : "")
       .join("");
-    const hasBreakpoint = message.content.some((part) =>
-      part.promptCacheBreakpoint?.mode === "explicit"
-    );
     return {
       ...message,
-      content: hasBreakpoint
-        ? withExplicitPromptCacheBreakpoint(content)
-        : content,
+      content,
     };
   });
 }

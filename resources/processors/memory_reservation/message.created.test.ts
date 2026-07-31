@@ -4,6 +4,30 @@ import type { Event, ProcessorDeps } from "@/types/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 import { process, shouldProcess } from "./message.created.ts";
 
+Deno.test("long-term-memory trigger ignores internal recovery fragments", async () => {
+  const event = {
+    type: "message.created",
+    payload: {
+      sender: { type: "agent", id: "agent" },
+      metadata: {
+        visibility: "internal",
+        recovery: { kind: "fragment", chainId: "chain-1" },
+      },
+    },
+  } as unknown as Event;
+  const deps = {
+    context: {
+      memory: [{
+        name: "long_term",
+        kind: "long_term",
+        enabled: true,
+        config: { triggerEstimatedTokens: 1 },
+      }],
+    },
+  } as unknown as ProcessorDeps;
+  assertEquals(await shouldProcess(event, deps), false);
+});
+
 Deno.test("long-term-memory trigger reserves one pending checkpoint and outbox event", async () => {
   const db = await createDatabase({ url: ":memory:" });
   const suffix = crypto.randomUUID();

@@ -77,7 +77,9 @@ function getLlmVisibleParticipantMetadata(
 ): Record<string, unknown> {
   if (!metadata) return {};
   return Object.fromEntries(
-    Object.entries(metadata).filter(([key]) => key !== "_private"),
+    Object.entries(metadata).filter(([key]) =>
+      key !== "_private" && key !== "updatedAt"
+    ),
   );
 }
 

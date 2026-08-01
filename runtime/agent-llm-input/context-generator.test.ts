@@ -1,4 +1,9 @@
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertNotEquals,
+  assertStringIncludes,
+} from "@std/assert";
 
 import type { Agent, Thread } from "@/types/index.ts";
 import { contextGenerator } from "./context-generator.ts";
@@ -135,6 +140,50 @@ Deno.test("contextGenerator excludes private participant metadata from the LLM c
   assert(!generated.systemPrompt.includes("customer-secret"));
   assert(!generated.systemPrompt.includes("token-secret"));
   assert(participantMetadata._private.accessToken === "token-secret");
+});
+
+Deno.test("contextGenerator excludes volatile participant timestamps but retains semantic metadata changes", () => {
+  const agent: Agent = {
+    id: "assistant",
+    name: "Assistant",
+    role: "assistant",
+    instructions: "Help the user.",
+  };
+  const thread = {
+    id: "thread-1",
+    name: "Participant metadata stability test",
+    participants: ["user-1", "assistant"],
+  } as Thread;
+  const generate = (metadata: Record<string, unknown>) =>
+    contextGenerator(agent, thread, [agent], [agent], metadata).systemPrompt;
+  const baselineMetadata = {
+    updatedAt: 1_775_000_000_000,
+    customFields: { company: "Copilotz" },
+    memories: {
+      items: [{ id: "memory-1", content: "Prefers concise answers." }],
+    },
+  };
+
+  const baseline = generate(baselineMetadata);
+  const timestampOnly = generate({
+    ...baselineMetadata,
+    updatedAt: 1_775_000_100_000,
+  });
+  const profileChanged = generate({
+    ...baselineMetadata,
+    customFields: { company: "New Company" },
+  });
+  const memoryChanged = generate({
+    ...baselineMetadata,
+    memories: {
+      items: [{ id: "memory-1", content: "Prefers detailed answers." }],
+    },
+  });
+
+  assertEquals(timestampOnly, baseline);
+  assertNotEquals(profileChanged, baseline);
+  assertNotEquals(memoryChanged, baseline);
+  assert(!baseline.includes('"updatedAt"'));
 });
 
 Deno.test("contextGenerator advertises the reserved control only when multi-agent routing is enabled", () => {

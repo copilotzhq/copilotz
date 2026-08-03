@@ -7,6 +7,10 @@ import type {
 } from "@/types/index.ts";
 import { parse as parseYaml } from "yaml";
 import type { ExecutableTool } from "@/runtime/tools/types.ts";
+import {
+  sanitizeToolErrorMessage,
+  ToolExecutionError,
+} from "@/runtime/tools/errors.ts";
 
 type AuthConfig = NonNullable<API["auth"]>;
 type DynamicAuth = Extract<AuthConfig, { type: "dynamic" }>;
@@ -257,6 +261,98 @@ function sanitizeToolJsonValue<T>(value: T, seen = new WeakSet<object>()): T {
   }
   seen.delete(value);
   return next as T;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function nestedValue(value: unknown, path: readonly string[]): unknown {
+  let current: unknown = value;
+  for (const segment of path) {
+    current = asRecord(current)[segment];
+  }
+  return current;
+}
+
+function firstString(value: unknown, paths: readonly (readonly string[])[]) {
+  for (const path of paths) {
+    const candidate = nestedValue(value, path);
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+  return undefined;
+}
+
+function firstStatus(value: unknown, paths: readonly (readonly string[])[]) {
+  for (const path of paths) {
+    const candidate = nestedValue(value, path);
+    const status = typeof candidate === "number"
+      ? candidate
+      : typeof candidate === "string" && /^\d{3}$/.test(candidate)
+      ? Number(candidate)
+      : undefined;
+    if (status && status >= 100 && status <= 599) return status;
+  }
+  return undefined;
+}
+
+function safeEndpoint(value: string): string | undefined {
+  try {
+    const parsed = new URL(value);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function apiHttpError(
+  response: Response,
+  responseData: unknown,
+  requestMethod: string,
+  requestUrl: string,
+  contentType: string,
+): ToolExecutionError {
+  const upstreamStatus = firstStatus(responseData, [
+    ["upstreamStatus"],
+    ["statusCode"],
+    ["response", "status"],
+    ["error", "status"],
+    ["error", "response", "status"],
+  ]);
+  const providerCode = firstString(responseData, [
+    ["code"],
+    ["errorCode"],
+    ["error", "code"],
+  ]);
+  const rawMessage = contentType.includes("text/html")
+    ? "Upstream returned an HTML error response."
+    : firstString(responseData, [
+      ["message"],
+      ["error_description"],
+      ["error", "message"],
+      ["response", "data", "message"],
+      ["error", "response", "data", "message"],
+      ["error"],
+    ]) ?? `HTTP ${response.status}: ${response.statusText}`;
+  const effectiveStatus = upstreamStatus ?? response.status;
+
+  return new ToolExecutionError({
+    code: "api_http_error",
+    message: sanitizeToolErrorMessage(rawMessage),
+    status: response.status,
+    ...(upstreamStatus ? { upstreamStatus } : {}),
+    ...(providerCode ? { providerCode } : {}),
+    requestId: response.headers.get("x-request-id") ??
+      response.headers.get("x-correlation-id") ?? undefined,
+    method: requestMethod,
+    endpoint: safeEndpoint(requestUrl),
+    retryable: effectiveStatus === 408 || effectiveStatus === 429 ||
+      effectiveStatus >= 500,
+  });
 }
 
 function decodeJsonPointerSegment(segment: string): string {
@@ -730,10 +826,12 @@ function createApiExecutor(
       responseData = sanitizeToolJsonValue(responseData);
 
       if (!response.ok) {
-        throw new Error(
-          `HTTP ${response.status}: ${response.statusText}\nResponse: ${
-            JSON.stringify(responseData)
-          }`,
+        throw apiHttpError(
+          response,
+          responseData,
+          requestMethod,
+          url,
+          contentType,
         );
       }
 

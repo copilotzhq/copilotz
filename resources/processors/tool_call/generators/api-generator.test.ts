@@ -6,6 +6,7 @@ import {
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import type { API } from "@/types/index.ts";
+import { ToolExecutionError } from "@/runtime/tools/errors.ts";
 
 import { generateApiTools } from "./api-generator.ts";
 
@@ -78,6 +79,67 @@ Deno.test("API tool strips null characters from structured responses", async () 
     const result = await tool.execute({});
 
     assertEquals(result, { text: "helloworld" });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("API tool exposes only allowlisted structured HTTP error details", async () => {
+  const originalFetch = globalThis.fetch;
+  const secret = "session-cookie-secret";
+  const html = `<!doctype html><html><body>${
+    "failure".repeat(6_000)
+  }</body></html>`;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        message: html,
+        error: {
+          code: "PIX_SUBMIT_FAILED",
+          response: { status: 500, data: html },
+        },
+        config: {
+          headers: {
+            authorization: "Bearer provider-secret",
+            cookie: secret,
+          },
+        },
+      }),
+      {
+        status: 400,
+        headers: {
+          "content-type": "application/json",
+          "x-request-id": "req_safe_123",
+        },
+      },
+    );
+
+  try {
+    const [tool] = generateApiTools(buildApiConfig());
+    let caught: unknown;
+    try {
+      await tool.execute({});
+    } catch (error) {
+      caught = error;
+    }
+
+    assertEquals(caught instanceof ToolExecutionError, true);
+    const details = (caught as ToolExecutionError).details;
+    assertEquals(details, {
+      code: "api_http_error",
+      message: "Upstream returned an HTML error response.",
+      retryable: true,
+      status: 400,
+      upstreamStatus: 500,
+      providerCode: "PIX_SUBMIT_FAILED",
+      requestId: "req_safe_123",
+      method: "GET",
+      endpoint: "https://example.com/status",
+    });
+    const serialized = JSON.stringify(details);
+    assertEquals(serialized.includes(secret), false);
+    assertEquals(serialized.includes("provider-secret"), false);
+    assertEquals(serialized.length < 1_000, true);
   } finally {
     globalThis.fetch = originalFetch;
   }

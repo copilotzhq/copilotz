@@ -117,6 +117,19 @@ retract an original public event that has already been delivered to a run's live
 event stream. Use transport/UI interception when an event must be hidden from a
 client.
 
+## Background Recovery
+
+Call `copilotz.recover({ namespace, schema })` from application maintenance for
+each tenant scope, or enable the built-in recovery timer for single-schema
+applications. Recovery takes over expired worker leases and replays stale
+`processing` events without requiring a new user message.
+
+Before a stranded `long_term_memory.created` event is replayed, Copilotz settles
+its abandoned `llm_attempt` as `superseded`. The checkpoint remains `pending`
+and is reused by the replay, so no memory range is skipped or reserved twice. If
+the event worker fails normally instead, Copilotz marks both the attempt and the
+pending checkpoint `failed`, allowing the next reservation to advance.
+
 ## Related Pages
 
 - [Runs](../runtime/runs.md)

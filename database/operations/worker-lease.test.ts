@@ -38,6 +38,46 @@ async function getLeaseState(
   return row;
 }
 
+async function createLongTermMemoryRecoveryFixture(
+  db: Awaited<ReturnType<typeof createDatabase>>,
+  threadId: string,
+) {
+  const checkpoint = await db.ops.unsafeGraph.createNode({
+    namespace: "default",
+    type: "long_term_memory",
+    name: "Recovery checkpoint",
+    data: {
+      status: "pending",
+      threadId: "source-thread",
+      agentId: "agent",
+      sequence: 1,
+    },
+  });
+  const event = await db.ops.addToQueue(threadId, {
+    eventType: "long_term_memory.created",
+    payload: { checkpointId: checkpoint.id },
+    status: "processing",
+  });
+  await db.query(
+    `UPDATE "events"
+     SET "subjectType" = 'long_term_memory',
+         "subjectId" = $2
+     WHERE "id" = $1`,
+    [String(event.id), String(checkpoint.id)],
+  );
+  const attempt = await db.ops.mutate.llmAttempts.create({
+    threadId: "source-thread",
+    eventId: String(event.id),
+    agentId: "agent",
+    provider: "openai",
+    model: "model",
+    status: "processing",
+    namespace: "default",
+    metadata: { source: "long_term_memory" },
+  });
+  return { checkpoint, event, attempt };
+}
+
 Deno.test({
   name: "default thread worker lease config recovers crashed workers faster",
   sanitizeExit: false,
@@ -246,6 +286,103 @@ Deno.test({
 
     assertEquals(staleItem?.status, "pending");
     assertEquals(activeItem?.status, "processing");
+  },
+});
+
+Deno.test({
+  name:
+    "recoverThreadProcessingQueueItems reconciles an interrupted memory attempt before replay",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({
+      url: ":memory:",
+      staleProcessingThresholdMs: 60_000,
+    });
+    const thread = await db.ops.findOrCreateThread(undefined, {
+      name: "Memory Recovery",
+      participants: [],
+      status: "active",
+      mode: "immediate",
+    });
+    const fixture = await createLongTermMemoryRecoveryFixture(
+      db,
+      String(thread.id),
+    );
+    await db.query(
+      `UPDATE "events" SET "updatedAt" = $2 WHERE "id" = $1`,
+      [
+        String(fixture.event.id),
+        new Date(Date.now() - 86_400_000).toISOString(),
+      ],
+    );
+
+    assertEquals(
+      await db.ops.recoverThreadProcessingQueueItems(String(thread.id)),
+      1,
+    );
+
+    const event = await db.ops.getQueueItemById(String(fixture.event.id));
+    const checkpoint = await db.ops.unsafeGraph.getNodeById(
+      String(fixture.checkpoint.id),
+    );
+    const attempt = await db.ops.unsafeGraph.getNodeById(
+      String(fixture.attempt.id),
+    );
+    const attemptData = attempt?.data as Record<string, unknown>;
+    assertEquals(event?.status, "pending");
+    assertEquals(
+      (checkpoint?.data as Record<string, unknown>).status,
+      "pending",
+    );
+    assertEquals(attemptData.status, "superseded");
+    assertEquals(attemptData.finishReason, "reconciled_replay");
+    assertEquals(
+      (attemptData.metadata as Record<string, unknown>).recoveryReconciled,
+      true,
+    );
+  },
+});
+
+Deno.test({
+  name:
+    "failing a memory event settles its pending checkpoint and processing attempt",
+  sanitizeExit: false,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const db = await createDatabase({ url: ":memory:" });
+    const thread = await db.ops.findOrCreateThread(undefined, {
+      name: "Memory Failure Reconciliation",
+      participants: [],
+      status: "active",
+      mode: "immediate",
+    });
+    const fixture = await createLongTermMemoryRecoveryFixture(
+      db,
+      String(thread.id),
+    );
+
+    await db.ops.updateQueueItemStatus(String(fixture.event.id), "failed");
+
+    const event = await db.ops.getQueueItemById(String(fixture.event.id));
+    const checkpoint = await db.ops.unsafeGraph.getNodeById(
+      String(fixture.checkpoint.id),
+    );
+    const attempt = await db.ops.unsafeGraph.getNodeById(
+      String(fixture.attempt.id),
+    );
+    const checkpointData = checkpoint?.data as Record<string, unknown>;
+    const attemptData = attempt?.data as Record<string, unknown>;
+    assertEquals(event?.status, "failed");
+    assertEquals(checkpointData.status, "failed");
+    assertEquals(
+      (checkpointData.error as Record<string, unknown>).code,
+      "LONG_TERM_MEMORY_EVENT_FAILED",
+    );
+    assertEquals(attemptData.status, "failed");
+    assertEquals(attemptData.finishReason, "reconciled_event_failed");
   },
 });
 

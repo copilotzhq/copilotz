@@ -24,6 +24,12 @@ import { sanitizePostgresParam } from "../postgres-json-safety.ts";
 
 const MAX_EXPIRED_CLEANUP_BATCH = 100;
 const EXPIRED_RETENTION_INTERVAL = "1 day";
+const LONG_TERM_MEMORY_EVENT = "long_term_memory.created";
+
+const recordValue = (value: unknown): Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 
 export class StaleRunGenerationError extends Error {
   readonly code = "STALE_RUN_GENERATION";
@@ -973,6 +979,94 @@ export function createOperations(
   const THREAD_WORKER_HEARTBEAT_MS = config?.threadLeaseHeartbeatMs ?? 15_000; // Default: 15 seconds
   let operations: DatabaseOperations;
 
+  const reconcileLongTermMemoryQueueItem = async (
+    event: Queue,
+    mode: "retry" | "fail",
+    reason: string,
+  ): Promise<number> => {
+    if (event.eventType !== LONG_TERM_MEMORY_EVENT) return 0;
+
+    const checkpointId = typeof event.subjectId === "string"
+      ? event.subjectId
+      : null;
+    const checkpoint = checkpointId ? await getNodeById(checkpointId) : null;
+    const checkpointData = recordValue(checkpoint?.data);
+    let checkpointStatus = typeof checkpointData.status === "string"
+      ? checkpointData.status
+      : null;
+    const reconciledAt = new Date().toISOString();
+    const recoveryError = {
+      name: "LongTermMemoryRecoveryError",
+      code: mode === "retry"
+        ? "LONG_TERM_MEMORY_ATTEMPT_INTERRUPTED"
+        : "LONG_TERM_MEMORY_EVENT_FAILED",
+      message: mode === "retry"
+        ? "The memory-consolidation attempt was interrupted and superseded before replay."
+        : "The memory-consolidation event failed before its checkpoint settled.",
+      reason,
+      retryable: mode === "retry",
+      eventId: String(event.id),
+      checkpointId,
+    };
+
+    if (mode === "fail" && checkpoint && checkpointStatus === "pending") {
+      await updateNode(String(checkpoint.id), {
+        data: {
+          ...checkpointData,
+          status: "failed",
+          error: recoveryError,
+          metadata: {
+            ...recordValue(checkpointData.metadata),
+            recoveryReconciledAt: reconciledAt,
+            recoveryReason: reason,
+          },
+        },
+      });
+      checkpointStatus = "failed";
+    }
+
+    const attempts = await db.query<{
+      id: string;
+      data: Record<string, unknown> | null;
+    }>(
+      `SELECT "id", "data"
+       FROM "nodes"
+       WHERE "type" = 'llm_attempt'
+         AND "data"->>'eventId' = $1
+         AND "data"->>'status' = 'processing'`,
+      [String(event.id)],
+    );
+    const attemptStatus = checkpointStatus === "ready"
+      ? "completed"
+      : checkpointStatus === "failed" || mode === "fail"
+      ? "failed"
+      : "superseded";
+
+    for (const attempt of attempts.rows) {
+      const attemptData = recordValue(attempt.data);
+      await updateLlmAttempt(String(attempt.id), {
+        status: attemptStatus,
+        finishReason: attemptStatus === "completed"
+          ? "reconciled_checkpoint_ready"
+          : attemptStatus === "failed"
+          ? "reconciled_event_failed"
+          : "reconciled_replay",
+        ...(attemptStatus === "completed" ? {} : { error: recoveryError }),
+        metadata: {
+          ...recordValue(attemptData.metadata),
+          recoveryReconciled: true,
+          recoveryMode: mode,
+          recoveryReason: reason,
+          recoveryEventId: String(event.id),
+          recoveryCheckpointId: checkpointId,
+        },
+        finishedAt: reconciledAt,
+      });
+    }
+
+    return attempts.rows.length;
+  };
+
   const cleanupExpiredQueueItems = async (): Promise<void> => {
     await db.query(
       `DELETE FROM "events"
@@ -1246,6 +1340,12 @@ export function createOperations(
         continue;
       }
 
+      await reconcileLongTermMemoryQueueItem(
+        event as Queue,
+        "retry",
+        "stale_processing_event",
+      );
+
       await crud.events.update(
         { id: event.id },
         {
@@ -1279,6 +1379,12 @@ export function createOperations(
         );
         continue;
       }
+
+      await reconcileLongTermMemoryQueueItem(
+        event,
+        "retry",
+        "expired_worker_lease",
+      );
 
       await crud.events.update(
         { id: event.id },
@@ -1462,6 +1568,16 @@ export function createOperations(
     queueId: string,
     status: Queue["status"],
   ): Promise<void> => {
+    if (status === "failed") {
+      const event = await crud.events.findOne({ id: queueId }) as Queue | null;
+      if (event) {
+        await reconcileLongTermMemoryQueueItem(
+          event,
+          "fail",
+          "event_worker_failed",
+        );
+      }
+    }
     await crud.events.update({ id: queueId }, { status });
   };
 

@@ -24,3 +24,8 @@ filtering `metadata.visibility === "internal"`; UIs can use
 fragments as one bubble. `node.content` remains canonical message content;
 `node.data` contains metadata and structured fields, not a duplicate content
 copy.
+
+Multi-tenant applications should invoke `copilotz.recover()` once per tenant
+namespace/schema from their background maintenance loop. Starting in 0.55.4,
+replayed memory-consolidation events reconcile interrupted attempts before
+retrying, while normally failed events settle pending checkpoints as failed.

@@ -6,6 +6,7 @@ import {
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import type { API } from "@/types/index.ts";
+import { ToolExecutionError } from "@/runtime/tools/errors.ts";
 
 import { generateApiTools } from "./api-generator.ts";
 
@@ -78,6 +79,41 @@ Deno.test("API tool strips null characters from structured responses", async () 
     const result = await tool.execute({});
 
     assertEquals(result, { text: "helloworld" });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("API tool preserves the base JSON response for HTTP errors", async () => {
+  const originalFetch = globalThis.fetch;
+  const errorResponse = {
+    message: "Passenger information is missing",
+    error: {
+      code: "PASSENGER_REQUIRED",
+      missingFields: ["birthdate"],
+    },
+  };
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify(errorResponse),
+      {
+        status: 422,
+        headers: { "content-type": "application/json" },
+      },
+    );
+
+  try {
+    const [tool] = generateApiTools(buildApiConfig());
+    let caught: unknown;
+    try {
+      await tool.execute({});
+    } catch (error) {
+      caught = error;
+    }
+
+    assertEquals(caught instanceof ToolExecutionError, true);
+    assertEquals((caught as ToolExecutionError).status, 422);
+    assertEquals((caught as ToolExecutionError).response, errorResponse);
   } finally {
     globalThis.fetch = originalFetch;
   }

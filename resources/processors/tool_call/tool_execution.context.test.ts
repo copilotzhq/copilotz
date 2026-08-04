@@ -3,6 +3,51 @@ import type { ExecutableTool } from "@/runtime/tools/types.ts";
 import type { ToolInvocation } from "@/runtime/llm/types.ts";
 import type { Event, ProcessorDeps } from "@/types/index.ts";
 import { process, processToolCalls } from "./tool_execution.created.ts";
+import { ToolExecutionError } from "@/runtime/tools/errors.ts";
+
+Deno.test("processToolCalls returns the base response from HTTP tool errors", async () => {
+  const response = {
+    message: "Provider rejected the request",
+    reason: "missing_birthdate",
+  };
+  const tool: ExecutableTool = {
+    id: "safe-error",
+    key: "safe_error",
+    name: "Safe error",
+    description: "Throws a structured safe error.",
+    inputSchema: { type: "object", additionalProperties: false },
+    execute: () => {
+      throw new ToolExecutionError(response, 422, "Unprocessable Entity");
+    },
+  };
+  const [result] = await processToolCalls([{
+    id: "call-safe-error",
+    tool: { id: tool.key },
+    args: "{}",
+  }], [tool]);
+
+  assertEquals(result.status, "failed");
+  assertEquals(result.error, response);
+});
+
+Deno.test("generic tool errors keep their original message", async () => {
+  const tool: ExecutableTool = {
+    id: "generic-error",
+    key: "generic_error",
+    name: "Generic error",
+    description: "Throws a regular error.",
+    inputSchema: { type: "object", additionalProperties: false },
+    execute: () => {
+      throw new Error("provider detail");
+    },
+  };
+  const [result] = await processToolCalls([{
+    id: "call-generic-error",
+    tool: { id: tool.key },
+    args: "{}",
+  }], [tool]);
+  assertEquals(result.error, "EXECUTION ERROR: provider detail");
+});
 
 Deno.test("processToolCalls assigns toolCallId per concurrent invocation", async () => {
   const contexts: Array<{

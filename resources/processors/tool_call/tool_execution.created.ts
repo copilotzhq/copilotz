@@ -33,6 +33,10 @@ import { isStaleRunGenerationError } from "@/database/operations/index.ts";
 import Ajv from "npm:ajv@^8.17.1";
 import addFormats from "npm:ajv-formats@^3.0.1";
 import { resolveAssetIdForStore } from "@/runtime/storage/assets.ts";
+import {
+  stringifyToolError,
+  toolExecutionErrorResult,
+} from "@/runtime/tools/errors.ts";
 
 export const processorId = "tool_call";
 export const eventTypes = ["tool_execution.created"] as const;
@@ -310,9 +314,9 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       const finishedAt = new Date().toISOString();
 
       let content: string;
-      if (error) {
+      if (typeof error !== "undefined") {
         content = `tool error: ${
-          String(error)
+          stringifyToolError(error)
         }\n\nPlease review the error above and try again with the correct format.`;
       } else if (typeof output !== "undefined") {
         try {
@@ -731,26 +735,24 @@ export const processToolCalls = async (
         const isTimeout = Boolean(
           cancellation.cancelled && cancellation.reason === "timeout",
         );
-        const errorMessage = isTimeout
+        const toolError = isTimeout
           ? `EXECUTION CANCELLED: Tool execution timed out after ${
             Math.round((timeoutMs ?? 0) / 1000)
           }s`
-          : `EXECUTION ERROR: ${
-            error instanceof Error ? error.message : String(error)
-          }`;
+          : toolExecutionErrorResult(error);
 
         const { visibility } = await projectToolResultForHistory(
           tool,
           args,
           undefined,
-          errorMessage,
+          toolError,
         );
 
         return {
           tool_call_id: toolCall.id,
           name,
           status: isTimeout ? "cancelled" : "failed",
-          error: errorMessage,
+          error: toolError,
           historyVisibility: visibility,
         } satisfies ProcessedToolCallResult;
       } finally {

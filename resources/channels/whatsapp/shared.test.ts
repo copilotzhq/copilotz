@@ -2,18 +2,28 @@ import {
   assertEquals,
   assertNotEquals,
   assertStringIncludes,
-} from "jsr:@std/assert";
+} from "@std/assert";
 
 import {
+  buildWhatsAppMediaCarouselMessage,
   buildWhatsAppReplyButtonsMessage,
   callWhatsAppGraphAPI,
   normalizeWhatsAppActionPayload,
   normalizeWhatsAppReplyButtons,
+  resolveWhatsAppMediaCarouselAction,
 } from "./shared.ts";
+
+const whatsappConfig = {
+  accessToken: "token",
+  phoneId: "phone-number-id",
+  appSecret: "",
+  webhookVerifyToken: "",
+  graphApiVersion: "v25.0",
+};
 
 Deno.test("normalizeWhatsAppActionPayload unwraps nested ACTION payloads", () => {
   const normalized = normalizeWhatsAppActionPayload({
-    sender: { type: "agent", id: "mobizap" },
+    sender: { type: "agent", id: "agent-1" },
     content: "Como voce gostaria de prosseguir com o pagamento?",
     action: {
       type: "reply_buttons",
@@ -128,6 +138,106 @@ Deno.test("buildWhatsAppReplyButtonsMessage returns null without a valid body or
   );
 });
 
+Deno.test("buildWhatsAppMediaCarouselMessage builds Meta quick-reply cards", () => {
+  assertEquals(
+    buildWhatsAppMediaCarouselMessage("5511999999999", {
+      type: "media_carousel",
+      message: "Choose an item",
+      fallbackText: "Alternative item list",
+      cards: [
+        {
+          body: "Item A\nAvailable now\n$50.00",
+          image: { id: "media-1" },
+          buttons: [{
+            type: "quick_reply",
+            text: "Choose",
+            payload: "choose_item:1",
+          }],
+        },
+        {
+          image: { link: "https://cdn.example.com/item-2.png" },
+          buttons: [{
+            type: "quick_reply",
+            text: "Choose",
+            payload: "choose_item:2",
+          }],
+        },
+      ],
+    }),
+    {
+      messaging_product: "whatsapp",
+      to: "5511999999999",
+      type: "interactive",
+      interactive: {
+        type: "carousel",
+        body: { text: "Choose an item" },
+        action: {
+          cards: [
+            {
+              card_index: 0,
+              type: "cta_url",
+              header: { type: "image", image: { id: "media-1" } },
+              body: { text: "Item A\nAvailable now\n$50.00" },
+              action: {
+                buttons: [{
+                  type: "quick_reply",
+                  quick_reply: {
+                    id: "choose_item:1",
+                    title: "Choose",
+                  },
+                }],
+              },
+            },
+            {
+              card_index: 1,
+              type: "cta_url",
+              header: {
+                type: "image",
+                image: { link: "https://cdn.example.com/item-2.png" },
+              },
+              action: {
+                buttons: [{
+                  type: "quick_reply",
+                  quick_reply: {
+                    id: "choose_item:2",
+                    title: "Choose",
+                  },
+                }],
+              },
+            },
+          ],
+        },
+      },
+    },
+  );
+});
+
+Deno.test("resolveWhatsAppMediaCarouselAction rejects invalid card counts and duplicate replies", async () => {
+  assertEquals(
+    await resolveWhatsAppMediaCarouselAction(whatsappConfig, {
+      type: "media_carousel",
+      message: "Escolha",
+      cards: [{
+        image: { id: "media-1" },
+        buttons: [{ text: "Choose", payload: "choose_item:1" }],
+      }],
+    }),
+    null,
+  );
+
+  assertEquals(
+    await resolveWhatsAppMediaCarouselAction(whatsappConfig, {
+      type: "media_carousel",
+      message: "Escolha",
+      cards: ["media-1", "media-2"].map((id) => ({
+        image: { id },
+        buttons: [{ text: "Choose", payload: "choose_item:same" }],
+      })),
+    }),
+    null,
+  );
+});
+
 Deno.test("WhatsApp channel debug logs sanitized Meta request and error response", async () => {
   const previousDebug = Deno.env.get("COPILOTZ_DEBUG_CHANNELS");
   const originalFetch = globalThis.fetch;
@@ -185,6 +295,7 @@ Deno.test("WhatsApp channel debug logs sanitized Meta request and error response
             recipient: "***9999",
             textLength: 17,
             interactiveType: null,
+            carouselCardCount: null,
           },
         },
       ],

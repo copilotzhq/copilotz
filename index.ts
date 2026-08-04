@@ -90,6 +90,16 @@ export {
   findMemorySpace,
   resolveThreadMemorySpaces,
 } from "@/runtime/memory/long-term.ts";
+export type {
+  WhatsAppCarouselImageInput,
+  WhatsAppMediaBytesInput,
+  WhatsAppMediaCarouselAction,
+  WhatsAppMediaCarouselCardInput,
+} from "@/resources/channels/whatsapp/shared.ts";
+export type {
+  WhatsAppDeliveryOutput,
+  WhatsAppMediaCarouselDeliveryOutput,
+} from "@/resources/channels/whatsapp/egress.ts";
 import { bundledAgents, coreResources } from "@/resources/core.ts";
 import type {
   Agent,

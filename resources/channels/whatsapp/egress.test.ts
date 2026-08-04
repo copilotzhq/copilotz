@@ -1,4 +1,4 @@
-import { assertEquals } from "jsr:@std/assert";
+import { assertEquals } from "@std/assert";
 
 import { createWhatsAppEgressAdapter } from "./egress.ts";
 
@@ -64,7 +64,7 @@ Deno.test("WhatsApp egress sends ACTION reply_buttons as interactive buttons", a
       {
         type: "ACTION",
         payload: {
-          sender: { type: "agent", id: "mobizap" },
+          sender: { type: "agent", id: "agent-1" },
           content: "Como voce gostaria de prosseguir?",
           action: {
             type: "reply_buttons",
@@ -96,6 +96,132 @@ Deno.test("WhatsApp egress sends ACTION reply_buttons as interactive buttons", a
       },
     },
   });
+});
+
+Deno.test("WhatsApp egress renders, uploads, and sends media carousel actions", async () => {
+  const messageBodies: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+  let uploadCount = 0;
+  globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("/media?")) {
+      uploadCount += 1;
+      assertEquals(init?.body instanceof FormData, true);
+      return Promise.resolve(
+        new Response(JSON.stringify({ id: `media-${uploadCount}` }), {
+          status: 200,
+        }),
+      );
+    }
+    messageBodies.push(JSON.parse(String(init?.body)));
+    return Promise.resolve(
+      new Response(JSON.stringify({ messages: [{ id: "wamid.carousel" }] }), {
+        status: 200,
+      }),
+    );
+  }) as typeof fetch;
+
+  try {
+    await createWhatsAppEgressAdapter().deliver(deliveryContext([
+      {
+        type: "ACTION",
+        payload: {
+          content: "Choose an item",
+          action: {
+            type: "media_carousel",
+            fallbackText: "1) Item A - $50.00",
+            cards: [1, 2].map((itemId) => ({
+              renderData: { itemId },
+              body: `Item ${itemId}\nAvailable now\n$50.00`,
+              buttons: [{
+                type: "quick_reply",
+                text: "Choose",
+                payload: `choose_item:${itemId}`,
+              }],
+            })),
+          },
+        },
+      },
+    ], (output) => {
+      const record = output as Record<string, unknown>;
+      if (record.kind !== "media_carousel") return output;
+      const action = record.action as Record<string, unknown>;
+      return {
+        ...record,
+        action: {
+          ...action,
+          cards: (action.cards as Array<Record<string, unknown>>).map(
+            (card) => ({
+              ...card,
+              image: {
+                bytes: new Uint8Array([137, 80, 78, 71]),
+                mimeType: "image/png",
+              },
+            }),
+          ),
+        },
+      };
+    }));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assertEquals(uploadCount, 2);
+  assertEquals(messageBodies.length, 1);
+  const interactive = messageBodies[0].interactive as Record<string, unknown>;
+  assertEquals(interactive.type, "carousel");
+  const action = interactive.action as Record<string, unknown>;
+  const cards = action.cards as Array<Record<string, unknown>>;
+  assertEquals(cards.length, 2);
+  assertEquals(
+    (cards[0].header as Record<string, unknown>).image,
+    { id: "media-1" },
+  );
+  assertEquals(
+    ((cards[1].action as Record<string, unknown>).buttons as Array<
+      Record<string, unknown>
+    >)[0].quick_reply,
+    { id: "choose_item:2", title: "Choose" },
+  );
+});
+
+Deno.test("WhatsApp egress falls back to text when carousel transformation fails", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return Promise.resolve(
+      new Response(JSON.stringify({ messages: [{ id: "wamid.fallback" }] }), {
+        status: 200,
+      }),
+    );
+  }) as typeof fetch;
+
+  try {
+    await createWhatsAppEgressAdapter().deliver(deliveryContext([
+      {
+        type: "ACTION",
+        payload: {
+          content: "Choose an item",
+          action: {
+            type: "media_carousel",
+            fallbackText: "Alternative item list",
+            cards: [{}, {}],
+          },
+        },
+      },
+    ], () => {
+      throw new Error("renderer unavailable");
+    }));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assertEquals(bodies, [{
+    messaging_product: "whatsapp",
+    to: "5511999999999",
+    type: "text",
+    text: { body: "Alternative item list" },
+  }]);
 });
 
 Deno.test("WhatsApp egress exposes reply button delivery output to channel overrides", async () => {
@@ -300,7 +426,7 @@ Deno.test("WhatsApp channel debug logs run completion and delivery completion", 
       {
         type: "NEW_MESSAGE",
         payload: {
-          sender: { type: "agent", id: "mobizap" },
+          sender: { type: "agent", id: "agent-1" },
           content: "debug lifecycle",
         },
       },

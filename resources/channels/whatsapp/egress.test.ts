@@ -64,7 +64,7 @@ Deno.test("WhatsApp egress sends ACTION reply_buttons as interactive buttons", a
       {
         type: "ACTION",
         payload: {
-          sender: { type: "agent", id: "mobizap" },
+          sender: { type: "agent", id: "agent-1" },
           content: "Como voce gostaria de prosseguir?",
           action: {
             type: "reply_buttons",
@@ -125,17 +125,17 @@ Deno.test("WhatsApp egress renders, uploads, and sends media carousel actions", 
       {
         type: "ACTION",
         payload: {
-          content: "Escolha sua viagem",
+          content: "Choose an item",
           action: {
             type: "media_carousel",
-            fallbackText: "1) 08:00 - R$ 50,00",
-            cards: [1, 2].map((tripId) => ({
-              renderData: { tripId },
-              body: `Empresa ${tripId}\n08:00 → 10:00\nR$ 50,00`,
+            fallbackText: "1) Item A - $50.00",
+            cards: [1, 2].map((itemId) => ({
+              renderData: { itemId },
+              body: `Item ${itemId}\nAvailable now\n$50.00`,
               buttons: [{
                 type: "quick_reply",
-                text: "Selecionar",
-                payload: `select_trip:${tripId}`,
+                text: "Choose",
+                payload: `choose_item:${itemId}`,
               }],
             })),
           },
@@ -180,7 +180,7 @@ Deno.test("WhatsApp egress renders, uploads, and sends media carousel actions", 
     ((cards[1].action as Record<string, unknown>).buttons as Array<
       Record<string, unknown>
     >)[0].quick_reply,
-    { id: "select_trip:2", title: "Selecionar" },
+    { id: "choose_item:2", title: "Choose" },
   );
 });
 
@@ -201,10 +201,10 @@ Deno.test("WhatsApp egress falls back to text when carousel transformation fails
       {
         type: "ACTION",
         payload: {
-          content: "Escolha sua viagem",
+          content: "Choose an item",
           action: {
             type: "media_carousel",
-            fallbackText: "Lista de viagens alternativa",
+            fallbackText: "Alternative item list",
             cards: [{}, {}],
           },
         },
@@ -220,7 +220,7 @@ Deno.test("WhatsApp egress falls back to text when carousel transformation fails
     messaging_product: "whatsapp",
     to: "5511999999999",
     type: "text",
-    text: { body: "Lista de viagens alternativa" },
+    text: { body: "Alternative item list" },
   }]);
 });
 
@@ -426,7 +426,7 @@ Deno.test("WhatsApp channel debug logs run completion and delivery completion", 
       {
         type: "NEW_MESSAGE",
         payload: {
-          sender: { type: "agent", id: "mobizap" },
+          sender: { type: "agent", id: "agent-1" },
           content: "debug lifecycle",
         },
       },

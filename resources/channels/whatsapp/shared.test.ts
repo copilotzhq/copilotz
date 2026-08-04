@@ -23,7 +23,7 @@ const whatsappConfig = {
 
 Deno.test("normalizeWhatsAppActionPayload unwraps nested ACTION payloads", () => {
   const normalized = normalizeWhatsAppActionPayload({
-    sender: { type: "agent", id: "mobizap" },
+    sender: { type: "agent", id: "agent-1" },
     content: "Como voce gostaria de prosseguir com o pagamento?",
     action: {
       type: "reply_buttons",
@@ -142,24 +142,24 @@ Deno.test("buildWhatsAppMediaCarouselMessage builds Meta quick-reply cards", () 
   assertEquals(
     buildWhatsAppMediaCarouselMessage("5511999999999", {
       type: "media_carousel",
-      message: "Escolha sua viagem",
-      fallbackText: "Lista alternativa",
+      message: "Choose an item",
+      fallbackText: "Alternative item list",
       cards: [
         {
-          body: "Empresa A\n08:00 → 10:00\nR$ 50,00",
+          body: "Item A\nAvailable now\n$50.00",
           image: { id: "media-1" },
           buttons: [{
             type: "quick_reply",
-            text: "Selecionar",
-            payload: "select_trip:1",
+            text: "Choose",
+            payload: "choose_item:1",
           }],
         },
         {
-          image: { link: "https://cdn.example.com/trip-2.png" },
+          image: { link: "https://cdn.example.com/item-2.png" },
           buttons: [{
             type: "quick_reply",
-            text: "Selecionar",
-            payload: "select_trip:2",
+            text: "Choose",
+            payload: "choose_item:2",
           }],
         },
       ],
@@ -170,20 +170,20 @@ Deno.test("buildWhatsAppMediaCarouselMessage builds Meta quick-reply cards", () 
       type: "interactive",
       interactive: {
         type: "carousel",
-        body: { text: "Escolha sua viagem" },
+        body: { text: "Choose an item" },
         action: {
           cards: [
             {
               card_index: 0,
               type: "cta_url",
               header: { type: "image", image: { id: "media-1" } },
-              body: { text: "Empresa A\n08:00 → 10:00\nR$ 50,00" },
+              body: { text: "Item A\nAvailable now\n$50.00" },
               action: {
                 buttons: [{
                   type: "quick_reply",
                   quick_reply: {
-                    id: "select_trip:1",
-                    title: "Selecionar",
+                    id: "choose_item:1",
+                    title: "Choose",
                   },
                 }],
               },
@@ -193,14 +193,14 @@ Deno.test("buildWhatsAppMediaCarouselMessage builds Meta quick-reply cards", () 
               type: "cta_url",
               header: {
                 type: "image",
-                image: { link: "https://cdn.example.com/trip-2.png" },
+                image: { link: "https://cdn.example.com/item-2.png" },
               },
               action: {
                 buttons: [{
                   type: "quick_reply",
                   quick_reply: {
-                    id: "select_trip:2",
-                    title: "Selecionar",
+                    id: "choose_item:2",
+                    title: "Choose",
                   },
                 }],
               },
@@ -219,7 +219,7 @@ Deno.test("resolveWhatsAppMediaCarouselAction rejects invalid card counts and du
       message: "Escolha",
       cards: [{
         image: { id: "media-1" },
-        buttons: [{ text: "Selecionar", payload: "select_trip:1" }],
+        buttons: [{ text: "Choose", payload: "choose_item:1" }],
       }],
     }),
     null,
@@ -231,7 +231,7 @@ Deno.test("resolveWhatsAppMediaCarouselAction rejects invalid card counts and du
       message: "Escolha",
       cards: ["media-1", "media-2"].map((id) => ({
         image: { id },
-        buttons: [{ text: "Selecionar", payload: "select_trip:same" }],
+        buttons: [{ text: "Choose", payload: "choose_item:same" }],
       })),
     }),
     null,

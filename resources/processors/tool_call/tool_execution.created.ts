@@ -34,8 +34,8 @@ import Ajv from "npm:ajv@^8.17.1";
 import addFormats from "npm:ajv-formats@^3.0.1";
 import { resolveAssetIdForStore } from "@/runtime/storage/assets.ts";
 import {
-  safeToolExecutionError,
   stringifyToolError,
+  toolExecutionErrorResult,
 } from "@/runtime/tools/errors.ts";
 
 export const processorId = "tool_call";
@@ -314,7 +314,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       const finishedAt = new Date().toISOString();
 
       let content: string;
-      if (error) {
+      if (typeof error !== "undefined") {
         content = `tool error: ${
           stringifyToolError(error)
         }\n\nPlease review the error above and try again with the correct format.`;
@@ -735,24 +735,24 @@ export const processToolCalls = async (
         const isTimeout = Boolean(
           cancellation.cancelled && cancellation.reason === "timeout",
         );
-        const safeError = isTimeout
+        const toolError = isTimeout
           ? `EXECUTION CANCELLED: Tool execution timed out after ${
             Math.round((timeoutMs ?? 0) / 1000)
           }s`
-          : safeToolExecutionError(error);
+          : toolExecutionErrorResult(error);
 
         const { visibility } = await projectToolResultForHistory(
           tool,
           args,
           undefined,
-          safeError,
+          toolError,
         );
 
         return {
           tool_call_id: toolCall.id,
           name,
           status: isTimeout ? "cancelled" : "failed",
-          error: safeError,
+          error: toolError,
           historyVisibility: visibility,
         } satisfies ProcessedToolCallResult;
       } finally {

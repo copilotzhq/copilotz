@@ -84,33 +84,21 @@ Deno.test("API tool strips null characters from structured responses", async () 
   }
 });
 
-Deno.test("API tool exposes only allowlisted structured HTTP error details", async () => {
+Deno.test("API tool preserves the base JSON response for HTTP errors", async () => {
   const originalFetch = globalThis.fetch;
-  const secret = "session-cookie-secret";
-  const html = `<!doctype html><html><body>${
-    "failure".repeat(6_000)
-  }</body></html>`;
+  const errorResponse = {
+    message: "Passenger information is missing",
+    error: {
+      code: "PASSENGER_REQUIRED",
+      missingFields: ["birthdate"],
+    },
+  };
   globalThis.fetch = async () =>
     new Response(
-      JSON.stringify({
-        message: html,
-        error: {
-          code: "PIX_SUBMIT_FAILED",
-          response: { status: 500, data: html },
-        },
-        config: {
-          headers: {
-            authorization: "Bearer provider-secret",
-            cookie: secret,
-          },
-        },
-      }),
+      JSON.stringify(errorResponse),
       {
-        status: 400,
-        headers: {
-          "content-type": "application/json",
-          "x-request-id": "req_safe_123",
-        },
+        status: 422,
+        headers: { "content-type": "application/json" },
       },
     );
 
@@ -124,22 +112,8 @@ Deno.test("API tool exposes only allowlisted structured HTTP error details", asy
     }
 
     assertEquals(caught instanceof ToolExecutionError, true);
-    const details = (caught as ToolExecutionError).details;
-    assertEquals(details, {
-      code: "api_http_error",
-      message: "Upstream returned an HTML error response.",
-      retryable: true,
-      status: 400,
-      upstreamStatus: 500,
-      providerCode: "PIX_SUBMIT_FAILED",
-      requestId: "req_safe_123",
-      method: "GET",
-      endpoint: "https://example.com/status",
-    });
-    const serialized = JSON.stringify(details);
-    assertEquals(serialized.includes(secret), false);
-    assertEquals(serialized.includes("provider-secret"), false);
-    assertEquals(serialized.length < 1_000, true);
+    assertEquals((caught as ToolExecutionError).status, 422);
+    assertEquals((caught as ToolExecutionError).response, errorResponse);
   } finally {
     globalThis.fetch = originalFetch;
   }

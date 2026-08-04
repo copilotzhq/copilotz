@@ -3,12 +3,13 @@ import type { ExecutableTool } from "@/runtime/tools/types.ts";
 import type { ToolInvocation } from "@/runtime/llm/types.ts";
 import type { Event, ProcessorDeps } from "@/types/index.ts";
 import { process, processToolCalls } from "./tool_execution.created.ts";
-import {
-  sanitizeToolErrorMessage,
-  ToolExecutionError,
-} from "@/runtime/tools/errors.ts";
+import { ToolExecutionError } from "@/runtime/tools/errors.ts";
 
-Deno.test("processToolCalls preserves structured safe tool errors", async () => {
+Deno.test("processToolCalls returns the base response from HTTP tool errors", async () => {
+  const response = {
+    message: "Provider rejected the request",
+    reason: "missing_birthdate",
+  };
   const tool: ExecutableTool = {
     id: "safe-error",
     key: "safe_error",
@@ -16,13 +17,7 @@ Deno.test("processToolCalls preserves structured safe tool errors", async () => 
     description: "Throws a structured safe error.",
     inputSchema: { type: "object", additionalProperties: false },
     execute: () => {
-      throw new ToolExecutionError({
-        code: "api_http_error",
-        message: "Provider unavailable",
-        retryable: true,
-        status: 400,
-        upstreamStatus: 500,
-      });
+      throw new ToolExecutionError(response, 422, "Unprocessable Entity");
     },
   };
   const [result] = await processToolCalls([{
@@ -32,24 +27,26 @@ Deno.test("processToolCalls preserves structured safe tool errors", async () => 
   }], [tool]);
 
   assertEquals(result.status, "failed");
-  assertEquals(result.error, {
-    code: "api_http_error",
-    message: "Provider unavailable",
-    retryable: true,
-    status: 400,
-    upstreamStatus: 500,
-  });
+  assertEquals(result.error, response);
 });
 
-Deno.test("generic tool errors are redacted and bounded", () => {
-  const sanitized = sanitizeToolErrorMessage(
-    `authorization: Bearer top-secret\ncookie: session=secret\n${
-      "x".repeat(5_000)
-    }`,
-  );
-  assertEquals(sanitized.includes("top-secret"), false);
-  assertEquals(sanitized.includes("session=secret"), false);
-  assertEquals(sanitized.length < 2_100, true);
+Deno.test("generic tool errors keep their original message", async () => {
+  const tool: ExecutableTool = {
+    id: "generic-error",
+    key: "generic_error",
+    name: "Generic error",
+    description: "Throws a regular error.",
+    inputSchema: { type: "object", additionalProperties: false },
+    execute: () => {
+      throw new Error("provider detail");
+    },
+  };
+  const [result] = await processToolCalls([{
+    id: "call-generic-error",
+    tool: { id: tool.key },
+    args: "{}",
+  }], [tool]);
+  assertEquals(result.error, "EXECUTION ERROR: provider detail");
 });
 
 Deno.test("processToolCalls assigns toolCallId per concurrent invocation", async () => {

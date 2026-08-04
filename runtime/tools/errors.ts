@@ -1,62 +1,20 @@
-export interface ToolExecutionErrorDetails {
-  code: string;
-  message: string;
-  retryable: boolean;
-  status?: number;
-  upstreamStatus?: number;
-  providerCode?: string;
-  requestId?: string;
-  method?: string;
-  endpoint?: string;
-}
-
-const MAX_TOOL_ERROR_MESSAGE_LENGTH = 2_000;
-const HTML_DOCUMENT_PATTERN = /<!doctype\s+html|<html[\s>]/i;
-
-function truncate(value: string): string {
-  if (value.length <= MAX_TOOL_ERROR_MESSAGE_LENGTH) return value;
-  return `${value.slice(0, MAX_TOOL_ERROR_MESSAGE_LENGTH)}…[truncated]`;
-}
-
-export function sanitizeToolErrorMessage(value: unknown): string {
-  const message = value instanceof Error ? value.message : String(value ?? "");
-  if (HTML_DOCUMENT_PATTERN.test(message)) {
-    return "Upstream returned an HTML error response.";
-  }
-  return truncate(
-    message
-      .replace(/\u0000/g, "")
-      .replace(
-        /(authorization\s*[:=]\s*["']?bearer\s+)[^\s,"'}]+/gi,
-        "$1[REDACTED]",
-      )
-      .replace(/((?:set-)?cookie\s*[:=]\s*)[^\r\n]+/gi, "$1[REDACTED]")
-      .replace(
-        /((?:api[-_]?key|access[-_]?token|refresh[-_]?token)\s*[:=]\s*["']?)[^\s,"'}]+/gi,
-        "$1[REDACTED]",
-      ),
-  );
-}
-
 export class ToolExecutionError extends Error {
-  readonly details: ToolExecutionErrorDetails;
+  readonly response: unknown;
+  readonly status: number;
 
-  constructor(details: ToolExecutionErrorDetails) {
-    const safeDetails = {
-      ...details,
-      message: sanitizeToolErrorMessage(details.message),
-    };
-    super(safeDetails.message);
+  constructor(response: unknown, status: number, statusText: string) {
+    super(`HTTP ${status}: ${statusText}`);
     this.name = "ToolExecutionError";
-    this.details = safeDetails;
+    this.response = response;
+    this.status = status;
   }
 }
 
-export function safeToolExecutionError(
-  error: unknown,
-): ToolExecutionErrorDetails | string {
-  if (error instanceof ToolExecutionError) return error.details;
-  return `EXECUTION ERROR: ${sanitizeToolErrorMessage(error)}`;
+export function toolExecutionErrorResult(error: unknown): unknown {
+  if (error instanceof ToolExecutionError) return error.response;
+  return `EXECUTION ERROR: ${
+    error instanceof Error ? error.message : String(error)
+  }`;
 }
 
 export function stringifyToolError(error: unknown): string {
@@ -64,6 +22,6 @@ export function stringifyToolError(error: unknown): string {
   try {
     return JSON.stringify(error);
   } catch {
-    return sanitizeToolErrorMessage(error);
+    return String(error);
   }
 }

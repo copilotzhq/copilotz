@@ -87,13 +87,6 @@ export {
 } from "@/runtime/thread-metadata.ts";
 export { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 export {
-  safeToolExecutionError,
-  sanitizeToolErrorMessage,
-  stringifyToolError,
-  ToolExecutionError,
-  type ToolExecutionErrorDetails,
-} from "@/runtime/tools/errors.ts";
-export {
   findMemorySpace,
   resolveThreadMemorySpaces,
 } from "@/runtime/memory/long-term.ts";

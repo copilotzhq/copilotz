@@ -11,10 +11,12 @@ import {
   normalizeWhatsAppActionPayload,
   resolveWhatsAppConfig,
   sendWhatsAppActionMessage,
+  sendWhatsAppMediaCarouselMessage,
   sendWhatsAppText,
   uploadWhatsAppMedia,
   type WhatsAppActionPayload,
   type WhatsAppConfig,
+  type WhatsAppMediaCarouselAction,
 } from "./shared.ts";
 
 export type WhatsAppTextDeliveryOutput = {
@@ -39,10 +41,33 @@ export type WhatsAppReplyButtonsDeliveryOutput = {
   event: StreamEvent;
 };
 
+export type WhatsAppMediaCarouselDeliveryOutput = {
+  kind: "media_carousel";
+  to: string;
+  action: WhatsAppMediaCarouselAction;
+  event: StreamEvent;
+};
+
 export type WhatsAppDeliveryOutput =
   | WhatsAppTextDeliveryOutput
   | WhatsAppMediaDeliveryOutput
-  | WhatsAppReplyButtonsDeliveryOutput;
+  | WhatsAppReplyButtonsDeliveryOutput
+  | WhatsAppMediaCarouselDeliveryOutput;
+
+async function sendCarouselFallback(
+  config: WhatsAppConfig,
+  to: string,
+  action: WhatsAppActionPayload,
+  reason: string,
+): Promise<void> {
+  const fallbackText = typeof action.fallbackText === "string"
+    ? action.fallbackText.trim()
+    : "";
+  const message = fallbackText ||
+    (typeof action.message === "string" ? action.message.trim() : "");
+  debugWhatsAppChannel("media_carousel_fallback", { reason });
+  if (message) await sendWhatsAppText(config, to, message);
+}
 
 function getAgentMessageDelivery(event: StreamEvent): {
   text: string;
@@ -237,6 +262,55 @@ export function createWhatsAppEgressAdapter(
                 });
                 if (output?.kind !== "reply_buttons") break;
                 await sendWhatsAppActionMessage(cfg, output.to, output.action);
+              } else if (action.type === "media_carousel") {
+                const carouselAction = action as WhatsAppMediaCarouselAction;
+                let output: WhatsAppDeliveryOutput | null = null;
+                try {
+                  output = await transformEgressDeliveryOutput<
+                    WhatsAppDeliveryOutput
+                  >(context, {
+                    kind: "media_carousel",
+                    to: recipientPhone,
+                    action: carouselAction,
+                    event,
+                  });
+                } catch (error) {
+                  debugWhatsAppChannel("media_carousel_transform_failed", {
+                    error: error instanceof Error
+                      ? error.message
+                      : String(error),
+                  });
+                  await sendCarouselFallback(
+                    cfg,
+                    recipientPhone,
+                    carouselAction,
+                    "transform_failed",
+                  );
+                  break;
+                }
+
+                if (output?.kind !== "media_carousel") {
+                  await sendCarouselFallback(
+                    cfg,
+                    recipientPhone,
+                    carouselAction,
+                    "transform_suppressed",
+                  );
+                  break;
+                }
+                const sent = await sendWhatsAppMediaCarouselMessage(
+                  cfg,
+                  output.to,
+                  output.action,
+                );
+                if (!sent) {
+                  await sendCarouselFallback(
+                    cfg,
+                    output.to,
+                    output.action,
+                    "media_or_send_failed",
+                  );
+                }
               }
               break;
             }

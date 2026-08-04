@@ -36,6 +36,9 @@ function summarizeWhatsAppMessage(body: Record<string, unknown>) {
   const interactive = body.interactive && typeof body.interactive === "object"
     ? body.interactive as Record<string, unknown>
     : undefined;
+  const action = interactive?.action && typeof interactive.action === "object"
+    ? interactive.action as Record<string, unknown>
+    : undefined;
 
   return {
     type: typeof body.type === "string" ? body.type : null,
@@ -43,6 +46,9 @@ function summarizeWhatsAppMessage(body: Record<string, unknown>) {
     textLength: typeof text?.body === "string" ? text.body.length : null,
     interactiveType: typeof interactive?.type === "string"
       ? interactive.type
+      : null,
+    carouselCardCount: Array.isArray(action?.cards)
+      ? action.cards.length
       : null,
   };
 }
@@ -182,6 +188,61 @@ export type WhatsAppActionPayload = Record<string, unknown> & {
   type?: string;
   message?: string;
   content?: WhatsAppReplyButtonInput[];
+  fallbackText?: string;
+  cards?: WhatsAppMediaCarouselCardInput[];
+};
+
+export type WhatsAppMediaBytesInput = {
+  bytes: Uint8Array;
+  mimeType: string;
+};
+
+export type WhatsAppMediaUploadInput = string | WhatsAppMediaBytesInput;
+
+export type WhatsAppCarouselImageInput = {
+  id?: string;
+  link?: string;
+  dataUrl?: string;
+  bytes?: Uint8Array;
+  mimeType?: string;
+};
+
+export type WhatsAppCarouselQuickReplyInput = {
+  type?: "quick_reply";
+  text?: string;
+  payload?: string;
+};
+
+export type WhatsAppMediaCarouselCardInput = {
+  body?: string;
+  image?: WhatsAppCarouselImageInput;
+  /** Opaque client-owned input that an egress override can turn into `image`. */
+  renderData?: unknown;
+  buttons?: WhatsAppCarouselQuickReplyInput[];
+};
+
+export type WhatsAppMediaCarouselAction = WhatsAppActionPayload & {
+  type: "media_carousel";
+  message: string;
+  fallbackText?: string;
+  cards: WhatsAppMediaCarouselCardInput[];
+};
+
+export type WhatsAppResolvedCarouselCard = {
+  body?: string;
+  image: { id: string } | { link: string };
+  buttons: Array<{
+    type: "quick_reply";
+    text: string;
+    payload: string;
+  }>;
+};
+
+export type WhatsAppResolvedMediaCarouselAction = {
+  type: "media_carousel";
+  message: string;
+  fallbackText?: string;
+  cards: WhatsAppResolvedCarouselCard[];
 };
 
 export type WhatsAppInteractiveButtonMessage = {
@@ -195,9 +256,43 @@ export type WhatsAppInteractiveButtonMessage = {
   };
 };
 
+export type WhatsAppInteractiveMediaCarouselMessage = {
+  messaging_product: "whatsapp";
+  to: string;
+  type: "interactive";
+  interactive: {
+    type: "carousel";
+    body: { text: string };
+    action: {
+      cards: Array<{
+        card_index: number;
+        type: "cta_url";
+        header: {
+          type: "image";
+          image: { id: string } | { link: string };
+        };
+        body?: { text: string };
+        action: {
+          buttons: Array<{
+            type: "quick_reply";
+            quick_reply: { id: string; title: string };
+          }>;
+        };
+      }>;
+    };
+  };
+};
+
 const MAX_REPLY_BUTTONS = 3;
 const MAX_REPLY_BUTTON_TITLE_LENGTH = 20;
 const MAX_REPLY_BUTTON_ID_LENGTH = 256;
+const MIN_CAROUSEL_CARDS = 2;
+const MAX_CAROUSEL_CARDS = 10;
+const MAX_CAROUSEL_MESSAGE_LENGTH = 1024;
+const MAX_CAROUSEL_CARD_BODY_LENGTH = 160;
+const MAX_CAROUSEL_CARD_LINE_BREAKS = 2;
+const MAX_CAROUSEL_IMAGE_BYTES = 5 * 1024 * 1024;
+const CAROUSEL_UPLOAD_CONCURRENCY = 3;
 
 function truncate(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : value.slice(0, maxLength);
@@ -251,6 +346,167 @@ export function normalizeWhatsAppReplyButtons(
   return buttons;
 }
 
+function normalizeCarouselBody(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value
+    .replace(/\r\n?/g, "\n")
+    .split("\n", MAX_CAROUSEL_CARD_LINE_BREAKS + 1)
+    .join("\n")
+    .trim();
+  return normalized
+    ? truncate(normalized, MAX_CAROUSEL_CARD_BODY_LENGTH)
+    : undefined;
+}
+
+function normalizeCarouselButtons(
+  items: WhatsAppCarouselQuickReplyInput[] | undefined,
+): WhatsAppResolvedCarouselCard["buttons"] | null {
+  if (
+    !Array.isArray(items) || items.length === 0 ||
+    items.length > MAX_REPLY_BUTTONS
+  ) {
+    return null;
+  }
+
+  const buttons: WhatsAppResolvedCarouselCard["buttons"] = [];
+  for (const item of items) {
+    if (item?.type && item.type !== "quick_reply") return null;
+    const text = truncate(
+      typeof item?.text === "string" ? item.text.trim() : "",
+      MAX_REPLY_BUTTON_TITLE_LENGTH,
+    );
+    const payload = truncate(
+      typeof item?.payload === "string" ? item.payload.trim() : "",
+      MAX_REPLY_BUTTON_ID_LENGTH,
+    );
+    if (!text || !payload) return null;
+    buttons.push({ type: "quick_reply", text, payload });
+  }
+  return buttons;
+}
+
+function resolvedCarouselImage(
+  image: WhatsAppCarouselImageInput | undefined,
+): WhatsAppResolvedCarouselCard["image"] | null {
+  const id = typeof image?.id === "string" ? image.id.trim() : "";
+  if (id) return { id };
+  const link = typeof image?.link === "string" ? image.link.trim() : "";
+  if (link && /^https:\/\//i.test(link)) return { link };
+  return null;
+}
+
+function carouselUploadInput(
+  image: WhatsAppCarouselImageInput | undefined,
+): WhatsAppMediaUploadInput | null {
+  if (typeof image?.dataUrl === "string" && image.dataUrl.length > 0) {
+    const parsed = parseDataUrl(image.dataUrl);
+    if (
+      parsed?.mime.startsWith("image/") && parsed.bytes.byteLength > 0 &&
+      parsed.bytes.byteLength <= MAX_CAROUSEL_IMAGE_BYTES
+    ) {
+      return { bytes: parsed.bytes, mimeType: parsed.mime };
+    }
+    return null;
+  }
+  if (
+    image?.bytes instanceof Uint8Array &&
+    typeof image.mimeType === "string" &&
+    image.mimeType.startsWith("image/") &&
+    image.bytes.byteLength > 0 &&
+    image.bytes.byteLength <= MAX_CAROUSEL_IMAGE_BYTES
+  ) {
+    return { bytes: image.bytes, mimeType: image.mimeType };
+  }
+  return null;
+}
+
+async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  mapper: (value: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, values.length) },
+    async () => {
+      while (nextIndex < values.length) {
+        const index = nextIndex++;
+        results[index] = await mapper(values[index], index);
+      }
+    },
+  );
+  await Promise.all(workers);
+  return results;
+}
+
+export async function resolveWhatsAppMediaCarouselAction(
+  config: WhatsAppConfig,
+  action: WhatsAppMediaCarouselAction,
+): Promise<WhatsAppResolvedMediaCarouselAction | null> {
+  const message = truncate(
+    typeof action.message === "string" ? action.message.trim() : "",
+    MAX_CAROUSEL_MESSAGE_LENGTH,
+  );
+  const cards = Array.isArray(action.cards) ? action.cards : [];
+  if (
+    !message || cards.length < MIN_CAROUSEL_CARDS ||
+    cards.length > MAX_CAROUSEL_CARDS
+  ) {
+    return null;
+  }
+
+  const resolved = await mapWithConcurrency(
+    cards,
+    CAROUSEL_UPLOAD_CONCURRENCY,
+    async (card): Promise<WhatsAppResolvedCarouselCard | null> => {
+      const buttons = normalizeCarouselButtons(card?.buttons);
+      if (!buttons) return null;
+      const body = normalizeCarouselBody(card?.body);
+
+      let image = resolvedCarouselImage(card?.image);
+      if (!image) {
+        const uploadInput = carouselUploadInput(card?.image);
+        if (!uploadInput) return null;
+        const uploaded = await uploadWhatsAppMedia(config, uploadInput);
+        if (!uploaded || uploaded.type !== "image") return null;
+        image = { id: uploaded.id };
+      }
+
+      return {
+        ...(body ? { body } : {}),
+        image,
+        buttons,
+      };
+    },
+  );
+
+  if (resolved.some((card) => card === null)) return null;
+  const normalizedCards = resolved as WhatsAppResolvedCarouselCard[];
+  const buttonCount = normalizedCards[0]?.buttons.length;
+  if (
+    !buttonCount ||
+    normalizedCards.some((card) => card.buttons.length !== buttonCount)
+  ) {
+    return null;
+  }
+
+  const replyIds = normalizedCards.flatMap((card) =>
+    card.buttons.map((button) => button.payload)
+  );
+  if (new Set(replyIds).size !== replyIds.length) return null;
+
+  const fallbackText = typeof action.fallbackText === "string"
+    ? action.fallbackText.trim()
+    : "";
+  return {
+    type: "media_carousel",
+    message,
+    ...(fallbackText ? { fallbackText } : {}),
+    cards: normalizedCards,
+  };
+}
+
 export function normalizeWhatsAppActionPayload(
   payload: Record<string, unknown> | null | undefined,
 ): WhatsAppActionPayload | null {
@@ -292,6 +548,58 @@ export function buildWhatsAppReplyButtonsMessage(
   };
 }
 
+export function buildWhatsAppMediaCarouselMessage(
+  to: string,
+  action: WhatsAppResolvedMediaCarouselAction,
+): WhatsAppInteractiveMediaCarouselMessage | null {
+  if (
+    !to || !action.message ||
+    action.cards.length < MIN_CAROUSEL_CARDS ||
+    action.cards.length > MAX_CAROUSEL_CARDS
+  ) {
+    return null;
+  }
+
+  return {
+    messaging_product: "whatsapp",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "carousel",
+      body: { text: action.message },
+      action: {
+        cards: action.cards.map((card, cardIndex) => ({
+          card_index: cardIndex,
+          type: "cta_url",
+          header: { type: "image", image: card.image },
+          ...(card.body ? { body: { text: card.body } } : {}),
+          action: {
+            buttons: card.buttons.map((button) => ({
+              type: "quick_reply" as const,
+              quick_reply: {
+                id: button.payload,
+                title: button.text,
+              },
+            })),
+          },
+        })),
+      },
+    },
+  };
+}
+
+export async function sendWhatsAppMediaCarouselMessage(
+  config: WhatsAppConfig,
+  to: string,
+  action: WhatsAppMediaCarouselAction,
+): Promise<boolean> {
+  const resolved = await resolveWhatsAppMediaCarouselAction(config, action);
+  if (!resolved) return false;
+  const body = buildWhatsAppMediaCarouselMessage(to, resolved);
+  if (!body) return false;
+  return (await callWhatsAppGraphAPI(config, body)) !== null;
+}
+
 export async function sendWhatsAppActionMessage(
   config: WhatsAppConfig,
   to: string,
@@ -331,16 +639,30 @@ function whatsappMediaType(mimeType: string): string {
 
 export async function uploadWhatsAppMedia(
   config: WhatsAppConfig,
-  dataUrl: string,
+  input: WhatsAppMediaUploadInput,
 ): Promise<{ id: string; type: string } | null> {
-  const parsed = parseDataUrl(dataUrl);
-  if (!parsed) return null;
+  const parsed = typeof input === "string" ? parseDataUrl(input) : null;
+  const bytes = parsed?.bytes ??
+    (typeof input === "object" ? input.bytes : undefined);
+  const mimeType = parsed?.mime ??
+    (typeof input === "object" ? input.mimeType : undefined);
+  if (
+    !(bytes instanceof Uint8Array) || bytes.byteLength === 0 ||
+    typeof mimeType !== "string" || !mimeType.includes("/")
+  ) {
+    return null;
+  }
 
-  const { bytes, mime: mimeType } = parsed;
   const mediaType = whatsappMediaType(mimeType);
   const formData = new FormData();
-  const blob = new Blob([bytes.buffer as ArrayBuffer], { type: mimeType });
-  formData.append("file", blob, `file.${mimeType.split("/")[1]}`);
+  const arrayBuffer = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
+  const blob = new Blob([arrayBuffer], { type: mimeType });
+  const extension = mimeType.split("/")[1]?.replace(/[^a-z0-9.+-]/gi, "") ||
+    "bin";
+  formData.append("file", blob, `file.${extension}`);
   formData.append("type", mimeType);
   formData.append("messaging_product", "whatsapp");
 

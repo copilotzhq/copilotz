@@ -2,14 +2,24 @@ import {
   assertEquals,
   assertNotEquals,
   assertStringIncludes,
-} from "jsr:@std/assert";
+} from "@std/assert";
 
 import {
+  buildWhatsAppMediaCarouselMessage,
   buildWhatsAppReplyButtonsMessage,
   callWhatsAppGraphAPI,
   normalizeWhatsAppActionPayload,
   normalizeWhatsAppReplyButtons,
+  resolveWhatsAppMediaCarouselAction,
 } from "./shared.ts";
+
+const whatsappConfig = {
+  accessToken: "token",
+  phoneId: "phone-number-id",
+  appSecret: "",
+  webhookVerifyToken: "",
+  graphApiVersion: "v25.0",
+};
 
 Deno.test("normalizeWhatsAppActionPayload unwraps nested ACTION payloads", () => {
   const normalized = normalizeWhatsAppActionPayload({
@@ -128,6 +138,106 @@ Deno.test("buildWhatsAppReplyButtonsMessage returns null without a valid body or
   );
 });
 
+Deno.test("buildWhatsAppMediaCarouselMessage builds Meta quick-reply cards", () => {
+  assertEquals(
+    buildWhatsAppMediaCarouselMessage("5511999999999", {
+      type: "media_carousel",
+      message: "Escolha sua viagem",
+      fallbackText: "Lista alternativa",
+      cards: [
+        {
+          body: "Empresa A\n08:00 → 10:00\nR$ 50,00",
+          image: { id: "media-1" },
+          buttons: [{
+            type: "quick_reply",
+            text: "Selecionar",
+            payload: "select_trip:1",
+          }],
+        },
+        {
+          image: { link: "https://cdn.example.com/trip-2.png" },
+          buttons: [{
+            type: "quick_reply",
+            text: "Selecionar",
+            payload: "select_trip:2",
+          }],
+        },
+      ],
+    }),
+    {
+      messaging_product: "whatsapp",
+      to: "5511999999999",
+      type: "interactive",
+      interactive: {
+        type: "carousel",
+        body: { text: "Escolha sua viagem" },
+        action: {
+          cards: [
+            {
+              card_index: 0,
+              type: "cta_url",
+              header: { type: "image", image: { id: "media-1" } },
+              body: { text: "Empresa A\n08:00 → 10:00\nR$ 50,00" },
+              action: {
+                buttons: [{
+                  type: "quick_reply",
+                  quick_reply: {
+                    id: "select_trip:1",
+                    title: "Selecionar",
+                  },
+                }],
+              },
+            },
+            {
+              card_index: 1,
+              type: "cta_url",
+              header: {
+                type: "image",
+                image: { link: "https://cdn.example.com/trip-2.png" },
+              },
+              action: {
+                buttons: [{
+                  type: "quick_reply",
+                  quick_reply: {
+                    id: "select_trip:2",
+                    title: "Selecionar",
+                  },
+                }],
+              },
+            },
+          ],
+        },
+      },
+    },
+  );
+});
+
+Deno.test("resolveWhatsAppMediaCarouselAction rejects invalid card counts and duplicate replies", async () => {
+  assertEquals(
+    await resolveWhatsAppMediaCarouselAction(whatsappConfig, {
+      type: "media_carousel",
+      message: "Escolha",
+      cards: [{
+        image: { id: "media-1" },
+        buttons: [{ text: "Selecionar", payload: "select_trip:1" }],
+      }],
+    }),
+    null,
+  );
+
+  assertEquals(
+    await resolveWhatsAppMediaCarouselAction(whatsappConfig, {
+      type: "media_carousel",
+      message: "Escolha",
+      cards: ["media-1", "media-2"].map((id) => ({
+        image: { id },
+        buttons: [{ text: "Selecionar", payload: "select_trip:same" }],
+      })),
+    }),
+    null,
+  );
+});
+
 Deno.test("WhatsApp channel debug logs sanitized Meta request and error response", async () => {
   const previousDebug = Deno.env.get("COPILOTZ_DEBUG_CHANNELS");
   const originalFetch = globalThis.fetch;
@@ -185,6 +295,7 @@ Deno.test("WhatsApp channel debug logs sanitized Meta request and error response
             recipient: "***9999",
             textLength: 17,
             interactiveType: null,
+            carouselCardCount: null,
           },
         },
       ],

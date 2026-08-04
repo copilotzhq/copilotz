@@ -50,6 +50,16 @@ export type { GraphHandlers, GraphSearchOptions } from "./graph.ts";
 
 export { createChannelHandlers } from "./channels.ts";
 export type { ChannelHandlers } from "./channels.ts";
+export type {
+  WhatsAppCarouselImageInput,
+  WhatsAppMediaBytesInput,
+  WhatsAppMediaCarouselAction,
+  WhatsAppMediaCarouselCardInput,
+} from "@/resources/channels/whatsapp/shared.ts";
+export type {
+  WhatsAppDeliveryOutput,
+  WhatsAppMediaCarouselDeliveryOutput,
+} from "@/resources/channels/whatsapp/egress.ts";
 
 export {
   migrateLlmUsageContract,

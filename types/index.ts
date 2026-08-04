@@ -226,6 +226,31 @@ export type AgentLlmOptionsResolver = (
   args: AgentLlmOptionsResolverArgs,
 ) => LLMRuntimeConfig | Promise<LLMRuntimeConfig>;
 
+/**
+ * Arguments passed to an agent instruction resolver before its prompt is built.
+ * The resolver can only choose the agent's local instructions for this LLM input.
+ */
+export interface AgentInstructionsResolverArgs {
+  /** Identity of the agent whose local instructions are being resolved. */
+  readonly agent: Readonly<Pick<Agent, "id" | "name">>;
+  /** Static instruction configured on the agent, normalized to null when absent. */
+  readonly baseInstructions: string | null;
+  /** Persisted thread selected for this LLM input. */
+  readonly thread: Readonly<Thread>;
+  /** Resolved participant metadata for the current user, when available. */
+  readonly userMetadata?: Readonly<Record<string, unknown>>;
+  /** Event that triggered this LLM input. */
+  readonly sourceEvent: Readonly<Event>;
+}
+
+/**
+ * Dynamically resolves an agent's local instructions for one LLM input.
+ * Return undefined to keep the static agent instructions, or null to omit them.
+ */
+export type AgentInstructionsResolver = (
+  args: AgentInstructionsResolverArgs,
+) => string | null | undefined | Promise<string | null | undefined>;
+
 export interface ResolveLLMRuntimeConfigArgs {
   provider?: string;
   model?: string;
@@ -583,6 +608,8 @@ export interface Agent {
   role: string;
   personality?: string | null;
   instructions?: string | null;
+  /** Optional per-input resolver for local agent instructions. */
+  instructionsResolver?: AgentInstructionsResolver;
   description?: string | null;
   /**
    * Agents this agent may ask or hand off to.
@@ -793,7 +820,10 @@ export interface ChatContext {
    * history. Defaults to `{ include: "self", maxEstimatedTokens: 750 }`.
    */
   reasoningHistory?: ReasoningHistoryOptions;
-  /** User metadata. */
+  /**
+   * Optional caller-supplied user metadata. When present, it takes precedence
+   * over metadata discovered from the current participant.
+   */
   userMetadata?: Record<string, unknown>;
   /** Hook for rewriting generated message history before the LLM call. */
   historyTransform?: HistoryTransform;

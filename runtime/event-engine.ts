@@ -140,12 +140,16 @@ export async function startThreadEventWorker(
   context: ChatContext,
   emitToStream: (event: Event) => void,
 ): Promise<void> {
+  // A worker owns mutable per-thread execution state, including user metadata
+  // resolved during prompt construction. Keep shared resource references intact
+  // while preventing one thread from contaminating another worker's context.
+  const threadContext: ChatContext = { ...context };
   const workerContext: WorkerContext = {
-    processors: context.processors ?? {},
+    processors: threadContext.processors ?? {},
     emitToStream,
-    stream: context.stream ?? true,
-    minPriority: context.minPriority,
-    namespace: context.namespace,
+    stream: threadContext.stream ?? true,
+    minPriority: threadContext.minPriority,
+    namespace: threadContext.namespace,
   };
 
   await startEventWorker(
@@ -160,7 +164,13 @@ export async function startThreadEventWorker(
 
       const thread = await ops.getThreadById(threadId);
       if (!thread) throw new Error(`Thread not found: ${threadId}`);
-      return { ops, db, thread, context, emitToStream } as ProcessorDeps;
+      return {
+        ops,
+        db,
+        thread,
+        context: threadContext,
+        emitToStream,
+      } as ProcessorDeps;
     },
   );
 }

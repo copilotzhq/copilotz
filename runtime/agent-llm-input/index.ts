@@ -22,6 +22,7 @@ import { filterSkillsForAgent } from "@/runtime/loaders/skill-loader.ts";
 import { getPublicThreadMetadata } from "@/runtime/thread-metadata.ts";
 import type {
   Agent,
+  AgentInstructionsResolverArgs,
   AgentLlmOptionsResolverArgs,
   ChatContext,
   Event,
@@ -122,6 +123,30 @@ function toExecutableTool(tool: unknown): ExecutableTool | null {
   };
 }
 
+async function resolveAgentInstructions(
+  agent: Agent,
+  args: Omit<AgentInstructionsResolverArgs, "agent" | "baseInstructions">,
+): Promise<string | null> {
+  const baseInstructions = agent.instructions ?? null;
+  const resolver = agent.instructionsResolver;
+  if (!resolver) return baseInstructions;
+
+  const resolved = await resolver({
+    agent: { id: agent.id, name: agent.name },
+    baseInstructions,
+    ...args,
+  });
+
+  if (resolved === undefined) return baseInstructions;
+  if (resolved === null || typeof resolved === "string") return resolved;
+
+  throw new TypeError(
+    `instructionsResolver for agent "${
+      agent.id ?? agent.name
+    }" must return a string, null, or undefined`,
+  );
+}
+
 function sliceMessagesInRange(
   messages: NewMessage[],
   startMessageId: string,
@@ -214,6 +239,111 @@ type ParticipantResolver = {
     externalId: string,
   ) => Promise<ParticipantLookupRecord | null>;
 };
+
+/**
+ * Metadata resolved by the runtime is cached only for the lifetime of one
+ * thread worker. A caller-supplied `context.userMetadata` remains an explicit
+ * override; this private map lets us tell the two cases apart without adding
+ * another public context field.
+ */
+interface RuntimeUserMetadataSnapshot {
+  userExternalId?: string;
+  metadata: Record<string, unknown>;
+}
+
+const runtimeUserMetadataSnapshots = new WeakMap<
+  ChatContext,
+  RuntimeUserMetadataSnapshot
+>();
+
+function asMetadataRecord(
+  value: unknown,
+): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function readThreadUserMetadata(
+  thread: Thread,
+): Record<string, unknown> | undefined {
+  return asMetadataRecord(
+    getPublicThreadMetadata(thread.metadata).userContext,
+  );
+}
+
+function cacheRuntimeUserMetadata(
+  context: ChatContext,
+  userExternalId: string | undefined,
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!metadata) {
+    delete context.userMetadata;
+    runtimeUserMetadataSnapshots.delete(context);
+    return undefined;
+  }
+
+  context.userMetadata = metadata;
+  runtimeUserMetadataSnapshots.set(context, { userExternalId, metadata });
+  return metadata;
+}
+
+async function resolveUserMetadata(
+  context: ChatContext,
+  thread: Thread,
+  participantCollection: ParticipantResolver | undefined,
+): Promise<Record<string, unknown> | undefined> {
+  const cached = runtimeUserMetadataSnapshots.get(context);
+  const contextMetadata = asMetadataRecord(context.userMetadata);
+  const isExplicitOverride = contextMetadata !== undefined &&
+    cached?.metadata !== contextMetadata;
+
+  if (isExplicitOverride) {
+    runtimeUserMetadataSnapshots.delete(context);
+    return contextMetadata;
+  }
+
+  const userExternalId = getUserExternalId(thread.metadata);
+  const threadMetadata = readThreadUserMetadata(thread);
+  const cachedMetadata = cached && cached.userExternalId === userExternalId
+    ? cached.metadata
+    : undefined;
+  const canResolveParticipant = Boolean(userExternalId) &&
+    typeof participantCollection?.resolveByExternalId === "function";
+
+  if (!canResolveParticipant) {
+    return cacheRuntimeUserMetadata(
+      context,
+      userExternalId,
+      threadMetadata ?? cachedMetadata,
+    );
+  }
+
+  try {
+    const participant = await participantCollection!.resolveByExternalId!(
+      userExternalId!,
+    );
+    // A successful lookup is authoritative, including when it has no metadata:
+    // do not keep a stale runtime snapshot after a participant update/removal.
+    return cacheRuntimeUserMetadata(
+      context,
+      userExternalId,
+      asMetadataRecord(participant?.metadata) ?? threadMetadata,
+    );
+  } catch (error) {
+    console.warn(
+      `buildProcessingContext: failed to load user metadata for ${userExternalId}`,
+      error,
+    );
+    // A transient read failure must not remove the last snapshot available to
+    // tools in this thread. The next prompt construction will retry the lookup.
+    return cacheRuntimeUserMetadata(
+      context,
+      userExternalId,
+      cachedMetadata ?? threadMetadata,
+    );
+  }
+}
 
 export async function buildProcessingContext(
   ops: Operations,
@@ -313,42 +443,11 @@ export async function buildProcessingContext(
     ...mcpTools,
   ];
 
-  let userMetadata = context.userMetadata;
-  const publicThreadMetadata = getPublicThreadMetadata(thread.metadata);
-  const userExternalId = getUserExternalId(thread.metadata);
-
-  if (!userMetadata && publicThreadMetadata) {
-    const stored = publicThreadMetadata.userContext;
-    if (stored && typeof stored === "object") {
-      userMetadata = stored as Record<string, unknown>;
-    }
-  }
-
-  if (!userMetadata && userExternalId) {
-    const externalId = userExternalId;
-    try {
-      if (
-        participantCollection &&
-        typeof participantCollection.resolveByExternalId === "function"
-      ) {
-        const participant = await participantCollection.resolveByExternalId(
-          externalId,
-        );
-        if (participant?.metadata && typeof participant.metadata === "object") {
-          userMetadata = participant.metadata as Record<string, unknown>;
-        }
-      }
-    } catch (error) {
-      console.warn(
-        `buildProcessingContext: failed to load user metadata for ${externalId}`,
-        error,
-      );
-    }
-  }
-
-  if (userMetadata && !context.userMetadata) {
-    context.userMetadata = userMetadata;
-  }
+  const userMetadata = await resolveUserMetadata(
+    context,
+    thread,
+    participantCollection,
+  );
 
   let agentNode: KnowledgeNode | undefined = undefined;
   if (targetAgentId) {
@@ -428,6 +527,14 @@ export async function buildAgentLlmInput(
   );
   const selectedHistory = ctx.chatHistory;
   const promptStartedAt = performance.now();
+  const promptAgent: Agent = {
+    ...agent,
+    instructions: await resolveAgentInstructions(agent, {
+      thread: ctx.thread,
+      userMetadata: ctx.userMetadata,
+      sourceEvent: event,
+    }),
+  };
 
   const agentSkills = filterSkillsForAgent(context.skills ?? [], agent);
   const agentSkillIndex = agentSkills.length > 0
@@ -445,7 +552,7 @@ export async function buildAgentLlmInput(
     )
     : { consult: [] };
   const llmContext = contextGenerator(
-    agent,
+    promptAgent,
     ctx.thread,
     ctx.availableAgents,
     ctx.availableAgents,

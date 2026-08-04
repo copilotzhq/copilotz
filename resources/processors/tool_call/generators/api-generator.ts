@@ -7,6 +7,7 @@ import type {
 } from "@/types/index.ts";
 import { parse as parseYaml } from "yaml";
 import type { ExecutableTool } from "@/runtime/tools/types.ts";
+import { ToolExecutionError } from "@/runtime/tools/errors.ts";
 
 type AuthConfig = NonNullable<API["auth"]>;
 type DynamicAuth = Extract<AuthConfig, { type: "dynamic" }>;
@@ -730,10 +731,10 @@ function createApiExecutor(
       responseData = sanitizeToolJsonValue(responseData);
 
       if (!response.ok) {
-        throw new Error(
-          `HTTP ${response.status}: ${response.statusText}\nResponse: ${
-            JSON.stringify(responseData)
-          }`,
+        throw new ToolExecutionError(
+          responseData,
+          response.status,
+          response.statusText,
         );
       }
 

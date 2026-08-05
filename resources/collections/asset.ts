@@ -1,7 +1,11 @@
 /**
  * Asset collection: first-class metadata for persisted media and files.
  */
-import { defineCollection, relation } from "@/database/collections/index.ts";
+import {
+  type CollectionDefinition,
+  defineCollection,
+  relation,
+} from "@/database/collections/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 export default defineCollection({
@@ -28,4 +32,4 @@ export default defineCollection({
       GRAPH_EDGE.HAS_ASSET,
     ),
   },
-});
+}) as CollectionDefinition;

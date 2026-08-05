@@ -2,7 +2,11 @@
  * Document collection: RAG documents stored as graph nodes.
  * Holds metadata for ingested documents; chunks are linked via the chunk collection.
  */
-import { defineCollection, relation } from "@/database/collections/index.ts";
+import {
+  type CollectionDefinition,
+  defineCollection,
+  relation,
+} from "@/database/collections/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 export default defineCollection({
@@ -39,4 +43,4 @@ export default defineCollection({
   relations: {
     chunks: relation.hasMany("chunk", "documentId", GRAPH_EDGE.HAS_CHUNK),
   },
-});
+}) as CollectionDefinition;

@@ -1,4 +1,8 @@
-import { defineCollection, relation } from "@/database/collections/index.ts";
+import {
+  type CollectionDefinition,
+  defineCollection,
+  relation,
+} from "@/database/collections/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 export default defineCollection({
@@ -88,4 +92,4 @@ export default defineCollection({
     enabled: true,
     fields: ["name", "content"],
   },
-});
+}) as CollectionDefinition;

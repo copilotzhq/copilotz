@@ -20,7 +20,7 @@ function extractOpenAICompatibleFinishReason(
   return typeof reason === "string" ? "unknown" : null;
 }
 
-export const groqProvider: ProviderFactory = (config: ProviderConfig) => {
+export const groqProvider: ProviderFactory = (_config: ProviderConfig) => {
   return {
     endpoint: "https://api.groq.com/openai/v1/chat/completions",
 

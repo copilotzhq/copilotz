@@ -62,7 +62,7 @@ function dataUrlSource(dataUrl: string): {
   return { mimeType, base64Data };
 }
 
-export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
+export const anthropicProvider: ProviderFactory = (_config: ProviderConfig) => {
   const transformMessages = (messages: ChatMessage[]) => {
     const systemPrompts: string[] = [];
     const userMessages: any[] = [];

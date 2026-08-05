@@ -1,7 +1,11 @@
 /**
  * Tool execution collection: durable child record of an agent message.
  */
-import { defineCollection, relation } from "@/database/collections/index.ts";
+import {
+  type CollectionDefinition,
+  defineCollection,
+  relation,
+} from "@/database/collections/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 export default defineCollection({
@@ -12,7 +16,6 @@ export default defineCollection({
       id: { type: "string" },
       threadId: { type: "string" },
       messageId: { type: ["string", "null"] },
-      eventId: { type: ["string", "null"] },
       agentId: { type: ["string", "null"] },
       agentName: { type: ["string", "null"] },
       toolCallId: { type: "string" },
@@ -27,6 +30,9 @@ export default defineCollection({
       finishedAt: { type: ["string", "null"] },
       durationMs: { type: ["number", "null"] },
       metadata: { type: ["object", "null"] },
+      batchId: { type: ["string", "null"] },
+      batchSize: { type: ["number", "null"] },
+      batchIndex: { type: ["number", "null"] },
     },
     required: ["threadId", "toolCallId", "tool"],
   } as const,
@@ -41,4 +47,4 @@ export default defineCollection({
     ),
     assets: relation.hasMany("asset", "toolCallId", GRAPH_EDGE.HAS_ASSET),
   },
-});
+}) as CollectionDefinition;

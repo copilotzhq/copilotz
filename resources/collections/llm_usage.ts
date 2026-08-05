@@ -1,7 +1,10 @@
 /**
  * LLM Usage collection: token and cost tracking per LLM call.
  */
-import { defineCollection } from "@/database/collections/index.ts";
+import {
+  type CollectionDefinition,
+  defineCollection,
+} from "@/database/collections/index.ts";
 
 export default defineCollection({
   name: "llm_usage",
@@ -44,4 +47,4 @@ export default defineCollection({
     "provider",
     "model",
   ],
-});
+}) as CollectionDefinition;

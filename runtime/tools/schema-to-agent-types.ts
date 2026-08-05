@@ -159,7 +159,11 @@ class GenericJsonSchemaToAgentTs {
     const items = this.itemsOf(s);
     for (const item of items) count += this.countUnions(item, seen);
     for (
-      const child of [...(s.oneOf ?? []), ...(s.anyOf ?? []), ...(s.allOf ?? [])]
+      const child of [
+        ...(s.oneOf ?? []),
+        ...(s.anyOf ?? []),
+        ...(s.allOf ?? []),
+      ]
     ) count += this.countUnions(child, seen);
     if (s.additionalProperties && typeof s.additionalProperties === "object") {
       count += this.countUnions(s.additionalProperties, seen);
@@ -245,7 +249,9 @@ class GenericJsonSchemaToAgentTs {
       `${meta.path}.{key}`,
     );
     if (indexLine) {
-      lines.push("  /** Additional dynamic keys allowed by the JSON Schema. */");
+      lines.push(
+        "  /** Additional dynamic keys allowed by the JSON Schema. */",
+      );
       lines.push(`  ${indexLine}`);
     }
 
@@ -315,7 +321,11 @@ class GenericJsonSchemaToAgentTs {
     if (tupleItems?.length) {
       return `[${
         tupleItems.map((item, index) =>
-          this.typeFor(item, `${preferredName}${index + 1}`, `${path}[${index}]`)
+          this.typeFor(
+            item,
+            `${preferredName}${index + 1}`,
+            `${path}[${index}]`,
+          )
         ).join(", ")
       }]`;
     }
@@ -426,7 +436,9 @@ class GenericJsonSchemaToAgentTs {
     const allConditions = variants.map((variant) =>
       this.literalConditions(variant)
     );
-    const disambiguatingProps = this.disambiguatingConditionProps(allConditions);
+    const disambiguatingProps = this.disambiguatingConditionProps(
+      allConditions,
+    );
     const usedNames = new Set<string>();
 
     return variants.map((schema, index) => {
@@ -481,7 +493,9 @@ class GenericJsonSchemaToAgentTs {
   private literalConditions(schema: JsonSchema): LiteralCondition[] {
     const required = new Set(schema.required ?? []);
     const out: LiteralCondition[] = [];
-    for (const [prop, propSchemaRaw] of Object.entries(schema.properties ?? {})) {
+    for (
+      const [prop, propSchemaRaw] of Object.entries(schema.properties ?? {})
+    ) {
       const propSchema = this.resolveAndMerge(propSchemaRaw);
       const values = this.literalValues(propSchema);
       if (values.length > 0) {
@@ -578,7 +592,9 @@ class GenericJsonSchemaToAgentTs {
     if (schema.example !== undefined) {
       meta.push(`example ${literal(schema.example)}`);
     }
-    if (schema.examples?.length) meta.push(`example ${literal(schema.examples[0])}`);
+    if (schema.examples?.length) {
+      meta.push(`example ${literal(schema.examples[0])}`);
+    }
     if (schema.enum && schema.enum.length > 1) {
       meta.push(`allowed ${schema.enum.map(literal).join(" | ")}`);
     }
@@ -648,7 +664,8 @@ class GenericJsonSchemaToAgentTs {
       return "Additional dynamic keys are allowed.";
     }
     if (
-      schema.additionalProperties && typeof schema.additionalProperties === "object"
+      schema.additionalProperties &&
+      typeof schema.additionalProperties === "object"
     ) {
       return "Additional dynamic keys are allowed with a constrained value type.";
     }
@@ -679,7 +696,11 @@ class GenericJsonSchemaToAgentTs {
       schema.additionalProperties === false
     ) return undefined;
     if (schema.additionalProperties === true) return `[key: string]: unknown;`;
-    const valueType = this.typeFor(schema.additionalProperties, valueName, path);
+    const valueType = this.typeFor(
+      schema.additionalProperties,
+      valueName,
+      path,
+    );
     return `[key: string]: ${valueType};`;
   }
 
@@ -779,7 +800,9 @@ class GenericJsonSchemaToAgentTs {
   }
 
   private jsDoc(parts: Array<string | undefined>): string {
-    const clean = parts.filter(Boolean).map((part) => this.compact(String(part)))
+    const clean = parts.filter(Boolean).map((part) =>
+      this.compact(String(part))
+    )
       .filter(Boolean);
     if (!clean.length) return "";
     return `/** ${clean.join(" ")} */`;

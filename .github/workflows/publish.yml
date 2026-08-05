@@ -1,11 +1,93 @@
-name: Publish
+name: Verify and publish
+
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  pull_request:
 
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: copilotz
+          POSTGRES_PASSWORD: copilotz
+          POSTGRES_DB: copilotz
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U copilotz"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      COPILOTZ_TEST_POSTGRES_URL: postgresql://copilotz:copilotz@localhost:5432/copilotz
+    steps:
+      - uses: actions/checkout@v5
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.8.2
+      - run: deno task verify
+
+  runtime-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [node, bun]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.8.2
+      - uses: actions/setup-node@v5
+        if: matrix.runtime == 'node'
+        with:
+          node-version: 24
+      - uses: oven-sh/setup-bun@v2
+        if: matrix.runtime == 'bun'
+        with:
+          bun-version: latest
+      - run: deno bundle --platform browser tests/runtime-smoke-runner.ts -o /tmp/copilotz-runtime-smoke.mjs
+      - if: matrix.runtime == 'node'
+        run: node /tmp/copilotz-runtime-smoke.mjs
+      - if: matrix.runtime == 'bun'
+        run: bun /tmp/copilotz-runtime-smoke.mjs
+
+  browser-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.8.2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: deno bundle --platform browser tests/runtime-smoke-runner.ts -o /tmp/copilotz-browser-smoke.mjs
+      - run: npm install --no-save --no-package-lock playwright@1.62.0
+      - run: npx playwright install --with-deps chromium
+      - run: node tests/browser-smoke.mjs /tmp/copilotz-browser-smoke.mjs
+
+  cloudflare-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.8.2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: deno bundle --platform browser tests/runtime-smoke-worker.ts -o /tmp/copilotz-worker-smoke.mjs
+      - run: npm install --no-save --no-package-lock miniflare@4.20260722.0
+      - run: node tests/cloudflare-smoke.mjs /tmp/copilotz-worker-smoke.mjs
+
   publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [quality, runtime-smoke, browser-smoke, cloudflare-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -15,7 +97,4 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.8.2
-      - name: Verify packed consumer types
-        run: deno test --allow-all database/packed-types.test.ts
-      - name: Publish package
-        run: deno publish
+      - run: deno publish

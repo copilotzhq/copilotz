@@ -1,80 +1,71 @@
-import { runThread } from "@/runtime/index.ts";
-import type { ToolExecutionContext } from "@/runtime/tools/types.ts";
+import type {
+  BackgroundThreadInput,
+  Tool,
+  ToolExecutionContext,
+} from "@/types/resources.ts";
 
-interface CreateThreadParams {
-    name: string;
-    participants: string[];
-    initialMessage?: string;
-    mode?: "background" | "immediate";
-    description?: string;
-    summary?: string;
+function inputOf(value: unknown): BackgroundThreadInput {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("create_thread requires an object input.");
+  }
+  const input = value as Record<string, unknown>;
+  const participants = Array.isArray(input.participants)
+    ? input.participants.filter((item): item is string =>
+      typeof item === "string" && item.trim().length > 0
+    )
+    : [];
+  if (typeof input.name !== "string" || !input.name.trim()) {
+    throw new TypeError("create_thread requires a name.");
+  }
+  if (!participants.length) {
+    throw new TypeError("create_thread requires at least one participant.");
+  }
+  return {
+    name: input.name,
+    participants,
+    ...(typeof input.initialMessage === "string"
+      ? { initialMessage: input.initialMessage }
+      : {}),
+    ...(typeof input.description === "string"
+      ? { description: input.description }
+      : {}),
+    ...(input.metadata && typeof input.metadata === "object" &&
+        !Array.isArray(input.metadata)
+      ? { metadata: input.metadata as Record<string, unknown> }
+      : {}),
+  };
 }
 
-export default {
-    key: "create_thread",
-    name: "Create Thread",
-    description: "Creates a new conversation thread.",
-    inputSchema: {
-        type: "object",
-        properties: {
-            name: { type: "string", description: "The name of the thread." },
-            participants: { 
-                type: "array", 
-                items: { type: "string" },
-                description: "Array of participant names (agent names or user IDs)." 
-            },
-            initialMessage: { type: "string", description: "Optional initial message to start the thread." },
-            mode: { 
-                type: "string", 
-                enum: ["background", "immediate"],
-                description: "Thread execution mode (default: immediate).",
-                default: "immediate"
-            },
-            description: { type: "string", description: "Optional thread description." },
-            summary: { type: "string", description: "Optional thread summary." },
-        },
-        required: ["name", "participants"],
+const createThread: Tool = {
+  resourceType: "tools",
+  id: "create_thread",
+  key: "create_thread",
+  name: "Create background thread",
+  description:
+    "Start an explicitly separate child-thread conversation. This is background work, not a private consultation in the current thread.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      name: { type: "string", description: "Child thread name" },
+      participants: {
+        type: "array",
+        minItems: 1,
+        items: { type: "string" },
+        description: "Agent IDs or names participating in the child thread",
+      },
+      initialMessage: {
+        type: "string",
+        description: "Optional public opening message sent to the first agent",
+      },
+      description: { type: "string" },
+      metadata: { type: "object" },
     },
-    execute: async ({ name, participants, initialMessage, mode = "immediate", description, summary }: CreateThreadParams, context?: ToolExecutionContext) => {
-        const db = context?.db ?? context?.dbInstance;
-        if (!db) {
-            throw new Error("Database instance is required to create a thread");
-        }
+    required: ["name", "participants"],
+  },
+  execute(input: unknown, context: ToolExecutionContext) {
+    return context.createThread(inputOf(input));
+  },
+};
 
-        const threadId = crypto.randomUUID();
-
-        const result = await runThread(
-            db,
-            {
-                ...context,
-                agents: context?.agents || [],
-                tools: context?.tools || [],
-            },
-            {
-                content: initialMessage || `Started thread: ${name}`,
-                sender: {
-                    type: (context?.senderType ?? "system") as "agent" | "user" | "tool" | "system" | "job",
-                    id: context?.senderId ?? "system",
-                    name: context?.senderId ?? "system",
-                },
-                thread: {
-                    id: threadId,
-                    name,
-                    participants,
-                },
-            },
-            { stream: context?.stream ?? false },
-        );
-
-        return {
-            threadId,
-            name,
-            participants,
-            mode,
-            description,
-            summary,
-            queueId: result.queueId,
-            status: result.status,
-        };
-    },
-}
+export default createThread;

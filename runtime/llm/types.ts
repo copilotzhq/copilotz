@@ -666,8 +666,3 @@ export type ProviderName = // LLM providers
 export interface ProviderRegistry {
   [key: string]: ProviderFactory;
 }
-
-// Base connector interface (now unused, keeping for backwards compatibility)
-export interface ChatConnector {
-  (request: ChatRequest, stream?: StreamCallback): Promise<ChatResponse>;
-}

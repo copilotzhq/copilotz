@@ -21,7 +21,7 @@ export const ollamaProvider: ProviderFactory = (config: ProviderConfig) => {
       config.baseUrl || config.apiKey || "http://localhost:11434"
     }/api/chat`,
 
-    headers: (config: ProviderConfig) => ({
+    headers: (_config: ProviderConfig) => ({
       "Content-Type": "application/json",
     }),
 

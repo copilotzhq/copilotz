@@ -199,13 +199,13 @@ export const geminiProvider: ProviderFactory = (config: ProviderConfig) => {
       config.model || DEFAULT_GEMINI_MODEL
     }:streamGenerateContent?key=${config.apiKey}&alt=sse`,
 
-    headers: (config: ProviderConfig) => ({
+    headers: (_config: ProviderConfig) => ({
       "Content-Type": "application/json",
     }),
 
     transformMessages,
 
-    body: async (messages: ChatMessage[], config: ProviderConfig) => {
+    body: (messages: ChatMessage[], config: ProviderConfig) => {
       const transformed = transformMessages(messages);
       const modelId = config.model || DEFAULT_GEMINI_MODEL;
 

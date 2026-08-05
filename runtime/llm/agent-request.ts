@@ -4,7 +4,7 @@ import type {
   ToolDefinition,
 } from "@/runtime/llm/types.ts";
 import { materializeAssetRefsForProvider } from "@/runtime/llm/asset-materialization.ts";
-import type { AssetConfig, AssetStore } from "@/runtime/storage/assets.ts";
+import type { AssetConfig, AssetStore } from "@/assets/index.ts";
 import type { Agent } from "@/types/index.ts";
 
 export interface PrepareAgentChatRequestOptions {
@@ -22,8 +22,13 @@ export interface PreparedAgentChatRequest {
 }
 
 function debugEnabled(): boolean {
+  const runtime = globalThis as typeof globalThis & {
+    Deno?: { env?: { get?(name: string): string | undefined } };
+    process?: { env?: Record<string, string | undefined> };
+  };
   try {
-    return Deno.env.get("COPILOTZ_DEBUG") === "1";
+    return runtime.Deno?.env?.get?.("COPILOTZ_DEBUG") === "1" ||
+      runtime.process?.env?.COPILOTZ_DEBUG === "1";
   } catch {
     return false;
   }

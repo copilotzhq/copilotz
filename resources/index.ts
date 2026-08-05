@@ -1,6 +1,6 @@
-import manifest from "./manifest.ts";
+/** Built-in resource modules for explicit plugin composition. */
 
-export { admin as adminFeature, default as features } from "./features/mod.ts";
-export { manifest };
-
-export const bundledResourcesUrl: string = new URL("./", import.meta.url).href;
+export * as collections from "./collections/mod.ts";
+export * as providers from "./llm/mod.ts";
+export { default as ask } from "./tools/ask/index.ts";
+export { default as createThread } from "./tools/create_thread/index.ts";

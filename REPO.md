@@ -1,55 +1,56 @@
 ---
 name: copilotz
 kind: lib
-summary: Agentic AI framework with runtime orchestration, persistent memory, tools, assets, and multi-tenant database support.
+summary: Event-native multi-agent framework for durable workflows and realtime media streams.
 depends_on:
   - ominipg
+  - oxian-js
 tags:
   - ai
-  - runtime
+  - multi-agent
+  - events
+  - streaming
+  - plugins
   - database
-  - tools
-  - assets
 entrypoints:
   - index.ts
-  - runtime/index.ts
-  - utils/loaders/resources.ts
-  - database/index.ts
-  - server/index.ts
-  - server/channels.ts
-  - create/mod.ts
+  - engine.ts
+  - plugins/registry.ts
+  - attachments/manager.ts
+  - database/database.ts
+  - execution/coordinator.ts
 status: active
 ---
 
 ## Purpose
 
-Shared framework repo used by clients for agent execution, event processing,
-memory, RAG, assets, and database operations.
+Copilotz provides thread-based multi-agent execution, plugin resources,
+durable event deliveries, graph persistence, and realtime media attachments.
+Oxian hosts logical workloads; Ominipg persists domain state and recovery work.
 
 ## Read These First
 
+- `README.md`
+- `docs/architecture.md`
 - `index.ts`
-- `runtime/index.ts`
-- `utils/loaders/resources.ts`
-- `database/index.ts`
+- `engine.ts`
 
 ## Common Task Locations
 
-- Runtime and run flow: `runtime/`
-- Event processors and native tools: `event-processors/`
-- Database schema, migrations, collections: `database/`
-- Connectors for LLM, embeddings, storage, HTTP: `connectors/`
-- Server helpers (framework-independent): `server/` (exported as `./server`)
-- Transport route API facade (web, WhatsApp, Zendesk): `server/channels.ts`
-  (exported as `./server/channels`)
-- Built-in transport adapter implementations: `resources/channels/<channel>/`
-  with `ingress.ts` and `egress.ts` per channel
-- Project scaffolding CLI: `create/` (exported as `./create`, used by
-  `deno run -Ar jsr:@copilotz/copilotz/create`)
+- Public engine and contracts: `engine.ts`, `types/`, `events/`
+- Plugin composition and core resources: `plugins/`, `core/`, `resources/`
+- Persistent graph, events, and deliveries: `database/`
+- Oxian workloads and dispatch: `execution/`
+- Realtime and text attachment flow: `attachments/`
+- Runtime-specific integration: `runtime/adapters/`, `server/`
+- Legacy database upgrade only: `migration/v1/`
 
 ## Warnings
 
-- Clients usually reference published JSR versions, not the local workspace
-  copy.
-- Namespace and schema isolation are core behavior; changes here can affect
-  multi-tenant data semantics.
+- Applications usually consume the published JSR package, not this workspace
+  checkout.
+- Durable delivery is at-least-once; mutations and external effects must honor
+  the supplied idempotency key.
+- Core modules must remain portable and cannot unconditionally import
+  Deno-, Node-, Bun-, browser-, or Cloudflare-specific APIs.
+- Namespace and schema isolation are part of the persistence contract.

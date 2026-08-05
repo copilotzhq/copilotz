@@ -46,7 +46,7 @@ function extractOpenAICompatibleFinishReason(
   return typeof reason === "string" ? "unknown" : null;
 }
 
-export const deepseekProvider: ProviderFactory = (config: ProviderConfig) => {
+export const deepseekProvider: ProviderFactory = (_config: ProviderConfig) => {
   return {
     endpoint: "https://api.deepseek.com/v1/chat/completions",
 

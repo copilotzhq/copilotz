@@ -1,9 +1,9 @@
 /**
  * Type definitions for the Collections API.
- * 
+ *
  * Provides a type-safe, developer-friendly interface for defining and
  * working with custom collections that map to the graph structure.
- * 
+ *
  * @module
  */
 
@@ -21,11 +21,11 @@ export type IndexDefinition =
   | string
   | string[]
   | {
-      fields: string | string[];
-      unique?: boolean;
-      type?: "btree" | "gin" | "gist" | "brin";
-      where?: Record<string, unknown>;
-    };
+    fields: string | string[];
+    unique?: boolean;
+    type?: "btree" | "gin" | "gist" | "brin";
+    where?: Record<string, unknown>;
+  };
 
 /**
  * Relation definition between collections.
@@ -54,17 +54,19 @@ export interface SearchConfig {
 /**
  * Lifecycle hooks for collection operations.
  */
-type HookCallback<T, R> = {
-  bivarianceHack: (record: T, ctx: HookContext) => R;
-}["bivarianceHack"];
-
-export interface CollectionHooks<T> {
-  beforeCreate?: (data: Record<string, unknown>, ctx: HookContext) => Record<string, unknown> | Promise<Record<string, unknown>>;
-  afterCreate?: HookCallback<T, void | Promise<void>>;
-  beforeUpdate?: (data: Record<string, unknown>, ctx: HookContext) => Record<string, unknown> | Promise<Record<string, unknown>>;
-  afterUpdate?: HookCallback<T, void | Promise<void>>;
-  beforeDelete?: (filter: Record<string, unknown>, ctx: HookContext) => void | Promise<void>;
-  afterDelete?: (deleted: number, ctx: HookContext) => void | Promise<void>;
+export interface CollectionHooks<_T> {
+  beforeCreate?: (
+    data: Record<string, unknown>,
+    ctx: HookContext,
+  ) => Record<string, unknown> | Promise<Record<string, unknown>>;
+  beforeUpdate?: (
+    data: Record<string, unknown>,
+    ctx: HookContext,
+  ) => Record<string, unknown> | Promise<Record<string, unknown>>;
+  beforeDelete?: (
+    filter: Record<string, unknown>,
+    ctx: HookContext,
+  ) => void | Promise<void>;
 }
 
 export interface HookContext {
@@ -88,15 +90,16 @@ export interface CollectionMethodContext<
     withNamespace: (namespace: string) => Record<string, any>;
   } & Record<string, any>;
   namespace: string;
-  ops: unknown;
 }
 
 export type CollectionMethodFactory<
   TSelect = unknown,
   TInsert = unknown,
-> = (
-  context: CollectionMethodContext<TSelect, TInsert>,
-) => CollectionMethodMap;
+> = {
+  bivarianceHack(
+    context: CollectionMethodContext<TSelect, TInsert>,
+  ): CollectionMethodMap;
+}["bivarianceHack"];
 
 // ============================================
 // COLLECTION DEFINITION
@@ -104,7 +107,7 @@ export type CollectionMethodFactory<
 
 /**
  * Collection definition with JSON Schema and configuration.
- * 
+ *
  * @example
  * ```ts
  * const customers = defineCollection({
@@ -120,7 +123,7 @@ export type CollectionMethodFactory<
  *   } as const,
  *   indexes: ['email'],
  * });
- * 
+ *
  * type Customer = typeof customers.$inferSelect;
  * ```
  */
@@ -128,7 +131,7 @@ export interface CollectionDefinition<
   S extends JsonSchema = JsonSchema,
   // Use conditional to defer type evaluation
   TSelect = S extends JsonSchema ? FromSchema<S> : Record<string, unknown>,
-  TInsert = S extends JsonSchema 
+  TInsert = S extends JsonSchema
     ? Omit<FromSchema<S>, "id" | "createdAt" | "updatedAt"> & { id?: string }
     : Record<string, unknown>,
 > {
@@ -166,9 +169,13 @@ export interface CollectionDefinition<
  * Input type for defineCollection (without phantom types).
  */
 export type CollectionInput<S extends JsonSchema = JsonSchema> = Omit<
-  CollectionDefinition<S, S extends JsonSchema ? FromSchema<S> : Record<string, unknown>, S extends JsonSchema
-    ? Omit<FromSchema<S>, "id" | "createdAt" | "updatedAt"> & { id?: string }
-    : Record<string, unknown>>,
+  CollectionDefinition<
+    S,
+    S extends JsonSchema ? FromSchema<S> : Record<string, unknown>,
+    S extends JsonSchema
+      ? Omit<FromSchema<S>, "id" | "createdAt" | "updatedAt"> & { id?: string }
+      : Record<string, unknown>
+  >,
   "$inferSelect" | "$inferInsert" | "$inferMethods"
 >;
 
@@ -221,13 +228,16 @@ export type WhereOperators<T> = {
 /**
  * Where filter for queries.
  */
-export type WhereFilter<T> = {
-  [K in keyof T]?: T[K] | WhereOperators<T[K]>;
-} & {
-  $and?: WhereFilter<T>[];
-  $or?: WhereFilter<T>[];
-  $not?: WhereFilter<T>;
-} & Record<string, unknown>;
+export type WhereFilter<T> =
+  & {
+    [K in keyof T]?: T[K] | WhereOperators<T[K]>;
+  }
+  & {
+    $and?: WhereFilter<T>[];
+    $or?: WhereFilter<T>[];
+    $not?: WhereFilter<T>;
+  }
+  & Record<string, unknown>;
 
 /**
  * Sort order specification.
@@ -482,12 +492,11 @@ export type ScopedCollectionWithMethods<
   TMethods extends CollectionMethodMap = CollectionMethodMap,
 > = ScopedCollectionCrud<TSelect, TInsert> & TMethods;
 
-export type CollectionMethodsOf<TDefinition> =
-  TDefinition extends { methods?: (...args: any[]) => infer TMethods }
-    ? TMethods extends CollectionMethodMap
-      ? TMethods
-      : Record<string, never>
-    : Record<string, never>;
+export type CollectionMethodsOf<TDefinition> = TDefinition extends
+  { methods?: (...args: any[]) => infer TMethods }
+  ? TMethods extends CollectionMethodMap ? TMethods
+  : Record<string, never>
+  : Record<string, never>;
 
 // ============================================
 // COLLECTIONS MAP TYPES
@@ -496,15 +505,17 @@ export type CollectionMethodsOf<TDefinition> =
 /**
  * Map of collection names to their CRUD interfaces.
  */
-export type CollectionsMap<T extends readonly CollectionDefinition[]> = {
-  [K in T[number] as K["name"]]: CollectionCrud<
-    K["$inferSelect"],
-    K["$inferInsert"]
-  >;
-} & {
-  /** Get scoped client with namespace pre-applied */
-  withNamespace: (namespace: string) => ScopedCollectionsMap<T>;
-};
+export type CollectionsMap<T extends readonly CollectionDefinition[]> =
+  & {
+    [K in T[number] as K["name"]]: CollectionCrud<
+      K["$inferSelect"],
+      K["$inferInsert"]
+    >;
+  }
+  & {
+    /** Get scoped client with namespace pre-applied */
+    withNamespace: (namespace: string) => ScopedCollectionsMap<T>;
+  };
 
 /**
  * Map of collection names to their scoped CRUD interfaces.
@@ -533,4 +544,17 @@ export interface CollectionsConfig {
   embeddingFn?: (text: string) => Promise<number[]>;
   /** Default namespace for operations */
   defaultNamespace?: string;
+}
+
+/** Runtime collection manager. Mutations always emit a durable event. */
+export interface CollectionsManager {
+  readonly definitions: readonly CollectionDefinition[];
+  withNamespace(namespace: string): ScopedCollectionsManager;
+  [collection: string]: unknown;
+}
+
+/** Namespace-bound collection manager exposed to processors and applications. */
+export interface ScopedCollectionsManager {
+  readonly namespace: string;
+  [collection: string]: unknown;
 }

@@ -13,7 +13,7 @@ import {
   isAssetRef,
   parseDataUrl,
   toDataUrl,
-} from "@/runtime/storage/assets.ts";
+} from "@/assets/index.ts";
 
 type AdapterAssetSupport = {
   image: boolean;

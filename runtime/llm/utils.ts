@@ -418,23 +418,6 @@ function stripTaggedBlocksFromText(text: string, tagNames: string[]): string {
   return stripped;
 }
 
-function stripTaggedBlocksFromContent(
-  content: ChatMessage["content"],
-  tagNames: string[],
-): ChatMessage["content"] {
-  if (typeof content === "string") {
-    return stripTaggedBlocksFromText(content, tagNames);
-  }
-
-  const strippedParts = content.flatMap((part): ChatContentPart[] => {
-    if (part.type !== "text") return [part];
-    const text = stripTaggedBlocksFromText(part.text, tagNames);
-    return text.length > 0 ? [{ ...part, text }] : [];
-  });
-
-  return strippedParts.length > 0 ? strippedParts : "";
-}
-
 function contentToText(content: ChatMessage["content"]): string {
   if (typeof content === "string") return content;
 
@@ -1202,18 +1185,20 @@ function limitMessageEstimatedInputTokens<T extends ChatMessage>(
 /**
  * Counts tokens in messages and response using the shared lightweight estimator.
  */
-export async function countTokens(
+export function countTokens(
   messages: ChatMessage[],
   response: string,
   config: ProviderConfig = {},
 ): Promise<number> {
-  return estimateChatMessages([
-    ...messages,
-    { role: "assistant", content: response },
-  ], config).estimatedTokens;
+  return Promise.resolve(
+    estimateChatMessages([
+      ...messages,
+      { role: "assistant", content: response },
+    ], config).estimatedTokens,
+  );
 }
 
-export async function estimateUsage(
+export function estimateUsage(
   messages: ChatMessage[],
   response: string,
   status: TokenUsage["status"],
@@ -1223,7 +1208,7 @@ export async function estimateUsage(
   const inputTokens = estimateChatMessages(messages, config).estimatedTokens;
   const outputTokens = estimateTextTokens(response);
 
-  return {
+  return Promise.resolve({
     inputTokens,
     outputTokens,
     totalTokens: inputTokens + outputTokens,
@@ -1232,7 +1217,7 @@ export async function estimateUsage(
     ...(metadata?.statusReason ? { statusReason: metadata.statusReason } : {}),
     ...(metadata?.stopSequence ? { stopSequence: metadata.stopSequence } : {}),
     rawUsage: null,
-  };
+  });
 }
 
 function tokenizeRepetitionTail(
@@ -2165,10 +2150,13 @@ export type ToolSystemPromptVariant =
 
 function readToolSystemPromptVariant(): ToolSystemPromptVariant {
   let raw: string | undefined;
+  const runtime = globalThis as typeof globalThis & {
+    Deno?: { env?: { get?(key: string): string | undefined } };
+    process?: { env?: Record<string, string | undefined> };
+  };
   try {
-    raw = typeof Deno !== "undefined"
-      ? Deno.env.get("COPILOTZ_TOOL_PROMPT_VARIANT")
-      : undefined;
+    raw = runtime.Deno?.env?.get?.("COPILOTZ_TOOL_PROMPT_VARIANT") ??
+      runtime.process?.env?.COPILOTZ_TOOL_PROMPT_VARIANT;
   } catch {
     raw = undefined;
   }
@@ -2285,9 +2273,6 @@ ${toolCatalog}`;
     ? "\n" +
       extraRules.map((rule, index) => `${4 + index}. ${rule}`).join("\n") +
       "\n"
-    : "";
-  const exampleTail = variant === "baseline"
-    ? "\nSure - running those now."
     : "";
   const exampleRuleNumber = 4 + extraRules.length;
   const nextRuleNumber = exampleRuleNumber + 1;
@@ -2953,60 +2938,6 @@ export function stripDanglingControlTail(
   return earliestDanglingStart === -1
     ? response
     : response.slice(0, earliestDanglingStart);
-}
-
-/**
- * Extract complete JSON objects from a string using proper bracket matching
- */
-function extractJsonObjects(content: string): string[] {
-  const jsonObjects: string[] = [];
-  let i = 0;
-
-  while (i < content.length) {
-    // Skip whitespace
-    while (i < content.length && /\s/.test(content[i])) {
-      i++;
-    }
-
-    if (i >= content.length) break;
-
-    // Look for opening brace
-    if (content[i] === "{") {
-      const startPos = i;
-      let braceCount = 1;
-      i++; // Move past the opening brace
-
-      // Find the matching closing brace
-      while (i < content.length && braceCount > 0) {
-        if (content[i] === "{") {
-          braceCount++;
-        } else if (content[i] === "}") {
-          braceCount--;
-        } else if (content[i] === '"') {
-          // Skip quoted strings to avoid counting braces inside strings
-          i++;
-          while (i < content.length && content[i] !== '"') {
-            if (content[i] === "\\") {
-              i++; // Skip escaped character
-            }
-            i++;
-          }
-        }
-        i++;
-      }
-
-      if (braceCount === 0) {
-        // Found complete JSON object
-        const jsonStr = content.slice(startPos, i);
-        jsonObjects.push(jsonStr);
-      }
-    } else {
-      // Skip non-JSON character
-      i++;
-    }
-  }
-
-  return jsonObjects;
 }
 
 function suffixPrefix(text: string, tag: string): number {

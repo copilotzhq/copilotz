@@ -2,7 +2,11 @@
  * LLM attempt collection: one stable logical-run root plus canonical child
  * records for every provider invocation.
  */
-import { defineCollection, relation } from "@/database/collections/index.ts";
+import {
+  type CollectionDefinition,
+  defineCollection,
+  relation,
+} from "@/database/collections/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 export default defineCollection({
@@ -13,7 +17,6 @@ export default defineCollection({
       id: { type: "string" },
       threadId: { type: "string" },
       messageId: { type: ["string", "null"] },
-      eventId: { type: ["string", "null"] },
       agentId: { type: ["string", "null"] },
       agentName: { type: ["string", "null"] },
       provider: { type: ["string", "null"] },
@@ -33,7 +36,6 @@ export default defineCollection({
       error: { type: ["object", "null"] },
       attemptIndex: { type: ["number", "null"] },
       parentAttemptId: { type: ["string", "null"] },
-      runSender: { type: ["object", "null"] },
       startedAt: { type: ["string", "null"] },
       finishedAt: { type: ["string", "null"] },
       metricsFinalizedAt: { type: ["string", "null"] },
@@ -50,4 +52,4 @@ export default defineCollection({
       GRAPH_EDGE.HAS_LLM_ATTEMPT,
     ),
   },
-});
+}) as CollectionDefinition;

@@ -1,7 +1,11 @@
 /**
- * Thread collection: semantic graph aggregate for an operational thread row.
+ * Thread collection: canonical graph aggregate. There is no physical thread table.
  */
-import { defineCollection, relation } from "@/database/collections/index.ts";
+import {
+  type CollectionDefinition,
+  defineCollection,
+  relation,
+} from "@/database/collections/index.ts";
 import { GRAPH_EDGE } from "@/runtime/graph/edges.ts";
 
 export default defineCollection({
@@ -13,7 +17,7 @@ export default defineCollection({
       threadId: { type: "string" },
       externalId: { type: ["string", "null"] },
       status: { type: ["string", "null"] },
-      participants: { type: ["array", "null"] },
+      name: { type: ["string", "null"] },
       parentThreadId: { type: ["string", "null"] },
       rootThreadId: { type: ["string", "null"] },
       forkedFromThreadId: { type: ["string", "null"] },
@@ -21,7 +25,9 @@ export default defineCollection({
       forkedFromEventId: { type: ["string", "null"] },
       forkedFromAttemptId: { type: ["string", "null"] },
       forkMode: { type: ["string", "null"] },
-      originTraceId: { type: ["string", "null"] },
+      lastEventId: { type: ["string", "null"] },
+      lastEventPosition: { type: ["string", "null"] },
+      lastEventAt: { type: ["string", "null"] },
       metadata: { type: ["object", "null"] },
     },
     required: ["threadId"],
@@ -30,7 +36,7 @@ export default defineCollection({
   timestamps: { createdAt: "createdAt", updatedAt: "updatedAt" },
   indexes: ["threadId", "externalId", "rootThreadId"],
   relations: {
-    messages: relation.hasMany("message", "messageId", GRAPH_EDGE.HAS_MESSAGE),
-    forks: relation.hasMany("thread", "threadId", GRAPH_EDGE.FORKED_FROM),
+    messages: relation.hasMany("message", "threadId", GRAPH_EDGE.HAS_MESSAGE),
+    forks: relation.hasMany("thread", "parentThreadId", GRAPH_EDGE.FORKED_FROM),
   },
-});
+}) as CollectionDefinition;

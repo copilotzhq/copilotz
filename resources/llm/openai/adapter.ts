@@ -19,8 +19,12 @@ interface OpenAIResponsesExtractionState {
 }
 
 function getEnvFlag(name: string): string | undefined {
+  const runtime = globalThis as typeof globalThis & {
+    Deno?: { env?: { get?(key: string): string | undefined } };
+    process?: { env?: Record<string, string | undefined> };
+  };
   try {
-    return typeof Deno !== "undefined" ? Deno.env.get(name) : undefined;
+    return runtime.Deno?.env?.get?.(name) ?? runtime.process?.env?.[name];
   } catch {
     return undefined;
   }

@@ -8,7 +8,10 @@
  * resource families. Rows are intentionally small — they never carry
  * conversation payloads — so aggregation avoids TOAST detoasting.
  */
-import { defineCollection } from "@/database/collections/index.ts";
+import {
+  type CollectionDefinition,
+  defineCollection,
+} from "@/database/collections/index.ts";
 
 export default defineCollection({
   name: "usage",
@@ -68,4 +71,4 @@ export default defineCollection({
     "agentId",
     "dedupeKey",
   ],
-});
+}) as CollectionDefinition;

@@ -1,94 +1,74 @@
 ---
 name: setup-collection
-description: Define a typed collection with JSON Schema validation and indexes for application data.
+description: Define a typed graph collection and expose it through a plugin.
 allowed-tools: [read_file, write_file, list_directory]
-tags: [framework, data, collection]
+tags: [framework, data, collection, plugin]
 ---
 
 # Setup Collection
 
-Collections provide type-safe CRUD over the knowledge graph with JSON Schema
-validation.
+Every collection mutation updates graph state, appends its immutable semantic
+event, and creates matching durable delivery obligations in one transaction.
 
-## Define a Collection
-
-Collections are defined in code and passed to `createCopilotz`:
-
-```typescript
-import { defineCollection, index, relation } from "copilotz";
+```ts
+import {
+  defineCollection,
+  index,
+  relation,
+} from "jsr:@copilotz/copilotz@3/domain";
+import { definePlugin } from "jsr:@copilotz/copilotz@3/plugins";
 
 const customer = defineCollection({
   name: "customer",
   schema: {
     type: "object",
     properties: {
-      id: { type: "string" },
       email: { type: "string" },
       name: { type: "string" },
       plan: { type: "string", enum: ["free", "pro", "enterprise"] },
     },
-    required: ["id", "email"],
+    required: ["email", "name", "plan"],
+    additionalProperties: false,
   } as const,
-  indexes: [
-    index.field("email"),
-    index.fulltext("name"),
-  ],
+  indexes: [index.unique("email"), index.field("plan")],
   relations: {
     tickets: relation.hasMany("ticket", "customerId"),
   },
-});
-```
-
-## Use in createCopilotz
-
-```typescript
-const copilotz = await createCopilotz({
-    agents: [...],
-    collections: [customer],
-    collectionsConfig: {
-        autoIndex: true,
-        validateOnWrite: true,
+  hooks: {
+    beforeCreate(input) {
+      return { ...input, email: String(input.email).trim().toLowerCase() };
     },
-    dbConfig: { url: "..." },
+  },
+});
+
+export default definePlugin({
+  manifest: {
+    id: "@acme/customer-domain",
+    version: "1.0.0",
+    provides: { collections: [customer.name] },
+  },
+  resources: { collections: [customer] },
 });
 ```
 
-## CRUD Operations
+## Application access
 
-```typescript
-// Create
-await copilotz.collections.customer.create({
-  id: "1",
-  email: "a@b.com",
+```ts
+const customers = app.collections.get("customer");
+const created = await customers.create({
+  email: "alice@example.com",
   name: "Alice",
   plan: "pro",
-});
+}, { namespace: "acme" });
 
-// Read
-const item = await copilotz.collections.customer.findOne({ id: "1" });
-const all = await copilotz.collections.customer.find({ plan: "pro" });
-
-// Update
-await copilotz.collections.customer.update({ id: "1" }, { plan: "enterprise" });
-
-// Delete
-await copilotz.collections.customer.delete({ id: "1" });
-
-// Search (semantic)
-const results = await copilotz.collections.customer.search(
-  "enterprise customers",
-);
+const alice = created.value;
+const listed = await customers.list("acme", { where: { plan: "pro" } });
 ```
 
-## With Namespaces (Multi-tenancy)
+Inside a processor, use `context.collections.customer`; it is already scoped to
+the delivery namespace and accepts stable `operationKey` values for retry
+deduplication.
 
-```typescript
-const scoped = copilotz.collections.withNamespace("tenant:acme");
-await scoped.customer.create({ ... });
-```
-
-## Notes
-
-- Collections map to graph nodes internally
-- `index.field()` for equality lookups, `index.fulltext()` for text search
-- Agents can interact with collections via the collection tools or custom tools
+Only `beforeCreate`, `beforeUpdate`, and `beforeDelete` hooks may validate or
+transform the atomic write. Put all post-write behavior in named processors.
+Never bypass collections with raw graph or SQL mutations.

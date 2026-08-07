@@ -1,69 +1,84 @@
 ---
 name: add-api-integration
-description: Add an OpenAPI-based external API integration that auto-generates tools for agents.
+description: Add an OpenAPI API resource and expose its operations as agent tools.
 allowed-tools: [read_file, write_file, list_directory, http_request]
-tags: [framework, api]
+tags: [framework, api, plugin]
 ---
 
 # Add API Integration
 
-Integrate an external REST API using an OpenAPI spec. Copilotz auto-generates
-tools from the spec.
+In Copilotz v3, an OpenAPI integration is an `apis` resource inside a plugin.
+The host explicitly grants the Web-fetch tool catalog to the text workflow; the
+core never scans a resource directory.
 
-## Directory Structure
+## Define the plugin
 
-```
-resources/apis/{api-name}/
-  openApiSchema.json    # Required: OpenAPI 3.0 spec
-  config.ts             # Optional: auth, base URL, tool policies
-```
+```ts
+import { definePlugin } from "jsr:@copilotz/copilotz@3/plugins";
+import type { API } from "jsr:@copilotz/copilotz@3/resources";
 
-## Step 1: Add OpenAPI Spec
-
-Place the OpenAPI 3.0 spec as `openApiSchema.json`. Can also be `.yaml`.
-
-## Step 2: Create config.ts
-
-```typescript
-import type { API } from "copilotz";
-
-const config: Omit<API, "openApiSchema"> = {
-  id: "my-api",
-  name: "My API",
-  baseUrl: "https://api.example.com", // Override spec's server URL
-  auth: {
-    type: "bearer",
-    token: Deno.env.get("MY_API_TOKEN"),
-  },
-  // Control how API tool results appear in history
-  historyPolicyDefaults: {
-    visibility: "requester_only",
-  },
-  toolPolicies: {
-    getItem: { // Keyed by operationId
-      visibility: "public",
+export function createCustomerApiPlugin(input: {
+  schema: Record<string, unknown>;
+  token: string;
+}) {
+  const api: API = {
+    id: "customer-api",
+    name: "Customer API",
+    openApiSchema: input.schema,
+    baseUrl: "https://api.example.com",
+    auth: { type: "bearer", token: input.token },
+    historyPolicyDefaults: { visibility: "requester_only" },
+    toolPolicies: {
+      getCustomer: { visibility: "public" },
     },
+  };
+
+  return definePlugin({
+    manifest: {
+      id: "@acme/customer-api",
+      version: "1.0.0",
+      provides: { apis: [api.id] },
+    },
+    resources: { apis: [api] },
+  });
+}
+```
+
+Inject secrets from the application boundary. Do not read Deno, Node, or Bun
+environment globals in a portable plugin.
+
+## Grant OpenAPI execution
+
+```ts
+import { createCopilotz } from "jsr:@copilotz/copilotz@3";
+import { createServerWorkflowToolCatalog } from "jsr:@copilotz/copilotz@3/adapters";
+
+const app = await createCopilotz({
+  namespace: "acme",
+  plugins: [createCustomerApiPlugin({ schema, token })],
+  core: {
+    text: { toolCatalog: createServerWorkflowToolCatalog() },
   },
-};
-
-export default config;
+  resources: {
+    agents: [{
+      id: "support",
+      name: "Support",
+      role: "Support customers.",
+      allowedTools: ["getCustomer"],
+      runtimes: { text: { type: "llm", provider: "openai" } },
+    }],
+  },
+});
 ```
 
-## Auth Types
+Each OpenAPI `operationId` becomes the stable tool key. Keep operation IDs
+unique across the composed application and use `allowedTools` to grant them.
 
-```typescript
-// Bearer token
-auth: { type: "bearer", token: "..." }
+## Checklist
 
-// API key (header or query)
-auth: { type: "apiKey", key: "X-API-Key", value: "...", in: "header" }
-
-// Basic auth
-auth: { type: "basic", username: "...", password: "..." }
-```
-
-## Notes
-
-- Each operation in the spec becomes a tool named `{apiId}_{operationId}`
-- Agents access API tools via `allowedTools` (e.g., `["myapi_getItem"]`)
-- The spec is loaded once at startup; the actual API is called at runtime
+- Use an OpenAPI 3.x object or string with stable `operationId` values.
+- Keep routing data and credentials small; return large bodies through normal
+  tool-result content handling.
+- Use `prepareRequest` for dynamic request policy and the provided idempotency
+  key for externally mutating operations.
+- Test generated schemas and auth without relying on filesystem discovery.

@@ -2,7 +2,7 @@ import { assertEquals } from "@std/assert";
 import {
   interpretAssistantResponse,
   REASONING_HISTORY_TAGS,
-} from "@/runtime/llm/response-interpreter.ts";
+} from "./response-interpreter.ts";
 
 Deno.test("interpreter accepts an answer after extracted thinking markup", () => {
   const result = interpretAssistantResponse({

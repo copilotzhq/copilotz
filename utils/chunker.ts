@@ -4,7 +4,7 @@
  * Splits text into chunks for embedding and retrieval.
  * Uses the shared lightweight token estimator for sizing decisions.
  */
-import { estimateTextTokens } from "@/runtime/tokens/index.ts";
+import { estimateTextTokens } from "../runtime/tokens/index.ts";
 
 export interface ChunkMetadata {
   chunkIndex: number;

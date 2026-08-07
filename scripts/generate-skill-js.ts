@@ -17,7 +17,9 @@ async function fileExists(path: string): Promise<boolean> {
 function buildModuleSource(dataUrl: string): string {
   return [
     "// This file is generated. Do not edit manually.",
-    `export default ${JSON.stringify(dataUrl)};`,
+    "const dataUrl: string =",
+    `  ${JSON.stringify(dataUrl)};`,
+    "export default dataUrl;",
     "",
   ].join("\n");
 }
@@ -33,7 +35,7 @@ async function main() {
     const mdPath = join(skillsRoot, dir, "SKILL.md");
     if (!(await fileExists(mdPath))) continue;
 
-    const jsPath = join(skillsRoot, dir, "SKILL.js");
+    const jsPath = join(skillsRoot, dir, "SKILL.ts");
     const bytes = await Deno.readFile(mdPath);
     const dataUrl = toDataUrlMarkdown(bytes);
     const src = buildModuleSource(dataUrl);
@@ -42,11 +44,10 @@ async function main() {
     generated.push(relative(repoRoot, jsPath));
   }
 
-  console.log(`Generated ${generated.length} SKILL.js files:`);
+  console.log(`Generated ${generated.length} SKILL.ts files:`);
   for (const p of generated) console.log(`- ${p}`);
 }
 
 if (import.meta.main) {
   await main();
 }
-

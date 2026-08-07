@@ -1,94 +1,33 @@
-/**
- * Framework-independent server helpers for Copilotz.
- *
- * These helpers wrap Copilotz operations into domain-specific handler factories
- * that can be wired to any web framework (Oxian, Hono, Express, etc.).
- *
- * @module
- *
- * @example
- * ```ts
- * import { createCopilotz } from "copilotz";
- * import { createThreadHandlers, createCollectionHandlers } from "copilotz/server";
- *
- * const copilotz = await createCopilotz({ ... });
- * const threads = createThreadHandlers(copilotz);
- * const collections = createCollectionHandlers(copilotz);
- *
- * // Wire to your framework's routes
- * app.get("/v1/threads/:id", async (req) => {
- *   return threads.getById(req.params.id);
- * });
- * ```
- */
-
-export { createThreadHandlers } from "./threads.ts";
-export type { ThreadHandlers } from "./threads.ts";
-
-export { createMessageHandlers } from "./messages.ts";
-export type { MessageHandlers } from "./messages.ts";
-
-export { createEventHandlers } from "./events.ts";
-export type { EventHandlers } from "./events.ts";
-
-export { createAssetHandlers } from "./assets.ts";
-export type { AssetHandlers } from "./assets.ts";
-
-export { createCollectionHandlers } from "./collections.ts";
-export type { CollectionHandlers } from "./collections.ts";
-
-export { createParticipantHandlers } from "./participants.ts";
-export type {
-  ParticipantData,
-  ParticipantGetOptions,
-  ParticipantHandlers,
-  ParticipantUpdateOptions,
-} from "./participants.ts";
-
-export { createGraphHandlers } from "./graph.ts";
-export type { GraphHandlers, GraphSearchOptions } from "./graph.ts";
-
-export { createChannelHandlers } from "./channels.ts";
-export type { ChannelHandlers } from "./channels.ts";
-export type {
-  WhatsAppCarouselImageInput,
-  WhatsAppMediaBytesInput,
-  WhatsAppMediaCarouselAction,
-  WhatsAppMediaCarouselCardInput,
-} from "@/resources/channels/whatsapp/shared.ts";
-export type {
-  WhatsAppDeliveryOutput,
-  WhatsAppMediaCarouselDeliveryOutput,
-} from "@/resources/channels/whatsapp/egress.ts";
+/** Runtime-neutral HTTP/application adapters for the event-native engine. */
 
 export {
-  migrateLlmUsageContract,
-  migrateLlmUsageToUsageLedger,
-  migrateTenantNamespaceGraph,
-} from "./migrations.ts";
+  createEventNativeApp,
+  EVENT_NATIVE_OUTPUT_STREAM,
+  isEventNativeOutputStream,
+} from "./event-native.ts";
 export type {
-  LlmUsageContractMigrationResult,
-  TenantNamespaceGraphMigrationResult,
-  UsageLedgerMigrationResult,
-} from "./migrations.ts";
+  CreateEventNativeAppOptions,
+  EventNativeApp,
+  EventNativeAppError,
+  EventNativeAppRequest,
+  EventNativeAppResponse,
+  EventNativeFeatureContext,
+  EventNativeFeatureResource,
+  EventNativeOutputStream,
+} from "./event-native.ts";
 
-export { tickScheduledJobs } from "@/runtime/scheduler/index.ts";
+export { createEventNativeFetchHandler } from "./fetch.ts";
 export type {
-  ScheduledJobData,
-  ScheduledJobRunTemplate,
-  ScheduledJobSchedule,
-  ScheduledJobStatus,
-  ScheduledJobTickOptions,
-  ScheduledJobTickResult,
-} from "@/runtime/scheduler/index.ts";
+  CreateEventNativeFetchHandlerOptions,
+  EventNativeFetchHandler,
+  EventNativeSseProjector,
+} from "./fetch.ts";
 
-export { withApp } from "./app.ts";
+/** Compatibility transport projections over the v3 application model. */
+export { createV1FetchHandler, createV1RouteAdapter } from "./v1-fetch.ts";
+export type { CreateV1FetchHandlerOptions } from "./v1-fetch.ts";
+export { createV1SseProjector } from "./v1-sse.ts";
 export type {
-  AgentHandlers,
-  AppRequest,
-  AppRequestContext,
-  AppResponse,
-  CopilotzApp,
-  ResourceDescriptor,
-  WithAppOptions,
-} from "./app.ts";
+  CreateV1SseProjectorOptions,
+  V1SseAssetHrefInput,
+} from "./v1-sse.ts";

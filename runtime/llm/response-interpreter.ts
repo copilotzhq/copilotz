@@ -1,7 +1,4 @@
-import type {
-  ProviderFinishReason,
-  ToolInvocation,
-} from "@/runtime/llm/types.ts";
+import type { ProviderFinishReason, ToolInvocation } from "./types.ts";
 import {
   detectDegenerateRepetition,
   parseInternalControlTagsFromResponse,
@@ -13,7 +10,7 @@ import {
   responseHasToolIntent,
   sanitizeUserFacingText,
   stripStructuralLeakTokens,
-} from "@/runtime/llm/utils.ts";
+} from "./utils.ts";
 
 export const REASONING_HISTORY_TAGS = [
   "think",

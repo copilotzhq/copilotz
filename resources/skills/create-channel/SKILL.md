@@ -1,93 +1,67 @@
 ---
 name: create-channel
-description: Add a transport channel with ingress and egress adapters.
+description: Add transport-neutral ingress and egress as a plugin channel.
 allowed-tools: [read_file, write_file, list_directory, search_files]
-tags: [framework, channel, integration]
+tags: [framework, channel, integration, plugin]
 ---
 
 # Create Channel
 
-Use a channel when Copilotz should receive or deliver messages through an
-external transport such as web, WhatsApp, or Zendesk.
+A channel normalizes an external transport into attachment inputs and delivers
+attachment outputs back to that transport. It is a plugin resource, not a
+filesystem convention.
 
-## When To Use It
+```ts
+import { definePlugin } from "jsr:@copilotz/copilotz@3/plugins";
+import type { ChannelResource } from "jsr:@copilotz/copilotz@3/channels";
 
-- Use a `channel` for ingress and egress at the transport boundary.
-- Prefer a channel over a feature or tool when the problem is message delivery
-  or normalization.
-- Do not mix transport-specific behavior into ordinary tools or features.
-
-## Directory Structure
-
-```txt
-resources/channels/{channel-name}/
-  ingress.ts
-  egress.ts
-```
-
-## Step 1: Design The Channel Boundary
-
-Define:
-
-- what inbound payloads look like
-- how they map into Copilotz envelopes or runtime events
-- what outbound runtime payloads must be sent back to the transport
-
-## Step 2: Create `ingress.ts`
-
-```typescript
-export default {
-  name: "my-channel",
-  routes: [
-    {
-      method: "POST",
-      path: "/webhook",
-      handler: async (request, copilotz) => {
-        const body = await request.json();
-
-        return {
-          type: "NEW_MESSAGE",
-          payload: {
-            content: body.text,
-            sender: {
-              type: "user",
-              id: body.userId,
-              name: body.userName ?? "User",
-            },
-            threadId: body.threadId,
+const webhook: ChannelResource = {
+  id: "webhook",
+  defaultAgentIds: ["support"],
+  ingress: {
+    async handle(request) {
+      const body = request.body as {
+        threadId: string;
+        userId: string;
+        text: string;
+      };
+      return {
+        status: 202,
+        inputs: [{
+          thread: { externalId: body.threadId },
+          participant: {
+            externalId: body.userId,
+            participantType: "human",
           },
-        };
-      },
+          input: { content: body.text },
+        }],
+      };
     },
-  ],
-};
-```
-
-## Step 3: Create `egress.ts`
-
-```typescript
-export default {
-  name: "my-channel",
-  send: async (payload, context) => {
-    console.log("Sending outbound payload", { payload, context });
+  },
+  egress: {
+    requestBound: false,
+    async deliver({ execution }) {
+      for await (const output of execution.outputs) {
+        await transport.send(output);
+      }
+    },
   },
 };
+
+export default definePlugin({
+  manifest: {
+    id: "@acme/webhook-channel",
+    version: "1.0.0",
+    provides: { channels: [webhook.id] },
+  },
+  resources: { channels: [webhook] },
+});
 ```
 
-## How Copilotz Consumes It
+Ingress returns one or more envelopes containing `thread`, `participant`,
+optional recipients, and the same input accepted by `attachment.send()`. Egress
+receives participant-labelled semantic events or readable media streams.
 
-- channels are loaded into the channel registry
-- ingress adapters normalize incoming traffic into Copilotz runtime input
-- egress adapters deliver runtime output back to the transport
-
-## Common Mistakes
-
-- Putting transport auth or webhook parsing inside tools
-- Treating channels like app-facing features
-- Forgetting that ingress and egress are different responsibilities
-
-## Notes
-
-- Keep normalization logic explicit and deterministic.
-- Reuse existing runtime helpers or built-in channels as references when
-  possible.
+Keep webhook verification and transport normalization at this boundary. Raw
+media chunks stay ephemeral; durable transcripts/messages are produced through
+the normal attachment workflow.

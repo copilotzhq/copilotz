@@ -1,17 +1,55 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.56.1",
+  "version": "0.57.0",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
-    "./resources": "./resources/index.ts",
+    "./admin": "./runtime/admin/index.ts",
+    "./adapters": "./runtime/adapters/index.ts",
+    "./adapters/deno": "./runtime/adapters/deno/index.ts",
+    "./adapters/node": "./runtime/adapters/node/index.ts",
+    "./adapters/stdio": "./runtime/adapters/stdio.ts",
+    "./application": "./runtime/application/index.ts",
+    "./attachments": "./runtime/attachments/index.ts",
+    "./channels": "./runtime/channels/index.ts",
+    "./content": "./runtime/content/index.ts",
+    "./domain": "./runtime/domain/index.ts",
+    "./engine": "./runtime/engine/index.ts",
+    "./features": "./runtime/features/index.ts",
+    "./memory": "./runtime/memory/index.ts",
+    "./tools": "./runtime/tools/index.ts",
+    "./usage": "./runtime/usage/index.ts",
+    "./schedules": "./runtime/schedules/index.ts",
+    "./skills": "./runtime/skills/index.ts",
+    "./knowledge": "./runtime/knowledge/index.ts",
+    "./goals": "./runtime/goals/index.ts",
+    "./workflows": "./runtime/workflows/index.ts",
+    "./events": "./runtime/events/index.ts",
+    "./execution": "./runtime/execution/index.ts",
+    "./plugins": "./runtime/plugins/index.ts",
+    "./migration/v1": "./migration/v1/index.ts",
+    "./resources": "./runtime/resources/index.ts",
     "./tokens": "./runtime/tokens/index.ts",
-    "./server": "./server/index.ts",
-    "./create": "./create/mod.ts",
-    "./scripts/ascii-logo": "./scripts/ascii-logo.ts",
-    "./scripts/compile-cli": "./scripts/compile-cli.ts",
-    "./scripts/migrate-tenant-namespace-graph": "./scripts/migrate-tenant-namespace-graph.ts"
+    "./server": "./server/index.ts"
+  },
+  "publish": {
+    "include": [
+      "LICENSE",
+      "README.md",
+      "CHANGELOG.md",
+      "deno.json",
+      "index.ts",
+      "dependencies/**/*.ts",
+      "docs/**/*.md",
+      "docs/manifest.json",
+      "migration/v1/index.ts",
+      "resources/skills/**/SKILL.ts",
+      "runtime/**/*.ts",
+      "server/**/*.ts",
+      "utils/**/*.ts"
+    ],
+    "exclude": ["**/*.test.ts", "runtime/testing"]
   },
   "unstable": [
     "bare-node-builtins",
@@ -29,29 +67,28 @@
     "raw-imports"
   ],
   "imports": {
-    "@/": "./",
-    "@std/assert": "jsr:@std/assert@1",
-    "@std/path": "jsr:@std/path@1",
-    "@bradenmacdonald/s3-lite-client": "jsr:@bradenmacdonald/s3-lite-client@^0.9.4",
-    "ajv": "npm:ajv@8.17.1",
-    "ajv-formats": "npm:ajv-formats@3.0.1",
-    "croner": "npm:croner@9.0.0",
-    "json-schema-to-ts": "npm:json-schema-to-ts@3.1.1",
-    "jq-wasm": "npm:jq-wasm@3.0.0-jq-1.8.2/inline",
-    "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client",
-    "omnipg": "jsr:@oxian/ominipg@0.8.3",
-    "omnipg/auto": "jsr:@oxian/ominipg@0.8.3/auto",
-    "omnipg/pglite": "jsr:@oxian/ominipg@0.8.3/pglite",
-    "omnipg/worker": "jsr:@oxian/ominipg@0.8.3/worker",
-    "ulid": "jsr:@std/ulid@1.0.0",
-    "yaml": "npm:yaml@2.8.0",
-    "zod": "npm:zod@3.23.8"
+    "@std/assert": "jsr:@std/assert@1"
+  },
+  "minimumDependencyAge": {
+    "age": "P1D",
+    "exclude": ["jsr:@oxian/ominipg", "jsr:@oxian/oxian-js"]
   },
   "tasks": {
     "gen:skills": "deno run -A scripts/generate-skill-js.ts",
-    "compile:cli": "deno run -A scripts/compile-cli.ts",
-    "test:examples": "deno run -A examples/test-examples.ts",
-    "test:v3-contracts": "deno test --allow-all contracts/v3"
+    "bundle:runtime-smoke": "deno bundle --platform=browser contracts/runtime/runtime-neutral-smoke.ts --output=dist/runtime-neutral-smoke.mjs",
+    "bundle:edge-smoke": "deno bundle --platform=browser contracts/runtime/edge-worker-smoke.ts --output=dist/edge-worker-smoke.mjs",
+    "smoke:deno": "deno run contracts/runtime/run-smoke.ts",
+    "smoke:node": "node scripts/run-bundled-smoke.mjs",
+    "smoke:bun": "bun scripts/run-bundled-smoke.mjs",
+    "smoke:browser": "node --experimental-vm-modules scripts/run-isolate-smoke.mjs dist/runtime-neutral-smoke.mjs core",
+    "smoke:cloudflare": "node --experimental-vm-modules scripts/run-isolate-smoke.mjs dist/edge-worker-smoke.mjs edge",
+    "smoke:cloudflare-build": "npx --yes wrangler@4.120.0 deploy --dry-run --config contracts/runtime/wrangler.jsonc --outdir dist/cloudflare-smoke",
+    "check:forbidden": "deno run --allow-read scripts/check-forbidden-symbols.ts",
+    "check:surface": "deno run --allow-read --allow-run=deno scripts/check-package-surface.ts",
+    "check": "deno task check:forbidden && deno task check:surface",
+    "publish:dry-run": "deno publish --dry-run --allow-dirty",
+    "test": "deno test --allow-all contracts/v3 runtime migration/v1 server utils",
+    "test:v3-contracts": "deno task test"
   },
   "lock": false
 }

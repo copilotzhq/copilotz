@@ -1,95 +1,54 @@
 ---
 name: create-feature
-description: Add an app-facing backend feature action for frontend or service calls.
+description: Add a transport-neutral application action as a plugin feature.
 allowed-tools: [read_file, write_file, list_directory]
-tags: [framework, feature, backend]
+tags: [framework, feature, backend, plugin]
 ---
 
 # Create Feature
 
-Use a feature when application code should call backend behavior directly
-through a request/response endpoint.
+Use a feature when application or frontend code should invoke named backend
+behavior directly. Use a tool when an agent decides to invoke it, a processor
+for event reactions, and a collection for durable state.
 
-## When To Use It
+```ts
+import { definePlugin } from "jsr:@copilotz/copilotz@3/plugins";
+import type { FeatureResource } from "jsr:@copilotz/copilotz@3/features";
 
-- Use a `feature` for app-facing backend actions with a clear request contract.
-- Prefer a feature over a tool when the caller is your frontend or another
-  service.
-- Do not hide ordinary application endpoints inside tools unless the model needs
-  to decide when to call them.
+const customers: FeatureResource = {
+  id: "customers",
+  actions: {
+    async register(request, { application, namespace }) {
+      const input = request.body as { id?: string; email?: string };
+      if (!input.email) {
+        return { status: 400, data: { error: "email is required" } };
+      }
 
-## Directory Structure
+      const result = await application.collections.get("customer").create({
+        id: input.id,
+        email: input.email,
+      }, { namespace });
 
-```txt
-resources/features/{feature-name}/{action}.ts
+      return { status: 201, data: { customer: result.value } };
+    },
+  },
+};
+
+export default definePlugin({
+  manifest: {
+    id: "@acme/customer-features",
+    version: "1.0.0",
+    provides: { features: [customers.id] },
+  },
+  resources: { features: [customers] },
+});
 ```
 
-Each file becomes a dispatcher endpoint at `/features/{feature-name}/{action}`
-when `withApp(...)` is enabled.
+`createEventNativeApp()` dispatches feature requests by resource ID and action
+name. The action receives a normalized request and a context containing the
+application and resolved tenant namespace. Return `{ status, data }` for an
+explicit HTTP-like response, or any value for a `200` response.
 
-## Step 1: Choose The Boundary
-
-Before creating the file, confirm the behavior belongs in a feature:
-
-- `feature`: app or service calls it directly
-- `tool`: an agent decides whether to call it
-- `processor`: it belongs in the event pipeline
-- `collection`: it is durable state, not behavior
-
-## Step 2: Create The Action File
-
-```typescript
-export default async function registerCustomer(request, copilotz) {
-  const body = (request.body ?? {}) as { email?: string; name?: string };
-
-  if (!body.email) {
-    return {
-      status: 400,
-      data: { error: "email is required" },
-    };
-  }
-
-  const customers = copilotz.collections?.customer;
-  const created = await customers?.create({
-    id: crypto.randomUUID(),
-    email: body.email,
-    name: body.name ?? "Unknown",
-  });
-
-  return {
-    status: 201,
-    data: { customer: created },
-  };
-}
-```
-
-## Handler Contract
-
-The default export receives:
-
-- a request-like object with `method`, `body`, `query`, `headers`, and optional
-  `context`
-- the `copilotz` instance
-
-It may return:
-
-- an object with `status` and `data`
-- or any value the dispatcher should wrap as `data`
-
-## How Copilotz Consumes It
-
-- features are loaded during `createCopilotz(...)`
-- `withApp(...)` exposes them as dispatcher routes
-- the resource family is `features`
-
-## Common Mistakes
-
-- Using a feature when the LLM should decide whether to invoke the behavior
-- Putting transport-specific ingress logic in a feature instead of a channel
-- Treating a collection as if it were an endpoint layer
-
-## Notes
-
-- Keep feature handlers focused on backend application contracts.
-- If multiple actions belong to the same business area, group them under one
-  feature directory.
+Keep transport parsing in channels/fetch adapters, enforce authorization before
+dispatch, and mutate through typed domain/collection APIs so state and events
+remain atomic.

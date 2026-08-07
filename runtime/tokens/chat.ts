@@ -2,7 +2,7 @@ import type {
   ChatContentPart,
   ChatMessage,
   ProviderConfig,
-} from "@/runtime/llm/types.ts";
+} from "../llm/types.ts";
 import {
   estimateTokens,
   type TokenEstimate,

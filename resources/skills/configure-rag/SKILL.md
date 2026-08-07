@@ -1,89 +1,71 @@
 ---
 name: configure-rag
-description: Enable RAG (Retrieval-Augmented Generation) with document ingestion and semantic search.
+description: Enable graph-native document ingestion and semantic retrieval.
 allowed-tools: [read_file, write_file]
-tags: [framework, rag]
+tags: [framework, rag, knowledge, plugin]
 ---
 
 # Configure RAG
 
-Enable agents to ingest documents and search a knowledge base using semantic
-similarity.
+The v3 knowledge plugin contributes graph collections, a durable indexing
+processor, and optional agent tools. It requires an embedding provider resource.
 
-## Enable RAG in createCopilotz
+```ts
+import { createCopilotz } from "jsr:@copilotz/copilotz@3";
+import { definePlugin } from "jsr:@copilotz/copilotz@3/plugins";
+import { defineKnowledgeEmbeddingProvider } from "jsr:@copilotz/copilotz@3/knowledge";
 
-```typescript
-const copilotz = await createCopilotz({
-  agents: [{
-    id: "assistant",
-    name: "Assistant",
-    role: "assistant",
-    instructions: "Answer questions from the knowledge base.",
-    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
-    allowedTools: [
-      "search_knowledge",
-      "ingest_document",
-      "list_knowledge_spaces",
-    ],
-    ragOptions: {
-      mode: "tool", // "tool" | "disabled"
-      scope: {
-        knowledgeSpaceIds: ["ks-docs"],
-      },
-    },
-  }],
-  rag: {
-    embedding: {
-      provider: "openai",
-      model: "text-embedding-3-small",
-      // apiKey: "...",          // Optional: override env var
-    },
-    chunking: {
-      strategy: "fixed", // "fixed" | "paragraph" | "sentence"
-      chunkSize: 512,
-      chunkOverlap: 50,
-    },
-    retrieval: {
-      defaultLimit: 5,
-      similarityThreshold: 0.7,
+const embeddings = defineKnowledgeEmbeddingProvider({
+  id: "acme.embeddings",
+  type: "embedding",
+  async embed({ texts, model, signal, idempotencyKey }) {
+    const result = await embeddingClient.embed({
+      texts,
+      model: model ?? "text-embedding-3-small",
+      signal,
+      idempotencyKey,
+    });
+    return {
+      embeddings: result.vectors,
+      model: result.model,
+      dimensions: result.dimensions,
+    };
+  },
+});
+
+const providerPlugin = definePlugin({
+  manifest: {
+    id: "@acme/embeddings",
+    version: "1.0.0",
+    provides: { providers: [embeddings.id] },
+  },
+  resources: { providers: [embeddings] },
+});
+
+const app = await createCopilotz({
+  namespace: "acme",
+  plugins: [providerPlugin],
+  core: {
+    knowledge: {
+      embedding: { provider: embeddings.id },
+      chunking: { strategy: "fixed", chunkSize: 512, chunkOverlap: 50 },
     },
   },
-  dbConfig: { url: "..." },
+  resources: {
+    agents: [{
+      id: "researcher",
+      name: "Researcher",
+      role: "Use the knowledge base when relevant.",
+      allowedTools: ["search_knowledge", "ingest_document", "delete_document"],
+      runtimes: { text: { type: "llm", provider: "openai" } },
+    }],
+  },
 });
 ```
 
-## RAG Modes
+Ingestion returns after the document is accepted. The durable indexing processor
+loads content, chunks it, embeds it, and settles independently. Source bodies
+use canonical content/assets rather than duplicated text fields.
 
-- **tool**: Agent must explicitly use `search_knowledge` tool to retrieve
-  context
-- **disabled**: Agent does not use RAG retrieval
-
-## RAG Tools
-
-| Tool                    | Description                                        |
-| ----------------------- | -------------------------------------------------- |
-| `search_knowledge`      | Search the knowledge base by query                 |
-| `ingest_document`       | Add a document (text or URL) to the knowledge base |
-| `list_knowledge_spaces` | List available knowledge-space nodes               |
-| `delete_document`       | Remove a document from the knowledge base          |
-
-## Per-Agent RAG Options
-
-Each agent can have different RAG settings:
-
-```typescript
-ragOptions: {
-    mode: "tool",
-    scope: {
-        knowledgeSpaceIds: ["ks-docs", "ks-faq"],
-    },
-    entityExtraction: { enabled: true },
-}
-```
-
-## Notes
-
-- Requires an embedding provider (OpenAI, Ollama, or Cohere)
-- Documents are automatically chunked and embedded on ingestion
-- `namespace` is the tenant/application partition
-- Use graph scopes and `knowledge_space` nodes to group searchable knowledge
+Keep embedding clients runtime-neutral, honor `AbortSignal`, propagate the
+idempotency key, and enforce namespace/graph scope on every search.

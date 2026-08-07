@@ -2,8 +2,8 @@ import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import {
   buildToolCallsBlock,
-  CanonicalToolCallDraftTracker,
   composeWireContent,
+  createCanonicalToolCallDraftTracker,
   detectDegenerateRepetition,
   filterTaggedControlTokensStreaming,
   formatMessages,
@@ -1100,7 +1100,7 @@ Deno.test("canonical tool draft tracker preserves escaped JSON across chunks", (
     delta: string;
     toolCallId?: string;
   }> = [];
-  const tracker = new CanonicalToolCallDraftTracker({
+  const tracker = createCanonicalToolCallDraftTracker({
     knownToolNames: ["terminal"],
     providerAttemptId: "attempt-1",
     emit: (delta) => deltas.push(delta),
@@ -1139,7 +1139,7 @@ Deno.test("canonical tool draft tracker handles calls, pipelines, and private na
     toolName: string;
     phase: string;
   }> = [];
-  const tracker = new CanonicalToolCallDraftTracker({
+  const tracker = createCanonicalToolCallDraftTracker({
     knownToolNames: ["search", "terminal"],
     providerAttemptId: "attempt-many",
     emit: (delta) => deltas.push(delta),
@@ -1181,7 +1181,7 @@ Deno.test("canonical tool draft tracker handles calls, pipelines, and private na
 
 Deno.test("canonical tool draft tracker recognizes a top-level name after arguments", () => {
   const deltas: Array<{ phase: string; delta: string }> = [];
-  const tracker = new CanonicalToolCallDraftTracker({
+  const tracker = createCanonicalToolCallDraftTracker({
     knownToolNames: ["terminal"],
     providerAttemptId: "attempt-key-order",
     emit: (delta) => deltas.push(delta),
@@ -1202,7 +1202,7 @@ Deno.test("canonical tool draft tracker recognizes a top-level name after argume
 
 Deno.test("canonical tool draft tracker discards abandoned malformed drafts", () => {
   const phases: string[] = [];
-  const tracker = new CanonicalToolCallDraftTracker({
+  const tracker = createCanonicalToolCallDraftTracker({
     knownToolNames: ["terminal"],
     providerAttemptId: "attempt-discard",
     emit: (delta) => phases.push(delta.phase),

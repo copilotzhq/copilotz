@@ -1,93 +1,49 @@
 ---
 name: create-storage-adapter
-description: Add a custom asset storage backend for files, media, and binary data.
+description: Extend canonical asset-body storage without bypassing content invariants.
 allowed-tools: [read_file, write_file, list_directory]
-tags: [framework, storage, assets]
+tags: [framework, storage, assets, architecture]
 ---
 
 # Create Storage Adapter
 
-Use a storage adapter when asset bytes, media, or other binary data should
-persist outside normal collection records.
+Copilotz v3's supported baseline stores canonical asset metadata and bodies in
+the graph/database repository. The initial 3.0 public engine does not yet expose
+an object-storage repository injection option. Do not add an inert `storage`
+resource and assume the content runtime will consume it.
 
-## When To Use It
+## If the database baseline is sufficient
 
-- Use a custom storage adapter for non-built-in asset persistence backends.
-- Prefer the built-in `fs` and `s3` adapters when they already match your
-  environment.
-- Do not stuff binary payloads into collection metadata.
+Configure `engine.maxDatabaseBytes` and use the canonical content API:
 
-## Directory Structure
+```ts
+const app = await createCopilotz({
+  engine: { maxDatabaseBytes: 64 * 1024 },
+});
 
-```txt
-resources/storage/{adapter-name}/
-  adapter.ts
+const prepared = await app.content.preparer.prepare({
+  type: "file",
+  bytes,
+  mediaType: "application/pdf",
+  name: "report.pdf",
+}, { namespace: "acme", idempotencyKey: "report:42" });
 ```
 
-Also declare the adapter in `resources/manifest.ts`:
+The prepared content must be materialized by an owning domain mutation; do not
+persist references to bodies that were never committed.
 
-```typescript
-export default {
-  provides: {
-    storage: ["my-backend"],
-  },
-};
-```
+## Adding object storage to Copilotz itself
 
-## Step 1: Create `adapter.ts`
+Treat this as a content-runtime contribution, not an application plugin recipe.
+The adapter must preserve:
 
-```typescript
-export interface MyConnector {
-  writeFile(path: string, data: Uint8Array): Promise<void>;
-  readFile(path: string): Promise<Uint8Array>;
-  exists(path: string): Promise<boolean>;
-  remove(path: string): Promise<void>;
-}
+- immutable digest-addressed bodies and namespace authorization;
+- stable idempotency on publish/materialize;
+- atomic database metadata, owner links, and semantic events;
+- staged upload recovery when object storage cannot join the SQL transaction;
+- verified byte length/digest on read and Web Stream backpressure on open;
+- deletion/retention semantics that cannot orphan live owner references;
+- runtime-neutral interfaces, with SDK-specific code in host adapters.
 
-export function createMyConnector(config: { bucket: string }): MyConnector {
-  return {
-    async writeFile(path, data) {
-      console.log("write", path, data.length, config.bucket);
-    },
-    async readFile(_path) {
-      return new Uint8Array();
-    },
-    async exists(_path) {
-      return false;
-    },
-    async remove(path) {
-      console.log("remove", path);
-    },
-  };
-}
-
-export default createMyConnector;
-```
-
-## Step 2: Configure The Backend
-
-```typescript
-assets: {
-  config: {
-    backend: "my-backend",
-  },
-}
-```
-
-## How Copilotz Consumes It
-
-- storage adapters are loaded into the asset storage registry
-- runtime asset helpers call the configured backend
-- asset references can flow back into app, tool, and LLM behavior
-
-## Common Mistakes
-
-- Treating storage as an application endpoint instead of a runtime backend
-- Saving large binary blobs directly into ordinary graph records
-- Forgetting to declare the adapter in the resource manifest
-
-## Notes
-
-- The built-in `fs` and `s3` adapters are the canonical examples.
-- Keep storage adapters focused on persistence semantics rather than business
-  logic.
+Add a public factory/injection seam, PGlite and PostgreSQL crash tests, and
+object-store conformance tests before documenting the backend as supported.

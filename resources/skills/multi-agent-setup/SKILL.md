@@ -1,110 +1,69 @@
 ---
 name: multi-agent-setup
-description: Configure same-thread routing, child-thread delegation, and loop prevention.
+description: Configure public same-thread agent collaboration with the ask capability.
 allowed-tools: [read_file, write_file]
-tags: [framework, agent, multi-agent]
+tags: [framework, agent, multi-agent, ask]
 ---
 
 # Multi-Agent Setup
 
-Configure multiple agents that communicate and collaborate in one conversation,
-with optional child-thread delegation for isolated work.
+Copilotz v3 models collaboration as public conversation. The built-in `ask` tool
+creates a normal message to another agent participant; the answer is a normal
+public message, and causal metadata resumes the asking agent.
 
-## Enable Multi-Agent
-
-```typescript
-const copilotz = await createCopilotz({
-  agents: [
-    {
-      id: "coordinator",
-      name: "Coordinator",
-      role: "assistant",
-      instructions: "Route user requests to the right specialist.",
-      llmOptions: { provider: "openai", model: "gpt-4o" },
-      allowedAgents: ["researcher", "writer"],
-    },
-    {
-      id: "researcher",
-      name: "Researcher",
-      role: "assistant",
-      instructions: "Find and analyze information.",
-      llmOptions: { provider: "openai", model: "gpt-4o-mini" },
-      allowedTools: ["search_knowledge", "http_request"],
-      allowedAgents: ["coordinator"],
-    },
-    {
-      id: "writer",
-      name: "Writer",
-      role: "assistant",
-      instructions: "Write clear, polished content.",
-      llmOptions: {
-        provider: "anthropic",
-        model: "claude-sonnet-4-5-20241022",
+```ts
+const app = await createCopilotz({
+  namespace: "acme",
+  core: { ask: { maxDepth: 6 } },
+  resources: {
+    agents: [
+      {
+        id: "coordinator",
+        name: "Coordinator",
+        role: "Coordinate specialists and synthesize answers.",
+        allowedAgents: ["researcher", "writer"],
+        allowedTools: ["ask"],
+        runtimes: { text: { type: "llm", provider: "openai" } },
       },
-      allowedAgents: ["coordinator"],
-    },
-  ],
-  multiAgent: {
-    enabled: true,
-    maxAgentTurns: 5, // Prevent infinite loops
-    maxTurnsFallbackAgent: "coordinator",
+      {
+        id: "researcher",
+        name: "Researcher",
+        role: "Research evidence and answer peers publicly.",
+        allowedAgents: ["coordinator"],
+        allowedTools: ["search_knowledge", "ask"],
+        runtimes: { text: { type: "llm", provider: "openai" } },
+      },
+      {
+        id: "writer",
+        name: "Writer",
+        role: "Turn evidence into clear prose.",
+        allowedAgents: ["coordinator"],
+        allowedTools: ["ask"],
+        runtimes: { text: { type: "llm", provider: "anthropic" } },
+      },
+    ],
   },
-  dbConfig: { url: "..." },
 });
 ```
 
-## Routing
+Create one participant per agent in the thread, with `participantType:
+"agent"`
+and the corresponding `agentId`. Route the initial user input by participant ID:
 
-- **@mentions**: Users type `@Researcher, find info on X` to target a specific
-  agent
-- **Programmatic**: Use `target` or `targetQueue` in run options
-- **Same-thread consultation**: Agents call `consult_agent` with atomic
-  `{ target, message }`; control returns after the target replies
-- **Child-thread delegation**: Agents call the regular `delegate_task` tool for
-  an isolated subtask and wait for its final answer
-
-```typescript
-// Programmatic routing
-await copilotz.run({
-  content: "Analyze this data",
-  sender: { type: "user", name: "Alex" },
-  target: "researcher",
+```ts
+const run = await app.run({
+  thread: threadId,
+  participant: userParticipantId,
+  recipientIds: [coordinatorParticipantId],
+  content: "Research this claim and draft a response.",
 });
-
-// Sequential routing
-await copilotz.run({
-  content: "Research and then write a summary",
-  sender: { type: "user", name: "Alex" },
-  targetQueue: ["researcher", "writer"],
-});
+await run.done;
 ```
 
-The routing controls are injected automatically for allowed agent participants.
-Do not add them to `allowedTools` or `resources.imports`, and do not duplicate
-their `message` argument as visible text. `delegate_task` is an executable tool
-and must be imported and allowed when used.
+The model calls `ask` with `{ target, message }`. The target must be an agent
+participant in the same thread and allowed by `allowedAgents`. Nested and
+parallel asks are public and independently settled. There is no single-speaker
+lock; realtime outputs remain separate participant-labelled streams.
 
-## Loop Prevention
-
-`maxAgentTurns` prevents infinite agent-to-agent conversations:
-
-- Each consecutive agent turn increments a counter
-- When the counter reaches `maxAgentTurns`, routing uses
-  `maxTurnsFallbackAgent` once when configured; otherwise it hard-stops
-- User messages reset the counter
-
-## allowedAgents
-
-Controls which agents can communicate with each other:
-
-```typescript
-allowedAgents: ["researcher", "writer"]; // Can only talk to these
-allowedAgents: undefined; // Can talk to all (default)
-allowedAgents: null; // Cannot route to another agent
-```
-
-## Notes
-
-- Each agent can have different LLM providers and models
-- Agents maintain persistent memory across conversations via `update_my_memory`
-  tool
+Use a separate application-defined thread for genuinely private/background work.
+Do not hide conversational collaboration behind delegation.

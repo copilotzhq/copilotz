@@ -1,134 +1,68 @@
 ---
 name: add-processor
-description: Create a custom processor to react to Copilotz lifecycle events.
+description: Create an independent named subscription to Copilotz semantic events.
 allowed-tools: [read_file, write_file, list_directory]
-tags: [framework, events, processor]
+tags: [framework, events, processor, plugin]
 ---
 
 # Add Processor
 
-Custom processors let you react to Copilotz lifecycle events and mutate domain
-state.
+Processors are logical plugin resources. Each processor ID is an independent
+subscription; durable processors receive at-least-once deliveries through Oxian.
 
-Prefer domain mutations such as `deps.db.ops.mutate.messages.create(...)`,
-`deps.db.ops.mutate.llmAttempts.update(...)`, and
-`deps.db.ops.mutate.toolExecutions.complete(...)`. These write the graph/table
-change and append a durable outbox row in one transaction. Returning
-`producedEvents` is still supported for legacy custom processors and live stream
-compatibility, but it should not be the first choice for durable workflow state.
+```ts
+import {
+  definePlugin,
+  defineProcessor,
+} from "jsr:@copilotz/copilotz@3/plugins";
+import type { CopilotzProcessorContext } from "jsr:@copilotz/copilotz@3/engine";
 
-## Directory Structure
+const processor = defineProcessor<CopilotzProcessorContext>({
+  id: "acme.audit-message",
+  on: ["message.created"],
+  delivery: "durable",
 
-```
-resources/processors/{purpose}/{event_subject}.{operation}.ts
-```
+  // Durable filters run while matching the atomic mutation. Keep them pure,
+  // synchronous, deterministic, and free of I/O.
+  filter: (event) => event.visibility !== "restricted",
 
-The directory is the processor purpose. The file name mirrors the durable event,
-for example `message.created.ts`, `llm_attempt.completed.ts`, or
-`tool_execution.failed.ts`. Legacy `eventType`/`index.ts` processors still load
-for compatibility, but new processors should export `eventTypes`.
+  async handle(event, context) {
+    if (!event.durable || !event.subject) return;
 
-## Create the event file
-
-```typescript
-import type { EventProcessor, ProcessorDeps } from "copilotz";
-
-export const processorId = "message_moderation";
-export const eventTypes = ["message.created"] as const;
-
-const processor: EventProcessor = {
-  shouldProcess: (event, deps: ProcessorDeps) => {
-    // Return true to handle this event
-    return event.payload.metadata?.requiresModeration === true;
+    await context.collections.audit.create({
+      id: `audit:${event.id}`,
+      messageId: event.subject.id,
+      eventPosition: event.position,
+    }, { operationKey: "record-message" });
   },
+});
 
-  process: async (event, deps: ProcessorDeps) => {
-    const { db, thread, context } = deps;
-
-    // Your custom logic
-    const content = event.payload.content;
-    const isOk = await moderateContent(content);
-
-    if (!isOk) {
-      await db.ops.mutate.messages.create(
-        {
-          threadId: event.threadId,
-          senderType: "system",
-          senderId: "moderator",
-          content: "This message was flagged.",
-          metadata: { causationId: event.id },
-        },
-        context.namespace,
-        {
-          traceId: event.traceId,
-          causationId: event.id,
-        },
-      );
-    }
-
-    return {};
+export default definePlugin({
+  manifest: {
+    id: "@acme/audit",
+    version: "1.0.0",
+    provides: { processors: [processor.id] },
   },
-};
-
-export default processor;
+  resources: { processors: [processor] },
+});
 ```
 
-## ProcessorDeps
+## Semantics
 
-| Field     | Type        | Description                                   |
-| --------- | ----------- | --------------------------------------------- |
-| `db`      | CopilotzDb  | Database instance with full ops access        |
-| `thread`  | Thread      | Current conversation thread                   |
-| `context` | ChatContext | Full pipeline context (agents, tools, config) |
+- Use `delivery: "durable"` for guaranteed work and `"live"` for ephemeral
+  observations such as `text.delta` or `audio.delta`.
+- Different processor IDs run independently. Reusing the same ID in a later
+  plugin or top-level resource intentionally overrides the earlier resource.
+- Put dynamic checks, network calls, and reads inside `handle()`.
+- Durable execution is at-least-once. Use scoped capabilities and stable
+  `operationKey` values so built-in mutations deduplicate retries.
+- External side effects receive `context.idempotencyKey`; propagate it to the
+  remote system whenever possible.
+- Throw to retry/fail the delivery. Returning normally succeeds only this
+  processor's delivery.
 
-## Event Types
-
-Common lifecycle events:
-
-- `message.created` — Message aggregate created
-- `llm_attempt.created` — LLM provider attempt started
-- `llm_attempt.completed` — LLM provider attempt finished
-- `llm_attempt.failed` — LLM provider attempt failed or recovered
-- `tool_execution.created` — Tool invocation started
-- `tool_execution.completed` — Tool invocation finished
-- `asset.created` — Asset node created
-
-Live uppercase events such as `TOKEN`, `TOOL_CALL`, `TOOL_RESULT`, and
-`LLM_RESULT` are stream projections for clients.
-
-## Priority
-
-Export a `priority` number (higher runs first):
-
-```typescript
-export const priority = 10; // Runs before priority 0 (default)
-```
-
-This sorting applies within processors discovered from the resource filesystem.
-The final chain places file-loaded user processors before inline config
-processors and bundled processors. Inline processors preserve array order and
-are not globally re-sorted by their `priority` fields.
-
-## Claiming and swallowing
-
-For the compatibility `producedEvents` contract:
-
-- Return `undefined` or `void` to continue to the next processor.
-- Return `{ producedEvents: [...] }` to enqueue new events and skip the rest of
-  the chain.
-- Return `{ producedEvents: [] }` to skip the rest of the chain without
-  enqueueing anything.
-
-This overrides downstream handling, not the original durable fact. The input
-queue row remains and is normally completed; produced events are separate queue
-rows. Swallowing does not undo an already-committed domain mutation. Public
-stream events are also emitted before processor execution, so swallowing cannot
-retract an event already delivered to a client.
-
-## Notes
-
-- Processors are loaded from `resources/processors/` automatically
-- Multiple processors can handle the same event type
-- Use `ops.mutate.*` for durable state changes and outbox facts
-- Return `producedEvents` only for legacy compatibility or deliberate stream
-  projections
+Processor context exposes scoped conversation, collections, relations, content,
+events, LLM attempts, tool executions, schedules, knowledge, and resources. It
+does not expose raw graph writes or SQL. Post-write behavior belongs here;
+collection hooks are only for `beforeCreate`, `beforeUpdate`, and `beforeDelete`
+validation/transformation.

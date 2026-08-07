@@ -1,106 +1,57 @@
 ---
 name: create-tool
-description: Create a custom tool with config and execute files for Copilotz agents.
+description: Define an agent workflow tool as a plugin resource.
 allowed-tools: [read_file, write_file, list_directory]
-tags: [framework, tool]
+tags: [framework, tool, plugin]
 ---
 
 # Create Tool
 
-Create a custom tool that agents can invoke.
+Tools are logical plugin resources. Their implementation executes inside the
+worker with a workflow-owned, tenant-scoped context.
 
-## Directory Structure
+```ts
+import { definePlugin } from "jsr:@copilotz/copilotz@3/plugins";
+import type {
+  WorkflowTool,
+  WorkflowToolExecutionContext,
+} from "jsr:@copilotz/copilotz@3/workflows";
 
-```
-resources/tools/{tool-name}/
-  config.ts     # Required: tool definition (schema, description)
-  execute.ts    # Required: tool implementation
-```
-
-## Step 1: Create config.ts
-
-Define the tool's metadata and input/output schemas.
-
-```typescript
-import type { Tool } from "copilotz";
-
-const config: Omit<Tool, "execute"> = {
-  id: "my-tool",
-  name: "My Tool",
-  description: "What this tool does — be specific, the LLM reads this.",
+const lookupCustomer: WorkflowTool = {
+  id: "lookup_customer",
+  key: "lookup_customer",
+  name: "Lookup customer",
+  description: "Get a customer by stable customer ID.",
   inputSchema: {
     type: "object",
-    properties: {
-      param1: {
-        type: "string",
-        description: "Description of param1",
-      },
-      param2: {
-        type: "number",
-        description: "Description of param2",
-        default: 10,
-      },
-    },
-    required: ["param1"],
+    additionalProperties: false,
+    properties: { id: { type: "string" } },
+    required: ["id"],
   },
-  // Optional: control how tool results appear in chat history
-  historyPolicy: {
-    visibility: "public_status", // "requester_only" | "public_status" | "public"
+  historyPolicy: { visibility: "requester_only" },
+  async execute(raw, context?: WorkflowToolExecutionContext) {
+    if (!context) throw new Error("Event-native tool context is required.");
+    const { id } = raw as { id: string };
+    return await context.collections.customer.get(id);
   },
 };
 
-export default config;
+export default definePlugin({
+  manifest: {
+    id: "@acme/customer-tools",
+    version: "1.0.0",
+    provides: { tools: [lookupCustomer.key] },
+  },
+  resources: { tools: [lookupCustomer] },
+});
 ```
 
-## Step 2: Create execute.ts
+The context includes namespace, correlation and idempotency IDs, execution
+identity, agent/team resources, scoped collections, content resolution,
+`AbortSignal` through `context.processor.signal`, and cancellation hooks. It
+does not expose unrestricted SQL.
 
-Implement the tool logic. The function receives input params and a context
-object.
-
-```typescript
-import type { ToolExecutionContext } from "copilotz";
-
-interface Input {
-  param1: string;
-  param2?: number;
-}
-
-export default async function execute(
-  input: Input,
-  context: ToolExecutionContext,
-): Promise<unknown> {
-  const { param1, param2 = 10 } = input;
-  const { threadId, namespace, db } = context;
-
-  // Your implementation here
-  const result = await doSomething(param1, param2);
-
-  return { success: true, data: result };
-}
-```
-
-## Context Object
-
-The `ToolExecutionContext` provides:
-
-| Field       | Type       | Description                          |
-| ----------- | ---------- | ------------------------------------ |
-| `threadId`  | string     | Current conversation thread          |
-| `namespace` | string     | Active namespace for multi-tenancy   |
-| `db`        | CopilotzDb | Database instance                    |
-| `senderId`  | string     | Agent or user who triggered the tool |
-| `agents`    | Agent[]    | Available agents                     |
-
-## History Policy
-
-Controls how tool calls and results appear in chat history for other agents:
-
-- `requester_only`: Only the calling agent sees results
-- `public_status`: Other agents see tool name and status only (default)
-- `public`: All agents see full input and output
-
-## Notes
-
-- The directory name becomes the tool's `id` by default
-- Agents access tools via `allowedTools: ["my-tool"]`
-- Tool is auto-loaded when `resources.path` is set
+For external mutations, propagate `context.idempotencyKey`. Use canonical
+content/assets for large inputs or results. Agent access is controlled by
+`allowedTools`; `undefined` allows all composed tools, while an empty/null list
+allows none.

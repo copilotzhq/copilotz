@@ -1,75 +1,67 @@
 ---
 name: configure-mcp
-description: Add an MCP (Model Context Protocol) server integration to provide tools to agents.
+description: Add MCP server resources and explicitly inject a host transport.
 allowed-tools: [read_file, write_file]
-tags: [framework, mcp]
+tags: [framework, mcp, plugin, adapter]
 ---
 
-# Configure MCP Server
+# Configure MCP
 
-MCP servers provide additional tools to agents via the Model Context Protocol.
+MCP servers are logical plugin resources. Transport placement belongs to the
+host, so a portable plugin describes a server but does not spawn a process.
 
-## Add to createCopilotz Config
+```ts
+import { definePlugin } from "jsr:@copilotz/copilotz@3/plugins";
+import type { MCPServer } from "jsr:@copilotz/copilotz@3/resources";
 
-```typescript
-const copilotz = await createCopilotz({
-    agents: [...],
-    mcpServers: [{
-        id: "filesystem",
-        name: "File System",
-        transport: {
-            type: "stdio",
-            command: "node",
-            args: ["./mcp-server.js"],
-            env: { ROOT_DIR: "/data" },
-        },
-    }],
-    dbConfig: { url: "..." },
+const filesystem: MCPServer = {
+  id: "filesystem",
+  name: "filesystem",
+  transport: {
+    type: "stdio",
+    command: "node",
+    args: ["./mcp-server.js"],
+  },
+  historyPolicyDefaults: { visibility: "requester_only" },
+};
+
+export const filesystemPlugin = definePlugin({
+  manifest: {
+    id: "@acme/filesystem-mcp",
+    version: "1.0.0",
+    provides: { mcpServers: [filesystem.id] },
+  },
+  resources: { mcpServers: [filesystem] },
 });
 ```
 
-## File-Based Configuration
+## Node, Deno, or Bun stdio host
 
-```
-resources/mcp-servers/{server-name}/
-  config.ts    # MCP server configuration
-```
+```ts
+import { createStdioServerWorkflowToolCatalog } from "jsr:@copilotz/copilotz@3/adapters/stdio";
 
-```typescript
-import type { MCPServer } from "copilotz";
-
-export default {
-  id: "filesystem",
-  name: "File System",
-  transport: {
-    type: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "/data"],
+const app = await createCopilotz({
+  plugins: [filesystemPlugin],
+  core: {
+    text: { toolCatalog: createStdioServerWorkflowToolCatalog() },
   },
-  historyPolicyDefaults: {
-    visibility: "requester_only",
-  },
-  toolPolicies: {
-    read_file: { visibility: "requester_only" },
-    list_directory: {
-      visibility: "public",
-    },
-  },
-} as MCPServer;
+});
 ```
 
-## Transport Types
+The stdio subpath is intentionally host-only. Never import it from browser or
+Cloudflare-compatible core code.
 
-- `stdio`: Communicate via stdin/stdout with a child process
-- `sse`: Connect to an SSE endpoint (for remote MCP servers)
+## Portable or remote host
 
-## Tool Naming
+```ts
+import { createServerWorkflowToolCatalog } from "jsr:@copilotz/copilotz@3/adapters";
 
-MCP tools are exposed as `{serverId}_{toolName}`. Agents access them via
-`allowedTools`.
+const catalog = createServerWorkflowToolCatalog({
+  connectMcp: appOwnedTransport.connect,
+});
+```
 
-## Notes
-
-- MCP tools are auto-discovered from the server at startup
-- Tool policies can override visibility per-tool using either the Copilotz key
-  or original MCP tool name
+The injected connector owns the transport mechanics. Copilotz opens a logical
+connection for discovery/execution and closes connections it opens. Grant
+generated tool keys through each agent's `allowedTools`, and keep credentials in
+the host rather than serialized resource descriptors.

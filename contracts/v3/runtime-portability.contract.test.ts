@@ -1,0 +1,71 @@
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+
+const repositoryRoot = new URL("../../", import.meta.url);
+
+async function source(path: string): Promise<string> {
+  return await Deno.readTextFile(new URL(path, repositoryRoot));
+}
+
+Deno.test("every declared package export resolves to a source file", async () => {
+  const configuration = JSON.parse(await source("deno.json")) as {
+    exports: Record<string, string>;
+  };
+  for (const [subpath, target] of Object.entries(configuration.exports)) {
+    const stat = await Deno.stat(new URL(target, repositoryRoot));
+    assert(stat.isFile, `${subpath} -> ${target}`);
+  }
+});
+
+Deno.test("generic package and adapter entrypoints exclude host-only MCP stdio", async () => {
+  const root = await source("index.ts");
+  const genericAdapters = await source("runtime/adapters/index.ts");
+  const genericCatalog = await source(
+    "runtime/adapters/server-tool-catalog.ts",
+  );
+  const stdioAdapters = await source("runtime/adapters/stdio.ts");
+
+  for (
+    const [name, value] of [
+      ["root", root],
+      ["generic adapters", genericAdapters],
+      ["generic catalog", genericCatalog],
+    ] as const
+  ) {
+    assert(!/from\s+["']node:/.test(value), name);
+    assert(!/\b(?:Deno|Bun|process)\./.test(value), name);
+    assert(!/stdio-mcp|connectStdioMcp/.test(value), name);
+  }
+  assertStringIncludes(stdioAdapters, "connectStdioMcp");
+});
+
+Deno.test("portable smoke contract uses only Web and injected capabilities", async () => {
+  const smoke = await source("contracts/runtime/runtime-neutral-smoke.ts");
+  assert(!/from\s+["']node:/.test(smoke));
+  assert(!/\b(?:Deno|Bun|process)\./.test(smoke));
+  for (
+    const capability of [
+      "ReadableStream",
+      "TextEncoder",
+      "Response",
+      "definePlugin",
+      "defineLlmProviderResource",
+    ]
+  ) assertStringIncludes(smoke, capability);
+});
+
+Deno.test("runtime-neutral Ominipg and Oxian release lines are pinned", async () => {
+  assertStringIncludes(
+    await source("dependencies/ominipg.ts"),
+    "@oxian/ominipg@0.9.0-rc.2",
+  );
+  assertStringIncludes(
+    await source("dependencies/oxian-host.ts"),
+    "@oxian/oxian-js@0.20.0-rc.6",
+  );
+  assertEquals(
+    /@modelcontextprotocol\/sdk@1\.29\.0/.test(
+      await source("dependencies/mcp-client.ts"),
+    ),
+    true,
+  );
+});

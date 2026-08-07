@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { decideRecovery } from "@/runtime/llm/recovery-policy.ts";
+import { decideRecovery } from "./recovery-policy.ts";
 
 const baseState = {
   visibleOutputStarted: false,

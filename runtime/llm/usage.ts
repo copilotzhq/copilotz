@@ -1,4 +1,4 @@
-import type { ProviderUsageUpdate, TokenUsage } from "@/runtime/llm/types.ts";
+import type { ProviderUsageUpdate, TokenUsage } from "./types.ts";
 
 function toNonNegativeInteger(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value)

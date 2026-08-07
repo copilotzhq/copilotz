@@ -5,17 +5,14 @@ import type {
   ProviderFinishReason,
   ProviderUsageUpdate,
   StreamCallback,
-} from "@/runtime/llm/types.ts";
-import {
-  attachLLMStreamDiagnostics,
-  LLMStreamTimeoutError,
-} from "@/runtime/llm/errors.ts";
+} from "./types.ts";
+import { attachLLMStreamDiagnostics, LLMStreamTimeoutError } from "./errors.ts";
 import {
   getLocalStopSequences,
   isStopDebugEnabled,
   processStream,
-} from "@/runtime/llm/utils.ts";
-import { streamPost, type StreamResponse } from "@/runtime/http.ts";
+} from "./utils.ts";
+import { streamPost, type StreamResponse } from "../http.ts";
 
 const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 90_000;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
@@ -100,7 +97,7 @@ export async function runProviderStream(
       : undefined,
   } satisfies ProviderConfig;
 
-  if (isStopDebugEnabled()) {
+  if (isStopDebugEnabled(config)) {
     console.log("[stop-debug] provider request", {
       provider: config.provider,
       model: config.model,

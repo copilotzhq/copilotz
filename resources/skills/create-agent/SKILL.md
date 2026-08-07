@@ -1,106 +1,55 @@
 ---
 name: create-agent
-description: Scaffold a new Copilotz agent with instructions and configuration files.
+description: Define a text/realtime agent as a plugin resource.
 allowed-tools: [read_file, write_file, list_directory, search_files]
-tags: [framework, agent]
+tags: [framework, agent, plugin]
 ---
 
 # Create Agent
 
-Create a new agent in the Copilotz resources directory.
+Agents are ordinary logical resources. Define them in a plugin for reuse or in
+top-level `resources.agents` for an application-local override. Copilotz does
+not infer IDs or scan directories.
 
-## Directory Structure
+```ts
+import { definePlugin } from "jsr:@copilotz/copilotz@3/plugins";
+import type { Agent } from "jsr:@copilotz/copilotz@3/resources";
 
-Each agent lives in `resources/agents/{agent-name}/` with two files:
-
-```
-resources/agents/{agent-name}/
-  instructions.md    # Required: system prompt (markdown)
-  config.ts          # Optional: agent configuration
-```
-
-## Step 1: Create instructions.md
-
-Write the agent's system prompt in markdown. This becomes the agent's
-`instructions` field.
-
-```markdown
-# Agent Name
-
-You are a [role description].
-
-## Guidelines
-
-- Be [tone/style]
-- [Key behavior 1]
-- [Key behavior 2]
-
-## Capabilities
-
-- [What the agent can do]
-```
-
-## Step 2: Create config.ts
-
-Export a default object with agent configuration. The `instructions` field is
-automatically loaded from `instructions.md`.
-
-```typescript
-import type { Agent } from "copilotz";
-
-export default {
-  llmOptions: {
-    provider: "gemini", // "openai", "anthropic", "gemini", "groq", "deepseek", "ollama"
-    model: "gemini-3.1-flash-lite",
-    temperature: 1,
-    maxTokens: 10000,
-    // apiKey: Deno.env.get("OPENAI_KEY"),  // Override env var
-  },
-  allowedTools: ["*"], // Or specific: ["search_knowledge", "http_request"]
-  // allowedAgents: ["other-agent"],  // For multi-agent setups
-  // ragOptions: { mode: "tool", scope: { knowledgeSpaceIds: ["ks-docs"] } },
-} as Agent;
-```
-
-## Key Configuration Options
-
-| Field           | Type             | Description                                         |
-| --------------- | ---------------- | --------------------------------------------------- |
-| `llmOptions`    | object           | LLM provider config (required)                      |
-| `allowedTools`  | string[] \| null | Tool whitelist. `null` = no tools, omit = all tools |
-| `allowedAgents` | string[]         | Which other agents this one can communicate with    |
-| `ragOptions`    | object           | RAG settings: `mode`, `scope`, `entityExtraction`   |
-| `assetOptions`  | object           | Asset generation settings                           |
-| `description`   | string           | Public description (shown in agent listings)        |
-
-## Common Patterns
-
-### Agent with RAG
-
-```typescript
-export default {
-  llmOptions: { provider: "openai", model: "gpt-4o-mini" },
-  allowedTools: ["search_knowledge", "ingest_document"],
-  ragOptions: {
-    mode: "tool",
-    scope: {
-      knowledgeSpaceIds: ["ks-docs", "ks-faq"],
+const support: Agent = {
+  id: "support",
+  name: "Support",
+  role: "Resolve customer questions clearly and safely.",
+  instructions: `
+Use the available tools when they improve accuracy.
+Ask a specialist publicly when their expertise is needed.
+  `.trim(),
+  runtimes: {
+    text: { type: "llm", provider: "openai", model: "gpt-5-mini" },
+    realtime: {
+      type: "realtime",
+      provider: "acme-realtime",
+      voice: "alloy",
     },
   },
-} as Agent;
+  allowedTools: ["lookup_customer", "ask"],
+  allowedAgents: ["billing"],
+};
+
+export default definePlugin({
+  manifest: {
+    id: "@acme/support-agents",
+    version: "1.0.0",
+    provides: { agents: [support.id] },
+  },
+  resources: { agents: [support] },
+});
 ```
 
-### Agent with API access
+`llmOptions` remains shorthand/configuration for `runtimes.text`; runtime
+selection belongs in `runtimes`. Inject API keys and dynamic model policy at the
+application/provider boundary instead of persisting secrets in the agent.
 
-```typescript
-export default {
-  llmOptions: { provider: "anthropic", model: "claude-sonnet-4-5-20241022" },
-  allowedTools: ["http_request", "github_getRepository"],
-} as Agent;
-```
-
-## Notes
-
-- The directory name becomes the agent's `id` and `name` by default
-- `config.ts` fields override auto-derived values
-- Agent is auto-loaded when `resources.path` is set in `createCopilotz`
+The stable agent ID is not the participant ID. A thread contains participant
+records whose `agentId` points to the agent resource. Multi-agent communication
+uses the public `ask` tool and requires target agent participants in the same
+thread.

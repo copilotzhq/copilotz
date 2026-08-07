@@ -121,7 +121,10 @@ async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(buffer);
 }
 
-async function readZipEntry(bytes: Uint8Array, entry: ZipEntry): Promise<Uint8Array> {
+async function readZipEntry(
+  bytes: Uint8Array,
+  entry: ZipEntry,
+): Promise<Uint8Array> {
   const localOffset = entry.localHeaderOffset;
   if (readUInt32(bytes, localOffset) !== LOCAL_FILE_SIGNATURE) {
     throw new Error(`Invalid ZIP local file header for ${entry.name}`);
@@ -163,7 +166,9 @@ function detectSupportedDocumentKind(
   bytes: Uint8Array,
   mime?: string,
 ): SupportedDocumentKind | null {
-  const normalizedMime = typeof mime === "string" ? mime.trim().toLowerCase() : "";
+  const normalizedMime = typeof mime === "string"
+    ? mime.trim().toLowerCase()
+    : "";
   if (normalizedMime === DOCX_MIME) return "docx";
 
   const detected = detectOfficeDocumentMime(bytes);
@@ -178,10 +183,14 @@ function decodeXmlEntities(value: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
-    .replace(/&#x([0-9a-fA-F]+);/g, (_match, hex) =>
-      String.fromCodePoint(Number.parseInt(hex, 16)))
-    .replace(/&#([0-9]+);/g, (_match, dec) =>
-      String.fromCodePoint(Number.parseInt(dec, 10)));
+    .replace(
+      /&#x([0-9a-fA-F]+);/g,
+      (_match, hex) => String.fromCodePoint(Number.parseInt(hex, 16)),
+    )
+    .replace(
+      /&#([0-9]+);/g,
+      (_match, dec) => String.fromCodePoint(Number.parseInt(dec, 10)),
+    );
 }
 
 function stripWordXml(xml: string): string {

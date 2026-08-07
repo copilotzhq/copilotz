@@ -1,19 +1,7 @@
-import type {
-  ChatContentPart,
-  ChatMessage,
-  ProviderConfig,
-} from "@/runtime/llm/types.ts";
-import { resolveModelCatalogEntry } from "@/runtime/llm/model-catalog.ts";
-import { resolveOpenAIApiMode } from "@/runtime/llm/openai-api-mode.ts";
-import {
-  type AssetRef,
-  type AssetStore,
-  bytesToBase64,
-  extractAssetId,
-  isAssetRef,
-  parseDataUrl,
-  toDataUrl,
-} from "@/runtime/storage/assets.ts";
+import type { ChatContentPart, ChatMessage, ProviderConfig } from "./types.ts";
+import { resolveModelCatalogEntry } from "./model-catalog.ts";
+import { resolveOpenAIApiMode } from "./openai-api-mode.ts";
+import { bytesToBase64, parseDataUrl } from "../content/index.ts";
 
 type AdapterAssetSupport = {
   image: boolean;
@@ -164,28 +152,17 @@ function audioFormatFromMime(mime?: string): string | undefined {
   return lower.split("/")[1];
 }
 
-function omittedFileText(
-  reason: string,
-  mime?: string,
-  assetRef?: string,
-): string {
+function omittedFileText(reason: string, mime?: string): string {
   const details = [
     mime ? `mime="${mime}"` : undefined,
-    assetRef && isAssetRef(assetRef)
-      ? `asset_id="${extractAssetId(assetRef)}"`
-      : undefined,
     `reason="${reason}"`,
   ].filter(Boolean).join(" ");
   return `[Attached file omitted from direct LLM input: ${details}]`;
 }
 
-function unavailableAssetText(assetRef: string): string {
-  return `[Attached file unavailable: asset_id="${extractAssetId(assetRef)}"]`;
-}
-
 function dataUrlMime(dataUrl: string): string | undefined {
   const parsed = parseDataUrl(dataUrl);
-  return parsed?.mime;
+  return parsed?.mediaType;
 }
 
 function directDataPart(
@@ -195,7 +172,7 @@ function directDataPart(
   filename?: string,
 ): ChatContentPart[] {
   const parsed = fileData.startsWith("data:") ? parseDataUrl(fileData) : null;
-  const actualMime = mime ?? parsed?.mime;
+  const actualMime = mime ?? parsed?.mediaType;
 
   if (
     isSupportedImageMime(actualMime) && support.image &&
@@ -204,13 +181,13 @@ function directDataPart(
     return [{ type: "image_url", image_url: { url: fileData } }];
   }
 
-  if (parsed && isSupportedAudioMime(parsed.mime) && support.audio) {
+  if (parsed && isSupportedAudioMime(parsed.mediaType) && support.audio) {
     return [{
       type: "input_audio",
       input_audio: {
         data: bytesToBase64(parsed.bytes),
-        ...(audioFormatFromMime(parsed.mime)
-          ? { format: audioFormatFromMime(parsed.mime) }
+        ...(audioFormatFromMime(parsed.mediaType)
+          ? { format: audioFormatFromMime(parsed.mediaType) }
           : {}),
         ...(filename ? { filename } : {}),
       },
@@ -241,94 +218,14 @@ function directDataPart(
   return [{ type: "text", text: omittedFileText(omittedReason, actualMime) }];
 }
 
-async function resolveAssetRefPart(
-  assetRef: AssetRef,
-  kind: "image" | "audio" | "file",
-  support: AdapterAssetSupport,
-  store?: AssetStore,
-  explicitMime?: string,
-  filename?: string,
-): Promise<ChatContentPart[]> {
-  if (!store) {
-    return [{ type: "text", text: unavailableAssetText(assetRef) }];
-  }
-
-  try {
-    const { bytes, mime } = await store.get(extractAssetId(assetRef));
-    const actualMime = mime || explicitMime;
-    if (
-      kind === "image" &&
-      support.image &&
-      isSupportedImageMime(actualMime)
-    ) {
-      return [{
-        type: "image_url",
-        image_url: { url: toDataUrl(bytes, actualMime) },
-      }];
-    }
-    if (
-      kind === "audio" &&
-      support.audio &&
-      isSupportedAudioMime(actualMime)
-    ) {
-      return [{
-        type: "input_audio",
-        input_audio: {
-          data: bytesToBase64(bytes),
-          ...(audioFormatFromMime(actualMime)
-            ? { format: audioFormatFromMime(actualMime) }
-            : {}),
-          ...(filename ? { filename } : {}),
-        },
-      }];
-    }
-    if (kind === "file" && support.file && isSupportedFileMime(actualMime)) {
-      return [{
-        type: "file",
-        file: {
-          file_data: toDataUrl(bytes, actualMime),
-          mime_type: actualMime,
-          ...(filename ? { filename } : {}),
-        },
-      }];
-    }
-
-    // Video attachments arrive as `file` parts; route them to a video part
-    // when the provider can serialize video input (MiniMax-M3).
-    if (kind === "file" && support.video && isSupportedVideoMime(actualMime)) {
-      return [{
-        type: "video",
-        video: {
-          url: toDataUrl(bytes, actualMime),
-          mime_type: actualMime,
-        },
-      }];
-    }
-
-    const omittedReason = isArchiveMime(actualMime)
-      ? "archive_tool_only"
-      : "unsupported_file_type";
-    return [{
-      type: "text",
-      text: omittedFileText(omittedReason, actualMime, assetRef),
-    }];
-  } catch {
-    return [{ type: "text", text: unavailableAssetText(assetRef) }];
-  }
-}
-
-async function materializePart(
+function materializePart(
   part: ChatContentPart,
   support: AdapterAssetSupport,
-  store?: AssetStore,
-): Promise<ChatContentPart[]> {
+): ChatContentPart[] {
   if (part.type === "text") return [part];
 
   if (part.type === "image_url" && part.image_url?.url) {
     const url = part.image_url.url;
-    if (isAssetRef(url)) {
-      return await resolveAssetRefPart(url, "image", support, store);
-    }
     if (url.startsWith("data:")) {
       const mime = dataUrlMime(url);
       return isSupportedImageMime(mime) && support.image ? [part] : [{
@@ -342,16 +239,6 @@ async function materializePart(
   }
 
   if (part.type === "video" && part.video?.url) {
-    const url = part.video.url;
-    if (isAssetRef(url)) {
-      return await resolveAssetRefPart(
-        url,
-        "file",
-        support,
-        store,
-        part.video.mime_type,
-      );
-    }
     if (support.video) return [part];
     return [{
       type: "text",
@@ -360,17 +247,6 @@ async function materializePart(
   }
 
   if (part.type === "input_audio" && part.input_audio?.data) {
-    const data = part.input_audio.data;
-    if (isAssetRef(data)) {
-      return await resolveAssetRefPart(
-        data,
-        "audio",
-        support,
-        store,
-        undefined,
-        part.input_audio.filename,
-      );
-    }
     return support.audio ? [part] : [{
       type: "text",
       text: omittedFileText(
@@ -384,16 +260,6 @@ async function materializePart(
 
   if (part.type === "file" && part.file?.file_data) {
     const fileData = part.file.file_data;
-    if (isAssetRef(fileData)) {
-      return await resolveAssetRefPart(
-        fileData,
-        "file",
-        support,
-        store,
-        part.file.mime_type,
-        part.file.filename,
-      );
-    }
     if (fileData.startsWith("data:")) {
       return directDataPart(
         fileData,
@@ -414,7 +280,6 @@ async function materializePart(
 export async function materializeAssetRefsForProvider(
   messages: ChatMessage[],
   config: AssetSupportConfig,
-  store?: AssetStore,
 ): Promise<ChatMessage[]> {
   const hasMultimodalParts = messages.some((message) =>
     Array.isArray(message.content) &&
@@ -433,7 +298,7 @@ export async function materializeAssetRefsForProvider(
 
     const parts: ChatContentPart[] = [];
     for (const part of message.content) {
-      const materialized = await materializePart(part, support, store);
+      const materialized = materializePart(part, support);
       const candidates = materialized.map((candidate): ChatContentPart => {
         if (
           part.type !== "text" &&

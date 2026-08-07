@@ -8,6 +8,7 @@ export { default as llm_attempt } from "./llm_attempt.ts";
 export { default as tool_execution } from "./tool_execution.ts";
 export { default as llm_usage } from "./llm_usage.ts";
 export { default as usage } from "./usage.ts";
+export { default as scheduled_job } from "./scheduled_job.ts";
 export { default as memory_space } from "./memory_space.ts";
 export { default as brain_node } from "./brain_node.ts";
 export { default as long_term_memory } from "./long_term_memory.ts";

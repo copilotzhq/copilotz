@@ -691,8 +691,10 @@ function getDatabasePGliteCacheToken(config: DatabaseConfig): string {
 /**
  * Creates or retrieves a database connection for Copilotz.
  *
- * This function manages a global connection cache, so calling it multiple times
- * with the same configuration will return the same database instance.
+ * This function manages a global connection cache for persistent database URLs,
+ * so calling it multiple times with the same configuration will return the same
+ * database instance. In-memory databases are intentionally instance-owned and
+ * are never shared through the cache.
  *
  * @param config - Optional database configuration. Defaults to in-memory PGlite.
  * @returns Promise resolving to a CopilotzDb instance
@@ -754,6 +756,9 @@ export async function createDatabase(
         globalCache.has(cacheKey) ? "[cache-hit]" : "[cache-miss]"
       }`,
     );
+  }
+  if (finalConfig.url === ":memory:") {
+    return await connect(finalConfig, debug, cacheKey);
   }
   if (globalCache.has(cacheKey)) {
     return await globalCache.get(cacheKey)!;

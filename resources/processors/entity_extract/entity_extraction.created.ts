@@ -13,7 +13,6 @@ import type {
   EmbeddingConfig,
   Event,
   EventProcessor,
-  NewEvent,
   ProcessorDeps,
 } from "@/types/index.ts";
 import type { EntityExtractPayload } from "@/database/schemas/index.ts";
@@ -617,6 +616,10 @@ async function confirmMerge(
   }
 }
 
-export default entityExtractProcessor;
+export default {
+  ...entityExtractProcessor,
+  processorId,
+  eventTypes,
+};
 
 export const { shouldProcess, process } = entityExtractProcessor;

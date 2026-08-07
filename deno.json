@@ -50,7 +50,8 @@
   "tasks": {
     "gen:skills": "deno run -A scripts/generate-skill-js.ts",
     "compile:cli": "deno run -A scripts/compile-cli.ts",
-    "test:examples": "deno run -A examples/test-examples.ts"
+    "test:examples": "deno run -A examples/test-examples.ts",
+    "test:v3-contracts": "deno test --allow-all contracts/v3"
   },
   "lock": false
 }

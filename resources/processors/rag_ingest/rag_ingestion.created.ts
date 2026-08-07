@@ -425,6 +425,10 @@ async function createErrorResponse(
   };
 }
 
-export default ragIngestProcessor;
+export default {
+  ...ragIngestProcessor,
+  processorId,
+  eventTypes,
+};
 
 export const { shouldProcess, process } = ragIngestProcessor;

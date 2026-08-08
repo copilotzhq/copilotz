@@ -1,15 +1,11 @@
-import type {
-  CostBreakdown,
-  ProviderConfig,
-  TokenUsage,
-} from "@/runtime/llm/types.ts";
+import type { CostBreakdown, ProviderConfig, TokenUsage } from "./types.ts";
 import {
   __resetModelCatalogCacheForTests,
   type ModelCatalogEntry,
   resolveModelCatalogCandidates,
   resolveModelCatalogEntry,
-} from "@/runtime/llm/model-catalog.ts";
-import { inclusiveInputTokensFromRawUsage } from "@/runtime/llm/usage.ts";
+} from "./model-catalog.ts";
+import { inclusiveInputTokensFromRawUsage } from "./usage.ts";
 
 const WARN_TTL_MS = 5 * 60 * 1000;
 const warningTimestamps = new Map<string, number>();

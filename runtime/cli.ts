@@ -1,37 +1,86 @@
-import { createInterface, type Interface } from "node:readline/promises";
-import { stdin, stdout } from "node:process";
+import type {
+  EventNativeRunHandle,
+  EventNativeRunInput,
+} from "./attachments/index.ts";
+import type { ContentInput } from "./content/index.ts";
+import type { CopilotzEvent } from "./events/index.ts";
 
-import type { Event, MessagePayload } from "@/types/index.ts";
+export type CliPerformRun = (
+  input: EventNativeRunInput,
+) => Promise<EventNativeRunHandle>;
 
-type CliPerformRun = (
-  message: MessagePayload,
-  options?: { stream?: boolean; ackMode?: "immediate" | "onComplete" },
-) => Promise<{
-  threadId: string;
-  events: AsyncIterable<unknown>;
-  done: Promise<void>;
-}>;
+export type CliRunScope = Readonly<
+  Omit<
+    EventNativeRunInput,
+    "content" | "messageId" | "correlationId" | "deduplicationId"
+  >
+>;
 
-type CliAgent = {
+export type CliAgent = Readonly<{
   id?: string;
   name: string;
   role?: string | null;
-};
+}>;
+
+export type CliTool = Readonly<{
+  id?: string;
+  key?: string;
+  name?: string;
+}>;
+
+export type CliSkill = Readonly<{
+  name: string;
+  description?: string;
+}>;
+
+export type CliInspection = Readonly<{
+  agent?: CliAgent;
+  agents: readonly CliAgent[];
+  tools: readonly CliTool[];
+  skills: readonly CliSkill[];
+}>;
+
+export type CliInspect = () => CliInspection | Promise<CliInspection>;
+
+/** Host-owned input/output capability. Core never imports a terminal runtime. */
+export type InteractiveCliIo = Readonly<{
+  question(prompt: string): Promise<string>;
+  write(value: string): void;
+  close(): void;
+  clear?(): void;
+  cwd?(): string;
+}>;
 
 export interface InteractiveCliOptions {
+  io: InteractiveCliIo;
   performRun: CliPerformRun;
-  initialMessage?:
-    | (MessagePayload & {
-      banner?: string | null;
-      quitCommand?: string;
-      threadExternalId?: string;
-    })
-    | string;
-  agents?: CliAgent[];
-  tools?: Array<{ id?: string; key?: string; name?: string }>;
+  /** Existing thread and participant scope used for every prompt. */
+  scope: CliRunScope;
+  initialContent?: ContentInput | readonly ContentInput[];
+  /** Canonical effective-capability lookup used by terminal commands. */
+  inspect?: CliInspect;
   banner?: string | null;
+  quitCommand?: string;
   cwd?: string;
+  now?: () => Date;
 }
+
+export type InteractiveCliHandle = Readonly<{
+  stop(): void;
+  closed: Promise<void>;
+}>;
+
+const COMMANDS = [
+  "/help",
+  "/agents",
+  "/tools",
+  "/skills",
+  "/history",
+  "/status",
+  "/compose",
+  "/clear",
+  "/exit",
+] as const;
 
 const ANSI = {
   reset: "\x1b[0m",
@@ -40,204 +89,291 @@ const ANSI = {
   yellow: "\x1b[33m",
   green: "\x1b[32m",
   magenta: "\x1b[35m",
-  red: "\x1b[31m",
   bold: "\x1b[1m",
 };
 
 function color(text: string, tone: keyof typeof ANSI): string {
-  return `${ANSI[tone]}${text}${ANSI.reset}`;
+  return ANSI[tone] + text + ANSI.reset;
 }
 
-function safeJson(value: unknown, max = 140): string {
-  let rendered = "";
-  try {
-    rendered = typeof value === "string" ? value : JSON.stringify(value);
-  } catch {
-    rendered = String(value);
-  }
-  return rendered.length > max ? `${rendered.slice(0, max - 3)}...` : rendered;
+function eventPayload(event: CopilotzEvent): Record<string, unknown> {
+  return event.payload && typeof event.payload === "object" &&
+      !Array.isArray(event.payload)
+    ? event.payload as Record<string, unknown>
+    : {};
 }
 
-function extractToolName(event: Event): string {
-  const payload = event.payload as Record<string, unknown> | null;
-  const toolCall = payload?.toolCall as Record<string, unknown> | undefined;
-  const tool = toolCall?.tool as Record<string, unknown> | undefined;
-  return typeof tool?.name === "string"
-    ? tool.name
-    : typeof tool?.id === "string"
-    ? tool.id
-    : "tool";
+function eventAgentName(event: CopilotzEvent): string {
+  const agent = eventPayload(event).agent;
+  return agent && typeof agent === "object" && !Array.isArray(agent) &&
+      typeof (agent as Record<string, unknown>).name === "string"
+    ? String((agent as Record<string, unknown>).name)
+    : "assistant";
 }
 
-function extractToolArgs(event: Event): string {
-  const payload = event.payload as Record<string, unknown> | null;
-  const toolCall = payload?.toolCall as Record<string, unknown> | undefined;
-  return safeJson(toolCall?.args ?? {});
+function threadLabel(scope: CliRunScope): string {
+  if (typeof scope.thread === "string") return scope.thread;
+  return scope.thread.externalId ?? scope.thread.id;
 }
 
-class CopilotzInteractiveCli {
-  private readonly rl: Interface;
-  private stopped = false;
-  private readonly history: Array<
-    { input: string; threadId: string; at: string }
-  > = [];
-  private quitCommand = "quit";
-  private banner: string | null;
-  private threadExternalId = crypto.randomUUID().slice(0, 24);
-  private sessionSender: MessagePayload["sender"] | undefined = {
-    type: "user",
-    name: "user",
-  };
-  private sessionParticipants: string[] | undefined = undefined;
-  private currentAgent = "";
-  private inReasoning = false;
-  private sawVisibleOutput = false;
-  private activeThreadId = "";
+/** Creates the interactive state machine over injected terminal I/O. */
+export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
+  stop(): void;
+  run(): Promise<void>;
+}> {
+  const io = options.io;
+  const now = options.now ?? (() => new Date());
+  const quitCommand = options.quitCommand?.trim().toLowerCase() || "quit";
+  let stopped = false;
+  let ioClosed = false;
+  const history: Array<{ input: string; eventId: string; at: string }> = [];
+  let currentAgent = "";
+  let inReasoning = false;
+  let sawVisibleOutput = false;
+  let activeEventId = "";
+  const renderedToolDrafts = new Set<string>();
 
-  constructor(private readonly options: InteractiveCliOptions) {
-    this.rl = createInterface({
-      input: stdin,
-      output: stdout,
-      terminal: true,
-      historySize: 500,
-      removeHistoryDuplicates: true,
-      completer: (line) => {
-        const commands = [
-          "/help",
-          "/agents",
-          "/tools",
-          "/history",
-          "/status",
-          "/compose",
-          "/clear",
-          "/exit",
-        ];
-        const hits = commands.filter((command) => command.startsWith(line));
-        return [hits.length > 0 ? hits : commands, line];
-      },
+  const printLine = (line: string): void => io.write(line + "\n");
+  const cwd = (): string => options.cwd ?? io.cwd?.() ?? ".";
+  const inspect = async (): Promise<CliInspection> =>
+    await options.inspect?.() ?? Object.freeze({
+      agents: Object.freeze([]),
+      tools: Object.freeze([]),
+      skills: Object.freeze([]),
     });
-    this.banner = options.banner ?? null;
-    this.initializeFromInitialMessage();
-  }
 
-  private initializeFromInitialMessage(): void {
-    const { initialMessage } = this.options;
-    if (!initialMessage || typeof initialMessage === "string") {
+  const stop = (): void => {
+    stopped = true;
+    if (ioClosed) return;
+    ioClosed = true;
+    io.close();
+  };
+
+  const renderSessionHeader = (): void => {
+    printLine([
+      color("Copilotz Interactive Session", "bold"),
+      color("cwd", "dim") + ": " + cwd(),
+      color("thread", "dim") + ": " + threadLabel(options.scope),
+      color("commands", "dim") + ": " + COMMANDS.join(" "),
+      "",
+    ].join("\n"));
+  };
+
+  const printAgents = async (): Promise<void> => {
+    const inspection = await inspect();
+    const currentId = inspection.agent?.id ?? inspection.agent?.name;
+    const agents = [
+      ...(inspection.agent ? [inspection.agent] : []),
+      ...inspection.agents,
+    ].filter((agent, index, values) =>
+      values.findIndex((candidate) =>
+        (candidate.id ?? candidate.name) === (agent.id ?? agent.name)
+      ) === index
+    );
+    if (!agents.length) {
+      printLine(color("No agent capabilities available.", "dim"));
       return;
     }
+    printLine([
+      color("Agents", "bold"),
+      ...agents.map((agent) =>
+        "- " + agent.name +
+        ((agent.id ?? agent.name) === currentId ? " (current)" : "") +
+        (agent.role ? " (" + agent.role + ")" : "") +
+        (agent.id && agent.id !== agent.name ? " [" + agent.id + "]" : "")
+      ),
+    ].join("\n"));
+  };
 
-    if (typeof initialMessage.quitCommand === "string") {
-      this.quitCommand = initialMessage.quitCommand;
-    }
-    if (
-      typeof initialMessage.banner === "string" ||
-      initialMessage.banner === null
-    ) {
-      this.banner = initialMessage.banner;
-    }
-    if (
-      typeof initialMessage.threadExternalId === "string" &&
-      initialMessage.threadExternalId.trim().length > 0
-    ) {
-      this.threadExternalId = initialMessage.threadExternalId;
-    } else if (
-      typeof initialMessage.thread?.externalId === "string" &&
-      initialMessage.thread.externalId.trim().length > 0
-    ) {
-      this.threadExternalId = initialMessage.thread.externalId;
-    }
-
-    if (initialMessage.sender && typeof initialMessage.sender === "object") {
-      this.sessionSender = {
-        id: initialMessage.sender.id ?? undefined,
-        externalId: initialMessage.sender.externalId ?? null,
-        type: initialMessage.sender.type ?? "user",
-        name: initialMessage.sender.name ?? null,
-        identifierType: initialMessage.sender.identifierType ?? undefined,
-        metadata: initialMessage.sender.metadata &&
-            typeof initialMessage.sender.metadata === "object"
-          ? initialMessage.sender.metadata as Record<string, unknown>
-          : null,
-      };
-    }
-
-    if (
-      Array.isArray(initialMessage.thread?.participants) &&
-      initialMessage.thread.participants.length > 0
-    ) {
-      this.sessionParticipants = initialMessage.thread.participants.slice();
-    }
-  }
-
-  stop(): void {
-    this.stopped = true;
-    this.rl.close();
-  }
-
-  async run(): Promise<void> {
-    if (this.banner) {
-      this.printLine(this.banner);
-    }
-    this.renderSessionHeader();
-
-    const { initialMessage } = this.options;
-    if (
-      typeof initialMessage === "string" && initialMessage.trim().length > 0
-    ) {
-      await this.send(initialMessage);
-    } else if (initialMessage && typeof initialMessage === "object") {
-      const {
-        banner: _banner,
-        quitCommand: _quit,
-        threadExternalId: _threadExternalId,
-        ...rest
-      } = initialMessage;
-      if (hasMessagePayload(rest)) {
-        await this.send(rest as MessagePayload);
-      }
-    }
-
-    while (!this.stopped) {
-      const input = (await this.rl.question(color("copilotz> ", "cyan")))
-        .trim();
-      if (!input) continue;
-      if (input.toLowerCase() === this.quitCommand || input === "/exit") {
-        this.printLine(color("Ending session. Goodbye.", "dim"));
-        this.stopped = true;
-        break;
-      }
-      if (input.startsWith("/")) {
-        const handled = await this.handleCommand(input);
-        if (handled) continue;
-      }
-      await this.send(input);
-    }
-
-    this.stop();
-  }
-
-  private renderSessionHeader(): void {
+  const printTools = async (): Promise<void> => {
+    const tools = (await inspect()).tools;
     const lines = [
-      color("Copilotz Interactive Session", "bold"),
-      `${color("cwd", "dim")}: ${this.options.cwd ?? Deno.cwd()}`,
-      `${color("thread", "dim")}: ${this.threadExternalId}`,
-      `${
-        color("commands", "dim")
-      }: /help /agents /tools /history /status /compose /clear /exit`,
-      "",
+      color("Tools", "bold"),
+      "Available tools: " + tools.length,
+      ...tools.slice(0, 30).map((tool) =>
+        "- " + (tool.key ?? tool.id ?? tool.name ?? "tool")
+      ),
     ];
-    this.printLine(lines.join("\n"));
-  }
+    if (tools.length > 30) {
+      lines.push("- ...and " + (tools.length - 30) + " more");
+    }
+    printLine(lines.join("\n"));
+  };
 
-  private async handleCommand(commandLine: string): Promise<boolean> {
-    const [command] = commandLine.split(/\s+/, 1);
+  const printSkills = async (): Promise<void> => {
+    const skills = (await inspect()).skills;
+    if (!skills.length) {
+      printLine(color("No skills available.", "dim"));
+      return;
+    }
+    printLine([
+      color("Skills", "bold"),
+      ...skills.map((skill) =>
+        "- " + skill.name +
+        (skill.description ? ": " + skill.description : "")
+      ),
+    ].join("\n"));
+  };
+
+  const printHistory = (): void => {
+    if (!history.length) {
+      printLine(color("No prompts sent yet.", "dim"));
+      return;
+    }
+    printLine([
+      color("Recent Prompts", "bold"),
+      ...history.slice(-10).map((entry, index) =>
+        (index + 1) + ". [" + entry.at + "] " + entry.input
+      ),
+    ].join("\n"));
+  };
+
+  const printStatus = async (): Promise<void> => {
+    const inspection = await inspect();
+    printLine([
+      color("Session Status", "bold"),
+      "cwd: " + cwd(),
+      "namespace: " + options.scope.namespace,
+      "thread: " + threadLabel(options.scope),
+      "last event id: " + (activeEventId || "(none yet)"),
+      "history entries: " + history.length,
+      "available agents: " + inspection.agents.length,
+      "available tools: " + inspection.tools.length,
+      "available skills: " + inspection.skills.length,
+    ].join("\n"));
+  };
+
+  const composeMessage = async (): Promise<string | null> => {
+    printLine(color(
+      "Compose mode. Enter /send on its own line to submit or /cancel to abort.",
+      "dim",
+    ));
+    const lines: string[] = [];
+    while (!stopped) {
+      const line = await io.question(color("... ", "magenta"));
+      if (line === "/cancel") {
+        printLine(color("Compose cancelled.", "dim"));
+        return null;
+      }
+      if (line === "/send") return lines.join("\n").trim();
+      lines.push(line);
+    }
+    return null;
+  };
+
+  const resetRenderState = (): void => {
+    currentAgent = "";
+    inReasoning = false;
+    sawVisibleOutput = false;
+    renderedToolDrafts.clear();
+  };
+
+  const renderDelta = (event: CopilotzEvent): void => {
+    const payload = eventPayload(event);
+    const agentName = eventAgentName(event);
+    const text = typeof payload.text === "string" ? payload.text : "";
+    const isReasoning = event.type === "reasoning.delta";
+    if (currentAgent !== agentName) {
+      io.write("\n" + color("assistant " + agentName, "green") + "\n");
+      currentAgent = agentName;
+      inReasoning = false;
+    }
+    if (isReasoning && !inReasoning) {
+      io.write(color("thinking> ", "dim"));
+      inReasoning = true;
+    } else if (!isReasoning && inReasoning) {
+      io.write("\n" + color("answer> ", "cyan"));
+      inReasoning = false;
+    } else if (!isReasoning && !sawVisibleOutput) {
+      io.write(color("answer> ", "cyan"));
+    }
+    if (!isReasoning) sawVisibleOutput = true;
+    io.write(text);
+  };
+
+  const renderToolCall = (event: CopilotzEvent): void => {
+    const payload = eventPayload(event);
+    const phase = typeof payload.phase === "string" ? payload.phase : "";
+    if (phase === "delta" || phase === "discarded") return;
+
+    const name = typeof payload.toolName === "string"
+      ? payload.toolName
+      : typeof payload.name === "string"
+      ? payload.name
+      : typeof payload.tool === "string"
+      ? payload.tool
+      : "tool";
+    const draftId = typeof payload.draftId === "string"
+      ? payload.draftId
+      : typeof payload.toolCallId === "string"
+      ? payload.toolCallId
+      : typeof payload.providerAttemptId === "string" &&
+          typeof payload.callIndex === "number"
+      ? `${payload.providerAttemptId}:${payload.callIndex}`
+      : "";
+    if (draftId && renderedToolDrafts.has(draftId)) return;
+    if (draftId) renderedToolDrafts.add(draftId);
+
+    if (inReasoning || sawVisibleOutput) io.write("\n");
+    inReasoning = false;
+    sawVisibleOutput = false;
+    printLine(color("tool>", "yellow") + " " + name);
+  };
+
+  const renderEvent = (event: CopilotzEvent): void => {
+    if (event.type === "text.delta" || event.type === "reasoning.delta") {
+      renderDelta(event);
+      return;
+    }
+    if (event.type === "tool_call.delta") {
+      renderToolCall(event);
+      return;
+    }
+    if (event.type === "llm_attempt.created") {
+      printLine(color("thinking… " + eventAgentName(event), "dim"));
+      return;
+    }
+    if (event.type === "tool_execution.failed") {
+      printLine(color("tool execution failed", "yellow"));
+    }
+  };
+
+  const send = async (
+    content: ContentInput | readonly ContentInput[],
+    historyLabel?: string,
+  ): Promise<void> => {
+    const label = historyLabel ??
+      (typeof content === "string"
+        ? content.replace(/\s+/g, " ").trim()
+        : "[rich content]");
+    resetRenderState();
+    printLine("");
+    const handle = await options.performRun({
+      ...options.scope,
+      content,
+    });
+    activeEventId = handle.eventId;
+    history.push({
+      input: label,
+      at: now().toISOString(),
+      eventId: handle.eventId,
+    });
+    for await (const event of handle.events) renderEvent(event);
+    await handle.done;
+    if (inReasoning || sawVisibleOutput) io.write("\n");
+    printLine(color("─".repeat(60), "dim"));
+  };
+
+  const handleCommand = async (line: string): Promise<boolean> => {
+    const [command] = line.split(/\s+/, 1);
     switch (command) {
       case "/help":
-        this.printLine([
+        printLine([
           color("Commands", "bold"),
           "/help       show this help",
-          "/agents     list loaded agents",
+          "/agents     list current and available agents",
           "/tools      summarize available tools",
+          "/skills     list available skills",
           "/history    show recent prompts from this session",
           "/status     show current session info",
           "/compose    enter multiline compose mode",
@@ -246,285 +382,71 @@ class CopilotzInteractiveCli {
         ].join("\n"));
         return true;
       case "/agents":
-        this.printAgents();
+        await printAgents();
         return true;
       case "/tools":
-        this.printTools();
+        await printTools();
+        return true;
+      case "/skills":
+        await printSkills();
         return true;
       case "/history":
-        this.printHistory();
+        printHistory();
         return true;
       case "/status":
-        this.printStatus();
+        await printStatus();
         return true;
       case "/compose": {
-        const composed = await this.composeMessage();
-        if (composed) {
-          await this.send(composed);
-        }
+        const composed = await composeMessage();
+        if (composed) await send(composed);
         return true;
       }
       case "/clear":
-        stdout.write("\x1bc");
-        this.renderSessionHeader();
+        if (io.clear) io.clear();
+        else io.write("\x1bc");
+        renderSessionHeader();
         return true;
       default:
         return false;
     }
-  }
-
-  private printAgents(): void {
-    const agents = this.options.agents ?? [];
-    if (agents.length === 0) {
-      this.printLine(color("No agents loaded.", "dim"));
-      return;
-    }
-    const lines = [
-      color("Agents", "bold"),
-      ...agents.map((agent) =>
-        `- ${agent.name}${agent.role ? ` (${agent.role})` : ""}${
-          agent.id && agent.id !== agent.name ? ` [${agent.id}]` : ""
-        }`
-      ),
-    ];
-    this.printLine(lines.join("\n"));
-  }
-
-  private printTools(): void {
-    const explicitTools = this.options.tools ?? [];
-    const lines = [
-      color("Tools", "bold"),
-      `Loaded explicit tools: ${explicitTools.length}`,
-    ];
-    if (explicitTools.length > 0) {
-      lines.push(
-        ...explicitTools.slice(0, 30).map((tool) =>
-          `- ${tool.key ?? tool.id ?? tool.name ?? "tool"}`
-        ),
-      );
-      if (explicitTools.length > 30) {
-        lines.push(`- ...and ${explicitTools.length - 30} more`);
-      }
-    }
-    lines.push(
-      color(
-        "Native tools are also available depending on each agent's allowedTools configuration.",
-        "dim",
-      ),
-    );
-    this.printLine(lines.join("\n"));
-  }
-
-  private printHistory(): void {
-    if (this.history.length === 0) {
-      this.printLine(color("No prompts sent yet.", "dim"));
-      return;
-    }
-    const lines = [
-      color("Recent Prompts", "bold"),
-      ...this.history.slice(-10).map((entry, index) =>
-        `${index + 1}. [${entry.at}] ${entry.input}`
-      ),
-    ];
-    this.printLine(lines.join("\n"));
-  }
-
-  private printStatus(): void {
-    const lines = [
-      color("Session Status", "bold"),
-      `cwd: ${this.options.cwd ?? Deno.cwd()}`,
-      `thread external id: ${this.threadExternalId}`,
-      `last thread id: ${this.activeThreadId || "(none yet)"}`,
-      `history entries: ${this.history.length}`,
-      `loaded agents: ${(this.options.agents ?? []).length}`,
-    ];
-    this.printLine(lines.join("\n"));
-  }
-
-  private async composeMessage(): Promise<string | null> {
-    this.printLine(
-      color(
-        "Compose mode. Enter /send on its own line to submit or /cancel to abort.",
-        "dim",
-      ),
-    );
-    const lines: string[] = [];
-    while (!this.stopped) {
-      const line = await this.rl.question(color("... ", "magenta"));
-      if (line === "/cancel") {
-        this.printLine(color("Compose cancelled.", "dim"));
-        return null;
-      }
-      if (line === "/send") {
-        return lines.join("\n").trim();
-      }
-      lines.push(line);
-    }
-    return null;
-  }
-
-  private buildOutboundMessage(
-    message: string | MessagePayload,
-  ): MessagePayload {
-    if (typeof message === "string") {
-      return {
-        content: message,
-        sender: this.sessionSender ?? { type: "user", name: "user" },
-        thread: this.sessionParticipants
-          ? {
-            externalId: this.threadExternalId,
-            participants: this.sessionParticipants,
-          }
-          : { externalId: this.threadExternalId },
-      };
-    }
-
-    const participants = Array.isArray(message.thread?.participants) &&
-        message.thread.participants.length > 0
-      ? message.thread.participants
-      : this.sessionParticipants;
-
-    return {
-      ...message,
-      sender: message.sender ?? this.sessionSender ??
-        { type: "user", name: "user" },
-      thread: {
-        ...(message.thread ?? {}),
-        externalId: this.threadExternalId,
-        ...(participants ? { participants } : {}),
-      },
-    };
-  }
-
-  private resetRenderState(): void {
-    this.currentAgent = "";
-    this.inReasoning = false;
-    this.sawVisibleOutput = false;
-  }
-
-  private renderToken(event: Event): void {
-    const payload = event.payload as {
-      token?: string;
-      isComplete?: boolean;
-      isReasoning?: boolean;
-      agent?: { name?: string | null };
-    };
-    const agentName = payload.agent?.name ?? "assistant";
-    const token = payload.token ?? "";
-    const isReasoning = Boolean(payload.isReasoning);
-    const isComplete = Boolean(payload.isComplete);
-
-    if (isComplete) {
-      if (this.inReasoning) {
-        stdout.write("\n");
-      }
-      if (this.sawVisibleOutput) {
-        stdout.write("\n");
-      }
-      this.inReasoning = false;
-      return;
-    }
-
-    if (this.currentAgent !== agentName) {
-      stdout.write(`\n${color(`assistant ${agentName}`, "green")}\n`);
-      this.currentAgent = agentName;
-      this.inReasoning = false;
-    }
-
-    if (isReasoning && !this.inReasoning) {
-      stdout.write(color("thinking> ", "dim"));
-      this.inReasoning = true;
-    } else if (!isReasoning && this.inReasoning) {
-      stdout.write(`\n${color("answer> ", "cyan")}`);
-      this.inReasoning = false;
-    } else if (!isReasoning && !this.sawVisibleOutput) {
-      stdout.write(color("answer> ", "cyan"));
-    }
-
-    if (!isReasoning) {
-      this.sawVisibleOutput = true;
-    }
-    stdout.write(token);
-  }
-
-  private renderEvent(event: Event): void {
-    if (event.type === "TOKEN") {
-      this.renderToken(event);
-      return;
-    }
-
-    if (event.type === "LLM_CALL") {
-      const payload = event.payload as Record<string, unknown> | null;
-      const agent = payload?.agent as Record<string, unknown> | undefined;
-      const agentName = typeof agent?.name === "string"
-        ? agent.name
-        : "assistant";
-      this.printLine(color(`thinking… ${agentName}`, "dim"));
-      return;
-    }
-
-    if (event.type === "TOOL_CALL") {
-      this.printLine(
-        `${color("tool>", "yellow")} ${extractToolName(event)} ${
-          color(extractToolArgs(event), "dim")
-        }`,
-      );
-      return;
-    }
-  }
-
-  private async send(message: string | MessagePayload): Promise<void> {
-    const outbound = this.buildOutboundMessage(message);
-    const text = typeof outbound.content === "string"
-      ? outbound.content.replace(/\s+/g, " ").trim()
-      : "[non-text message]";
-    this.history.push({
-      input: text,
-      at: new Date().toISOString(),
-      threadId: this.activeThreadId,
-    });
-
-    this.resetRenderState();
-    this.printLine("");
-
-    const handle = await this.options.performRun(
-      outbound,
-      { stream: true, ackMode: "onComplete" },
-    );
-    this.activeThreadId = handle.threadId;
-    this.history[this.history.length - 1]!.threadId = handle.threadId;
-
-    for await (const event of handle.events) {
-      this.renderEvent(event as Event);
-    }
-    await handle.done;
-    this.printLine(color("─".repeat(60), "dim"));
-  }
-
-  private printLine(line: string): void {
-    stdout.write(`${line}\n`);
-  }
-}
-
-function hasMessagePayload(value: Record<string, unknown>): boolean {
-  if (typeof value.content === "string" && value.content.trim().length > 0) {
-    return true;
-  }
-  if (Array.isArray(value.content) && value.content.length > 0) return true;
-  if (Array.isArray(value.toolCalls) && value.toolCalls.length > 0) return true;
-  if (Array.isArray(value.attachments) && value.attachments.length > 0) {
-    return true;
-  }
-  return false;
-}
-
-export function startInteractiveCli(options: InteractiveCliOptions): {
-  stop: () => void;
-  closed: Promise<void>;
-} {
-  const cli = new CopilotzInteractiveCli(options);
-  return {
-    stop: () => cli.stop(),
-    closed: cli.run(),
   };
+
+  const run = async (): Promise<void> => {
+    try {
+      if (options.banner) printLine(options.banner);
+      renderSessionHeader();
+      if (options.initialContent !== undefined) {
+        await send(options.initialContent, "[initial content]");
+      }
+      while (!stopped) {
+        let answer: string;
+        try {
+          answer = await io.question(color("copilotz> ", "cyan"));
+        } catch (error) {
+          if (stopped) break;
+          throw error;
+        }
+        const input = answer.trim();
+        if (!input) continue;
+        if (input.toLowerCase() === quitCommand || input === "/exit") {
+          printLine(color("Ending session. Goodbye.", "dim"));
+          stopped = true;
+          break;
+        }
+        if (input.startsWith("/") && await handleCommand(input)) continue;
+        await send(input);
+      }
+    } finally {
+      stop();
+    }
+  };
+
+  return Object.freeze({ stop, run });
+}
+
+export function startInteractiveCli(
+  options: InteractiveCliOptions,
+): InteractiveCliHandle {
+  const cli = createInteractiveCli(options);
+  return Object.freeze({ stop: cli.stop, closed: cli.run() });
 }

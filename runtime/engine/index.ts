@@ -1,0 +1,30 @@
+export { createCopilotzProcessorCapabilities } from "./context.ts";
+export { createCopilotzEngine } from "./engine.ts";
+export type {
+  CopilotzCapabilityBase,
+  CopilotzCapabilitySource,
+  CopilotzEngine,
+  CopilotzEngineAttachmentOptions,
+  CopilotzEngineDispatchReport,
+  CopilotzEngineExecutionOptions,
+  CopilotzEngineMaintenanceResult,
+  CopilotzEnginePublishAssetInput,
+  CopilotzLiveProcessorContext,
+  CopilotzMutationIdentityFactory,
+  CopilotzProcessorCapabilities,
+  CopilotzProcessorContext,
+  CreateCopilotzEngineOptions,
+  CreateCopilotzProcessorCapabilitiesOptions,
+  EphemeralEventInput,
+  ScopedContent,
+  ScopedConversation,
+  ScopedEphemeralEventInput,
+  ScopedEvents,
+  ScopedEventWaitOptions,
+  ScopedLlmAttempts,
+  ScopedMutationOptions,
+  ScopedPluginResources,
+  ScopedRelations,
+  ScopedToolExecutions,
+} from "./types.ts";
+export type { ScopedKnowledge } from "../knowledge/index.ts";

@@ -3,7 +3,7 @@ import type {
   ProviderErrorDetails,
   ProviderFallbackReason,
   ProviderName,
-} from "@/runtime/llm/types.ts";
+} from "./types.ts";
 
 export type LLMProviderAttempt = {
   provider: ProviderName;

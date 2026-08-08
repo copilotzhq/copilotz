@@ -1,497 +1,164 @@
-```
-╔═════════════════════════════════════════════════════════════════╗
-║                                                                 ║
-║   ██████╗ ██████╗ ██████╗ ██╗██╗      ██████╗ ████████╗███████╗ ║
-║  ██╔════╝██╔═══██╗██╔══██╗██║██║     ██╔═══██╗╚══██╔══╝╚══███╔╝ ║
-║  ██║     ██║   ██║██████╔╝██║██║     ██║   ██║   ██║     ███╔╝  ║
-║  ██║     ██║   ██║██╔═══╝ ██║██║     ██║   ██║   ██║    ███╔╝   ║
-║  ╚██████╗╚██████╔╝██║     ██║███████╗╚██████╔╝   ██║   ███████╗ ║
-║   ╚═════╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝   ╚══════╝ ║
-║                                                                 ║
-╚═════════════════════════════════════════════════════════════════╝
-```
-
 # Copilotz
 
-**The full-stack framework for AI applications.**
+Copilotz v3 is a factory-first framework for durable multi-agent applications.
+It combines graph-native conversation state, immutable semantic events,
+guaranteed processor deliveries, canonical content/assets, and realtime Web
+Streams. Oxian places work; Ominipg persists state and recovery obligations.
 
-LLM wrappers give you chat. Copilotz gives you everything else: persistent
-memory, RAG, tool calling, background jobs, and multi-tenancy — in one
-framework.
-
-Build AI apps, not AI infrastructure.
-
-[![Deno](https://img.shields.io/badge/Deno-2.0+-000?logo=deno)](https://deno.land)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-
----
-
-## The Problem
-
-Building AI features today feels like building websites in 2005.
-
-You start with an LLM wrapper. Then you need memory — so you add Redis. Then RAG
-— so you add a vector database. Then your tool generates an image — now you need
-asset storage and a way to pass it back to the LLM. Then background jobs,
-multi-tenancy, tool calling, handling media, observability... Before you know
-it, you're maintaining infrastructure instead of building your product.
-
-**There's no Rails for AI. No Next.js. Just parts.**
-
-## The Solution
-
-Copilotz is the full-stack framework for AI applications. Everything you need to
-ship production AI, in one package:
-
-| What You Need   | What Copilotz Gives You                                                                    |
-| --------------- | ------------------------------------------------------------------------------------------ |
-| Memory          | Knowledge graph that remembers users, conversations, and entities                          |
-| RAG             | Document ingestion, chunking, embeddings, and semantic search                              |
-| Skills          | SKILL.md-based instructions with progressive disclosure and an importable native assistant |
-| Tools           | 27 native tools + OpenAPI integration + MCP support                                        |
-| Assets          | Automatic extraction, storage, and LLM resolution of images and files                      |
-| Background Jobs | Event queue with persistent workers and custom processors                                  |
-| Multi-tenancy   | Schema isolation + namespace partitioning                                                  |
-| Database        | PostgreSQL (production) or PGLite (development/embedded)                                   |
-| Channels        | Web (SSE), WhatsApp, and Zendesk — import and go                                           |
-| Streaming       | Real-time token streaming with async iterables                                             |
-| Collections     | Persist application-specific data via copiloz native Collections API                       |
-| Usage & Cost    | Provider-native token usage tracking plus optional OpenRouter-based cost estimation        |
-
-**One framework. One dependency. Production-ready.**
-
----
-
-## Quick Start
-
-### Create a New Project
-
-Scaffold a full Copilotz project with API routes, a React chat UI, and
-everything wired up:
-
-```bash
-deno run -Ar jsr:@copilotz/copilotz/create my-app
+```text
+threads + participants
+          │
+    routed events
+          │
+ durable deliveries ── Oxian workers
+          │
+ plugin resources ─── agents, tools, processors, providers, channels…
 ```
 
-Then follow the prompts:
+## Install
 
-```bash
-cd my-app
-# Edit .env with your API keys
-deno task dev           # start the API server
-deno task dev:web       # start the web UI
+```ts
+import { createCopilotz } from "jsr:@copilotz/copilotz@3";
 ```
 
-This uses the [copilotz-starter](https://github.com/copilotzhq/starter) template
--- a minimal but complete reference app with threads, knowledge graph, assets,
-and a chat UI.
+The root package is runtime-neutral. Host capabilities such as MCP stdio,
+filesystem access, subprocesses, CLI terminal I/O, and HTTP mounting live on
+explicit package subpaths.
 
-### Add to an Existing Project
+## Minimal application
 
-```bash
-deno add jsr:@copilotz/copilotz
-```
+```ts
+import { createCopilotz } from "jsr:@copilotz/copilotz@3";
 
-### Interactive Mode (Fastest)
-
-Try Copilotz instantly with an interactive chat:
-
-```typescript
-import { createCopilotz } from "@copilotz/copilotz";
-
+const namespace = "example";
 const copilotz = await createCopilotz({
-  agents: [{
-    id: "assistant",
-    name: "Assistant",
-    role: "assistant",
-    instructions: "You are a helpful assistant. Remember what users tell you.",
-    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
-  }],
-  dbConfig: { url: ":memory:" },
+  namespace,
+  database: { url: ":memory:" },
+  resources: {
+    agents: [{
+      id: "support",
+      name: "Support",
+      role: "Helpful support agent",
+      capabilities: {}, // omission also grants no tools, agents, or skills
+      llmOptions: {
+        provider: "openai",
+        model: "gpt-5-mini",
+        apiKey,
+      },
+    }],
+  },
 });
 
-// Start an interactive REPL — streams responses to stdout
-copilotz.start({ banner: "🤖 Chat with your AI! Type 'quit' to exit.\n" });
-```
-
-Run it: `OPENAI_API_KEY=your-key deno run --allow-net --allow-env chat.ts`
-
-`llmOptions` is persisted as safe `LLMConfig`. If you need to inject secrets or
-runtime-only provider overrides without persisting them in `LLM_CALL` events,
-use `security.resolveLLMRuntimeConfig` in `createCopilotz()`.
-
-### Compile a CLI
-
-Generate and compile a terminal Copilotz app with:
-
-```bash
-deno run -A jsr:@copilotz/copilotz/scripts/compile-cli \
-  --resources ./resources \
-  --imports agents.copilotz \
-  --out ./copilotz-cli
-```
-
-The helper writes a local `scripts/ascii-logo.ts`, generates
-`.copilotz/cli-entry.ts`, defaults PGlite storage to
-`file://~/.copilotz/<namespace>.db`, and builds a `copilotz.start(...)` CLI that
-exits cleanly after `quit`.
-
-For frontend/native desktop packaging with `deno compile` and WebView, see
-[Compile Copilotz Apps with Deno](./docs/playbooks/compile-copilotz-apps.md).
-
-### File-Based Resources
-
-Organize agents, tools, and APIs in a directory structure — no giant config
-objects:
-
-```typescript
-import { createCopilotz } from "@copilotz/copilotz";
-
-const copilotz = await createCopilotz({
-  resources: { path: "./resources" }, // Loads agents/, tools/, apis/ automatically
-  dbConfig: { url: Deno.env.get("DATABASE_URL") },
-});
-```
-
-### Usage and Cost Tracking
-
-Copilotz records provider-native LLM usage when the upstream provider exposes
-it, and can estimate per-call cost using OpenRouter model pricing. Each logical
-run has one stable `llm_attempt` root, with one canonical child node per actual
-provider invocation.
-
-- Cost estimation is enabled by default with `llmOptions.estimateCost !== false`
-- Use `llmOptions.pricingModelId` to override the OpenRouter model id when
-  automatic mapping is not enough
-- Cost is only estimated when usage came from the provider, not from Copilotz's
-  rough fallback token heuristic
-- Child `llm_attempt` nodes store prompt snapshots, partial output, usage, cost,
-  status, errors, and recovery linkage; the root keeps stable stream/result
-  correlation
-- `llm_usage` remains a compatibility projection for admin screens and older
-  integrations during the migration
-
-See the [copilotz-starter](https://github.com/copilotzhq/starter) template for a
-complete example.
-
-### Programmatic Mode
-
-For applications, use `run()` for full control:
-
-```typescript
-import { createCopilotz } from "@copilotz/copilotz";
-
-const copilotz = await createCopilotz({
-  agents: [{
-    id: "assistant",
-    name: "Assistant",
-    role: "assistant",
-    instructions: "You are a helpful assistant with a great memory.",
-    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
-  }],
-  dbConfig: { url: ":memory:" },
+await copilotz.conversation.createThread({
+  namespace,
+  id: "thread-1",
+  participants: [
+    { id: "user-1", externalId: "user-1", participantType: "human" },
+    {
+      id: "agent-support",
+      externalId: "support",
+      participantType: "agent",
+      agentId: "support",
+    },
+  ],
 });
 
-// First conversation
-const result = await copilotz.run({
-  content: "Hi! I'm Alex and I love hiking in the mountains.",
-  sender: { type: "user", name: "Alex" },
+const run = await copilotz.run({
+  thread: "thread-1",
+  participant: "user-1",
+  recipientIds: ["agent-support"],
+  content: "Hello",
 });
-await result.done;
 
-// Later... your AI remembers
-const result2 = await copilotz.run({
-  content: "What do you know about me?",
-  sender: { type: "user", name: "Alex" },
-});
-await result2.done;
-// → "You're Alex, and you love hiking in the mountains!"
-
+for await (const event of run.events) {
+  console.log(event.type, event.correlationId);
+}
+await run.done;
 await copilotz.shutdown();
 ```
 
----
+`run()` is a convenience attachment for one text correlation scope. Long-lived
+and realtime applications use `connect()` and `attachment.send()`; stream input
+is passed once as a `ReadableStream<Uint8Array>` with native backpressure.
 
-## Why Copilotz?
+## Core guarantees
 
-### Memory That Actually Works
+- Public runtime products are frozen records created by factories; architecture
+  services are not classes.
+- Every durable domain mutation atomically commits graph state, one immutable
+  event, and the sparse delivery rows required by matched processors.
+- Delivery is at-least-once. Built-in mutations deduplicate by delivery-derived
+  operation keys, and tools receive an idempotency key.
+- Raw token/audio/future media frames are ephemeral Web Streams. Final
+  transcripts, messages, tools, errors, and stream lifecycle facts are durable.
+- Plugins compose in deterministic order: core, declared plugins, then explicit
+  application resources. Later resources replace earlier resources by type and
+  stable ID.
+- Installed resources do not create ambient agent authority. Exact
+  `capabilities` grants are required; broad access uses explicit
+  `{ all: true }`.
+- Injected Ominipg sessions, Oxian Hypervisors, and dispatchers remain owned by
+  the embedding application.
+- Namespace and schema scope are explicit; no ambient runtime/database context
+  is required.
 
-Most AI frameworks give you chat history. Copilotz gives you a **knowledge
-graph** — users, conversations, documents, and entities all connected. Your AI
-doesn't just remember what was said; it understands relationships.
+## Package map
 
-```typescript
-// Entities are extracted automatically
-await copilotz.run({ content: "I work at Acme Corp as a senior engineer" });
-
-// Later, your AI knows:
-// - User: Alex
-// - Organization: Acme Corp
-// - Role: Senior Engineer
-// - Relationship: Alex works at Acme Corp
-```
-
-### Tools That Do Things
-
-27 built-in tools for file operations, HTTP requests, RAG, agent memory, and
-more. Plus automatic tool generation from OpenAPI specs and MCP servers.
-
-```typescript
-const copilotz = await createCopilotz({
-  agents: [{
-    // ...
-    allowedTools: [
-      "read_file",
-      "write_file",
-      "http_request",
-      "search_knowledge",
-    ],
-  }],
-  apis: [{
-    id: "github",
-    openApiSchema: myOpenApiSchema, // Object or JSON/YAML string
-    auth: { type: "bearer", token: process.env.GITHUB_TOKEN },
-  }],
-});
-```
-
-Tools can also be composed into sequential pipelines. New JSONL lines run in
-parallel, while `|` passes structured output through jq or into another tool:
-
-```xml
-<tool_calls>
-{"name":"extract","arguments":{"source":"crm"}} | {"jq":"{records:.items}"} | {"name":"analyze","arguments":{"mode":"deep"}}
-</tool_calls>
-```
-
-See
-[Chain Tools with Pipelines](./docs/build-guides/chain-tools-with-pipelines.md)
-for merge rules, lifecycle behavior, and a runnable live-model example.
-
-### Multi-Tenant From Day One
-
-Schema-level isolation for hard boundaries. Namespace-level isolation for
-logical partitioning. Your SaaS is ready for customers on day one.
-
-```typescript
-// Each customer gets complete isolation
-await copilotz.run(message, {
-  schema: "tenant_acme", // PostgreSQL schema
-  namespace: "tenant-acme", // Tenant/application partition
-});
-```
-
-### Assets Without the Headache
-
-When your tool generates an image or fetches a file, what happens next? With
-most frameworks, you're on your own. Copilotz automatically extracts assets from
-tool outputs, stores them, and resolves them for vision-capable LLMs.
-
-```typescript
-// Your tool just returns base64 data
-const generateChart = {
-  id: "generate_chart",
-  execute: async ({ data }) => ({
-    mimeType: "image/png",
-    dataBase64: await createChart(data),
-  }),
-};
-
-// Copilotz automatically:
-// 1. Detects the asset in the tool output
-// 2. Stores it (filesystem, S3, or memory)
-// 3. Replaces it with an asset:// reference
-// 4. Resolves it to a data URL for the next LLM call
-// 5. Emits an ASSET_CREATED event for your hooks
-```
-
-Need finer control? Agents can opt out of persisting assets they generate via
-`assetOptions.produce.persistGeneratedAssets = false`, which also sanitizes
-inline base64/data URLs returned by their tool calls before persistence.
-
-### Everything Is a Resource
-
-Agents, tools, processors, LLM providers, embeddings, storage backends — they're
-all resources loaded through the same system. Use presets/imports to decide what
-loads, then override anything you need:
-
-```typescript
-const copilotz = await createCopilotz({
-  resources: {
-    path: "./resources",
-    preset: ["core", "code"],
-    imports: ["channels.whatsapp", "tools.fetch_asset"],
-    filterResources: (resource, type) =>
-      !(type === "tool" && resource.id === "persistent_terminal"),
-  },
-  processors: [{ // custom event processor
-    eventType: "NEW_MESSAGE",
-    shouldProcess: (event) => event.payload.needsApproval,
-    process: async (event, deps) => {
-      // Claim the event and skip remaining processors without enqueueing
-      // follow-up events. The original durable queue row is not deleted.
-      return { producedEvents: [] };
-    },
-  }],
-});
-```
-
-Returning `{ producedEvents: [event, ...] }` instead claims the input and
-enqueues those values as new events. Public events are streamed before processor
-execution, so claiming changes downstream behavior but cannot retract an event
-already delivered to a client.
-
-### Production Infrastructure, Not Prototypes
-
-Event-driven architecture with persistent queues. Background workers for heavy
-processing. Custom processors for your business logic. This is infrastructure
-you'd build anyway — already built.
-
----
-
-## What's Included
-
-### Skills & Native Assistant
-
-SKILL.md files teach agents how to perform framework tasks and execution
-workflows. Progressive disclosure keeps prompts lean — only names and
-descriptions are loaded upfront; full instructions are fetched on-demand. A
-bundled native assistant can be enabled with
-`resources.imports: ["agents.copilotz"]` and uses these skills to help with
-general work and to build Copilotz projects interactively when needed.
-
-### Agents
-
-Multi-agent orchestration with persistent targets, @mentions, loop prevention,
-and inter-agent communication. Agents can remember learnings across
-conversations with persistent memory.
-
-### Collections
-
-Type-safe data storage on top of the knowledge graph with JSON Schema
-validation.
-
-### RAG Pipeline
-
-Document ingestion → chunking → embeddings → semantic search. Works out of the
-box.
-
-### Channels
-
-Pre-built ingress and egress adapters for Web (SSE), WhatsApp Cloud API, Zendesk
-Sunshine, Discord (Interactions), and Telegram (Bot API). The route model is
-`ingress -> runtime -> egress`, so you can keep same-channel flows or mix
-transports like `/channels/web/to/zendesk`.
-
-```typescript
-import { withApp } from "@copilotz/copilotz/server";
-
-const app = withApp(copilotz).app;
-
-await app.handle({
-  resource: "channels",
-  method: "POST",
-  path: ["whatsapp"],
-  body,
-  headers,
-  rawBody,
-});
-```
-
-Config defaults to env vars (`WHATSAPP_*`, `ZENDESK_*`). Built-in adapters are
-also exportable directly:
-
-```typescript
-import {
-  discordEgressAdapter,
-  discordIngressAdapter,
-  telegramEgressAdapter,
-  telegramIngressAdapter,
-  whatsappEgressAdapter,
-  whatsappIngressAdapter,
-  zendeskEgressAdapter,
-  zendeskIngressAdapter,
-} from "@copilotz/copilotz/server/channels";
-```
-
-**WhatsApp**, **Zendesk**, **Discord**, and **Telegram** adapters handle the
-full lifecycle internally — verify the webhook, parse the payload, run the
-agent, and push responses back to the platform API.
-
-Set `COPILOTZ_DEBUG_CHANNELS=1` to trace sanitized WhatsApp egress events and
-Meta Graph API request/response metadata. Tokens, message contents, and full
-recipient phone numbers are not logged.
-
-### Streaming
-
-Real-time token streaming with callbacks and async iterables.
-
-### Assets
-
-Automatic extraction and storage of images, files, and media from tool outputs.
-Seamless resolution for vision LLMs.
-
----
+| Subpath                            | Purpose                                                             |
+| ---------------------------------- | ------------------------------------------------------------------- |
+| `@copilotz/copilotz`               | Normal runtime-neutral application API                              |
+| `/application`, `/engine`          | Assembly and lower-level engine factories                           |
+| `/plugins`, `/resources`           | Plugin composition and logical resource types                       |
+| `/capabilities`                    | Explicit agent grants and canonical introspection                   |
+| `/events`, `/execution`            | Immutable events, deliveries, and Oxian placement                   |
+| `/content`, `/domain`              | Canonical assets and graph-native repositories                      |
+| `/attachments`, `/workflows`       | Text/realtime ingress, LLM/tools, and public agent ask              |
+| `/skills`                          | Optional Open Skill resources and portable disclosure tools         |
+| `/channels`, `/features`, `/admin` | App and transport resources                                         |
+| `/adapters`                        | Runtime-neutral OpenAPI/MCP injection and Ominipg adapters          |
+| `/adapters/stdio`                  | Explicit subprocess-backed MCP stdio capability                     |
+| `/adapters/deno`, `/adapters/node` | Host-specific capabilities                                          |
+| `/server`                          | Web Fetch handlers and the transitional v1 transport projection     |
+| `/migration/v1`                    | Isolated one-way database upgrade; never imported by normal runtime |
 
 ## Documentation
 
-**Getting Started**
+Start with [the v3 quickstart](docs/quickstart.md), then read:
 
-- [Quick Start](./docs/getting-started.md) — Install and run your first agent
-- [Overview](./docs/overview.md) — Architecture and core concepts
+- [Architecture](docs/architecture.md)
+- [Plugins and processors](docs/plugins-and-processors.md)
+- [Agent capabilities](docs/agent-capabilities.md)
+- [Skills](docs/skills.md)
+- [Events, deliveries, and recovery](docs/events-deliveries-recovery.md)
+- [Content and assets](docs/content-assets.md)
+- [Embedding and hypervisors](docs/embedding-and-hypervisors.md)
+- [Multi-agent public ask](docs/multi-agent-ask.md)
+- [Realtime attachments](docs/realtime-attachments.md)
+- [API and package reference](docs/api.md)
+- [Migrating from v0.x](docs/migration-v3.md)
+- [v3 release notes](CHANGELOG.md)
 
-**Core Concepts**
+The detailed implementation contracts and parity evidence live in
+[docs/v3](docs/v3/README.md).
 
-- [Agents](./docs/agents.md) — Multi-agent configuration and communication
-- [Events](./docs/core-concepts/events.md) — Mutation outbox and live stream
-  projections
-- [Tools](./docs/resources/tools.md) — Native tools, pipelines, APIs, and MCP
-  integration
+## Validation
 
-**Data Layer**
+```sh
+deno task check
+deno task test
+deno task bundle:runtime-smoke
+deno task smoke:deno
+deno task smoke:node
+deno task smoke:bun
+deno task smoke:browser
+deno task bundle:edge-smoke
+deno task smoke:cloudflare
+deno task smoke:cloudflare-build
+deno task publish:dry-run
+```
 
-- [Database](./docs/database.md) — PostgreSQL, PGLite, and the knowledge graph
-- [Tables Structure](./docs/tables-structure.md) — Database schema reference
-- [Collections](./docs/collections.md) — Type-safe data storage
-- [RAG](./docs/rag.md) — Document ingestion and semantic search
-
-**Resources & Extensibility**
-
-- [Resources](./docs/resources.md) — How the resource system works
-- [Channels Setup](./docs/channels-setup.md) — Set up Discord, Telegram,
-  WhatsApp, etc.
-- [LLM Providers](./docs/llm-providers.md) — Built-in and custom LLM adapters
-- [Embeddings](./docs/embeddings.md) — Custom embedding providers
-- [Storage](./docs/storage.md) — Asset storage backends
-- [Loaders](./docs/loaders.md) — Load resources from filesystem
-
-**Advanced**
-
-- [Skills](./docs/skills.md) — SKILL.md format, discovery, and the native
-  assistant
-- [Configuration](./docs/configuration.md) — Full configuration reference
-- [Assets](./docs/assets.md) — File and media storage
-- [Server Helpers](./docs/server.md) — Framework-independent handlers and
-  transport routes
-- [API Reference](./docs/api-reference.md) — Complete API documentation
-
----
-
-## Requirements
-
-- Deno 2.0+
-- PostgreSQL 13+ (production) or PGLite (development/embedded)
-- LLM API key (OpenAI, Anthropic, Gemini, Groq, DeepSeek, or Ollama)
-
----
+CI additionally runs the PostgreSQL migration/event matrix before publishing.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE)
-
----
-
-<p align="center">
-  <strong>Stop gluing. Start shipping.</strong>
-</p>
+MIT

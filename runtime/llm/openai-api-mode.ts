@@ -1,4 +1,4 @@
-import type { ProviderConfig } from "@/runtime/llm/types.ts";
+import type { ProviderConfig } from "./types.ts";
 
 export type OpenAIApiMode = "chat_completions" | "responses";
 

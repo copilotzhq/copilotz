@@ -5,8 +5,8 @@ import {
   assertRejects,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import { chat, LLMProviderError } from "@/runtime/llm/index.ts";
-import type { ProviderRegistry } from "@/runtime/llm/types.ts";
+import { chat, LLMProviderError } from "./index.ts";
+import type { ProviderRegistry } from "./types.ts";
 
 const registry: ProviderRegistry = {
   anthropic: () => ({

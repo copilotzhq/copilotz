@@ -1,5 +1,5 @@
-import type { ToolDefinition } from "@/runtime/llm/types.ts";
-import { generateAgentTypesFromSchema } from "@/runtime/tools/schema-to-agent-types.ts";
+import type { ToolDefinition } from "../llm/types.ts";
+import { generateAgentTypesFromSchema } from "./schema-to-agent-types.ts";
 
 type PromptTool = {
   key: string;

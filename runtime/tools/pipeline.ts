@@ -2,7 +2,7 @@ import type {
   ToolPipeline,
   ToolPipelineStage,
   ToolPipelineToolStage,
-} from "@/runtime/llm/types.ts";
+} from "../llm/types.ts";
 
 export const TOOL_PIPELINE_METADATA_KEY = "toolPipeline";
 

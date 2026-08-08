@@ -14,14 +14,15 @@ import type {
   ToolDefinition,
   ToolInvocation,
   ToolPipelineStage,
+  ToolSystemPromptVariant,
   WireChatMessage,
-} from "@/runtime/llm/types.ts";
-import { LLMTranscriptError } from "@/runtime/llm/errors.ts";
+} from "./types.ts";
+import { LLMTranscriptError } from "./errors.ts";
 import {
   type ChatTokenEstimate,
   estimateChatMessages,
   estimateTextTokens,
-} from "@/runtime/tokens/index.ts";
+} from "../tokens/index.ts";
 
 const LOCAL_DEFAULT_STOP_SEQUENCES = [
   "<tool_results",
@@ -149,31 +150,12 @@ const DEFAULT_REPETITION_OPTIONS: Required<DegenerateRepetitionOptions> = {
   periodicityMin: 0.85,
 };
 
-function getEnvVar(key: string): string | undefined {
-  try {
-    const anyGlobal = globalThis as unknown as {
-      Deno?: { env?: { get?: (name: string) => string | undefined } };
-      process?: { env?: Record<string, string | undefined> };
-    };
-    const fromDeno = anyGlobal?.Deno?.env?.get?.(key);
-    if (typeof fromDeno === "string") return fromDeno;
-    const fromNode = anyGlobal?.process?.env?.[key];
-    if (typeof fromNode === "string") return fromNode;
-  } catch {
-    // Ignore env lookup failures in unsupported runtimes.
-  }
-  return undefined;
-}
-
 /**
- * Diagnostic flag for stop-sequence behavior. Enable with
- * `COPILOTZ_DEBUG_STOP=1` (or the broad `COPILOTZ_DEBUG=1`) to log the native
- * stop sequences sent to providers, local stop matches, and whether a provider
- * keeps generating after a stop sequence (measured during the post-stop drain).
+ * Runtime diagnostics are explicit configuration so provider behavior remains
+ * identical in Deno, Node, Bun, browsers, and isolate runtimes.
  */
-export function isStopDebugEnabled(): boolean {
-  return getEnvVar("COPILOTZ_DEBUG_STOP") === "1" ||
-    getEnvVar("COPILOTZ_DEBUG") === "1";
+export function isStopDebugEnabled(config?: ProviderConfig): boolean {
+  return config?.runtimeDiagnostics?.enabled === true;
 }
 
 function escapeRegex(value: string): string {
@@ -270,7 +252,10 @@ export function formatMessagesDetailed(
 
   // Add tool definitions to system prompt if tools are provided
   if (tools && tools.length > 0) {
-    const toolSystemPrompt = generateToolSystemPrompt(tools);
+    const toolSystemPrompt = generateToolSystemPrompt(
+      tools,
+      config?.toolSystemPromptVariant,
+    );
     systemContent = isEmptyContent(systemContent)
       ? toolSystemPrompt
       : mergeMessageContent(toolSystemPrompt, systemContent);
@@ -416,23 +401,6 @@ function stripTaggedBlocksFromText(text: string, tagNames: string[]): string {
     stripped = stripped.replace(block, "").replace(strayClosingTag, "");
   }
   return stripped;
-}
-
-function stripTaggedBlocksFromContent(
-  content: ChatMessage["content"],
-  tagNames: string[],
-): ChatMessage["content"] {
-  if (typeof content === "string") {
-    return stripTaggedBlocksFromText(content, tagNames);
-  }
-
-  const strippedParts = content.flatMap((part): ChatContentPart[] => {
-    if (part.type !== "text") return [part];
-    const text = stripTaggedBlocksFromText(part.text, tagNames);
-    return text.length > 0 ? [{ ...part, text }] : [];
-  });
-
-  return strippedParts.length > 0 ? strippedParts : "";
 }
 
 function contentToText(content: ChatMessage["content"]): string {
@@ -1202,18 +1170,20 @@ function limitMessageEstimatedInputTokens<T extends ChatMessage>(
 /**
  * Counts tokens in messages and response using the shared lightweight estimator.
  */
-export async function countTokens(
+export function countTokens(
   messages: ChatMessage[],
   response: string,
   config: ProviderConfig = {},
 ): Promise<number> {
-  return estimateChatMessages([
-    ...messages,
-    { role: "assistant", content: response },
-  ], config).estimatedTokens;
+  return Promise.resolve(
+    estimateChatMessages([
+      ...messages,
+      { role: "assistant", content: response },
+    ], config).estimatedTokens,
+  );
 }
 
-export async function estimateUsage(
+export function estimateUsage(
   messages: ChatMessage[],
   response: string,
   status: TokenUsage["status"],
@@ -1223,7 +1193,7 @@ export async function estimateUsage(
   const inputTokens = estimateChatMessages(messages, config).estimatedTokens;
   const outputTokens = estimateTextTokens(response);
 
-  return {
+  return Promise.resolve({
     inputTokens,
     outputTokens,
     totalTokens: inputTokens + outputTokens,
@@ -1232,7 +1202,7 @@ export async function estimateUsage(
     ...(metadata?.statusReason ? { statusReason: metadata.statusReason } : {}),
     ...(metadata?.stopSequence ? { stopSequence: metadata.stopSequence } : {}),
     rawUsage: null,
-  };
+  });
 }
 
 function tokenizeRepetitionTail(
@@ -1544,147 +1514,33 @@ function readCanonicalToolName(line: string): string | null {
  * Tracks one draft per non-empty canonical JSON line while preserving the
  * exact text produced inside `<tool_calls>`. Unknown tool names stay private.
  */
-export class CanonicalToolCallDraftTracker {
-  readonly #knownToolNames: Set<string>;
-  readonly #providerAttemptId: string;
-  readonly #emit?: (delta: ToolCallStreamDelta) => void;
-  readonly #drafts: CanonicalToolCallDraft[] = [];
-  #line = "";
-  #activeDraft: CanonicalToolCallDraft | null = null;
-  #nextCallIndex = 0;
-
-  constructor(options: {
-    knownToolNames: Iterable<string>;
-    providerAttemptId: string;
-    emit?: (delta: ToolCallStreamDelta) => void;
-  }) {
-    this.#knownToolNames = new Set(options.knownToolNames);
-    this.#providerAttemptId = options.providerAttemptId;
-    this.#emit = options.emit;
-  }
-
+export interface CanonicalToolCallDraftTracker {
   observe(
     tagName: string,
     chunk: string,
     phase: "start" | "content" | "end",
-  ): void {
-    if (tagName !== "tool_calls") return;
-    if (phase === "start") {
-      this.#finishLine();
-      return;
-    }
-    if (phase === "end") {
-      this.#finishLine();
-      return;
-    }
+  ): void;
+  complete(toolCalls: ToolInvocation[]): void;
+  discardAll(): void;
+}
 
-    let start = 0;
-    for (let index = 0; index < chunk.length; index += 1) {
-      if (chunk[index] !== "\n") continue;
-      this.#append(chunk.slice(start, index));
-      this.#finishLine();
-      start = index + 1;
-    }
-    this.#append(chunk.slice(start));
-  }
+export function createCanonicalToolCallDraftTracker(options: {
+  knownToolNames: Iterable<string>;
+  providerAttemptId: string;
+  emit?: (delta: ToolCallStreamDelta) => void;
+}): CanonicalToolCallDraftTracker {
+  const knownToolNames = new Set(options.knownToolNames);
+  const drafts: CanonicalToolCallDraft[] = [];
+  let line = "";
+  let activeDraft: CanonicalToolCallDraft | null = null;
+  let nextCallIndex = 0;
 
-  complete(toolCalls: ToolInvocation[]): void {
-    this.#finishLine();
-    const usedCallIds = new Set<string>();
-
-    for (const draft of this.#drafts) {
-      if (draft.terminal) continue;
-      const toolCall = toolCalls.find((candidate) =>
-        candidate.tool.id === draft.toolName && !usedCallIds.has(candidate.id)
-      );
-      if (toolCall) {
-        usedCallIds.add(toolCall.id);
-        draft.sequence += 1;
-        draft.terminal = true;
-        this.#emit?.({
-          providerAttemptId: this.#providerAttemptId,
-          draftId: draft.draftId,
-          callIndex: draft.callIndex,
-          sequence: draft.sequence,
-          toolName: draft.toolName,
-          phase: "complete",
-          delta: "",
-          toolCallId: toolCall.id,
-        });
-      } else {
-        this.#discard(draft);
-      }
-    }
-  }
-
-  discardAll(): void {
-    this.#finishLine();
-    for (const draft of this.#drafts) this.#discard(draft);
-  }
-
-  #append(text: string): void {
-    if (!text) return;
-    const previousLength = this.#line.length;
-    this.#line += text;
-
-    if (!this.#activeDraft) {
-      const toolName = readCanonicalToolName(this.#line);
-      if (!toolName || !this.#knownToolNames.has(toolName)) return;
-      const draft: CanonicalToolCallDraft = {
-        draftId: `${this.#providerAttemptId}:${this.#nextCallIndex}`,
-        callIndex: this.#nextCallIndex,
-        toolName,
-        sequence: 0,
-        rawLine: this.#line,
-        terminal: false,
-      };
-      this.#activeDraft = draft;
-      this.#drafts.push(draft);
-      this.#emit?.({
-        providerAttemptId: this.#providerAttemptId,
-        draftId: draft.draftId,
-        callIndex: draft.callIndex,
-        sequence: draft.sequence,
-        toolName,
-        phase: "start",
-        delta: this.#line,
-      });
-      return;
-    }
-
-    const delta = this.#line.slice(previousLength);
-    if (!delta) return;
-    this.#activeDraft.rawLine = this.#line;
-    this.#activeDraft.sequence += 1;
-    this.#emit?.({
-      providerAttemptId: this.#providerAttemptId,
-      draftId: this.#activeDraft.draftId,
-      callIndex: this.#activeDraft.callIndex,
-      sequence: this.#activeDraft.sequence,
-      toolName: this.#activeDraft.toolName,
-      phase: "delta",
-      delta,
-    });
-  }
-
-  #finishLine(): void {
-    if (!this.#line.trim()) {
-      this.#line = "";
-      this.#activeDraft = null;
-      return;
-    }
-    if (this.#activeDraft) this.#activeDraft.rawLine = this.#line;
-    this.#nextCallIndex += 1;
-    this.#line = "";
-    this.#activeDraft = null;
-  }
-
-  #discard(draft: CanonicalToolCallDraft): void {
+  const discard = (draft: CanonicalToolCallDraft): void => {
     if (draft.terminal) return;
     draft.sequence += 1;
     draft.terminal = true;
-    this.#emit?.({
-      providerAttemptId: this.#providerAttemptId,
+    options.emit?.({
+      providerAttemptId: options.providerAttemptId,
       draftId: draft.draftId,
       callIndex: draft.callIndex,
       sequence: draft.sequence,
@@ -1692,7 +1548,121 @@ export class CanonicalToolCallDraftTracker {
       phase: "discarded",
       delta: "",
     });
-  }
+  };
+
+  const finishLine = (): void => {
+    if (!line.trim()) {
+      line = "";
+      activeDraft = null;
+      return;
+    }
+    if (activeDraft) activeDraft.rawLine = line;
+    nextCallIndex += 1;
+    line = "";
+    activeDraft = null;
+  };
+
+  const append = (text: string): void => {
+    if (!text) return;
+    const previousLength = line.length;
+    line += text;
+
+    if (!activeDraft) {
+      const toolName = readCanonicalToolName(line);
+      if (!toolName || !knownToolNames.has(toolName)) return;
+      const draft: CanonicalToolCallDraft = {
+        draftId: `${options.providerAttemptId}:${nextCallIndex}`,
+        callIndex: nextCallIndex,
+        toolName,
+        sequence: 0,
+        rawLine: line,
+        terminal: false,
+      };
+      activeDraft = draft;
+      drafts.push(draft);
+      options.emit?.({
+        providerAttemptId: options.providerAttemptId,
+        draftId: draft.draftId,
+        callIndex: draft.callIndex,
+        sequence: draft.sequence,
+        toolName,
+        phase: "start",
+        delta: line,
+      });
+      return;
+    }
+
+    const delta = line.slice(previousLength);
+    if (!delta) return;
+    activeDraft.rawLine = line;
+    activeDraft.sequence += 1;
+    options.emit?.({
+      providerAttemptId: options.providerAttemptId,
+      draftId: activeDraft.draftId,
+      callIndex: activeDraft.callIndex,
+      sequence: activeDraft.sequence,
+      toolName: activeDraft.toolName,
+      phase: "delta",
+      delta,
+    });
+  };
+
+  const observe: CanonicalToolCallDraftTracker["observe"] = (
+    tagName,
+    chunk,
+    phase,
+  ) => {
+    if (tagName !== "tool_calls") return;
+    if (phase === "start" || phase === "end") {
+      finishLine();
+      return;
+    }
+
+    let start = 0;
+    for (let index = 0; index < chunk.length; index += 1) {
+      if (chunk[index] !== "\n") continue;
+      append(chunk.slice(start, index));
+      finishLine();
+      start = index + 1;
+    }
+    append(chunk.slice(start));
+  };
+
+  const complete = (toolCalls: ToolInvocation[]): void => {
+    finishLine();
+    const usedCallIds = new Set<string>();
+
+    for (const draft of drafts) {
+      if (draft.terminal) continue;
+      const toolCall = toolCalls.find((candidate) =>
+        candidate.tool.id === draft.toolName && !usedCallIds.has(candidate.id)
+      );
+      if (!toolCall) {
+        discard(draft);
+        continue;
+      }
+      usedCallIds.add(toolCall.id);
+      draft.sequence += 1;
+      draft.terminal = true;
+      options.emit?.({
+        providerAttemptId: options.providerAttemptId,
+        draftId: draft.draftId,
+        callIndex: draft.callIndex,
+        sequence: draft.sequence,
+        toolName: draft.toolName,
+        phase: "complete",
+        delta: "",
+        toolCallId: toolCall.id,
+      });
+    }
+  };
+
+  const discardAll = (): void => {
+    finishLine();
+    for (const draft of drafts) discard(draft);
+  };
+
+  return Object.freeze({ observe, complete, discardAll });
 }
 
 /**
@@ -1751,7 +1721,7 @@ export async function processStream(
     : (options?.localStopSequences ?? []);
   const localStopState: LocalStopState = { pending: "" };
   let stoppedByLocalStop = false;
-  const stopDebug = isStopDebugEnabled();
+  const stopDebug = isStopDebugEnabled(config);
   let postStopVisibleChars = 0;
   let postStopReasoningChars = 0;
   let postStopContentEvents = 0;
@@ -2154,39 +2124,10 @@ export function filterTaggedControlTokensStreaming(
 // STANDARDIZED TOOL CALLING FUNCTIONS
 // =============================================================================
 
-export type ToolSystemPromptVariant =
-  | "baseline"
-  | "no-visible-ack"
-  | "tool-only-turn"
-  | "useful-visible-contract"
-  | "tool-call-contract"
-  | "lifecycle-explicit"
-  | "strict-minimal";
-
-function readToolSystemPromptVariant(): ToolSystemPromptVariant {
-  let raw: string | undefined;
-  try {
-    raw = typeof Deno !== "undefined"
-      ? Deno.env.get("COPILOTZ_TOOL_PROMPT_VARIANT")
-      : undefined;
-  } catch {
-    raw = undefined;
-  }
-  switch (raw) {
-    case "no-visible-ack":
-    case "tool-only-turn":
-    case "useful-visible-contract":
-    case "tool-call-contract":
-    case "lifecycle-explicit":
-    case "strict-minimal":
-      return raw;
-    default:
-      return "useful-visible-contract";
-  }
-}
-
-export function generateToolSystemPrompt(tools: ToolDefinition[]): string {
-  const variant = readToolSystemPromptVariant();
+export function generateToolSystemPrompt(
+  tools: ToolDefinition[],
+  variant: ToolSystemPromptVariant = "useful-visible-contract",
+): string {
   return generateToolSystemPromptVariant(tools, variant);
 }
 
@@ -2285,9 +2226,6 @@ ${toolCatalog}`;
     ? "\n" +
       extraRules.map((rule, index) => `${4 + index}. ${rule}`).join("\n") +
       "\n"
-    : "";
-  const exampleTail = variant === "baseline"
-    ? "\nSure - running those now."
     : "";
   const exampleRuleNumber = 4 + extraRules.length;
   const nextRuleNumber = exampleRuleNumber + 1;
@@ -2953,60 +2891,6 @@ export function stripDanglingControlTail(
   return earliestDanglingStart === -1
     ? response
     : response.slice(0, earliestDanglingStart);
-}
-
-/**
- * Extract complete JSON objects from a string using proper bracket matching
- */
-function extractJsonObjects(content: string): string[] {
-  const jsonObjects: string[] = [];
-  let i = 0;
-
-  while (i < content.length) {
-    // Skip whitespace
-    while (i < content.length && /\s/.test(content[i])) {
-      i++;
-    }
-
-    if (i >= content.length) break;
-
-    // Look for opening brace
-    if (content[i] === "{") {
-      const startPos = i;
-      let braceCount = 1;
-      i++; // Move past the opening brace
-
-      // Find the matching closing brace
-      while (i < content.length && braceCount > 0) {
-        if (content[i] === "{") {
-          braceCount++;
-        } else if (content[i] === "}") {
-          braceCount--;
-        } else if (content[i] === '"') {
-          // Skip quoted strings to avoid counting braces inside strings
-          i++;
-          while (i < content.length && content[i] !== '"') {
-            if (content[i] === "\\") {
-              i++; // Skip escaped character
-            }
-            i++;
-          }
-        }
-        i++;
-      }
-
-      if (braceCount === 0) {
-        // Found complete JSON object
-        const jsonStr = content.slice(startPos, i);
-        jsonObjects.push(jsonStr);
-      }
-    } else {
-      // Skip non-JSON character
-      i++;
-    }
-  }
-
-  return jsonObjects;
 }
 
 function suffixPrefix(text: string, tag: string): number {

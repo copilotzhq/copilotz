@@ -1,11 +1,16 @@
-import type { ProviderRegistry, ProviderName, LLMProviderName, ProviderFactory } from '@/runtime/llm/types.ts';
-import { openaiProvider } from '@/resources/llm/openai/adapter.ts';
-import { anthropicProvider } from '@/resources/llm/anthropic/adapter.ts';
-import { geminiProvider } from '@/resources/llm/gemini/adapter.ts';
-import { groqProvider } from '@/resources/llm/groq/adapter.ts';
-import { deepseekProvider } from '@/resources/llm/deepseek/adapter.ts';
-import { ollamaProvider } from '@/resources/llm/ollama/adapter.ts';
-import { minimaxProvider } from '@/resources/llm/minimax/adapter.ts';
+import type {
+  LLMProviderName,
+  ProviderFactory,
+  ProviderName,
+  ProviderRegistry,
+} from "./types.ts";
+import { openaiProvider } from "./providers/openai/adapter.ts";
+import { anthropicProvider } from "./providers/anthropic/adapter.ts";
+import { geminiProvider } from "./providers/gemini/adapter.ts";
+import { groqProvider } from "./providers/groq/adapter.ts";
+import { deepseekProvider } from "./providers/deepseek/adapter.ts";
+import { ollamaProvider } from "./providers/ollama/adapter.ts";
+import { minimaxProvider } from "./providers/minimax/adapter.ts";
 
 // Provider registry with all available providers
 export const providers: ProviderRegistry = {
@@ -24,7 +29,11 @@ export const providers: ProviderRegistry = {
 export function getProvider(name: ProviderName): ProviderFactory {
   const provider = providers[name];
   if (!provider) {
-    throw new Error(`Provider '${name}' is not supported. Available providers: ${Object.keys(providers).join(', ')}`);
+    throw new Error(
+      `Provider '${name}' is not supported. Available providers: ${
+        Object.keys(providers).join(", ")
+      }`,
+    );
   }
   return provider;
 }
@@ -46,26 +55,35 @@ export function isProviderAvailable(name: string): name is LLMProviderName {
 /**
  * Get provider default models
  */
-export function getProviderDefaults(): Record<LLMProviderName, { model: string; apiKeyEnv: string }> {
+export function getProviderDefaults(): Record<
+  LLMProviderName,
+  { model: string; apiKeyEnv: string }
+> {
   return {
-    openai: { model: 'gpt-5-mini', apiKeyEnv: 'OPENAI_API_KEY' },
-    anthropic: { model: 'claude-3-haiku-20240307', apiKeyEnv: 'ANTHROPIC_API_KEY' },
-    gemini: { model: 'gemini-2.0-flash-lite-preview-02-05', apiKeyEnv: 'GEMINI_API_KEY' },
-    groq: { model: 'llama3-8b-8192', apiKeyEnv: 'GROQ_API_KEY' },
-    deepseek: { model: 'deepseek-chat', apiKeyEnv: 'DEEPSEEK_API_KEY' },
-    ollama: { model: 'llama3.2', apiKeyEnv: 'OLLAMA_BASE_URL' },
-    minimax: { model: 'MiniMax-M3', apiKeyEnv: 'MINIMAX_API_KEY' },
-    xai: { model: 'grok-beta', apiKeyEnv: 'XAI_API_KEY' },
+    openai: { model: "gpt-5-mini", apiKeyEnv: "OPENAI_API_KEY" },
+    anthropic: {
+      model: "claude-3-haiku-20240307",
+      apiKeyEnv: "ANTHROPIC_API_KEY",
+    },
+    gemini: {
+      model: "gemini-2.0-flash-lite-preview-02-05",
+      apiKeyEnv: "GEMINI_API_KEY",
+    },
+    groq: { model: "llama3-8b-8192", apiKeyEnv: "GROQ_API_KEY" },
+    deepseek: { model: "deepseek-chat", apiKeyEnv: "DEEPSEEK_API_KEY" },
+    ollama: { model: "llama3.2", apiKeyEnv: "OLLAMA_BASE_URL" },
+    minimax: { model: "MiniMax-M3", apiKeyEnv: "MINIMAX_API_KEY" },
+    xai: { model: "grok-beta", apiKeyEnv: "XAI_API_KEY" },
   };
 }
 
 // Export individual providers for direct access
 export {
-  openaiProvider,
   anthropicProvider,
+  deepseekProvider,
   geminiProvider,
   groqProvider,
-  deepseekProvider,
-  ollamaProvider,
   minimaxProvider,
+  ollamaProvider,
+  openaiProvider,
 };

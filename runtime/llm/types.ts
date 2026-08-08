@@ -11,8 +11,8 @@
  * - MiniMax (Anthropic-compatible Messages API): supports `text`, `image`, and `video` (MiniMax-M3 only).
  *   The `video` part carries a data URL, public URL, or `mm_file://{file_id}` reference.
  */
-import type { TokenMediaMetadata } from "@/runtime/tokens/estimate.ts";
-import type { ChatTokenEstimate } from "@/runtime/tokens/chat.ts";
+import type { TokenMediaMetadata } from "../tokens/estimate.ts";
+import type { ChatTokenEstimate } from "../tokens/chat.ts";
 
 export type ChatContentPart =
   | { type: "text"; text: string }
@@ -104,11 +104,22 @@ export interface LLMRuntimeDiagnostics {
   credentialSource?: LLMCredentialSource;
 }
 
+export type ToolSystemPromptVariant =
+  | "baseline"
+  | "no-visible-ack"
+  | "tool-only-turn"
+  | "useful-visible-contract"
+  | "tool-call-contract"
+  | "lifecycle-explicit"
+  | "strict-minimal";
+
 export interface ProviderConfigBase {
   // Provider selection
   provider?: ProviderName;
   apiKey?: string;
   runtimeDiagnostics?: LLMRuntimeDiagnostics;
+  /** Explicit prompt protocol selection; defaults to the useful-visible contract. */
+  toolSystemPromptVariant?: ToolSystemPromptVariant;
 
   // Model configuration
   model?: string;
@@ -252,6 +263,8 @@ export interface ToolDefinition {
 export interface ChatRequest {
   messages: ChatMessage[];
   instructions?: string;
+  /** Stable caller-owned key that provider adapters may forward when supported. */
+  idempotencyKey?: string;
   config?: ProviderConfig;
   answer?: string; // For mock responses
   tools?: ToolDefinition[]; // Tool definitions for standardized tool calling
@@ -314,6 +327,8 @@ export interface ChatRequest {
   onAttemptLifecycle?: (
     event: LLMAttemptLifecycleEvent,
   ) => Promise<void> | void;
+  /** Propagate lifecycle callback failures instead of treating them as diagnostics. */
+  strictAttemptLifecycle?: boolean;
   /**
    * Internal stream-only hook for canonical tool-call JSON drafts. Drafts are
    * never persisted and may be discarded when a provider attempt is retried.

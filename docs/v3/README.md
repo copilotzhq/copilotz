@@ -1,17 +1,17 @@
 ---
-title: Copilotz v3 Design Gate
-description: Review artifacts that must be accepted before the v3 refactor starts.
+title: Copilotz v3 Implementation Record
+description: Design contracts, migration evidence, and release acceptance for v3.
 section: Internal Design
-status: proposal
+status: implementation
 ---
 
-# Copilotz v3 Design Gate
+# Copilotz v3 Implementation Record
 
-This directory records the design contract for a fresh v3 implementation. It is
-not current user documentation and is intentionally excluded from
-`docs/manifest.json` until the design is accepted and implemented.
+This directory preserves the design, migration evidence, and implementation
+contracts for v3. Current user documentation lives one level above and is listed
+in `docs/manifest.json`.
 
-The baseline is `origin/main` at commit `64dddb8` (`0.56.1`) on 2026-08-06. The
+The baseline is `origin/main` at commit `cb6016b` (`0.56.1`) on 2026-08-06. The
 existing `v3` branch is an architectural spike and evidence source, not the
 implementation baseline. In particular, it deleted most current capabilities,
 documentation, and tests and introduced stateful service classes. Those choices
@@ -27,6 +27,30 @@ must not be carried forward implicitly.
   for text, structured values, files, tool payloads, finalized realtime media,
   and future modalities while keeping routing metadata inline and raw stream
   frames ephemeral.
+- [Events and Durable Deliveries](./events-and-deliveries.md) records the
+  implemented immutable-event store, sparse delivery lifecycle, causal
+  settlement, retention, and isolated v1 upgrade.
+- [Plugins and Resources](./plugins-and-resources.md) defines the package
+  boundary, deterministic resource composition, and independent durable/live
+  processor subscriptions.
+- [Oxian Execution](./oxian-execution.md) defines private/shared/remote delivery
+  placement, ownership, lease claiming, and ID-only worker payloads.
+- [Graph-Native Conversation](./graph-native-conversation.md) defines the first
+  participant/thread/message aggregate on canonical content, immutable events,
+  sparse deliveries, and typed graph operations.
+- [Event-Native Collections](./event-native-collections.md) defines plugin
+  collection composition, atomic typed mutations, before-hook migration, and
+  delivery-scoped retry safety.
+- [Event-Native Workflows](./event-native-workflows.md) defines graph-native
+  LLM-attempt and tool-execution lifecycles, canonical content roles, provider
+  fallback relationships, and retry-safe promotion into public messages.
+- [Factory Engine Assembly](./engine-assembly.md) composes storage, plugins,
+  Oxian, canonical content, graph domains, and tenant-scoped processor
+  capabilities without exposing raw persistence to plugins.
+- [Runtime Capability Adapters](./runtime-adapters.md) keeps OpenAPI, MCP,
+  filesystem, terminal, server, and CLI access explicit at worker assembly.
+- [Downstream Migration Matrix](./downstream-migration.md) records exact client
+  pins, breaking-surface mappings, rollout order, and per-application gates.
 
 ## Non-Negotiable Constraints
 
@@ -43,9 +67,21 @@ must not be carried forward implicitly.
 7. Raw audio, token, and future video frames are stream data, not database
    events. Durable outcomes use the same content/asset model as text.
 
-## Start Gate
+## Current Gate
 
-Implementation can begin only after these artifacts are reviewed and the P0
-characterization tests in the parity ledger are present on `main`. Design
-changes discovered later update these documents and their corresponding tests
-before old behavior is deleted.
+The event-native implementation and aggressive cleanup are complete in the
+working tree. Canonical content/assets, four-table persistence, immutable
+events, durable deliveries, plugins, Oxian placement, graph-native domains,
+LLM/tool and public `ask` workflows, attachments/realtime streams, channels,
+admin, server, CLI, goals, and isolated v1 upgrades now share one
+factory-created runtime.
+
+Release validation is implemented in CI: package/subpath and removed-symbol
+checks, Deno/Node/Bun/browser/Cloudflare smokes, PGlite/PostgreSQL matrices,
+formatting, downstream embedding contracts, package-file filtering, and a JSR
+dry run. Final local acceptance passes 475 tests with two PostgreSQL-service
+tests intentionally deferred to CI, verifies 28 public exports and 252 reachable
+production modules, passes the full runtime smoke matrix including Bun 1.3.14
+and Wrangler 4.120.0, and completes the JSR publish dry run without warnings.
+Existing downstream applications retain exact 0.x pins and will move through
+explicit migrations rather than a compatibility runtime inside v3.

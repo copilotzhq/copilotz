@@ -5,12 +5,12 @@ import type {
   StreamCallback,
   ToolCallStreamDelta,
   ToolInvocation,
-} from "@/runtime/llm/types.ts";
+} from "./types.ts";
 import {
-  CanonicalToolCallDraftTracker,
+  createCanonicalToolCallDraftTracker,
   responseHasOrphanedToolResult,
-} from "@/runtime/llm/utils.ts";
-import { runProviderStream, type StreamResult } from "@/runtime/llm/stream.ts";
+} from "./utils.ts";
+import { runProviderStream, type StreamResult } from "./stream.ts";
 
 const ORPHANED_TOOL_RESULT_PREFIX_PATTERN = /^(?:"[}\],]{2,}"|[}\],]{3,})/;
 
@@ -71,7 +71,7 @@ export async function runProviderAttempt(args: {
   let leadingVisibleBuffer = "";
   let leadingVisibleProtocol: "undecided" | "suspect" | "pass" = "undecided";
   let toolDraftsSettled = false;
-  const toolDraftTracker = new CanonicalToolCallDraftTracker({
+  const toolDraftTracker = createCanonicalToolCallDraftTracker({
     knownToolNames: args.knownToolNames,
     providerAttemptId: args.attemptId,
     emit: args.silent ? undefined : args.onToolCallDelta,

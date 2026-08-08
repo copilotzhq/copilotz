@@ -2,8 +2,8 @@ import type {
   LLMRecoveryAction,
   ProviderFallbackReason,
   TokenUsageStatusReason,
-} from "@/runtime/llm/types.ts";
-import type { AssistantSemanticIssue } from "@/runtime/llm/response-interpreter.ts";
+} from "./types.ts";
+import type { AssistantSemanticIssue } from "./response-interpreter.ts";
 
 export interface RecoveryPolicyState {
   visibleOutputStarted: boolean;

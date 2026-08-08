@@ -1,8 +1,8 @@
 import { assertEquals, assertRejects } from "@std/assert";
-import { disconnectJqWorker, evaluateJq } from "./jq.ts";
+import { evaluateJq, resetJqRuntime } from "./jq.ts";
 
 Deno.test({
-  name: "evaluateJq runs real jq filters in an isolated worker",
+  name: "evaluateJq runs real jq filters through portable in-process WASM",
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
@@ -18,7 +18,7 @@ Deno.test({
         content: "hello",
       });
     } finally {
-      disconnectJqWorker();
+      resetJqRuntime();
     }
   },
 });
@@ -35,7 +35,7 @@ Deno.test({
         "wrap the filter in [...]",
       );
     } finally {
-      disconnectJqWorker();
+      resetJqRuntime();
     }
   },
 });
@@ -51,7 +51,7 @@ Deno.test({
         Error,
       );
     } finally {
-      disconnectJqWorker();
+      resetJqRuntime();
     }
   },
 });

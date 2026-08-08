@@ -1,4 +1,5 @@
-import type { Agent, API, MCPServer } from "../resources/index.ts";
+import { resolveToolGrants } from "../capabilities/index.ts";
+import type { Agent, API, MCPServer, Skill } from "../resources/index.ts";
 import type { ScopedPluginResources } from "../engine/index.ts";
 import { isWorkflowTool } from "./resources.ts";
 import type {
@@ -52,19 +53,12 @@ function composeTools(
 function filterAgentTools(
   tools: readonly WorkflowTool[],
   agent: Agent,
+  resources: ScopedPluginResources,
 ): readonly WorkflowTool[] {
-  if (agent.allowedTools === undefined) return tools;
-  if (!Array.isArray(agent.allowedTools) || agent.allowedTools.length === 0) {
-    return Object.freeze([]);
-  }
-  const byKey = new Map(tools.map((tool) => [tool.key, tool]));
-  return Object.freeze(agent.allowedTools.map((key) => {
-    const tool = byKey.get(key);
-    if (!tool) {
-      throw new Error(`Agent '${agent.id}' allows unknown tool '${key}'.`);
-    }
-    return tool;
-  }));
+  return resolveToolGrants(agent, tools, {
+    agents: resources.list<Agent>("agents"),
+    skills: resources.list<Skill>("skills"),
+  });
 }
 
 /**
@@ -127,7 +121,7 @@ export function createWorkflowToolCatalog(
   return Object.freeze({
     all,
     async forAgent(resources, agent) {
-      return filterAgentTools(await all(resources), agent);
+      return filterAgentTools(await all(resources), agent, resources);
     },
     async get(resources, key) {
       return (await all(resources)).find((tool) => tool.key === key);

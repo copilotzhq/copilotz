@@ -1,6 +1,8 @@
+import { createAgentCapabilityResolver } from "../capabilities/index.ts";
 import { createCopilotzEngine } from "../engine/index.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
 import { createGoalRuntime } from "../goals/index.ts";
+import { createWorkflowToolCatalog } from "../workflows/index.ts";
 import { createCopilotzCorePlugins } from "./core-plugins.ts";
 import type {
   ApplicationConnectInput,
@@ -45,7 +47,21 @@ export async function createCopilotzApplication(
 ): Promise<CopilotzApplication> {
   const namespace = optionalText(options.namespace, "Namespace");
   const schema = optionalText(options.schema, "Schema") ?? "public";
-  const core = createCopilotzCorePlugins(options.core);
+  const configuredTextCatalog = options.core !== false &&
+      options.core?.text !== false
+    ? options.core?.text?.toolCatalog
+    : undefined;
+  if (
+    options.toolCatalog && configuredTextCatalog &&
+    options.toolCatalog !== configuredTextCatalog
+  ) {
+    throw new TypeError(
+      "Application toolCatalog must match core.text.toolCatalog when both are provided.",
+    );
+  }
+  const toolCatalog = options.toolCatalog ?? configuredTextCatalog ??
+    createWorkflowToolCatalog();
+  const core = createCopilotzCorePlugins(options.core, { toolCatalog });
   const registry = await createPluginRegistry({
     core,
     plugins: options.plugins,
@@ -117,6 +133,7 @@ export async function createCopilotzApplication(
       declaredPluginIds: Object.freeze(declaredPluginIds),
       sessionOwnership: options.closeSession ? "application" : "injected",
     }),
+    capabilities: createAgentCapabilityResolver({ registry, toolCatalog }),
     engine,
     connect(input: ApplicationConnectInput) {
       return engine.connect({

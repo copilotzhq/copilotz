@@ -54,6 +54,20 @@ export type AgentRuntimes = Readonly<{
   realtime?: AgentRealtimeRuntime;
 }>;
 
+/** Explicit resource grant. Omission grants nothing; broad access is opt-in. */
+export type CapabilitySelection =
+  | readonly string[]
+  | Readonly<{
+    all: true;
+    except?: readonly string[];
+  }>;
+
+export type AgentCapabilities = Readonly<{
+  tools?: CapabilitySelection;
+  agents?: CapabilitySelection;
+  skills?: CapabilitySelection;
+}>;
+
 export type Agent = Readonly<{
   id: string;
   name: string;
@@ -62,9 +76,8 @@ export type Agent = Readonly<{
   personality?: string | null;
   instructions?: string | null;
   description?: string | null;
-  allowedAgents?: readonly string[] | null;
-  allowedTools?: readonly string[] | null;
-  allowedSkills?: readonly string[] | null;
+  /** Least-authority grants resolved against composed plugin resources. */
+  capabilities?: AgentCapabilities;
   metadata?: Readonly<Record<string, unknown>> | null;
   /** Shorthand for `runtimes.text`; dynamic policy belongs in the text plugin. */
   llmOptions?: ProviderConfig;
@@ -197,20 +210,50 @@ export type MCPServer = Readonly<{
 
 export type NewMCPServer = Partial<MCPServer> & Pick<MCPServer, "name">;
 
-export type Skill = Readonly<{
+/** Agent Skills specification metadata parsed from `SKILL.md`. */
+export type SkillManifest = Readonly<{
   name: string;
   description: string;
-  content: string;
-  allowedTools?: readonly string[];
-  tags?: readonly string[];
-  source: "project" | "user" | "bundled" | "remote";
-  sourcePath: string;
-  hasReferences: boolean;
-  metadata?: Readonly<Record<string, unknown>>;
+  license?: string;
+  compatibility?: string;
+  metadata?: Readonly<Record<string, string>>;
+  /** Experimental spec field. It describes compatibility, not authority. */
+  allowedTools?: string;
 }>;
 
-export type SkillIndexEntry = Readonly<{
-  name: string;
-  description: string;
-  tags?: readonly string[];
+export type SkillFileDescriptor = Readonly<{
+  /** Portable, slash-separated path relative to the skill root. */
+  path: string;
+  mediaType: string;
+  size?: number;
+  /** Content digest such as `sha256:<hex>`. */
+  digest?: string;
 }>;
+
+export type SkillFileBody =
+  | string
+  | Uint8Array
+  | ReadableStream<Uint8Array>;
+
+export type SkillFile =
+  & SkillFileDescriptor
+  & Readonly<{
+    body: SkillFileBody;
+  }>;
+
+export type SkillReadOptions = Readonly<{
+  signal?: AbortSignal;
+}>;
+
+/** Runtime-neutral lazy representation of one Agent Skills directory. */
+export type Skill =
+  & SkillManifest
+  & Readonly<{
+    files: readonly SkillFileDescriptor[];
+    read(path: string, options?: SkillReadOptions): Promise<SkillFile>;
+  }>;
+
+export type SkillIndexEntry = Pick<
+  SkillManifest,
+  "name" | "description" | "compatibility"
+>;

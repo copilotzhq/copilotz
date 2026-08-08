@@ -1,14 +1,8 @@
-import {
-  assert,
-  assertEquals,
-  assertExists,
-  assertRejects,
-  assertThrows,
-} from "@std/assert";
+import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 
 import type { Agent } from "../resources/index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
-import type { Skill } from "../resources/index.ts";
+import { createSkillsPlugin, defineInlineSkill } from "../skills/index.ts";
 import {
   type CopilotzEngine,
   type CopilotzProcessorContext,
@@ -37,17 +31,18 @@ const agent: Agent = {
   name: "Agent A",
   role: "assistant",
   instructions: "Exercise built-in tools.",
-  allowedSkills: ["contract-skill"],
+  capabilities: { skills: ["contract-skill"] },
 };
 
-const skill: Skill = {
-  name: "contract-skill",
-  description: "Contract skill",
-  content: "Follow the contract.",
-  source: "project",
-  sourcePath: "/virtual/contract-skill",
-  hasReferences: true,
-};
+const skill = defineInlineSkill({
+  directoryName: "contract-skill",
+  markdown: `---
+name: contract-skill
+description: Contract skill used by the built-in tool integration test.
+---
+Follow the contract.`,
+  files: { "references/guide.md": "Contract guide" },
+});
 
 type RunAction<T> = (context: CopilotzProcessorContext) => Promise<T>;
 
@@ -84,13 +79,22 @@ async function createFixture(
       version: "1.0.0",
       provides: {
         agents: [agent.id],
-        skills: [skill.name],
         processors: [runner.id],
       },
     },
-    resources: { agents: [agent], skills: [skill], processors: [runner] },
+    resources: { agents: [agent], processors: [runner] },
   });
-  const registry = await createPluginRegistry({ plugins: [builtIns, app] });
+  const registry = await createPluginRegistry({
+    plugins: [
+      builtIns,
+      createSkillsPlugin({
+        id: "test.core-tools.skills",
+        version: "1.0.0",
+        skills: [skill],
+      }),
+      app,
+    ],
+  });
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     schema: TEST_SCHEMA,
@@ -198,25 +202,14 @@ function tool(
   return context.resources.require<WorkflowTool>("tools", id);
 }
 
-Deno.test("built-in tools package only portable defaults and require explicit adapters", () => {
+Deno.test("built-in tools exclude optional plugin-owned skill tools", () => {
   const plugin = createBuiltInToolsPlugin();
   assertEquals(plugin.manifest.provides.tools, [...BUILT_IN_CORE_TOOL_IDS]);
   assertEquals(
     plugin.resources.tools?.map((value) => (value as WorkflowTool).key),
-    [
-      ...BUILT_IN_CORE_TOOL_IDS,
-    ],
+    [...BUILT_IN_CORE_TOOL_IDS],
   );
-  assertThrows(
-    () => createBuiltInToolsPlugin({ include: ["read_skill_resource"] }),
-    TypeError,
-    "requires a host capability adapter",
-  );
-  const adapted = createBuiltInToolsPlugin({
-    include: ["read_skill_resource"],
-    readSkillResource: () => Promise.resolve("adapter"),
-  });
-  assertEquals(adapted.manifest.provides.tools, ["read_skill_resource"]);
+  assert(!plugin.manifest.provides.tools?.includes("load_skill"));
 });
 
 Deno.test("asset, result, skill, clock, and wait tools use typed capabilities", async () => {
@@ -227,8 +220,6 @@ Deno.test("asset, result, skill, clock, and wait tools use typed capabilities", 
       waits.push(milliseconds);
       return Promise.resolve();
     },
-    readSkillResource: ({ skill, path }) =>
-      Promise.resolve(`${skill.name}:${path}`),
   }));
   try {
     const result = await fixture.run(async (processor) => {
@@ -282,7 +273,7 @@ Deno.test("asset, result, skill, clock, and wait tools use typed capabilities", 
         ctx,
       ) as Record<string, unknown>;
       const resource = await tool(processor, "read_skill_resource").execute!(
-        { skill: "contract-skill", path: "guide.md" },
+        { skill: "contract-skill", path: "references/guide.md" },
         ctx,
       ) as Record<string, unknown>;
       await assertRejects(
@@ -310,7 +301,7 @@ Deno.test("asset, result, skill, clock, and wait tools use typed capabilities", 
     assert(String(result.read.excerpt).includes("needle"));
     assertEquals(result.listed.count, 1);
     assertEquals(result.loaded.content, "Follow the contract.");
-    assertEquals(result.resource.content, "contract-skill:guide.md");
+    assertEquals(result.resource.content, "Contract guide");
     assertEquals(result.clock.iso, "2026-08-06T12:34:56.000Z");
     assertEquals(waits, [250]);
 

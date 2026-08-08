@@ -14,6 +14,7 @@ tags:
 entrypoints:
   - index.ts
   - runtime/application/index.ts
+  - runtime/capabilities/index.ts
   - runtime/plugins/index.ts
   - runtime/events/index.ts
   - runtime/attachments/index.ts
@@ -37,6 +38,7 @@ placement.
 ## Code Map
 
 - Public application assembly: `runtime/application/`
+- Agent authority and capability introspection: `runtime/capabilities/`
 - Canonical content/assets: `runtime/content/`
 - Graph-native domains and collections: `runtime/domain/`
 - Immutable events/deliveries: `runtime/events/`
@@ -53,9 +55,10 @@ placement.
 ## Invariants
 
 - Keep the public architecture factory/closure based.
+- Agent tools, peers, and skills require explicit capability grants.
 - Durable mutations commit graph, event, and delivery obligations atomically.
 - Raw media/token frames are never persisted as events.
 - Plugins mutate through typed domain or collection capabilities.
 - Core and generic adapters must not import host-specific APIs.
-- Injected sessions, hosts, and dispatchers remain application-owned.
+- Injected sessions, Hypervisors, and dispatchers remain application-owned.
 - Run `deno task check` and `deno task test` before release work.

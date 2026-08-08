@@ -9,7 +9,7 @@ status: implementation
 
 `createCopilotzEngine()` is the first executable composition root for the v3
 core. It returns a frozen plain record and owns no application-provided database
-session, shared host, dispatcher, or remote worker.
+session, shared Hypervisor, dispatcher, or remote Worker.
 
 ```text
 app-owned SQL session + plugin registry
@@ -84,9 +84,10 @@ delivery set, and immutable body.
 
 The engine delegates placement to `createDeliveryExecutor()`:
 
-- no execution option creates and owns one private in-process host;
-- an injected host gets one attached Copilotz worker, which engine shutdown
-  removes without closing the host;
+- no execution option creates and owns one private Hypervisor with in-process
+  Workers;
+- an injected Hypervisor gets Copilotz-owned Workers, which engine shutdown
+  stops without closing the Hypervisor;
 - an injected dispatcher is never shut down; and
 - worker payloads remain IDs only.
 

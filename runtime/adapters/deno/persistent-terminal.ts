@@ -11,7 +11,7 @@ import type {
   PersistentTerminalServiceContext,
 } from "../../tools/index.ts";
 
-export type CreateDenoPersistentTerminalServiceOptions = Readonly<{
+export type CreatePersistentTerminalServiceOptions = Readonly<{
   /** Explicit isolated workspace tree. Defaults to COPILOTZ_WORKSPACES_DIR. */
   workspaceBase?: string | null;
   /** Shared filesystem root when workspaceBase is absent. Defaults to cwd. */
@@ -64,7 +64,7 @@ function optionalEnvironment(name: string): string | undefined {
 }
 
 function configuredWorkspaceBase(
-  options: CreateDenoPersistentTerminalServiceOptions,
+  options: CreatePersistentTerminalServiceOptions,
 ): string | undefined {
   if (Object.prototype.hasOwnProperty.call(options, "workspaceBase")) {
     return options.workspaceBase?.trim() || undefined;
@@ -73,7 +73,7 @@ function configuredWorkspaceBase(
 }
 
 function configuredArtifactLimit(
-  options: CreateDenoPersistentTerminalServiceOptions,
+  options: CreatePersistentTerminalServiceOptions,
 ): number {
   if (options.maxArtifactBytes !== undefined) {
     return positiveInteger(
@@ -127,7 +127,7 @@ export function buildPersistentTerminalSessionKey(
   ].join(":");
 }
 
-export function buildDenoTerminalWorkspaceRoot(
+export function buildTerminalWorkspaceRoot(
   input: Readonly<{
     namespace: string;
     project: string;
@@ -228,8 +228,8 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 /** Creates a worker-local Deno shell service. The caller owns shutdown. */
-export function createDenoPersistentTerminalService(
-  options: CreateDenoPersistentTerminalServiceOptions = {},
+export function createPersistentTerminalService(
+  options: CreatePersistentTerminalServiceOptions = {},
 ): PersistentTerminalService {
   const isolatedBase = configuredWorkspaceBase(options);
   const projectRoot = resolve(options.projectRoot ?? Deno.cwd());
@@ -426,7 +426,7 @@ export function createDenoPersistentTerminalService(
       context.agentId,
       scope,
     );
-    const workspaceRoot = buildDenoTerminalWorkspaceRoot({
+    const workspaceRoot = buildTerminalWorkspaceRoot({
       namespace: context.namespace,
       project,
       agentId: context.agentId,

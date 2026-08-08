@@ -1,21 +1,25 @@
 export {
-  createDenoProcessToolsPlugin,
-  createDenoWorkspaceToolsPlugin,
-  DENO_PROCESS_TOOL_IDS,
-  DENO_WORKSPACE_TOOL_IDS,
+  createProcessToolsPlugin,
+  createWorkspaceToolsPlugin,
+  PROCESS_TOOL_IDS,
+  WORKSPACE_TOOL_IDS,
 } from "./tools.ts";
-export { createDenoSkillResourceReader } from "./skills.ts";
+export { buildOpenSkillsPlugin } from "./skills.ts";
+export type {
+  BuildOpenSkillsPluginOptions,
+  OpenSkillsPluginBuild,
+} from "./skills.ts";
 export {
-  buildDenoTerminalWorkspaceRoot,
   buildPersistentTerminalSessionKey,
-  createDenoPersistentTerminalService,
+  buildTerminalWorkspaceRoot,
+  createPersistentTerminalService,
   normalizeTerminalFilePath,
   resolveTerminalFilePath,
 } from "./persistent-terminal.ts";
-export type { CreateDenoPersistentTerminalServiceOptions } from "./persistent-terminal.ts";
+export type { CreatePersistentTerminalServiceOptions } from "./persistent-terminal.ts";
 export type {
-  CreateDenoProcessToolsPluginOptions,
-  CreateDenoWorkspaceToolsPluginOptions,
-  DenoProcessToolId,
-  DenoWorkspaceToolId,
+  CreateProcessToolsPluginOptions,
+  CreateWorkspaceToolsPluginOptions,
+  ProcessToolId,
+  WorkspaceToolId,
 } from "./tools.ts";

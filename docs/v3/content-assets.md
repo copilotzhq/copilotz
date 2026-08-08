@@ -623,8 +623,8 @@ imports in core.
   Streams, never database frame records.
 - The default private host can use an in-memory body backend only for explicitly
   non-durable operation.
-- A remote/shared host requires a storage backend visible to both producer and
-  worker, or a scoped content-transfer workload.
+- A remote/shared execution topology requires a storage backend visible to both
+  producer and worker, or a scoped content-transfer workload.
 - Copilotz owns and closes only the private host/session it created. An injected
   dispatcher, target, session, or storage backend remains app-owned.
 

@@ -9,7 +9,7 @@ import type { Agent, API, MCPServer } from "../resources/index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import type { ContentInput } from "../content/index.ts";
 import type { ProviderAPI } from "../llm/types.ts";
-import type { Skill } from "../resources/index.ts";
+import { createSkillsPlugin, defineInlineSkill } from "../skills/index.ts";
 import type {
   ChatRequest,
   ChatResponse,
@@ -54,7 +54,10 @@ const north: Agent = {
   name: "north",
   role: "assistant",
   instructions: "You are north.",
-  allowedTools: ["contract_tool"],
+  capabilities: {
+    tools: ["contract_tool"],
+    skills: ["contract-skill"],
+  },
   llmOptions: {
     provider: "openai",
     model: "primary-model",
@@ -70,14 +73,14 @@ const south: Agent = {
   instructions: "You are south.",
 };
 
-const contractSkill: Skill = {
-  name: "contract-skill",
-  description: "A prompt-visible contract skill.",
-  content: "Use the contract skill carefully.",
-  source: "bundled",
-  sourcePath: "contract-skill",
-  hasReferences: false,
-};
+const contractSkill = defineInlineSkill({
+  directoryName: "contract-skill",
+  markdown: `---
+name: contract-skill
+description: A prompt-visible contract skill.
+---
+Use the contract skill carefully.`,
+});
 
 function toolCall(id: string, value: string): ToolInvocation {
   return {
@@ -242,7 +245,6 @@ async function createFixture(
       version: "1.0.0",
       provides: {
         agents: [agent, ...additionalAgents].map((candidate) => candidate.id),
-        skills: [contractSkill.name],
         tools: [tool, ...(generatedResources.tools ?? [])].map((candidate) =>
           candidate.key
         ),
@@ -261,7 +263,6 @@ async function createFixture(
     },
     resources: {
       agents: [agent, ...additionalAgents],
-      skills: [contractSkill],
       tools: [tool, ...(generatedResources.tools ?? [])],
       providers: [provider],
       ...(generatedResources.apis?.length
@@ -273,7 +274,15 @@ async function createFixture(
     },
   });
   const registry = await createPluginRegistry({
-    plugins: [createTextWorkflowPlugin({ ...workflowOptions, chat }), app],
+    plugins: [
+      createTextWorkflowPlugin({ ...workflowOptions, chat }),
+      createSkillsPlugin({
+        id: "test.text-workflow.skills",
+        version: "1.0.0",
+        skills: [contractSkill],
+      }),
+      app,
+    ],
   });
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
@@ -377,7 +386,15 @@ async function waitForRun(
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error("Timed out waiting for the causal workflow to settle.");
+  const deliveries = await fixture.engine.deliveries.list({
+    namespace: "tenant-a",
+    limit: 100,
+  });
+  throw new Error(
+    `Timed out waiting for the causal workflow to settle: ${
+      JSON.stringify(deliveries)
+    }`,
+  );
 }
 
 async function waitForSettlement(
@@ -919,6 +936,8 @@ Deno.test("prompt construction preserves resolvers, transforms, skills, memory, 
       assertStringIncludes(serialized, "history transform marker");
       assertEquals(request.tools?.map((tool) => tool.function.name), [
         "contract_tool",
+        "list_skills",
+        "load_skill",
       ]);
       await lifecycleStarted(request, 0, "primary-model");
       await lifecycleSettled(request, {
@@ -960,7 +979,7 @@ Deno.test("prompt construction preserves resolvers, transforms, skills, memory, 
           "history transform marker",
         );
         assertEquals(input.thread.id, "thread-a");
-        assertEquals(input.tools.length, 1);
+        assertEquals(input.tools.length, 3);
         return input.baseConfig;
       },
     },
@@ -971,6 +990,43 @@ Deno.test("prompt construction preserves resolvers, transforms, skills, memory, 
     assertEquals(instructionCalls, 1);
     assertEquals(transformCalls, 1);
     assertEquals(configCalls, 1);
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("prompt omits skills when the agent cannot load their instructions", async () => {
+  const withoutSkillLoader: Agent = {
+    ...north,
+    capabilities: { tools: ["contract_tool"] },
+  };
+  const fixture = await createFixture(
+    async (request) => {
+      const serialized = JSON.stringify(request.messages);
+      assert(!serialized.includes("AVAILABLE SKILLS"));
+      assert(!serialized.includes("contract-skill"));
+      assertEquals(request.tools?.map((tool) => tool.function.name), [
+        "contract_tool",
+      ]);
+      await lifecycleStarted(request, 0, "primary-model");
+      await lifecycleSettled(request, {
+        attemptIndex: 0,
+        model: "primary-model",
+        status: "completed",
+        recoveryAction: "accept",
+      });
+      return response(request, {
+        answer: "skill loader correctly omitted",
+        model: "primary-model",
+      });
+    },
+    undefined,
+    {},
+    withoutSkillLoader,
+  );
+  try {
+    const root = await startRun(fixture, "Exercise skill tool policy.");
+    await waitForRun(fixture, root.event.id, 2);
   } finally {
     await closeFixture(fixture);
   }
@@ -1316,7 +1372,7 @@ Deno.test("OpenAPI and MCP descriptors resolve worker-locally for both prompt an
     ...north,
     id: "generated-agent",
     name: "generated-agent",
-    allowedTools: ["api_lookup", "contract_mcp_ping"],
+    capabilities: { tools: ["api_lookup", "contract_mcp_ping"] },
   };
   let logicalCalls = 0;
   const fixture = await createFixture(
@@ -1428,7 +1484,7 @@ Deno.test("tool pipelines keep jq internal, persist actual stages, and resume on
     ...north,
     id: "pipeline-agent",
     name: "pipeline-agent",
-    allowedTools: ["extract", "analyze"],
+    capabilities: { tools: ["extract", "analyze"] },
   };
   let logicalCalls = 0;
   let jqCalls = 0;

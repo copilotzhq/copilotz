@@ -40,11 +40,6 @@ export type CreateServerWorkflowToolCatalogOptions = Readonly<{
   generateApiTools?: GenerateApiWorkflowTools;
 }>;
 
-export type CreateStdioServerWorkflowToolCatalogOptions = Omit<
-  CreateServerWorkflowToolCatalogOptions,
-  "connectMcp"
->;
-
 export type CreateServerWorkflowToolCatalog = (
   options?: CreateServerWorkflowToolCatalogOptions,
 ) => WorkflowToolCatalog;

@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertExists } from "@std/assert";
-import { createWorkerHost } from "../../dependencies/oxian-host.ts";
+import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
+import { createWorker } from "../../dependencies/oxian-worker.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import {
   createCoreSchemaStatements,
@@ -112,7 +113,7 @@ Deno.test("A24 private in-process Oxian recovers and executes a durable delivery
     workerId: "copilotz-private-test",
   });
   try {
-    assertEquals(executor.ownership, "private_host");
+    assertEquals(executor.ownership, "private_hypervisor");
     const recovery = await executor.dispatchRecoverable({
       namespace: "tenant-a",
     });
@@ -209,39 +210,47 @@ Deno.test("concurrent local dispatch calls share one physical delivery attempt",
   }
 });
 
-Deno.test("A52 a shared host survives Copilotz worker shutdown", async () => {
+Deno.test("A52 a shared Hypervisor survives Copilotz worker shutdown", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
-  const host = createWorkerHost({
+  const hypervisor = createHypervisor({
     persistAcceptance: () => Promise.resolve(),
   });
   const executor = createDeliveryExecutor({
     store: fixture.store,
     registry: fixture.registry,
-    host,
+    hypervisor,
     workerId: "shared-copilotz",
   });
+  let applicationRun: Promise<unknown> | undefined;
   try {
-    assertEquals(executor.ownership, "shared_host");
+    assertEquals(executor.ownership, "shared_hypervisor");
     const result = await (await executor.dispatchDelivery(
       committed.deliveries[0],
     )).done;
     assertEquals(result.delivery.status, "succeeded");
 
     await executor.shutdown();
-    assertEquals(host.snapshot().workers, 0);
-    host.attachInProcessWorker({
-      workerId: "application-worker",
+    assertEquals(hypervisor.snapshot().inProcessWorkers, 0);
+    const applicationWorker = createWorker({
+      id: "application-worker",
+      transport: { type: "in-process", hypervisor },
       workloads: {
         "application.probe.v1": () => ({ metadata: { alive: true } }),
       },
     });
-    const probe = await host.dispatch({ workload: "application.probe.v1" });
+    applicationRun = applicationWorker.run();
+    void applicationRun.catch(() => {});
+    await applicationWorker.whenReady();
+    const probe = await hypervisor.dispatch({
+      workload: "application.probe.v1",
+    });
     assertEquals(await probe.metadata, { alive: true });
     assertEquals((await probe.completed).status, "completed");
   } finally {
     await executor.shutdown();
-    await host.shutdown();
+    await hypervisor.shutdown();
+    if (applicationRun) await applicationRun;
     await closeFixture(fixture);
   }
 });
@@ -249,11 +258,12 @@ Deno.test("A52 a shared host survives Copilotz worker shutdown", async () => {
 Deno.test("A53 remote dispatch contains serializable identities and resolves on the worker", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
-  const host = createWorkerHost({
+  const hypervisor = createHypervisor({
     persistAcceptance: () => Promise.resolve(),
   });
-  host.attachInProcessWorker({
-    workerId: "external-copilotz",
+  const worker = createWorker({
+    id: "external-copilotz",
+    transport: { type: "in-process", hypervisor },
     workloads: {
       "copilotz.delivery.v1": createDeliveryWorkload({
         store: fixture.store,
@@ -261,6 +271,9 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
       }),
     },
   });
+  const running = worker.run();
+  void running.catch(() => {});
+  await worker.whenReady();
   const captured: unknown[] = [];
   const dispatcher: DeliveryDispatcher = {
     dispatch(input) {
@@ -268,7 +281,7 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
       const encoded = JSON.stringify(input.metadata);
       assert(!encoded.includes("function"));
       captured.push(JSON.parse(encoded));
-      return host.dispatch(input);
+      return hypervisor.dispatch(input);
     },
   };
   const executor = createDeliveryExecutor({
@@ -296,11 +309,13 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
     });
 
     await executor.shutdown();
-    assertEquals(host.snapshot().workers, 1);
-    assertExists(host.sessions.get("external-copilotz"));
+    assertEquals(hypervisor.snapshot().inProcessWorkers, 1);
+    assertExists(hypervisor.sessions.get("external-copilotz"));
   } finally {
     await executor.shutdown();
-    await host.shutdown();
+    await worker.stop();
+    await running;
+    await hypervisor.shutdown();
     await closeFixture(fixture);
   }
 });
@@ -308,7 +323,7 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
 Deno.test("A55 delivery execution core is factory-first and runtime-neutral", async () => {
   for (const module of ["executor.ts", "index.ts", "types.ts", "workload.ts"]) {
     const source = await Deno.readTextFile(new URL(module, import.meta.url));
-    assert(!/\bDeno\b|\bBun\b|\bprocess\b/.test(source), module);
+    assert(!/\b(?:Deno|Bun|process)\./.test(source), module);
     assert(!/from\s+["']node:/.test(source), module);
     assert(!/\bclass\s+\w+/.test(source), module);
     assert(!/runtime\/cli|server\//.test(source), module);

@@ -39,9 +39,9 @@ work.
 
 Oxian dispatches logical workload identities. Copilotz dispatch payloads contain
 delivery/resource IDs, never serialized closures or physical worker identity.
-The default application attaches one Copilotz worker to a private in-process
-host. An embedding app may inject a shared host or a dispatcher/target owned by
-its hypervisor.
+The default application binds Copilotz Workers to a private Hypervisor with
+in-process transports. An embedding app may inject a shared Hypervisor or a
+dispatcher/target whose Workers are already hosted elsewhere.
 
 ## Plugin model
 
@@ -54,6 +54,15 @@ and storage capabilities. Composition is deterministic:
 3. explicit application resources
 
 A later resource with the same type and stable ID replaces the earlier one.
+Skills remain optional plugin resources: standard directories are packed before
+runtime, and their instructions/files are disclosed lazily through the plugin's
+portable reader.
+
+Availability is separate from authority. Agents receive explicit tool, agent,
+and skill grants; omission means none, while `{ all: true }` is the deliberate
+broad-access form. `ask` and skill disclosure tools are derived implementation
+mechanisms of higher-level grants. Application introspection resolves the same
+catalog used by prompts and durable execution.
 
 ## Stream model
 

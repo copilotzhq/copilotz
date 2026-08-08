@@ -11,6 +11,7 @@
     "./adapters/node": "./runtime/adapters/node/index.ts",
     "./adapters/stdio": "./runtime/adapters/stdio.ts",
     "./application": "./runtime/application/index.ts",
+    "./capabilities": "./runtime/capabilities/index.ts",
     "./attachments": "./runtime/attachments/index.ts",
     "./channels": "./runtime/channels/index.ts",
     "./content": "./runtime/content/index.ts",
@@ -44,7 +45,6 @@
       "docs/**/*.md",
       "docs/manifest.json",
       "migration/v1/index.ts",
-      "resources/skills/**/SKILL.ts",
       "runtime/**/*.ts",
       "server/**/*.ts",
       "utils/**/*.ts"
@@ -67,14 +67,14 @@
     "raw-imports"
   ],
   "imports": {
-    "@std/assert": "jsr:@std/assert@1"
+    "@std/assert": "jsr:@std/assert@1",
+    "@std/yaml": "jsr:@std/yaml@1"
   },
   "minimumDependencyAge": {
     "age": "P1D",
     "exclude": ["jsr:@oxian/ominipg", "jsr:@oxian/oxian-js"]
   },
   "tasks": {
-    "gen:skills": "deno run -A scripts/generate-skill-js.ts",
     "bundle:runtime-smoke": "deno bundle --platform=browser contracts/runtime/runtime-neutral-smoke.ts --output=dist/runtime-neutral-smoke.mjs",
     "bundle:edge-smoke": "deno bundle --platform=browser contracts/runtime/edge-worker-smoke.ts --output=dist/edge-worker-smoke.mjs",
     "smoke:deno": "deno run contracts/runtime/run-smoke.ts",

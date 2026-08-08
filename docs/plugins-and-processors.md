@@ -55,6 +55,10 @@ plugins: [
 `imports` selects stable resources. `presets` expands selectors declared by the
 plugin manifest. A plugin manifest must exactly match the resources it exports.
 
+Installing a tool, agent, or skill resource does not grant it to every agent.
+Agents use explicit `capabilities`; see
+[agent capabilities](agent-capabilities.md).
+
 ## Processor semantics
 
 - Processor IDs are logical consumer IDs. Different IDs run independently.
@@ -74,4 +78,6 @@ LLM attempts, tool executions, events, resources, schedules, and knowledge—not
 raw SQL or graph mutation primitives.
 
 Detailed contracts: [plugins/resources](v3/plugins-and-resources.md) and
-[event-native collections](v3/event-native-collections.md).
+[event-native collections](v3/event-native-collections.md). Skills use the same
+resource precedence while keeping their standard directories outside runtime;
+see [skills](skills.md).

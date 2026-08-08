@@ -1,13 +1,13 @@
 import { assert, assertEquals } from "@std/assert";
 
-import {
-  createNodeInteractiveCliIo,
-  startNodeInteractiveCli,
-} from "./index.ts";
+import * as nodeAdapter from "./index.ts";
+import { createInteractiveCliIo, startInteractiveCli } from "./index.ts";
 
 Deno.test("Node CLI adapter explicitly owns readline terminal access", async () => {
-  assertEquals(typeof createNodeInteractiveCliIo, "function");
-  assertEquals(typeof startNodeInteractiveCli, "function");
+  assertEquals(typeof createInteractiveCliIo, "function");
+  assertEquals(typeof startInteractiveCli, "function");
+  assertEquals("createNodeInteractiveCliIo" in nodeAdapter, false);
+  assertEquals("startNodeInteractiveCli" in nodeAdapter, false);
   const source = await Deno.readTextFile(new URL("cli.ts", import.meta.url));
   assert(/from\s+["']node:readline\/promises["']/.test(source));
   assert(/from\s+["']node:process["']/.test(source));

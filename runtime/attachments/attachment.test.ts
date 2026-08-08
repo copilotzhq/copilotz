@@ -1,7 +1,8 @@
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
-import { createWorkerHost } from "../../dependencies/oxian-host.ts";
+import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
+import { createWorker } from "../../dependencies/oxian-worker.ts";
 import type { Agent } from "../resources/index.ts";
 import type { SqlSession } from "../events/index.ts";
 import { createSqlSession } from "../events/index.ts";
@@ -759,20 +760,24 @@ Deno.test("concurrent realtime outputs retain distinct participant labels", asyn
 
 Deno.test("injected stream dispatcher survives engine shutdown", async () => {
   const registry = await registryFor();
-  const host = createWorkerHost({
+  const hypervisor = createHypervisor({
     persistAcceptance: () => Promise.resolve(),
   });
-  host.attachInProcessWorker({
-    workerId: "application-worker",
+  const worker = createWorker({
+    id: "application-worker",
+    transport: { type: "in-process", hypervisor },
     workloads: {
       [COPILOTZ_STREAM_WORKLOAD]: createRealtimeStreamWorkload({ registry }),
       "application.probe.v1": () => ({ metadata: { alive: true } }),
     },
   });
+  const running = worker.run();
+  void running.catch(() => {});
+  await worker.whenReady();
   const fixture = await createFixture({
     registry,
     execution: {
-      dispatcher: host,
+      dispatcher: hypervisor,
       target: { workerId: "application-worker" },
     },
   });
@@ -797,8 +802,8 @@ Deno.test("injected stream dispatcher survives engine shutdown", async () => {
     await reader.cancel();
 
     await fixture.engine.shutdown();
-    assertEquals(host.snapshot().workers, 1);
-    const probe = await host.dispatch({
+    assertEquals(hypervisor.snapshot().inProcessWorkers, 1);
+    const probe = await hypervisor.dispatch({
       workload: "application.probe.v1",
       target: { workerId: "application-worker" },
     });
@@ -806,7 +811,9 @@ Deno.test("injected stream dispatcher survives engine shutdown", async () => {
     assertEquals((await probe.completed).status, "completed");
   } finally {
     await fixture.engine.shutdown();
-    await host.shutdown();
+    await worker.stop();
+    await running;
+    await hypervisor.shutdown();
     await fixture.db.close();
   }
 });

@@ -21,7 +21,6 @@ import type {
   CreateFinanceToolsPluginOptions,
   CreateWebToolsPluginOptions,
 } from "../tools/index.ts";
-import type { CreateBundledSkillsPluginOptions } from "../skills/index.ts";
 import type { CreateUsageWorkflowPluginOptions } from "../usage/index.ts";
 import type { CreateScheduledJobsPluginOptions } from "../schedules/index.ts";
 import type { CreateKnowledgePluginOptions } from "../knowledge/index.ts";
@@ -30,6 +29,7 @@ import type {
   CreateAgentAskPluginOptions,
   CreateBuiltInLlmProvidersPluginOptions,
   CreateTextWorkflowPluginOptions,
+  WorkflowToolCatalog,
 } from "../workflows/index.ts";
 
 export type CorePluginSetting<T> = false | Readonly<T>;
@@ -40,7 +40,6 @@ export type CopilotzCorePluginOptions = Readonly<{
   tools?: CorePluginSetting<CreateBuiltInToolsPluginOptions>;
   webTools?: CorePluginSetting<CreateWebToolsPluginOptions>;
   finance?: CorePluginSetting<CreateFinanceToolsPluginOptions>;
-  skills?: CorePluginSetting<CreateBundledSkillsPluginOptions>;
   memory?: CorePluginSetting<CreateLongTermMemoryPluginOptions>;
   usage?: CorePluginSetting<CreateUsageWorkflowPluginOptions>;
   text?: CorePluginSetting<CreateTextWorkflowPluginOptions>;
@@ -60,6 +59,8 @@ export type CreateCopilotzApplicationOptions = Readonly<{
   plugins?: readonly PluginSource[];
   resources?: PluginResources;
   pluginResolver?: PluginResolver;
+  /** Canonical static/generated tool catalog shared by execution and introspection. */
+  toolCatalog?: WorkflowToolCatalog;
   engine?: Omit<
     CreateCopilotzEngineOptions,
     "session" | "registry" | "schema"
@@ -97,6 +98,7 @@ export type CopilotzApplication =
   >
   & Readonly<{
     config: CopilotzApplicationConfig;
+    capabilities: AgentCapabilityResolver;
     /** Lower-level engine for adapters that need the complete explicit scope. */
     engine: CopilotzEngine;
     connect(input: ApplicationConnectInput): Promise<ThreadAttachment>;
@@ -108,4 +110,6 @@ export type CopilotzApplication =
 
 export type CreateCopilotzCorePlugins = (
   options?: false | CopilotzCorePluginOptions,
+  defaults?: Readonly<{ toolCatalog?: WorkflowToolCatalog }>,
 ) => readonly CopilotzPlugin[];
+import type { AgentCapabilityResolver } from "../capabilities/index.ts";

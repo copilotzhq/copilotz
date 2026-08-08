@@ -1,4 +1,4 @@
-import type { Agent, Skill } from "../resources/index.ts";
+import type { Agent } from "../resources/index.ts";
 import {
   type Participant,
   type ParticipantInput,
@@ -18,25 +18,11 @@ export const BUILT_IN_CORE_TOOL_IDS = [
   "read_tool_result",
   "update_my_memory",
   "update_user_memory",
-  "list_skills",
-  "load_skill",
   "create_thread",
   "end_thread",
 ] as const;
 
-export const ADAPTER_CORE_TOOL_IDS = ["read_skill_resource"] as const;
-
-export type BuiltInCoreToolId =
-  | typeof BUILT_IN_CORE_TOOL_IDS[number]
-  | typeof ADAPTER_CORE_TOOL_IDS[number];
-
-export type SkillResourceReader = (
-  input: Readonly<{
-    skill: Skill;
-    path: string;
-    signal: AbortSignal;
-  }>,
-) => Promise<string | Uint8Array>;
+export type BuiltInCoreToolId = typeof BUILT_IN_CORE_TOOL_IDS[number];
 
 export type CreateBuiltInToolsPluginOptions = Readonly<{
   id?: string;
@@ -44,7 +30,6 @@ export type CreateBuiltInToolsPluginOptions = Readonly<{
   include?: readonly BuiltInCoreToolId[];
   now?: () => Date;
   sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
-  readSkillResource?: SkillResourceReader;
 }>;
 
 type JsonRecord = Record<string, unknown>;
@@ -144,42 +129,6 @@ function assetIdFrom(
     throw new Error("Asset ref does not belong to the active namespace.");
   }
   return requiredText(segments[1], "Asset ID");
-}
-
-function availableSkills(ctx: WorkflowToolExecutionContext): readonly Skill[] {
-  const values = ctx.processor.resources.list<Skill>("skills");
-  const agent = ctx.agent ??
-    (ctx.execution.agentId
-      ? ctx.processor.resources.get<Agent>("agents", ctx.execution.agentId)
-      : undefined);
-  if (!agent) return values;
-  if (agent.allowedSkills === null) return Object.freeze([]);
-  if (!Array.isArray(agent.allowedSkills)) return values;
-  const selected = new Set(agent.allowedSkills);
-  return Object.freeze(values.filter((skill) => selected.has(skill.name)));
-}
-
-function skillByName(
-  ctx: WorkflowToolExecutionContext,
-  name: unknown,
-): Skill {
-  const id = requiredText(name, "Skill name");
-  const skill = availableSkills(ctx).find((candidate) => candidate.name === id);
-  if (!skill) {
-    throw new Error(`Skill '${id}' is not available to this agent.`);
-  }
-  return skill;
-}
-
-function safeSkillPath(value: unknown): string {
-  const input = requiredText(value, "Skill resource path").replaceAll(
-    "\\",
-    "/",
-  );
-  if (input.startsWith("/") || input.split("/").some((part) => part === "..")) {
-    throw new TypeError("Skill resource path must remain inside references/.");
-  }
-  return input.split("/").filter((part) => part && part !== ".").join("/");
 }
 
 function defaultSleep(
@@ -672,81 +621,6 @@ function updateUserMemoryTool(now: () => Date): WorkflowTool {
   });
 }
 
-function listSkillsTool(): WorkflowTool {
-  return defineTool({
-    key: "list_skills",
-    name: "List Skills",
-    description: "List skills available to the calling agent.",
-    inputSchema: { type: "object", properties: {} },
-    execute: (_raw, value) => {
-      const skills = availableSkills(context(value));
-      return {
-        skills: skills.map((skill) => ({
-          name: skill.name,
-          description: skill.description,
-          tags: skill.tags,
-          hasReferences: skill.hasReferences,
-        })),
-        count: skills.length,
-      };
-    },
-  });
-}
-
-function loadSkillTool(): WorkflowTool {
-  return defineTool({
-    key: "load_skill",
-    name: "Load Skill",
-    description: "Load the complete instructions for an available skill.",
-    inputSchema: {
-      type: "object",
-      properties: { name: { type: "string", minLength: 1 } },
-      required: ["name"],
-    },
-    execute: (raw, value) => {
-      const skill = skillByName(context(value), record(raw).name);
-      return {
-        name: skill.name,
-        description: skill.description,
-        content: skill.content,
-        allowedTools: skill.allowedTools,
-        hasReferences: skill.hasReferences,
-      };
-    },
-  });
-}
-
-function readSkillResourceTool(read: SkillResourceReader): WorkflowTool {
-  return defineTool({
-    key: "read_skill_resource",
-    name: "Read Skill Resource",
-    description:
-      "Read one supporting file through the host's skill capability adapter.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        skill: { type: "string", minLength: 1 },
-        path: { type: "string", minLength: 1 },
-      },
-      required: ["skill", "path"],
-    },
-    async execute(raw, value) {
-      const ctx = context(value);
-      const input = record(raw);
-      const skill = skillByName(ctx, input.skill);
-      const path = safeSkillPath(input.path);
-      const content = await read({ skill, path, signal: ctx.processor.signal });
-      return {
-        skill: skill.name,
-        path,
-        content: typeof content === "string"
-          ? content
-          : new TextDecoder().decode(content),
-      };
-    },
-  });
-}
-
 function participantInput(participant: Participant): ParticipantInput {
   return Object.freeze({
     id: participant.id,
@@ -946,12 +820,7 @@ function toolFactories(options: CreateBuiltInToolsPluginOptions): Readonly<
     read_tool_result: readToolResultTool,
     update_my_memory: updateMyMemoryTool,
     update_user_memory: () => updateUserMemoryTool(now),
-    list_skills: listSkillsTool,
-    load_skill: loadSkillTool,
     create_thread: createThreadTool,
-    read_skill_resource: options.readSkillResource
-      ? () => readSkillResourceTool(options.readSkillResource!)
-      : undefined,
     end_thread: endThreadTool,
   });
 }
@@ -960,11 +829,7 @@ function toolFactories(options: CreateBuiltInToolsPluginOptions): Readonly<
 export function createBuiltInToolsPlugin(
   options: CreateBuiltInToolsPluginOptions = {},
 ): CopilotzPlugin {
-  const defaultIds: BuiltInCoreToolId[] = [
-    ...BUILT_IN_CORE_TOOL_IDS,
-    ...(options.readSkillResource ? ADAPTER_CORE_TOOL_IDS : []),
-  ];
-  const ids = [...new Set(options.include ?? defaultIds)];
+  const ids = [...new Set(options.include ?? BUILT_IN_CORE_TOOL_IDS)];
   const factories = toolFactories(options);
   const tools = Object.freeze(ids.map((id) => {
     const factory = factories[id];

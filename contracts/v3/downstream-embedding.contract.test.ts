@@ -1,5 +1,6 @@
 import { assertEquals, assertExists } from "@std/assert";
-import { createWorkerHost } from "../../dependencies/oxian-host.ts";
+import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
+import { createWorker } from "../../dependencies/oxian-worker.ts";
 
 import {
   type CopilotzProcessorContext,
@@ -76,23 +77,25 @@ function migratedApplicationPlugin() {
   });
 }
 
-Deno.test("downstream app embeds Copilotz with app-owned database, host, and plugin", async () => {
+Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, and plugin", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
-  const host = createWorkerHost({ persistAcceptance: () => Promise.resolve() });
+  const hypervisor = createHypervisor({
+    persistAcceptance: () => Promise.resolve(),
+  });
   const application = await createCopilotzApplication({
     session: database.session,
     namespace: NAMESPACE,
     core: false,
     plugins: [migratedApplicationPlugin()],
     engine: {
-      execution: { host, workerId: "downstream-copilotz" },
+      execution: { hypervisor, workerId: "downstream-copilotz" },
       retryBaseMs: 0,
       random: () => 0,
     },
   });
   try {
     assertEquals(application.config.sessionOwnership, "injected");
-    assertEquals(application.execution.ownership, "shared_host");
+    assertEquals(application.execution.ownership, "shared_hypervisor");
     assertEquals(
       application.plugins.require<LlmProviderResource>(
         "providers",
@@ -135,22 +138,30 @@ Deno.test("downstream app embeds Copilotz with app-owned database, host, and plu
     await application.shutdown();
   }
 
+  let probeRun: Promise<unknown> | undefined;
   try {
-    assertEquals(host.snapshot().workers, 0);
+    assertEquals(hypervisor.snapshot().inProcessWorkers, 0);
     assertEquals((await database.query("SELECT 1 AS alive")).rows[0], {
       alive: 1,
     });
-    host.attachInProcessWorker({
-      workerId: "downstream-probe",
+    const probeWorker = createWorker({
+      id: "downstream-probe",
+      transport: { type: "in-process", hypervisor },
       workloads: {
         "downstream.probe.v1": () => ({ metadata: { alive: true } }),
       },
     });
-    const probe = await host.dispatch({ workload: "downstream.probe.v1" });
+    probeRun = probeWorker.run();
+    void probeRun.catch(() => {});
+    await probeWorker.whenReady();
+    const probe = await hypervisor.dispatch({
+      workload: "downstream.probe.v1",
+    });
     assertEquals(await probe.metadata, { alive: true });
     assertEquals((await probe.completed).status, "completed");
   } finally {
-    await host.shutdown();
+    await hypervisor.shutdown();
+    if (probeRun) await probeRun;
     await database.close();
   }
 });

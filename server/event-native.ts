@@ -192,8 +192,8 @@ function publicAgent(agent: Agent): Readonly<Record<string, unknown>> {
     name: agent.name,
     role: agent.role ?? null,
     ...(agent.runtimes ? { runtimes: structuredClone(agent.runtimes) } : {}),
-    ...(Array.isArray(agent.allowedTools)
-      ? { allowedTools: [...agent.allowedTools] }
+    ...(agent.capabilities
+      ? { capabilities: structuredClone(agent.capabilities) }
       : {}),
   });
 }

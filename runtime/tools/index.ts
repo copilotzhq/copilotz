@@ -1,12 +1,10 @@
 export {
-  ADAPTER_CORE_TOOL_IDS,
   BUILT_IN_CORE_TOOL_IDS,
   createBuiltInToolsPlugin,
 } from "./core-plugin.ts";
 export type {
   BuiltInCoreToolId,
   CreateBuiltInToolsPluginOptions,
-  SkillResourceReader,
 } from "./core-plugin.ts";
 export { createWebToolsPlugin, WEB_TOOL_IDS } from "./web-plugin.ts";
 export type { CreateWebToolsPluginOptions, WebToolId } from "./web-plugin.ts";

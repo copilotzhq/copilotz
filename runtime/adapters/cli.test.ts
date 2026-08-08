@@ -5,7 +5,14 @@ import { type InteractiveCliIo, startInteractiveCli } from "../cli.ts";
 import { createEphemeralEvent } from "../events/index.ts";
 
 Deno.test("portable CLI preserves interactive run, rendering, and session commands", async () => {
-  const answers = ["hello", "/status", "/exit"];
+  const answers = [
+    "hello",
+    "/agents",
+    "/tools",
+    "/skills",
+    "/status",
+    "/exit",
+  ];
   const output: string[] = [];
   let ioClosed = 0;
   const io: InteractiveCliIo = Object.freeze({
@@ -26,8 +33,12 @@ Deno.test("portable CLI preserves interactive run, rendering, and session comman
       participant: "user-a",
       recipientIds: ["agent-a"],
     },
-    agents: [{ id: "support", name: "Support" }],
-    tools: [{ key: "lookup" }],
+    inspect: () => ({
+      agent: { id: "support", name: "Support" },
+      agents: [],
+      tools: [{ key: "lookup" }],
+      skills: [{ name: "support-guide", description: "Support guidance" }],
+    }),
     performRun(message) {
       messages.push(message);
       const event = createEphemeralEvent({
@@ -64,7 +75,103 @@ Deno.test("portable CLI preserves interactive run, rendering, and session comman
   assertStringIncludes(rendered, "assistant Support");
   assertStringIncludes(rendered, "answer>");
   assertStringIncludes(rendered, "last event id: event-a");
+  assertStringIncludes(rendered, "Available tools: 1");
+  assertStringIncludes(rendered, "support-guide: Support guidance");
   assertStringIncludes(rendered, "Ending session. Goodbye.");
+});
+
+Deno.test("portable CLI renders one labelled line for a streamed tool-call draft", async () => {
+  const answers = ["what time is it?", "/exit"];
+  const output: string[] = [];
+  const io: InteractiveCliIo = Object.freeze({
+    question: () => Promise.resolve(answers.shift() ?? "/exit"),
+    write: (value) => output.push(value),
+    close: () => undefined,
+  });
+  const agent = { name: "Support" };
+  const frame = (
+    type: "text.delta" | "tool_call.delta",
+    payload: Record<string, unknown>,
+  ) =>
+    createEphemeralEvent({
+      type,
+      namespace: "tenant-a",
+      threadId: "thread-a",
+      payload: { ...payload, agent },
+      correlationId: "correlation-a",
+    });
+  const events = [
+    frame("text.delta", { text: "Checking now." }),
+    frame("tool_call.delta", {
+      providerAttemptId: "attempt-a",
+      draftId: "attempt-a:0",
+      callIndex: 0,
+      sequence: 0,
+      toolName: "get_current_time",
+      phase: "start",
+      delta: '{"name":"get_current_time"',
+    }),
+    frame("tool_call.delta", {
+      providerAttemptId: "attempt-a",
+      draftId: "attempt-a:0",
+      callIndex: 0,
+      sequence: 1,
+      toolName: "get_current_time",
+      phase: "delta",
+      delta: ',"arguments":',
+    }),
+    frame("tool_call.delta", {
+      providerAttemptId: "attempt-a",
+      draftId: "attempt-a:0",
+      callIndex: 0,
+      sequence: 2,
+      toolName: "get_current_time",
+      phase: "delta",
+      delta: '{"timezone":"local"}}',
+    }),
+    frame("tool_call.delta", {
+      providerAttemptId: "attempt-a",
+      draftId: "attempt-a:0",
+      callIndex: 0,
+      sequence: 3,
+      toolName: "get_current_time",
+      phase: "complete",
+      delta: "",
+      toolCallId: "call-a",
+    }),
+    frame("text.delta", { text: "It is noon." }),
+  ];
+  const handle = startInteractiveCli({
+    io,
+    scope: {
+      namespace: "tenant-a",
+      thread: "thread-a",
+      participant: "user-a",
+      recipientIds: ["agent-a"],
+    },
+    performRun() {
+      return Promise.resolve({
+        eventId: "event-a",
+        threadId: "thread-a",
+        correlationId: "correlation-a",
+        events: new ReadableStream({
+          start(controller) {
+            for (const event of events) controller.enqueue(event);
+            controller.close();
+          },
+        }),
+        done: Promise.resolve(),
+        cancel: () => Promise.resolve(),
+      });
+    },
+  });
+
+  await handle.closed;
+  const rendered = output.join("");
+  assertEquals(rendered.match(/tool>\x1b\[0m get_current_time/g)?.length, 1);
+  assertEquals(rendered.includes("tool>\x1b[0m tool"), false);
+  assertEquals(rendered.match(/answer>/g)?.length, 2);
+  assertStringIncludes(rendered, "It is noon.");
 });
 
 Deno.test("portable CLI is factory-first and imports no host terminal API", async () => {

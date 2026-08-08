@@ -1,10 +1,13 @@
+import type { Hypervisor } from "../../dependencies/oxian-hypervisor.ts";
 import type {
-  InProcessWorker,
-  InProcessWorkerOptions,
-  WorkerHost,
-  WorkerHostDispatchInput,
-  WorkerHostWorkHandle,
-} from "../../dependencies/oxian-host.ts";
+  Dispatcher,
+  WorkHandle,
+  WorkInput,
+} from "../../dependencies/oxian-work.ts";
+import type {
+  Worker,
+  WorkerWorkHandler,
+} from "../../dependencies/oxian-worker.ts";
 import type {
   DurableEvent,
   EventDelivery,
@@ -24,18 +27,13 @@ export type DeliveryDispatchMetadata = Readonly<{
   idempotencyKey: string;
 }>;
 
-export type DeliveryDispatcher = Pick<WorkerHost, "dispatch">;
-
-export type DeliveryWorkerHost = Pick<
-  WorkerHost,
-  "dispatch" | "attachInProcessWorker"
->;
-
-export type DeliveryWorkload = InProcessWorkerOptions["workloads"][string];
-export type ExecutionWorkInput = WorkerHostDispatchInput;
-export type ExecutionWorkHandle = WorkerHostWorkHandle;
+export type DeliveryDispatcher = Dispatcher;
+export type DeliveryHypervisor = Hypervisor;
+export type DeliveryWorkload = WorkerWorkHandler;
+export type ExecutionWorkInput = WorkInput;
+export type ExecutionWorkHandle = WorkHandle;
 export type ExecutionWorkTarget = NonNullable<
-  WorkerHostDispatchInput["target"]
+  WorkInput["target"]
 >;
 
 export type LocalWorkloadWorkerOptions = Readonly<{
@@ -114,8 +112,8 @@ export type CreateDeliveryExecutorOptions = Readonly<{
   createContext?: DeliveryContextFactory;
   /** Dispatch to an externally hosted workload. The executor never closes it. */
   dispatcher?: DeliveryDispatcher;
-  /** Attach one Copilotz worker to an application-owned embedded host. */
-  host?: DeliveryWorkerHost;
+  /** Bind Copilotz Workers to an application-owned in-process Hypervisor. */
+  hypervisor?: DeliveryHypervisor;
   target?: Readonly<{ workerId: string }>;
   workload?: string;
   /** Additional application/runtime workloads hosted beside deliveries. */
@@ -135,13 +133,15 @@ export type CreateDeliveryExecutorOptions = Readonly<{
 }>;
 
 export type DeliveryExecutorOwnership =
-  | "private_host"
-  | "shared_host"
+  | "private_hypervisor"
+  | "shared_hypervisor"
   | "injected_dispatcher";
 
 export type DeliveryExecutor = Readonly<{
   ownership: DeliveryExecutorOwnership;
   workload: string;
+  /** Worker-local handlers for embedded or outbound Oxian registration. */
+  workloads: Readonly<Record<string, DeliveryWorkload>>;
   /** Queues post-commit placement without waiting for a worker slot. */
   scheduleDelivery(delivery: string | EventDelivery): void;
   /** Dispatches a non-delivery workload through the same owned target. */
@@ -159,11 +159,11 @@ export type DeliveryExecutor = Readonly<{
 
 export type DeliveryExecutorInternals = Readonly<{
   dispatcher: DeliveryDispatcher;
-  attachedWorkers?: readonly InProcessWorker[];
+  attachedWorkers?: readonly Worker[];
   createHandle(
     delivery: EventDelivery,
     event: DurableEvent,
     attemptId: string,
-    work: WorkerHostWorkHandle,
+    work: WorkHandle,
   ): DeliveryExecutionHandle;
 }>;

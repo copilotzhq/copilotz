@@ -44,15 +44,14 @@ const usage: TokenUsage = {
 
 function agent(
   id: string,
-  allowedAgents: readonly string[] = [],
+  agentCapabilities: readonly string[] = [],
 ): Agent {
   return {
     id,
     name: id,
     role: "assistant",
     instructions: `ACTIVE_AGENT=${id}`,
-    allowedAgents: [...allowedAgents],
-    allowedTools: ["ask"],
+    capabilities: { agents: [...agentCapabilities] },
     llmOptions: { provider: "openai", model: "ask-model" },
   };
 }
@@ -297,7 +296,10 @@ Deno.test("public ask resumes its caller without occupying worker capacity", asy
     calls.push(id);
     const count = (counts.get(id) ?? 0) + 1;
     counts.set(id, count);
-    assertEquals(request.tools?.map((tool) => tool.function.name), ["ask"]);
+    assertEquals(
+      request.tools?.map((tool) => tool.function.name),
+      id === "a" ? ["ask"] : [],
+    );
     if (id === "a" && count === 1) {
       return response(request, {
         answer: "",

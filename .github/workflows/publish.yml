@@ -4,7 +4,8 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches: [main, "release/**"]
+    tags: ["v*"]
   workflow_dispatch:
 
 concurrency:
@@ -102,7 +103,7 @@ jobs:
 
   publish:
     name: Publish to JSR
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [deno-postgres, runtimes, cloudflare, package]
     runs-on: ubuntu-latest
     permissions:
@@ -113,4 +114,8 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.8.2
+      - name: Validate release tag
+        run: >-
+          deno run --allow-read=deno.json scripts/validate_publish_release.ts
+          "${{ github.ref_name }}" "${{ github.ref }}"
       - run: deno publish

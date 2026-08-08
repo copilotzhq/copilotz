@@ -8,9 +8,9 @@ import {
 
 import type { PersistentTerminalServiceContext } from "../../tools/index.ts";
 import {
-  buildDenoTerminalWorkspaceRoot,
   buildPersistentTerminalSessionKey,
-  createDenoPersistentTerminalService,
+  buildTerminalWorkspaceRoot,
+  createPersistentTerminalService,
   normalizeTerminalFilePath,
   resolveTerminalFilePath,
 } from "./persistent-terminal.ts";
@@ -80,7 +80,7 @@ Deno.test("Deno terminal session keys and roots preserve sharing boundaries", ()
     ),
   );
   assertStringIncludes(
-    buildDenoTerminalWorkspaceRoot({
+    buildTerminalWorkspaceRoot({
       namespace: "tenant-a",
       project: "project-a",
       agentId: "agent-a",
@@ -111,7 +111,7 @@ Deno.test("Deno terminal paths remain inside the selected workspace", () => {
 
 Deno.test("Deno persistent terminal keeps shell state and closes owned sessions", async () => {
   const root = await Deno.makeTempDir({ prefix: "copilotz-terminal-" });
-  const terminal = createDenoPersistentTerminalService({
+  const terminal = createPersistentTerminalService({
     projectRoot: root,
     workspaceBase: null,
     createId: () => "fixture",
@@ -152,7 +152,7 @@ Deno.test("Deno persistent terminal keeps shell state and closes owned sessions"
 Deno.test("Deno terminal transfers canonical assets without owning storage", async () => {
   const root = await Deno.makeTempDir({ prefix: "copilotz-terminal-assets-" });
   let published: Uint8Array | undefined;
-  const terminal = createDenoPersistentTerminalService({
+  const terminal = createPersistentTerminalService({
     workspaceBase: root,
     createId: () => "asset-fixture",
   });

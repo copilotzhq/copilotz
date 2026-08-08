@@ -2,9 +2,12 @@ import { assertEquals } from "@std/assert";
 
 import * as copilotz from "../../index.ts";
 import * as adapters from "../../runtime/adapters/index.ts";
+import * as denoAdapters from "../../runtime/adapters/deno/index.ts";
+import * as nodeAdapters from "../../runtime/adapters/node/index.ts";
 import * as stdioAdapters from "../../runtime/adapters/stdio.ts";
 import * as application from "../../runtime/application/index.ts";
 import * as attachments from "../../runtime/attachments/index.ts";
+import * as capabilities from "../../runtime/capabilities/index.ts";
 import * as content from "../../runtime/content/index.ts";
 import * as domain from "../../runtime/domain/index.ts";
 import * as engine from "../../runtime/engine/index.ts";
@@ -55,6 +58,7 @@ Deno.test("v3 root exposes the factory-first application vocabulary", () => {
     "createDeliveryExecutor",
     "createAgentAskPlugin",
     "createTextWorkflowPlugin",
+    "createAgentCapabilityResolver",
   ]);
   for (
     const removed of [
@@ -75,14 +79,28 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
     "createModulePluginResolver",
     "createServerWorkflowToolCatalog",
   ]);
-  assertEquals("connectStdioMcp" in adapters, false);
+  assertEquals("connectMcp" in adapters, false);
   assertFunctions(stdioAdapters, [
-    "connectStdioMcp",
-    "createStdioServerWorkflowToolCatalog",
+    "connectMcp",
+    "createServerWorkflowToolCatalog",
+  ]);
+  assertFunctions(nodeAdapters, [
+    "createInteractiveCliIo",
+    "startInteractiveCli",
+  ]);
+  assertFunctions(denoAdapters, [
+    "buildOpenSkillsPlugin",
+    "createPersistentTerminalService",
+    "createProcessToolsPlugin",
+    "createWorkspaceToolsPlugin",
   ]);
   assertFunctions(attachments, [
     "createAttachmentRuntime",
     "defineRealtimeProviderResource",
+  ]);
+  assertFunctions(capabilities, [
+    "createAgentCapabilityResolver",
+    "selectCapabilityResources",
   ]);
   assertFunctions(content, [
     "createContentPreparer",

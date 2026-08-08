@@ -1,79 +1,177 @@
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 
 import { createPluginRegistry } from "../plugins/index.ts";
 import {
-  BUNDLED_SKILL_IDS,
-  createBundledSkillsPlugin,
-  getBundledSkills,
-} from "./plugin.ts";
-import { parseSkillMarkdown } from "./parser.ts";
+  createSkillsPlugin,
+  defineInlineSkill,
+  defineSkill,
+  parseSkillMarkdown,
+  SKILL_TOOL_IDS,
+} from "./index.ts";
 
-Deno.test("bundled skills are immutable plugin resources with stable IDs", async () => {
-  const plugin = createBundledSkillsPlugin();
-  assertEquals(plugin.manifest.provides.skills, [...BUNDLED_SKILL_IDS]);
-  assertEquals(
-    plugin.resources.skills?.map((value) => (value as { name: string }).name),
-    [...BUNDLED_SKILL_IDS],
-  );
-  assert(getBundledSkills().every((skill) => Object.isFrozen(skill)));
-  const registry = await createPluginRegistry({ core: plugin });
-  assertEquals(registry.list("skills").length, BUNDLED_SKILL_IDS.length);
-  assertEquals(
-    (registry.require("skills", "create-agent") as { source: string }).source,
-    "bundled",
-  );
-});
-
-Deno.test("bundled skills can be selected without changing catalog order", () => {
-  const plugin = createBundledSkillsPlugin({
-    include: ["configure-mcp", "create-agent"],
-  });
-  assertEquals(plugin.manifest.provides.skills, [
-    "configure-mcp",
-    "create-agent",
-  ]);
-  assertThrows(
-    () =>
-      createBundledSkillsPlugin({
-        include: ["create-agent", "create-agent"],
-      }),
-    TypeError,
-    "duplicate IDs",
-  );
-  assertThrows(
-    () =>
-      createBundledSkillsPlugin({
-        include: ["missing" as "create-agent"],
-      }),
-    TypeError,
-    "Unknown bundled skill",
-  );
-});
-
-Deno.test("bundled skill plugin performs no filesystem or network I/O", async () => {
-  const source = await Deno.readTextFile(new URL("plugin.ts", import.meta.url));
-  assert(!/\bDeno\./.test(source));
-  assert(!/\bfetch\s*\(/.test(source));
-  assert(!/from\s+["']node:/.test(source));
-  assert(!/^\s*(?:export\s+)?class\s/m.test(source));
-});
-
-Deno.test("skill frontmatter parsing is permissionless and supports multiline lists", () => {
-  const parsed = parseSkillMarkdown(`---
+const markdown = `---
 name: portable-skill
-allowed-tools: [
-  read_file,
-  write_file,
-]
-enabled: true
+description: Handles portable skill tests when validating runtime behavior.
+license: Apache-2.0
+compatibility: Works in Web API runtimes.
+metadata:
+  author: acme
+  version: "1.0"
+allowed-tools: Read Bash(git:*)
 ---
 # Portable
-`);
 
-  assertEquals(parsed.frontmatter, {
-    name: "portable-skill",
-    "allowed-tools": ["read_file", "write_file"],
-    enabled: true,
+Follow the portable instructions.
+`;
+
+Deno.test("Agent Skills frontmatter uses strict YAML and specification validation", () => {
+  const parsed = parseSkillMarkdown(markdown, {
+    directoryName: "portable-skill",
   });
-  assertEquals(parsed.body, "# Portable");
+  assertEquals(parsed.manifest, {
+    name: "portable-skill",
+    description:
+      "Handles portable skill tests when validating runtime behavior.",
+    license: "Apache-2.0",
+    compatibility: "Works in Web API runtimes.",
+    metadata: { author: "acme", version: "1.0" },
+    allowedTools: "Read Bash(git:*)",
+  });
+  assertEquals(parsed.body, "# Portable\n\nFollow the portable instructions.");
+
+  assertThrows(
+    () => parseSkillMarkdown("# Missing frontmatter"),
+    TypeError,
+    "must begin",
+  );
+  assertThrows(
+    () => parseSkillMarkdown(markdown, { directoryName: "different-skill" }),
+    TypeError,
+    "must match directory",
+  );
+  assertThrows(
+    () =>
+      parseSkillMarkdown(`---
+name: invalid--name
+description: Invalid.
+---`),
+    TypeError,
+    "single hyphens",
+  );
+  assertThrows(
+    () =>
+      parseSkillMarkdown(`---
+name: invalid-tools
+description: Invalid.
+allowed-tools: [Read, Write]
+---`),
+    TypeError,
+    "allowed-tools",
+  );
+  assertThrows(
+    () =>
+      parseSkillMarkdown(`---
+name: invalid-extension
+description: Invalid.
+tags: [test]
+---`),
+    TypeError,
+    "Use metadata",
+  );
+});
+
+Deno.test("skill resources expose eager metadata and lazy bounded file reads", async () => {
+  let reads = 0;
+  const skill = defineSkill({
+    manifest: parseSkillMarkdown(markdown).manifest,
+    files: [{
+      path: "SKILL.md",
+      mediaType: "text/markdown;charset=utf-8",
+    }, {
+      path: "references/guide.md",
+      mediaType: "text/markdown;charset=utf-8",
+    }],
+    read(path) {
+      reads += 1;
+      return path === "SKILL.md" ? markdown : "# Guide";
+    },
+  });
+  assertEquals(skill.name, "portable-skill");
+  assertEquals(reads, 0);
+  assert(Object.isFrozen(skill));
+  assert(Object.isFrozen(skill.files));
+  assertEquals((await skill.read("references/guide.md")).body, "# Guide");
+  assertEquals(reads, 1);
+  const controller = new AbortController();
+  controller.abort(new Error("skill read cancelled"));
+  await assertRejects(
+    () => skill.read("SKILL.md", { signal: controller.signal }),
+    Error,
+    "skill read cancelled",
+  );
+  assertEquals(reads, 1);
+  await assertRejects(
+    () => skill.read("../secret"),
+    TypeError,
+    "inside the skill root",
+  );
+  await assertRejects(
+    () => skill.read("assets/missing.png"),
+    Error,
+    "does not provide",
+  );
+});
+
+Deno.test("skills plugins own disclosure tools and preserve stable-ID overrides", async () => {
+  const first = defineInlineSkill({
+    markdown,
+    directoryName: "portable-skill",
+  });
+  const replacement = defineInlineSkill({
+    markdown: markdown.replace(
+      "Handles portable skill tests when validating runtime behavior.",
+      "Replacement instructions for portable runtime behavior.",
+    ),
+    directoryName: "portable-skill",
+    files: { "references/guide.md": "# Replacement guide" },
+  });
+  const base = createSkillsPlugin({
+    id: "@acme/base-skills",
+    version: "1.0.0",
+    skills: [first],
+  });
+  const overriding = createSkillsPlugin({
+    id: "@acme/overriding-skills",
+    version: "1.0.0",
+    skills: [replacement],
+  });
+  assertEquals(base.manifest.provides.tools, ["list_skills", "load_skill"]);
+  assertEquals(overriding.manifest.provides.tools, [...SKILL_TOOL_IDS]);
+
+  const registry = await createPluginRegistry({
+    plugins: [base, overriding],
+  });
+  assertEquals(
+    registry.require<{ description: string }>("skills", "portable-skill")
+      .description,
+    "Replacement instructions for portable runtime behavior.",
+  );
+  assertEquals(registry.origin("skills", "portable-skill"), {
+    pluginId: "@acme/overriding-skills",
+    pluginVersion: "1.0.0",
+  });
+  assertEquals(
+    registry.list<{ key: string }>("tools").map((tool) => tool.key),
+    [...SKILL_TOOL_IDS],
+  );
+});
+
+Deno.test("skill core remains factory-first and runtime-neutral", async () => {
+  for (const module of ["parser.ts", "plugin.ts", "skill.ts", "tools.ts"]) {
+    const source = await Deno.readTextFile(new URL(module, import.meta.url));
+    assert(!/\bDeno\b|\bBun\b|\bprocess\b/.test(source));
+    assert(!/from\s+["']node:/.test(source));
+    assert(!/^\s*(?:export\s+)?class\s/m.test(source));
+    assert(!/resources\/skills|data:text|sourcePath/.test(source));
+  }
 });

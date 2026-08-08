@@ -16,6 +16,7 @@ const app = await createCopilotz({
       id: "support",
       name: "Support",
       role: "Answer clearly and use tools when useful.",
+      capabilities: {},
       runtimes: {
         text: { type: "llm", provider: "openai", model: "gpt-5-mini" },
       },
@@ -103,8 +104,20 @@ const customerPlugin = definePlugin({
 const app = await createCopilotz({
   namespace: "acme",
   plugins: [customerPlugin],
+  resources: {
+    agents: [{
+      id: "support",
+      name: "Support",
+      role: "Customer support",
+      capabilities: { tools: ["lookup_customer"] },
+    }],
+  },
 });
 ```
+
+Installing a tool and granting it are separate. Omitted capabilities grant
+nothing; see [agent capabilities](agent-capabilities.md) for exact and explicit
+all-resource selections.
 
 Next: [plugins and processors](plugins-and-processors.md) or
 [persistent/realtime attachments](realtime-attachments.md).

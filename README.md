@@ -39,6 +39,7 @@ const copilotz = await createCopilotz({
       id: "support",
       name: "Support",
       role: "Helpful support agent",
+      capabilities: {}, // omission also grants no tools, agents, or skills
       llmOptions: {
         provider: "openai",
         model: "gpt-5-mini",
@@ -93,8 +94,11 @@ is passed once as a `ReadableStream<Uint8Array>` with native backpressure.
 - Plugins compose in deterministic order: core, declared plugins, then explicit
   application resources. Later resources replace earlier resources by type and
   stable ID.
-- Injected Ominipg sessions, Oxian hosts, and dispatchers remain owned by the
-  embedding application.
+- Installed resources do not create ambient agent authority. Exact
+  `capabilities` grants are required; broad access uses explicit
+  `{ all: true }`.
+- Injected Ominipg sessions, Oxian Hypervisors, and dispatchers remain owned by
+  the embedding application.
 - Namespace and schema scope are explicit; no ambient runtime/database context
   is required.
 
@@ -105,9 +109,11 @@ is passed once as a `ReadableStream<Uint8Array>` with native backpressure.
 | `@copilotz/copilotz`               | Normal runtime-neutral application API                              |
 | `/application`, `/engine`          | Assembly and lower-level engine factories                           |
 | `/plugins`, `/resources`           | Plugin composition and logical resource types                       |
+| `/capabilities`                    | Explicit agent grants and canonical introspection                   |
 | `/events`, `/execution`            | Immutable events, deliveries, and Oxian placement                   |
 | `/content`, `/domain`              | Canonical assets and graph-native repositories                      |
 | `/attachments`, `/workflows`       | Text/realtime ingress, LLM/tools, and public agent ask              |
+| `/skills`                          | Optional Open Skill resources and portable disclosure tools         |
 | `/channels`, `/features`, `/admin` | App and transport resources                                         |
 | `/adapters`                        | Runtime-neutral OpenAPI/MCP injection and Ominipg adapters          |
 | `/adapters/stdio`                  | Explicit subprocess-backed MCP stdio capability                     |
@@ -121,6 +127,8 @@ Start with [the v3 quickstart](docs/quickstart.md), then read:
 
 - [Architecture](docs/architecture.md)
 - [Plugins and processors](docs/plugins-and-processors.md)
+- [Agent capabilities](docs/agent-capabilities.md)
+- [Skills](docs/skills.md)
 - [Events, deliveries, and recovery](docs/events-deliveries-recovery.md)
 - [Content and assets](docs/content-assets.md)
 - [Embedding and hypervisors](docs/embedding-and-hypervisors.md)

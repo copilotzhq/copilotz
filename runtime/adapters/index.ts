@@ -16,8 +16,12 @@ export type {
 export { createInteractiveCli, startInteractiveCli } from "../cli.ts";
 export type {
   CliAgent,
+  CliInspect,
+  CliInspection,
   CliPerformRun,
   CliRunScope,
+  CliSkill,
+  CliTool,
   InteractiveCliHandle,
   InteractiveCliIo,
   InteractiveCliOptions,

@@ -270,15 +270,15 @@ built-in processors; that switch remains gated on complete resource and executor
 verticals so there is never a second canonical runtime path.
 
 The Oxian delivery executor is now an isolated Gate 2 seam. It defaults to an
-owned private embedded host, can attach one targeted worker to an injected
-shared host without owning that host, or can dispatch ID-only work to an
-externally hosted workload. The worker claims and heartbeats the durable row
-before resolving the logical processor locally. Contracts cover post-commit
-recovery, retry with one stable idempotency key, concurrent local dispatch
-deduplication, shared-host survival, remote serializability/resource resolution,
-and runtime-neutral factory modules. Stream transport and full Deno/Node/Bun/
-browser/Cloudflare smoke matrices remain gated with attachments and migrated
-provider/storage capabilities.
+owned private Hypervisor with in-process Workers, can bind targeted
+Copilotz-owned Workers to an injected shared Hypervisor without owning it, or
+can dispatch ID-only work to an externally hosted workload. The Worker claims
+and heartbeats the durable row before resolving the logical processor locally.
+Contracts cover post-commit recovery, retry with one stable idempotency key,
+concurrent local dispatch deduplication, shared-Hypervisor survival, remote
+serializability/resource resolution, and runtime-neutral factory modules. Stream
+transport and full Deno/Node/Bun/ browser/Cloudflare smoke matrices remain gated
+with attachments and migrated provider/storage capabilities.
 
 The additive v3 suite is green at 129 tests. It now includes the first
 graph-native participant/thread/message vertical: aggregate atomicity, canonical
@@ -427,21 +427,23 @@ deterministic conversion for existing resource directories and manifests.
 **Coverage:** `runtime/loaders/resources.test.ts`,
 `runtime/loaders/agents-file.test.ts`,
 `runtime/create-copilotz-resources.test.ts`, `utils/merge-resources.test.ts`,
-`resources/core.test.ts`, and `resources/skills/index.test.ts`.
+`resources/core.test.ts`, `runtime/plugins/plugins.test.ts`, and
+`runtime/skills/plugin.test.ts`.
 
 ### F04 — Built-in resource catalog
 
 **Current contract:** the manifest provides five bundled agents; 34 built-in
 tools; 11 processors; participant/history/retrieval/long-term memory; seven LLM
 providers; OpenAI embeddings; filesystem/S3 storage; 15 collections; five
-channels; admin features; 24 skills; and `core`, `rag`, `admin`, `finance`,
-`code`, and `skunk-works` presets.
+channels; admin features; and several presets. It also carried 24
+Copilotz-development skills in every application import.
 
-**Disposition:** Keep, P0. Renaming or repackaging is allowed, but every current
-manifest entry requires a parity row or an approved retirement. The v3 spike’s
-deletion of most of this catalog is explicitly rejected.
+**Disposition:** Keep or explicitly retire, P0. Runtime capabilities require a
+parity row. The generic development-skill catalog is an approved retirement from
+core: those skills belong in a separately versioned optional plugin and must not
+be installed into unrelated applications by default.
 
-**Coverage:** `resources/core.test.ts`, `resources/skills/index.test.ts`, tool,
+**Coverage:** `resources/core.test.ts`, `runtime/skills/plugin.test.ts`, tool,
 provider, channel, memory, and processor tests listed in the appendix. Add A04,
 which compares the declared manifest with loadable resources.
 
@@ -452,7 +454,7 @@ messages, use the interactive `start()` controller, recover work, and shut down
 owned database resources. Injected resources are not implicitly owned.
 
 **Disposition:** Adapt, P0. Add app-owned Oxian dispatcher/target injection and
-private in-process hosting while preserving ownership boundaries. Keep `start()`
+private in-process Workers while preserving ownership boundaries. Keep `start()`
 unless separately retired with CLI replacement.
 
 **Coverage:** `runtime/run-thread.test.ts`, `runtime/recovery.test.ts`,
@@ -814,30 +816,33 @@ feature, downstream sandbox/feature tests, workflow catalog tests, and
 
 ### F26 — Skills and built-in operational tools
 
-**Current contract:** bundled skills and on-demand skill loading, skill resource
-reading, filesystem/code/terminal/web/finance/wait/memory/asset tools, and
-prompt formatting.
+**Current contract:** optional Agent Skills plugins with on-demand instruction
+and resource loading, filesystem/code/terminal/web/finance/wait/memory/asset
+tools, and prompt formatting.
 
 **Disposition:** Keep, P1. Runtime-specific implementations live behind
 capability adapters; unsupported runtimes fail at resource resolution rather
 than making the core runtime non-portable.
 
-**V3 progress:** package-embedded skills are immutable resources from
-`createBundledSkillsPlugin()` and require no filesystem/network load.
-`list_skills` and `load_skill` are portable core tools; `read_skill_resource` is
-present only when a reader capability is injected. `http_request`, `fetch_text`,
-and `web_search` are stable resources from the Web-API-only
-`createWebToolsPlugin()`. Filesystem, code search/write, subprocess/terminal,
-and finance adapters remain host-specific. The explicit Deno subpath now
-packages the existing bounded workspace tools and `run_command`, and supplies a
-skill-reference reader without entering generic core imports. Persistent
-terminal is now a runtime-neutral tool plugin over an explicitly owned service;
-the Deno adapter supplies a closure-backed shell service with scoped sessions,
-canonical asset import/export, cancellation, bounded output, and idempotent
-shutdown. An embedding application owns that service and must pin its plugin to
-a stable worker target when using worker-local shell state. Finance is now a
-factory-created plugin with a closure-backed provider registry and a
-factory-created Yahoo provider; only the narrow `FinanceError` remains a class.
+**V3 implementation:** standard Agent Skills directories are strict canonical
+source. `buildOpenSkillsPlugin()` validates and emits a metadata-only catalog
+plus lazy skill chunks before runtime. `createSkillsPlugin()` contributes the
+skills and owns `list_skills`, `load_skill`, and, when supporting files exist,
+`read_skill_resource`. Generic core installs neither skills nor those tools.
+`allowed-tools` remains compatibility metadata and never grants authority.
+`http_request`, `fetch_text`, and `web_search` are stable resources from the
+Web-API-only `createWebToolsPlugin()`. Filesystem, code search/write,
+subprocess/terminal, and finance adapters remain host-specific. The explicit
+Deno subpath now packages the existing bounded workspace tools and
+`run_command`, and supplies the build-only Open Skill packer without entering
+generic core imports. Persistent terminal is now a runtime-neutral tool plugin
+over an explicitly owned service; the Deno adapter supplies a closure-backed
+shell service with scoped sessions, canonical asset import/export, cancellation,
+bounded output, and idempotent shutdown. An embedding application owns that
+service and must pin its plugin to a stable worker target when using
+worker-local shell state. Finance is now a factory-created plugin with a
+closure-backed provider registry and a factory-created Yahoo provider; only the
+narrow `FinanceError` remains a class.
 
 **Coverage:** skill, filesystem, fetch, terminal, web-search, jq, pipeline, and
 tool-formatting tests plus manifest completeness,
@@ -853,9 +858,11 @@ Oxian now support Deno, Node, Bun, browser, and Cloudflare-compatible execution
 with injected capabilities.
 
 **Disposition:** New/Adapt, P0. The core has no unconditional Deno/Node imports.
-Default execution uses a private in-process host; an injected dispatcher/target
-supports shared hosts and hypervisors. Copilotz shuts down only infrastructure
-it owns. Worker payloads contain resource/delivery IDs, never closures.
+Default execution uses a private Hypervisor with in-process Workers. An injected
+Hypervisor hosts Copilotz-owned Workers, while an injected dispatcher/target
+addresses workloads already hosted elsewhere. Copilotz shuts down only
+infrastructure it owns. Worker payloads contain resource/delivery IDs, never
+closures.
 
 **Coverage:** A24–A27 and A52–A55. Browser/Cloudflare smoke tests use supported
 injected providers and storage; they need not promise local filesystem or CLI
@@ -915,7 +922,7 @@ first subsystem replacement.
 | A49 | Web SSE compatibility               | Current adapter event names and payloads remain available until the adapter migrates.                                                                                   |
 | A50 | Channel round trip                  | Web, WhatsApp, and Zendesk ingress → run → egress, including media/actions, remains correct.                                                                            |
 | A51 | Channel override contract           | Ingress/egress decorators receive stable inputs and can replace output.                                                                                                 |
-| A52 | Shared-host dispatch                | Injected Oxian host executes logical resources without owning app infrastructure.                                                                                       |
+| A52 | Shared-Hypervisor dispatch          | Injected Oxian Hypervisor executes logical resources without transferring ownership of app infrastructure.                                                              |
 | A53 | Remote dispatch contract            | Payloads contain serializable IDs/data only and resolve resources on the worker.                                                                                        |
 | A54 | Stream backpressure transport       | Web Streams preserve pressure/cancellation in process and across the supported remote transport.                                                                        |
 | A55 | Core import portability             | Importing core does not access filesystem, environment, network, CLI, or server APIs.                                                                                   |
@@ -1028,7 +1035,8 @@ Keep behavior; adapt event/content representations and persistence queries:
 - `resources/features/admin/brain.test.ts`
 - `resources/features/admin/events.test.ts`
 - `resources/features/admin/usage.test.ts`
-- `resources/skills/index.test.ts`
+- `runtime/skills/plugin.test.ts`
+- `runtime/adapters/deno/deno-adapter.test.ts` (Open Skill pack/build contract)
 - `resources/tools/_shared/fs-utils.test.ts`
 - `resources/tools/fetch_text/index.test.ts`
 - `resources/tools/persistent_terminal/index.test.ts`

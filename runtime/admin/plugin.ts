@@ -575,8 +575,7 @@ function publicAgent(agent: Agent): Record<string, unknown> {
     name: agent.name,
     role: agent.role,
     runtimes: structuredClone(agent.runtimes ?? {}),
-    allowedTools: [...(agent.allowedTools ?? [])],
-    allowedAgents: [...(agent.allowedAgents ?? [])],
+    capabilities: structuredClone(agent.capabilities ?? {}),
   };
 }
 

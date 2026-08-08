@@ -12,15 +12,14 @@ resources: {
       id: "coordinator",
       name: "Coordinator",
       role: "Coordinate specialists and synthesize the final answer.",
-      allowedAgents: ["researcher", "writer"],
-      allowedTools: ["ask"],
+      capabilities: { agents: ["researcher", "writer"] },
       runtimes: { text: { type: "llm", provider: "openai" } },
     },
     {
       id: "researcher",
       name: "Researcher",
       role: "Research facts and answer peers publicly.",
-      allowedAgents: ["coordinator"],
+      capabilities: { agents: ["coordinator"] },
       runtimes: { text: { type: "llm", provider: "openai" } },
     },
   ],
@@ -36,8 +35,10 @@ The model invokes:
 ## Semantics
 
 - The target must be an agent participant in the same thread.
-- `allowedAgents` constrains who an agent may ask; omitted means all declared
-  peers, while an empty/null list permits none.
+- `capabilities.agents` constrains who an agent may ask. Omitted or empty means
+  none; `{ all: true }` deliberately grants every declared peer.
+- The `ask` tool is derived from a non-empty agent grant. Applications enable
+  its resource/processor plugin explicitly with `core: { ask: {} }`.
 - Questions, progress, and answers are public messages with stable ask metadata.
 - Nested asks are allowed up to a configurable depth (default 8).
 - Parallel asks and tools settle independently, then resume their callers.

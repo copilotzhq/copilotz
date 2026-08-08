@@ -70,6 +70,7 @@ import type {
   DeliveryContextBase,
   DeliveryExecutorOwnership,
   DeliveryRecoveryDispatch,
+  DeliveryWorkload,
   LiveProcessorContextBase,
 } from "../execution/index.ts";
 import type {
@@ -394,6 +395,8 @@ export type CopilotzEngine = Readonly<{
     workload: string;
     liveWorkload: string;
     streamWorkload: string;
+    /** Register these closures in a worker created within this runtime. */
+    workloads: Readonly<Record<string, DeliveryWorkload>>;
   }>;
   content: Readonly<{
     assets: DatabaseAssetRepository;

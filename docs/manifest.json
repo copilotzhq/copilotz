@@ -29,6 +29,16 @@
           "description": "Compose resources and independent subscriptions."
         },
         {
+          "title": "Agent Capabilities",
+          "slug": "agent-capabilities",
+          "description": "Least-authority resource grants, derived mechanisms, and introspection."
+        },
+        {
+          "title": "Skills",
+          "slug": "skills",
+          "description": "Open Skill authoring, portable plugin builds, and progressive disclosure."
+        },
+        {
           "title": "Events, Deliveries, and Recovery",
           "slug": "events-deliveries-recovery",
           "description": "Atomic facts, guaranteed work, retries, and maintenance."

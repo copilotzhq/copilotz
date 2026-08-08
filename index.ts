@@ -9,6 +9,7 @@
  */
 
 export * from "./runtime/application/index.ts";
+export * from "./runtime/capabilities/index.ts";
 export * from "./runtime/admin/index.ts";
 export * from "./runtime/attachments/index.ts";
 export * from "./runtime/channels/index.ts";
@@ -24,7 +25,6 @@ export * from "./runtime/memory/index.ts";
 export * from "./runtime/plugins/index.ts";
 export * from "./runtime/resources/index.ts";
 export * from "./runtime/schedules/index.ts";
-export * from "./runtime/skills/index.ts";
 export * from "./runtime/tools/index.ts";
 export * from "./runtime/usage/index.ts";
 export * from "./runtime/workflows/index.ts";

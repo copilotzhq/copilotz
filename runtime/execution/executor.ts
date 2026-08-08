@@ -1,4 +1,5 @@
-import { createWorkerHost } from "../../dependencies/oxian-host.ts";
+import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
+import { createWorker } from "../../dependencies/oxian-worker.ts";
 import type { DurableEvent, EventDelivery } from "../events/index.ts";
 import {
   COPILOTZ_DELIVERY_WORKLOAD,
@@ -8,8 +9,9 @@ import {
   type DeliveryExecutionHandle,
   type DeliveryExecutor,
   type DeliveryExecutorOwnership,
+  type DeliveryHypervisor,
   type DeliveryRecoveryDispatch,
-  type DeliveryWorkerHost,
+  type DeliveryWorkload,
   type ExecutionWorkTarget,
 } from "./types.ts";
 import { createDeliveryWorkload } from "./workload.ts";
@@ -32,9 +34,9 @@ function assertWorkload(value: string): string {
 export function createDeliveryExecutor(
   options: CreateDeliveryExecutorOptions,
 ): DeliveryExecutor {
-  if (options.dispatcher && options.host) {
+  if (options.dispatcher && options.hypervisor) {
     throw new TypeError(
-      "Configure either a delivery dispatcher or host, not both.",
+      "Configure either a delivery dispatcher or Hypervisor, not both.",
     );
   }
   const workload = assertWorkload(
@@ -83,22 +85,41 @@ export function createDeliveryExecutor(
 
   let dispatcher: DeliveryDispatcher;
   let ownership: DeliveryExecutorOwnership;
-  const attachedWorkers: ReturnType<
-    DeliveryWorkerHost["attachInProcessWorker"]
-  >[] = [];
-  let privateHost: ReturnType<typeof createWorkerHost> | undefined;
+  const attachedWorkers: ReturnType<typeof createWorker>[] = [];
+  const workerRuns: Promise<unknown>[] = [];
+  let privateHypervisor: ReturnType<typeof createHypervisor> | undefined;
   let target = options.target;
   const workloadTargets = new Map<string, ExecutionWorkTarget>(
     Object.entries(options.workloadTargets ?? {}),
   );
   let localCapacity: number | undefined;
 
-  const attachLocalWorkers = (host: DeliveryWorkerHost): void => {
-    attachedWorkers.push(host.attachInProcessWorker({
-      workerId,
-      capacity: localCapacity,
+  const startWorker = (
+    hypervisor: DeliveryHypervisor,
+    config: Readonly<{
+      id: string;
+      capacity: number;
+      workloads: Readonly<Record<string, DeliveryWorkload>>;
+    }>,
+  ): void => {
+    const worker = createWorker({
+      id: config.id,
+      transport: { type: "in-process", hypervisor },
+      capacity: config.capacity,
+      workloads: config.workloads,
+    });
+    attachedWorkers.push(worker);
+    const running = worker.run();
+    void running.catch(() => {});
+    workerRuns.push(running);
+  };
+
+  const attachLocalWorkers = (hypervisor: DeliveryHypervisor): void => {
+    startWorker(hypervisor, {
+      id: workerId,
+      capacity: localCapacity!,
       workloads: hostedWorkloads,
-    }));
+    });
     target = { workerId };
     const workerIds = new Set([workerId]);
     let index = 0;
@@ -116,11 +137,11 @@ export function createDeliveryExecutor(
         );
       }
       workerIds.add(isolatedWorkerId);
-      attachedWorkers.push(host.attachInProcessWorker({
-        workerId: isolatedWorkerId,
+      startWorker(hypervisor, {
+        id: isolatedWorkerId,
         capacity: positiveCapacity(config.capacity),
         workloads: { [name]: additionalWorkloads[name] },
-      }));
+      });
       workloadTargets.set(name, { workerId: isolatedWorkerId });
     }
   };
@@ -128,21 +149,25 @@ export function createDeliveryExecutor(
   if (options.dispatcher) {
     dispatcher = options.dispatcher;
     ownership = "injected_dispatcher";
-  } else if (options.host) {
+  } else if (options.hypervisor) {
     localCapacity = positiveCapacity(options.capacity);
-    attachLocalWorkers(options.host);
-    dispatcher = options.host;
-    ownership = "shared_host";
+    attachLocalWorkers(options.hypervisor);
+    dispatcher = options.hypervisor;
+    ownership = "shared_hypervisor";
   } else {
     localCapacity = positiveCapacity(options.capacity);
-    privateHost = createWorkerHost({
+    privateHypervisor = createHypervisor({
       // Copilotz claims its durable delivery inside the workload before effects.
       persistAcceptance: () => Promise.resolve(),
     });
-    attachLocalWorkers(privateHost);
-    dispatcher = privateHost;
-    ownership = "private_host";
+    attachLocalWorkers(privateHypervisor);
+    dispatcher = privateHypervisor;
+    ownership = "private_hypervisor";
   }
+  const ready = Promise.all(
+    attachedWorkers.map((worker) => worker.whenReady()),
+  ).then(() => undefined);
+  void ready.catch(() => {});
 
   let closed = false;
   const active = new Map<string, DeliveryExecutionHandle>();
@@ -250,6 +275,7 @@ export function createDeliveryExecutor(
     if (dispatching) return await dispatching;
 
     const task = (async () => {
+      await ready;
       const event = await options.store.getEvent(delivery.eventId);
       if (!event) throw new Error(`Event '${delivery.eventId}' was not found.`);
       const attemptId = createAttemptId();
@@ -295,6 +321,7 @@ export function createDeliveryExecutor(
   return Object.freeze({
     ownership,
     workload,
+    workloads: hostedWorkloads,
     scheduleDelivery(delivery) {
       if (closed) throw new Error("Delivery executor is shut down.");
       const id = deliveryKey(delivery);
@@ -302,12 +329,13 @@ export function createDeliveryExecutor(
       scheduled.set(id, delivery);
       schedulePump();
     },
-    dispatchWork(input) {
+    async dispatchWork(input) {
       if (closed) {
-        return Promise.reject(new Error("Delivery executor is shut down."));
+        throw new Error("Delivery executor is shut down.");
       }
+      await ready;
       const workloadTarget = workloadTargets.get(input.workload);
-      return dispatcher.dispatch({
+      return await dispatcher.dispatch({
         ...input,
         ...(input.target
           ? {}
@@ -359,14 +387,13 @@ export function createDeliveryExecutor(
         handle.cancel(reason).catch(() => undefined)
       );
       await Promise.all(cancellations);
-      if (privateHost) await privateHost.shutdown(reason);
-      else {
-        await Promise.all(
-          attachedWorkers.map((worker) =>
-            worker.shutdown(reason).catch(() => undefined)
-          ),
-        );
-      }
+      await Promise.all(
+        attachedWorkers.map((worker) =>
+          worker.stop(reason).catch(() => undefined)
+        ),
+      );
+      await Promise.allSettled(workerRuns);
+      await privateHypervisor?.shutdown(reason);
     },
   });
 }

@@ -58,31 +58,6 @@ export function requireAgent(
   return resources.require<Agent>("agents", requiredText(id, "Agent id"));
 }
 
-export function agentTools(
-  resources: ScopedPluginResources,
-  agent: Agent,
-): readonly WorkflowTool[] {
-  const available = resources.list<WorkflowTool>("tools").filter(
-    isWorkflowTool,
-  );
-  if (agent.allowedTools === undefined) return Object.freeze(available);
-  if (!Array.isArray(agent.allowedTools) || agent.allowedTools.length === 0) {
-    return Object.freeze([]);
-  }
-  const byKey = new Map(available.map((tool) => [tool.key, tool]));
-  return Object.freeze(
-    agent.allowedTools.map((key) => {
-      const tool = byKey.get(key);
-      if (!tool) {
-        throw new Error(
-          `Agent '${agent.id}' allows unknown tool '${key}'.`,
-        );
-      }
-      return tool;
-    }),
-  );
-}
-
 export function providerRegistry(
   resources: ScopedPluginResources,
 ): ProviderRegistry {

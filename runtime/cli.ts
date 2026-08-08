@@ -22,6 +22,26 @@ export type CliAgent = Readonly<{
   role?: string | null;
 }>;
 
+export type CliTool = Readonly<{
+  id?: string;
+  key?: string;
+  name?: string;
+}>;
+
+export type CliSkill = Readonly<{
+  name: string;
+  description?: string;
+}>;
+
+export type CliInspection = Readonly<{
+  agent?: CliAgent;
+  agents: readonly CliAgent[];
+  tools: readonly CliTool[];
+  skills: readonly CliSkill[];
+}>;
+
+export type CliInspect = () => CliInspection | Promise<CliInspection>;
+
 /** Host-owned input/output capability. Core never imports a terminal runtime. */
 export type InteractiveCliIo = Readonly<{
   question(prompt: string): Promise<string>;
@@ -37,8 +57,8 @@ export interface InteractiveCliOptions {
   /** Existing thread and participant scope used for every prompt. */
   scope: CliRunScope;
   initialContent?: ContentInput | readonly ContentInput[];
-  agents?: readonly CliAgent[];
-  tools?: readonly Readonly<{ id?: string; key?: string; name?: string }>[];
+  /** Canonical effective-capability lookup used by terminal commands. */
+  inspect?: CliInspect;
   banner?: string | null;
   quitCommand?: string;
   cwd?: string;
@@ -54,6 +74,7 @@ const COMMANDS = [
   "/help",
   "/agents",
   "/tools",
+  "/skills",
   "/history",
   "/status",
   "/compose",
@@ -110,9 +131,16 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
   let inReasoning = false;
   let sawVisibleOutput = false;
   let activeEventId = "";
+  const renderedToolDrafts = new Set<string>();
 
   const printLine = (line: string): void => io.write(line + "\n");
   const cwd = (): string => options.cwd ?? io.cwd?.() ?? ".";
+  const inspect = async (): Promise<CliInspection> =>
+    await options.inspect?.() ?? Object.freeze({
+      agents: Object.freeze([]),
+      tools: Object.freeze([]),
+      skills: Object.freeze([]),
+    });
 
   const stop = (): void => {
     stopped = true;
@@ -131,27 +159,37 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     ].join("\n"));
   };
 
-  const printAgents = (): void => {
-    const agents = options.agents ?? [];
+  const printAgents = async (): Promise<void> => {
+    const inspection = await inspect();
+    const currentId = inspection.agent?.id ?? inspection.agent?.name;
+    const agents = [
+      ...(inspection.agent ? [inspection.agent] : []),
+      ...inspection.agents,
+    ].filter((agent, index, values) =>
+      values.findIndex((candidate) =>
+        (candidate.id ?? candidate.name) === (agent.id ?? agent.name)
+      ) === index
+    );
     if (!agents.length) {
-      printLine(color("No agents loaded.", "dim"));
+      printLine(color("No agent capabilities available.", "dim"));
       return;
     }
     printLine([
       color("Agents", "bold"),
       ...agents.map((agent) =>
         "- " + agent.name +
+        ((agent.id ?? agent.name) === currentId ? " (current)" : "") +
         (agent.role ? " (" + agent.role + ")" : "") +
         (agent.id && agent.id !== agent.name ? " [" + agent.id + "]" : "")
       ),
     ].join("\n"));
   };
 
-  const printTools = (): void => {
-    const tools = options.tools ?? [];
+  const printTools = async (): Promise<void> => {
+    const tools = (await inspect()).tools;
     const lines = [
       color("Tools", "bold"),
-      "Loaded tools: " + tools.length,
+      "Available tools: " + tools.length,
       ...tools.slice(0, 30).map((tool) =>
         "- " + (tool.key ?? tool.id ?? tool.name ?? "tool")
       ),
@@ -160,6 +198,21 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
       lines.push("- ...and " + (tools.length - 30) + " more");
     }
     printLine(lines.join("\n"));
+  };
+
+  const printSkills = async (): Promise<void> => {
+    const skills = (await inspect()).skills;
+    if (!skills.length) {
+      printLine(color("No skills available.", "dim"));
+      return;
+    }
+    printLine([
+      color("Skills", "bold"),
+      ...skills.map((skill) =>
+        "- " + skill.name +
+        (skill.description ? ": " + skill.description : "")
+      ),
+    ].join("\n"));
   };
 
   const printHistory = (): void => {
@@ -175,7 +228,8 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     ].join("\n"));
   };
 
-  const printStatus = (): void => {
+  const printStatus = async (): Promise<void> => {
+    const inspection = await inspect();
     printLine([
       color("Session Status", "bold"),
       "cwd: " + cwd(),
@@ -183,7 +237,9 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
       "thread: " + threadLabel(options.scope),
       "last event id: " + (activeEventId || "(none yet)"),
       "history entries: " + history.length,
-      "loaded agents: " + (options.agents ?? []).length,
+      "available agents: " + inspection.agents.length,
+      "available tools: " + inspection.tools.length,
+      "available skills: " + inspection.skills.length,
     ].join("\n"));
   };
 
@@ -209,6 +265,7 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     currentAgent = "";
     inReasoning = false;
     sawVisibleOutput = false;
+    renderedToolDrafts.clear();
   };
 
   const renderDelta = (event: CopilotzEvent): void => {
@@ -234,19 +291,42 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     io.write(text);
   };
 
+  const renderToolCall = (event: CopilotzEvent): void => {
+    const payload = eventPayload(event);
+    const phase = typeof payload.phase === "string" ? payload.phase : "";
+    if (phase === "delta" || phase === "discarded") return;
+
+    const name = typeof payload.toolName === "string"
+      ? payload.toolName
+      : typeof payload.name === "string"
+      ? payload.name
+      : typeof payload.tool === "string"
+      ? payload.tool
+      : "tool";
+    const draftId = typeof payload.draftId === "string"
+      ? payload.draftId
+      : typeof payload.toolCallId === "string"
+      ? payload.toolCallId
+      : typeof payload.providerAttemptId === "string" &&
+          typeof payload.callIndex === "number"
+      ? `${payload.providerAttemptId}:${payload.callIndex}`
+      : "";
+    if (draftId && renderedToolDrafts.has(draftId)) return;
+    if (draftId) renderedToolDrafts.add(draftId);
+
+    if (inReasoning || sawVisibleOutput) io.write("\n");
+    inReasoning = false;
+    sawVisibleOutput = false;
+    printLine(color("tool>", "yellow") + " " + name);
+  };
+
   const renderEvent = (event: CopilotzEvent): void => {
     if (event.type === "text.delta" || event.type === "reasoning.delta") {
       renderDelta(event);
       return;
     }
     if (event.type === "tool_call.delta") {
-      const payload = eventPayload(event);
-      const name = typeof payload.name === "string"
-        ? payload.name
-        : typeof payload.tool === "string"
-        ? payload.tool
-        : "tool";
-      printLine(color("tool>", "yellow") + " " + name);
+      renderToolCall(event);
       return;
     }
     if (event.type === "llm_attempt.created") {
@@ -291,8 +371,9 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
         printLine([
           color("Commands", "bold"),
           "/help       show this help",
-          "/agents     list loaded agents",
+          "/agents     list current and available agents",
           "/tools      summarize available tools",
+          "/skills     list available skills",
           "/history    show recent prompts from this session",
           "/status     show current session info",
           "/compose    enter multiline compose mode",
@@ -301,16 +382,19 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
         ].join("\n"));
         return true;
       case "/agents":
-        printAgents();
+        await printAgents();
         return true;
       case "/tools":
-        printTools();
+        await printTools();
+        return true;
+      case "/skills":
+        await printSkills();
         return true;
       case "/history":
         printHistory();
         return true;
       case "/status":
-        printStatus();
+        await printStatus();
         return true;
       case "/compose": {
         const composed = await composeMessage();

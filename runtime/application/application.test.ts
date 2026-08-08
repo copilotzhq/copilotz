@@ -14,6 +14,7 @@ import { createCopilotzApplication } from "./application.ts";
 import { createCopilotz } from "./copilotz.ts";
 import { createCopilotzCorePlugins } from "./core-plugins.ts";
 import { createManagedOminipgSession } from "../adapters/ominipg.ts";
+import type { WorkflowTool } from "../workflows/index.ts";
 
 const SCHEMA = "copilotz_application";
 const NAMESPACE = "tenant-a";
@@ -180,7 +181,7 @@ Deno.test("createCopilotz owns its default private session", async () => {
   await application.shutdown();
 });
 
-Deno.test("built-in plugins precede explicit application resources", async () => {
+Deno.test("minimal built-ins precede explicit application resources", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const replacement = Object.freeze({
     id: "openai",
@@ -197,15 +198,7 @@ Deno.test("built-in plugins precede explicit application resources", async () =>
   try {
     assertEquals(application.config.corePluginIds, [
       "@copilotz/built-in-llm-providers",
-      "@copilotz/built-in-tools",
-      "@copilotz/web-tools",
-      "@copilotz/finance-tools",
-      "@copilotz/bundled-skills",
-      "@copilotz/core-long-term-memory",
-      "@copilotz/core-usage",
       "@copilotz/core-text",
-      "@copilotz/agent-ask",
-      "@copilotz/scheduled-jobs",
     ]);
     assertEquals(
       application.plugins.require("providers", "openai"),
@@ -229,7 +222,6 @@ Deno.test("knowledge is an explicit core-plugin opt-in", () => {
       tools: false,
       webTools: false,
       finance: false,
-      skills: false,
       memory: false,
       usage: false,
       text: false,
@@ -239,6 +231,41 @@ Deno.test("knowledge is an explicit core-plugin opt-in", () => {
     }).map((plugin) => plugin.manifest.id),
     ["@copilotz/knowledge"],
   );
+});
+
+Deno.test("application exposes canonical effective capability introspection", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const tool: WorkflowTool = Object.freeze({
+    id: "lookup",
+    key: "lookup",
+    name: "Lookup",
+    description: "Looks up a fixture.",
+    execute: () => ({ ok: true }),
+  });
+  const agent: Agent = Object.freeze({
+    id: "support",
+    name: "Support",
+    role: "Support agent",
+    capabilities: { tools: [tool.key] },
+  });
+  const application = await createCopilotzApplication({
+    session: createSqlSession(db),
+    namespace: NAMESPACE,
+    schema: `${SCHEMA}_capabilities`,
+    core: false,
+    resources: { agents: [agent], tools: [tool] },
+  });
+  try {
+    const resolved = await application.capabilities.resolve({
+      agent: agent.id,
+    });
+    assertEquals(resolved.agent, agent);
+    assertEquals(resolved.tools.map((entry) => entry.id), [tool.key]);
+    assertEquals(resolved.tools[0].origin?.pluginId, "@copilotz/application");
+  } finally {
+    await application.shutdown();
+    await db.close();
+  }
 });
 
 Deno.test("application invokes an explicitly owned session closer exactly once", async () => {

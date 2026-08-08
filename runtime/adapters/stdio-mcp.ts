@@ -84,7 +84,7 @@ async function abortable<T>(
 }
 
 /** Server-runtime connector for the official MCP SDK stdio transport. */
-export const connectStdioMcp: ConnectMcpRuntime = async (
+export const connectMcp: ConnectMcpRuntime = async (
   server,
   signal,
 ): Promise<McpRuntimeConnection> => {

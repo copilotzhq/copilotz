@@ -11,7 +11,7 @@ import type { NewTool } from "../../resources/index.ts";
 import { type CopilotzPlugin, definePlugin } from "../../plugins/index.ts";
 import type { WorkflowTool } from "../../workflows/index.ts";
 
-export const DENO_WORKSPACE_TOOL_IDS = [
+export const WORKSPACE_TOOL_IDS = [
   "read_file",
   "write_file",
   "list_directory",
@@ -22,25 +22,25 @@ export const DENO_WORKSPACE_TOOL_IDS = [
   "restore_file_version",
 ] as const;
 
-export const DENO_PROCESS_TOOL_IDS = ["run_command"] as const;
+export const PROCESS_TOOL_IDS = ["run_command"] as const;
 
-export type DenoWorkspaceToolId = typeof DENO_WORKSPACE_TOOL_IDS[number];
-export type DenoProcessToolId = typeof DENO_PROCESS_TOOL_IDS[number];
+export type WorkspaceToolId = typeof WORKSPACE_TOOL_IDS[number];
+export type ProcessToolId = typeof PROCESS_TOOL_IDS[number];
 
-export type CreateDenoWorkspaceToolsPluginOptions = Readonly<{
+export type CreateWorkspaceToolsPluginOptions = Readonly<{
   id?: string;
   version?: string;
-  include?: readonly DenoWorkspaceToolId[];
+  include?: readonly WorkspaceToolId[];
 }>;
 
-export type CreateDenoProcessToolsPluginOptions = Readonly<{
+export type CreateProcessToolsPluginOptions = Readonly<{
   id?: string;
   version?: string;
-  include?: readonly DenoProcessToolId[];
+  include?: readonly ProcessToolId[];
 }>;
 
 const workspaceDefinitions: Readonly<
-  Record<DenoWorkspaceToolId, NewTool>
+  Record<WorkspaceToolId, NewTool>
 > = Object.freeze({
   read_file: readFile,
   write_file: writeFile,
@@ -52,7 +52,7 @@ const workspaceDefinitions: Readonly<
   restore_file_version: restoreFileVersion,
 });
 
-const processDefinitions: Readonly<Record<DenoProcessToolId, NewTool>> = Object
+const processDefinitions: Readonly<Record<ProcessToolId, NewTool>> = Object
   .freeze({ run_command: runCommand });
 
 function selectedTools<Id extends string>(
@@ -80,19 +80,19 @@ function selectedTools<Id extends string>(
   }));
 }
 
-/** Deno filesystem adapter preserving the bounded workspace tool contracts. */
-export function createDenoWorkspaceToolsPlugin(
-  options: CreateDenoWorkspaceToolsPluginOptions = {},
+/** Filesystem adapter preserving the bounded workspace tool contracts. */
+export function createWorkspaceToolsPlugin(
+  options: CreateWorkspaceToolsPluginOptions = {},
 ): CopilotzPlugin {
   const tools = selectedTools(
-    "Deno workspace",
-    options.include ?? DENO_WORKSPACE_TOOL_IDS,
-    DENO_WORKSPACE_TOOL_IDS,
+    "workspace",
+    options.include ?? WORKSPACE_TOOL_IDS,
+    WORKSPACE_TOOL_IDS,
     workspaceDefinitions,
   );
   return definePlugin({
     manifest: {
-      id: options.id ?? "@copilotz/deno-workspace-tools",
+      id: options.id ?? "@copilotz/workspace-tools",
       version: options.version ?? "3.0.0",
       provides: { tools: tools.map((tool) => tool.key) },
     },
@@ -100,19 +100,19 @@ export function createDenoWorkspaceToolsPlugin(
   });
 }
 
-/** Deno subprocess adapter; persistent terminal migration remains separate. */
-export function createDenoProcessToolsPlugin(
-  options: CreateDenoProcessToolsPluginOptions = {},
+/** Subprocess adapter; persistent terminal execution remains separate. */
+export function createProcessToolsPlugin(
+  options: CreateProcessToolsPluginOptions = {},
 ): CopilotzPlugin {
   const tools = selectedTools(
-    "Deno process",
-    options.include ?? DENO_PROCESS_TOOL_IDS,
-    DENO_PROCESS_TOOL_IDS,
+    "process",
+    options.include ?? PROCESS_TOOL_IDS,
+    PROCESS_TOOL_IDS,
     processDefinitions,
   );
   return definePlugin({
     manifest: {
-      id: options.id ?? "@copilotz/deno-process-tools",
+      id: options.id ?? "@copilotz/process-tools",
       version: options.version ?? "3.0.0",
       provides: { tools: tools.map((tool) => tool.key) },
     },

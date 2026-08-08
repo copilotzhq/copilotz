@@ -1,3 +1,4 @@
+import { resolveAgentGrants } from "../capabilities/index.ts";
 import type { Agent } from "../resources/index.ts";
 import type {
   LlmAttempt,
@@ -97,14 +98,16 @@ function resolveTargetAgent(
   return matches[0];
 }
 
-function assertAgentAllowed(asking: Agent, asked: Agent): void {
+function assertAgentAllowed(
+  asking: Agent,
+  asked: Agent,
+  agents: readonly Agent[],
+): void {
   if (matchesAgent(asking.id, asked) || matchesAgent(asking.name, asked)) {
     throw new Error("An agent cannot ask itself.");
   }
-  if (asking.allowedAgents === undefined) return;
   if (
-    !Array.isArray(asking.allowedAgents) ||
-    !asking.allowedAgents.some((candidate) => matchesAgent(candidate, asked))
+    !resolveAgentGrants(asking, agents).some((agent) => agent.id === asked.id)
   ) {
     throw new Error(
       `Agent '${asking.id}' is not allowed to ask agent '${asked.id}'.`,
@@ -203,7 +206,7 @@ function defineAskTool(
         );
       }
       const askedAgent = resolveTargetAgent(target, agents);
-      assertAgentAllowed(askingAgent, askedAgent);
+      assertAgentAllowed(askingAgent, askedAgent, agents);
 
       const thread = await context.processor.conversation.getThread(
         execution.threadId,

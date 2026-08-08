@@ -50,7 +50,7 @@ const supportAgent = Object.freeze(
     role: "support",
     instructions: "Never expose this instruction.",
     metadata: { apiKey: "never-expose-this-either" },
-    allowedTools: ["lookup"],
+    capabilities: { tools: ["lookup"] },
     runtimes: {
       text: { type: "llm", provider: "test", model: "test-model" },
     },
@@ -156,7 +156,7 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
     const projectedAgent = object(array(agentResponse.data)[0]);
     assertEquals(projectedAgent.id, "support");
     assertEquals(projectedAgent.name, "Support");
-    assertEquals(projectedAgent.allowedTools, ["lookup"]);
+    assertEquals(projectedAgent.capabilities, { tools: ["lookup"] });
     assertEquals("instructions" in projectedAgent, false);
     assertEquals("metadata" in projectedAgent, false);
 

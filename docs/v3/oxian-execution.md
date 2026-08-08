@@ -50,25 +50,34 @@ const handle = await executor.dispatchDelivery(delivery);
 const result = await handle.done;
 ```
 
-The default executor creates a private embedded Oxian `WorkerHost` and owns its
-lifecycle. Passing `host` attaches one targeted Copilotz worker to an
-application-owned shared host; shutdown removes only that worker. Passing
-`dispatcher` sends work to an already hosted workload and never closes the
-dispatcher, Hypervisor, connection, or remote worker.
+The default executor creates a private Oxian Hypervisor and targeted in-process
+Workers and owns their lifecycle. Passing `hypervisor` binds those
+Copilotz-owned Workers to an application-owned Hypervisor; shutdown stops only
+those Workers. Passing `dispatcher` sends work to an already hosted workload and
+never closes the dispatcher, Hypervisor, connection, or remote Worker.
 
 External workers install the same handler:
 
 ```ts
 const workload = createDeliveryWorkload({ store, registry, createContext });
 
-workerHost.attachInProcessWorker({
-  workerId: "copilotz-engine",
+const worker = createWorker({
+  id: "copilotz-engine",
+  transport: { type: "in-process", hypervisor },
   workloads: { "copilotz.delivery.v1": workload },
 });
+const running = worker.run();
+await worker.whenReady();
 ```
 
-The external host shown here is only illustrative. The handler has the same
-Oxian workload contract when registered in an outbound WebSocket worker.
+The handler has the same Oxian workload contract when the Worker's transport is
+changed to an outbound WebSocket descriptor.
+
+At the application assembly level, `application.execution.workloads` exposes the
+complete worker-local map created by that application (delivery, live, and
+stream workloads). An outbound worker can register this map directly. This is a
+closure export within the worker process, not a dispatch payload; gateway and
+worker still exchange identities and streams only.
 
 ## Delivery boundary
 
@@ -91,10 +100,11 @@ causation and correlation and derives a child deduplication ID from the logical
 delivery. Domain and collection writes can therefore survive a crash after their
 own commit but before source-delivery settlement without duplicating the effect.
 
-For the private host, Oxian's acceptance persistence callback is intentionally
-process-local because the durable no-effect boundary is the subsequent database
-claim. A Hypervisor may still persist its own operation acceptance
-independently; neither mechanism replaces the delivery table.
+For the private Hypervisor, Oxian's acceptance persistence callback is
+intentionally process-local because the durable no-effect boundary is the
+subsequent database claim. A shared Hypervisor may still persist its own
+operation acceptance independently; neither mechanism replaces the delivery
+table.
 
 ## Current boundary
 
@@ -102,8 +112,8 @@ The execution seam is additive and now assembled by `createCopilotzEngine()`.
 Its processor context is tenant-scoped and exposes typed domain/content/resource
 capabilities, not the SQL session, event store, coordinator, or graph
 primitives. A crash after typed LLM-attempt and collection projections is tested
-through a real private-host delivery and retry. It does not yet replace the
-legacy event worker. Built-in processors move next as complete event-native
+through a real private-Hypervisor delivery and retry. It does not yet replace
+the legacy event worker. Built-in processors move next as complete event-native
 verticals, after which the old queue dispatcher and processor coercion path can
 be deleted rather than retained in parallel.
 

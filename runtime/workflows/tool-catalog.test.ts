@@ -75,7 +75,7 @@ Deno.test("worker-local tool catalog caches descriptors and keeps explicit-tool 
     name: "north",
     role: "assistant",
     instructions: "Use generated tools.",
-    allowedTools: ["mcp_only", "collision"],
+    capabilities: { tools: ["mcp_only", "collision"] },
   };
   assertEquals(
     (await catalog.forAgent(resources, agent)).map((candidate) =>
@@ -93,7 +93,7 @@ Deno.test("worker-local tool catalog caches descriptors and keeps explicit-tool 
   assertEquals(mcpGenerations, 2);
 });
 
-Deno.test("worker-local tool catalog rejects unknown agent allow-list keys", async () => {
+Deno.test("worker-local tool catalog rejects unknown explicit grants", async () => {
   const resources = await createPluginRegistry();
   const catalog = createWorkflowToolCatalog({
     generateApiTools: () => [],
@@ -106,14 +106,14 @@ Deno.test("worker-local tool catalog rejects unknown agent allow-list keys", asy
         name: "north",
         role: "assistant",
         instructions: "No tools.",
-        allowedTools: ["missing"],
+        capabilities: { tools: ["missing"] },
       }),
     Error,
-    "allows unknown tool 'missing'",
+    "grants unknown tool 'missing'",
   );
 });
 
-Deno.test("worker-local tool catalog keeps static tools capability-free", async () => {
+Deno.test("worker-local tool catalog installs tools without ambient agent grants", async () => {
   const explicit = tool("portable", "application");
   const plugin = definePlugin({
     manifest: {
@@ -126,4 +126,21 @@ Deno.test("worker-local tool catalog keeps static tools capability-free", async 
   const resources = await createPluginRegistry({ plugins: [plugin] });
   const catalog = createWorkflowToolCatalog();
   assertEquals(await catalog.all(resources), [explicit]);
+  assertEquals(
+    await catalog.forAgent(resources, {
+      id: "restricted",
+      name: "Restricted",
+      role: "assistant",
+    }),
+    [],
+  );
+  assertEquals(
+    await catalog.forAgent(resources, {
+      id: "broad",
+      name: "Broad",
+      role: "assistant",
+      capabilities: { tools: { all: true } },
+    }),
+    [explicit],
+  );
 });

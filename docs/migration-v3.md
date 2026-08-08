@@ -18,11 +18,17 @@ database state, and HTTP clients explicitly.
 | hidden agent consultation/delegation                                   | public same-thread `ask` conversation                                                   |
 | Web Worker/inline runtime switches                                     | private/shared/injected Oxian placement                                                 |
 | separate large message/tool payloads                                   | canonical content assets and references                                                 |
+| bundled development skills and generated `SKILL.ts` files              | standard Agent Skills source packed into an optional `createSkillsPlugin()`             |
+| `allowedTools`, `allowedAgents`, and `allowedSkills`                   | explicit `agent.capabilities` selections; omission grants none                          |
+| static CLI `agents`/`tools` display arrays                             | application capability introspection or a portable `inspect` callback                   |
 
 ## Recommended sequence
 
 1. Pin the current 0.x release while preparing migration.
-2. Convert reusable resource bundles to validated plugins.
+2. Convert reusable resource bundles to validated plugins. Pack any standard
+   skill directories as optional plugins; generic core no longer installs skills
+   or skill tools. Replace agent allow-list fields with `capabilities`; use
+   `{ all: true }` only where ambient expansion is intentional.
 3. Rewrite each processor as an independent durable or live subscription and
    move every mutation through typed context capabilities.
 4. Replace ambient schema/database calls with explicit namespace/schema and

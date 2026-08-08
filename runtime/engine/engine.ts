@@ -397,6 +397,7 @@ export async function createCopilotzEngine(
         workload: executor.workload,
         liveWorkload: liveDispatcher.workload,
         streamWorkload,
+        workloads: executor.workloads,
       }),
       content: Object.freeze({ assets, preparer, resolver }),
       conversation,

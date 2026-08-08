@@ -61,10 +61,11 @@ whole resource kind `channels`. A runtime adapter resolves string sources such
 as local paths, JSR, or npm; the core registry imports no filesystem, server,
 Deno, Node, or Bun APIs.
 
-Built-in resources use the same mechanism. For example,
-`createBundledSkillsPlugin()` contributes immutable package-embedded `skills`
-resources before application plugins. It performs no runtime I/O, and later
-plugins or explicit resources can replace a bundled skill by stable name.
+Built-in resources use the same mechanism. Skills are optional plugin resources,
+not a default development catalog. `createSkillsPlugin()` packages portable
+skills and their progressive-disclosure tools; later plugins or explicit
+resources can replace a skill by stable name. Standard `SKILL.md` directories
+are validated and packed before runtime rather than read by the registry.
 
 ## Processor subscriptions
 

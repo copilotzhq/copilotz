@@ -9,7 +9,9 @@ attachments.
 1. [Quickstart](quickstart.md)
 2. [Architecture](architecture.md)
 3. [Plugins and processors](plugins-and-processors.md)
-4. [API and package reference](api.md)
+4. [Agent capabilities](agent-capabilities.md)
+5. [Skills](skills.md)
+6. [API and package reference](api.md)
 
 ## Runtime and persistence
 

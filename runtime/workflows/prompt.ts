@@ -1,3 +1,7 @@
+import {
+  resolveAgentGrants,
+  resolveSkillGrants,
+} from "../capabilities/index.ts";
 import type { Agent, Skill } from "../resources/index.ts";
 import type {
   ConversationMessage,
@@ -74,17 +78,14 @@ function agentForParticipant(
   );
 }
 
-function allowedSkills(
+function grantedSkills(
   context: CopilotzProcessorContext,
   agent: Agent,
 ): readonly Skill[] {
-  const skills = context.resources.list<Skill>("skills");
-  if (agent.allowedSkills === undefined) return skills;
-  if (!Array.isArray(agent.allowedSkills) || !agent.allowedSkills.length) {
-    return Object.freeze([]);
-  }
-  const allowed = new Set(agent.allowedSkills);
-  return Object.freeze(skills.filter((skill) => allowed.has(skill.name)));
+  return resolveSkillGrants(
+    agent,
+    context.resources.list<Skill>("skills"),
+  );
 }
 
 function systemPrompt(
@@ -130,7 +131,9 @@ function systemPrompt(
       participant.externalId,
     ].filter((value): value is string => typeof value === "string")
   ));
-  const otherAgents = input.agents.filter((agent) =>
+  const otherAgents = resolveAgentGrants(input.agent, input.agents).filter((
+    agent,
+  ) =>
     agent.id !== input.agent.id && !activeAgentIds.has(agent.id) &&
     !activeAgentIds.has(agent.name)
   );
@@ -382,7 +385,9 @@ export async function buildAgentTextPrompt(
     thread,
     participant: input.participant,
     agents: context.resources.list<Agent>("agents"),
-    skills: allowedSkills(context, input.agent),
+    skills: input.tools.some((tool) => tool.key === "load_skill")
+      ? grantedSkills(context, input.agent)
+      : Object.freeze([]),
     userMetadata,
     agentsFileInstructions: input.options.agentsFileInstructions,
     memory: memoryContributions,

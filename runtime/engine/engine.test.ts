@@ -1,7 +1,8 @@
 import { assert, assertEquals, assertExists } from "@std/assert";
 
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
-import { createWorkerHost } from "../../dependencies/oxian-host.ts";
+import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
+import { createWorker } from "../../dependencies/oxian-worker.ts";
 import { defineCollection, llmAttemptContent } from "../domain/index.ts";
 import { createSqlSession, type SqlSession } from "../events/index.ts";
 import {
@@ -146,7 +147,7 @@ async function closeFixture(fixture: Fixture): Promise<void> {
 Deno.test("factory engine scopes typed processor capabilities and deduplicates retry projections", async () => {
   const fixture = await createFixture();
   try {
-    assertEquals(fixture.engine.execution.ownership, "private_host");
+    assertEquals(fixture.engine.execution.ownership, "private_hypervisor");
     assert(!("eventStore" in fixture.engine));
     assert(!("session" in fixture.engine));
     assert(!("coordinator" in fixture.engine));
@@ -275,33 +276,41 @@ Deno.test("engine shutdown releases only its worker and leaves injected infrastr
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   const registry = await createPluginRegistry();
-  const host = createWorkerHost({
+  const hypervisor = createHypervisor({
     persistAcceptance: () => Promise.resolve(),
   });
   const engine = await createCopilotzEngine({
     session,
     registry,
     schema: "copilotz_shared_engine",
-    execution: { host, workerId: "shared-engine" },
+    execution: { hypervisor, workerId: "shared-engine" },
   });
+  let applicationRun: Promise<unknown> | undefined;
   try {
-    assertEquals(engine.execution.ownership, "shared_host");
+    assertEquals(engine.execution.ownership, "shared_hypervisor");
     await engine.shutdown();
-    assertEquals(host.snapshot().workers, 0);
+    assertEquals(hypervisor.snapshot().inProcessWorkers, 0);
     await session.query("SELECT 1");
 
-    host.attachInProcessWorker({
-      workerId: "application-probe",
+    const applicationWorker = createWorker({
+      id: "application-probe",
+      transport: { type: "in-process", hypervisor },
       workloads: {
         "application.probe.v1": () => ({ metadata: { alive: true } }),
       },
     });
-    const probe = await host.dispatch({ workload: "application.probe.v1" });
+    applicationRun = applicationWorker.run();
+    void applicationRun.catch(() => {});
+    await applicationWorker.whenReady();
+    const probe = await hypervisor.dispatch({
+      workload: "application.probe.v1",
+    });
     assertEquals(await probe.metadata, { alive: true });
     assertEquals((await probe.completed).status, "completed");
   } finally {
     await engine.shutdown();
-    await host.shutdown();
+    await hypervisor.shutdown();
+    if (applicationRun) await applicationRun;
     await db.close();
   }
 });

@@ -760,20 +760,22 @@ Deno.test("concurrent realtime outputs retain distinct participant labels", asyn
 
 Deno.test("injected stream dispatcher survives engine shutdown", async () => {
   const registry = await registryFor();
+  const transport = {
+    type: "in-process",
+    config: { topic: `copilotz.stream.${crypto.randomUUID()}` },
+  } as const;
   const hypervisor = createHypervisor({
-    persistAcceptance: () => Promise.resolve(),
+    transports: [transport],
   });
   const worker = createWorker({
     id: "application-worker",
-    transport: { type: "in-process", hypervisor },
+    transport,
     workloads: {
       [COPILOTZ_STREAM_WORKLOAD]: createRealtimeStreamWorkload({ registry }),
       "application.probe.v1": () => ({ metadata: { alive: true } }),
     },
   });
-  const running = worker.run();
-  void running.catch(() => {});
-  await worker.whenReady();
+  await worker.ready;
   const fixture = await createFixture({
     registry,
     execution: {
@@ -812,7 +814,7 @@ Deno.test("injected stream dispatcher survives engine shutdown", async () => {
   } finally {
     await fixture.engine.shutdown();
     await worker.stop();
-    await running;
+    await worker.closed;
     await hypervisor.shutdown();
     await fixture.db.close();
   }

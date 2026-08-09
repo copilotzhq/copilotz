@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { assert, assertEquals, assertExists, assertThrows } from "@std/assert";
 import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
 import { createWorker } from "../../dependencies/oxian-worker.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
@@ -213,16 +213,21 @@ Deno.test("concurrent local dispatch calls share one physical delivery attempt",
 Deno.test("A52 a shared Hypervisor survives Copilotz worker shutdown", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
+  const transport = {
+    type: "in-process",
+    config: { topic: `copilotz.shared.${crypto.randomUUID()}` },
+  } as const;
   const hypervisor = createHypervisor({
-    persistAcceptance: () => Promise.resolve(),
+    transports: [transport],
   });
   const executor = createDeliveryExecutor({
     store: fixture.store,
     registry: fixture.registry,
     hypervisor,
+    transport,
     workerId: "shared-copilotz",
   });
-  let applicationRun: Promise<unknown> | undefined;
+  let applicationWorker: ReturnType<typeof createWorker> | undefined;
   try {
     assertEquals(executor.ownership, "shared_hypervisor");
     const result = await (await executor.dispatchDelivery(
@@ -232,16 +237,14 @@ Deno.test("A52 a shared Hypervisor survives Copilotz worker shutdown", async () 
 
     await executor.shutdown();
     assertEquals(hypervisor.snapshot().inProcessWorkers, 0);
-    const applicationWorker = createWorker({
+    applicationWorker = createWorker({
       id: "application-worker",
-      transport: { type: "in-process", hypervisor },
+      transport,
       workloads: {
         "application.probe.v1": () => ({ metadata: { alive: true } }),
       },
     });
-    applicationRun = applicationWorker.run();
-    void applicationRun.catch(() => {});
-    await applicationWorker.whenReady();
+    await applicationWorker.ready;
     const probe = await hypervisor.dispatch({
       workload: "application.probe.v1",
     });
@@ -249,8 +252,9 @@ Deno.test("A52 a shared Hypervisor survives Copilotz worker shutdown", async () 
     assertEquals((await probe.completed).status, "completed");
   } finally {
     await executor.shutdown();
+    await applicationWorker?.stop();
+    await applicationWorker?.closed;
     await hypervisor.shutdown();
-    if (applicationRun) await applicationRun;
     await closeFixture(fixture);
   }
 });
@@ -258,12 +262,16 @@ Deno.test("A52 a shared Hypervisor survives Copilotz worker shutdown", async () 
 Deno.test("A53 remote dispatch contains serializable identities and resolves on the worker", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
+  const transport = {
+    type: "in-process",
+    config: { topic: `copilotz.remote.${crypto.randomUUID()}` },
+  } as const;
   const hypervisor = createHypervisor({
-    persistAcceptance: () => Promise.resolve(),
+    transports: [transport],
   });
   const worker = createWorker({
     id: "external-copilotz",
-    transport: { type: "in-process", hypervisor },
+    transport,
     workloads: {
       "copilotz.delivery.v1": createDeliveryWorkload({
         store: fixture.store,
@@ -271,9 +279,7 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
       }),
     },
   });
-  const running = worker.run();
-  void running.catch(() => {});
-  await worker.whenReady();
+  await worker.ready;
   const captured: unknown[] = [];
   const dispatcher: DeliveryDispatcher = {
     dispatch(input) {
@@ -314,7 +320,31 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
   } finally {
     await executor.shutdown();
     await worker.stop();
-    await running;
+    await worker.closed;
+    await hypervisor.shutdown();
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("shared Hypervisors require their explicit event-fabric transport", async () => {
+  const fixture = await createFixture();
+  const transport = {
+    type: "in-process",
+    config: { topic: `copilotz.explicit.${crypto.randomUUID()}` },
+  } as const;
+  const hypervisor = createHypervisor({ transports: [transport] });
+  try {
+    assertThrows(
+      () =>
+        createDeliveryExecutor({
+          store: fixture.store,
+          registry: fixture.registry,
+          hypervisor,
+        }),
+      TypeError,
+      "requires its declared in-process transport",
+    );
+  } finally {
     await hypervisor.shutdown();
     await closeFixture(fixture);
   }

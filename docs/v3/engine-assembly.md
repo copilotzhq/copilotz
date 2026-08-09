@@ -85,9 +85,9 @@ delivery set, and immutable body.
 The engine delegates placement to `createDeliveryExecutor()`:
 
 - no execution option creates and owns one private Hypervisor with in-process
-  Workers;
-- an injected Hypervisor gets Copilotz-owned Workers, which engine shutdown
-  stops without closing the Hypervisor;
+  Workers on a unique event-fabric topic;
+- an injected Hypervisor and explicit shared transport get Copilotz-owned
+  Workers, which engine shutdown stops without closing the Hypervisor;
 - an injected dispatcher is never shut down; and
 - worker payloads remain IDs only.
 

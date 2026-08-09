@@ -6,6 +6,7 @@ import type {
 } from "../../dependencies/oxian-work.ts";
 import type {
   Worker,
+  WorkerOptions,
   WorkerWorkHandler,
 } from "../../dependencies/oxian-worker.ts";
 import type {
@@ -29,6 +30,10 @@ export type DeliveryDispatchMetadata = Readonly<{
 
 export type DeliveryDispatcher = Dispatcher;
 export type DeliveryHypervisor = Hypervisor;
+export type DeliveryInProcessTransport = Extract<
+  WorkerOptions["transport"],
+  { type: "in-process" }
+>;
 export type DeliveryWorkload = WorkerWorkHandler;
 export type ExecutionWorkInput = WorkInput;
 export type ExecutionWorkHandle = WorkHandle;
@@ -114,6 +119,12 @@ export type CreateDeliveryExecutorOptions = Readonly<{
   dispatcher?: DeliveryDispatcher;
   /** Bind Copilotz Workers to an application-owned in-process Hypervisor. */
   hypervisor?: DeliveryHypervisor;
+  /**
+   * In-process event-fabric rendezvous shared by Copilotz Workers and their
+   * Hypervisor. Required with an injected Hypervisor; optional for a private
+   * Hypervisor, which otherwise receives a unique topic.
+   */
+  transport?: DeliveryInProcessTransport;
   target?: Readonly<{ workerId: string }>;
   workload?: string;
   /** Additional application/runtime workloads hosted beside deliveries. */

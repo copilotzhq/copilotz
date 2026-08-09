@@ -39,9 +39,11 @@ work.
 
 Oxian dispatches logical workload identities. Copilotz dispatch payloads contain
 delivery/resource IDs, never serialized closures or physical worker identity.
-The default application binds Copilotz Workers to a private Hypervisor with
-in-process transports. An embedding app may inject a shared Hypervisor or a
-dispatcher/target whose Workers are already hosted elsewhere.
+The default application binds Copilotz Workers to a private Hypervisor with one
+uniquely addressed in-process event-fabric transport. An embedding app may
+inject a shared Hypervisor together with the same plain transport declaration
+used by its Workers, or a dispatcher/target whose Workers are already hosted
+elsewhere.
 
 ## Plugin model
 

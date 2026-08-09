@@ -269,16 +269,17 @@ adapter. This seam does not yet replace the current resource loader or dispatch
 built-in processors; that switch remains gated on complete resource and executor
 verticals so there is never a second canonical runtime path.
 
-The Oxian delivery executor is now an isolated Gate 2 seam. It defaults to an
-owned private Hypervisor with in-process Workers, can bind targeted
-Copilotz-owned Workers to an injected shared Hypervisor without owning it, or
-can dispatch ID-only work to an externally hosted workload. The Worker claims
-and heartbeats the durable row before resolving the logical processor locally.
-Contracts cover post-commit recovery, retry with one stable idempotency key,
-concurrent local dispatch deduplication, shared-Hypervisor survival, remote
-serializability/resource resolution, and runtime-neutral factory modules. Stream
-transport and full Deno/Node/Bun/ browser/Cloudflare smoke matrices remain gated
-with attachments and migrated provider/storage capabilities.
+The Oxian delivery executor defaults to an owned private Hypervisor with Workers
+on a uniquely addressed in-process event fabric, can bind targeted
+Copilotz-owned Workers to an injected shared Hypervisor through the same
+explicit transport declaration without owning it, or can dispatch ID-only work
+to an externally hosted workload. The Worker claims and heartbeats the durable
+row before resolving the logical processor locally. Contracts cover post-commit
+recovery, retry with one stable idempotency key, concurrent local dispatch
+deduplication, shared-Hypervisor survival, remote serializability/resource
+resolution, and runtime-neutral factory modules. Stream transport and full
+Deno/Node/Bun/ browser/Cloudflare smoke matrices remain gated with attachments
+and migrated provider/storage capabilities.
 
 The additive v3 suite is green at 129 tests. It now includes the first
 graph-native participant/thread/message vertical: aggregate atomicity, canonical
@@ -858,11 +859,12 @@ Oxian now support Deno, Node, Bun, browser, and Cloudflare-compatible execution
 with injected capabilities.
 
 **Disposition:** New/Adapt, P0. The core has no unconditional Deno/Node imports.
-Default execution uses a private Hypervisor with in-process Workers. An injected
-Hypervisor hosts Copilotz-owned Workers, while an injected dispatcher/target
-addresses workloads already hosted elsewhere. Copilotz shuts down only
-infrastructure it owns. Worker payloads contain resource/delivery IDs, never
-closures.
+Default execution uses a private Hypervisor with Workers on a unique in-process
+event-fabric topic. An injected Hypervisor hosts Copilotz-owned Workers when the
+embedding app also supplies its explicit transport declaration, while an
+injected dispatcher/target addresses workloads already hosted elsewhere.
+Copilotz shuts down only infrastructure it owns. Worker payloads contain
+resource/delivery IDs, never closures.
 
 **Coverage:** A24–A27 and A52–A55. Browser/Cloudflare smoke tests use supported
 injected providers and storage; they need not promise local filesystem or CLI

@@ -36,8 +36,9 @@ Copilotz v3 is an intentionally breaking pre-1.0 architecture release.
   persistent text/control/media interaction.
 - Collection post-write behavior is expressed as independent named processors.
 - Ominipg is the durable state/recovery authority; Oxian owns work placement.
-- Copilotz now targets Oxian `0.20.0-rc.7`'s declarative
-  Hypervisor/Worker/transport topology and Ominipg `0.9.0-rc.3`.
+- Copilotz now targets Oxian `0.21.0-rc.2`'s shared event-fabric lifecycle and
+  Ominipg `0.9.0-rc.5`. Embedded Hypervisors and Workers share an explicit
+  transport record; Workers auto-start and expose `ready` / `closed` promises.
 - Standard Agent Skills directories are canonical source while generated plugin
   modules are runtime artifacts; generic applications install no skills by
   default.

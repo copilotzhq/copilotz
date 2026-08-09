@@ -276,32 +276,34 @@ Deno.test("engine shutdown releases only its worker and leaves injected infrastr
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   const registry = await createPluginRegistry();
+  const transport = {
+    type: "in-process",
+    config: { topic: `copilotz.engine.${crypto.randomUUID()}` },
+  } as const;
   const hypervisor = createHypervisor({
-    persistAcceptance: () => Promise.resolve(),
+    transports: [transport],
   });
   const engine = await createCopilotzEngine({
     session,
     registry,
     schema: "copilotz_shared_engine",
-    execution: { hypervisor, workerId: "shared-engine" },
+    execution: { hypervisor, transport, workerId: "shared-engine" },
   });
-  let applicationRun: Promise<unknown> | undefined;
+  let applicationWorker: ReturnType<typeof createWorker> | undefined;
   try {
     assertEquals(engine.execution.ownership, "shared_hypervisor");
     await engine.shutdown();
     assertEquals(hypervisor.snapshot().inProcessWorkers, 0);
     await session.query("SELECT 1");
 
-    const applicationWorker = createWorker({
+    applicationWorker = createWorker({
       id: "application-probe",
-      transport: { type: "in-process", hypervisor },
+      transport,
       workloads: {
         "application.probe.v1": () => ({ metadata: { alive: true } }),
       },
     });
-    applicationRun = applicationWorker.run();
-    void applicationRun.catch(() => {});
-    await applicationWorker.whenReady();
+    await applicationWorker.ready;
     const probe = await hypervisor.dispatch({
       workload: "application.probe.v1",
     });
@@ -309,8 +311,9 @@ Deno.test("engine shutdown releases only its worker and leaves injected infrastr
     assertEquals((await probe.completed).status, "completed");
   } finally {
     await engine.shutdown();
+    await applicationWorker?.stop();
+    await applicationWorker?.closed;
     await hypervisor.shutdown();
-    if (applicationRun) await applicationRun;
     await db.close();
   }
 });

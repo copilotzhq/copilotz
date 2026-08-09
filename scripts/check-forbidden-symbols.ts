@@ -34,6 +34,27 @@ const forbidden = [
   "CreateStdioServerWorkflowToolCatalogOptions",
 ] as const;
 
+const retiredOxian = [
+  [/\bpersistAcceptance\b/, "persistAcceptance"],
+  [/\.whenReady\s*\(/, "whenReady"],
+  [/\bcreateWorkerHost\b/, "createWorkerHost"],
+  [/\bWorkerHost\b/, "WorkerHost"],
+  [/\bcreateWorkerClient\b/, "createWorkerClient"],
+  [/\bWorkerClient\b/, "WorkerClient"],
+  [/\bWebSocketWorkerOptions\b/, "WebSocketWorkerOptions"],
+  [/\bcredentialPersistence\b/, "credentialPersistence"],
+  [/@oxian\/oxian-js@0\.20\.0-rc\.7/, "Oxian 0.20.0-rc.7"],
+  [/@oxian\/ominipg@0\.9\.0-rc\.3/, "Ominipg 0.9.0-rc.3"],
+  [
+    /transport\s*:\s*\{\s*type\s*:\s*["']in-process["']\s*,\s*hypervisor/,
+    "direct Hypervisor transport",
+  ],
+  [
+    /transport\s*:\s*\{\s*type\s*:\s*["']websocket["']\s*,\s*url/,
+    "flat WebSocket transport",
+  ],
+] as const;
+
 const ignoredDirectories = new Set([
   ".git",
   ".deno",
@@ -71,8 +92,17 @@ async function* files(
 
 const violations: string[] = [];
 for await (const file of files(repositoryRoot)) {
-  if (allowed(file.path)) continue;
   const lines = (await Deno.readTextFile(file.url)).split(/\r?\n/);
+  if (file.path !== "scripts/check-forbidden-symbols.ts") {
+    for (let index = 0; index < lines.length; index += 1) {
+      for (const [pattern, label] of retiredOxian) {
+        if (pattern.test(lines[index])) {
+          violations.push(`${file.path}:${index + 1}: ${label}`);
+        }
+      }
+    }
+  }
+  if (allowed(file.path)) continue;
   for (let index = 0; index < lines.length; index += 1) {
     for (const symbol of forbidden) {
       const pattern = new RegExp(`\\b${symbol}\\b`);
@@ -90,4 +120,6 @@ if (violations.length) {
   Deno.exit(1);
 }
 
-console.log(`Forbidden-symbol audit passed (${forbidden.length} symbols).`);
+console.log(
+  `Forbidden-symbol audit passed (${forbidden.length} architecture symbols and ${retiredOxian.length} retired Oxian patterns).`,
+);

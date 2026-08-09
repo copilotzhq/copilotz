@@ -18,13 +18,22 @@ and in-process Workers. `app.shutdown()` owns them all.
 import { createCopilotzApplication } from "@copilotz/copilotz/application";
 import { createHypervisor } from "@oxian/oxian-js/hypervisor";
 
-const hypervisor = createHypervisor({ persistAcceptance });
+const transport = {
+  type: "in-process",
+  config: { topic: "acme.copilotz" },
+} as const;
+
+const hypervisor = createHypervisor({
+  transports: [transport],
+}, {
+  onWorkAccepted: persistWorkAcceptance,
+});
 const app = await createCopilotzApplication({
   session: ominipgSession,
   namespace: "acme",
   plugins,
   engine: {
-    execution: { hypervisor, workerId: "copilotz-acme" },
+    execution: { hypervisor, transport, workerId: "copilotz-acme" },
   },
 });
 
@@ -35,6 +44,10 @@ await closeOminipg();
 
 An injected SQL session is not closed unless `closeSession` explicitly grants
 ownership. A shared Hypervisor remains usable after Copilotz stops its Workers.
+The transport topic is an explicit same-realm rendezvous address, not a work
+broadcast topic. Passing the same declaration makes the embedding topology
+visible and lets Oxian run its complete Worker lifecycle over the local event
+fabric.
 
 ## Hypervisor dispatcher
 
@@ -54,16 +67,29 @@ const workerApplication = await createCopilotzApplication({
 });
 
 const worker = createWorker({
-  transport: { type: "websocket", url: hypervisorUrl },
-  // identity, credential, persistence, and capacity omitted
+  id: "copilotz-acme",
+  transport: {
+    type: "websocket",
+    config: { url: hypervisorUrl },
+  },
+  activate,
+  register,
+  handshake,
   workloads: workerApplication.execution.workloads,
 });
+
+await worker.ready;
 ```
 
 The handlers are never serialized. Each process constructs them locally; the
 Hypervisor transports only operation metadata and Web Streams. Gateway and
 worker processes need shared/reachable persistence plus an event publication
 mechanism when live output must cross process boundaries.
+
+`createWorker()` starts immediately. Its `activate`, `register`, and `handshake`
+functions own application-specific identity, credentials, and bootstrap
+persistence; lifecycle callbacks are passed as the factory's second argument
+when the embedding application needs to observe or gate stages.
 
 Copilotz never shuts down an injected dispatcher. Worker affinity is optional
 for durable deliveries; workloads that hold process-local state, such as a

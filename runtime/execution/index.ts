@@ -24,6 +24,7 @@ export type {
   DeliveryExecutor,
   DeliveryExecutorOwnership,
   DeliveryHypervisor,
+  DeliveryInProcessTransport,
   DeliveryMutationIdentity,
   DeliveryRecoveryDispatch,
   DeliveryWorkload,

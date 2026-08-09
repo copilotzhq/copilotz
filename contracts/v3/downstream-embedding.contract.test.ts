@@ -79,8 +79,12 @@ function migratedApplicationPlugin() {
 
 Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, and plugin", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
+  const transport = {
+    type: "in-process",
+    config: { topic: `copilotz.downstream.${crypto.randomUUID()}` },
+  } as const;
   const hypervisor = createHypervisor({
-    persistAcceptance: () => Promise.resolve(),
+    transports: [transport],
   });
   const application = await createCopilotzApplication({
     session: database.session,
@@ -88,7 +92,7 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
     core: false,
     plugins: [migratedApplicationPlugin()],
     engine: {
-      execution: { hypervisor, workerId: "downstream-copilotz" },
+      execution: { hypervisor, transport, workerId: "downstream-copilotz" },
       retryBaseMs: 0,
       random: () => 0,
     },
@@ -138,30 +142,29 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
     await application.shutdown();
   }
 
-  let probeRun: Promise<unknown> | undefined;
+  let probeWorker: ReturnType<typeof createWorker> | undefined;
   try {
     assertEquals(hypervisor.snapshot().inProcessWorkers, 0);
     assertEquals((await database.query("SELECT 1 AS alive")).rows[0], {
       alive: 1,
     });
-    const probeWorker = createWorker({
+    probeWorker = createWorker({
       id: "downstream-probe",
-      transport: { type: "in-process", hypervisor },
+      transport,
       workloads: {
         "downstream.probe.v1": () => ({ metadata: { alive: true } }),
       },
     });
-    probeRun = probeWorker.run();
-    void probeRun.catch(() => {});
-    await probeWorker.whenReady();
+    await probeWorker.ready;
     const probe = await hypervisor.dispatch({
       workload: "downstream.probe.v1",
     });
     assertEquals(await probe.metadata, { alive: true });
     assertEquals((await probe.completed).status, "completed");
   } finally {
+    await probeWorker?.stop();
+    await probeWorker?.closed;
     await hypervisor.shutdown();
-    if (probeRun) await probeRun;
     await database.close();
   }
 });

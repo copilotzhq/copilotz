@@ -12,7 +12,8 @@ Main options:
 - `core: false | CopilotzCorePluginOptions`
 - `plugins`, `resources`, `pluginResolver`
 - `toolCatalog` shared by text execution and capability introspection
-- `engine.execution` for a shared Hypervisor or dispatcher/target
+- `engine.execution` for a shared Hypervisor plus its explicit in-process
+  transport, or an already-hosted dispatcher/target
 - `closeSession` only when ownership of an injected session is intentional
 
 ### `createCopilotzApplication(options)`

@@ -9,7 +9,7 @@ import {
   type DeliveryExecutionHandle,
   type DeliveryExecutor,
   type DeliveryExecutorOwnership,
-  type DeliveryHypervisor,
+  type DeliveryInProcessTransport,
   type DeliveryRecoveryDispatch,
   type DeliveryWorkload,
   type ExecutionWorkTarget,
@@ -37,6 +37,16 @@ export function createDeliveryExecutor(
   if (options.dispatcher && options.hypervisor) {
     throw new TypeError(
       "Configure either a delivery dispatcher or Hypervisor, not both.",
+    );
+  }
+  if (options.dispatcher && options.transport) {
+    throw new TypeError(
+      "An injected dispatcher already owns Worker placement and cannot receive a local transport.",
+    );
+  }
+  if (options.hypervisor && !options.transport) {
+    throw new TypeError(
+      "An injected Hypervisor requires its declared in-process transport.",
     );
   }
   const workload = assertWorkload(
@@ -86,16 +96,22 @@ export function createDeliveryExecutor(
   let dispatcher: DeliveryDispatcher;
   let ownership: DeliveryExecutorOwnership;
   const attachedWorkers: ReturnType<typeof createWorker>[] = [];
-  const workerRuns: Promise<unknown>[] = [];
   let privateHypervisor: ReturnType<typeof createHypervisor> | undefined;
   let target = options.target;
   const workloadTargets = new Map<string, ExecutionWorkTarget>(
     Object.entries(options.workloadTargets ?? {}),
   );
   let localCapacity: number | undefined;
+  const transport: DeliveryInProcessTransport | undefined = options.dispatcher
+    ? undefined
+    : options.transport ?? Object.freeze({
+      type: "in-process" as const,
+      config: Object.freeze({
+        topic: `copilotz.execution.${crypto.randomUUID()}`,
+      }),
+    });
 
   const startWorker = (
-    hypervisor: DeliveryHypervisor,
     config: Readonly<{
       id: string;
       capacity: number;
@@ -104,18 +120,16 @@ export function createDeliveryExecutor(
   ): void => {
     const worker = createWorker({
       id: config.id,
-      transport: { type: "in-process", hypervisor },
+      transport: transport!,
       capacity: config.capacity,
       workloads: config.workloads,
     });
     attachedWorkers.push(worker);
-    const running = worker.run();
-    void running.catch(() => {});
-    workerRuns.push(running);
+    void worker.closed.catch(() => undefined);
   };
 
-  const attachLocalWorkers = (hypervisor: DeliveryHypervisor): void => {
-    startWorker(hypervisor, {
+  const attachLocalWorkers = (): void => {
+    startWorker({
       id: workerId,
       capacity: localCapacity!,
       workloads: hostedWorkloads,
@@ -137,7 +151,7 @@ export function createDeliveryExecutor(
         );
       }
       workerIds.add(isolatedWorkerId);
-      startWorker(hypervisor, {
+      startWorker({
         id: isolatedWorkerId,
         capacity: positiveCapacity(config.capacity),
         workloads: { [name]: additionalWorkloads[name] },
@@ -151,21 +165,20 @@ export function createDeliveryExecutor(
     ownership = "injected_dispatcher";
   } else if (options.hypervisor) {
     localCapacity = positiveCapacity(options.capacity);
-    attachLocalWorkers(options.hypervisor);
+    attachLocalWorkers();
     dispatcher = options.hypervisor;
     ownership = "shared_hypervisor";
   } else {
     localCapacity = positiveCapacity(options.capacity);
     privateHypervisor = createHypervisor({
-      // Copilotz claims its durable delivery inside the workload before effects.
-      persistAcceptance: () => Promise.resolve(),
+      transports: [transport!],
     });
-    attachLocalWorkers(privateHypervisor);
+    attachLocalWorkers();
     dispatcher = privateHypervisor;
     ownership = "private_hypervisor";
   }
   const ready = Promise.all(
-    attachedWorkers.map((worker) => worker.whenReady()),
+    attachedWorkers.map((worker) => worker.ready),
   ).then(() => undefined);
   void ready.catch(() => {});
 
@@ -392,7 +405,9 @@ export function createDeliveryExecutor(
           worker.stop(reason).catch(() => undefined)
         ),
       );
-      await Promise.allSettled(workerRuns);
+      await Promise.allSettled(
+        attachedWorkers.map((worker) => worker.closed),
+      );
       await privateHypervisor?.shutdown(reason);
     },
   });

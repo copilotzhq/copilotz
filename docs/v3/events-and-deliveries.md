@@ -9,13 +9,12 @@ status: implementation
 
 ## Current Status
 
-The Gate 2 persistence seam is implemented in `runtime/events/`. It is composed
-of factories, functions, plain records, and a narrow injected SQL session. It
-does not import the current event worker, CLI, server, or runtime factory.
-
-This seam is not yet the execution path used by `createCopilotz()`. The legacy
-worker remains authoritative until domain mutations and processors are ported
-with their A20–A23 replacements green. There is no dual dispatch path.
+The event and delivery engine in `runtime/events/` is the canonical persistence
+path used by `createCopilotz()`. It is composed of factories, functions, plain
+records, and a narrow injected SQL session. Domain mutations commit semantic
+events and sparse delivery obligations atomically; post-commit execution uses
+the Oxian workloads assembled by `createCopilotzEngine()`. There is no legacy
+event worker or dual dispatch path.
 
 ## Storage Model
 

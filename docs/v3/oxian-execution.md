@@ -50,24 +50,31 @@ const handle = await executor.dispatchDelivery(delivery);
 const result = await handle.done;
 ```
 
-The default executor creates a private Oxian Hypervisor and targeted in-process
-Workers and owns their lifecycle. Passing `hypervisor` binds those
-Copilotz-owned Workers to an application-owned Hypervisor; shutdown stops only
-those Workers. Passing `dispatcher` sends work to an already hosted workload and
-never closes the dispatcher, Hypervisor, connection, or remote Worker.
+The default executor creates a unique in-process event-fabric transport, a
+private Oxian Hypervisor, and targeted Workers, and owns their lifecycle.
+Passing `hypervisor` and its explicit `transport` binds those Copilotz-owned
+Workers to an application-owned Hypervisor; shutdown stops only those Workers.
+Passing `dispatcher` sends work to an already hosted workload and never closes
+the dispatcher, Hypervisor, connection, or remote Worker.
 
 External workers install the same handler:
 
 ```ts
 const workload = createDeliveryWorkload({ store, registry, createContext });
 
+const transport = {
+  type: "in-process",
+  config: { topic: "acme.copilotz" },
+} as const;
+
+const hypervisor = createHypervisor({ transports: [transport] });
+
 const worker = createWorker({
   id: "copilotz-engine",
-  transport: { type: "in-process", hypervisor },
+  transport,
   workloads: { "copilotz.delivery.v1": workload },
 });
-const running = worker.run();
-await worker.whenReady();
+await worker.ready;
 ```
 
 The handler has the same Oxian workload contract when the Worker's transport is
@@ -100,23 +107,19 @@ causation and correlation and derives a child deduplication ID from the logical
 delivery. Domain and collection writes can therefore survive a crash after their
 own commit but before source-delivery settlement without duplicating the effect.
 
-For the private Hypervisor, Oxian's acceptance persistence callback is
-intentionally process-local because the durable no-effect boundary is the
-subsequent database claim. A shared Hypervisor may still persist its own
-operation acceptance independently; neither mechanism replaces the delivery
-table.
+The private Hypervisor intentionally has no transport-level durable acceptance
+callback because the delivery workload claims the database row before plugin
+effects. A shared or remote embedding may still persist Oxian's acceptance
+through its `onWorkAccepted` Hypervisor lifecycle callback. That transport
+boundary and Copilotz's delivery table are complementary; neither replaces the
+other.
 
-## Current boundary
+## Runtime boundary
 
-The execution seam is additive and now assembled by `createCopilotzEngine()`.
-Its processor context is tenant-scoped and exposes typed domain/content/resource
-capabilities, not the SQL session, event store, coordinator, or graph
-primitives. A crash after typed LLM-attempt and collection projections is tested
-through a real private-Hypervisor delivery and retry. It does not yet replace
-the legacy event worker. Built-in processors move next as complete event-native
-verticals, after which the old queue dispatcher and processor coercion path can
-be deleted rather than retained in parallel.
-
-Realtime attachments will use a separate stream workload. They will share Oxian
-lifecycle, cancellation, targeting, and Web Streams, while raw media frames
-remain outside the durable event/delivery tables.
+`createCopilotzEngine()` assembles durable delivery, live processor, and
+realtime stream workloads over this one Oxian lifecycle. Processor context is
+tenant-scoped and exposes typed domain/content/resource capabilities, not the
+SQL session, event store, coordinator, or graph primitives. Realtime attachment
+frames use the stream workload and remain outside durable event/delivery tables;
+their semantic open/close/transcript/message events use the ordinary event
+model.

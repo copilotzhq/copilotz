@@ -1004,6 +1004,52 @@ Deno.test("prompt construction preserves resolvers, transforms, skills, memory, 
   }
 });
 
+Deno.test("agent tool policy is resolved once and persisted on the text attempt", async () => {
+  let resolverCalls = 0;
+  const fixture = await createFixture(
+    async (request) => {
+      assertEquals(request.tools?.map((tool) => tool.function.name), [
+        "contract_tool",
+      ]);
+      await lifecycleStarted(request, 0, "primary-model");
+      await lifecycleSettled(request, {
+        attemptIndex: 0,
+        model: "primary-model",
+        status: "completed",
+        recoveryAction: "accept",
+      });
+      return response(request, {
+        answer: "tenant tool policy preserved",
+        model: "primary-model",
+      });
+    },
+    undefined,
+    {
+      resolveAgentTools(input) {
+        resolverCalls += 1;
+        assertEquals(input.agent.id, "north");
+        assertEquals(input.context.namespace, "tenant-a");
+        return input.tools.filter((tool) => tool.key === "contract_tool");
+      },
+    },
+  );
+  try {
+    const root = await startRun(fixture, "Apply the tenant tool policy.");
+    await waitForRun(fixture, root.event.id, 2);
+    const attempts = await fixture.engine.llmAttempts.list(
+      "tenant-a",
+      "thread-a",
+    );
+    const logical = attempts.find((attempt) =>
+      !attempt.id.includes(":provider:")
+    );
+    assertEquals(logical?.availableToolIds, ["contract_tool"]);
+    assertEquals(resolverCalls, 1);
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
 Deno.test("prompt omits skills when the agent cannot load their instructions", async () => {
   const withoutSkillLoader: Agent = {
     ...north,

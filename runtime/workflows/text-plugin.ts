@@ -218,6 +218,7 @@ async function isLastSettledToolResult(
 }
 
 function messageRouterProcessor(
+  options: CreateTextWorkflowPluginOptions,
   toolCatalog: WorkflowToolCatalog,
 ): Processor<CopilotzProcessorContext> {
   return defineProcessor<CopilotzProcessorContext>({
@@ -257,7 +258,30 @@ function messageRouterProcessor(
         if (!participant || participant.participantType !== "agent") continue;
         const agentId = participantAgentId(participant);
         const agent = requireAgent(context.resources, agentId);
-        const tools = await toolCatalog.forAgent(context.resources, agent);
+        const available = await toolCatalog.forAgent(context.resources, agent);
+        const tools = options.resolveAgentTools
+          ? await options.resolveAgentTools({
+            agent,
+            tools: available,
+            sourceEvent: event,
+            context,
+          })
+          : available;
+        const availableIds = new Set(available.map((tool) => tool.key));
+        const grantedIds = new Set<string>();
+        for (const tool of tools) {
+          if (!availableIds.has(tool.key)) {
+            throw new Error(
+              `Agent tool resolver granted unavailable tool '${tool.key}'.`,
+            );
+          }
+          if (grantedIds.has(tool.key)) {
+            throw new Error(
+              `Agent tool resolver returned duplicate tool '${tool.key}'.`,
+            );
+          }
+          grantedIds.add(tool.key);
+        }
         const continuationKey = metadata?.kind === "tool_result"
           ? `${requiredText(metadata.batchId, "Tool batch id")}:${recipientId}`
           : `${message.id}:${recipientId}`;
@@ -314,7 +338,9 @@ function executeTextAttemptProcessor(
           `LLM attempt '${attempt.id}' has no agent participant.`,
         );
       }
-      const tools = await toolCatalog.forAgent(context.resources, agent);
+      const granted = new Set(attempt.availableToolIds);
+      const tools = (await toolCatalog.forAgent(context.resources, agent))
+        .filter((tool) => granted.has(tool.key));
       const prompt = await buildAgentTextPrompt(context, {
         options,
         agent,
@@ -583,10 +609,11 @@ function projectTextResultProcessor(
         context.resources,
         requiredText(attempt.agentId, "LLM attempt agent id"),
       );
-      const availableTools = await toolCatalog.forAgent(
+      const granted = new Set(attempt.availableToolIds);
+      const availableTools = (await toolCatalog.forAgent(
         context.resources,
         agent,
-      );
+      )).filter((tool) => granted.has(tool.key));
       const toolsByKey = new Map(
         availableTools.map((tool) => [tool.key, tool]),
       );
@@ -663,9 +690,20 @@ function executeToolProcessor(
       const agent = execution.agentId
         ? context.resources.get<Agent>("agents", execution.agentId)
         : undefined;
-      const availableTools = agent
+      let availableTools = agent
         ? await toolCatalog.forAgent(context.resources, agent)
         : await toolCatalog.all(context.resources);
+      const workflow = workflowMetadata(execution.metadata);
+      const attemptId = workflow?.parentLlmAttemptId ?? workflow?.llmAttemptId;
+      if (attemptId) {
+        const attempt = await context.llmAttempts.get(attemptId);
+        if (attempt) {
+          const granted = new Set(attempt.availableToolIds);
+          availableTools = availableTools.filter((tool) =>
+            granted.has(tool.key)
+          );
+        }
+      }
       const tool = availableTools.find((candidate) => candidate.key === toolId);
       const argumentRef = toolExecutionContent(execution).arguments;
       const args = resolvedValue(await context.content.resolve(argumentRef));
@@ -811,9 +849,20 @@ function projectToolResultProcessor(
           const agent = execution.agentId
             ? context.resources.get<Agent>("agents", execution.agentId)
             : undefined;
-          const availableTools = agent
+          let availableTools = agent
             ? await toolCatalog.forAgent(context.resources, agent)
             : await toolCatalog.all(context.resources);
+          const attemptId = metadata.parentLlmAttemptId ??
+            metadata.llmAttemptId;
+          if (attemptId) {
+            const attempt = await context.llmAttempts.get(attemptId);
+            if (attempt) {
+              const granted = new Set(attempt.availableToolIds);
+              availableTools = availableTools.filter((tool) =>
+                granted.has(tool.key)
+              );
+            }
+          }
           const nextTool = availableTools.find((candidate) =>
             candidate.key === advancement.stage.tool.id
           );
@@ -988,7 +1037,7 @@ export function createTextWorkflowPlugin(
   const toolCatalog = options.toolCatalog ?? createWorkflowToolCatalog();
   const evaluateJq = options.evaluateJq ?? defaultWorkflowJq;
   const processors = Object.freeze([
-    messageRouterProcessor(toolCatalog),
+    messageRouterProcessor(options, toolCatalog),
     executeTextAttemptProcessor(options, toolCatalog),
     projectTextResultProcessor(toolCatalog),
     executeToolProcessor(options, toolCatalog),

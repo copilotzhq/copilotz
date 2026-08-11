@@ -132,12 +132,23 @@ export type WorkflowPromptMemoryResource = Readonly<{
     | Promise<WorkflowPromptMemoryContribution | null>;
 }>;
 
+/** Application policy applied before a text attempt records its tool grants. */
+export type ResolveWorkflowAgentTools = (
+  input: Readonly<{
+    agent: Agent;
+    tools: readonly WorkflowTool[];
+    sourceEvent: CopilotzEvent;
+    context: CopilotzProcessorContext;
+  }>,
+) => readonly WorkflowTool[] | Promise<readonly WorkflowTool[]>;
+
 export type CreateTextWorkflowPluginOptions = Readonly<{
   id?: string;
   version?: string;
   chat?: LlmChat;
   env?: Readonly<Record<string, string>>;
   resolveAgentTextConfig?: ResolveAgentTextConfig;
+  resolveAgentTools?: ResolveWorkflowAgentTools;
   resolveAgentInstructions?: ResolveWorkflowAgentInstructions;
   historyTransform?: WorkflowHistoryTransform;
   reasoningHistory?: ReasoningHistoryOptions;

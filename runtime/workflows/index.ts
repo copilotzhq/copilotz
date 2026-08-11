@@ -44,6 +44,7 @@ export type {
   LlmProviderResource,
   ResolveAgentTextConfig,
   ResolveWorkflowAgentInstructions,
+  ResolveWorkflowAgentTools,
   WorkflowAgentsFileInstructions,
   WorkflowHistoryTransform,
   WorkflowJqEvaluator,

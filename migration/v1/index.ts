@@ -983,6 +983,7 @@ async function upsertThreadNode(
     id: thread.id,
     threadId: thread.id,
     externalId: thread.external_id,
+    name: thread.name,
     description: thread.description,
     participants: stringArray(thread.participants),
     initialMessage: thread.initial_message,

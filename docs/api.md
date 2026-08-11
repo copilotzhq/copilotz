@@ -166,6 +166,10 @@ and SSE responses.
 - `createV1FetchHandler(application, options?)`
 - `createV1SseProjector(application, options?)`
 
+The v1 SSE projection writes the projected frame `type` as the SSE `event:`
+name. Thread records preserve `name` and `description`; message history accepts
+`before`, `after`, `order`, and `limit` query parameters.
+
 ## Package exports
 
 The authoritative subpath list is `deno.json`. Public groups are application,

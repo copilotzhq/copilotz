@@ -40,6 +40,8 @@ export type ConversationThread = Readonly<{
   id: string;
   namespace: string;
   externalId?: string;
+  name?: string;
+  description?: string;
   status: "active" | "archived" | "closed" | string;
   parentThreadId?: string;
   metadata: Readonly<Record<string, unknown>>;
@@ -110,6 +112,8 @@ export type CreateThreadInput = Readonly<{
   namespace: string;
   id?: string;
   externalId?: string;
+  name?: string;
+  description?: string;
   status?: ConversationThread["status"];
   participants?: readonly ParticipantInput[];
   parentThreadId?: string;
@@ -125,6 +129,8 @@ export type AddThreadParticipantInput = Readonly<{
 }>;
 
 export type ThreadPatch = Readonly<{
+  name?: string | null;
+  description?: string | null;
   status?: ConversationThread["status"];
   metadata?: Record<string, unknown>;
 }>;
@@ -190,7 +196,9 @@ export type DeleteThreadResult = Readonly<{
 
 export type ListMessagesOptions = Readonly<{
   after?: string;
+  before?: string;
   limit?: number;
+  order?: "asc" | "desc";
   /** Active branch by default; `all` includes superseded messages/revisions. */
   view?: "active" | "all";
 }>;

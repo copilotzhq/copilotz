@@ -31,6 +31,8 @@ export type CreateEventNativeFetchHandlerOptions = Readonly<{
   responseHeaders?: Readonly<Record<string, string>>;
   /** Optional versioned projection applied only to request-bound SSE output. */
   projectSseOutput?: EventNativeSseProjector;
+  /** Optional SSE event name derived from a projected output value. */
+  sseEventName?: (value: unknown) => string | undefined;
   onError?: (error: unknown, request: Request) => void | Promise<void>;
 }>;
 
@@ -172,8 +174,11 @@ function safeStreamOutput(output: AttachmentOutput): unknown {
   });
 }
 
-function sseFrame(value: unknown): Uint8Array {
-  return new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`);
+function sseFrame(value: unknown, event?: string): Uint8Array {
+  const name = event?.replace(/[\r\n]/g, "").trim();
+  return new TextEncoder().encode(
+    `${name ? `event: ${name}\n` : ""}data: ${JSON.stringify(value)}\n\n`,
+  );
 }
 
 function cancellationReason(reason: unknown): string {
@@ -202,7 +207,9 @@ function sseResponse(
           : safeStreamOutput(next.value);
         if (projected === null || projected === undefined) return;
         const values = Array.isArray(projected) ? projected : [projected];
-        for (const value of values) controller.enqueue(sseFrame(value));
+        for (const value of values) {
+          controller.enqueue(sseFrame(value, options.sseEventName?.(value)));
+        }
       } catch (error) {
         await stream.cancel(cancellationReason(error)).catch(() => undefined);
         controller.error(error);

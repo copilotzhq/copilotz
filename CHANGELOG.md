@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.59.1 — 2026-08-11
+
+This patch restores graph-native conversation details required by embedded and
+HTTP clients while keeping the event-native contracts authoritative.
+
+### Fixed
+
+- Thread names and descriptions are preserved by create, update, channel
+  ingress, and the isolated v1 database upgrade.
+- Channel thread participants are now independent from per-message recipients,
+  so passive participants do not accidentally receive work.
+- Thread participant filters accept either the internal participant ID or its
+  stable external ID.
+- Message history supports `before` cursors and ascending or descending order,
+  enabling latest-first windows and chronological client pages without offset
+  pagination.
+- Tool-call-only LLM turns now create their public agent-message anchor instead
+  of disappearing from durable conversation history.
+- The v1 Fetch projection emits explicit SSE `event:` names, restoring the
+  uppercase stream contract expected by existing clients.
+
 ## 0.59.0 — 2026-08-11
 
 This pre-1.0 minor makes shared persistence and physical-schema routing

@@ -89,6 +89,13 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
       body: {
         thread: {
           externalId: "web-thread-a",
+          name: "Web support",
+          description: "Created by the Web channel",
+          participants: [{
+            externalId: "passive-observer",
+            participantType: "job",
+            name: "Observer",
+          }],
           metadata: { channel: "web" },
         },
         participant: {
@@ -127,11 +134,13 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
       "web-thread-a",
     );
     assertExists(thread);
-    assertEquals(thread.participants.length, 2);
+    assertEquals(thread.name, "Web support");
+    assertEquals(thread.description, "Created by the Web channel");
+    assertEquals(thread.participants.length, 3);
     assertEquals(
       thread.participants.map((participant) => participant.participantType)
         .sort(),
-      ["agent", "human"],
+      ["agent", "human", "job"],
     );
     const messages = await application.conversation.listMessages(
       NAMESPACE,
@@ -152,7 +161,10 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
       method: "POST",
       path: ["web"],
       body: {
-        thread: { externalId: "web-thread-a" },
+        thread: {
+          externalId: "web-thread-a",
+          name: "Renamed Web support",
+        },
         participant: {
           externalId: "web-user-a",
           participantType: "human",
@@ -166,8 +178,12 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
     });
     assertEquals(second, { status: 202, data: { accepted: true } });
     assertEquals(
+      (await application.conversation.getThread(NAMESPACE, thread.id))?.name,
+      "Renamed Web support",
+    );
+    assertEquals(
       (await application.conversation.listParticipants(NAMESPACE)).length,
-      2,
+      3,
     );
     assertEquals(
       (await application.conversation.listThreads(NAMESPACE)).length,

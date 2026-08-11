@@ -531,7 +531,7 @@ Deno.test("event-native text workflow preserves user -> tool -> same-agent conti
         recoveryAction: "accept",
       });
       return response(request, {
-        answer: "north is checking",
+        answer: "",
         model: "primary-model",
         finishReason: "tool_calls",
         toolCalls: [toolCall("call-1", "persist-once")],
@@ -586,7 +586,16 @@ Deno.test("event-native text workflow preserves user -> tool -> same-agent conti
       await messageText(fixture, messages[0]),
       "Execute a retry-safe tool turn.",
     );
-    assertEquals(await messageText(fixture, messages[1]), "north is checking");
+    assertEquals(await messageText(fixture, messages[1]), "");
+    assertEquals(
+      (messages[1].metadata.copilotzWorkflow as Record<string, unknown>).kind,
+      "agent_output",
+    );
+    assertEquals(
+      (messages[1].metadata.copilotzWorkflow as Record<string, unknown>)
+        .agentParticipantId,
+      "agent-north",
+    );
     assertStringIncludes(
       await messageText(fixture, messages[2]),
       "tool-result:persist-once",

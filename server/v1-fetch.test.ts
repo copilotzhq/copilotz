@@ -111,8 +111,10 @@ Deno.test("v1 Fetch handler streams projected output from a providers route", as
       dispatched?.context?.originalUrl,
       "https://example.test/v1/providers/web",
     );
+    const streamed = (await response.text()).trim();
+    assert(streamed.startsWith("event: TOKEN\ndata: "));
     const frame = JSON.parse(
-      (await response.text()).trim().slice("data: ".length),
+      streamed.split("\ndata: ", 2)[1],
     ) as Record<string, unknown>;
     assertEquals(frame.type, "TOKEN");
     assertEquals(

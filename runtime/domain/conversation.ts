@@ -316,10 +316,16 @@ function mapThread(
   participants: readonly Participant[],
 ): ConversationThread {
   const data = record(row.data);
+  const explicitName = stringValue(data.name) ??
+    (row.name !== row.id && row.name !== row.source_id ? row.name : undefined);
   return deepFreeze({
     id: row.id,
     namespace: row.namespace,
     ...(row.source_id ? { externalId: row.source_id } : {}),
+    ...(explicitName ? { name: explicitName } : {}),
+    ...(stringValue(data.description)
+      ? { description: stringValue(data.description) }
+      : {}),
     status: stringValue(data.status) ?? "active",
     ...(stringValue(data.parentThreadId)
       ? { parentThreadId: stringValue(data.parentThreadId) }
@@ -800,6 +806,8 @@ export function createConversationRepository(
         createId,
       );
       const externalId = input.externalId?.trim() || undefined;
+      const name = input.name?.trim() || undefined;
+      const description = input.description?.trim() || undefined;
       const parentThreadId = input.parentThreadId?.trim() || undefined;
       if (parentThreadId === id) {
         throw new TypeError("A thread cannot be its own parent.");
@@ -850,8 +858,10 @@ export function createConversationRepository(
             [
               id,
               namespace,
-              externalId ?? id,
+              name ?? externalId ?? id,
               JSON.stringify({
+                name: name ?? null,
+                description: description ?? null,
                 status,
                 parentThreadId: parentThreadId ?? null,
                 metadata: structuredClone(input.metadata ?? {}),
@@ -974,9 +984,19 @@ export function createConversationRepository(
       const patch = input.patch as ThreadPatch & Record<string, unknown>;
       const fields = changedPatchFields(
         patch,
-        ["status", "metadata"],
+        ["name", "description", "status", "metadata"],
         "Thread patch",
       );
+      const name = patch.name === undefined
+        ? undefined
+        : patch.name === null
+        ? null
+        : requireText(patch.name, "Thread name");
+      const description = patch.description === undefined
+        ? undefined
+        : patch.description === null
+        ? null
+        : requireText(patch.description, "Thread description");
       const status = patch.status === undefined
         ? undefined
         : requireText(patch.status, "Thread status");
@@ -1007,17 +1027,23 @@ export function createConversationRepository(
           );
           if (!row) throw new Error(`Thread '${id}' was not found.`);
           const data = record(row.data);
+          const storedName = name === undefined ? stringValue(data.name) : name;
           const result = await transaction.query<NodeRow>(
             `UPDATE ${names.nodes}
-             SET data = $4::jsonb, updated_at = CURRENT_TIMESTAMP
+             SET name = $4, data = $5::jsonb, updated_at = CURRENT_TIMESTAMP
              WHERE namespace = $1 AND id = $2 AND type = $3
              RETURNING *`,
             [
               namespace,
               id,
               "thread",
+              storedName ?? row.source_id ?? id,
               JSON.stringify({
                 ...data,
+                name: storedName ?? null,
+                description: description === undefined
+                  ? stringValue(data.description) ?? null
+                  : description,
                 status: status ?? stringValue(data.status) ?? "active",
                 metadata: patch.metadata === undefined
                   ? objectValue(data.metadata)
@@ -1675,8 +1701,15 @@ export function createConversationRepository(
       filters.push(
         `EXISTS (
           SELECT 1 FROM ${names.edges} participation
+          JOIN ${names.nodes} participant
+            ON participant.namespace = participation.namespace
+           AND participant.id = participation.source_node_id
+           AND participant.type = 'participant'
           WHERE participation.namespace = thread.namespace
-            AND participation.source_node_id = $${params.length}
+            AND (
+              participant.id = $${params.length}
+              OR participant.source_id = $${params.length}
+            )
             AND participation.target_node_id = thread.id
             AND participation.type = 'participates_in'
         )`,
@@ -1801,18 +1834,30 @@ export function createConversationRepository(
       ? Object.freeze(messages)
       : projectActiveMessageBranch(messages, thread.activeMessageBranch);
     const after = listOptions.after?.trim();
-    let offset = 0;
-    if (after) {
-      const cursor = projected.findIndex((message) => message.id === after);
+    const before = listOptions.before?.trim();
+    if (after && before) {
+      throw new TypeError(
+        "Message history accepts either after or before, not both.",
+      );
+    }
+    const order = listOptions.order ?? "asc";
+    if (order !== "asc" && order !== "desc") {
+      throw new TypeError("Message order must be 'asc' or 'desc'.");
+    }
+    let bounded = [...projected];
+    const cursorId = after ?? before;
+    if (cursorId) {
+      const cursor = projected.findIndex((message) => message.id === cursorId);
       if (cursor < 0) {
         throw new Error(
-          `Message cursor '${after}' was not found in the ${view} history for thread '${threadId}'.`,
+          `Message cursor '${cursorId}' was not found in the ${view} history for thread '${threadId}'.`,
         );
       }
-      offset = cursor + 1;
+      bounded = after ? bounded.slice(cursor + 1) : bounded.slice(0, cursor);
     }
+    if (order === "desc") bounded.reverse();
     return Object.freeze(
-      projected.slice(offset, offset + boundedLimit(listOptions.limit)),
+      bounded.slice(0, boundedLimit(listOptions.limit)),
     );
   };
   const readMessageRevisions = async (

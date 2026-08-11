@@ -144,6 +144,8 @@ Deno.test("graph-native conversation commits domain graph, semantic event, and d
       namespace: "tenant-a",
       id: "thread-a",
       externalId: "customer-thread-42",
+      name: "Customer support",
+      description: "Visible thread metadata",
       participants: [{
         id: "human-alice",
         externalId: "alice",
@@ -157,6 +159,8 @@ Deno.test("graph-native conversation commits domain graph, semantic event, and d
       identity: { deduplicationId: "thread:42" },
     });
     assertEquals(thread.value?.participants.length, 2);
+    assertEquals(thread.value?.name, "Customer support");
+    assertEquals(thread.value?.description, "Visible thread metadata");
 
     const content = await fixture.prepare.prepare([
       "Hello from an asset",
@@ -878,6 +882,12 @@ Deno.test("participant identity and graph reads remain tenant scoped", async () 
       ))?.id,
       participantA.id,
     );
+    assertEquals(
+      (await fixture.conversation.listThreads("tenant-a", {
+        participantId: "shared-user",
+      })).map((thread) => thread.id),
+      ["thread-a-2", "thread-a-1"],
+    );
 
     const participantCounts = await fixture.session.query<{
       namespace: string;
@@ -939,6 +949,8 @@ Deno.test("participant and thread updates are typed, durable, and retry-safe", a
     await fixture.conversation.createThread({
       namespace: "tenant-a",
       id: "thread-a",
+      name: "Original thread",
+      description: "Original description",
       participants: [{
         id: "agent-a",
         externalId: "agent-a",
@@ -978,11 +990,18 @@ Deno.test("participant and thread updates are typed, durable, and retry-safe", a
     const updatedThread = await fixture.conversation.updateThread({
       namespace: "tenant-a",
       id: "thread-a",
-      patch: { status: "closed", metadata: { version: 2 } },
+      patch: {
+        name: "Renamed thread",
+        description: "Updated description",
+        status: "closed",
+        metadata: { version: 2 },
+      },
       identity: { deduplicationId: "thread:update:thread-a" },
     });
     assertEquals(updatedThread.event.type, "thread.updated");
     assertEquals(updatedThread.value?.status, "closed");
+    assertEquals(updatedThread.value?.name, "Renamed thread");
+    assertEquals(updatedThread.value?.description, "Updated description");
     assertEquals(updatedThread.value?.metadata, { version: 2 });
     assertEquals(updatedThread.value?.participants.map((value) => value.id), [
       "agent-a",
@@ -1111,6 +1130,30 @@ Deno.test("message deduplication and event positions preserve exactly-once proje
         limit: 1,
       })).map((message) => message.id),
       [second.value!.id],
+    );
+    assertEquals(
+      (await fixture.conversation.listMessages("tenant-a", "thread-a", {
+        order: "desc",
+        limit: 2,
+      })).map((message) => message.id),
+      [third.value!.id, second.value!.id],
+    );
+    assertEquals(
+      (await fixture.conversation.listMessages("tenant-a", "thread-a", {
+        before: third.value!.id,
+        order: "desc",
+        limit: 1,
+      })).map((message) => message.id),
+      [second.value!.id],
+    );
+    await assertRejects(
+      () =>
+        fixture.conversation.listMessages("tenant-a", "thread-a", {
+          after: first.value!.id,
+          before: third.value!.id,
+        }),
+      TypeError,
+      "either after or before",
     );
 
     const persisted = await fixture.session.query<{ count: number | string }>(

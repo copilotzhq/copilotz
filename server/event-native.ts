@@ -200,6 +200,7 @@ function publicAgent(agent: Agent): Readonly<Record<string, unknown>> {
     id: agent.id ?? agent.name,
     name: agent.name,
     role: agent.role ?? null,
+    ...(agent.description ? { description: agent.description } : {}),
     ...(agent.runtimes ? { runtimes: structuredClone(agent.runtimes) } : {}),
     ...(agent.capabilities
       ? { capabilities: structuredClone(agent.capabilities) }
@@ -298,7 +299,9 @@ async function messageList(
     threadId,
     {
       after: queryText(request.query, "after"),
+      before: queryText(request.query, "before"),
       limit,
+      order: queryChoice(request.query, "order", ["asc", "desc"]),
       view: queryChoice(request.query, "view", ["active", "all"]),
     },
   );

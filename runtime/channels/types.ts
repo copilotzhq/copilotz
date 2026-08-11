@@ -28,7 +28,11 @@ export type ChannelRequest = Readonly<{
 export type ChannelThreadInput = Readonly<{
   id?: string;
   externalId?: string;
+  name?: string;
+  description?: string;
   status?: string;
+  /** Participants belong to the thread independently of message recipients. */
+  participants?: readonly ChannelParticipantRef[];
   /** Merged into existing thread metadata and used as initial metadata. */
   metadata?: Record<string, unknown>;
 }>;

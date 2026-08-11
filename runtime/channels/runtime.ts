@@ -92,13 +92,21 @@ async function refreshThread(
     : undefined;
   const statusChanged = descriptor.status !== undefined &&
     descriptor.status !== thread.status;
+  const nameChanged = descriptor.name !== undefined &&
+    descriptor.name !== thread.name;
+  const descriptionChanged = descriptor.description !== undefined &&
+    descriptor.description !== thread.description;
   const metadataChanged = metadata !== undefined &&
     !sameValue(metadata, thread.metadata);
-  if (!statusChanged && !metadataChanged) return thread;
+  if (
+    !nameChanged && !descriptionChanged && !statusChanged && !metadataChanged
+  ) return thread;
   const updated = await application.conversation.updateThread({
     namespace,
     id: thread.id,
     patch: {
+      ...(nameChanged ? { name: descriptor.name! } : {}),
+      ...(descriptionChanged ? { description: descriptor.description! } : {}),
       ...(statusChanged ? { status: descriptor.status! } : {}),
       ...(metadataChanged ? { metadata } : {}),
     },
@@ -259,6 +267,10 @@ async function resolveThread(
     namespace,
     ...(id ? { id } : {}),
     ...(externalId ? { externalId } : {}),
+    ...(descriptor.name?.trim() ? { name: descriptor.name.trim() } : {}),
+    ...(descriptor.description?.trim()
+      ? { description: descriptor.description.trim() }
+      : {}),
     ...(descriptor.status ? { status: descriptor.status } : {}),
     ...(descriptor.metadata
       ? { metadata: structuredClone(descriptor.metadata) }
@@ -294,11 +306,20 @@ async function startExecution(
     namespace,
     envelope.participant,
   );
+  const declaredReferences = typeof envelope.thread === "string" ||
+      isThread(envelope.thread)
+    ? []
+    : envelope.thread.participants ?? [];
+  const declaredParticipants = await Promise.all(
+    declaredReferences.map((reference) =>
+      resolveParticipant(application, namespace, reference)
+    ),
+  );
   let thread = await resolveThread(
     application,
     namespace,
     envelope.thread,
-    [sender],
+    [sender, ...declaredParticipants],
   );
   const recipients = envelope.recipients
     ? await Promise.all(
@@ -308,7 +329,9 @@ async function startExecution(
     )
     : await defaultRecipients(application, namespace, channel, thread, sender);
   const participantIds = new Set(thread.participants.map((value) => value.id));
-  for (const participant of [sender, ...recipients]) {
+  for (
+    const participant of [sender, ...declaredParticipants, ...recipients]
+  ) {
     if (participantIds.has(participant.id)) continue;
     const added = await application.conversation.addThreadParticipant({
       namespace,

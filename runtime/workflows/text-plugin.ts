@@ -561,24 +561,21 @@ function projectTextResultProcessor(
           agentParticipantId: participant.id,
         },
       );
-      let outputMessageId: string | undefined;
-      if (content.answer || toolCalls.length === 0) {
-        const outputMessage = await context.conversation.createMessage({
-          id: `message:${attempt.id}:output`,
-          threadId: attempt.threadId,
-          sender: participantInput(participant),
-          recipientIds: [],
-          content: content.answer ? [content.answer] : [],
-          visibility: { kind: "public" },
-          metadata: messageMetadata,
-        }, {
-          operationKey: "project:agent-message",
-          metadata: messageMetadata,
-        });
-        outputMessageId = outputMessage.value?.id;
-        if (!outputMessageId) {
-          throw new Error(`LLM attempt '${attempt.id}' produced no message.`);
-        }
+      const outputMessage = await context.conversation.createMessage({
+        id: `message:${attempt.id}:output`,
+        threadId: attempt.threadId,
+        sender: participantInput(participant),
+        recipientIds: [],
+        content: content.answer ? [content.answer] : [],
+        visibility: { kind: "public" },
+        metadata: messageMetadata,
+      }, {
+        operationKey: "project:agent-message",
+        metadata: messageMetadata,
+      });
+      const outputMessageId = outputMessage.value?.id;
+      if (!outputMessageId) {
+        throw new Error(`LLM attempt '${attempt.id}' produced no message.`);
       }
       if (!toolCalls.length) return;
 

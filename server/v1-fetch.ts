@@ -74,5 +74,10 @@ export function createV1FetchHandler(
     responseHeaders: options.responseHeaders,
     onError: options.onError,
     projectSseOutput: createV1SseProjector(application, options.sse),
+    sseEventName: (value) =>
+      value && typeof value === "object" &&
+        typeof (value as { type?: unknown }).type === "string"
+        ? (value as { type: string }).type
+        : undefined,
   });
 }

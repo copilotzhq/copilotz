@@ -665,12 +665,17 @@ records to references inside each tenant's upgrade transaction:
 8. migration is idempotent and applies independently to every tenant schema;
 9. non-canonical legacy asset records require `resolveLegacyAsset`, supplied by
    the maintenance adapter that knows how to read the old filesystem or object
-   store.
+   store; and
+10. legacy `metadata.attachments` entries become ordered `attachment` content
+    refs while their compatibility metadata remains available at the boundary.
 
 Old body fields are removed only after reference resolution and digest/size
-verification. If any body cannot be resolved or encoded, the tenant transaction
-rolls back to the untouched v1 tables. Tenant schemas are upgraded independently
-so an operator can validate and back up each tenant before continuing.
+verification. Unexpected resolver or encoding failures roll the tenant back to
+the untouched v1 tables. If an adapter confirms that a body was already missing,
+it may return an explicit `failed` or `abandoned` result; the upgrade preserves
+that unreadable asset and its refs without manufacturing content. Tenant schemas
+are upgraded independently so an operator can validate and back up each tenant
+before continuing.
 
 ## Acceptance Tests
 

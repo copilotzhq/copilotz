@@ -114,8 +114,9 @@ For every selected tenant schema it:
 6. canonicalizes participant/thread identities and rewrites messages, tool
    executions, LLM attempts, document sources, and memory snapshots into their
    v3 graph and content-reference shapes;
-7. imports legacy asset bodies through the caller's `resolveLegacyAsset` adapter
-   and verifies their media encoding, size, and SHA-256 digest;
+7. imports legacy asset bodies through the caller's `resolveLegacyAsset`
+   adapter, verifies their media encoding, size, and SHA-256 digest, and
+   preserves explicitly unavailable assets as failed or abandoned records;
 8. translates settled non-frame events into positioned immutable facts with no
    delivery obligations;
 9. refreshes graph-native thread activity metadata; and
@@ -125,18 +126,27 @@ The operation is tenant-independent and idempotent after success. Inline text,
 reasoning, tool data, document sources, and memory snapshots become
 database-backed assets. Existing external asset metadata cannot prove that its
 body was preserved, so the migration requires an injected resolver whenever it
-encounters such a record. A missing resolver, missing body, invalid encoding, or
-resolver failure rolls back that tenant's complete upgrade. The migration module
-does not import filesystem, object-storage, Deno, Node, or server APIs; the
-maintenance adapter owns those concerns.
+encounters such a record. A missing resolver, invalid resolver result, encoding
+failure, or unexpected adapter failure rolls back that tenant's complete
+upgrade. A resolver may explicitly classify a body that was already absent as
+`failed` or `abandoned`; its node and content references remain intact, and
+normal reads report that the asset is not ready. The migration module does not
+import filesystem, object-storage, Deno, Node, or server APIs; the maintenance
+adapter owns those concerns.
 
 ```ts
 await upgradeV1Schemas(session, {
   schemas: ["tenant_a", "tenant_b"],
-  resolveLegacyAsset: async ({ ref, mediaType }) => ({
-    body: await legacyAssetAdapter.read(ref!),
-    mediaType: mediaType ?? "application/octet-stream",
-  }),
+  resolveLegacyAsset: async ({ ref, mediaType }) => {
+    const body = await legacyAssetAdapter.readIfPresent(ref!);
+    return body
+      ? { body, mediaType: mediaType ?? "application/octet-stream" }
+      : {
+        state: "failed",
+        reason: "legacy body is no longer available",
+        mediaType: mediaType ?? "application/octet-stream",
+      };
+  },
 });
 ```
 

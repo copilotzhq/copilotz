@@ -51,10 +51,19 @@ import { upgradeV1Schemas } from "@copilotz/copilotz/migration/v1";
 
 const results = await upgradeV1Schemas(session, {
   schemas: ["public", "tenant_acme"],
-  resolveLegacyAsset: async (legacy) => ({
-    body: await fetchLegacyBytes(legacy),
-    mediaType: legacy.mediaType ?? "application/octet-stream",
-  }),
+  resolveLegacyAsset: async (legacy) => {
+    const body = await fetchLegacyBytes(legacy);
+    return body
+      ? {
+        body,
+        mediaType: legacy.mediaType ?? "application/octet-stream",
+      }
+      : {
+        state: "failed",
+        reason: "legacy body is no longer available",
+        mediaType: legacy.mediaType ?? "application/octet-stream",
+      };
+  },
 });
 ```
 
@@ -63,6 +72,12 @@ thread lease is active. It preserves node/edge IDs, merges thread fields into
 thread nodes, unions participant edges, canonicalizes assets, translates settled
 non-ephemeral events, discards transient queue state, verifies the new schema,
 and drops staged legacy tables in one transaction per tenant.
+
+Resolver exceptions still roll back the tenant. When the source was already
+missing before migration, the adapter may explicitly return `state: "failed"` or
+`state: "abandoned"`; the asset record and every message attachment reference
+are then preserved, while reads fail honestly instead of substituting invented
+bytes.
 
 Fresh databases use the four-table v3 baseline directly and never import the
 upgrade module.

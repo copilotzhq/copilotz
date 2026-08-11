@@ -219,7 +219,15 @@ async function seedLegacyTenant(
         senderType: "user",
         reasoning: "legacy reasoning",
         toolCalls: [{ id: `call-${suffix}`, name: "lookup" }],
-        metadata: { channel: "legacy-web" },
+        metadata: {
+          channel: "legacy-web",
+          attachments: [{
+            kind: "image",
+            mimeType: "image/png",
+            fileName: "legacy.png",
+            assetRef: `asset://asset-${suffix}`,
+          }],
+        },
       },
       sourceType: "message",
       sourceId: `message-${suffix}`,
@@ -510,7 +518,7 @@ Deno.test("A28 upgrade refuses active queue work and live thread leases", async 
   }
 });
 
-Deno.test("A28 upgrade rolls back when legacy asset bytes cannot be resolved", async () => {
+Deno.test("A28 upgrade rolls back when legacy assets have no resolver", async () => {
   const { db, session } = await createFixture();
   const schema = uniqueSchema("asset_rollback");
   try {
@@ -542,6 +550,72 @@ Deno.test("A28 upgrade rolls back when legacy asset bytes cannot be resolved", a
     assert(
       !legacyColumns.rows.some((row) => row.column_name === "position"),
     );
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("A28 upgrade preserves unavailable assets and their message references", async () => {
+  const { db, session } = await createFixture();
+  const schema = uniqueSchema("asset_unavailable");
+  try {
+    await provisionV1FixtureSchema(session, schema);
+    await seedLegacyTenant(session, schema, "unavailable");
+    await upgradeV1Schema(session, schema, {
+      resolveLegacyAsset: () => ({
+        state: "failed",
+        reason: "legacy filesystem body is unavailable",
+      }),
+    });
+
+    const asset = await session.query<{ data: Record<string, unknown> }>(
+      `SELECT data FROM ${q(schema, "nodes")} WHERE id = $1`,
+      ["asset-unavailable"],
+    );
+    assertEquals(asset.rows[0]?.data.state, "failed");
+    assertEquals(
+      (asset.rows[0]?.data.metadata as Record<string, unknown>)
+        .migrationUnavailable,
+      {
+        code: "legacy_asset_unavailable",
+        reason: "legacy filesystem body is unavailable",
+      },
+    );
+
+    const readers = await createV3Readers(session, schema);
+    try {
+      const message = await readers.conversation.getMessage(
+        "tenant-unavailable",
+        "message-unavailable",
+      );
+      assertEquals(
+        message?.content.map((ref) => [ref.role, ref.assetId]),
+        [
+          ["body", message?.content[0]?.assetId],
+          ["attachment", "asset-unavailable"],
+          ["reasoning", message?.content[2]?.assetId],
+          ["llm.tool_calls", message?.content[3]?.assetId],
+        ],
+      );
+      assertEquals(
+        (await readers.assets.get(
+          "tenant-unavailable",
+          "asset-unavailable",
+        ))?.state,
+        "failed",
+      );
+      await assertRejects(
+        () =>
+          readers.assets.read(
+            "tenant-unavailable",
+            "asset-unavailable",
+          ),
+        Error,
+        "not ready",
+      );
+    } finally {
+      await readers.executor.shutdown();
+    }
   } finally {
     await db.close();
   }
@@ -733,15 +807,20 @@ Deno.test("A28 multi-tenant upgrade preserves graph domains and translates settl
         assertEquals(message?.metadata.channel, "legacy-web");
         assertEquals(
           message?.content.map((ref) => ref.role),
-          ["body", "reasoning", "llm.tool_calls"],
+          ["body", "attachment", "reasoning", "llm.tool_calls"],
         );
         const messageBodies = await readers.resolver.getMany(
           message!.content,
           { namespace },
         );
         assertEquals(messageBodies[0].text, "hello");
-        assertEquals(messageBodies[1].text, "legacy reasoning");
-        assertEquals(messageBodies[2].value, [{
+        assertEquals(
+          new TextDecoder().decode(messageBodies[1].bytes),
+          `legacy-image-${suffix}`,
+        );
+        assertEquals(messageBodies[1].ref.name, "legacy.png");
+        assertEquals(messageBodies[2].text, "legacy reasoning");
+        assertEquals(messageBodies[3].value, [{
           id: `call-${suffix}`,
           name: "lookup",
         }]);

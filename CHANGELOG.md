@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.59.3 — 2026-08-11
+
+This patch makes the v1 content migration loss-aware for production databases
+whose historical filesystem assets are only partially available.
+
+### Fixed
+
+- Legacy message attachments become ordered canonical content references while
+  retaining compatibility metadata.
+- Asset resolvers can explicitly preserve unavailable bodies as `failed` or
+  `abandoned` records; unexpected resolver failures still roll back the tenant.
+- Failed legacy assets remain addressable and report not-ready reads instead of
+  receiving invented empty content or blocking unrelated tenant migration.
+
 ## 0.59.2 — 2026-08-11
 
 This patch restores graph-native conversation details required by embedded and

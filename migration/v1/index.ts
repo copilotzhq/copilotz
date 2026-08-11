@@ -94,11 +94,19 @@ export type LegacyAssetMigrationInput = Readonly<{
   updatedAt: string;
 }>;
 
-export type ResolvedLegacyAsset = Readonly<{
-  body: Uint8Array;
-  mediaType?: string;
-  metadata?: Readonly<Record<string, unknown>>;
-}>;
+export type ResolvedLegacyAsset =
+  | Readonly<{
+    state?: "ready";
+    body: Uint8Array;
+    mediaType?: string;
+    metadata?: Readonly<Record<string, unknown>>;
+  }>
+  | Readonly<{
+    state: "failed" | "abandoned";
+    reason: string;
+    mediaType?: string;
+    metadata?: Readonly<Record<string, unknown>>;
+  }>;
 
 export type ResolveLegacyAsset = (
   input: LegacyAssetMigrationInput,
@@ -106,8 +114,8 @@ export type ResolveLegacyAsset = (
 
 export type UpgradeV1SchemaOptions = Readonly<{
   /**
-   * Imports bytes addressed by legacy asset metadata. The upgrade aborts when
-   * a non-canonical asset exists and no resolver can provide its body.
+   * Imports bytes addressed by legacy asset metadata or explicitly classifies
+   * an already-unavailable body. Missing/invalid resolver results abort.
    */
   resolveLegacyAsset?: ResolveLegacyAsset;
 }>;
@@ -286,13 +294,16 @@ function encodeDatabaseBody(
 function canonicalAssetData(value: unknown): boolean {
   const data = object(value);
   const location = object(data.location);
-  return typeof data.mediaType === "string" &&
+  const common = typeof data.mediaType === "string" &&
     finiteNonNegativeInteger(data.byteLength) !== null &&
     typeof data.digest === "string" && data.digest.startsWith("sha256:") &&
-    data.state === "ready" && location.kind === "database" &&
+    location.kind === "database" &&
     (location.encoding === "utf8" || location.encoding === "json" ||
       location.encoding === "base64") &&
     typeof data.body === "string";
+  return common &&
+    (data.state === "ready" || data.state === "failed" ||
+      data.state === "abandoned");
 }
 
 function semanticEventType(row: LegacyEventRow): string {
@@ -649,6 +660,60 @@ async function writeCanonicalAsset(
   );
 }
 
+async function writeUnavailableLegacyAsset(
+  transaction: SqlExecutor,
+  schema: string,
+  input: Readonly<{
+    id: string;
+    namespace: string;
+    mediaType: string;
+    state: "failed" | "abandoned";
+    reason: string;
+    metadata?: Readonly<Record<string, unknown>>;
+    sourceType?: string | null;
+    sourceId?: string | null;
+    updatedAt: string;
+  }>,
+): Promise<void> {
+  const mediaType = input.mediaType.trim();
+  const reason = input.reason.trim();
+  if (!mediaType) throw new TypeError(`Asset '${input.id}' has no media type.`);
+  if (!reason) {
+    throw new TypeError(`Unavailable asset '${input.id}' has no reason.`);
+  }
+  const body = new Uint8Array();
+  const encoded = encodeDatabaseBody(mediaType, body);
+  await transaction.query(
+    `UPDATE ${qualified(schema, "nodes")}
+     SET name = $3, content = NULL, data = $4::jsonb,
+       source_type = $5, source_id = $6, updated_at = $7::timestamptz
+     WHERE namespace = $1 AND id = $2 AND type = 'asset'`,
+    [
+      input.namespace,
+      input.id,
+      mediaType,
+      json({
+        mediaType,
+        byteLength: 0,
+        digest: await sha256(body),
+        state: input.state,
+        location: encoded.location,
+        body: encoded.body,
+        metadata: {
+          ...object(input.metadata),
+          migrationUnavailable: {
+            code: "legacy_asset_unavailable",
+            reason,
+          },
+        },
+      }),
+      input.sourceType ?? null,
+      input.sourceId ?? null,
+      input.updatedAt,
+    ],
+  );
+}
+
 async function canonicalizeLegacyAssets(
   transaction: SqlExecutor,
   schema: string,
@@ -678,7 +743,38 @@ async function canonicalizeLegacyAssets(
       createdAt: iso(row.created_at)!,
       updatedAt: iso(row.updated_at)!,
     });
-    if (!resolved || !(resolved.body instanceof Uint8Array)) {
+    if (!resolved) {
+      throw new TypeError(
+        `resolveLegacyAsset did not return a result for '${row.id}'.`,
+      );
+    }
+    const mediaType = optionalString(resolved.mediaType) ?? inferredMediaType ??
+      "application/octet-stream";
+    const migratedFromV1 = {
+      ref,
+      sourceType: row.source_type,
+      sourceId: row.source_id,
+      data: structuredClone(data),
+    };
+    if (resolved.state === "failed" || resolved.state === "abandoned") {
+      await writeUnavailableLegacyAsset(transaction, schema, {
+        id: row.id,
+        namespace: row.namespace,
+        mediaType,
+        state: resolved.state,
+        reason: resolved.reason,
+        metadata: {
+          ...object(data.metadata),
+          ...object(resolved.metadata),
+          migratedFromV1,
+        },
+        sourceType: "legacy_asset_ref",
+        sourceId: ref ?? row.id,
+        updatedAt: iso(row.updated_at)!,
+      });
+      continue;
+    }
+    if (!("body" in resolved) || !(resolved.body instanceof Uint8Array)) {
       throw new TypeError(
         `resolveLegacyAsset did not return a body for '${row.id}'.`,
       );
@@ -686,18 +782,12 @@ async function canonicalizeLegacyAssets(
     await writeCanonicalAsset(transaction, schema, {
       id: row.id,
       namespace: row.namespace,
-      mediaType: optionalString(resolved.mediaType) ?? inferredMediaType ??
-        "application/octet-stream",
+      mediaType,
       body: resolved.body,
       metadata: {
         ...object(data.metadata),
         ...object(resolved.metadata),
-        migratedFromV1: {
-          ref,
-          sourceType: row.source_type,
-          sourceId: row.source_id,
-          data: structuredClone(data),
-        },
+        migratedFromV1,
       },
       sourceType: "legacy_asset_ref",
       sourceId: ref ?? row.id,
@@ -1232,6 +1322,58 @@ async function resolveRecipientIds(
   return Object.freeze([...ids]);
 }
 
+function legacyAttachmentAssetId(value: unknown): string | null {
+  const ref = optionalString(value);
+  if (!ref) return null;
+  if (!ref.startsWith("asset://")) return ref;
+  const path = ref.slice("asset://".length);
+  const id = path.split("/").at(-1)?.trim();
+  return id || null;
+}
+
+async function appendLegacyMessageAttachments(
+  transaction: SqlExecutor,
+  schema: string,
+  row: LegacyNodeRow,
+  data: Record<string, unknown>,
+  content: MigratedContentRef[],
+): Promise<void> {
+  const attachments = object(data.metadata).attachments;
+  if (!Array.isArray(attachments)) return;
+
+  for (const candidate of attachments) {
+    const attachment = object(candidate);
+    const ref = optionalString(attachment.assetRef) ??
+      optionalString(attachment.assetId);
+    const assetId = legacyAttachmentAssetId(ref);
+    if (!assetId) continue;
+    const name = optionalString(attachment.fileName) ??
+      optionalString(attachment.name);
+    if (
+      content.some((existing) =>
+        existing.role === "attachment" && existing.assetId === assetId &&
+        (existing.name ?? null) === name
+      )
+    ) continue;
+    content.push(
+      await assetContentRef(transaction, schema, {
+        namespace: row.namespace,
+        ownerId: row.id,
+        assetId,
+        role: "attachment",
+        name,
+        metadata: {
+          migratedFromV1: {
+            ref,
+            kind: optionalString(attachment.kind),
+            format: optionalString(attachment.format),
+          },
+        },
+      }),
+    );
+  }
+}
+
 async function canonicalMessageContent(
   transaction: SqlExecutor,
   schema: string,
@@ -1264,6 +1406,13 @@ async function canonicalMessageContent(
       }),
     );
   }
+  await appendLegacyMessageAttachments(
+    transaction,
+    schema,
+    row,
+    data,
+    content,
+  );
   if (
     typeof data.reasoning === "string" &&
     !content.some((ref) => ref.role === "reasoning")
@@ -1824,6 +1973,7 @@ async function assetContentRef(
     assetId: string;
     role: string;
     name?: string | null;
+    metadata?: Record<string, unknown>;
   }>,
 ): Promise<MigratedContentRef> {
   const result = await transaction.query<{ data: unknown }>(
@@ -1850,6 +2000,7 @@ async function assetContentRef(
     role: input.role,
     mediaType,
     ...(input.name ? { name: input.name } : {}),
+    ...(input.metadata ? { metadata: structuredClone(input.metadata) } : {}),
   });
 }
 

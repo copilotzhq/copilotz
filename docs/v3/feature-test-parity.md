@@ -256,8 +256,9 @@ tables, and is idempotent after success. Repository-level acceptance now reads
 migrated threads, participants, messages, tool executions, LLM attempts,
 knowledge documents, and memory snapshots through the v3 factories and resolves
 their bodies through canonical assets. Legacy external assets cross an explicit
-`resolveLegacyAsset` maintenance boundary; missing or invalid bytes roll back
-the entire tenant. The same contract passes on PGlite and PostgreSQL.
+`resolveLegacyAsset` maintenance boundary; invalid results roll back the entire
+tenant, while explicitly missing bodies remain failed or abandoned assets. The
+same contract passes on PGlite and PostgreSQL.
 
 The factory-first plugin seam is now independently executable from the root and
 `copilotz/plugins` entrypoints. Contracts cover exact manifest/resource

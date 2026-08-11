@@ -635,7 +635,12 @@ async function writeUnavailableLegacyAsset(
   if (!reason) {
     throw new TypeError(`Unavailable asset '${input.id}' has no reason.`);
   }
-  const body = new Uint8Array();
+  // Keep the stored sentinel internally consistent even though failed and
+  // abandoned assets can never be read. An empty byte sequence is not valid
+  // JSON, so JSON media types use the smallest explicit no-value payload.
+  const body = jsonMediaType(mediaType)
+    ? new TextEncoder().encode("null")
+    : new Uint8Array();
   const encoded = encodeDatabaseBody(mediaType, body);
   await transaction.query(
     `UPDATE ${qualified(schema, "nodes")}
@@ -648,7 +653,7 @@ async function writeUnavailableLegacyAsset(
       mediaType,
       json({
         mediaType,
-        byteLength: 0,
+        byteLength: body.byteLength,
         digest: await sha256(body),
         state: input.state,
         location: encoded.location,

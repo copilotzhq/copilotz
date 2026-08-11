@@ -565,6 +565,7 @@ Deno.test("A28 upgrade preserves unavailable assets and their message references
       resolveLegacyAsset: () => ({
         state: "failed",
         reason: "legacy filesystem body is unavailable",
+        mediaType: "application/json",
       }),
     });
 
@@ -573,6 +574,13 @@ Deno.test("A28 upgrade preserves unavailable assets and their message references
       ["asset-unavailable"],
     );
     assertEquals(asset.rows[0]?.data.state, "failed");
+    assertEquals(asset.rows[0]?.data.mediaType, "application/json");
+    assertEquals(asset.rows[0]?.data.byteLength, 4);
+    assertEquals(asset.rows[0]?.data.body, "null");
+    assertEquals(
+      (asset.rows[0]?.data.location as Record<string, unknown>).encoding,
+      "json",
+    );
     assertEquals(
       (asset.rows[0]?.data.metadata as Record<string, unknown>)
         .migrationUnavailable,

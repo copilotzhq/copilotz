@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.59.1 — 2026-08-11
+## 0.59.2 — 2026-08-11
 
 This patch restores graph-native conversation details required by embedded and
 HTTP clients while keeping the event-native contracts authoritative.

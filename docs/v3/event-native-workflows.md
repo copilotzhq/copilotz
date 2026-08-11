@@ -150,6 +150,15 @@ ordered `text.delta`, `reasoning.delta`, and `tool_call.delta` events. They flow
 through the live event hub and attachment outputs, carry the logical attempt as
 their stream identity, and are never inserted into durable event storage.
 
+Provider retry and fallback also remain inside that logical attempt. They create
+durable child provider attempts for accounting and diagnostics, but do not
+create conversation messages or replace the logical attempt's workflow metadata.
+An agent ask therefore keeps the same causal identity through provider recovery,
+tool continuations, its public answer, and the result delivered back to the
+caller. A custom text runtime that returns the legacy detached durable-recovery
+response is rejected explicitly; event-native workflows never promote that
+partial fragment as a final agent answer.
+
 Tests now prove user → agent → tool → same agent → public final output, one
 external tool execution after recovery, explicit provider fallback children,
 concurrent tools, and one post-batch continuation. The plugin is exported from

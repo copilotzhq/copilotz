@@ -424,6 +424,12 @@ function executeTextAttemptProcessor(
         );
         await settleLiveEmissions();
 
+        if (response.recovery) {
+          throw new Error(
+            "Event-native text workflows require provider recovery to settle within one logical LLM attempt.",
+          );
+        }
+
         let usage = response.usage as unknown as
           | Record<string, unknown>
           | undefined;

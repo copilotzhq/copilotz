@@ -13,6 +13,7 @@ import { createSqlSession } from "../events/index.ts";
 import type {
   ChatRequest,
   ChatResponse,
+  LLMAttemptLifecycleEvent,
   ProviderAPI,
   TokenUsage,
   ToolInvocation,
@@ -86,6 +87,69 @@ function response(
     finishReason: input.toolCalls ? "tool_calls" : "stop",
     ...(input.toolCalls ? { toolCalls: [...input.toolCalls] } : {}),
   };
+}
+
+async function providerAttemptStarted(
+  request: ChatRequest,
+  attemptIndex: number,
+): Promise<void> {
+  await request.onAttemptLifecycle?.({
+    phase: "started",
+    attemptId: `runtime-recovery-${attemptIndex}`,
+    attemptIndex,
+    provider: "openai",
+    model: "ask-model",
+    config: { provider: "openai", model: "ask-model" },
+    messages: request.messages,
+    startedAt: `2026-08-11T00:00:0${attemptIndex}.000Z`,
+  });
+}
+
+async function providerAttemptSettled(
+  request: ChatRequest,
+  input: Readonly<{
+    attemptIndex: number;
+    status: "completed" | "failed";
+    recoveryAction: "accept" | "retry_same";
+  }>,
+): Promise<void> {
+  const failed = input.status === "failed";
+  const event: LLMAttemptLifecycleEvent = {
+    phase: "settled",
+    attemptId: `runtime-recovery-${input.attemptIndex}`,
+    attemptIndex: input.attemptIndex,
+    provider: "openai",
+    model: "ask-model",
+    status: input.status,
+    ...(failed ? { statusReason: "malformed_tool_call" as const } : {}),
+    recoveryAction: input.recoveryAction,
+    record: {
+      attemptId: `runtime-recovery-${input.attemptIndex}`,
+      attemptIndex: input.attemptIndex,
+      provider: "openai",
+      model: "ask-model",
+      usage: failed
+        ? {
+          ...usage,
+          statusReason: "malformed_tool_call",
+        }
+        : usage,
+      status: input.status,
+      recoveryAction: input.recoveryAction,
+      ...(failed
+        ? {
+          error: {
+            reason: "provider_error" as const,
+            message: "Malformed tool call recovered internally.",
+          },
+        }
+        : {}),
+      startedAt: `2026-08-11T00:00:0${input.attemptIndex}.000Z`,
+      finishedAt: `2026-08-11T00:00:0${input.attemptIndex + 1}.000Z`,
+    },
+    finishedAt: `2026-08-11T00:00:0${input.attemptIndex + 1}.000Z`,
+  };
+  await request.onAttemptLifecycle?.(event);
 }
 
 function requestAgent(
@@ -477,6 +541,158 @@ Deno.test("nested public asks return through each caller in one thread", async (
       "completed",
       "completed",
     ]);
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("asked-agent provider recovery preserves the ask and resumes its caller once", async () => {
+  const agents = [agent("a", ["b"]), agent("b")];
+  const calls: string[] = [];
+  const counts = new Map<string, number>();
+  const fixture = await createFixture(agents, async (request) => {
+    const id = requestAgent(request, agents);
+    calls.push(id);
+    const count = (counts.get(id) ?? 0) + 1;
+    counts.set(id, count);
+    if (id === "a" && count === 1) {
+      return response(request, {
+        answer: "",
+        toolCalls: [askCall("recovering-ask", "b", "B, recover and answer")],
+      });
+    }
+    if (id === "b") {
+      assertEquals(request.durableRecovery, undefined);
+      await providerAttemptStarted(request, 0);
+      await providerAttemptSettled(request, {
+        attemptIndex: 0,
+        status: "failed",
+        recoveryAction: "retry_same",
+      });
+      await providerAttemptStarted(request, 1);
+      await providerAttemptSettled(request, {
+        attemptIndex: 1,
+        status: "completed",
+        recoveryAction: "accept",
+      });
+      return response(request, { answer: "B recovered answer" });
+    }
+    const transcript = JSON.stringify(request.messages);
+    assertStringIncludes(transcript, "B recovered answer");
+    assertStringIncludes(transcript, "answerMessageId");
+    return response(request, { answer: "A resumed once" });
+  });
+
+  try {
+    const root = await startRun(fixture, "Exercise asked-agent recovery.");
+    await waitForRun(fixture, root.event.id, 5);
+    assertEquals(calls, ["a", "b", "a"]);
+
+    const attempts = await fixture.engine.llmAttempts.list(
+      "tenant-a",
+      "thread-a",
+    );
+    const askedAttempt = attempts.find((attempt) =>
+      attempt.agentId === "b" && agentAskMetadata(attempt.metadata)?.phase ===
+        "question"
+    );
+    assertExists(askedAttempt);
+    const providerAttempts = attempts.filter((attempt) =>
+      attempt.parentAttemptId === askedAttempt.id
+    );
+    assertEquals(providerAttempts.map((attempt) => attempt.status), [
+      "failed",
+      "completed",
+    ]);
+
+    const messages = await fixture.engine.conversation.listMessages(
+      "tenant-a",
+      "thread-a",
+    );
+    const question = agentAskMetadata(messages[1].metadata);
+    const answer = agentAskMetadata(messages[2].metadata);
+    assertExists(question);
+    assertEquals(answer?.phase, "answer");
+    assertEquals(answer?.askId, question.askId);
+    assertEquals(
+      agentAskMetadata(askedAttempt.metadata)?.askId,
+      question.askId,
+    );
+    assertEquals(await messageText(fixture, messages[4]), "A resumed once");
+
+    const executions = await fixture.engine.toolExecutions.list(
+      "tenant-a",
+      "thread-a",
+    );
+    assertEquals(executions.length, 1);
+    assertEquals(executions[0].status, "completed");
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("unexpected durable recovery fails the ask and resumes its caller safely", async () => {
+  const agents = [agent("a", ["b"]), agent("b")];
+  const calls: string[] = [];
+  const counts = new Map<string, number>();
+  const fixture = await createFixture(agents, async (request) => {
+    const id = requestAgent(request, agents);
+    calls.push(id);
+    const count = (counts.get(id) ?? 0) + 1;
+    counts.set(id, count);
+    if (id === "a" && count === 1) {
+      return response(request, {
+        answer: "",
+        toolCalls: [askCall("invalid-recovery", "b", "B, inspect this")],
+      });
+    }
+    if (id === "b") {
+      return {
+        ...response(request, { answer: "unsafe partial answer" }),
+        recovery: {
+          reason: "malformed_tool_call",
+          cue: "<recovery_cue>Continue safely.</recovery_cue>",
+          answer: "unsafe partial answer",
+          joinSeparator: " ",
+          nextProviderIndex: 0,
+        },
+      };
+    }
+    assertStringIncludes(
+      JSON.stringify(request.messages),
+      "Asked agent 'b' failed",
+    );
+    return response(request, { answer: "A handled recovery failure" });
+  });
+
+  try {
+    const root = await startRun(fixture, "Reject detached durable recovery.");
+    await waitForRun(fixture, root.event.id, 4);
+    assertEquals(calls, ["a", "b", "a"]);
+
+    const attempts = await fixture.engine.llmAttempts.list(
+      "tenant-a",
+      "thread-a",
+    );
+    const askedAttempt = attempts.find((attempt) => attempt.agentId === "b");
+    assertEquals(askedAttempt?.status, "failed");
+
+    const messages = await fixture.engine.conversation.listMessages(
+      "tenant-a",
+      "thread-a",
+    );
+    const texts = await Promise.all(
+      messages.map((message) => messageText(fixture, message)),
+    );
+    assertEquals(texts.includes("unsafe partial answer"), false);
+    assertEquals(texts.at(-1), "A handled recovery failure");
+
+    const executions = await fixture.engine.toolExecutions.list(
+      "tenant-a",
+      "thread-a",
+    );
+    assertEquals(executions.length, 1);
+    assertEquals(executions[0].status, "failed");
   } finally {
     await closeFixture(fixture);
   }

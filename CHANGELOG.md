@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.58.1 — 2026-08-11
+
+This patch hardens event-native agent asks across provider recovery.
+
+### Fixed
+
+- Provider retries remain inside one logical asked-agent attempt, preserving the
+  immutable ask identity through the final answer and back to its caller.
+- Custom text runtimes that unexpectedly return a detached durable-recovery
+  response now fail explicitly instead of promoting partial output as a final
+  agent answer; the existing ask-failure path safely resumes the caller.
+
+### Tests
+
+- Added end-to-end workflow coverage for asked-agent provider recovery, child
+  provider attempts, answer correlation, and exactly-once caller resumption.
+- Added a regression proving unsupported durable-recovery responses persist no
+  partial answer and settle the originating ask as a safe failure.
+
 ## 0.58.0 — 2026-08-10
 
 This pre-1.0 minor release makes Copilotz topology explicit while keeping the

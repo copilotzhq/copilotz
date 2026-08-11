@@ -104,7 +104,15 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
           name: "Web User",
         },
         input: {
-          content: "Channel input",
+          content: [
+            { type: "text", text: "Channel input" },
+            {
+              type: "image",
+              dataBase64: btoa("image-bytes"),
+              mediaType: "image/png",
+              name: "fixture.png",
+            },
+          ],
           id: "channel-message-a",
           correlationId: "channel-run-a",
         },
@@ -155,6 +163,16 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
       { namespace: NAMESPACE },
     );
     assertEquals(resolved[0].text, "Channel reply");
+    const inputContent = await application.content.resolver.getMany(
+      messages[0].content,
+      { namespace: NAMESPACE },
+    );
+    assertEquals(inputContent[0].text, "Channel input");
+    assertEquals(inputContent[1].asset.mediaType, "image/png");
+    assertEquals(
+      new TextDecoder().decode(inputContent[1].bytes),
+      "image-bytes",
+    );
 
     const second = await createEventNativeApp(application).handle({
       resource: "channels",

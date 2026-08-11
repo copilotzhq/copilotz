@@ -81,7 +81,7 @@ async function createFixture(
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry,
-    schema: "memory_plugin_contract",
+    defaultDatabaseSchema: "memory_plugin_contract",
     retryBaseMs: 0,
     random: () => 0,
   });
@@ -178,7 +178,7 @@ Deno.test("memory plugin exposes tenant-scoped knowledge spaces through a typed 
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry,
-    schema: "memory_space_tool_contract",
+    defaultDatabaseSchema: "memory_space_tool_contract",
   });
   try {
     assertEquals(memory.manifest.provides.tools, ["list_knowledge_spaces"]);
@@ -592,7 +592,7 @@ Deno.test("ready memory contributes to the text prompt and replaces archived his
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry,
-    schema: "memory_prompt_contract",
+    defaultDatabaseSchema: "memory_prompt_contract",
     retryBaseMs: 0,
     random: () => 0,
   });

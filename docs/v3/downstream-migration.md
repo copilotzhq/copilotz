@@ -7,16 +7,16 @@ status: implementation
 
 # Copilotz v3 Downstream Migration Matrix
 
-Copilotz v3 is intentionally source-breaking and ships as the next pre-1.0
-minor, 0.58.0. Existing clients pin exact 0.x versions, so publishing it cannot
-silently upgrade them. That protects production rollout, but it does not count
-as v3 compatibility: each application needs a deliberate migration and its own
-acceptance run.
+Copilotz v3 is intentionally source-breaking. The 0.59.0 persistence and
+multi-schema foundation is the current downstream migration target. Existing
+clients pin exact 0.x versions, so publishing it cannot silently upgrade them.
+That protects production rollout, but it does not count as v3 compatibility:
+each application needs a deliberate migration and its own acceptance run.
 
 The library contract `contracts/v3/downstream-embedding.contract.test.ts` is the
 reference embedded shape. It proves that an application can own the Ominipg
-session and Oxian host, compose an agent/provider/processor plugin, run a causal
-turn, and shut Copilotz down without closing injected infrastructure. The
+database and Oxian host, compose an agent/provider/processor plugin, run a
+causal turn, and shut Copilotz down without closing injected infrastructure. The
 external-dispatcher contract is covered separately by the execution suite,
 including ID-only dispatch payloads and app-owned worker lifetime.
 

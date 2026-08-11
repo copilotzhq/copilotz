@@ -156,9 +156,9 @@ Deno.test("WhatsApp channel normalizes signed media ingress and native semantic 
   const db = await createTestDatabase({ url: ":memory:" });
   const fake = fakeTransport();
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
+    database: db,
     namespace: NAMESPACE,
-    schema: "copilotz_v3_whatsapp",
+    databaseSchema: "copilotz_v3_whatsapp",
     core: false,
     plugins: [
       replyPlugin(),

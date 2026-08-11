@@ -123,7 +123,7 @@ async function expectAppError(
 Deno.test("event-native app exposes graph, event, asset, collection, and plugin capabilities without legacy storage routes", async () => {
   const application = await createCopilotz({
     namespace: NAMESPACE,
-    schema: SCHEMA,
+    databaseSchema: SCHEMA,
     core: false,
     plugins: [adapterPlugin],
   });
@@ -479,7 +479,7 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
         app.handle({
           resource: "threads",
           method: "GET",
-          context: { schema: "wrong-schema" },
+          context: { databaseSchema: "wrong-schema" },
         }),
       400,
       "schema_mismatch",
@@ -567,10 +567,66 @@ Deno.test("event-native server adapter remains factory-first and avoids raw grap
   );
 });
 
+Deno.test("trusted schema resolution isolates identical HTTP resource identities", async () => {
+  const defaultSchema = `${SCHEMA}_trusted_default`;
+  const alternateSchema = `${SCHEMA}_trusted_alternate`;
+  const application = await createCopilotz({
+    namespace: NAMESPACE,
+    databaseSchema: defaultSchema,
+    core: false,
+  });
+  let authorizedSchema = defaultSchema;
+  const app = createEventNativeApp(application, {
+    resolveDatabaseSchema: () => authorizedSchema,
+  });
+  const create = (status: string) =>
+    app.handle({
+      resource: "threads",
+      method: "POST",
+      body: { id: "shared-thread", status, participants: [] },
+      context: { databaseSchema: authorizedSchema },
+    });
+  try {
+    assertEquals((await create("default")).status, 201);
+    authorizedSchema = alternateSchema;
+    assertEquals((await create("alternate")).status, 201);
+
+    const alternate = await app.handle({
+      resource: "threads",
+      method: "GET",
+      path: ["shared-thread"],
+      context: { databaseSchema: alternateSchema },
+    });
+    assertEquals(object(alternate.data).status, "alternate");
+
+    authorizedSchema = defaultSchema;
+    const original = await app.handle({
+      resource: "threads",
+      method: "GET",
+      path: ["shared-thread"],
+      context: { databaseSchema: defaultSchema },
+    });
+    assertEquals(object(original.data).status, "default");
+    await expectAppError(
+      () =>
+        app.handle({
+          resource: "threads",
+          method: "GET",
+          path: ["shared-thread"],
+          context: { databaseSchema: alternateSchema },
+        }),
+      400,
+      "schema_mismatch",
+    );
+  } finally {
+    await application.shutdown();
+  }
+});
+
 Deno.test("event-native app returns request-bound channel output before delivery settlement", async () => {
   const application = await createCopilotz({
     namespace: NAMESPACE,
-    schema: `${SCHEMA}_request_bound`,
+    databaseSchema: `${SCHEMA}_request_bound`,
     core: false,
   });
   let release!: () => void;

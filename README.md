@@ -18,7 +18,7 @@ threads + participants
 ## Install
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.58.0";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.59.0";
 ```
 
 The root package is runtime-neutral. Host capabilities such as MCP stdio,
@@ -28,7 +28,7 @@ explicit package subpaths.
 ## Minimal application
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.58.0";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.59.0";
 
 const namespace = "example";
 const copilotz = await createCopilotz({
@@ -97,10 +97,11 @@ is passed once as a `ReadableStream<Uint8Array>` with native backpressure.
 - Installed resources do not create ambient agent authority. Exact
   `capabilities` grants are required; broad access uses explicit
   `{ all: true }`.
-- Injected Ominipg sessions, Oxian Hypervisors, and dispatchers remain owned by
+- Injected Ominipg databases, Oxian Hypervisors, and dispatchers remain owned by
   the embedding application.
-- Namespace and schema scope are explicit; no ambient runtime/database context
-  is required.
+- Logical `namespace` and physical `databaseSchema` scope are explicit; one
+  application can lazily bind multiple schemas without creating another database
+  connection or Oxian runtime.
 
 ## Package map
 

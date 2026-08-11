@@ -50,6 +50,7 @@ export type EventCoordinator = Readonly<{
     options?: { priority?: number; maxAttempts?: number },
   ): Promise<CoordinatedMutationResult<void>>;
   recover(options?: {
+    databaseSchema?: string;
     namespace?: string;
     consumerIds?: readonly string[];
     limit?: number;
@@ -154,7 +155,11 @@ export function createEventCoordinator(
       });
     },
     recover(recoveryOptions = {}) {
-      return options.executor.dispatchRecoverable(recoveryOptions);
+      return options.executor.dispatchRecoverable({
+        ...recoveryOptions,
+        databaseSchema: recoveryOptions.databaseSchema ??
+          options.store.databaseSchema,
+      });
     },
   });
 }

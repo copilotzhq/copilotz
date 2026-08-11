@@ -1,11 +1,11 @@
 # Quickstart
 
 The normal entry point is `createCopilotz()`. It creates a private Ominipg
-session and private in-process Oxian host unless you inject application-owned
+database and private in-process Oxian host unless you inject application-owned
 infrastructure.
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.58.0";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.59.0";
 
 const namespace = "acme";
 const app = await createCopilotz({
@@ -77,7 +77,7 @@ Use plugins for reusable packages and explicit top-level resources for
 application-local overrides.
 
 ```ts
-import { definePlugin } from "jsr:@copilotz/copilotz@^0.58.0/plugins";
+import { definePlugin } from "jsr:@copilotz/copilotz@^0.59.0/plugins";
 
 const customerPlugin = definePlugin({
   manifest: {

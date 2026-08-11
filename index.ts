@@ -28,12 +28,7 @@ export * from "./runtime/schedules/index.ts";
 export * from "./runtime/tools/index.ts";
 export * from "./runtime/usage/index.ts";
 export * from "./runtime/workflows/index.ts";
-export {
-  createManagedOminipgSession,
-  createOminipgSqlSession,
-} from "./runtime/adapters/ominipg.ts";
 export type {
   CopilotzOminipgOptions,
-  ManagedSqlSession,
   OminipgDatabaseLike,
 } from "./runtime/adapters/ominipg.ts";

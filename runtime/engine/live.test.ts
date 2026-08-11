@@ -86,7 +86,7 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry,
-    schema: "copilotz_live_nested",
+    defaultDatabaseSchema: "copilotz_live_nested",
     execution: { capacity: 1 },
   });
   try {
@@ -190,7 +190,7 @@ Deno.test("live subscription failures remain independent and ephemeral", async (
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry,
-    schema: "copilotz_live_errors",
+    defaultDatabaseSchema: "copilotz_live_errors",
     execution: { capacity: 2 },
   });
   try {

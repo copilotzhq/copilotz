@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals } from "@std/assert";
 
 import {
   createCopilotz,
@@ -18,6 +18,8 @@ type RemovedConfigurationKeys = Extract<
   | "ackMode"
   | "resourcesPath"
   | "useWebWorker"
+  | "session"
+  | "closeSession"
 >;
 
 const noRemovedConfigurationKeys: RemovedConfigurationKeys extends never ? true
@@ -31,7 +33,7 @@ const emptyPlugin = definePlugin({
 
 const validConfiguration = {
   namespace: "configuration-contract",
-  schema: "public",
+  databaseSchema: "public",
   database: { url: ":memory:", pgliteMemoryProfile: "low-memory" },
   core: {
     knowledge: false,
@@ -49,9 +51,9 @@ const validConfiguration = {
 Deno.test("v3 configuration composes plugins, resources, persistence, and engine policy", async () => {
   const application = await createCopilotz(validConfiguration);
   try {
-    assertEquals(application.config.schema, "public");
+    assertEquals(application.config.databaseSchema, "public");
     assertEquals(application.config.declaredPluginIds, ["contract.empty"]);
-    assertEquals(application.config.sessionOwnership, "application");
+    assertEquals(application.config.databaseOwnership, "application");
     assertEquals(application.plugins.get("agents", "support"), {
       id: "support",
       name: "Support",
@@ -59,22 +61,4 @@ Deno.test("v3 configuration composes plugins, resources, persistence, and engine
   } finally {
     await application.shutdown();
   }
-});
-
-Deno.test("v3 persistence ownership inputs are unambiguous", async () => {
-  await assertRejects(
-    () =>
-      createCopilotz({
-        namespace: "invalid",
-        core: false,
-        session: {
-          query: async () => ({ rows: [] }),
-          transaction: async (operation) =>
-            await operation({ query: async () => ({ rows: [] }) }),
-        },
-        database: { url: ":memory:" },
-      }),
-    TypeError,
-    "either session or database",
-  );
 });

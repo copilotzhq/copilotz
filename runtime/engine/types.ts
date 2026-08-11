@@ -334,6 +334,7 @@ export type CopilotzCapabilitySource = Readonly<{
 
 /** Durable causal scope used to bind domain capabilities outside a delivery. */
 export type CopilotzCapabilityBase = Readonly<{
+  databaseSchema: string;
   event: CopilotzEvent;
   signal: AbortSignal;
   createMutationIdentity: CopilotzMutationIdentityFactory;
@@ -342,7 +343,11 @@ export type CopilotzCapabilityBase = Readonly<{
 
 export type CopilotzEngineExecutionOptions = Omit<
   CreateDeliveryExecutorOptions,
-  "store" | "registry" | "createContext"
+  | "store"
+  | "resolveStore"
+  | "defaultDatabaseSchema"
+  | "registry"
+  | "createContext"
 >;
 
 export type CopilotzEngineAttachmentOptions = Readonly<{
@@ -359,7 +364,7 @@ export type CopilotzEngineAttachmentOptions = Readonly<{
 export type CreateCopilotzEngineOptions = Readonly<{
   session: SqlSession;
   registry: PluginRegistry;
-  schema?: string;
+  defaultDatabaseSchema?: string;
   initializeSchema?: boolean;
   execution?: CopilotzEngineExecutionOptions;
   attachments?: CopilotzEngineAttachmentOptions;
@@ -388,7 +393,41 @@ export type CopilotzEngineMaintenanceResult = Readonly<{
   compacted: Readonly<{ events: number; deliveries: number }>;
 }>;
 
+export type CopilotzEngineDatabaseScope = Readonly<{
+  databaseSchema: string;
+  content: Readonly<{
+    assets: DatabaseAssetRepository;
+    preparer: ContentPreparer;
+    resolver: ContentResolver;
+  }>;
+  conversation: ConversationRepository;
+  collections: EventCollections;
+  llmAttempts: LlmAttemptRepository;
+  toolExecutions: ToolExecutionRepository;
+  relations: DomainRelationRepository;
+  schedules: ScheduledJobRepository;
+  knowledge: KnowledgeRepository;
+  connect(input: ConnectAttachmentInput): Promise<ThreadAttachment>;
+  run(input: RunInput): Promise<RunHandle>;
+  events: CopilotzEngine["events"];
+  deliveries: CopilotzEngine["deliveries"];
+  recover(options?: {
+    namespace?: string;
+    consumerIds?: readonly string[];
+    limit?: number;
+  }): Promise<DeliveryRecoveryDispatch>;
+  maintenance(options?: {
+    namespace?: string;
+    consumerIds?: readonly string[];
+    limit?: number;
+    retentionMs?: number | null;
+    now?: Date;
+  }): Promise<CopilotzEngineMaintenanceResult>;
+}>;
+
 export type CopilotzEngine = Readonly<{
+  databaseSchema: string;
+  databaseScope(databaseSchema: string): Promise<CopilotzEngineDatabaseScope>;
   plugins: PluginRegistry;
   execution: Readonly<{
     ownership: DeliveryExecutorOwnership;

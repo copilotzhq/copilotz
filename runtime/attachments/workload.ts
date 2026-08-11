@@ -12,6 +12,11 @@ export type CreateRealtimeStreamWorkloadOptions = Readonly<{
   registry: PluginRegistry;
   /** Required only when realtime providers need typed semantic capabilities. */
   eventStore?: Pick<EventStore, "getEvent">;
+  resolveEventStore?: (
+    databaseSchema: string,
+  ) =>
+    | Pick<EventStore, "getEvent">
+    | Promise<Pick<EventStore, "getEvent">>;
   createContext?: RealtimeProviderContextFactory;
 }>;
 
@@ -42,6 +47,7 @@ export function parseStreamDispatchMetadata(
   }
   return Object.freeze({
     schema: "copilotz.stream.dispatch.v1",
+    databaseSchema: requiredText(value, "databaseSchema"),
     streamId: requiredText(value, "streamId"),
     eventId: requiredText(value, "eventId"),
     namespace: requiredText(value, "namespace"),
@@ -80,7 +86,9 @@ export function defineRealtimeProviderResource(
 export function createRealtimeStreamWorkload(
   options: CreateRealtimeStreamWorkloadOptions,
 ): DeliveryWorkload {
-  if (options.createContext && !options.eventStore) {
+  if (
+    options.createContext && !options.eventStore && !options.resolveEventStore
+  ) {
     throw new TypeError(
       "A realtime context factory requires an event store.",
     );
@@ -102,7 +110,10 @@ export function createRealtimeStreamWorkload(
     }
     let context;
     if (options.createContext) {
-      const event = await options.eventStore!.getEvent(metadata.eventId);
+      const eventStore = options.resolveEventStore
+        ? await options.resolveEventStore(metadata.databaseSchema)
+        : options.eventStore!;
+      const event = await eventStore.getEvent(metadata.eventId);
       if (!event) {
         throw new Error(`Stream event '${metadata.eventId}' was not found.`);
       }
@@ -137,6 +148,7 @@ export function createRealtimeStreamWorkload(
         });
       };
       context = await options.createContext(Object.freeze({
+        databaseSchema: metadata.databaseSchema,
         event,
         metadata,
         signal,

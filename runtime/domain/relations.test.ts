@@ -33,7 +33,7 @@ Deno.test("typed relations create, query, and delete direct graph edges", async 
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry,
-    schema: "typed_relation_contract",
+    defaultDatabaseSchema: "typed_relation_contract",
   });
   try {
     const scoped = engine.collections.withScope({ namespace: "tenant-a" });

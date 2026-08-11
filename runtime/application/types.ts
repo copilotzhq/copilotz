@@ -9,7 +9,6 @@ import type {
   CopilotzEngine,
   CreateCopilotzEngineOptions,
 } from "../engine/index.ts";
-import type { SqlSession } from "../events/index.ts";
 import type {
   CopilotzPlugin,
   PluginResolver,
@@ -32,6 +31,7 @@ import type {
   CreateTextWorkflowPluginOptions,
   WorkflowToolCatalog,
 } from "../workflows/index.ts";
+import type { CopilotzPersistenceOptions } from "./persistence.ts";
 
 export type CorePluginSetting<T> = false | Readonly<T>;
 
@@ -50,28 +50,24 @@ export type CopilotzCorePluginOptions = Readonly<{
   knowledge?: CorePluginSetting<CreateKnowledgePluginOptions>;
 }>;
 
-export type CreateCopilotzApplicationOptions = Readonly<{
-  session: SqlSession;
-  /** Default tenant namespace used when run/connect omit one. */
-  namespace?: string;
-  schema?: string;
-  /** Disable every built-in plugin with false, or configure them individually. */
-  core?: false | CopilotzCorePluginOptions;
-  plugins?: readonly PluginSource[];
-  resources?: PluginResources;
-  pluginResolver?: PluginResolver;
-  /** Canonical static/generated tool catalog shared by execution and introspection. */
-  toolCatalog?: WorkflowToolCatalog;
-  engine?: Omit<
-    CreateCopilotzEngineOptions,
-    "session" | "registry" | "schema"
-  >;
-  /**
-   * Grants session ownership to this application. Injected sessions are left
-   * open when this callback is omitted.
-   */
-  closeSession?: (reason?: string) => void | Promise<void>;
-}>;
+export type CreateCopilotzApplicationOptions =
+  & Readonly<{
+    /** Default tenant namespace used when run/connect omit one. */
+    namespace?: string;
+    databaseSchema?: string;
+    /** Disable every built-in plugin with false, or configure them individually. */
+    core?: false | CopilotzCorePluginOptions;
+    plugins?: readonly PluginSource[];
+    resources?: PluginResources;
+    pluginResolver?: PluginResolver;
+    /** Canonical static/generated tool catalog shared by execution and introspection. */
+    toolCatalog?: WorkflowToolCatalog;
+    engine?: Omit<
+      CreateCopilotzEngineOptions,
+      "session" | "registry" | "defaultDatabaseSchema"
+    >;
+  }>
+  & CopilotzPersistenceOptions;
 
 /** Plain application semantics that can be shared by Gateway and Worker roles. */
 export type CopilotzComposition = Pick<
@@ -81,10 +77,10 @@ export type CopilotzComposition = Pick<
 
 export type CopilotzApplicationConfig = Readonly<{
   namespace?: string;
-  schema: string;
+  databaseSchema: string;
   corePluginIds: readonly string[];
   declaredPluginIds: readonly string[];
-  sessionOwnership: "application" | "injected";
+  databaseOwnership: "application" | "injected";
 }>;
 
 export type ApplicationConnectInput =

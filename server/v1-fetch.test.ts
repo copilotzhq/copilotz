@@ -53,7 +53,7 @@ Deno.test("v1 route adapter isolates providers and admin aliases from the native
 Deno.test("v1 Fetch handler streams projected output from a providers route", async () => {
   const application = await createCopilotz({
     namespace: NAMESPACE,
-    schema: "copilotz_v1_fetch",
+    databaseSchema: "copilotz_v1_fetch",
     core: false,
   });
   let dispatched: ChannelRequest | undefined;

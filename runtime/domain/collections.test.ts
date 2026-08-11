@@ -104,6 +104,33 @@ const auditDefinition = defineCollection({
   } as const,
 });
 
+const counterDefinition = defineCollection({
+  name: "contract_counter",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      id: { type: "string" },
+      count: { type: "integer" },
+      createdAt: { type: "string" },
+      updatedAt: { type: "string" },
+    },
+    required: ["id", "count"],
+  } as const,
+  commands: {
+    increment: {
+      execute({ current, input }) {
+        assert(Object.isFrozen(current));
+        const by = Number((input as { by?: unknown } | undefined)?.by ?? 1);
+        if (!Number.isSafeInteger(by)) {
+          throw new TypeError("increment.by must be an integer");
+        }
+        return { count: Number(current.count) + by };
+      },
+    },
+  },
+});
+
 type ParentRepository = EventCollectionRepository<
   typeof parentDefinition.schema,
   typeof parentDefinition.$inferSelect,
@@ -208,12 +235,18 @@ async function createFixture(): Promise<Fixture> {
             parentDefinition.name,
             childDefinition.name,
             auditDefinition.name,
+            counterDefinition.name,
           ],
         },
       },
       resources: {
         processors: [processor],
-        collections: [parentDefinition, childDefinition, auditDefinition],
+        collections: [
+          parentDefinition,
+          childDefinition,
+          auditDefinition,
+          counterDefinition,
+        ],
       },
     })],
   });
@@ -599,6 +632,74 @@ Deno.test("delivery-scoped collections deduplicate a committed projection across
     assertEquals(
       fixture.handled.filter((entry) => entry.id === "child-retry").length,
       1,
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("collection commands serialize aggregate updates and deduplicate retries", async () => {
+  const fixture = await createFixture();
+  try {
+    const counters = fixture.collections.get(counterDefinition.name);
+    await counters.create({ id: "counter-a", count: 0 }, {
+      namespace: "tenant-a",
+    });
+    const commands = await Promise.all(
+      Array.from(
+        { length: 12 },
+        (_, index) =>
+          counters.command("counter-a", "increment", { by: 1 }, {
+            namespace: "tenant-a",
+            identity: {
+              correlationId: "counter-race",
+              deduplicationId: `counter-a:increment:${index}`,
+            },
+          }),
+      ),
+    );
+    assertEquals(
+      (await counters.get("tenant-a", "counter-a"))?.count,
+      12,
+    );
+    assertEquals(
+      commands.map((result) => result.event.type),
+      Array(12).fill("contract_counter.increment"),
+    );
+    assertEquals(
+      commands.map((result) => result.value?.command),
+      Array(12).fill("increment"),
+    );
+
+    const replay = await counters.command(
+      "counter-a",
+      "increment",
+      { by: 100 },
+      {
+        namespace: "tenant-a",
+        identity: {
+          correlationId: "counter-race",
+          deduplicationId: "counter-a:increment:0",
+        },
+      },
+    );
+    assertEquals(replay.deduplicated, true);
+    assertEquals(replay.event.id, commands[0].event.id);
+    assertEquals(replay.value?.record.count, 12);
+    assertEquals(
+      (await fixture.store.listEvents({ namespace: "tenant-a" })).filter(
+        (event) => event.type === "contract_counter.increment",
+      ).length,
+      12,
+    );
+    await assertRejects(
+      async () => {
+        await counters.command("counter-a", "missing", {}, {
+          namespace: "tenant-a",
+        });
+      },
+      Error,
+      "Unknown contract_counter command 'missing'",
     );
   } finally {
     await closeFixture(fixture);

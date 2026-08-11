@@ -10,6 +10,7 @@ export const COPILOTZ_LIVE_WORKLOAD = "copilotz.live.v1";
 
 export type LiveDispatchMetadata = Readonly<{
   schema: "copilotz.live.dispatch.v1";
+  databaseSchema: string;
   processorId: string;
   namespace: string;
   eventType: string;
@@ -19,6 +20,7 @@ export type LiveDispatchMetadata = Readonly<{
 }>;
 
 export type LiveProcessorContextBase = Readonly<{
+  databaseSchema: string;
   event: CopilotzEvent;
   signal: AbortSignal;
   processorId: string;
@@ -48,6 +50,7 @@ export type CreateLiveProcessorWorkloadOptions = Readonly<{
 }>;
 
 export type InvokeLiveProcessorsOptions = Readonly<{
+  databaseSchema: string;
   registry: PluginRegistry;
   event: CopilotzEvent;
   signal: AbortSignal;
@@ -64,7 +67,10 @@ export type LiveEventDispatchHandle = Readonly<{
 
 export type LiveEventDispatcher = Readonly<{
   workload: string;
-  dispatch(event: CopilotzEvent): Promise<LiveEventDispatchHandle>;
+  dispatch(
+    event: CopilotzEvent,
+    databaseSchema?: string,
+  ): Promise<LiveEventDispatchHandle>;
 }>;
 
 export type CreateLiveEventDispatcherOptions = Readonly<{
@@ -72,6 +78,7 @@ export type CreateLiveEventDispatcherOptions = Readonly<{
   executor: Pick<DeliveryExecutor, "dispatchWork">;
   workload?: string;
   createDispatchAttemptId?: () => string;
+  defaultDatabaseSchema?: string;
 }>;
 
 const encoder = new TextEncoder();
@@ -102,6 +109,10 @@ function parseMetadata(
   }
   return Object.freeze({
     schema: "copilotz.live.dispatch.v1",
+    databaseSchema: requiredText(
+      value.databaseSchema,
+      "Live database schema",
+    ),
     processorId: requiredText(value.processorId, "Live processor ID"),
     namespace: requiredText(value.namespace, "Live namespace"),
     eventType: requiredText(value.eventType, "Live event type"),
@@ -234,6 +245,7 @@ async function invokeOne(
     );
   }
   const base: LiveProcessorContextBase = Object.freeze({
+    databaseSchema: options.databaseSchema,
     event: options.event,
     signal: options.signal,
     processorId,
@@ -290,6 +302,7 @@ export function createLiveProcessorWorkload(
     }
     await invokeOne(
       {
+        databaseSchema: metadata.databaseSchema,
         registry: options.registry,
         event,
         signal,
@@ -319,10 +332,18 @@ export function createLiveEventDispatcher(
   const workload = workloadName(options.workload);
   const createId = options.createDispatchAttemptId ??
     (() => crypto.randomUUID());
+  const defaultDatabaseSchema = requiredText(
+    options.defaultDatabaseSchema ?? "public",
+    "Live default database schema",
+  );
 
   return Object.freeze({
     workload,
-    async dispatch(event) {
+    async dispatch(event, databaseSchemaInput) {
+      const databaseSchema = requiredText(
+        databaseSchemaInput ?? defaultDatabaseSchema,
+        "Live database schema",
+      );
       const processors = options.registry.matchLive(event);
       if (!processors.length) {
         return Object.freeze({
@@ -337,6 +358,7 @@ export function createLiveEventDispatcher(
           const dispatchAttemptId = createId();
           const metadata: LiveDispatchMetadata = Object.freeze({
             schema: "copilotz.live.dispatch.v1",
+            databaseSchema,
             processorId: processor.id,
             namespace: event.namespace,
             eventType: event.type,

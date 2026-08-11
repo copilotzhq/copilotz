@@ -39,7 +39,7 @@ Deno.test("custom collection content materializes and links atomically", async (
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry,
-    schema: "collection_content_contract",
+    defaultDatabaseSchema: "collection_content_contract",
     createId: () => `generated-${++nextId}`,
     validateCollection({ definition, record }) {
       if (

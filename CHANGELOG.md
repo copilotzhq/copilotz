@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.59.0 — 2026-08-11
+
+This pre-1.0 minor makes shared persistence and physical-schema routing
+first-class without multiplying Copilotz execution infrastructure.
+
+### Added
+
+- Application-owned Ominipg database injection through the public `database`
+  option. Copilotz adapts the database internally and never closes an injected
+  instance.
+- Lazy `databaseScope(name)` application views and per-operation
+  `databaseSchema` routing. Every schema gets isolated repositories and event
+  observation while sharing one database, Gateway/Worker topology, and Oxian
+  executor.
+- Trusted `resolveDatabaseSchema(request)` Gateway routing for multi-tenant HTTP
+  applications. Untrusted request context can confirm, but cannot choose, a
+  physical schema.
+- Atomic named collection commands through `defineCollection({ commands })` and
+  `POST /collections/:name/:id/commands/:command`. Commands lock the aggregate,
+  validate the resulting record, emit one semantic event, and honor idempotency
+  keys.
+- Feature response headers across JSON, empty, and streaming Fetch responses.
+
+### Changed
+
+- Ominipg advances to `0.9.0-rc.6`, whose operation lane makes one shared
+  database instance safe across Gateway and Worker transaction boundaries.
+- Delivery, live-event, and realtime workload metadata now carry the physical
+  database schema so detached Workers resolve the correct durable scope.
+- Goal, channel, attachment, recovery, and maintenance capabilities resolve
+  against the same lazy schema boundary.
+
+### Removed
+
+- The public SQL-session injection vocabulary, `closeSession`, and managed
+  session factories. SQL sessions remain a package-private persistence seam;
+  applications configure or inject a database.
+
 ## 0.58.0 — 2026-08-10
 
 This pre-1.0 minor release makes Copilotz topology explicit while keeping the

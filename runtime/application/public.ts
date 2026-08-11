@@ -23,3 +23,8 @@ export type {
 } from "./gateway.ts";
 export type { CopilotzWorker, CreateCopilotzWorkerOptions } from "./worker.ts";
 export type { GoalHandle, GoalInput } from "../goals/index.ts";
+export type {
+  CopilotzDatabase,
+  CopilotzDatabaseInput,
+  CopilotzPersistenceOptions,
+} from "./persistence.ts";

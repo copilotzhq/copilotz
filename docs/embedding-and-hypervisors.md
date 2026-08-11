@@ -10,7 +10,7 @@ ownership and transport explicit.
 const app = await createCopilotz({ namespace: "acme" });
 ```
 
-This creates a private in-memory Ominipg session plus a private Gateway and
+This creates a private in-memory Ominipg database plus a private Gateway and
 Worker joined by an in-process event fabric. `app.shutdown()` owns all of them.
 The returned application intentionally hides those topology details.
 
@@ -23,7 +23,7 @@ import {
 } from "@copilotz/copilotz";
 
 const composition = {
-  session: ominipgSession,
+  database: ominipg,
   namespace: "acme",
   plugins,
 };
@@ -58,8 +58,47 @@ not a work broadcast topic. Oxian admits one Worker connection and assigns each
 operation exactly; the event fabric carries the same lifecycle/protocol used by
 remote transports.
 
-Injected sessions remain application-owned unless `closeSession` explicitly
-grants ownership.
+An injected database is always application-owned. Copilotz never closes it.
+Passing database configuration instead makes the Copilotz role own and close the
+database it opens.
+
+Gateway and Worker roles may share the same Ominipg instance in-process. One
+instance safely serializes transaction ownership, while each Copilotz role
+adapts it to its private narrow SQL seam. This avoids duplicate connections
+without exposing a public session abstraction.
+
+## Multiple physical schemas
+
+`databaseSchema` selects the default physical schema. Additional schemas are
+bound lazily through `application.databaseScope(name)` or an operation's
+`databaseSchema`. A schema scope creates repositories and an isolated event hub
+only; it does not create another database, Worker, Hypervisor, or scheduler.
+
+HTTP requests cannot select a physical schema by context alone. A Gateway must
+provide an explicit authorization resolver:
+
+```ts
+const gateway = await createCopilotzGateway({
+  ...composition,
+  http: {
+    resolveContext: async (request) => {
+      const tenant = await authenticateTenant(request);
+      return {
+        namespace: tenant.namespace,
+        authorizedDatabaseSchema: tenant.databaseSchema,
+      };
+    },
+  },
+  resolveDatabaseSchema(request) {
+    const value = request.context?.authorizedDatabaseSchema;
+    if (typeof value !== "string") throw new Error("Tenant scope required.");
+    return value;
+  },
+});
+```
+
+The resolver is the application's tenant-authorization boundary. A supplied
+`context.databaseSchema` must match its result and cannot override it.
 
 ## WebSocket roles
 

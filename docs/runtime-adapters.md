@@ -4,12 +4,12 @@ Plugin resources describe logical behavior; they do not grant filesystem,
 subprocess, package-loader, or server access. The embedding worker grants those
 capabilities explicitly.
 
-| Subpath           | Capability                                                                                           |
-| ----------------- | ---------------------------------------------------------------------------------------------------- |
-| `/adapters`       | Ominipg sessions, module plugin resolution, Web-fetch OpenAPI generation, and injected MCP transport |
-| `/adapters/stdio` | Official MCP SDK subprocess transport                                                                |
-| `/adapters/deno`  | Deno listener, workspace/process tools, Open Skill build packer, and persistent terminal service     |
-| `/adapters/node`  | Node terminal I/O for the interactive CLI                                                            |
+| Subpath           | Capability                                                                                                      |
+| ----------------- | --------------------------------------------------------------------------------------------------------------- |
+| `/adapters`       | Ominipg database adaptation, module plugin resolution, Web-fetch OpenAPI generation, and injected MCP transport |
+| `/adapters/stdio` | Official MCP SDK subprocess transport                                                                           |
+| `/adapters/deno`  | Deno listener, workspace/process tools, Open Skill build packer, and persistent terminal service                |
+| `/adapters/node`  | Node terminal I/O for the interactive CLI                                                                       |
 
 Generic OpenAPI with an application-owned MCP transport:
 

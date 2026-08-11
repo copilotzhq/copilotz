@@ -97,7 +97,7 @@ async function createFixture(
   });
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
-    schema: TEST_SCHEMA,
+    defaultDatabaseSchema: TEST_SCHEMA,
     registry,
     retryBaseMs: 0,
     random: () => 0,

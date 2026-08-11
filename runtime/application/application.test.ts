@@ -3,7 +3,6 @@ import { assert, assertEquals, assertExists } from "@std/assert";
 import type { TestDatabase } from "../testing/ominipg.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import type { Agent } from "../resources/index.ts";
-import { createSqlSession } from "../events/index.ts";
 import {
   type CopilotzPlugin,
   definePlugin,
@@ -13,7 +12,6 @@ import type { CopilotzProcessorContext } from "../engine/index.ts";
 import { createCopilotzApplication } from "./application.ts";
 import { createCopilotz } from "./copilotz.ts";
 import { createCopilotzCorePlugins } from "./core-plugins.ts";
-import { createManagedOminipgSession } from "../adapters/ominipg.ts";
 import type { WorkflowTool } from "../workflows/index.ts";
 
 const SCHEMA = "copilotz_application";
@@ -72,11 +70,10 @@ async function closeDb(db: TestDatabase): Promise<void> {
 
 Deno.test("application factory composes plugins and supplies the default tenant scope", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
-  const session = createSqlSession(db);
   const application = await createCopilotzApplication({
-    session,
+    database: db,
     namespace: NAMESPACE,
-    schema: SCHEMA,
+    databaseSchema: SCHEMA,
     core: false,
     plugins: [replyPlugin()],
     engine: { retryBaseMs: 0, random: () => 0 },
@@ -85,10 +82,10 @@ Deno.test("application factory composes plugins and supplies the default tenant 
     assert(Object.isFrozen(application));
     assertEquals(application.config, {
       namespace: NAMESPACE,
-      schema: SCHEMA,
+      databaseSchema: SCHEMA,
       corePluginIds: [],
       declaredPluginIds: ["test.application.reply"],
-      sessionOwnership: "injected",
+      databaseOwnership: "injected",
     });
     await application.conversation.createThread({
       namespace: NAMESPACE,
@@ -132,51 +129,40 @@ Deno.test("application factory composes plugins and supplies the default tenant 
     assertEquals(reply[0].text, "application reply");
 
     await application.shutdown();
-    await session.query("SELECT 1");
+    await db.query("SELECT 1");
   } finally {
     await application.shutdown();
     await closeDb(db);
   }
 });
 
-Deno.test("createCopilotz owns a clean four-table Ominipg baseline", async () => {
-  const managed = await createManagedOminipgSession();
+Deno.test("createCopilotz owns a configured Ominipg database", async () => {
   const application = await createCopilotz({
     namespace: NAMESPACE,
-    schema: "public",
+    databaseSchema: "public",
     core: false,
-    session: managed.session,
-    closeSession: managed.close,
+    database: { url: ":memory:" },
   });
   try {
-    assertEquals(application.config.sessionOwnership, "application");
-    const tables = await managed.session.query<{
-      table_name: string;
-    }>(
-      `SELECT table_name
-         FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND table_type = 'BASE TABLE'
-        ORDER BY table_name`,
-    );
-    assertEquals(tables.rows.map((row) => row.table_name), [
-      "edges",
-      "event_deliveries",
-      "events",
-      "nodes",
-    ]);
+    assertEquals(application.config.databaseOwnership, "application");
+    const created = await application.conversation.createThread({
+      namespace: NAMESPACE,
+      id: "owned-database-thread",
+      participants: [],
+    });
+    assertEquals(created.value?.id, "owned-database-thread");
   } finally {
     await application.shutdown();
     await application.shutdown();
   }
 });
 
-Deno.test("createCopilotz owns its default private session", async () => {
+Deno.test("createCopilotz owns its default private database", async () => {
   const application = await createCopilotz({
     namespace: NAMESPACE,
     core: false,
   });
-  assertEquals(application.config.sessionOwnership, "application");
+  assertEquals(application.config.databaseOwnership, "application");
   await application.shutdown();
   await application.shutdown();
 });
@@ -190,9 +176,9 @@ Deno.test("minimal built-ins precede explicit application resources", async () =
     factory: () => ({}),
   });
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
+    database: db,
     namespace: NAMESPACE,
-    schema: `${SCHEMA}_core`,
+    databaseSchema: `${SCHEMA}_core`,
     resources: { providers: [replacement] },
   });
   try {
@@ -249,9 +235,9 @@ Deno.test("application exposes canonical effective capability introspection", as
     capabilities: { tools: [tool.key] },
   });
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
+    database: db,
     namespace: NAMESPACE,
-    schema: `${SCHEMA}_capabilities`,
+    databaseSchema: `${SCHEMA}_capabilities`,
     core: false,
     resources: { agents: [agent], tools: [tool] },
   });
@@ -268,22 +254,29 @@ Deno.test("application exposes canonical effective capability introspection", as
   }
 });
 
-Deno.test("application invokes an explicitly owned session closer exactly once", async () => {
+Deno.test("application never closes an injected database", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   let closes = 0;
-  const application = await createCopilotzApplication({
-    session: createSqlSession(db),
-    namespace: NAMESPACE,
-    schema: `${SCHEMA}_owned`,
-    core: false,
-    closeSession: async () => {
+  const injected = Object.freeze({
+    query: db.query,
+    transaction: db.transaction,
+    async close() {
       closes += 1;
       await db.close();
     },
   });
+  const application = await createCopilotzApplication({
+    database: injected,
+    namespace: NAMESPACE,
+    databaseSchema: `${SCHEMA}_owned`,
+    core: false,
+  });
   await Promise.all([application.shutdown(), application.shutdown()]);
+  assertEquals(closes, 0);
+  assertEquals(application.config.databaseOwnership, "injected");
+  await injected.query("SELECT 1");
+  await injected.close();
   assertEquals(closes, 1);
-  assertEquals(application.config.sessionOwnership, "application");
 });
 
 Deno.test("application composition remains factory-first and runtime-neutral", async () => {

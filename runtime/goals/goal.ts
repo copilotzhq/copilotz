@@ -38,7 +38,7 @@ type StreamChannel<T> = Readonly<{
 
 type PreparedGoal = Readonly<{
   namespace: string;
-  schema?: string;
+  databaseSchema?: string;
   targetAgent: Agent;
   leadAgent: Agent;
   targetThread: ConversationThread;
@@ -485,9 +485,9 @@ async function prepareGoal(
   goalId: string,
 ): Promise<PreparedGoal> {
   const namespace = namespaceFor(input, options.defaultNamespace);
-  const schema = optionalText(
-    input.schema ?? options.defaultSchema,
-    "Goal schema",
+  const databaseSchema = optionalText(
+    input.databaseSchema ?? options.defaultDatabaseSchema,
+    "Goal database schema",
   );
   const targetAgentId = requiredText(input.target, "Goal target agent");
   const leadAgentId = requiredText(input.sender.usingAgent, "Goal lead agent");
@@ -556,7 +556,7 @@ async function prepareGoal(
 
   return Object.freeze({
     namespace,
-    ...(schema ? { schema } : {}),
+    ...(databaseSchema ? { databaseSchema } : {}),
     targetAgent,
     leadAgent,
     targetThread,
@@ -697,7 +697,7 @@ export function createGoalRuntime(
         `${goalId}:${input.phase}:${input.turn}:${createId()}`;
       const run = await options.run({
         namespace: prepared.namespace,
-        schema: prepared.schema,
+        databaseSchema: prepared.databaseSchema,
         thread: input.thread,
         participant: input.participant,
         recipientIds: [input.recipient.id],

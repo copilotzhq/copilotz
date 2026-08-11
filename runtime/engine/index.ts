@@ -5,6 +5,7 @@ export type {
   CopilotzCapabilitySource,
   CopilotzEngine,
   CopilotzEngineAttachmentOptions,
+  CopilotzEngineDatabaseScope,
   CopilotzEngineDispatchReport,
   CopilotzEngineExecutionOptions,
   CopilotzEngineMaintenanceResult,

@@ -61,6 +61,39 @@ processors subscribed to the corresponding semantic event. This removes the old
 failure boundary where a write could commit and then an `after*` hook could make
 the API call reject.
 
+## Aggregate Commands
+
+Named commands express domain mutations that depend on the latest aggregate
+state without exposing transaction or locking primitives:
+
+```ts
+const counters = defineCollection({
+  name: "counters",
+  schema: counterSchema,
+  commands: {
+    increment: {
+      execute({ current, input }) {
+        const by = Number((input as { by?: number } | undefined)?.by ?? 1);
+        return { value: Number(current.value ?? 0) + by };
+      },
+    },
+  },
+});
+```
+
+`collection.command(id, "increment", input, options)` locks the record, passes
+an immutable snapshot and stable operation ID to the command, merges the
+returned patch, runs `beforeUpdate` and schema validation, synchronizes content
+and relations, and commits `<collection>.increment` with its delivery
+obligations. The command is not executed again when a deduplication key is
+replayed. The response resolves the current canonical aggregate, which may
+include later successful commands.
+
+The HTTP projection exposes the same mutation at
+`POST /collections/:name/:id/commands/:command`; its `Idempotency-Key` header is
+the command's operation identity. Commands are for atomic state transitions.
+Independent reactions and external effects remain processors.
+
 ## Delivery-Scoped Collection Context
 
 Workers receive namespace-scoped collection bindings:
@@ -88,8 +121,7 @@ scope. This prevents accidental retry-unsafe random identity.
 
 ## Current Boundary
 
-The seam currently covers ID-based create/update/delete, tenant-scoped get/list,
-defaults, timestamps, relations, compact events, before hooks, and injected
-validation. Full current collection query operators, population, indexes, custom
-methods, semantic search, and reporting reads remain on the parity ledger and
-must move before the legacy collection implementation is removed.
+The seam currently covers ID-based create/update/delete/command, tenant-scoped
+get/list, defaults, timestamps, relations, compact events, before hooks, and
+injected validation. Full query operators, population, index management,
+semantic search, and reporting reads remain on the parity ledger.

@@ -112,6 +112,8 @@ export type DeliveryStatus =
 
 /** Mutable guaranteed-work obligation for one logical consumer. */
 export type EventDelivery = Readonly<{
+  /** Physical database schema containing this delivery row. */
+  databaseSchema: string;
   id: string;
   eventId: string;
   consumerId: string;

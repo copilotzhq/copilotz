@@ -4,15 +4,7 @@ export {
   createOpenApiWorkflowToolGenerator,
   createServerWorkflowToolCatalog,
 } from "./server-tool-catalog.ts";
-export {
-  createManagedOminipgSession,
-  createOminipgSqlSession,
-} from "./ominipg.ts";
-export type {
-  CopilotzOminipgOptions,
-  ManagedSqlSession,
-  OminipgDatabaseLike,
-} from "./ominipg.ts";
+export type { CopilotzOminipgOptions, OminipgDatabaseLike } from "./ominipg.ts";
 export { createInteractiveCli, startInteractiveCli } from "../cli.ts";
 export type {
   CliAgent,

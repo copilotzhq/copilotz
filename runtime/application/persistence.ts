@@ -1,46 +1,49 @@
 import {
   type CopilotzOminipgOptions,
-  createManagedOminipgSession,
+  type OminipgDatabaseLike,
+  openManagedOminipgDatabase,
 } from "../adapters/ominipg.ts";
+import { createOminipgSqlSession } from "../adapters/ominipg.ts";
 import type { SqlSession } from "../events/index.ts";
 
+export type CopilotzDatabase = OminipgDatabaseLike;
+export type CopilotzDatabaseInput = CopilotzOminipgOptions | CopilotzDatabase;
+
 export type CopilotzPersistenceOptions = Readonly<{
-  /** Inject an application-owned atomic session. Mutually exclusive with database. */
-  session?: SqlSession;
-  /** Create a private Ominipg session. Defaults to an in-memory database. */
-  database?: CopilotzOminipgOptions;
-  /** Optional ownership callback for an injected session. */
-  closeSession?: (reason?: string) => void | Promise<void>;
+  /** Database configuration or an application-owned Ominipg instance. */
+  database?: CopilotzDatabaseInput;
 }>;
 
 export type OpenCopilotzPersistence = Readonly<{
+  database: CopilotzDatabase;
   session: SqlSession;
   ownership: "application" | "injected";
   close(reason?: string): Promise<void>;
 }>;
 
+function isDatabase(value: CopilotzDatabaseInput): value is CopilotzDatabase {
+  const candidate = value as Partial<CopilotzDatabase>;
+  return typeof candidate.query === "function" &&
+    typeof candidate.transaction === "function" &&
+    typeof candidate.close === "function";
+}
+
 /** Resolves one role's explicit persistence ownership without host globals. */
 export async function openCopilotzPersistence(
   options: CopilotzPersistenceOptions,
 ): Promise<OpenCopilotzPersistence> {
-  if (options.session && options.database) {
-    throw new TypeError("Use either session or database, not both.");
-  }
-  if (!options.session && options.closeSession) {
-    throw new TypeError("closeSession requires an injected session.");
-  }
-  if (options.session) {
+  if (options.database && isDatabase(options.database)) {
     return Object.freeze({
-      session: options.session,
-      ownership: options.closeSession ? "application" : "injected",
-      async close(reason?: string) {
-        await options.closeSession?.(reason);
-      },
+      database: options.database,
+      session: createOminipgSqlSession(options.database),
+      ownership: "injected",
+      close: () => Promise.resolve(),
     });
   }
 
-  const managed = await createManagedOminipgSession(options.database);
+  const managed = await openManagedOminipgDatabase(options.database);
   return Object.freeze({
+    database: managed.database,
     session: managed.session,
     ownership: "application",
     close: () => managed.close(),

@@ -5,19 +5,21 @@
 ### `createCopilotz(options?)`
 
 The normal embedded factory. It creates one private Gateway and Worker over an
-in-process Oxian event fabric and creates a private Ominipg session unless a
-session is injected. Its result exposes Copilotz domain/application semantics,
+in-process Oxian event fabric and opens a private Ominipg database unless a
+database is injected. Its result exposes Copilotz domain/application semantics,
 not the private Hypervisor, transport, engine, or Worker workload closures.
 
 Main options:
 
-- `namespace`, `schema`
-- `database` or `session` (mutually exclusive)
+- `namespace`, `databaseSchema`
+- `database`: Ominipg configuration or an existing Ominipg-compatible instance
 - `core: false | CopilotzCorePluginOptions`
 - `plugins`, `resources`, `pluginResolver`
 - `toolCatalog` shared by execution and capability introspection
 - `worker: { id?, capacity? }`
-- `closeSession` only when ownership of an injected session is intentional
+
+Configuration-created databases are closed by the application. Injected database
+instances are never closed by Copilotz.
 
 ### `createCopilotzGateway(options?, lifecycle?)`
 
@@ -63,7 +65,7 @@ persistence. Ordinary object spread keeps that relationship visible:
 ```ts
 const composition = {
   namespace: "acme",
-  session,
+  database,
   plugins,
 };
 const transport = {
@@ -95,6 +97,7 @@ Important members:
 - `content`, `conversation`, `collections`, `relations`
 - `llmAttempts`, `toolExecutions`, `schedules`, `knowledge`
 - `events`, `deliveries`
+- `databaseSchema`, `databaseScope(name)`
 - `run(input)`, `connect(input)`, `goal(input)`
 - `recover(options)`, `maintenance(options)`, `shutdown(reason?)`
 
@@ -104,6 +107,12 @@ All products are factory-created frozen records. Infer their type or import
 `application.capabilities.resolve({ agent })` returns the agent's effective
 tool, peer-agent, and skill resources with plugin origins and grant sources.
 Omitted grants resolve to none.
+
+`databaseScope(name)` returns a lightweight physical-schema-bound view of the
+domain repositories, events, deliveries, attachments, and maintenance APIs.
+Scopes share the application's Ominipg database and Oxian execution runtime. For
+`run()`, `connect()`, and `goal()`, `databaseSchema` can select the same scope
+directly.
 
 ## Run handle
 
@@ -145,6 +154,12 @@ plugin. Filesystem directory loading is not an application runtime API.
 `gateway.fetch` is the v3 Web Fetch API. It serves the Copilotz application at
 `/v3` by default and also handles Worker upgrades when the Gateway owns a
 WebSocket transport.
+
+`resolveDatabaseSchema(request)` on `createCopilotzGateway()` is the explicit
+tenant-authorization boundary for multi-schema HTTP routing. Request context
+cannot override the resolver. Feature actions may return `headers` alongside
+`status` and `data`; the Fetch adapter preserves those headers for JSON, 204,
+and SSE responses.
 
 `@copilotz/copilotz/server` contains only the transitional v1 projection:
 

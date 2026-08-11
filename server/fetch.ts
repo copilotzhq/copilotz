@@ -105,11 +105,23 @@ async function body(request: Request): Promise<
 
 function responseHeaders(
   options: CreateEventNativeFetchHandlerOptions,
+  featureHeaders?: HeadersInit,
 ): Headers {
-  return new Headers({
+  const result = new Headers({
     "content-type": "application/json; charset=utf-8",
     ...(options.responseHeaders ?? {}),
   });
+  if (!featureHeaders) return result;
+  const supplied = new Headers(featureHeaders);
+  supplied.forEach((value, name) => {
+    if (name.toLowerCase() !== "set-cookie") result.set(name, value);
+  });
+  const cookieValues = (
+    supplied as Headers & { getSetCookie?: () => string[] }
+  ).getSetCookie?.() ??
+    (supplied.has("set-cookie") ? [supplied.get("set-cookie")!] : []);
+  for (const value of cookieValues) result.append("set-cookie", value);
+  return result;
 }
 
 function jsonResponse(
@@ -120,19 +132,22 @@ function jsonResponse(
   if (result.status === 204) {
     return new Response(null, {
       status: result.status,
-      headers: options.responseHeaders,
+      headers: responseHeaders(options, result.headers),
     });
   }
   if (result.data instanceof Response) return result.data;
   if (isEventNativeOutputStream(result.data)) {
-    return sseResponse(result.data, request, options);
+    return sseResponse(result.data, request, options, result.headers);
   }
   return new Response(
     JSON.stringify({
       ...(result.data !== undefined ? { data: result.data } : {}),
       ...(result.pageInfo ? { pageInfo: result.pageInfo } : {}),
     }),
-    { status: result.status, headers: responseHeaders(options) },
+    {
+      status: result.status,
+      headers: responseHeaders(options, result.headers),
+    },
   );
 }
 
@@ -171,6 +186,7 @@ function sseResponse(
   stream: EventNativeOutputStream,
   request: Request,
   options: CreateEventNativeFetchHandlerOptions,
+  featureHeaders?: HeadersInit,
 ): Response {
   const reader = stream.outputs.getReader();
   const body = new ReadableStream<Uint8Array>({
@@ -199,11 +215,12 @@ function sseResponse(
   });
   return new Response(body, {
     status: 200,
-    headers: {
-      "cache-control": "no-cache",
-      ...options.responseHeaders,
-      "content-type": "text/event-stream; charset=utf-8",
-    },
+    headers: (() => {
+      const headers = responseHeaders(options, featureHeaders);
+      headers.set("cache-control", "no-cache");
+      headers.set("content-type", "text/event-stream; charset=utf-8");
+      return headers;
+    })(),
   });
 }
 

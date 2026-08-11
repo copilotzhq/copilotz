@@ -1,38 +1,17 @@
 import {
   type AttachmentRuntime,
   COPILOTZ_STREAM_WORKLOAD,
-  createAttachmentRuntime,
   createRealtimeProviderContext,
   createRealtimeStreamWorkload,
 } from "../attachments/index.ts";
-import {
-  createContentPreparer,
-  createContentResolver,
-  createDatabaseAssetRepository,
-  type DatabaseAssetRepository,
-} from "../content/index.ts";
-import {
-  type ConversationRepository,
-  createConversationRepository,
-  createDomainRelationRepository,
-  createEventCollections,
-  createLlmAttemptRepository,
-  createToolExecutionRepository,
-  type DomainRelationRepository,
-  type EventCollections,
-  type LlmAttemptRepository,
-  type ToolExecutionRepository,
-} from "../domain/index.ts";
+import { createContentPreparer } from "../content/index.ts";
 import {
   type CopilotzEvent,
+  type CopilotzEventHub,
   createCopilotzEventHub,
   createCoreSchemaStatements,
-  createEphemeralEvent,
-  createEventCoordinator,
   createEventStore,
-  type EventCoordinator,
   type EventStore,
-  waitForCopilotzEvent,
 } from "../events/index.ts";
 import {
   COPILOTZ_LIVE_WORKLOAD,
@@ -46,31 +25,20 @@ import {
   type LiveProcessorContextBase,
 } from "../execution/index.ts";
 import { createCopilotzProcessorCapabilities } from "./context.ts";
+import {
+  createDatabaseScope,
+  type DatabaseScopeRuntime,
+} from "./database-scope.ts";
 import type {
   CopilotzCapabilityBase,
   CopilotzEngine,
-  CopilotzEngineMaintenanceResult,
   CopilotzProcessorCapabilities,
   CreateCopilotzEngineOptions,
 } from "./types.ts";
-import {
-  createScheduledJobRepository,
-  type ScheduledJobRepository,
-} from "../schedules/index.ts";
-import {
-  createKnowledgeRepository,
-  type KnowledgeRepository,
-} from "../knowledge/index.ts";
 
-type EngineCapabilities = Readonly<{
-  assets: DatabaseAssetRepository;
-  conversation: ConversationRepository;
-  collections: EventCollections;
-  llmAttempts: LlmAttemptRepository;
-  toolExecutions: ToolExecutionRepository;
-  relations: DomainRelationRepository;
-  schedules: ScheduledJobRepository;
-  knowledge: KnowledgeRepository;
+type AdditionalDatabaseScope = Readonly<{
+  runtime: DatabaseScopeRuntime;
+  hub: CopilotzEventHub;
 }>;
 
 async function initializeSchema(
@@ -104,8 +72,8 @@ function workerOriginated(event: CopilotzEvent): boolean {
 export async function createCopilotzEngine(
   options: CreateCopilotzEngineOptions,
 ): Promise<CopilotzEngine> {
-  const schema = options.schema ?? "public";
-  await initializeSchema(options, schema);
+  const databaseSchema = options.defaultDatabaseSchema ?? "public";
+  await initializeSchema(options, databaseSchema);
   const now = options.now ?? (() => new Date());
   const eventHub = options.eventHub ?? createCopilotzEventHub();
   const ownsEventHub = options.eventHub === undefined;
@@ -115,7 +83,7 @@ export async function createCopilotzEngine(
 
   const store: EventStore = createEventStore({
     session: options.session,
-    schema,
+    schema: databaseSchema,
     createId: options.createId,
     now,
     random: options.random,
@@ -124,41 +92,63 @@ export async function createCopilotzEngine(
     retryBaseMs: options.retryBaseMs,
     retryCapMs: options.retryCapMs,
   });
+  const additionalScopes = new Map<
+    string,
+    Promise<AdditionalDatabaseScope>
+  >();
+  const relayedDurableIds = new Set<string>();
+  const relayedDurableOrder: string[] = [];
+  let closed = false;
+  let resolveAdditionalScope: (
+    databaseSchema: string,
+  ) => Promise<AdditionalDatabaseScope>;
 
-  let capabilities: EngineCapabilities | undefined;
+  let capabilities: DatabaseScopeRuntime["capabilities"] | undefined;
   const preparer = createContentPreparer({
     createId: options.createId,
     digest: options.digest,
   });
-  let resolver: ReturnType<typeof createContentResolver> | undefined;
-  const createCapabilities = (
+  let resolver:
+    | DatabaseScopeRuntime["public"]["content"]["resolver"]
+    | undefined;
+  const createCapabilities = async (
     base: CopilotzCapabilityBase,
-  ): CopilotzProcessorCapabilities => {
-    if (!capabilities || !resolver) {
+  ): Promise<CopilotzProcessorCapabilities> => {
+    const additional = base.databaseSchema === databaseSchema
+      ? undefined
+      : await resolveAdditionalScope(base.databaseSchema);
+    const scopedCapabilities = additional?.runtime.capabilities ?? capabilities;
+    const scopedResolver = additional?.runtime.public.content.resolver ??
+      resolver;
+    const scopedEventHub = additional?.hub ?? eventHub;
+    const scopedStore = additional?.runtime.store ?? store;
+    if (!scopedCapabilities || !scopedResolver) {
       throw new Error("Copilotz engine context is not initialized.");
     }
     return createCopilotzProcessorCapabilities({
       base,
       registry: options.registry,
       preparer,
-      resolver,
-      eventHub,
+      resolver: scopedResolver,
+      eventHub: scopedEventHub,
       async publishEvent(event) {
         const dispatched = await publishLive(event, {
           inline: true,
           signal: base.signal,
+          databaseSchema: base.databaseSchema,
+          eventHub: scopedEventHub,
         });
         await dispatched.done;
       },
-      eventStore: store,
+      eventStore: scopedStore,
       now,
-      ...capabilities,
+      ...scopedCapabilities,
     });
   };
-  const createContext = (
+  const createContext = async (
     base: DeliveryContextBase,
-  ): CopilotzProcessorCapabilities =>
-    createCapabilities({
+  ): Promise<CopilotzProcessorCapabilities> =>
+    await createCapabilities({
       ...base,
       source: {
         kind: "delivery",
@@ -166,10 +156,10 @@ export async function createCopilotzEngine(
         consumerId: base.delivery.consumerId,
       },
     });
-  const createLiveContext = (
+  const createLiveContext = async (
     base: LiveProcessorContextBase,
-  ): CopilotzProcessorCapabilities =>
-    createCapabilities({
+  ): Promise<CopilotzProcessorCapabilities> =>
+    await createCapabilities({
       ...base,
       source: {
         kind: "live",
@@ -204,11 +194,15 @@ export async function createCopilotzEngine(
       ...configuredWorkloads,
       [streamWorkload]: createRealtimeStreamWorkload({
         registry: options.registry,
-        eventStore: store,
-        createContext: (base) =>
+        resolveEventStore: async (requestedDatabaseSchema) =>
+          requestedDatabaseSchema === databaseSchema
+            ? store
+            : (await resolveAdditionalScope(requestedDatabaseSchema)).runtime
+              .store,
+        createContext: async (base) =>
           createRealtimeProviderContext({
             base,
-            capabilities: createCapabilities({
+            capabilities: await createCapabilities({
               ...base,
               source: { kind: "stream", id: base.metadata.streamId },
             }),
@@ -228,13 +222,40 @@ export async function createCopilotzEngine(
           capacity: options.attachments?.streamCapacity,
         }),
       }),
-    store,
+    resolveStore: async (requestedDatabaseSchema) =>
+      requestedDatabaseSchema === databaseSchema
+        ? store
+        : (await resolveAdditionalScope(requestedDatabaseSchema)).runtime.store,
+    defaultDatabaseSchema: databaseSchema,
     registry: options.registry,
     createContext,
-    async onOutputEvent(event) {
-      await options.execution?.onOutputEvent?.(event);
+    async onOutputEvent(event, context) {
+      const additional = context.databaseSchema === databaseSchema
+        ? undefined
+        : await resolveAdditionalScope(context.databaseSchema);
+      const scoped = additional
+        ? { store: additional.runtime.store, hub: additional.hub }
+        : { store, hub: eventHub };
+      const relayKey = event.durable
+        ? `${context.databaseSchema}\u0000${event.id}`
+        : undefined;
+      const publish = relayKey === undefined ||
+        !relayedDurableIds.has(relayKey);
+      if (relayKey && publish) {
+        relayedDurableIds.add(relayKey);
+        relayedDurableOrder.push(relayKey);
+        if (relayedDurableOrder.length > 10_000) {
+          const removed = relayedDurableOrder.shift();
+          if (removed) relayedDurableIds.delete(removed);
+        }
+      }
+      if (publish) {
+        await scoped.hub.publish(event);
+        await options.publish?.(event);
+        await options.execution?.onOutputEvent?.(event, context);
+      }
       if (!event.durable) return;
-      const deliveries = await store.listDeliveries({
+      const deliveries = await scoped.store.listDeliveries({
         namespace: event.namespace,
         eventId: event.id,
         status: "pending",
@@ -246,15 +267,24 @@ export async function createCopilotzEngine(
   const liveDispatcher = createLiveEventDispatcher({
     registry: options.registry,
     executor,
+    defaultDatabaseSchema: databaseSchema,
   });
   const publishLive = async (
     event: CopilotzEvent,
-    publishOptions: { inline?: boolean; signal?: AbortSignal } = {},
+    publishOptions: {
+      inline?: boolean;
+      signal?: AbortSignal;
+      databaseSchema?: string;
+      eventHub?: typeof eventHub;
+    } = {},
   ): Promise<LiveEventDispatchHandle> => {
-    await eventHub.publish(event);
+    const scopedDatabaseSchema = publishOptions.databaseSchema ??
+      databaseSchema;
+    const scopedEventHub = publishOptions.eventHub ?? eventHub;
+    await scopedEventHub.publish(event);
     await options.publish?.(event);
     if (!publishOptions.inline && !workerOriginated(event)) {
-      return await liveDispatcher.dispatch(event);
+      return await liveDispatcher.dispatch(event, scopedDatabaseSchema);
     }
 
     const abort = new AbortController();
@@ -264,6 +294,7 @@ export async function createCopilotzEngine(
         once: true,
       });}
     const done = invokeLiveProcessors({
+      databaseSchema: scopedDatabaseSchema,
       registry: options.registry,
       event,
       signal: abort.signal,
@@ -287,121 +318,71 @@ export async function createCopilotzEngine(
   let attachmentRuntime: AttachmentRuntime | undefined;
 
   try {
-    const coordinator: EventCoordinator = createEventCoordinator({
+    const defaultScope = createDatabaseScope({
+      databaseSchema,
       store,
+      engine: options,
       registry: options.registry,
       executor,
-      async publish(event) {
-        const dispatched = await publishLive(event);
-        await dispatched.done;
-      },
-      onDispatchFailure: options.onDispatchFailure,
-    });
-    const assets = createDatabaseAssetRepository({
-      coordinator,
-      session: options.session,
-      eventStore: store,
-      createId: options.createId,
-      now: options.now,
-      digest: options.digest,
-      maxDatabaseBytes: options.maxDatabaseBytes,
-    });
-    resolver = createContentResolver({
-      assets,
-      authorize: options.authorizeContent,
-      digest: options.digest,
-    });
-    const conversation = createConversationRepository({
-      coordinator,
-      session: options.session,
-      eventStore: store,
-      assets,
-      createId: options.createId,
-    });
-    const collections = createEventCollections({
-      registry: options.registry,
-      coordinator,
-      session: options.session,
-      eventStore: store,
-      assets,
-      validate: options.validateCollection,
-      createId: options.createId,
-      now: options.now,
-    });
-    const llmAttempts = createLlmAttemptRepository({
-      coordinator,
-      session: options.session,
-      eventStore: store,
-      assets,
-      createId: options.createId,
-      now: options.now,
-    });
-    const toolExecutions = createToolExecutionRepository({
-      coordinator,
-      session: options.session,
-      eventStore: store,
-      assets,
-      createId: options.createId,
-      now: options.now,
-    });
-    const relations = createDomainRelationRepository({
-      coordinator,
-      session: options.session,
-      eventStore: store,
-      createId: options.createId,
-    });
-    const schedules = createScheduledJobRepository({
-      collections,
-      coordinator,
-      session: options.session,
-      eventStore: store,
-      preparer,
-      now,
-    });
-    const knowledge = createKnowledgeRepository({
-      coordinator,
-      session: options.session,
-      eventStore: store,
-      assets,
-      preparer,
-      createId: options.createId,
-      now,
-    });
-    capabilities = Object.freeze({
-      assets,
-      conversation,
-      collections,
-      llmAttempts,
-      toolExecutions,
-      relations,
-      schedules,
-      knowledge,
-    });
-    attachmentRuntime = createAttachmentRuntime({
-      schema,
-      coordinator,
-      store,
-      conversation,
       preparer,
       eventHub,
-      executor,
-      registry: options.registry,
-      dispatchEvent: (event) => publishLive(event),
-      workload: streamWorkload,
-      createId: options.createId,
+      streamWorkload,
       now,
-      settlementPollMs: options.attachments?.settlementPollMs,
+      publishLive: (event) => publishLive(event),
     });
+    capabilities = defaultScope.capabilities;
+    resolver = defaultScope.public.content.resolver;
+    attachmentRuntime = defaultScope.attachmentRuntime;
 
-    const deliveryInNamespace = async (namespace: string, id: string) => {
-      const delivery = await store.getDelivery(id);
-      if (!delivery) return null;
-      const event = await store.getEvent(delivery.eventId);
-      return event?.namespace === namespace ? delivery : null;
+    resolveAdditionalScope = (requested: string) => {
+      const normalized = requested.trim();
+      if (!normalized) {
+        throw new TypeError("Database schema must be non-empty.");
+      }
+      const existing = additionalScopes.get(normalized);
+      if (existing) return existing;
+      if (closed) throw new Error("Copilotz engine is shut down.");
+      const hub = createCopilotzEventHub();
+      const pending = (async () => {
+        try {
+          await initializeSchema(options, normalized);
+          const runtime = createDatabaseScope({
+            databaseSchema: normalized,
+            engine: options,
+            registry: options.registry,
+            executor,
+            preparer,
+            eventHub: hub,
+            streamWorkload,
+            now,
+            publishLive: (event) =>
+              publishLive(event, {
+                databaseSchema: normalized,
+                eventHub: hub,
+              }),
+          });
+          return Object.freeze({ runtime, hub });
+        } catch (error) {
+          hub.close(error);
+          throw error;
+        }
+      })().catch((error) => {
+        if (additionalScopes.get(normalized) === pending) {
+          additionalScopes.delete(normalized);
+        }
+        throw error;
+      });
+      additionalScopes.set(normalized, pending);
+      return pending;
     };
-
-    let closed = false;
     const engine: CopilotzEngine = {
+      ...defaultScope.public,
+      databaseSchema,
+      async databaseScope(requestedDatabaseSchema) {
+        if (requestedDatabaseSchema.trim() === databaseSchema) return engine;
+        return (await resolveAdditionalScope(requestedDatabaseSchema)).runtime
+          .public;
+      },
       plugins: options.registry,
       execution: Object.freeze({
         ownership: executor.ownership,
@@ -410,93 +391,50 @@ export async function createCopilotzEngine(
         streamWorkload,
         workloads: executor.workloads,
       }),
-      content: Object.freeze({ assets, preparer, resolver }),
-      conversation,
-      collections,
-      llmAttempts,
-      toolExecutions,
-      relations,
-      schedules,
-      knowledge,
-      connect: attachmentRuntime.connect,
-      run: attachmentRuntime.run,
-      events: Object.freeze({
-        append: (draft, appendOptions) =>
-          coordinator.append(draft, appendOptions),
-        async emit(input) {
-          const event = createEphemeralEvent(input, now);
-          const dispatched = await publishLive(event);
-          await dispatched.done;
-          return event;
-        },
-        subscribe: (filter) => eventHub.subscribe(filter),
-        waitFor(filterInput, signal) {
-          const { timeoutMs, pollIntervalMs, ...filter } = filterInput;
-          return waitForCopilotzEvent({
-            hub: eventHub,
-            filter,
-            signal,
-            timeoutMs,
-            pollIntervalMs,
-            loadDurable: () =>
-              store.listEvents({
-                namespace: filter.namespace,
-                threadId: filter.threadId,
-                correlationId: filter.correlationId,
-                afterPosition: filter.afterPosition,
-                limit: 1_000,
-              }),
+      connect(input) {
+        const requested = input.databaseSchema?.trim() || databaseSchema;
+        if (requested === databaseSchema) {
+          return attachmentRuntime!.connect({
+            ...input,
+            databaseSchema: requested,
           });
-        },
-        async get(namespace, id) {
-          const event = await store.getEvent(id);
-          return event?.namespace === namespace ? event : null;
-        },
-        list: (listOptions) => store.listEvents(listOptions),
-        settlement: (namespace, rootEventId) =>
-          store.scopeSettlement(namespace, rootEventId),
-        cancel: (namespace, rootEventId, reason) =>
-          store.cancelScope(namespace, rootEventId, reason),
-      }),
-      deliveries: Object.freeze({
-        get: deliveryInNamespace,
-        list: (listOptions) => store.listDeliveries(listOptions),
-        async retry(namespace, id) {
-          if (!await deliveryInNamespace(namespace, id)) return false;
-          const retried = await store.retryDeadLetter(id);
-          if (retried) {
-            await executor.dispatchDelivery(id).catch(() => undefined);
-          }
-          return retried;
-        },
-        async discard(namespace, id) {
-          if (!await deliveryInNamespace(namespace, id)) return false;
-          return await store.discardDeadLetter(id);
-        },
-      }),
-      recover: (recoverOptions) => coordinator.recover(recoverOptions),
-      async maintenance(maintenanceOptions = {}) {
-        const recovery = await coordinator.recover({
-          namespace: maintenanceOptions.namespace,
-          consumerIds: maintenanceOptions.consumerIds,
-          limit: maintenanceOptions.limit,
-        });
-        const compacted = await store.compact({
-          retentionMs: maintenanceOptions.retentionMs,
-          now: maintenanceOptions.now,
-        });
-        const result: CopilotzEngineMaintenanceResult = Object.freeze({
-          recovered: recovery.handles.length,
-          dispatchFailures: recovery.failures.length,
-          compacted: Object.freeze(compacted),
-        });
-        return result;
+        }
+        return resolveAdditionalScope(requested).then((scope) =>
+          scope.runtime.public.connect(input)
+        );
+      },
+      run(input) {
+        const requested = input.databaseSchema?.trim() || databaseSchema;
+        if (requested === databaseSchema) {
+          return attachmentRuntime!.run({
+            ...input,
+            databaseSchema: requested,
+          });
+        }
+        return resolveAdditionalScope(requested).then((scope) =>
+          scope.runtime.public.run(input)
+        );
       },
       async shutdown(reason = "copilotz_engine_shutdown") {
         if (closed) return;
         closed = true;
+        const scoped = await Promise.allSettled([...additionalScopes.values()]);
+        await Promise.all(
+          scoped.flatMap((result) =>
+            result.status === "fulfilled"
+              ? [
+                result.value.runtime.attachmentRuntime.shutdown(reason).catch(
+                  () => undefined,
+                ),
+              ]
+              : []
+          ),
+        );
         await attachmentRuntime?.shutdown(reason);
         await executor.shutdown(reason);
+        for (const result of scoped) {
+          if (result.status === "fulfilled") result.value.hub.close();
+        }
         if (ownsEventHub) eventHub.close();
       },
     };

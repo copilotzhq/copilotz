@@ -53,6 +53,7 @@ export function parseDeliveryDispatchMetadata(
   }
   return Object.freeze({
     schema,
+    databaseSchema: requiredMetadataString(metadata, "databaseSchema"),
     deliveryId: requiredMetadataString(metadata, "deliveryId"),
     eventId: requiredMetadataString(metadata, "eventId"),
     consumerId: requiredMetadataString(metadata, "consumerId"),
@@ -77,6 +78,9 @@ function deliveryMismatch(
   delivery: EventDelivery,
   metadata: DeliveryDispatchMetadata,
 ): string | undefined {
+  if (delivery.databaseSchema !== metadata.databaseSchema) {
+    return "database schema mismatch";
+  }
   if (delivery.eventId !== metadata.eventId) return "event ID mismatch";
   if (delivery.consumerId !== metadata.consumerId) {
     return "consumer ID mismatch";
@@ -91,6 +95,9 @@ function deliveryMismatch(
 export function createDeliveryWorkload(
   options: CreateDeliveryWorkloadOptions,
 ): DeliveryWorkload {
+  if (!options.store && !options.resolveStore) {
+    throw new TypeError("Delivery workload requires a store resolver.");
+  }
   const leaseMs = boundedPositive(options.leaseMs, DEFAULT_LEASE_MS, "leaseMs");
   const heartbeatMs = boundedPositive(
     options.heartbeatMs,
@@ -104,13 +111,19 @@ export function createDeliveryWorkload(
 
   return async ({ metadata: rawMetadata, signal: dispatchSignal }) => {
     const metadata = parseDeliveryDispatchMetadata(rawMetadata);
-    const delivery = await options.store.claimDelivery({
+    const store = options.resolveStore
+      ? await options.resolveStore(metadata.databaseSchema)
+      : options.store!;
+    if (store.databaseSchema !== metadata.databaseSchema) {
+      throw new TypeError("Delivery dispatch database schema mismatch.");
+    }
+    const delivery = await store.claimDelivery({
       id: metadata.deliveryId,
       owner: metadata.dispatchAttemptId,
       leaseMs,
     });
     if (!delivery) {
-      const current = await options.store.getDelivery(metadata.deliveryId);
+      const current = await store.getDelivery(metadata.deliveryId);
       return {
         metadata: statusMetadata(
           metadata.deliveryId,
@@ -134,7 +147,7 @@ export function createDeliveryWorkload(
     };
     const heartbeat = () => {
       heartbeatHandle = scheduler.schedule(() => {
-        void options.store.heartbeatDelivery({
+        void store.heartbeatDelivery({
           id: delivery.id,
           owner: metadata.dispatchAttemptId,
           leaseMs,
@@ -154,7 +167,7 @@ export function createDeliveryWorkload(
       if (mismatch) {
         throw new TypeError(`Invalid delivery dispatch: ${mismatch}.`);
       }
-      const event = await options.store.getEvent(delivery.eventId);
+      const event = await store.getEvent(delivery.eventId);
       if (!event) throw new Error(`Event '${delivery.eventId}' was not found.`);
       if (event.namespace !== metadata.namespace) {
         throw new TypeError("Invalid delivery dispatch: namespace mismatch.");
@@ -193,6 +206,7 @@ export function createDeliveryWorkload(
         };
 
       const base: DeliveryContextBase = Object.freeze({
+        databaseSchema: metadata.databaseSchema,
         event,
         delivery,
         signal: abort.signal,
@@ -208,7 +222,7 @@ export function createDeliveryWorkload(
       abort.signal.throwIfAborted();
       await processor.handle(event, context);
       abort.signal.throwIfAborted();
-      const succeeded = await options.store.succeedDelivery(
+      const succeeded = await store.succeedDelivery(
         delivery.id,
         metadata.dispatchAttemptId,
       );
@@ -217,12 +231,12 @@ export function createDeliveryWorkload(
       }
       return { metadata: statusMetadata(delivery.id, "succeeded") };
     } catch (error) {
-      const failed = await options.store.failDelivery({
+      const failed = await store.failDelivery({
         id: delivery.id,
         owner: metadata.dispatchAttemptId,
         error,
       });
-      const current = failed ?? await options.store.getDelivery(delivery.id);
+      const current = failed ?? await store.getDelivery(delivery.id);
       return {
         metadata: statusMetadata(
           delivery.id,

@@ -10,6 +10,7 @@ import type {
   CreateCopilotzApplicationOptions,
   InternalCopilotzApplication,
 } from "./types.ts";
+import { openCopilotzPersistence } from "./persistence.ts";
 
 function optionalText(value: string | undefined, name: string) {
   if (value === undefined) return undefined;
@@ -31,22 +32,19 @@ function requiredNamespace(
   return namespace;
 }
 
-async function closeOwnedSession(
-  close: CreateCopilotzApplicationOptions["closeSession"],
-  reason: string,
-): Promise<void> {
-  await close?.(reason);
-}
-
 /**
- * Composes the normal embedded Copilotz runtime from plugins and a SQL session.
+ * Composes the normal embedded Copilotz runtime from plugins and a database.
  * Filesystem/package resolution and database construction remain adapters.
  */
 export async function createCopilotzApplication(
   options: CreateCopilotzApplicationOptions,
 ): Promise<InternalCopilotzApplication> {
+  const persistence = await openCopilotzPersistence(options);
   const namespace = optionalText(options.namespace, "Namespace");
-  const schema = optionalText(options.schema, "Schema") ?? "public";
+  const databaseSchema = optionalText(
+    options.databaseSchema,
+    "Database schema",
+  ) ?? "public";
   const configuredTextCatalog = options.core !== false &&
       options.core?.text !== false
     ? options.core?.text?.toolCatalog
@@ -73,36 +71,66 @@ export async function createCopilotzApplication(
   try {
     engine = await createCopilotzEngine({
       ...(options.engine ?? {}),
-      session: options.session,
+      session: persistence.session,
       registry,
-      schema,
+      defaultDatabaseSchema: databaseSchema,
     });
   } catch (error) {
-    await closeOwnedSession(
-      options.closeSession,
-      "copilotz_application_initialization_failed",
-    ).catch(() => undefined);
+    await persistence.close("copilotz_application_initialization_failed").catch(
+      () => undefined,
+    );
     throw error;
   }
 
   let shutdownTask: Promise<void> | undefined;
-  const goals = createGoalRuntime({
-    registry,
-    conversation: engine.conversation,
-    resolver: engine.content.resolver,
-    run: engine.run,
-    defaultNamespace: namespace,
-    defaultSchema: schema,
-    createId: options.engine?.createId,
-    now: options.engine?.now,
-  });
+  const goalScopes = new Map<
+    string,
+    Promise<ReturnType<typeof createGoalRuntime>>
+  >();
+  const goalsFor = (requestedDatabaseSchema: string) => {
+    const requested = optionalText(
+      requestedDatabaseSchema,
+      "Goal database schema",
+    )!;
+    const existing = goalScopes.get(requested);
+    if (existing) return existing;
+    const pending = engine.databaseScope(requested).then((scope) =>
+      createGoalRuntime({
+        registry,
+        conversation: scope.conversation,
+        resolver: scope.content.resolver,
+        run: (input) =>
+          scope.run({
+            ...input,
+            databaseSchema: requested,
+          }),
+        defaultNamespace: namespace,
+        defaultDatabaseSchema: requested,
+        createId: options.engine?.createId,
+        now: options.engine?.now,
+      })
+    ).catch((error) => {
+      if (goalScopes.get(requested) === pending) goalScopes.delete(requested);
+      throw error;
+    });
+    goalScopes.set(requested, pending);
+    return pending;
+  };
+  await goalsFor(databaseSchema);
   const shutdown = (reason = "copilotz_application_shutdown") => {
     if (shutdownTask) return shutdownTask;
     shutdownTask = (async () => {
-      await goals.shutdown(reason);
+      const goalRuntimes = await Promise.allSettled([...goalScopes.values()]);
+      await Promise.all(
+        goalRuntimes.flatMap((result) =>
+          result.status === "fulfilled"
+            ? [result.value.shutdown(reason).catch(() => undefined)]
+            : []
+        ),
+      );
       const settled = await Promise.allSettled([
         engine.shutdown(reason),
-        closeOwnedSession(options.closeSession, reason),
+        persistence.close(reason),
       ]);
       const failures = settled.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : []
@@ -126,12 +154,12 @@ export async function createCopilotzApplication(
     ...engine,
     config: Object.freeze({
       ...(namespace ? { namespace } : {}),
-      schema,
+      databaseSchema,
       corePluginIds: Object.freeze(
         core.map((plugin) => plugin.manifest.id),
       ),
       declaredPluginIds: Object.freeze(declaredPluginIds),
-      sessionOwnership: options.closeSession ? "application" : "injected",
+      databaseOwnership: persistence.ownership,
     }),
     capabilities: createAgentCapabilityResolver({ registry, toolCatalog }),
     engine,
@@ -139,17 +167,23 @@ export async function createCopilotzApplication(
       return engine.connect({
         ...input,
         namespace: requiredNamespace(input.namespace, namespace),
-        schema: input.schema ?? schema,
+        databaseSchema: input.databaseSchema ?? databaseSchema,
       });
     },
     run(input: ApplicationRunInput) {
       return engine.run({
         ...input,
         namespace: requiredNamespace(input.namespace, namespace),
-        schema: input.schema ?? schema,
+        databaseSchema: input.databaseSchema ?? databaseSchema,
       });
     },
-    goal: goals.goal,
+    async goal(input) {
+      const requested = input.databaseSchema?.trim() || databaseSchema;
+      return await (await goalsFor(requested)).goal({
+        ...input,
+        databaseSchema: requested,
+      });
+    },
     shutdown,
   };
   return Object.freeze(application);

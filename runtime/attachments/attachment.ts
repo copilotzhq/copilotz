@@ -44,7 +44,7 @@ import { isRealtimeProviderResource } from "./workload.ts";
 import type { Agent } from "../resources/index.ts";
 
 export type CreateAttachmentRuntimeOptions = Readonly<{
-  schema: string;
+  databaseSchema: string;
   coordinator: EventCoordinator;
   store: EventStore;
   conversation: ConversationRepository;
@@ -292,6 +292,7 @@ function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
 
 async function waitForScope(
   store: EventStore,
+  databaseSchema: string,
   namespace: string,
   eventId: string,
   correlationId: string,
@@ -323,7 +324,11 @@ async function waitForScope(
       // A remote Worker settles its database delivery just before the final
       // output frame reaches this Gateway. Await correlated relays, then
       // confirm the durable scope once more in case a frame created more work.
-      await executor.settleOutputs({ namespace, correlationId });
+      await executor.settleOutputs({
+        databaseSchema,
+        namespace,
+        correlationId,
+      });
       const confirmed = await store.scopeSettlement(namespace, eventId);
       if (confirmed.deadLetters > 0) {
         throw attachmentError(
@@ -410,10 +415,13 @@ export function createAttachmentRuntime(
     input: ConnectAttachmentInput,
   ): Promise<ThreadAttachment> => {
     const namespace = requiredText(input.namespace, "Namespace");
-    if (input.schema !== undefined && input.schema.trim() !== options.schema) {
+    if (
+      input.databaseSchema !== undefined &&
+      input.databaseSchema.trim() !== options.databaseSchema
+    ) {
       throw attachmentError(
         "attachment_invalid",
-        `Attachment schema '${input.schema}' does not match engine schema '${options.schema}'.`,
+        `Attachment database schema '${input.databaseSchema}' does not match runtime schema '${options.databaseSchema}'.`,
       );
     }
     const thread = await resolveThread(namespace, input.thread);
@@ -526,6 +534,7 @@ export function createAttachmentRuntime(
       let settled = false;
       const done = waitForScope(
         options.store,
+        options.databaseSchema,
         namespace,
         event.id,
         event.correlationId,
@@ -786,6 +795,7 @@ export function createAttachmentRuntime(
       });
       const dispatchMetadata: StreamDispatchMetadata = Object.freeze({
         schema: "copilotz.stream.dispatch.v1",
+        databaseSchema: options.databaseSchema,
         streamId,
         eventId: opened.event.id,
         namespace,
@@ -878,6 +888,7 @@ export function createAttachmentRuntime(
         );
         await waitForScope(
           options.store,
+          options.databaseSchema,
           namespace,
           opened.event.id,
           correlationId,
@@ -956,7 +967,7 @@ export function createAttachmentRuntime(
       thread: input.thread,
       participant: input.participant,
       recipientIds: input.recipientIds,
-      schema: input.schema,
+      databaseSchema: input.databaseSchema,
     });
     let sent: AttachmentMessageHandle;
     try {

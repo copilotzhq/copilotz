@@ -26,7 +26,7 @@ export type ConnectAttachmentInput = Readonly<{
   thread: string | ConversationThread;
   participant: AttachmentParticipantRef;
   recipientIds?: readonly string[];
-  schema?: string;
+  databaseSchema?: string;
 }>;
 
 export type AttachmentMessageInput = Readonly<{
@@ -142,7 +142,7 @@ export type RunInput = Readonly<{
   deduplicationId?: string;
   metadata?: Record<string, unknown>;
   visibility?: EventVisibility;
-  schema?: string;
+  databaseSchema?: string;
 }>;
 
 export type RunHandle = Readonly<{
@@ -253,6 +253,7 @@ export type RealtimeProviderResource = Readonly<{
 
 export type StreamDispatchMetadata = Readonly<{
   schema: "copilotz.stream.dispatch.v1";
+  databaseSchema: string;
   streamId: string;
   eventId: string;
   namespace: string;
@@ -268,6 +269,7 @@ export type StreamDispatchMetadata = Readonly<{
 }>;
 
 export type RealtimeProviderContextBase = Readonly<{
+  databaseSchema: string;
   event: DurableEvent;
   metadata: StreamDispatchMetadata;
   signal: AbortSignal;

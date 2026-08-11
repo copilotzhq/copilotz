@@ -10,7 +10,7 @@ const NAMESPACE = "tenant-a";
 Deno.test("v1 SSE projector maps live vocabulary and hydrates canonical public messages", async () => {
   const application = await createCopilotz({
     namespace: NAMESPACE,
-    schema: "copilotz_v1_sse",
+    databaseSchema: "copilotz_v1_sse",
     core: false,
   });
   try {
@@ -109,7 +109,7 @@ Deno.test("v1 SSE projector maps live vocabulary and hydrates canonical public m
 Deno.test("v1 SSE projector leaves media as references and never serializes a byte stream", async () => {
   const application = await createCopilotz({
     namespace: NAMESPACE,
-    schema: "copilotz_v1_sse_media",
+    databaseSchema: "copilotz_v1_sse_media",
     core: false,
   });
   try {

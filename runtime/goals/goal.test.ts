@@ -137,9 +137,9 @@ async function createFixture(
 > {
   const database = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
-    session: createSqlSession(database),
+    database,
     namespace: NAMESPACE,
-    schema,
+    databaseSchema: schema,
     core: false,
     plugins: [scriptedGoalPlugin(mode)],
     engine: { retryBaseMs: 0, random: () => 0 },

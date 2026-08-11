@@ -14,7 +14,6 @@ import {
   COPILOTZ_DELIVERY_WORKLOAD,
   createCopilotzWorkOutputRelay,
 } from "../execution/index.ts";
-import { createCopilotzEventHub } from "../events/index.ts";
 import { createCopilotzApplication } from "./application.ts";
 import type { CreateCopilotzApplicationOptions } from "./types.ts";
 import {
@@ -30,7 +29,7 @@ type WorkerEngineOptions = Omit<
 export type CreateCopilotzWorkerOptions =
   & Omit<
     CreateCopilotzApplicationOptions,
-    "session" | "closeSession" | "engine"
+    "database" | "engine"
   >
   & CopilotzPersistenceOptions
   & Omit<WorkerOptions, "workloads">
@@ -99,22 +98,20 @@ export async function createCopilotzWorker(
   lifecycle: WorkerLifecycleCallbacks = {},
 ): Promise<CopilotzWorker> {
   const persistence = await openCopilotzPersistence(options);
-  const eventHub = createCopilotzEventHub();
   const relay = createCopilotzWorkOutputRelay();
   let application;
   try {
     application = await createCopilotzApplication({
       namespace: options.namespace,
-      schema: options.schema,
+      databaseSchema: options.databaseSchema,
       core: options.core,
       plugins: options.plugins,
       resources: options.resources,
       pluginResolver: options.pluginResolver,
       toolCatalog: options.toolCatalog,
-      session: persistence.session,
+      database: persistence.database,
       engine: {
         ...(options.engine ?? {}),
-        eventHub,
         publish: relay.publish,
         execution: {
           dispatcher: createDeferredDeliveryDispatcher(),
@@ -122,7 +119,6 @@ export async function createCopilotzWorker(
       },
     });
   } catch (error) {
-    eventHub.close(error);
     await persistence.close("copilotz_worker_initialization_failed").catch(
       () => undefined,
     );
@@ -154,7 +150,6 @@ export async function createCopilotzWorker(
     await application.shutdown("copilotz_worker_creation_failed").catch(
       () => undefined,
     );
-    eventHub.close(error);
     await persistence.close("copilotz_worker_creation_failed").catch(
       () => undefined,
     );
@@ -168,7 +163,6 @@ export async function createCopilotzWorker(
       application.shutdown(reason),
       persistence.close(reason),
     ]).then((settled) => {
-      eventHub.close();
       const failures = settled.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : []
       );

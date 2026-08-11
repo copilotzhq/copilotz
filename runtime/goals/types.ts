@@ -137,7 +137,7 @@ export type GoalEvaluateCallback = (
 
 export type GoalInput = Readonly<{
   namespace?: string;
-  schema?: string;
+  databaseSchema?: string;
   content: ContentInput | readonly ContentInput[];
   sender: GoalSenderInput;
   /** Stable ID of the declared agent resource under test. */
@@ -226,7 +226,7 @@ export type CreateGoalRuntimeOptions = Readonly<{
   resolver: Pick<ContentResolver, "getMany">;
   run(input: RunInput): Promise<RunHandle>;
   defaultNamespace?: string;
-  defaultSchema?: string;
+  defaultDatabaseSchema?: string;
   createId?: () => string;
   now?: () => Date;
 }>;

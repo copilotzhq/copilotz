@@ -7,7 +7,7 @@ import {
   type CopilotzProcessorContext,
   definePlugin,
   defineProcessor,
-} from "jsr:@copilotz/copilotz@^0.58.0";
+} from "jsr:@copilotz/copilotz@^0.59.0";
 
 const audit = defineProcessor<CopilotzProcessorContext>({
   id: "audit.messages",

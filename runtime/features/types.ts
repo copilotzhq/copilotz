@@ -10,13 +10,15 @@ export type FeatureRequest = Readonly<{
   context?: Readonly<
     Record<string, unknown> & {
       namespace?: string;
-      schema?: string;
+      databaseSchema?: string;
     }
   >;
 }>;
 
 export type FeatureResponse = Readonly<{
   status: number;
+  /** Transport headers such as Set-Cookie or a content disposition. */
+  headers?: HeadersInit;
   data?: unknown;
   pageInfo?: Readonly<{
     next?: string;
@@ -27,6 +29,7 @@ export type FeatureResponse = Readonly<{
 export type FeatureContext = Readonly<{
   application: CopilotzApplication;
   namespace: string;
+  databaseSchema: string;
   request: FeatureRequest;
 }>;
 

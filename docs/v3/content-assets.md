@@ -625,8 +625,8 @@ imports in core.
   non-durable operation.
 - A remote/shared execution topology requires a storage backend visible to both
   producer and worker, or a scoped content-transfer workload.
-- Copilotz owns and closes only the private host/session it created. An injected
-  dispatcher, target, session, or storage backend remains app-owned.
+- Copilotz owns and closes only the private host/database it created. An
+  injected dispatcher, target, database, or storage backend remains app-owned.
 
 ## Compatibility and Migration
 

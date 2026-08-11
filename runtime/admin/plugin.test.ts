@@ -45,9 +45,9 @@ async function close(db: TestDatabase): Promise<void> {
 Deno.test("admin plugin projects event-native application state without raw storage access", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
+    database: db,
     namespace: NAMESPACE,
-    schema: SCHEMA,
+    databaseSchema: SCHEMA,
     core: false,
     plugins: [
       createUsageWorkflowPlugin({ enabled: false }),

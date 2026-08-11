@@ -124,7 +124,7 @@ async function createFixture(): Promise<Fixture> {
   const engine = await createCopilotzEngine({
     session,
     registry,
-    schema: TEST_SCHEMA,
+    defaultDatabaseSchema: TEST_SCHEMA,
     createId: () => `engine-${++nextId}`,
     now: () => new Date("2026-08-09T00:00:00.000Z"),
     random: () => 0,
@@ -286,7 +286,7 @@ Deno.test("engine shutdown releases only its worker and leaves injected infrastr
   const engine = await createCopilotzEngine({
     session,
     registry,
-    schema: "copilotz_shared_engine",
+    defaultDatabaseSchema: "copilotz_shared_engine",
     execution: { hypervisor, transport, workerId: "shared-engine" },
   });
   let applicationWorker: ReturnType<typeof createWorker> | undefined;
@@ -314,6 +314,96 @@ Deno.test("engine shutdown releases only its worker and leaves injected infrastr
     await applicationWorker?.stop();
     await applicationWorker?.closed;
     await hypervisor.shutdown();
+    await db.close();
+  }
+});
+
+Deno.test("one engine isolates lazy physical-schema repository scopes", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const session = createSqlSession(db);
+  const handledSchemas: string[] = [];
+  const processor = defineProcessor<CopilotzProcessorContext>({
+    id: "engine.scope.audit",
+    on: ["thread.created"],
+    delivery: "durable",
+    async handle(event, context) {
+      if (!event.durable) throw new Error("Expected a durable event.");
+      handledSchemas.push(context.databaseSchema);
+      await context.collections.engine_audit.create({
+        id: `audit:${event.subject?.id}`,
+        sourceEventId: event.id,
+      });
+    },
+  });
+  const registry = await createPluginRegistry({
+    plugins: [definePlugin({
+      manifest: {
+        id: "test.engine.scopes",
+        version: "1.0.0",
+        provides: {
+          collections: [auditCollection.name],
+          processors: [processor.id],
+        },
+      },
+      resources: {
+        collections: [auditCollection],
+        processors: [processor],
+      },
+    })],
+  });
+  const engine = await createCopilotzEngine({
+    session,
+    registry,
+    defaultDatabaseSchema: "copilotz_scope_a",
+  });
+  try {
+    const first = await engine.databaseScope("copilotz_scope_a");
+    const second = await engine.databaseScope("copilotz_scope_b");
+    const firstThread = await first.conversation.createThread({
+      namespace: "tenant",
+      id: "same-thread",
+      status: "first",
+      participants: [],
+    });
+    const secondThread = await second.conversation.createThread({
+      namespace: "tenant",
+      id: "same-thread",
+      status: "second",
+      participants: [],
+    });
+    await Promise.all(
+      [...firstThread.dispatch.handles, ...secondThread.dispatch.handles].map(
+        (handle) => handle.done,
+      ),
+    );
+
+    assertEquals(
+      (await first.conversation.getThread("tenant", "same-thread"))?.status,
+      "first",
+    );
+    assertEquals(
+      (await second.conversation.getThread("tenant", "same-thread"))?.status,
+      "second",
+    );
+    assertEquals(
+      (await first.collections.get("engine_audit").list("tenant")).map(
+        (row) => row.id,
+      ),
+      ["audit:same-thread"],
+    );
+    assertEquals(
+      (await second.collections.get("engine_audit").list("tenant")).map(
+        (row) => row.id,
+      ),
+      ["audit:same-thread"],
+    );
+    assertEquals(handledSchemas.sort(), [
+      "copilotz_scope_a",
+      "copilotz_scope_b",
+    ]);
+    assertEquals(engine.execution.ownership, "private_hypervisor");
+  } finally {
+    await engine.shutdown();
     await db.close();
   }
 });

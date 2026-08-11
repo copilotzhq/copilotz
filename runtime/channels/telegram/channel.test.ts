@@ -112,9 +112,9 @@ Deno.test("Telegram channel preserves identity, canonical media, buttons, and na
   const db = await createTestDatabase({ url: ":memory:" });
   const fake = fakeTransport();
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
+    database: db,
     namespace: NAMESPACE,
-    schema: "copilotz_v3_telegram",
+    databaseSchema: "copilotz_v3_telegram",
     core: false,
     plugins: [
       replyPlugin(),

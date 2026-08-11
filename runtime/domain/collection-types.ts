@@ -35,6 +35,13 @@ export type CollectionMutationOptions = Readonly<{
   identity?: MutationIdentity;
 }>;
 
+export type CollectionCommandResult<
+  TSelect extends object = CollectionRecord,
+> = Readonly<{
+  command: string;
+  record: EventCollectionValue<TSelect>;
+}>;
+
 export type CollectionListOptions = Readonly<{
   after?: string;
   limit?: number;
@@ -67,6 +74,12 @@ export type EventCollectionRepository<
     id: string,
     options: CollectionMutationOptions,
   ): Promise<CoordinatedMutationResult<{ id: string; deleted: true }>>;
+  command(
+    id: string,
+    command: string,
+    input: unknown,
+    options: CollectionMutationOptions,
+  ): Promise<CoordinatedMutationResult<CollectionCommandResult<TSelect>>>;
   get(
     namespace: string,
     id: string,
@@ -115,6 +128,12 @@ export type ScopedEventCollection = Readonly<{
     id: string,
     options?: ScopedCollectionMutationOptions,
   ): Promise<{ id: string; deleted: true }>;
+  command(
+    id: string,
+    command: string,
+    input: unknown,
+    options?: ScopedCollectionMutationOptions,
+  ): Promise<CollectionCommandResult>;
   get(id: string): Promise<CollectionRecord | null>;
   list(options?: {
     after?: string;
@@ -156,6 +175,12 @@ export type ErasedEventCollectionRepository = Readonly<{
     id: string,
     options: CollectionMutationOptions,
   ): Promise<CoordinatedMutationResult<{ id: string; deleted: true }>>;
+  command(
+    id: string,
+    command: string,
+    input: unknown,
+    options: CollectionMutationOptions,
+  ): Promise<CoordinatedMutationResult<CollectionCommandResult>>;
   get(namespace: string, id: string): Promise<CollectionRecord | null>;
   list(
     namespace: string,

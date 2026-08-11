@@ -104,6 +104,7 @@ export type CreateEventStoreOptions = {
 };
 
 export type EventStore = {
+  databaseSchema: string;
   tables: Readonly<Record<CoreTableName, string>>;
   commitMutation<T>(
     options: CommitEventMutationOptions<T>,
@@ -279,9 +280,10 @@ function mapEvent(row: EventRow): DurableEvent {
   return deepFreeze(event);
 }
 
-function mapDelivery(row: DeliveryRow): EventDelivery {
+function mapDelivery(row: DeliveryRow, databaseSchema: string): EventDelivery {
   const lastError = row.last_error == null ? undefined : record(row.last_error);
   return deepFreeze({
+    databaseSchema,
     id: String(row.id),
     eventId: String(row.event_id),
     consumerId: String(row.consumer_id),
@@ -441,7 +443,8 @@ export function createEventStore(
   options: CreateEventStoreOptions,
 ): EventStore {
   const { session } = options;
-  const tables = createCoreTableNames(options.schema ?? "public");
+  const databaseSchema = options.schema ?? "public";
+  const tables = createCoreTableNames(databaseSchema);
   const createId = options.createId ?? ulid;
   const now = options.now ?? (() => new Date());
   const random = options.random ?? Math.random;
@@ -459,7 +462,7 @@ export function createEventStore(
        WHERE event_id = $1 ORDER BY created_at, id`,
       [eventId],
     );
-    return result.rows.map(mapDelivery);
+    return result.rows.map((row) => mapDelivery(row, databaseSchema));
   };
 
   const duplicateResult = async <T>(
@@ -574,7 +577,7 @@ export function createEventStore(
             RETURNING *`,
             [createId(), event.id, consumerId, maxAttempts, priority],
           );
-          deliveries.push(mapDelivery(result.rows[0]));
+          deliveries.push(mapDelivery(result.rows[0], databaseSchema));
         }
 
         if (draft.threadId) {
@@ -634,7 +637,7 @@ export function createEventStore(
       `SELECT * FROM ${tables.event_deliveries} WHERE id = $1 LIMIT 1`,
       [id],
     );
-    return result.rows[0] ? mapDelivery(result.rows[0]) : null;
+    return result.rows[0] ? mapDelivery(result.rows[0], databaseSchema) : null;
   };
 
   const deadLetterExhaustedLeases = async (
@@ -681,7 +684,7 @@ export function createEventStore(
        RETURNING *`,
       [claim.id, claim.owner, leaseMs],
     );
-    return result.rows[0] ? mapDelivery(result.rows[0]) : null;
+    return result.rows[0] ? mapDelivery(result.rows[0], databaseSchema) : null;
   };
 
   const settleDelivery = async (
@@ -738,7 +741,7 @@ export function createEventStore(
        LIMIT $${params.length}`,
       params,
     );
-    return result.rows.map(mapDelivery);
+    return result.rows.map((row) => mapDelivery(row, databaseSchema));
   };
 
   const claimNext = async (claim: {
@@ -785,7 +788,7 @@ export function createEventStore(
       RETURNING d.*`,
       params,
     );
-    return result.rows[0] ? mapDelivery(result.rows[0]) : null;
+    return result.rows[0] ? mapDelivery(result.rows[0], databaseSchema) : null;
   };
 
   const scopeCte = `WITH RECURSIVE scope(id) AS (
@@ -798,6 +801,7 @@ export function createEventStore(
   )`;
 
   return {
+    databaseSchema,
     tables,
     commitMutation,
     append(draft, consumerIds = [], appendOptions = {}) {
@@ -866,7 +870,7 @@ export function createEventStore(
          ORDER BY d.created_at, d.id LIMIT $${params.length}`,
         params,
       );
-      return result.rows.map(mapDelivery);
+      return result.rows.map((row) => mapDelivery(row, databaseSchema));
     },
     claimDelivery,
     claimNext,
@@ -927,7 +931,9 @@ export function createEventStore(
           JSON.stringify(serializeError(failure.error)),
         ],
       );
-      return result.rows[0] ? mapDelivery(result.rows[0]) : null;
+      return result.rows[0]
+        ? mapDelivery(result.rows[0], databaseSchema)
+        : null;
     },
     listRecoverable,
     async nextRecoveryDelayMs() {

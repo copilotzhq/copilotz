@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertExists } from "@std/assert";
 import { createCopilotzGateway, createCopilotzWorker } from "./index.ts";
-import { createManagedOminipgSession } from "../adapters/ominipg.ts";
+import { createTestDatabase } from "../testing/ominipg.ts";
 import { listen } from "../adapters/deno/listen.ts";
 import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
 import { defineProcessor } from "../plugins/processor.ts";
@@ -167,7 +167,7 @@ async function collect<T>(stream: ReadableStream<T>): Promise<T[]> {
 }
 
 Deno.test("Gateway and Worker preserve live output and cascading durable work", async () => {
-  const managed = await createManagedOminipgSession();
+  const database = await createTestDatabase({ url: ":memory:" });
   const transport = {
     type: "in-process",
     config: { topic: `copilotz.topology.${crypto.randomUUID()}` },
@@ -180,7 +180,7 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
   const gateway = await createCopilotzGateway({
     namespace,
     core: false,
-    session: managed.session,
+    database,
     plugins: [plugin],
     transports: [transport],
     target: { workerId },
@@ -193,7 +193,7 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
   const worker = await createCopilotzWorker({
     namespace,
     core: false,
-    session: managed.session,
+    database,
     plugins: [plugin],
     id: workerId,
     transport,
@@ -263,14 +263,14 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
       gateway.shutdown("topology test complete"),
       worker.stop("topology test complete"),
     ]);
-    await managed.close();
+    await database.close();
   }
 });
 
 Deno.test({
   name: "Gateway and Worker preserve Copilotz semantics over WebSocket",
   async fn() {
-    const managed = await createManagedOminipgSession();
+    const database = await createTestDatabase({ url: ":memory:" });
     const plugin = cascadingPlugin();
     const realtime = realtimePlugin();
     const workerId = "copilotz-websocket-topology-worker";
@@ -294,7 +294,7 @@ Deno.test({
     const gateway = await createCopilotzGateway({
       namespace,
       core: false,
-      session: managed.session,
+      database,
       plugins: [plugin, realtime],
       transports: [transport],
       target: { workerId },
@@ -331,7 +331,7 @@ Deno.test({
     const worker = await createCopilotzWorker({
       namespace,
       core: false,
-      session: managed.session,
+      database,
       plugins: [plugin, realtime],
       id: workerId,
       transport: {
@@ -471,7 +471,7 @@ Deno.test({
         worker.stop("WebSocket topology test complete"),
       ]);
       await listener.shutdown();
-      await managed.close();
+      await database.close();
     }
   },
 });

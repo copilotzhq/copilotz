@@ -68,9 +68,9 @@ async function close(db: TestDatabase): Promise<void> {
 Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, and delivers attachment outputs", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
+    database: db,
     namespace: NAMESPACE,
-    schema: SCHEMA,
+    databaseSchema: SCHEMA,
     core: false,
     plugins: [
       replyPlugin(),
@@ -182,9 +182,9 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
 Deno.test("request-bound channel delivery reports missing callbacks through done", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
+    database: db,
     namespace: NAMESPACE,
-    schema: `${SCHEMA}_callback`,
+    databaseSchema: `${SCHEMA}_callback`,
     core: false,
     plugins: [createWebChannelPlugin()],
   });

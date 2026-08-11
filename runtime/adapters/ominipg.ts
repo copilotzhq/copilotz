@@ -1,7 +1,7 @@
 import { Ominipg } from "../../dependencies/ominipg.ts";
 import type { OminipgConnectionOptions } from "../../dependencies/ominipg.ts";
 import { resolveAutoProviders } from "../../dependencies/ominipg-auto.ts";
-import type { SqlExecutor, SqlSession } from "../events/index.ts";
+import { createSqlSession, type SqlSession } from "../events/index.ts";
 
 type QueryResult<TRow extends Record<string, unknown>> = Readonly<{
   rows: TRow[];
@@ -13,23 +13,12 @@ type Query = <TRow extends Record<string, unknown> = Record<string, unknown>>(
   params?: unknown[],
 ) => Promise<QueryResult<TRow>>;
 
-type PoolClient = Readonly<{
-  query(
-    sql: string,
-    params?: unknown[],
-  ): Promise<{ rows: unknown[]; rowCount?: number }>;
-  release(): void;
-}>;
-
-type OminipgPool = Readonly<{
-  connect(): Promise<PoolClient>;
-}>;
-
 export type OminipgDatabaseLike = Readonly<{
   query: Query;
+  transaction<T>(
+    operation: (transaction: Readonly<{ query: Query }>) => T | Promise<T>,
+  ): Promise<T>;
   close(): Promise<void>;
-  /** Ominipg exposes its direct PostgreSQL pool to integration adapters. */
-  pool?: OminipgPool;
 }>;
 
 export type CopilotzOminipgOptions = Readonly<{
@@ -45,103 +34,28 @@ export type CopilotzOminipgOptions = Readonly<{
   logMetrics?: boolean;
 }>;
 
-export type ManagedSqlSession = Readonly<{
+export type ManagedOminipgDatabase = Readonly<{
+  database: OminipgDatabaseLike;
   session: SqlSession;
   close(): Promise<void>;
 }>;
 
-function createExclusiveRunner() {
-  let tail: Promise<void> = Promise.resolve();
-  return async function runExclusive<T>(
-    operation: () => Promise<T>,
-  ): Promise<T> {
-    const previous = tail;
-    let release: () => void = () => undefined;
-    tail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release();
-    }
-  };
-}
-
-function clientExecutor(client: PoolClient): SqlExecutor {
-  return {
-    async query<TRow extends Record<string, unknown>>(
-      sql: string,
-      params?: unknown[],
-    ) {
-      const result = await client.query(sql, params);
-      return {
-        rows: result.rows as TRow[],
-        ...(result.rowCount === undefined ? {} : { rowCount: result.rowCount }),
-      };
-    },
-  };
-}
-
 /**
  * Adapts one Ominipg connection to Copilotz's narrow atomic SQL seam.
  *
- * PGlite/worker operations are serialized so ordinary queries cannot interleave
- * with a transaction. Direct PostgreSQL transactions pin one pool client.
+ * Ominipg owns transaction pinning and operation ordering. Copilotz only
+ * narrows that database contract to the atomic SQL seam used by its stores.
  */
 export function createOminipgSqlSession(
   database: OminipgDatabaseLike,
 ): SqlSession {
-  const runExclusive = createExclusiveRunner();
-  const directQuery: Query = database.query.bind(database);
-  const pool = database.pool;
-  const query: SqlSession["query"] = async (sql, params) => {
-    if (pool) return await directQuery(sql, params);
-    return await runExclusive(() => directQuery(sql, params));
-  };
-
-  return Object.freeze({
-    query,
-    async transaction<T>(
-      operation: (transaction: SqlExecutor) => Promise<T>,
-    ): Promise<T> {
-      if (pool) {
-        const client = await pool.connect();
-        const transaction = clientExecutor(client);
-        try {
-          await client.query("BEGIN");
-          const result = await operation(transaction);
-          await client.query("COMMIT");
-          return result;
-        } catch (error) {
-          await client.query("ROLLBACK").catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
-      }
-
-      return await runExclusive(async () => {
-        const transaction: SqlExecutor = { query: directQuery };
-        try {
-          await directQuery("BEGIN");
-          const result = await operation(transaction);
-          await directQuery("COMMIT");
-          return result;
-        } catch (error) {
-          await directQuery("ROLLBACK").catch(() => undefined);
-          throw error;
-        }
-      });
-    },
-  });
+  return Object.freeze(createSqlSession(database));
 }
 
-/** Creates an application-owned Ominipg connection and atomic SQL session. */
-export async function createManagedOminipgSession(
+/** Opens an application-owned Ominipg database and its private SQL adapter. */
+export async function openManagedOminipgDatabase(
   options: CopilotzOminipgOptions = {},
-): Promise<ManagedSqlSession> {
+): Promise<ManagedOminipgDatabase> {
   const url = options.url ?? ":memory:";
   const providers = resolveAutoProviders({
     url,
@@ -172,11 +86,11 @@ export async function createManagedOminipgSession(
     // legacy Web Worker boundary around the persistence connection.
     useWorker: false,
   });
-  const session = createOminipgSqlSession(
-    database as unknown as OminipgDatabaseLike,
-  );
+  const adapted = database as unknown as OminipgDatabaseLike;
+  const session = createOminipgSqlSession(adapted);
   let closeTask: Promise<void> | undefined;
   return Object.freeze({
+    database: adapted,
     session,
     close() {
       closeTask ??= database.close();

@@ -52,7 +52,16 @@ export type CreateEventNativeAppOptions = Readonly<{
   resolveNamespace?: (
     request: EventNativeAppRequest,
   ) => string | null | undefined | Promise<string | null | undefined>;
+  /** Trusted authorization boundary for selecting a physical DB schema. */
+  resolveDatabaseSchema?: (
+    request: EventNativeAppRequest,
+  ) => string | null | undefined | Promise<string | null | undefined>;
   channels?: ChannelRuntime;
+  /** Supplies an explicitly schema-bound channel runtime when one is injected. */
+  resolveChannels?: (
+    databaseSchema: string,
+    application: CopilotzApplication,
+  ) => ChannelRuntime | Promise<ChannelRuntime>;
   onDetachedChannelError?: (error: unknown) => void;
 }>;
 
@@ -214,11 +223,11 @@ function featureId(feature: FeatureResource): string {
   return feature.id.trim();
 }
 
-async function namespaceFor(
+async function requestScope(
   application: CopilotzApplication,
   request: EventNativeAppRequest,
   options: CreateEventNativeAppOptions,
-): Promise<string> {
+): Promise<Readonly<{ namespace: string; databaseSchema: string }>> {
   const context = request.context?.namespace;
   const resolved = context?.trim() ||
     (await options.resolveNamespace?.(request))?.trim() ||
@@ -226,15 +235,41 @@ async function namespaceFor(
   if (!resolved) {
     throw appError(400, "namespace_required", "Tenant namespace is required.");
   }
-  const requestedSchema = request.context?.schema?.trim();
-  if (requestedSchema && requestedSchema !== application.config.schema) {
+  const trustedSchema = (await options.resolveDatabaseSchema?.(request))
+    ?.trim();
+  const requestedSchema = request.context?.databaseSchema?.trim();
+  const databaseSchema = trustedSchema || application.config.databaseSchema;
+  if (requestedSchema && requestedSchema !== databaseSchema) {
     throw appError(
       400,
       "schema_mismatch",
-      `Application is bound to schema '${application.config.schema}'.`,
+      "Request database schema does not match its trusted application scope.",
     );
   }
-  return resolved;
+  return Object.freeze({ namespace: resolved, databaseSchema });
+}
+
+function applicationForDatabaseScope(
+  application: CopilotzApplication,
+  scope: Awaited<ReturnType<CopilotzApplication["databaseScope"]>>,
+): CopilotzApplication {
+  if (scope.databaseSchema === application.config.databaseSchema) {
+    return application;
+  }
+  return Object.freeze({
+    ...application,
+    ...scope,
+    config: Object.freeze({
+      ...application.config,
+      databaseSchema: scope.databaseSchema,
+    }),
+    goal(input) {
+      return application.goal({
+        ...input,
+        databaseSchema: input.databaseSchema ?? scope.databaseSchema,
+      });
+    },
+  });
 }
 
 function threadResponse(
@@ -621,6 +656,20 @@ async function handleCollections(
     return { status: created.deduplicated ? 200 : 201, data: created.value };
   }
   const id = path[1];
+  if (
+    id && request.method === "POST" && path.length === 4 &&
+    path[2] === "commands"
+  ) {
+    const commanded = await collection.command(id, path[3], request.body, {
+      namespace,
+      identity: {
+        correlationId: header(request.headers, "x-copilotz-correlation-id"),
+        deduplicationId: header(request.headers, "idempotency-key"),
+        metadata: { sourceAdapter: "http" },
+      },
+    });
+    return { status: 200, data: commanded.value };
+  }
   if (!id || path.length !== 2) {
     throw appError(404, "route_not_found", "Collection route was not found.");
   }
@@ -775,7 +824,12 @@ async function handleFeatures(
   if (!feature || !action) {
     throw appError(404, "feature_not_found", "Feature action was not found.");
   }
-  const output = await action(request, { application, namespace, request });
+  const output = await action(request, {
+    application,
+    namespace,
+    databaseSchema: application.config.databaseSchema,
+    request,
+  });
   const response = record(output);
   return "status" in response && typeof response.status === "number"
     ? response as EventNativeAppResponse
@@ -877,6 +931,53 @@ export function createEventNativeApp(
   const channels = options.channels ?? createChannelRuntime(application, {
     onDetachedError: (error) => options.onDetachedChannelError?.(error),
   });
+  const applicationScopes = new Map<string, Promise<CopilotzApplication>>();
+  const channelScopes = new Map<string, Promise<ChannelRuntime>>();
+  const scopedApplication = (databaseSchema: string) => {
+    if (databaseSchema === application.config.databaseSchema) {
+      return Promise.resolve(application);
+    }
+    const existing = applicationScopes.get(databaseSchema);
+    if (existing) return existing;
+    const pending = application.databaseScope(databaseSchema).then((scope) =>
+      applicationForDatabaseScope(application, scope)
+    ).catch((error) => {
+      if (applicationScopes.get(databaseSchema) === pending) {
+        applicationScopes.delete(databaseSchema);
+      }
+      throw error;
+    });
+    applicationScopes.set(databaseSchema, pending);
+    return pending;
+  };
+  const scopedChannels = (
+    databaseSchema: string,
+    scoped: CopilotzApplication,
+  ): Promise<ChannelRuntime> => {
+    if (databaseSchema === application.config.databaseSchema) {
+      return Promise.resolve(channels);
+    }
+    const existing = channelScopes.get(databaseSchema);
+    if (existing) return existing;
+    const pending = options.resolveChannels
+      ? Promise.resolve(options.resolveChannels(databaseSchema, scoped))
+      : options.channels
+      ? Promise.reject(
+        new Error(
+          "An injected channel runtime requires resolveChannels for non-default database schemas.",
+        ),
+      )
+      : Promise.resolve(createChannelRuntime(scoped, {
+        onDetachedError: (error) => options.onDetachedChannelError?.(error),
+      }));
+    channelScopes.set(databaseSchema, pending);
+    void pending.catch(() => {
+      if (channelScopes.get(databaseSchema) === pending) {
+        channelScopes.delete(databaseSchema);
+      }
+    });
+    return pending;
+  };
   const resources = Object.freeze([
     { name: "agents", methods: Object.freeze(["GET"]) },
     { name: "assets", methods: Object.freeze(["GET"]) },
@@ -903,7 +1004,13 @@ export function createEventNativeApp(
   return Object.freeze({
     resources: () => resources,
     async handle(request) {
-      const namespace = await namespaceFor(application, request, options);
+      const requestBoundary = await requestScope(
+        application,
+        request,
+        options,
+      );
+      const scoped = await scopedApplication(requestBoundary.databaseSchema);
+      const namespace = requestBoundary.namespace;
       const path = request.path ?? [];
       switch (request.resource) {
         case "agents":
@@ -916,29 +1023,34 @@ export function createEventNativeApp(
           }
           return {
             status: 200,
-            data: application.plugins.list<Agent>("agents").map(publicAgent),
+            data: scoped.plugins.list<Agent>("agents").map(publicAgent),
           };
         case "assets":
-          return await handleAssets(application, namespace, request, path);
+          return await handleAssets(scoped, namespace, request, path);
         case "channels":
-          return await handleChannels(channels, namespace, request, path);
+          return await handleChannels(
+            await scopedChannels(requestBoundary.databaseSchema, scoped),
+            namespace,
+            request,
+            path,
+          );
         case "threads":
-          return await handleThreads(application, namespace, request, path);
+          return await handleThreads(scoped, namespace, request, path);
         case "participants":
           return await handleParticipants(
-            application,
+            scoped,
             namespace,
             request,
             path,
           );
         case "collections":
-          return await handleCollections(application, namespace, request, path);
+          return await handleCollections(scoped, namespace, request, path);
         case "events":
-          return await handleEvents(application, namespace, request, path);
+          return await handleEvents(scoped, namespace, request, path);
         case "deliveries":
-          return await handleDeliveries(application, namespace, request, path);
+          return await handleDeliveries(scoped, namespace, request, path);
         case "features":
-          return await handleFeatures(application, namespace, request, path);
+          return await handleFeatures(scoped, namespace, request, path);
         default:
           throw appError(
             404,

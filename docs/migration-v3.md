@@ -1,8 +1,8 @@
-# Migrating from Copilotz 0.56.x to 0.57.0 (v3 architecture)
+# Migrating from Copilotz 0.56.x/0.57.x to 0.58.0 (v3 architecture)
 
-The v3 architecture ships as the intentionally breaking pre-1.0 version 0.57.0.
-It does not include a dual runtime. Migrate configuration, plugins/processors,
-database state, and HTTP clients explicitly.
+The role-based v3 architecture ships as the intentionally breaking pre-1.0
+version 0.58.0. It does not include a dual runtime. Migrate configuration,
+plugins/processors, database state, and HTTP clients explicitly.
 
 ## Public API mapping
 
@@ -14,7 +14,8 @@ database state, and HTTP clients explicitly.
 | uppercase internal event vocabulary                                    | semantic lowercase durable events plus ephemeral deltas                                 |
 | `unsafeGraph` and public raw graph writes                              | typed domain/collection mutations and relations                                         |
 | ambient `withSchema()`                                                 | explicit namespace/schema on application or operation scope                             |
-| `withApp()`                                                            | `createEventNativeFetchHandler()` or transitional `createV1FetchHandler()`              |
+| `withApp()`                                                            | `createCopilotzGateway().fetch` or transitional `createV1FetchHandler()`                |
+| public engine/application assembly and workload maps                   | `createCopilotz()`, `createCopilotzGateway()`, and `createCopilotzWorker()`             |
 | hidden agent consultation/delegation                                   | public same-thread `ask` conversation                                                   |
 | Web Worker/inline runtime switches                                     | private/shared/injected Oxian placement                                                 |
 | separate large message/tool payloads                                   | canonical content assets and references                                                 |
@@ -34,8 +35,8 @@ database state, and HTTP clients explicitly.
 4. Replace ambient schema/database calls with explicit namespace/schema and
    domain repositories.
 5. Move large text, JSON, media, and tool payloads to canonical content refs.
-6. Mount the v3 event-native server. Keep the v1 Fetch/SSE projection only for
-   clients that still require it.
+6. Mount `gateway.fetch` as the v3 server. Keep the v1 Fetch/SSE projection only
+   for clients that still require it.
 7. Drain all legacy pending/processing work and active thread leases.
 8. Run the isolated database upgrade for every tenant schema.
 9. Run application compile, runtime, persistence, channel, and HTTP acceptance

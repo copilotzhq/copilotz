@@ -231,6 +231,17 @@ export async function createCopilotzEngine(
     store,
     registry: options.registry,
     createContext,
+    async onOutputEvent(event) {
+      await options.execution?.onOutputEvent?.(event);
+      if (!event.durable) return;
+      const deliveries = await store.listDeliveries({
+        namespace: event.namespace,
+        eventId: event.id,
+        status: "pending",
+        limit: 1_000,
+      });
+      for (const delivery of deliveries) executor.scheduleDelivery(delivery);
+    },
   });
   const liveDispatcher = createLiveEventDispatcher({
     registry: options.registry,
@@ -241,7 +252,7 @@ export async function createCopilotzEngine(
     publishOptions: { inline?: boolean; signal?: AbortSignal } = {},
   ): Promise<LiveEventDispatchHandle> => {
     await eventHub.publish(event);
-    if (event.durable) await options.publish?.(event);
+    await options.publish?.(event);
     if (!publishOptions.inline && !workerOriginated(event)) {
       return await liveDispatcher.dispatch(event);
     }

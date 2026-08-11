@@ -5,23 +5,23 @@ import * as adapters from "../../runtime/adapters/index.ts";
 import * as denoAdapters from "../../runtime/adapters/deno/index.ts";
 import * as nodeAdapters from "../../runtime/adapters/node/index.ts";
 import * as stdioAdapters from "../../runtime/adapters/stdio.ts";
-import * as application from "../../runtime/application/index.ts";
+import * as application from "../../runtime/application/public.ts";
 import * as attachments from "../../runtime/attachments/index.ts";
 import * as capabilities from "../../runtime/capabilities/index.ts";
 import * as content from "../../runtime/content/index.ts";
 import * as domain from "../../runtime/domain/index.ts";
-import * as engine from "../../runtime/engine/index.ts";
 import * as events from "../../runtime/events/index.ts";
-import * as execution from "../../runtime/execution/index.ts";
 import * as plugins from "../../runtime/plugins/index.ts";
 import * as server from "../../server/index.ts";
 import * as migration from "../../migration/v1/index.ts";
 import type {
   CopilotzApplication,
   CopilotzEvent,
+  CopilotzGateway,
+  CopilotzWorker,
   CreateCopilotzOptions,
-  EventNativeRunHandle,
   PluginManifest,
+  RunHandle,
   ThreadAttachment,
 } from "../../index.ts";
 
@@ -29,7 +29,9 @@ function compilePublicTypes(
   _application: CopilotzApplication,
   _options: CreateCopilotzOptions,
   _event: CopilotzEvent,
-  _run: EventNativeRunHandle,
+  _gateway: CopilotzGateway,
+  _worker: CopilotzWorker,
+  _run: RunHandle,
   _attachment: ThreadAttachment,
   _manifest: PluginManifest,
 ): void {}
@@ -45,8 +47,8 @@ function assertFunctions(
 Deno.test("v3 root exposes the factory-first application vocabulary", () => {
   assertFunctions(copilotz, [
     "createCopilotz",
-    "createCopilotzApplication",
-    "createCopilotzEngine",
+    "createCopilotzGateway",
+    "createCopilotzWorker",
     "createManagedOminipgSession",
     "definePlugin",
     "defineProcessor",
@@ -55,7 +57,6 @@ Deno.test("v3 root exposes the factory-first application vocabulary", () => {
     "createContentPreparer",
     "createConversationRepository",
     "createEventStore",
-    "createDeliveryExecutor",
     "createAgentAskPlugin",
     "createTextWorkflowPlugin",
     "createAgentCapabilityResolver",
@@ -68,12 +69,20 @@ Deno.test("v3 root exposes the factory-first application vocabulary", () => {
       "getNativeTools",
       "createAssetStoreForNamespace",
       "createUsageService",
+      "createCopilotzApplication",
+      "createCopilotzEngine",
+      "createDeliveryExecutor",
     ]
   ) assertEquals(removed in copilotz, false, removed);
 });
 
 Deno.test("v3 package subpaths expose cohesive factories", () => {
-  assertFunctions(application, ["createCopilotz", "createCopilotzApplication"]);
+  assertFunctions(application, [
+    "createCopilotz",
+    "createCopilotzGateway",
+    "createCopilotzWorker",
+  ]);
+  assertEquals("createCopilotzApplication" in application, false);
   assertFunctions(adapters, [
     "createManagedOminipgSession",
     "createModulePluginResolver",
@@ -93,6 +102,7 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
     "createPersistentTerminalService",
     "createProcessToolsPlugin",
     "createWorkspaceToolsPlugin",
+    "listen",
   ]);
   assertFunctions(attachments, [
     "createAttachmentRuntime",
@@ -112,16 +122,12 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
     "createConversationRepository",
     "createEventCollections",
   ]);
-  assertFunctions(engine, ["createCopilotzEngine"]);
   assertFunctions(events, ["createEventStore", "createEventCoordinator"]);
-  assertFunctions(execution, ["createDeliveryExecutor"]);
   assertFunctions(plugins, ["definePlugin", "defineProcessor"]);
 });
 
 Deno.test("server and migration remain explicit bounded subpaths", () => {
   assertFunctions(server, [
-    "createEventNativeApp",
-    "createEventNativeFetchHandler",
     "createV1FetchHandler",
     "createV1SseProjector",
   ]);
@@ -131,6 +137,9 @@ Deno.test("server and migration remain explicit bounded subpaths", () => {
       "createGraphHandlers",
       "createThreadHandlers",
       "tickScheduledJobs",
+      "createEventNativeApp",
+      "createEventNativeFetchHandler",
+      "createV1RouteAdapter",
     ]
   ) assertEquals(removed in server, false, removed);
   assertFunctions(migration, ["upgradeV1Schema", "upgradeV1Schemas"]);

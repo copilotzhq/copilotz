@@ -18,7 +18,7 @@ threads + participants
 ## Install
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@3";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.58.0";
 ```
 
 The root package is runtime-neutral. Host capabilities such as MCP stdio,
@@ -28,7 +28,7 @@ explicit package subpaths.
 ## Minimal application
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@3";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.58.0";
 
 const namespace = "example";
 const copilotz = await createCopilotz({
@@ -107,10 +107,10 @@ is passed once as a `ReadableStream<Uint8Array>` with native backpressure.
 | Subpath                            | Purpose                                                             |
 | ---------------------------------- | ------------------------------------------------------------------- |
 | `@copilotz/copilotz`               | Normal runtime-neutral application API                              |
-| `/application`, `/engine`          | Assembly and lower-level engine factories                           |
+| `/application`                     | Embedded, Gateway, and Worker role factories                        |
 | `/plugins`, `/resources`           | Plugin composition and logical resource types                       |
 | `/capabilities`                    | Explicit agent grants and canonical introspection                   |
-| `/events`, `/execution`            | Immutable events, deliveries, and Oxian placement                   |
+| `/events`                          | Immutable events and durable delivery contracts                     |
 | `/content`, `/domain`              | Canonical assets and graph-native repositories                      |
 | `/attachments`, `/workflows`       | Text/realtime ingress, LLM/tools, and public agent ask              |
 | `/skills`                          | Optional Open Skill resources and portable disclosure tools         |
@@ -118,7 +118,7 @@ is passed once as a `ReadableStream<Uint8Array>` with native backpressure.
 | `/adapters`                        | Runtime-neutral OpenAPI/MCP injection and Ominipg adapters          |
 | `/adapters/stdio`                  | Explicit subprocess-backed MCP stdio capability                     |
 | `/adapters/deno`, `/adapters/node` | Host-specific capabilities                                          |
-| `/server`                          | Web Fetch handlers and the transitional v1 transport projection     |
+| `/server`                          | Transitional v1 transport projection                                |
 | `/migration/v1`                    | Isolated one-way database upgrade; never imported by normal runtime |
 
 ## Documentation

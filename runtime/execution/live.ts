@@ -377,18 +377,28 @@ export function createLiveEventDispatcher(
       output.forEach((promise) => promise.catch(() => undefined));
       work.forEach((item) => item.metadata.catch(() => undefined));
       const done = (async () => {
-        const [terminals, outputResults] = await Promise.all([
-          Promise.all(work.map((item) => item.completed)),
+        const [terminalResults, outputResults] = await Promise.all([
+          Promise.allSettled(work.map((item) => item.completed)),
           Promise.allSettled(output),
         ]);
-        const failures: Error[] = terminals.flatMap((item) =>
-          item.status === "completed" ? [] : [
-            new Error(
-              item.terminal?.message ??
-                `Live processor ended as '${item.status}'.`,
-            ),
-          ]
+        const terminals = terminalResults.map((result) =>
+          result.status === "fulfilled" ? result.value : undefined
         );
+        const failures: Error[] = terminalResults.flatMap((result) => {
+          if (result.status === "rejected") {
+            return [
+              result.reason instanceof Error
+                ? result.reason
+                : new Error(String(result.reason)),
+            ];
+          }
+          return result.value.status === "completed" ? [] : [
+            new Error(
+              result.value.terminal?.message ??
+                `Live processor ended as '${result.value.status}'.`,
+            ),
+          ];
+        });
         outputResults.forEach((result, index) => {
           if (
             result.status === "rejected" &&

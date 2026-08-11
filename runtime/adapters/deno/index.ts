@@ -23,3 +23,5 @@ export type {
   ProcessToolId,
   WorkspaceToolId,
 } from "./tools.ts";
+export { listen } from "./listen.ts";
+export type { ListenCopilotzGatewayOptions } from "./listen.ts";

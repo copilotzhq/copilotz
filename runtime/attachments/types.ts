@@ -130,7 +130,7 @@ export type ThreadAttachment = Readonly<{
   close(reason?: string): Promise<void>;
 }>;
 
-export type EventNativeRunInput = Readonly<{
+export type RunInput = Readonly<{
   namespace: string;
   thread: string | ConversationThread;
   participant: AttachmentParticipantRef;
@@ -145,7 +145,7 @@ export type EventNativeRunInput = Readonly<{
   schema?: string;
 }>;
 
-export type EventNativeRunHandle = Readonly<{
+export type RunHandle = Readonly<{
   eventId: string;
   threadId: string;
   correlationId: string;

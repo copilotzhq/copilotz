@@ -8,7 +8,7 @@ status: implementation
 # Copilotz v3 Downstream Migration Matrix
 
 Copilotz v3 is intentionally source-breaking and ships as the next pre-1.0
-minor, 0.57.0. Existing clients pin exact 0.x versions, so publishing it cannot
+minor, 0.58.0. Existing clients pin exact 0.x versions, so publishing it cannot
 silently upgrade them. That protects production rollout, but it does not count
 as v3 compatibility: each application needs a deliberate migration and its own
 acceptance run.
@@ -22,18 +22,18 @@ including ID-only dispatch payloads and app-owned worker lifetime.
 
 ## Migration Mapping
 
-| v0.x integration                                                                     | v3 destination                                                                                                       |
-| ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| `createCopilotz({...legacy config})`                                                 | `createCopilotz()` or `createCopilotzApplication()` with explicit database/session, plugins, and engine capabilities |
-| `Copilotz` service type                                                              | inferred `CopilotzApplication` factory product                                                                       |
-| resource directories and `loadResources()`                                           | `definePlugin({ manifest, resources })`, with an injected module resolver for package/path sources                   |
-| `ProcessorDeps`, priority, `shouldProcess`, replacement events, and `producedEvents` | independent `defineProcessor()` subscriptions using typed context and collection/domain mutations                    |
-| uppercase queue/live events                                                          | semantic durable events and ephemeral lowercase deltas; v1 wire projection only at the server boundary               |
-| `withSchema()` ambient context                                                       | explicit namespace/schema on application or operation scope                                                          |
-| direct database operations and `CopilotzDb`                                          | typed conversation, collection, event, content, workflow, and admin capabilities                                     |
-| `withApp()`                                                                          | `createEventNativeFetchHandler()` or transitional `createV1FetchHandler()`                                           |
-| legacy asset store and `resolveAsset` plumbing                                       | canonical content preparer/resolver and asset references                                                             |
-| `start().closed`                                                                     | embedding application owns its server lifecycle; Copilotz exposes idempotent `shutdown()`                            |
+| v0.x integration                                                                     | v3 destination                                                                                             |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `createCopilotz({...legacy config})`                                                 | `createCopilotz()` for embedded use or explicit `createCopilotzGateway()` + `createCopilotzWorker()` roles |
+| `Copilotz` service type                                                              | inferred `CopilotzApplication` factory product                                                             |
+| resource directories and `loadResources()`                                           | `definePlugin({ manifest, resources })`, with an injected module resolver for package/path sources         |
+| `ProcessorDeps`, priority, `shouldProcess`, replacement events, and `producedEvents` | independent `defineProcessor()` subscriptions using typed context and collection/domain mutations          |
+| uppercase queue/live events                                                          | semantic durable events and ephemeral lowercase deltas; v1 wire projection only at the server boundary     |
+| `withSchema()` ambient context                                                       | explicit namespace/schema on application or operation scope                                                |
+| direct database operations and `CopilotzDb`                                          | typed conversation, collection, event, content, workflow, and admin capabilities                           |
+| `withApp()`                                                                          | `gateway.fetch` or transitional `createV1FetchHandler()`                                                   |
+| legacy asset store and `resolveAsset` plumbing                                       | canonical content preparer/resolver and asset references                                                   |
+| `start().closed`                                                                     | embedding application owns its server lifecycle; Copilotz exposes idempotent `shutdown()`                  |
 
 ## First-Party Status
 

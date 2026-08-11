@@ -288,10 +288,10 @@ reuse, event-position ordering, deduplication, rollback, and Oxian processor
 delivery. Plugin collection resources also have atomic create/update/delete
 events, relation validation, before-hook and validator boundaries, explicit
 rejection of post-write hooks, scoped reads, and delivery-derived child-mutation
-idempotency proven across a crash-after-projection retry. The installed
-npm-tarball consumer verifies the root plus `copilotz/content`,
-`copilotz/domain`, `copilotz/engine`, `copilotz/events`, `copilotz/execution`,
-`copilotz/plugins`, `copilotz/workflows`, and migration entrypoints.
+idempotency proven across a crash-after-projection retry. The installed package
+consumer verifies the root plus the public application, content, domain, events,
+plugins, workflows, and migration entrypoints. Engine and raw execution assembly
+are package-private.
 
 The same domain seam now includes six tool-execution and five LLM-attempt tests.
 They cover compact lifecycle facts; transactionally owned role-labelled content;
@@ -302,14 +302,14 @@ idempotent retries prepared with fresh transient asset IDs. These repositories
 remain additive until built-in call/result processors move as one end-to-end
 vertical.
 
-Three engine-assembly tests and one public-entrypoint contract now compose the
-implemented seams through `createCopilotzEngine()`. A real Oxian delivery gets a
-tenant-scoped content, conversation, collection, LLM-attempt, tool-execution,
-and resource context; a crash after two typed child projections retries with one
-child event, record, and body each. The engine and processor context expose no
-raw session, event-store, coordinator, or graph mutation path. Private/shared
-ownership and app-owned session survival are explicit, and the `copilotz/engine`
-subpath joins the packed-consumer gate.
+Engine-assembly tests and public role contracts compose the implemented seams
+through the module-private engine. A real Oxian delivery gets a tenant-scoped
+content, conversation, collection, LLM-attempt, tool-execution, and resource
+context; a crash after two typed child projections retries with one child event,
+record, and body each. The engine and processor context expose no raw session,
+event-store, coordinator, or graph mutation path. Private/shared ownership and
+app-owned session survival are explicit; public consumers select Embedded,
+Gateway, or Worker factories instead of an engine subpath.
 
 Three workflow tests, two strict-lifecycle tests, and one additional
 public-entrypoint contract now add the first complete event-native text/tool
@@ -320,9 +320,9 @@ every result returns to the producing agent; and only one continuation starts
 after a complete result batch. Recovery does not repeat the external tool, whose
 context receives a stable delivery-derived idempotency key. The root and
 `copilotz/workflows` entrypoints export factory-only resource adapters and
-plugin composition. This does not yet switch the bundled core or public
-`createCopilotz()` path; the remaining F09–F11 prompt, tool, accounting, and
-live-frame parity stays gated before deletion.
+plugin composition. The bundled core and public `createCopilotz()` path now use
+this execution model, with the retained prompt, tool, accounting, and live-frame
+parity suites guarding it.
 
 This is the first batch, not completion of Gate 1. Unimplemented A-tests below
 remain required according to their priority. A temporary-config source check
@@ -767,23 +767,23 @@ authentication context, SSE, channel overrides, and generated-event logging.
 these adapters remain first-party. Current HTTP/SSE shapes require a versioned
 compatibility layer while chat packages migrate.
 
-**V3 progress:** event-native feature routes now terminate at
-`createEventNativeFetchHandler()`, a Web Fetch adapter that maps `Request` into
-the transport-neutral application contract. It preserves repeated query
-parameters and raw channel bytes, passes native streaming `Response` values
-through unchanged, and provides explicit base-path, context, header, error, and
-SSE projection hooks. Request-bound channels return an `EventNativeOutputStream`
-immediately: the Fetch adapter pulls one attachment output at a time, preserves
-backpressure, strips byte-stream bodies from SSE metadata, and cancels causal
-work when the response body is cancelled. That surface can be hosted by Deno,
-Node, Bun, browser service workers, and Cloudflare workers. Legacy SSE
-projection is isolated in `createV1SseProjector()`, which maps
-text/reasoning/tool-call deltas and hydrated public messages to the current
-uppercase wire vocabulary. Binary and oversized message content stays an asset
-reference under an application-controlled URL policy. `createV1RouteAdapter()`
-maps only the transitional `providers` and `admin` names at the edge, and
-`createV1FetchHandler()` composes that adapter with the `/v1` Fetch and SSE
-surface. Downstream response-shape migration remains in this feature family.
+**V3 progress:** event-native feature routes now terminate at `gateway.fetch`, a
+Web Fetch boundary that maps `Request` into the transport-neutral application
+contract. It preserves repeated query parameters and raw channel bytes, passes
+native streaming `Response` values through unchanged, and provides explicit
+base-path, context, header, error, and SSE projection hooks. Request-bound
+channels stream attachment output immediately: the Fetch boundary pulls one
+attachment output at a time, preserves backpressure, strips byte-stream bodies
+from SSE metadata, and cancels causal work when the response body is cancelled.
+That surface can be hosted by Deno, Node, Bun, browser service workers, and
+Cloudflare workers. Legacy SSE projection is isolated in
+`createV1SseProjector()`, which maps text/reasoning/tool-call deltas and
+hydrated public messages to the current uppercase wire vocabulary. Binary and
+oversized message content stays an asset reference under an
+application-controlled URL policy. An internal route adapter maps only the
+transitional `providers` and `admin` names at the edge, and
+`createV1FetchHandler()` composes it with the `/v1` Fetch and SSE surface.
+Downstream response-shape migration remains in this feature family.
 
 Interactive CLI behavior is now a factory-created state machine over injected
 I/O. Node-compatible readline/process access lives only on the explicit

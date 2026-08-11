@@ -39,11 +39,22 @@ work.
 
 Oxian dispatches logical workload identities. Copilotz dispatch payloads contain
 delivery/resource IDs, never serialized closures or physical worker identity.
-The default application binds Copilotz Workers to a private Hypervisor with one
-uniquely addressed in-process event-fabric transport. An embedding app may
-inject a shared Hypervisor together with the same plain transport declaration
-used by its Workers, or a dispatcher/target whose Workers are already hosted
-elsewhere.
+The default `createCopilotz()` application composes a private Gateway and Worker
+over one uniquely addressed in-process event-fabric transport. Explicit
+topologies use `createCopilotzGateway()` and `createCopilotzWorker()` with the
+same plain transport vocabulary:
+
+```text
+embedded      Gateway ── in-process fabric ── Worker
+split-local   Gateway ── in-process fabric ── Worker(s)
+remote        Gateway ── WebSocket ────────── Worker(s)
+shared-host   Gateway ── injected dispatcher ─ existing Oxian fleet
+```
+
+In-process and WebSocket paths use the same versioned Copilotz work protocol and
+lifecycle. The transport adapter owns byte movement; semantic events, response
+metadata, cancellation, and raw stream output follow one framing contract. Local
+transport can retain byte arrays without WebSocket encoding.
 
 ## Plugin model
 
@@ -78,5 +89,10 @@ final semantic outcomes are persisted.
 Public runtime objects are frozen records returned by factories. Stateful
 behavior is held in closures. Narrow `Error` subclasses may exist for error
 identity, but managers/stores/services are not public architecture classes.
+
+The public application boundary intentionally omits the internal engine and
+worker workload closures. Application code selects a role and declares its
+transport, lifecycle functions, plugins, and persistence. Copilotz owns the
+assembly details.
 
 For implementation-level detail, see [the v3 design index](v3/README.md).

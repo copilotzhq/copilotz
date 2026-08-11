@@ -50,6 +50,11 @@ when calling non-idempotent systems.
 sharing a correlation ID. Cancellation marks unsettled work in that scope and
 rejects the handle. Dead-lettered descendants also reject settlement.
 
+For detached Workers, settlement also waits for correlated Worker output frames
+already in flight. This prevents the database's final delivery update from
+racing the Gateway's final semantic event. The Gateway then confirms the durable
+scope again in case that event created more work.
+
 ## Operations
 
 ```ts

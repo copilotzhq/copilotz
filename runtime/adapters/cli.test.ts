@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 
-import type { EventNativeRunInput } from "../attachments/index.ts";
+import type { RunInput } from "../attachments/index.ts";
 import { type InteractiveCliIo, startInteractiveCli } from "../cli.ts";
 import { createEphemeralEvent } from "../events/index.ts";
 
@@ -23,7 +23,7 @@ Deno.test("portable CLI preserves interactive run, rendering, and session comman
     },
     cwd: () => "/workspace",
   });
-  const messages: EventNativeRunInput[] = [];
+  const messages: RunInput[] = [];
   const handle = startInteractiveCli({
     io,
     now: () => new Date("2026-08-06T00:00:00.000Z"),

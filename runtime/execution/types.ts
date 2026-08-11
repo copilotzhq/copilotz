@@ -10,6 +10,7 @@ import type {
   WorkerWorkHandler,
 } from "../../dependencies/oxian-worker.ts";
 import type {
+  CopilotzEvent,
   DurableEvent,
   EventDelivery,
   EventStore,
@@ -141,6 +142,8 @@ export type CreateDeliveryExecutorOptions = Readonly<{
   heartbeatMs?: number;
   scheduler?: DeliveryWorkloadScheduler;
   createDispatchAttemptId?: () => string;
+  /** Relays semantic events framed by a remote Copilotz Worker. */
+  onOutputEvent?: (event: CopilotzEvent) => void | Promise<void>;
 }>;
 
 export type DeliveryExecutorOwnership =
@@ -165,6 +168,11 @@ export type DeliveryExecutor = Readonly<{
     consumerIds?: readonly string[];
     limit?: number;
   }): Promise<DeliveryRecoveryDispatch>;
+  /** Waits until relayed output for currently active correlated work settles. */
+  settleOutputs(scope: {
+    namespace: string;
+    correlationId: string;
+  }): Promise<void>;
   shutdown(reason?: string): Promise<void>;
 }>;
 

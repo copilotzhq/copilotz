@@ -32,6 +32,8 @@ const forbidden = [
   "connectStdioMcp",
   "createStdioServerWorkflowToolCatalog",
   "CreateStdioServerWorkflowToolCatalogOptions",
+  "EventNativeRunHandle",
+  "EventNativeRunInput",
 ] as const;
 
 const retiredOxian = [

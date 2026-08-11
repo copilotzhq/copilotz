@@ -1,5 +1,16 @@
 export { createDeliveryExecutor } from "./executor.ts";
 export {
+  COPILOTZ_WORK_FRAME_SCHEMA,
+  COPILOTZ_WORK_OUTPUT_SCHEMA,
+  createCopilotzWorkOutputRelay,
+  relayCopilotzWorkHandle,
+} from "./protocol.ts";
+export type {
+  CopilotzWorkOutputMetadata,
+  CopilotzWorkOutputRelay,
+  RelayCopilotzWorkHandleOptions,
+} from "./protocol.ts";
+export {
   COPILOTZ_LIVE_WORKLOAD,
   createLiveEventDispatcher,
   createLiveProcessorWorkload,

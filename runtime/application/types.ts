@@ -1,7 +1,8 @@
+import type { AgentCapabilityResolver } from "../capabilities/index.ts";
 import type {
   ConnectAttachmentInput,
-  EventNativeRunHandle,
-  EventNativeRunInput,
+  RunHandle,
+  RunInput,
   ThreadAttachment,
 } from "../attachments/index.ts";
 import type {
@@ -72,6 +73,12 @@ export type CreateCopilotzApplicationOptions = Readonly<{
   closeSession?: (reason?: string) => void | Promise<void>;
 }>;
 
+/** Plain application semantics that can be shared by Gateway and Worker roles. */
+export type CopilotzComposition = Pick<
+  CreateCopilotzApplicationOptions,
+  "core" | "plugins" | "resources" | "pluginResolver" | "toolCatalog"
+>;
+
 export type CopilotzApplicationConfig = Readonly<{
   namespace?: string;
   schema: string;
@@ -88,28 +95,31 @@ export type ApplicationConnectInput =
   & Readonly<{ namespace?: string }>;
 
 export type ApplicationRunInput =
-  & Omit<EventNativeRunInput, "namespace">
+  & Omit<RunInput, "namespace">
   & Readonly<{ namespace?: string }>;
 
 export type CopilotzApplication =
   & Omit<
     CopilotzEngine,
-    "connect" | "run" | "shutdown"
+    "connect" | "run" | "shutdown" | "execution"
   >
   & Readonly<{
     config: CopilotzApplicationConfig;
     capabilities: AgentCapabilityResolver;
-    /** Lower-level engine for adapters that need the complete explicit scope. */
-    engine: CopilotzEngine;
     connect(input: ApplicationConnectInput): Promise<ThreadAttachment>;
-    run(input: ApplicationRunInput): Promise<EventNativeRunHandle>;
+    run(input: ApplicationRunInput): Promise<RunHandle>;
     /** Runs a bounded target/simulator/judge conversation through normal runs. */
     goal(input: GoalInput): Promise<GoalHandle>;
     shutdown(reason?: string): Promise<void>;
   }>;
 
+/** Internal composition result used only while assembling runtime roles. */
+export type InternalCopilotzApplication =
+  & CopilotzApplication
+  & Pick<CopilotzEngine, "execution">
+  & Readonly<{ engine: CopilotzEngine }>;
+
 export type CreateCopilotzCorePlugins = (
   options?: false | CopilotzCorePluginOptions,
   defaults?: Readonly<{ toolCatalog?: WorkflowToolCatalog }>,
 ) => readonly CopilotzPlugin[];
-import type { AgentCapabilityResolver } from "../capabilities/index.ts";

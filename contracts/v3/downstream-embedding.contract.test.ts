@@ -4,7 +4,8 @@ import { createWorker } from "../../dependencies/oxian-worker.ts";
 
 import {
   type CopilotzProcessorContext,
-  createCopilotzApplication,
+  createCopilotzGateway,
+  createCopilotzWorker,
   defineLlmProviderResource,
   definePlugin,
   defineProcessor,
@@ -86,20 +87,34 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
   const hypervisor = createHypervisor({
     transports: [transport],
   });
-  const application = await createCopilotzApplication({
+  const plugin = migratedApplicationPlugin();
+  const workerId = "downstream-copilotz";
+  const application = await createCopilotzGateway({
     session: database.session,
     namespace: NAMESPACE,
     core: false,
-    plugins: [migratedApplicationPlugin()],
+    plugins: [plugin],
+    dispatcher: hypervisor,
+    target: { workerId },
     engine: {
-      execution: { hypervisor, transport, workerId: "downstream-copilotz" },
       retryBaseMs: 0,
       random: () => 0,
     },
   });
+  const worker = await createCopilotzWorker({
+    session: database.session,
+    namespace: NAMESPACE,
+    core: false,
+    plugins: [plugin],
+    id: workerId,
+    transport,
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
   try {
+    await worker.ready;
     assertEquals(application.config.sessionOwnership, "injected");
-    assertEquals(application.execution.ownership, "shared_hypervisor");
+    assertEquals("engine" in application, false);
+    assertEquals("execution" in application, false);
     assertEquals(
       application.plugins.require<LlmProviderResource>(
         "providers",
@@ -139,7 +154,10 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
       2,
     );
   } finally {
-    await application.shutdown();
+    await Promise.allSettled([
+      application.shutdown(),
+      worker.stop(),
+    ]);
   }
 
   let probeWorker: ReturnType<typeof createWorker> | undefined;

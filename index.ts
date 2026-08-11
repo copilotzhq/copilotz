@@ -8,16 +8,16 @@
  * @module
  */
 
-export * from "./runtime/application/index.ts";
+export * from "./runtime/application/public.ts";
 export * from "./runtime/capabilities/index.ts";
 export * from "./runtime/admin/index.ts";
 export * from "./runtime/attachments/index.ts";
 export * from "./runtime/channels/index.ts";
 export * from "./runtime/content/index.ts";
 export * from "./runtime/domain/index.ts";
-export * from "./runtime/engine/index.ts";
 export * from "./runtime/events/index.ts";
-export * from "./runtime/execution/index.ts";
+export type * from "./runtime/engine/index.ts";
+export type * from "./runtime/execution/index.ts";
 export * from "./runtime/features/index.ts";
 export * from "./runtime/goals/index.ts";
 export * from "./runtime/knowledge/index.ts";

@@ -7,8 +7,8 @@ import { createCopilotzCorePlugins } from "./core-plugins.ts";
 import type {
   ApplicationConnectInput,
   ApplicationRunInput,
-  CopilotzApplication,
   CreateCopilotzApplicationOptions,
+  InternalCopilotzApplication,
 } from "./types.ts";
 
 function optionalText(value: string | undefined, name: string) {
@@ -44,7 +44,7 @@ async function closeOwnedSession(
  */
 export async function createCopilotzApplication(
   options: CreateCopilotzApplicationOptions,
-): Promise<CopilotzApplication> {
+): Promise<InternalCopilotzApplication> {
   const namespace = optionalText(options.namespace, "Namespace");
   const schema = optionalText(options.schema, "Schema") ?? "public";
   const configuredTextCatalog = options.core !== false &&
@@ -122,7 +122,7 @@ export async function createCopilotzApplication(
   const declaredPluginIds = registry.plugins
     .slice(core.length)
     .map((plugin) => plugin.manifest.id);
-  const application: CopilotzApplication = {
+  const application: InternalCopilotzApplication = {
     ...engine,
     config: Object.freeze({
       ...(namespace ? { namespace } : {}),

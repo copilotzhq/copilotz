@@ -1,17 +1,14 @@
-import type {
-  EventNativeRunHandle,
-  EventNativeRunInput,
-} from "./attachments/index.ts";
+import type { RunHandle, RunInput } from "./attachments/index.ts";
 import type { ContentInput } from "./content/index.ts";
 import type { CopilotzEvent } from "./events/index.ts";
 
 export type CliPerformRun = (
-  input: EventNativeRunInput,
-) => Promise<EventNativeRunHandle>;
+  input: RunInput,
+) => Promise<RunHandle>;
 
 export type CliRunScope = Readonly<
   Omit<
-    EventNativeRunInput,
+    RunInput,
     "content" | "messageId" | "correlationId" | "deduplicationId"
   >
 >;

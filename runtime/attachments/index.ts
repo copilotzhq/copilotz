@@ -25,8 +25,6 @@ export type {
   AttachmentStreamInput,
   AttachmentStreamOutput,
   ConnectAttachmentInput,
-  EventNativeRunHandle,
-  EventNativeRunInput,
   RealtimeAgentAskInput,
   RealtimeAgentAskResult,
   RealtimeContextMessageInput,
@@ -39,6 +37,8 @@ export type {
   RealtimeProviderResource,
   RealtimeToolCallInput,
   RealtimeToolCallResult,
+  RunHandle,
+  RunInput,
   StreamDispatchMetadata,
   ThreadAttachment,
 } from "./types.ts";

@@ -63,6 +63,11 @@ Deno.test("root createCopilotz runs one causal event scope without queue state",
     engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
+    assertEquals(copilotz.role, "embedded");
+    assertEquals("engine" in copilotz, false);
+    assertEquals("execution" in copilotz, false);
+    assertEquals("hypervisor" in copilotz, false);
+    assertEquals("transports" in copilotz, false);
     await copilotz.conversation.createThread({
       namespace: NAMESPACE,
       id: "contract-thread",

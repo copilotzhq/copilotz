@@ -6,7 +6,7 @@ import type {
   Participant,
   ParticipantInput,
 } from "../domain/index.ts";
-import type { EventNativeRunHandle } from "../attachments/index.ts";
+import type { RunHandle } from "../attachments/index.ts";
 import type {
   CreateGoalRuntimeOptions,
   GoalAssessment,
@@ -588,7 +588,7 @@ export function createGoalRuntime(
     const prepared = await prepareGoal(options, input, goalId);
     const startedAt = now().getTime();
     const completion = deferred<GoalResult>();
-    const activeRuns = new Set<EventNativeRunHandle>();
+    const activeRuns = new Set<RunHandle>();
     const abort = new AbortController();
     let cancellationReason: string | undefined;
     let settled = false;
@@ -615,7 +615,7 @@ export function createGoalRuntime(
     let orchestrationErrors = 0;
 
     const observeRun = async (
-      run: EventNativeRunHandle,
+      run: RunHandle,
       phase: GoalPhase,
       turn: number,
       expectedParticipantId?: string,

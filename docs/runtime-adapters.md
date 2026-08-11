@@ -8,7 +8,7 @@ capabilities explicitly.
 | ----------------- | ---------------------------------------------------------------------------------------------------- |
 | `/adapters`       | Ominipg sessions, module plugin resolution, Web-fetch OpenAPI generation, and injected MCP transport |
 | `/adapters/stdio` | Official MCP SDK subprocess transport                                                                |
-| `/adapters/deno`  | Deno workspace/process tools, Open Skill build packer, and persistent terminal service               |
+| `/adapters/deno`  | Deno listener, workspace/process tools, Open Skill build packer, and persistent terminal service     |
 | `/adapters/node`  | Node terminal I/O for the interactive CLI                                                            |
 
 Generic OpenAPI with an application-owned MCP transport:
@@ -33,6 +33,11 @@ Adapter subpaths identify placement; their symbols remain capability-oriented.
 For example, `/adapters/node` exports `startInteractiveCli()` and
 `/adapters/deno` exports `createWorkspaceToolsPlugin()` without repeating the
 runtime in each API name.
+
+The same naming rule applies to serving a Gateway. Deno applications call
+`listen(gateway, options)` from `/adapters/deno`; other hosts mount the
+runtime-neutral `gateway.fetch` function in their own server, service worker, or
+Cloudflare entry point.
 
 The normal interactive CLI receives the application and stable agent ID, then
 uses canonical capability introspection for `/agents`, `/tools`, and `/skills`:

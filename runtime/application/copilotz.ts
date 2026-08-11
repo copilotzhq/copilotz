@@ -1,22 +1,34 @@
-import { createManagedOminipgSession } from "../adapters/ominipg.ts";
-import type { SqlSession } from "../events/index.ts";
-import { createCopilotzApplication } from "./application.ts";
-import type {
-  CopilotzApplication,
-  CreateCopilotzApplicationOptions,
-} from "./types.ts";
-import type { CopilotzOminipgOptions } from "../adapters/ominipg.ts";
+import type { HypervisorTransport } from "../../dependencies/oxian-hypervisor.ts";
+import { createCopilotzGateway } from "./gateway.ts";
+import type { CreateCopilotzGatewayOptions } from "./gateway.ts";
+import { openCopilotzPersistence } from "./persistence.ts";
+import { createCopilotzWorker } from "./worker.ts";
+import type { CopilotzApplication } from "./types.ts";
+
+type EmbeddedWorkerOptions = Readonly<{
+  id?: string;
+  capacity?: number;
+}>;
 
 export type CreateCopilotzOptions =
-  & Omit<CreateCopilotzApplicationOptions, "session" | "closeSession">
-  & Readonly<{
-    /** Inject an application-owned atomic session. Mutually exclusive with database. */
-    session?: SqlSession;
-    /** Create a private Ominipg session. Defaults to an in-memory database. */
-    database?: CopilotzOminipgOptions;
-    /** Optional ownership callback for an injected session. */
-    closeSession?: (reason?: string) => void | Promise<void>;
-  }>;
+  & Omit<
+    CreateCopilotzGatewayOptions,
+    | "transports"
+    | "dispatcher"
+    | "target"
+    | "workloadTargets"
+    | "admit"
+    | "assign"
+    | "sessions"
+    | "signal"
+    | "hypervisorConfig"
+    | "http"
+  >
+  & Readonly<{ worker?: EmbeddedWorkerOptions }>;
+
+export type CopilotzEmbeddedApplication =
+  & CopilotzApplication
+  & Readonly<{ role: "embedded" }>;
 
 /**
  * Creates the normal factory-first Copilotz application.
@@ -27,31 +39,102 @@ export type CreateCopilotzOptions =
  */
 export async function createCopilotz(
   options: CreateCopilotzOptions = {},
-): Promise<CopilotzApplication> {
-  if (options.session && options.database) {
-    throw new TypeError("Use either session or database, not both.");
-  }
-  if (!options.session && options.closeSession) {
-    throw new TypeError("closeSession requires an injected session.");
-  }
-
-  if (options.session) {
-    return await createCopilotzApplication({
-      ...options,
-      session: options.session,
-      ...(options.closeSession ? { closeSession: options.closeSession } : {}),
-    });
-  }
-
-  const managed = await createManagedOminipgSession(options.database);
+): Promise<CopilotzEmbeddedApplication> {
+  const persistence = await openCopilotzPersistence(options);
+  const workerId = options.worker?.id?.trim() ||
+    `copilotz-embedded-${crypto.randomUUID()}`;
+  const transport: HypervisorTransport = Object.freeze({
+    type: "in-process",
+    config: Object.freeze({
+      topic: `copilotz.embedded.${crypto.randomUUID()}`,
+    }),
+  });
+  const engine = options.engine ?? {};
+  const { publish: _publish, ...workerEngine } = engine;
+  let gateway: Awaited<ReturnType<typeof createCopilotzGateway>> | undefined;
+  let worker: Awaited<ReturnType<typeof createCopilotzWorker>> | undefined;
   try {
-    return await createCopilotzApplication({
-      ...options,
-      session: managed.session,
-      closeSession: () => managed.close(),
+    gateway = await createCopilotzGateway({
+      namespace: options.namespace,
+      schema: options.schema,
+      core: options.core,
+      plugins: options.plugins,
+      resources: options.resources,
+      pluginResolver: options.pluginResolver,
+      toolCatalog: options.toolCatalog,
+      session: persistence.session,
+      transports: [transport],
+      target: { workerId },
+      engine,
     });
+    worker = await createCopilotzWorker({
+      namespace: options.namespace,
+      schema: options.schema,
+      core: options.core,
+      plugins: options.plugins,
+      resources: options.resources,
+      pluginResolver: options.pluginResolver,
+      toolCatalog: options.toolCatalog,
+      session: persistence.session,
+      id: workerId,
+      transport,
+      capacity: options.worker?.capacity,
+      engine: workerEngine,
+    });
+    await worker.ready;
   } catch (error) {
-    await managed.close().catch(() => undefined);
+    await Promise.allSettled([
+      worker?.stop("copilotz_embedded_initialization_failed"),
+      gateway?.shutdown("copilotz_embedded_initialization_failed"),
+      persistence.close("copilotz_embedded_initialization_failed"),
+    ]);
     throw error;
   }
+
+  let shutdownTask: Promise<void> | undefined;
+  const shutdown = (reason = "copilotz_embedded_shutdown"): Promise<void> => {
+    if (shutdownTask) return shutdownTask;
+    shutdownTask = (async () => {
+      const roleResults = await Promise.allSettled([
+        gateway!.shutdown(reason),
+        worker!.stop(reason),
+      ]);
+      const persistenceResult = await Promise.allSettled([
+        persistence.close(reason),
+      ]);
+      const failures = [
+        ...roleResults,
+        ...persistenceResult,
+      ].flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) {
+        throw new AggregateError(
+          failures,
+          "Embedded Copilotz shutdown failed.",
+        );
+      }
+    })();
+    shutdownTask.catch(() => undefined);
+    return shutdownTask;
+  };
+
+  const {
+    role: _gatewayRole,
+    transports: _gatewayTransports,
+    hypervisor: _gatewayHypervisor,
+    fetch: _gatewayFetch,
+    ...application
+  } = gateway;
+
+  return Object.freeze({
+    ...application,
+    config: Object.freeze({
+      ...gateway.config,
+      sessionOwnership: persistence.ownership,
+    }),
+    role: "embedded",
+    shutdown,
+  });
 }

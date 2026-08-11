@@ -11,10 +11,7 @@ import type {
 } from "../domain/index.ts";
 import type { CopilotzEvent } from "../events/index.ts";
 import type { PluginRegistry } from "../plugins/index.ts";
-import type {
-  EventNativeRunHandle,
-  EventNativeRunInput,
-} from "../attachments/index.ts";
+import type { RunHandle, RunInput } from "../attachments/index.ts";
 
 export type GoalStatus =
   | "completed"
@@ -113,7 +110,7 @@ export type GoalJudgeRunInput = Readonly<{
 }>;
 
 export type GoalRunResult = Readonly<{
-  handle: EventNativeRunHandle;
+  handle: RunHandle;
   events: readonly GoalObservedEvent[];
   finalMessage?: GoalTranscriptMessage;
   text: string;
@@ -227,7 +224,7 @@ export type CreateGoalRuntimeOptions = Readonly<{
     | "getMessage"
   >;
   resolver: Pick<ContentResolver, "getMany">;
-  run(input: EventNativeRunInput): Promise<EventNativeRunHandle>;
+  run(input: RunInput): Promise<RunHandle>;
   defaultNamespace?: string;
   defaultSchema?: string;
   createId?: () => string;

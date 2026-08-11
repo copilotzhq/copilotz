@@ -7,9 +7,10 @@ status: implementation
 
 # Copilotz v3 Factory Engine Assembly
 
-`createCopilotzEngine()` is the first executable composition root for the v3
-core. It returns a frozen plain record and owns no application-provided database
-session, shared Hypervisor, dispatcher, or remote Worker.
+The module-private `createCopilotzEngine()` is the executable composition root
+used by the public Embedded, Gateway, and Worker factories. It returns a frozen
+plain record and owns no application-provided database session, shared
+Hypervisor, dispatcher, or remote Worker.
 
 ```text
 app-owned SQL session + plugin registry
@@ -103,12 +104,9 @@ worker while dispatch payloads remain delivery/resource IDs. Provider fallback
 children, tool outputs, and participant messages are created only through the
 typed context above.
 
-## Public and Current Boundary
+## Public Boundary
 
-The factory is exported from the root package and `copilotz/engine`; the first
-workflow plugin is exported from the root and `copilotz/workflows`. Every
-surface is verified through an installed npm tarball. It is additive: the legacy
-public `createCopilotz()` runtime still handles current production runs. The
-remaining prompt/tool parity, memory, `ask`, and attachments must move as tested
-verticals before that adapter switches to this engine and old queue code can be
-deleted.
+Applications choose `createCopilotz()`, `createCopilotzGateway()`, or
+`createCopilotzWorker()`. The engine and raw workload map are deliberately not
+package entry points. Plugin authors still receive the public
+`CopilotzProcessorContext` type and typed capabilities assembled here.

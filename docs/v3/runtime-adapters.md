@@ -19,12 +19,14 @@ with a bounded configuration error instead of importing a runtime module or
 silently omitting tools.
 
 ```ts
-import { createCopilotzApplication } from "@copilotz/copilotz/application";
+import { createCopilotzWorker } from "@copilotz/copilotz/application";
 import { createServerWorkflowToolCatalog } from "@copilotz/copilotz/adapters/stdio";
 
-const application = await createCopilotzApplication({
+const worker = await createCopilotzWorker({
   session,
   namespace: "customer-a",
+  id: "customer-a-worker",
+  transport,
   core: {
     text: {
       toolCatalog: createServerWorkflowToolCatalog(),
@@ -115,23 +117,20 @@ attached worker, while a shared hypervisor must configure a stable worker target
 (or inject an external terminal service) when shell state must survive
 deliveries.
 
-The first-party server facade terminates at the Web Fetch contract.
-`createEventNativeFetchHandler()` maps `Request` values into the
-transport-neutral application, preserves raw channel bytes, and passes native
-streaming `Response` values through. Request-bound attachment output is exposed
-as a framework-neutral `EventNativeOutputStream`; the Fetch adapter serializes
-semantic output incrementally as SSE, honors pull backpressure, omits raw media
-streams from JSON frames, and propagates response cancellation to the channel
-execution. A versioned `projectSseOutput` hook owns any legacy wire vocabulary
-outside the event-native core. `createV1SseProjector()` is the first-party v1
-edge: it maps canonical deltas and public messages to uppercase compatibility
-frames while preserving media and oversized content as configurable asset links.
-`createV1RouteAdapter()` keeps the transitional `providers` → `channels` and
-`admin` → `features/admin` aliases at that same boundary, while
-`createV1FetchHandler()` composes the aliases, `/v1` base path, and SSE
-projection in one factory. The same handler can therefore be mounted by Deno,
-Node, Bun, browser service workers, or Cloudflare workers without bringing a
-framework or runtime API into the core.
+The first-party Gateway terminates at the Web Fetch contract. `gateway.fetch`
+maps `Request` values into the transport-neutral application, preserves raw
+channel bytes, and passes native streaming `Response` values through. The
+internal adapter serializes semantic attachment output incrementally as SSE,
+honors pull backpressure, omits raw media streams from JSON frames, and
+propagates response cancellation to channel execution. `createV1SseProjector()`
+is the first-party v1 edge: it maps canonical deltas and public messages to
+uppercase compatibility frames while preserving media and oversized content as
+configurable asset links. The internal route projection keeps transitional
+`providers` → `channels` and `admin` → `features/admin` aliases at that same
+boundary, while `createV1FetchHandler()` composes those aliases, the `/v1` base
+path, and SSE projection in one factory. The same handler can therefore be
+mounted by Deno, Node, Bun, browser service workers, or Cloudflare workers
+without bringing a framework or runtime API into the core.
 
 Plugin package loading is also injected. `createModulePluginResolver()` requires
 a runtime-owned `importModule` capability, resolves relative sources only

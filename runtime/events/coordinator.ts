@@ -10,7 +10,7 @@ import type {
   CommitEventMutationResult,
   EventStore,
 } from "./store.ts";
-import type { DurableEvent, DurableEventDraft } from "./types.ts";
+import type { CopilotzEvent, DurableEventDraft } from "./types.ts";
 
 export type CoordinatedMutationOptions<T> = Omit<
   CommitEventMutationOptions<T>,
@@ -30,7 +30,7 @@ export type CoordinatedMutationResult<T> =
   }>;
 
 export type EventPublisher = (
-  event: DurableEvent,
+  event: CopilotzEvent,
 ) => void | Promise<void>;
 
 export type CreateEventCoordinatorOptions = Readonly<{

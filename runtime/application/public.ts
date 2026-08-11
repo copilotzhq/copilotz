@@ -1,4 +1,3 @@
-export { createCopilotzApplication } from "./application.ts";
 export { createCopilotz } from "./copilotz.ts";
 export { createCopilotzGateway } from "./gateway.ts";
 export { createCopilotzWorker } from "./worker.ts";
@@ -11,7 +10,6 @@ export type {
   CopilotzComposition,
   CopilotzCorePluginOptions,
   CorePluginSetting,
-  CreateCopilotzApplicationOptions,
   CreateCopilotzCorePlugins,
 } from "./types.ts";
 export type {

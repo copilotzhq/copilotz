@@ -79,9 +79,10 @@ factory-created runtime.
 Release validation is implemented in CI: package/subpath and removed-symbol
 checks, Deno/Node/Bun/browser/Cloudflare smokes, PGlite/PostgreSQL matrices,
 formatting, downstream embedding contracts, package-file filtering, and a JSR
-dry run. Final local acceptance passes 475 tests with two PostgreSQL-service
-tests intentionally deferred to CI, verifies 28 public exports and 252 reachable
-production modules, passes the full runtime smoke matrix including Bun 1.3.14
-and Wrangler 4.120.0, and completes the JSR publish dry run without warnings.
-Existing downstream applications retain exact 0.x pins and will move through
-explicit migrations rather than a compatibility runtime inside v3.
+dry run. The 0.58 local acceptance passes 488 tests with two PostgreSQL-service
+tests intentionally deferred to CI, verifies 27 public exports and 245 reachable
+production modules, passes Deno, Node, browser-isolate, Cloudflare-isolate, and
+Wrangler 4.120.0 checks, and completes the JSR publish dry run without warnings.
+Bun 1.3.14 and PostgreSQL run in CI. Existing downstream applications retain
+exact 0.x pins and will move through explicit migrations rather than a
+compatibility runtime inside v3.

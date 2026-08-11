@@ -34,9 +34,9 @@ import {
   type AttachmentStreamOutput,
   type ConnectAttachmentInput,
   COPILOTZ_STREAM_WORKLOAD,
-  type EventNativeRunHandle,
-  type EventNativeRunInput,
   type RealtimeProviderResource,
+  type RunHandle,
+  type RunInput,
   type StreamDispatchMetadata,
   type ThreadAttachment,
 } from "./types.ts";
@@ -66,7 +66,7 @@ export type CreateAttachmentRuntimeOptions = Readonly<{
 
 export type AttachmentRuntime = Readonly<{
   connect(input: ConnectAttachmentInput): Promise<ThreadAttachment>;
-  run(input: EventNativeRunInput): Promise<EventNativeRunHandle>;
+  run(input: RunInput): Promise<RunHandle>;
   shutdown(reason?: string): Promise<void>;
 }>;
 
@@ -294,6 +294,8 @@ async function waitForScope(
   store: EventStore,
   namespace: string,
   eventId: string,
+  correlationId: string,
+  executor: DeliveryExecutor,
   signal: AbortSignal,
   pollMs: number,
 ): Promise<void> {
@@ -317,7 +319,26 @@ async function waitForScope(
         `Causal event scope '${eventId}' was cancelled.`,
       );
     }
-    if (settlement.unsettled === 0) return;
+    if (settlement.unsettled === 0) {
+      // A remote Worker settles its database delivery just before the final
+      // output frame reaches this Gateway. Await correlated relays, then
+      // confirm the durable scope once more in case a frame created more work.
+      await executor.settleOutputs({ namespace, correlationId });
+      const confirmed = await store.scopeSettlement(namespace, eventId);
+      if (confirmed.deadLetters > 0) {
+        throw attachmentError(
+          "attachment_dead_letter",
+          `Causal event scope '${eventId}' contains dead-lettered work.`,
+        );
+      }
+      if (confirmed.cancelled > 0) {
+        throw attachmentError(
+          "attachment_cancelled",
+          `Causal event scope '${eventId}' was cancelled.`,
+        );
+      }
+      if (confirmed.unsettled === 0) return;
+    }
     await delay(pollMs, signal);
   }
 }
@@ -507,6 +528,8 @@ export function createAttachmentRuntime(
         options.store,
         namespace,
         event.id,
+        event.correlationId,
+        options.executor,
         abort.signal,
         pollMs,
       ).finally(() => {
@@ -857,6 +880,8 @@ export function createAttachmentRuntime(
           options.store,
           namespace,
           opened.event.id,
+          correlationId,
+          options.executor,
           new AbortController().signal,
           pollMs,
         );
@@ -924,8 +949,8 @@ export function createAttachmentRuntime(
   };
 
   const run = async (
-    input: EventNativeRunInput,
-  ): Promise<EventNativeRunHandle> => {
+    input: RunInput,
+  ): Promise<RunHandle> => {
     const attachment = await connect({
       namespace: input.namespace,
       thread: input.thread,

@@ -1,118 +1,172 @@
-# Embedding and Hypervisors
+# Embedding, Gateways, and Workers
 
-Copilotz can run inside another application or behind its own server. The domain
-model does not change; only ownership and Oxian placement do.
+Copilotz can run inside another application, split across local roles, or place
+Workers remotely. Domain semantics do not change; the selected factories make
+ownership and transport explicit.
 
-## Private defaults
+## Embedded default
 
 ```ts
 const app = await createCopilotz({ namespace: "acme" });
 ```
 
-This creates a private in-memory Ominipg session plus a private Oxian Hypervisor
-and in-process Workers. `app.shutdown()` owns them all.
+This creates a private in-memory Ominipg session plus a private Gateway and
+Worker joined by an in-process event fabric. `app.shutdown()` owns all of them.
+The returned application intentionally hides those topology details.
 
-## App-owned database and shared Hypervisor
+## Explicit in-process roles
 
 ```ts
-import { createCopilotzApplication } from "@copilotz/copilotz/application";
-import { createHypervisor } from "@oxian/oxian-js/hypervisor";
+import {
+  createCopilotzGateway,
+  createCopilotzWorker,
+} from "@copilotz/copilotz";
 
+const composition = {
+  session: ominipgSession,
+  namespace: "acme",
+  plugins,
+};
 const transport = {
   type: "in-process",
   config: { topic: "acme.copilotz" },
 } as const;
+const workerId = "copilotz-acme";
 
-const hypervisor = createHypervisor({
+const gateway = await createCopilotzGateway({
+  ...composition,
   transports: [transport],
-}, {
-  onWorkAccepted: persistWorkAcceptance,
+  target: { workerId },
 });
-const app = await createCopilotzApplication({
-  session: ominipgSession,
-  namespace: "acme",
-  plugins,
-  engine: {
-    execution: { hypervisor, transport, workerId: "copilotz-acme" },
-  },
+const worker = await createCopilotzWorker({
+  ...composition,
+  id: workerId,
+  transport,
 });
+await worker.ready;
 
-await app.shutdown(); // detaches Copilotz only
-await hypervisor.shutdown(); // embedding app decides when
+// Application work enters through the Gateway.
+const run = await gateway.run(input);
+await run.done;
+
+await Promise.all([gateway.shutdown(), worker.stop()]);
 await closeOminipg();
 ```
 
-An injected SQL session is not closed unless `closeSession` explicitly grants
-ownership. A shared Hypervisor remains usable after Copilotz stops its Workers.
-The transport topic is an explicit same-realm rendezvous address, not a work
-broadcast topic. Passing the same declaration makes the embedding topology
-visible and lets Oxian run its complete Worker lifecycle over the local event
-fabric.
+The local `topic` is a rendezvous address, analogous to a WebSocket URL. It is
+not a work broadcast topic. Oxian admits one Worker connection and assigns each
+operation exactly; the event fabric carries the same lifecycle/protocol used by
+remote transports.
 
-## Hypervisor dispatcher
+Injected sessions remain application-owned unless `closeSession` explicitly
+grants ownership.
 
-For remote/shared placement, inject `engine.execution.dispatcher` and a logical
-target. The remote worker hosts `copilotz.delivery.v1` and, for attachments,
-`copilotz.stream.v1` against the same reachable event/domain storage and plugin
-registry. Dispatch metadata contains delivery/resource identities only.
+## WebSocket roles
 
-A worker-side application creates the same registry and database capabilities,
-then exposes its locally closed-over workload handlers for registration:
+The Gateway declares the server-side path:
 
 ```ts
-const workerApplication = await createCopilotzApplication({
-  session: workerSession,
-  namespace: "acme",
-  plugins,
+const gateway = await createCopilotzGateway({
+  ...gatewayComposition,
+  transports: [{
+    type: "websocket",
+    config: { path: "/_copilotz/workers" },
+  }],
+  target: { workerId: "copilotz-acme" },
+  admit,
+}, {
+  onWorkAccepted: recordAcceptedWork,
 });
 
-const worker = createWorker({
+import { listen } from "@copilotz/copilotz/adapters/deno";
+const listener = listen(gateway, { port: 8080 });
+```
+
+The outbound Worker declares its URL and identity lifecycle:
+
+```ts
+const worker = await createCopilotzWorker({
+  ...workerComposition,
   id: "copilotz-acme",
   transport: {
     type: "websocket",
-    config: { url: hypervisorUrl },
+    config: { url: "wss://gateway.example/_copilotz/workers" },
   },
   activate,
   register,
   handshake,
-  workloads: workerApplication.execution.workloads,
+}, {
+  onReady: observeReady,
+  onStart: observeStart,
 });
 
 await worker.ready;
 ```
 
-The handlers are never serialized. Each process constructs them locally; the
-Hypervisor transports only operation metadata and Web Streams. Gateway and
-worker processes need shared/reachable persistence plus an event publication
-mechanism when live output must cross process boundaries.
+The lifecycle functions decide identity, credentials, and handshake state. The
+callbacks observe or gate important stages. Copilotz does not replace either
+with hidden repository/authority objects.
 
-`createWorker()` starts immediately. Its `activate`, `register`, and `handshake`
-functions own application-specific identity, credentials, and bootstrap
-persistence; lifecycle callbacks are passed as the factory's second argument
-when the embedding application needs to observe or gate stages.
+Gateway and Worker processes construct equivalent plugins locally and use
+shared/reachable persistence. Closures are never serialized. Dispatch carries
+delivery/resource identity and Web Streams.
 
-Copilotz never shuts down an injected dispatcher. Worker affinity is optional
-for durable deliveries; workloads that hold process-local state, such as a
-persistent terminal, should receive a stable target or use an external service.
+## One framed protocol
 
-## Server mode
+In-process and WebSocket transports share one versioned Copilotz output
+protocol:
+
+- semantic durable and ephemeral events;
+- workload response metadata;
+- raw output bytes;
+- cancellation and operation completion.
+
+Local transport can pass byte arrays directly; WebSocket adapters encode the
+same frames on the wire. Raw bodies are chunked with backpressure. Large
+semantic payloads belong in canonical assets and cross the protocol by
+reference.
+
+Worker-created durable events are relayed to the Gateway immediately. The
+Gateway publishes them to attachments and schedules any new durable delivery
+obligations. Ominipg remains the recovery authority if a connection fails after
+commit but before relay.
+
+## Application-owned dispatcher
+
+An embedding application that already owns an Oxian Hypervisor or dispatcher can
+inject it:
 
 ```ts
-import {
-  createEventNativeApp,
-  createEventNativeFetchHandler,
-} from "@copilotz/copilotz/server";
-
-const handler = createEventNativeFetchHandler(
-  createEventNativeApp(app),
-  { basePath: "/v3" },
-);
-
-// Mount `handler(request)` in Deno, Node, Bun, a service worker, or Cloudflare.
+const gateway = await createCopilotzGateway({
+  ...composition,
+  dispatcher: applicationHypervisor,
+  target: { workerId: "copilotz-acme" },
+});
 ```
 
-The server boundary is the Web Fetch contract and does not own a framework or
-listen socket.
+Copilotz never shuts down the injected dispatcher. Workers connect to the
+transport owned by that infrastructure. Stable affinity is optional for durable
+deliveries; workloads with process-local state need a stable target or an
+external state service.
 
-Detailed contracts: [engine assembly](v3/engine-assembly.md) and
+## HTTP and horizontally scaled Gateways
+
+`gateway.fetch` is the portable HTTP boundary. Deno uses `listen(gateway)`;
+Node, Bun, Cloudflare, browsers, or frameworks mount `gateway.fetch` directly.
+
+A Gateway instance owns its live Worker connections and transient attachment
+streams, but conversation state and delivery obligations remain durable. A
+horizontally scaled deployment therefore uses one of these topologies:
+
+- reconnectable Workers per Gateway instance, with load-balancer affinity only
+  for the live WebSocket;
+- an application-owned shared dispatcher/fleet behind all Gateways; or
+- separate Gateway and Worker services with a stable routing layer.
+
+Copilotz does not pretend an open WebSocket or raw audio stream can transfer
+between instances. Oxian resume credentials reconnect lifecycle state; Ominipg
+recovery resumes durable work. Realtime clients reconnect and reopen ephemeral
+streams while retaining the same thread and semantic history.
+
+Detailed implementation records: [engine assembly](v3/engine-assembly.md) and
 [Oxian execution](v3/oxian-execution.md).

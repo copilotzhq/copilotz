@@ -15,6 +15,7 @@ import {
   type ExecutionWorkTarget,
 } from "./types.ts";
 import { createDeliveryWorkload } from "./workload.ts";
+import { relayCopilotzWorkHandle } from "./protocol.ts";
 
 function positiveCapacity(value: number | undefined): number {
   const capacity = value ?? 8;
@@ -184,12 +185,28 @@ export function createDeliveryExecutor(
 
   let closed = false;
   const active = new Map<string, DeliveryExecutionHandle>();
+  const activeOutputScopes = new Map<string, Set<Promise<unknown>>>();
   const dispatchTasks = new Map<string, Promise<DeliveryExecutionHandle>>();
   const scheduled = new Map<string, string | EventDelivery>();
   let scheduling = false;
   let scheduleTimer: ReturnType<typeof setTimeout> | undefined;
   const deliveryKey = (delivery: string | EventDelivery): string =>
     typeof delivery === "string" ? delivery : delivery.id;
+  const outputScopeKey = (namespace: string, correlationId: string): string =>
+    `${namespace}\u0000${correlationId}`;
+  const trackOutputScope = (
+    event: DurableEvent,
+    task: Promise<unknown>,
+  ): void => {
+    const key = outputScopeKey(event.namespace, event.correlationId);
+    const tasks = activeOutputScopes.get(key) ?? new Set<Promise<unknown>>();
+    tasks.add(task);
+    activeOutputScopes.set(key, tasks);
+    void task.finally(() => {
+      tasks.delete(task);
+      if (tasks.size === 0) activeOutputScopes.delete(key);
+    }).catch(() => undefined);
+  };
   const schedulePump = (delayMs = 0): void => {
     if (closed || scheduling || scheduleTimer !== undefined) return;
     scheduleTimer = setTimeout(() => {
@@ -257,6 +274,7 @@ export function createDeliveryExecutor(
         operationStatus: terminal.status,
       });
     })();
+    trackOutputScope(event, done);
 
     return Object.freeze({
       deliveryId: delivery.id,
@@ -304,10 +322,13 @@ export function createDeliveryExecutor(
         dispatchAttemptId: attemptId,
         idempotencyKey: delivery.id,
       });
-      const work = await dispatcher.dispatch({
+      const dispatched = await dispatcher.dispatch({
         workload,
         ...(target ? { target } : {}),
         metadata,
+      });
+      const work = relayCopilotzWorkHandle(dispatched, {
+        onEvent: options.onOutputEvent,
       });
       const handle = createHandle(delivery, event, attemptId, work);
       active.set(delivery.id, handle);
@@ -348,7 +369,7 @@ export function createDeliveryExecutor(
       }
       await ready;
       const workloadTarget = workloadTargets.get(input.workload);
-      return await dispatcher.dispatch({
+      const dispatched = await dispatcher.dispatch({
         ...input,
         ...(input.target
           ? {}
@@ -357,6 +378,9 @@ export function createDeliveryExecutor(
           : target
           ? { target }
           : {}),
+      });
+      return relayCopilotzWorkHandle(dispatched, {
+        onEvent: options.onOutputEvent,
       });
     },
     dispatchDelivery,
@@ -382,6 +406,14 @@ export function createDeliveryExecutor(
         handles: Object.freeze(handles),
         failures: Object.freeze(failures),
       });
+    },
+    async settleOutputs(scope) {
+      const key = outputScopeKey(scope.namespace, scope.correlationId);
+      while (true) {
+        const tasks = [...(activeOutputScopes.get(key) ?? [])];
+        if (tasks.length === 0) return;
+        await Promise.allSettled(tasks);
+      }
     },
     async shutdown(reason = "copilotz_delivery_executor_shutdown") {
       if (closed) return;

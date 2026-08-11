@@ -81,8 +81,8 @@ import type {
 } from "../plugins/index.ts";
 import type {
   ConnectAttachmentInput,
-  EventNativeRunHandle,
-  EventNativeRunInput,
+  RunHandle,
+  RunInput,
   ThreadAttachment,
 } from "../attachments/index.ts";
 import type {
@@ -411,7 +411,7 @@ export type CopilotzEngine = Readonly<{
   schedules: ScheduledJobRepository;
   knowledge: KnowledgeRepository;
   connect(input: ConnectAttachmentInput): Promise<ThreadAttachment>;
-  run(input: EventNativeRunInput): Promise<EventNativeRunHandle>;
+  run(input: RunInput): Promise<RunHandle>;
   events: Readonly<{
     append(
       draft: DurableEventDraft,

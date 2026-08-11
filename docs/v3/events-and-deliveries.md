@@ -13,7 +13,7 @@ The event and delivery engine in `runtime/events/` is the canonical persistence
 path used by `createCopilotz()`. It is composed of factories, functions, plain
 records, and a narrow injected SQL session. Domain mutations commit semantic
 events and sparse delivery obligations atomically; post-commit execution uses
-the Oxian workloads assembled by `createCopilotzEngine()`. There is no legacy
+the Oxian workloads assembled behind the role factories. There is no legacy
 event worker or dual dispatch path.
 
 ## Storage Model

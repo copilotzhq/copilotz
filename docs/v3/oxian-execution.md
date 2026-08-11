@@ -80,11 +80,10 @@ await worker.ready;
 The handler has the same Oxian workload contract when the Worker's transport is
 changed to an outbound WebSocket descriptor.
 
-At the application assembly level, `application.execution.workloads` exposes the
-complete worker-local map created by that application (delivery, live, and
-stream workloads). An outbound worker can register this map directly. This is a
-closure export within the worker process, not a dispatch payload; gateway and
-worker still exchange identities and streams only.
+At the public application boundary, `createCopilotzWorker()` reconstructs and
+registers the complete worker-local map (delivery, live, and stream workloads).
+The closures remain module-private within that Worker process. Gateway and
+Worker exchange identities, versioned output frames, and streams only.
 
 ## Delivery boundary
 
@@ -116,8 +115,8 @@ other.
 
 ## Runtime boundary
 
-`createCopilotzEngine()` assembles durable delivery, live processor, and
-realtime stream workloads over this one Oxian lifecycle. Processor context is
+The internal engine assembles durable delivery, live processor, and realtime
+stream workloads over this one Oxian lifecycle. Processor context is
 tenant-scoped and exposes typed domain/content/resource capabilities, not the
 SQL session, event store, coordinator, or graph primitives. Realtime attachment
 frames use the stream workload and remain outside durable event/delivery tables;

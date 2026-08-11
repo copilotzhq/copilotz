@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.59.4 — 2026-08-11
+
+This patch makes the one-way v1 database upgrade safe for large production
+tenant histories.
+
+### Fixed
+
+- Multi-gigabyte upgrades translate events with one set-based database operation
+  and normalize nodes in bounded keyset batches instead of loading whole tenant
+  histories into application memory.
+- Bulk graph and event copies return aggregate counts instead of materializing
+  every inserted identifier in the migration process.
+
 ## 0.59.3 — 2026-08-11
 
 This patch makes the v1 content migration loss-aware for production databases

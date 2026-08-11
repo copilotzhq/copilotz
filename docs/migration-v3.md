@@ -79,6 +79,12 @@ missing before migration, the adapter may explicitly return `state: "failed"` or
 are then preserved, while reads fail honestly instead of substituting invented
 bytes.
 
+The upgrade keeps application memory bounded: graph records are normalized in
+keyset batches, and settled legacy events are translated with a set-based SQL
+insert ordered by creation time and ID. Large tenant histories therefore stay
+inside the database engine rather than being materialized in the maintenance
+process.
+
 Fresh databases use the four-table v3 baseline directly and never import the
 upgrade module.
 

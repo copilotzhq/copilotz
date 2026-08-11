@@ -621,6 +621,53 @@ Deno.test("A28 upgrade preserves unavailable assets and their message references
   }
 });
 
+Deno.test("A28 upgrade processes legacy nodes in bounded batches", async () => {
+  const { db, session } = await createFixture();
+  const schema = uniqueSchema("node_batches");
+  try {
+    await provisionV1FixtureSchema(session, schema);
+    await session.query(
+      `INSERT INTO ${q(schema, "nodes")} (
+         id, namespace, type, name, content, data,
+         source_type, source_id, created_at, updated_at
+       )
+       SELECT
+         'batch-asset-' || value,
+         'tenant-batches',
+         'asset',
+         'Batch asset',
+         NULL,
+         jsonb_build_object(
+           'ref', 'asset://batch-' || value,
+           'mime', 'application/octet-stream'
+         ),
+         'asset',
+         'batch-asset-' || value,
+         '2026-01-01T00:00:00.000Z'::timestamptz,
+         '2026-01-01T00:00:00.000Z'::timestamptz
+       FROM generate_series(1, 205) AS value`,
+    );
+
+    let resolved = 0;
+    await upgradeV1Schema(session, schema, {
+      resolveLegacyAsset: () => {
+        resolved += 1;
+        return { body: new Uint8Array([resolved % 255]) };
+      },
+    });
+
+    const assets = await session.query<{ count: string | number }>(
+      `SELECT COUNT(*) AS count
+         FROM ${q(schema, "nodes")}
+        WHERE type = 'asset' AND data ->> 'state' = 'ready'`,
+    );
+    assertEquals(resolved, 205);
+    assertEquals(Number(assets.rows[0]?.count), 205);
+  } finally {
+    await db.close();
+  }
+});
+
 Deno.test("A28 multi-tenant upgrade preserves graph domains and translates settled events", async () => {
   const { db, session } = await createFixture();
   const schemaA = uniqueSchema("tenant_a");

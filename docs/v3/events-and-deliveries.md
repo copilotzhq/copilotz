@@ -134,6 +134,10 @@ normal reads report that the asset is not ready. The migration module does not
 import filesystem, object-storage, Deno, Node, or server APIs; the maintenance
 adapter owns those concerns.
 
+Node normalization uses bounded keyset batches. Legacy event translation is a
+single ordered `INSERT … SELECT`, so even multi-gigabyte event tables are not
+loaded into Worker memory or copied through one SQL round trip per event.
+
 ```ts
 await upgradeV1Schemas(session, {
   schemas: ["tenant_a", "tenant_b"],

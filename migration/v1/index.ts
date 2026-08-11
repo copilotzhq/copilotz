@@ -33,29 +33,6 @@ type LegacyThreadRow = Record<string, unknown> & {
   updated_at: string | Date;
 };
 
-type LegacyEventRow = Record<string, unknown> & {
-  id: string;
-  thread_id: string;
-  event_type: string;
-  payload: unknown;
-  parent_event_id: string | null;
-  trace_id: string | null;
-  namespace: string | null;
-  subject_type: string | null;
-  subject_id: string | null;
-  operation: string | null;
-  causation_id: string | null;
-  correlation_id: string | null;
-  dedupe_key: string | null;
-  input: unknown;
-  before: unknown;
-  after: unknown;
-  patch: unknown;
-  status: string;
-  metadata: unknown;
-  created_at: string | Date;
-};
-
 type LegacyNodeRow = Record<string, unknown> & {
   id: string;
   namespace: string;
@@ -135,7 +112,7 @@ export type UpgradeV1SchemasOptions = UpgradeV1SchemaOptions & {
   schemas?: readonly string[];
 };
 
-const EPHEMERAL_TYPES = new Set([
+const EPHEMERAL_TYPES = Object.freeze([
   "TOKEN",
   "TOOL_CALL_DELTA",
   "TEXT_DELTA",
@@ -146,6 +123,8 @@ const EPHEMERAL_TYPES = new Set([
   "audio.delta",
   "tool_call.delta",
 ]);
+
+const NODE_MIGRATION_BATCH_SIZE = 100;
 
 function qualified(schema: string, table: string): string {
   return `${quoteEventIdentifier(schema)}.${quoteEventIdentifier(table)}`;
@@ -306,52 +285,6 @@ function canonicalAssetData(value: unknown): boolean {
       data.state === "abandoned");
 }
 
-function semanticEventType(row: LegacyEventRow): string {
-  if (row.event_type.includes(".")) return row.event_type;
-  switch (row.event_type) {
-    case "NEW_MESSAGE":
-      return "message.created";
-    case "LLM_CALL":
-      return "llm_attempt.created";
-    case "LLM_RESULT":
-      return object(row.payload).status === "failed"
-        ? "llm_attempt.failed"
-        : "llm_attempt.completed";
-    case "TOOL_CALL":
-      return "tool_execution.created";
-    case "TOOL_RESULT":
-      return object(row.payload).status === "failed"
-        ? "tool_execution.failed"
-        : "tool_execution.completed";
-    default:
-      return row.event_type.toLowerCase().replaceAll("_", ".");
-  }
-}
-
-function eventVisibility(row: LegacyEventRow): Record<string, unknown> {
-  const metadataVisibility = object(row.metadata).visibility;
-  if (
-    metadataVisibility && typeof metadataVisibility === "object" &&
-    !Array.isArray(metadataVisibility) &&
-    typeof (metadataVisibility as Record<string, unknown>).kind === "string"
-  ) {
-    return metadataVisibility as Record<string, unknown>;
-  }
-
-  const payload = object(row.payload);
-  const policy = payload.historyVisibility;
-  const agent = object(payload.agent);
-  if (
-    row.event_type === "TOOL_RESULT" &&
-    (policy === "requester_only" || policy === "public_status" ||
-      policy === "public") &&
-    typeof agent.id === "string"
-  ) {
-    return { kind: "tool", policy, requesterId: agent.id };
-  }
-  return { kind: "public" };
-}
-
 async function tableExists(
   executor: SqlExecutor,
   schema: string,
@@ -480,22 +413,25 @@ async function copyNodes(
   hasNodes: boolean,
 ): Promise<number> {
   if (!hasNodes) return 0;
-  const result = await transaction.query<{ id: string }>(
-    `INSERT INTO ${qualified(schema, "nodes")} (
-       id, namespace, type, name, content, data, embedding,
-       source_type, source_id, created_at, updated_at
+  const result = await transaction.query<{ count: string | number }>(
+    `WITH inserted AS (
+       INSERT INTO ${qualified(schema, "nodes")} (
+         id, namespace, type, name, content, data, embedding,
+         source_type, source_id, created_at, updated_at
+       )
+       SELECT id, COALESCE(namespace, 'default'), type, name, content,
+         COALESCE(data, '{}'::jsonb),
+         CASE WHEN embedding IS NULL THEN NULL ELSE to_jsonb(embedding) END,
+         source_type, source_id,
+         COALESCE(created_at, NOW()),
+         COALESCE(updated_at, created_at, NOW())
+       FROM ${qualified(schema, "nodes_v1_upgrade")}
+       ON CONFLICT (id) DO NOTHING
+       RETURNING 1
      )
-     SELECT id, COALESCE(namespace, 'default'), type, name, content,
-       COALESCE(data, '{}'::jsonb),
-       CASE WHEN embedding IS NULL THEN NULL ELSE to_jsonb(embedding) END,
-       source_type, source_id,
-       COALESCE(created_at, NOW()),
-       COALESCE(updated_at, created_at, NOW())
-     FROM ${qualified(schema, "nodes_v1_upgrade")}
-     ON CONFLICT (id) DO NOTHING
-     RETURNING id`,
+     SELECT COUNT(*) AS count FROM inserted`,
   );
-  return result.rows.length;
+  return Number(result.rows[0]?.count ?? 0);
 }
 
 async function copyEdges(
@@ -504,40 +440,58 @@ async function copyEdges(
   hasEdges: boolean,
 ): Promise<number> {
   if (!hasEdges) return 0;
-  const result = await transaction.query<{ id: string }>(
-    `INSERT INTO ${qualified(schema, "edges")} (
-       id, namespace, source_node_id, target_node_id,
-       type, data, weight, created_at
+  const result = await transaction.query<{ count: string | number }>(
+    `WITH inserted AS (
+       INSERT INTO ${qualified(schema, "edges")} (
+         id, namespace, source_node_id, target_node_id,
+         type, data, weight, created_at
+       )
+       SELECT edge.id, source.namespace,
+         edge.source_node_id, edge.target_node_id, edge.type,
+         COALESCE(edge.data, '{}'::jsonb), edge.weight,
+         COALESCE(edge.created_at, NOW())
+       FROM ${qualified(schema, "edges_v1_upgrade")} edge
+       JOIN ${qualified(schema, "nodes")} source
+         ON source.id = edge.source_node_id
+       JOIN ${qualified(schema, "nodes")} target
+         ON target.id = edge.target_node_id
+       ON CONFLICT DO NOTHING
+       RETURNING 1
      )
-     SELECT edge.id, source.namespace,
-       edge.source_node_id, edge.target_node_id, edge.type,
-       COALESCE(edge.data, '{}'::jsonb), edge.weight,
-       COALESCE(edge.created_at, NOW())
-     FROM ${qualified(schema, "edges_v1_upgrade")} edge
-     JOIN ${qualified(schema, "nodes")} source
-       ON source.id = edge.source_node_id
-     JOIN ${qualified(schema, "nodes")} target
-       ON target.id = edge.target_node_id
-     ON CONFLICT DO NOTHING
-     RETURNING id`,
+     SELECT COUNT(*) AS count FROM inserted`,
   );
-  return result.rows.length;
+  return Number(result.rows[0]?.count ?? 0);
 }
 
-async function loadNodes(
+async function* loadNodes(
   transaction: SqlExecutor,
   schema: string,
   types: readonly string[],
-): Promise<LegacyNodeRow[]> {
-  const result = await transaction.query<LegacyNodeRow>(
-    `SELECT id, namespace, type, name, content, data,
-       source_type, source_id, created_at, updated_at
-     FROM ${qualified(schema, "nodes")}
-     WHERE type = ANY($1::text[])
-     ORDER BY created_at, id`,
-    [[...types]],
-  );
-  return result.rows;
+): AsyncGenerator<LegacyNodeRow> {
+  let createdAt: string | Date | null = null;
+  let id = "";
+  while (true) {
+    const result: { rows: LegacyNodeRow[] } = await transaction.query<
+      LegacyNodeRow
+    >(
+      `SELECT id, namespace, type, name, content, data,
+         source_type, source_id, created_at, updated_at
+       FROM ${qualified(schema, "nodes")}
+       WHERE type = ANY($1::text[])
+         AND (
+           $2::timestamptz IS NULL
+           OR (created_at, id) > ($2::timestamptz, $3)
+         )
+       ORDER BY created_at, id
+       LIMIT $4`,
+      [[...types], createdAt, id, NODE_MIGRATION_BATCH_SIZE],
+    );
+    if (result.rows.length === 0) return;
+    for (const row of result.rows) yield row;
+    const last: LegacyNodeRow = result.rows.at(-1)!;
+    createdAt = last.created_at;
+    id = last.id;
+  }
 }
 
 async function ensureEdge(
@@ -719,7 +673,7 @@ async function canonicalizeLegacyAssets(
   schema: string,
   options: UpgradeV1SchemaOptions,
 ): Promise<void> {
-  for (const row of await loadNodes(transaction, schema, ["asset"])) {
+  for await (const row of loadNodes(transaction, schema, ["asset"])) {
     if (canonicalAssetData(row.data)) continue;
     const data = object(row.data);
     const ref = optionalString(data.ref) ?? optionalString(row.source_id);
@@ -1179,7 +1133,7 @@ async function normalizeParticipantNodes(
   schema: string,
 ): Promise<number> {
   let created = 0;
-  for (const row of await loadNodes(transaction, schema, ["participant"])) {
+  for await (const row of loadNodes(transaction, schema, ["participant"])) {
     const data = object(row.data);
     const externalId = optionalString(data.externalId) ??
       optionalString(row.source_id) ?? row.id;
@@ -1449,7 +1403,7 @@ async function normalizeMessages(
   schema: string,
 ): Promise<number> {
   let participantsCreated = 0;
-  for (const row of await loadNodes(transaction, schema, ["message"])) {
+  for await (const row of loadNodes(transaction, schema, ["message"])) {
     const data = object(row.data);
     const threadId = optionalString(data.threadId) ??
       (row.source_type === "thread" ? optionalString(row.source_id) : null);
@@ -1657,8 +1611,8 @@ async function normalizeToolExecutions(
   schema: string,
 ): Promise<number> {
   let participantsCreated = 0;
-  for (
-    const row of await loadNodes(transaction, schema, ["tool_execution"])
+  for await (
+    const row of loadNodes(transaction, schema, ["tool_execution"])
   ) {
     const data = object(row.data);
     const threadId = optionalString(data.threadId);
@@ -1801,7 +1755,7 @@ async function normalizeLlmAttempts(
   schema: string,
 ): Promise<number> {
   let participantsCreated = 0;
-  for (const row of await loadNodes(transaction, schema, ["llm_attempt"])) {
+  for await (const row of loadNodes(transaction, schema, ["llm_attempt"])) {
     const data = object(row.data);
     const threadId = optionalString(data.threadId);
     if (
@@ -2018,7 +1972,7 @@ async function normalizeKnowledgeDocuments(
   transaction: SqlExecutor,
   schema: string,
 ): Promise<void> {
-  for (const row of await loadNodes(transaction, schema, ["document"])) {
+  for await (const row of loadNodes(transaction, schema, ["document"])) {
     const data = object(row.data);
     let source: MigratedContentRef[] = isCanonicalContent(data.source)
       ? structuredClone(data.source)
@@ -2133,8 +2087,8 @@ async function normalizeLongTermMemory(
   transaction: SqlExecutor,
   schema: string,
 ): Promise<void> {
-  for (
-    const row of await loadNodes(transaction, schema, ["long_term_memory"])
+  for await (
+    const row of loadNodes(transaction, schema, ["long_term_memory"])
   ) {
     const data = object(row.data);
     let content: MigratedContentRef[] = isCanonicalContent(data.content)
@@ -2209,85 +2163,91 @@ async function normalizeLongTermMemory(
   }
 }
 
-async function loadLegacyEvents(
-  transaction: SqlExecutor,
-  schema: string,
-): Promise<LegacyEventRow[]> {
-  const result = await transaction.query<LegacyEventRow>(
-    `SELECT id,
-       "threadId" AS thread_id,
-       "eventType" AS event_type,
-       payload,
-       "parentEventId" AS parent_event_id,
-       "traceId" AS trace_id,
-       namespace,
-       "subjectType" AS subject_type,
-       "subjectId" AS subject_id,
-       operation,
-       "causationId" AS causation_id,
-       "correlationId" AS correlation_id,
-       "dedupeKey" AS dedupe_key,
-       input, before, after, patch, status, metadata,
-       "createdAt" AS created_at
-     FROM ${qualified(schema, "events_v1_upgrade")}
-     WHERE status NOT IN ('pending', 'processing')
-     ORDER BY "createdAt", id`,
-  );
-  return result.rows;
-}
-
 async function copyEvents(
   transaction: SqlExecutor,
   schema: string,
 ): Promise<number> {
-  let count = 0;
-  for (const row of await loadLegacyEvents(transaction, schema)) {
-    if (EPHEMERAL_TYPES.has(row.event_type)) continue;
-    const metadata = {
-      ...object(row.metadata),
-      migratedFromV1: true,
-      legacyStatus: row.status,
-    };
-    const delta = {
-      ...(row.operation == null ? {} : { operation: row.operation }),
-      ...(row.input == null ? {} : { input: row.input }),
-      ...(row.before == null ? {} : { before: row.before }),
-      ...(row.after == null ? {} : { after: row.after }),
-      ...(row.patch == null ? {} : { patch: row.patch }),
-    };
-    const result = await transaction.query<{ id: string }>(
-      `INSERT INTO ${qualified(schema, "events")} (
+  const legacy = qualified(schema, "events_v1_upgrade");
+  const result = await transaction.query<{ count: string | number }>(
+    `WITH inserted AS (
+       INSERT INTO ${qualified(schema, "events")} (
          id, schema_version, type, namespace, thread_id,
          subject_type, subject_id, payload, delta, routing, visibility,
          metadata, causation_id, correlation_id, deduplication_id, created_at
-       ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7,
-         $8::jsonb, $9::jsonb, '{}'::jsonb, $10::jsonb,
-         $11::jsonb, $12, $13, $14, $15::timestamptz
        )
+       SELECT
+         event.id,
+         $1,
+         CASE
+           WHEN event."eventType" LIKE '%.%' THEN event."eventType"
+           WHEN event."eventType" = 'NEW_MESSAGE' THEN 'message.created'
+           WHEN event."eventType" = 'LLM_CALL' THEN 'llm_attempt.created'
+           WHEN event."eventType" = 'LLM_RESULT' THEN
+             CASE WHEN event.payload ->> 'status' = 'failed'
+               THEN 'llm_attempt.failed'
+               ELSE 'llm_attempt.completed'
+             END
+           WHEN event."eventType" = 'TOOL_CALL' THEN 'tool_execution.created'
+           WHEN event."eventType" = 'TOOL_RESULT' THEN
+             CASE WHEN event.payload ->> 'status' = 'failed'
+               THEN 'tool_execution.failed'
+               ELSE 'tool_execution.completed'
+             END
+           ELSE replace(lower(event."eventType"), '_', '.')
+         END,
+         COALESCE(NULLIF(btrim(event.namespace), ''), 'default'),
+         NULLIF(event."threadId", ''),
+         event."subjectType",
+         event."subjectId",
+         COALESCE(event.payload, 'null'::jsonb),
+         (CASE WHEN event.operation IS NULL THEN '{}'::jsonb
+           ELSE jsonb_build_object('operation', event.operation) END) ||
+         (CASE WHEN event.input IS NULL THEN '{}'::jsonb
+           ELSE jsonb_build_object('input', event.input) END) ||
+         (CASE WHEN event.before IS NULL THEN '{}'::jsonb
+           ELSE jsonb_build_object('before', event.before) END) ||
+         (CASE WHEN event.after IS NULL THEN '{}'::jsonb
+           ELSE jsonb_build_object('after', event.after) END) ||
+         (CASE WHEN event.patch IS NULL THEN '{}'::jsonb
+           ELSE jsonb_build_object('patch', event.patch) END),
+         '{}'::jsonb,
+         CASE
+           WHEN jsonb_typeof(event.metadata -> 'visibility') = 'object'
+             AND jsonb_typeof(event.metadata -> 'visibility' -> 'kind') = 'string'
+             THEN event.metadata -> 'visibility'
+           WHEN event."eventType" = 'TOOL_RESULT'
+             AND event.payload ->> 'historyVisibility' IN (
+               'requester_only', 'public_status', 'public'
+             )
+             AND jsonb_typeof(event.payload -> 'agent' -> 'id') = 'string'
+             THEN jsonb_build_object(
+               'kind', 'tool',
+               'policy', event.payload ->> 'historyVisibility',
+               'requesterId', event.payload -> 'agent' ->> 'id'
+             )
+           ELSE jsonb_build_object('kind', 'public')
+         END,
+         (CASE WHEN jsonb_typeof(event.metadata) = 'object'
+           THEN event.metadata ELSE '{}'::jsonb END) ||
+           jsonb_build_object(
+             'migratedFromV1', true,
+             'legacyStatus', event.status
+           ),
+         COALESCE(event."causationId", event."parentEventId"),
+         COALESCE(event."correlationId", event."traceId", event.id),
+         event."dedupeKey",
+         event."createdAt"
+       FROM ${legacy} event
+       WHERE event.status NOT IN ('pending', 'processing')
+         AND event."eventType" <> ALL($2::text[])
+       ORDER BY event."createdAt", event.id
        ON CONFLICT (id) DO NOTHING
-       RETURNING id`,
-      [
-        row.id,
-        EVENT_SCHEMA_VERSION,
-        semanticEventType(row),
-        row.namespace?.trim() || "default",
-        row.thread_id || null,
-        row.subject_type,
-        row.subject_id,
-        json(row.payload),
-        json(delta),
-        json(eventVisibility(row)),
-        json(metadata),
-        row.causation_id ?? row.parent_event_id,
-        row.correlation_id ?? row.trace_id ?? row.id,
-        row.dedupe_key,
-        iso(row.created_at),
-      ],
-    );
-    count += result.rows.length;
-  }
-  return count;
+       RETURNING 1
+     )
+     SELECT COUNT(*) AS count FROM inserted`,
+    [EVENT_SCHEMA_VERSION, [...EPHEMERAL_TYPES]],
+  );
+  return Number(result.rows[0]?.count ?? 0);
 }
 
 async function updateThreadActivity(

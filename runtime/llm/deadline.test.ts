@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects } from "@std/assert";
-import { chat, LLMProviderError } from "@/runtime/llm/index.ts";
-import type { ProviderRegistry } from "@/runtime/llm/types.ts";
+import { chat, LLMProviderError } from "./index.ts";
+import type { ProviderRegistry } from "./types.ts";
 
 const encoder = new TextEncoder();
 

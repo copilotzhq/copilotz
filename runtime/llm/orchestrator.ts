@@ -11,15 +11,15 @@ import type {
   StreamCallback,
   TokenUsageStatusReason,
   ToolInvocation,
-} from "@/runtime/llm/types.ts";
-import { resolveProviderApiKey, toLLMConfig } from "@/runtime/llm/config.ts";
+} from "./types.ts";
+import { resolveProviderApiKey, toLLMConfig } from "./config.ts";
 import {
   composeWireContent,
   createMockResponse,
   sanitizeUserFacingText,
   stripStructuralLeakTokens,
   withDefaultStopSequences,
-} from "@/runtime/llm/utils.ts";
+} from "./utils.ts";
 import {
   classifyLLMError,
   getErrorMessage,
@@ -30,25 +30,25 @@ import {
   type LLMProviderAttempt,
   LLMProviderError,
   LLMStreamTimeoutError,
-} from "@/runtime/llm/errors.ts";
-import { runProviderAttempt } from "@/runtime/llm/attempt-runner.ts";
+} from "./errors.ts";
+import { runProviderAttempt } from "./attempt-runner.ts";
 import {
   interpretAssistantResponse,
   REASONING_HISTORY_TAGS,
-} from "@/runtime/llm/response-interpreter.ts";
+} from "./response-interpreter.ts";
 import {
   decideRecovery,
   recoveryActionOf,
   type RecoveryDecision,
-} from "@/runtime/llm/recovery-policy.ts";
-import { prepareAttemptTranscript } from "@/runtime/llm/transcript.ts";
+} from "./recovery-policy.ts";
+import { prepareAttemptTranscript } from "./transcript.ts";
 import {
   accountCompletedAttempt,
   accountFailedAttempt,
-} from "@/runtime/llm/attempt-accounting.ts";
+} from "./attempt-accounting.ts";
 
-export { classifyLLMError, LLMProviderError } from "@/runtime/llm/errors.ts";
-export type { LLMProviderAttempt } from "@/runtime/llm/errors.ts";
+export { classifyLLMError, LLMProviderError } from "./errors.ts";
+export type { LLMProviderAttempt } from "./errors.ts";
 
 const RECOVERABLE_FINISH_REASONS: ReadonlySet<ProviderFinishReason> = new Set([
   "length",
@@ -155,7 +155,7 @@ async function getProviderRegistry(
 ): Promise<ProviderRegistry> {
   if (registry) return registry;
   if (!defaultProviderRegistryPromise) {
-    defaultProviderRegistryPromise = import("@/runtime/llm/registry.ts")
+    defaultProviderRegistryPromise = import("./registry.ts")
       .then((mod) => mod.providers);
   }
   return await defaultProviderRegistryPromise;
@@ -486,6 +486,7 @@ export async function chat(
     try {
       await request.onAttemptLifecycle?.(event);
     } catch (error) {
+      if (request.strictAttemptLifecycle) throw error;
       console.warn("[llm] Attempt lifecycle observer failed:", error);
     }
   };

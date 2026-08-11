@@ -1,0 +1,842 @@
+import type {
+  API,
+  APIPrepareRequestContext,
+  APIPrepareRequestInput,
+} from "../resources/index.ts";
+import { parse as parseYaml } from "../../dependencies/yaml.ts";
+import type {
+  WorkflowTool,
+  WorkflowToolExecutionContext,
+} from "../workflows/index.ts";
+import { ToolExecutionError } from "../tools/errors.ts";
+
+type AuthConfig = NonNullable<API["auth"]>;
+type DynamicAuth = Extract<AuthConfig, { type: "dynamic" }>;
+
+// Token cache for dynamic authentication
+interface CachedToken {
+  token: string;
+  expiry: number;
+  refreshToken?: string;
+}
+
+const tokenCache = new Map<string, CachedToken>();
+
+interface OpenAPIOperation {
+  operationId?: string;
+  summary?: string;
+  description?: string;
+  parameters?: any[];
+  requestBody?: any;
+  responses?: any;
+}
+
+interface OpenAPIPath {
+  [method: string]: OpenAPIOperation;
+}
+
+interface OpenAPISchema {
+  openapi: string;
+  servers?: Array<{ url: string; description?: string }>;
+  paths: Record<string, OpenAPIPath>;
+  components?: {
+    schemas?: Record<string, any>;
+    parameters?: Record<string, any>;
+    requestBodies?: Record<string, any>;
+  };
+}
+
+/**
+ * Converts OpenAPI parameter schema to JSON Schema for tool validation
+ * Also returns metadata about where each parameter should be routed
+ */
+function convertParameterToJsonSchema(
+  parameters: any[] = [],
+  requestBody?: any,
+): {
+  schema: any;
+  parameterMetadata: {
+    pathParams: Set<string>;
+    queryParams: Set<string>;
+    bodyParams: Set<string>;
+    isObjectBody: boolean;
+  };
+} {
+  const properties: Record<string, any> = {};
+  const required: string[] = [];
+  const pathParams = new Set<string>();
+  const queryParams = new Set<string>();
+  const bodyParams = new Set<string>();
+  let isObjectBody = false;
+  let additionalProperties: unknown = undefined;
+
+  // Process path, query, and header parameters
+  parameters.forEach((param) => {
+    if (param.name && param.schema) {
+      properties[param.name] = {
+        ...param.schema,
+        description: param.description || param.schema.description,
+      };
+
+      if (param.required) {
+        required.push(param.name);
+      }
+
+      // Track parameter location
+      if (param.in === "path") {
+        pathParams.add(param.name);
+      } else if (param.in === "query") {
+        queryParams.add(param.name);
+      }
+      // Note: headers are handled in authentication, so we skip them here
+    }
+  });
+
+  // Process request body if it exists
+  if (requestBody?.content) {
+    const jsonContent = requestBody.content["application/json"];
+    if (jsonContent?.schema) {
+      // If it's an object schema, merge properties and mark them as body params
+      if (
+        jsonContent.schema.type === "object" && jsonContent.schema.properties
+      ) {
+        isObjectBody = true;
+        additionalProperties = jsonContent.schema.additionalProperties;
+        Object.keys(jsonContent.schema.properties).forEach((propName) => {
+          properties[propName] = jsonContent.schema.properties[propName];
+          bodyParams.add(propName);
+        });
+        if (jsonContent.schema.required) {
+          required.push(...jsonContent.schema.required);
+        }
+      } else {
+        // For non-object schemas, create a 'body' parameter
+        properties.body = jsonContent.schema;
+        bodyParams.add("body");
+        if (requestBody.required) {
+          required.push("body");
+        }
+      }
+    }
+  }
+
+  return {
+    schema: {
+      type: "object",
+      properties,
+      required: required.length > 0 ? required : undefined,
+      ...(additionalProperties !== undefined ? { additionalProperties } : {}),
+    },
+    parameterMetadata: {
+      pathParams,
+      queryParams,
+      bodyParams,
+      isObjectBody,
+    },
+  };
+}
+
+/**
+ * Detects if a string is JSON or YAML format
+ */
+function detectFormat(input: string): "json" | "yaml" {
+  // Trim whitespace for better detection
+  const trimmed = input.trim();
+
+  // JSON typically starts with { or [
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    return "json";
+  }
+
+  // YAML often has key: value patterns without quotes
+  // or starts with --- (document separator)
+  if (
+    trimmed.startsWith("---") ||
+    /^[a-zA-Z_][a-zA-Z0-9_]*:\s/.test(trimmed) ||
+    /^openapi:\s*['"]?3\./.test(trimmed)
+  ) {
+    return "yaml";
+  }
+
+  // Default to JSON and let parsing errors handle invalid format
+  return "json";
+}
+
+/**
+ * Normalizes OpenAPI schema to ensure consistent structure
+ * Supports both JSON and YAML string inputs, as well as parsed objects
+ */
+function normalizeOpenApiSchema(schema: any): OpenAPISchema {
+  // If it's already an object, return as-is
+  if (typeof schema === "object" && schema !== null) {
+    return schema as OpenAPISchema;
+  }
+
+  // If it's a string, detect format and parse accordingly
+  if (typeof schema === "string") {
+    const format = detectFormat(schema);
+
+    try {
+      if (format === "json") {
+        schema = JSON.parse(schema);
+      } else {
+        // YAML format - parseYaml can also handle JSON
+        schema = parseYaml(schema);
+      }
+    } catch (error) {
+      console.error(
+        `Failed to parse ${format.toUpperCase()} OpenAPI schema:`,
+        error,
+      );
+      throw new Error(
+        `Invalid ${format.toUpperCase()} OpenAPI schema provided. ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`,
+      );
+    }
+  }
+
+  // Validate that it's a valid OpenAPI 3.x schema
+  if (!schema.openapi || !schema.openapi.startsWith("3.")) {
+    console.warn(
+      "Provided schema does not appear to be OpenAPI 3.x format. Some features might not work as expected.",
+    );
+  }
+
+  // Ensure required fields exist
+  if (!schema.paths) {
+    throw new Error("OpenAPI schema must contain a 'paths' object");
+  }
+
+  return schema as OpenAPISchema;
+}
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+const NULL_CHAR_PATTERN = /\u0000/g;
+
+function sanitizeToolJsonValue<T>(value: T, seen = new WeakSet<object>()): T {
+  if (typeof value === "string") {
+    return value.replace(NULL_CHAR_PATTERN, "") as T;
+  }
+
+  if (value === null || typeof value !== "object") return value;
+  if (value instanceof Date) return value;
+  if (seen.has(value)) return "[Circular]" as T;
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    const next = value.map((item) => sanitizeToolJsonValue(item, seen)) as T;
+    seen.delete(value);
+    return next;
+  }
+
+  const next: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    next[key] = sanitizeToolJsonValue(child, seen);
+  }
+  seen.delete(value);
+  return next as T;
+}
+
+function decodeJsonPointerSegment(segment: string): string {
+  return segment.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
+function resolveLocalJsonPointer(root: unknown, ref: string): unknown {
+  if (!ref.startsWith("#/")) {
+    throw new Error(
+      `Unsupported OpenAPI reference "${ref}". Only local references beginning with "#/" are supported.`,
+    );
+  }
+
+  return ref.slice(2).split("/").reduce((current, rawSegment) => {
+    if (current === undefined || current === null) return undefined;
+    const segment = decodeJsonPointerSegment(rawSegment);
+    return (current as Record<string, unknown>)[segment];
+  }, root);
+}
+
+function dereferenceOpenApiLocalRefs<T>(
+  value: T,
+  root: unknown = value,
+  seenRefs = new Set<string>(),
+): T {
+  if (Array.isArray(value)) {
+    return value.map((item) =>
+      dereferenceOpenApiLocalRefs(item, root, seenRefs)
+    ) as T;
+  }
+
+  if (!value || typeof value !== "object") return value;
+
+  const objectValue = value as Record<string, unknown>;
+  if (typeof objectValue.$ref === "string") {
+    const ref = objectValue.$ref;
+    if (seenRefs.has(ref)) {
+      throw new Error(`Circular OpenAPI reference detected: ${ref}`);
+    }
+
+    const resolved = resolveLocalJsonPointer(root, ref);
+    if (resolved === undefined) {
+      throw new Error(`Unable to resolve OpenAPI reference: ${ref}`);
+    }
+
+    const nextSeenRefs = new Set(seenRefs);
+    nextSeenRefs.add(ref);
+    const { $ref: _ref, ...overrides } = objectValue;
+    return dereferenceOpenApiLocalRefs(
+      {
+        ...cloneJson(resolved),
+        ...overrides,
+      },
+      root,
+      nextSeenRefs,
+    ) as T;
+  }
+
+  const dereferenced: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(objectValue)) {
+    dereferenced[key] = dereferenceOpenApiLocalRefs(child, root, seenRefs);
+  }
+  return dereferenced as T;
+}
+
+/**
+ * Extracts value from object using JSONPath-like string
+ */
+function extractValue(obj: any, path: string): any {
+  return path.split(".").reduce((current, key) => current?.[key], obj);
+}
+
+/**
+ * Calls authentication endpoint and returns token
+ */
+async function callAuthEndpoint(
+  authConfig: DynamicAuth,
+  baseUrl: string,
+): Promise<CachedToken> {
+  const authUrl = authConfig.authEndpoint.url.startsWith("http")
+    ? authConfig.authEndpoint.url
+    : baseUrl + authConfig.authEndpoint.url;
+
+  const method = authConfig.authEndpoint.method || "POST";
+  const headers = {
+    "Content-Type": "application/json",
+    "User-Agent": "Copilotz-Agents/1.0",
+    ...authConfig.authEndpoint.headers,
+  };
+
+  let body: string | undefined;
+  if (method !== "GET") {
+    body = JSON.stringify(
+      authConfig.authEndpoint.body || authConfig.authEndpoint.credentials || {},
+    );
+  }
+
+  console.log(`🔐 Calling auth endpoint: ${method} ${authUrl}`);
+
+  const response = await fetch(authUrl, { method, headers, body });
+
+  if (!response.ok) {
+    throw new Error(
+      `Authentication failed: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  const authResponse = authConfig.tokenExtraction.path
+    ? await response.json()
+    : undefined;
+  const token = authConfig.tokenExtraction.path
+    ? extractValue(authResponse, authConfig.tokenExtraction.path)
+    : (await response.text()).trim();
+
+  if (!token) {
+    throw new Error(
+      authConfig.tokenExtraction.path
+        ? `Token not found at path: ${authConfig.tokenExtraction.path}`
+        : "Token not found in response body",
+    );
+  }
+
+  // Calculate expiry
+  let expiry = Date.now() + (authConfig.cache?.duration || 3600) * 1000;
+  if (authResponse && authConfig.refreshConfig?.expiryPath) {
+    const expiryValue = extractValue(
+      authResponse,
+      authConfig.refreshConfig.expiryPath,
+    );
+    if (expiryValue) {
+      // Handle both absolute timestamps and relative seconds
+      expiry = typeof expiryValue === "number" && expiryValue > 1000000000
+        ? expiryValue * 1000 // Unix timestamp
+        : Date.now() + expiryValue * 1000; // Relative seconds
+    }
+  }
+
+  // Extract refresh token if configured
+  const refreshToken = authConfig.refreshConfig?.refreshPath
+    ? authResponse
+      ? extractValue(authResponse, authConfig.refreshConfig.refreshPath)
+      : undefined
+    : undefined;
+
+  console.log(
+    `✅ Authentication successful, token expires: ${
+      new Date(expiry).toISOString()
+    }`,
+  );
+
+  return { token, expiry, refreshToken };
+}
+
+/**
+ * Gets or refreshes authentication token for dynamic auth
+ */
+async function getDynamicToken(
+  authConfig: DynamicAuth,
+  baseUrl: string,
+  apiName: string,
+): Promise<string> {
+  const cacheKey = `${apiName}_dynamic_token`;
+  const cached = tokenCache.get(cacheKey);
+  const now = Date.now();
+
+  // Check if we have a valid cached token
+  if (
+    cached &&
+    cached.expiry >
+      now + (authConfig.refreshConfig?.refreshBeforeExpiry || 300) * 1000
+  ) {
+    return cached.token;
+  }
+
+  // Try to refresh if we have a refresh token and refresh endpoint
+  if (cached?.refreshToken && authConfig.refreshConfig?.refreshEndpoint) {
+    try {
+      console.log(`🔄 Refreshing token for ${apiName}`);
+
+      const refreshUrl =
+        authConfig.refreshConfig.refreshEndpoint.startsWith("http")
+          ? authConfig.refreshConfig.refreshEndpoint
+          : baseUrl + authConfig.refreshConfig.refreshEndpoint;
+
+      const refreshResponse = await fetch(refreshUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "Copilotz-Agents/1.0",
+        },
+        body: JSON.stringify({ refresh_token: cached.refreshToken }),
+      });
+
+      if (refreshResponse.ok) {
+        const refreshData = await refreshResponse.json();
+        const newToken = extractValue(
+          refreshData,
+          authConfig.tokenExtraction.path ?? "",
+        );
+        if (newToken) {
+          const newCached: CachedToken = {
+            token: newToken,
+            expiry: now + (authConfig.cache?.duration || 3600) * 1000,
+            refreshToken: cached.refreshToken,
+          };
+          tokenCache.set(cacheKey, newCached);
+          console.log(`✅ Token refreshed for ${apiName}`);
+          return newToken;
+        }
+      }
+    } catch (error) {
+      console.warn(
+        `⚠️ Token refresh failed for ${apiName}, getting new token:`,
+        error,
+      );
+    }
+  }
+
+  // Get new token
+  const newToken = await callAuthEndpoint(authConfig, baseUrl);
+
+  if (authConfig.cache?.enabled !== false) {
+    tokenCache.set(cacheKey, newToken);
+  }
+
+  return newToken.token;
+}
+
+/**
+ * Applies authentication configuration to headers and query parameters
+ */
+async function applyAuthentication(
+  auth: API["auth"] | undefined,
+  headers: Record<string, string>,
+  queryParams: URLSearchParams,
+  baseUrl?: string,
+  apiName?: string,
+) {
+  if (!auth) return;
+  const normalizedAuth: AuthConfig = auth;
+
+  switch (normalizedAuth.type) {
+    case "apiKey":
+      if (normalizedAuth.in === "header") {
+        headers[normalizedAuth.name] = normalizedAuth.key;
+      } else if (normalizedAuth.in === "query") {
+        queryParams.set(normalizedAuth.name, normalizedAuth.key);
+      }
+      break;
+
+    case "bearer": {
+      const scheme = normalizedAuth.scheme || "Bearer";
+      headers["Authorization"] = `${scheme} ${normalizedAuth.token}`;
+      break;
+    }
+    case "basic": {
+      const credentials = btoa(
+        `${normalizedAuth.username}:${normalizedAuth.password}`,
+      );
+      headers["Authorization"] = `Basic ${credentials}`;
+      break;
+    }
+    case "custom":
+      if (normalizedAuth.headers) {
+        Object.assign(headers, normalizedAuth.headers);
+      }
+      if (normalizedAuth.queryParams) {
+        Object.entries(normalizedAuth.queryParams).forEach(([key, value]) => {
+          queryParams.set(key, String(value));
+        });
+      }
+      break;
+
+    case "dynamic": {
+      if (!baseUrl || !apiName) {
+        throw new Error("Dynamic authentication requires baseUrl and apiName");
+      }
+
+      const token = await getDynamicToken(normalizedAuth, baseUrl, apiName);
+
+      if (normalizedAuth.tokenExtraction.type === "bearer") {
+        const prefix = normalizedAuth.tokenExtraction.prefix || "Bearer ";
+        headers["Authorization"] = `${prefix}${token}`;
+      } else if (normalizedAuth.tokenExtraction.type === "apiKey") {
+        const headerName = normalizedAuth.tokenExtraction.headerName ||
+          "Authorization";
+        const prefix = normalizedAuth.tokenExtraction.prefix || "";
+        headers[headerName] = `${prefix}${token}`;
+      }
+      break;
+    }
+  }
+}
+
+/**
+ * Creates a tool execution function for an API operation
+ */
+function createApiExecutor(
+  apiConfig: API,
+  path: string,
+  method: string,
+  toolKey: string,
+  baseUrl: string,
+  parameterMetadata: {
+    pathParams: Set<string>;
+    queryParams: Set<string>;
+    bodyParams: Set<string>;
+    isObjectBody: boolean;
+  },
+) {
+  return async (
+    args: unknown,
+    context?: unknown,
+  ) => {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let unsubscribe: (() => void) | undefined;
+    let abortReason: "timeout" | "cancelled" | undefined;
+    try {
+      const executionContext = context as
+        | WorkflowToolExecutionContext
+        | undefined;
+      const params = (args && typeof args === "object")
+        ? args as Record<string, unknown>
+        : {};
+
+      // Build the URL
+      let url = baseUrl + path;
+
+      // Replace path parameters
+      parameterMetadata.pathParams.forEach((key) => {
+        if (params[key] !== undefined) {
+          url = url.replace(
+            `{${key}}`,
+            encodeURIComponent(String(params[key])),
+          );
+        }
+      });
+
+      // Build query parameters (only for parameters explicitly marked as query)
+      const queryParams = new URLSearchParams();
+      parameterMetadata.queryParams.forEach((key) => {
+        if (params[key] !== undefined) {
+          queryParams.append(key, String(params[key]));
+        }
+      });
+
+      // Build request headers
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "User-Agent": "Copilotz-Agents/1.0",
+        ...apiConfig.headers, // Legacy header support (still supported)
+      };
+
+      // Apply authentication (now async for dynamic auth)
+      await applyAuthentication(
+        apiConfig.auth,
+        headers,
+        queryParams,
+        baseUrl,
+        apiConfig.name,
+      );
+
+      const requestMethod = method.toUpperCase();
+
+      // Add body for methods that support it
+      let requestBody: unknown;
+      if (
+        ["POST", "PUT", "PATCH", "DELETE"].includes(requestMethod) &&
+        parameterMetadata.bodyParams.size > 0
+      ) {
+        if (parameterMetadata.isObjectBody) {
+          // Collect all body parameters into an object
+          requestBody = {};
+          const objectBody = requestBody as Record<string, unknown>;
+          parameterMetadata.bodyParams.forEach((key) => {
+            if (params[key] !== undefined) {
+              objectBody[key] = params[key];
+            }
+          });
+        } else {
+          // Use the 'body' parameter directly
+          requestBody = params.body;
+        }
+      }
+
+      let preparedRequest: APIPrepareRequestInput = {
+        url,
+        method: requestMethod,
+        headers,
+        queryParams,
+        body: requestBody,
+      };
+
+      if (apiConfig.prepareRequest) {
+        const prepareContext: APIPrepareRequestContext = {
+          apiName: apiConfig.name,
+          toolKey,
+          toolExecutionId: executionContext?.toolExecutionId,
+          toolCallId: executionContext?.toolCallId,
+          correlationId: executionContext?.correlationId,
+          idempotencyKey: executionContext?.idempotencyKey,
+          threadId: executionContext?.threadId,
+          senderId: executionContext?.senderId,
+          senderType: executionContext?.senderType,
+          userExternalId: executionContext?.userExternalId,
+          agent: executionContext?.agent ?? null,
+          namespace: executionContext?.namespace,
+          userMetadata: executionContext?.userMetadata,
+          threadMetadata: executionContext?.threadMetadata,
+          resolveAsset: executionContext?.resolveAsset,
+        };
+        preparedRequest =
+          (await apiConfig.prepareRequest(preparedRequest, prepareContext)) ??
+            preparedRequest;
+      }
+
+      // Add final query parameters to URL after prepareRequest has had a
+      // chance to mutate them.
+      url = preparedRequest.url;
+      const finalQueryParams = preparedRequest.queryParams;
+      if (finalQueryParams.toString()) {
+        url += (url.includes("?") ? "&" : "?") + finalQueryParams.toString();
+      }
+
+      // Build request options
+      const requestOptions: RequestInit = {
+        method: preparedRequest.method,
+        headers: preparedRequest.headers,
+      };
+
+      if (preparedRequest.body !== undefined) {
+        requestOptions.body = typeof preparedRequest.body === "string"
+          ? preparedRequest.body
+          : JSON.stringify(preparedRequest.body);
+      }
+
+      // Set cancellation / timeout
+      const controller = new AbortController();
+      unsubscribe = executionContext?.onCancel?.(() => {
+        abortReason = "cancelled";
+        controller.abort();
+      });
+      timeoutId = typeof apiConfig.timeout === "number" && apiConfig.timeout > 0
+        ? setTimeout(() => {
+          if (!controller.signal.aborted) {
+            abortReason = "timeout";
+            controller.abort();
+          }
+        }, apiConfig.timeout * 1000)
+        : undefined;
+      requestOptions.signal = controller.signal;
+      if (executionContext?.cancelled) {
+        abortReason = "cancelled";
+        controller.abort();
+      }
+
+      // Make the request
+      const response = await fetch(url, requestOptions);
+
+      // Parse response
+      const contentType = response.headers.get("content-type") || "";
+      let responseData;
+
+      if (contentType.includes("application/json")) {
+        responseData = await response.json();
+      } else {
+        responseData = await response.text();
+      }
+      responseData = sanitizeToolJsonValue(responseData);
+
+      if (!response.ok) {
+        throw new ToolExecutionError(
+          responseData,
+          response.status,
+          response.statusText,
+        );
+      }
+
+      if (apiConfig.includeResponseHeaders) {
+        return {
+          body: responseData,
+          headers: sanitizeToolJsonValue(
+            Object.fromEntries(response.headers.entries()),
+          ),
+        };
+      }
+
+      return responseData;
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(
+          abortReason === "timeout"
+            ? `Request timeout after ${apiConfig.timeout} seconds`
+            : `Request cancelled`,
+        );
+      }
+      throw error;
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      unsubscribe?.();
+    }
+  };
+}
+
+/**
+ * Generates Tool instances from an OpenAPI configuration
+ */
+export function generateApiTools(apiConfig: API): WorkflowTool[] {
+  const tools: WorkflowTool[] = [];
+  const schema = dereferenceOpenApiLocalRefs(
+    normalizeOpenApiSchema(apiConfig.openApiSchema),
+  );
+
+  // Determine base URL
+  const baseUrl = apiConfig.baseUrl ||
+    (schema.servers && schema.servers.length > 0 ? schema.servers[0].url : "");
+
+  if (!baseUrl) {
+    throw new Error(
+      `No base URL found for API ${apiConfig.name}. Provide baseUrl in config or servers in OpenAPI schema.`,
+    );
+  }
+
+  // Process each path and method
+  Object.entries(schema.paths).forEach(([path, pathItem]) => {
+    Object.entries(pathItem).forEach(([method, operation]) => {
+      // Skip non-operation properties
+      if (
+        !["get", "post", "put", "patch", "delete", "options", "head"].includes(
+          method.toLowerCase(),
+        )
+      ) {
+        return;
+      }
+
+      const op = operation as OpenAPIOperation;
+
+      // Generate tool key and name
+      const toolKey = op.operationId ||
+        `${apiConfig.name}_${method}_${path.replace(/[^a-zA-Z0-9]/g, "_")}`;
+
+      const toolName = op.summary ||
+        `${method.toUpperCase()} ${path}`;
+
+      const toolDescription = op.description ||
+        `${
+          apiConfig.description ? apiConfig.description + ": " : ""
+        }${toolName}`;
+
+      // Convert OpenAPI parameters to JSON Schema
+      const { schema: inputSchema, parameterMetadata } =
+        convertParameterToJsonSchema(op.parameters, op.requestBody);
+
+      // Create the tool
+      const tool: WorkflowTool = {
+        id: `api:${apiConfig.id}:${toolKey}`,
+        key: toolKey,
+        name: toolName,
+        description: toolDescription,
+        externalId: null,
+        metadata: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        outputSchema: null,
+        inputSchema,
+        historyPolicy: apiConfig.toolPolicies?.[toolKey] ??
+          apiConfig.historyPolicyDefaults,
+        execute: createApiExecutor(
+          apiConfig,
+          path,
+          method,
+          toolKey,
+          baseUrl,
+          parameterMetadata,
+        ),
+      };
+
+      tools.push(tool);
+    });
+  });
+
+  return tools;
+}
+
+/**
+ * Generates tools from multiple API configurations
+ */
+export function generateAllApiTools(apiConfigs: API[]): WorkflowTool[] {
+  const allTools: WorkflowTool[] = [];
+
+  apiConfigs.forEach((config) => {
+    try {
+      const tools = generateApiTools(config);
+      allTools.push(...tools);
+    } catch (error) {
+      console.error(`Failed to generate tools for API ${config.name}:`, error);
+    }
+  });
+
+  return allTools;
+}

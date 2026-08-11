@@ -2,7 +2,7 @@
 title: Copilotz v3 Content and Asset Model
 description: A unified durable-content contract for text, structured values, tools, files, and realtime outcomes.
 section: Internal Design
-status: proposal
+status: implementation
 ---
 
 # Copilotz v3 Content and Asset Model
@@ -33,6 +33,35 @@ message / tool execution / event
 Raw token, audio, and future video frames are not assets as they travel. They
 remain ephemeral Web Stream chunks. A completed recording or transcript becomes
 an asset only when retention policy elects to persist it.
+
+## Implementation Status
+
+The Gate 2 content seam is implemented in `runtime/content/` and exported from
+the root package and the `./content` subpath. It provides factory-created,
+runtime-neutral contracts for immediate publication, transaction-free boundary
+preparation, authorization-aware batch resolution, SHA-256 integrity checks, and
+Web Stream reads. A tenant-scoped memory repository remains available for
+isolated tests and explicitly non-durable embedded use.
+
+The graph-native database repository stores ready text, JSON, and binary bodies
+up to the provisional 64 KiB limit as asset nodes. `createContentPreparer()`
+produces refs plus uncommitted immutable bodies; a typed aggregate then commits
+those bodies, its owner, `has_asset` edges, one compact semantic event, and all
+matched deliveries in one Ominipg transaction. Standalone publication emits
+`asset.created`. Message creation now uses this path, validates existing refs
+transactionally, and detects content conflicts on an idempotent replay. Events
+and message nodes never duplicate body data.
+
+Tool executions and logical/provider LLM attempts now use the same repository
+for role-labelled arguments, output, projections, errors, model input, answer,
+reasoning, tool calls, and restricted traces. Owner links are synchronized when
+mutable workflow projections replace content, and promoting a tool output or LLM
+answer into a public message reuses its immutable body.
+
+Object-backed staging, document/memory ownership, realtime finalization,
+retention, and v1 compatibility projection remain subsequent verticals. The
+current v1 runtime remains authoritative until those A29–A35 paths move end to
+end; no dual canonical write path has been introduced.
 
 ## Goals
 
@@ -594,8 +623,8 @@ imports in core.
   Streams, never database frame records.
 - The default private host can use an in-memory body backend only for explicitly
   non-durable operation.
-- A remote/shared host requires a storage backend visible to both producer and
-  worker, or a scoped content-transfer workload.
+- A remote/shared execution topology requires a storage backend visible to both
+  producer and worker, or a scoped content-transfer workload.
 - Copilotz owns and closes only the private host/session it created. An injected
   dispatcher, target, session, or storage backend remains app-owned.
 
@@ -611,9 +640,8 @@ During the v3 migration:
   `assetStore` access;
 - project canonical messages to v1 REST `content: string` plus
   `metadata.attachments` until the chat adapter moves;
-- project semantic/delta events to `NEW_MESSAGE`, `TOKEN`, `TOOL_CALL`,
-  `TOOL_CALL_DELTA`, `TOOL_RESULT`, `LLM_RESULT`, `ASSET_CREATED`, and errors
-  for the v1 SSE surface;
+- project semantic/delta events to the versioned legacy transport vocabulary at
+  the v1 SSE boundary;
 - preserve `/v1/assets/:id?format=dataUrl` with authorization and size limits.
 
 Compatibility projection happens at the boundary. Canonical internal records do
@@ -621,22 +649,28 @@ not store both old and new content shapes.
 
 ### Existing records
 
-The v1 upgrade creates assets for existing canonical bodies and rewrites domain
-records to references:
+The isolated v1 upgrade creates assets for existing bodies and rewrites domain
+records to references inside each tenant's upgrade transaction:
 
 1. text/reasoning fields become text assets;
 2. current attachment metadata and asset nodes are normalized and linked;
 3. tool args/output/projected output/error become typed content assets;
-4. document bodies and memory text are migrated according to their collection;
+4. document sources and memory snapshots are migrated according to their
+   collection;
 5. duplicate body copies within one aggregate can reuse a single newly created
    asset after integrity checks;
 6. IDs and message/tool/domain relationships remain stable;
-7. derived preview/search text is rebuilt and verified;
-8. migration is idempotent and applies independently to every tenant schema.
+7. derived chunk/search text remains inline as an intentional searchable
+   projection;
+8. migration is idempotent and applies independently to every tenant schema;
+9. non-canonical legacy asset records require `resolveLegacyAsset`, supplied by
+   the maintenance adapter that knows how to read the old filesystem or object
+   store.
 
-Large migration batches are checkpointed and bounded. Old body fields are
-dropped only after reference resolution, digest/size verification, downstream
-compatibility tests, and backup/rollback validation.
+Old body fields are removed only after reference resolution and digest/size
+verification. If any body cannot be resolved or encoded, the tenant transaction
+rolls back to the untouched v1 tables. Tenant schemas are upgraded independently
+so an operator can validate and back up each tenant before continuing.
 
 ## Acceptance Tests
 

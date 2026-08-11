@@ -1,0 +1,498 @@
+import type {
+  AssetRecord,
+  AuthorizeContent,
+  ContentInput,
+  ContentPreparer,
+  ContentRef,
+  ContentResolver,
+  DatabaseAssetRepository,
+  PreparedContent,
+  PublishAssetInput,
+  ResolvedContent,
+} from "../content/index.ts";
+import type {
+  AddThreadParticipantInput,
+  CancelLlmAttemptInput,
+  CancelToolExecutionInput,
+  CompleteLlmAttemptInput,
+  CompleteToolExecutionInput,
+  ConversationMessage,
+  ConversationRepository,
+  ConversationThread,
+  CreateDomainRelationInput,
+  CreateLlmAttemptInput,
+  CreateMessageInput,
+  CreateParticipantInput,
+  CreateThreadInput,
+  CreateToolExecutionInput,
+  DeleteDomainRelationInput,
+  DeleteThreadMessagesResult,
+  DeleteThreadResult,
+  DomainRelation,
+  DomainRelationRepository,
+  EventCollections,
+  FailLlmAttemptInput,
+  FailToolExecutionInput,
+  ListDomainRelationsOptions,
+  LlmAttempt,
+  LlmAttemptRepository,
+  MessageRevisionResult,
+  MutationIdentity,
+  Participant,
+  ParticipantPatch,
+  ReviseMessageInput,
+  ScopedEventCollection,
+  ThreadPatch,
+  ToolExecution,
+  ToolExecutionRepository,
+  UpdateLlmAttemptInput,
+  UpdateToolExecutionInput,
+  ValidateCollectionRecord,
+} from "../domain/index.ts";
+import type {
+  CoordinatedMutationResult,
+  CopilotzEvent,
+  CopilotzEventFilter,
+  CopilotzEventHub,
+  DeliveryScopeSettlement,
+  DurableEvent,
+  DurableEventDraft,
+  EphemeralEvent,
+  EphemeralEventDraft,
+  EventDelivery,
+  EventDispatchReport,
+  EventPublisher,
+  EventStore,
+  SqlSession,
+} from "../events/index.ts";
+import type {
+  CreateDeliveryExecutorOptions,
+  DeliveryContextBase,
+  DeliveryExecutorOwnership,
+  DeliveryRecoveryDispatch,
+  DeliveryWorkload,
+  LiveProcessorContextBase,
+} from "../execution/index.ts";
+import type {
+  PluginRegistry,
+  PluginResource,
+  PluginResourceOrigin,
+  PluginResourceType,
+} from "../plugins/index.ts";
+import type {
+  ConnectAttachmentInput,
+  RunHandle,
+  RunInput,
+  ThreadAttachment,
+} from "../attachments/index.ts";
+import type {
+  ScheduledJobRepository,
+  ScopedScheduledJobs,
+} from "../schedules/index.ts";
+import type {
+  KnowledgeRepository,
+  ScopedKnowledge,
+} from "../knowledge/types.ts";
+
+export type ScopedMutationOptions = Readonly<{
+  operationKey?: string;
+  metadata?: Record<string, unknown>;
+}>;
+
+export type EphemeralEventInput = EphemeralEventDraft;
+
+export type ScopedEphemeralEventInput =
+  & Omit<
+    EphemeralEventInput,
+    "namespace" | "correlationId" | "causationId"
+  >
+  & Readonly<{
+    correlationId?: string;
+    causationId?: string;
+  }>;
+
+export type ScopedEventWaitOptions =
+  & Omit<
+    CopilotzEventFilter,
+    "namespace"
+  >
+  & Readonly<{
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+  }>;
+
+export type ScopedEvents = Readonly<{
+  emit(input: ScopedEphemeralEventInput): Promise<EphemeralEvent>;
+  list(
+    options?: Omit<CopilotzEventFilter, "namespace" | "durable"> & {
+      limit?: number;
+    },
+  ): Promise<readonly DurableEvent[]>;
+  waitFor(options: ScopedEventWaitOptions): Promise<CopilotzEvent>;
+}>;
+
+export type ScopedContent = Readonly<{
+  prepare(
+    input: ContentInput | readonly ContentInput[],
+    options: { operationKey: string },
+  ): Promise<PreparedContent>;
+  publish(
+    input: Omit<PublishAssetInput, "namespace" | "idempotencyKey">,
+    options: { operationKey: string },
+  ): Promise<AssetRecord>;
+  get(assetId: string): Promise<AssetRecord | null>;
+  getMany(assetIds: readonly string[]): Promise<readonly AssetRecord[]>;
+  resolve(ref: ContentRef): Promise<ResolvedContent>;
+  resolveMany(refs: readonly ContentRef[]): Promise<readonly ResolvedContent[]>;
+  open(ref: ContentRef): Promise<ReadableStream<Uint8Array>>;
+}>;
+
+export type ScopedConversation = Readonly<{
+  createParticipant(
+    input: Omit<CreateParticipantInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<Participant>>;
+  updateParticipant(
+    id: string,
+    patch: ParticipantPatch,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<Participant>>;
+  getParticipant(id: string): Promise<Participant | null>;
+  getParticipantByExternalId(externalId: string): Promise<Participant | null>;
+  listParticipants(
+    options?: Parameters<ConversationRepository["listParticipants"]>[1],
+  ): Promise<readonly Participant[]>;
+  createThread(
+    input: Omit<CreateThreadInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<ConversationThread>>;
+  addThreadParticipant(
+    input: Omit<AddThreadParticipantInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<ConversationThread>>;
+  updateThread(
+    id: string,
+    patch: ThreadPatch,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<ConversationThread>>;
+  deleteThread(
+    id: string,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<DeleteThreadResult>>;
+  getThread(id: string): Promise<ConversationThread | null>;
+  getThreadByExternalId(externalId: string): Promise<ConversationThread | null>;
+  listThreads(
+    options?: Parameters<ConversationRepository["listThreads"]>[1],
+  ): Promise<readonly ConversationThread[]>;
+  createMessage(
+    input: Omit<CreateMessageInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<ConversationMessage>>;
+  reviseMessage(
+    input: Omit<ReviseMessageInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<MessageRevisionResult>>;
+  deleteThreadMessages(
+    threadId: string,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<DeleteThreadMessagesResult>>;
+  getMessage(id: string): Promise<ConversationMessage | null>;
+  listMessages(
+    threadId: string,
+    options?: Parameters<ConversationRepository["listMessages"]>[2],
+  ): Promise<readonly ConversationMessage[]>;
+  listMessageRevisions(
+    rootMessageId: string,
+  ): Promise<readonly ConversationMessage[]>;
+}>;
+
+export type ScopedLlmAttempts = Readonly<{
+  create(
+    input: Omit<CreateLlmAttemptInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<LlmAttempt>>;
+  update(
+    input: Omit<UpdateLlmAttemptInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<LlmAttempt>>;
+  complete(
+    input: Omit<CompleteLlmAttemptInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<LlmAttempt>>;
+  fail(
+    input: Omit<FailLlmAttemptInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<LlmAttempt>>;
+  cancel(
+    input: Omit<CancelLlmAttemptInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<LlmAttempt>>;
+  get(id: string): Promise<LlmAttempt | null>;
+  list(
+    threadId: string,
+    options?: { after?: string; limit?: number },
+  ): Promise<readonly LlmAttempt[]>;
+}>;
+
+export type ScopedToolExecutions = Readonly<{
+  create(
+    input: Omit<CreateToolExecutionInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<ToolExecution>>;
+  update(
+    input: Omit<UpdateToolExecutionInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<ToolExecution>>;
+  complete(
+    input: Omit<CompleteToolExecutionInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<ToolExecution>>;
+  fail(
+    input: Omit<FailToolExecutionInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<ToolExecution>>;
+  cancel(
+    input: Omit<CancelToolExecutionInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<ToolExecution>>;
+  get(id: string): Promise<ToolExecution | null>;
+  getByToolCallId(
+    threadId: string,
+    toolCallId: string,
+  ): Promise<ToolExecution | null>;
+  list(
+    threadId: string,
+    options?: { after?: string; limit?: number },
+  ): Promise<readonly ToolExecution[]>;
+}>;
+
+export type ScopedRelations = Readonly<{
+  create(
+    input: Omit<CreateDomainRelationInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<DomainRelation>>;
+  delete(
+    input: Omit<DeleteDomainRelationInput, "namespace" | "identity">,
+    options?: ScopedMutationOptions,
+  ): Promise<CoordinatedMutationResult<{ id: string; deleted: true }>>;
+  get(id: string): Promise<DomainRelation | null>;
+  list(
+    options?: Omit<ListDomainRelationsOptions, "namespace">,
+  ): Promise<readonly DomainRelation[]>;
+}>;
+
+export type ScopedPluginResources = Readonly<{
+  list<T extends PluginResource = PluginResource>(
+    type: PluginResourceType,
+  ): readonly T[];
+  get<T extends PluginResource = PluginResource>(
+    type: PluginResourceType,
+    id: string,
+  ): T | undefined;
+  require<T extends PluginResource = PluginResource>(
+    type: PluginResourceType,
+    id: string,
+  ): T;
+  origin(
+    type: PluginResourceType,
+    id: string,
+  ): PluginResourceOrigin | undefined;
+}>;
+
+export type CopilotzProcessorCapabilities = Readonly<{
+  namespace: string;
+  events: ScopedEvents;
+  resources: ScopedPluginResources;
+  content: ScopedContent;
+  conversation: ScopedConversation;
+  collections: Readonly<Record<string, ScopedEventCollection>>;
+  llmAttempts: ScopedLlmAttempts;
+  toolExecutions: ScopedToolExecutions;
+  relations: ScopedRelations;
+  schedules: ScopedScheduledJobs;
+  knowledge: ScopedKnowledge;
+}>;
+
+export type CopilotzProcessorContext =
+  & DeliveryContextBase
+  & CopilotzProcessorCapabilities;
+
+export type CopilotzLiveProcessorContext =
+  & LiveProcessorContextBase
+  & CopilotzProcessorCapabilities;
+
+export type CopilotzMutationIdentityFactory = (
+  operationKey: string,
+  metadata?: Record<string, unknown>,
+) => MutationIdentity;
+
+export type CopilotzCapabilitySource = Readonly<{
+  kind: "delivery" | "stream" | "live";
+  id: string;
+  consumerId?: string;
+}>;
+
+/** Durable causal scope used to bind domain capabilities outside a delivery. */
+export type CopilotzCapabilityBase = Readonly<{
+  event: CopilotzEvent;
+  signal: AbortSignal;
+  createMutationIdentity: CopilotzMutationIdentityFactory;
+  source?: CopilotzCapabilitySource;
+}>;
+
+export type CopilotzEngineExecutionOptions = Omit<
+  CreateDeliveryExecutorOptions,
+  "store" | "registry" | "createContext"
+>;
+
+export type CopilotzEngineAttachmentOptions = Readonly<{
+  /** Logical Oxian workload used for raw realtime streams. */
+  streamWorkload?: string;
+  /** Capacity of the separate embedded stream worker. */
+  streamCapacity?: number;
+  /** Stable worker ID for the separate embedded stream worker. */
+  streamWorkerId?: string;
+  /** Poll interval used while observing causal delivery settlement. */
+  settlementPollMs?: number;
+}>;
+
+export type CreateCopilotzEngineOptions = Readonly<{
+  session: SqlSession;
+  registry: PluginRegistry;
+  schema?: string;
+  initializeSchema?: boolean;
+  execution?: CopilotzEngineExecutionOptions;
+  attachments?: CopilotzEngineAttachmentOptions;
+  eventHub?: CopilotzEventHub;
+  publish?: EventPublisher;
+  onDispatchFailure?: (failure: {
+    deliveryId: string;
+    error: unknown;
+  }) => void;
+  authorizeContent?: AuthorizeContent;
+  validateCollection?: ValidateCollectionRecord;
+  createId?: () => string;
+  now?: () => Date;
+  random?: () => number;
+  digest?: (bytes: Uint8Array) => Promise<`sha256:${string}`>;
+  maxDatabaseBytes?: number;
+  leaseMs?: number;
+  maxAttempts?: number;
+  retryBaseMs?: number;
+  retryCapMs?: number;
+}>;
+
+export type CopilotzEngineMaintenanceResult = Readonly<{
+  recovered: number;
+  dispatchFailures: number;
+  compacted: Readonly<{ events: number; deliveries: number }>;
+}>;
+
+export type CopilotzEngine = Readonly<{
+  plugins: PluginRegistry;
+  execution: Readonly<{
+    ownership: DeliveryExecutorOwnership;
+    workload: string;
+    liveWorkload: string;
+    streamWorkload: string;
+    /** Register these closures in a worker created within this runtime. */
+    workloads: Readonly<Record<string, DeliveryWorkload>>;
+  }>;
+  content: Readonly<{
+    assets: DatabaseAssetRepository;
+    preparer: ContentPreparer;
+    resolver: ContentResolver;
+  }>;
+  conversation: ConversationRepository;
+  collections: EventCollections;
+  llmAttempts: LlmAttemptRepository;
+  toolExecutions: ToolExecutionRepository;
+  relations: DomainRelationRepository;
+  schedules: ScheduledJobRepository;
+  knowledge: KnowledgeRepository;
+  connect(input: ConnectAttachmentInput): Promise<ThreadAttachment>;
+  run(input: RunInput): Promise<RunHandle>;
+  events: Readonly<{
+    append(
+      draft: DurableEventDraft,
+      options?: { priority?: number; maxAttempts?: number },
+    ): Promise<CoordinatedMutationResult<void>>;
+    emit(input: EphemeralEventInput): Promise<EphemeralEvent>;
+    subscribe(filter?: CopilotzEventFilter): ReadableStream<CopilotzEvent>;
+    waitFor(
+      filter: CopilotzEventFilter & {
+        namespace: string;
+        timeoutMs?: number;
+        pollIntervalMs?: number;
+      },
+      signal?: AbortSignal,
+    ): Promise<CopilotzEvent>;
+    get(namespace: string, id: string): Promise<DurableEvent | null>;
+    list(options: {
+      namespace: string;
+      threadId?: string;
+      correlationId?: string;
+      afterPosition?: string;
+      limit?: number;
+    }): Promise<readonly DurableEvent[]>;
+    settlement(
+      namespace: string,
+      rootEventId: string,
+    ): Promise<DeliveryScopeSettlement>;
+    cancel(
+      namespace: string,
+      rootEventId: string,
+      reason?: string,
+    ): Promise<number>;
+  }>;
+  deliveries: Readonly<{
+    get(namespace: string, id: string): Promise<EventDelivery | null>;
+    list(options: {
+      namespace: string;
+      eventId?: string;
+      consumerId?: string;
+      status?: EventDelivery["status"];
+      limit?: number;
+    }): Promise<readonly EventDelivery[]>;
+    retry(namespace: string, id: string): Promise<boolean>;
+    discard(namespace: string, id: string): Promise<boolean>;
+  }>;
+  recover(options?: {
+    namespace?: string;
+    consumerIds?: readonly string[];
+    limit?: number;
+  }): Promise<DeliveryRecoveryDispatch>;
+  maintenance(options?: {
+    namespace?: string;
+    consumerIds?: readonly string[];
+    limit?: number;
+    retentionMs?: number | null;
+    now?: Date;
+  }): Promise<CopilotzEngineMaintenanceResult>;
+  shutdown(reason?: string): Promise<void>;
+}>;
+
+export type CreateCopilotzProcessorCapabilitiesOptions = Readonly<{
+  base: CopilotzCapabilityBase;
+  registry: PluginRegistry;
+  assets: DatabaseAssetRepository;
+  preparer: ContentPreparer;
+  resolver: ContentResolver;
+  conversation: ConversationRepository;
+  collections: EventCollections;
+  llmAttempts: LlmAttemptRepository;
+  toolExecutions: ToolExecutionRepository;
+  relations: DomainRelationRepository;
+  schedules: ScheduledJobRepository;
+  knowledge: KnowledgeRepository;
+  eventHub: CopilotzEventHub;
+  publishEvent?: (event: CopilotzEvent) => Promise<void>;
+  eventStore: Pick<EventStore, "listEvents">;
+  now?: () => Date;
+}>;
+
+export type CopilotzEngineDispatchReport = EventDispatchReport;
+export type CopilotzEnginePublishAssetInput = Omit<
+  PublishAssetInput,
+  "namespace"
+>;

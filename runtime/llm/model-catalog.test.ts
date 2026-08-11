@@ -8,7 +8,7 @@ import {
   OPENROUTER_MODELS_URL,
   resolveModelCatalogCandidates,
   resolveModelCatalogEntry,
-} from "@/runtime/llm/model-catalog.ts";
+} from "./model-catalog.ts";
 
 Deno.test("resolveModelCatalogEntry normalizes OpenRouter pricing and capabilities", async () => {
   const originalFetch = globalThis.fetch;

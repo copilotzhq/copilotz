@@ -1,0 +1,224 @@
+import {
+  createHypervisor,
+  type Hypervisor,
+  type HypervisorLifecycleCallbacks,
+  type HypervisorOptions,
+  type HypervisorTransport,
+} from "../../dependencies/oxian-hypervisor.ts";
+import type {
+  DeliveryDispatcher,
+  ExecutionWorkTarget,
+} from "../execution/index.ts";
+import { type CopilotzEvent, createCopilotzEventHub } from "../events/index.ts";
+import { createEventNativeApp } from "../../server/event-native.ts";
+import {
+  createEventNativeFetchHandler,
+  type CreateEventNativeFetchHandlerOptions,
+} from "../../server/fetch.ts";
+import { createCopilotzApplication } from "./application.ts";
+import type {
+  CopilotzApplication,
+  CreateCopilotzApplicationOptions,
+  InternalCopilotzApplication,
+} from "./types.ts";
+import {
+  type CopilotzPersistenceOptions,
+  openCopilotzPersistence,
+} from "./persistence.ts";
+
+type GatewayEngineOptions = Omit<
+  NonNullable<CreateCopilotzApplicationOptions["engine"]>,
+  "eventHub" | "execution"
+>;
+
+export type CopilotzGatewayHttpOptions = CreateEventNativeFetchHandlerOptions;
+
+export type CreateCopilotzGatewayOptions =
+  & Omit<
+    CreateCopilotzApplicationOptions,
+    "session" | "closeSession" | "engine"
+  >
+  & CopilotzPersistenceOptions
+  & Readonly<{
+    /** Creates a Gateway-owned Hypervisor when no dispatcher is injected. */
+    transports?: readonly HypervisorTransport[];
+    /** Advanced app-owned placement. Copilotz never closes it. */
+    dispatcher?: DeliveryDispatcher;
+    target?: ExecutionWorkTarget;
+    workloadTargets?: Readonly<Record<string, ExecutionWorkTarget>>;
+    admit?: HypervisorOptions["admit"];
+    assign?: HypervisorOptions["assign"];
+    sessions?: HypervisorOptions["sessions"];
+    signal?: AbortSignal;
+    hypervisorConfig?: HypervisorOptions["config"];
+    engine?: GatewayEngineOptions;
+    http?: CopilotzGatewayHttpOptions;
+  }>;
+
+export type CopilotzGateway =
+  & CopilotzApplication
+  & Readonly<{
+    role: "gateway";
+    transports: readonly HypervisorTransport[];
+    /** Present only when this Gateway created the Hypervisor. */
+    hypervisor?: Hypervisor;
+    /** Runtime-neutral application Fetch boundary. */
+    fetch(request: Request): Promise<Response>;
+  }>;
+
+function uniqueTransport(): HypervisorTransport {
+  return Object.freeze({
+    type: "in-process" as const,
+    config: Object.freeze({
+      topic: `copilotz.gateway.${crypto.randomUUID()}`,
+    }),
+  });
+}
+
+function rememberDurable(
+  event: CopilotzEvent,
+  seen: Set<string>,
+  order: string[],
+): boolean {
+  if (!event.durable) return true;
+  if (seen.has(event.id)) return false;
+  seen.add(event.id);
+  order.push(event.id);
+  if (order.length > 10_000) {
+    const removed = order.shift();
+    if (removed) seen.delete(removed);
+  }
+  return true;
+}
+
+async function settleAll(
+  operations: readonly (() => void | Promise<void>)[],
+  message: string,
+): Promise<void> {
+  const settled = await Promise.allSettled(
+    operations.map((operation) => operation()),
+  );
+  const failures = settled.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : []
+  );
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, message);
+}
+
+/** Creates the durable ingress/dispatch role without hosting plugin work. */
+export async function createCopilotzGateway(
+  options: CreateCopilotzGatewayOptions = {},
+  lifecycle: HypervisorLifecycleCallbacks = {},
+): Promise<CopilotzGateway> {
+  if (options.dispatcher && options.transports) {
+    throw new TypeError("Configure either dispatcher or transports, not both.");
+  }
+  if (
+    options.dispatcher &&
+    (options.admit || options.assign || options.sessions ||
+      options.hypervisorConfig)
+  ) {
+    throw new TypeError(
+      "Injected dispatchers own admission, assignment, sessions, and Hypervisor configuration.",
+    );
+  }
+
+  const persistence = await openCopilotzPersistence(options);
+  const eventHub = createCopilotzEventHub();
+  const transports = options.dispatcher
+    ? Object.freeze([])
+    : Object.freeze([...(options.transports ?? [uniqueTransport()])]);
+  let fetchApplication = (_request: Request): Promise<Response> =>
+    Promise.resolve(
+      new Response("Copilotz Gateway is initializing.", {
+        status: 503,
+      }),
+    );
+  const hypervisor = options.dispatcher ? undefined : createHypervisor({
+    transports,
+    admit: options.admit,
+    assign: options.assign,
+    sessions: options.sessions,
+    signal: options.signal,
+    config: options.hypervisorConfig,
+    fallback: (request) => fetchApplication(request),
+  }, lifecycle);
+  const dispatcher = options.dispatcher ?? hypervisor!;
+  const seenDurable = new Set<string>();
+  const durableOrder: string[] = [];
+  let application: InternalCopilotzApplication | undefined;
+
+  const onOutputEvent = async (event: CopilotzEvent): Promise<void> => {
+    if (!rememberDurable(event, seenDurable, durableOrder)) return;
+    await eventHub.publish(event);
+    await options.engine?.publish?.(event);
+  };
+
+  try {
+    application = await createCopilotzApplication({
+      namespace: options.namespace,
+      schema: options.schema,
+      core: options.core,
+      plugins: options.plugins,
+      resources: options.resources,
+      pluginResolver: options.pluginResolver,
+      toolCatalog: options.toolCatalog,
+      session: persistence.session,
+      engine: {
+        ...(options.engine ?? {}),
+        eventHub,
+        execution: {
+          dispatcher,
+          target: options.target,
+          workloadTargets: options.workloadTargets,
+          onOutputEvent,
+        },
+      },
+    });
+  } catch (error) {
+    await settleAll([
+      () => hypervisor?.shutdown("copilotz_gateway_initialization_failed"),
+      () => persistence.close("copilotz_gateway_initialization_failed"),
+    ], "Copilotz Gateway initialization cleanup failed.").catch(() =>
+      undefined
+    );
+    eventHub.close(error);
+    throw error;
+  }
+
+  const native = createEventNativeApp(application);
+  fetchApplication = createEventNativeFetchHandler(native, {
+    basePath: "/v3",
+    ...(options.http ?? {}),
+  });
+  let shutdownTask: Promise<void> | undefined;
+  const shutdown = (reason = "copilotz_gateway_shutdown"): Promise<void> => {
+    if (shutdownTask) return shutdownTask;
+    shutdownTask = settleAll([
+      () => application!.shutdown(reason),
+      () => hypervisor?.shutdown(reason),
+      () => persistence.close(reason),
+    ], "Copilotz Gateway shutdown failed.").finally(() => eventHub.close());
+    shutdownTask.catch(() => undefined);
+    return shutdownTask;
+  };
+
+  const {
+    engine: _internalEngine,
+    execution: _internalExecution,
+    ...publicApplication
+  } = application;
+
+  return Object.freeze({
+    ...publicApplication,
+    config: Object.freeze({
+      ...application.config,
+      sessionOwnership: persistence.ownership,
+    }),
+    role: "gateway",
+    transports,
+    ...(hypervisor ? { hypervisor } : {}),
+    fetch: (request: Request) => fetchApplication(request),
+    shutdown,
+  });
+}

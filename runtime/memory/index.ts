@@ -1,42 +1,51 @@
 export {
-  contextGenerator,
-  type LLMContextData,
-} from "@/runtime/agent-llm-input/context-generator.ts";
-export {
-  historyGenerator,
-  type HistoryGeneratorOptions,
-} from "@/runtime/agent-llm-input/history-generator.ts";
-export {
-  getUserExternalId,
-  resolveParticipantCollection,
-  setUserExternalId,
-} from "./identity.ts";
-export {
-  getEnabledMemoryResources,
-  getLongTermMemoryConfig,
-  hasMemoryResource,
-  isHistoryMemoryEnabled,
-  isParticipantMemoryEnabled,
-  isRetrievalMemoryEnabled,
+  DEFAULT_LONG_TERM_MEMORY_CONFIG,
   type LongTermMemoryConfig,
 } from "./resources.ts";
 export {
-  findMemorySpace,
-  getCheckpointMemorySpaceIds,
-  getLatestReadyLongTermMemory,
-  getLongTermMemoryData,
-  getNextLongTermMemorySequence,
-  getPendingLongTermMemory,
-  isLongTermMemoryAccessible,
-  type LongTermMemoryData,
-  type LongTermMemoryDataV1,
-  type LongTermMemoryDataV2,
-  type LongTermMemoryRange,
-  type LongTermMemoryRecord,
-  type LongTermMemoryStatus,
-  type MemorySpaceAccessMode,
-  resolveThreadMemorySpaces,
-  selectLongTermMemoryRange,
-  sliceMessagesAfterLongTermMemory,
-  type ThreadMemorySpaceAccess,
-} from "./long-term.ts";
+  brainNodeCollection,
+  longTermMemoryCollection,
+  memorySpaceAccessCollection,
+  memorySpaceCollection,
+} from "./collections.ts";
+export {
+  applyContinuityPatch,
+  buildContinuityRetrievalTexts,
+  buildMemoryConsolidationInstruction,
+  createEmptyContinuity,
+  createWorkingMemoryNodeDrafts,
+  extractVisibleBrainNodeIds,
+  MEMORY_RELATION_TYPES,
+  parseMemoryConsolidationProposal,
+  readContinuity,
+  renderLongTermMemory,
+  selectLongTermMemoryRange as selectEventLongTermMemoryRange,
+  stableMemoryNodeId,
+} from "./consolidation.ts";
+export type {
+  LongTermMemoryContinuity,
+  LongTermMemoryContinuityPatch,
+  MemoryBrainNode,
+  MemoryBrainRelation,
+  MemoryConsolidationNode,
+  MemoryConsolidationProposal,
+  MemoryConsolidationRelation,
+  MemoryRelationType,
+  MemorySourceMessage,
+  MemorySpaceDescriptor,
+  RetrievedMemoryBrainNode,
+  SelectedMemoryRange,
+  SourcedContinuityValue,
+  WorkingMemoryNodeDraft,
+} from "./consolidation.ts";
+export { createLongTermMemoryPlugin } from "./plugin.ts";
+export type {
+  CreateLongTermMemoryPluginOptions,
+  LongTermMemoryResource,
+  MemoryConsolidator,
+  MemoryConsolidatorInput,
+  MemoryConsolidatorResult,
+  MemoryEmbed,
+  MemoryEmbeddingInput,
+  ResolveMemoryLlmConfig,
+} from "./types.ts";

@@ -3,7 +3,7 @@ import {
   inclusiveInputTokensFromRawUsage,
   promptCacheHitRate,
   withInclusiveInputTokens,
-} from "@/runtime/llm/usage.ts";
+} from "./usage.ts";
 
 Deno.test("withInclusiveInputTokens folds Anthropic-style cache fields into input", () => {
   const usage = withInclusiveInputTokens({
@@ -23,7 +23,10 @@ Deno.test("promptCacheHitRate uses inclusive input semantics", () => {
     promptCacheHitRate({ inputTokens: 1000, cacheReadInputTokens: 800 }),
     0.8,
   );
-  assertEquals(promptCacheHitRate({ inputTokens: 0, cacheReadInputTokens: 0 }), null);
+  assertEquals(
+    promptCacheHitRate({ inputTokens: 0, cacheReadInputTokens: 0 }),
+    null,
+  );
 });
 
 Deno.test("inclusiveInputTokensFromRawUsage repairs stored Anthropic raw usage", () => {

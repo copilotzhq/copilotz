@@ -2,10 +2,23 @@
 title: Copilotz v3 Feature and Test Parity Ledger
 description: The behavioral and downstream compatibility gate for the v3 refactor.
 section: Internal Design
-status: proposal
+status: implemented
 ---
 
 # Copilotz v3 Feature and Test Parity Ledger
+
+## Implementation Closure — 2026-08-06
+
+The migration gates in this ledger are complete in the v3 working tree. The
+current runtime has one event-native path, and retained behaviors have direct v3
+contracts. The detailed baseline narrative below remains as historical evidence:
+statements about temporary 0.x behavior, future replacement, or the refactor not
+yet starting describe the recorded migration point, not the current runtime.
+
+Release acceptance now lives in `deno task check`, `deno task test`, the runtime
+smoke tasks, and `deno task publish:dry-run`. Downstream applications remain on
+their recorded exact 0.x pins until each application performs the explicit
+migration in `downstream-migration.md`.
 
 ## Purpose
 
@@ -25,7 +38,7 @@ No row may disappear as an incidental consequence of deleting its old module.
 
 ## Baseline and Vocabulary
 
-- Code baseline: `origin/main` at `64dddb8`, package version `0.56.1`.
+- Code baseline: `origin/main` at `cb6016b`, package version `0.56.1`.
 - Spike reference: branch `v3`; useful for ideas, not suitable as the new base.
 - Current first-party suite: 93 test files containing 624 declared tests or
   subtests.
@@ -43,15 +56,84 @@ The first executable Gate 1 batch lives in `contracts/v3/` and is run by
 
 - A01: factory shape plus an exact allowlist that prevents additional non-error
   classes;
-- A02: root, server, and resources entrypoint exports used by downstream apps;
+- A02: root, server, and resources entrypoint exports used by downstream apps,
+  including type-checking and evaluating an installed npm tarball;
+- A03: the complete current configuration surface plus representative Compass,
+  Mobizap, Gilpinna, and Starter configuration families;
 - A04: every bundled manifest resource and preset selector is loadable and has a
   stable identity;
-- A05: sequential in-memory factory ownership, usable replacement instances, and
-  idempotent runtime shutdown;
+- A05: sequential in-memory factory ownership, usable replacement instances,
+  idempotent runtime shutdown, and preservation of an app-owned injected
+  database across shutdown;
 - A06/A08: a minimal durable text run, message persistence, public stream
   ordering, and causal completion;
-- A14/A16: current observer ordering and `{ producedEvents: [] }` claim/swallow
-  behavior.
+- A09: explicit `target` and persisted `targetQueue` routing select the intended
+  participant agent;
+- A10: concurrent agents execute tools concurrently while each unique tool
+  result resumes only its originating agent;
+- A11: nested consultations remain public, share one trace, return through the
+  caller stack in order, and hard-stop at `maxAgentTurns`;
+- A12: the current `delegate_task` behavior remains a separate archived child
+  thread whose answer returns as a main-thread tool result, while invalid
+  targets fail the tool and resume the caller;
+- A13: user → agent → tool → same agent → public final output remains
+  single-write when the post-tool LLM continuation falls back to another
+  provider attempt;
+- A14: replay invokes independent observers physically more than once while
+  preserving one stable event ID that can key a logical-once effect;
+- A15: explicit processor array order currently outranks numeric priority,
+  duplicate stable IDs both execute, and processors in one event share a stale
+  thread snapshot unless they reread persisted state;
+- A16: produced events claim their source, skip later processors, suppress the
+  built-in route, and enter the durable/public stream after the source;
+- A17: a channel-neutral processor `ACTION` reaches built-in web egress exactly
+  once;
+- A18: before-hooks transform or reject before persistence, after-hook failures
+  reject after persistence, and `validateOnWrite` is currently inert;
+- A19: custom collection CRUD preserves IDs, indexes, relations, and namespace
+  isolation but currently emits no semantic event; the equivalent native message
+  write emits one `message.created` event;
+- A20: graph state and its current lifecycle/work row commit or roll back
+  together;
+- A21: recovery covers commit-before-dispatch, expired-lease takeover with a
+  stable event identity, and idempotent output committed before source
+  settlement;
+- A22: current priority/FIFO ordering, lease ownership, expiry, manual retry,
+  and durable deduplication are explicit;
+- A23: `done` waits for trace descendants and rejects on descendant failure,
+  while a separate contract records that current settlement is trace-wide rather
+  than causation-scoped;
+- A29: raw-text RAG ingestion, chunking, embedding, semantic retrieval, and
+  deletion work end to end, while the source document currently has no canonical
+  asset;
+- A30: ordered text, JSON, image, audio, and file input survives the public run,
+  asset, graph, and history APIs, including the current split between message
+  text and attachment metadata;
+- A31: large tool arguments/results, projected output, safe errors, asset
+  metadata, and history visibility round-trip through the graph and lifecycle
+  projection;
+- A32: memory and filesystem stores preserve bytes, MIME, references, size, and
+  backend URL behavior for small and large bodies;
+- A33: context-namespaced references reject cross-tenant resolution and storage
+  lookup;
+- A34: application handlers preserve message, tool, reasoning, attachment, and
+  asset-delivery projections; and
+- A35: supported provider projections preserve ordered multimodal content while
+  unsupported media becomes an explicit text marker;
+- A45: sequential replay and concurrent retries preserve one tenant-scoped
+  usage/cost row and one lifecycle event per deduplication key;
+- A46: namespace-scoped admin overview, activity, events, brain, thread lists,
+  and thread detail remain internally consistent;
+- A47: passive participants and processors do not multiply durable facts, and
+  token/tool-call frames remain stream-only;
+- A48: `withApp` keeps its route-resource contract and channel-to-run
+  orchestration;
+- A49: web egress keeps current SSE event names and suppresses the duplicate
+  persisted-message projection;
+- A50: web, WhatsApp, and Zendesk preserve ingress identity and current text,
+  media, and action egress behavior; and
+- A51: channel decorators can transform ingress and replace egress output with
+  stable hook inputs.
 
 A07 has an explicit temporary current-main contract: `cancel()` closes the
 caller's observation stream while already accepted durable work continues to
@@ -66,8 +148,193 @@ default exports were unwrapped. A05 also exposed a lifecycle defect where a
 closed in-memory database remained in the global connection cache; in-memory
 databases are now instance-owned while persistent URLs retain caching.
 
+Expanding A02 exposed a pre-existing npm packaging defect hidden by the old
+database-only compile fixture. `deno pack` preserved Copilotz's private `@/` and
+dependency aliases in generated JavaScript and declarations without adding
+equivalent mappings to the npm package. Production imports are now package-safe
+relative specifiers, direct JSR/npm dependencies are centralized behind small
+relative adapters in `dependencies/`, and `loadResources` has an explicit
+declaration-safe signature. The packed fixture now checks configuration callback
+inference and imports from all three public entrypoints before evaluating the
+installed tarball.
+
+A12 exposed and fixed a delegation collector defect: `delegate_task` listened
+only for legacy uppercase `NEW_MESSAGE` events even though the public run stream
+emits `message.created`, causing successful child answers to time out. It now
+accepts both forms until the legacy vocabulary is removed.
+
+The Gate 1B verification run is green: 19 v3 contracts, 649 first-party tests,
+and the installed npm-tarball consumer all pass. Selective downstream gates
+against the local source tree also pass without modifying client worktrees:
+Compass runs 14 feature, database, and extension tests; Mobizap runs 112
+processor and runtime tests; Gilpinna runs its in-memory participant API
+round-trip; and Starter type-checks both Copilotz backend entrypoints.
+
+Gate 1C adds eight green contracts for A14–A19. Several are intentionally
+temporary current-main assertions: processor priority and duplicate-ID
+replacement are not enforced by composition, `validateOnWrite` has no runtime
+effect, after-hook errors do not roll back their writes, and custom collection
+CRUD does not emit a lifecycle event. Each must be replaced by an explicit v3
+contract in the same change that introduces subscriptions, removes after-hooks,
+or routes custom writes through atomic mutations. The complete first-party suite
+remains green with this batch: 657 tests pass with no failures.
+
+Gate 1D adds ten green contracts for A20–A23. They preserve the guarantees that
+must survive the storage/executor replacement while making the legacy boundaries
+visible: one mutable event row currently represents both the semantic fact and
+its work state; failed work has no attempts, backoff, or dead-letter lifecycle
+and requires a manual reset to `pending`; and correlation-wide trace polling can
+wait on unrelated work that merely shares a trace ID. These assertions must be
+replaced by immutable events, sparse consumer deliveries, and causation-scoped
+settlement in the same vertical migration. A22 also exposed and fixed an expiry
+bug: raw PostgreSQL/PGlite queue reads can return `expiresAt` as a `Date`, but
+the selector previously checked only string timestamps. The complete first-party
+suite is green at 667 tests after the fix.
+
+Gate 1E adds seven green contracts for A29–A35. These protect content behavior
+without freezing the current representation: RAG sources have `assetId: null`;
+text/JSON remain in the message body while media moves to attachment metadata;
+tool arguments and results remain large inline JSON values and are duplicated in
+lifecycle payloads; stores have no staging, digest, deletion, or orphan-cleanup
+contract; and memory storage returns a data URL even when a large body requests
+non-inline delivery. Each temporary assertion must be replaced in the vertical
+content migration by immutable content assets, ordered `ContentSequence`
+references, staged large-object writes, tenant authorization, and compatibility
+projections. A29 also exposed and fixed a functional defect: the built-in
+`search_knowledge` tool did not embed its query before graph search, so it
+always returned no results through the public tool path. The complete v3
+contract suite is green at 44 tests; the complete first-party suite is green at
+674 tests with 61 substeps, and the installed npm-tarball consumer passes its
+entrypoint, configuration-inference, type-check, and runtime checks.
+
+Gate 1F adds seven green contracts for A45–A51. A45 exposed two correctness
+defects. Usage records carried and indexed a deduplication key but never checked
+it, so retries could duplicate billable rows and lifecycle events; usage IDs are
+now stable per namespace/key while retaining lookup compatibility for existing
+random-ID rows. Concurrent A45 execution also exposed that no-pool database
+sessions could interleave `BEGIN`/`COMMIT` boundaries; standalone operations and
+transactions are now serialized at that single-session boundary. The remaining
+contracts pin current admin, app, SSE, channel, and persistence-growth behavior
+without making their legacy uppercase event vocabulary permanent. Verification
+is green at 51 v3 contracts, 681 first-party tests with 61 substeps, and the
+installed npm-tarball consumer. Local-source downstream gates also pass without
+modifying client worktrees: Compass runs 14 feature/database/extension tests,
+Mobizap runs 116 processor/runtime tests, Gilpinna runs its in-memory
+participant API round-trip, and Starter type-checks both backend entrypoints.
+
+Gate 2 has started with an isolated canonical-content seam. Factory-created
+memory and graph-native database repositories, normalizer, preparer, and
+resolver contracts now cover ordered text/JSON/media references, tenant
+isolation, immutable and idempotent publication, deletion, authorization,
+digest/size/media integrity, batched reads, and portable Web Streams. Prepared
+bodies now commit atomically with a message owner, typed graph links, its
+compact event, and sparse deliveries; rollback and replay tests prove there is
+no asset orphan and no body duplication in the event. The provisional
+database-only limit is 64 KiB and oversized durable bodies fail until an object
+backend is configured. The core has no unconditional Deno, Node, Bun,
+filesystem, CLI, or server dependency and introduces no stateful class. These
+eleven content tests are additive; A29–A35 continue to guard the current public
+representation until tools, RAG, and compatibility projections move as complete
+verticals. The root and `./content` package exports are also part of the source
+and packed-consumer surface contract.
+
+The Gate 2 persistence seam is also implemented and tested without switching the
+current runtime. Its clean schema has only nodes, edges, immutable positioned
+events, and sparse event deliveries. A20–A23 replacements cover atomic writes,
+database-enforced immutability, logical-consumer deduplication, priority/lease/
+heartbeat behavior, jittered retries, dead letters, crash recovery, idempotent
+output replay, causal rather than correlation-wide settlement, cancellation, and
+safe compaction. A47 confirms passive semantic events create no deliveries, and
+A55 guards the factory-only runtime-neutral modules.
+
+The isolated `copilotz/migration/v1` entrypoint now supplies the A28 foundation.
+It refuses active queue work or leases, upgrades selected tenant schemas
+independently, preserves native/custom graph records and IDs, merges
+graph-native threads and participant relationships, translates settled non-frame
+events with monotonic positions and no historical deliveries, drops legacy
+tables, and is idempotent after success. Repository-level acceptance now reads
+migrated threads, participants, messages, tool executions, LLM attempts,
+knowledge documents, and memory snapshots through the v3 factories and resolves
+their bodies through canonical assets. Legacy external assets cross an explicit
+`resolveLegacyAsset` maintenance boundary; missing or invalid bytes roll back
+the entire tenant. The same contract passes on PGlite and PostgreSQL.
+
+The factory-first plugin seam is now independently executable from the root and
+`copilotz/plugins` entrypoints. Contracts cover exact manifest/resource
+agreement, presets and named imports, core → declared plugin → explicit
+application precedence, stable-ID replacement, independent processor IDs,
+synchronous durable matching, ephemeral live matching, logical consumer IDs, and
+runtime-neutral modules. Source strings are resolved only through an injected
+adapter. This seam does not yet replace the current resource loader or dispatch
+built-in processors; that switch remains gated on complete resource and executor
+verticals so there is never a second canonical runtime path.
+
+The Oxian delivery executor defaults to an owned private Hypervisor with Workers
+on a uniquely addressed in-process event fabric, can bind targeted
+Copilotz-owned Workers to an injected shared Hypervisor through the same
+explicit transport declaration without owning it, or can dispatch ID-only work
+to an externally hosted workload. The Worker claims and heartbeats the durable
+row before resolving the logical processor locally. Contracts cover post-commit
+recovery, retry with one stable idempotency key, concurrent local dispatch
+deduplication, shared-Hypervisor survival, remote serializability/resource
+resolution, and runtime-neutral factory modules. Stream transport and full
+Deno/Node/Bun/ browser/Cloudflare smoke matrices remain gated with attachments
+and migrated provider/storage capabilities.
+
+The additive v3 suite is green at 129 tests. It now includes the first
+graph-native participant/thread/message vertical: aggregate atomicity, canonical
+content refs and database bodies, compact message events, tenant-scoped identity
+reuse, event-position ordering, deduplication, rollback, and Oxian processor
+delivery. Plugin collection resources also have atomic create/update/delete
+events, relation validation, before-hook and validator boundaries, explicit
+rejection of post-write hooks, scoped reads, and delivery-derived child-mutation
+idempotency proven across a crash-after-projection retry. The installed package
+consumer verifies the root plus the public application, content, domain, events,
+plugins, workflows, and migration entrypoints. Engine and raw execution assembly
+are package-private.
+
+The same domain seam now includes six tool-execution and five LLM-attempt tests.
+They cover compact lifecycle facts; transactionally owned role-labelled content;
+public-message body reuse; safe versus restricted errors; provider fallback
+children; partial/final usage and cost; supersession and cancellation; terminal
+guards; event-position cursors; tenant isolation; aggregate rollback; and
+idempotent retries prepared with fresh transient asset IDs. These repositories
+remain additive until built-in call/result processors move as one end-to-end
+vertical.
+
+Engine-assembly tests and public role contracts compose the implemented seams
+through the module-private engine. A real Oxian delivery gets a tenant-scoped
+content, conversation, collection, LLM-attempt, tool-execution, and resource
+context; a crash after two typed child projections retries with one child event,
+record, and body each. The engine and processor context expose no raw session,
+event-store, coordinator, or graph mutation path. Private/shared ownership and
+app-owned session survival are explicit; public consumers select Embedded,
+Gateway, or Worker factories instead of an engine subpath.
+
+Three workflow tests, two strict-lifecycle tests, and one additional
+public-entrypoint contract now add the first complete event-native text/tool
+vertical. Addressed participant messages create logical attempts; provider
+fallback is represented by durable child attempts; canonical agent/tool message
+bodies reuse attempt/execution assets; parallel tools execute concurrently;
+every result returns to the producing agent; and only one continuation starts
+after a complete result batch. Recovery does not repeat the external tool, whose
+context receives a stable delivery-derived idempotency key. The root and
+`copilotz/workflows` entrypoints export factory-only resource adapters and
+plugin composition. The bundled core and public `createCopilotz()` path now use
+this execution model, with the retained prompt, tool, accounting, and live-frame
+parity suites guarding it.
+
 This is the first batch, not completion of Gate 1. Unimplemented A-tests below
-remain required according to their priority.
+remain required according to their priority. A temporary-config source check
+against the local package covered every directly importing TypeScript file in
+Compass (76), Starter (2), Gilpinna (34), and Mobizap (51) without touching
+their worktrees. The first three check cleanly. Mobizap reports the same five
+pre-existing errors against both local Copilotz and its pinned `0.55.6`
+baseline, so there is no new incompatibility in this batch. Selective downstream
+runtime suites now cover the highest-value extension seams listed above; broader
+client matrices remain release gates as affected subsystems are ported. Injected
+Oxian ownership remains part of A05 once that public injection seam exists; the
+current assertion covers injected database ownership only.
 
 Disposition labels:
 
@@ -120,11 +387,11 @@ already factory-first.
 but its public and internal stateful components are created by functions and
 represented by closures/plain records. Error subclasses are allowed.
 
-Current `main` still has non-error class implementations in the CLI, async
-queues, schema conversion, MCP client, finance provider, and tool-call draft
-tracker. A temporary explicit allowlist records that migration debt and prevents
-new classes; the v3 cleanup gate removes or separately approves each entry. The
-class-heavy v3 spike does not extend the allowlist.
+Current `main` still has non-error class implementations in async queues, schema
+conversion, the legacy MCP client, and the tool-call draft tracker. The CLI and
+finance provider have moved to closure-backed factories. A temporary explicit
+allowlist records the remaining migration debt and prevents new classes; the v3
+cleanup gate removes or separately approves each entry.
 
 **Coverage:** `runtime/create-copilotz-resources.test.ts`,
 `runtime/storage/assets.ts` through its consumer tests, and new test A01 below.
@@ -161,21 +428,23 @@ deterministic conversion for existing resource directories and manifests.
 **Coverage:** `runtime/loaders/resources.test.ts`,
 `runtime/loaders/agents-file.test.ts`,
 `runtime/create-copilotz-resources.test.ts`, `utils/merge-resources.test.ts`,
-`resources/core.test.ts`, and `resources/skills/index.test.ts`.
+`resources/core.test.ts`, `runtime/plugins/plugins.test.ts`, and
+`runtime/skills/plugin.test.ts`.
 
 ### F04 — Built-in resource catalog
 
 **Current contract:** the manifest provides five bundled agents; 34 built-in
 tools; 11 processors; participant/history/retrieval/long-term memory; seven LLM
 providers; OpenAI embeddings; filesystem/S3 storage; 15 collections; five
-channels; admin features; 24 skills; and `core`, `rag`, `admin`, `finance`,
-`code`, and `skunk-works` presets.
+channels; admin features; and several presets. It also carried 24
+Copilotz-development skills in every application import.
 
-**Disposition:** Keep, P0. Renaming or repackaging is allowed, but every current
-manifest entry requires a parity row or an approved retirement. The v3 spike’s
-deletion of most of this catalog is explicitly rejected.
+**Disposition:** Keep or explicitly retire, P0. Runtime capabilities require a
+parity row. The generic development-skill catalog is an approved retirement from
+core: those skills belong in a separately versioned optional plugin and must not
+be installed into unrelated applications by default.
 
-**Coverage:** `resources/core.test.ts`, `resources/skills/index.test.ts`, tool,
+**Coverage:** `resources/core.test.ts`, `runtime/skills/plugin.test.ts`, tool,
 provider, channel, memory, and processor tests listed in the appendix. Add A04,
 which compares the declared manifest with loadable resources.
 
@@ -186,7 +455,7 @@ messages, use the interactive `start()` controller, recover work, and shut down
 owned database resources. Injected resources are not implicitly owned.
 
 **Disposition:** Adapt, P0. Add app-owned Oxian dispatcher/target injection and
-private in-process hosting while preserving ownership boundaries. Keep `start()`
+private in-process Workers while preserving ownership boundaries. Keep `start()`
 unless separately retired with CLI replacement.
 
 **Coverage:** `runtime/run-thread.test.ts`, `runtime/recovery.test.ts`,
@@ -406,7 +675,8 @@ search, and admin brain inspection.
 model; searchable extracted text and embeddings remain queryable projections.
 
 **Coverage:** document parser, graph search, memory tests, API/tool generator
-tests, admin brain tests, and add A29 for asset-backed document ingestion.
+tests, admin brain tests, and A29 for the current ingestion/search/delete
+lifecycle before asset-backed migration.
 
 ### F19 — Assets, attachments, and media
 
@@ -422,7 +692,7 @@ bodies to references. Raw stream frames never become event rows.
 
 **Coverage:** asset generator/materialization tests, inbound-message and
 document-parser tests, channel media tests, chat-adapter message/asset tests,
-and A30–A35.
+and current-boundary contracts A30–A35.
 
 ### F20 — Persistent realtime attachments
 
@@ -443,13 +713,22 @@ Provider-specific codecs, VAD, and production audio providers are P2.
 agent, streams progress/results, supports stopping, and is used for application
 QA. The lead thread is currently private.
 
-**Disposition:** Decide, P0. Realtime/public `ask` does not automatically
-replace the separate goal/testing primitive. Preserve `goal()` until its
-simulation, judge, stopping, and reporting responsibilities have a reviewed
-destination.
+**Disposition:** Keep and Adapt, P0. Goal remains a first-class simulation
+primitive exposed by the factory-created application. Target, lead, and judge
+phases use ordinary event-native `run()` scopes and Oxian deliveries. The lead
+thread remains deliberately separate from the tested conversation, and receives
+only the target's final canonical message assets—not tool-result or reasoning
+payloads. Goal stream items wrap canonical events with phase/turn coordinates
+instead of mutating immutable events or reintroducing uppercase schemas.
+Declared agent resource IDs replace inline lead-agent closures so execution can
+remain identity-based across in-process and hypervisor placement.
 
-**Coverage:** `runtime/goal.test.ts`, goal documentation/examples, and Mobizap’s
-goal QA scripts/features.
+**Coverage:** `runtime/goals/goal.test.ts` covers bounded turns, stop/result
+reporting, canonical asset handoff, tool-result isolation, judge runs,
+cancellation, declared agent identities, lowercase stream items, factory style,
+and runtime neutrality. `runtime/goal.test.ts` remains legacy characterization
+until the final public switch. Goal documentation/examples and Mobizap's QA
+scripts remain downstream release gates.
 
 ### F22 — Scheduled and background work
 
@@ -488,8 +767,33 @@ authentication context, SSE, channel overrides, and generated-event logging.
 these adapters remain first-party. Current HTTP/SSE shapes require a versioned
 compatibility layer while chat packages migrate.
 
+**V3 progress:** event-native feature routes now terminate at `gateway.fetch`, a
+Web Fetch boundary that maps `Request` into the transport-neutral application
+contract. It preserves repeated query parameters and raw channel bytes, passes
+native streaming `Response` values through unchanged, and provides explicit
+base-path, context, header, error, and SSE projection hooks. Request-bound
+channels stream attachment output immediately: the Fetch boundary pulls one
+attachment output at a time, preserves backpressure, strips byte-stream bodies
+from SSE metadata, and cancels causal work when the response body is cancelled.
+That surface can be hosted by Deno, Node, Bun, browser service workers, and
+Cloudflare workers. Legacy SSE projection is isolated in
+`createV1SseProjector()`, which maps text/reasoning/tool-call deltas and
+hydrated public messages to the current uppercase wire vocabulary. Binary and
+oversized message content stays an asset reference under an
+application-controlled URL policy. An internal route adapter maps only the
+transitional `providers` and `admin` names at the edge, and
+`createV1FetchHandler()` composes it with the `/v1` Fetch and SSE surface.
+Downstream response-shape migration remains in this feature family.
+
+Interactive CLI behavior is now a factory-created state machine over injected
+I/O. Node-compatible readline/process access lives only on the explicit
+`adapters/node` subpath, and the legacy root loads it lazily only when `start()`
+is called. This preserves the current command UX without importing a host
+terminal API as part of normal core startup.
+
 **Coverage:** all server and channel tests, `server/app.test.ts` subtests,
-Compass/Mobizap channel tests, chat adapter tests, and A48–A51.
+`server/fetch.test.ts`, Compass/Mobizap channel tests, chat adapter tests, and
+A48–A51.
 
 ### F25 — APIs, MCP, features, and custom tools
 
@@ -500,21 +804,53 @@ errors are bounded and safe for the agent.
 **Disposition:** Keep, P0. These remain plugin resource types and execute
 through logical Oxian resource IDs rather than serialized closures.
 
+**V3 implementation:** static, OpenAPI, and MCP tools resolve in a worker-local
+catalog. Core no longer dynamically imports legacy generators. Descriptor
+resources require an explicit adapter; the first-party server catalog grants
+Web-fetch OpenAPI and factory-created MCP stdio behavior. MCP discovery and each
+execution own and close short-lived connections, while Oxian payloads retain
+only logical identities.
+
 **Coverage:** API generator, safe API error, MCP/tool formatting, server
-feature, and downstream sandbox/feature tests.
+feature, downstream sandbox/feature tests, workflow catalog tests, and
+`runtime/adapters/tool-catalog.test.ts`.
 
 ### F26 — Skills and built-in operational tools
 
-**Current contract:** bundled skills and on-demand skill loading, skill resource
-reading, filesystem/code/terminal/web/finance/wait/memory/asset tools, and
-prompt formatting.
+**Current contract:** optional Agent Skills plugins with on-demand instruction
+and resource loading, filesystem/code/terminal/web/finance/wait/memory/asset
+tools, and prompt formatting.
 
 **Disposition:** Keep, P1. Runtime-specific implementations live behind
 capability adapters; unsupported runtimes fail at resource resolution rather
 than making the core runtime non-portable.
 
+**V3 implementation:** standard Agent Skills directories are strict canonical
+source. `buildOpenSkillsPlugin()` validates and emits a metadata-only catalog
+plus lazy skill chunks before runtime. `createSkillsPlugin()` contributes the
+skills and owns `list_skills`, `load_skill`, and, when supporting files exist,
+`read_skill_resource`. Generic core installs neither skills nor those tools.
+`allowed-tools` remains compatibility metadata and never grants authority.
+`http_request`, `fetch_text`, and `web_search` are stable resources from the
+Web-API-only `createWebToolsPlugin()`. Filesystem, code search/write,
+subprocess/terminal, and finance adapters remain host-specific. The explicit
+Deno subpath now packages the existing bounded workspace tools and
+`run_command`, and supplies the build-only Open Skill packer without entering
+generic core imports. Persistent terminal is now a runtime-neutral tool plugin
+over an explicitly owned service; the Deno adapter supplies a closure-backed
+shell service with scoped sessions, canonical asset import/export, cancellation,
+bounded output, and idempotent shutdown. An embedding application owns that
+service and must pin its plugin to a stable worker target when using
+worker-local shell state. Finance is now a factory-created plugin with a
+closure-backed provider registry and a factory-created Yahoo provider; only the
+narrow `FinanceError` remains a class.
+
 **Coverage:** skill, filesystem, fetch, terminal, web-search, jq, pipeline, and
-tool-formatting tests plus manifest completeness.
+tool-formatting tests plus manifest completeness,
+`runtime/skills/plugin.test.ts`, `runtime/tools/core-plugin.test.ts`, and
+`runtime/tools/web-plugin.test.ts`, plus `runtime/tools/finance-plugin.test.ts`
+and the persistent-terminal plugin/Deno service tests under `runtime/tools` and
+`runtime/adapters/deno`.
 
 ### F27 — Runtime portability and Oxian placement
 
@@ -523,13 +859,21 @@ Oxian now support Deno, Node, Bun, browser, and Cloudflare-compatible execution
 with injected capabilities.
 
 **Disposition:** New/Adapt, P0. The core has no unconditional Deno/Node imports.
-Default execution uses a private in-process host; an injected dispatcher/target
-supports shared hosts and hypervisors. Copilotz shuts down only infrastructure
-it owns. Worker payloads contain resource/delivery IDs, never closures.
+Default execution uses a private Hypervisor with Workers on a unique in-process
+event-fabric topic. An injected Hypervisor hosts Copilotz-owned Workers when the
+embedding app also supplies its explicit transport declaration, while an
+injected dispatcher/target addresses workloads already hosted elsewhere.
+Copilotz shuts down only infrastructure it owns. Worker payloads contain
+resource/delivery IDs, never closures.
 
 **Coverage:** A24–A27 and A52–A55. Browser/Cloudflare smoke tests use supported
 injected providers and storage; they need not promise local filesystem or CLI
 capabilities.
+
+**V3 progress:** application, engine, attachment, event, execution, plugin, and
+tool-catalog cores use Web/runtime-neutral APIs. API/MCP host access is now an
+explicit adapter choice. Full Node, Bun, browser, and Cloudflare smoke matrices
+remain release gates.
 
 ## P0 Characterization Tests to Add Before Refactoring
 
@@ -580,7 +924,7 @@ first subsystem replacement.
 | A49 | Web SSE compatibility               | Current adapter event names and payloads remain available until the adapter migrates.                                                                                   |
 | A50 | Channel round trip                  | Web, WhatsApp, and Zendesk ingress → run → egress, including media/actions, remains correct.                                                                            |
 | A51 | Channel override contract           | Ingress/egress decorators receive stable inputs and can replace output.                                                                                                 |
-| A52 | Shared-host dispatch                | Injected Oxian host executes logical resources without owning app infrastructure.                                                                                       |
+| A52 | Shared-Hypervisor dispatch          | Injected Oxian Hypervisor executes logical resources without transferring ownership of app infrastructure.                                                              |
 | A53 | Remote dispatch contract            | Payloads contain serializable IDs/data only and resolve resources on the worker.                                                                                        |
 | A54 | Stream backpressure transport       | Web Streams preserve pressure/cancellation in process and across the supported remote transport.                                                                        |
 | A55 | Core import portability             | Importing core does not access filesystem, environment, network, CLI, or server APIs.                                                                                   |
@@ -596,42 +940,42 @@ behavior; it means the test must stop asserting an obsolete physical mechanism.
 
 ### Database — 12 files
 
-| Test file                                                         | Disposition                       | V3 owner                                      |
-| ----------------------------------------------------------------- | --------------------------------- | --------------------------------------------- |
-| `database/collections/collections.test.ts`                        | Keep/Adapt                        | Collection contract and hooks (F13, A18–A19)  |
-| `database/collections/type-inference.test.ts`                     | Keep                              | Public collection type contract (F13)         |
-| `database/migrations/migration_0017_participant_identity.test.ts` | Keep in isolated v1 upgrade suite | F07/F16/F17, A28                              |
-| `database/operations/event-supersession.test.ts`                  | Decide after characterization     | F14, A21–A23                                  |
-| `database/operations/graph-search.test.ts`                        | Keep                              | F13/F18                                       |
-| `database/operations/message-history-pagination.test.ts`          | Keep/Adapt                        | F07                                           |
-| `database/operations/mutation-outbox.test.ts`                     | Adapt                             | Atomic event/delivery commit (F14, A20)       |
-| `database/operations/trace-state.test.ts`                         | Adapt                             | Correlation settlement (F06/F14, A23)         |
-| `database/operations/worker-lease.test.ts`                        | Adapt                             | Durable delivery lifecycle (F14, A21–A22)     |
-| `database/packed-types.test.ts`                                   | Keep/Adapt                        | Portable persistence serialization (F15)      |
-| `database/postgres-json-safety.test.ts`                           | Keep                              | F14/F15                                       |
-| `database/schema-provisioning.test.ts`                            | Keep/Adapt                        | Tenant provisioning and v3 baseline (F15/F16) |
+| Test file                                                         | Disposition                       | V3 owner                                       |
+| ----------------------------------------------------------------- | --------------------------------- | ---------------------------------------------- |
+| `database/collections/collections.test.ts`                        | Keep/Adapt                        | Collection contract and hooks (F13, A18–A19)   |
+| `database/collections/type-inference.test.ts`                     | Keep                              | Public collection type contract (F13)          |
+| `database/migrations/migration_0017_participant_identity.test.ts` | Keep in isolated v1 upgrade suite | F07/F16/F17, A28                               |
+| `database/operations/event-supersession.test.ts`                  | Decide after characterization     | F14, A21–A23                                   |
+| `database/operations/graph-search.test.ts`                        | Keep                              | F13/F18                                        |
+| `database/operations/message-history-pagination.test.ts`          | Keep/Adapt                        | F07                                            |
+| `database/operations/mutation-outbox.test.ts`                     | Adapt                             | Atomic event/delivery commit (F14, A20)        |
+| `database/operations/trace-state.test.ts`                         | Adapt                             | Correlation settlement (F06/F14, A23)          |
+| `database/operations/worker-lease.test.ts`                        | Adapt                             | Durable delivery lifecycle (F14, A21–A22)      |
+| `database/packed-types.test.ts`                                   | Keep/Adapt                        | Public package/runtime compatibility (F02/F05) |
+| `database/postgres-json-safety.test.ts`                           | Keep                              | F14/F15                                        |
+| `database/schema-provisioning.test.ts`                            | Keep/Adapt                        | Tenant provisioning and v3 baseline (F15/F16)  |
 
 ### Runtime composition, execution, and routing — 22 files
 
-| Test family                                                                  | Disposition                                  | V3 owner                                    |
-| ---------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------- |
-| `runtime/create-copilotz-resources.test.ts`                                  | Keep/Adapt                                   | F01–F04                                     |
-| `runtime/loaders/resources.test.ts`, `runtime/loaders/agents-file.test.ts`   | Adapt                                        | Plugin adapter and agent instructions (F03) |
-| `utils/merge-resources.test.ts`                                              | Keep/Adapt                                   | Stable-ID composition (F03)                 |
-| `runtime/event-engine.test.ts`, `runtime/event-priority.test.ts`             | Characterize/Adapt                           | F06/F12/F14                                 |
-| `runtime/processors/coerce.test.ts`                                          | Adapt, then remove with downstream migration | F12                                         |
-| `runtime/recovery.test.ts`, `runtime/run-generation.test.ts`                 | Adapt                                        | F14                                         |
-| `runtime/run-thread.test.ts`                                                 | Keep/Adapt                                   | F05–F08                                     |
-| `runtime/routing/index.test.ts`                                              | Keep/Adapt                                   | F07/F08                                     |
-| `runtime/goal.test.ts`                                                       | Keep pending product decision                | F21                                         |
-| `runtime/stream-redaction.test.ts`                                           | Keep                                         | F06/F09/F23                                 |
-| `runtime/thread-metadata.test.ts`                                            | Keep                                         | F07                                         |
-| `runtime/collections/native.test.ts`                                         | Keep/Adapt                                   | F13/F16                                     |
-| `runtime/memory/long-term.test.ts`                                           | Keep                                         | F17/F18                                     |
-| `runtime/usage/attribution.test.ts`                                          | Keep/Adapt                                   | F23                                         |
-| `server/app.test.ts`, `server/channels.test.ts`, `server/migrations.test.ts` | Keep/Adapt                                   | F15/F16/F24                                 |
-| `utils/inbound-message.test.ts`                                              | Keep/Adapt                                   | F07/F19                                     |
-| `utils/document-parser.test.ts`                                              | Keep                                         | F18/F19                                     |
+| Test family                                                                  | Disposition                                  | V3 owner                                         |
+| ---------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------ |
+| `runtime/create-copilotz-resources.test.ts`                                  | Keep/Adapt                                   | F01–F04                                          |
+| `runtime/loaders/resources.test.ts`, `runtime/loaders/agents-file.test.ts`   | Adapt                                        | Plugin adapter and agent instructions (F03)      |
+| `utils/merge-resources.test.ts`                                              | Keep/Adapt                                   | Stable-ID composition (F03)                      |
+| `runtime/event-engine.test.ts`, `runtime/event-priority.test.ts`             | Characterize/Adapt                           | F06/F12/F14                                      |
+| `runtime/processors/coerce.test.ts`                                          | Adapt, then remove with downstream migration | F12                                              |
+| `runtime/recovery.test.ts`, `runtime/run-generation.test.ts`                 | Adapt                                        | F14                                              |
+| `runtime/run-thread.test.ts`                                                 | Keep/Adapt                                   | F05–F08                                          |
+| `runtime/routing/index.test.ts`                                              | Keep/Adapt                                   | F07/F08                                          |
+| `runtime/goal.test.ts`                                                       | Keep as legacy characterization until switch | F21; replacement in `runtime/goals/goal.test.ts` |
+| `runtime/stream-redaction.test.ts`                                           | Keep                                         | F06/F09/F23                                      |
+| `runtime/thread-metadata.test.ts`                                            | Keep                                         | F07                                              |
+| `runtime/collections/native.test.ts`                                         | Keep/Adapt                                   | F13/F16                                          |
+| `runtime/memory/long-term.test.ts`                                           | Keep                                         | F17/F18                                          |
+| `runtime/usage/attribution.test.ts`                                          | Keep/Adapt                                   | F23                                              |
+| `server/app.test.ts`, `server/channels.test.ts`, `server/migrations.test.ts` | Keep/Adapt                                   | F15/F16/F24                                      |
+| `utils/inbound-message.test.ts`                                              | Keep/Adapt                                   | F07/F19                                          |
+| `utils/document-parser.test.ts`                                              | Keep                                         | F18/F19                                          |
 
 ### LLM and prompt construction — 24 files
 
@@ -693,7 +1037,8 @@ Keep behavior; adapt event/content representations and persistence queries:
 - `resources/features/admin/brain.test.ts`
 - `resources/features/admin/events.test.ts`
 - `resources/features/admin/usage.test.ts`
-- `resources/skills/index.test.ts`
+- `runtime/skills/plugin.test.ts`
+- `runtime/adapters/deno/deno-adapter.test.ts` (Open Skill pack/build contract)
 - `resources/tools/_shared/fs-utils.test.ts`
 - `resources/tools/fetch_text/index.test.ts`
 - `resources/tools/persistent_terminal/index.test.ts`
@@ -803,13 +1148,11 @@ WhatsApp seam pass.
 
 1. Which product guarantees, if any, require event supersession, coalescing, and
    run generations after moving to causal deliveries?
-2. Does `goal()` remain a first-class simulation primitive, become a plugin, or
-   receive a new API? Public `ask` alone is not equivalent.
-3. Which current lower-level database reads become a supported query API rather
+2. Which current lower-level database reads become a supported query API rather
    than an unsafe graph mutation API?
-4. Is the legacy processor adapter shipped for one major-version migration
+3. Is the legacy processor adapter shipped for one major-version migration
    window, or are all first-party consumers migrated atomically before v3?
-5. Which live compatibility projection is versioned at `/v1`, and does the new
+4. Which live compatibility projection is versioned at `/v1`, and does the new
    semantic attachment API ship at `/v2` or behind content negotiation?
-6. Which current built-in resources are intentionally deprecated? The default is
+5. Which current built-in resources are intentionally deprecated? The default is
    all remain.

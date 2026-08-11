@@ -1,10 +1,10 @@
 import { assertEquals } from "@std/assert";
-import type { TokenUsage } from "@/runtime/llm/types.ts";
-import { OPENROUTER_MODELS_URL } from "@/runtime/llm/model-catalog.ts";
+import type { TokenUsage } from "./types.ts";
+import { OPENROUTER_MODELS_URL } from "./model-catalog.ts";
 import {
   __resetPricingCatalogCacheForTests,
   estimateUsageCost,
-} from "@/runtime/llm/pricing.ts";
+} from "./pricing.ts";
 
 const catalogEntry = {
   id: "test/model",

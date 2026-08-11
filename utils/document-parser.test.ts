@@ -5,16 +5,10 @@ import {
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
 import {
-  DOCX_MIME,
   detectOfficeDocumentMime,
+  DOCX_MIME,
   parseDocumentToText,
-} from "@/utils/document-parser.ts";
-import {
-  buildAssetRefForStore,
-  createMemoryAssetStore,
-  resolveAssetRefsInMessages,
-} from "@/runtime/storage/assets.ts";
-import type { ChatMessage } from "@/runtime/llm/types.ts";
+} from "./document-parser.ts";
 
 function writeUInt16(target: Uint8Array, offset: number, value: number): void {
   target[offset] = value & 0xFF;
@@ -125,90 +119,4 @@ Deno.test("parseDocumentToText extracts DOCX text", async () => {
   assert(parsed);
   assertEquals(parsed.kind, "docx");
   assertStringIncludes(parsed.text, "Hello from DOCX");
-});
-
-Deno.test("resolveAssetRefsInMessages converts DOCX asset refs into text", async () => {
-  const bytes = createDocxBytes("Seat selection instructions");
-  const store = createMemoryAssetStore();
-  const saved = await store.save(bytes, DOCX_MIME);
-  const ref = buildAssetRefForStore(store, saved.assetId);
-
-  const input: ChatMessage[] = [{
-    role: "user",
-    content: [{
-      type: "file",
-      file: {
-        file_data: ref,
-        mime_type: DOCX_MIME,
-      },
-    }],
-  }];
-
-  const resolved = await resolveAssetRefsInMessages(input, store);
-  const content = resolved.messages[0].content;
-
-  assert(Array.isArray(content));
-  assertEquals(content[0]?.type, "text");
-  assertStringIncludes(
-    (content[0] as { text: string }).text,
-    "Seat selection instructions",
-  );
-  assertEquals(resolved.referenced.length, 1);
-});
-
-Deno.test("resolveAssetRefsInMessages falls back to text notice for invalid DOCX", async () => {
-  const store = createMemoryAssetStore();
-  const badBytes = new TextEncoder().encode("not-a-real-docx");
-  const saved = await store.save(badBytes, DOCX_MIME);
-  const ref = buildAssetRefForStore(store, saved.assetId);
-
-  const input: ChatMessage[] = [{
-    role: "user",
-    content: [{
-      type: "file",
-      file: {
-        file_data: ref,
-        mime_type: DOCX_MIME,
-      },
-    }],
-  }];
-
-  const resolved = await resolveAssetRefsInMessages(input, store);
-  const content = resolved.messages[0].content;
-
-  assert(Array.isArray(content));
-  assertEquals(content[0]?.type, "text");
-  assertStringIncludes(
-    (content[0] as { text: string }).text,
-    "could not be parsed",
-  );
-});
-
-Deno.test("resolveAssetRefsInMessages passes through unsupported files", async () => {
-  const store = createMemoryAssetStore();
-  const bytes = new TextEncoder().encode("fake binary");
-  const mime = "application/x-custom-binary";
-  const saved = await store.save(bytes, mime);
-  const ref = buildAssetRefForStore(store, saved.assetId);
-
-  const input: ChatMessage[] = [{
-    role: "user",
-    content: [{
-      type: "file",
-      file: {
-        file_data: ref,
-        mime_type: mime,
-      },
-    }],
-  }];
-
-  const resolved = await resolveAssetRefsInMessages(input, store);
-  const content = resolved.messages[0].content;
-
-  assert(Array.isArray(content));
-  assertEquals(content[0]?.type, "file");
-  assertEquals(
-    (content[0] as { file: { mime_type?: string } }).file.mime_type,
-    mime,
-  );
 });

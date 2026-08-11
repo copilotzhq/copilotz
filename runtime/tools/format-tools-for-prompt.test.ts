@@ -9,7 +9,7 @@ import {
   formatMessages,
   generateToolSystemPrompt,
   generateToolSystemPromptVariant,
-} from "@/runtime/llm/utils.ts";
+} from "../llm/utils.ts";
 
 Deno.test("generateAgentTypesFromSchema renders nested oneOf action unions", () => {
   const output = generateAgentTypesFromSchema({

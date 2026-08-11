@@ -1,5 +1,5 @@
-import { get, type RequestResponse } from "@/runtime/http.ts";
-import type { ProviderConfig, ProviderName } from "@/runtime/llm/types.ts";
+import { get, type RequestResponse } from "../http.ts";
+import type { ProviderConfig, ProviderName } from "./types.ts";
 
 export const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const OPENROUTER_CACHE_TTL_MS = 60 * 60 * 1000;

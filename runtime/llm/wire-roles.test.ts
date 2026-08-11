@@ -1,18 +1,14 @@
 import { assertEquals } from "@std/assert";
 
-import type {
-  ChatMessage,
-  ProviderConfig,
-  ProviderFactory,
-} from "@/runtime/llm/types.ts";
-import { formatMessages } from "@/runtime/llm/utils.ts";
-import { anthropicProvider } from "@/resources/llm/anthropic/adapter.ts";
-import { deepseekProvider } from "@/resources/llm/deepseek/adapter.ts";
-import { geminiProvider } from "@/resources/llm/gemini/adapter.ts";
-import { groqProvider } from "@/resources/llm/groq/adapter.ts";
-import { minimaxProvider } from "@/resources/llm/minimax/adapter.ts";
-import { ollamaProvider } from "@/resources/llm/ollama/adapter.ts";
-import { openaiProvider } from "@/resources/llm/openai/adapter.ts";
+import type { ChatMessage, ProviderConfig, ProviderFactory } from "./types.ts";
+import { formatMessages } from "./utils.ts";
+import { anthropicProvider } from "./providers/anthropic/adapter.ts";
+import { deepseekProvider } from "./providers/deepseek/adapter.ts";
+import { geminiProvider } from "./providers/gemini/adapter.ts";
+import { groqProvider } from "./providers/groq/adapter.ts";
+import { minimaxProvider } from "./providers/minimax/adapter.ts";
+import { ollamaProvider } from "./providers/ollama/adapter.ts";
+import { openaiProvider } from "./providers/openai/adapter.ts";
 
 const history: ChatMessage[] = [
   { role: "user", content: "Check the service." },

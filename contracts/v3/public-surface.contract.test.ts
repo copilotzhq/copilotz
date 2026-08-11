@@ -1,111 +1,146 @@
 import { assertEquals } from "@std/assert";
 
-import * as copilotzModule from "@/index.ts";
+import * as copilotz from "../../index.ts";
+import * as adapters from "../../runtime/adapters/index.ts";
+import * as denoAdapters from "../../runtime/adapters/deno/index.ts";
+import * as nodeAdapters from "../../runtime/adapters/node/index.ts";
+import * as stdioAdapters from "../../runtime/adapters/stdio.ts";
+import * as application from "../../runtime/application/public.ts";
+import * as attachments from "../../runtime/attachments/index.ts";
+import * as capabilities from "../../runtime/capabilities/index.ts";
+import * as content from "../../runtime/content/index.ts";
+import * as domain from "../../runtime/domain/index.ts";
+import * as events from "../../runtime/events/index.ts";
+import * as plugins from "../../runtime/plugins/index.ts";
+import * as server from "../../server/index.ts";
+import * as migration from "../../migration/v1/index.ts";
 import type {
-  Agent,
-  API,
-  Copilotz,
-  CopilotzDb,
-  Event,
-  GoalResult,
-  GoalStreamEvent,
-  IngressResult,
-  LLMRuntimeConfig,
-  MessagePayload,
-  NewEvent,
-  ProcessorDeps,
-  Thread,
-  ToolConfig,
-  ToolExecutionContext,
-} from "@/index.ts";
-import * as resourceModule from "@/resources/index.ts";
-import * as serverModule from "@/server/index.ts";
+  CopilotzApplication,
+  CopilotzEvent,
+  CopilotzGateway,
+  CopilotzWorker,
+  CreateCopilotzOptions,
+  PluginManifest,
+  RunHandle,
+  ThreadAttachment,
+} from "../../index.ts";
 
-type DownstreamCopilotzSurface = Pick<
-  Copilotz,
-  | "config"
-  | "db"
-  | "ops"
-  | "run"
-  | "goal"
-  | "recover"
-  | "start"
-  | "shutdown"
-  | "assets"
-  | "embeddings"
-  | "collections"
-  | "schema"
->;
+function compilePublicTypes(
+  _application: CopilotzApplication,
+  _options: CreateCopilotzOptions,
+  _event: CopilotzEvent,
+  _gateway: CopilotzGateway,
+  _worker: CopilotzWorker,
+  _run: RunHandle,
+  _attachment: ThreadAttachment,
+  _manifest: PluginManifest,
+): void {}
+void compilePublicTypes;
 
-type CurrentRunHandle = Awaited<ReturnType<Copilotz["run"]>>;
-
-function compileDownstreamTypes(
-  _copilotz: DownstreamCopilotzSurface,
-  _db: CopilotzDb,
-  _agent: Agent,
-  _api: API,
-  _event: Event,
-  _newEvent: NewEvent,
-  _deps: ProcessorDeps,
-  _thread: Thread,
-  _message: MessagePayload,
-  _tool: ToolConfig,
-  _toolContext: ToolExecutionContext,
-  _llm: LLMRuntimeConfig,
-  _ingress: IngressResult,
-  _goalResult: GoalResult,
-  _goalEvent: GoalStreamEvent,
-  run: CurrentRunHandle,
+function assertFunctions(
+  module: Record<string, unknown>,
+  names: readonly string[],
 ): void {
-  const queueId: string = run.queueId;
-  const threadId: string = run.threadId;
-  const status: "queued" = run.status;
-  const done: Promise<void> = run.done;
-  const cancel: () => void = run.cancel;
-  const events: AsyncIterable<unknown> = run.events;
-  void [queueId, threadId, status, done, cancel, events];
+  for (const name of names) assertEquals(typeof module[name], "function", name);
 }
 
-void compileDownstreamTypes;
-
-Deno.test("A02 root package retains downstream-consumed value exports", () => {
-  const expectedFunctions = [
+Deno.test("v3 root exposes the factory-first application vocabulary", () => {
+  assertFunctions(copilotz, [
     "createCopilotz",
-    "createDatabase",
+    "createCopilotzGateway",
+    "createCopilotzWorker",
+    "createManagedOminipgSession",
+    "definePlugin",
+    "defineProcessor",
     "defineCollection",
-    "listTenantSchemas",
-    "loadResources",
-    "parseAssetRef",
-    "withSchema",
-  ] as const;
-
-  for (const name of expectedFunctions) {
-    assertEquals(typeof copilotzModule[name], "function", name);
-  }
-  assertEquals(typeof copilotzModule.index, "object");
+    "createAttachmentRuntime",
+    "createContentPreparer",
+    "createConversationRepository",
+    "createEventStore",
+    "createAgentAskPlugin",
+    "createTextWorkflowPlugin",
+    "createAgentCapabilityResolver",
+  ]);
+  for (
+    const removed of [
+      "createDatabase",
+      "loadResources",
+      "withSchema",
+      "getNativeTools",
+      "createAssetStoreForNamespace",
+      "createUsageService",
+      "createCopilotzApplication",
+      "createCopilotzEngine",
+      "createDeliveryExecutor",
+    ]
+  ) assertEquals(removed in copilotz, false, removed);
 });
 
-Deno.test("A02 server package retains framework-independent handler factories", () => {
-  const expectedFunctions = [
-    "createAssetHandlers",
-    "createChannelHandlers",
-    "createCollectionHandlers",
-    "createEventHandlers",
-    "createGraphHandlers",
-    "createMessageHandlers",
-    "createParticipantHandlers",
-    "createThreadHandlers",
-    "tickScheduledJobs",
-    "withApp",
-  ] as const;
-
-  for (const name of expectedFunctions) {
-    assertEquals(typeof serverModule[name], "function", name);
-  }
+Deno.test("v3 package subpaths expose cohesive factories", () => {
+  assertFunctions(application, [
+    "createCopilotz",
+    "createCopilotzGateway",
+    "createCopilotzWorker",
+  ]);
+  assertEquals("createCopilotzApplication" in application, false);
+  assertFunctions(adapters, [
+    "createManagedOminipgSession",
+    "createModulePluginResolver",
+    "createServerWorkflowToolCatalog",
+  ]);
+  assertEquals("connectMcp" in adapters, false);
+  assertFunctions(stdioAdapters, [
+    "connectMcp",
+    "createServerWorkflowToolCatalog",
+  ]);
+  assertFunctions(nodeAdapters, [
+    "createInteractiveCliIo",
+    "startInteractiveCli",
+  ]);
+  assertFunctions(denoAdapters, [
+    "buildOpenSkillsPlugin",
+    "createPersistentTerminalService",
+    "createProcessToolsPlugin",
+    "createWorkspaceToolsPlugin",
+    "listen",
+  ]);
+  assertFunctions(attachments, [
+    "createAttachmentRuntime",
+    "defineRealtimeProviderResource",
+  ]);
+  assertFunctions(capabilities, [
+    "createAgentCapabilityResolver",
+    "selectCapabilityResources",
+  ]);
+  assertFunctions(content, [
+    "createContentPreparer",
+    "createContentResolver",
+    "createDatabaseAssetRepository",
+  ]);
+  assertFunctions(domain, [
+    "defineCollection",
+    "createConversationRepository",
+    "createEventCollections",
+  ]);
+  assertFunctions(events, ["createEventStore", "createEventCoordinator"]);
+  assertFunctions(plugins, ["definePlugin", "defineProcessor"]);
 });
 
-Deno.test("A02 resources package retains manifest discovery exports", () => {
-  assertEquals(typeof resourceModule.bundledResourcesUrl, "string");
-  assertEquals(resourceModule.bundledResourcesUrl.startsWith("file:"), true);
-  assertEquals(typeof resourceModule.manifest, "object");
+Deno.test("server and migration remain explicit bounded subpaths", () => {
+  assertFunctions(server, [
+    "createV1FetchHandler",
+    "createV1SseProjector",
+  ]);
+  for (
+    const removed of [
+      "withApp",
+      "createGraphHandlers",
+      "createThreadHandlers",
+      "tickScheduledJobs",
+      "createEventNativeApp",
+      "createEventNativeFetchHandler",
+      "createV1RouteAdapter",
+    ]
+  ) assertEquals(removed in server, false, removed);
+  assertFunctions(migration, ["upgradeV1Schema", "upgradeV1Schemas"]);
 });

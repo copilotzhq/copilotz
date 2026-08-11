@@ -1,12 +1,8 @@
-import type {
-  ChatMessage,
-  ChatRequest,
-  ProviderConfig,
-} from "@/runtime/llm/types.ts";
-import { toLLMConfig } from "@/runtime/llm/config.ts";
-import { formatMessagesDetailed } from "@/runtime/llm/utils.ts";
-import { estimateChatMessages } from "@/runtime/tokens/index.ts";
-import type { ChatTokenEstimate } from "@/runtime/tokens/chat.ts";
+import type { ChatMessage, ChatRequest, ProviderConfig } from "./types.ts";
+import { toLLMConfig } from "./config.ts";
+import { formatMessagesDetailed } from "./utils.ts";
+import { estimateChatMessages } from "../tokens/index.ts";
+import type { ChatTokenEstimate } from "../tokens/chat.ts";
 
 export interface PreparedAttemptTranscript {
   messages: ChatMessage[];

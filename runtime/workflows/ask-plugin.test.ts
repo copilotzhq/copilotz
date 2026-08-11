@@ -321,7 +321,7 @@ Deno.test("public ask resumes its caller without occupying worker capacity", asy
 
   try {
     const root = await startRun(fixture, "Start one ask.");
-    await waitForRun(fixture, root.event.id, 5);
+    await waitForRun(fixture, root.event.id, 6);
     assertEquals(calls, ["a", "b", "a"]);
 
     const messages = await fixture.engine.conversation.listMessages(
@@ -334,6 +334,7 @@ Deno.test("public ask resumes its caller without occupying worker capacity", asy
       ),
       [
         "Start one ask.",
+        "",
         "A asks B publicly",
         "B public answer",
         JSON.stringify({
@@ -352,11 +353,12 @@ Deno.test("public ask resumes its caller without occupying worker capacity", asy
       "human",
       "agent",
       "agent",
+      "agent",
       "tool",
       "agent",
     ]);
-    const question = agentAskMetadata(messages[1].metadata);
-    const answer = agentAskMetadata(messages[2].metadata);
+    const question = agentAskMetadata(messages[2].metadata);
+    const answer = agentAskMetadata(messages[3].metadata);
     assertEquals(question?.phase, "question");
     assertEquals(answer?.phase, "answer");
     assertEquals(answer?.askId, question?.askId);
@@ -374,7 +376,7 @@ Deno.test("public ask resumes its caller without occupying worker capacity", asy
     );
     assertEquals(
       (output.value as Record<string, unknown>).answerMessageId,
-      messages[2].id,
+      messages[3].id,
     );
     const events = await fixture.engine.events.list({
       namespace: "tenant-a",
@@ -434,7 +436,7 @@ Deno.test("nested public asks return through each caller in one thread", async (
 
   try {
     const root = await startRun(fixture, "Start nested asks.");
-    await waitForRun(fixture, root.event.id, 8);
+    await waitForRun(fixture, root.event.id, 10);
     assertEquals(calls, ["a", "b", "c", "b", "a"]);
     const messages = await fixture.engine.conversation.listMessages(
       "tenant-a",
@@ -448,25 +450,27 @@ Deno.test("nested public asks return through each caller in one thread", async (
         publicAgentMessages.map((message) => messageText(fixture, message)),
       ),
       [
+        "",
         "A asks B",
+        "",
         "B asks C",
         "C public answer",
         "B public synthesis",
         "A public final",
       ],
     );
-    const firstAsk = agentAskMetadata(publicAgentMessages[0].metadata);
-    const nestedAsk = agentAskMetadata(publicAgentMessages[1].metadata);
+    const firstAsk = agentAskMetadata(publicAgentMessages[1].metadata);
+    const nestedAsk = agentAskMetadata(publicAgentMessages[3].metadata);
     assertExists(firstAsk);
     assertExists(nestedAsk);
     assertEquals(nestedAsk.depth, 2);
     assertEquals(nestedAsk.parentAskId, firstAsk.askId);
     assertEquals(
-      agentAskMetadata(publicAgentMessages[2].metadata)?.askId,
+      agentAskMetadata(publicAgentMessages[4].metadata)?.askId,
       nestedAsk.askId,
     );
     assertEquals(
-      agentAskMetadata(publicAgentMessages[3].metadata)?.askId,
+      agentAskMetadata(publicAgentMessages[5].metadata)?.askId,
       firstAsk.askId,
     );
     const executions = await fixture.engine.toolExecutions.list(
@@ -507,7 +511,7 @@ Deno.test("asked-agent failure settles the ask and resumes the caller", async ()
 
   try {
     const root = await startRun(fixture, "Exercise ask failure.");
-    await waitForRun(fixture, root.event.id, 4);
+    await waitForRun(fixture, root.event.id, 5);
     assertEquals(calls, ["a", "b", "a"]);
     const executions = await fixture.engine.toolExecutions.list(
       "tenant-a",
@@ -522,15 +526,16 @@ Deno.test("asked-agent failure settles the ask and resumes the caller", async ()
     assertEquals(messages.map((message) => message.sender.participantType), [
       "human",
       "agent",
+      "agent",
       "tool",
       "agent",
     ]);
     assertStringIncludes(
-      await messageText(fixture, messages[2]),
+      await messageText(fixture, messages[3]),
       "Asked agent 'b' failed",
     );
     assertEquals(
-      await messageText(fixture, messages[3]),
+      await messageText(fixture, messages[4]),
       "A recovered publicly",
     );
   } finally {

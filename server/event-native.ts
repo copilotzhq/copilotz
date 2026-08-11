@@ -6,6 +6,7 @@ import type {
   ConversationThread,
   CreateThreadInput,
   Participant,
+  ParticipantInput,
 } from "../runtime/domain/index.ts";
 import type {
   DeliveryStatus,
@@ -571,6 +572,19 @@ async function handleParticipants(
       pageInfo: nextPage(participants, limit),
     };
   }
+  if (request.method === "POST" && path.length === 0) {
+    const body = record(request.body);
+    const created = await application.conversation.createParticipant({
+      namespace,
+      participant: body as ParticipantInput,
+      identity: {
+        correlationId: header(request.headers, "x-copilotz-correlation-id"),
+        deduplicationId: header(request.headers, "idempotency-key"),
+        metadata: { sourceAdapter: "http" },
+      },
+    });
+    return { status: created.deduplicated ? 200 : 201, data: created.value };
+  }
   if (path.length !== 1) {
     throw appError(404, "route_not_found", "Participant route was not found.");
   }
@@ -998,7 +1012,10 @@ export function createEventNativeApp(
       name: "features",
       methods: Object.freeze(["GET", "POST", "PATCH", "PUT", "DELETE"]),
     },
-    { name: "participants", methods: Object.freeze(["GET", "PATCH"]) },
+    {
+      name: "participants",
+      methods: Object.freeze(["GET", "POST", "PATCH"]),
+    },
     {
       name: "threads",
       methods: Object.freeze(["GET", "POST", "PATCH", "DELETE"]),

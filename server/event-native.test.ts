@@ -148,6 +148,11 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
       app.resources().find((resource) => resource.name === "threads")?.methods,
       ["GET", "POST", "PATCH", "DELETE"],
     );
+    assertEquals(
+      app.resources().find((resource) => resource.name === "participants")
+        ?.methods,
+      ["GET", "POST", "PATCH"],
+    );
 
     const agentResponse = await app.handle({
       resource: "agents",
@@ -195,6 +200,20 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
     assertEquals(repeatedThread.status, 200);
     assertEquals(object(repeatedThread.data).id, "thread-a");
 
+    const createdParticipant = await app.handle({
+      resource: "participants",
+      method: "POST",
+      headers: { "idempotency-key": "http:participant:b" },
+      body: {
+        id: "user-b",
+        externalId: "external-user-b",
+        participantType: "human",
+        name: "Bob",
+      },
+    });
+    assertEquals(createdParticipant.status, 201);
+    assertEquals(object(createdParticipant.data).externalId, "external-user-b");
+
     const listedThreads = await app.handle({
       resource: "threads",
       method: "GET",
@@ -217,7 +236,7 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
       method: "GET",
       query: { type: "human" },
     });
-    assertEquals(array(humanParticipants.data).length, 1);
+    assertEquals(array(humanParticipants.data).length, 2);
 
     const run = await application.run({
       thread: "thread-a",

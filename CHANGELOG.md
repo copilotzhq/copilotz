@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.59.17 — 2026-08-12
+
+This patch makes periodic event retention safe for large PostgreSQL schemas.
+
+### Fixed
+
+- Event and settled-delivery compaction runs in bounded batches instead of one
+  unbounded delete transaction.
+- Candidate selection uses existing position and namespace/causation indexes;
+  causal trees are compacted safely from their leaves without rollout DDL.
+- The existing maintenance `limit` now bounds recovery and each compaction
+  phase, with a defensive maximum of 1,000 rows per phase.
+- Ominipg `0.9.0-rc.10` and Oxian `0.21.0-rc.4` keep timed-out database sessions
+  recoverable and expose bounded HTTP worker capacity downstream.
+
 ## 0.59.16 — 2026-08-12
 
 This patch bounds one-way migration responses for legacy LLM attempts with very

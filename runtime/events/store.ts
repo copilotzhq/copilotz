@@ -178,8 +178,12 @@ export type EventStore = {
   compact(options?: {
     retentionMs?: number | null;
     now?: Date;
+    limit?: number;
   }): Promise<{ events: number; deliveries: number }>;
 };
+
+const DEFAULT_COMPACTION_LIMIT = 100;
+const MAX_COMPACTION_LIMIT = 1_000;
 
 function iso(value: string | Date | null | undefined): string | undefined {
   if (value == null) return undefined;
@@ -1029,36 +1033,63 @@ export function createEventStore(
       const cutoff = new Date(
         (compactOptions.now ?? now()).getTime() - retentionMs,
       ).toISOString();
+      const limit = Math.min(
+        MAX_COMPACTION_LIMIT,
+        boundedInteger(
+          compactOptions.limit,
+          DEFAULT_COMPACTION_LIMIT,
+          1,
+        ),
+      );
       return await session.transaction(async (transaction) => {
         const deliveries = await transaction.query<{ id: string }>(
-          `DELETE FROM ${tables.event_deliveries} AS delivery
-           USING ${tables.events} AS event
-           WHERE event.id = delivery.event_id
-             AND event.created_at < $1::timestamptz
-             AND delivery.status IN ('succeeded', 'cancelled')
-             AND NOT EXISTS (
-               SELECT 1 FROM ${tables.event_deliveries} active
-               WHERE active.event_id = event.id
-                 AND active.status IN (
-                   'pending', 'leased', 'retry_wait', 'dead_letter'
-                 )
-             )
+          `WITH candidates AS (
+             SELECT delivery.id
+             FROM ${tables.events} AS event
+             JOIN ${tables.event_deliveries} AS delivery
+               ON delivery.event_id = event.id
+             WHERE event.created_at < $1::timestamptz
+               AND delivery.status IN ('succeeded', 'cancelled')
+               AND NOT EXISTS (
+                 SELECT 1 FROM ${tables.event_deliveries} active
+                 WHERE active.event_id = event.id
+                   AND active.status IN (
+                     'pending', 'leased', 'retry_wait', 'dead_letter'
+                   )
+               )
+             ORDER BY event.position, delivery.created_at, delivery.id
+             FOR UPDATE OF delivery SKIP LOCKED
+             LIMIT $2
+           )
+           DELETE FROM ${tables.event_deliveries} AS delivery
+           USING candidates
+           WHERE delivery.id = candidates.id
            RETURNING delivery.id`,
-          [cutoff],
+          [cutoff, limit],
         );
         const events = await transaction.query<{ id: string }>(
-          `DELETE FROM ${tables.events} AS event
-           WHERE event.created_at < $1::timestamptz
-             AND NOT EXISTS (
-               SELECT 1 FROM ${tables.event_deliveries} delivery
-               WHERE delivery.event_id = event.id
-             )
-             AND NOT EXISTS (
-               SELECT 1 FROM ${tables.events} child
-               WHERE child.causation_id = event.id
-             )
+          `WITH candidates AS (
+             SELECT event.position
+             FROM ${tables.events} AS event
+             WHERE event.created_at < $1::timestamptz
+               AND NOT EXISTS (
+                 SELECT 1 FROM ${tables.event_deliveries} delivery
+                 WHERE delivery.event_id = event.id
+               )
+               AND NOT EXISTS (
+                 SELECT 1 FROM ${tables.events} child
+                 WHERE child.namespace = event.namespace
+                   AND child.causation_id = event.id
+               )
+             ORDER BY event.position
+             FOR UPDATE OF event SKIP LOCKED
+             LIMIT $2
+           )
+           DELETE FROM ${tables.events} AS event
+           USING candidates
+           WHERE event.position = candidates.position
            RETURNING event.id`,
-          [cutoff],
+          [cutoff, limit],
         );
         return {
           events: events.rows.length,

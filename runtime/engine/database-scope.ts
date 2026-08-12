@@ -283,6 +283,7 @@ export function createDatabaseScope(
     const compacted = await store.compact({
       retentionMs: maintenanceOptions.retentionMs,
       now: maintenanceOptions.now,
+      limit: maintenanceOptions.limit,
     });
     const result: CopilotzEngineMaintenanceResult = Object.freeze({
       recovered: recovery.handles.length,

@@ -590,6 +590,104 @@ Deno.test("A22 compaction removes only old fully settled semantic work", async (
   }
 });
 
+Deno.test("A22 compaction bounds each transaction and peels causal leaves", async () => {
+  const fixture = await createFixture();
+  const { store } = fixture;
+  try {
+    const old = "2020-01-01T00:00:00.000Z";
+    const parent = await store.append({
+      type: "old.parent",
+      namespace: "tenant-a",
+      payload: {},
+      createdAt: old,
+    });
+    const child = await store.append({
+      type: "old.child",
+      namespace: "tenant-a",
+      payload: {},
+      causationId: parent.event.id,
+      createdAt: old,
+    });
+    const unrelated = await Promise.all(
+      Array.from({ length: 3 }, (_, index) =>
+        store.append({
+          type: `old.unrelated.${index}`,
+          namespace: "tenant-a",
+          payload: {},
+          createdAt: old,
+        })),
+    );
+
+    const first = await store.compact({
+      retentionMs: 7 * 24 * 60 * 60 * 1_000,
+      now: new Date("2021-01-01T00:00:00.000Z"),
+      limit: 1,
+    });
+    assertEquals(first, { events: 1, deliveries: 0 });
+    assertEquals(await store.getEvent(parent.event.id) !== null, true);
+
+    let removed = first.events;
+    for (let index = 0; index < 4; index++) {
+      const result = await store.compact({
+        retentionMs: 7 * 24 * 60 * 60 * 1_000,
+        now: new Date("2021-01-01T00:00:00.000Z"),
+        limit: 1,
+      });
+      assertEquals(result.events <= 1, true);
+      removed += result.events;
+    }
+    assertEquals(removed, 5);
+    assertEquals(await store.getEvent(parent.event.id), null);
+    assertEquals(await store.getEvent(child.event.id), null);
+    for (const event of unrelated) {
+      assertEquals(await store.getEvent(event.event.id), null);
+    }
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("A22 compaction bounds settled deliveries before deleting their event", async () => {
+  const fixture = await createFixture();
+  const { store } = fixture;
+  try {
+    const old = "2020-01-01T00:00:00.000Z";
+    const committed = await store.append({
+      type: "old.settled.batch",
+      namespace: "tenant-a",
+      payload: {},
+      createdAt: old,
+    }, ["consumer-a", "consumer-b"]);
+    for (const [index, delivery] of committed.deliveries.entries()) {
+      const owner = `settled-${index}`;
+      await store.claimDelivery({ id: delivery.id, owner });
+      await store.succeedDelivery(delivery.id, owner);
+    }
+
+    assertEquals(
+      await store.compact({
+        retentionMs: 7 * 24 * 60 * 60 * 1_000,
+        now: new Date("2021-01-01T00:00:00.000Z"),
+        limit: 1,
+      }),
+      { events: 0, deliveries: 1 },
+    );
+    assertEquals(await store.getEvent(committed.event.id) !== null, true);
+
+    assertEquals(
+      await store.compact({
+        retentionMs: 7 * 24 * 60 * 60 * 1_000,
+        now: new Date("2021-01-01T00:00:00.000Z"),
+        limit: 1,
+      }),
+      { events: 1, deliveries: 1 },
+    );
+    assertEquals(await store.getEvent(committed.event.id), null);
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
 Deno.test("A55 event core is runtime-neutral and factory-first", async () => {
   for (
     const module of [

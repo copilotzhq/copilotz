@@ -62,6 +62,7 @@ await app.recover({ namespace: "acme", limit: 100 });
 
 const result = await app.maintenance({
   namespace: "acme",
+  limit: 100,
   retentionMs: 7 * 24 * 60 * 60 * 1000,
 });
 
@@ -76,6 +77,9 @@ await app.deliveries.retry("acme", dead[0].id);
 
 Never compact pending, leased, retrying, or dead-lettered work. Long-lived
 engines should schedule periodic maintenance; short-lived deployments can call
-it opportunistically.
+it opportunistically. Each maintenance call bounds both recovery and each
+compaction phase with `limit` (default 100, capped at 1,000), so retention work
+is incremental and does not turn a periodic tick into an unbounded database
+transaction.
 
 Detailed contract: [events and deliveries](v3/events-and-deliveries.md).

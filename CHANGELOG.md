@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.59.15 — 2026-08-12
+
+This patch makes the one-way v1 database upgrade preserve legacy text-labelled
+assets whose bytes are not valid UTF-8.
+
+### Fixed
+
+- Invalidly labelled legacy `text/*` assets are stored losslessly as base64
+  while retaining their media type; valid UTF-8 text and JSON remain unchanged.
+- Runtime asset writes remain strict, so this compatibility behavior is limited
+  to importing historical data.
+
 ## 0.59.14 — 2026-08-12
 
 This patch adopts Oxian `0.21.0-rc.3` and Ominipg `0.9.0-rc.9` so embedded

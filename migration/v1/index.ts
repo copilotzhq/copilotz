@@ -257,16 +257,31 @@ function encodeDatabaseBody(
     { kind: "database"; encoding: "utf8" | "json" | "base64" }
   >;
 }> {
-  if (mediaType.toLowerCase().startsWith("text/") || jsonMediaType(mediaType)) {
+  if (jsonMediaType(mediaType)) {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(body);
-    if (jsonMediaType(mediaType)) JSON.parse(text);
+    JSON.parse(text);
     return {
       body: text,
       location: {
         kind: "database",
-        encoding: jsonMediaType(mediaType) ? "json" : "utf8",
+        encoding: "json",
       },
     };
+  }
+  if (mediaType.toLowerCase().startsWith("text/")) {
+    try {
+      return {
+        body: new TextDecoder("utf-8", { fatal: true }).decode(body),
+        location: { kind: "database", encoding: "utf8" },
+      };
+    } catch {
+      // Legacy stores did not require text-labelled assets to contain UTF-8.
+      // Preserve those bytes exactly instead of performing a lossy decode.
+      return {
+        body: bytesToBase64(body),
+        location: { kind: "database", encoding: "base64" },
+      };
+    }
   }
   return {
     body: bytesToBase64(body),

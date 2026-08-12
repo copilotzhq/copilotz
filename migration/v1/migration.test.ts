@@ -701,6 +701,45 @@ Deno.test("A28 upgrade preserves unavailable assets and their message references
   }
 });
 
+Deno.test("A28 upgrade preserves non-UTF-8 legacy text assets as bytes", async () => {
+  const { db, session } = await createFixture();
+  const schema = uniqueSchema("asset_non_utf8");
+  const bytes = new Uint8Array([0xff, 0xfe, 0x2c, 0x61]);
+  try {
+    await provisionV1FixtureSchema(session, schema);
+    await seedLegacyTenant(session, schema, "asset-non-utf8");
+    await upgradeV1Schema(session, schema, {
+      resolveLegacyAsset: () => ({
+        body: bytes,
+        mediaType: "text/csv",
+      }),
+    });
+
+    const stored = await session.query<{ data: Record<string, unknown> }>(
+      `SELECT data FROM ${q(schema, "nodes")} WHERE id = $1`,
+      ["asset-asset-non-utf8"],
+    );
+    assertEquals(
+      (stored.rows[0]?.data.location as Record<string, unknown>).encoding,
+      "base64",
+    );
+
+    const readers = await createV3Readers(session, schema);
+    try {
+      const asset = await readers.assets.read(
+        "tenant-asset-non-utf8",
+        "asset-asset-non-utf8",
+      );
+      assertEquals(asset.asset.mediaType, "text/csv");
+      assertEquals(asset.bytes, bytes);
+    } finally {
+      await readers.executor.shutdown();
+    }
+  } finally {
+    await db.close();
+  }
+});
+
 Deno.test("A28 upgrade processes legacy nodes in bounded batches", async () => {
   const { db, session } = await createFixture();
   const schema = uniqueSchema("node_batches");

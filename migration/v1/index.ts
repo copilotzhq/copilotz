@@ -1545,6 +1545,15 @@ function workflowStatus(
   return "running";
 }
 
+function legacyFinalOrPartial(
+  finalValue: unknown,
+  partialValue: unknown,
+): unknown {
+  if (finalValue !== undefined && finalValue !== null) return finalValue;
+  if (partialValue !== undefined) return partialValue;
+  return finalValue;
+}
+
 function safeError(
   value: unknown,
   fallback: string,
@@ -1817,13 +1826,14 @@ async function normalizeLlmAttempts(
     );
     if (participant?.created) participantsCreated++;
     const error = data.error ?? data.safeError;
-    // An explicitly stored null is legacy data, not an absent primary field.
-    // Preserve it as JSON null instead of falling through to an absent partial
-    // value, which would otherwise materialize as an invalid empty JSON body.
-    const answer = data.answer === undefined ? data.partialAnswer : data.answer;
-    const reasoning = data.reasoning === undefined
-      ? data.partialReasoning
-      : data.reasoning;
+    // Preserve a partial result when the legacy final field is absent/null. If
+    // no partial exists, retain an explicit final null as JSON null rather than
+    // converting it to an invalid empty JSON body.
+    const answer = legacyFinalOrPartial(data.answer, data.partialAnswer);
+    const reasoning = legacyFinalOrPartial(
+      data.reasoning,
+      data.partialReasoning,
+    );
     const content = await canonicalWorkflowContent(
       transaction,
       schema,

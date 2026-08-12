@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.59.11 — 2026-08-11
+
+This patch completes the legacy null-content migration fix without losing
+available partial model output.
+
+### Fixed
+
+- Legacy LLM attempts still prefer `partialAnswer` or `partialReasoning` when a
+  final field is null; JSON `null` is preserved only when no partial fallback
+  exists.
+
 ## 0.59.10 — 2026-08-11
 
 This patch preserves explicit null output fields during the one-way v1

@@ -1155,7 +1155,7 @@ Deno.test("A28 upgrade preserves repeated provider tool-call labels", async () =
   }
 });
 
-Deno.test("A28 upgrade preserves explicit null LLM content as JSON null", async () => {
+Deno.test("A28 upgrade preserves null and partial LLM content", async () => {
   const { db, session } = await createFixture();
   const schema = uniqueSchema("null_llm_content");
   const suffix = "null-llm-content";
@@ -1171,9 +1171,9 @@ Deno.test("A28 upgrade preserves explicit null LLM content as JSON null", async 
       ...legacy.rows[0]!.data,
       answer: null,
       reasoning: null,
+      partialReasoning: "legacy partial thought",
     };
     delete data.partialAnswer;
-    delete data.partialReasoning;
     await session.query(
       `UPDATE ${q(schema, "nodes")} SET data = $2::jsonb WHERE id = $1`,
       [attemptId, JSON.stringify(data)],
@@ -1200,8 +1200,8 @@ Deno.test("A28 upgrade preserves explicit null LLM content as JSON null", async 
       assertEquals(
         (await readers.resolver.get(content.reasoning!, {
           namespace: `tenant-${suffix}`,
-        })).value,
-        null,
+        })).text,
+        "legacy partial thought",
       );
     } finally {
       await readers.executor.shutdown();

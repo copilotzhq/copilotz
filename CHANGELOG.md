@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.59.10 — 2026-08-11
+
+This patch preserves explicit null output fields during the one-way v1
+migration.
+
+### Fixed
+
+- Legacy LLM attempts with an explicit `null` answer or reasoning value and no
+  partial fallback now materialize that value as valid JSON `null` instead of
+  producing an empty JSON asset and aborting the tenant transaction.
+
 ## 0.59.9 — 2026-08-11
 
 This patch aligns durable tool-execution identity with provider behavior found

@@ -1817,6 +1817,13 @@ async function normalizeLlmAttempts(
     );
     if (participant?.created) participantsCreated++;
     const error = data.error ?? data.safeError;
+    // An explicitly stored null is legacy data, not an absent primary field.
+    // Preserve it as JSON null instead of falling through to an absent partial
+    // value, which would otherwise materialize as an invalid empty JSON body.
+    const answer = data.answer === undefined ? data.partialAnswer : data.answer;
+    const reasoning = data.reasoning === undefined
+      ? data.partialReasoning
+      : data.reasoning;
     const content = await canonicalWorkflowContent(
       transaction,
       schema,
@@ -1835,15 +1842,13 @@ async function normalizeLlmAttempts(
         },
         {
           role: "body",
-          value: data.answer ?? data.partialAnswer,
-          present: data.answer !== undefined ||
-            data.partialAnswer !== undefined,
+          value: answer,
+          present: answer !== undefined,
         },
         {
           role: "reasoning",
-          value: data.reasoning ?? data.partialReasoning,
-          present: data.reasoning !== undefined ||
-            data.partialReasoning !== undefined,
+          value: reasoning,
+          present: reasoning !== undefined,
         },
         {
           role: "llm.tool_calls",
@@ -1858,7 +1863,7 @@ async function normalizeLlmAttempts(
       ],
     );
     const status = workflowStatus(data.status, {
-      answer: data.answer ?? data.partialAnswer,
+      answer,
       error,
     });
     const attemptIndex = finiteNonNegativeInteger(data.attemptIndex) ?? 0;

@@ -1155,6 +1155,62 @@ Deno.test("A28 upgrade preserves repeated provider tool-call labels", async () =
   }
 });
 
+Deno.test("A28 upgrade preserves explicit null LLM content as JSON null", async () => {
+  const { db, session } = await createFixture();
+  const schema = uniqueSchema("null_llm_content");
+  const suffix = "null-llm-content";
+  try {
+    await provisionV1FixtureSchema(session, schema);
+    await seedLegacyTenant(session, schema, suffix);
+    const attemptId = `llm-${suffix}`;
+    const legacy = await session.query<{ data: Record<string, unknown> }>(
+      `SELECT data FROM ${q(schema, "nodes")} WHERE id = $1`,
+      [attemptId],
+    );
+    const data: Record<string, unknown> = {
+      ...legacy.rows[0]!.data,
+      answer: null,
+      reasoning: null,
+    };
+    delete data.partialAnswer;
+    delete data.partialReasoning;
+    await session.query(
+      `UPDATE ${q(schema, "nodes")} SET data = $2::jsonb WHERE id = $1`,
+      [attemptId, JSON.stringify(data)],
+    );
+
+    await upgradeV1Schema(session, schema, {
+      resolveLegacyAsset: legacyAssetResolver(suffix),
+    });
+
+    const readers = await createV3Readers(session, schema);
+    try {
+      const attempt = await readers.attempts.get(
+        `tenant-${suffix}`,
+        attemptId,
+      );
+      assertEquals(attempt?.status, "completed");
+      const content = llmAttemptContent(attempt!);
+      assertEquals(
+        (await readers.resolver.get(content.answer!, {
+          namespace: `tenant-${suffix}`,
+        })).value,
+        null,
+      );
+      assertEquals(
+        (await readers.resolver.get(content.reasoning!, {
+          namespace: `tenant-${suffix}`,
+        })).value,
+        null,
+      );
+    } finally {
+      await readers.executor.shutdown();
+    }
+  } finally {
+    await db.close();
+  }
+});
+
 Deno.test("v1 upgrade module remains isolated from the normal runtime", async () => {
   const source = await Deno.readTextFile(
     new URL("./index.ts", import.meta.url),

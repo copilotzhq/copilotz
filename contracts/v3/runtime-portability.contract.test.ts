@@ -79,7 +79,7 @@ Deno.test("agent capability resolution remains factory-first and host-neutral", 
 Deno.test("runtime-neutral Ominipg and Oxian release lines are pinned", async () => {
   assertStringIncludes(
     await source("dependencies/ominipg.ts"),
-    "@oxian/ominipg@0.9.0-rc.6",
+    "@oxian/ominipg@0.9.0-rc.7",
   );
   assertStringIncludes(
     await source("dependencies/oxian-hypervisor.ts"),

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.59.8 — 2026-08-11
+
+This patch adopts Ominipg `0.9.0-rc.7` throughout Copilotz.
+
+### Fixed
+
+- Large database request and response frames now cross Oxian as bounded,
+  backpressured stream chunks instead of exceeding the worker staging limit.
+- Downstream applications resolve one consistent Ominipg release rather than
+  retaining the previous transitive version alongside a direct upgrade.
+
 ## 0.59.7 — 2026-08-11
 
 This patch reconciles a legacy message's logical scope with its canonical thread

@@ -285,8 +285,11 @@ interface ToolExecutionContentFields {
 }
 ```
 
-The tool-call ID, tool resource ID, agent ID, status, timing,
-`historyVisibility`, idempotency key, and safe error summary remain inline.
+The provider tool-call ID, tool resource ID, agent ID, status, timing,
+`historyVisibility`, idempotency key, and safe error summary remain inline. The
+provider label is not the durable execution identity and may recur in later
+attempts. The tool-execution node/event ID remains canonical; lookup by provider
+tool-call ID returns the latest matching execution in the thread.
 
 The runtime resolves `arguments` before invoking a tool. A local or remote
 worker receives either the already-resolved value under an explicit size limit

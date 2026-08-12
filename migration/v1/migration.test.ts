@@ -506,6 +506,39 @@ async function seedLegacyTenant(
   }
 }
 
+async function seedRepeatedLegacyToolCall(
+  session: SqlSession,
+  schema: string,
+  suffix: string,
+): Promise<string> {
+  const id = `tool-repeated-${suffix}`;
+  await session.query(
+    `INSERT INTO ${q(schema, "nodes")} (
+       "id", "namespace", "type", "name", "content", "data",
+       "source_type", "source_id", "created_at", "updated_at"
+     ) VALUES (
+       $1, $2, 'tool_execution', 'Repeated provider call', NULL, $3::jsonb,
+       'tool_execution', $1, $4::timestamptz, $4::timestamptz
+     )`,
+    [
+      id,
+      `tenant-${suffix}`,
+      JSON.stringify({
+        threadId: `thread-root-${suffix}`,
+        messageId: `message-${suffix}`,
+        agentId: `agent-${suffix}`,
+        toolCallId: `call-${suffix}`,
+        tool: { id: "lookup-retry", name: "Lookup retry" },
+        args: { q: "retry" },
+        status: "failed",
+        error: { message: "legacy retry failed" },
+      }),
+      "2026-01-01T00:00:05.000Z",
+    ],
+  );
+  return id;
+}
+
 Deno.test("A28 upgrade refuses active queue work and live thread leases", async () => {
   const { db, session } = await createFixture();
   try {
@@ -1069,6 +1102,59 @@ Deno.test("A28 multi-tenant upgrade preserves graph domains and translates settl
   }
 });
 
+Deno.test("A28 upgrade preserves repeated provider tool-call labels", async () => {
+  const { db, session } = await createFixture();
+  const schema = uniqueSchema("repeated_tool_call");
+  const suffix = "repeated-tool-call";
+  try {
+    await provisionV1FixtureSchema(session, schema);
+    await seedLegacyTenant(session, schema, suffix);
+    const repeatedId = await seedRepeatedLegacyToolCall(
+      session,
+      schema,
+      suffix,
+    );
+
+    await upgradeV1Schema(session, schema, {
+      resolveLegacyAsset: legacyAssetResolver(suffix),
+    });
+
+    const rows = await session.query<{ id: string; source_id: string }>(
+      `SELECT id, source_id FROM ${q(schema, "nodes")}
+       WHERE namespace = $1 AND type = 'tool_execution'
+         AND data ->> 'toolCallId' = $2
+       ORDER BY created_at, id`,
+      [`tenant-${suffix}`, `call-${suffix}`],
+    );
+    assertEquals(rows.rows.map((row) => row.id), [
+      `tool-${suffix}`,
+      repeatedId,
+    ]);
+    assertEquals(new Set(rows.rows.map((row) => row.source_id)).size, 1);
+
+    const readers = await createV3Readers(session, schema);
+    try {
+      assertEquals(
+        (await readers.tools.getByToolCallId(
+          `tenant-${suffix}`,
+          `thread-root-${suffix}`,
+          `call-${suffix}`,
+        ))?.id,
+        repeatedId,
+      );
+      assertEquals(
+        (await readers.tools.get(`tenant-${suffix}`, `tool-${suffix}`))
+          ?.toolCallId,
+        `call-${suffix}`,
+      );
+    } finally {
+      await readers.executor.shutdown();
+    }
+  } finally {
+    await db.close();
+  }
+});
+
 Deno.test("v1 upgrade module remains isolated from the normal runtime", async () => {
   const source = await Deno.readTextFile(
     new URL("./index.ts", import.meta.url),
@@ -1090,6 +1176,7 @@ Deno.test({
     try {
       await provisionV1FixtureSchema(session, schema);
       await seedLegacyTenant(session, schema, "postgres");
+      await seedRepeatedLegacyToolCall(session, schema, "postgres");
       const result = await upgradeV1Schema(session, schema, {
         resolveLegacyAsset: legacyAssetResolver("postgres"),
       });
@@ -1115,6 +1202,12 @@ Deno.test({
         "tool_execution.failed",
         "booking.updated",
       ]);
+      const repeatedCalls = await session.query<{ count: string | number }>(
+        `SELECT COUNT(*) AS count FROM ${q(schema, "nodes")}
+         WHERE type = 'tool_execution'
+           AND data ->> 'toolCallId' = 'call-postgres'`,
+      );
+      assertEquals(Number(repeatedCalls.rows[0]?.count), 2);
     } finally {
       await session.query(
         `DROP SCHEMA IF EXISTS ${quoteEventIdentifier(schema)} CASCADE`,

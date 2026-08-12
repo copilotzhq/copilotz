@@ -74,7 +74,8 @@ export function createCoreSchemaStatements(
       WHERE type = 'asset'
         AND source_type = 'asset_idempotency'
         AND source_id IS NOT NULL`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS "nodes_tool_call_unique_idx"
+    `DROP INDEX IF EXISTS ${schema}."nodes_tool_call_unique_idx"`,
+    `CREATE INDEX IF NOT EXISTS "nodes_tool_call_idx"
       ON ${tables.nodes} (namespace, source_id)
       WHERE type = 'tool_execution'
         AND source_type = 'tool_call'

@@ -395,6 +395,7 @@ export function createToolExecutionRepository(
       const namespace = workflowRequiredText(input.namespace, "Namespace");
       const threadId = workflowRequiredText(input.threadId, "Thread ID");
       const toolCallId = workflowRequiredText(input.toolCallId, "Tool call ID");
+      const messageId = workflowOptionalText(input.messageId, "Message ID");
       const tool = workflowObject(input.tool);
       const toolId = typeof tool.id === "string"
         ? workflowRequiredText(tool.id, "Tool ID")
@@ -403,7 +404,11 @@ export function createToolExecutionRepository(
         })();
       const identity = identityWithDefault(
         input.identity,
-        `tool_execution:create:${callSourceId(threadId, toolCallId)}`,
+        `tool_execution:create:${
+          input.id?.trim() || (messageId
+            ? JSON.stringify([threadId, messageId, toolCallId])
+            : callSourceId(threadId, toolCallId))
+        }`,
       );
       const id = workflowMutationId(
         "tool_execution",
@@ -425,7 +430,6 @@ export function createToolExecutionRepository(
         });
       }
       const prepared = composeRoleContent(fields);
-      const messageId = workflowOptionalText(input.messageId, "Message ID");
       const participantId = workflowOptionalText(
         input.participantId,
         "Participant ID",
@@ -610,7 +614,9 @@ export function createToolExecutionRepository(
       const result = await options.session.query<WorkflowNodeRow>(
         `SELECT * FROM ${names.nodes}
          WHERE namespace = $1 AND type = 'tool_execution'
-           AND source_type = 'tool_call' AND source_id = $2 LIMIT 1`,
+           AND source_type = 'tool_call' AND source_id = $2
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1`,
         [namespace, callSourceId(threadId, toolCallId)],
       );
       return result.rows[0] ? mapToolExecution(result.rows[0]) : null;

@@ -256,6 +256,7 @@ export type ScopedToolExecutions = Readonly<{
     options?: ScopedMutationOptions,
   ): Promise<CoordinatedMutationResult<ToolExecution>>;
   get(id: string): Promise<ToolExecution | null>;
+  /** Returns the latest execution carrying this provider call label. */
   getByToolCallId(
     threadId: string,
     toolCallId: string,

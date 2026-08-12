@@ -561,6 +561,19 @@ Deno.test("tool aggregate rollback, tenant scope, and event-position cursors rem
       ))?.id,
       "execution-2",
     );
+    await create("execution-4", "call-2", "list:4");
+    assertEquals(
+      (await fixture.tools.getByToolCallId(
+        "tenant-a",
+        "thread-a",
+        "call-2",
+      ))?.id,
+      "execution-4",
+    );
+    assertEquals(
+      (await fixture.tools.get("tenant-a", "execution-2"))?.toolCallId,
+      "call-2",
+    );
     assertEquals(await fixture.tools.get("tenant-b", "execution-2"), null);
   } finally {
     await closeFixture(fixture);

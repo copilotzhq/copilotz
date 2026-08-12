@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.59.9 — 2026-08-11
+
+This patch aligns durable tool-execution identity with provider behavior found
+in long-lived production threads.
+
+### Fixed
+
+- Provider tool-call IDs are indexed as repeatable lookup labels instead of
+  being treated as globally unique within a thread. Durable node/event IDs
+  remain the canonical execution identity.
+- Re-provisioning an existing v3 schema removes the obsolete unique tool-call
+  index, and the v1 migration preserves every historical execution when a
+  provider reuses a call ID across attempts.
+- Singular tool-call lookup now deterministically returns the latest matching
+  execution; exact callers continue to address executions by their canonical ID.
+
 ## 0.59.8 — 2026-08-11
 
 This patch adopts Ominipg `0.9.0-rc.7` throughout Copilotz.

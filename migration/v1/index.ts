@@ -1572,6 +1572,140 @@ function safeError(
   };
 }
 
+type WorkflowThreadResolution = Readonly<{
+  threadId: string;
+  orphanRecovery?: Readonly<{
+    reason: "missing_thread" | "missing_thread_id";
+    originalThreadId: string | null;
+    recoveredThreadId: string;
+  }>;
+}>;
+
+async function recoveredWorkflowThreadId(
+  transaction: SqlExecutor,
+  schema: string,
+  row: LegacyNodeRow,
+  originalThreadId: string | null,
+): Promise<string> {
+  const fallback = `migration-orphan-thread:${originalThreadId ?? row.id}`;
+  const candidates = originalThreadId && originalThreadId !== fallback
+    ? [originalThreadId, fallback]
+    : [fallback, `${fallback}:recovered`];
+
+  for (const candidate of candidates) {
+    const existing = await transaction.query<{
+      namespace: string;
+      type: string;
+    }>(
+      `SELECT namespace, type FROM ${qualified(schema, "nodes")}
+       WHERE id = $1 LIMIT 1`,
+      [candidate],
+    );
+    const found = existing.rows[0];
+    if (found) {
+      if (found.namespace === row.namespace && found.type === "thread") {
+        return candidate;
+      }
+      continue;
+    }
+
+    const createdAt = iso(row.created_at)!;
+    const updatedAt = iso(row.updated_at)!;
+    await transaction.query(
+      `INSERT INTO ${qualified(schema, "nodes")} (
+         id, namespace, type, name, content, data,
+         source_type, source_id, created_at, updated_at
+       ) VALUES (
+         $1, $2, 'thread', $3, NULL, $4::jsonb,
+         'migration_orphan_thread', NULL,
+         $5::timestamptz, $6::timestamptz
+       )`,
+      [
+        candidate,
+        row.namespace,
+        "Recovered legacy workflow history",
+        json({
+          id: candidate,
+          threadId: candidate,
+          name: "Recovered legacy workflow history",
+          description:
+            "Archived migration tombstone for workflow history whose original thread is unavailable.",
+          status: "archived",
+          rootThreadId: candidate,
+          metadata: {
+            migratedFromV1: {
+              orphanRecovery: true,
+              originalThreadId,
+            },
+          },
+          createdAt,
+          updatedAt,
+        }),
+        createdAt,
+        updatedAt,
+      ],
+    );
+    return candidate;
+  }
+
+  throw new Error(
+    `Legacy workflow '${row.id}' cannot reserve an orphan recovery thread.`,
+  );
+}
+
+async function resolveWorkflowThread(
+  transaction: SqlExecutor,
+  schema: string,
+  row: LegacyNodeRow,
+  data: Record<string, unknown>,
+): Promise<WorkflowThreadResolution> {
+  const originalThreadId = optionalString(data.threadId);
+  if (originalThreadId) {
+    const existing = await transaction.query<{
+      source_type: string | null;
+      data: unknown;
+    }>(
+      `SELECT source_type, data FROM ${qualified(schema, "nodes")}
+       WHERE namespace = $1 AND id = $2 AND type = 'thread' LIMIT 1`,
+      [row.namespace, originalThreadId],
+    );
+    if (existing.rows[0]) {
+      const migrated = object(
+        object(object(existing.rows[0].data).metadata).migratedFromV1,
+      );
+      if (
+        existing.rows[0].source_type === "migration_orphan_thread" ||
+        migrated.orphanRecovery === true
+      ) {
+        return Object.freeze({
+          threadId: originalThreadId,
+          orphanRecovery: Object.freeze({
+            reason: "missing_thread",
+            originalThreadId,
+            recoveredThreadId: originalThreadId,
+          }),
+        });
+      }
+      return Object.freeze({ threadId: originalThreadId });
+    }
+  }
+
+  const threadId = await recoveredWorkflowThreadId(
+    transaction,
+    schema,
+    row,
+    originalThreadId,
+  );
+  return Object.freeze({
+    threadId,
+    orphanRecovery: Object.freeze({
+      reason: originalThreadId ? "missing_thread" : "missing_thread_id",
+      originalThreadId,
+      recoveredThreadId: threadId,
+    }),
+  });
+}
+
 async function resolveWorkflowParticipant(
   transaction: SqlExecutor,
   schema: string,
@@ -1653,21 +1787,13 @@ async function normalizeToolExecutions(
     const row of loadNodes(transaction, schema, ["tool_execution"])
   ) {
     const data = object(row.data);
-    const threadId = optionalString(data.threadId);
-    if (
-      !threadId ||
-      !await nodeExists(
-        transaction,
-        schema,
-        row.namespace,
-        threadId,
-        "thread",
-      )
-    ) {
-      throw new Error(
-        `Legacy tool execution '${row.id}' has no readable thread.`,
-      );
-    }
+    const thread = await resolveWorkflowThread(
+      transaction,
+      schema,
+      row,
+      data,
+    );
+    const threadId = thread.threadId;
     const messageId = optionalString(data.messageId);
     const linkedMessageId = await nodeExists(
         transaction,
@@ -1749,8 +1875,12 @@ async function normalizeToolExecutions(
           metadata: {
             ...object(data.metadata),
             migratedFromV1: {
+              ...object(object(data.metadata).migratedFromV1),
               eventId: optionalString(data.eventId),
               agentName: optionalString(data.agentName),
+              ...(thread.orphanRecovery
+                ? { orphanRecovery: thread.orphanRecovery }
+                : {}),
             },
           },
         }),
@@ -1795,19 +1925,13 @@ async function normalizeLlmAttempts(
   let participantsCreated = 0;
   for await (const row of loadNodes(transaction, schema, ["llm_attempt"])) {
     const data = object(row.data);
-    const threadId = optionalString(data.threadId);
-    if (
-      !threadId ||
-      !await nodeExists(
-        transaction,
-        schema,
-        row.namespace,
-        threadId,
-        "thread",
-      )
-    ) {
-      throw new Error(`Legacy LLM attempt '${row.id}' has no readable thread.`);
-    }
+    const thread = await resolveWorkflowThread(
+      transaction,
+      schema,
+      row,
+      data,
+    );
+    const threadId = thread.threadId;
     const messageId = optionalString(data.messageId);
     const linkedMessageId = await nodeExists(
         transaction,
@@ -1924,6 +2048,7 @@ async function normalizeLlmAttempts(
           metadata: {
             ...object(data.metadata),
             migratedFromV1: {
+              ...object(object(data.metadata).migratedFromV1),
               eventId: optionalString(data.eventId),
               agentName: optionalString(data.agentName),
               config: data.config === undefined
@@ -1932,6 +2057,9 @@ async function normalizeLlmAttempts(
               runSender: data.runSender === undefined
                 ? null
                 : structuredClone(data.runSender),
+              ...(thread.orphanRecovery
+                ? { orphanRecovery: thread.orphanRecovery }
+                : {}),
             },
           },
         }),

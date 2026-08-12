@@ -73,6 +73,13 @@ thread nodes, unions participant edges, canonicalizes assets, translates settled
 non-ephemeral events, discards transient queue state, verifies the new schema,
 and drops staged legacy tables in one transaction per tenant.
 
+Historical tool executions and LLM attempts can outlive a thread that was
+deleted in v1. The upgrader preserves that history under one archived tombstone
+thread per missing legacy thread ID. Both the tombstone and each affected
+workflow carry explicit orphan-recovery metadata; no history is moved to an
+unrelated live thread. A workflow that never stored a thread ID receives a
+deterministic workflow-scoped tombstone.
+
 Resolver exceptions still roll back the tenant. When the source was already
 missing before migration, the adapter may explicitly return `state: "failed"` or
 `state: "abandoned"`; the asset record and every message attachment reference

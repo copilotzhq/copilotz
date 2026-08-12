@@ -114,13 +114,16 @@ For every selected tenant schema it:
 6. canonicalizes participant/thread identities and rewrites messages, tool
    executions, LLM attempts, document sources, and memory snapshots into their
    v3 graph and content-reference shapes;
-7. imports legacy asset bodies through the caller's `resolveLegacyAsset`
+7. retains workflows whose original thread was deleted under an archived,
+   explicitly marked tombstone thread rather than discarding history or linking
+   it to an unrelated conversation;
+8. imports legacy asset bodies through the caller's `resolveLegacyAsset`
    adapter, verifies their media encoding, size, and SHA-256 digest, and
    preserves explicitly unavailable assets as failed or abandoned records;
-8. translates settled non-frame events into positioned immutable facts with no
+9. translates settled non-frame events into positioned immutable facts with no
    delivery obligations;
-9. refreshes graph-native thread activity metadata; and
-10. drops staged tables before commit.
+10. refreshes graph-native thread activity metadata; and
+11. drops staged tables before commit.
 
 The operation is tenant-independent and idempotent after success. Inline text,
 reasoning, tool data, document sources, and memory snapshots become

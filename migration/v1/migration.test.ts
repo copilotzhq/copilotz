@@ -1155,6 +1155,166 @@ Deno.test("A28 upgrade preserves repeated provider tool-call labels", async () =
   }
 });
 
+Deno.test("A28 upgrade preserves workflows whose legacy threads were deleted", async () => {
+  const { db, session } = await createFixture();
+  const schema = uniqueSchema("orphan_workflows");
+  const suffix = "orphan-workflows";
+  const namespace = `tenant-${suffix}`;
+  const missingThreadId = `thread-deleted-${suffix}`;
+  const toolId = `tool-orphan-${suffix}`;
+  const attemptId = `llm-orphan-${suffix}`;
+  const noThreadAttemptId = `llm-no-thread-${suffix}`;
+  const noThreadRecoveryId = `migration-orphan-thread:${noThreadAttemptId}`;
+  try {
+    await provisionV1FixtureSchema(session, schema);
+    await seedLegacyTenant(session, schema, suffix);
+    await session.query(
+      `INSERT INTO ${q(schema, "nodes")} (
+         id, namespace, type, name, content, data,
+         source_type, source_id, created_at, updated_at
+       ) VALUES
+       (
+         $1, $2, 'tool_execution', 'Orphan tool', NULL, $3::jsonb,
+         'tool_execution', $1,
+         '2026-01-01T00:01:00.000Z', '2026-01-01T00:01:01.000Z'
+       ),
+       (
+         $4, $2, 'llm_attempt', 'Orphan attempt', NULL, $5::jsonb,
+         'llm_attempt', $4,
+         '2026-01-01T00:01:02.000Z', '2026-01-01T00:01:03.000Z'
+       ),
+       (
+         $6, $2, 'llm_attempt', 'Attempt without thread identity', NULL,
+         $7::jsonb, 'llm_attempt', $6,
+         '2026-01-01T00:01:04.000Z', '2026-01-01T00:01:05.000Z'
+       )`,
+      [
+        toolId,
+        namespace,
+        JSON.stringify({
+          threadId: missingThreadId,
+          agentId: `agent-${suffix}`,
+          toolCallId: `call-orphan-${suffix}`,
+          tool: { id: "orphan-tool" },
+          args: { preserved: true },
+          output: { ok: true },
+          status: "completed",
+          metadata: { migratedFromV1: { retained: true } },
+        }),
+        attemptId,
+        JSON.stringify({
+          threadId: missingThreadId,
+          agentId: `agent-${suffix}`,
+          provider: "openai",
+          model: "gpt-test",
+          messages: [{ role: "user", content: "preserve me" }],
+          answer: "preserved",
+          status: "completed",
+          metadata: { migratedFromV1: { retained: true } },
+        }),
+        noThreadAttemptId,
+        JSON.stringify({
+          agentId: `agent-${suffix}`,
+          provider: "openai",
+          model: "gpt-test",
+          messages: [],
+          answer: "also preserved",
+          status: "completed",
+        }),
+      ],
+    );
+    await session.query(
+      `INSERT INTO ${q(schema, "events")} (
+         id, "threadId", "eventType", payload, namespace, status,
+         metadata, "subjectType", "subjectId", "correlationId",
+         "createdAt", "updatedAt"
+       ) VALUES (
+         $1, $2, 'TOOL_RESULT', '{"status":"completed"}'::jsonb,
+         $3, 'completed', '{}'::jsonb, 'tool_execution', $4,
+         $1, '2026-01-01T00:01:06.000Z', '2026-01-01T00:01:06.000Z'
+       )`,
+      [
+        `event-orphan-${suffix}`,
+        missingThreadId,
+        namespace,
+        toolId,
+      ],
+    );
+
+    await upgradeV1Schema(session, schema, {
+      resolveLegacyAsset: legacyAssetResolver(suffix),
+    });
+
+    const readers = await createV3Readers(session, schema);
+    try {
+      const recovered = await readers.conversation.getThread(
+        namespace,
+        missingThreadId,
+      );
+      assertEquals(recovered?.status, "archived");
+      assertEquals(recovered?.lastEventId, `event-orphan-${suffix}`);
+      assertEquals(recovered?.metadata, {
+        migratedFromV1: {
+          orphanRecovery: true,
+          originalThreadId: missingThreadId,
+        },
+      });
+
+      const tool = await readers.tools.get(namespace, toolId);
+      const attempt = await readers.attempts.get(namespace, attemptId);
+      const noThreadAttempt = await readers.attempts.get(
+        namespace,
+        noThreadAttemptId,
+      );
+      assertEquals(tool?.threadId, missingThreadId);
+      assertEquals(attempt?.threadId, missingThreadId);
+      assertEquals(noThreadAttempt?.threadId, noThreadRecoveryId);
+      for (const workflow of [tool, attempt]) {
+        const migrated = workflow?.metadata.migratedFromV1 as
+          | Record<string, unknown>
+          | undefined;
+        assertEquals(migrated?.retained, true);
+        assertEquals(migrated?.orphanRecovery, {
+          reason: "missing_thread",
+          originalThreadId: missingThreadId,
+          recoveredThreadId: missingThreadId,
+        });
+      }
+      assertEquals(
+        (noThreadAttempt?.metadata.migratedFromV1 as Record<string, unknown>)
+          .orphanRecovery,
+        {
+          reason: "missing_thread_id",
+          originalThreadId: null,
+          recoveredThreadId: noThreadRecoveryId,
+        },
+      );
+
+      const tombstones = await session.query<{
+        id: string;
+        status: string;
+      }>(
+        `SELECT id, data ->> 'status' AS status
+         FROM ${q(schema, "nodes")}
+         WHERE namespace = $1 AND source_type = 'migration_orphan_thread'
+         ORDER BY id`,
+        [namespace],
+      );
+      assertEquals(
+        tombstones.rows,
+        [
+          { id: noThreadRecoveryId, status: "archived" },
+          { id: missingThreadId, status: "archived" },
+        ].sort((left, right) => left.id.localeCompare(right.id)),
+      );
+    } finally {
+      await readers.executor.shutdown();
+    }
+  } finally {
+    await db.close();
+  }
+});
+
 Deno.test("A28 upgrade preserves null and partial LLM content", async () => {
   const { db, session } = await createFixture();
   const schema = uniqueSchema("null_llm_content");

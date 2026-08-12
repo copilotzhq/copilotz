@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.59.13 — 2026-08-12
+
+This patch preserves historical workflows whose legacy conversation threads were
+deleted before the one-way v1 upgrade.
+
+### Fixed
+
+- Legacy tool executions and LLM attempts with an unavailable thread now share
+  an archived tombstone thread for that original thread ID instead of aborting
+  the tenant transaction.
+- Workflow and tombstone metadata explicitly records orphan recovery, and
+  settled event references continue to resolve without attaching history to an
+  unrelated live conversation.
+
 ## 0.59.12 — 2026-08-12
 
 This patch adopts Ominipg `0.9.0-rc.8` and exposes its configurable session

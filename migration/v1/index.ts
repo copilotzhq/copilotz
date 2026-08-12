@@ -46,6 +46,10 @@ type LegacyNodeRow = Record<string, unknown> & {
   updated_at: string | Date;
 };
 
+type LegacyNodePageRow = LegacyNodeRow & {
+  migration_cursor_created_at: string;
+};
+
 type ParticipantType = "human" | "agent" | "tool" | "job";
 
 type MigratedContentRef = Readonly<{
@@ -468,14 +472,15 @@ async function* loadNodes(
   schema: string,
   types: readonly string[],
 ): AsyncGenerator<LegacyNodeRow> {
-  let createdAt: string | Date | null = null;
+  let createdAt: string | null = null;
   let id = "";
   while (true) {
-    const result: { rows: LegacyNodeRow[] } = await transaction.query<
-      LegacyNodeRow
+    const result: { rows: LegacyNodePageRow[] } = await transaction.query<
+      LegacyNodePageRow
     >(
       `SELECT id, namespace, type, name, content, data,
-         source_type, source_id, created_at, updated_at
+         source_type, source_id, created_at, updated_at,
+         created_at::text AS migration_cursor_created_at
        FROM ${qualified(schema, "nodes")}
        WHERE type = ANY($1::text[])
          AND (
@@ -488,8 +493,8 @@ async function* loadNodes(
     );
     if (result.rows.length === 0) return;
     for (const row of result.rows) yield row;
-    const last: LegacyNodeRow = result.rows.at(-1)!;
-    createdAt = last.created_at;
+    const last = result.rows.at(-1)!;
+    createdAt = last.migration_cursor_created_at;
     id = last.id;
   }
 }

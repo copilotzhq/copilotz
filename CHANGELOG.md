@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.59.6 — 2026-08-11
+
+This patch makes bounded v1 node pagination safe with PostgreSQL timestamp
+decoding.
+
+### Fixed
+
+- Migration cursors now round-trip the database's exact `timestamptz` text,
+  preserving microseconds instead of re-reading the final page after a driver
+  converts timestamps to millisecond-precision JavaScript dates.
+- The bounded-batch regression test emulates PostgreSQL timestamp decoding with
+  microsecond-distinct rows and fails fast if a cursor stops advancing.
+
+## 0.59.5 — 2026-08-11
+
+This patch preserves unavailable legacy JSON assets without inventing invalid
+database bodies.
+
+### Fixed
+
+- Missing legacy `application/json` bodies use a valid `null` sentinel whose
+  bytes, length, and digest agree while the asset remains explicitly failed and
+  unreadable.
+
 ## 0.59.4 — 2026-08-11
 
 This patch makes the one-way v1 database upgrade safe for large production

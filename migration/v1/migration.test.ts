@@ -8,6 +8,8 @@ import {
   createEventCoordinator,
   createEventStore,
   quoteEventIdentifier,
+  type SqlExecutor,
+  type SqlQueryResult,
   type SqlSession,
 } from "../../runtime/events/index.ts";
 import {
@@ -55,6 +57,43 @@ async function createFixture(): Promise<{
   const db = await createTestDatabase({ url: ":memory:" });
   await provisionV1FixtureSchema(db.session, "public");
   return { db, session: db.session };
+}
+
+function emulatePostgresTimestampDecoding(session: SqlSession): SqlSession {
+  let nodePageQueries = 0;
+  const wrap = (executor: SqlExecutor): SqlExecutor => {
+    const query = async <
+      TRow extends Record<string, unknown> = Record<string, unknown>,
+    >(
+      sql: string,
+      params?: unknown[],
+    ): Promise<SqlQueryResult<TRow>> => {
+      const result = await executor.query<TRow>(sql, params);
+      const isNodePage = sql.includes(
+        "source_type, source_id, created_at, updated_at",
+      ) && sql.includes("ORDER BY created_at, id");
+      if (!isNodePage) return result;
+      nodePageQueries += 1;
+      if (nodePageQueries > 30) {
+        throw new Error("Legacy node pagination did not advance.");
+      }
+      return {
+        ...result,
+        rows: result.rows.map((row) => ({
+          ...row,
+          created_at: new Date(String(row.created_at)),
+          updated_at: new Date(String(row.updated_at)),
+        })) as TRow[],
+      };
+    };
+    return { query };
+  };
+  const executor = wrap(session);
+  return {
+    query: executor.query,
+    transaction: (operation) =>
+      session.transaction((transaction) => operation(wrap(transaction))),
+  };
 }
 
 async function createV3Readers(session: SqlSession, schema: string) {
@@ -651,13 +690,15 @@ Deno.test("A28 upgrade processes legacy nodes in bounded batches", async () => {
          ),
          'asset',
          'batch-asset-' || value,
-         '2026-01-01T00:00:00.000Z'::timestamptz,
-         '2026-01-01T00:00:00.000Z'::timestamptz
+         '2026-01-01T00:00:00.000Z'::timestamptz +
+           value * INTERVAL '1 microsecond',
+         '2026-01-01T00:00:00.000Z'::timestamptz +
+           value * INTERVAL '1 microsecond'
        FROM generate_series(1, 205) AS value`,
     );
 
     let resolved = 0;
-    await upgradeV1Schema(session, schema, {
+    await upgradeV1Schema(emulatePostgresTimestampDecoding(session), schema, {
       resolveLegacyAsset: () => {
         resolved += 1;
         return { body: new Uint8Array([resolved % 255]) };

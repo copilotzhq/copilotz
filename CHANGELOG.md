@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.59.14 — 2026-08-12
+
+This patch adopts Oxian `0.21.0-rc.3` and Ominipg `0.9.0-rc.9` so embedded
+Copilotz runtimes can keep durable in-process streams alive for the application
+lifetime.
+
+### Fixed
+
+- In-process Gateway, Worker, database-session, and realtime streams no longer
+  inherit WebSocket connection-age rotation or its bounded drain timeout.
+- WebSocket Workers retain proactive connection rotation and the existing
+  reconnect lifecycle.
+
 ## 0.59.13 — 2026-08-12
 
 This patch preserves historical workflows whose legacy conversation threads were

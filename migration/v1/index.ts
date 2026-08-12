@@ -129,6 +129,7 @@ const EPHEMERAL_TYPES = Object.freeze([
 ]);
 
 const NODE_MIGRATION_BATCH_SIZE = 100;
+const LLM_ATTEMPT_MIGRATION_BATCH_SIZE = 1;
 
 function qualified(schema: string, table: string): string {
   return `${quoteEventIdentifier(schema)}.${quoteEventIdentifier(table)}`;
@@ -486,6 +487,7 @@ async function* loadNodes(
   transaction: SqlExecutor,
   schema: string,
   types: readonly string[],
+  batchSize = NODE_MIGRATION_BATCH_SIZE,
 ): AsyncGenerator<LegacyNodeRow> {
   let createdAt: string | null = null;
   let id = "";
@@ -504,7 +506,7 @@ async function* loadNodes(
          )
        ORDER BY created_at, id
        LIMIT $4`,
-      [[...types], createdAt, id, NODE_MIGRATION_BATCH_SIZE],
+      [[...types], createdAt, id, batchSize],
     );
     if (result.rows.length === 0) return;
     for (const row of result.rows) yield row;
@@ -1938,7 +1940,16 @@ async function normalizeLlmAttempts(
   schema: string,
 ): Promise<number> {
   let participantsCreated = 0;
-  for await (const row of loadNodes(transaction, schema, ["llm_attempt"])) {
+  // Legacy attempts can contain tens of megabytes of embedded transcript data.
+  // Keep each Ominipg result frame bounded independently of ordinary nodes.
+  for await (
+    const row of loadNodes(
+      transaction,
+      schema,
+      ["llm_attempt"],
+      LLM_ATTEMPT_MIGRATION_BATCH_SIZE,
+    )
+  ) {
     const data = object(row.data);
     const thread = await resolveWorkflowThread(
       transaction,

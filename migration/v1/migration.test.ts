@@ -96,6 +96,34 @@ function emulatePostgresTimestampDecoding(session: SqlSession): SqlSession {
   };
 }
 
+function observeLlmAttemptPageSizes(
+  session: SqlSession,
+  pageSizes: number[],
+): SqlSession {
+  const wrap = (executor: SqlExecutor): SqlExecutor => ({
+    query: async <
+      TRow extends Record<string, unknown> = Record<string, unknown>,
+    >(
+      sql: string,
+      params?: unknown[],
+    ): Promise<SqlQueryResult<TRow>> => {
+      if (
+        sql.includes("type = ANY($1::text[])") &&
+        Array.isArray(params?.[0]) && params[0].includes("llm_attempt")
+      ) {
+        pageSizes.push(Number(params[3]));
+      }
+      return await executor.query<TRow>(sql, params);
+    },
+  });
+  const executor = wrap(session);
+  return {
+    query: executor.query,
+    transaction: (operation) =>
+      session.transaction((transaction) => operation(wrap(transaction))),
+  };
+}
+
 async function createV3Readers(session: SqlSession, schema: string) {
   const store = createEventStore({ session, schema });
   const registry = await createPluginRegistry();
@@ -784,6 +812,26 @@ Deno.test("A28 upgrade processes legacy nodes in bounded batches", async () => {
     );
     assertEquals(resolved, 205);
     assertEquals(Number(assets.rows[0]?.count), 205);
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("A28 upgrade isolates large LLM attempts in single-row pages", async () => {
+  const { db, session } = await createFixture();
+  const schema = uniqueSchema("llm_attempt_pages");
+  const pageSizes: number[] = [];
+  try {
+    await provisionV1FixtureSchema(session, schema);
+    await seedLegacyTenant(session, schema, "llm-attempt-pages");
+    await upgradeV1Schema(
+      observeLlmAttemptPageSizes(session, pageSizes),
+      schema,
+      { resolveLegacyAsset: legacyAssetResolver("llm-attempt-pages") },
+    );
+
+    assert(pageSizes.length >= 2);
+    assertEquals([...new Set(pageSizes)], [1]);
   } finally {
     await db.close();
   }

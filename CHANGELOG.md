@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.59.16 — 2026-08-12
+
+This patch bounds one-way migration responses for legacy LLM attempts with very
+large embedded transcripts.
+
+### Fixed
+
+- Legacy LLM attempts are migrated in single-row pages so multi-gigabyte
+  histories cannot overflow Ominipg's session-frame encoding.
+- Ordinary node types retain their larger migration batches.
+
 ## 0.59.15 — 2026-08-12
 
 This patch makes the one-way v1 database upgrade preserve legacy text-labelled

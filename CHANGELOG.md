@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.59.12 — 2026-08-12
+
+This patch adopts Ominipg `0.9.0-rc.8` and exposes its configurable session
+request timeout through managed Copilotz persistence.
+
+### Fixed
+
+- Long-running migration and analytical queries can opt into a request timeout
+  above Ominipg's unchanged 30-second default.
+
 ## 0.59.11 — 2026-08-11
 
 This patch completes the legacy null-content migration fix without losing

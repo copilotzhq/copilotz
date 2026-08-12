@@ -31,6 +31,7 @@ export type CopilotzOminipgOptions = Readonly<{
   pgliteProvider?: OminipgConnectionOptions["pgliteProvider"];
   pgProvider?: OminipgConnectionOptions["pgProvider"];
   pgPoolMax?: number;
+  requestTimeoutMs?: OminipgConnectionOptions["requestTimeoutMs"];
   logMetrics?: boolean;
 }>;
 
@@ -79,6 +80,9 @@ export async function openManagedOminipgDatabase(
     ...(options.pgPoolMax === undefined
       ? {}
       : { pgPoolMax: options.pgPoolMax }),
+    ...(options.requestTimeoutMs === undefined
+      ? {}
+      : { requestTimeoutMs: options.requestTimeoutMs }),
     ...(options.logMetrics === undefined
       ? {}
       : { logMetrics: options.logMetrics }),

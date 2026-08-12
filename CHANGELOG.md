@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.59.7 — 2026-08-11
+
+This patch reconciles a legacy message's logical scope with its canonical thread
+during the one-way v1 upgrade.
+
+### Fixed
+
+- A message whose legacy namespace differs from its readable thread now adopts
+  the thread namespace atomically instead of aborting the tenant migration.
+- Outgoing edge scope follows the moved message, and migration metadata retains
+  the original namespace for auditability.
+
 ## 0.59.6 — 2026-08-11
 
 This patch makes bounded v1 node pagination safe with PostgreSQL timestamp

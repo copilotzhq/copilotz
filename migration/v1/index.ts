@@ -1417,35 +1417,51 @@ async function normalizeMessages(
     const data = object(row.data);
     const threadId = optionalString(data.threadId) ??
       (row.source_type === "thread" ? optionalString(row.source_id) : null);
-    if (
-      !threadId ||
-      !await nodeExists(
-        transaction,
-        schema,
-        row.namespace,
-        threadId,
-        "thread",
+    const thread = threadId
+      ? await transaction.query<{ namespace: string }>(
+        `SELECT namespace FROM ${qualified(schema, "nodes")}
+         WHERE id = $1 AND type = 'thread' LIMIT 1`,
+        [threadId],
       )
-    ) {
+      : null;
+    const threadNamespace = optionalString(thread?.rows[0]?.namespace);
+    if (!threadId || !threadNamespace) {
       throw new Error(`Legacy message '${row.id}' has no readable thread.`);
     }
+    if (row.namespace !== threadNamespace) {
+      await transaction.query(
+        `UPDATE ${qualified(schema, "nodes")}
+         SET namespace = $2
+         WHERE id = $1 AND type = 'message'`,
+        [row.id, threadNamespace],
+      );
+      await transaction.query(
+        `UPDATE ${qualified(schema, "edges")}
+         SET namespace = $2
+         WHERE source_node_id = $1`,
+        [row.id, threadNamespace],
+      );
+    }
+    const messageRow: LegacyNodeRow = row.namespace === threadNamespace
+      ? row
+      : { ...row, namespace: threadNamespace };
     const sender = await resolveMessageSender(
       transaction,
       schema,
-      row,
+      messageRow,
       data,
     );
     if (sender.created) participantsCreated++;
     const recipientIds = await resolveRecipientIds(
       transaction,
       schema,
-      row.namespace,
+      messageRow.namespace,
       data.recipientIds ?? object(data.metadata).recipientIds,
     );
     const content = await canonicalMessageContent(
       transaction,
       schema,
-      row,
+      messageRow,
       data,
     );
     const metadata = {
@@ -1457,6 +1473,9 @@ async function normalizeMessages(
         senderUserId: optionalString(data.senderUserId),
         externalId: optionalString(data.externalId),
         toolCallId: optionalString(data.toolCallId),
+        ...(row.namespace === threadNamespace
+          ? {}
+          : { originalNamespace: row.namespace }),
       },
     };
     await transaction.query(
@@ -1465,7 +1484,7 @@ async function normalizeMessages(
          source_type = 'thread', source_id = $4
        WHERE namespace = $1 AND id = $2 AND type = 'message'`,
       [
-        row.namespace,
+        messageRow.namespace,
         row.id,
         json({
           threadId,
@@ -1478,26 +1497,26 @@ async function normalizeMessages(
       ],
     );
     await ensureEdge(transaction, schema, {
-      namespace: row.namespace,
+      namespace: messageRow.namespace,
       sourceId: threadId,
       targetId: row.id,
       type: "has_message",
     });
     await ensureEdge(transaction, schema, {
-      namespace: row.namespace,
+      namespace: messageRow.namespace,
       sourceId: sender.id,
       targetId: row.id,
       type: "sent_by",
     });
     await ensureEdge(transaction, schema, {
-      namespace: row.namespace,
+      namespace: messageRow.namespace,
       sourceId: sender.id,
       targetId: threadId,
       type: "participates_in",
     });
     for (const recipientId of recipientIds) {
       await ensureEdge(transaction, schema, {
-        namespace: row.namespace,
+        namespace: messageRow.namespace,
         sourceId: recipientId,
         targetId: threadId,
         type: "participates_in",

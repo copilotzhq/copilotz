@@ -717,6 +717,51 @@ Deno.test("A28 upgrade processes legacy nodes in bounded batches", async () => {
   }
 });
 
+Deno.test("A28 upgrade aligns a legacy message with its thread namespace", async () => {
+  const { db, session } = await createFixture();
+  const schema = uniqueSchema("message_namespace");
+  try {
+    await provisionV1FixtureSchema(session, schema);
+    await seedLegacyTenant(session, schema, "message-namespace");
+    await session.query(
+      `UPDATE ${q(schema, "nodes")}
+       SET namespace = 'legacy-misrouted'
+       WHERE id = 'message-message-namespace'`,
+    );
+
+    await upgradeV1Schema(session, schema, {
+      resolveLegacyAsset: legacyAssetResolver("message-namespace"),
+    });
+
+    const message = await session.query<{
+      namespace: string;
+      data: Record<string, unknown>;
+    }>(
+      `SELECT namespace, data FROM ${q(schema, "nodes")}
+       WHERE id = 'message-message-namespace'`,
+    );
+    assertEquals(message.rows[0]?.namespace, "tenant-message-namespace");
+    const metadata = message.rows[0]?.data.metadata as Record<string, unknown>;
+    const migrated = metadata.migratedFromV1 as Record<string, unknown>;
+    assertEquals(migrated.originalNamespace, "legacy-misrouted");
+
+    const outgoing = await session.query<{
+      namespace: string;
+    }>(
+      `SELECT namespace FROM ${q(schema, "edges")}
+       WHERE source_node_id = 'message-message-namespace'`,
+    );
+    assert(
+      outgoing.rows.length > 0 &&
+        outgoing.rows.every((edge) =>
+          edge.namespace === "tenant-message-namespace"
+        ),
+    );
+  } finally {
+    await db.close();
+  }
+});
+
 Deno.test("A28 multi-tenant upgrade preserves graph domains and translates settled events", async () => {
   const { db, session } = await createFixture();
   const schemaA = uniqueSchema("tenant_a");

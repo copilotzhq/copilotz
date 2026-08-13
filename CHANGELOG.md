@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.59.21 — 2026-08-13
+
+This patch lets downstream applications type their own processors against the
+real delivery contract instead of duck-typing it.
+
+### Added
+
+- `@copilotz/copilotz/engine` exposes the processor-facing context types,
+  including `CopilotzProcessorContext` and `CopilotzLiveProcessorContext`.
+  Previously these were reachable only through the root barrel, which forces
+  applications that ban barrel imports to redeclare the context structurally.
+  Engine assembly itself stays internal to `@copilotz/copilotz/application`, so
+  the new subpath is types only.
+
 ## 0.59.20 — 2026-08-13
 
 This patch makes tenant schema lifecycle explicit and exposes renderable history

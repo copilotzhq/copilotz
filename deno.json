@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.59.20",
+  "version": "0.59.21",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -16,6 +16,7 @@
     "./channels": "./runtime/channels/index.ts",
     "./content": "./runtime/content/index.ts",
     "./domain": "./runtime/domain/index.ts",
+    "./engine": "./runtime/engine/public.ts",
     "./features": "./runtime/features/index.ts",
     "./memory": "./runtime/memory/index.ts",
     "./tools": "./runtime/tools/index.ts",

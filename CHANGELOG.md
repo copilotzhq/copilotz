@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.59.23 — 2026-08-13
+
+This patch keeps durable workflow identities safe across deeply nested tool,
+pipeline, ask, and realtime continuations.
+
+### Fixed
+
+- Synthesized workflow IDs preserve their readable form while short, then
+  compact deterministically with SHA-256 before recursive ancestry can exceed
+  downstream transport limits.
+- LLM attempts, agent messages, tool executions, pipeline stages, public asks,
+  and realtime tool calls now share the same runtime-neutral identity rule.
+
 ## 0.59.22 — 2026-08-13
 
 This patch makes uploaded and tool-produced files addressable across the full

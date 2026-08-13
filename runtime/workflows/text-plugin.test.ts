@@ -661,6 +661,63 @@ Deno.test("event-native text workflow preserves user -> tool -> same-agent conti
   }
 });
 
+Deno.test("text workflow bounds synthesized identities across a long tool chain", async () => {
+  let logicalCalls = 0;
+  const longToolCallId = `preview-${"nested-call-".repeat(24)}`;
+  const fixture = await createFixture(async (request) => {
+    logicalCalls += 1;
+    await lifecycleStarted(request, 0, "primary-model");
+    await lifecycleSettled(request, {
+      attemptIndex: 0,
+      model: "primary-model",
+      status: "completed",
+      recoveryAction: "accept",
+    });
+    return response(
+      request,
+      logicalCalls === 1
+        ? {
+          answer: "",
+          model: "primary-model",
+          finishReason: "tool_calls",
+          toolCalls: [toolCall(longToolCallId, "bounded")],
+        }
+        : { answer: "complete", model: "primary-model" },
+    );
+  });
+  try {
+    const root = await startRun(fixture, "Run a deeply identified tool.");
+    await waitForRun(fixture, root.event.id, 4);
+
+    const attempts = await fixture.engine.llmAttempts.list(
+      "tenant-a",
+      "thread-a",
+    );
+    const executions = await fixture.engine.toolExecutions.list(
+      "tenant-a",
+      "thread-a",
+    );
+    const messages = await fixture.engine.conversation.listMessages(
+      "tenant-a",
+      "thread-a",
+    );
+    for (
+      const id of [
+        ...attempts.map((attempt) => attempt.id),
+        ...executions.map((execution) => execution.id),
+        ...messages.map((message) => message.id),
+      ]
+    ) {
+      assert(id.length <= 256, id);
+    }
+    assert(
+      executions.some((execution) => execution.id.startsWith("tool:sha256:")),
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
 Deno.test("tool attachments persist and remain addressable in the next model turn", async () => {
   let logicalCalls = 0;
   const assetAgent: Agent = {
@@ -1798,6 +1855,7 @@ Deno.test("A55 workflow modules remain factory-first and runtime-neutral", async
   for (
     const module of [
       "index.ts",
+      "identity.ts",
       "pipeline.ts",
       "prompt.ts",
       "resources.ts",

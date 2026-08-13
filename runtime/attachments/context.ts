@@ -2,6 +2,7 @@ import type { Participant, ParticipantInput } from "../domain/index.ts";
 import { toolExecutionContent } from "../domain/index.ts";
 import type { CopilotzProcessorCapabilities } from "../engine/index.ts";
 import { withWorkflowMetadata } from "../workflows/resources.ts";
+import { deriveWorkflowId } from "../workflows/identity.ts";
 import type {
   RealtimeAgentAskInput,
   RealtimeAgentAskResult,
@@ -160,7 +161,7 @@ export function createRealtimeProviderContext(
     const toolCallId = input.toolCallId?.trim() ||
       `${metadata.streamId}:${ordinal}`;
     const executionId = input.id?.trim() ||
-      `tool:${metadata.streamId}:${toolCallId}`;
+      await deriveWorkflowId("tool", metadata.streamId, toolCallId);
     const resource = capabilities.resources.get<Record<string, unknown>>(
       "tools",
       toolId,

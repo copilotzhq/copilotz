@@ -41,6 +41,7 @@ import {
   workflowMetadata,
 } from "./resources.ts";
 import { recordProviderAttemptLifecycle } from "./llm-lifecycle.ts";
+import { deriveWorkflowId } from "./identity.ts";
 import { createWorkflowToolExecutor } from "./tool-executor.ts";
 import { createWorkflowToolCatalog } from "./tool-catalog.ts";
 import {
@@ -290,7 +291,7 @@ function messageRouterProcessor(
           ...(metadata?.batchId ? { batchId: metadata.batchId } : {}),
         };
         await context.llmAttempts.create({
-          id: `llm:${continuationKey}`,
+          id: await deriveWorkflowId("llm", continuationKey),
           threadId: message.threadId,
           messageId: message.id,
           participantId: participant.id,
@@ -588,7 +589,7 @@ function projectTextResultProcessor(
         },
       );
       const outputMessage = await context.conversation.createMessage({
-        id: `message:${attempt.id}:output`,
+        id: await deriveWorkflowId("message", attempt.id, "output"),
         threadId: attempt.threadId,
         sender: participantInput(participant),
         recipientIds: [],
@@ -647,7 +648,7 @@ function projectTextResultProcessor(
           },
         );
         await context.toolExecutions.create({
-          id: `tool:${attempt.id}:${call.id}`,
+          id: await deriveWorkflowId("tool", attempt.id, call.id),
           threadId: attempt.threadId,
           ...(outputMessageId ? { messageId: outputMessageId } : {}),
           participantId: participant.id,
@@ -900,8 +901,13 @@ function projectToolResultProcessor(
           const parentAttemptId = metadata.parentLlmAttemptId ??
             metadata.llmAttemptId ?? "pipeline";
           await context.toolExecutions.create({
-            id:
-              `tool:${parentAttemptId}:pipeline:${advancement.pipeline.id}:${advancement.stageIndex}`,
+            id: await deriveWorkflowId(
+              "tool",
+              parentAttemptId,
+              "pipeline",
+              advancement.pipeline.id,
+              String(advancement.stageIndex),
+            ),
             threadId: execution.threadId,
             messageId: execution.messageId,
             participantId: execution.participantId,
@@ -1020,7 +1026,7 @@ function projectToolResultProcessor(
           : {}),
       });
       await context.conversation.createMessage({
-        id: `message:${execution.id}:result`,
+        id: await deriveWorkflowId("message", execution.id, "result"),
         threadId: execution.threadId,
         sender: {
           externalId: `tool:${toolId}`,

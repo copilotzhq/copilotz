@@ -379,8 +379,12 @@ Initial policy:
 - `passthrough` remains an edge compatibility mode, not a valid backend for
   durable referenced content.
 
-The resolver batches metadata/body reads so a message history does not incur one
-database/network round trip per part.
+The event-native history endpoint resolves a page as one compound document, so
+clients do not issue one HTTP request per content part. Canonical messages stay
+in `data`; `included.content` contains each requested immutable body alongside
+its original ref and asset record. `included.llmAttempts` and
+`included.toolExecutions` preserve workflow identity for reasoning, tool calls,
+progressive tool state, and final projected output.
 
 ## Write and Transaction Protocol
 
@@ -641,8 +645,8 @@ During the v3 migration:
 - accept bare IDs and current `asset://<id>` / namespaced references;
 - keep `ToolExecutionContext.resolveAsset` and provide a migration from direct
   `assetStore` access;
-- project canonical messages to v1 REST `content: string` plus
-  `metadata.attachments` until the chat adapter moves;
+- expose canonical compound message history to migrated clients through
+  `include=content,workflow`, without a flattened message compatibility DTO;
 - project semantic/delta events to the versioned legacy transport vocabulary at
   the v1 SSE boundary;
 - preserve `/v1/assets/:id?format=dataUrl` with authorization and size limits.

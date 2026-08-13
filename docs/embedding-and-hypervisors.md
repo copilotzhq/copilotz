@@ -71,8 +71,11 @@ without exposing a public session abstraction.
 
 `databaseSchema` selects the default physical schema. Additional schemas are
 bound lazily through `application.databaseScope(name)` or an operation's
-`databaseSchema`. A schema scope creates repositories and an isolated event hub
-only; it does not create another database, Worker, Hypervisor, or scheduler.
+`databaseSchema`. Binding validates the clean four-table baseline with read-only
+catalog SQL; it does not execute DDL. Tenant onboarding or migration must call
+`provisionCopilotzSchema(database, name)` before traffic can select that scope.
+A valid schema scope creates repositories and an isolated event hub only; it
+does not create another database, Worker, Hypervisor, or scheduler.
 
 HTTP requests cannot select a physical schema by context alone. A Gateway must
 provide an explicit authorization resolver:

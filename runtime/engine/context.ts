@@ -373,6 +373,13 @@ export function createCopilotzProcessorCapabilities(
           threadId,
           toolCallId,
         ),
+      getByMessageToolCallId: (threadId, messageId, toolCallId) =>
+        options.toolExecutions.getByMessageToolCallId(
+          namespace,
+          threadId,
+          messageId,
+          toolCallId,
+        ),
       list: (threadId, listOptions) =>
         options.toolExecutions.list(namespace, threadId, listOptions),
     });

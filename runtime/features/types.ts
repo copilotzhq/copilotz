@@ -20,6 +20,8 @@ export type FeatureResponse = Readonly<{
   /** Transport headers such as Set-Cookie or a content disposition. */
   headers?: HeadersInit;
   data?: unknown;
+  /** Canonical related resources requested through an `include` query. */
+  included?: unknown;
   pageInfo?: Readonly<{
     next?: string;
     hasMore: boolean;

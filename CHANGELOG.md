@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.59.20 — 2026-08-13
+
+This patch makes tenant schema lifecycle explicit and exposes renderable history
+without flattening the event-native domain contract.
+
+### Added
+
+- `validateCopilotzSchema()` performs a read-only structural check of every
+  runtime-required column in the four-table baseline.
+- `provisionCopilotzSchema()` is the explicit schema create/upgrade lifecycle
+  for migrations and tenant onboarding.
+- Message history accepts `include=content,workflow` and returns canonical
+  messages with related LLM attempts, tool executions, and immutable content in
+  one compound document.
+
+### Fixed
+
+- Lazy tenant access no longer reruns schema DDL or waits on trigger/index locks
+  during ordinary requests.
+- Co-located Gateway/Worker topologies can let one role provision the default
+  schema while the other validates it.
+- Canonical history retains participant identity, reasoning, tool calls,
+  execution state, projected output, errors, attachments, and pagination without
+  introducing a flattened compatibility model.
+
 ## 0.59.19 — 2026-08-13
 
 This patch makes tool execution lifecycle and progressive output first-class in

@@ -9,9 +9,10 @@ import {
   type CopilotzEvent,
   type CopilotzEventHub,
   createCopilotzEventHub,
-  createCoreSchemaStatements,
   createEventStore,
   type EventStore,
+  provisionCopilotzSchema,
+  validateCopilotzSchema,
 } from "../events/index.ts";
 import {
   COPILOTZ_LIVE_WORKLOAD,
@@ -41,14 +42,15 @@ type AdditionalDatabaseScope = Readonly<{
   hub: CopilotzEventHub;
 }>;
 
-async function initializeSchema(
+async function prepareDefaultDatabaseSchema(
   options: CreateCopilotzEngineOptions,
   schema: string,
 ): Promise<void> {
-  if (options.initializeSchema === false) return;
-  for (const statement of createCoreSchemaStatements(schema)) {
-    await options.session.query(statement);
+  if (options.provisionDefaultDatabaseSchema === false) {
+    await validateCopilotzSchema(options.session, schema);
+    return;
   }
+  await provisionCopilotzSchema(options.session, schema);
 }
 
 function streamWorkloadName(value: string | undefined): string {
@@ -73,7 +75,7 @@ export async function createCopilotzEngine(
   options: CreateCopilotzEngineOptions,
 ): Promise<CopilotzEngine> {
   const databaseSchema = options.defaultDatabaseSchema ?? "public";
-  await initializeSchema(options, databaseSchema);
+  await prepareDefaultDatabaseSchema(options, databaseSchema);
   const now = options.now ?? (() => new Date());
   const eventHub = options.eventHub ?? createCopilotzEventHub();
   const ownsEventHub = options.eventHub === undefined;
@@ -345,7 +347,9 @@ export async function createCopilotzEngine(
       const hub = createCopilotzEventHub();
       const pending = (async () => {
         try {
-          await initializeSchema(options, normalized);
+          // Selecting a tenant scope is a request-path operation. It must never
+          // acquire DDL locks or implicitly create tenant infrastructure.
+          await validateCopilotzSchema(options.session, normalized);
           const runtime = createDatabaseScope({
             databaseSchema: normalized,
             engine: options,

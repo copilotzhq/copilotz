@@ -261,6 +261,11 @@ export type ScopedToolExecutions = Readonly<{
     threadId: string,
     toolCallId: string,
   ): Promise<ToolExecution | null>;
+  getByMessageToolCallId(
+    threadId: string,
+    messageId: string,
+    toolCallId: string,
+  ): Promise<ToolExecution | null>;
   list(
     threadId: string,
     options?: { after?: string; limit?: number },
@@ -366,7 +371,8 @@ export type CreateCopilotzEngineOptions = Readonly<{
   session: SqlSession;
   registry: PluginRegistry;
   defaultDatabaseSchema?: string;
-  initializeSchema?: boolean;
+  /** Provision the default schema during engine startup. Set false to validate it only. */
+  provisionDefaultDatabaseSchema?: boolean;
   execution?: CopilotzEngineExecutionOptions;
   attachments?: CopilotzEngineAttachmentOptions;
   eventHub?: CopilotzEventHub;

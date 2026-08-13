@@ -37,9 +37,13 @@ configuration. An injected database is always application-owned and remains
 usable after Copilotz shuts down. The engine sees only a package-private atomic
 SQL adapter.
 
-The default physical schema is initialized eagerly. `databaseScope(name)` and
-schema-bearing operations initialize additional physical schemas lazily. Each
-scope owns its repositories, event store, attachment runtime, and event hub; all
+The default physical schema is provisioned eagerly unless
+`provisionDefaultDatabaseSchema` is false, in which case it is validated only.
+`databaseScope(name)` and schema-bearing operations always validate additional
+physical schemas with read-only catalog SQL. They never execute DDL on a request
+path. Applications explicitly call `provisionCopilotzSchema()` from migration or
+tenant-onboarding control flow before selecting a new schema. Each valid scope
+owns its repositories, event store, attachment runtime, and event hub; all
 scopes reuse the same Ominipg database, plugin registry, and Oxian executor.
 Adding a tenant schema therefore does not create another database connection,
 Worker, Hypervisor, scheduler, or resident timer.

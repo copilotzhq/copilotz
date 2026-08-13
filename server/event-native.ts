@@ -23,6 +23,10 @@ import type {
   FeatureResource,
   FeatureResponse,
 } from "../runtime/features/index.ts";
+import {
+  createEventNativeMessageHistoryIncluded,
+  type EventNativeHistoryInclude,
+} from "./history.ts";
 
 export type EventNativeAppRequest = FeatureRequest;
 
@@ -306,9 +310,32 @@ async function messageList(
       view: queryChoice(request.query, "view", ["active", "all"]),
     },
   );
+  const includeValues = queryTexts(request.query, "include") ?? [];
+  const allowedIncludes = new Set<EventNativeHistoryInclude>([
+    "content",
+    "workflow",
+  ]);
+  const invalidInclude = includeValues.find((value) =>
+    !allowedIncludes.has(value as EventNativeHistoryInclude)
+  );
+  if (invalidInclude) {
+    throw appError(
+      400,
+      "invalid_query",
+      `include must contain only: ${[...allowedIncludes].join(", ")}.`,
+    );
+  }
+  const included = await createEventNativeMessageHistoryIncluded(
+    application,
+    namespace,
+    threadId,
+    messages,
+    new Set(includeValues as readonly EventNativeHistoryInclude[]),
+  );
   return {
     status: 200,
     data: messages,
+    ...(included ? { included } : {}),
     pageInfo: nextPage(messages, limit),
   };
 }

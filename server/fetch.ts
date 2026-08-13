@@ -144,6 +144,7 @@ function jsonResponse(
   return new Response(
     JSON.stringify({
       ...(result.data !== undefined ? { data: result.data } : {}),
+      ...(result.included !== undefined ? { included: result.included } : {}),
       ...(result.pageInfo ? { pageInfo: result.pageInfo } : {}),
     }),
     {

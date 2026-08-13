@@ -112,7 +112,11 @@ Omitted grants resolve to none.
 domain repositories, events, deliveries, attachments, and maintenance APIs.
 Scopes share the application's Ominipg database and Oxian execution runtime. For
 `run()`, `connect()`, and `goal()`, `databaseSchema` can select the same scope
-directly.
+directly. Selecting an additional scope performs a read-only structural
+validation and never creates or upgrades schema objects. Applications must run
+`provisionCopilotzSchema(database, name)` explicitly during tenant onboarding or
+migration. Set `engine.provisionDefaultDatabaseSchema` to `false` when an
+application-owned migration also owns the default schema lifecycle.
 
 ## Run handle
 
@@ -168,7 +172,11 @@ and SSE responses.
 
 The v1 SSE projection writes the projected frame `type` as the SSE `event:`
 name. Thread records preserve `name` and `description`; message history accepts
-`before`, `after`, `order`, and `limit` query parameters.
+`before`, `after`, `order`, and `limit` query parameters. Consumers that need
+renderable history request `include=content,workflow`. The response keeps
+canonical messages in `data` and adds related canonical `llmAttempts`,
+`toolExecutions`, and resolved immutable `content` under `included`; it does not
+flatten message senders, content refs, or workflow records into a legacy DTO.
 
 ## Package exports
 

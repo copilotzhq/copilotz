@@ -662,6 +662,27 @@ export function createToolExecutionRepository(
       );
       return result.rows[0] ? mapToolExecution(result.rows[0]) : null;
     },
+    async getByMessageToolCallId(
+      namespaceInput,
+      threadIdInput,
+      messageIdInput,
+      toolCallIdInput,
+    ) {
+      const namespace = workflowRequiredText(namespaceInput, "Namespace");
+      const threadId = workflowRequiredText(threadIdInput, "Thread ID");
+      const messageId = workflowRequiredText(messageIdInput, "Message ID");
+      const toolCallId = workflowRequiredText(toolCallIdInput, "Tool call ID");
+      const result = await options.session.query<WorkflowNodeRow>(
+        `SELECT * FROM ${names.nodes}
+         WHERE namespace = $1 AND type = 'tool_execution'
+           AND source_type = 'tool_call' AND source_id = $2
+           AND data->>'messageId' = $3
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1`,
+        [namespace, callSourceId(threadId, toolCallId), messageId],
+      );
+      return result.rows[0] ? mapToolExecution(result.rows[0]) : null;
+    },
     async list(namespaceInput, threadIdInput, listOptions = {}) {
       const namespace = workflowRequiredText(namespaceInput, "Namespace");
       const threadId = workflowRequiredText(threadIdInput, "Thread ID");

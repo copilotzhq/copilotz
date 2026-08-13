@@ -1,4 +1,5 @@
 export { digestContent } from "./digest.ts";
+export { assetIdFromRef, formatAssetRef } from "./asset-ref.ts";
 export {
   base64ToBytes,
   bytesToBase64,

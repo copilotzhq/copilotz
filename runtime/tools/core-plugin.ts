@@ -1,4 +1,5 @@
 import type { Agent } from "../resources/index.ts";
+import { assetIdFromRef, formatAssetRef } from "../content/index.ts";
 import {
   type Participant,
   type ParticipantInput,
@@ -102,12 +103,6 @@ function assetKind(mediaType: string): "image" | "audio" | "video" | "file" {
   return "file";
 }
 
-function assetRef(namespace: string, assetId: string): string {
-  return `asset://${encodeURIComponent(namespace)}/${
-    encodeURIComponent(assetId)
-  }`;
-}
-
 function assetIdFrom(
   namespace: string,
   value: Readonly<{ id?: unknown; assetId?: unknown; ref?: unknown }>,
@@ -117,18 +112,10 @@ function assetIdFrom(
     : typeof value.id === "string"
     ? value.id
     : undefined;
-  if (direct?.trim()) return direct.trim();
-  const ref = requiredText(value.ref, "Asset ref");
-  if (!ref.startsWith("asset://")) {
-    throw new TypeError("Asset ref must use the asset:// scheme.");
-  }
-  const segments = ref.slice("asset://".length).split("/").filter(Boolean)
-    .map((segment) => decodeURIComponent(segment));
-  if (segments.length === 1) return requiredText(segments[0], "Asset ID");
-  if (segments.length !== 2 || segments[0] !== namespace) {
-    throw new Error("Asset ref does not belong to the active namespace.");
-  }
-  return requiredText(segments[1], "Asset ID");
+  return assetIdFromRef(
+    namespace,
+    direct ?? requiredText(value.ref, "Asset ref"),
+  );
 }
 
 function defaultSleep(
@@ -335,7 +322,7 @@ function saveAssetTool(): WorkflowTool {
       const kind = assetKind(asset.mediaType);
       return {
         assetId: asset.id,
-        assetRef: assetRef(ctx.namespace, asset.id),
+        assetRef: formatAssetRef(ctx.namespace, asset.id),
         content: {
           assetId: asset.id,
           kind,
@@ -387,7 +374,7 @@ function fetchAssetTool(): WorkflowTool {
       const base64 = bytesToBase64(resolved.bytes);
       const common = {
         assetId: id,
-        assetRef: assetRef(ctx.namespace, id),
+        assetRef: formatAssetRef(ctx.namespace, id),
         mimeType: asset.mediaType,
         size: asset.byteLength,
       };

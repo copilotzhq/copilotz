@@ -73,6 +73,16 @@ function fixture(
     collections: {},
     content: {
       get: () => Promise.resolve(null),
+      resolve: () =>
+        Promise.resolve({
+          bytes: new Uint8Array(),
+          ref: {
+            assetId: "asset-a",
+            kind: "file",
+            role: "attachment",
+            mediaType: "text/plain",
+          },
+        }),
     },
   } as unknown as CopilotzProcessorContext;
   return Object.freeze({
@@ -212,4 +222,105 @@ Deno.test("large returned values remain on the asset-backed durable path", async
 
   assertEquals(outcome.status, "completed");
   assertEquals(test.events, []);
+});
+
+Deno.test("tool result envelopes keep attachment bytes off the live result channel", async () => {
+  const attachment = {
+    type: "file" as const,
+    bytes: new TextEncoder().encode("name,value\nalpha,1\n"),
+    mediaType: "text/csv",
+    name: "report.csv",
+    role: "attachment",
+    disposition: "attachment" as const,
+  };
+  const output = { path: "outputs/report.csv", size: attachment.bytes.length };
+  const test = fixture(() => ({
+    kind: "copilotz.workflow-tool.result.v1" as const,
+    output,
+    attachments: [attachment],
+  }));
+
+  const outcome = await test.run({
+    execution: {
+      id: "execution-a",
+      namespace: "tenant-a",
+      threadId: "thread-a",
+      participantId: "agent-a",
+      toolCallId: "call-a",
+      tool: { id: "terminal", name: "Terminal" },
+      status: "running",
+      content: [],
+      startedAt: "2026-08-13T12:00:00.000Z",
+      metadata: {},
+      createdAt: "2026-08-13T12:00:00.000Z",
+      updatedAt: "2026-08-13T12:00:00.000Z",
+    },
+    tool: test.tool,
+    availableTools: [test.tool],
+    arguments: {},
+    context: test.context,
+  });
+
+  assertEquals(outcome.status, "completed");
+  if (outcome.status !== "completed") throw new Error("Expected completion");
+  assertEquals(outcome.output, output);
+  assertEquals(outcome.attachments, [attachment]);
+  assertEquals(test.events.length, 1);
+  assertEquals(test.events[0].payload, {
+    toolExecutionId: "execution-a",
+    toolCallId: "call-a",
+    toolId: "terminal",
+    toolName: "Terminal",
+    channel: "result",
+    mode: "replace",
+    delta: output,
+  });
+});
+
+Deno.test("tool asset resolution accepts namespace-qualified canonical refs", async () => {
+  let requestedAssetId = "";
+  const test = fixture(async (_args, context) => {
+    const asset = await context!.resolveAsset!(
+      "asset://tenant-a/asset%2Freport",
+    );
+    assertEquals(asset, {
+      bytes: new TextEncoder().encode("report"),
+      mime: "text/csv",
+    });
+    return { imported: true };
+  });
+  const processorContent = test.context.content as unknown as {
+    get(assetId: string): Promise<unknown>;
+    resolve(ref: unknown): Promise<unknown>;
+  };
+  processorContent.get = (assetId) => {
+    requestedAssetId = assetId;
+    return Promise.resolve({ id: assetId, mediaType: "text/csv" });
+  };
+  processorContent.resolve = () =>
+    Promise.resolve({ bytes: new TextEncoder().encode("report") });
+
+  const outcome = await test.run({
+    execution: {
+      id: "execution-a",
+      namespace: "tenant-a",
+      threadId: "thread-a",
+      participantId: "agent-a",
+      toolCallId: "call-a",
+      tool: { id: "terminal", name: "Terminal" },
+      status: "running",
+      content: [],
+      startedAt: "2026-08-13T12:00:00.000Z",
+      metadata: {},
+      createdAt: "2026-08-13T12:00:00.000Z",
+      updatedAt: "2026-08-13T12:00:00.000Z",
+    },
+    tool: test.tool,
+    availableTools: [test.tool],
+    arguments: {},
+    context: test.context,
+  });
+
+  assertEquals(outcome.status, "completed");
+  assertEquals(requestedAssetId, "asset/report");
 });

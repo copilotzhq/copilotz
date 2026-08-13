@@ -22,6 +22,7 @@ export {
   createWorkflowToolExecutor,
   deferWorkflowTool,
   isDeferredWorkflowToolResult,
+  isWorkflowToolResult,
 } from "./tool-executor.ts";
 export {
   agentAskMetadata,
@@ -57,6 +58,7 @@ export type {
   WorkflowToolCatalog,
   WorkflowToolExecutionContext,
   WorkflowToolOutputOptions,
+  WorkflowToolResult,
 } from "./types.ts";
 export type {
   CreateWorkflowToolExecutorOptions,

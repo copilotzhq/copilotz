@@ -9,6 +9,7 @@ export type {
   APIPrepareRequest,
   APIPrepareRequestContext,
   APIPrepareRequestInput,
+  APIResponseAssetMapping,
   CapabilitySelection,
   MCPServer,
   NewAgent,

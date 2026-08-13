@@ -1,4 +1,5 @@
 import type { Agent } from "../resources/index.ts";
+import { assetIdFromRef } from "../content/index.ts";
 import type { ToolExecution } from "../domain/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import { validateToolCall } from "../tools/validation.ts";
@@ -8,6 +9,7 @@ import type {
   DeferWorkflowToolOptions,
   WorkflowTool,
   WorkflowToolExecutionContext,
+  WorkflowToolResult,
 } from "./types.ts";
 
 const DEFERRED_WORKFLOW_TOOL_KIND = "copilotz.workflow-tool.deferred.v1";
@@ -34,10 +36,20 @@ export function isDeferredWorkflowToolResult(
     !Array.isArray(candidate.metadata);
 }
 
+export function isWorkflowToolResult(
+  value: unknown,
+): value is WorkflowToolResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Partial<WorkflowToolResult>;
+  return candidate.kind === "copilotz.workflow-tool.result.v1" &&
+    Object.prototype.hasOwnProperty.call(candidate, "output");
+}
+
 export type WorkflowToolOutcome =
   | Readonly<{
     status: "completed";
     output: unknown;
+    attachments?: WorkflowToolResult["attachments"];
     durationMs: number;
   }>
   | Readonly<{
@@ -284,9 +296,10 @@ export function createWorkflowToolExecutor(
       collections: context.collections,
       userMetadata: human?.metadata,
       threadMetadata: thread?.metadata,
-      resolveAsset: async (assetId) => {
+      resolveAsset: async (refOrId) => {
+        const assetId = assetIdFromRef(context.namespace, refOrId);
         const asset = await context.content.get(assetId);
-        if (!asset) throw new Error(`Asset '${assetId}' was not found.`);
+        if (!asset) throw new Error(`Asset '${refOrId}' was not found.`);
         const resolved = await context.content.resolve({
           assetId,
           kind: "file",
@@ -334,17 +347,23 @@ export function createWorkflowToolExecutor(
           durationMs: elapsed(started),
         });
       }
+      const result = isWorkflowToolResult(output) ? output : undefined;
+      const projectedOutput = result ? result.output : output;
       await outputEmission;
       if (outputEmissionError !== undefined) throw outputEmissionError;
       if (
-        !emittedResult && output !== undefined &&
-        automaticLiveOutputFits(output)
+        !emittedResult && projectedOutput !== undefined &&
+        automaticLiveOutputFits(projectedOutput)
       ) {
-        await emitOutput(output, { channel: "result", mode: "replace" });
+        await emitOutput(projectedOutput, {
+          channel: "result",
+          mode: "replace",
+        });
       }
       return Object.freeze({
         status: "completed" as const,
-        output,
+        output: projectedOutput,
+        ...(result?.attachments ? { attachments: result.attachments } : {}),
         durationMs: elapsed(started),
       });
     } catch (caught) {

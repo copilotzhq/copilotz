@@ -181,6 +181,13 @@ export type APIPrepareRequest = (
   | undefined
   | Promise<APIPrepareRequestInput | undefined>;
 
+/** Top-level response fields promoted into one canonical tool attachment. */
+export type APIResponseAssetMapping = Readonly<{
+  dataBase64Field: string;
+  mediaTypeField: string;
+  nameField?: string;
+}>;
+
 export type API = Readonly<{
   id: string;
   name: string;
@@ -195,6 +202,8 @@ export type API = Readonly<{
   /** Consume application/x-ndjson records as live tool output plus one result. */
   streamNdjson?: boolean | null;
   prepareRequest?: APIPrepareRequest | null;
+  /** Tool key to response-field mapping for automatic canonical attachments. */
+  responseAssets?: Readonly<Record<string, APIResponseAssetMapping>>;
   metadata?: Readonly<Record<string, unknown>> | null;
   historyPolicyDefaults?: ToolHistoryPolicy;
   toolPolicies?: Readonly<Record<string, ToolHistoryPolicy>>;

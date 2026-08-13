@@ -719,10 +719,16 @@ function executeToolProcessor(
           valueContent(outcome.output, "tool.output"),
           { operationKey: "tool:output" },
         );
+        const attachments = outcome.attachments
+          ? await context.content.prepare(outcome.attachments, {
+            operationKey: "tool:attachments",
+          })
+          : undefined;
         await context.toolExecutions.complete({
           id: execution.id,
           output: prepared,
           projectedOutput: prepared,
+          ...(attachments ? { attachments } : {}),
           historyVisibility: execution.historyVisibility ?? "public_status",
           durationMs: outcome.durationMs,
         }, { operationKey: "tool:complete" });
@@ -794,7 +800,12 @@ async function resultContent(
   const content = toolExecutionContent(execution);
   const selected: ContentRef | undefined = content.projectedOutput ??
     content.output;
-  if (selected) return Object.freeze([selected]);
+  if (selected || content.attachments.length > 0) {
+    return Object.freeze([
+      ...(selected ? [selected] : []),
+      ...content.attachments,
+    ]);
+  }
   return await context.content.prepare({
     type: "text",
     text: execution.status === "failed"

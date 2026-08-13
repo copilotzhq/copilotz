@@ -28,6 +28,7 @@ import type {
 import type { CopilotzEvent } from "../events/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import type { ScopedPluginResources } from "../engine/index.ts";
+import type { ContentInput } from "../content/index.ts";
 
 /** Plugin resource that exposes one existing low-level LLM provider adapter. */
 export type LlmProviderResource = Readonly<{
@@ -264,6 +265,16 @@ export type WorkflowToolOutputOptions = Readonly<{
   /** Append is useful for text chunks; replace is useful for snapshots. */
   mode?: "append" | "replace";
   mediaType?: string;
+}>;
+
+/**
+ * Declarative tool result carrying canonical attachments separately from its
+ * bounded model/live projection.
+ */
+export type WorkflowToolResult = Readonly<{
+  kind: "copilotz.workflow-tool.result.v1";
+  output: unknown;
+  attachments?: ContentInput | readonly ContentInput[];
 }>;
 
 /**

@@ -123,3 +123,70 @@ Deno.test("OpenAPI NDJSON responses stream output before returning their final v
     globalThis.fetch = originalFetch;
   }
 });
+
+Deno.test("OpenAPI response assets become canonical attachments without leaking base64", async () => {
+  const api: API = {
+    id: "asset-api",
+    name: "Asset API",
+    baseUrl: "https://example.test",
+    responseAssets: {
+      asset_export: {
+        dataBase64Field: "dataBase64",
+        mediaTypeField: "mimeType",
+        nameField: "path",
+      },
+    },
+    openApiSchema: {
+      openapi: "3.1.0",
+      paths: {
+        "/assets/export": {
+          post: {
+            operationId: "asset_export",
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: { type: "object", properties: {} },
+                },
+              },
+            },
+            responses: { "200": { description: "ok" } },
+          },
+        },
+      },
+    },
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(Response.json({
+      path: "outputs/report.csv",
+      mimeType: "text/csv",
+      size: 18,
+      dataBase64: btoa("name,value\nalpha,1\n"),
+      workspaceGeneration: 2,
+      environment: null,
+    }));
+  try {
+    const result = await generateApiTools(api)[0].execute({});
+    assertEquals(result, {
+      kind: "copilotz.workflow-tool.result.v1",
+      output: {
+        path: "outputs/report.csv",
+        mimeType: "text/csv",
+        size: 18,
+        workspaceGeneration: 2,
+        environment: null,
+      },
+      attachments: [{
+        type: "file",
+        bytes: new TextEncoder().encode("name,value\nalpha,1\n"),
+        mediaType: "text/csv",
+        role: "attachment",
+        disposition: "attachment",
+        name: "report.csv",
+      }],
+    });
+    assertEquals(JSON.stringify(result).includes("dataBase64"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

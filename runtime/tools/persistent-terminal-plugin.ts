@@ -1,4 +1,5 @@
 import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
+import { assetIdFromRef, formatAssetRef } from "../content/index.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
@@ -86,25 +87,6 @@ function executionContext(
   return value;
 }
 
-function requiredAssetId(namespace: string, value: string): string {
-  const normalized = value.trim();
-  if (!normalized) throw new TypeError("Asset ref must be non-empty.");
-  if (!normalized.startsWith("asset://")) return normalized;
-  const segments = normalized.slice("asset://".length).split("/")
-    .filter(Boolean).map((segment) => decodeURIComponent(segment));
-  if (segments.length === 1 && segments[0]) return segments[0];
-  if (segments.length !== 2 || segments[0] !== namespace || !segments[1]) {
-    throw new Error("Asset ref does not belong to the active namespace.");
-  }
-  return segments[1];
-}
-
-function assetRef(namespace: string, assetId: string): string {
-  return `asset://${encodeURIComponent(namespace)}/${
-    encodeURIComponent(assetId)
-  }`;
-}
-
 function assetKind(mediaType: string): "image" | "audio" | "video" | "file" {
   if (mediaType.startsWith("image/")) return "image";
   if (mediaType.startsWith("audio/")) return "audio";
@@ -182,7 +164,7 @@ function createPersistentTerminalTool(
         threadId: context.threadId,
         signal: processor.signal,
         async readAsset(ref) {
-          const id = requiredAssetId(namespace, ref);
+          const id = assetIdFromRef(namespace, ref);
           const asset = await processor.content.get(id);
           if (!asset) throw new Error(`Asset '${id}' was not found.`);
           const resolved = await processor.content.resolve({
@@ -192,7 +174,7 @@ function createPersistentTerminalTool(
             mediaType: asset.mediaType,
           });
           return Object.freeze({
-            assetRef: assetRef(namespace, id),
+            assetRef: formatAssetRef(namespace, id),
             mediaType: asset.mediaType,
             bytes: resolved.bytes,
           });
@@ -209,7 +191,7 @@ function createPersistentTerminalTool(
           });
           return Object.freeze({
             assetId: asset.id,
-            assetRef: assetRef(namespace, asset.id),
+            assetRef: formatAssetRef(namespace, asset.id),
             mediaType: asset.mediaType,
             byteLength: asset.byteLength,
           });

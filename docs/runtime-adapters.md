@@ -21,6 +21,30 @@ const catalog = createServerWorkflowToolCatalog({
 });
 ```
 
+An OpenAPI resource can promote an API response into a canonical tool attachment
+without embedding transport-specific code in the tool:
+
+```ts
+const sandboxApi = {
+  id: "sandbox",
+  name: "Sandbox",
+  openApiSchema,
+  baseUrl: "https://sandbox.example.test",
+  responseAssets: {
+    asset_export: {
+      dataBase64Field: "dataBase64",
+      mediaTypeField: "mimeType",
+      nameField: "path",
+    },
+  },
+};
+```
+
+For `asset_export`, the adapter decodes the declared field into a durable
+attachment, removes that base64 field from the bounded tool output, and retains
+the remaining response as ordinary structured output. The mapping is explicit
+per operation so Copilotz does not guess which API responses represent files.
+
 Explicit server-side stdio:
 
 ```ts

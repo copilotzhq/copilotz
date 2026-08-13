@@ -8,6 +8,7 @@ import {
 import type { Agent, API, MCPServer } from "../resources/index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import type { ContentInput } from "../content/index.ts";
+import { toolExecutionContent } from "../domain/index.ts";
 import type { ProviderAPI } from "../llm/types.ts";
 import { createSkillsPlugin, defineInlineSkill } from "../skills/index.ts";
 import type {
@@ -32,6 +33,7 @@ import {
   type LlmChat,
   type WorkflowTool,
   type WorkflowToolExecutionContext,
+  type WorkflowToolResult,
 } from "./index.ts";
 
 const TEST_SCHEMA = "copilotz_text_workflow";
@@ -390,9 +392,26 @@ async function waitForRun(
     namespace: "tenant-a",
     limit: 100,
   });
+  const messages = await fixture.engine.conversation.listMessages(
+    "tenant-a",
+    "thread-a",
+  );
+  const attempts = await fixture.engine.llmAttempts.list(
+    "tenant-a",
+    "thread-a",
+  );
   throw new Error(
     `Timed out waiting for the causal workflow to settle: ${
-      JSON.stringify(deliveries)
+      JSON.stringify({
+        expectedMessages,
+        actualMessages: messages.length,
+        attempts: attempts.map((attempt) => ({
+          id: attempt.id,
+          status: attempt.status,
+          safeError: attempt.safeError,
+        })),
+        deliveries,
+      })
     }`,
   );
 }
@@ -637,6 +656,99 @@ Deno.test("event-native text workflow preserves user -> tool -> same-agent conti
       messages.map((message) => message.id),
     );
     assertEquals(fixture.toolCalls(), 1);
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("tool attachments persist and remain addressable in the next model turn", async () => {
+  let logicalCalls = 0;
+  const assetAgent: Agent = {
+    ...north,
+    assetOptions: { resolveInLLM: false },
+  };
+  const fixture = await createFixture(
+    async (request, config) => {
+      logicalCalls += 1;
+      await lifecycleStarted(request, 0, "primary-model");
+      await lifecycleSettled(request, {
+        attemptIndex: 0,
+        model: "primary-model",
+        status: "completed",
+        recoveryAction: "accept",
+      });
+      if (logicalCalls === 1) {
+        return response(request, {
+          answer: "",
+          model: "primary-model",
+          finishReason: "tool_calls",
+          toolCalls: [toolCall("export-call", "export")],
+        });
+      }
+
+      assert(request.materializeMessages);
+      const materialized = await request.materializeMessages(
+        request.messages,
+        config,
+      );
+      const serialized = JSON.stringify(materialized);
+      assertStringIncludes(serialized, "report.csv");
+      assertStringIncludes(serialized, "assetId");
+      assertStringIncludes(serialized, "asset://tenant-a/");
+      assertEquals(serialized.includes("bmFtZSx2YWx1ZQ"), false);
+      return response(request, {
+        answer: "The exported report is attached.",
+        model: "primary-model",
+      });
+    },
+    () => {
+      const result: WorkflowToolResult = {
+        kind: "copilotz.workflow-tool.result.v1",
+        output: {
+          path: "outputs/report.csv",
+          mimeType: "text/csv",
+          size: 19,
+        },
+        attachments: [{
+          type: "file",
+          bytes: new TextEncoder().encode("name,value\nalpha,1\n"),
+          mediaType: "text/csv",
+          name: "report.csv",
+          role: "attachment",
+          disposition: "attachment",
+        }],
+      };
+      return result;
+    },
+    {},
+    assetAgent,
+  );
+  try {
+    const root = await startRun(fixture, "Export the report.");
+    await waitForRun(fixture, root.event.id, 4);
+    assertEquals(logicalCalls, 2);
+
+    const executions = await fixture.engine.toolExecutions.list(
+      "tenant-a",
+      "thread-a",
+    );
+    assertEquals(executions.length, 1);
+    const executionContent = toolExecutionContent(executions[0]);
+    assertEquals(executionContent.attachments.length, 1);
+    assertEquals(executionContent.attachments[0].name, "report.csv");
+    assertEquals(executionContent.attachments[0].mediaType, "text/csv");
+
+    const messages = await fixture.engine.conversation.listMessages(
+      "tenant-a",
+      "thread-a",
+    );
+    assertEquals(
+      messages[2].content.some((ref) =>
+        ref.assetId === executionContent.attachments[0].assetId &&
+        ref.role === "attachment"
+      ),
+      true,
+    );
   } finally {
     await closeFixture(fixture);
   }
@@ -1314,10 +1426,28 @@ Deno.test("canonical multimodal history remains ordered and can be reduced to te
       assert(user && Array.isArray(user.content));
       assertEquals(user.content.map((part) => part.type), [
         "text",
+        "text",
         "image_url",
+        "text",
         "input_audio",
+        "text",
         "file",
       ]);
+      const attachmentDescriptors = user.content.filter((part) =>
+        part.type === "text" && part.text.startsWith("[Copilotz attachment:")
+      );
+      assertEquals(attachmentDescriptors.length, 3);
+      const descriptorText = attachmentDescriptors.flatMap((part) =>
+        part.type === "text" ? [part.text] : []
+      ).join("\n");
+      assertStringIncludes(
+        descriptorText,
+        '"assetRef":"asset://tenant-a/',
+      );
+      assertStringIncludes(
+        descriptorText,
+        '"name":"data.csv"',
+      );
       assert(request.materializeMessages);
       const materialized = await request.materializeMessages(
         request.messages,
@@ -1326,7 +1456,14 @@ Deno.test("canonical multimodal history remains ordered and can be reduced to te
       const materializedUser = materialized.find((message) =>
         message.role === "user"
       );
-      assertEquals(materializedUser?.content, "Describe the attachments.");
+      assert(typeof materializedUser?.content === "string");
+      assertStringIncludes(
+        materializedUser.content,
+        "Describe the attachments.",
+      );
+      assertStringIncludes(materializedUser.content, "assetId");
+      assertStringIncludes(materializedUser.content, "asset://tenant-a/");
+      assertStringIncludes(materializedUser.content, "data.csv");
       await lifecycleStarted(request, 0, "primary-model");
       await lifecycleSettled(request, {
         attemptIndex: 0,
@@ -1360,10 +1497,10 @@ Deno.test("canonical multimodal history remains ordered and can be reduced to te
       },
       {
         type: "file",
-        bytes: new TextEncoder().encode("%PDF"),
-        mediaType: "application/pdf",
+        bytes: new TextEncoder().encode("name,value\nalpha,1\n"),
+        mediaType: "text/csv",
         role: "attachment",
-        name: "contract.pdf",
+        name: "data.csv",
       },
     ]);
     await waitForRun(fixture, root.event.id, 2);

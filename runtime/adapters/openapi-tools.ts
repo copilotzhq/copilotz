@@ -2,11 +2,14 @@ import type {
   API,
   APIPrepareRequestContext,
   APIPrepareRequestInput,
+  APIResponseAssetMapping,
 } from "../resources/index.ts";
+import { base64ToBytes, type ContentInput } from "../content/index.ts";
 import { parse as parseYaml } from "../../dependencies/yaml.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
+  WorkflowToolResult,
 } from "../workflows/index.ts";
 import { ToolExecutionError } from "../tools/errors.ts";
 
@@ -44,6 +47,78 @@ interface OpenAPISchema {
     parameters?: Record<string, any>;
     requestBodies?: Record<string, any>;
   };
+}
+
+function responseRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Asset-producing API response must be an object.");
+  }
+  return value as Record<string, unknown>;
+}
+
+function responseField(
+  response: Record<string, unknown>,
+  field: string,
+  name: string,
+): string {
+  const value = response[field];
+  if (typeof value !== "string" || !value.trim()) {
+    throw new TypeError(
+      `Asset-producing API response requires ${name} field '${field}'.`,
+    );
+  }
+  return value;
+}
+
+function attachmentKind(
+  mediaType: string,
+): "image" | "audio" | "video" | "file" {
+  if (mediaType.startsWith("image/")) return "image";
+  if (mediaType.startsWith("audio/")) return "audio";
+  if (mediaType.startsWith("video/")) return "video";
+  return "file";
+}
+
+function attachmentName(value: string): string {
+  return value.split(/[\\/]/).filter(Boolean).at(-1) ?? value;
+}
+
+function promoteResponseAsset(
+  value: unknown,
+  mapping: APIResponseAssetMapping,
+): WorkflowToolResult {
+  const response = responseRecord(value);
+  const dataBase64 = responseField(
+    response,
+    mapping.dataBase64Field,
+    "base64 data",
+  );
+  const mediaType = responseField(
+    response,
+    mapping.mediaTypeField,
+    "media type",
+  );
+  const nameValue = mapping.nameField
+    ? responseField(response, mapping.nameField, "name")
+    : undefined;
+  const output = Object.fromEntries(
+    Object.entries(response).filter(([field]) =>
+      field !== mapping.dataBase64Field
+    ),
+  );
+  const attachment: ContentInput = {
+    type: attachmentKind(mediaType),
+    bytes: base64ToBytes(dataBase64),
+    mediaType,
+    role: "attachment",
+    disposition: "attachment",
+    ...(nameValue ? { name: attachmentName(nameValue) } : {}),
+  };
+  return Object.freeze({
+    kind: "copilotz.workflow-tool.result.v1",
+    output: Object.freeze(output),
+    attachments: Object.freeze([attachment]),
+  });
 }
 
 /**
@@ -824,16 +899,33 @@ function createApiExecutor(
         );
       }
 
+      const assetMapping = apiConfig.responseAssets?.[toolKey];
+      const result = assetMapping
+        ? promoteResponseAsset(responseData, assetMapping)
+        : responseData;
+
       if (apiConfig.includeResponseHeaders) {
+        if (assetMapping) {
+          const promoted = result as WorkflowToolResult;
+          return Object.freeze({
+            ...promoted,
+            output: {
+              body: promoted.output,
+              headers: sanitizeToolJsonValue(
+                Object.fromEntries(response.headers.entries()),
+              ),
+            },
+          });
+        }
         return {
-          body: responseData,
+          body: result,
           headers: sanitizeToolJsonValue(
             Object.fromEntries(response.headers.entries()),
           ),
         };
       }
 
-      return responseData;
+      return result;
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         throw new Error(

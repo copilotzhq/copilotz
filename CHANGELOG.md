@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.59.22 — 2026-08-13
+
+This patch makes uploaded and tool-produced files addressable across the full
+agent, tool, persistence, and client flow.
+
+### Added
+
+- LLM transcript attachments carry model-visible raw and tenant-qualified asset
+  references while retaining provider-native multimodal parts.
+- Workflow tools can return bounded output plus canonical attachments through
+  `WorkflowToolResult`.
+- OpenAPI resources can map tool response fields into canonical attachments
+  through `API.responseAssets`.
+
+### Fixed
+
+- Asset-aware tools resolve raw IDs, canonical `asset://namespace/id` refs, and
+  the legacy unqualified shorthand through one namespace-safe parser.
+- Binary export bodies are removed from live/model output and persisted once as
+  immutable content referenced by the public tool-result message.
+
 ## 0.59.21 — 2026-08-13
 
 This patch lets downstream applications type their own processors against the

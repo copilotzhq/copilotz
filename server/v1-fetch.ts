@@ -30,6 +30,23 @@ export type CreateV1FetchHandlerOptions = Readonly<{
 function mappedRequest(
   request: EventNativeAppRequest,
 ): EventNativeAppRequest {
+  if (
+    request.resource === "threads" && request.method === "GET" &&
+    (request.path?.length ?? 0) === 0
+  ) {
+    const rawStatus = request.query?.status;
+    const statuses = (Array.isArray(rawStatus) ? rawStatus : [rawStatus])
+      .filter((status): status is string => typeof status === "string")
+      .flatMap((status) => status.split(","))
+      .map((status) => status.trim());
+    if (statuses.includes("all")) {
+      const { status: _legacyStatus, ...query } = request.query ?? {};
+      return Object.freeze({
+        ...request,
+        query: Object.freeze(query),
+      });
+    }
+  }
   if (request.resource === "providers") {
     return Object.freeze({ ...request, resource: "channels" });
   }

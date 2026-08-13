@@ -48,6 +48,22 @@ Deno.test("v1 route adapter isolates providers and admin aliases from the native
   await handle(new Request("https://example.test/v1/threads/thread-a"));
   assertEquals(seen[2].resource, "threads");
   assertEquals(seen[2].path, ["thread-a"]);
+
+  await handle(
+    new Request(
+      "https://example.test/v1/threads?participantId=user-a&status=all&order=desc",
+    ),
+  );
+  assertEquals(seen[3].resource, "threads");
+  assertEquals(seen[3].query, {
+    participantId: "user-a",
+    order: "desc",
+  });
+
+  await handle(
+    new Request("https://example.test/v1/threads?status=active"),
+  );
+  assertEquals(seen[4].query, { status: "active" });
 });
 
 Deno.test("v1 Fetch handler streams projected output from a providers route", async () => {

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.59.18 — 2026-08-12
+
+This patch restores legacy v1 thread-history queries over the event-native
+conversation API.
+
+### Fixed
+
+- The v1 Fetch adapter treats the legacy `status=all` thread-list query as no
+  status filter instead of looking for a literal `all` thread status.
+- Explicit status filters such as `active`, `archived`, and custom statuses
+  continue to pass through unchanged.
+
 ## 0.59.17 — 2026-08-12
 
 This patch makes periodic event retention safe for large PostgreSQL schemas.

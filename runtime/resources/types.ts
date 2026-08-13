@@ -192,6 +192,8 @@ export type API = Readonly<{
   auth?: APIAuth | null;
   timeout?: number | null;
   includeResponseHeaders?: boolean | null;
+  /** Consume application/x-ndjson records as live tool output plus one result. */
+  streamNdjson?: boolean | null;
   prepareRequest?: APIPrepareRequest | null;
   metadata?: Readonly<Record<string, unknown>> | null;
   historyPolicyDefaults?: ToolHistoryPolicy;

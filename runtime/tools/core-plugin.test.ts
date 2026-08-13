@@ -191,6 +191,7 @@ async function toolContext(
     agents: [agent],
     tools: [...context.resources.list<WorkflowTool>("tools")],
     collections: context.collections,
+    emitOutput: () => Promise.resolve(),
     cancelled: false,
   };
 }

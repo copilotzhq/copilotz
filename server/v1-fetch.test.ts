@@ -66,7 +66,7 @@ Deno.test("v1 route adapter isolates providers and admin aliases from the native
   assertEquals(seen[4].query, { status: "active" });
 });
 
-Deno.test("v1 Fetch handler streams projected output from a providers route", async () => {
+Deno.test("v1 Fetch handler isolates legacy providers projection from canonical channels", async () => {
   const application = await createCopilotz({
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v1_fetch",
@@ -137,6 +137,22 @@ Deno.test("v1 Fetch handler streams projected output from a providers route", as
       (frame.payload as Record<string, unknown>).token,
       "Hello",
     );
+
+    const canonicalResponse = await handler(
+      new Request("https://example.test/v1/channels/web", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: "Hello canonically" }),
+      }),
+    );
+    assertEquals(canonicalResponse.status, 200);
+    const canonicalStreamed = (await canonicalResponse.text()).trim();
+    assert(canonicalStreamed.startsWith("event: text.delta\ndata: "));
+    const canonicalFrame = JSON.parse(
+      canonicalStreamed.split("\ndata: ", 2)[1],
+    ) as Record<string, unknown>;
+    assertEquals(canonicalFrame.type, "text.delta");
+    assertEquals(canonicalFrame.durable, false);
   } finally {
     await application.shutdown();
   }

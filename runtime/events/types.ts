@@ -51,6 +51,7 @@ export type EphemeralEvent<TPayload = unknown> = Readonly<{
     | "reasoning.delta"
     | "audio.delta"
     | "tool_call.delta"
+    | "tool_output.delta"
     | (string & Record<never, never>);
   namespace: string;
   threadId?: string;

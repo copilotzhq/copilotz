@@ -15,8 +15,12 @@ Common facts include:
 - `tool_execution.created`, `tool_execution.completed`, `tool_execution.failed`
 - `<collection>.created`, `<collection>.updated`, `<collection>.deleted`
 
-Ephemeral events such as `text.delta`, `reasoning.delta`, `audio.delta`, and
-`tool_call.delta` are published live and never inserted into the events table.
+Ephemeral events such as `text.delta`, `reasoning.delta`, `audio.delta`,
+`tool_call.delta`, and `tool_output.delta` are published live and never inserted
+into the events table. `tool_output.delta` carries ordered logical channels such
+as `stdout`, `stderr`, `progress`, and `result`; the corresponding
+`tool_execution.*` durable events own lifecycle settlement, while the final tool
+result remains asset-backed durable content.
 
 ## Durable deliveries
 

@@ -205,6 +205,7 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
         agents: [],
         tools: [tool],
         collections: processor.collections,
+        emitOutput: () => Promise.resolve(),
         cancelled: false,
       };
       outputs.set(event.id, await tool.execute(event.payload, context));

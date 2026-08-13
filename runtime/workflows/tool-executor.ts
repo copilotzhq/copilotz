@@ -11,6 +11,8 @@ import type {
 } from "./types.ts";
 
 const DEFERRED_WORKFLOW_TOOL_KIND = "copilotz.workflow-tool.deferred.v1";
+const MAX_AUTOMATIC_LIVE_OUTPUT_BYTES = 512 * 1024;
+const outputEncoder = new TextEncoder();
 
 /** Marks a tool call as accepted while a later event owns its settlement. */
 export function deferWorkflowTool(
@@ -134,6 +136,22 @@ function elapsed(started: number): number {
   return Math.max(0, Date.now() - started);
 }
 
+function outputText(value: string | undefined, fallback: string): string {
+  const normalized = value?.trim();
+  return normalized || fallback;
+}
+
+function automaticLiveOutputFits(value: unknown): boolean {
+  try {
+    const encoded = JSON.stringify(value);
+    return encoded !== undefined &&
+      outputEncoder.encode(encoded).byteLength <=
+        MAX_AUTOMATIC_LIVE_OUTPUT_BYTES;
+  } catch {
+    return false;
+  }
+}
+
 /** Creates the runtime-neutral executor used by durable tool deliveries. */
 export function createWorkflowToolExecutor(
   options: CreateWorkflowToolExecutorOptions = {},
@@ -193,6 +211,58 @@ export function createWorkflowToolExecutor(
       ? context.resources.get<Agent>("agents", execution.agentId)
       : undefined;
     let rejectCancellation: ((reason: Error) => void) | undefined;
+    let outputSequence = 0;
+    let emittedResult = false;
+    let outputEmissionError: unknown;
+    let outputEmission = Promise.resolve();
+    const emitOutput: WorkflowToolExecutionContext["emitOutput"] = (
+      delta,
+      outputOptions = {},
+    ) => {
+      const channel = outputText(outputOptions.channel, "result");
+      const mode = outputOptions.mode ??
+        (channel === "result" ? "replace" : "append");
+      const mediaType = outputOptions.mediaType?.trim();
+      const sequence = outputSequence++;
+      if (channel === "result") emittedResult = true;
+      const emission = outputEmission.then(async () => {
+        if (outputEmissionError !== undefined) throw outputEmissionError;
+        try {
+          await context.events.emit({
+            type: "tool_output.delta",
+            threadId: execution.threadId,
+            payload: {
+              toolExecutionId: execution.id,
+              toolCallId: execution.toolCallId,
+              toolId,
+              ...(typeof execution.tool.name === "string" &&
+                  execution.tool.name.trim()
+                ? { toolName: execution.tool.name.trim() }
+                : {}),
+              channel,
+              mode,
+              ...(mediaType ? { mediaType } : {}),
+              delta,
+            },
+            routing: execution.participantId
+              ? { senderId: execution.participantId }
+              : {},
+            visibility: context.event.visibility,
+            metadata: {
+              toolExecutionId: execution.id,
+              toolCallId: execution.toolCallId,
+            },
+            streamId: execution.id,
+            sequence,
+          });
+        } catch (error) {
+          outputEmissionError = error;
+          throw error;
+        }
+      });
+      outputEmission = emission.catch(() => undefined);
+      return emission;
+    };
     const cancellationPromise = new Promise<never>((_, reject) => {
       rejectCancellation = reject;
     });
@@ -225,6 +295,7 @@ export function createWorkflowToolExecutor(
         });
         return { bytes: resolved.bytes, mime: asset.mediaType };
       },
+      emitOutput,
       onCancel: cancellation.onCancel,
       cancelled: cancellation.cancelled(),
       cancelReason: cancellation.reason(),
@@ -255,18 +326,30 @@ export function createWorkflowToolExecutor(
         cancellationPromise,
       ]);
       if (isDeferredWorkflowToolResult(output)) {
+        await outputEmission;
+        if (outputEmissionError !== undefined) throw outputEmissionError;
         return Object.freeze({
           status: "deferred" as const,
           metadata: output.metadata,
           durationMs: elapsed(started),
         });
       }
+      await outputEmission;
+      if (outputEmissionError !== undefined) throw outputEmissionError;
+      if (
+        !emittedResult && output !== undefined &&
+        automaticLiveOutputFits(output)
+      ) {
+        await emitOutput(output, { channel: "result", mode: "replace" });
+      }
       return Object.freeze({
         status: "completed" as const,
         output,
         durationMs: elapsed(started),
       });
-    } catch (error) {
+    } catch (caught) {
+      await outputEmission;
+      const error = outputEmissionError ?? caught;
       if (cancellation.cancelled()) {
         const reason = cancellation.reason() ?? errorText(error);
         const timedOut = reason.startsWith("timeout:");

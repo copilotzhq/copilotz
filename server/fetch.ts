@@ -161,7 +161,14 @@ function isAttachmentStreamOutput(
     typeof (payload as { getReader?: unknown }).getReader === "function";
 }
 
-function safeStreamOutput(output: AttachmentOutput): unknown {
+/**
+ * Produces the canonical JSON-safe representation used by event-native SSE.
+ * Byte streams keep their identity and metadata while their ReadableStream
+ * remains on the transport-specific stream path.
+ */
+export function projectEventNativeSseOutput(
+  output: AttachmentOutput,
+): unknown {
   if (!isAttachmentStreamOutput(output)) return output;
   return Object.freeze({
     type: output.type,
@@ -204,7 +211,7 @@ function sseResponse(
         }
         const projected = options.projectSseOutput
           ? await options.projectSseOutput(next.value, request)
-          : safeStreamOutput(next.value);
+          : projectEventNativeSseOutput(next.value);
         if (projected === null || projected === undefined) return;
         const values = Array.isArray(projected) ? projected : [projected];
         for (const value of values) {

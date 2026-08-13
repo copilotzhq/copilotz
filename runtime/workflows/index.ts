@@ -56,6 +56,7 @@ export type {
   WorkflowTool,
   WorkflowToolCatalog,
   WorkflowToolExecutionContext,
+  WorkflowToolOutputOptions,
 } from "./types.ts";
 export type {
   CreateWorkflowToolExecutorOptions,

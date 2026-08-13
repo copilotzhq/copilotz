@@ -9,6 +9,7 @@ import {
   createEventNativeFetchHandler,
   type CreateEventNativeFetchHandlerOptions,
   type EventNativeFetchHandler,
+  projectEventNativeSseOutput,
 } from "./fetch.ts";
 import {
   createV1SseProjector,
@@ -60,6 +61,18 @@ function mappedRequest(
   return request;
 }
 
+function requestResource(
+  request: Request,
+  basePath: string,
+): string | undefined {
+  const route = new URL(request.url).pathname.split("/").filter(Boolean).map(
+    decodeURIComponent,
+  );
+  const base = basePath.split("/").filter(Boolean).map(decodeURIComponent);
+  if (base.some((part, index) => route[index] !== part)) return undefined;
+  return route[base.length];
+}
+
 /**
  * Keeps v1 route aliases at the transport edge. The wrapped app continues to
  * expose and execute only the canonical event-native resource vocabulary.
@@ -74,9 +87,10 @@ export function createV1RouteAdapter(app: EventNativeApp): EventNativeApp {
 /**
  * Creates the transitional v1 Fetch surface over a v3 application.
  *
- * `/v1/providers/*` maps to `/channels/*`, `/v1/admin/*` maps to
- * `/features/admin/*`, and request-bound outputs use the explicit uppercase v1
- * SSE projection. All other route names pass through unchanged.
+ * `/v1/providers/*` maps to `/channels/*` and retains the explicit uppercase
+ * compatibility projection. Canonical `/v1/channels/*` routes stream the
+ * event-native vocabulary unchanged. `/v1/admin/*` maps to
+ * `/features/admin/*`; all other route names pass through unchanged.
  */
 export function createV1FetchHandler(
   application: CopilotzApplication,
@@ -85,12 +99,17 @@ export function createV1FetchHandler(
   const app = createV1RouteAdapter(
     createEventNativeApp(application, options.appOptions),
   );
+  const configuredBasePath = options.basePath ?? "/v1";
+  const projectLegacySse = createV1SseProjector(application, options.sse);
   return createEventNativeFetchHandler(app, {
-    basePath: options.basePath ?? "/v1",
+    basePath: configuredBasePath,
     resolveContext: options.resolveContext,
     responseHeaders: options.responseHeaders,
     onError: options.onError,
-    projectSseOutput: createV1SseProjector(application, options.sse),
+    projectSseOutput: (output, request) =>
+      requestResource(request, configuredBasePath) === "providers"
+        ? projectLegacySse(output, request)
+        : projectEventNativeSseOutput(output),
     sseEventName: (value) =>
       value && typeof value === "object" &&
         typeof (value as { type?: unknown }).type === "string"

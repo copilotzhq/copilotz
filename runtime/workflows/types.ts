@@ -241,10 +241,30 @@ export type WorkflowToolExecutionContext = {
   resolveAsset?: (
     assetId: string,
   ) => Promise<{ bytes: Uint8Array; mime: string }>;
+  /**
+   * Emits non-durable output while this tool is executing. Calls are ordered
+   * even when a tool does not await each returned promise. The final returned
+   * tool value is emitted automatically on the `result` channel when it fits
+   * the bounded live-event frame, unless the tool already emitted that channel
+   * itself. Large results remain asset-backed durable content; tools can stream
+   * bounded pieces explicitly instead.
+   */
+  emitOutput(
+    delta: unknown,
+    options?: WorkflowToolOutputOptions,
+  ): Promise<void>;
   onCancel?: (callback: () => void) => () => void;
   cancelled: boolean;
   cancelReason?: string;
 };
+
+export type WorkflowToolOutputOptions = Readonly<{
+  /** Logical output lane such as result, stdout, stderr, or progress. */
+  channel?: string;
+  /** Append is useful for text chunks; replace is useful for snapshots. */
+  mode?: "append" | "replace";
+  mediaType?: string;
+}>;
 
 /**
  * Returned by an event-producing tool whose durable result will be settled by

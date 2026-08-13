@@ -404,6 +404,7 @@ Deno.test("knowledge tools execute through scoped factory capabilities", async (
         agents: [],
         tools: [tool],
         collections: processor.collections,
+        emitOutput: () => Promise.resolve(),
         cancelled: false,
       };
       outputs.set(

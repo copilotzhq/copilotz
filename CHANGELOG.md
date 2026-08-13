@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.59.19 — 2026-08-13
+
+This patch makes tool execution lifecycle and progressive output first-class in
+the event-native channel contract.
+
+### Added
+
+- Tools can emit ordered `tool_output.delta` events on named channels such as
+  `stdout`, `stderr`, and `result` while they execute.
+- OpenAPI tools can consume `application/x-ndjson` responses incrementally,
+  preserving backpressure from an HTTP workload through the Copilotz event
+  stream.
+- Small ordinary tool return values are projected automatically onto the live
+  `result` channel without duplicating explicit output.
+
+### Fixed
+
+- Tool lifecycle events now carry stable call, execution, tool, status, and
+  bounded error fields with the tool's configured visibility policy.
+- The canonical `/channels/*` routes retain native event names and payloads;
+  uppercase compatibility projection remains isolated to legacy `/providers/*`
+  routes.
+
 ## 0.59.18 — 2026-08-12
 
 This patch restores legacy v1 thread-history queries over the event-native

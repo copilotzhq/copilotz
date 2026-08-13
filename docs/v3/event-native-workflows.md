@@ -145,10 +145,14 @@ creates the continuation attempt, so there is no mutable queue accumulator and
 the model cannot resume on a partial batch. The continuation remains addressed
 to the participant that produced the calls.
 
-Provider text, reasoning, and canonical tool-call drafts are published as
-ordered `text.delta`, `reasoning.delta`, and `tool_call.delta` events. They flow
-through the live event hub and attachment outputs, carry the logical attempt as
-their stream identity, and are never inserted into durable event storage.
+Provider text, reasoning, canonical tool-call drafts, and executing tool output
+are published as ordered `text.delta`, `reasoning.delta`, `tool_call.delta`, and
+`tool_output.delta` events. Tool output uses independent channels such as
+`stdout`, `stderr`, `progress`, and `result`; terminal `tool_execution.*` events
+settle the already-visible execution. These frames flow through the live event
+hub and attachment outputs, carry their logical attempt or execution as stream
+identity, and are never inserted into durable event storage. Final messages and
+tool results remain asset-backed durable state.
 
 Tests now prove user → agent → tool → same agent → public final output, one
 external tool execution after recovery, explicit provider fallback children,

@@ -193,6 +193,13 @@ Deno.test("tool lifecycle stores role-labelled assets and compact independently 
       toolExecutionId: "execution-a",
       toolCallId: "call-a",
       toolId: "lookup",
+      toolName: "Lookup",
+      status: "running",
+    });
+    assertEquals(created.event.visibility, {
+      kind: "tool",
+      policy: "public_status",
+      requesterId: "agent-a",
     });
     assert(!JSON.stringify(created.event).includes("private query body"));
 
@@ -228,6 +235,18 @@ Deno.test("tool lifecycle stores role-labelled assets and compact independently 
     });
     assertEquals(completed.value?.status, "completed");
     assertEquals(completed.event.threadId, "thread-a");
+    assertEquals(completed.event.payload, {
+      toolExecutionId: "execution-a",
+      toolCallId: "call-a",
+      toolId: "lookup",
+      toolName: "Lookup",
+      status: "completed",
+    });
+    assertEquals(completed.event.visibility, {
+      kind: "tool",
+      policy: "requester_only",
+      requesterId: "agent-a",
+    });
     assertEquals(completed.event.delta, {
       fields: [
         "content",
@@ -422,6 +441,19 @@ Deno.test("tool failures keep safe control data inline and diagnostic detail res
       kind: "tool",
       policy: "public_status",
       requesterId: "agent-a",
+    });
+    assertEquals(failure.event.payload, {
+      toolExecutionId: "execution-failed",
+      toolCallId: "call-failed",
+      toolId: "lookup",
+      toolName: "Lookup",
+      status: "failed",
+      safeError: {
+        name: "LookupError",
+        message: "Lookup failed safely",
+        code: "LOOKUP_FAILED",
+        retryable: true,
+      },
     });
     assert(!JSON.stringify(failure.event).includes("private stack"));
     assertEquals(

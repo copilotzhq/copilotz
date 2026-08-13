@@ -50,3 +50,76 @@ Deno.test("OpenAPI preparation receives the trusted database and collection scop
     globalThis.fetch = originalFetch;
   }
 });
+
+Deno.test("OpenAPI NDJSON responses stream output before returning their final value", async () => {
+  const api: API = {
+    id: "streaming-api",
+    name: "Streaming API",
+    baseUrl: "https://example.test",
+    streamNdjson: true,
+    openApiSchema: {
+      openapi: "3.1.0",
+      paths: {
+        "/terminal": {
+          post: {
+            operationId: "terminal",
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: { type: "object", properties: {} },
+                },
+              },
+            },
+            responses: { "200": { description: "ok" } },
+          },
+        },
+      },
+    },
+  };
+  const seen: unknown[] = [];
+  const executionContext = {
+    emitOutput(value: unknown, options: unknown) {
+      seen.push({ value, options });
+      return Promise.resolve();
+    },
+    processor: { signal: new AbortController().signal },
+  } as unknown as WorkflowToolExecutionContext;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(
+        [
+          JSON.stringify({
+            type: "output",
+            channel: "stdout",
+            mode: "append",
+            delta: "hello\n",
+          }),
+          JSON.stringify({
+            type: "output",
+            channel: "stderr",
+            mode: "append",
+            delta: "warning\n",
+          }),
+          JSON.stringify({ type: "result", value: { exitCode: 0 } }),
+          "",
+        ].join("\n"),
+        {
+          headers: { "content-type": "application/x-ndjson; charset=utf-8" },
+        },
+      ),
+    );
+  try {
+    const result = await generateApiTools(api)[0].execute({}, executionContext);
+    assertEquals(seen, [{
+      value: "hello\n",
+      options: { channel: "stdout", mode: "append" },
+    }, {
+      value: "warning\n",
+      options: { channel: "stderr", mode: "append" },
+    }]);
+    assertEquals(result, { exitCode: 0 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.59.24 — 2026-08-13
+
+This patch aligns the framework and frontend package releases after preserving
+participant identity through parallel stream settlement.
+
+### Fixed
+
+- The coordinated frontend adapter retains each LLM attempt's agent identity
+  when its terminal durable message arrives without repeating the agent payload,
+  keeping parallel participant answers visually stable through settlement.
+
 ## 0.59.23 — 2026-08-13
 
 This patch keeps durable workflow identities safe across deeply nested tool,

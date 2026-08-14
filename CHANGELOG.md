@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.60.5 — 2026-08-14
+
+### Fixed
+
+- Content-v2 now audits existing tool outputs in indexed batches, resolves
+  provenance once per batch, uploads bodies with bounded concurrency, and
+  commits each relocated batch in one database update instead of performing
+  history-sized N+1 queries and per-asset transactions.
+
 ## 0.60.4 — 2026-08-14
 
 ### Fixed

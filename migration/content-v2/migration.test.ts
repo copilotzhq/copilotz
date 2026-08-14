@@ -162,6 +162,73 @@ Deno.test("content-v2 repairs tool messages, extracts data URLs, relocates bodie
   }
 });
 
+Deno.test("content-v2 relocates asset batches with bounded upload concurrency", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const session = createSqlSession(db);
+  try {
+    for (const statement of createCoreSchemaStatements(SCHEMA)) {
+      await session.query(statement);
+    }
+    for (let index = 1; index <= 4; index++) {
+      const body = `asset-${index}`;
+      const bytes = new TextEncoder().encode(body);
+      await session.query(
+        `INSERT INTO ${q("nodes")} (
+           id, namespace, type, name, data
+         ) VALUES ($1, 'tenant-a', 'asset', 'text/plain', $2::jsonb)`,
+        [
+          `asset-${index}`,
+          JSON.stringify({
+            mediaType: "text/plain",
+            byteLength: bytes.byteLength,
+            digest: await digestContent(bytes),
+            state: "ready",
+            location: { kind: "database", encoding: "utf8" },
+            body,
+            readyAt: "2026-08-01T00:00:00.000Z",
+            metadata: {},
+          }),
+        ],
+      );
+    }
+    const memory = createMemoryAssetBodyStore({ backendId: "gcs:bounded" });
+    let active = 0;
+    let maximumActive = 0;
+    const store = Object.freeze({
+      ...memory,
+      kind: "object" as const,
+      async put(input: Parameters<typeof memory.put>[0]) {
+        active++;
+        maximumActive = Math.max(maximumActive, active);
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return await memory.put(input);
+        } finally {
+          active--;
+        }
+      },
+    });
+    const report = await migrateContentV2Schema(session, SCHEMA, {
+      mode: "apply",
+      batchSize: 4,
+      uploadConcurrency: 2,
+      assets: {
+        storage: { type: "custom", config: { store, prefix: "copilotz" } },
+      },
+    });
+    assertEquals(report.uploadedObjects, 4);
+    assertEquals(maximumActive, 2);
+    const remaining = await session.query<{ count: string | number }>(
+      `SELECT COUNT(*) AS count FROM ${q("nodes")}
+       WHERE type = 'asset'
+         AND data -> 'location' ->> 'kind' = 'database'`,
+    );
+    assertEquals(Number(remaining.rows[0].count), 0);
+  } finally {
+    await db.close();
+  }
+});
+
 Deno.test("content-v2 sanitizes existing canonical tool outputs without duplicate messages", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
@@ -218,6 +285,25 @@ Deno.test("content-v2 sanitizes existing canonical tool outputs without duplicat
          'edge-existing-output', 'tenant-a', 'execution-existing',
          'raw-output', 'has_asset', '{}', 1
        )`,
+    );
+    await session.query(
+      `INSERT INTO ${q("nodes")} (
+         id, namespace, type, name, data, source_type, source_id
+       )
+       SELECT 'decoy-' || LPAD(value::text, 4, '0'),
+         'tenant-a', 'tool_execution', 'decoy',
+         jsonb_build_object(
+           'threadId', 'thread-existing',
+           'toolCallId', 'decoy-' || value::text,
+           'tool', jsonb_build_object('id', 'decoy'),
+           'status', 'completed',
+           'content', '[]'::jsonb,
+           'startedAt', '2026-08-01T00:00:00.000Z',
+           'finishedAt', '2026-08-01T00:00:01.000Z',
+           'metadata', '{}'::jsonb
+         ),
+         'tool_call', 'decoy-' || value::text
+       FROM generate_series(1, 501) AS value`,
     );
 
     const dryRun = await migrateContentV2Schema(session, SCHEMA);

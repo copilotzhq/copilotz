@@ -613,70 +613,108 @@ async function sanitizeExistingToolExecutionContent(
   schema: string,
   report: ToolMessageRepairReport,
 ): Promise<void> {
-  const executions = await transaction.query<NodeRow>(
-    `SELECT id, namespace, name, content, data, source_type, source_id,
-       created_at, updated_at
-     FROM ${q(schema, "nodes")}
-     WHERE type = 'tool_execution' ORDER BY created_at, id`,
-  );
-  for (const execution of executions.rows) {
-    const data = record(execution.data);
-    const threadId = text(data.threadId);
-    if (!threadId) continue;
-    let refs = content(data.content);
-    const removedAssetIds: string[] = [];
-    let changed = false;
-    for (const role of ["tool.output", "tool.projected_output"] as const) {
-      const value = await databaseContentValue(
-        transaction,
-        schema,
-        execution.namespace,
-        refs,
-        role,
-      );
-      if (value === undefined) continue;
-      const replacement = await prepareRole(
-        execution.namespace,
-        threadId,
-        execution.id,
-        role,
-        value,
-      );
-      if (!replacement.prepared || replacement.extractedAssets === 0) {
-        continue;
-      }
-      report.extractedAssets += replacement.extractedAssets;
-      for (const asset of replacement.prepared.assets) {
-        await insertPreparedAsset(transaction, schema, asset);
-      }
-      removedAssetIds.push(
-        ...refs.filter((ref) => ref.role === role).map((ref) => ref.assetId),
-      );
-      refs = replaceRoles(refs, [replacement.prepared], new Set([role]));
-      changed = true;
-    }
-    if (!changed) continue;
-    await transaction.query(
-      `UPDATE ${q(schema, "nodes")}
-       SET data = jsonb_set(data, '{content}', $3::jsonb), updated_at = NOW()
-       WHERE namespace = $1 AND id = $2 AND type = 'tool_execution'`,
-      [execution.namespace, execution.id, json(refs)],
+  const roles = new Set(["tool.output", "tool.projected_output"]);
+  let cursor = "";
+  while (true) {
+    const executions = await transaction.query<NodeRow>(
+      `SELECT id, namespace, name, content, data, source_type, source_id,
+         created_at, updated_at
+       FROM ${q(schema, "nodes")}
+       WHERE type = 'tool_execution' AND id > $1
+       ORDER BY id LIMIT 500`,
+      [cursor],
     );
-    removedAssetIds.push(
-      ...await syncAssetEdges(
-        transaction,
-        schema,
-        execution.namespace,
-        execution.id,
-        refs,
+    if (executions.rows.length === 0) break;
+
+    const referencedAssetIds = [
+      ...new Set(
+        executions.rows.flatMap((row) =>
+          content(record(row.data).content)
+            .filter((ref) => roles.has(ref.role))
+            .map((ref) => ref.assetId)
+        ),
       ),
+    ];
+    const candidateAssets = referencedAssetIds.length === 0
+      ? []
+      : (await transaction.query<{ id: string; data: unknown }>(
+        `SELECT id, data FROM ${q(schema, "nodes")}
+         WHERE type = 'asset' AND id = ANY($1::text[])
+           AND data ->> 'state' = 'ready'
+           AND data -> 'location' ->> 'kind' = 'database'
+           AND data -> 'location' ->> 'encoding' IN ('json', 'utf8')
+           AND (
+             data ->> 'body' LIKE '%data:%'
+             OR data ->> 'body' LIKE '%"dataUrl"%'
+             OR data ->> 'body' LIKE '%"dataBase64"%'
+           )`,
+        [referencedAssetIds],
+      )).rows;
+    const assetsById = new Map(
+      candidateAssets.map((asset) => [asset.id, asset.data]),
     );
-    report.deletedOrphanAssets += await deleteUnreferencedMigrationAssets(
-      transaction,
-      schema,
-      execution.namespace,
-      removedAssetIds,
-    );
+
+    for (const execution of executions.rows) {
+      const data = record(execution.data);
+      const threadId = text(data.threadId);
+      if (!threadId) continue;
+      let refs = content(data.content);
+      const removedAssetIds: string[] = [];
+      let changed = false;
+      for (const role of roles) {
+        const ref = refs.find((candidate) => candidate.role === role);
+        const assetData = ref ? assetsById.get(ref.assetId) : undefined;
+        if (!ref || assetData === undefined) continue;
+        const location = record(record(assetData).location);
+        const body = record(assetData).body;
+        if (
+          location.kind !== "database" || typeof body !== "string"
+        ) continue;
+        const value = ref.kind === "json" || jsonMediaType(ref.mediaType)
+          ? JSON.parse(body)
+          : body;
+        const replacement = await prepareRole(
+          execution.namespace,
+          threadId,
+          execution.id,
+          role,
+          value,
+        );
+        if (!replacement.prepared || replacement.extractedAssets === 0) {
+          continue;
+        }
+        report.extractedAssets += replacement.extractedAssets;
+        for (const asset of replacement.prepared.assets) {
+          await insertPreparedAsset(transaction, schema, asset);
+        }
+        removedAssetIds.push(ref.assetId);
+        refs = replaceRoles(refs, [replacement.prepared], new Set([role]));
+        changed = true;
+      }
+      if (!changed) continue;
+      await transaction.query(
+        `UPDATE ${q(schema, "nodes")}
+         SET data = jsonb_set(data, '{content}', $3::jsonb), updated_at = NOW()
+         WHERE namespace = $1 AND id = $2 AND type = 'tool_execution'`,
+        [execution.namespace, execution.id, json(refs)],
+      );
+      removedAssetIds.push(
+        ...await syncAssetEdges(
+          transaction,
+          schema,
+          execution.namespace,
+          execution.id,
+          refs,
+        ),
+      );
+      report.deletedOrphanAssets += await deleteUnreferencedMigrationAssets(
+        transaction,
+        schema,
+        execution.namespace,
+        removedAssetIds,
+      );
+    }
+    cursor = executions.rows.at(-1)!.id;
   }
 }
 

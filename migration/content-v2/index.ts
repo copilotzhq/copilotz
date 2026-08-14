@@ -5,6 +5,7 @@ import {
   digestContent,
 } from "../../runtime/content/index.ts";
 import type {
+  AssetBodyHead,
   AssetOrigin,
   AssetStorageOptions,
 } from "../../runtime/content/index.ts";
@@ -43,6 +44,7 @@ export type MigrateContentV2SchemaOptions = Readonly<{
   mode?: ContentV2MigrationMode;
   assets?: AssetStorageOptions;
   batchSize?: number;
+  uploadConcurrency?: number;
 }>;
 
 function q(schema: string, table: string): string {
@@ -119,44 +121,80 @@ function storedOrigin(value: unknown): AssetOrigin | undefined {
   return undefined;
 }
 
-async function inferOrigin(
+async function inferOrigins(
   session: SqlExecutor,
   schema: string,
-  row: AssetRow,
-): Promise<AssetOrigin> {
-  const existing = storedOrigin(record(row.data).origin);
-  if (existing) return existing;
-  const owner = await session.query<
-    { id: string; type: string; data: unknown }
+  rows: readonly AssetRow[],
+): Promise<ReadonlyMap<string, AssetOrigin>> {
+  const origins = new Map<string, AssetOrigin>();
+  const unresolved: AssetRow[] = [];
+  for (const row of rows) {
+    const existing = storedOrigin(record(row.data).origin);
+    if (existing) origins.set(row.id, existing);
+    else unresolved.push(row);
+  }
+  if (unresolved.length === 0) return origins;
+  const owners = await session.query<
+    { asset_id: string; id: string; type: string; data: unknown }
   >(
-    `SELECT owner.id, owner.type, owner.data
+    `SELECT DISTINCT ON (edge.target_node_id)
+       edge.target_node_id AS asset_id, owner.id, owner.type, owner.data
      FROM ${q(schema, "edges")} edge
      JOIN ${q(schema, "nodes")} owner
        ON owner.namespace = edge.namespace AND owner.id = edge.source_node_id
-     WHERE edge.namespace = $1 AND edge.target_node_id = $2
-       AND edge.type = 'has_asset'
-     ORDER BY edge.created_at, edge.id LIMIT 1`,
-    [row.namespace, row.id],
+     WHERE edge.target_node_id = ANY($1::text[]) AND edge.type = 'has_asset'
+     ORDER BY edge.target_node_id, edge.created_at, edge.id`,
+    [unresolved.map((row) => row.id)],
   );
-  const found = owner.rows[0];
-  if (!found) {
-    return {
-      scope: { type: "namespace", id: row.namespace },
-      producer: { type: "asset", id: row.id },
+  const ownersByAsset = new Map(
+    owners.rows.map((owner) => [owner.asset_id, owner]),
+  );
+  for (const row of unresolved) {
+    const found = ownersByAsset.get(row.id);
+    if (!found) {
+      origins.set(row.id, {
+        scope: { type: "namespace", id: row.namespace },
+        producer: { type: "asset", id: row.id },
+        inferred: true,
+      });
+      continue;
+    }
+    const data = record(found.data);
+    const threadId = typeof data.threadId === "string"
+      ? data.threadId
+      : undefined;
+    origins.set(row.id, {
+      scope: threadId
+        ? { type: "thread", id: threadId }
+        : { type: "collection", collection: found.type, id: found.id },
+      producer: { type: found.type, id: found.id },
       inferred: true,
-    };
+    });
   }
-  const data = record(found.data);
-  const threadId = typeof data.threadId === "string"
-    ? data.threadId
-    : undefined;
-  return {
-    scope: threadId
-      ? { type: "thread", id: threadId }
-      : { type: "collection", collection: found.type, id: found.id },
-    producer: { type: found.type, id: found.id },
-    inferred: true,
-  };
+  return origins;
+}
+
+async function mapBounded<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  run: (value: T) => Promise<R>,
+): Promise<readonly R[]> {
+  if (values.length === 0) return Object.freeze([]);
+  const results = new Array<R>(values.length);
+  let cursor = 0;
+  await Promise.all(
+    Array.from(
+      { length: Math.min(values.length, concurrency) },
+      async () => {
+        while (true) {
+          const index = cursor++;
+          if (index >= values.length) return;
+          results[index] = await run(values[index]);
+        }
+      },
+    ),
+  );
+  return Object.freeze(results);
 }
 
 async function dryRunCounts(session: SqlExecutor, schema: string) {
@@ -185,8 +223,17 @@ export async function migrateContentV2Schema(
   const schema = validateEventSchemaName(schemaName);
   const mode = options.mode ?? "dry-run";
   const batchSize = options.batchSize ?? 100;
+  const uploadConcurrency = options.uploadConcurrency ?? 8;
   if (!Number.isSafeInteger(batchSize) || batchSize <= 0 || batchSize > 1_000) {
     throw new TypeError("content-v2 batchSize must be between 1 and 1000.");
+  }
+  if (
+    !Number.isSafeInteger(uploadConcurrency) || uploadConcurrency <= 0 ||
+    uploadConcurrency > 32
+  ) {
+    throw new TypeError(
+      "content-v2 uploadConcurrency must be between 1 and 32.",
+    );
   }
   const counts = await dryRunCounts(session, schema);
   if (mode === "dry-run") {
@@ -266,73 +313,128 @@ export async function migrateContentV2Schema(
       [cursorCreatedAt, cursorId, batchSize],
     );
     if (page.rows.length === 0) break;
-    for (const row of page.rows) {
-      try {
-        const data = record(row.data);
-        const mediaType = String(data.mediaType ?? "");
-        const digest = String(data.digest ?? "") as `sha256:${string}`;
-        const byteLength = Number(data.byteLength);
-        const bytes = databaseBytes(row);
-        if (
-          !mediaType || !digest.startsWith("sha256:") ||
-          bytes.byteLength !== byteLength ||
-          await digestContent(bytes) !== digest
-        ) {
-          throw new Error("database asset integrity verification failed");
+    const origins = await inferOrigins(session, schema, page.rows);
+    type Uploaded = Readonly<{
+      row: AssetRow;
+      origin: AssetOrigin;
+      head: AssetBodyHead;
+      key: string;
+    }>;
+    type UploadResult =
+      | Readonly<{ status: "uploaded"; value: Uploaded }>
+      | Readonly<{
+        status: "failed";
+        id: string;
+        message: string;
+        conflict: boolean;
+      }>;
+    const results = await mapBounded(
+      page.rows,
+      uploadConcurrency,
+      async (row): Promise<UploadResult> => {
+        try {
+          const data = record(row.data);
+          const mediaType = String(data.mediaType ?? "");
+          const digest = String(data.digest ?? "") as `sha256:${string}`;
+          const byteLength = Number(data.byteLength);
+          const bytes = databaseBytes(row);
+          if (
+            !mediaType || !digest.startsWith("sha256:") ||
+            bytes.byteLength !== byteLength ||
+            await digestContent(bytes) !== digest
+          ) {
+            throw new Error("database asset integrity verification failed");
+          }
+          const origin = origins.get(row.id);
+          if (!origin) throw new Error("asset origin inference failed");
+          const key = assetBodyKey({
+            prefix: storage.prefix,
+            databaseSchema: schema,
+            namespace: row.namespace,
+            assetId: row.id,
+            origin,
+          });
+          const head = await objectWriter.put({
+            key,
+            bytes,
+            mediaType,
+            digest,
+            ifAbsent: true,
+          });
+          return {
+            status: "uploaded",
+            value: { row, origin, head, key },
+          };
+        } catch (error) {
+          return {
+            status: "failed",
+            id: row.id,
+            message: error instanceof Error ? error.message : String(error),
+            conflict: (error as { code?: string }).code === "asset_conflict",
+          };
         }
-        const origin = await inferOrigin(session, schema, row);
-        const key = assetBodyKey({
-          prefix: storage.prefix,
-          databaseSchema: schema,
-          namespace: row.namespace,
-          assetId: row.id,
-          origin,
-        });
-        const head = await objectWriter.put({
+      },
+    );
+    const conflict = results.find((result) =>
+      result.status === "failed" && result.conflict
+    );
+    if (conflict?.status === "failed") {
+      throw new Error(
+        `Asset '${conflict.id}' conflicts with its existing object: ${conflict.message}`,
+      );
+    }
+    for (const result of results) {
+      if (result.status === "failed") {
+        failures.push({ id: result.id, message: result.message });
+      }
+    }
+    const uploaded = results.flatMap((result) =>
+      result.status === "uploaded" ? [result.value] : []
+    );
+    if (uploaded.length > 0) {
+      const moved = uploaded.map(({ row, origin, head, key }) => ({
+        id: row.id,
+        namespace: row.namespace,
+        digest: String(record(row.data).digest),
+        location: {
+          kind: "object",
+          backendId: objectWriter.backendId,
           key,
-          bytes,
-          mediaType,
-          digest,
-          ifAbsent: true,
-        });
-        const changed = await session.transaction((transaction) =>
-          transaction.query<{ id: string }>(
-            `UPDATE ${q(schema, "nodes")}
-           SET data = (data - 'body') || jsonb_build_object(
-             'location', $3::jsonb,
-             'origin', $4::jsonb
+          ...(head.etag ? { etag: head.etag } : {}),
+        },
+        origin,
+      }));
+      const changed = await session.transaction((transaction) =>
+        transaction.query<{ id: string }>(
+          `WITH moved AS (
+             SELECT * FROM jsonb_to_recordset($1::jsonb) AS item(
+               id text,
+               namespace text,
+               digest text,
+               location jsonb,
+               origin jsonb
+             )
+           )
+           UPDATE ${q(schema, "nodes")} asset
+           SET data = (asset.data - 'body') || jsonb_build_object(
+             'location', moved.location,
+             'origin', moved.origin
            ), updated_at = NOW()
-           WHERE namespace = $1 AND id = $2 AND type = 'asset'
-             AND data ->> 'state' = 'ready'
-             AND data -> 'location' ->> 'kind' = 'database'
-             AND data ->> 'digest' = $5
-           RETURNING id`,
-            [
-              row.namespace,
-              row.id,
-              JSON.stringify({
-                kind: "object",
-                backendId: objectWriter.backendId,
-                key,
-                ...(head.etag ? { etag: head.etag } : {}),
-              }),
-              JSON.stringify(origin),
-              digest,
-            ],
-          )
-        );
-        if (changed.rows.length === 1) {
-          uploadedObjects++;
-          bytesMoved += bytes.byteLength;
-        }
-      } catch (error) {
-        if ((error as { code?: string }).code === "asset_conflict") {
-          throw error;
-        }
-        failures.push({
-          id: row.id,
-          message: error instanceof Error ? error.message : String(error),
-        });
+           FROM moved
+           WHERE asset.namespace = moved.namespace AND asset.id = moved.id
+             AND asset.type = 'asset'
+             AND asset.data ->> 'state' = 'ready'
+             AND asset.data -> 'location' ->> 'kind' = 'database'
+             AND asset.data ->> 'digest' = moved.digest
+           RETURNING asset.id`,
+          [JSON.stringify(moved)],
+        )
+      );
+      const changedIds = new Set(changed.rows.map((row) => row.id));
+      for (const item of uploaded) {
+        if (!changedIds.has(item.row.id)) continue;
+        uploadedObjects++;
+        bytesMoved += Number(record(item.row.data).byteLength);
       }
     }
     const last: AssetRow = page.rows.at(-1)!;

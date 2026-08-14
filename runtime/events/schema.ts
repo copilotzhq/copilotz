@@ -287,14 +287,16 @@ export function createCoreSchemaStatements(
     `ALTER TABLE ${tables.event_deliveries}
       ADD COLUMN IF NOT EXISTS settlement_scope_id TEXT`,
     `WITH RECURSIVE ancestry AS (
-       SELECT event.id AS event_id,
+       SELECT delivery.id AS delivery_id,
               event.namespace,
               event.id AS ancestor_id,
               event.causation_id,
               ARRAY[event.id]::text[] AS path
-       FROM ${tables.events} AS event
+       FROM ${tables.event_deliveries} AS delivery
+       JOIN ${tables.events} AS event ON event.id = delivery.event_id
+       WHERE delivery.settlement_scope_id IS NULL
        UNION ALL
-       SELECT ancestry.event_id,
+       SELECT ancestry.delivery_id,
               ancestry.namespace,
               parent.id AS ancestor_id,
               parent.causation_id,
@@ -306,14 +308,14 @@ export function createCoreSchemaStatements(
        WHERE ancestry.causation_id IS NOT NULL
          AND NOT parent.id = ANY(ancestry.path)
      ), roots AS (
-       SELECT DISTINCT ON (event_id) event_id, ancestor_id
+       SELECT DISTINCT ON (delivery_id) delivery_id, ancestor_id
        FROM ancestry
-       ORDER BY event_id, cardinality(path) DESC
+       ORDER BY delivery_id, cardinality(path) DESC
      )
      UPDATE ${tables.event_deliveries} AS delivery
      SET settlement_scope_id = roots.ancestor_id
      FROM roots
-     WHERE delivery.event_id = roots.event_id
+     WHERE delivery.id = roots.delivery_id
        AND delivery.settlement_scope_id IS NULL`,
     `UPDATE ${tables.event_deliveries}
       SET settlement_scope_id = event_id

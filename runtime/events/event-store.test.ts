@@ -1,7 +1,14 @@
-import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertExists,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import {
   createCoreSchemaStatements,
+  createCoreTableNames,
   createEventStore,
   createSqlSession,
   type EventStore,
@@ -166,6 +173,18 @@ Deno.test("schema provisioning backfills legacy deliveries to their causal root 
   } finally {
     await closeFixture(fixture);
   }
+});
+
+Deno.test("schema provisioning scopes legacy backfill to deliveries missing a scope", () => {
+  const statement = createCoreSchemaStatements(TEST_SCHEMA).find((candidate) =>
+    candidate.includes("WITH RECURSIVE ancestry")
+  );
+  assertExists(statement);
+  assertStringIncludes(
+    statement,
+    `FROM ${createCoreTableNames(TEST_SCHEMA).event_deliveries} AS delivery`,
+  );
+  assertStringIncludes(statement, "WHERE delivery.settlement_scope_id IS NULL");
 });
 
 Deno.test("A20 graph mutation, immutable event, and sparse deliveries commit atomically", async () => {

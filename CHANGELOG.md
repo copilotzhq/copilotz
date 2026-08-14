@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.60.3 — 2026-08-14
+
+### Fixed
+
+- Existing delivery settlement-scope backfills now recurse only from delivery
+  obligations that need migration, avoiding history-sized temporary results.
+
 ## 0.60.2 — 2026-08-14
 
 ### Added

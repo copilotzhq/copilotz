@@ -66,6 +66,12 @@ Candidate retrieval happens after extraction, independently for each proposed
 record. Stable checkpoint, attempt, execution, record, and relation identities
 make delivery recovery idempotent.
 
+The reservation processor starts this lifecycle in a detached durable settlement
+scope. Consolidation therefore remains retryable and recoverable but does not
+delay or fail the user-facing `run.done`. Every checkpoint, attempt, tool
+execution, repair, and final commit retains causation to the triggering message
+while inheriting the detached scope automatically.
+
 After reconciliation, Copilotz commits every new or updated semantic record,
 relation, lifecycle change, frozen snapshot asset link, the internal
 `memory.consolidation.committed` event, and the ready checkpoint in one database

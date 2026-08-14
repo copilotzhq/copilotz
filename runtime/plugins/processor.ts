@@ -2,6 +2,9 @@ import type { CopilotzEvent, DurableEventDraft } from "../events/types.ts";
 
 export type ProcessorDelivery = "durable" | "live";
 
+/** Determines whether durable work participates in its triggering scope. */
+export type ProcessorSettlement = "inherit" | "detached";
+
 export type ProcessorMatchEvent = DurableEventDraft | CopilotzEvent;
 
 export type ProcessorContext = Record<string, unknown>;
@@ -11,6 +14,8 @@ export type Processor<TContext extends ProcessorContext = ProcessorContext> = {
   id: string;
   on: readonly string[];
   delivery: ProcessorDelivery;
+  /** Defaults to `inherit`. Detached work remains durable but non-blocking. */
+  settlement?: ProcessorSettlement;
   filter?: (event: ProcessorMatchEvent) => boolean;
   handle(
     event: CopilotzEvent,
@@ -36,6 +41,15 @@ export function defineProcessor<
   if (processor.delivery !== "durable" && processor.delivery !== "live") {
     throw new TypeError(`Processor '${id}' has an invalid delivery mode.`);
   }
+  const settlement = processor.settlement ?? "inherit";
+  if (settlement !== "inherit" && settlement !== "detached") {
+    throw new TypeError(`Processor '${id}' has an invalid settlement mode.`);
+  }
+  if (processor.delivery === "live" && settlement === "detached") {
+    throw new TypeError(
+      `Live processor '${id}' cannot use detached durable settlement.`,
+    );
+  }
   if (typeof processor.handle !== "function") {
     throw new TypeError(`Processor '${id}' requires a handle function.`);
   }
@@ -44,7 +58,12 @@ export function defineProcessor<
   ) {
     throw new TypeError(`Processor '${id}' filter must be a function.`);
   }
-  return Object.freeze({ ...processor, id, on: Object.freeze(on) });
+  return Object.freeze({
+    ...processor,
+    id,
+    on: Object.freeze(on),
+    settlement,
+  });
 }
 
 export function processorConsumerId(processorId: string): string {

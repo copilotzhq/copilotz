@@ -82,7 +82,10 @@ export type CreateDatabaseScopeOptions = Readonly<{
   eventHub: CopilotzEventHub;
   streamWorkload: string;
   now: () => Date;
-  publishLive(event: CopilotzEvent): Promise<LiveEventDispatchHandle>;
+  publishLive(
+    event: CopilotzEvent,
+    settlementScopeId?: string,
+  ): Promise<LiveEventDispatchHandle>;
   store?: EventStore;
 }>;
 
@@ -111,8 +114,11 @@ export function createDatabaseScope(
     store,
     registry: options.registry,
     executor: options.executor,
-    async publish(event) {
-      const dispatched = await options.publishLive(event);
+    async publish(event, context) {
+      const dispatched = await options.publishLive(
+        event,
+        context?.settlementScopeId,
+      );
       await dispatched.done;
     },
     onDispatchFailure: engine.onDispatchFailure,
@@ -259,10 +265,10 @@ export function createDatabaseScope(
       return event?.namespace === namespace ? event : null;
     },
     list: (listOptions) => store.listEvents(listOptions),
-    settlement: (namespace, rootEventId) =>
-      store.scopeSettlement(namespace, rootEventId),
-    cancel: (namespace, rootEventId, reason) =>
-      store.cancelScope(namespace, rootEventId, reason),
+    settlement: (namespace, settlementScopeId) =>
+      store.scopeSettlement(namespace, settlementScopeId),
+    cancel: (namespace, settlementScopeId, reason) =>
+      store.cancelScope(namespace, settlementScopeId, reason),
   });
   const deliveries: CopilotzEngineDatabaseScope["deliveries"] = Object.freeze({
     get: deliveryInNamespace,

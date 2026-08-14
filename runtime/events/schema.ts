@@ -81,6 +81,7 @@ const CORE_SCHEMA_COLUMNS = Object.freeze(
       "id",
       "event_id",
       "consumer_id",
+      "settlement_scope_id",
       "status",
       "attempts",
       "max_attempts",
@@ -267,6 +268,7 @@ export function createCoreSchemaStatements(
       id TEXT PRIMARY KEY,
       event_id TEXT NOT NULL REFERENCES ${tables.events}(id) ON DELETE CASCADE,
       consumer_id TEXT NOT NULL,
+      settlement_scope_id TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN (
         'pending', 'leased', 'retry_wait', 'succeeded', 'cancelled', 'dead_letter'
       )),
@@ -282,12 +284,50 @@ export function createCoreSchemaStatements(
       settled_at TIMESTAMPTZ,
       UNIQUE (event_id, consumer_id)
     )`,
+    `ALTER TABLE ${tables.event_deliveries}
+      ADD COLUMN IF NOT EXISTS settlement_scope_id TEXT`,
+    `WITH RECURSIVE ancestry AS (
+       SELECT event.id AS event_id,
+              event.namespace,
+              event.id AS ancestor_id,
+              event.causation_id,
+              ARRAY[event.id]::text[] AS path
+       FROM ${tables.events} AS event
+       UNION ALL
+       SELECT ancestry.event_id,
+              ancestry.namespace,
+              parent.id AS ancestor_id,
+              parent.causation_id,
+              ancestry.path || parent.id
+       FROM ancestry
+       JOIN ${tables.events} AS parent
+         ON parent.namespace = ancestry.namespace
+        AND parent.id = ancestry.causation_id
+       WHERE ancestry.causation_id IS NOT NULL
+         AND NOT parent.id = ANY(ancestry.path)
+     ), roots AS (
+       SELECT DISTINCT ON (event_id) event_id, ancestor_id
+       FROM ancestry
+       ORDER BY event_id, cardinality(path) DESC
+     )
+     UPDATE ${tables.event_deliveries} AS delivery
+     SET settlement_scope_id = roots.ancestor_id
+     FROM roots
+     WHERE delivery.event_id = roots.event_id
+       AND delivery.settlement_scope_id IS NULL`,
+    `UPDATE ${tables.event_deliveries}
+      SET settlement_scope_id = event_id
+      WHERE settlement_scope_id IS NULL`,
+    `ALTER TABLE ${tables.event_deliveries}
+      ALTER COLUMN settlement_scope_id SET NOT NULL`,
     `CREATE INDEX IF NOT EXISTS "deliveries_available_idx"
       ON ${tables.event_deliveries}
         (status, available_at, priority DESC, created_at, id)
       WHERE status IN ('pending', 'retry_wait', 'leased')`,
     `CREATE INDEX IF NOT EXISTS "deliveries_event_idx"
       ON ${tables.event_deliveries} (event_id)`,
+    `CREATE INDEX IF NOT EXISTS "deliveries_settlement_scope_idx"
+      ON ${tables.event_deliveries} (settlement_scope_id, status)`,
     `CREATE OR REPLACE FUNCTION ${immutableFunction}()
       RETURNS trigger AS $$
       BEGIN

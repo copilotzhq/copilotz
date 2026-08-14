@@ -85,6 +85,8 @@ export type MutationIdentity = Readonly<{
   causationId?: string;
   correlationId?: string;
   deduplicationId?: string;
+  /** Runtime-owned completion scope propagated across durable descendants. */
+  settlementScopeId?: string;
   metadata?: Record<string, unknown>;
 }>;
 

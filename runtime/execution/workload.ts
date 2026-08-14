@@ -196,6 +196,7 @@ export function createDeliveryWorkload(
             causationId: event.id,
             correlationId: event.correlationId,
             deduplicationId: `delivery:${delivery.id}:${key}`,
+            settlementScopeId: delivery.settlementScopeId,
             metadata: Object.freeze({
               ...structuredClone(mutationMetadata),
               sourceEventId: event.id,
@@ -209,6 +210,7 @@ export function createDeliveryWorkload(
         databaseSchema: metadata.databaseSchema,
         event,
         delivery,
+        settlementScopeId: delivery.settlementScopeId,
         signal: abort.signal,
         idempotencyKey: delivery.id,
         dispatchAttemptId: metadata.dispatchAttemptId,

@@ -284,10 +284,10 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
       "active",
     );
     const manual = await invoke({ action: "run_now", jobId: "tool-job" });
-    const manualEventId = String(manual.eventId);
+    const manualSettlementScopeId = String(manual.settlementScopeId);
     const expires = Date.now() + 5_000;
     while (
-      (await application.events.settlement(NAMESPACE, manualEventId))
+      (await application.events.settlement(NAMESPACE, manualSettlementScopeId))
         .unsettled >
         0
     ) {

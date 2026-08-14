@@ -1657,6 +1657,7 @@ function memoryReservationProcessor(
     id: "copilotz.memory.reserve",
     on: ["message.created"],
     delivery: "durable",
+    settlement: "detached",
     filter: (event) => event.visibility?.kind !== "internal",
     async handle(event, context) {
       if (!event.durable || !event.threadId || !event.subject) return;

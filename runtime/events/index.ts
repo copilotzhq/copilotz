@@ -43,6 +43,7 @@ export type {
   CopilotzEvent,
   DeliveryScopeSettlement,
   DeliveryStatus,
+  DurableConsumerObligation,
   DurableEvent,
   DurableEventDraft,
   EphemeralEvent,

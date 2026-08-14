@@ -139,6 +139,7 @@ export type ScheduledJobRunNowResult = Readonly<{
   name: string;
   occurrenceId: string;
   eventId: string;
+  settlementScopeId: string;
   deduplicated: boolean;
   dispatchFailures: number;
 }>;

@@ -219,17 +219,17 @@ export function createDeliveryExecutor(
   const outputScopeKey = (
     databaseSchema: string,
     namespace: string,
-    correlationId: string,
-  ): string => `${databaseSchema}\u0000${namespace}\u0000${correlationId}`;
+    settlementScopeId: string,
+  ): string => `${databaseSchema}\u0000${namespace}\u0000${settlementScopeId}`;
   const trackOutputScope = (
-    databaseSchema: string,
+    delivery: EventDelivery,
     event: DurableEvent,
     task: Promise<unknown>,
   ): void => {
     const key = outputScopeKey(
-      databaseSchema,
+      delivery.databaseSchema,
       event.namespace,
-      event.correlationId,
+      delivery.settlementScopeId,
     );
     const tasks = activeOutputScopes.get(key) ?? new Set<Promise<unknown>>();
     tasks.add(task);
@@ -307,7 +307,7 @@ export function createDeliveryExecutor(
         operationStatus: terminal.status,
       });
     })();
-    trackOutputScope(delivery.databaseSchema, event, done);
+    trackOutputScope(delivery, event, done);
 
     return Object.freeze({
       deliveryId: delivery.id,
@@ -467,7 +467,7 @@ export function createDeliveryExecutor(
       const key = outputScopeKey(
         scope.databaseSchema?.trim() || defaultDatabaseSchema,
         scope.namespace,
-        scope.correlationId,
+        scope.settlementScopeId,
       );
       while (true) {
         const tasks = [...(activeOutputScopes.get(key) ?? [])];

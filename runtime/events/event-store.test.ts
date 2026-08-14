@@ -128,6 +128,46 @@ Deno.test("A20 schema provisioning replaces the obsolete unique tool-call index"
   }
 });
 
+Deno.test("schema provisioning backfills legacy deliveries to their causal root scope", async () => {
+  const fixture = await createFixture();
+  try {
+    const root = await fixture.store.append({
+      type: "legacy.root",
+      namespace: "tenant-a",
+      payload: {},
+    }, ["root"]);
+    const child = await fixture.store.append({
+      type: "legacy.child",
+      namespace: "tenant-a",
+      payload: {},
+      causationId: root.event.id,
+      correlationId: root.event.correlationId,
+    }, ["child"]);
+    await fixture.session.query(
+      `ALTER TABLE ${fixture.store.tables.event_deliveries}
+       DROP COLUMN settlement_scope_id`,
+    );
+    for (const statement of createCoreSchemaStatements(TEST_SCHEMA)) {
+      await fixture.session.query(statement);
+    }
+    const rows = await fixture.session.query<{
+      id: string;
+      settlement_scope_id: string;
+    }>(
+      `SELECT id, settlement_scope_id
+       FROM ${fixture.store.tables.event_deliveries}
+       ORDER BY id`,
+    );
+    assertEquals(
+      rows.rows.map((row) => row.settlement_scope_id),
+      [root.event.id, root.event.id],
+    );
+    assertExists(await fixture.store.getDelivery(child.deliveries[0].id));
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
 Deno.test("A20 graph mutation, immutable event, and sparse deliveries commit atomically", async () => {
   const fixture = await createFixture();
   const { store, session } = fixture;
@@ -139,7 +179,7 @@ Deno.test("A20 graph mutation, immutable event, and sparse deliveries commit ato
           namespace: "tenant-a",
           payload: { id: "rollback" },
         },
-        consumerIds: ["widget.index"],
+        consumers: [{ consumerId: "widget.index", settlement: "inherit" }],
         mutate: async ({ transaction, tables }) => {
           await transaction.query(
             `INSERT INTO ${tables.nodes} (
@@ -174,7 +214,11 @@ Deno.test("A20 graph mutation, immutable event, and sparse deliveries commit ato
     } as const;
     const first = await store.commitMutation({
       draft,
-      consumerIds: ["widget.index", "widget.audit", "widget.index"],
+      consumers: [
+        { consumerId: "widget.index", settlement: "inherit" },
+        { consumerId: "widget.audit", settlement: "inherit" },
+        { consumerId: "widget.index", settlement: "inherit" },
+      ],
       mutate: async ({ transaction, tables }) => {
         mutationCalls++;
         await transaction.query(
@@ -191,7 +235,10 @@ Deno.test("A20 graph mutation, immutable event, and sparse deliveries commit ato
         ...draft,
         payload: { nested: { first: 1, second: 2 }, label: "A" },
       },
-      consumerIds: ["widget.audit", "widget.index"],
+      consumers: [
+        { consumerId: "widget.audit", settlement: "inherit" },
+        { consumerId: "widget.index", settlement: "inherit" },
+      ],
       mutate: () => {
         mutationCalls++;
         return Promise.resolve({ id: "must-not-run" });
@@ -472,7 +519,7 @@ Deno.test("A21 crash recovery and concurrent claims preserve one delivery owner"
   }
 });
 
-Deno.test("A23 settlement and cancellation follow causation, not shared correlation", async () => {
+Deno.test("A23 settlement and cancellation follow explicit scope, not shared correlation", async () => {
   const fixture = await createFixture();
   const { store } = fixture;
   try {
@@ -488,6 +535,7 @@ Deno.test("A23 settlement and cancellation follow causation, not shared correlat
       payload: {},
       causationId: root.event.id,
       correlationId: "shared-correlation",
+      settlementScopeId: root.event.id,
     }, ["llm"]);
     const grandchild = await store.append({
       type: "tool_execution.created",
@@ -495,6 +543,7 @@ Deno.test("A23 settlement and cancellation follow causation, not shared correlat
       payload: {},
       causationId: child.event.id,
       correlationId: "shared-correlation",
+      settlementScopeId: root.event.id,
     }, ["tool"]);
     const unrelated = await store.append({
       type: "scheduled_job.created",
@@ -527,6 +576,67 @@ Deno.test("A23 settlement and cancellation follow causation, not shared correlat
     assertEquals(
       await store.scopeSettlement("tenant-a", root.event.id),
       { unsettled: 0, deadLetters: 0, cancelled: 1, succeeded: 2 },
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("one event atomically forks inherited and detached delivery scopes", async () => {
+  const fixture = await createFixture();
+  const { store } = fixture;
+  try {
+    const committed = await store.commitMutation({
+      draft: {
+        type: "message.created",
+        namespace: "tenant-a",
+        payload: {},
+      },
+      consumers: [
+        { consumerId: "foreground", settlement: "inherit" },
+        { consumerId: "memory", settlement: "detached" },
+      ],
+      mutate: () => Promise.resolve(undefined),
+    });
+    const foreground = committed.deliveries.find((delivery) =>
+      delivery.consumerId === "foreground"
+    );
+    const memory = committed.deliveries.find((delivery) =>
+      delivery.consumerId === "memory"
+    );
+    assertExists(foreground);
+    assertExists(memory);
+    assertEquals(foreground.settlementScopeId, committed.event.id);
+    assert(memory.settlementScopeId !== committed.event.id);
+    assertEquals(
+      await store.scopeSettlement("tenant-a", committed.event.id),
+      { unsettled: 1, deadLetters: 0, cancelled: 0, succeeded: 0 },
+    );
+    assertEquals(
+      await store.scopeSettlement("tenant-a", memory.settlementScopeId),
+      { unsettled: 1, deadLetters: 0, cancelled: 0, succeeded: 0 },
+    );
+
+    const child = await store.append({
+      type: "long_term_memory.created",
+      namespace: "tenant-a",
+      payload: {},
+      causationId: committed.event.id,
+      correlationId: committed.event.correlationId,
+      settlementScopeId: memory.settlementScopeId,
+    }, ["memory.prepare"]);
+    assertEquals(
+      child.deliveries[0].settlementScopeId,
+      memory.settlementScopeId,
+    );
+    assertEquals(
+      await store.cancelScope("tenant-a", committed.event.id),
+      1,
+    );
+    assertEquals((await store.getDelivery(memory.id))?.status, "pending");
+    assertEquals(
+      (await store.getDelivery(child.deliveries[0].id))?.status,
+      "pending",
     );
   } finally {
     await closeFixture(fixture);

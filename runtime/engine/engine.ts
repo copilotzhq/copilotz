@@ -148,6 +148,7 @@ export async function createCopilotzEngine(
           signal: base.signal,
           databaseSchema: base.databaseSchema,
           eventHub: scopedEventHub,
+          settlementScopeId: base.settlementScopeId,
         });
         await dispatched.done;
       },
@@ -287,6 +288,7 @@ export async function createCopilotzEngine(
       signal?: AbortSignal;
       databaseSchema?: string;
       eventHub?: typeof eventHub;
+      settlementScopeId?: string;
     } = {},
   ): Promise<LiveEventDispatchHandle> => {
     const scopedDatabaseSchema = publishOptions.databaseSchema ??
@@ -295,7 +297,11 @@ export async function createCopilotzEngine(
     await scopedEventHub.publish(event);
     await options.publish?.(event);
     if (!publishOptions.inline && !workerOriginated(event)) {
-      return await liveDispatcher.dispatch(event, scopedDatabaseSchema);
+      return await liveDispatcher.dispatch(
+        event,
+        scopedDatabaseSchema,
+        publishOptions.settlementScopeId,
+      );
     }
 
     const abort = new AbortController();
@@ -309,6 +315,7 @@ export async function createCopilotzEngine(
       registry: options.registry,
       event,
       signal: abort.signal,
+      settlementScopeId: publishOptions.settlementScopeId,
       createContext: createLiveContext,
     }).finally(() => {
       publishOptions.signal?.removeEventListener("abort", relay);
@@ -339,7 +346,8 @@ export async function createCopilotzEngine(
       eventHub,
       streamWorkload,
       now,
-      publishLive: (event) => publishLive(event),
+      publishLive: (event, settlementScopeId) =>
+        publishLive(event, { settlementScopeId }),
     });
     capabilities = defaultScope.capabilities;
     resolver = defaultScope.public.content.resolver;
@@ -368,10 +376,11 @@ export async function createCopilotzEngine(
             eventHub: hub,
             streamWorkload,
             now,
-            publishLive: (event) =>
+            publishLive: (event, settlementScopeId) =>
               publishLive(event, {
                 databaseSchema: normalized,
                 eventHub: hub,
+                settlementScopeId,
               }),
           });
           return Object.freeze({ runtime, hub });

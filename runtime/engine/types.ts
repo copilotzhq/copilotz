@@ -347,11 +347,12 @@ export type CopilotzCapabilitySource = Readonly<{
   consumerId?: string;
 }>;
 
-/** Durable causal scope used to bind domain capabilities outside a delivery. */
+/** Durable settlement scope used to bind domain capabilities outside a delivery. */
 export type CopilotzCapabilityBase = Readonly<{
   databaseSchema: string;
   event: CopilotzEvent;
   signal: AbortSignal;
+  settlementScopeId?: string;
   createMutationIdentity: CopilotzMutationIdentityFactory;
   source?: CopilotzCapabilitySource;
 }>;
@@ -372,7 +373,7 @@ export type CopilotzEngineAttachmentOptions = Readonly<{
   streamCapacity?: number;
   /** Stable worker ID for the separate embedded stream worker. */
   streamWorkerId?: string;
-  /** Poll interval used while observing causal delivery settlement. */
+  /** Poll interval used while observing delivery settlement. */
   settlementPollMs?: number;
 }>;
 
@@ -502,11 +503,11 @@ export type CopilotzEngine = Readonly<{
     }): Promise<readonly DurableEvent[]>;
     settlement(
       namespace: string,
-      rootEventId: string,
+      settlementScopeId: string,
     ): Promise<DeliveryScopeSettlement>;
     cancel(
       namespace: string,
-      rootEventId: string,
+      settlementScopeId: string,
       reason?: string,
     ): Promise<number>;
   }>;

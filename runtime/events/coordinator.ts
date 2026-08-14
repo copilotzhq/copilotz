@@ -14,7 +14,7 @@ import type { CopilotzEvent, DurableEventDraft } from "./types.ts";
 
 export type CoordinatedMutationOptions<T> = Omit<
   CommitEventMutationOptions<T>,
-  "consumerIds"
+  "consumers"
 >;
 
 export type EventDispatchReport = Readonly<{
@@ -31,6 +31,7 @@ export type CoordinatedMutationResult<T> =
 
 export type EventPublisher = (
   event: CopilotzEvent,
+  context?: Readonly<{ settlementScopeId: string }>,
 ) => void | Promise<void>;
 
 export type CreateEventCoordinatorOptions = Readonly<{
@@ -121,16 +122,18 @@ export function createEventCoordinator(
   ): Promise<CoordinatedMutationResult<T>> => {
     // Durable filters are synchronous so the complete obligation set is known
     // before entering the database transaction.
-    const consumerIds = options.registry.durableConsumerIds(mutation.draft);
+    const consumers = options.registry.durableConsumers(mutation.draft);
     const committed = await options.store.commitMutation({
       ...mutation,
-      consumerIds,
+      consumers,
     });
 
     let publishError: unknown;
     if (!committed.deduplicated) {
       try {
-        await options.publish?.(committed.event);
+        await options.publish?.(committed.event, {
+          settlementScopeId: committed.settlementScopeId,
+        });
       } catch (error) {
         publishError = error;
       }

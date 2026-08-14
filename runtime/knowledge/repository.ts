@@ -187,6 +187,9 @@ function identityFields(identity: CreateKnowledgeDocumentInput["identity"]) {
     ...(identity?.deduplicationId?.trim()
       ? { deduplicationId: identity.deduplicationId.trim() }
       : {}),
+    ...(identity?.settlementScopeId?.trim()
+      ? { settlementScopeId: identity.settlementScopeId.trim() }
+      : {}),
     metadata: structuredClone(identity?.metadata ?? {}),
   };
 }

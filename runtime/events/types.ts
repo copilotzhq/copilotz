@@ -101,6 +101,8 @@ export type DurableEventDraft<TPayload = unknown> = {
   correlationId?: string;
   deduplicationId?: string;
   createdAt?: string;
+  /** Runtime-owned completion scope inherited by this mutation's deliveries. */
+  settlementScopeId?: string;
 };
 
 export type DeliveryStatus =
@@ -118,6 +120,7 @@ export type EventDelivery = Readonly<{
   id: string;
   eventId: string;
   consumerId: string;
+  settlementScopeId: string;
   status: DeliveryStatus;
   attempts: number;
   maxAttempts: number;
@@ -129,6 +132,12 @@ export type EventDelivery = Readonly<{
   createdAt: string;
   updatedAt: string;
   settledAt?: string;
+}>;
+
+/** Durable consumer selected atomically for an event mutation. */
+export type DurableConsumerObligation = Readonly<{
+  consumerId: string;
+  settlement: "inherit" | "detached";
 }>;
 
 export type DeliveryScopeSettlement = Readonly<{

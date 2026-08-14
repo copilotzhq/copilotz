@@ -7,7 +7,7 @@ import {
   type CopilotzProcessorContext,
   definePlugin,
   defineProcessor,
-} from "jsr:@copilotz/copilotz@^0.59.0";
+} from "jsr:@copilotz/copilotz@^0.60.2";
 
 const audit = defineProcessor<CopilotzProcessorContext>({
   id: "audit.messages",
@@ -67,6 +67,10 @@ Agents use explicit `capabilities`; see
   checks belong inside `handle()`.
 - Durable delivery is at-least-once. Use the scoped mutation capabilities and
   operation keys supplied by context so retries deduplicate.
+- Durable processors inherit the triggering completion scope by default. Declare
+  `settlement: "detached"` for durable background work that must remain
+  recoverable without delaying or failing the foreground run. Its descendants
+  inherit the detached scope automatically.
 - Live processors receive ephemeral events without delivery rows.
 - A processor cannot claim, swallow, reprioritize, or replace another
   subscription's work.

@@ -184,7 +184,7 @@ The authoritative subpath list is `deno.json`. Public groups are application,
 capabilities, plugins, resources, content, domain, events, attachments,
 workflows, memory, knowledge, schedules, usage, skills, tools, channels,
 features, admin, goals, adapters, the transitional server projection, and the
-isolated v1 migration.
+isolated v1 and memory-v4 migrations.
 
 Internal engine assembly, delivery executors, framed Worker protocol, and raw
 workload maps are implementation details rather than package entry points. Every

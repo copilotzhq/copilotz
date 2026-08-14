@@ -29,6 +29,7 @@ import type { CopilotzEvent } from "../events/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import type { ScopedPluginResources } from "../engine/index.ts";
 import type { ContentInput } from "../content/index.ts";
+import type { MemorySourceRef } from "../memory/ontology.ts";
 
 /** Plugin resource that exposes one existing low-level LLM provider adapter. */
 export type LlmProviderResource = Readonly<{
@@ -102,35 +103,20 @@ export type AgentTextPrompt = Readonly<{
   rawMessages: readonly ConversationMessage[];
   messages: readonly ChatMessage[];
   tools: readonly ToolDefinition[];
-  memory: readonly WorkflowPromptMemoryContribution[];
+  context: readonly WorkflowPromptContextContribution[];
   userMetadata?: Readonly<Record<string, unknown>>;
 }>;
 
-export type WorkflowPromptMemoryContribution = Readonly<{
+export type WorkflowPromptContextContribution = Readonly<{
+  id: string;
   resourceId: string;
-  section?: string;
-  /** Exclude persisted transcript entries up to and including this message. */
+  title: string;
+  role: "context" | "evidence";
+  text: string;
+  source?: MemorySourceRef;
+  capturedAt?: string;
+  /** Set and honored only by Copilotz's built-in long-term-memory resource. */
   historyAfterMessageId?: string;
-}>;
-
-export type WorkflowPromptMemoryResource = Readonly<{
-  id?: string;
-  name: string;
-  kind: string;
-  enabled?: boolean;
-  contribute(
-    input: Readonly<{
-      agent: Agent;
-      participant: Participant;
-      thread: ConversationThread;
-      history: readonly ConversationMessage[];
-      sourceEvent: CopilotzEvent;
-      context: CopilotzProcessorContext;
-    }>,
-  ):
-    | WorkflowPromptMemoryContribution
-    | null
-    | Promise<WorkflowPromptMemoryContribution | null>;
 }>;
 
 /** Application policy applied before a text attempt records its tool grants. */

@@ -136,33 +136,52 @@ Deno.test("admin plugin projects event-native application state without raw stor
       sourceStartMessageId: "message-a",
       sourceEndMessageId: "message-a",
     }, { namespace: NAMESPACE });
-    const brain = application.collections.get("brain_node");
+    const memories = application.collections.get("memory_record");
     for (
-      const [id, name, kind] of [
-        ["brain-a", "Decision", "decision"],
-        ["brain-b", "Next action", "next_action"],
+      const [id, form, kind, summary, status, data] of [
+        [
+          "memory-a-decision",
+          "intent",
+          "intent.decision",
+          "The team chose the event-native architecture.",
+          "active",
+          { status: "active" },
+        ],
+        [
+          "memory-a-action",
+          "intent",
+          "intent.action",
+          "Implement the event-native architecture.",
+          "proposed",
+          { status: "proposed" },
+        ],
       ] as const
     ) {
-      await brain.create({
+      await memories.create({
         id,
         memorySpaceId: "memory-a",
-        checkpointId: "checkpoint-a",
+        consolidationId: "checkpoint-a",
         createdByAgentId: "support",
         originThreadId: "thread-a",
-        layer: "knowledge",
-        status: "active",
+        form,
+        status,
         kind,
-        name,
-        content: `${name} content`,
-        sourceMessageIds: ["message-a"],
+        summary,
+        temporal: { recordedAt: new Date().toISOString() },
+        provenance: {
+          sources: [{ type: "message", id: "message-a" }],
+          recordedBy: { type: "participant", id: "agent-a" },
+          consolidationId: "checkpoint-a",
+        },
+        data,
       }, { namespace: NAMESPACE });
     }
     await application.relations.create({
       namespace: NAMESPACE,
-      id: "brain-relation-a",
-      type: "related_to",
-      source: { type: "brain_node", id: "brain-a" },
-      target: { type: "brain_node", id: "brain-b" },
+      id: "memory-relation-a",
+      type: "depends_on",
+      source: { type: "memory_record", id: "memory-a-action" },
+      target: { type: "memory_record", id: "memory-a-decision" },
       threadId: "thread-a",
     });
 
@@ -228,16 +247,17 @@ Deno.test("admin plugin projects event-native application state without raw stor
 
     const brainProjection = object(
       (await request("brain", {
-        status: "active",
+        form: "intent",
       })).data,
     );
     assertEquals(array(brainProjection.nodes).length, 2);
     assert(
       array(brainProjection.edges).some((value) =>
-        object(value).id === "brain-relation-a"
+        object(value).id === "memory-relation-a"
       ),
     );
     assertEquals(array(brainProjection.stats).length, 2);
+    assertEquals(object(array(brainProjection.stats)[0]).form, "intent");
 
     const agents = array((await request("agents")).data);
     assertEquals(object(agents[0]).id, "support");

@@ -8,7 +8,8 @@ export const PLUGIN_RESOURCE_TYPES = [
   "providers",
   "channels",
   "skills",
-  "memory",
+  "context",
+  "memoryKinds",
   "apis",
   "mcpServers",
   "features",
@@ -73,7 +74,7 @@ export function pluginResourceId(
     : type === "collections"
     ? resource.name ?? resource.id
     : type === "skills" || type === "channels" || type === "features" ||
-        type === "storage"
+        type === "storage" || type === "context" || type === "memoryKinds"
     ? resource.name ?? resource.id
     : resource.id ?? resource.name;
   if (typeof candidate !== "string" || !candidate.trim()) {

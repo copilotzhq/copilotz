@@ -34,6 +34,10 @@ const forbidden = [
   "CreateStdioServerWorkflowToolCatalogOptions",
   "EventNativeRunHandle",
   "EventNativeRunInput",
+  "brain_node",
+  "continuityPatch",
+  "MemoryConsolidator",
+  "WorkflowPromptMemory",
 ] as const;
 
 const retiredOxian = [
@@ -66,12 +70,15 @@ const ignoredDirectories = new Set([
 
 function allowed(path: string): boolean {
   return path.startsWith("migration/v1/") ||
+    path.startsWith("migration/memory-v4/") ||
     path.startsWith("contracts/") ||
     path.endsWith(".test.ts") ||
     path === "server/v1-sse.ts" ||
     path === "docs/migration-v3.md" ||
     path === "docs/v3/downstream-migration.md" ||
     path === "docs/v3/feature-test-parity.md" ||
+    path === "docs/application-resilience-plan.md" ||
+    path === "docs/memory.md" ||
     path === "scripts/check-forbidden-symbols.ts";
 }
 

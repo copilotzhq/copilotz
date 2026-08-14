@@ -700,9 +700,12 @@ function executeToolProcessor(
         const attempt = await context.llmAttempts.get(attemptId);
         if (attempt) {
           const granted = new Set(attempt.availableToolIds);
-          availableTools = availableTools.filter((tool) =>
-            granted.has(tool.key)
-          );
+          // The durable attempt grant is the authority for internal workflows
+          // too. Internal tools do not need to leak into the agent's ordinary
+          // conversation capability declaration.
+          availableTools = (await toolCatalog.all(context.resources)).filter((
+            tool,
+          ) => granted.has(tool.key));
         }
       }
       const tool = availableTools.find((candidate) => candidate.key === toolId);
@@ -732,7 +735,7 @@ function executeToolProcessor(
           ...(attachments ? { attachments } : {}),
           historyVisibility: execution.historyVisibility ?? "public_status",
           durationMs: outcome.durationMs,
-        }, { operationKey: "tool:complete" });
+        }, { operationKey: "tool:complete", metadata: execution.metadata });
         return;
       }
       if (outcome.status === "deferred") return;
@@ -763,7 +766,7 @@ function executeToolProcessor(
           projectedOutput: projection,
           historyVisibility: execution.historyVisibility ?? "public_status",
           durationMs: outcome.durationMs,
-        }, { operationKey: "tool:cancel" });
+        }, { operationKey: "tool:cancel", metadata: execution.metadata });
         return;
       }
       await context.toolExecutions.fail({
@@ -777,7 +780,7 @@ function executeToolProcessor(
         projectedOutput: projection,
         historyVisibility: execution.historyVisibility ?? "public_status",
         durationMs: outcome.durationMs,
-      }, { operationKey: "tool:fail" });
+      }, { operationKey: "tool:fail", metadata: execution.metadata });
     },
   });
 }
@@ -844,6 +847,7 @@ function projectToolResultProcessor(
       let execution = await context.toolExecutions.get(event.subject.id);
       if (!execution || execution.status === "running") return;
       let metadata = workflowMetadata(execution.metadata);
+      if (metadata?.kind === "memory_consolidation") return;
       let projectedStatus = execution.status;
       let projectedContent: ContentSequence | PreparedContent | undefined;
 

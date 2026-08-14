@@ -1,189 +1,275 @@
 import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
-
 import {
-  applyContinuityPatch,
-  buildContinuityRetrievalTexts,
-  createEmptyContinuity,
-  extractVisibleBrainNodeIds,
-  parseMemoryConsolidationProposal,
+  buildMemoryConsolidationInstruction,
+  parseConsolidateMemoryInput,
   renderLongTermMemory,
   selectLongTermMemoryRange,
-  stableMemoryNodeId,
+  stableMemoryRecordId,
 } from "./consolidation.ts";
+import { CORE_MEMORY_KINDS, memorySourceKey } from "./ontology.ts";
 
-Deno.test("continuity patches preserve omitted fields and expose stable refs", () => {
-  const initial = applyContinuityPatch(createEmptyContinuity(), {
-    intent: {
-      challenge: {
-        value: "Preserve the user's goal across rollovers.",
-        sourceMessageIds: ["message-1"],
-      },
-    },
-    state: {
-      openQuestions: {
-        value: ["How should retrieval support continuity?"],
-        sourceMessageIds: ["message-1"],
-      },
-    },
+function options() {
+  return {
+    kinds: new Map(CORE_MEMORY_KINDS.map((kind) => [kind.id, kind])),
+    writableMemorySpaceIds: new Set(["space-a"]),
+    defaultWriteMemorySpaceId: "space-a",
+    allowedEvidenceSources: new Set([
+      memorySourceKey({ type: "message", id: "message-a" }),
+      memorySourceKey({
+        type: "collection_record",
+        collection: "sharedDocument",
+        id: "doc-a",
+        version: 7,
+      }),
+    ]),
+    visibleMemoryIds: new Set(["memory-old"]),
+    visibleNodeIds: new Set(["sharedDocument:doc-a"]),
+  };
+}
+
+Deno.test("consolidation validates forms, kinds, provenance, references, and temporal meaning", () => {
+  const parsed = parseConsolidateMemoryInput({
+    outcome: "changes",
+    entities: [{
+      localId: "project",
+      kind: "entity.project",
+      summary: "Compass is the active client project.",
+      name: "Compass",
+      aliases: ["Compass"],
+      attributes: { portfolio: "clients" },
+      sources: [{ type: "message", id: "message-a" }],
+    }],
+    assertions: [{
+      localId: "state",
+      kind: "assertion.state",
+      summary: "Compass is migrating its memory architecture.",
+      sources: [{
+        type: "collection_record",
+        collection: "sharedDocument",
+        id: "doc-a",
+        version: 7,
+      }],
+      subject: { localId: "project" },
+      predicate: "migration_status",
+      object: { value: "in_progress" },
+      epistemic: { basis: "observed", stance: "affirmed" },
+      temporal: { validFrom: "2026-08-14T00:00:00Z" },
+    }],
+    relations: [{
+      from: { localId: "state" },
+      type: "about",
+      to: { localId: "project" },
+    }],
+    lifecycle: [{
+      target: { memoryId: "memory-old" },
+      status: "superseded",
+      replacement: { localId: "state" },
+      sources: [{ type: "message", id: "message-a" }],
+    }],
+  }, options());
+
+  assertEquals(parsed.outcome, "changes");
+  assertEquals(parsed.entities?.[0].spaceId, "space-a");
+  assertEquals(parsed.entities?.[0].attributes, { portfolio: "clients" });
+  assertEquals(parsed.assertions?.[0].epistemic, {
+    basis: "observed",
+    stance: "affirmed",
   });
-  const updated = applyContinuityPatch(initial, {
-    state: {
-      openQuestions: { value: [], sourceMessageIds: ["message-2"] },
-    },
-  });
-  assertEquals(updated.intent.challenge, initial.intent.challenge);
-  assertEquals(updated.state.openQuestions, {
-    value: [],
-    sourceMessageIds: ["message-2"],
-  });
-  const rendered = renderLongTermMemory({
-    proposal: { continuityPatch: {}, nodes: [], relations: [] },
-    continuity: updated,
-    newBrainNodes: new Map(),
-    olderBrainNodes: [],
-    olderRelations: [],
-    maxContentEstimatedTokens: 2_000,
-  });
-  assertStringIncludes(
-    rendered,
-    "[continuity:intent.challenge] Challenge: Preserve the user's goal across rollovers.",
-  );
-  assertEquals(buildContinuityRetrievalTexts(updated), [
-    "challenge: Preserve the user's goal across rollovers.",
-  ]);
+  assertEquals(parsed.lifecycle?.[0].status, "superseded");
 });
 
-Deno.test("proposal validation constrains provenance, spaces, and older nodes", () => {
-  const parsed = parseMemoryConsolidationProposal(
-    JSON.stringify({
-      continuityPatch: {
-        state: {
-          currentState: {
-            value: "The migration is underway.",
-            sourceMessageIds: ["message-1", "foreign-message"],
-          },
-        },
-      },
-      nodes: [{
-        localId: "decision-1",
-        kind: "decision",
-        name: "Use events",
-        content: "The architecture uses durable semantic events.",
-        confidence: 2,
-        sourceMessageIds: ["message-1", "foreign-message"],
-        memorySpaceId: "read-only-space",
-        supersedesNodeId: "older-1",
-      }],
-      relations: [{
-        source: "decision-1",
-        type: "supersedes",
-        target: "older-1",
-      }],
-    }),
-    new Set(["message-1"]),
-    new Set(["older-1"]),
+Deno.test("no_changes is explicit and cannot conceal mutations", () => {
+  assertEquals(
+    parseConsolidateMemoryInput({ outcome: "no_changes" }, options()),
     {
-      writableMemorySpaceIds: new Set(["write-space"]),
-      defaultWriteMemorySpaceId: "write-space",
+      outcome: "no_changes",
     },
   );
-  assertEquals(parsed.nodes[0], {
-    localId: "decision-1",
-    kind: "decision",
-    name: "Use events",
-    content: "The architecture uses durable semantic events.",
-    sourceMessageIds: ["message-1"],
-    memorySpaceId: "write-space",
-    confidence: 1,
-    supersedesNodeId: "older-1",
-  });
-  assertEquals(parsed.relations, [{
-    source: "decision-1",
-    type: "supersedes",
-    target: "older-1",
-  }]);
-});
-
-Deno.test("proposal continuity requires current-range provenance", () => {
   assertThrows(
     () =>
-      parseMemoryConsolidationProposal(
-        JSON.stringify({
-          continuityPatch: {
-            state: {
-              currentState: {
-                value: "Unsupported",
-                sourceMessageIds: ["older-message"],
-              },
-            },
-          },
-          nodes: [],
-          relations: [],
-        }),
-        new Set(["message-1"]),
-        new Set(),
-        {
-          writableMemorySpaceIds: new Set(["space"]),
-          defaultWriteMemorySpaceId: "space",
-        },
-      ),
-    Error,
-    "Invalid long-term-memory continuity field",
+      parseConsolidateMemoryInput({
+        outcome: "no_changes",
+        entities: [{
+          localId: "hidden",
+          kind: "entity.project",
+          summary: "Hidden change",
+          name: "Hidden",
+          sources: [{ type: "message", id: "message-a" }],
+        }],
+      }, options()),
+    TypeError,
+    "cannot contain changes",
+  );
+  assertThrows(
+    () => parseConsolidateMemoryInput({ outcome: "changes" }, options()),
+    TypeError,
+    "at least one change",
   );
 });
 
-Deno.test("range selection preserves tool-result units and advances boundaries", () => {
-  const messages = [
-    { id: "boundary", senderType: "agent", senderId: "a", text: "old" },
-    { id: "user", senderType: "human", senderId: "u", text: "A".repeat(40) },
-    { id: "agent", senderType: "agent", senderId: "a", text: "B".repeat(40) },
-    { id: "tool", senderType: "tool", senderId: "t", text: "C".repeat(40) },
-  ];
+Deno.test("unauthorized, stale, and context-only sources are rejected", () => {
+  const entity = (sources: unknown[]) => ({
+    outcome: "changes",
+    entities: [{
+      localId: "project",
+      kind: "entity.project",
+      summary: "Compass project",
+      name: "Compass",
+      sources,
+    }],
+  });
+  assertThrows(
+    () =>
+      parseConsolidateMemoryInput(
+        entity([{ type: "message", id: "message-other" }]),
+        options(),
+      ),
+    TypeError,
+    "unauthorized",
+  );
+  assertThrows(
+    () =>
+      parseConsolidateMemoryInput(
+        entity([{
+          type: "collection_record",
+          collection: "sharedDocument",
+          id: "doc-a",
+          version: 8,
+        }]),
+        options(),
+      ),
+    TypeError,
+    "unauthorized",
+  );
+  assertThrows(
+    () =>
+      parseConsolidateMemoryInput(
+        entity([{ type: "external", id: "context-only" }]),
+        options(),
+      ),
+    TypeError,
+    "unauthorized",
+  );
+  assertThrows(
+    () =>
+      parseConsolidateMemoryInput({
+        ...entity([{ type: "message", id: "message-a" }]),
+        entities: [{
+          ...entity([{ type: "message", id: "message-a" }]).entities[0],
+          spaceId: "space-read-only",
+        }],
+      }, options()),
+    TypeError,
+    "not writable",
+  );
+});
+
+Deno.test("duplicate local IDs and invisible references are rejected before mutation", () => {
+  assertThrows(
+    () =>
+      parseConsolidateMemoryInput({
+        outcome: "changes",
+        entities: ["a", "b"].map((name) => ({
+          localId: "duplicate",
+          kind: "entity.project",
+          summary: name,
+          name,
+          sources: [{ type: "message", id: "message-a" }],
+        })),
+      }, options()),
+    TypeError,
+    "unique",
+  );
+  assertThrows(
+    () =>
+      parseConsolidateMemoryInput({
+        outcome: "changes",
+        assertions: [{
+          localId: "assertion",
+          kind: "assertion.state",
+          summary: "Invisible target",
+          sources: [{ type: "message", id: "message-a" }],
+          subject: { memoryId: "not-visible" },
+          predicate: "state",
+          object: { value: "unknown" },
+          epistemic: { basis: "reported", stance: "tentative" },
+        }],
+      }, options()),
+    TypeError,
+    "not visible",
+  );
+});
+
+Deno.test("range reservation retains tool-result units and remains deterministic", () => {
   const selected = selectLongTermMemoryRange({
-    messages,
-    triggerMessageId: "tool",
-    previousBoundaryMessageId: "boundary",
+    messages: [
+      { id: "m0", senderType: "agent", senderId: "a", text: "boundary" },
+      { id: "m1", senderType: "human", senderId: "u", text: "one two three" },
+      { id: "m2", senderType: "agent", senderId: "a", text: "four five six" },
+      { id: "m3", senderType: "tool", senderId: "t", text: "seven eight" },
+      { id: "m4", senderType: "human", senderId: "u", text: "nine ten" },
+    ],
+    triggerMessageId: "m4",
+    previousBoundaryMessageId: "m0",
     triggerEstimatedTokens: 1,
     retainRecentEstimatedTokens: 1,
   });
-  assertEquals(selected?.messages.map((message) => message.id), ["user"]);
-  assertEquals(selected?.retainedMessageCount, 2);
-  assertEquals(selected?.sourceStartMessageId, "user");
-  assertEquals(selected?.sourceEndMessageId, "user");
+  assertEquals(selected?.sourceStartMessageId, "m1");
+  assertEquals(selected?.sourceEndMessageId, "m3");
 });
 
-Deno.test("rendering keeps blocks whole and stable IDs are replay-safe", () => {
-  const oversized = "OVERSIZED_MEMORY_BLOCK_".repeat(20);
-  const continuity = applyContinuityPatch(createEmptyContinuity(), {
-    state: {
-      currentState: {
-        value: oversized,
-        sourceMessageIds: ["message-1"],
-      },
-    },
+Deno.test("derived continuity is rendered from ordinary records", () => {
+  const text = renderLongTermMemory({
+    records: [{
+      id: "objective",
+      memorySpaceId: "space-a",
+      form: "intent",
+      kind: "intent.objective",
+      summary: "Ship the event-native memory refactor.",
+      status: "active",
+      data: {},
+    }, {
+      id: "question",
+      memorySpaceId: "space-a",
+      form: "inquiry",
+      kind: "inquiry.question",
+      summary: "Will the migration preserve provenance?",
+      status: "open",
+      data: {},
+    }],
+    relations: [{ sourceId: "question", type: "about", targetId: "objective" }],
+    maxContentEstimatedTokens: 2_000,
   });
-  const rendered = renderLongTermMemory({
-    proposal: { continuityPatch: {}, nodes: [], relations: [] },
-    continuity,
-    newBrainNodes: new Map(),
-    olderBrainNodes: [],
-    olderRelations: [],
-    maxContentEstimatedTokens: 30,
-  });
-  assertEquals(rendered.includes("OVERSIZED_MEMORY_BLOCK_"), false);
+  assertStringIncludes(text, "### Objectives and purpose");
+  assertStringIncludes(text, "Ship the event-native memory refactor");
+  assertStringIncludes(text, "### Open inquiries");
+  assertStringIncludes(text, "--about-->");
   assertEquals(
-    stableMemoryNodeId("checkpoint-1", "decision one"),
-    "checkpoint-1:brain:decision%20one",
+    stableMemoryRecordId("checkpoint", "a/b"),
+    "checkpoint:record:a%2Fb",
   );
 });
 
-Deno.test("visible node IDs are extracted without duplicates", () => {
-  assertEquals(
-    extractVisibleBrainNodeIds([
-      "- [id:brain-1] [fact] One",
-      "- [id:brain-2] [fact] Two",
-      "- [id:brain-1] [fact] One again",
-    ].join("\n")),
-    ["brain-1", "brain-2"],
-  );
+Deno.test("maintenance instruction names the only valid action and registered taxonomy", () => {
+  const instruction = buildMemoryConsolidationInstruction({
+    spaces: [{
+      id: "space-a",
+      name: "A",
+      scopeType: "thread",
+      access: "read_write",
+      defaultWrite: true,
+    }],
+    sourceMessages: [{
+      id: "message-a",
+      senderType: "human",
+      senderId: "user",
+      text: "remember this",
+    }],
+    kinds: CORE_MEMORY_KINDS,
+    previousRecords: [],
+    context: [],
+  });
+  assertStringIncludes(instruction, "Call consolidate_memory exactly once");
+  assertStringIncludes(instruction, "no_changes");
+  assertStringIncludes(instruction, "assertion.state");
 });

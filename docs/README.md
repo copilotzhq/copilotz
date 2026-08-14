@@ -11,11 +11,14 @@ attachments.
 3. [Plugins and processors](plugins-and-processors.md)
 4. [Agent capabilities](agent-capabilities.md)
 5. [Skills](skills.md)
-6. [API and package reference](api.md)
+6. [Semantic memory and application context](memory.md)
+7. [API and package reference](api.md)
 
 ## Runtime and persistence
 
 - [Events, deliveries, and recovery](events-deliveries-recovery.md)
+- [Application resilience and memory refactor plan](application-resilience-plan.md)
+- [Semantic memory and application context](memory.md)
 - [Canonical content and assets](content-assets.md)
 - [Embedding and hypervisors](embedding-and-hypervisors.md)
 - [Runtime capability adapters](runtime-adapters.md)

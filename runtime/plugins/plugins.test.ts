@@ -123,6 +123,48 @@ Deno.test("plugin composition precedence is core, declaration order, then applic
   });
 });
 
+Deno.test("context and memory-kind resources follow the same stable-ID override rules", async () => {
+  const contextA = {
+    id: "workspace",
+    type: "context",
+    purposes: ["conversation"],
+    contribute: () => null,
+  };
+  const contextB = { ...contextA, purposes: ["memory_consolidation"] };
+  const kindA = {
+    id: "acme.signal",
+    form: "assertion",
+    description: "first",
+  };
+  const kindB = { ...kindA, description: "replacement" };
+  const resourcePlugin = (id: string, context: object, kind: object) =>
+    definePlugin({
+      manifest: {
+        id,
+        version: "1.0.0",
+        provides: { context: ["workspace"], memoryKinds: ["acme.signal"] },
+      },
+      resources: { context: [context], memoryKinds: [kind] },
+    });
+  const registry = await createPluginRegistry({
+    plugins: [
+      resourcePlugin("first", contextA, kindA),
+      resourcePlugin("second", contextB, kindB),
+    ],
+  });
+
+  assertEquals(registry.require("context", "workspace"), contextB);
+  assertEquals(
+    registry.require<{ description: string }>("memoryKinds", "acme.signal")
+      .description,
+    "replacement",
+  );
+  assertEquals(
+    registry.origin("memoryKinds", "acme.signal")?.pluginId,
+    "second",
+  );
+});
+
 Deno.test("resolver-loaded plugins support named imports and presets", async () => {
   const remote = plugin({
     id: "acme.remote",

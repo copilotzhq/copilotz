@@ -38,6 +38,10 @@ import {
   createKnowledgeRepository,
   type KnowledgeRepository,
 } from "../knowledge/index.ts";
+import {
+  createMemoryConsolidationRepository,
+  type MemoryConsolidationRepository,
+} from "../memory/repository.ts";
 import type { PluginRegistry } from "../plugins/index.ts";
 import {
   createScheduledJobRepository,
@@ -58,6 +62,7 @@ export type DatabaseScopeCapabilities = Readonly<{
   relations: DomainRelationRepository;
   schedules: ScheduledJobRepository;
   knowledge: KnowledgeRepository;
+  memory: MemoryConsolidationRepository;
 }>;
 
 export type DatabaseScopeRuntime = Readonly<{
@@ -182,6 +187,12 @@ export function createDatabaseScope(
     createId: engine.createId,
     now: options.now,
   });
+  const memory = createMemoryConsolidationRepository({
+    coordinator,
+    eventStore: store,
+    assets,
+    validate: engine.validateCollection,
+  });
   const capabilities: DatabaseScopeCapabilities = Object.freeze({
     assets,
     conversation,
@@ -191,6 +202,7 @@ export function createDatabaseScope(
     relations,
     schedules,
     knowledge,
+    memory,
   });
   const attachmentRuntime = createAttachmentRuntime({
     databaseSchema,

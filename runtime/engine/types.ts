@@ -93,6 +93,10 @@ import type {
   KnowledgeRepository,
   ScopedKnowledge,
 } from "../knowledge/types.ts";
+import type {
+  MemoryConsolidationRepository,
+  ScopedMemoryConsolidation,
+} from "../memory/repository.ts";
 
 export type ScopedMutationOptions = Readonly<{
   operationKey?: string;
@@ -317,6 +321,8 @@ export type CopilotzProcessorCapabilities = Readonly<{
   relations: ScopedRelations;
   schedules: ScopedScheduledJobs;
   knowledge: ScopedKnowledge;
+  /** Internal typed aggregate used by semantic-memory consolidation. */
+  memory: ScopedMemoryConsolidation;
 }>;
 
 export type CopilotzProcessorContext =
@@ -531,6 +537,7 @@ export type CreateCopilotzProcessorCapabilitiesOptions = Readonly<{
   relations: DomainRelationRepository;
   schedules: ScheduledJobRepository;
   knowledge: KnowledgeRepository;
+  memory: MemoryConsolidationRepository;
   eventHub: CopilotzEventHub;
   publishEvent?: (event: CopilotzEvent) => Promise<void>;
   eventStore: Pick<EventStore, "listEvents">;

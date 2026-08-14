@@ -120,9 +120,9 @@ Deno.test("Zendesk channel preserves webhook identity, media, actions, and nativ
   const db = await createTestDatabase({ url: ":memory:" });
   const fake = fakeTransport();
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
+    database: db,
     namespace: NAMESPACE,
-    schema: "copilotz_v3_zendesk",
+    databaseSchema: "copilotz_v3_zendesk",
     core: false,
     plugins: [
       replyPlugin(),

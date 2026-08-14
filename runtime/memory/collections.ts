@@ -3,8 +3,8 @@ import type { CollectionDefinition } from "../domain/index.ts";
 
 const MEMORY_EDGE = Object.freeze({
   usesSpace: "uses_memory_space",
-  hasNode: "has_brain_node",
-  includesNode: "includes_brain_node",
+  hasRecord: "has_memory_record",
+  includesRecord: "includes_memory_record",
 });
 
 const memorySpaceSchema = {
@@ -44,10 +44,10 @@ export const memorySpaceCollection: CollectionDefinition<
       "threadId",
       MEMORY_EDGE.usesSpace,
     ),
-    brainNodes: relation.hasMany(
-      "brain_node",
+    records: relation.hasMany(
+      "memory_record",
       "memorySpaceId",
-      MEMORY_EDGE.hasNode,
+      MEMORY_EDGE.hasRecord,
     ),
   },
 });
@@ -127,6 +127,8 @@ const longTermMemorySchema = {
     contentHash: { type: ["string", "null"] },
     tokenEstimate: { type: ["number", "null"] },
     error: { type: ["object", "null"] },
+    contextSnapshotContent: { type: ["array", "null"] },
+    contextSnapshot: { type: ["array", "null"] },
     metadata: { type: ["object", "null"] },
   },
   required: [
@@ -159,89 +161,93 @@ export const longTermMemoryCollection: CollectionDefinition<
       "threadId",
       "has_long_term_memory",
     ),
-    brainNodes: relation.hasMany(
-      "brain_node",
-      "checkpointId",
-      MEMORY_EDGE.includesNode,
+    memoryRecords: relation.hasMany(
+      "memory_record",
+      "consolidationId",
+      MEMORY_EDGE.includesRecord,
     ),
   },
-  content: { fields: ["content"] },
+  content: { fields: ["content", "contextSnapshotContent"] },
 });
 
-const brainNodeSchema = {
+const memoryRecordSchema = {
   type: "object",
+  additionalProperties: false,
   properties: {
     id: { type: "string" },
     memorySpaceId: { type: "string" },
-    checkpointId: { type: "string" },
+    consolidationId: { type: "string" },
     createdByAgentId: { type: "string" },
     originThreadId: { type: "string" },
-    layer: {
-      type: "string",
-      enum: ["knowledge", "working"],
-    },
-    status: {
-      type: "string",
-      enum: ["active", "superseded", "archived"],
-    },
-    kind: {
+    form: {
       type: "string",
       enum: [
         "entity",
-        "fact",
-        "claim",
-        "decision",
-        "preference",
-        "task",
-        "event",
-        "constraint",
-        "challenge",
-        "purpose",
-        "desired_outcome",
-        "success_criterion",
-        "decision_criterion",
-        "current_state",
-        "active_approach",
-        "risk",
-        "open_question",
-        "next_action",
+        "assertion",
+        "occurrence",
+        "intent",
+        "inquiry",
+        "procedure",
       ],
     },
-    name: { type: "string" },
-    content: { type: "string" },
-    confidence: { type: ["number", "null"] },
-    sourceMessageIds: { type: "array", items: { type: "string" } },
-    sourceField: { type: ["string", "null"] },
+    status: {
+      type: "string",
+      enum: [
+        "active",
+        "merged",
+        "archived",
+        "current",
+        "superseded",
+        "retracted",
+        "disputed",
+        "scheduled",
+        "happened",
+        "cancelled",
+        "proposed",
+        "completed",
+        "open",
+        "answered",
+        "obsolete",
+        "deprecated",
+      ],
+    },
+    kind: { type: "string" },
+    summary: { type: "string" },
+    content: { type: ["array", "null"] },
+    temporal: { type: "object" },
+    epistemic: { type: ["object", "null"] },
+    provenance: { type: "object" },
+    data: { type: "object" },
     embedding: { type: ["array", "null"] },
-    supersedesNodeId: { type: ["string", "null"] },
     metadata: { type: ["object", "null"] },
   },
   required: [
     "memorySpaceId",
-    "checkpointId",
+    "consolidationId",
     "createdByAgentId",
     "originThreadId",
-    "layer",
+    "form",
     "status",
     "kind",
-    "name",
-    "content",
-    "sourceMessageIds",
+    "summary",
+    "temporal",
+    "provenance",
+    "data",
   ],
 } as const;
 
-export const brainNodeCollection: CollectionDefinition<
-  typeof brainNodeSchema
+export const memoryRecordCollection: CollectionDefinition<
+  typeof memoryRecordSchema
 > = defineCollection({
-  name: "brain_node",
-  schema: brainNodeSchema,
+  name: "memory_record",
+  schema: memoryRecordSchema,
   indexes: [
     "memorySpaceId",
-    "checkpointId",
+    "consolidationId",
     "createdByAgentId",
     "originThreadId",
     ["memorySpaceId", "createdByAgentId"],
-    ["layer", "kind"],
+    ["form", "kind"],
     "status",
     "kind",
   ],
@@ -249,13 +255,14 @@ export const brainNodeCollection: CollectionDefinition<
     memorySpace: relation.belongsTo(
       "memory_space",
       "memorySpaceId",
-      MEMORY_EDGE.hasNode,
+      MEMORY_EDGE.hasRecord,
     ),
     checkpoint: relation.belongsTo(
       "long_term_memory",
-      "checkpointId",
-      MEMORY_EDGE.includesNode,
+      "consolidationId",
+      MEMORY_EDGE.includesRecord,
     ),
   },
-  search: { enabled: true, fields: ["name", "content"] },
+  search: { enabled: true, fields: ["summary"] },
+  content: { fields: ["content"] },
 });

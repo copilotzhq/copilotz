@@ -9,13 +9,16 @@ import type {
   DeliveryDispatcher,
   ExecutionWorkTarget,
 } from "../execution/index.ts";
-import { type CopilotzEvent, createCopilotzEventHub } from "../events/index.ts";
 import { createEventNativeApp } from "../../server/event-native.ts";
+import type { CreateEventNativeAppOptions } from "../../server/event-native.ts";
 import {
   createEventNativeFetchHandler,
   type CreateEventNativeFetchHandlerOptions,
 } from "../../server/fetch.ts";
-import { createCopilotzApplication } from "./application.ts";
+import {
+  createCopilotzApplication,
+  observeApplicationPersistence,
+} from "./application.ts";
 import type {
   CopilotzApplication,
   CreateCopilotzApplicationOptions,
@@ -36,7 +39,7 @@ export type CopilotzGatewayHttpOptions = CreateEventNativeFetchHandlerOptions;
 export type CreateCopilotzGatewayOptions =
   & Omit<
     CreateCopilotzApplicationOptions,
-    "session" | "closeSession" | "engine"
+    "database" | "engine"
   >
   & CopilotzPersistenceOptions
   & Readonly<{
@@ -53,6 +56,9 @@ export type CreateCopilotzGatewayOptions =
     hypervisorConfig?: HypervisorOptions["config"];
     engine?: GatewayEngineOptions;
     http?: CopilotzGatewayHttpOptions;
+    /** Authorizes and resolves the physical database schema for one request. */
+    resolveDatabaseSchema?:
+      CreateEventNativeAppOptions["resolveDatabaseSchema"];
   }>;
 
 export type CopilotzGateway =
@@ -73,22 +79,6 @@ function uniqueTransport(): HypervisorTransport {
       topic: `copilotz.gateway.${crypto.randomUUID()}`,
     }),
   });
-}
-
-function rememberDurable(
-  event: CopilotzEvent,
-  seen: Set<string>,
-  order: string[],
-): boolean {
-  if (!event.durable) return true;
-  if (seen.has(event.id)) return false;
-  seen.add(event.id);
-  order.push(event.id);
-  if (order.length > 10_000) {
-    const removed = order.shift();
-    if (removed) seen.delete(removed);
-  }
-  return true;
 }
 
 async function settleAll(
@@ -124,7 +114,6 @@ export async function createCopilotzGateway(
   }
 
   const persistence = await openCopilotzPersistence(options);
-  const eventHub = createCopilotzEventHub();
   const transports = options.dispatcher
     ? Object.freeze([])
     : Object.freeze([...(options.transports ?? [uniqueTransport()])]);
@@ -144,34 +133,24 @@ export async function createCopilotzGateway(
     fallback: (request) => fetchApplication(request),
   }, lifecycle);
   const dispatcher = options.dispatcher ?? hypervisor!;
-  const seenDurable = new Set<string>();
-  const durableOrder: string[] = [];
   let application: InternalCopilotzApplication | undefined;
-
-  const onOutputEvent = async (event: CopilotzEvent): Promise<void> => {
-    if (!rememberDurable(event, seenDurable, durableOrder)) return;
-    await eventHub.publish(event);
-    await options.engine?.publish?.(event);
-  };
 
   try {
     application = await createCopilotzApplication({
       namespace: options.namespace,
-      schema: options.schema,
+      databaseSchema: options.databaseSchema,
       core: options.core,
       plugins: options.plugins,
       resources: options.resources,
       pluginResolver: options.pluginResolver,
       toolCatalog: options.toolCatalog,
-      session: persistence.session,
+      database: persistence.database,
       engine: {
         ...(options.engine ?? {}),
-        eventHub,
         execution: {
           dispatcher,
           target: options.target,
           workloadTargets: options.workloadTargets,
-          onOutputEvent,
         },
       },
     });
@@ -182,23 +161,38 @@ export async function createCopilotzGateway(
     ], "Copilotz Gateway initialization cleanup failed.").catch(() =>
       undefined
     );
-    eventHub.close(error);
     throw error;
   }
 
-  const native = createEventNativeApp(application);
-  fetchApplication = createEventNativeFetchHandler(native, {
-    basePath: "/v3",
-    ...(options.http ?? {}),
+  const native = createEventNativeApp(application, {
+    resolveDatabaseSchema: options.resolveDatabaseSchema,
   });
+  fetchApplication = createEventNativeFetchHandler(
+    Object.freeze({
+      resources: native.resources,
+      async handle(request) {
+        await persistence.recovery?.admit();
+        return await native.handle(request);
+      },
+    }),
+    {
+      basePath: "/v3",
+      ...(options.http ?? {}),
+    },
+  );
+  const stopObservingPersistence = observeApplicationPersistence(
+    persistence,
+    application,
+  );
   let shutdownTask: Promise<void> | undefined;
   const shutdown = (reason = "copilotz_gateway_shutdown"): Promise<void> => {
     if (shutdownTask) return shutdownTask;
+    stopObservingPersistence();
     shutdownTask = settleAll([
       () => application!.shutdown(reason),
       () => hypervisor?.shutdown(reason),
       () => persistence.close(reason),
-    ], "Copilotz Gateway shutdown failed.").finally(() => eventHub.close());
+    ], "Copilotz Gateway shutdown failed.");
     shutdownTask.catch(() => undefined);
     return shutdownTask;
   };
@@ -213,11 +207,27 @@ export async function createCopilotzGateway(
     ...publicApplication,
     config: Object.freeze({
       ...application.config,
-      sessionOwnership: persistence.ownership,
+      databaseOwnership: persistence.ownership,
     }),
     role: "gateway",
     transports,
     ...(hypervisor ? { hypervisor } : {}),
+    async databaseScope(databaseSchema: string) {
+      await persistence.recovery?.admit();
+      return await application!.databaseScope(databaseSchema);
+    },
+    async connect(input: Parameters<CopilotzApplication["connect"]>[0]) {
+      await persistence.recovery?.admit();
+      return await application!.connect(input);
+    },
+    async run(input: Parameters<CopilotzApplication["run"]>[0]) {
+      await persistence.recovery?.admit();
+      return await application!.run(input);
+    },
+    async goal(input: Parameters<CopilotzApplication["goal"]>[0]) {
+      await persistence.recovery?.admit();
+      return await application!.goal(input);
+    },
     fetch: (request: Request) => fetchApplication(request),
     shutdown,
   });

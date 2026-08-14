@@ -373,6 +373,13 @@ export function createCopilotzProcessorCapabilities(
           threadId,
           toolCallId,
         ),
+      getByMessageToolCallId: (threadId, messageId, toolCallId) =>
+        options.toolExecutions.getByMessageToolCallId(
+          namespace,
+          threadId,
+          messageId,
+          toolCallId,
+        ),
       list: (threadId, listOptions) =>
         options.toolExecutions.list(namespace, threadId, listOptions),
     });
@@ -520,6 +527,25 @@ export function createCopilotzProcessorCapabilities(
     search: (input) => options.knowledge.search({ ...input, namespace }),
   });
 
+  const memory: CopilotzProcessorCapabilities["memory"] = Object.freeze({
+    async commit(input, mutationOptions) {
+      const committed = await options.memory.commit({
+        ...input,
+        namespace,
+        identity: mutation(
+          `memory.consolidation:${input.checkpointId}`,
+          mutationOptions,
+        ),
+      });
+      if (!committed.value) {
+        throw new Error(
+          `Memory checkpoint '${input.checkpointId}' committed without a result.`,
+        );
+      }
+      return committed.value;
+    },
+  });
+
   return Object.freeze({
     namespace,
     events,
@@ -535,5 +561,6 @@ export function createCopilotzProcessorCapabilities(
     relations,
     schedules,
     knowledge,
+    memory,
   });
 }

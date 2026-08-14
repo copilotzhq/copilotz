@@ -15,8 +15,12 @@ Common facts include:
 - `tool_execution.created`, `tool_execution.completed`, `tool_execution.failed`
 - `<collection>.created`, `<collection>.updated`, `<collection>.deleted`
 
-Ephemeral events such as `text.delta`, `reasoning.delta`, `audio.delta`, and
-`tool_call.delta` are published live and never inserted into the events table.
+Ephemeral events such as `text.delta`, `reasoning.delta`, `audio.delta`,
+`tool_call.delta`, and `tool_output.delta` are published live and never inserted
+into the events table. `tool_output.delta` carries ordered logical channels such
+as `stdout`, `stderr`, `progress`, and `result`; the corresponding
+`tool_execution.*` durable events own lifecycle settlement, while the final tool
+result remains asset-backed durable content.
 
 ## Durable deliveries
 
@@ -60,8 +64,12 @@ scope again in case that event created more work.
 ```ts
 await app.recover({ namespace: "acme", limit: 100 });
 
+// All physical database scopes already opened by this application:
+await app.recoverAll({ limit: 100 });
+
 const result = await app.maintenance({
   namespace: "acme",
+  limit: 100,
   retentionMs: 7 * 24 * 60 * 60 * 1000,
 });
 
@@ -76,6 +84,13 @@ await app.deliveries.retry("acme", dead[0].id);
 
 Never compact pending, leased, retrying, or dead-lettered work. Long-lived
 engines should schedule periodic maintenance; short-lived deployments can call
-it opportunistically.
+it opportunistically. Each maintenance call bounds both recovery and each
+compaction phase with `limit` (default 100, capped at 1,000), so retention work
+is incremental and does not turn a periodic tick into an unbounded database
+transaction.
 
 Detailed contract: [events and deliveries](v3/events-and-deliveries.md).
+
+Copilotz-owned database connections also trigger `recoverAll()` automatically
+after a successful reconnect. This rediscovers durable obligations; it never
+replays the in-flight operation that detected the connection loss.

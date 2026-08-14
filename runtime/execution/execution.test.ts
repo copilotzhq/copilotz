@@ -305,6 +305,7 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
     assertEquals(captured.length, 1);
     assertEquals(captured[0], {
       schema: "copilotz.delivery.dispatch.v1",
+      databaseSchema: fixture.store.databaseSchema,
       deliveryId: committed.deliveries[0].id,
       eventId: committed.event.id,
       consumerId: "processor:messages.observe",

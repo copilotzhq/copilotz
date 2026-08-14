@@ -8,6 +8,8 @@ import {
   createEventCoordinator,
   createEventStore,
   quoteEventIdentifier,
+  type SqlExecutor,
+  type SqlQueryResult,
   type SqlSession,
 } from "../../runtime/events/index.ts";
 import {
@@ -55,6 +57,71 @@ async function createFixture(): Promise<{
   const db = await createTestDatabase({ url: ":memory:" });
   await provisionV1FixtureSchema(db.session, "public");
   return { db, session: db.session };
+}
+
+function emulatePostgresTimestampDecoding(session: SqlSession): SqlSession {
+  let nodePageQueries = 0;
+  const wrap = (executor: SqlExecutor): SqlExecutor => {
+    const query = async <
+      TRow extends Record<string, unknown> = Record<string, unknown>,
+    >(
+      sql: string,
+      params?: unknown[],
+    ): Promise<SqlQueryResult<TRow>> => {
+      const result = await executor.query<TRow>(sql, params);
+      const isNodePage = sql.includes(
+        "source_type, source_id, created_at, updated_at",
+      ) && sql.includes("ORDER BY created_at, id");
+      if (!isNodePage) return result;
+      nodePageQueries += 1;
+      if (nodePageQueries > 30) {
+        throw new Error("Legacy node pagination did not advance.");
+      }
+      return {
+        ...result,
+        rows: result.rows.map((row) => ({
+          ...row,
+          created_at: new Date(String(row.created_at)),
+          updated_at: new Date(String(row.updated_at)),
+        })) as TRow[],
+      };
+    };
+    return { query };
+  };
+  const executor = wrap(session);
+  return {
+    query: executor.query,
+    transaction: (operation) =>
+      session.transaction((transaction) => operation(wrap(transaction))),
+  };
+}
+
+function observeLlmAttemptPageSizes(
+  session: SqlSession,
+  pageSizes: number[],
+): SqlSession {
+  const wrap = (executor: SqlExecutor): SqlExecutor => ({
+    query: async <
+      TRow extends Record<string, unknown> = Record<string, unknown>,
+    >(
+      sql: string,
+      params?: unknown[],
+    ): Promise<SqlQueryResult<TRow>> => {
+      if (
+        sql.includes("type = ANY($1::text[])") &&
+        Array.isArray(params?.[0]) && params[0].includes("llm_attempt")
+      ) {
+        pageSizes.push(Number(params[3]));
+      }
+      return await executor.query<TRow>(sql, params);
+    },
+  });
+  const executor = wrap(session);
+  return {
+    query: executor.query,
+    transaction: (operation) =>
+      session.transaction((transaction) => operation(wrap(transaction))),
+  };
 }
 
 async function createV3Readers(session: SqlSession, schema: string) {
@@ -219,7 +286,15 @@ async function seedLegacyTenant(
         senderType: "user",
         reasoning: "legacy reasoning",
         toolCalls: [{ id: `call-${suffix}`, name: "lookup" }],
-        metadata: { channel: "legacy-web" },
+        metadata: {
+          channel: "legacy-web",
+          attachments: [{
+            kind: "image",
+            mimeType: "image/png",
+            fileName: "legacy.png",
+            assetRef: `asset://asset-${suffix}`,
+          }],
+        },
       },
       sourceType: "message",
       sourceId: `message-${suffix}`,
@@ -459,6 +534,39 @@ async function seedLegacyTenant(
   }
 }
 
+async function seedRepeatedLegacyToolCall(
+  session: SqlSession,
+  schema: string,
+  suffix: string,
+): Promise<string> {
+  const id = `tool-repeated-${suffix}`;
+  await session.query(
+    `INSERT INTO ${q(schema, "nodes")} (
+       "id", "namespace", "type", "name", "content", "data",
+       "source_type", "source_id", "created_at", "updated_at"
+     ) VALUES (
+       $1, $2, 'tool_execution', 'Repeated provider call', NULL, $3::jsonb,
+       'tool_execution', $1, $4::timestamptz, $4::timestamptz
+     )`,
+    [
+      id,
+      `tenant-${suffix}`,
+      JSON.stringify({
+        threadId: `thread-root-${suffix}`,
+        messageId: `message-${suffix}`,
+        agentId: `agent-${suffix}`,
+        toolCallId: `call-${suffix}`,
+        tool: { id: "lookup-retry", name: "Lookup retry" },
+        args: { q: "retry" },
+        status: "failed",
+        error: { message: "legacy retry failed" },
+      }),
+      "2026-01-01T00:00:05.000Z",
+    ],
+  );
+  return id;
+}
+
 Deno.test("A28 upgrade refuses active queue work and live thread leases", async () => {
   const { db, session } = await createFixture();
   try {
@@ -510,7 +618,7 @@ Deno.test("A28 upgrade refuses active queue work and live thread leases", async 
   }
 });
 
-Deno.test("A28 upgrade rolls back when legacy asset bytes cannot be resolved", async () => {
+Deno.test("A28 upgrade rolls back when legacy assets have no resolver", async () => {
   const { db, session } = await createFixture();
   const schema = uniqueSchema("asset_rollback");
   try {
@@ -541,6 +649,233 @@ Deno.test("A28 upgrade rolls back when legacy asset bytes cannot be resolved", a
     );
     assert(
       !legacyColumns.rows.some((row) => row.column_name === "position"),
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("A28 upgrade preserves unavailable assets and their message references", async () => {
+  const { db, session } = await createFixture();
+  const schema = uniqueSchema("asset_unavailable");
+  try {
+    await provisionV1FixtureSchema(session, schema);
+    await seedLegacyTenant(session, schema, "unavailable");
+    await upgradeV1Schema(session, schema, {
+      resolveLegacyAsset: () => ({
+        state: "failed",
+        reason: "legacy filesystem body is unavailable",
+        mediaType: "application/json",
+      }),
+    });
+
+    const asset = await session.query<{ data: Record<string, unknown> }>(
+      `SELECT data FROM ${q(schema, "nodes")} WHERE id = $1`,
+      ["asset-unavailable"],
+    );
+    assertEquals(asset.rows[0]?.data.state, "failed");
+    assertEquals(asset.rows[0]?.data.mediaType, "application/json");
+    assertEquals(asset.rows[0]?.data.byteLength, 4);
+    assertEquals(asset.rows[0]?.data.body, "null");
+    assertEquals(
+      (asset.rows[0]?.data.location as Record<string, unknown>).encoding,
+      "json",
+    );
+    assertEquals(
+      (asset.rows[0]?.data.metadata as Record<string, unknown>)
+        .migrationUnavailable,
+      {
+        code: "legacy_asset_unavailable",
+        reason: "legacy filesystem body is unavailable",
+      },
+    );
+
+    const readers = await createV3Readers(session, schema);
+    try {
+      const message = await readers.conversation.getMessage(
+        "tenant-unavailable",
+        "message-unavailable",
+      );
+      assertEquals(
+        message?.content.map((ref) => [ref.role, ref.assetId]),
+        [
+          ["body", message?.content[0]?.assetId],
+          ["attachment", "asset-unavailable"],
+          ["reasoning", message?.content[2]?.assetId],
+          ["llm.tool_calls", message?.content[3]?.assetId],
+        ],
+      );
+      assertEquals(
+        (await readers.assets.get(
+          "tenant-unavailable",
+          "asset-unavailable",
+        ))?.state,
+        "failed",
+      );
+      await assertRejects(
+        () =>
+          readers.assets.read(
+            "tenant-unavailable",
+            "asset-unavailable",
+          ),
+        Error,
+        "not ready",
+      );
+    } finally {
+      await readers.executor.shutdown();
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("A28 upgrade preserves non-UTF-8 legacy text assets as bytes", async () => {
+  const { db, session } = await createFixture();
+  const schema = uniqueSchema("asset_non_utf8");
+  const bytes = new Uint8Array([0xff, 0xfe, 0x2c, 0x61]);
+  try {
+    await provisionV1FixtureSchema(session, schema);
+    await seedLegacyTenant(session, schema, "asset-non-utf8");
+    await upgradeV1Schema(session, schema, {
+      resolveLegacyAsset: () => ({
+        body: bytes,
+        mediaType: "text/csv",
+      }),
+    });
+
+    const stored = await session.query<{ data: Record<string, unknown> }>(
+      `SELECT data FROM ${q(schema, "nodes")} WHERE id = $1`,
+      ["asset-asset-non-utf8"],
+    );
+    assertEquals(
+      (stored.rows[0]?.data.location as Record<string, unknown>).encoding,
+      "base64",
+    );
+
+    const readers = await createV3Readers(session, schema);
+    try {
+      const asset = await readers.assets.read(
+        "tenant-asset-non-utf8",
+        "asset-asset-non-utf8",
+      );
+      assertEquals(asset.asset.mediaType, "text/csv");
+      assertEquals(asset.bytes, bytes);
+    } finally {
+      await readers.executor.shutdown();
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("A28 upgrade processes legacy nodes in bounded batches", async () => {
+  const { db, session } = await createFixture();
+  const schema = uniqueSchema("node_batches");
+  try {
+    await provisionV1FixtureSchema(session, schema);
+    await session.query(
+      `INSERT INTO ${q(schema, "nodes")} (
+         id, namespace, type, name, content, data,
+         source_type, source_id, created_at, updated_at
+       )
+       SELECT
+         'batch-asset-' || value,
+         'tenant-batches',
+         'asset',
+         'Batch asset',
+         NULL,
+         jsonb_build_object(
+           'ref', 'asset://batch-' || value,
+           'mime', 'application/octet-stream'
+         ),
+         'asset',
+         'batch-asset-' || value,
+         '2026-01-01T00:00:00.000Z'::timestamptz +
+           value * INTERVAL '1 microsecond',
+         '2026-01-01T00:00:00.000Z'::timestamptz +
+           value * INTERVAL '1 microsecond'
+       FROM generate_series(1, 205) AS value`,
+    );
+
+    let resolved = 0;
+    await upgradeV1Schema(emulatePostgresTimestampDecoding(session), schema, {
+      resolveLegacyAsset: () => {
+        resolved += 1;
+        return { body: new Uint8Array([resolved % 255]) };
+      },
+    });
+
+    const assets = await session.query<{ count: string | number }>(
+      `SELECT COUNT(*) AS count
+         FROM ${q(schema, "nodes")}
+        WHERE type = 'asset' AND data ->> 'state' = 'ready'`,
+    );
+    assertEquals(resolved, 205);
+    assertEquals(Number(assets.rows[0]?.count), 205);
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("A28 upgrade isolates large LLM attempts in single-row pages", async () => {
+  const { db, session } = await createFixture();
+  const schema = uniqueSchema("llm_attempt_pages");
+  const pageSizes: number[] = [];
+  try {
+    await provisionV1FixtureSchema(session, schema);
+    await seedLegacyTenant(session, schema, "llm-attempt-pages");
+    await upgradeV1Schema(
+      observeLlmAttemptPageSizes(session, pageSizes),
+      schema,
+      { resolveLegacyAsset: legacyAssetResolver("llm-attempt-pages") },
+    );
+
+    assert(pageSizes.length >= 2);
+    assertEquals([...new Set(pageSizes)], [1]);
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("A28 upgrade aligns a legacy message with its thread namespace", async () => {
+  const { db, session } = await createFixture();
+  const schema = uniqueSchema("message_namespace");
+  try {
+    await provisionV1FixtureSchema(session, schema);
+    await seedLegacyTenant(session, schema, "message-namespace");
+    await session.query(
+      `UPDATE ${q(schema, "nodes")}
+       SET namespace = 'legacy-misrouted'
+       WHERE id = 'message-message-namespace'`,
+    );
+
+    await upgradeV1Schema(session, schema, {
+      resolveLegacyAsset: legacyAssetResolver("message-namespace"),
+    });
+
+    const message = await session.query<{
+      namespace: string;
+      data: Record<string, unknown>;
+    }>(
+      `SELECT namespace, data FROM ${q(schema, "nodes")}
+       WHERE id = 'message-message-namespace'`,
+    );
+    assertEquals(message.rows[0]?.namespace, "tenant-message-namespace");
+    const metadata = message.rows[0]?.data.metadata as Record<string, unknown>;
+    const migrated = metadata.migratedFromV1 as Record<string, unknown>;
+    assertEquals(migrated.originalNamespace, "legacy-misrouted");
+
+    const outgoing = await session.query<{
+      namespace: string;
+    }>(
+      `SELECT namespace FROM ${q(schema, "edges")}
+       WHERE source_node_id = 'message-message-namespace'`,
+    );
+    assert(
+      outgoing.rows.length > 0 &&
+        outgoing.rows.every((edge) =>
+          edge.namespace === "tenant-message-namespace"
+        ),
     );
   } finally {
     await db.close();
@@ -733,15 +1068,20 @@ Deno.test("A28 multi-tenant upgrade preserves graph domains and translates settl
         assertEquals(message?.metadata.channel, "legacy-web");
         assertEquals(
           message?.content.map((ref) => ref.role),
-          ["body", "reasoning", "llm.tool_calls"],
+          ["body", "attachment", "reasoning", "llm.tool_calls"],
         );
         const messageBodies = await readers.resolver.getMany(
           message!.content,
           { namespace },
         );
         assertEquals(messageBodies[0].text, "hello");
-        assertEquals(messageBodies[1].text, "legacy reasoning");
-        assertEquals(messageBodies[2].value, [{
+        assertEquals(
+          new TextDecoder().decode(messageBodies[1].bytes),
+          `legacy-image-${suffix}`,
+        );
+        assertEquals(messageBodies[1].ref.name, "legacy.png");
+        assertEquals(messageBodies[2].text, "legacy reasoning");
+        assertEquals(messageBodies[3].value, [{
           id: `call-${suffix}`,
           name: "lookup",
         }]);
@@ -849,6 +1189,275 @@ Deno.test("A28 multi-tenant upgrade preserves graph domains and translates settl
   }
 });
 
+Deno.test("A28 upgrade preserves repeated provider tool-call labels", async () => {
+  const { db, session } = await createFixture();
+  const schema = uniqueSchema("repeated_tool_call");
+  const suffix = "repeated-tool-call";
+  try {
+    await provisionV1FixtureSchema(session, schema);
+    await seedLegacyTenant(session, schema, suffix);
+    const repeatedId = await seedRepeatedLegacyToolCall(
+      session,
+      schema,
+      suffix,
+    );
+
+    await upgradeV1Schema(session, schema, {
+      resolveLegacyAsset: legacyAssetResolver(suffix),
+    });
+
+    const rows = await session.query<{ id: string; source_id: string }>(
+      `SELECT id, source_id FROM ${q(schema, "nodes")}
+       WHERE namespace = $1 AND type = 'tool_execution'
+         AND data ->> 'toolCallId' = $2
+       ORDER BY created_at, id`,
+      [`tenant-${suffix}`, `call-${suffix}`],
+    );
+    assertEquals(rows.rows.map((row) => row.id), [
+      `tool-${suffix}`,
+      repeatedId,
+    ]);
+    assertEquals(new Set(rows.rows.map((row) => row.source_id)).size, 1);
+
+    const readers = await createV3Readers(session, schema);
+    try {
+      assertEquals(
+        (await readers.tools.getByToolCallId(
+          `tenant-${suffix}`,
+          `thread-root-${suffix}`,
+          `call-${suffix}`,
+        ))?.id,
+        repeatedId,
+      );
+      assertEquals(
+        (await readers.tools.get(`tenant-${suffix}`, `tool-${suffix}`))
+          ?.toolCallId,
+        `call-${suffix}`,
+      );
+    } finally {
+      await readers.executor.shutdown();
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("A28 upgrade preserves workflows whose legacy threads were deleted", async () => {
+  const { db, session } = await createFixture();
+  const schema = uniqueSchema("orphan_workflows");
+  const suffix = "orphan-workflows";
+  const namespace = `tenant-${suffix}`;
+  const missingThreadId = `thread-deleted-${suffix}`;
+  const toolId = `tool-orphan-${suffix}`;
+  const attemptId = `llm-orphan-${suffix}`;
+  const noThreadAttemptId = `llm-no-thread-${suffix}`;
+  const noThreadRecoveryId = `migration-orphan-thread:${noThreadAttemptId}`;
+  try {
+    await provisionV1FixtureSchema(session, schema);
+    await seedLegacyTenant(session, schema, suffix);
+    await session.query(
+      `INSERT INTO ${q(schema, "nodes")} (
+         id, namespace, type, name, content, data,
+         source_type, source_id, created_at, updated_at
+       ) VALUES
+       (
+         $1, $2, 'tool_execution', 'Orphan tool', NULL, $3::jsonb,
+         'tool_execution', $1,
+         '2026-01-01T00:01:00.000Z', '2026-01-01T00:01:01.000Z'
+       ),
+       (
+         $4, $2, 'llm_attempt', 'Orphan attempt', NULL, $5::jsonb,
+         'llm_attempt', $4,
+         '2026-01-01T00:01:02.000Z', '2026-01-01T00:01:03.000Z'
+       ),
+       (
+         $6, $2, 'llm_attempt', 'Attempt without thread identity', NULL,
+         $7::jsonb, 'llm_attempt', $6,
+         '2026-01-01T00:01:04.000Z', '2026-01-01T00:01:05.000Z'
+       )`,
+      [
+        toolId,
+        namespace,
+        JSON.stringify({
+          threadId: missingThreadId,
+          agentId: `agent-${suffix}`,
+          toolCallId: `call-orphan-${suffix}`,
+          tool: { id: "orphan-tool" },
+          args: { preserved: true },
+          output: { ok: true },
+          status: "completed",
+          metadata: { migratedFromV1: { retained: true } },
+        }),
+        attemptId,
+        JSON.stringify({
+          threadId: missingThreadId,
+          agentId: `agent-${suffix}`,
+          provider: "openai",
+          model: "gpt-test",
+          messages: [{ role: "user", content: "preserve me" }],
+          answer: "preserved",
+          status: "completed",
+          metadata: { migratedFromV1: { retained: true } },
+        }),
+        noThreadAttemptId,
+        JSON.stringify({
+          agentId: `agent-${suffix}`,
+          provider: "openai",
+          model: "gpt-test",
+          messages: [],
+          answer: "also preserved",
+          status: "completed",
+        }),
+      ],
+    );
+    await session.query(
+      `INSERT INTO ${q(schema, "events")} (
+         id, "threadId", "eventType", payload, namespace, status,
+         metadata, "subjectType", "subjectId", "correlationId",
+         "createdAt", "updatedAt"
+       ) VALUES (
+         $1, $2, 'TOOL_RESULT', '{"status":"completed"}'::jsonb,
+         $3, 'completed', '{}'::jsonb, 'tool_execution', $4,
+         $1, '2026-01-01T00:01:06.000Z', '2026-01-01T00:01:06.000Z'
+       )`,
+      [
+        `event-orphan-${suffix}`,
+        missingThreadId,
+        namespace,
+        toolId,
+      ],
+    );
+
+    await upgradeV1Schema(session, schema, {
+      resolveLegacyAsset: legacyAssetResolver(suffix),
+    });
+
+    const readers = await createV3Readers(session, schema);
+    try {
+      const recovered = await readers.conversation.getThread(
+        namespace,
+        missingThreadId,
+      );
+      assertEquals(recovered?.status, "archived");
+      assertEquals(recovered?.lastEventId, `event-orphan-${suffix}`);
+      assertEquals(recovered?.metadata, {
+        migratedFromV1: {
+          orphanRecovery: true,
+          originalThreadId: missingThreadId,
+        },
+      });
+
+      const tool = await readers.tools.get(namespace, toolId);
+      const attempt = await readers.attempts.get(namespace, attemptId);
+      const noThreadAttempt = await readers.attempts.get(
+        namespace,
+        noThreadAttemptId,
+      );
+      assertEquals(tool?.threadId, missingThreadId);
+      assertEquals(attempt?.threadId, missingThreadId);
+      assertEquals(noThreadAttempt?.threadId, noThreadRecoveryId);
+      for (const workflow of [tool, attempt]) {
+        const migrated = workflow?.metadata.migratedFromV1 as
+          | Record<string, unknown>
+          | undefined;
+        assertEquals(migrated?.retained, true);
+        assertEquals(migrated?.orphanRecovery, {
+          reason: "missing_thread",
+          originalThreadId: missingThreadId,
+          recoveredThreadId: missingThreadId,
+        });
+      }
+      assertEquals(
+        (noThreadAttempt?.metadata.migratedFromV1 as Record<string, unknown>)
+          .orphanRecovery,
+        {
+          reason: "missing_thread_id",
+          originalThreadId: null,
+          recoveredThreadId: noThreadRecoveryId,
+        },
+      );
+
+      const tombstones = await session.query<{
+        id: string;
+        status: string;
+      }>(
+        `SELECT id, data ->> 'status' AS status
+         FROM ${q(schema, "nodes")}
+         WHERE namespace = $1 AND source_type = 'migration_orphan_thread'
+         ORDER BY id`,
+        [namespace],
+      );
+      assertEquals(
+        tombstones.rows,
+        [
+          { id: noThreadRecoveryId, status: "archived" },
+          { id: missingThreadId, status: "archived" },
+        ].sort((left, right) => left.id.localeCompare(right.id)),
+      );
+    } finally {
+      await readers.executor.shutdown();
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("A28 upgrade preserves null and partial LLM content", async () => {
+  const { db, session } = await createFixture();
+  const schema = uniqueSchema("null_llm_content");
+  const suffix = "null-llm-content";
+  try {
+    await provisionV1FixtureSchema(session, schema);
+    await seedLegacyTenant(session, schema, suffix);
+    const attemptId = `llm-${suffix}`;
+    const legacy = await session.query<{ data: Record<string, unknown> }>(
+      `SELECT data FROM ${q(schema, "nodes")} WHERE id = $1`,
+      [attemptId],
+    );
+    const data: Record<string, unknown> = {
+      ...legacy.rows[0]!.data,
+      answer: null,
+      reasoning: null,
+      partialReasoning: "legacy partial thought",
+    };
+    delete data.partialAnswer;
+    await session.query(
+      `UPDATE ${q(schema, "nodes")} SET data = $2::jsonb WHERE id = $1`,
+      [attemptId, JSON.stringify(data)],
+    );
+
+    await upgradeV1Schema(session, schema, {
+      resolveLegacyAsset: legacyAssetResolver(suffix),
+    });
+
+    const readers = await createV3Readers(session, schema);
+    try {
+      const attempt = await readers.attempts.get(
+        `tenant-${suffix}`,
+        attemptId,
+      );
+      assertEquals(attempt?.status, "completed");
+      const content = llmAttemptContent(attempt!);
+      assertEquals(
+        (await readers.resolver.get(content.answer!, {
+          namespace: `tenant-${suffix}`,
+        })).value,
+        null,
+      );
+      assertEquals(
+        (await readers.resolver.get(content.reasoning!, {
+          namespace: `tenant-${suffix}`,
+        })).text,
+        "legacy partial thought",
+      );
+    } finally {
+      await readers.executor.shutdown();
+    }
+  } finally {
+    await db.close();
+  }
+});
+
 Deno.test("v1 upgrade module remains isolated from the normal runtime", async () => {
   const source = await Deno.readTextFile(
     new URL("./index.ts", import.meta.url),
@@ -870,6 +1479,7 @@ Deno.test({
     try {
       await provisionV1FixtureSchema(session, schema);
       await seedLegacyTenant(session, schema, "postgres");
+      await seedRepeatedLegacyToolCall(session, schema, "postgres");
       const result = await upgradeV1Schema(session, schema, {
         resolveLegacyAsset: legacyAssetResolver("postgres"),
       });
@@ -895,6 +1505,12 @@ Deno.test({
         "tool_execution.failed",
         "booking.updated",
       ]);
+      const repeatedCalls = await session.query<{ count: string | number }>(
+        `SELECT COUNT(*) AS count FROM ${q(schema, "nodes")}
+         WHERE type = 'tool_execution'
+           AND data ->> 'toolCallId' = 'call-postgres'`,
+      );
+      assertEquals(Number(repeatedCalls.rows[0]?.count), 2);
     } finally {
       await session.query(
         `DROP SCHEMA IF EXISTS ${quoteEventIdentifier(schema)} CASCADE`,

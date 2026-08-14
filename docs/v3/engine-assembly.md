@@ -9,31 +9,44 @@ status: implementation
 
 The module-private `createCopilotzEngine()` is the executable composition root
 used by the public Embedded, Gateway, and Worker factories. It returns a frozen
-plain record and owns no application-provided database session, shared
-Hypervisor, dispatcher, or remote Worker.
+plain record and owns no application-provided database, shared Hypervisor,
+dispatcher, or remote Worker.
 
 ```text
-app-owned SQL session + plugin registry
-                  │
-                  ▼
-        createCopilotzEngine()
-                  │
-     ┌────────────┼──────────────┐
-     ▼            ▼              ▼
- event store   Oxian executor   canonical assets
-     │            │              │
-     └──── event coordinator ─────┘
-                  │
-       graph-native repositories
-  conversation / collections / LLM / tools
-                  │
-       tenant-scoped processor context
+app-owned Ominipg database + plugin registry
+                       │
+            private atomic SQL adapter
+                       │
+                       ▼
+             createCopilotzEngine()
+                       │
+          ┌────────────┴────────────┐
+          ▼                         ▼
+ one shared Oxian executor     lazy database scopes
+                                    │
+                ┌───────────────────┼───────────────────┐
+                ▼                   ▼                   ▼
+           event store       canonical assets    graph repositories
+                └──────── event coordinator ────────────┘
+                                    │
+                         schema-scoped capabilities
 ```
 
-The engine can initialize the clean four-table schema, or accept an already
-initialized schema. It constructs one event store and one set of repositories
-over the injected session. A future public `createCopilotz()` adapter may own a
-session; this core factory deliberately does not.
+The application owns database lifecycle when it opens a database from
+configuration. An injected database is always application-owned and remains
+usable after Copilotz shuts down. The engine sees only a package-private atomic
+SQL adapter.
+
+The default physical schema is provisioned eagerly unless
+`provisionDefaultDatabaseSchema` is false, in which case it is validated only.
+`databaseScope(name)` and schema-bearing operations always validate additional
+physical schemas with read-only catalog SQL. They never execute DDL on a request
+path. Applications explicitly call `provisionCopilotzSchema()` from migration or
+tenant-onboarding control flow before selecting a new schema. Each valid scope
+owns its repositories, event store, attachment runtime, and event hub; all
+scopes reuse the same Ominipg database, plugin registry, and Oxian executor.
+Adding a tenant schema therefore does not create another database connection,
+Worker, Hypervisor, scheduler, or resident timer.
 
 ## Processor Boundary
 
@@ -69,7 +82,7 @@ The context contains:
 - read-only plugin resource lookup for agents, tools, providers, skills, and
   other resource types.
 
-It intentionally excludes the SQL session, event store, coordinator, and raw
+It intentionally excludes the SQL adapter, event store, coordinator, and raw
 graph operations. Domain repositories no longer expose their coordinator.
 Plugins therefore mutate through typed domain or collection operations, which
 atomically create semantic events and delivery obligations.
@@ -93,10 +106,16 @@ The engine delegates placement to `createDeliveryExecutor()`:
 - worker payloads remain IDs only.
 
 `shutdown()` is idempotent and closes only executor infrastructure owned or
-attached by this engine. The injected SQL session remains usable. `recover()`
-dispatches available durable work, while `maintenance()` combines bounded
-recovery with safe event/delivery compaction. No resident timer is required by
-the core.
+attached by this engine. Its application factory separately closes only a
+database created from configuration. `recover()` dispatches available durable
+work, while `maintenance()` combines bounded recovery with safe event/delivery
+compaction. Both are scoped to one physical schema. No resident timer is
+required by the core.
+
+Delivery, live-event, and stream workloads carry `databaseSchema` as routing
+metadata. Detached Workers resolve the matching lazy scope before loading an
+event or delivery. Payloads still contain stable identities rather than
+repository instances or closures.
 
 The engine can now execute `createTextWorkflowPlugin()` as an ordinary plugin.
 This proves that agent, provider, and tool resources resolve inside the Oxian

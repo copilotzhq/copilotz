@@ -14,6 +14,7 @@ export * from "./runtime/admin/index.ts";
 export * from "./runtime/attachments/index.ts";
 export * from "./runtime/channels/index.ts";
 export * from "./runtime/content/index.ts";
+export * from "./runtime/context/index.ts";
 export * from "./runtime/domain/index.ts";
 export * from "./runtime/events/index.ts";
 export type * from "./runtime/engine/index.ts";
@@ -28,12 +29,7 @@ export * from "./runtime/schedules/index.ts";
 export * from "./runtime/tools/index.ts";
 export * from "./runtime/usage/index.ts";
 export * from "./runtime/workflows/index.ts";
-export {
-  createManagedOminipgSession,
-  createOminipgSqlSession,
-} from "./runtime/adapters/ominipg.ts";
 export type {
   CopilotzOminipgOptions,
-  ManagedSqlSession,
   OminipgDatabaseLike,
 } from "./runtime/adapters/ominipg.ts";

@@ -23,7 +23,7 @@ import { createCopilotzWorker } from "@copilotz/copilotz/application";
 import { createServerWorkflowToolCatalog } from "@copilotz/copilotz/adapters/stdio";
 
 const worker = await createCopilotzWorker({
-  session,
+  database,
   namespace: "customer-a",
   id: "customer-a-worker",
   transport,

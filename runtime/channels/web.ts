@@ -1,4 +1,5 @@
 import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
+import { base64ToBytes, parseDataUrl } from "../content/index.ts";
 import type {
   ChannelEgressContext,
   ChannelIngressEnvelope,
@@ -7,6 +8,54 @@ import type {
   CreateWebChannelOptions,
   CreateWebChannelPluginOptions,
 } from "./types.ts";
+
+const MEDIA_TYPES = new Set(["image", "audio", "video", "file"]);
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function contentPart(value: unknown): unknown {
+  const part = record(value);
+  if (!part || typeof part.type !== "string" || !MEDIA_TYPES.has(part.type)) {
+    return value;
+  }
+  if (part.bytes instanceof Uint8Array) return value;
+  const encoded = typeof part.dataBase64 === "string"
+    ? {
+      bytes: base64ToBytes(part.dataBase64),
+      mediaType: typeof part.mediaType === "string"
+        ? part.mediaType
+        : "application/octet-stream",
+    }
+    : typeof part.url === "string"
+    ? parseDataUrl(part.url)
+    : null;
+  if (!encoded) {
+    throw new TypeError(
+      `Web channel ${part.type} content requires dataBase64 or a data URL.`,
+    );
+  }
+  const { dataBase64: _dataBase64, url: _url, ...rest } = part;
+  return Object.freeze({
+    ...rest,
+    bytes: encoded.bytes,
+    mediaType: typeof part.mediaType === "string"
+      ? part.mediaType
+      : encoded.mediaType,
+  });
+}
+
+function webInput(value: unknown): unknown {
+  const input = record(value);
+  if (!input || !("content" in input)) return value;
+  const content = Array.isArray(input.content)
+    ? Object.freeze(input.content.map(contentPart))
+    : contentPart(input.content);
+  return Object.freeze({ ...input, content });
+}
 
 function envelope(value: unknown): ChannelIngressEnvelope {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -18,7 +67,10 @@ function envelope(value: unknown): ChannelIngressEnvelope {
       "Web channel body requires thread, participant, and input.",
     );
   }
-  return input as ChannelIngressEnvelope;
+  return Object.freeze({
+    ...input,
+    input: webInput(input.input),
+  }) as ChannelIngressEnvelope;
 }
 
 /** Creates the request-bound Web/SSE channel using unified attachment outputs. */

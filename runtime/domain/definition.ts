@@ -38,6 +38,22 @@ export type CollectionBeforeHooks = Readonly<{
   ) => void | Promise<void>;
 }>;
 
+export type CollectionCommandContext = Readonly<{
+  namespace: string;
+  operationId: string;
+  current: Readonly<Record<string, unknown>>;
+  input: unknown;
+}>;
+
+export type CollectionCommandDefinition = Readonly<{
+  /** Returns the fields atomically merged into the locked current record. */
+  execute(
+    context: CollectionCommandContext,
+  ):
+    | Record<string, unknown>
+    | Promise<Record<string, unknown>>;
+}>;
+
 export type CollectionDefinition<
   S extends JsonSchema = JsonSchema,
   TSelect = S extends JsonSchema ? FromSchema<S> : Record<string, unknown>,
@@ -63,6 +79,8 @@ export type CollectionDefinition<
   content?: Readonly<{ fields: readonly string[] }>;
   /** Post-write behavior belongs in named event processors. */
   hooks?: CollectionBeforeHooks;
+  /** Named aggregate mutations executed under the collection record lock. */
+  commands?: Readonly<Record<string, CollectionCommandDefinition>>;
   readonly $inferSelect: TSelect;
   readonly $inferInsert: TInsert;
 }>;
@@ -124,6 +142,24 @@ export function defineCollection<S extends JsonSchema>(
       }
       : {}),
     ...(input.hooks ? { hooks: Object.freeze({ ...input.hooks }) } : {}),
+    ...(input.commands
+      ? {
+        commands: Object.freeze(Object.fromEntries(
+          Object.entries(input.commands).map(([command, definition]) => {
+            const name = requiredText(command, "Collection command name");
+            if (!/^[a-z][a-z0-9_.-]*$/i.test(name)) {
+              throw new TypeError(`Invalid collection command '${name}'.`);
+            }
+            if (typeof definition.execute !== "function") {
+              throw new TypeError(
+                `Collection command '${name}' requires an execute function.`,
+              );
+            }
+            return [name, Object.freeze({ ...definition })];
+          }),
+        )),
+      }
+      : {}),
   };
   return Object.freeze(definition) as CollectionDefinition<
     S,

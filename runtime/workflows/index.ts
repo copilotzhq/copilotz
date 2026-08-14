@@ -22,6 +22,7 @@ export {
   createWorkflowToolExecutor,
   deferWorkflowTool,
   isDeferredWorkflowToolResult,
+  isWorkflowToolResult,
 } from "./tool-executor.ts";
 export {
   agentAskMetadata,
@@ -44,17 +45,19 @@ export type {
   LlmProviderResource,
   ResolveAgentTextConfig,
   ResolveWorkflowAgentInstructions,
+  ResolveWorkflowAgentTools,
   WorkflowAgentsFileInstructions,
   WorkflowHistoryTransform,
   WorkflowJqEvaluator,
   WorkflowMetadata,
   WorkflowPipelineAdvance,
   WorkflowPipelineMetadata,
-  WorkflowPromptMemoryContribution,
-  WorkflowPromptMemoryResource,
+  WorkflowPromptContextContribution,
   WorkflowTool,
   WorkflowToolCatalog,
   WorkflowToolExecutionContext,
+  WorkflowToolOutputOptions,
+  WorkflowToolResult,
 } from "./types.ts";
 export type {
   CreateWorkflowToolExecutorOptions,

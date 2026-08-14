@@ -151,9 +151,9 @@ Deno.test("Discord channel verifies interactions and preserves native media/acti
   const fake = fakeTransport();
   const db = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
+    database: db,
     namespace: NAMESPACE,
-    schema: "copilotz_v3_discord",
+    databaseSchema: "copilotz_v3_discord",
     core: false,
     plugins: [
       replyPlugin(),

@@ -35,6 +35,9 @@ function assertWorkload(value: string): string {
 export function createDeliveryExecutor(
   options: CreateDeliveryExecutorOptions,
 ): DeliveryExecutor {
+  if (!options.store && !options.resolveStore) {
+    throw new TypeError("Delivery executor requires a store resolver.");
+  }
   if (options.dispatcher && options.hypervisor) {
     throw new TypeError(
       "Configure either a delivery dispatcher or Hypervisor, not both.",
@@ -57,8 +60,24 @@ export function createDeliveryExecutor(
     (() => crypto.randomUUID());
   const workerId = options.workerId ??
     `copilotz-delivery-${crypto.randomUUID()}`;
+  const defaultDatabaseSchema = options.defaultDatabaseSchema?.trim() ||
+    options.store?.databaseSchema || "public";
+  const resolveStore = async (databaseSchema: string) => {
+    const requested = databaseSchema.trim();
+    if (!requested) throw new TypeError("Database schema must be non-empty.");
+    const store = options.resolveStore
+      ? await options.resolveStore(requested)
+      : options.store!;
+    if (store.databaseSchema !== requested) {
+      throw new TypeError(
+        `Resolved store '${store.databaseSchema}' does not match '${requested}'.`,
+      );
+    }
+    return store;
+  };
   const handler = createDeliveryWorkload({
     store: options.store,
+    resolveStore: options.resolveStore,
     registry: options.registry,
     createContext: options.createContext,
     leaseMs: options.leaseMs,
@@ -190,15 +209,28 @@ export function createDeliveryExecutor(
   const scheduled = new Map<string, string | EventDelivery>();
   let scheduling = false;
   let scheduleTimer: ReturnType<typeof setTimeout> | undefined;
-  const deliveryKey = (delivery: string | EventDelivery): string =>
-    typeof delivery === "string" ? delivery : delivery.id;
-  const outputScopeKey = (namespace: string, correlationId: string): string =>
-    `${namespace}\u0000${correlationId}`;
+  const deliveryKey = (
+    delivery: string | EventDelivery,
+    databaseSchema = defaultDatabaseSchema,
+  ): string =>
+    `${
+      typeof delivery === "string" ? databaseSchema : delivery.databaseSchema
+    }\u0000${typeof delivery === "string" ? delivery : delivery.id}`;
+  const outputScopeKey = (
+    databaseSchema: string,
+    namespace: string,
+    correlationId: string,
+  ): string => `${databaseSchema}\u0000${namespace}\u0000${correlationId}`;
   const trackOutputScope = (
+    databaseSchema: string,
     event: DurableEvent,
     task: Promise<unknown>,
   ): void => {
-    const key = outputScopeKey(event.namespace, event.correlationId);
+    const key = outputScopeKey(
+      databaseSchema,
+      event.namespace,
+      event.correlationId,
+    );
     const tasks = activeOutputScopes.get(key) ?? new Set<Promise<unknown>>();
     tasks.add(task);
     activeOutputScopes.set(key, tasks);
@@ -242,6 +274,7 @@ export function createDeliveryExecutor(
   const createHandle = (
     delivery: EventDelivery,
     event: DurableEvent,
+    store: Awaited<ReturnType<typeof resolveStore>>,
     attemptId: string,
     work: Awaited<ReturnType<DeliveryDispatcher["dispatch"]>>,
   ): DeliveryExecutionHandle => {
@@ -253,7 +286,7 @@ export function createDeliveryExecutor(
       const terminal = await work.completed;
       await output.catch(() => undefined);
       if (terminal.status !== "completed") {
-        await options.store.failDelivery({
+        await store.failDelivery({
           id: delivery.id,
           owner: attemptId,
           error: new Error(
@@ -262,7 +295,7 @@ export function createDeliveryExecutor(
           ),
         });
       }
-      const current = await options.store.getDelivery(delivery.id);
+      const current = await store.getDelivery(delivery.id);
       if (!current) {
         throw new Error(
           `Delivery '${delivery.id}' disappeared after execution.`,
@@ -274,7 +307,7 @@ export function createDeliveryExecutor(
         operationStatus: terminal.status,
       });
     })();
-    trackOutputScope(event, done);
+    trackOutputScope(delivery.databaseSchema, event, done);
 
     return Object.freeze({
       deliveryId: delivery.id,
@@ -292,22 +325,28 @@ export function createDeliveryExecutor(
 
   const dispatchDelivery = async (
     deliveryInput: string | EventDelivery,
+    dispatchOptions: { databaseSchema?: string } = {},
   ): Promise<DeliveryExecutionHandle> => {
     if (closed) throw new Error("Delivery executor is shut down.");
+    const requestedSchema = typeof deliveryInput === "string"
+      ? dispatchOptions.databaseSchema?.trim() || defaultDatabaseSchema
+      : deliveryInput.databaseSchema;
+    const store = await resolveStore(requestedSchema);
     const delivery = typeof deliveryInput === "string"
-      ? await options.store.getDelivery(deliveryInput)
+      ? await store.getDelivery(deliveryInput)
       : deliveryInput;
     if (!delivery) {
       throw new Error(`Delivery '${deliveryInput}' was not found.`);
     }
-    const existing = active.get(delivery.id);
+    const key = deliveryKey(delivery);
+    const existing = active.get(key);
     if (existing) return existing;
-    const dispatching = dispatchTasks.get(delivery.id);
+    const dispatching = dispatchTasks.get(key);
     if (dispatching) return await dispatching;
 
     const task = (async () => {
       await ready;
-      const event = await options.store.getEvent(delivery.eventId);
+      const event = await store.getEvent(delivery.eventId);
       if (!event) throw new Error(`Event '${delivery.eventId}' was not found.`);
       const attemptId = createAttemptId();
       if (!attemptId.trim()) {
@@ -315,6 +354,7 @@ export function createDeliveryExecutor(
       }
       const metadata: DeliveryDispatchMetadata = Object.freeze({
         schema: "copilotz.delivery.dispatch.v1",
+        databaseSchema: delivery.databaseSchema,
         deliveryId: delivery.id,
         eventId: event.id,
         consumerId: delivery.consumerId,
@@ -328,26 +368,31 @@ export function createDeliveryExecutor(
         metadata,
       });
       const work = relayCopilotzWorkHandle(dispatched, {
-        onEvent: options.onOutputEvent,
+        onEvent: options.onOutputEvent
+          ? (event) =>
+            options.onOutputEvent!(event, {
+              databaseSchema: delivery.databaseSchema,
+            })
+          : undefined,
       });
-      const handle = createHandle(delivery, event, attemptId, work);
-      active.set(delivery.id, handle);
+      const handle = createHandle(delivery, event, store, attemptId, work);
+      active.set(key, handle);
       // Register first, then attach cleanup. A fast embedded operation may
       // already be settled when createHandle returns.
       void handle.done.finally(() => {
-        if (active.get(delivery.id)?.operationId === work.operationId) {
-          active.delete(delivery.id);
+        if (active.get(key)?.operationId === work.operationId) {
+          active.delete(key);
         }
         schedulePump();
       }).catch(() => undefined);
       return handle;
     })();
-    dispatchTasks.set(delivery.id, task);
+    dispatchTasks.set(key, task);
     try {
       return await task;
     } finally {
-      if (dispatchTasks.get(delivery.id) === task) {
-        dispatchTasks.delete(delivery.id);
+      if (dispatchTasks.get(key) === task) {
+        dispatchTasks.delete(key);
       }
     }
   };
@@ -379,17 +424,28 @@ export function createDeliveryExecutor(
           ? { target }
           : {}),
       });
+      const databaseSchema = typeof input.metadata?.databaseSchema === "string"
+        ? input.metadata.databaseSchema.trim() || defaultDatabaseSchema
+        : defaultDatabaseSchema;
       return relayCopilotzWorkHandle(dispatched, {
-        onEvent: options.onOutputEvent,
+        onEvent: options.onOutputEvent
+          ? (event) => options.onOutputEvent!(event, { databaseSchema })
+          : undefined,
       });
     },
     dispatchDelivery,
     async dispatchRecoverable(
       listOptions = {},
     ): Promise<DeliveryRecoveryDispatch> {
-      const deliveries = await options.store.listRecoverable(listOptions);
+      const databaseSchema = listOptions.databaseSchema?.trim() ||
+        defaultDatabaseSchema;
+      const store = await resolveStore(databaseSchema);
+      const { databaseSchema: _databaseSchema, ...filters } = listOptions;
+      const deliveries = await store.listRecoverable(filters);
       const settled = await Promise.allSettled(
-        deliveries.map((delivery) => dispatchDelivery(delivery)),
+        deliveries.map((delivery) =>
+          dispatchDelivery(delivery, { databaseSchema })
+        ),
       );
       const handles: DeliveryExecutionHandle[] = [];
       const failures: Array<{ deliveryId: string; error: unknown }> = [];
@@ -408,7 +464,11 @@ export function createDeliveryExecutor(
       });
     },
     async settleOutputs(scope) {
-      const key = outputScopeKey(scope.namespace, scope.correlationId);
+      const key = outputScopeKey(
+        scope.databaseSchema?.trim() || defaultDatabaseSchema,
+        scope.namespace,
+        scope.correlationId,
+      );
       while (true) {
         const tasks = [...(activeOutputScopes.get(key) ?? [])];
         if (tasks.length === 0) return;

@@ -23,7 +23,7 @@ function requireText(value: string, name: string): string {
 
 function mutationIdentity(
   collection: string,
-  operation: "create" | "update" | "delete",
+  operation: "create" | "update" | "delete" | `command:${string}`,
   recordId: string | undefined,
   options: ScopedCollectionMutationOptions | undefined,
   createIdentity: CollectionMutationIdentityFactory | undefined,
@@ -142,6 +142,21 @@ export function createEventCollections(
             ),
           });
           return requiredValue(result.value, `${name}.delete`);
+        },
+        async command(idInput, commandInput, input, mutationOptions) {
+          const id = requireText(idInput, `${name} ID`);
+          const command = requireText(commandInput, `${name} command`);
+          const result = await repository.command(id, command, input, {
+            namespace,
+            identity: mutationIdentity(
+              name,
+              `command:${command}`,
+              id,
+              mutationOptions,
+              scopeInput.createMutationIdentity,
+            ),
+          });
+          return requiredValue(result.value, `${name}.${command}`);
         },
         get(id) {
           return repository.get(namespace, id);

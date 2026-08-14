@@ -1,6 +1,6 @@
 import {
   type CopilotzOminipgOptions,
-  createManagedOminipgSession,
+  openManagedOminipgDatabase,
 } from "../adapters/ominipg.ts";
 import type { SqlSession } from "../events/index.ts";
 
@@ -15,7 +15,7 @@ export type TestDatabase =
 export async function createTestDatabase(
   options: CopilotzOminipgOptions = {},
 ): Promise<TestDatabase> {
-  const managed = await createManagedOminipgSession(options);
+  const managed = await openManagedOminipgDatabase(options);
   return Object.freeze({
     session: managed.session,
     query: managed.session.query,

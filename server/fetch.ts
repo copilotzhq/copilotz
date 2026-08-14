@@ -31,6 +31,8 @@ export type CreateEventNativeFetchHandlerOptions = Readonly<{
   responseHeaders?: Readonly<Record<string, string>>;
   /** Optional versioned projection applied only to request-bound SSE output. */
   projectSseOutput?: EventNativeSseProjector;
+  /** Optional SSE event name derived from a projected output value. */
+  sseEventName?: (value: unknown) => string | undefined;
   onError?: (error: unknown, request: Request) => void | Promise<void>;
 }>;
 
@@ -105,11 +107,23 @@ async function body(request: Request): Promise<
 
 function responseHeaders(
   options: CreateEventNativeFetchHandlerOptions,
+  featureHeaders?: HeadersInit,
 ): Headers {
-  return new Headers({
+  const result = new Headers({
     "content-type": "application/json; charset=utf-8",
     ...(options.responseHeaders ?? {}),
   });
+  if (!featureHeaders) return result;
+  const supplied = new Headers(featureHeaders);
+  supplied.forEach((value, name) => {
+    if (name.toLowerCase() !== "set-cookie") result.set(name, value);
+  });
+  const cookieValues = (
+    supplied as Headers & { getSetCookie?: () => string[] }
+  ).getSetCookie?.() ??
+    (supplied.has("set-cookie") ? [supplied.get("set-cookie")!] : []);
+  for (const value of cookieValues) result.append("set-cookie", value);
+  return result;
 }
 
 function jsonResponse(
@@ -120,19 +134,23 @@ function jsonResponse(
   if (result.status === 204) {
     return new Response(null, {
       status: result.status,
-      headers: options.responseHeaders,
+      headers: responseHeaders(options, result.headers),
     });
   }
   if (result.data instanceof Response) return result.data;
   if (isEventNativeOutputStream(result.data)) {
-    return sseResponse(result.data, request, options);
+    return sseResponse(result.data, request, options, result.headers);
   }
   return new Response(
     JSON.stringify({
       ...(result.data !== undefined ? { data: result.data } : {}),
+      ...(result.included !== undefined ? { included: result.included } : {}),
       ...(result.pageInfo ? { pageInfo: result.pageInfo } : {}),
     }),
-    { status: result.status, headers: responseHeaders(options) },
+    {
+      status: result.status,
+      headers: responseHeaders(options, result.headers),
+    },
   );
 }
 
@@ -144,7 +162,14 @@ function isAttachmentStreamOutput(
     typeof (payload as { getReader?: unknown }).getReader === "function";
 }
 
-function safeStreamOutput(output: AttachmentOutput): unknown {
+/**
+ * Produces the canonical JSON-safe representation used by event-native SSE.
+ * Byte streams keep their identity and metadata while their ReadableStream
+ * remains on the transport-specific stream path.
+ */
+export function projectEventNativeSseOutput(
+  output: AttachmentOutput,
+): unknown {
   if (!isAttachmentStreamOutput(output)) return output;
   return Object.freeze({
     type: output.type,
@@ -157,8 +182,11 @@ function safeStreamOutput(output: AttachmentOutput): unknown {
   });
 }
 
-function sseFrame(value: unknown): Uint8Array {
-  return new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`);
+function sseFrame(value: unknown, event?: string): Uint8Array {
+  const name = event?.replace(/[\r\n]/g, "").trim();
+  return new TextEncoder().encode(
+    `${name ? `event: ${name}\n` : ""}data: ${JSON.stringify(value)}\n\n`,
+  );
 }
 
 function cancellationReason(reason: unknown): string {
@@ -171,6 +199,7 @@ function sseResponse(
   stream: EventNativeOutputStream,
   request: Request,
   options: CreateEventNativeFetchHandlerOptions,
+  featureHeaders?: HeadersInit,
 ): Response {
   const reader = stream.outputs.getReader();
   const body = new ReadableStream<Uint8Array>({
@@ -183,10 +212,12 @@ function sseResponse(
         }
         const projected = options.projectSseOutput
           ? await options.projectSseOutput(next.value, request)
-          : safeStreamOutput(next.value);
+          : projectEventNativeSseOutput(next.value);
         if (projected === null || projected === undefined) return;
         const values = Array.isArray(projected) ? projected : [projected];
-        for (const value of values) controller.enqueue(sseFrame(value));
+        for (const value of values) {
+          controller.enqueue(sseFrame(value, options.sseEventName?.(value)));
+        }
       } catch (error) {
         await stream.cancel(cancellationReason(error)).catch(() => undefined);
         controller.error(error);
@@ -199,11 +230,12 @@ function sseResponse(
   });
   return new Response(body, {
     status: 200,
-    headers: {
-      "cache-control": "no-cache",
-      ...options.responseHeaders,
-      "content-type": "text/event-stream; charset=utf-8",
-    },
+    headers: (() => {
+      const headers = responseHeaders(options, featureHeaders);
+      headers.set("cache-control", "no-cache");
+      headers.set("content-type", "text/event-stream; charset=utf-8");
+      return headers;
+    })(),
   });
 }
 
@@ -211,7 +243,9 @@ function errorResponse(
   error: unknown,
   options: CreateEventNativeFetchHandlerOptions,
 ): Response {
-  const typed = error as Partial<EventNativeAppError>;
+  const typed = error as Partial<EventNativeAppError> & {
+    retryAfterSeconds?: unknown;
+  };
   const status = typeof typed?.status === "number" &&
       typed.status >= 400 && typed.status <= 599
     ? typed.status
@@ -219,12 +253,22 @@ function errorResponse(
   const code = typeof typed?.code === "string" && typed.code
     ? typed.code
     : "internal_error";
-  const message = status < 500 && error instanceof Error
+  const availability = code === "persistence_unavailable" ||
+    code === "persistence_indeterminate";
+  const message = (status < 500 || availability) && error instanceof Error
     ? error.message
     : "Internal application error.";
+  const response = responseHeaders(options);
+  if (
+    availability && typeof typed.retryAfterSeconds === "number" &&
+    Number.isSafeInteger(typed.retryAfterSeconds) &&
+    typed.retryAfterSeconds >= 0
+  ) {
+    response.set("retry-after", String(typed.retryAfterSeconds));
+  }
   return new Response(JSON.stringify({ error: { code, message } }), {
     status,
-    headers: responseHeaders(options),
+    headers: response,
   });
 }
 

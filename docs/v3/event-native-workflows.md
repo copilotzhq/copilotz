@@ -145,10 +145,29 @@ creates the continuation attempt, so there is no mutable queue accumulator and
 the model cannot resume on a partial batch. The continuation remains addressed
 to the participant that produced the calls.
 
-Provider text, reasoning, and canonical tool-call drafts are published as
-ordered `text.delta`, `reasoning.delta`, and `tool_call.delta` events. They flow
-through the live event hub and attachment outputs, carry the logical attempt as
-their stream identity, and are never inserted into durable event storage.
+Provider text, reasoning, canonical tool-call drafts, and executing tool output
+are published as ordered `text.delta`, `reasoning.delta`, `tool_call.delta`, and
+`tool_output.delta` events. Tool output uses independent channels such as
+`stdout`, `stderr`, `progress`, and `result`; terminal `tool_execution.*` events
+settle the already-visible execution. These frames flow through the live event
+hub and attachment outputs, carry their logical attempt or execution as stream
+identity, and are never inserted into durable event storage. Final messages and
+tool results remain asset-backed durable state.
+
+An ordinary tool may return `WorkflowToolResult` when it produces one or more
+files or media bodies. Its `output` remains the bounded result used for model
+history and live `result` projection, while `attachments` are prepared and
+committed as canonical content on the tool execution. The public tool-result
+message reuses those refs. OpenAPI resources can create the same result
+declaratively with `API.responseAssets`, mapping response fields for base64
+data, media type, and optional filename.
+
+Input attachments follow the inverse path. Transcript projection emits a compact
+identity descriptor before each attachment, including both `assetId` and a
+namespace-qualified `assetRef`. Provider-native image, audio, video, and file
+parts are still supplied when supported. If a provider omits an unsupported file
+body, the descriptor survives and allows an asset-aware tool to resolve or
+import it without another upload.
 
 Tests now prove user → agent → tool → same agent → public final output, one
 external tool execution after recovery, explicit provider fallback children,

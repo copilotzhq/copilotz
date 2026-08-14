@@ -68,9 +68,9 @@ async function close(db: TestDatabase): Promise<void> {
 Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, and delivers attachment outputs", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
+    database: db,
     namespace: NAMESPACE,
-    schema: SCHEMA,
+    databaseSchema: SCHEMA,
     core: false,
     plugins: [
       replyPlugin(),
@@ -89,6 +89,13 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
       body: {
         thread: {
           externalId: "web-thread-a",
+          name: "Web support",
+          description: "Created by the Web channel",
+          participants: [{
+            externalId: "passive-observer",
+            participantType: "job",
+            name: "Observer",
+          }],
           metadata: { channel: "web" },
         },
         participant: {
@@ -97,7 +104,15 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
           name: "Web User",
         },
         input: {
-          content: "Channel input",
+          content: [
+            { type: "text", text: "Channel input" },
+            {
+              type: "image",
+              dataBase64: btoa("image-bytes"),
+              mediaType: "image/png",
+              name: "fixture.png",
+            },
+          ],
           id: "channel-message-a",
           correlationId: "channel-run-a",
         },
@@ -127,11 +142,13 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
       "web-thread-a",
     );
     assertExists(thread);
-    assertEquals(thread.participants.length, 2);
+    assertEquals(thread.name, "Web support");
+    assertEquals(thread.description, "Created by the Web channel");
+    assertEquals(thread.participants.length, 3);
     assertEquals(
       thread.participants.map((participant) => participant.participantType)
         .sort(),
-      ["agent", "human"],
+      ["agent", "human", "job"],
     );
     const messages = await application.conversation.listMessages(
       NAMESPACE,
@@ -146,13 +163,26 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
       { namespace: NAMESPACE },
     );
     assertEquals(resolved[0].text, "Channel reply");
+    const inputContent = await application.content.resolver.getMany(
+      messages[0].content,
+      { namespace: NAMESPACE },
+    );
+    assertEquals(inputContent[0].text, "Channel input");
+    assertEquals(inputContent[1].asset.mediaType, "image/png");
+    assertEquals(
+      new TextDecoder().decode(inputContent[1].bytes),
+      "image-bytes",
+    );
 
     const second = await createEventNativeApp(application).handle({
       resource: "channels",
       method: "POST",
       path: ["web"],
       body: {
-        thread: { externalId: "web-thread-a" },
+        thread: {
+          externalId: "web-thread-a",
+          name: "Renamed Web support",
+        },
         participant: {
           externalId: "web-user-a",
           participantType: "human",
@@ -166,8 +196,12 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
     });
     assertEquals(second, { status: 202, data: { accepted: true } });
     assertEquals(
+      (await application.conversation.getThread(NAMESPACE, thread.id))?.name,
+      "Renamed Web support",
+    );
+    assertEquals(
       (await application.conversation.listParticipants(NAMESPACE)).length,
-      2,
+      3,
     );
     assertEquals(
       (await application.conversation.listThreads(NAMESPACE)).length,
@@ -182,9 +216,9 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
 Deno.test("request-bound channel delivery reports missing callbacks through done", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
+    database: db,
     namespace: NAMESPACE,
-    schema: `${SCHEMA}_callback`,
+    databaseSchema: `${SCHEMA}_callback`,
     core: false,
     plugins: [createWebChannelPlugin()],
   });

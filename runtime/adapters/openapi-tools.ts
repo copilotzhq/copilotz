@@ -2,11 +2,14 @@ import type {
   API,
   APIPrepareRequestContext,
   APIPrepareRequestInput,
+  APIResponseAssetMapping,
 } from "../resources/index.ts";
+import { base64ToBytes, type ContentInput } from "../content/index.ts";
 import { parse as parseYaml } from "../../dependencies/yaml.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
+  WorkflowToolResult,
 } from "../workflows/index.ts";
 import { ToolExecutionError } from "../tools/errors.ts";
 
@@ -44,6 +47,78 @@ interface OpenAPISchema {
     parameters?: Record<string, any>;
     requestBodies?: Record<string, any>;
   };
+}
+
+function responseRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Asset-producing API response must be an object.");
+  }
+  return value as Record<string, unknown>;
+}
+
+function responseField(
+  response: Record<string, unknown>,
+  field: string,
+  name: string,
+): string {
+  const value = response[field];
+  if (typeof value !== "string" || !value.trim()) {
+    throw new TypeError(
+      `Asset-producing API response requires ${name} field '${field}'.`,
+    );
+  }
+  return value;
+}
+
+function attachmentKind(
+  mediaType: string,
+): "image" | "audio" | "video" | "file" {
+  if (mediaType.startsWith("image/")) return "image";
+  if (mediaType.startsWith("audio/")) return "audio";
+  if (mediaType.startsWith("video/")) return "video";
+  return "file";
+}
+
+function attachmentName(value: string): string {
+  return value.split(/[\\/]/).filter(Boolean).at(-1) ?? value;
+}
+
+function promoteResponseAsset(
+  value: unknown,
+  mapping: APIResponseAssetMapping,
+): WorkflowToolResult {
+  const response = responseRecord(value);
+  const dataBase64 = responseField(
+    response,
+    mapping.dataBase64Field,
+    "base64 data",
+  );
+  const mediaType = responseField(
+    response,
+    mapping.mediaTypeField,
+    "media type",
+  );
+  const nameValue = mapping.nameField
+    ? responseField(response, mapping.nameField, "name")
+    : undefined;
+  const output = Object.fromEntries(
+    Object.entries(response).filter(([field]) =>
+      field !== mapping.dataBase64Field
+    ),
+  );
+  const attachment: ContentInput = {
+    type: attachmentKind(mediaType),
+    bytes: base64ToBytes(dataBase64),
+    mediaType,
+    role: "attachment",
+    disposition: "attachment",
+    ...(nameValue ? { name: attachmentName(nameValue) } : {}),
+  };
+  return Object.freeze({
+    kind: "copilotz.workflow-tool.result.v1",
+    output: Object.freeze(output),
+    attachments: Object.freeze([attachment]),
+  });
 }
 
 /**
@@ -239,6 +314,97 @@ function sanitizeToolJsonValue<T>(value: T, seen = new WeakSet<object>()): T {
   }
   seen.delete(value);
   return next as T;
+}
+
+type NdjsonRecord = Readonly<{
+  type: "output" | "result" | "error";
+  channel?: string;
+  mode?: "append" | "replace";
+  mediaType?: string;
+  delta?: unknown;
+  value?: unknown;
+  error?: unknown;
+}>;
+
+function ndjsonRecord(value: unknown): NdjsonRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("NDJSON tool response records must be objects.");
+  }
+  const record = sanitizeToolJsonValue(value) as Record<string, unknown>;
+  if (record.type === "output") {
+    if (typeof record.channel !== "string" || !record.channel.trim()) {
+      throw new TypeError("NDJSON tool output requires a channel.");
+    }
+    if (
+      record.mode !== undefined && record.mode !== "append" &&
+      record.mode !== "replace"
+    ) {
+      throw new TypeError("NDJSON tool output mode must be append or replace.");
+    }
+    return record as NdjsonRecord;
+  }
+  if (record.type === "result" || record.type === "error") {
+    return record as NdjsonRecord;
+  }
+  throw new TypeError("NDJSON tool response record type is invalid.");
+}
+
+async function consumeNdjsonToolResponse(
+  response: Response,
+  context: WorkflowToolExecutionContext | undefined,
+): Promise<unknown> {
+  if (!response.body) throw new TypeError("NDJSON tool response has no body.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  let terminal: NdjsonRecord | undefined;
+  const processLine = async (raw: string): Promise<void> => {
+    const line = raw.trim();
+    if (!line) return;
+    const record = ndjsonRecord(JSON.parse(line));
+    if (terminal) {
+      throw new TypeError("NDJSON tool response emitted after settlement.");
+    }
+    if (record.type === "output") {
+      await context?.emitOutput(record.delta, {
+        channel: record.channel,
+        ...(record.mode ? { mode: record.mode } : {}),
+        ...(typeof record.mediaType === "string" && record.mediaType.trim()
+          ? { mediaType: record.mediaType.trim() }
+          : {}),
+      });
+      return;
+    }
+    terminal = record;
+  };
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      buffered += decoder.decode(next.value, { stream: true });
+      let boundary = buffered.indexOf("\n");
+      while (boundary >= 0) {
+        await processLine(buffered.slice(0, boundary));
+        buffered = buffered.slice(boundary + 1);
+        boundary = buffered.indexOf("\n");
+      }
+    }
+    buffered += decoder.decode();
+    await processLine(buffered);
+  } finally {
+    reader.releaseLock();
+  }
+  if (!terminal) {
+    throw new TypeError("NDJSON tool response ended without a result.");
+  }
+  if (terminal.type === "error") {
+    throw new ToolExecutionError(
+      terminal.error ?? terminal.value,
+      response.status,
+      response.statusText || "Stream failed",
+    );
+  }
+  return terminal.value;
 }
 
 function decodeJsonPointerSegment(segment: string): string {
@@ -591,6 +757,12 @@ function createApiExecutor(
         "User-Agent": "Copilotz-Agents/1.0",
         ...apiConfig.headers, // Legacy header support (still supported)
       };
+      if (
+        apiConfig.streamNdjson &&
+        !Object.keys(headers).some((name) => name.toLowerCase() === "accept")
+      ) {
+        headers.Accept = "application/x-ndjson, application/json;q=0.9";
+      }
 
       // Apply authentication (now async for dynamic auth)
       await applyAuthentication(
@@ -646,6 +818,8 @@ function createApiExecutor(
           userExternalId: executionContext?.userExternalId,
           agent: executionContext?.agent ?? null,
           namespace: executionContext?.namespace,
+          databaseSchema: executionContext?.processor.databaseSchema,
+          collections: executionContext?.collections,
           userMetadata: executionContext?.userMetadata,
           threadMetadata: executionContext?.threadMetadata,
           resolveAsset: executionContext?.resolveAsset,
@@ -702,7 +876,15 @@ function createApiExecutor(
       const contentType = response.headers.get("content-type") || "";
       let responseData;
 
-      if (contentType.includes("application/json")) {
+      if (
+        apiConfig.streamNdjson &&
+        contentType.toLowerCase().includes("application/x-ndjson")
+      ) {
+        responseData = await consumeNdjsonToolResponse(
+          response,
+          executionContext,
+        );
+      } else if (contentType.includes("application/json")) {
         responseData = await response.json();
       } else {
         responseData = await response.text();
@@ -717,16 +899,33 @@ function createApiExecutor(
         );
       }
 
+      const assetMapping = apiConfig.responseAssets?.[toolKey];
+      const result = assetMapping
+        ? promoteResponseAsset(responseData, assetMapping)
+        : responseData;
+
       if (apiConfig.includeResponseHeaders) {
+        if (assetMapping) {
+          const promoted = result as WorkflowToolResult;
+          return Object.freeze({
+            ...promoted,
+            output: {
+              body: promoted.output,
+              headers: sanitizeToolJsonValue(
+                Object.fromEntries(response.headers.entries()),
+              ),
+            },
+          });
+        }
         return {
-          body: responseData,
+          body: result,
           headers: sanitizeToolJsonValue(
             Object.fromEntries(response.headers.entries()),
           ),
         };
       }
 
-      return responseData;
+      return result;
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         throw new Error(

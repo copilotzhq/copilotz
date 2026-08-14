@@ -49,7 +49,6 @@ Deno.test("v3 root exposes the factory-first application vocabulary", () => {
     "createCopilotz",
     "createCopilotzGateway",
     "createCopilotzWorker",
-    "createManagedOminipgSession",
     "definePlugin",
     "defineProcessor",
     "defineCollection",
@@ -72,6 +71,8 @@ Deno.test("v3 root exposes the factory-first application vocabulary", () => {
       "createCopilotzApplication",
       "createCopilotzEngine",
       "createDeliveryExecutor",
+      "createManagedOminipgSession",
+      "createOminipgSqlSession",
     ]
   ) assertEquals(removed in copilotz, false, removed);
 });
@@ -80,14 +81,16 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
   assertFunctions(application, [
     "createCopilotz",
     "createCopilotzGateway",
+    "createCopilotzPersistence",
     "createCopilotzWorker",
   ]);
   assertEquals("createCopilotzApplication" in application, false);
   assertFunctions(adapters, [
-    "createManagedOminipgSession",
     "createModulePluginResolver",
     "createServerWorkflowToolCatalog",
   ]);
+  assertEquals("createManagedOminipgSession" in adapters, false);
+  assertEquals("createOminipgSqlSession" in adapters, false);
   assertEquals("connectMcp" in adapters, false);
   assertFunctions(stdioAdapters, [
     "connectMcp",

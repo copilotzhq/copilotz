@@ -51,6 +51,7 @@ export type EphemeralEvent<TPayload = unknown> = Readonly<{
     | "reasoning.delta"
     | "audio.delta"
     | "tool_call.delta"
+    | "tool_output.delta"
     | (string & Record<never, never>);
   namespace: string;
   threadId?: string;
@@ -112,6 +113,8 @@ export type DeliveryStatus =
 
 /** Mutable guaranteed-work obligation for one logical consumer. */
 export type EventDelivery = Readonly<{
+  /** Physical database schema containing this delivery row. */
+  databaseSchema: string;
   id: string;
   eventId: string;
   consumerId: string;

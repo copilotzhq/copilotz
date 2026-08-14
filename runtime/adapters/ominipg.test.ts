@@ -1,12 +1,12 @@
 import { assertEquals, assertRejects } from "@std/assert";
 
 import {
-  createManagedOminipgSession,
   createOminipgSqlSession,
+  openManagedOminipgDatabase,
 } from "./ominipg.ts";
 
-Deno.test("managed Ominipg session commits and rolls back atomically", async () => {
-  const managed = await createManagedOminipgSession();
+Deno.test("managed Ominipg database commits and rolls back atomically", async () => {
+  const managed = await openManagedOminipgDatabase();
   try {
     await managed.session.query(
       "CREATE TABLE atomic_records (id TEXT PRIMARY KEY)",
@@ -39,28 +39,22 @@ Deno.test("managed Ominipg session commits and rolls back atomically", async () 
   }
 });
 
-Deno.test("Ominipg adapter pins a direct PostgreSQL transaction client", async () => {
+Deno.test("Ominipg SQL adapter delegates transaction ownership to Ominipg", async () => {
   const calls: string[] = [];
-  let releases = 0;
   const session = createOminipgSqlSession({
     async query(sql) {
       calls.push(`database:${sql}`);
       return { rows: [] };
     },
     async close() {},
-    pool: {
-      async connect() {
-        calls.push("pool:connect");
-        return {
-          async query(sql) {
-            calls.push(`client:${sql}`);
-            return { rows: [] };
-          },
-          release() {
-            releases += 1;
-          },
-        };
-      },
+    async transaction(operation) {
+      calls.push("database:transaction");
+      return await operation({
+        async query(sql) {
+          calls.push(`transaction:${sql}`);
+          return { rows: [] };
+        },
+      });
     },
   });
 
@@ -71,10 +65,7 @@ Deno.test("Ominipg adapter pins a direct PostgreSQL transaction client", async (
 
   assertEquals(calls, [
     "database:SELECT outside",
-    "pool:connect",
-    "client:BEGIN",
-    "client:SELECT inside",
-    "client:COMMIT",
+    "database:transaction",
+    "transaction:SELECT inside",
   ]);
-  assertEquals(releases, 1);
 });

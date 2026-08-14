@@ -90,6 +90,79 @@ Deno.test("Fetch adapter returns bounded HTTP errors and preserves native Respon
   assertEquals(streamed.headers.get("content-type"), "text/plain");
 });
 
+Deno.test("Fetch adapter exposes bounded retryable persistence failures as HTTP 503", async () => {
+  const app: EventNativeApp = Object.freeze({
+    resources: () => [],
+    handle() {
+      throw Object.assign(
+        new Error("Application persistence is temporarily unavailable."),
+        {
+          status: 503,
+          code: "persistence_unavailable",
+          retryAfterSeconds: 4,
+        },
+      );
+    },
+  });
+  const response = await createEventNativeFetchHandler(app)(
+    new Request("https://example.test/threads"),
+  );
+  assertEquals(response.status, 503);
+  assertEquals(response.headers.get("retry-after"), "4");
+  assertEquals(await response.json(), {
+    error: {
+      code: "persistence_unavailable",
+      message: "Application persistence is temporarily unavailable.",
+    },
+  });
+});
+
+Deno.test("Fetch adapter preserves feature response headers for JSON, empty, and SSE responses", async () => {
+  let mode: "json" | "empty" | "sse" = "json";
+  const stream: EventNativeOutputStream = Object.freeze({
+    type: EVENT_NATIVE_OUTPUT_STREAM,
+    outputs: new ReadableStream<AttachmentOutput>({
+      start(controller) {
+        controller.close();
+      },
+    }),
+    done: Promise.resolve(),
+    cancel: () => Promise.resolve(),
+  });
+  const app: EventNativeApp = Object.freeze({
+    resources: () => [],
+    handle() {
+      return Promise.resolve({
+        status: mode === "empty" ? 204 : 200,
+        headers: [
+          ["set-cookie", "session=feature; Path=/; HttpOnly"],
+          ["set-cookie", "tenant=acme; Path=/; Secure"],
+          ["x-feature", mode],
+          ["x-shared", "feature"],
+        ],
+        ...(mode === "sse"
+          ? { data: stream }
+          : mode === "json"
+          ? { data: { ok: true } }
+          : {}),
+      });
+    },
+  });
+  const handle = createEventNativeFetchHandler(app, {
+    responseHeaders: { "x-shared": "default" },
+  });
+  for (const candidate of ["json", "empty", "sse"] as const) {
+    mode = candidate;
+    const response = await handle(new Request("https://example.test/test"));
+    assertEquals(response.headers.get("x-feature"), candidate);
+    assertEquals(response.headers.get("x-shared"), "feature");
+    assertEquals(response.headers.getSetCookie(), [
+      "session=feature; Path=/; HttpOnly",
+      "tenant=acme; Path=/; Secure",
+    ]);
+  }
+});
+
 Deno.test("Fetch adapter is runtime-neutral and factory-first", async () => {
   const source = await Deno.readTextFile(new URL("fetch.ts", import.meta.url));
   assert(!/\bDeno\./.test(source));

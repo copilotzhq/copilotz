@@ -124,7 +124,7 @@ async function createFixture(options: {
   const engine = await createCopilotzEngine({
     session,
     registry,
-    schema: SCHEMA,
+    defaultDatabaseSchema: SCHEMA,
     createId: () => `attachment-${++nextId}`,
     execution: options.execution,
     attachments: { settlementPollMs: 1 },

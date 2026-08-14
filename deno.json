@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.58.0",
+  "version": "0.59.25",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -15,7 +15,9 @@
     "./attachments": "./runtime/attachments/index.ts",
     "./channels": "./runtime/channels/index.ts",
     "./content": "./runtime/content/index.ts",
+    "./context": "./runtime/context/index.ts",
     "./domain": "./runtime/domain/index.ts",
+    "./engine": "./runtime/engine/public.ts",
     "./features": "./runtime/features/index.ts",
     "./memory": "./runtime/memory/index.ts",
     "./tools": "./runtime/tools/index.ts",
@@ -28,6 +30,7 @@
     "./events": "./runtime/events/index.ts",
     "./plugins": "./runtime/plugins/index.ts",
     "./migration/v1": "./migration/v1/index.ts",
+    "./migration/memory-v4": "./migration/memory-v4/index.ts",
     "./resources": "./runtime/resources/index.ts",
     "./tokens": "./runtime/tokens/index.ts",
     "./server": "./server/index.ts"
@@ -43,6 +46,7 @@
       "docs/**/*.md",
       "docs/manifest.json",
       "migration/v1/index.ts",
+      "migration/memory-v4/index.ts",
       "runtime/**/*.ts",
       "server/**/*.ts",
       "utils/**/*.ts"
@@ -85,7 +89,7 @@
     "check:surface": "deno run --allow-read --allow-run=deno scripts/check-package-surface.ts",
     "check": "deno task check:forbidden && deno task check:surface",
     "publish:dry-run": "deno publish --dry-run --allow-dirty",
-    "test": "deno test --allow-all contracts/v3 runtime migration/v1 server utils",
+    "test": "deno test --allow-all contracts/v3 runtime migration/v1 migration/memory-v4 server utils",
     "test:v3-contracts": "deno task test"
   },
   "lock": false

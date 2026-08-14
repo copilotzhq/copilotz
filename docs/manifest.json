@@ -49,6 +49,11 @@
           "description": "One immutable content model for every modality."
         },
         {
+          "title": "Semantic Memory and Context",
+          "slug": "memory",
+          "description": "Ontology, native consolidation, application evidence, querying, and migration."
+        },
+        {
           "title": "Multi-Agent Ask",
           "slug": "multi-agent-ask",
           "description": "Public agent-to-agent conversation and causal resumption."
@@ -72,6 +77,11 @@
           "title": "Runtime Adapters",
           "slug": "runtime-adapters",
           "description": "Explicit host capabilities and portable core boundaries."
+        },
+        {
+          "title": "Application Resilience and Memory Refactor Plan",
+          "slug": "application-resilience-plan",
+          "description": "Agreed resilience, memory ontology, native consolidation, and plugin context design."
         },
         {
           "title": "API Reference",

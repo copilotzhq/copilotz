@@ -193,6 +193,13 @@ Deno.test("tool lifecycle stores role-labelled assets and compact independently 
       toolExecutionId: "execution-a",
       toolCallId: "call-a",
       toolId: "lookup",
+      toolName: "Lookup",
+      status: "running",
+    });
+    assertEquals(created.event.visibility, {
+      kind: "tool",
+      policy: "public_status",
+      requesterId: "agent-a",
     });
     assert(!JSON.stringify(created.event).includes("private query body"));
 
@@ -228,6 +235,18 @@ Deno.test("tool lifecycle stores role-labelled assets and compact independently 
     });
     assertEquals(completed.value?.status, "completed");
     assertEquals(completed.event.threadId, "thread-a");
+    assertEquals(completed.event.payload, {
+      toolExecutionId: "execution-a",
+      toolCallId: "call-a",
+      toolId: "lookup",
+      toolName: "Lookup",
+      status: "completed",
+    });
+    assertEquals(completed.event.visibility, {
+      kind: "tool",
+      policy: "requester_only",
+      requesterId: "agent-a",
+    });
     assertEquals(completed.event.delta, {
       fields: [
         "content",
@@ -423,6 +442,19 @@ Deno.test("tool failures keep safe control data inline and diagnostic detail res
       policy: "public_status",
       requesterId: "agent-a",
     });
+    assertEquals(failure.event.payload, {
+      toolExecutionId: "execution-failed",
+      toolCallId: "call-failed",
+      toolId: "lookup",
+      toolName: "Lookup",
+      status: "failed",
+      safeError: {
+        name: "LookupError",
+        message: "Lookup failed safely",
+        code: "LOOKUP_FAILED",
+        retryable: true,
+      },
+    });
     assert(!JSON.stringify(failure.event).includes("private stack"));
     assertEquals(
       toolExecutionContent(failure.value!).errorDetail?.role,
@@ -527,11 +559,17 @@ Deno.test("tool aggregate rollback, tenant scope, and event-position cursors rem
       null,
     );
 
-    const create = async (id: string, call: string, key: string) =>
+    const create = async (
+      id: string,
+      call: string,
+      key: string,
+      messageId?: string,
+    ) =>
       await fixture.tools.create({
         namespace: "tenant-a",
         id,
         threadId: "thread-a",
+        ...(messageId ? { messageId } : {}),
         toolCallId: call,
         tool: { id: "lookup" },
         arguments: await fixture.prepare.prepare({
@@ -539,8 +577,8 @@ Deno.test("tool aggregate rollback, tenant scope, and event-position cursors rem
           value: { call },
         }, { namespace: "tenant-a", idempotencyKey: key }),
       });
-    await create("execution-1", "call-1", "list:1");
-    await create("execution-2", "call-2", "list:2");
+    await create("execution-1", "call-1", "list:1", "message-a");
+    await create("execution-2", "call-2", "list:2", "message-a");
     await create("execution-3", "call-3", "list:3");
     assertEquals(
       (await fixture.tools.list("tenant-a", "thread-a")).map((item) => item.id),
@@ -560,6 +598,28 @@ Deno.test("tool aggregate rollback, tenant scope, and event-position cursors rem
         "call-2",
       ))?.id,
       "execution-2",
+    );
+    await create("execution-4", "call-2", "list:4");
+    assertEquals(
+      (await fixture.tools.getByToolCallId(
+        "tenant-a",
+        "thread-a",
+        "call-2",
+      ))?.id,
+      "execution-4",
+    );
+    assertEquals(
+      (await fixture.tools.getByMessageToolCallId(
+        "tenant-a",
+        "thread-a",
+        "message-a",
+        "call-2",
+      ))?.id,
+      "execution-2",
+    );
+    assertEquals(
+      (await fixture.tools.get("tenant-a", "execution-2"))?.toolCallId,
+      "call-2",
     );
     assertEquals(await fixture.tools.get("tenant-b", "execution-2"), null);
   } finally {

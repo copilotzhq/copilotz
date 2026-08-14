@@ -19,6 +19,7 @@ import {
   workflowMetadata,
 } from "./resources.ts";
 import { deferWorkflowTool } from "./tool-executor.ts";
+import { deriveWorkflowId } from "./identity.ts";
 import type {
   AgentAskMetadata,
   CreateAgentAskPluginOptions,
@@ -239,8 +240,12 @@ function defineAskTool(
         );
       }
       const workflow = workflowMetadata(execution.metadata);
-      const askId = `ask:${execution.id}`;
-      const questionMessageId = `message:${execution.id}:ask`;
+      const askId = await deriveWorkflowId("ask", execution.id);
+      const questionMessageId = await deriveWorkflowId(
+        "message",
+        execution.id,
+        "ask",
+      );
       const ask: AgentAskMetadata = Object.freeze({
         schema: "copilotz.ask.v1",
         askId,

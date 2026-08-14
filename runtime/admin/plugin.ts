@@ -471,11 +471,11 @@ function hashUnit(value: string, salt: number): number {
 }
 
 function brainNode(value: CollectionRecord) {
-  const layer = typeof value.layer === "string" ? value.layer : "knowledge";
+  const form = typeof value.form === "string" ? value.form : "unknown";
   const kind = typeof value.kind === "string" ? value.kind : "unknown";
   return {
     ...value,
-    clusterId: `${layer}:${kind}`,
+    clusterId: `${form}:${kind}`,
     x: hashUnit(value.id, 1),
     y: hashUnit(value.id, 2),
   };
@@ -487,21 +487,16 @@ const brain: FeatureAction = async (request, context) => {
   const limit = queryLimit(request);
   const where: Record<string, unknown> = {};
   for (
-    const key of [
-      "memorySpaceId",
-      "checkpointId",
-      "createdByAgentId",
-      "originThreadId",
-      "layer",
-      "kind",
-      "status",
-    ]
+    const [key, queryKey] of [
+      ["memorySpaceId", "memorySpaceId"],
+      ["consolidationId", "checkpointId"],
+      ["createdByAgentId", "agentId"],
+      ["originThreadId", "threadId"],
+      ["form", "form"],
+      ["kind", "kind"],
+      ["status", "status"],
+    ] as const
   ) {
-    const queryKey = key === "createdByAgentId"
-      ? "agentId"
-      : key === "originThreadId"
-      ? "threadId"
-      : key;
     const value = queryText(request, queryKey);
     if (value && value !== "all") where[key] = value;
   }
@@ -509,14 +504,14 @@ const brain: FeatureAction = async (request, context) => {
     ...await allCollectionRecords(
       context.application,
       context.namespace,
-      "brain_node",
+      "memory_record",
       Object.keys(where).length ? where : undefined,
     ),
   ];
   const search = queryText(request, "search")?.toLowerCase();
   if (search) {
     values = values.filter((value) =>
-      `${String(value.name ?? "")}\n${String(value.content ?? "")}`
+      `${String(value.summary ?? "")}\n${JSON.stringify(value.data ?? {})}`
         .toLowerCase().includes(search)
     );
   }
@@ -542,15 +537,15 @@ const brain: FeatureAction = async (request, context) => {
     values.reduce<
       Record<
         string,
-        { layer: string; kind: string; status: string; count: number }
+        { form: string; kind: string; status: string; count: number }
       >
     >(
       (result, value) => {
-        const layer = String(value.layer ?? "knowledge");
+        const form = String(value.form ?? "unknown");
         const kind = String(value.kind ?? "unknown");
         const status = String(value.status ?? "active");
-        const key = `${layer}\0${kind}\0${status}`;
-        const current = result[key] ?? { layer, kind, status, count: 0 };
+        const key = `${form}\0${kind}\0${status}`;
+        const current = result[key] ?? { form, kind, status, count: 0 };
         current.count += 1;
         result[key] = current;
         return result;

@@ -1,162 +1,24 @@
 import { estimateTextTokens } from "../tokens/index.ts";
-
-export const MEMORY_RELATION_TYPES: readonly [
-  "mentions",
-  "related_to",
-  "supports",
-  "contradicts",
-  "depends_on",
-  "supersedes",
-] = Object.freeze(
-  [
-    "mentions",
-    "related_to",
-    "supports",
-    "contradicts",
-    "depends_on",
-    "supersedes",
-  ] as const,
-);
-
-export type MemoryRelationType = typeof MEMORY_RELATION_TYPES[number];
-
-const KNOWLEDGE_KINDS = new Set([
-  "entity",
-  "fact",
-  "claim",
-  "decision",
-  "preference",
-  "task",
-  "event",
-  "constraint",
-]);
-
-const WORKING_FIELD_META = {
-  intent: {
-    challenge: { kind: "challenge", label: "Challenge" },
-    purpose: { kind: "purpose", label: "Purpose" },
-    desiredOutcome: { kind: "desired_outcome", label: "Desired outcome" },
-    successCriteria: {
-      kind: "success_criterion",
-      label: "Success criterion",
-    },
-    decisionCriteria: {
-      kind: "decision_criterion",
-      label: "Decision criterion",
-    },
-    constraints: { kind: "constraint", label: "Constraint" },
-  },
-  state: {
-    currentState: { kind: "current_state", label: "Current state" },
-    activeApproach: { kind: "active_approach", label: "Active approach" },
-    risksAndBlockers: { kind: "risk", label: "Risk or blocker" },
-    openQuestions: { kind: "open_question", label: "Open question" },
-    nextActions: { kind: "next_action", label: "Next action" },
-  },
-} as const;
-
-type ContinuityValueKind = "nullable_string" | "string_list";
-
-const CONTINUITY_FIELD_KINDS = {
-  intent: {
-    challenge: "nullable_string",
-    purpose: "nullable_string",
-    desiredOutcome: "nullable_string",
-    successCriteria: "string_list",
-    decisionCriteria: "string_list",
-    constraints: "string_list",
-  },
-  state: {
-    currentState: "nullable_string",
-    activeApproach: "nullable_string",
-    risksAndBlockers: "string_list",
-    openQuestions: "string_list",
-    nextActions: "string_list",
-  },
-} as const satisfies Record<
-  "intent" | "state",
-  Record<string, ContinuityValueKind>
->;
-
-export type SourcedContinuityValue<T> = Readonly<{
-  value: T;
-  sourceMessageIds: readonly string[];
-}>;
-
-export type LongTermMemoryContinuity = Readonly<{
-  intent: Readonly<{
-    challenge: SourcedContinuityValue<string | null>;
-    purpose: SourcedContinuityValue<string | null>;
-    desiredOutcome: SourcedContinuityValue<string | null>;
-    successCriteria: SourcedContinuityValue<readonly string[]>;
-    decisionCriteria: SourcedContinuityValue<readonly string[]>;
-    constraints: SourcedContinuityValue<readonly string[]>;
-  }>;
-  state: Readonly<{
-    currentState: SourcedContinuityValue<string | null>;
-    activeApproach: SourcedContinuityValue<string | null>;
-    risksAndBlockers: SourcedContinuityValue<readonly string[]>;
-    openQuestions: SourcedContinuityValue<readonly string[]>;
-    nextActions: SourcedContinuityValue<readonly string[]>;
-  }>;
-}>;
-
-export type LongTermMemoryContinuityPatch = Readonly<{
-  intent?: Partial<LongTermMemoryContinuity["intent"]>;
-  state?: Partial<LongTermMemoryContinuity["state"]>;
-}>;
-
-export type MemoryConsolidationNode = Readonly<{
-  localId: string;
-  kind: string;
-  name: string;
-  content: string;
-  confidence?: number;
-  sourceMessageIds: readonly string[];
-  memorySpaceId: string;
-  supersedesNodeId?: string;
-}>;
-
-export type MemoryConsolidationRelation = Readonly<{
-  source: string;
-  type: MemoryRelationType;
-  target: string;
-}>;
-
-export type MemoryConsolidationProposal = Readonly<{
-  continuityPatch: LongTermMemoryContinuityPatch;
-  nodes: readonly MemoryConsolidationNode[];
-  relations: readonly MemoryConsolidationRelation[];
-}>;
-
-export type MemoryBrainNode = Readonly<{
-  id: string;
-  name: string;
-  content: string;
-  kind: string;
-  memorySpaceId: string;
-}>;
-
-export type RetrievedMemoryBrainNode = Readonly<{
-  node: MemoryBrainNode;
-  similarity: number;
-}>;
-
-export type MemoryBrainRelation = Readonly<{
-  sourceNodeId: string;
-  targetNodeId: string;
-  type: string;
-}>;
-
-export type WorkingMemoryNodeDraft = Readonly<{
-  localId: string;
-  kind: string;
-  name: string;
-  content: string;
-  sourceMessageIds: readonly string[];
-  memorySpaceId: string;
-  sourceField: string;
-}>;
+import type { FrozenContextContribution } from "../context/index.ts";
+import {
+  type AssertionMemoryDraft,
+  type ConsolidateMemoryInput,
+  type EntityMemoryDraft,
+  type InquiryMemoryDraft,
+  type IntentMemoryDraft,
+  MEMORY_FORMS,
+  MEMORY_RELATION_TYPES,
+  type MemoryDraftBase,
+  type MemoryForm,
+  type MemoryKindDefinition,
+  type MemoryLifecycleDraft,
+  type MemoryRelationDraft,
+  memorySourceKey,
+  type MemorySourceRef,
+  type OccurrenceMemoryDraft,
+  type ProcedureMemoryDraft,
+  type ProposedMemoryRef,
+} from "./ontology.ts";
 
 export type MemorySourceMessage = Readonly<{
   id: string;
@@ -185,7 +47,35 @@ export type MemorySpaceDescriptor = Readonly<{
   defaultWrite: boolean;
 }>;
 
-const BRAIN_NODE_ID_PATTERN = /^- \[id:([^\]\s]+)\]/gm;
+export type MemoryRecordProjection = Readonly<{
+  id: string;
+  memorySpaceId: string;
+  form: MemoryForm;
+  kind: string;
+  summary: string;
+  status: string;
+  data: Readonly<Record<string, unknown>>;
+}>;
+
+export type RetrievedMemoryRecord = Readonly<{
+  record: MemoryRecordProjection;
+  similarity: number;
+}>;
+
+export type MemoryRecordRelation = Readonly<{
+  sourceId: string;
+  targetId: string;
+  type: string;
+}>;
+
+type ParseConsolidationOptions = Readonly<{
+  kinds: ReadonlyMap<string, MemoryKindDefinition>;
+  writableMemorySpaceIds: ReadonlySet<string>;
+  defaultWriteMemorySpaceId: string;
+  allowedEvidenceSources: ReadonlySet<string>;
+  visibleMemoryIds: ReadonlySet<string>;
+  visibleNodeIds: ReadonlySet<string>;
+}>;
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -193,490 +83,629 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function clampConfidence(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.min(1, Math.max(0, value))
-    : null;
+function requiredText(value: unknown, label: string): string {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized) throw new TypeError(`${label} must be non-empty.`);
+  return normalized;
 }
 
-function emptySourcedValue<T>(value: T): SourcedContinuityValue<T> {
-  return Object.freeze({ value, sourceMessageIds: Object.freeze([]) });
+function optionalText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-export function createEmptyContinuity(): LongTermMemoryContinuity {
+function uniqueStrings(value: unknown, label: string): readonly string[] {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value)) throw new TypeError(`${label} must be an array.`);
+  const entries = value.map((item) => requiredText(item, label));
+  return Object.freeze([...new Set(entries)]);
+}
+
+function parseSource(value: unknown): MemorySourceRef {
+  const input = record(value);
+  const type = requiredText(input.type, "Memory source type");
+  if (type === "collection_record") {
+    return Object.freeze({
+      type,
+      collection: requiredText(input.collection, "Memory source collection"),
+      id: requiredText(input.id, "Memory source id"),
+      ...(typeof input.version === "string" || typeof input.version === "number"
+        ? { version: input.version }
+        : {}),
+      ...(optionalText(input.updatedAt)
+        ? { updatedAt: optionalText(input.updatedAt) }
+        : {}),
+      ...(optionalText(input.fragment)
+        ? { fragment: optionalText(input.fragment) }
+        : {}),
+    });
+  }
+  if (
+    type !== "message" && type !== "tool_execution" && type !== "asset" &&
+    type !== "external"
+  ) {
+    throw new TypeError(`Unsupported memory source type '${type}'.`);
+  }
   return Object.freeze({
-    intent: Object.freeze({
-      challenge: emptySourcedValue<string | null>(null),
-      purpose: emptySourcedValue<string | null>(null),
-      desiredOutcome: emptySourcedValue<string | null>(null),
-      successCriteria: emptySourcedValue<readonly string[]>([]),
-      decisionCriteria: emptySourcedValue<readonly string[]>([]),
-      constraints: emptySourcedValue<readonly string[]>([]),
-    }),
-    state: Object.freeze({
-      currentState: emptySourcedValue<string | null>(null),
-      activeApproach: emptySourcedValue<string | null>(null),
-      risksAndBlockers: emptySourcedValue<readonly string[]>([]),
-      openQuestions: emptySourcedValue<readonly string[]>([]),
-      nextActions: emptySourcedValue<readonly string[]>([]),
-    }),
-  });
+    type,
+    id: requiredText(input.id, "Memory source id"),
+  } as MemorySourceRef);
 }
 
-function normalizeStringList(value: unknown): readonly string[] | null {
-  if (!Array.isArray(value)) return null;
-  const normalized = value.map((entry) =>
-    typeof entry === "string" ? entry.trim() : ""
-  );
-  if (normalized.some((entry) => !entry)) return null;
+function parseSources(
+  value: unknown,
+  options: ParseConsolidationOptions,
+  label: string,
+): readonly MemorySourceRef[] {
+  if (!Array.isArray(value) || !value.length) {
+    throw new TypeError(`${label} requires at least one evidence source.`);
+  }
+  const result = value.map(parseSource);
+  for (const source of result) {
+    if (!options.allowedEvidenceSources.has(memorySourceKey(source))) {
+      throw new TypeError(`${label} cites an unauthorized evidence source.`);
+    }
+  }
   return Object.freeze(
-    normalized.filter((entry, index, values) =>
-      values.indexOf(entry) === index
+    result.filter((source, index) =>
+      result.findIndex((candidate) =>
+        memorySourceKey(candidate) === memorySourceKey(source)
+      ) === index
     ),
   );
 }
 
-function parseSourcedContinuityValue(
-  candidate: unknown,
-  kind: ContinuityValueKind,
-  allowedSourceMessageIds?: ReadonlySet<string>,
-  requireSource = false,
-): SourcedContinuityValue<string | null | readonly string[]> | null {
-  const value = record(candidate);
-  if (!Array.isArray(value.sourceMessageIds)) return null;
-  const sourceMessageIds = Object.freeze(
-    value.sourceMessageIds
-      .filter((id): id is string =>
-        typeof id === "string" && id.length > 0 &&
-        (!allowedSourceMessageIds || allowedSourceMessageIds.has(id))
-      )
-      .filter((id, index, ids) => ids.indexOf(id) === index),
-  );
-  if (requireSource && sourceMessageIds.length === 0) return null;
-  if (kind === "nullable_string") {
-    if (value.value === null) {
-      return Object.freeze({ value: null, sourceMessageIds });
+function parseRef(
+  value: unknown,
+  localIds: ReadonlySet<string>,
+  options: ParseConsolidationOptions,
+  label: string,
+): ProposedMemoryRef {
+  const input = record(value);
+  const localId = optionalText(input.localId);
+  if (localId) {
+    if (!localIds.has(localId)) {
+      throw new TypeError(`${label} references unknown localId '${localId}'.`);
     }
-    const text = typeof value.value === "string" ? value.value.trim() : "";
-    return text ? Object.freeze({ value: text, sourceMessageIds }) : null;
+    return Object.freeze({ localId });
   }
-  const values = normalizeStringList(value.value);
-  return values ? Object.freeze({ value: values, sourceMessageIds }) : null;
-}
-
-function parseContinuitySection(
-  candidate: unknown,
-  kinds: Readonly<Record<string, ContinuityValueKind>>,
-  allowedSourceMessageIds?: ReadonlySet<string>,
-  requireSource = false,
-): Record<string, SourcedContinuityValue<string | null | readonly string[]>> {
-  if (candidate === undefined) return {};
-  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-    throw new Error("Invalid long-term-memory continuity section.");
-  }
-  const source = candidate as Record<string, unknown>;
-  const parsed: Record<
-    string,
-    SourcedContinuityValue<string | null | readonly string[]>
-  > = {};
-  for (const [field, kind] of Object.entries(kinds)) {
-    if (!Object.prototype.hasOwnProperty.call(source, field)) continue;
-    const value = parseSourcedContinuityValue(
-      source[field],
-      kind,
-      allowedSourceMessageIds,
-      requireSource,
-    );
-    if (!value) {
-      throw new Error(`Invalid long-term-memory continuity field: ${field}`);
-    }
-    parsed[field] = value;
-  }
-  return parsed;
-}
-
-function parseContinuityPatch(
-  candidate: unknown,
-  allowedSourceMessageIds: ReadonlySet<string>,
-): LongTermMemoryContinuityPatch {
-  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-    throw new Error("Invalid long-term-memory continuity patch.");
-  }
-  const source = candidate as Record<string, unknown>;
-  return Object.freeze({
-    ...(source.intent !== undefined
-      ? {
-        intent: parseContinuitySection(
-          source.intent,
-          CONTINUITY_FIELD_KINDS.intent,
-          allowedSourceMessageIds,
-          true,
-        ) as LongTermMemoryContinuityPatch["intent"],
-      }
-      : {}),
-    ...(source.state !== undefined
-      ? {
-        state: parseContinuitySection(
-          source.state,
-          CONTINUITY_FIELD_KINDS.state,
-          allowedSourceMessageIds,
-          true,
-        ) as LongTermMemoryContinuityPatch["state"],
-      }
-      : {}),
-  });
-}
-
-export function applyContinuityPatch(
-  previous: LongTermMemoryContinuity,
-  patch: LongTermMemoryContinuityPatch,
-): LongTermMemoryContinuity {
-  return Object.freeze({
-    intent: Object.freeze({ ...previous.intent, ...(patch.intent ?? {}) }),
-    state: Object.freeze({ ...previous.state, ...(patch.state ?? {}) }),
-  });
-}
-
-export function readContinuity(value: unknown): LongTermMemoryContinuity {
-  const fallback = createEmptyContinuity();
-  const candidate = record(value);
-  if (!Object.keys(candidate).length) return fallback;
-  try {
-    return applyContinuityPatch(fallback, {
-      intent: parseContinuitySection(
-        candidate.intent,
-        CONTINUITY_FIELD_KINDS.intent,
-      ) as LongTermMemoryContinuityPatch["intent"],
-      state: parseContinuitySection(
-        candidate.state,
-        CONTINUITY_FIELD_KINDS.state,
-      ) as LongTermMemoryContinuityPatch["state"],
-    });
-  } catch {
-    return fallback;
-  }
-}
-
-function continuityText(
-  value: SourcedContinuityValue<string | null | readonly string[]>,
-): readonly string[] {
-  return Array.isArray(value.value)
-    ? value.value
-    : value.value
-    ? [value.value as string]
-    : [];
-}
-
-export function buildContinuityRetrievalTexts(
-  continuity: LongTermMemoryContinuity,
-): readonly string[] {
-  const section = (
-    values: Readonly<
-      Record<
-        string,
-        SourcedContinuityValue<string | null | readonly string[]>
-      >
-    >,
-  ) =>
-    Object.entries(values).flatMap(([field, value]) =>
-      continuityText(value).map((text) => `${field}: ${text}`)
-    );
-  const intent = section(continuity.intent);
-  const state = section(continuity.state);
-  return Object.freeze([
-    intent.length ? intent.join("\n") : "",
-    state.length ? state.join("\n") : "",
-  ].filter(Boolean));
-}
-
-export function createWorkingMemoryNodeDrafts(
-  continuity: LongTermMemoryContinuity,
-  memorySpaceId: string,
-): readonly WorkingMemoryNodeDraft[] {
-  const drafts: WorkingMemoryNodeDraft[] = [];
-  for (const section of ["intent", "state"] as const) {
-    for (const [field, meta] of Object.entries(WORKING_FIELD_META[section])) {
-      const value = (continuity[section] as Readonly<
-        Record<
-          string,
-          SourcedContinuityValue<string | null | readonly string[]>
-        >
-      >)[field];
-      if (!value) continue;
-      const texts = continuityText(value);
-      texts.forEach((content, index) =>
-        drafts.push(Object.freeze({
-          localId: `working:${section}.${field}:${index}`,
-          kind: meta.kind,
-          name: texts.length > 1 ? `${meta.label} ${index + 1}` : meta.label,
-          content: content.trim(),
-          sourceMessageIds: value.sourceMessageIds,
-          memorySpaceId,
-          sourceField: `${section}.${field}`,
-        }))
+  const memoryId = optionalText(input.memoryId);
+  if (memoryId) {
+    if (!options.visibleMemoryIds.has(memoryId)) {
+      throw new TypeError(
+        `${label} references memory '${memoryId}' that was not visible.`,
       );
     }
+    return Object.freeze({ memoryId });
   }
-  return Object.freeze(drafts.filter((draft) => draft.content));
-}
-
-function parseJsonObject(value: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(value);
-    return Object.keys(record(parsed)).length ? record(parsed) : null;
-  } catch {
-    const match = value.match(/\{[\s\S]*\}/);
-    if (!match) return null;
-    try {
-      const parsed = JSON.parse(match[0]);
-      return Object.keys(record(parsed)).length ? record(parsed) : null;
-    } catch {
-      return null;
-    }
-  }
-}
-
-export function parseMemoryConsolidationProposal(
-  value: string,
-  allowedSourceMessageIds: ReadonlySet<string>,
-  allowedOlderNodeIds: ReadonlySet<string>,
-  routing: Readonly<{
-    writableMemorySpaceIds: ReadonlySet<string>;
-    defaultWriteMemorySpaceId: string;
-  }>,
-): MemoryConsolidationProposal {
-  const parsed = parseJsonObject(value);
-  if (!parsed) {
-    throw new Error("Invalid long-term-memory consolidation response.");
-  }
-  const continuityPatch = parseContinuityPatch(
-    parsed.continuityPatch,
-    allowedSourceMessageIds,
-  );
-  const rawNodes = Array.isArray(parsed.nodes)
-    ? parsed.nodes
-    : Array.isArray(parsed.items)
-    ? parsed.items
-    : [];
-  const localIds = new Set<string>();
-  const nodes = rawNodes.flatMap((candidate): MemoryConsolidationNode[] => {
-    const source = record(candidate);
-    const localId = typeof source.localId === "string"
-      ? source.localId.trim()
-      : "";
-    const kind = typeof source.kind === "string" ? source.kind.trim() : "";
-    const name = typeof source.name === "string" ? source.name.trim() : "";
-    const content = typeof source.content === "string"
-      ? source.content.trim()
-      : "";
-    if (
-      !localId || localIds.has(localId) || !KNOWLEDGE_KINDS.has(kind) ||
-      !name || !content
-    ) return [];
-    localIds.add(localId);
-    const sourceMessageIds = Object.freeze(
-      (Array.isArray(source.sourceMessageIds) ? source.sourceMessageIds : [])
-        .filter((id): id is string =>
-          typeof id === "string" && allowedSourceMessageIds.has(id)
-        )
-        .filter((id, index, ids) => ids.indexOf(id) === index),
-    );
-    const requestedSpace = typeof source.memorySpaceId === "string"
-      ? source.memorySpaceId.trim()
-      : "";
-    const memorySpaceId = routing.writableMemorySpaceIds.has(requestedSpace)
-      ? requestedSpace
-      : routing.defaultWriteMemorySpaceId;
-    const requestedSupersedes = typeof source.supersedesNodeId === "string"
-      ? source.supersedesNodeId
-      : typeof source.supersedesItemId === "string"
-      ? source.supersedesItemId
-      : "";
-    const confidence = clampConfidence(source.confidence);
-    return [Object.freeze({
-      localId,
-      kind,
-      name,
-      content,
-      sourceMessageIds,
-      memorySpaceId,
-      ...(confidence !== null ? { confidence } : {}),
-      ...(allowedOlderNodeIds.has(requestedSupersedes)
-        ? { supersedesNodeId: requestedSupersedes }
-        : {}),
-    })];
-  });
-  const validTargets = new Set([...localIds, ...allowedOlderNodeIds]);
-  const relations = (Array.isArray(parsed.relations) ? parsed.relations : [])
-    .flatMap((candidate): MemoryConsolidationRelation[] => {
-      const source = record(candidate);
-      const from = typeof source.source === "string"
-        ? source.source.trim()
-        : "";
-      const type = typeof source.type === "string" ? source.type.trim() : "";
-      const target = typeof source.target === "string"
-        ? source.target.trim()
-        : "";
-      if (
-        !localIds.has(from) ||
-        !MEMORY_RELATION_TYPES.includes(type as MemoryRelationType) ||
-        !validTargets.has(target) || from === target
-      ) return [];
-      return [Object.freeze({
-        source: from,
-        type: type as MemoryRelationType,
-        target,
-      })];
+  const node = record(input.node);
+  if (Object.keys(node).length) {
+    const parsed = Object.freeze({
+      type: requiredText(node.type, `${label} node type`),
+      id: requiredText(node.id, `${label} node id`),
     });
-  return Object.freeze({
-    continuityPatch,
-    nodes: Object.freeze(nodes),
-    relations: Object.freeze(relations),
-  });
-}
-
-export function extractVisibleBrainNodeIds(content: string): readonly string[] {
-  return Object.freeze(
-    [...content.matchAll(BRAIN_NODE_ID_PATTERN)]
-      .map((match) => match[1])
-      .filter((id, index, ids) => ids.indexOf(id) === index),
-  );
-}
-
-function renderContinuity(
-  continuity: LongTermMemoryContinuity,
-): readonly string[] {
-  const scalar = (
-    ref: string,
-    label: string,
-    value: SourcedContinuityValue<string | null>,
-  ) => value.value ? [`- [continuity:${ref}] ${label}: ${value.value}`] : [];
-  const list = (
-    ref: string,
-    label: string,
-    value: SourcedContinuityValue<readonly string[]>,
-  ) =>
-    value.value.length
-      ? [`- [continuity:${ref}] ${label}: ${value.value.join("; ")}`]
-      : [];
-  const intent = [
-    ...scalar("intent.challenge", "Challenge", continuity.intent.challenge),
-    ...scalar("intent.purpose", "Purpose", continuity.intent.purpose),
-    ...scalar(
-      "intent.desiredOutcome",
-      "Desired outcome",
-      continuity.intent.desiredOutcome,
-    ),
-    ...list(
-      "intent.successCriteria",
-      "Success criteria",
-      continuity.intent.successCriteria,
-    ),
-    ...list(
-      "intent.decisionCriteria",
-      "Decision criteria",
-      continuity.intent.decisionCriteria,
-    ),
-    ...list("intent.constraints", "Constraints", continuity.intent.constraints),
-  ];
-  const state = [
-    ...scalar(
-      "state.currentState",
-      "Current state",
-      continuity.state.currentState,
-    ),
-    ...scalar(
-      "state.activeApproach",
-      "Active approach",
-      continuity.state.activeApproach,
-    ),
-    ...list(
-      "state.risksAndBlockers",
-      "Risks and blockers",
-      continuity.state.risksAndBlockers,
-    ),
-    ...list(
-      "state.openQuestions",
-      "Open questions",
-      continuity.state.openQuestions,
-    ),
-    ...list("state.nextActions", "Next actions", continuity.state.nextActions),
-  ];
-  return Object.freeze([
-    "## CONTINUITY",
-    "### Intent",
-    ...(intent.length ? intent : ["- No explicit intent recorded."]),
-    "### Current state",
-    ...(state.length ? state : ["- No explicit current state recorded."]),
-  ]);
-}
-
-export function renderLongTermMemory(
-  input: Readonly<{
-    proposal: MemoryConsolidationProposal;
-    continuity: LongTermMemoryContinuity;
-    newBrainNodes: ReadonlyMap<string, MemoryBrainNode>;
-    olderBrainNodes: readonly RetrievedMemoryBrainNode[];
-    olderRelations: readonly MemoryBrainRelation[];
-    maxContentEstimatedTokens: number;
-  }>,
-): string {
-  const names = new Map(input.olderBrainNodes.map((item) => [
-    item.node.id,
-    item.node.name,
-  ]));
-  const superseded = new Set(
-    input.proposal.nodes.flatMap((node) =>
-      node.supersedesNodeId ? [node.supersedesNodeId] : []
-    ),
-  );
-  const relevant = [
-    ...input.proposal.nodes.map((node) => {
-      const persisted = input.newBrainNodes.get(node.localId);
-      return `- [id:${
-        persisted?.id ?? node.localId
-      }] [${node.kind}] ${node.name}: ${node.content}`;
-    }),
-    ...input.olderBrainNodes
-      .filter((item) => !superseded.has(item.node.id))
-      .map((item) =>
-        `- [id:${item.node.id}] [${item.node.kind}] ${item.node.name}: ${item.node.content}`
-      ),
-  ];
-  const relationLines = [
-    ...input.proposal.relations.map((relation) => {
-      const source = input.newBrainNodes.get(relation.source)?.name ??
-        relation.source;
-      const target = input.newBrainNodes.get(relation.target)?.name ??
-        names.get(relation.target) ?? relation.target;
-      return `- ${source} --${relation.type}--> ${target}`;
-    }),
-    ...input.olderRelations.map((relation) =>
-      `- ${
-        names.get(relation.sourceNodeId) ?? relation.sourceNodeId
-      } --${relation.type}--> ${
-        names.get(relation.targetNodeId) ?? relation.targetNodeId
-      }`
-    ),
-  ];
-  const blocks = [
-    "## LONG-TERM CONVERSATION MEMORY",
-    ...renderContinuity(input.continuity),
-    "## RELEVANT MEMORY",
-    ...(relevant.length ? relevant : ["- No durable brain nodes."]),
-    "## RELATIONSHIPS",
-    ...(relationLines.length
-      ? relationLines
-      : ["- No explicit relationships."]),
-  ];
-  const retained: string[] = [];
-  for (const block of blocks) {
-    const candidate = [...retained, block].join("\n");
-    if (estimateTextTokens(candidate) <= input.maxContentEstimatedTokens) {
-      retained.push(block);
+    if (!options.visibleNodeIds.has(`${parsed.type}:${parsed.id}`)) {
+      throw new TypeError(
+        `${label} references a domain node that was not visible.`,
+      );
     }
+    return Object.freeze({ node: parsed });
   }
-  return retained.join("\n");
+  throw new TypeError(`${label} requires localId, memoryId, or node.`);
+}
+
+function parseBase(
+  value: unknown,
+  form: MemoryForm,
+  options: ParseConsolidationOptions,
+): MemoryDraftBase & { source: Record<string, unknown> } {
+  const source = record(value);
+  const localId = requiredText(source.localId, `${form} localId`);
+  const kind = requiredText(source.kind, `${form} kind`);
+  const definition = options.kinds.get(kind);
+  if (!definition || definition.form !== form) {
+    throw new TypeError(
+      `Memory kind '${kind}' is not registered for form '${form}'.`,
+    );
+  }
+  const requestedSpace = optionalText(source.spaceId);
+  if (requestedSpace && !options.writableMemorySpaceIds.has(requestedSpace)) {
+    throw new TypeError(
+      `${form} '${localId}' references a memory space that is not writable.`,
+    );
+  }
+  const spaceId = requestedSpace ?? options.defaultWriteMemorySpaceId;
+  if (
+    source.attributes !== undefined &&
+    (!source.attributes || typeof source.attributes !== "object" ||
+      Array.isArray(source.attributes))
+  ) {
+    throw new TypeError(`${form} '${localId}' attributes must be an object.`);
+  }
+  return {
+    localId,
+    kind,
+    summary: requiredText(source.summary, `${form} summary`),
+    spaceId,
+    sources: parseSources(source.sources, options, `${form} '${localId}'`),
+    ...(source.attributes
+      ? {
+        attributes: Object.freeze(structuredClone(record(source.attributes))),
+      }
+      : {}),
+    source,
+  };
+}
+
+function parseEpistemic(value: unknown) {
+  const input = record(value);
+  const basis = requiredText(input.basis, "Assertion epistemic basis");
+  const stance = requiredText(input.stance, "Assertion epistemic stance");
+  if (!["observed", "reported", "inferred", "assumed"].includes(basis)) {
+    throw new TypeError(`Invalid assertion epistemic basis '${basis}'.`);
+  }
+  if (!["affirmed", "denied", "tentative", "disputed"].includes(stance)) {
+    throw new TypeError(`Invalid assertion epistemic stance '${stance}'.`);
+  }
+  return Object.freeze({ basis, stance }) as AssertionMemoryDraft["epistemic"];
+}
+
+function parseDrafts<T>(
+  value: unknown,
+  form: MemoryForm,
+  parse: (base: ReturnType<typeof parseBase>) => T,
+  options: ParseConsolidationOptions,
+): readonly T[] {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${form} drafts must be an array.`);
+  }
+  return Object.freeze(
+    value.map((candidate) => parse(parseBase(candidate, form, options))),
+  );
+}
+
+function parseTemporal(
+  value: unknown,
+): Readonly<Record<string, string>> | undefined {
+  if (value === undefined) return undefined;
+  const input = record(value);
+  const result = Object.fromEntries(
+    Object.entries(input).flatMap(([key, item]) =>
+      optionalText(item) ? [[key, optionalText(item)!]] : []
+    ),
+  );
+  return Object.keys(result).length ? Object.freeze(result) : undefined;
+}
+
+/** Validates and normalizes one model-authored consolidation tool call. */
+export function parseConsolidateMemoryInput(
+  value: unknown,
+  options: ParseConsolidationOptions,
+): ConsolidateMemoryInput {
+  const input = record(value);
+  if (input.outcome !== "changes" && input.outcome !== "no_changes") {
+    throw new TypeError(
+      "consolidate_memory outcome must be 'changes' or 'no_changes'.",
+    );
+  }
+
+  const rawGroups = [
+    input.entities,
+    input.assertions,
+    input.occurrences,
+    input.intents,
+    input.inquiries,
+    input.procedures,
+  ];
+  const rawLocalIds = rawGroups.flatMap((group) =>
+    Array.isArray(group)
+      ? group.map((item) => optionalText(record(item).localId)).filter((
+        id,
+      ): id is string => Boolean(id))
+      : []
+  );
+  if (new Set(rawLocalIds).size !== rawLocalIds.length) {
+    throw new TypeError("Memory proposal localIds must be unique.");
+  }
+  const localIds = new Set(rawLocalIds);
+
+  const entities = parseDrafts<EntityMemoryDraft>(
+    input.entities,
+    "entity",
+    (base) =>
+      Object.freeze({
+        localId: base.localId,
+        kind: base.kind,
+        summary: base.summary,
+        spaceId: base.spaceId,
+        sources: base.sources,
+        ...(base.attributes ? { attributes: base.attributes } : {}),
+        name: requiredText(base.source.name, `Entity '${base.localId}' name`),
+        ...(base.source.aliases !== undefined
+          ? {
+            aliases: uniqueStrings(
+              base.source.aliases,
+              `Entity '${base.localId}' aliases`,
+            ),
+          }
+          : {}),
+        ...(Object.keys(record(base.source.externalIds)).length
+          ? {
+            externalIds: Object.freeze(Object.fromEntries(
+              Object.entries(record(base.source.externalIds)).map((
+                [key, item],
+              ) => [
+                requiredText(key, "Entity external id key"),
+                requiredText(item, "Entity external id value"),
+              ]),
+            )),
+          }
+          : {}),
+      }),
+    options,
+  );
+
+  const assertions = parseDrafts<AssertionMemoryDraft>(
+    input.assertions,
+    "assertion",
+    (base) => {
+      const object = record(base.source.object);
+      const parsedObject = Object.prototype.hasOwnProperty.call(object, "ref")
+        ? Object.freeze({
+          ref: parseRef(
+            object.ref,
+            localIds,
+            options,
+            `Assertion '${base.localId}' object`,
+          ),
+        })
+        : Object.prototype.hasOwnProperty.call(object, "value") &&
+            (object.value === null ||
+              ["string", "number", "boolean"].includes(typeof object.value))
+        ? Object.freeze({
+          value: object.value as string | number | boolean | null,
+        })
+        : (() => {
+          throw new TypeError(
+            `Assertion '${base.localId}' requires an object ref or scalar value.`,
+          );
+        })();
+      return Object.freeze({
+        localId: base.localId,
+        kind: base.kind,
+        summary: base.summary,
+        spaceId: base.spaceId,
+        sources: base.sources,
+        ...(base.attributes ? { attributes: base.attributes } : {}),
+        subject: parseRef(
+          base.source.subject,
+          localIds,
+          options,
+          `Assertion '${base.localId}' subject`,
+        ),
+        predicate: requiredText(
+          base.source.predicate,
+          `Assertion '${base.localId}' predicate`,
+        ),
+        object: parsedObject,
+        epistemic: parseEpistemic(base.source.epistemic),
+        ...(parseTemporal(base.source.temporal)
+          ? { temporal: parseTemporal(base.source.temporal) }
+          : {}),
+      });
+    },
+    options,
+  );
+
+  const occurrences = parseDrafts<OccurrenceMemoryDraft>(
+    input.occurrences,
+    "occurrence",
+    (base) =>
+      Object.freeze({
+        localId: base.localId,
+        kind: base.kind,
+        summary: base.summary,
+        spaceId: base.spaceId,
+        sources: base.sources,
+        ...(base.attributes ? { attributes: base.attributes } : {}),
+        ...(Array.isArray(base.source.participants)
+          ? {
+            participants: Object.freeze(base.source.participants.map((item) =>
+              parseRef(
+                item,
+                localIds,
+                options,
+                `Occurrence '${base.localId}' participant`,
+              )
+            )),
+          }
+          : {}),
+        ...(parseTemporal(base.source.temporal)
+          ? { temporal: parseTemporal(base.source.temporal) }
+          : {}),
+      }),
+    options,
+  );
+
+  const intents = parseDrafts<IntentMemoryDraft>(
+    input.intents,
+    "intent",
+    (base) => {
+      const status = requiredText(
+        base.source.status,
+        `Intent '${base.localId}' status`,
+      );
+      if (!["proposed", "active", "completed", "cancelled"].includes(status)) {
+        throw new TypeError(
+          `Intent '${base.localId}' has invalid status '${status}'.`,
+        );
+      }
+      return Object.freeze({
+        localId: base.localId,
+        kind: base.kind,
+        summary: base.summary,
+        spaceId: base.spaceId,
+        sources: base.sources,
+        ...(base.attributes ? { attributes: base.attributes } : {}),
+        status: status as IntentMemoryDraft["status"],
+        ...(base.source.owner
+          ? {
+            owner: parseRef(
+              base.source.owner,
+              localIds,
+              options,
+              `Intent '${base.localId}' owner`,
+            ),
+          }
+          : {}),
+        ...(base.source.target
+          ? {
+            target: parseRef(
+              base.source.target,
+              localIds,
+              options,
+              `Intent '${base.localId}' target`,
+            ),
+          }
+          : {}),
+        ...(optionalText(base.source.dueAt)
+          ? { dueAt: optionalText(base.source.dueAt) }
+          : {}),
+      });
+    },
+    options,
+  );
+
+  const inquiries = parseDrafts<InquiryMemoryDraft>(
+    input.inquiries,
+    "inquiry",
+    (base) => {
+      const status = requiredText(
+        base.source.status,
+        `Inquiry '${base.localId}' status`,
+      );
+      if (!["open", "answered", "obsolete"].includes(status)) {
+        throw new TypeError(
+          `Inquiry '${base.localId}' has invalid status '${status}'.`,
+        );
+      }
+      return Object.freeze({
+        localId: base.localId,
+        kind: base.kind,
+        summary: base.summary,
+        spaceId: base.spaceId,
+        sources: base.sources,
+        ...(base.attributes ? { attributes: base.attributes } : {}),
+        question: requiredText(
+          base.source.question,
+          `Inquiry '${base.localId}' question`,
+        ),
+        status: status as InquiryMemoryDraft["status"],
+        ...(Array.isArray(base.source.about)
+          ? {
+            about: Object.freeze(
+              base.source.about.map((item) =>
+                parseRef(
+                  item,
+                  localIds,
+                  options,
+                  `Inquiry '${base.localId}' about`,
+                )
+              ),
+            ),
+          }
+          : {}),
+        ...(base.source.answer
+          ? {
+            answer: parseRef(
+              base.source.answer,
+              localIds,
+              options,
+              `Inquiry '${base.localId}' answer`,
+            ),
+          }
+          : {}),
+      });
+    },
+    options,
+  );
+
+  const procedures = parseDrafts<ProcedureMemoryDraft>(
+    input.procedures,
+    "procedure",
+    (base) => {
+      const steps = uniqueStrings(
+        base.source.steps,
+        `Procedure '${base.localId}' steps`,
+      );
+      if (!steps.length) {
+        throw new TypeError(
+          `Procedure '${base.localId}' requires at least one step.`,
+        );
+      }
+      return Object.freeze({
+        localId: base.localId,
+        kind: base.kind,
+        summary: base.summary,
+        spaceId: base.spaceId,
+        sources: base.sources,
+        ...(base.attributes ? { attributes: base.attributes } : {}),
+        steps,
+        ...(optionalText(base.source.trigger)
+          ? { trigger: optionalText(base.source.trigger) }
+          : {}),
+        ...(base.source.preconditions !== undefined
+          ? {
+            preconditions: uniqueStrings(
+              base.source.preconditions,
+              `Procedure '${base.localId}' preconditions`,
+            ),
+          }
+          : {}),
+        ...(optionalText(base.source.expectedOutcome)
+          ? { expectedOutcome: optionalText(base.source.expectedOutcome) }
+          : {}),
+        ...(optionalText(base.source.applicability)
+          ? { applicability: optionalText(base.source.applicability) }
+          : {}),
+      });
+    },
+    options,
+  );
+
+  const parseRelation = (value: unknown): MemoryRelationDraft => {
+    const candidate = record(value);
+    const type = requiredText(candidate.type, "Memory relation type");
+    if (
+      !MEMORY_RELATION_TYPES.includes(type as never) ||
+      type === "derived_from" || type === "supersedes"
+    ) throw new TypeError(`Memory relation type '${type}' cannot be proposed.`);
+    return Object.freeze({
+      from: parseRef(
+        candidate.from,
+        localIds,
+        options,
+        "Memory relation source",
+      ),
+      type: type as MemoryRelationDraft["type"],
+      to: parseRef(candidate.to, localIds, options, "Memory relation target"),
+      ...(candidate.sources !== undefined
+        ? {
+          sources: parseSources(candidate.sources, options, "Memory relation"),
+        }
+        : {}),
+    });
+  };
+  const relations = input.relations === undefined
+    ? Object.freeze([])
+    : Array.isArray(input.relations)
+    ? Object.freeze(input.relations.map(parseRelation))
+    : (() => {
+      throw new TypeError("Memory relations must be an array.");
+    })();
+
+  const parseLifecycle = (value: unknown): MemoryLifecycleDraft => {
+    const candidate = record(value);
+    const target = record(candidate.target);
+    const memoryId = optionalText(target.memoryId);
+    let parsedTarget: MemoryLifecycleDraft["target"];
+    if (memoryId) {
+      if (!options.visibleMemoryIds.has(memoryId)) {
+        throw new TypeError(`Lifecycle target '${memoryId}' was not visible.`);
+      }
+      parsedTarget = Object.freeze({ memoryId });
+    } else {
+      const match = record(target.match);
+      const form = requiredText(
+        match.form,
+        "Lifecycle match form",
+      ) as MemoryForm;
+      if (!MEMORY_FORMS.includes(form)) {
+        throw new TypeError(`Invalid lifecycle match form '${form}'.`);
+      }
+      parsedTarget = Object.freeze({
+        match: Object.freeze({
+          form,
+          ...(optionalText(match.kind)
+            ? { kind: optionalText(match.kind) }
+            : {}),
+          ...(match.subject
+            ? {
+              subject: parseRef(
+                match.subject,
+                localIds,
+                options,
+                "Lifecycle match subject",
+              ),
+            }
+            : {}),
+          ...(optionalText(match.predicate)
+            ? { predicate: optionalText(match.predicate) }
+            : {}),
+          query: requiredText(match.query, "Lifecycle match query"),
+        }),
+      });
+    }
+    const status = requiredText(candidate.status, "Lifecycle status");
+    if (
+      ![
+        "superseded",
+        "retracted",
+        "completed",
+        "cancelled",
+        "answered",
+        "obsolete",
+        "deprecated",
+      ].includes(status)
+    ) {
+      throw new TypeError(`Invalid lifecycle status '${status}'.`);
+    }
+    return Object.freeze({
+      target: parsedTarget,
+      status: status as MemoryLifecycleDraft["status"],
+      ...(candidate.replacement
+        ? {
+          replacement: parseRef(
+            candidate.replacement,
+            localIds,
+            options,
+            "Lifecycle replacement",
+          ),
+        }
+        : {}),
+      sources: parseSources(candidate.sources, options, "Lifecycle change"),
+    });
+  };
+  const lifecycle = input.lifecycle === undefined
+    ? Object.freeze([])
+    : Array.isArray(input.lifecycle)
+    ? Object.freeze(input.lifecycle.map(parseLifecycle))
+    : (() => {
+      throw new TypeError("Memory lifecycle changes must be an array.");
+    })();
+
+  const changed = entities.length + assertions.length + occurrences.length +
+    intents.length + inquiries.length + procedures.length + relations.length +
+    lifecycle.length;
+  if (input.outcome === "no_changes" && changed) {
+    throw new TypeError("A no_changes consolidation cannot contain changes.");
+  }
+  if (input.outcome === "changes" && !changed) {
+    throw new TypeError(
+      "A changes consolidation must contain at least one change.",
+    );
+  }
+  return Object.freeze({
+    outcome: input.outcome,
+    ...(entities.length ? { entities } : {}),
+    ...(assertions.length ? { assertions } : {}),
+    ...(occurrences.length ? { occurrences } : {}),
+    ...(intents.length ? { intents } : {}),
+    ...(inquiries.length ? { inquiries } : {}),
+    ...(procedures.length ? { procedures } : {}),
+    ...(relations.length ? { relations } : {}),
+    ...(lifecycle.length ? { lifecycle } : {}),
+  });
 }
 
 function sourceMessageTokens(message: MemorySourceMessage): number {
@@ -722,7 +751,7 @@ export function selectLongTermMemoryRange(
   }
   if (
     !foundBoundary || estimatedTokens < input.triggerEstimatedTokens ||
-    selectedNewestFirst.length === 0
+    !selectedNewestFirst.length
   ) return null;
   const selected = selectedNewestFirst.reverse();
   const retainTarget = Math.max(0, input.retainRecentEstimatedTokens ?? 0);
@@ -732,10 +761,8 @@ export function selectLongTermMemoryRange(
     const units: MemorySourceMessage[][] = [];
     for (const message of selected) {
       if (message.senderType === "tool" && units.length) {
-        units[units.length - 1].push(message);
-      } else {
-        units.push([message]);
-      }
+        units.at(-1)!.push(message);
+      } else units.push([message]);
     }
     for (
       let index = units.length - 1;
@@ -763,92 +790,216 @@ export function selectLongTermMemoryRange(
   });
 }
 
-function sourcePreview(message: MemorySourceMessage): string | undefined {
-  if (message.senderType === "tool") return "[tool result]";
-  const compact = message.text.replace(/\s+/g, " ").trim();
-  if (!compact) return undefined;
-  return compact.length > 160 ? `${compact.slice(0, 157)}...` : compact;
-}
-
 export function buildMemoryConsolidationInstruction(
   input: Readonly<{
     spaces: readonly MemorySpaceDescriptor[];
     sourceMessages: readonly MemorySourceMessage[];
-    hasPreviousMemoryCheckpoint: boolean;
+    kinds: readonly MemoryKindDefinition[];
+    previousRecords: readonly MemoryRecordProjection[];
+    context: readonly FrozenContextContribution[];
+    repair?: string;
   }>,
 ): string {
-  const defaultSpace = input.spaces.find((space) => space.defaultWrite);
-  if (!defaultSpace || defaultSpace.access !== "read_write") {
-    throw new Error("Memory consolidation requires a default writable space.");
-  }
-  const sourceMap = input.sourceMessages.map((message) => ({
-    messageId: message.id,
-    senderType: message.senderType,
-    senderId: message.senderId,
-    ...(sourcePreview(message) ? { preview: sourcePreview(message) } : {}),
-  }));
   const writable = input.spaces.filter((space) =>
     space.access === "read_write"
   );
+  const defaultSpace = writable.find((space) => space.defaultWrite);
+  if (!defaultSpace) {
+    throw new Error("Memory consolidation requires a default writable space.");
+  }
   return [
-    "You are performing long-term memory consolidation for the agent history immediately above.",
-    "Do not answer the user, route the conversation, or call tools.",
-    "Source message map for provenance:",
-    JSON.stringify(sourceMap),
-    "",
-    "Update continuity and extract durable memory from that history.",
-    "Emit only changed continuity fields; omitted fields retain their previous values.",
-    "Use null or [] only when the source explicitly clears a value.",
-    "Keep challenge, desired outcome, current state, blockers, questions, and next actions distinct.",
-    "Create canonical entity nodes for durable people, organizations, projects, products, tools, APIs, documents, concepts, goals, and workstreams.",
-    "Relate non-entity memories to their main entities with mentions where applicable.",
-    input.hasPreviousMemoryCheckpoint
-      ? "You may target only older brain-node IDs visible in the long-term memory section."
-      : "There is no prior checkpoint; relation targets must be new localIds.",
-    "Every sourceMessageIds value must occur in the source message map.",
-    `Writable memory spaces: ${JSON.stringify(writable)}`,
+    "## Internal memory maintenance",
+    "Copilotz reserved part of your conversation history for durable memory consolidation. This is internal maintenance, not a new user request.",
+    'Review the reserved history using your normal identity and instructions. Call consolidate_memory exactly once. If nothing durable changed, call it with {"outcome":"no_changes"}. Do not answer the user or continue the task.',
+    "Extract only durable entities, assertions, meaningful occurrences, active intents, unresolved inquiries, and reusable procedures. Every record must be self-contained and cite allowed sources. Preserve uncertainty, negation, temporal meaning, authorship, and explicit corrections. Do not turn tentative language into facts, silently overwrite conflicts, create an entity for every noun, or persist small talk, raw tool output, token deltas, and transient wording. Use the default writable memory space unless another listed writable space clearly owns the record.",
+    input.repair ? `Repair required: ${input.repair}` : "",
+    "Allowed message evidence:",
+    JSON.stringify(input.sourceMessages.map((message) => ({
+      type: "message",
+      id: message.id,
+      senderType: message.senderType,
+      senderId: message.senderId,
+    }))),
+    "Frozen application contributions:",
+    JSON.stringify(input.context.map((item) => ({
+      id: item.id,
+      title: item.title,
+      role: item.role,
+      source: item.source,
+      capturedAt: item.capturedAt,
+    }))),
+    "Writable memory spaces:",
+    JSON.stringify(writable),
     `Default writable memory space: ${defaultSpace.id}`,
-    "Output only one JSON object with this shape:",
-    JSON.stringify({
-      continuityPatch: {
-        intent: {
-          challenge: { value: "string|null", sourceMessageIds: ["id"] },
-          purpose: { value: "string|null", sourceMessageIds: ["id"] },
-          desiredOutcome: { value: "string|null", sourceMessageIds: ["id"] },
-          successCriteria: { value: ["string"], sourceMessageIds: ["id"] },
-          decisionCriteria: { value: ["string"], sourceMessageIds: ["id"] },
-          constraints: { value: ["string"], sourceMessageIds: ["id"] },
-        },
-        state: {
-          currentState: { value: "string|null", sourceMessageIds: ["id"] },
-          activeApproach: { value: "string|null", sourceMessageIds: ["id"] },
-          risksAndBlockers: { value: ["string"], sourceMessageIds: ["id"] },
-          openQuestions: { value: ["string"], sourceMessageIds: ["id"] },
-          nextActions: { value: ["string"], sourceMessageIds: ["id"] },
-        },
-      },
-      nodes: [{
-        localId: "local-id",
-        kind: "entity|fact|claim|decision|preference|task|event|constraint",
-        name: "short label",
-        content: "self-contained statement",
-        confidence: 0.9,
-        sourceMessageIds: ["id"],
-        memorySpaceId: defaultSpace.id,
-        supersedesNodeId: "optional-visible-id",
-      }],
-      relations: [{
-        source: "local-id",
-        type: "mentions|related_to|supports|contradicts|depends_on|supersedes",
-        target: "local-id-or-visible-id",
-      }],
-    }),
-  ].join("\n");
+    "Registered memory kinds:",
+    JSON.stringify(
+      input.kinds.map(({ id, form, description, schema }) => ({
+        id,
+        form,
+        description,
+        ...(schema ? { attributesSchema: schema } : {}),
+      })),
+    ),
+    "Visible previous active memories:",
+    JSON.stringify(
+      input.previousRecords.map(({ id, form, kind, summary, status }) => ({
+        id,
+        form,
+        kind,
+        summary,
+        status,
+      })),
+    ),
+  ].filter(Boolean).join("\n\n");
 }
 
-export function stableMemoryNodeId(
+export function stableMemoryRecordId(
   checkpointId: string,
   localId: string,
 ): string {
-  return `${checkpointId}:brain:${encodeURIComponent(localId)}`;
+  return `${checkpointId}:record:${encodeURIComponent(localId)}`;
+}
+
+function continuityGroup(
+  records: readonly MemoryRecordProjection[],
+  form: MemoryForm,
+  kinds: readonly string[],
+) {
+  return records.filter((item) =>
+    item.form === form && kinds.includes(item.kind)
+  ).map((item) => `- [id:${item.id}] [${item.kind}] ${item.summary}`);
+}
+
+/** Renders the bounded derived continuity and retrieval view used in prompts. */
+export function renderLongTermMemory(
+  input: Readonly<{
+    records: readonly MemoryRecordProjection[];
+    relations: readonly MemoryRecordRelation[];
+    maxContentEstimatedTokens: number;
+  }>,
+): string {
+  const current = input.records.filter((item) =>
+    ![
+      "superseded",
+      "retracted",
+      "cancelled",
+      "obsolete",
+      "deprecated",
+      "merged",
+      "archived",
+    ].includes(item.status)
+  );
+  const names = new Map(current.map((item) => [item.id, item.summary]));
+  const sections = [
+    "## LONG-TERM CONVERSATION MEMORY",
+    "## CONTINUITY",
+    "### Objectives and purpose",
+    ...(continuityGroup(current, "intent", [
+        "intent.purpose",
+        "intent.objective",
+      ]).length
+      ? continuityGroup(current, "intent", [
+        "intent.purpose",
+        "intent.objective",
+      ])
+      : ["- None recorded."]),
+    "### Decisions, plans, and actions",
+    ...(continuityGroup(current, "intent", [
+        "intent.decision",
+        "intent.plan",
+        "intent.action",
+      ]).length
+      ? continuityGroup(current, "intent", [
+        "intent.decision",
+        "intent.plan",
+        "intent.action",
+      ])
+      : ["- None recorded."]),
+    "### Current state, constraints, and risks",
+    ...(continuityGroup(current, "assertion", [
+        "assertion.state",
+        "assertion.constraint",
+        "assertion.risk",
+      ]).length
+      ? continuityGroup(current, "assertion", [
+        "assertion.state",
+        "assertion.constraint",
+        "assertion.risk",
+      ])
+      : ["- None recorded."]),
+    "### Open inquiries",
+    ...(continuityGroup(current, "inquiry", [
+        "inquiry.question",
+        "inquiry.unknown",
+        "inquiry.validation_needed",
+      ]).length
+      ? continuityGroup(current, "inquiry", [
+        "inquiry.question",
+        "inquiry.unknown",
+        "inquiry.validation_needed",
+      ])
+      : ["- None recorded."]),
+    "## RELEVANT MEMORY",
+    ...current.map((item) =>
+      `- [id:${item.id}] [${item.form}/${item.kind}; ${item.status}] ${item.summary}`
+    ),
+    "## RELATIONSHIPS",
+    ...(input.relations.length
+      ? input.relations.map((relation) =>
+        `- ${
+          names.get(relation.sourceId) ?? relation.sourceId
+        } --${relation.type}--> ${
+          names.get(relation.targetId) ?? relation.targetId
+        }`
+      )
+      : ["- No explicit relationships."]),
+  ];
+  const selected: string[] = [];
+  for (const section of sections) {
+    if (
+      estimateTextTokens([...selected, section].join("\n")) <=
+        input.maxContentEstimatedTokens
+    ) selected.push(section);
+  }
+  return selected.join("\n");
+}
+
+export function proposalDrafts(
+  input: ConsolidateMemoryInput,
+): readonly Readonly<{
+  form: MemoryForm;
+  draft:
+    | EntityMemoryDraft
+    | AssertionMemoryDraft
+    | OccurrenceMemoryDraft
+    | IntentMemoryDraft
+    | InquiryMemoryDraft
+    | ProcedureMemoryDraft;
+}>[] {
+  return Object.freeze([
+    ...(input.entities ?? []).map((draft) => ({
+      form: "entity" as const,
+      draft,
+    })),
+    ...(input.assertions ?? []).map((draft) => ({
+      form: "assertion" as const,
+      draft,
+    })),
+    ...(input.occurrences ?? []).map((draft) => ({
+      form: "occurrence" as const,
+      draft,
+    })),
+    ...(input.intents ?? []).map((draft) => ({
+      form: "intent" as const,
+      draft,
+    })),
+    ...(input.inquiries ?? []).map((draft) => ({
+      form: "inquiry" as const,
+      draft,
+    })),
+    ...(input.procedures ?? []).map((draft) => ({
+      form: "procedure" as const,
+      draft,
+    })),
+  ]);
 }

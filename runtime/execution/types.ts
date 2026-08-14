@@ -21,6 +21,7 @@ export const COPILOTZ_DELIVERY_WORKLOAD = "copilotz.delivery.v1";
 
 export type DeliveryDispatchMetadata = Readonly<{
   schema: "copilotz.delivery.dispatch.v1";
+  databaseSchema: string;
   deliveryId: string;
   eventId: string;
   consumerId: string;
@@ -48,6 +49,7 @@ export type LocalWorkloadWorkerOptions = Readonly<{
 }>;
 
 export type DeliveryContextBase = Readonly<{
+  databaseSchema: string;
   event: DurableEvent;
   delivery: EventDelivery;
   signal: AbortSignal;
@@ -78,7 +80,8 @@ export type DeliveryWorkloadScheduler = Readonly<{
 }>;
 
 export type CreateDeliveryWorkloadOptions = Readonly<{
-  store: EventStore;
+  store?: EventStore;
+  resolveStore?: (databaseSchema: string) => EventStore | Promise<EventStore>;
   registry: PluginRegistry;
   createContext?: DeliveryContextFactory;
   leaseMs?: number;
@@ -113,7 +116,9 @@ export type DeliveryRecoveryDispatch = Readonly<{
 }>;
 
 export type CreateDeliveryExecutorOptions = Readonly<{
-  store: EventStore;
+  store?: EventStore;
+  resolveStore?: (databaseSchema: string) => EventStore | Promise<EventStore>;
+  defaultDatabaseSchema?: string;
   registry: PluginRegistry;
   createContext?: DeliveryContextFactory;
   /** Dispatch to an externally hosted workload. The executor never closes it. */
@@ -143,7 +148,10 @@ export type CreateDeliveryExecutorOptions = Readonly<{
   scheduler?: DeliveryWorkloadScheduler;
   createDispatchAttemptId?: () => string;
   /** Relays semantic events framed by a remote Copilotz Worker. */
-  onOutputEvent?: (event: CopilotzEvent) => void | Promise<void>;
+  onOutputEvent?: (
+    event: CopilotzEvent,
+    context: Readonly<{ databaseSchema: string }>,
+  ) => void | Promise<void>;
 }>;
 
 export type DeliveryExecutorOwnership =
@@ -162,14 +170,17 @@ export type DeliveryExecutor = Readonly<{
   dispatchWork(input: ExecutionWorkInput): Promise<ExecutionWorkHandle>;
   dispatchDelivery(
     delivery: string | EventDelivery,
+    options?: { databaseSchema?: string },
   ): Promise<DeliveryExecutionHandle>;
   dispatchRecoverable(options?: {
+    databaseSchema?: string;
     namespace?: string;
     consumerIds?: readonly string[];
     limit?: number;
   }): Promise<DeliveryRecoveryDispatch>;
   /** Waits until relayed output for currently active correlated work settles. */
   settleOutputs(scope: {
+    databaseSchema?: string;
     namespace: string;
     correlationId: string;
   }): Promise<void>;

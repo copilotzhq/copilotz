@@ -8,6 +8,7 @@ import type {
 } from "../content/index.ts";
 import type { EventMutationContext, SqlExecutor } from "../events/index.ts";
 import type {
+  CollectionCommandResult,
   CollectionRecord,
   CreateEventCollectionRepositoryOptions,
   EventCollectionRepository,
@@ -48,6 +49,21 @@ type RuntimeCollectionDefinition = Readonly<{
       context: { namespace: string },
     ) => void | Promise<void>;
   }>;
+  commands?: Readonly<
+    Record<
+      string,
+      Readonly<{
+        execute(
+          context: Readonly<{
+            namespace: string;
+            operationId: string;
+            current: Readonly<Record<string, unknown>>;
+            input: unknown;
+          }>,
+        ): Record<string, unknown> | Promise<Record<string, unknown>>;
+      }>
+    >
+  >;
 }>;
 
 type ExtractedCollectionContent = Readonly<{
@@ -672,6 +688,129 @@ export function createEventCollectionRepository<
           mapNode<EventCollectionValue<TSelect>>(
             await requireNode(transaction, namespace, id),
           ),
+      });
+    },
+    command(idInput, commandInput, input, mutationOptions) {
+      const namespace = requireText(mutationOptions.namespace, "Namespace");
+      const id = requireText(idInput, `${name} ID`);
+      const command = requireText(commandInput, `${name} command`);
+      const commandDefinition = definition.commands?.[command];
+      if (!commandDefinition) {
+        throw new Error(`Unknown ${name} command '${command}'.`);
+      }
+      const operationId = mutationOptions.identity?.deduplicationId?.trim() ||
+        createId();
+      return coordinator.commitMutation({
+        draft: {
+          type: `${name}.${command}`,
+          namespace,
+          subject: { type: name, id },
+          payload: { id, command, operationId },
+          delta: { command },
+          ...identityDraft(mutationOptions.identity),
+        },
+        mutate: async (context) => {
+          const { transaction } = context;
+          const current = mapNode<EventCollectionValue<TSelect>>(
+            await requireNode(transaction, namespace, id, true),
+          );
+          const commandPatch = await commandDefinition.execute(Object.freeze({
+            namespace,
+            operationId,
+            current: deepFreeze(structuredClone(current)),
+            input: structuredClone(input),
+          }));
+          const extractedContent = extractCollectionContent(
+            jsonRecord(commandPatch, `${name}.${command} patch`),
+            contentFields,
+            name,
+          );
+          const patch = extractedContent.input;
+          if (patch.id !== undefined && patch.id !== id) {
+            throw new TypeError(
+              `Collection '${name}' command '${command}' cannot change id.`,
+            );
+          }
+          delete patch.namespace;
+          let processed: Record<string, unknown> = {
+            ...current,
+            ...patch,
+            id,
+          };
+          delete processed.namespace;
+          delete processed.createdAt;
+          delete processed.updatedAt;
+          const createdField = definition.timestamps?.createdAt;
+          if (createdField && current[createdField] !== undefined) {
+            processed[createdField] = current[createdField];
+          }
+          const updatedField = definition.timestamps?.updatedAt;
+          if (updatedField) processed[updatedField] = now().toISOString();
+          if (definition.hooks?.beforeUpdate) {
+            processed = await definition.hooks.beforeUpdate(
+              structuredClone(processed),
+              { namespace },
+            );
+          }
+          processed = jsonRecord(
+            processed,
+            `${name}.${command} beforeUpdate result`,
+          );
+          if (processed.id !== id) {
+            throw new TypeError(
+              `Collection '${name}' beforeUpdate cannot change id.`,
+            );
+          }
+          await canonicalizeCollectionContent(
+            context,
+            namespace,
+            name,
+            contentFields,
+            processed,
+            extractedContent.durable,
+            options.assets,
+          );
+          await validate("update", processed);
+          const primaryKey = definition.keys?.[0]?.property ?? "id";
+          const sourceId = processed[primaryKey];
+          const updated = await transaction.query<NodeRow>(
+            `UPDATE ${tables.nodes}
+             SET name = $1, content = $2, data = $3::jsonb,
+                 source_type = $4, source_id = $5, updated_at = NOW()
+             WHERE namespace = $6 AND id = $7 AND type = $8
+             RETURNING *`,
+            [
+              String(processed.name ?? id),
+              searchContent(definition, processed),
+              JSON.stringify(processed),
+              primaryKey === "id" ? null : `${name}:${primaryKey}`,
+              primaryKey === "id" || sourceId == null ? null : String(sourceId),
+              namespace,
+              id,
+              name,
+            ],
+          );
+          await synchronizeRelations(transaction, namespace, id, processed);
+          if (contentFields.length > 0) {
+            await options.assets!.syncOwner(context, {
+              namespace,
+              ownerId: id,
+              content: ownedContent(processed, contentFields),
+            });
+          }
+          const result: CollectionCommandResult<TSelect> = Object.freeze({
+            command,
+            record: mapNode<EventCollectionValue<TSelect>>(updated.rows[0]),
+          });
+          return result;
+        },
+        recoverDuplicate: async (_event, { transaction }) =>
+          Object.freeze({
+            command,
+            record: mapNode<EventCollectionValue<TSelect>>(
+              await requireNode(transaction, namespace, id),
+            ),
+          }),
       });
     },
     delete(idInput, mutationOptions) {

@@ -152,7 +152,7 @@ Deno.test("realtime context executes a tool and resumes without a text attempt",
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry,
-    schema: "copilotz_realtime_tool",
+    defaultDatabaseSchema: "copilotz_realtime_tool",
     execution: { capacity: 1 },
     attachments: { settlementPollMs: 1, streamCapacity: 1 },
   });
@@ -315,7 +315,7 @@ Deno.test("realtime context asks another agent publicly and resumes the stream",
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry,
-    schema: "copilotz_realtime_ask",
+    defaultDatabaseSchema: "copilotz_realtime_ask",
     execution: { capacity: 1 },
     attachments: { settlementPollMs: 1, streamCapacity: 1 },
   });

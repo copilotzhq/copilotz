@@ -117,6 +117,35 @@ Deno.test({
         (await store.getEvent(committed.event.id))?.type,
         "widget.created",
       );
+
+      const old = "2020-01-01T00:00:00.000Z";
+      const parent = await store.append({
+        type: "old.parent",
+        namespace: "tenant-a",
+        payload: {},
+        createdAt: old,
+      });
+      await store.append({
+        type: "old.child",
+        namespace: "tenant-a",
+        payload: {},
+        causationId: parent.event.id,
+        createdAt: old,
+      });
+      const firstCompaction = await store.compact({
+        retentionMs: 7 * 24 * 60 * 60 * 1_000,
+        now: new Date("2021-01-01T00:00:00.000Z"),
+        limit: 1,
+      });
+      assertEquals(firstCompaction.events, 1);
+      assertEquals(await store.getEvent(parent.event.id) !== null, true);
+      const secondCompaction = await store.compact({
+        retentionMs: 7 * 24 * 60 * 60 * 1_000,
+        now: new Date("2021-01-01T00:00:00.000Z"),
+        limit: 1,
+      });
+      assertEquals(secondCompaction.events, 1);
+      assertEquals(await store.getEvent(parent.event.id), null);
     } finally {
       await session.query(
         `DROP SCHEMA IF EXISTS ${quoteEventIdentifier(schema)} CASCADE`,

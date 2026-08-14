@@ -51,10 +51,19 @@ import { upgradeV1Schemas } from "@copilotz/copilotz/migration/v1";
 
 const results = await upgradeV1Schemas(session, {
   schemas: ["public", "tenant_acme"],
-  resolveLegacyAsset: async (legacy) => ({
-    body: await fetchLegacyBytes(legacy),
-    mediaType: legacy.mediaType ?? "application/octet-stream",
-  }),
+  resolveLegacyAsset: async (legacy) => {
+    const body = await fetchLegacyBytes(legacy);
+    return body
+      ? {
+        body,
+        mediaType: legacy.mediaType ?? "application/octet-stream",
+      }
+      : {
+        state: "failed",
+        reason: "legacy body is no longer available",
+        mediaType: legacy.mediaType ?? "application/octet-stream",
+      };
+  },
 });
 ```
 
@@ -63,6 +72,25 @@ thread lease is active. It preserves node/edge IDs, merges thread fields into
 thread nodes, unions participant edges, canonicalizes assets, translates settled
 non-ephemeral events, discards transient queue state, verifies the new schema,
 and drops staged legacy tables in one transaction per tenant.
+
+Historical tool executions and LLM attempts can outlive a thread that was
+deleted in v1. The upgrader preserves that history under one archived tombstone
+thread per missing legacy thread ID. Both the tombstone and each affected
+workflow carry explicit orphan-recovery metadata; no history is moved to an
+unrelated live thread. A workflow that never stored a thread ID receives a
+deterministic workflow-scoped tombstone.
+
+Resolver exceptions still roll back the tenant. When the source was already
+missing before migration, the adapter may explicitly return `state: "failed"` or
+`state: "abandoned"`; the asset record and every message attachment reference
+are then preserved, while reads fail honestly instead of substituting invented
+bytes.
+
+The upgrade keeps application memory bounded: graph records are normalized in
+keyset batches, and settled legacy events are translated with a set-based SQL
+insert ordered by creation time and ID. Large tenant histories therefore stay
+inside the database engine rather than being materialized in the maintenance
+process.
 
 Fresh databases use the four-table v3 baseline directly and never import the
 upgrade module.

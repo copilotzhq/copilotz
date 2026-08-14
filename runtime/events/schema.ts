@@ -1,3 +1,5 @@
+import type { SqlExecutor } from "./session.ts";
+
 export const EVENT_SCHEMA_VERSION = 3;
 
 export type CoreTableName =
@@ -29,6 +31,136 @@ export function createCoreTableNames(schemaName = "public"): Readonly<
     events: table("events"),
     event_deliveries: table("event_deliveries"),
   });
+}
+
+const CORE_SCHEMA_COLUMNS = Object.freeze(
+  {
+    nodes: Object.freeze([
+      "id",
+      "namespace",
+      "type",
+      "name",
+      "content",
+      "data",
+      "embedding",
+      "source_type",
+      "source_id",
+      "created_at",
+      "updated_at",
+    ]),
+    edges: Object.freeze([
+      "id",
+      "namespace",
+      "source_node_id",
+      "target_node_id",
+      "type",
+      "data",
+      "weight",
+      "created_at",
+    ]),
+    events: Object.freeze([
+      "position",
+      "id",
+      "schema_version",
+      "type",
+      "namespace",
+      "thread_id",
+      "subject_type",
+      "subject_id",
+      "payload",
+      "delta",
+      "routing",
+      "visibility",
+      "metadata",
+      "causation_id",
+      "correlation_id",
+      "deduplication_id",
+      "created_at",
+    ]),
+    event_deliveries: Object.freeze([
+      "id",
+      "event_id",
+      "consumer_id",
+      "status",
+      "attempts",
+      "max_attempts",
+      "priority",
+      "available_at",
+      "lease_owner",
+      "lease_expires_at",
+      "last_error",
+      "created_at",
+      "updated_at",
+      "settled_at",
+    ]),
+  } satisfies Readonly<Record<CoreTableName, readonly string[]>>,
+);
+
+export type CoreSchemaValidation = Readonly<{
+  schema: string;
+  version: typeof EVENT_SCHEMA_VERSION;
+}>;
+
+/**
+ * Performs a read-only structural check for the clean event-native baseline.
+ * Runtime scope selection uses this path so an ordinary request never runs DDL.
+ */
+export async function validateCopilotzSchema(
+  executor: SqlExecutor,
+  schemaName = "public",
+): Promise<CoreSchemaValidation> {
+  const schema = validateEventSchemaName(schemaName);
+  const result = await executor.query<{
+    table_name: string;
+    column_name: string;
+  }>(
+    `SELECT table_name, column_name
+       FROM information_schema.columns
+      WHERE table_schema = $1
+        AND table_name IN ('nodes', 'edges', 'events', 'event_deliveries')`,
+    [schema],
+  );
+  const actual = new Map<string, Set<string>>();
+  for (const row of result.rows) {
+    const columns = actual.get(row.table_name) ?? new Set<string>();
+    columns.add(row.column_name);
+    actual.set(row.table_name, columns);
+  }
+  const missing = Object.entries(CORE_SCHEMA_COLUMNS).flatMap(
+    ([table, columns]) =>
+      columns
+        .filter((column) => !actual.get(table)?.has(column))
+        .map((column) => `${table}.${column}`),
+  );
+  if (missing.length > 0) {
+    const error = new Error(
+      `Copilotz database schema '${schema}' is not provisioned for v${EVENT_SCHEMA_VERSION}; missing ${
+        missing.join(
+          ", ",
+        )
+      }. Run the schema provisioning or migration operation before serving requests.`,
+    );
+    Object.assign(error, {
+      name: "CopilotzSchemaError",
+      code: "copilotz_schema_not_provisioned",
+      schema,
+      version: EVENT_SCHEMA_VERSION,
+      missing: Object.freeze(missing),
+    });
+    throw error;
+  }
+  return Object.freeze({ schema, version: EVENT_SCHEMA_VERSION });
+}
+
+/** Explicit lifecycle operation for creating or upgrading a Copilotz schema. */
+export async function provisionCopilotzSchema(
+  executor: SqlExecutor,
+  schemaName = "public",
+): Promise<CoreSchemaValidation> {
+  for (const statement of createCoreSchemaStatements(schemaName)) {
+    await executor.query(statement);
+  }
+  return await validateCopilotzSchema(executor, schemaName);
 }
 
 /** Clean v3 baseline. The v1 upgrader is deliberately isolated elsewhere. */
@@ -74,7 +206,8 @@ export function createCoreSchemaStatements(
       WHERE type = 'asset'
         AND source_type = 'asset_idempotency'
         AND source_id IS NOT NULL`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS "nodes_tool_call_unique_idx"
+    `DROP INDEX IF EXISTS ${schema}."nodes_tool_call_unique_idx"`,
+    `CREATE INDEX IF NOT EXISTS "nodes_tool_call_idx"
       ON ${tables.nodes} (namespace, source_id)
       WHERE type = 'tool_execution'
         AND source_type = 'tool_call'

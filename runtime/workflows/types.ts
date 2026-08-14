@@ -28,6 +28,8 @@ import type {
 import type { CopilotzEvent } from "../events/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import type { ScopedPluginResources } from "../engine/index.ts";
+import type { ContentInput } from "../content/index.ts";
+import type { MemorySourceRef } from "../memory/ontology.ts";
 
 /** Plugin resource that exposes one existing low-level LLM provider adapter. */
 export type LlmProviderResource = Readonly<{
@@ -101,36 +103,31 @@ export type AgentTextPrompt = Readonly<{
   rawMessages: readonly ConversationMessage[];
   messages: readonly ChatMessage[];
   tools: readonly ToolDefinition[];
-  memory: readonly WorkflowPromptMemoryContribution[];
+  context: readonly WorkflowPromptContextContribution[];
   userMetadata?: Readonly<Record<string, unknown>>;
 }>;
 
-export type WorkflowPromptMemoryContribution = Readonly<{
+export type WorkflowPromptContextContribution = Readonly<{
+  id: string;
   resourceId: string;
-  section?: string;
-  /** Exclude persisted transcript entries up to and including this message. */
+  title: string;
+  role: "context" | "evidence";
+  text: string;
+  source?: MemorySourceRef;
+  capturedAt?: string;
+  /** Set and honored only by Copilotz's built-in long-term-memory resource. */
   historyAfterMessageId?: string;
 }>;
 
-export type WorkflowPromptMemoryResource = Readonly<{
-  id?: string;
-  name: string;
-  kind: string;
-  enabled?: boolean;
-  contribute(
-    input: Readonly<{
-      agent: Agent;
-      participant: Participant;
-      thread: ConversationThread;
-      history: readonly ConversationMessage[];
-      sourceEvent: CopilotzEvent;
-      context: CopilotzProcessorContext;
-    }>,
-  ):
-    | WorkflowPromptMemoryContribution
-    | null
-    | Promise<WorkflowPromptMemoryContribution | null>;
-}>;
+/** Application policy applied before a text attempt records its tool grants. */
+export type ResolveWorkflowAgentTools = (
+  input: Readonly<{
+    agent: Agent;
+    tools: readonly WorkflowTool[];
+    sourceEvent: CopilotzEvent;
+    context: CopilotzProcessorContext;
+  }>,
+) => readonly WorkflowTool[] | Promise<readonly WorkflowTool[]>;
 
 export type CreateTextWorkflowPluginOptions = Readonly<{
   id?: string;
@@ -138,6 +135,7 @@ export type CreateTextWorkflowPluginOptions = Readonly<{
   chat?: LlmChat;
   env?: Readonly<Record<string, string>>;
   resolveAgentTextConfig?: ResolveAgentTextConfig;
+  resolveAgentTools?: ResolveWorkflowAgentTools;
   resolveAgentInstructions?: ResolveWorkflowAgentInstructions;
   historyTransform?: WorkflowHistoryTransform;
   reasoningHistory?: ReasoningHistoryOptions;
@@ -230,10 +228,40 @@ export type WorkflowToolExecutionContext = {
   resolveAsset?: (
     assetId: string,
   ) => Promise<{ bytes: Uint8Array; mime: string }>;
+  /**
+   * Emits non-durable output while this tool is executing. Calls are ordered
+   * even when a tool does not await each returned promise. The final returned
+   * tool value is emitted automatically on the `result` channel when it fits
+   * the bounded live-event frame, unless the tool already emitted that channel
+   * itself. Large results remain asset-backed durable content; tools can stream
+   * bounded pieces explicitly instead.
+   */
+  emitOutput(
+    delta: unknown,
+    options?: WorkflowToolOutputOptions,
+  ): Promise<void>;
   onCancel?: (callback: () => void) => () => void;
   cancelled: boolean;
   cancelReason?: string;
 };
+
+export type WorkflowToolOutputOptions = Readonly<{
+  /** Logical output lane such as result, stdout, stderr, or progress. */
+  channel?: string;
+  /** Append is useful for text chunks; replace is useful for snapshots. */
+  mode?: "append" | "replace";
+  mediaType?: string;
+}>;
+
+/**
+ * Declarative tool result carrying canonical attachments separately from its
+ * bounded model/live projection.
+ */
+export type WorkflowToolResult = Readonly<{
+  kind: "copilotz.workflow-tool.result.v1";
+  output: unknown;
+  attachments?: ContentInput | readonly ContentInput[];
+}>;
 
 /**
  * Returned by an event-producing tool whose durable result will be settled by

@@ -285,8 +285,11 @@ interface ToolExecutionContentFields {
 }
 ```
 
-The tool-call ID, tool resource ID, agent ID, status, timing,
-`historyVisibility`, idempotency key, and safe error summary remain inline.
+The provider tool-call ID, tool resource ID, agent ID, status, timing,
+`historyVisibility`, idempotency key, and safe error summary remain inline. The
+provider label is not the durable execution identity and may recur in later
+attempts. The tool-execution node/event ID remains canonical; lookup by provider
+tool-call ID returns the latest matching execution in the thread.
 
 The runtime resolves `arguments` before invoking a tool. A local or remote
 worker receives either the already-resolved value under an explicit size limit
@@ -376,8 +379,12 @@ Initial policy:
 - `passthrough` remains an edge compatibility mode, not a valid backend for
   durable referenced content.
 
-The resolver batches metadata/body reads so a message history does not incur one
-database/network round trip per part.
+The event-native history endpoint resolves a page as one compound document, so
+clients do not issue one HTTP request per content part. Canonical messages stay
+in `data`; `included.content` contains each requested immutable body alongside
+its original ref and asset record. `included.llmAttempts` and
+`included.toolExecutions` preserve workflow identity for reasoning, tool calls,
+progressive tool state, and final projected output.
 
 ## Write and Transaction Protocol
 
@@ -625,8 +632,8 @@ imports in core.
   non-durable operation.
 - A remote/shared execution topology requires a storage backend visible to both
   producer and worker, or a scoped content-transfer workload.
-- Copilotz owns and closes only the private host/session it created. An injected
-  dispatcher, target, session, or storage backend remains app-owned.
+- Copilotz owns and closes only the private host/database it created. An
+  injected dispatcher, target, database, or storage backend remains app-owned.
 
 ## Compatibility and Migration
 
@@ -638,8 +645,8 @@ During the v3 migration:
 - accept bare IDs and current `asset://<id>` / namespaced references;
 - keep `ToolExecutionContext.resolveAsset` and provide a migration from direct
   `assetStore` access;
-- project canonical messages to v1 REST `content: string` plus
-  `metadata.attachments` until the chat adapter moves;
+- expose canonical compound message history to migrated clients through
+  `include=content,workflow`, without a flattened message compatibility DTO;
 - project semantic/delta events to the versioned legacy transport vocabulary at
   the v1 SSE boundary;
 - preserve `/v1/assets/:id?format=dataUrl` with authorization and size limits.
@@ -665,12 +672,17 @@ records to references inside each tenant's upgrade transaction:
 8. migration is idempotent and applies independently to every tenant schema;
 9. non-canonical legacy asset records require `resolveLegacyAsset`, supplied by
    the maintenance adapter that knows how to read the old filesystem or object
-   store.
+   store; and
+10. legacy `metadata.attachments` entries become ordered `attachment` content
+    refs while their compatibility metadata remains available at the boundary.
 
 Old body fields are removed only after reference resolution and digest/size
-verification. If any body cannot be resolved or encoded, the tenant transaction
-rolls back to the untouched v1 tables. Tenant schemas are upgraded independently
-so an operator can validate and back up each tenant before continuing.
+verification. Unexpected resolver or encoding failures roll the tenant back to
+the untouched v1 tables. If an adapter confirms that a body was already missing,
+it may return an explicit `failed` or `abandoned` result; the upgrade preserves
+that unreadable asset and its refs without manufacturing content. Tenant schemas
+are upgraded independently so an operator can validate and back up each tenant
+before continuing.
 
 ## Acceptance Tests
 

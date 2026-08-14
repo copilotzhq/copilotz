@@ -6,3 +6,8 @@ export type {
   CreateV1SseProjectorOptions,
   V1SseAssetHrefInput,
 } from "./v1-sse.ts";
+export type {
+  EventNativeHistoryInclude,
+  EventNativeMessageHistoryIncluded,
+  EventNativeResolvedContent,
+} from "./history.ts";

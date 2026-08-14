@@ -1,7 +1,10 @@
 import type { HypervisorTransport } from "../../dependencies/oxian-hypervisor.ts";
 import { createCopilotzGateway } from "./gateway.ts";
 import type { CreateCopilotzGatewayOptions } from "./gateway.ts";
-import { openCopilotzPersistence } from "./persistence.ts";
+import {
+  type CopilotzPersistenceLifecycleCallbacks,
+  openCopilotzPersistence,
+} from "./persistence.ts";
 import { createCopilotzWorker } from "./worker.ts";
 import type { CopilotzApplication } from "./types.ts";
 
@@ -23,6 +26,7 @@ export type CreateCopilotzOptions =
     | "signal"
     | "hypervisorConfig"
     | "http"
+    | "resolveDatabaseSchema"
   >
   & Readonly<{ worker?: EmbeddedWorkerOptions }>;
 
@@ -33,14 +37,15 @@ export type CopilotzEmbeddedApplication =
 /**
  * Creates the normal factory-first Copilotz application.
  *
- * With no session, Copilotz owns one private Ominipg connection. Injected
- * sessions and execution infrastructure remain application-owned unless an
- * explicit close callback grants ownership.
+ * With no database, Copilotz owns one private Ominipg connection. Injected
+ * databases and execution infrastructure remain application-owned.
  */
 export async function createCopilotz(
   options: CreateCopilotzOptions = {},
+  lifecycle: CopilotzPersistenceLifecycleCallbacks =
+    options.databaseLifecycle ?? {},
 ): Promise<CopilotzEmbeddedApplication> {
-  const persistence = await openCopilotzPersistence(options);
+  const persistence = await openCopilotzPersistence(options, lifecycle);
   const workerId = options.worker?.id?.trim() ||
     `copilotz-embedded-${crypto.randomUUID()}`;
   const transport: HypervisorTransport = Object.freeze({
@@ -56,26 +61,26 @@ export async function createCopilotz(
   try {
     gateway = await createCopilotzGateway({
       namespace: options.namespace,
-      schema: options.schema,
+      databaseSchema: options.databaseSchema,
       core: options.core,
       plugins: options.plugins,
       resources: options.resources,
       pluginResolver: options.pluginResolver,
       toolCatalog: options.toolCatalog,
-      session: persistence.session,
+      persistence,
       transports: [transport],
       target: { workerId },
       engine,
     });
     worker = await createCopilotzWorker({
       namespace: options.namespace,
-      schema: options.schema,
+      databaseSchema: options.databaseSchema,
       core: options.core,
       plugins: options.plugins,
       resources: options.resources,
       pluginResolver: options.pluginResolver,
       toolCatalog: options.toolCatalog,
-      session: persistence.session,
+      persistence,
       id: workerId,
       transport,
       capacity: options.worker?.capacity,
@@ -132,9 +137,25 @@ export async function createCopilotz(
     ...application,
     config: Object.freeze({
       ...gateway.config,
-      sessionOwnership: persistence.ownership,
+      databaseOwnership: persistence.ownership,
     }),
     role: "embedded",
+    async databaseScope(databaseSchema: string) {
+      await persistence.recovery?.admit();
+      return await gateway!.databaseScope(databaseSchema);
+    },
+    async connect(input: Parameters<CopilotzApplication["connect"]>[0]) {
+      await persistence.recovery?.admit();
+      return await gateway!.connect(input);
+    },
+    async run(input: Parameters<CopilotzApplication["run"]>[0]) {
+      await persistence.recovery?.admit();
+      return await gateway!.run(input);
+    },
+    async goal(input: Parameters<CopilotzApplication["goal"]>[0]) {
+      await persistence.recovery?.admit();
+      return await gateway!.goal(input);
+    },
     shutdown,
   });
 }

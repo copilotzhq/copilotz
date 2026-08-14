@@ -1,4 +1,5 @@
 import type { ProviderConfig } from "../llm/types.ts";
+import type { ScopedEventCollection } from "../domain/index.ts";
 
 export type ToolHistoryVisibility =
   | "requester_only"
@@ -161,6 +162,10 @@ export type APIPrepareRequestContext = Readonly<{
   userExternalId?: string;
   agent?: Agent | null;
   namespace?: string;
+  /** Trusted physical schema selected by the application boundary. */
+  databaseSchema?: string;
+  /** Tenant-scoped graph collections available to this tool execution. */
+  collections?: Readonly<Record<string, ScopedEventCollection>>;
   userMetadata?: Readonly<Record<string, unknown>>;
   threadMetadata?: Readonly<Record<string, unknown>>;
   resolveAsset?: (
@@ -176,6 +181,13 @@ export type APIPrepareRequest = (
   | undefined
   | Promise<APIPrepareRequestInput | undefined>;
 
+/** Top-level response fields promoted into one canonical tool attachment. */
+export type APIResponseAssetMapping = Readonly<{
+  dataBase64Field: string;
+  mediaTypeField: string;
+  nameField?: string;
+}>;
+
 export type API = Readonly<{
   id: string;
   name: string;
@@ -187,7 +199,11 @@ export type API = Readonly<{
   auth?: APIAuth | null;
   timeout?: number | null;
   includeResponseHeaders?: boolean | null;
+  /** Consume application/x-ndjson records as live tool output plus one result. */
+  streamNdjson?: boolean | null;
   prepareRequest?: APIPrepareRequest | null;
+  /** Tool key to response-field mapping for automatic canonical attachments. */
+  responseAssets?: Readonly<Record<string, APIResponseAssetMapping>>;
   metadata?: Readonly<Record<string, unknown>> | null;
   historyPolicyDefaults?: ToolHistoryPolicy;
   toolPolicies?: Readonly<Record<string, ToolHistoryPolicy>>;

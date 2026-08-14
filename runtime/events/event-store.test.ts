@@ -6,6 +6,7 @@ import {
   createSqlSession,
   type EventStore,
   isEventStoreError,
+  quoteEventIdentifier,
   type SqlSession,
 } from "./index.ts";
 
@@ -78,6 +79,49 @@ Deno.test("A20 clean v3 baseline contains only the four core tables", async () =
     assertEquals(
       columns.rows.some((row) => row.column_name === "status"),
       false,
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("A20 schema provisioning replaces the obsolete unique tool-call index", async () => {
+  const fixture = await createFixture();
+  try {
+    await fixture.session.query(
+      `DROP INDEX ${quoteEventIdentifier(TEST_SCHEMA)}."nodes_tool_call_idx"`,
+    );
+    await fixture.session.query(
+      `CREATE UNIQUE INDEX "nodes_tool_call_unique_idx"
+       ON ${fixture.store.tables.nodes} (namespace, source_id)
+       WHERE type = 'tool_execution'
+         AND source_type = 'tool_call'
+         AND source_id IS NOT NULL`,
+    );
+
+    for (const statement of createCoreSchemaStatements(TEST_SCHEMA)) {
+      await fixture.session.query(statement);
+    }
+
+    const indexes = await fixture.session.query<{ indexname: string }>(
+      `SELECT indexname FROM pg_indexes
+       WHERE schemaname = $1
+         AND indexname IN ('nodes_tool_call_idx', 'nodes_tool_call_unique_idx')
+       ORDER BY indexname`,
+      [TEST_SCHEMA],
+    );
+    assertEquals(indexes.rows.map((row) => row.indexname), [
+      "nodes_tool_call_idx",
+    ]);
+
+    await fixture.session.query(
+      `INSERT INTO ${fixture.store.tables.nodes} (
+         id, namespace, type, name, data, source_type, source_id
+       ) VALUES
+         ('tool-a', 'tenant-a', 'tool_execution', 'A', '{}',
+          'tool_call', '["thread-a","provider-call-a"]'),
+         ('tool-b', 'tenant-a', 'tool_execution', 'B', '{}',
+          'tool_call', '["thread-a","provider-call-a"]')`,
     );
   } finally {
     await closeFixture(fixture);
@@ -541,6 +585,104 @@ Deno.test("A22 compaction removes only old fully settled semantic work", async (
       (await store.getDelivery(pending.deliveries[0].id))?.status,
       "pending",
     );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("A22 compaction bounds each transaction and peels causal leaves", async () => {
+  const fixture = await createFixture();
+  const { store } = fixture;
+  try {
+    const old = "2020-01-01T00:00:00.000Z";
+    const parent = await store.append({
+      type: "old.parent",
+      namespace: "tenant-a",
+      payload: {},
+      createdAt: old,
+    });
+    const child = await store.append({
+      type: "old.child",
+      namespace: "tenant-a",
+      payload: {},
+      causationId: parent.event.id,
+      createdAt: old,
+    });
+    const unrelated = await Promise.all(
+      Array.from({ length: 3 }, (_, index) =>
+        store.append({
+          type: `old.unrelated.${index}`,
+          namespace: "tenant-a",
+          payload: {},
+          createdAt: old,
+        })),
+    );
+
+    const first = await store.compact({
+      retentionMs: 7 * 24 * 60 * 60 * 1_000,
+      now: new Date("2021-01-01T00:00:00.000Z"),
+      limit: 1,
+    });
+    assertEquals(first, { events: 1, deliveries: 0 });
+    assertEquals(await store.getEvent(parent.event.id) !== null, true);
+
+    let removed = first.events;
+    for (let index = 0; index < 4; index++) {
+      const result = await store.compact({
+        retentionMs: 7 * 24 * 60 * 60 * 1_000,
+        now: new Date("2021-01-01T00:00:00.000Z"),
+        limit: 1,
+      });
+      assertEquals(result.events <= 1, true);
+      removed += result.events;
+    }
+    assertEquals(removed, 5);
+    assertEquals(await store.getEvent(parent.event.id), null);
+    assertEquals(await store.getEvent(child.event.id), null);
+    for (const event of unrelated) {
+      assertEquals(await store.getEvent(event.event.id), null);
+    }
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("A22 compaction bounds settled deliveries before deleting their event", async () => {
+  const fixture = await createFixture();
+  const { store } = fixture;
+  try {
+    const old = "2020-01-01T00:00:00.000Z";
+    const committed = await store.append({
+      type: "old.settled.batch",
+      namespace: "tenant-a",
+      payload: {},
+      createdAt: old,
+    }, ["consumer-a", "consumer-b"]);
+    for (const [index, delivery] of committed.deliveries.entries()) {
+      const owner = `settled-${index}`;
+      await store.claimDelivery({ id: delivery.id, owner });
+      await store.succeedDelivery(delivery.id, owner);
+    }
+
+    assertEquals(
+      await store.compact({
+        retentionMs: 7 * 24 * 60 * 60 * 1_000,
+        now: new Date("2021-01-01T00:00:00.000Z"),
+        limit: 1,
+      }),
+      { events: 0, deliveries: 1 },
+    );
+    assertEquals(await store.getEvent(committed.event.id) !== null, true);
+
+    assertEquals(
+      await store.compact({
+        retentionMs: 7 * 24 * 60 * 60 * 1_000,
+        now: new Date("2021-01-01T00:00:00.000Z"),
+        limit: 1,
+      }),
+      { events: 1, deliveries: 1 },
+    );
+    assertEquals(await store.getEvent(committed.event.id), null);
   } finally {
     await closeFixture(fixture);
   }

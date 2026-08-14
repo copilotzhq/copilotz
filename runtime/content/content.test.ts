@@ -1,12 +1,14 @@
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 
 import {
+  assetIdFromRef,
   type AssetRepository,
   type ContentError,
   type ContentRef,
   createContentNormalizer,
   createContentResolver,
   createMemoryAssetRepository,
+  formatAssetRef,
 } from "./index.ts";
 
 function createFixture() {
@@ -17,6 +19,19 @@ function createFixture() {
   });
   return { assets, normalize: createContentNormalizer({ assets }) };
 }
+
+Deno.test("canonical asset refs round-trip and reject cross-namespace access", () => {
+  const ref = formatAssetRef("tenant a", "asset/id");
+  assertEquals(ref, "asset://tenant%20a/asset%2Fid");
+  assertEquals(assetIdFromRef("tenant a", ref), "asset/id");
+  assertEquals(assetIdFromRef("tenant a", "raw-id"), "raw-id");
+  assertEquals(assetIdFromRef("tenant a", "asset://legacy-id"), "legacy-id");
+  assertThrows(
+    () => assetIdFromRef("tenant-b", ref),
+    Error,
+    "active namespace",
+  );
+});
 
 async function readStream(stream: ReadableStream<Uint8Array>) {
   const reader = stream.getReader();

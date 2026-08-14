@@ -1,5 +1,6 @@
 import type { ReasoningHistoryOptions } from "../resources/index.ts";
-import { bytesToBase64, toDataUrl } from "../content/index.ts";
+import { bytesToBase64, formatAssetRef, toDataUrl } from "../content/index.ts";
+import type { ContentRef } from "../content/index.ts";
 import type {
   ConversationMessage,
   LlmAttempt,
@@ -29,6 +30,19 @@ function audioFormat(mediaType: string): string | undefined {
   return subtype || undefined;
 }
 
+function attachmentDescriptor(message: ConversationMessage, ref: ContentRef) {
+  const identity = {
+    assetId: ref.assetId,
+    assetRef: formatAssetRef(message.namespace, ref.assetId),
+    kind: ref.kind,
+    mediaType: ref.mediaType,
+    ...(ref.name ? { name: ref.name } : {}),
+  };
+  return `[Copilotz attachment: ${
+    JSON.stringify(identity)
+  }. Use assetId or assetRef with asset tools.]`;
+}
+
 async function contentParts(
   context: CopilotzProcessorCapabilities,
   message: ConversationMessage,
@@ -37,6 +51,12 @@ async function contentParts(
   const parts: ChatContentPart[] = [];
   const text: string[] = [];
   for (const item of resolved) {
+    if (item.ref.role === "attachment") {
+      parts.push({
+        type: "text",
+        text: attachmentDescriptor(message, item.ref),
+      });
+    }
     if (item.ref.kind === "text") {
       const value = item.text ?? new TextDecoder().decode(item.bytes);
       text.push(value);

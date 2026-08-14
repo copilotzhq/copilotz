@@ -33,29 +33,6 @@ type LegacyThreadRow = Record<string, unknown> & {
   updated_at: string | Date;
 };
 
-type LegacyEventRow = Record<string, unknown> & {
-  id: string;
-  thread_id: string;
-  event_type: string;
-  payload: unknown;
-  parent_event_id: string | null;
-  trace_id: string | null;
-  namespace: string | null;
-  subject_type: string | null;
-  subject_id: string | null;
-  operation: string | null;
-  causation_id: string | null;
-  correlation_id: string | null;
-  dedupe_key: string | null;
-  input: unknown;
-  before: unknown;
-  after: unknown;
-  patch: unknown;
-  status: string;
-  metadata: unknown;
-  created_at: string | Date;
-};
-
 type LegacyNodeRow = Record<string, unknown> & {
   id: string;
   namespace: string;
@@ -67,6 +44,10 @@ type LegacyNodeRow = Record<string, unknown> & {
   source_id: string | null;
   created_at: string | Date;
   updated_at: string | Date;
+};
+
+type LegacyNodePageRow = LegacyNodeRow & {
+  migration_cursor_created_at: string;
 };
 
 type ParticipantType = "human" | "agent" | "tool" | "job";
@@ -94,11 +75,19 @@ export type LegacyAssetMigrationInput = Readonly<{
   updatedAt: string;
 }>;
 
-export type ResolvedLegacyAsset = Readonly<{
-  body: Uint8Array;
-  mediaType?: string;
-  metadata?: Readonly<Record<string, unknown>>;
-}>;
+export type ResolvedLegacyAsset =
+  | Readonly<{
+    state?: "ready";
+    body: Uint8Array;
+    mediaType?: string;
+    metadata?: Readonly<Record<string, unknown>>;
+  }>
+  | Readonly<{
+    state: "failed" | "abandoned";
+    reason: string;
+    mediaType?: string;
+    metadata?: Readonly<Record<string, unknown>>;
+  }>;
 
 export type ResolveLegacyAsset = (
   input: LegacyAssetMigrationInput,
@@ -106,8 +95,8 @@ export type ResolveLegacyAsset = (
 
 export type UpgradeV1SchemaOptions = Readonly<{
   /**
-   * Imports bytes addressed by legacy asset metadata. The upgrade aborts when
-   * a non-canonical asset exists and no resolver can provide its body.
+   * Imports bytes addressed by legacy asset metadata or explicitly classifies
+   * an already-unavailable body. Missing/invalid resolver results abort.
    */
   resolveLegacyAsset?: ResolveLegacyAsset;
 }>;
@@ -127,7 +116,7 @@ export type UpgradeV1SchemasOptions = UpgradeV1SchemaOptions & {
   schemas?: readonly string[];
 };
 
-const EPHEMERAL_TYPES = new Set([
+const EPHEMERAL_TYPES = Object.freeze([
   "TOKEN",
   "TOOL_CALL_DELTA",
   "TEXT_DELTA",
@@ -138,6 +127,9 @@ const EPHEMERAL_TYPES = new Set([
   "audio.delta",
   "tool_call.delta",
 ]);
+
+const NODE_MIGRATION_BATCH_SIZE = 100;
+const LLM_ATTEMPT_MIGRATION_BATCH_SIZE = 1;
 
 function qualified(schema: string, table: string): string {
   return `${quoteEventIdentifier(schema)}.${quoteEventIdentifier(table)}`;
@@ -266,16 +258,31 @@ function encodeDatabaseBody(
     { kind: "database"; encoding: "utf8" | "json" | "base64" }
   >;
 }> {
-  if (mediaType.toLowerCase().startsWith("text/") || jsonMediaType(mediaType)) {
+  if (jsonMediaType(mediaType)) {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(body);
-    if (jsonMediaType(mediaType)) JSON.parse(text);
+    JSON.parse(text);
     return {
       body: text,
       location: {
         kind: "database",
-        encoding: jsonMediaType(mediaType) ? "json" : "utf8",
+        encoding: "json",
       },
     };
+  }
+  if (mediaType.toLowerCase().startsWith("text/")) {
+    try {
+      return {
+        body: new TextDecoder("utf-8", { fatal: true }).decode(body),
+        location: { kind: "database", encoding: "utf8" },
+      };
+    } catch {
+      // Legacy stores did not require text-labelled assets to contain UTF-8.
+      // Preserve those bytes exactly instead of performing a lossy decode.
+      return {
+        body: bytesToBase64(body),
+        location: { kind: "database", encoding: "base64" },
+      };
+    }
   }
   return {
     body: bytesToBase64(body),
@@ -286,59 +293,16 @@ function encodeDatabaseBody(
 function canonicalAssetData(value: unknown): boolean {
   const data = object(value);
   const location = object(data.location);
-  return typeof data.mediaType === "string" &&
+  const common = typeof data.mediaType === "string" &&
     finiteNonNegativeInteger(data.byteLength) !== null &&
     typeof data.digest === "string" && data.digest.startsWith("sha256:") &&
-    data.state === "ready" && location.kind === "database" &&
+    location.kind === "database" &&
     (location.encoding === "utf8" || location.encoding === "json" ||
       location.encoding === "base64") &&
     typeof data.body === "string";
-}
-
-function semanticEventType(row: LegacyEventRow): string {
-  if (row.event_type.includes(".")) return row.event_type;
-  switch (row.event_type) {
-    case "NEW_MESSAGE":
-      return "message.created";
-    case "LLM_CALL":
-      return "llm_attempt.created";
-    case "LLM_RESULT":
-      return object(row.payload).status === "failed"
-        ? "llm_attempt.failed"
-        : "llm_attempt.completed";
-    case "TOOL_CALL":
-      return "tool_execution.created";
-    case "TOOL_RESULT":
-      return object(row.payload).status === "failed"
-        ? "tool_execution.failed"
-        : "tool_execution.completed";
-    default:
-      return row.event_type.toLowerCase().replaceAll("_", ".");
-  }
-}
-
-function eventVisibility(row: LegacyEventRow): Record<string, unknown> {
-  const metadataVisibility = object(row.metadata).visibility;
-  if (
-    metadataVisibility && typeof metadataVisibility === "object" &&
-    !Array.isArray(metadataVisibility) &&
-    typeof (metadataVisibility as Record<string, unknown>).kind === "string"
-  ) {
-    return metadataVisibility as Record<string, unknown>;
-  }
-
-  const payload = object(row.payload);
-  const policy = payload.historyVisibility;
-  const agent = object(payload.agent);
-  if (
-    row.event_type === "TOOL_RESULT" &&
-    (policy === "requester_only" || policy === "public_status" ||
-      policy === "public") &&
-    typeof agent.id === "string"
-  ) {
-    return { kind: "tool", policy, requesterId: agent.id };
-  }
-  return { kind: "public" };
+  return common &&
+    (data.state === "ready" || data.state === "failed" ||
+      data.state === "abandoned");
 }
 
 async function tableExists(
@@ -469,22 +433,25 @@ async function copyNodes(
   hasNodes: boolean,
 ): Promise<number> {
   if (!hasNodes) return 0;
-  const result = await transaction.query<{ id: string }>(
-    `INSERT INTO ${qualified(schema, "nodes")} (
-       id, namespace, type, name, content, data, embedding,
-       source_type, source_id, created_at, updated_at
+  const result = await transaction.query<{ count: string | number }>(
+    `WITH inserted AS (
+       INSERT INTO ${qualified(schema, "nodes")} (
+         id, namespace, type, name, content, data, embedding,
+         source_type, source_id, created_at, updated_at
+       )
+       SELECT id, COALESCE(namespace, 'default'), type, name, content,
+         COALESCE(data, '{}'::jsonb),
+         CASE WHEN embedding IS NULL THEN NULL ELSE to_jsonb(embedding) END,
+         source_type, source_id,
+         COALESCE(created_at, NOW()),
+         COALESCE(updated_at, created_at, NOW())
+       FROM ${qualified(schema, "nodes_v1_upgrade")}
+       ON CONFLICT (id) DO NOTHING
+       RETURNING 1
      )
-     SELECT id, COALESCE(namespace, 'default'), type, name, content,
-       COALESCE(data, '{}'::jsonb),
-       CASE WHEN embedding IS NULL THEN NULL ELSE to_jsonb(embedding) END,
-       source_type, source_id,
-       COALESCE(created_at, NOW()),
-       COALESCE(updated_at, created_at, NOW())
-     FROM ${qualified(schema, "nodes_v1_upgrade")}
-     ON CONFLICT (id) DO NOTHING
-     RETURNING id`,
+     SELECT COUNT(*) AS count FROM inserted`,
   );
-  return result.rows.length;
+  return Number(result.rows[0]?.count ?? 0);
 }
 
 async function copyEdges(
@@ -493,40 +460,60 @@ async function copyEdges(
   hasEdges: boolean,
 ): Promise<number> {
   if (!hasEdges) return 0;
-  const result = await transaction.query<{ id: string }>(
-    `INSERT INTO ${qualified(schema, "edges")} (
-       id, namespace, source_node_id, target_node_id,
-       type, data, weight, created_at
+  const result = await transaction.query<{ count: string | number }>(
+    `WITH inserted AS (
+       INSERT INTO ${qualified(schema, "edges")} (
+         id, namespace, source_node_id, target_node_id,
+         type, data, weight, created_at
+       )
+       SELECT edge.id, source.namespace,
+         edge.source_node_id, edge.target_node_id, edge.type,
+         COALESCE(edge.data, '{}'::jsonb), edge.weight,
+         COALESCE(edge.created_at, NOW())
+       FROM ${qualified(schema, "edges_v1_upgrade")} edge
+       JOIN ${qualified(schema, "nodes")} source
+         ON source.id = edge.source_node_id
+       JOIN ${qualified(schema, "nodes")} target
+         ON target.id = edge.target_node_id
+       ON CONFLICT DO NOTHING
+       RETURNING 1
      )
-     SELECT edge.id, source.namespace,
-       edge.source_node_id, edge.target_node_id, edge.type,
-       COALESCE(edge.data, '{}'::jsonb), edge.weight,
-       COALESCE(edge.created_at, NOW())
-     FROM ${qualified(schema, "edges_v1_upgrade")} edge
-     JOIN ${qualified(schema, "nodes")} source
-       ON source.id = edge.source_node_id
-     JOIN ${qualified(schema, "nodes")} target
-       ON target.id = edge.target_node_id
-     ON CONFLICT DO NOTHING
-     RETURNING id`,
+     SELECT COUNT(*) AS count FROM inserted`,
   );
-  return result.rows.length;
+  return Number(result.rows[0]?.count ?? 0);
 }
 
-async function loadNodes(
+async function* loadNodes(
   transaction: SqlExecutor,
   schema: string,
   types: readonly string[],
-): Promise<LegacyNodeRow[]> {
-  const result = await transaction.query<LegacyNodeRow>(
-    `SELECT id, namespace, type, name, content, data,
-       source_type, source_id, created_at, updated_at
-     FROM ${qualified(schema, "nodes")}
-     WHERE type = ANY($1::text[])
-     ORDER BY created_at, id`,
-    [[...types]],
-  );
-  return result.rows;
+  batchSize = NODE_MIGRATION_BATCH_SIZE,
+): AsyncGenerator<LegacyNodeRow> {
+  let createdAt: string | null = null;
+  let id = "";
+  while (true) {
+    const result: { rows: LegacyNodePageRow[] } = await transaction.query<
+      LegacyNodePageRow
+    >(
+      `SELECT id, namespace, type, name, content, data,
+         source_type, source_id, created_at, updated_at,
+         created_at::text AS migration_cursor_created_at
+       FROM ${qualified(schema, "nodes")}
+       WHERE type = ANY($1::text[])
+         AND (
+           $2::timestamptz IS NULL
+           OR (created_at, id) > ($2::timestamptz, $3)
+         )
+       ORDER BY created_at, id
+       LIMIT $4`,
+      [[...types], createdAt, id, batchSize],
+    );
+    if (result.rows.length === 0) return;
+    for (const row of result.rows) yield row;
+    const last = result.rows.at(-1)!;
+    createdAt = last.migration_cursor_created_at;
+    id = last.id;
+  }
 }
 
 async function ensureEdge(
@@ -649,12 +636,71 @@ async function writeCanonicalAsset(
   );
 }
 
+async function writeUnavailableLegacyAsset(
+  transaction: SqlExecutor,
+  schema: string,
+  input: Readonly<{
+    id: string;
+    namespace: string;
+    mediaType: string;
+    state: "failed" | "abandoned";
+    reason: string;
+    metadata?: Readonly<Record<string, unknown>>;
+    sourceType?: string | null;
+    sourceId?: string | null;
+    updatedAt: string;
+  }>,
+): Promise<void> {
+  const mediaType = input.mediaType.trim();
+  const reason = input.reason.trim();
+  if (!mediaType) throw new TypeError(`Asset '${input.id}' has no media type.`);
+  if (!reason) {
+    throw new TypeError(`Unavailable asset '${input.id}' has no reason.`);
+  }
+  // Keep the stored sentinel internally consistent even though failed and
+  // abandoned assets can never be read. An empty byte sequence is not valid
+  // JSON, so JSON media types use the smallest explicit no-value payload.
+  const body = jsonMediaType(mediaType)
+    ? new TextEncoder().encode("null")
+    : new Uint8Array();
+  const encoded = encodeDatabaseBody(mediaType, body);
+  await transaction.query(
+    `UPDATE ${qualified(schema, "nodes")}
+     SET name = $3, content = NULL, data = $4::jsonb,
+       source_type = $5, source_id = $6, updated_at = $7::timestamptz
+     WHERE namespace = $1 AND id = $2 AND type = 'asset'`,
+    [
+      input.namespace,
+      input.id,
+      mediaType,
+      json({
+        mediaType,
+        byteLength: body.byteLength,
+        digest: await sha256(body),
+        state: input.state,
+        location: encoded.location,
+        body: encoded.body,
+        metadata: {
+          ...object(input.metadata),
+          migrationUnavailable: {
+            code: "legacy_asset_unavailable",
+            reason,
+          },
+        },
+      }),
+      input.sourceType ?? null,
+      input.sourceId ?? null,
+      input.updatedAt,
+    ],
+  );
+}
+
 async function canonicalizeLegacyAssets(
   transaction: SqlExecutor,
   schema: string,
   options: UpgradeV1SchemaOptions,
 ): Promise<void> {
-  for (const row of await loadNodes(transaction, schema, ["asset"])) {
+  for await (const row of loadNodes(transaction, schema, ["asset"])) {
     if (canonicalAssetData(row.data)) continue;
     const data = object(row.data);
     const ref = optionalString(data.ref) ?? optionalString(row.source_id);
@@ -678,7 +724,38 @@ async function canonicalizeLegacyAssets(
       createdAt: iso(row.created_at)!,
       updatedAt: iso(row.updated_at)!,
     });
-    if (!resolved || !(resolved.body instanceof Uint8Array)) {
+    if (!resolved) {
+      throw new TypeError(
+        `resolveLegacyAsset did not return a result for '${row.id}'.`,
+      );
+    }
+    const mediaType = optionalString(resolved.mediaType) ?? inferredMediaType ??
+      "application/octet-stream";
+    const migratedFromV1 = {
+      ref,
+      sourceType: row.source_type,
+      sourceId: row.source_id,
+      data: structuredClone(data),
+    };
+    if (resolved.state === "failed" || resolved.state === "abandoned") {
+      await writeUnavailableLegacyAsset(transaction, schema, {
+        id: row.id,
+        namespace: row.namespace,
+        mediaType,
+        state: resolved.state,
+        reason: resolved.reason,
+        metadata: {
+          ...object(data.metadata),
+          ...object(resolved.metadata),
+          migratedFromV1,
+        },
+        sourceType: "legacy_asset_ref",
+        sourceId: ref ?? row.id,
+        updatedAt: iso(row.updated_at)!,
+      });
+      continue;
+    }
+    if (!("body" in resolved) || !(resolved.body instanceof Uint8Array)) {
       throw new TypeError(
         `resolveLegacyAsset did not return a body for '${row.id}'.`,
       );
@@ -686,18 +763,12 @@ async function canonicalizeLegacyAssets(
     await writeCanonicalAsset(transaction, schema, {
       id: row.id,
       namespace: row.namespace,
-      mediaType: optionalString(resolved.mediaType) ?? inferredMediaType ??
-        "application/octet-stream",
+      mediaType,
       body: resolved.body,
       metadata: {
         ...object(data.metadata),
         ...object(resolved.metadata),
-        migratedFromV1: {
-          ref,
-          sourceType: row.source_type,
-          sourceId: row.source_id,
-          data: structuredClone(data),
-        },
+        migratedFromV1,
       },
       sourceType: "legacy_asset_ref",
       sourceId: ref ?? row.id,
@@ -983,6 +1054,7 @@ async function upsertThreadNode(
     id: thread.id,
     threadId: thread.id,
     externalId: thread.external_id,
+    name: thread.name,
     description: thread.description,
     participants: stringArray(thread.participants),
     initialMessage: thread.initial_message,
@@ -1088,7 +1160,7 @@ async function normalizeParticipantNodes(
   schema: string,
 ): Promise<number> {
   let created = 0;
-  for (const row of await loadNodes(transaction, schema, ["participant"])) {
+  for await (const row of loadNodes(transaction, schema, ["participant"])) {
     const data = object(row.data);
     const externalId = optionalString(data.externalId) ??
       optionalString(row.source_id) ?? row.id;
@@ -1231,6 +1303,58 @@ async function resolveRecipientIds(
   return Object.freeze([...ids]);
 }
 
+function legacyAttachmentAssetId(value: unknown): string | null {
+  const ref = optionalString(value);
+  if (!ref) return null;
+  if (!ref.startsWith("asset://")) return ref;
+  const path = ref.slice("asset://".length);
+  const id = path.split("/").at(-1)?.trim();
+  return id || null;
+}
+
+async function appendLegacyMessageAttachments(
+  transaction: SqlExecutor,
+  schema: string,
+  row: LegacyNodeRow,
+  data: Record<string, unknown>,
+  content: MigratedContentRef[],
+): Promise<void> {
+  const attachments = object(data.metadata).attachments;
+  if (!Array.isArray(attachments)) return;
+
+  for (const candidate of attachments) {
+    const attachment = object(candidate);
+    const ref = optionalString(attachment.assetRef) ??
+      optionalString(attachment.assetId);
+    const assetId = legacyAttachmentAssetId(ref);
+    if (!assetId) continue;
+    const name = optionalString(attachment.fileName) ??
+      optionalString(attachment.name);
+    if (
+      content.some((existing) =>
+        existing.role === "attachment" && existing.assetId === assetId &&
+        (existing.name ?? null) === name
+      )
+    ) continue;
+    content.push(
+      await assetContentRef(transaction, schema, {
+        namespace: row.namespace,
+        ownerId: row.id,
+        assetId,
+        role: "attachment",
+        name,
+        metadata: {
+          migratedFromV1: {
+            ref,
+            kind: optionalString(attachment.kind),
+            format: optionalString(attachment.format),
+          },
+        },
+      }),
+    );
+  }
+}
+
 async function canonicalMessageContent(
   transaction: SqlExecutor,
   schema: string,
@@ -1263,6 +1387,13 @@ async function canonicalMessageContent(
       }),
     );
   }
+  await appendLegacyMessageAttachments(
+    transaction,
+    schema,
+    row,
+    data,
+    content,
+  );
   if (
     typeof data.reasoning === "string" &&
     !content.some((ref) => ref.role === "reasoning")
@@ -1299,39 +1430,55 @@ async function normalizeMessages(
   schema: string,
 ): Promise<number> {
   let participantsCreated = 0;
-  for (const row of await loadNodes(transaction, schema, ["message"])) {
+  for await (const row of loadNodes(transaction, schema, ["message"])) {
     const data = object(row.data);
     const threadId = optionalString(data.threadId) ??
       (row.source_type === "thread" ? optionalString(row.source_id) : null);
-    if (
-      !threadId ||
-      !await nodeExists(
-        transaction,
-        schema,
-        row.namespace,
-        threadId,
-        "thread",
+    const thread = threadId
+      ? await transaction.query<{ namespace: string }>(
+        `SELECT namespace FROM ${qualified(schema, "nodes")}
+         WHERE id = $1 AND type = 'thread' LIMIT 1`,
+        [threadId],
       )
-    ) {
+      : null;
+    const threadNamespace = optionalString(thread?.rows[0]?.namespace);
+    if (!threadId || !threadNamespace) {
       throw new Error(`Legacy message '${row.id}' has no readable thread.`);
     }
+    if (row.namespace !== threadNamespace) {
+      await transaction.query(
+        `UPDATE ${qualified(schema, "nodes")}
+         SET namespace = $2
+         WHERE id = $1 AND type = 'message'`,
+        [row.id, threadNamespace],
+      );
+      await transaction.query(
+        `UPDATE ${qualified(schema, "edges")}
+         SET namespace = $2
+         WHERE source_node_id = $1`,
+        [row.id, threadNamespace],
+      );
+    }
+    const messageRow: LegacyNodeRow = row.namespace === threadNamespace
+      ? row
+      : { ...row, namespace: threadNamespace };
     const sender = await resolveMessageSender(
       transaction,
       schema,
-      row,
+      messageRow,
       data,
     );
     if (sender.created) participantsCreated++;
     const recipientIds = await resolveRecipientIds(
       transaction,
       schema,
-      row.namespace,
+      messageRow.namespace,
       data.recipientIds ?? object(data.metadata).recipientIds,
     );
     const content = await canonicalMessageContent(
       transaction,
       schema,
-      row,
+      messageRow,
       data,
     );
     const metadata = {
@@ -1343,6 +1490,9 @@ async function normalizeMessages(
         senderUserId: optionalString(data.senderUserId),
         externalId: optionalString(data.externalId),
         toolCallId: optionalString(data.toolCallId),
+        ...(row.namespace === threadNamespace
+          ? {}
+          : { originalNamespace: row.namespace }),
       },
     };
     await transaction.query(
@@ -1351,7 +1501,7 @@ async function normalizeMessages(
          source_type = 'thread', source_id = $4
        WHERE namespace = $1 AND id = $2 AND type = 'message'`,
       [
-        row.namespace,
+        messageRow.namespace,
         row.id,
         json({
           threadId,
@@ -1364,26 +1514,26 @@ async function normalizeMessages(
       ],
     );
     await ensureEdge(transaction, schema, {
-      namespace: row.namespace,
+      namespace: messageRow.namespace,
       sourceId: threadId,
       targetId: row.id,
       type: "has_message",
     });
     await ensureEdge(transaction, schema, {
-      namespace: row.namespace,
+      namespace: messageRow.namespace,
       sourceId: sender.id,
       targetId: row.id,
       type: "sent_by",
     });
     await ensureEdge(transaction, schema, {
-      namespace: row.namespace,
+      namespace: messageRow.namespace,
       sourceId: sender.id,
       targetId: threadId,
       type: "participates_in",
     });
     for (const recipientId of recipientIds) {
       await ensureEdge(transaction, schema, {
-        namespace: row.namespace,
+        namespace: messageRow.namespace,
         sourceId: recipientId,
         targetId: threadId,
         type: "participates_in",
@@ -1412,6 +1562,15 @@ function workflowStatus(
   return "running";
 }
 
+function legacyFinalOrPartial(
+  finalValue: unknown,
+  partialValue: unknown,
+): unknown {
+  if (finalValue !== undefined && finalValue !== null) return finalValue;
+  if (partialValue !== undefined) return partialValue;
+  return finalValue;
+}
+
 function safeError(
   value: unknown,
   fallback: string,
@@ -1428,6 +1587,140 @@ function safeError(
       : {}),
     ...(fields.metadata ? { metadata: object(fields.metadata) } : {}),
   };
+}
+
+type WorkflowThreadResolution = Readonly<{
+  threadId: string;
+  orphanRecovery?: Readonly<{
+    reason: "missing_thread" | "missing_thread_id";
+    originalThreadId: string | null;
+    recoveredThreadId: string;
+  }>;
+}>;
+
+async function recoveredWorkflowThreadId(
+  transaction: SqlExecutor,
+  schema: string,
+  row: LegacyNodeRow,
+  originalThreadId: string | null,
+): Promise<string> {
+  const fallback = `migration-orphan-thread:${originalThreadId ?? row.id}`;
+  const candidates = originalThreadId && originalThreadId !== fallback
+    ? [originalThreadId, fallback]
+    : [fallback, `${fallback}:recovered`];
+
+  for (const candidate of candidates) {
+    const existing = await transaction.query<{
+      namespace: string;
+      type: string;
+    }>(
+      `SELECT namespace, type FROM ${qualified(schema, "nodes")}
+       WHERE id = $1 LIMIT 1`,
+      [candidate],
+    );
+    const found = existing.rows[0];
+    if (found) {
+      if (found.namespace === row.namespace && found.type === "thread") {
+        return candidate;
+      }
+      continue;
+    }
+
+    const createdAt = iso(row.created_at)!;
+    const updatedAt = iso(row.updated_at)!;
+    await transaction.query(
+      `INSERT INTO ${qualified(schema, "nodes")} (
+         id, namespace, type, name, content, data,
+         source_type, source_id, created_at, updated_at
+       ) VALUES (
+         $1, $2, 'thread', $3, NULL, $4::jsonb,
+         'migration_orphan_thread', NULL,
+         $5::timestamptz, $6::timestamptz
+       )`,
+      [
+        candidate,
+        row.namespace,
+        "Recovered legacy workflow history",
+        json({
+          id: candidate,
+          threadId: candidate,
+          name: "Recovered legacy workflow history",
+          description:
+            "Archived migration tombstone for workflow history whose original thread is unavailable.",
+          status: "archived",
+          rootThreadId: candidate,
+          metadata: {
+            migratedFromV1: {
+              orphanRecovery: true,
+              originalThreadId,
+            },
+          },
+          createdAt,
+          updatedAt,
+        }),
+        createdAt,
+        updatedAt,
+      ],
+    );
+    return candidate;
+  }
+
+  throw new Error(
+    `Legacy workflow '${row.id}' cannot reserve an orphan recovery thread.`,
+  );
+}
+
+async function resolveWorkflowThread(
+  transaction: SqlExecutor,
+  schema: string,
+  row: LegacyNodeRow,
+  data: Record<string, unknown>,
+): Promise<WorkflowThreadResolution> {
+  const originalThreadId = optionalString(data.threadId);
+  if (originalThreadId) {
+    const existing = await transaction.query<{
+      source_type: string | null;
+      data: unknown;
+    }>(
+      `SELECT source_type, data FROM ${qualified(schema, "nodes")}
+       WHERE namespace = $1 AND id = $2 AND type = 'thread' LIMIT 1`,
+      [row.namespace, originalThreadId],
+    );
+    if (existing.rows[0]) {
+      const migrated = object(
+        object(object(existing.rows[0].data).metadata).migratedFromV1,
+      );
+      if (
+        existing.rows[0].source_type === "migration_orphan_thread" ||
+        migrated.orphanRecovery === true
+      ) {
+        return Object.freeze({
+          threadId: originalThreadId,
+          orphanRecovery: Object.freeze({
+            reason: "missing_thread",
+            originalThreadId,
+            recoveredThreadId: originalThreadId,
+          }),
+        });
+      }
+      return Object.freeze({ threadId: originalThreadId });
+    }
+  }
+
+  const threadId = await recoveredWorkflowThreadId(
+    transaction,
+    schema,
+    row,
+    originalThreadId,
+  );
+  return Object.freeze({
+    threadId,
+    orphanRecovery: Object.freeze({
+      reason: originalThreadId ? "missing_thread" : "missing_thread_id",
+      originalThreadId,
+      recoveredThreadId: threadId,
+    }),
+  });
 }
 
 async function resolveWorkflowParticipant(
@@ -1507,25 +1800,17 @@ async function normalizeToolExecutions(
   schema: string,
 ): Promise<number> {
   let participantsCreated = 0;
-  for (
-    const row of await loadNodes(transaction, schema, ["tool_execution"])
+  for await (
+    const row of loadNodes(transaction, schema, ["tool_execution"])
   ) {
     const data = object(row.data);
-    const threadId = optionalString(data.threadId);
-    if (
-      !threadId ||
-      !await nodeExists(
-        transaction,
-        schema,
-        row.namespace,
-        threadId,
-        "thread",
-      )
-    ) {
-      throw new Error(
-        `Legacy tool execution '${row.id}' has no readable thread.`,
-      );
-    }
+    const thread = await resolveWorkflowThread(
+      transaction,
+      schema,
+      row,
+      data,
+    );
+    const threadId = thread.threadId;
     const messageId = optionalString(data.messageId);
     const linkedMessageId = await nodeExists(
         transaction,
@@ -1607,8 +1892,12 @@ async function normalizeToolExecutions(
           metadata: {
             ...object(data.metadata),
             migratedFromV1: {
+              ...object(object(data.metadata).migratedFromV1),
               eventId: optionalString(data.eventId),
               agentName: optionalString(data.agentName),
+              ...(thread.orphanRecovery
+                ? { orphanRecovery: thread.orphanRecovery }
+                : {}),
             },
           },
         }),
@@ -1651,21 +1940,24 @@ async function normalizeLlmAttempts(
   schema: string,
 ): Promise<number> {
   let participantsCreated = 0;
-  for (const row of await loadNodes(transaction, schema, ["llm_attempt"])) {
+  // Legacy attempts can contain tens of megabytes of embedded transcript data.
+  // Keep each Ominipg result frame bounded independently of ordinary nodes.
+  for await (
+    const row of loadNodes(
+      transaction,
+      schema,
+      ["llm_attempt"],
+      LLM_ATTEMPT_MIGRATION_BATCH_SIZE,
+    )
+  ) {
     const data = object(row.data);
-    const threadId = optionalString(data.threadId);
-    if (
-      !threadId ||
-      !await nodeExists(
-        transaction,
-        schema,
-        row.namespace,
-        threadId,
-        "thread",
-      )
-    ) {
-      throw new Error(`Legacy LLM attempt '${row.id}' has no readable thread.`);
-    }
+    const thread = await resolveWorkflowThread(
+      transaction,
+      schema,
+      row,
+      data,
+    );
+    const threadId = thread.threadId;
     const messageId = optionalString(data.messageId);
     const linkedMessageId = await nodeExists(
         transaction,
@@ -1684,6 +1976,14 @@ async function normalizeLlmAttempts(
     );
     if (participant?.created) participantsCreated++;
     const error = data.error ?? data.safeError;
+    // Preserve a partial result when the legacy final field is absent/null. If
+    // no partial exists, retain an explicit final null as JSON null rather than
+    // converting it to an invalid empty JSON body.
+    const answer = legacyFinalOrPartial(data.answer, data.partialAnswer);
+    const reasoning = legacyFinalOrPartial(
+      data.reasoning,
+      data.partialReasoning,
+    );
     const content = await canonicalWorkflowContent(
       transaction,
       schema,
@@ -1702,15 +2002,13 @@ async function normalizeLlmAttempts(
         },
         {
           role: "body",
-          value: data.answer ?? data.partialAnswer,
-          present: data.answer !== undefined ||
-            data.partialAnswer !== undefined,
+          value: answer,
+          present: answer !== undefined,
         },
         {
           role: "reasoning",
-          value: data.reasoning ?? data.partialReasoning,
-          present: data.reasoning !== undefined ||
-            data.partialReasoning !== undefined,
+          value: reasoning,
+          present: reasoning !== undefined,
         },
         {
           role: "llm.tool_calls",
@@ -1725,7 +2023,7 @@ async function normalizeLlmAttempts(
       ],
     );
     const status = workflowStatus(data.status, {
-      answer: data.answer ?? data.partialAnswer,
+      answer,
       error,
     });
     const attemptIndex = finiteNonNegativeInteger(data.attemptIndex) ?? 0;
@@ -1776,6 +2074,7 @@ async function normalizeLlmAttempts(
           metadata: {
             ...object(data.metadata),
             migratedFromV1: {
+              ...object(object(data.metadata).migratedFromV1),
               eventId: optionalString(data.eventId),
               agentName: optionalString(data.agentName),
               config: data.config === undefined
@@ -1784,6 +2083,9 @@ async function normalizeLlmAttempts(
               runSender: data.runSender === undefined
                 ? null
                 : structuredClone(data.runSender),
+              ...(thread.orphanRecovery
+                ? { orphanRecovery: thread.orphanRecovery }
+                : {}),
             },
           },
         }),
@@ -1823,6 +2125,7 @@ async function assetContentRef(
     assetId: string;
     role: string;
     name?: string | null;
+    metadata?: Record<string, unknown>;
   }>,
 ): Promise<MigratedContentRef> {
   const result = await transaction.query<{ data: unknown }>(
@@ -1849,6 +2152,7 @@ async function assetContentRef(
     role: input.role,
     mediaType,
     ...(input.name ? { name: input.name } : {}),
+    ...(input.metadata ? { metadata: structuredClone(input.metadata) } : {}),
   });
 }
 
@@ -1866,7 +2170,7 @@ async function normalizeKnowledgeDocuments(
   transaction: SqlExecutor,
   schema: string,
 ): Promise<void> {
-  for (const row of await loadNodes(transaction, schema, ["document"])) {
+  for await (const row of loadNodes(transaction, schema, ["document"])) {
     const data = object(row.data);
     let source: MigratedContentRef[] = isCanonicalContent(data.source)
       ? structuredClone(data.source)
@@ -1981,8 +2285,8 @@ async function normalizeLongTermMemory(
   transaction: SqlExecutor,
   schema: string,
 ): Promise<void> {
-  for (
-    const row of await loadNodes(transaction, schema, ["long_term_memory"])
+  for await (
+    const row of loadNodes(transaction, schema, ["long_term_memory"])
   ) {
     const data = object(row.data);
     let content: MigratedContentRef[] = isCanonicalContent(data.content)
@@ -2057,85 +2361,91 @@ async function normalizeLongTermMemory(
   }
 }
 
-async function loadLegacyEvents(
-  transaction: SqlExecutor,
-  schema: string,
-): Promise<LegacyEventRow[]> {
-  const result = await transaction.query<LegacyEventRow>(
-    `SELECT id,
-       "threadId" AS thread_id,
-       "eventType" AS event_type,
-       payload,
-       "parentEventId" AS parent_event_id,
-       "traceId" AS trace_id,
-       namespace,
-       "subjectType" AS subject_type,
-       "subjectId" AS subject_id,
-       operation,
-       "causationId" AS causation_id,
-       "correlationId" AS correlation_id,
-       "dedupeKey" AS dedupe_key,
-       input, before, after, patch, status, metadata,
-       "createdAt" AS created_at
-     FROM ${qualified(schema, "events_v1_upgrade")}
-     WHERE status NOT IN ('pending', 'processing')
-     ORDER BY "createdAt", id`,
-  );
-  return result.rows;
-}
-
 async function copyEvents(
   transaction: SqlExecutor,
   schema: string,
 ): Promise<number> {
-  let count = 0;
-  for (const row of await loadLegacyEvents(transaction, schema)) {
-    if (EPHEMERAL_TYPES.has(row.event_type)) continue;
-    const metadata = {
-      ...object(row.metadata),
-      migratedFromV1: true,
-      legacyStatus: row.status,
-    };
-    const delta = {
-      ...(row.operation == null ? {} : { operation: row.operation }),
-      ...(row.input == null ? {} : { input: row.input }),
-      ...(row.before == null ? {} : { before: row.before }),
-      ...(row.after == null ? {} : { after: row.after }),
-      ...(row.patch == null ? {} : { patch: row.patch }),
-    };
-    const result = await transaction.query<{ id: string }>(
-      `INSERT INTO ${qualified(schema, "events")} (
+  const legacy = qualified(schema, "events_v1_upgrade");
+  const result = await transaction.query<{ count: string | number }>(
+    `WITH inserted AS (
+       INSERT INTO ${qualified(schema, "events")} (
          id, schema_version, type, namespace, thread_id,
          subject_type, subject_id, payload, delta, routing, visibility,
          metadata, causation_id, correlation_id, deduplication_id, created_at
-       ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7,
-         $8::jsonb, $9::jsonb, '{}'::jsonb, $10::jsonb,
-         $11::jsonb, $12, $13, $14, $15::timestamptz
        )
+       SELECT
+         event.id,
+         $1,
+         CASE
+           WHEN event."eventType" LIKE '%.%' THEN event."eventType"
+           WHEN event."eventType" = 'NEW_MESSAGE' THEN 'message.created'
+           WHEN event."eventType" = 'LLM_CALL' THEN 'llm_attempt.created'
+           WHEN event."eventType" = 'LLM_RESULT' THEN
+             CASE WHEN event.payload ->> 'status' = 'failed'
+               THEN 'llm_attempt.failed'
+               ELSE 'llm_attempt.completed'
+             END
+           WHEN event."eventType" = 'TOOL_CALL' THEN 'tool_execution.created'
+           WHEN event."eventType" = 'TOOL_RESULT' THEN
+             CASE WHEN event.payload ->> 'status' = 'failed'
+               THEN 'tool_execution.failed'
+               ELSE 'tool_execution.completed'
+             END
+           ELSE replace(lower(event."eventType"), '_', '.')
+         END,
+         COALESCE(NULLIF(btrim(event.namespace), ''), 'default'),
+         NULLIF(event."threadId", ''),
+         event."subjectType",
+         event."subjectId",
+         COALESCE(event.payload, 'null'::jsonb),
+         (CASE WHEN event.operation IS NULL THEN '{}'::jsonb
+           ELSE jsonb_build_object('operation', event.operation) END) ||
+         (CASE WHEN event.input IS NULL THEN '{}'::jsonb
+           ELSE jsonb_build_object('input', event.input) END) ||
+         (CASE WHEN event.before IS NULL THEN '{}'::jsonb
+           ELSE jsonb_build_object('before', event.before) END) ||
+         (CASE WHEN event.after IS NULL THEN '{}'::jsonb
+           ELSE jsonb_build_object('after', event.after) END) ||
+         (CASE WHEN event.patch IS NULL THEN '{}'::jsonb
+           ELSE jsonb_build_object('patch', event.patch) END),
+         '{}'::jsonb,
+         CASE
+           WHEN jsonb_typeof(event.metadata -> 'visibility') = 'object'
+             AND jsonb_typeof(event.metadata -> 'visibility' -> 'kind') = 'string'
+             THEN event.metadata -> 'visibility'
+           WHEN event."eventType" = 'TOOL_RESULT'
+             AND event.payload ->> 'historyVisibility' IN (
+               'requester_only', 'public_status', 'public'
+             )
+             AND jsonb_typeof(event.payload -> 'agent' -> 'id') = 'string'
+             THEN jsonb_build_object(
+               'kind', 'tool',
+               'policy', event.payload ->> 'historyVisibility',
+               'requesterId', event.payload -> 'agent' ->> 'id'
+             )
+           ELSE jsonb_build_object('kind', 'public')
+         END,
+         (CASE WHEN jsonb_typeof(event.metadata) = 'object'
+           THEN event.metadata ELSE '{}'::jsonb END) ||
+           jsonb_build_object(
+             'migratedFromV1', true,
+             'legacyStatus', event.status
+           ),
+         COALESCE(event."causationId", event."parentEventId"),
+         COALESCE(event."correlationId", event."traceId", event.id),
+         event."dedupeKey",
+         event."createdAt"
+       FROM ${legacy} event
+       WHERE event.status NOT IN ('pending', 'processing')
+         AND event."eventType" <> ALL($2::text[])
+       ORDER BY event."createdAt", event.id
        ON CONFLICT (id) DO NOTHING
-       RETURNING id`,
-      [
-        row.id,
-        EVENT_SCHEMA_VERSION,
-        semanticEventType(row),
-        row.namespace?.trim() || "default",
-        row.thread_id || null,
-        row.subject_type,
-        row.subject_id,
-        json(row.payload),
-        json(delta),
-        json(eventVisibility(row)),
-        json(metadata),
-        row.causation_id ?? row.parent_event_id,
-        row.correlation_id ?? row.trace_id ?? row.id,
-        row.dedupe_key,
-        iso(row.created_at),
-      ],
-    );
-    count += result.rows.length;
-  }
-  return count;
+       RETURNING 1
+     )
+     SELECT COUNT(*) AS count FROM inserted`,
+    [EVENT_SCHEMA_VERSION, [...EPHEMERAL_TYPES]],
+  );
+  return Number(result.rows[0]?.count ?? 0);
 }
 
 async function updateThreadActivity(

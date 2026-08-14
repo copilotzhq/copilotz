@@ -81,9 +81,9 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
     signal: AbortSignal;
   }> = [];
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
+    database: db,
     namespace: NAMESPACE,
-    schema: "copilotz_v3_knowledge",
+    databaseSchema: "copilotz_v3_knowledge",
     core: false,
     plugins: [createKnowledgePlugin({
       embedding: {
@@ -291,9 +291,9 @@ Deno.test("knowledge source failures retry through Oxian and settle as one durab
   const db = await createTestDatabase({ url: ":memory:" });
   const sourceKeys: string[] = [];
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
+    database: db,
     namespace: NAMESPACE,
-    schema: "copilotz_v3_knowledge_failure",
+    databaseSchema: "copilotz_v3_knowledge_failure",
     core: false,
     plugins: [createKnowledgePlugin({
       embedding: { provider: "fixture.embedding", dimensions: 2 },
@@ -404,6 +404,7 @@ Deno.test("knowledge tools execute through scoped factory capabilities", async (
         agents: [],
         tools: [tool],
         collections: processor.collections,
+        emitOutput: () => Promise.resolve(),
         cancelled: false,
       };
       outputs.set(
@@ -421,9 +422,9 @@ Deno.test("knowledge tools execute through scoped factory capabilities", async (
     resources: { processors: [driver] },
   });
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
+    database: db,
     namespace: NAMESPACE,
-    schema: "copilotz_v3_knowledge_tools",
+    databaseSchema: "copilotz_v3_knowledge_tools",
     core: false,
     plugins: [
       createKnowledgePlugin({

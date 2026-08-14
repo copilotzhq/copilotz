@@ -180,8 +180,22 @@ function transitionStatus(
 
 function eventVisibility(
   input: { visibility?: EventVisibility },
+  participantId: string | undefined,
+  historyVisibility: string | undefined,
 ): EventVisibility {
-  return input.visibility ?? { kind: "internal" };
+  if (input.visibility) return input.visibility;
+  if (!participantId) return { kind: "internal" };
+  const policy = historyVisibility === "requester_only" ||
+      historyVisibility === "public"
+    ? historyVisibility
+    : "public_status";
+  return { kind: "tool", policy, requesterId: participantId };
+}
+
+function toolName(tool: Readonly<Record<string, unknown>>): string | undefined {
+  return typeof tool.name === "string" && tool.name.trim()
+    ? tool.name.trim()
+    : undefined;
 }
 
 /** Creates typed graph-native tool execution lifecycle operations. */
@@ -232,6 +246,22 @@ export function createToolExecutionRepository(
     const cancellationReason = operation === "cancelled"
       ? (input as CancelToolExecutionInput).reason
       : undefined;
+    const safeError = operation === "failed"
+      ? normalizeWorkflowSafeError(failure!)
+      : operation === "cancelled" && cancellationReason
+      ? normalizeWorkflowSafeError({
+        name: "ToolExecutionCancelled",
+        message: cancellationReason,
+        code: "cancelled",
+      })
+      : undefined;
+    const status = transitionStatus(operation, input, existing.status);
+    const existingToolId = typeof existing.tool.id === "string"
+      ? workflowRequiredText(existing.tool.id, "Tool ID")
+      : (() => {
+        throw new Error(`Tool execution '${id}' has no tool ID.`);
+      })();
+    const existingToolName = toolName(existing.tool);
     const changedFields = [
       ...(roles.size > 0 ? ["content"] : []),
       ...(targetStatus || ("status" in input && input.status)
@@ -252,12 +282,23 @@ export function createToolExecutionRepository(
         namespace,
         threadId: existing.threadId,
         subject: { type: "tool_execution", id },
-        payload: { toolExecutionId: id },
+        payload: {
+          toolExecutionId: id,
+          toolCallId: existing.toolCallId,
+          toolId: existingToolId,
+          ...(existingToolName ? { toolName: existingToolName } : {}),
+          status,
+          ...(safeError ? { safeError } : {}),
+        },
         delta: {
           fields: [...new Set(changedFields)].sort(),
           ...(targetStatus ? { status: targetStatus } : {}),
         },
-        visibility: eventVisibility(input),
+        visibility: eventVisibility(
+          input,
+          existing.participantId,
+          historyVisibility ?? existing.historyVisibility,
+        ),
         routing: existing.participantId
           ? { senderId: existing.participantId }
           : {},
@@ -325,18 +366,7 @@ export function createToolExecutionRepository(
               ) ?? null,
             }
             : {}),
-          ...(operation === "failed"
-            ? { safeError: normalizeWorkflowSafeError(failure!) }
-            : {}),
-          ...(operation === "cancelled" && cancellationReason
-            ? {
-              safeError: normalizeWorkflowSafeError({
-                name: "ToolExecutionCancelled",
-                message: cancellationReason,
-                code: "cancelled",
-              }),
-            }
-            : {}),
+          ...(safeError ? { safeError } : {}),
           ...(finishedAt ? { finishedAt } : {}),
           ...(durationMs !== undefined ? { durationMs } : {}),
           metadata: {
@@ -395,6 +425,7 @@ export function createToolExecutionRepository(
       const namespace = workflowRequiredText(input.namespace, "Namespace");
       const threadId = workflowRequiredText(input.threadId, "Thread ID");
       const toolCallId = workflowRequiredText(input.toolCallId, "Tool call ID");
+      const messageId = workflowOptionalText(input.messageId, "Message ID");
       const tool = workflowObject(input.tool);
       const toolId = typeof tool.id === "string"
         ? workflowRequiredText(tool.id, "Tool ID")
@@ -403,7 +434,11 @@ export function createToolExecutionRepository(
         })();
       const identity = identityWithDefault(
         input.identity,
-        `tool_execution:create:${callSourceId(threadId, toolCallId)}`,
+        `tool_execution:create:${
+          input.id?.trim() || (messageId
+            ? JSON.stringify([threadId, messageId, toolCallId])
+            : callSourceId(threadId, toolCallId))
+        }`,
       );
       const id = workflowMutationId(
         "tool_execution",
@@ -425,7 +460,6 @@ export function createToolExecutionRepository(
         });
       }
       const prepared = composeRoleContent(fields);
-      const messageId = workflowOptionalText(input.messageId, "Message ID");
       const participantId = workflowOptionalText(
         input.participantId,
         "Participant ID",
@@ -434,6 +468,7 @@ export function createToolExecutionRepository(
         now().toISOString();
       const status = input.status ?? "running";
       const sourceId = callSourceId(threadId, toolCallId);
+      const name = toolName(tool);
 
       return options.coordinator.commitMutation({
         draft: {
@@ -441,9 +476,19 @@ export function createToolExecutionRepository(
           namespace,
           threadId,
           subject: { type: "tool_execution", id },
-          payload: { toolExecutionId: id, toolCallId, toolId },
+          payload: {
+            toolExecutionId: id,
+            toolCallId,
+            toolId,
+            ...(name ? { toolName: name } : {}),
+            status,
+          },
           routing: participantId ? { senderId: participantId } : {},
-          visibility: eventVisibility(input),
+          visibility: eventVisibility(
+            input,
+            participantId,
+            input.historyVisibility,
+          ),
           ...workflowIdentityDraft(identity),
         },
         mutate: async (context) => {
@@ -610,8 +655,31 @@ export function createToolExecutionRepository(
       const result = await options.session.query<WorkflowNodeRow>(
         `SELECT * FROM ${names.nodes}
          WHERE namespace = $1 AND type = 'tool_execution'
-           AND source_type = 'tool_call' AND source_id = $2 LIMIT 1`,
+           AND source_type = 'tool_call' AND source_id = $2
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1`,
         [namespace, callSourceId(threadId, toolCallId)],
+      );
+      return result.rows[0] ? mapToolExecution(result.rows[0]) : null;
+    },
+    async getByMessageToolCallId(
+      namespaceInput,
+      threadIdInput,
+      messageIdInput,
+      toolCallIdInput,
+    ) {
+      const namespace = workflowRequiredText(namespaceInput, "Namespace");
+      const threadId = workflowRequiredText(threadIdInput, "Thread ID");
+      const messageId = workflowRequiredText(messageIdInput, "Message ID");
+      const toolCallId = workflowRequiredText(toolCallIdInput, "Tool call ID");
+      const result = await options.session.query<WorkflowNodeRow>(
+        `SELECT * FROM ${names.nodes}
+         WHERE namespace = $1 AND type = 'tool_execution'
+           AND source_type = 'tool_call' AND source_id = $2
+           AND data->>'messageId' = $3
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1`,
+        [namespace, callSourceId(threadId, toolCallId), messageId],
       );
       return result.rows[0] ? mapToolExecution(result.rows[0]) : null;
     },

@@ -41,6 +41,7 @@ import {
   workflowMetadata,
 } from "./resources.ts";
 import { recordProviderAttemptLifecycle } from "./llm-lifecycle.ts";
+import { deriveWorkflowId } from "./identity.ts";
 import { createWorkflowToolExecutor } from "./tool-executor.ts";
 import { createWorkflowToolCatalog } from "./tool-catalog.ts";
 import {
@@ -218,6 +219,7 @@ async function isLastSettledToolResult(
 }
 
 function messageRouterProcessor(
+  options: CreateTextWorkflowPluginOptions,
   toolCatalog: WorkflowToolCatalog,
 ): Processor<CopilotzProcessorContext> {
   return defineProcessor<CopilotzProcessorContext>({
@@ -257,7 +259,30 @@ function messageRouterProcessor(
         if (!participant || participant.participantType !== "agent") continue;
         const agentId = participantAgentId(participant);
         const agent = requireAgent(context.resources, agentId);
-        const tools = await toolCatalog.forAgent(context.resources, agent);
+        const available = await toolCatalog.forAgent(context.resources, agent);
+        const tools = options.resolveAgentTools
+          ? await options.resolveAgentTools({
+            agent,
+            tools: available,
+            sourceEvent: event,
+            context,
+          })
+          : available;
+        const availableIds = new Set(available.map((tool) => tool.key));
+        const grantedIds = new Set<string>();
+        for (const tool of tools) {
+          if (!availableIds.has(tool.key)) {
+            throw new Error(
+              `Agent tool resolver granted unavailable tool '${tool.key}'.`,
+            );
+          }
+          if (grantedIds.has(tool.key)) {
+            throw new Error(
+              `Agent tool resolver returned duplicate tool '${tool.key}'.`,
+            );
+          }
+          grantedIds.add(tool.key);
+        }
         const continuationKey = metadata?.kind === "tool_result"
           ? `${requiredText(metadata.batchId, "Tool batch id")}:${recipientId}`
           : `${message.id}:${recipientId}`;
@@ -266,7 +291,7 @@ function messageRouterProcessor(
           ...(metadata?.batchId ? { batchId: metadata.batchId } : {}),
         };
         await context.llmAttempts.create({
-          id: `llm:${continuationKey}`,
+          id: await deriveWorkflowId("llm", continuationKey),
           threadId: message.threadId,
           messageId: message.id,
           participantId: participant.id,
@@ -314,7 +339,9 @@ function executeTextAttemptProcessor(
           `LLM attempt '${attempt.id}' has no agent participant.`,
         );
       }
-      const tools = await toolCatalog.forAgent(context.resources, agent);
+      const granted = new Set(attempt.availableToolIds);
+      const tools = (await toolCatalog.forAgent(context.resources, agent))
+        .filter((tool) => granted.has(tool.key));
       const prompt = await buildAgentTextPrompt(context, {
         options,
         agent,
@@ -561,24 +588,21 @@ function projectTextResultProcessor(
           agentParticipantId: participant.id,
         },
       );
-      let outputMessageId: string | undefined;
-      if (content.answer || toolCalls.length === 0) {
-        const outputMessage = await context.conversation.createMessage({
-          id: `message:${attempt.id}:output`,
-          threadId: attempt.threadId,
-          sender: participantInput(participant),
-          recipientIds: [],
-          content: content.answer ? [content.answer] : [],
-          visibility: { kind: "public" },
-          metadata: messageMetadata,
-        }, {
-          operationKey: "project:agent-message",
-          metadata: messageMetadata,
-        });
-        outputMessageId = outputMessage.value?.id;
-        if (!outputMessageId) {
-          throw new Error(`LLM attempt '${attempt.id}' produced no message.`);
-        }
+      const outputMessage = await context.conversation.createMessage({
+        id: await deriveWorkflowId("message", attempt.id, "output"),
+        threadId: attempt.threadId,
+        sender: participantInput(participant),
+        recipientIds: [],
+        content: content.answer ? [content.answer] : [],
+        visibility: { kind: "public" },
+        metadata: messageMetadata,
+      }, {
+        operationKey: "project:agent-message",
+        metadata: messageMetadata,
+      });
+      const outputMessageId = outputMessage.value?.id;
+      if (!outputMessageId) {
+        throw new Error(`LLM attempt '${attempt.id}' produced no message.`);
       }
       if (!toolCalls.length) return;
 
@@ -586,10 +610,11 @@ function projectTextResultProcessor(
         context.resources,
         requiredText(attempt.agentId, "LLM attempt agent id"),
       );
-      const availableTools = await toolCatalog.forAgent(
+      const granted = new Set(attempt.availableToolIds);
+      const availableTools = (await toolCatalog.forAgent(
         context.resources,
         agent,
-      );
+      )).filter((tool) => granted.has(tool.key));
       const toolsByKey = new Map(
         availableTools.map((tool) => [tool.key, tool]),
       );
@@ -623,7 +648,7 @@ function projectTextResultProcessor(
           },
         );
         await context.toolExecutions.create({
-          id: `tool:${attempt.id}:${call.id}`,
+          id: await deriveWorkflowId("tool", attempt.id, call.id),
           threadId: attempt.threadId,
           ...(outputMessageId ? { messageId: outputMessageId } : {}),
           participantId: participant.id,
@@ -666,9 +691,23 @@ function executeToolProcessor(
       const agent = execution.agentId
         ? context.resources.get<Agent>("agents", execution.agentId)
         : undefined;
-      const availableTools = agent
+      let availableTools = agent
         ? await toolCatalog.forAgent(context.resources, agent)
         : await toolCatalog.all(context.resources);
+      const workflow = workflowMetadata(execution.metadata);
+      const attemptId = workflow?.parentLlmAttemptId ?? workflow?.llmAttemptId;
+      if (attemptId) {
+        const attempt = await context.llmAttempts.get(attemptId);
+        if (attempt) {
+          const granted = new Set(attempt.availableToolIds);
+          // The durable attempt grant is the authority for internal workflows
+          // too. Internal tools do not need to leak into the agent's ordinary
+          // conversation capability declaration.
+          availableTools = (await toolCatalog.all(context.resources)).filter((
+            tool,
+          ) => granted.has(tool.key));
+        }
+      }
       const tool = availableTools.find((candidate) => candidate.key === toolId);
       const argumentRef = toolExecutionContent(execution).arguments;
       const args = resolvedValue(await context.content.resolve(argumentRef));
@@ -684,13 +723,19 @@ function executeToolProcessor(
           valueContent(outcome.output, "tool.output"),
           { operationKey: "tool:output" },
         );
+        const attachments = outcome.attachments
+          ? await context.content.prepare(outcome.attachments, {
+            operationKey: "tool:attachments",
+          })
+          : undefined;
         await context.toolExecutions.complete({
           id: execution.id,
           output: prepared,
           projectedOutput: prepared,
+          ...(attachments ? { attachments } : {}),
           historyVisibility: execution.historyVisibility ?? "public_status",
           durationMs: outcome.durationMs,
-        }, { operationKey: "tool:complete" });
+        }, { operationKey: "tool:complete", metadata: execution.metadata });
         return;
       }
       if (outcome.status === "deferred") return;
@@ -721,7 +766,7 @@ function executeToolProcessor(
           projectedOutput: projection,
           historyVisibility: execution.historyVisibility ?? "public_status",
           durationMs: outcome.durationMs,
-        }, { operationKey: "tool:cancel" });
+        }, { operationKey: "tool:cancel", metadata: execution.metadata });
         return;
       }
       await context.toolExecutions.fail({
@@ -735,7 +780,7 @@ function executeToolProcessor(
         projectedOutput: projection,
         historyVisibility: execution.historyVisibility ?? "public_status",
         durationMs: outcome.durationMs,
-      }, { operationKey: "tool:fail" });
+      }, { operationKey: "tool:fail", metadata: execution.metadata });
     },
   });
 }
@@ -759,7 +804,12 @@ async function resultContent(
   const content = toolExecutionContent(execution);
   const selected: ContentRef | undefined = content.projectedOutput ??
     content.output;
-  if (selected) return Object.freeze([selected]);
+  if (selected || content.attachments.length > 0) {
+    return Object.freeze([
+      ...(selected ? [selected] : []),
+      ...content.attachments,
+    ]);
+  }
   return await context.content.prepare({
     type: "text",
     text: execution.status === "failed"
@@ -797,6 +847,7 @@ function projectToolResultProcessor(
       let execution = await context.toolExecutions.get(event.subject.id);
       if (!execution || execution.status === "running") return;
       let metadata = workflowMetadata(execution.metadata);
+      if (metadata?.kind === "memory_consolidation") return;
       let projectedStatus = execution.status;
       let projectedContent: ContentSequence | PreparedContent | undefined;
 
@@ -814,9 +865,20 @@ function projectToolResultProcessor(
           const agent = execution.agentId
             ? context.resources.get<Agent>("agents", execution.agentId)
             : undefined;
-          const availableTools = agent
+          let availableTools = agent
             ? await toolCatalog.forAgent(context.resources, agent)
             : await toolCatalog.all(context.resources);
+          const attemptId = metadata.parentLlmAttemptId ??
+            metadata.llmAttemptId;
+          if (attemptId) {
+            const attempt = await context.llmAttempts.get(attemptId);
+            if (attempt) {
+              const granted = new Set(attempt.availableToolIds);
+              availableTools = availableTools.filter((tool) =>
+                granted.has(tool.key)
+              );
+            }
+          }
           const nextTool = availableTools.find((candidate) =>
             candidate.key === advancement.stage.tool.id
           );
@@ -843,8 +905,13 @@ function projectToolResultProcessor(
           const parentAttemptId = metadata.parentLlmAttemptId ??
             metadata.llmAttemptId ?? "pipeline";
           await context.toolExecutions.create({
-            id:
-              `tool:${parentAttemptId}:pipeline:${advancement.pipeline.id}:${advancement.stageIndex}`,
+            id: await deriveWorkflowId(
+              "tool",
+              parentAttemptId,
+              "pipeline",
+              advancement.pipeline.id,
+              String(advancement.stageIndex),
+            ),
             threadId: execution.threadId,
             messageId: execution.messageId,
             participantId: execution.participantId,
@@ -963,7 +1030,7 @@ function projectToolResultProcessor(
           : {}),
       });
       await context.conversation.createMessage({
-        id: `message:${execution.id}:result`,
+        id: await deriveWorkflowId("message", execution.id, "result"),
         threadId: execution.threadId,
         sender: {
           externalId: `tool:${toolId}`,
@@ -991,7 +1058,7 @@ export function createTextWorkflowPlugin(
   const toolCatalog = options.toolCatalog ?? createWorkflowToolCatalog();
   const evaluateJq = options.evaluateJq ?? defaultWorkflowJq;
   const processors = Object.freeze([
-    messageRouterProcessor(toolCatalog),
+    messageRouterProcessor(options, toolCatalog),
     executeTextAttemptProcessor(options, toolCatalog),
     projectTextResultProcessor(toolCatalog),
     executeToolProcessor(options, toolCatalog),

@@ -90,7 +90,7 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
   const plugin = migratedApplicationPlugin();
   const workerId = "downstream-copilotz";
   const application = await createCopilotzGateway({
-    session: database.session,
+    database,
     namespace: NAMESPACE,
     core: false,
     plugins: [plugin],
@@ -102,7 +102,7 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
     },
   });
   const worker = await createCopilotzWorker({
-    session: database.session,
+    database,
     namespace: NAMESPACE,
     core: false,
     plugins: [plugin],
@@ -112,7 +112,7 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
   });
   try {
     await worker.ready;
-    assertEquals(application.config.sessionOwnership, "injected");
+    assertEquals(application.config.databaseOwnership, "injected");
     assertEquals("engine" in application, false);
     assertEquals("execution" in application, false);
     assertEquals(

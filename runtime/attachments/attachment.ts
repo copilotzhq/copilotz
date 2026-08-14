@@ -44,7 +44,7 @@ import { isRealtimeProviderResource } from "./workload.ts";
 import type { Agent } from "../resources/index.ts";
 
 export type CreateAttachmentRuntimeOptions = Readonly<{
-  schema: string;
+  databaseSchema: string;
   coordinator: EventCoordinator;
   store: EventStore;
   conversation: ConversationRepository;
@@ -67,6 +67,8 @@ export type CreateAttachmentRuntimeOptions = Readonly<{
 export type AttachmentRuntime = Readonly<{
   connect(input: ConnectAttachmentInput): Promise<ThreadAttachment>;
   run(input: RunInput): Promise<RunHandle>;
+  /** Terminates active attachments with a transport-visible error. */
+  terminate(error: unknown): Promise<void>;
   shutdown(reason?: string): Promise<void>;
 }>;
 
@@ -292,6 +294,7 @@ function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
 
 async function waitForScope(
   store: EventStore,
+  databaseSchema: string,
   namespace: string,
   eventId: string,
   correlationId: string,
@@ -323,7 +326,11 @@ async function waitForScope(
       // A remote Worker settles its database delivery just before the final
       // output frame reaches this Gateway. Await correlated relays, then
       // confirm the durable scope once more in case a frame created more work.
-      await executor.settleOutputs({ namespace, correlationId });
+      await executor.settleOutputs({
+        databaseSchema,
+        namespace,
+        correlationId,
+      });
       const confirmed = await store.scopeSettlement(namespace, eventId);
       if (confirmed.deadLetters > 0) {
         throw attachmentError(
@@ -377,7 +384,10 @@ export function createAttachmentRuntime(
   const createId = options.createId ?? (() => crypto.randomUUID());
   const now = options.now ?? (() => new Date());
   const pollMs = positivePoll(options.settlementPollMs);
-  const openAttachments = new Set<ThreadAttachment>();
+  const openAttachments = new Map<
+    ThreadAttachment,
+    (error: unknown) => Promise<void>
+  >();
 
   const resolveThread = async (
     namespace: string,
@@ -410,10 +420,13 @@ export function createAttachmentRuntime(
     input: ConnectAttachmentInput,
   ): Promise<ThreadAttachment> => {
     const namespace = requiredText(input.namespace, "Namespace");
-    if (input.schema !== undefined && input.schema.trim() !== options.schema) {
+    if (
+      input.databaseSchema !== undefined &&
+      input.databaseSchema.trim() !== options.databaseSchema
+    ) {
       throw attachmentError(
         "attachment_invalid",
-        `Attachment schema '${input.schema}' does not match engine schema '${options.schema}'.`,
+        `Attachment database schema '${input.databaseSchema}' does not match runtime schema '${options.databaseSchema}'.`,
       );
     }
     const thread = await resolveThread(namespace, input.thread);
@@ -465,6 +478,30 @@ export function createAttachmentRuntime(
       );
       active.clear();
       closeOutputs();
+      openAttachments.delete(attachment);
+    };
+
+    const terminate = async (error: unknown): Promise<void> => {
+      if (closed) return;
+      closed = true;
+      const reason = errorText(error);
+      // Error the consumer-facing stream before cancelling the semantic reader;
+      // its normal completion path would otherwise race and close the output.
+      if (!outputsClosed) {
+        outputsClosed = true;
+        try {
+          outputController?.error(error);
+        } catch {
+          // A consumer may already have cancelled the stream.
+        }
+      }
+      await semanticReader.cancel(reason).catch(() => undefined);
+      await Promise.all(
+        [...active].map((operation) =>
+          operation.cancel(reason).catch(() => undefined)
+        ),
+      );
+      active.clear();
       openAttachments.delete(attachment);
     };
 
@@ -526,6 +563,7 @@ export function createAttachmentRuntime(
       let settled = false;
       const done = waitForScope(
         options.store,
+        options.databaseSchema,
         namespace,
         event.id,
         event.correlationId,
@@ -786,6 +824,7 @@ export function createAttachmentRuntime(
       });
       const dispatchMetadata: StreamDispatchMetadata = Object.freeze({
         schema: "copilotz.stream.dispatch.v1",
+        databaseSchema: options.databaseSchema,
         streamId,
         eventId: opened.event.id,
         namespace,
@@ -878,6 +917,7 @@ export function createAttachmentRuntime(
         );
         await waitForScope(
           options.store,
+          options.databaseSchema,
           namespace,
           opened.event.id,
           correlationId,
@@ -944,7 +984,7 @@ export function createAttachmentRuntime(
       send: send as ThreadAttachment["send"],
       close,
     });
-    openAttachments.add(attachment);
+    openAttachments.set(attachment, terminate);
     return attachment;
   };
 
@@ -956,7 +996,7 @@ export function createAttachmentRuntime(
       thread: input.thread,
       participant: input.participant,
       recipientIds: input.recipientIds,
-      schema: input.schema,
+      databaseSchema: input.databaseSchema,
     });
     let sent: AttachmentMessageHandle;
     try {
@@ -1021,9 +1061,16 @@ export function createAttachmentRuntime(
   return Object.freeze({
     connect,
     run,
+    async terminate(error: unknown) {
+      await Promise.all(
+        [...openAttachments.values()].map((terminate) =>
+          terminate(error).catch(() => undefined)
+        ),
+      );
+    },
     async shutdown(reason = "attachment_runtime_shutdown") {
       await Promise.all(
-        [...openAttachments].map((attachment) =>
+        [...openAttachments.keys()].map((attachment) =>
           attachment.close(reason).catch(() => undefined)
         ),
       );

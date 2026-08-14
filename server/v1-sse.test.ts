@@ -10,7 +10,7 @@ const NAMESPACE = "tenant-a";
 Deno.test("v1 SSE projector maps live vocabulary and hydrates canonical public messages", async () => {
   const application = await createCopilotz({
     namespace: NAMESPACE,
-    schema: "copilotz_v1_sse",
+    databaseSchema: "copilotz_v1_sse",
     core: false,
   });
   try {
@@ -82,6 +82,36 @@ Deno.test("v1 SSE projector maps live vocabulary and hydrates canonical public m
       true,
     );
 
+    const toolOutput = await project(
+      createEphemeralEvent({
+        type: "tool_output.delta",
+        namespace: NAMESPACE,
+        threadId: "thread-a",
+        payload: {
+          toolExecutionId: "execution-a",
+          toolCallId: "call-a",
+          toolId: "terminal",
+          channel: "stdout",
+          mode: "append",
+          delta: "hello\n",
+        },
+        correlationId: "correlation-a",
+        streamId: "execution-a",
+        sequence: 0,
+      }),
+      request,
+    ) as Record<string, unknown>;
+    assertEquals(toolOutput.type, "TOOL_OUTPUT_DELTA");
+    assertEquals(toolOutput.payload, {
+      threadId: "thread-a",
+      toolExecutionId: "execution-a",
+      toolCallId: "call-a",
+      toolId: "terminal",
+      channel: "stdout",
+      mode: "append",
+      delta: "hello\n",
+    });
+
     const message = await project(created.event, request) as Record<
       string,
       unknown
@@ -109,7 +139,7 @@ Deno.test("v1 SSE projector maps live vocabulary and hydrates canonical public m
 Deno.test("v1 SSE projector leaves media as references and never serializes a byte stream", async () => {
   const application = await createCopilotz({
     namespace: NAMESPACE,
-    schema: "copilotz_v1_sse_media",
+    databaseSchema: "copilotz_v1_sse_media",
     core: false,
   });
   try {

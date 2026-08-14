@@ -9,6 +9,7 @@ import {
   createEventNativeFetchHandler,
   type CreateEventNativeFetchHandlerOptions,
   type EventNativeFetchHandler,
+  projectEventNativeSseOutput,
 } from "./fetch.ts";
 import {
   createV1SseProjector,
@@ -30,6 +31,23 @@ export type CreateV1FetchHandlerOptions = Readonly<{
 function mappedRequest(
   request: EventNativeAppRequest,
 ): EventNativeAppRequest {
+  if (
+    request.resource === "threads" && request.method === "GET" &&
+    (request.path?.length ?? 0) === 0
+  ) {
+    const rawStatus = request.query?.status;
+    const statuses = (Array.isArray(rawStatus) ? rawStatus : [rawStatus])
+      .filter((status): status is string => typeof status === "string")
+      .flatMap((status) => status.split(","))
+      .map((status) => status.trim());
+    if (statuses.includes("all")) {
+      const { status: _legacyStatus, ...query } = request.query ?? {};
+      return Object.freeze({
+        ...request,
+        query: Object.freeze(query),
+      });
+    }
+  }
   if (request.resource === "providers") {
     return Object.freeze({ ...request, resource: "channels" });
   }
@@ -41,6 +59,18 @@ function mappedRequest(
     });
   }
   return request;
+}
+
+function requestResource(
+  request: Request,
+  basePath: string,
+): string | undefined {
+  const route = new URL(request.url).pathname.split("/").filter(Boolean).map(
+    decodeURIComponent,
+  );
+  const base = basePath.split("/").filter(Boolean).map(decodeURIComponent);
+  if (base.some((part, index) => route[index] !== part)) return undefined;
+  return route[base.length];
 }
 
 /**
@@ -57,9 +87,10 @@ export function createV1RouteAdapter(app: EventNativeApp): EventNativeApp {
 /**
  * Creates the transitional v1 Fetch surface over a v3 application.
  *
- * `/v1/providers/*` maps to `/channels/*`, `/v1/admin/*` maps to
- * `/features/admin/*`, and request-bound outputs use the explicit uppercase v1
- * SSE projection. All other route names pass through unchanged.
+ * `/v1/providers/*` maps to `/channels/*` and retains the explicit uppercase
+ * compatibility projection. Canonical `/v1/channels/*` routes stream the
+ * event-native vocabulary unchanged. `/v1/admin/*` maps to
+ * `/features/admin/*`; all other route names pass through unchanged.
  */
 export function createV1FetchHandler(
   application: CopilotzApplication,
@@ -68,11 +99,21 @@ export function createV1FetchHandler(
   const app = createV1RouteAdapter(
     createEventNativeApp(application, options.appOptions),
   );
+  const configuredBasePath = options.basePath ?? "/v1";
+  const projectLegacySse = createV1SseProjector(application, options.sse);
   return createEventNativeFetchHandler(app, {
-    basePath: options.basePath ?? "/v1",
+    basePath: configuredBasePath,
     resolveContext: options.resolveContext,
     responseHeaders: options.responseHeaders,
     onError: options.onError,
-    projectSseOutput: createV1SseProjector(application, options.sse),
+    projectSseOutput: (output, request) =>
+      requestResource(request, configuredBasePath) === "providers"
+        ? projectLegacySse(output, request)
+        : projectEventNativeSseOutput(output),
+    sseEventName: (value) =>
+      value && typeof value === "object" &&
+        typeof (value as { type?: unknown }).type === "string"
+        ? (value as { type: string }).type
+        : undefined,
   });
 }

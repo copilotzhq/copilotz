@@ -23,9 +23,9 @@ async function close(db: TestDatabase): Promise<void> {
 Deno.test("scheduled due transition atomically advances and dispatches one public job message", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
+    database: db,
     namespace: NAMESPACE,
-    schema: "copilotz_v3_schedules",
+    databaseSchema: "copilotz_v3_schedules",
     core: false,
     plugins: [createScheduledJobsPlugin()],
     resources: { agents: [agent] },
@@ -205,6 +205,7 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
         agents: [],
         tools: [tool],
         collections: processor.collections,
+        emitOutput: () => Promise.resolve(),
         cancelled: false,
       };
       outputs.set(event.id, await tool.execute(event.payload, context));
@@ -219,8 +220,8 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
     resources: { processors: [driver] },
   });
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
-    schema: "copilotz_v3_schedule_tool",
+    database: db,
+    databaseSchema: "copilotz_v3_schedule_tool",
     core: false,
     plugins: [createScheduledJobsPlugin(), fixturePlugin],
     resources: { agents: [agent] },
@@ -321,8 +322,8 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
 Deno.test("scheduled lifecycle and concurrent ticks remain tenant scoped and lease-free", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const application = await createCopilotzApplication({
-    session: createSqlSession(db),
-    schema: "copilotz_v3_schedule_lifecycle",
+    database: db,
+    databaseSchema: "copilotz_v3_schedule_lifecycle",
     core: false,
     plugins: [createScheduledJobsPlugin()],
     resources: { agents: [agent] },

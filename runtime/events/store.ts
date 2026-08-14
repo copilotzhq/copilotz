@@ -104,6 +104,7 @@ export type CreateEventStoreOptions = {
 };
 
 export type EventStore = {
+  databaseSchema: string;
   tables: Readonly<Record<CoreTableName, string>>;
   commitMutation<T>(
     options: CommitEventMutationOptions<T>,
@@ -177,8 +178,12 @@ export type EventStore = {
   compact(options?: {
     retentionMs?: number | null;
     now?: Date;
+    limit?: number;
   }): Promise<{ events: number; deliveries: number }>;
 };
+
+const DEFAULT_COMPACTION_LIMIT = 100;
+const MAX_COMPACTION_LIMIT = 1_000;
 
 function iso(value: string | Date | null | undefined): string | undefined {
   if (value == null) return undefined;
@@ -279,9 +284,10 @@ function mapEvent(row: EventRow): DurableEvent {
   return deepFreeze(event);
 }
 
-function mapDelivery(row: DeliveryRow): EventDelivery {
+function mapDelivery(row: DeliveryRow, databaseSchema: string): EventDelivery {
   const lastError = row.last_error == null ? undefined : record(row.last_error);
   return deepFreeze({
+    databaseSchema,
     id: String(row.id),
     eventId: String(row.event_id),
     consumerId: String(row.consumer_id),
@@ -441,7 +447,8 @@ export function createEventStore(
   options: CreateEventStoreOptions,
 ): EventStore {
   const { session } = options;
-  const tables = createCoreTableNames(options.schema ?? "public");
+  const databaseSchema = options.schema ?? "public";
+  const tables = createCoreTableNames(databaseSchema);
   const createId = options.createId ?? ulid;
   const now = options.now ?? (() => new Date());
   const random = options.random ?? Math.random;
@@ -459,7 +466,7 @@ export function createEventStore(
        WHERE event_id = $1 ORDER BY created_at, id`,
       [eventId],
     );
-    return result.rows.map(mapDelivery);
+    return result.rows.map((row) => mapDelivery(row, databaseSchema));
   };
 
   const duplicateResult = async <T>(
@@ -574,7 +581,7 @@ export function createEventStore(
             RETURNING *`,
             [createId(), event.id, consumerId, maxAttempts, priority],
           );
-          deliveries.push(mapDelivery(result.rows[0]));
+          deliveries.push(mapDelivery(result.rows[0], databaseSchema));
         }
 
         if (draft.threadId) {
@@ -634,7 +641,7 @@ export function createEventStore(
       `SELECT * FROM ${tables.event_deliveries} WHERE id = $1 LIMIT 1`,
       [id],
     );
-    return result.rows[0] ? mapDelivery(result.rows[0]) : null;
+    return result.rows[0] ? mapDelivery(result.rows[0], databaseSchema) : null;
   };
 
   const deadLetterExhaustedLeases = async (
@@ -681,7 +688,7 @@ export function createEventStore(
        RETURNING *`,
       [claim.id, claim.owner, leaseMs],
     );
-    return result.rows[0] ? mapDelivery(result.rows[0]) : null;
+    return result.rows[0] ? mapDelivery(result.rows[0], databaseSchema) : null;
   };
 
   const settleDelivery = async (
@@ -738,7 +745,7 @@ export function createEventStore(
        LIMIT $${params.length}`,
       params,
     );
-    return result.rows.map(mapDelivery);
+    return result.rows.map((row) => mapDelivery(row, databaseSchema));
   };
 
   const claimNext = async (claim: {
@@ -785,7 +792,7 @@ export function createEventStore(
       RETURNING d.*`,
       params,
     );
-    return result.rows[0] ? mapDelivery(result.rows[0]) : null;
+    return result.rows[0] ? mapDelivery(result.rows[0], databaseSchema) : null;
   };
 
   const scopeCte = `WITH RECURSIVE scope(id) AS (
@@ -798,6 +805,7 @@ export function createEventStore(
   )`;
 
   return {
+    databaseSchema,
     tables,
     commitMutation,
     append(draft, consumerIds = [], appendOptions = {}) {
@@ -866,7 +874,7 @@ export function createEventStore(
          ORDER BY d.created_at, d.id LIMIT $${params.length}`,
         params,
       );
-      return result.rows.map(mapDelivery);
+      return result.rows.map((row) => mapDelivery(row, databaseSchema));
     },
     claimDelivery,
     claimNext,
@@ -927,7 +935,9 @@ export function createEventStore(
           JSON.stringify(serializeError(failure.error)),
         ],
       );
-      return result.rows[0] ? mapDelivery(result.rows[0]) : null;
+      return result.rows[0]
+        ? mapDelivery(result.rows[0], databaseSchema)
+        : null;
     },
     listRecoverable,
     async nextRecoveryDelayMs() {
@@ -1023,36 +1033,63 @@ export function createEventStore(
       const cutoff = new Date(
         (compactOptions.now ?? now()).getTime() - retentionMs,
       ).toISOString();
+      const limit = Math.min(
+        MAX_COMPACTION_LIMIT,
+        boundedInteger(
+          compactOptions.limit,
+          DEFAULT_COMPACTION_LIMIT,
+          1,
+        ),
+      );
       return await session.transaction(async (transaction) => {
         const deliveries = await transaction.query<{ id: string }>(
-          `DELETE FROM ${tables.event_deliveries} AS delivery
-           USING ${tables.events} AS event
-           WHERE event.id = delivery.event_id
-             AND event.created_at < $1::timestamptz
-             AND delivery.status IN ('succeeded', 'cancelled')
-             AND NOT EXISTS (
-               SELECT 1 FROM ${tables.event_deliveries} active
-               WHERE active.event_id = event.id
-                 AND active.status IN (
-                   'pending', 'leased', 'retry_wait', 'dead_letter'
-                 )
-             )
+          `WITH candidates AS (
+             SELECT delivery.id
+             FROM ${tables.events} AS event
+             JOIN ${tables.event_deliveries} AS delivery
+               ON delivery.event_id = event.id
+             WHERE event.created_at < $1::timestamptz
+               AND delivery.status IN ('succeeded', 'cancelled')
+               AND NOT EXISTS (
+                 SELECT 1 FROM ${tables.event_deliveries} active
+                 WHERE active.event_id = event.id
+                   AND active.status IN (
+                     'pending', 'leased', 'retry_wait', 'dead_letter'
+                   )
+               )
+             ORDER BY event.position, delivery.created_at, delivery.id
+             FOR UPDATE OF delivery SKIP LOCKED
+             LIMIT $2
+           )
+           DELETE FROM ${tables.event_deliveries} AS delivery
+           USING candidates
+           WHERE delivery.id = candidates.id
            RETURNING delivery.id`,
-          [cutoff],
+          [cutoff, limit],
         );
         const events = await transaction.query<{ id: string }>(
-          `DELETE FROM ${tables.events} AS event
-           WHERE event.created_at < $1::timestamptz
-             AND NOT EXISTS (
-               SELECT 1 FROM ${tables.event_deliveries} delivery
-               WHERE delivery.event_id = event.id
-             )
-             AND NOT EXISTS (
-               SELECT 1 FROM ${tables.events} child
-               WHERE child.causation_id = event.id
-             )
+          `WITH candidates AS (
+             SELECT event.position
+             FROM ${tables.events} AS event
+             WHERE event.created_at < $1::timestamptz
+               AND NOT EXISTS (
+                 SELECT 1 FROM ${tables.event_deliveries} delivery
+                 WHERE delivery.event_id = event.id
+               )
+               AND NOT EXISTS (
+                 SELECT 1 FROM ${tables.events} child
+                 WHERE child.namespace = event.namespace
+                   AND child.causation_id = event.id
+               )
+             ORDER BY event.position
+             FOR UPDATE OF event SKIP LOCKED
+             LIMIT $2
+           )
+           DELETE FROM ${tables.events} AS event
+           USING candidates
+           WHERE event.position = candidates.position
            RETURNING event.id`,
-          [cutoff],
+          [cutoff, limit],
         );
         return {
           events: events.rows.length,

@@ -15,9 +15,13 @@ import type {
 } from "../runtime/channels/index.ts";
 import { defineCollection } from "../runtime/domain/index.ts";
 import type { CopilotzEvent } from "../runtime/events/index.ts";
-import { createEphemeralEvent } from "../runtime/events/index.ts";
+import {
+  createEphemeralEvent,
+  provisionCopilotzSchema,
+} from "../runtime/events/index.ts";
 import { definePlugin } from "../runtime/plugins/index.ts";
 import type { Agent } from "../runtime/resources/index.ts";
+import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import {
   createEventNativeApp,
   type EventNativeAppError,
@@ -123,7 +127,7 @@ async function expectAppError(
 Deno.test("event-native app exposes graph, event, asset, collection, and plugin capabilities without legacy storage routes", async () => {
   const application = await createCopilotz({
     namespace: NAMESPACE,
-    schema: SCHEMA,
+    databaseSchema: SCHEMA,
     core: false,
     plugins: [adapterPlugin],
   });
@@ -147,6 +151,11 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
     assertEquals(
       app.resources().find((resource) => resource.name === "threads")?.methods,
       ["GET", "POST", "PATCH", "DELETE"],
+    );
+    assertEquals(
+      app.resources().find((resource) => resource.name === "participants")
+        ?.methods,
+      ["GET", "POST", "PATCH"],
     );
 
     const agentResponse = await app.handle({
@@ -195,6 +204,20 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
     assertEquals(repeatedThread.status, 200);
     assertEquals(object(repeatedThread.data).id, "thread-a");
 
+    const createdParticipant = await app.handle({
+      resource: "participants",
+      method: "POST",
+      headers: { "idempotency-key": "http:participant:b" },
+      body: {
+        id: "user-b",
+        externalId: "external-user-b",
+        participantType: "human",
+        name: "Bob",
+      },
+    });
+    assertEquals(createdParticipant.status, 201);
+    assertEquals(object(createdParticipant.data).externalId, "external-user-b");
+
     const listedThreads = await app.handle({
       resource: "threads",
       method: "GET",
@@ -217,7 +240,7 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
       method: "GET",
       query: { type: "human" },
     });
-    assertEquals(array(humanParticipants.data).length, 1);
+    assertEquals(array(humanParticipants.data).length, 2);
 
     const run = await application.run({
       thread: "thread-a",
@@ -240,6 +263,7 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
       resource: "threads",
       method: "GET",
       path: ["thread-a", "messages"],
+      query: { include: "content,workflow" },
     });
     const messages = array(messagesResponse.data);
     assertEquals(messages.length, 1);
@@ -248,6 +272,33 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
     const content = array(message.content);
     const assetId = object(content[0]).assetId;
     assertEquals(typeof assetId, "string");
+    const included = object(messagesResponse.included);
+    assertEquals(included.llmAttempts, []);
+    assertEquals(included.toolExecutions, []);
+    const includedContent = array(included.content);
+    assertEquals(includedContent.length, 1);
+    assertEquals(object(object(includedContent[0]).ref).assetId, assetId);
+    assertEquals(
+      new TextDecoder().decode(
+        Uint8Array.from(
+          atob(object(includedContent[0]).base64 as string),
+          (c) => c.charCodeAt(0),
+        ),
+      ),
+      "Hello from the event-native adapter",
+    );
+
+    await expectAppError(
+      () =>
+        app.handle({
+          resource: "threads",
+          method: "GET",
+          path: ["thread-a", "messages"],
+          query: { include: "legacyProjection" },
+        }),
+      400,
+      "invalid_query",
+    );
 
     const assetResponse = await app.handle({
       resource: "assets",
@@ -479,7 +530,7 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
         app.handle({
           resource: "threads",
           method: "GET",
-          context: { schema: "wrong-schema" },
+          context: { databaseSchema: "wrong-schema" },
         }),
       400,
       "schema_mismatch",
@@ -550,6 +601,230 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
   }
 });
 
+Deno.test("message history compounds canonical LLM, tool, and content resources without flattening", async () => {
+  const application = await createCopilotz({
+    namespace: NAMESPACE,
+    databaseSchema: `${SCHEMA}_history`,
+    core: false,
+  });
+  const app = createEventNativeApp(application);
+  try {
+    await application.conversation.createThread({
+      namespace: NAMESPACE,
+      id: "history-thread",
+      participants: [{
+        id: "history-human",
+        externalId: "history-human",
+        participantType: "human",
+        name: "Human",
+      }, {
+        id: "history-agent",
+        externalId: "support",
+        participantType: "agent",
+        agentId: "support",
+        name: "Support",
+      }],
+    });
+    await application.conversation.createMessage({
+      namespace: NAMESPACE,
+      id: "history-user-message",
+      threadId: "history-thread",
+      sender: {
+        id: "history-human",
+        externalId: "history-human",
+        participantType: "human",
+      },
+      recipientIds: ["history-agent"],
+      content: await application.content.preparer.prepare("Run lookup", {
+        namespace: NAMESPACE,
+        idempotencyKey: "history:user:body",
+      }),
+    });
+    await application.llmAttempts.create({
+      namespace: NAMESPACE,
+      id: "history-attempt",
+      threadId: "history-thread",
+      messageId: "history-user-message",
+      participantId: "history-agent",
+      initiatorParticipantId: "history-human",
+      agentId: "support",
+      inputMessageIds: ["history-user-message"],
+    });
+    await application.llmAttempts.complete({
+      namespace: NAMESPACE,
+      id: "history-attempt",
+      reasoning: await application.content.preparer.prepare({
+        type: "text",
+        text: "I should run lookup.",
+        role: "reasoning",
+      }, {
+        namespace: NAMESPACE,
+        idempotencyKey: "history:attempt:reasoning",
+      }),
+      toolCalls: await application.content.preparer.prepare({
+        type: "json",
+        value: [{
+          id: "history-call",
+          tool: { id: "lookup", name: "Lookup" },
+          args: JSON.stringify({ query: "canonical" }),
+        }],
+        role: "llm.tool_calls",
+      }, {
+        namespace: NAMESPACE,
+        idempotencyKey: "history:attempt:tool-calls",
+      }),
+      finishReason: "tool_calls",
+    });
+    await application.conversation.createMessage({
+      namespace: NAMESPACE,
+      id: "history-agent-message",
+      threadId: "history-thread",
+      sender: {
+        id: "history-agent",
+        externalId: "support",
+        participantType: "agent",
+        agentId: "support",
+      },
+      content: await application.content.preparer.prepare("Running lookup", {
+        namespace: NAMESPACE,
+        idempotencyKey: "history:agent:body",
+      }),
+      metadata: {
+        copilotzWorkflow: {
+          kind: "agent_output",
+          llmAttemptId: "history-attempt",
+          agentParticipantId: "history-agent",
+        },
+      },
+    });
+    await application.toolExecutions.create({
+      namespace: NAMESPACE,
+      id: "history-execution",
+      threadId: "history-thread",
+      messageId: "history-agent-message",
+      participantId: "history-agent",
+      agentId: "support",
+      toolCallId: "history-call",
+      tool: { id: "lookup", name: "Lookup" },
+      arguments: await application.content.preparer.prepare({
+        type: "json",
+        value: { query: "canonical" },
+        role: "tool.arguments",
+      }, {
+        namespace: NAMESPACE,
+        idempotencyKey: "history:execution:arguments",
+      }),
+    });
+    await application.toolExecutions.fail({
+      namespace: NAMESPACE,
+      id: "history-execution",
+      safeError: { message: "Lookup unavailable", code: "lookup_failed" },
+      projectedOutput: await application.content.preparer.prepare({
+        type: "json",
+        value: { ok: false, error: "Lookup unavailable" },
+        role: "tool.projected_output",
+      }, {
+        namespace: NAMESPACE,
+        idempotencyKey: "history:execution:output",
+      }),
+    });
+    await application.conversation.createMessage({
+      namespace: NAMESPACE,
+      id: "history-tool-message",
+      threadId: "history-thread",
+      sender: {
+        externalId: "tool:lookup",
+        participantType: "tool",
+        name: "Lookup",
+      },
+      recipientIds: ["history-agent"],
+      content: (await application.toolExecutions.get(
+        NAMESPACE,
+        "history-execution",
+      ))!.content.filter((ref) => ref.role === "tool.projected_output"),
+      metadata: {
+        toolId: "lookup",
+        toolStatus: "failed",
+        copilotzWorkflow: {
+          kind: "tool_result",
+          llmAttemptId: "history-attempt",
+          toolCallId: "history-call",
+          toolExecutionId: "history-execution",
+          sourceMessageId: "history-agent-message",
+          agentParticipantId: "history-agent",
+        },
+      },
+    });
+
+    const response = await app.handle({
+      resource: "threads",
+      method: "GET",
+      path: ["history-thread", "messages"],
+      query: { include: "content,workflow", order: "desc", limit: "2" },
+    });
+    assertEquals(response.pageInfo, {
+      next: "history-agent-message",
+      hasMore: true,
+    });
+    const included = object(response.included);
+    assertEquals(
+      array(included.llmAttempts).map((value) => object(value).id),
+      ["history-attempt"],
+    );
+    assertEquals(
+      array(included.toolExecutions).map((value) => object(value).id),
+      ["history-execution"],
+    );
+    const roles = array(included.content).map((value) =>
+      object(object(value).ref).role
+    );
+    for (
+      const role of [
+        "body",
+        "reasoning",
+        "llm.tool_calls",
+        "tool.arguments",
+        "tool.projected_output",
+      ]
+    ) {
+      assert(
+        roles.includes(role),
+        `Expected canonical content role '${role}'.`,
+      );
+    }
+    const agentMessage = array(response.data).map(object).find((message) =>
+      message.id === "history-agent-message"
+    )!;
+    assertEquals(
+      object(object(agentMessage.metadata).copilotzWorkflow).llmAttemptId,
+      "history-attempt",
+    );
+    assertEquals("senderType" in agentMessage, false);
+    assert(Array.isArray(agentMessage.content));
+
+    const older = await app.handle({
+      resource: "threads",
+      method: "GET",
+      path: ["history-thread", "messages"],
+      query: {
+        include: "content,workflow",
+        order: "desc",
+        limit: "2",
+        before: "history-agent-message",
+      },
+    });
+    assertEquals(
+      array(older.data).map((message) => object(message).id),
+      ["history-user-message"],
+    );
+    assertEquals(older.pageInfo, { hasMore: false });
+    assertEquals(object(older.included).llmAttempts, []);
+    assertEquals(object(older.included).toolExecutions, []);
+  } finally {
+    await application.shutdown();
+  }
+});
+
 Deno.test("event-native server adapter remains factory-first and avoids raw graph and queue contracts", async () => {
   const source = await Deno.readTextFile(
     new URL("event-native.ts", import.meta.url),
@@ -567,10 +842,70 @@ Deno.test("event-native server adapter remains factory-first and avoids raw grap
   );
 });
 
+Deno.test("trusted schema resolution isolates identical HTTP resource identities", async () => {
+  const defaultSchema = `${SCHEMA}_trusted_default`;
+  const alternateSchema = `${SCHEMA}_trusted_alternate`;
+  const database = await createTestDatabase({ url: ":memory:" });
+  await provisionCopilotzSchema(database, alternateSchema);
+  const application = await createCopilotz({
+    namespace: NAMESPACE,
+    databaseSchema: defaultSchema,
+    core: false,
+    database,
+  });
+  let authorizedSchema = defaultSchema;
+  const app = createEventNativeApp(application, {
+    resolveDatabaseSchema: () => authorizedSchema,
+  });
+  const create = (status: string) =>
+    app.handle({
+      resource: "threads",
+      method: "POST",
+      body: { id: "shared-thread", status, participants: [] },
+      context: { databaseSchema: authorizedSchema },
+    });
+  try {
+    assertEquals((await create("default")).status, 201);
+    authorizedSchema = alternateSchema;
+    assertEquals((await create("alternate")).status, 201);
+
+    const alternate = await app.handle({
+      resource: "threads",
+      method: "GET",
+      path: ["shared-thread"],
+      context: { databaseSchema: alternateSchema },
+    });
+    assertEquals(object(alternate.data).status, "alternate");
+
+    authorizedSchema = defaultSchema;
+    const original = await app.handle({
+      resource: "threads",
+      method: "GET",
+      path: ["shared-thread"],
+      context: { databaseSchema: defaultSchema },
+    });
+    assertEquals(object(original.data).status, "default");
+    await expectAppError(
+      () =>
+        app.handle({
+          resource: "threads",
+          method: "GET",
+          path: ["shared-thread"],
+          context: { databaseSchema: alternateSchema },
+        }),
+      400,
+      "schema_mismatch",
+    );
+  } finally {
+    await application.shutdown();
+    await database.close();
+  }
+});
+
 Deno.test("event-native app returns request-bound channel output before delivery settlement", async () => {
   const application = await createCopilotz({
     namespace: NAMESPACE,
-    schema: `${SCHEMA}_request_bound`,
+    databaseSchema: `${SCHEMA}_request_bound`,
     core: false,
   });
   let release!: () => void;

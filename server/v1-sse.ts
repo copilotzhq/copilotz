@@ -210,6 +210,12 @@ export function createV1SseProjector(
         ...payload,
       });
     }
+    if (output.type === "tool_output.delta") {
+      return frame(output, "TOOL_OUTPUT_DELTA", {
+        threadId: output.threadId ?? "",
+        ...payload,
+      });
+    }
     if (
       output.durable && output.subject?.type === "message" &&
       (output.type === "message.created" || output.type === "message.revised")

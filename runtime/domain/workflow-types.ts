@@ -173,9 +173,17 @@ export type ToolExecutionRepository = Readonly<{
     input: CancelToolExecutionInput,
   ): Promise<CoordinatedMutationResult<ToolExecution>>;
   get(namespace: string, id: string): Promise<ToolExecution | null>;
+  /** Returns the latest execution carrying this provider call label. */
   getByToolCallId(
     namespace: string,
     threadId: string,
+    toolCallId: string,
+  ): Promise<ToolExecution | null>;
+  /** Returns the execution for one exact source message and provider call. */
+  getByMessageToolCallId(
+    namespace: string,
+    threadId: string,
+    messageId: string,
     toolCallId: string,
   ): Promise<ToolExecution | null>;
   list(

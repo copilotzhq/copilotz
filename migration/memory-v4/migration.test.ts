@@ -233,6 +233,76 @@ Deno.test("memory-v4 migration preserves IDs, provenance, temporal history, and 
   }
 });
 
+Deno.test("memory-v4 migration bounds row batches and preserves cross-batch relations", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const schema = "memory_v4_batched";
+  try {
+    await seed(db, schema);
+    const nodes = q(schema, "nodes");
+    const edges = q(schema, "edges");
+    const timestamp = "2026-08-13T00:00:00.000Z";
+    for (let index = 0; index < 249; index++) {
+      const suffix = String(index).padStart(3, "0");
+      const id = `brain-batch-${suffix}`;
+      await db.query(
+        `INSERT INTO ${nodes} (
+           id, namespace, type, name, content, data, embedding,
+           created_at, updated_at
+         ) VALUES ($1, 'tenant-a', 'brain_node', $2, NULL, $3::jsonb,
+           $4::jsonb, $5::timestamptz, $5::timestamptz)`,
+        [
+          id,
+          `Memory ${suffix}`,
+          JSON.stringify({
+            id,
+            memorySpaceId: "space-a",
+            checkpointId: "checkpoint-a",
+            createdByAgentId: "north",
+            originThreadId: "thread-a",
+            layer: "knowledge",
+            status: "active",
+            kind: "fact",
+            name: `Memory ${suffix}`,
+            content: `Bounded memory ${suffix}.`,
+            sourceMessageIds: ["message-a"],
+            metadata: {},
+          }),
+          JSON.stringify([index, index + 1, index + 2]),
+          timestamp,
+        ],
+      );
+    }
+    await db.query(
+      `INSERT INTO ${edges} (
+         id, namespace, source_node_id, target_node_id, type, data, weight
+       ) VALUES (
+         'edge-cross-batch', 'tenant-a', 'brain-a', 'brain-batch-248',
+         'related_to', '{}'::jsonb, 1
+       )`,
+    );
+
+    assertEquals(await upgradeMemoryV4Schema(db.session, schema), {
+      schema,
+      recordsMigrated: 252,
+      checkpointsMigrated: 1,
+      relationsMigrated: 6,
+      alreadyUpgraded: false,
+    });
+    const counts = await db.query<{ count: string | number }>(
+      `SELECT COUNT(*) AS count FROM ${nodes} WHERE type = 'brain_node'`,
+    );
+    assertEquals(Number(counts.rows[0]?.count), 0);
+    const relation = await db.query<{ type: string; data: unknown }>(
+      `SELECT type, data FROM ${edges} WHERE id = 'edge-cross-batch'`,
+    );
+    assertEquals(relation.rows[0]?.type, "about");
+    assertEquals(object(relation.rows[0]?.data).sourceType, "memory_record");
+    assertEquals(object(relation.rows[0]?.data).targetType, "memory_record");
+  } finally {
+    await db.close();
+  }
+});
+
 Deno.test("memory-v4 migration refuses pending checkpoints without partial writes", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const schema = "memory_v4_pending";

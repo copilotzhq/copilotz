@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.59.26 — 2026-08-14
+
+### Fixed
+
+- The explicit memory-v4 migration now reads legacy memory records and
+  checkpoints in bounded batches instead of retaining every embedding and ID in
+  application memory.
+- Legacy memory relations are rewritten with database-side endpoint detection,
+  preserving relation typing when connected records cross migration batches.
+
 ## 0.59.25 — 2026-08-14
 
 This release replaces the mixed memory model with a queryable semantic memory

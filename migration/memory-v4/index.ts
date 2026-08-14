@@ -83,6 +83,8 @@ export type UpgradeMemoryV4SchemasOptions = Readonly<{
   schemas?: readonly string[];
 }>;
 
+const MEMORY_V4_MIGRATION_BATCH_SIZE = 250;
+
 function q(schema: string, table: string): string {
   return `${quoteEventIdentifier(schema)}.${quoteEventIdentifier(table)}`;
 }
@@ -460,6 +462,131 @@ async function assertNoPendingCheckpoint(
   }
 }
 
+async function legacyBrainNodeBatch(
+  transaction: SqlExecutor,
+  schema: string,
+): Promise<readonly NodeRow[]> {
+  const result = await transaction.query<NodeRow>(
+    `SELECT id, namespace, type, name, content, data, embedding,
+       created_at, updated_at
+     FROM ${q(schema, "nodes")}
+     WHERE type = 'brain_node'
+     ORDER BY created_at, id
+     LIMIT $1`,
+    [MEMORY_V4_MIGRATION_BATCH_SIZE],
+  );
+  return result.rows;
+}
+
+async function migrateLegacyRelations(
+  transaction: SqlExecutor,
+  schema: string,
+): Promise<number> {
+  const nodes = q(schema, "nodes");
+  const edges = q(schema, "edges");
+  const result = await transaction.query<{ count: string | number }>(
+    `WITH changed AS (
+       UPDATE ${edges} AS edge
+       SET type = CASE edge.type
+         WHEN 'has_brain_node' THEN 'has_memory_record'
+         WHEN 'includes_brain_node' THEN 'includes_memory_record'
+         WHEN 'mentions' THEN 'about'
+         WHEN 'related_to' THEN 'about'
+         ELSE edge.type
+       END,
+       data = jsonb_set(
+         jsonb_set(
+           COALESCE(edge.data, '{}'::jsonb),
+           '{sourceType}',
+           to_jsonb(CASE
+             WHEN EXISTS (
+               SELECT 1 FROM ${nodes} AS source
+               WHERE source.id = edge.source_node_id
+                 AND source.namespace = edge.namespace
+                 AND source.type = 'memory_record'
+                 AND source.data -> 'metadata' -> 'migratedFromMemoryV3'
+                   IS NOT NULL
+             ) THEN 'memory_record'
+             ELSE COALESCE(edge.data ->> 'sourceType', 'node')
+           END),
+           true
+         ),
+         '{targetType}',
+         to_jsonb(CASE
+           WHEN EXISTS (
+             SELECT 1 FROM ${nodes} AS target
+             WHERE target.id = edge.target_node_id
+               AND target.namespace = edge.namespace
+               AND target.type = 'memory_record'
+               AND target.data -> 'metadata' -> 'migratedFromMemoryV3'
+                 IS NOT NULL
+           ) THEN 'memory_record'
+           ELSE COALESCE(edge.data ->> 'targetType', 'node')
+         END),
+         true
+       )
+       WHERE edge.type IN ('has_brain_node', 'includes_brain_node')
+          OR (
+            edge.type IN ('mentions', 'related_to')
+            AND (
+              EXISTS (
+                SELECT 1 FROM ${nodes} AS source
+                WHERE source.id = edge.source_node_id
+                  AND source.namespace = edge.namespace
+                  AND source.type = 'memory_record'
+                  AND source.data -> 'metadata' -> 'migratedFromMemoryV3'
+                    IS NOT NULL
+              )
+              OR EXISTS (
+                SELECT 1 FROM ${nodes} AS target
+                WHERE target.id = edge.target_node_id
+                  AND target.namespace = edge.namespace
+                  AND target.type = 'memory_record'
+                  AND target.data -> 'metadata' -> 'migratedFromMemoryV3'
+                    IS NOT NULL
+              )
+            )
+          )
+       RETURNING edge.id
+     ) SELECT COUNT(*) AS count FROM changed`,
+  );
+  return Number(result.rows[0]?.count ?? 0);
+}
+
+async function legacyCheckpointBatch(
+  transaction: SqlExecutor,
+  schema: string,
+): Promise<readonly NodeRow[]> {
+  const result = await transaction.query<NodeRow>(
+    `SELECT id, namespace, type, name, content, data, embedding,
+       created_at, updated_at
+     FROM ${q(schema, "nodes")}
+     WHERE type = 'long_term_memory'
+       AND COALESCE(data ->> 'schemaVersion', '') <> '4'
+     ORDER BY created_at, id
+     LIMIT $1`,
+    [MEMORY_V4_MIGRATION_BATCH_SIZE],
+  );
+  return result.rows;
+}
+
+async function existingContinuityFields(
+  transaction: SqlExecutor,
+  schema: string,
+  checkpointId: string,
+): Promise<ReadonlySet<string>> {
+  const result = await transaction.query<{ field: string }>(
+    `SELECT DISTINCT
+       data -> 'data' -> 'migrated' ->> 'continuityField' AS field
+     FROM ${q(schema, "nodes")}
+     WHERE type = 'memory_record'
+       AND data ->> 'consolidationId' = $1
+       AND data -> 'data' -> 'migrated' ->> 'continuityField' IS NOT NULL`,
+    [checkpointId],
+  );
+  return new Set(result.rows.map((row) => `${checkpointId}\0${row.field}`));
+}
+
 /** Upgrades one already event-native physical schema in a single transaction. */
 export async function upgradeMemoryV4Schema(
   session: SqlSession,
@@ -489,133 +616,92 @@ export async function upgradeMemoryV4Schema(
       });
     }
 
-    const rows = await transaction.query<NodeRow>(
-      `SELECT id, namespace, type, name, content, data, embedding,
-         created_at, updated_at
-       FROM ${q(schema, "nodes")} WHERE type = 'brain_node'
-       ORDER BY created_at, id`,
-    );
-    for (const row of rows.rows) {
-      const data = migratedRecord(row);
-      await transaction.query(
-        `UPDATE ${q(schema, "nodes")}
-         SET type = 'memory_record', name = $3, content = $4,
-           data = $5::jsonb, embedding = $6::jsonb
-         WHERE namespace = $1 AND id = $2 AND type = 'brain_node'`,
-        [
-          row.namespace,
-          row.id,
-          String(data.summary),
-          String(data.summary),
-          JSON.stringify(data),
-          JSON.stringify(data.embedding),
-        ],
-      );
+    let recordsMigrated = 0;
+    while (true) {
+      const rows = await legacyBrainNodeBatch(transaction, schema);
+      if (!rows.length) break;
+      for (const row of rows) {
+        const data = migratedRecord(row);
+        await transaction.query(
+          `UPDATE ${q(schema, "nodes")}
+           SET type = 'memory_record', name = $3, content = $4,
+             data = $5::jsonb, embedding = $6::jsonb
+           WHERE namespace = $1 AND id = $2 AND type = 'brain_node'`,
+          [
+            row.namespace,
+            row.id,
+            String(data.summary),
+            String(data.summary),
+            JSON.stringify(data),
+            JSON.stringify(data.embedding),
+          ],
+        );
+      }
+      recordsMigrated += rows.length;
     }
 
-    const memoryIds = rows.rows.map((row) => row.id);
-    const relations = await transaction.query<{ count: string | number }>(
-      `WITH changed AS (
-         UPDATE ${q(schema, "edges")}
-         SET type = CASE type
-           WHEN 'has_brain_node' THEN 'has_memory_record'
-           WHEN 'includes_brain_node' THEN 'includes_memory_record'
-           WHEN 'mentions' THEN 'about'
-           WHEN 'related_to' THEN 'about'
-           ELSE type
-         END,
-         data = jsonb_set(
-           jsonb_set(
-             COALESCE(data, '{}'::jsonb),
-             '{sourceType}',
-             to_jsonb(CASE
-               WHEN source_node_id = ANY($1::text[]) THEN 'memory_record'
-               ELSE COALESCE(data ->> 'sourceType', 'node')
-             END),
-             true
-           ),
-           '{targetType}',
-           to_jsonb(CASE
-             WHEN target_node_id = ANY($1::text[]) THEN 'memory_record'
-             ELSE COALESCE(data ->> 'targetType', 'node')
-           END),
-           true
-         )
-         WHERE type IN ('has_brain_node', 'includes_brain_node')
-            OR (type IN ('mentions', 'related_to') AND (
-              source_node_id = ANY($1::text[])
-              OR target_node_id = ANY($1::text[])
-            ))
-         RETURNING id
-       ) SELECT COUNT(*) AS count FROM changed`,
-      [memoryIds],
+    const migratedRelations = await migrateLegacyRelations(
+      transaction,
+      schema,
     );
 
-    const checkpoints = await transaction.query<NodeRow>(
-      `SELECT id, namespace, type, name, content, data, embedding,
-         created_at, updated_at
-       FROM ${q(schema, "nodes")}
-       WHERE type = 'long_term_memory'
-         AND COALESCE(data ->> 'schemaVersion', '') <> '4'`,
-    );
-    const existingContinuityFields = new Set(
-      rows.rows.flatMap((row) => {
-        const data = record(row.data);
-        const checkpointId = text(data.checkpointId);
-        const sourceField = text(data.sourceField);
-        return checkpointId && sourceField
-          ? [`${checkpointId}\0${sourceField}`]
-          : [];
-      }),
-    );
+    let checkpointsMigrated = 0;
     let continuityRecords = 0;
     let continuityRelations = 0;
-    for (const checkpoint of checkpoints.rows) {
-      const data = record(checkpoint.data);
-      const metadata = record(data.metadata);
-      const continuity = metadata.continuity;
-      const migrated = await migrateContinuity(
-        transaction,
-        schema,
-        checkpoint,
-        existingContinuityFields,
-      );
-      continuityRecords += migrated.records;
-      continuityRelations += migrated.relations;
-      delete metadata.continuity;
-      delete metadata.continuityVersion;
-      await transaction.query(
-        `UPDATE ${q(schema, "nodes")}
-         SET data = $3::jsonb
-         WHERE namespace = $1 AND id = $2 AND type = 'long_term_memory'`,
-        [
-          checkpoint.namespace,
-          checkpoint.id,
-          JSON.stringify({
-            ...data,
-            schemaVersion: "4",
-            strategy: "semantic_graph",
-            contextSnapshotContent: data.contextSnapshotContent ?? null,
-            contextSnapshot: data.contextSnapshot ?? null,
-            metadata: {
-              ...metadata,
-              processorVersion: "v4",
-              memoryOntologyVersion: "1",
-              migratedFromMemoryV3: {
-                continuityWasDerived: continuity !== undefined,
+    while (true) {
+      const checkpoints = await legacyCheckpointBatch(transaction, schema);
+      if (!checkpoints.length) break;
+      for (const checkpoint of checkpoints) {
+        const data = record(checkpoint.data);
+        const metadata = record(data.metadata);
+        const continuity = metadata.continuity;
+        const migrated = await migrateContinuity(
+          transaction,
+          schema,
+          checkpoint,
+          await existingContinuityFields(
+            transaction,
+            schema,
+            checkpoint.id,
+          ),
+        );
+        continuityRecords += migrated.records;
+        continuityRelations += migrated.relations;
+        delete metadata.continuity;
+        delete metadata.continuityVersion;
+        await transaction.query(
+          `UPDATE ${q(schema, "nodes")}
+           SET data = $3::jsonb
+           WHERE namespace = $1 AND id = $2 AND type = 'long_term_memory'`,
+          [
+            checkpoint.namespace,
+            checkpoint.id,
+            JSON.stringify({
+              ...data,
+              schemaVersion: "4",
+              strategy: "semantic_graph",
+              contextSnapshotContent: data.contextSnapshotContent ?? null,
+              contextSnapshot: data.contextSnapshot ?? null,
+              metadata: {
+                ...metadata,
+                processorVersion: "v4",
+                memoryOntologyVersion: "1",
+                migratedFromMemoryV3: {
+                  continuityWasDerived: continuity !== undefined,
+                },
               },
-            },
-          }),
-        ],
-      );
+            }),
+          ],
+        );
+      }
+      checkpointsMigrated += checkpoints.length;
     }
 
     return Object.freeze({
       schema,
-      recordsMigrated: rows.rows.length + continuityRecords,
-      checkpointsMigrated: checkpoints.rows.length,
-      relationsMigrated: Number(relations.rows[0]?.count ?? 0) +
-        continuityRelations,
+      recordsMigrated: recordsMigrated + continuityRecords,
+      checkpointsMigrated,
+      relationsMigrated: migratedRelations + continuityRelations,
       alreadyUpgraded: false,
     });
   });

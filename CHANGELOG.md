@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.60.4 — 2026-08-14
+
+### Fixed
+
+- Content-v2 now uses explicit legacy execution IDs, projected-output and error
+  digests, and original result creation times to disambiguate reused tool calls.
+
 ## 0.60.3 — 2026-08-14
 
 ### Fixed

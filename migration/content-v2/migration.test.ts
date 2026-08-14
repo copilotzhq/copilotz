@@ -403,6 +403,90 @@ Deno.test("content-v2 disambiguates a reused tool-call ID by canonical output di
   }
 });
 
+Deno.test("content-v2 disambiguates a reused failed tool call by canonical error digest", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const session = createSqlSession(db);
+  try {
+    for (const statement of createCoreSchemaStatements(SCHEMA)) {
+      await session.query(statement);
+    }
+    const errorValue = { code: "sandbox_failed", message: "command failed" };
+    const errorBody = JSON.stringify(errorValue);
+    const errorBytes = new TextEncoder().encode(errorBody);
+    const execution = (content: unknown[]) =>
+      JSON.stringify({
+        threadId: "thread-error-reused",
+        participantId: "agent-error-reused",
+        toolCallId: "call-error-reused",
+        tool: { id: "sandbox" },
+        status: "failed",
+        content,
+        startedAt: "2026-08-01T00:00:01Z",
+        finishedAt: "2026-08-01T00:00:02Z",
+        metadata: {},
+      });
+    await session.query(
+      `INSERT INTO ${q("nodes")} (
+         id, namespace, type, name, data, created_at, updated_at
+       ) VALUES
+       ('thread-error-reused', 'tenant-a', 'thread', 'Thread', '{}', NOW(), NOW()),
+       ('agent-error-reused', 'tenant-a', 'participant', 'Agent', '{}', NOW(), NOW()),
+       ('error-matching', 'tenant-a', 'asset', 'application/json', $1::jsonb, NOW(), NOW()),
+       ('message-error-reused', 'tenant-a', 'message', 'Tool', $2::jsonb,
+         '2026-08-01T00:00:03Z', '2026-08-01T00:00:04Z'),
+       ('execution-error-matching', 'tenant-a', 'tool_execution', 'sandbox', $3::jsonb,
+         '2026-08-01T00:00:01Z', '2026-08-01T00:00:02Z'),
+       ('execution-error-other', 'tenant-a', 'tool_execution', 'sandbox', $4::jsonb,
+         '2026-08-01T00:00:01Z', '2026-08-01T00:00:02Z')`,
+      [
+        JSON.stringify({
+          mediaType: "application/json",
+          byteLength: errorBytes.byteLength,
+          digest: await digestContent(errorBytes),
+          state: "ready",
+          location: { kind: "database", encoding: "json" },
+          body: errorBody,
+          readyAt: "2026-08-01T00:00:02Z",
+        }),
+        JSON.stringify({
+          threadId: "thread-error-reused",
+          metadata: {
+            migratedFromV1: {
+              senderType: "tool",
+              senderId: "agent-error-reused",
+            },
+            toolCalls: [{
+              id: "call-error-reused",
+              tool: { id: "sandbox" },
+              error: errorValue,
+              status: "failed",
+            }],
+          },
+        }),
+        execution([{
+          assetId: "error-matching",
+          kind: "json",
+          role: "tool.error_detail",
+          mediaType: "application/json",
+        }]),
+        execution([]),
+      ],
+    );
+    await session.query(
+      `INSERT INTO ${q("edges")} (
+         id, namespace, source_node_id, target_node_id, type, data, weight
+       ) VALUES ('edge-error-matching', 'tenant-a',
+         'execution-error-matching', 'error-matching', 'has_asset', '{}', 1)`,
+    );
+
+    const dryRun = await migrateContentV2Schema(session, SCHEMA);
+    assertEquals(dryRun.mergedExecutions, 1);
+    assertEquals(dryRun.synthesizedExecutions, 0);
+  } finally {
+    await db.close();
+  }
+});
+
 Deno.test("content-v2 aborts ambiguous tool-message repair without partial writes", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);

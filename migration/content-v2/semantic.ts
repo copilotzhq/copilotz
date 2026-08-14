@@ -108,6 +108,25 @@ async function narrowExecutionMatches(
   let narrowed = [...candidates];
   if (narrowed.length <= 1) return narrowed;
 
+  const metadata = record(messageData.metadata);
+  const migrated = record(metadata.migratedFromV1);
+  const executionHints = new Set(
+    [
+      parsed.call.toolExecutionId,
+      parsed.call.executionId,
+      messageData.toolExecutionId,
+      metadata.toolExecutionId,
+      migrated.toolExecutionId,
+    ].map(text).filter((value): value is string => Boolean(value)),
+  );
+  if (executionHints.size > 0) {
+    const exact = narrowed.filter((candidate) =>
+      executionHints.has(candidate.id)
+    );
+    if (exact.length > 0) narrowed = exact;
+  }
+  if (narrowed.length <= 1) return narrowed;
+
   const narrowByDigest = async (
     expectedValue: unknown,
     role: string,
@@ -133,14 +152,21 @@ async function narrowExecutionMatches(
   // A canonical result body is stronger evidence than a reused provider call ID.
   await narrowByDigest(parsed.call.output, "tool.output", ["output"]);
   await narrowByDigest(
+    parsed.call.projectedOutput ?? parsed.call.projected_output,
+    "tool.projected_output",
+    ["projectedOutput", "projected_output"],
+  );
+  // Preserve full diagnostic identity. A safeError summary may intentionally
+  // differ from the canonical legacy error body, so only direct full errors
+  // precede the asset-backed role here.
+  await narrowByDigest(parsed.call.error, "tool.error_detail", ["error"]);
+  await narrowByDigest(
     parsed.call.args ?? parsed.call.arguments,
     "tool.arguments",
     ["args", "arguments"],
   );
   if (narrowed.length <= 1) return narrowed;
 
-  const metadata = record(messageData.metadata);
-  const migrated = record(metadata.migratedFromV1);
   const participantHints = new Set(
     [
       parsed.call.participantId,
@@ -180,7 +206,7 @@ async function narrowExecutionMatches(
   if (narrowed.length <= 1) return narrowed;
 
   // A result message cannot have been produced by an execution that started later.
-  const resultAt = new Date(row.updated_at).getTime();
+  const resultAt = new Date(row.created_at).getTime();
   const causalMatches = narrowed.filter((candidate) => {
     const data = record(candidate.data);
     const startedAt = text(data.startedAt) ?? iso(candidate.created_at);

@@ -2,6 +2,7 @@ import { ulid } from "../../dependencies/ulid.ts";
 import {
   bytesToBase64,
   createContentPreparer,
+  digestContent,
   mergePreparedContent,
 } from "../../runtime/content/index.ts";
 import type {
@@ -64,6 +65,129 @@ function iso(value: string | Date): string {
   return value instanceof Date
     ? value.toISOString()
     : new Date(value).toISOString();
+}
+
+async function jsonDigest(value: unknown): Promise<string | undefined> {
+  if (value === undefined) return undefined;
+  const encoded = JSON.stringify(value);
+  if (encoded === undefined) return undefined;
+  return await digestContent(new TextEncoder().encode(encoded));
+}
+
+async function executionRoleDigest(
+  transaction: SqlExecutor,
+  schema: string,
+  namespace: string,
+  data: Record<string, unknown>,
+  role: string,
+  directKeys: readonly string[],
+): Promise<string | undefined> {
+  for (const key of directKeys) {
+    if (Object.hasOwn(data, key)) return await jsonDigest(data[key]);
+  }
+  const ref = content(data.content).find((candidate) =>
+    candidate.role === role
+  );
+  if (!ref) return undefined;
+  const result = await transaction.query<{ data: unknown }>(
+    `SELECT data FROM ${q(schema, "nodes")}
+     WHERE namespace = $1 AND id = $2 AND type = 'asset' LIMIT 1`,
+    [namespace, ref.assetId],
+  );
+  return text(record(result.rows[0]?.data).digest);
+}
+
+async function narrowExecutionMatches(
+  transaction: SqlExecutor,
+  schema: string,
+  row: NodeRow,
+  messageData: Record<string, unknown>,
+  parsed: ReturnType<typeof oneToolCall>,
+  candidates: readonly NodeRow[],
+): Promise<readonly NodeRow[]> {
+  let narrowed = [...candidates];
+  if (narrowed.length <= 1) return narrowed;
+
+  const narrowByDigest = async (
+    expectedValue: unknown,
+    role: string,
+    directKeys: readonly string[],
+  ) => {
+    if (expectedValue === undefined || narrowed.length <= 1) return;
+    const expected = await jsonDigest(expectedValue);
+    const matches: NodeRow[] = [];
+    for (const candidate of narrowed) {
+      const actual = await executionRoleDigest(
+        transaction,
+        schema,
+        candidate.namespace,
+        record(candidate.data),
+        role,
+        directKeys,
+      );
+      if (actual && actual === expected) matches.push(candidate);
+    }
+    if (matches.length > 0) narrowed = matches;
+  };
+
+  // A canonical result body is stronger evidence than a reused provider call ID.
+  await narrowByDigest(parsed.call.output, "tool.output", ["output"]);
+  await narrowByDigest(
+    parsed.call.args ?? parsed.call.arguments,
+    "tool.arguments",
+    ["args", "arguments"],
+  );
+  if (narrowed.length <= 1) return narrowed;
+
+  const metadata = record(messageData.metadata);
+  const migrated = record(metadata.migratedFromV1);
+  const participantHints = new Set(
+    [
+      parsed.call.participantId,
+      parsed.call.agentId,
+      messageData.participantId,
+      messageData.agentId,
+      migrated.requestingParticipantId,
+      migrated.senderId,
+      migrated.senderUserId,
+    ].map(text).filter((value): value is string => Boolean(value)),
+  );
+  if (participantHints.size > 0) {
+    const participantMatches = narrowed.filter((candidate) => {
+      const data = record(candidate.data);
+      return [text(data.participantId), text(data.agentId)].some((value) =>
+        value ? participantHints.has(value) : false
+      );
+    });
+    if (participantMatches.length > 0) narrowed = participantMatches;
+  }
+  if (narrowed.length <= 1) return narrowed;
+
+  const messageHints = new Set(
+    [
+      parsed.call.messageId,
+      messageData.messageId,
+      metadata.messageId,
+    ].map(text).filter((value): value is string => Boolean(value)),
+  );
+  if (messageHints.size > 0) {
+    const messageMatches = narrowed.filter((candidate) => {
+      const messageId = text(record(candidate.data).messageId);
+      return messageId ? messageHints.has(messageId) : false;
+    });
+    if (messageMatches.length > 0) narrowed = messageMatches;
+  }
+  if (narrowed.length <= 1) return narrowed;
+
+  // A result message cannot have been produced by an execution that started later.
+  const resultAt = new Date(row.updated_at).getTime();
+  const causalMatches = narrowed.filter((candidate) => {
+    const data = record(candidate.data);
+    const startedAt = text(data.startedAt) ?? iso(candidate.created_at);
+    return new Date(startedAt).getTime() <= resultAt;
+  });
+  if (causalMatches.length > 0) narrowed = causalMatches;
+  return narrowed;
 }
 
 function jsonMediaType(mediaType: string): boolean {
@@ -584,7 +708,7 @@ export async function repairLegacyToolMessages(
       row = { ...row, namespace: threadNamespace };
     }
     const parsed = oneToolCall(data, row.id);
-    const matches = await transaction.query<NodeRow>(
+    const baseMatches = await transaction.query<NodeRow>(
       `SELECT id, namespace, name, content, data, source_type, source_id,
          created_at, updated_at
        FROM ${q(schema, "nodes")}
@@ -595,14 +719,23 @@ export async function repairLegacyToolMessages(
        ORDER BY created_at, id`,
       [row.namespace, threadId, parsed.toolCallId, parsed.toolId],
     );
-    if (matches.rows.length > 1) {
+    const matches = await narrowExecutionMatches(
+      transaction,
+      schema,
+      row,
+      data,
+      parsed,
+      baseMatches.rows,
+    );
+    if (matches.length > 1) {
       throw new Error(
-        `Legacy tool message '${row.id}' matches ${matches.rows.length} tool executions; migration refuses to guess.`,
+        `Legacy tool message '${row.id}' matches ${matches.length} tool executions; migration refuses to guess.`,
       );
     }
-    const executionId = matches.rows[0]?.id ??
+    const matched = matches[0];
+    const executionId = matched?.id ??
       `migration:tool_execution:${row.id}`;
-    const existingData = record(matches.rows[0]?.data);
+    const existingData = record(matched?.data);
     const requestingParticipantId = await participantId(
       transaction,
       schema,
@@ -734,7 +867,7 @@ export async function repairLegacyToolMessages(
         repairedBy: "copilotz.content-v2",
       },
     };
-    if (matches.rows[0]) {
+    if (matched) {
       await transaction.query(
         `UPDATE ${q(schema, "nodes")}
          SET data = $3::jsonb, updated_at = GREATEST(updated_at, $4::timestamptz)

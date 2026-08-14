@@ -256,6 +256,153 @@ Deno.test("content-v2 sanitizes existing canonical tool outputs without duplicat
   }
 });
 
+Deno.test("content-v2 disambiguates a reused tool-call ID by canonical output digest", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const session = createSqlSession(db);
+  try {
+    for (const statement of createCoreSchemaStatements(SCHEMA)) {
+      await session.query(statement);
+    }
+    const matchingOutput = JSON.stringify({ ok: true, value: "matching" });
+    const otherOutput = JSON.stringify({ ok: true, value: "other" });
+    const matchingBytes = new TextEncoder().encode(matchingOutput);
+    const otherBytes = new TextEncoder().encode(otherOutput);
+    await session.query(
+      `INSERT INTO ${q("nodes")} (
+         id, namespace, type, name, data, created_at, updated_at
+       ) VALUES
+       ('thread-reused', 'tenant-a', 'thread', 'Thread', '{}',
+         '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'),
+       ('agent-reused', 'tenant-a', 'participant', 'Agent', $1::jsonb,
+         '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'),
+       ('output-matching', 'tenant-a', 'asset', 'application/json', $2::jsonb,
+         '2026-08-01T00:00:01Z', '2026-08-01T00:00:01Z'),
+       ('output-other', 'tenant-a', 'asset', 'application/json', $3::jsonb,
+         '2026-08-01T00:08:01Z', '2026-08-01T00:08:01Z'),
+       ('message-reused', 'tenant-a', 'message', 'Tool', $4::jsonb,
+         '2026-08-01T00:00:10Z', '2026-08-01T00:00:11Z'),
+       ('execution-matching', 'tenant-a', 'tool_execution', 'sandbox', $5::jsonb,
+         '2026-08-01T00:00:01Z', '2026-08-01T00:00:09Z'),
+       ('execution-other', 'tenant-a', 'tool_execution', 'sandbox', $6::jsonb,
+         '2026-08-01T00:08:01Z', '2026-08-01T00:08:09Z')`,
+      [
+        JSON.stringify({ externalId: "east", participantType: "agent" }),
+        JSON.stringify({
+          mediaType: "application/json",
+          byteLength: matchingBytes.byteLength,
+          digest: await digestContent(matchingBytes),
+          state: "ready",
+          location: { kind: "database", encoding: "json" },
+          body: matchingOutput,
+          readyAt: "2026-08-01T00:00:01Z",
+        }),
+        JSON.stringify({
+          mediaType: "application/json",
+          byteLength: otherBytes.byteLength,
+          digest: await digestContent(otherBytes),
+          state: "ready",
+          location: { kind: "database", encoding: "json" },
+          body: otherOutput,
+          readyAt: "2026-08-01T00:08:01Z",
+        }),
+        JSON.stringify({
+          threadId: "thread-reused",
+          metadata: {
+            migratedFromV1: {
+              senderType: "tool",
+              senderId: "agent-reused",
+            },
+            toolCalls: [{
+              id: "call-reused",
+              tool: { id: "sandbox" },
+              output: { ok: true, value: "matching" },
+              status: "completed",
+            }],
+          },
+        }),
+        JSON.stringify({
+          threadId: "thread-reused",
+          participantId: "agent-reused",
+          agentId: "east",
+          toolCallId: "call-reused",
+          tool: { id: "sandbox" },
+          status: "completed",
+          content: [{
+            assetId: "output-matching",
+            kind: "json",
+            role: "tool.output",
+            mediaType: "application/json",
+          }],
+          startedAt: "2026-08-01T00:00:01Z",
+          finishedAt: "2026-08-01T00:00:09Z",
+          metadata: {},
+        }),
+        JSON.stringify({
+          threadId: "thread-reused",
+          participantId: "agent-reused",
+          agentId: "east",
+          toolCallId: "call-reused",
+          tool: { id: "sandbox" },
+          status: "completed",
+          content: [{
+            assetId: "output-other",
+            kind: "json",
+            role: "tool.output",
+            mediaType: "application/json",
+          }],
+          startedAt: "2026-08-01T00:08:01Z",
+          finishedAt: "2026-08-01T00:08:09Z",
+          metadata: {},
+        }),
+      ],
+    );
+    await session.query(
+      `INSERT INTO ${q("edges")} (
+         id, namespace, source_node_id, target_node_id, type, data, weight
+       ) VALUES
+       ('edge-output-matching', 'tenant-a', 'execution-matching',
+         'output-matching', 'has_asset', '{}', 1),
+       ('edge-output-other', 'tenant-a', 'execution-other',
+         'output-other', 'has_asset', '{}', 1)`,
+    );
+
+    const dryRun = await migrateContentV2Schema(session, SCHEMA);
+    assertEquals(dryRun.mergedExecutions, 1);
+    assertEquals(dryRun.synthesizedExecutions, 0);
+
+    const memory = createMemoryAssetBodyStore({ backendId: "gcs:test" });
+    const report = await migrateContentV2Schema(session, SCHEMA, {
+      mode: "apply",
+      assets: {
+        storage: {
+          type: "custom",
+          config: {
+            store: Object.freeze({ ...memory, kind: "object" as const }),
+          },
+        },
+      },
+    });
+    assertEquals(report.mergedExecutions, 1);
+    const executions = await session.query<{ id: string; data: unknown }>(
+      `SELECT id, data FROM ${q("nodes")}
+       WHERE type = 'tool_execution' ORDER BY id`,
+    );
+    const byId = new Map(executions.rows.map((row) => [row.id, row.data]));
+    assertEquals(
+      ((byId.get("execution-matching") as Record<string, unknown>).metadata as {
+        migratedFromV1: { legacyToolMessageId: string };
+      }).migratedFromV1.legacyToolMessageId,
+      "message-reused",
+    );
+    assertEquals(
+      JSON.stringify(byId.get("execution-other")).includes("message-reused"),
+      false,
+    );
+  } finally {
+    await db.close();
+  }
+});
+
 Deno.test("content-v2 aborts ambiguous tool-message repair without partial writes", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);

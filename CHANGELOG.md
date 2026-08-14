@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.60.2 — 2026-08-14
+
+### Added
+
+- Delivery-level settlement scopes with declarative detached durable processors,
+  automatic descendant propagation, scope-local cancellation, and Worker-output
+  settlement.
+
+### Changed
+
+- Long-term memory consolidation now runs as durable background work without
+  blocking or failing the user-facing run.
+
+## 0.60.1 — 2026-08-14
+
+### Fixed
+
+- Content-v2 now disambiguates reused legacy tool-call IDs with canonical
+  output/argument digests, participant/message evidence, and causal timestamps
+  before refusing an uncertain match.
+
 ## 0.60.0 — 2026-08-14
 
 This release separates graph asset metadata from pluggable body storage and

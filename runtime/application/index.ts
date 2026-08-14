@@ -31,13 +31,16 @@ export type {
   CopilotzDatabaseConnector,
   CopilotzDatabaseInput,
   CopilotzDatabaseRecoveryOptions,
+  CopilotzPersistence,
   CopilotzPersistenceError,
   CopilotzPersistenceLifecycleCallbacks,
   CopilotzPersistenceOptions,
   CopilotzPersistenceSnapshot,
   CopilotzPersistenceState,
+  CreateCopilotzPersistenceOptions,
 } from "./persistence.ts";
 export {
+  createCopilotzPersistence,
   isCopilotzPersistenceError,
   isPersistenceUnavailable,
 } from "./persistence.ts";

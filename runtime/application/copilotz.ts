@@ -67,7 +67,7 @@ export async function createCopilotz(
       resources: options.resources,
       pluginResolver: options.pluginResolver,
       toolCatalog: options.toolCatalog,
-      database: persistence.database,
+      persistence,
       transports: [transport],
       target: { workerId },
       engine,
@@ -80,7 +80,7 @@ export async function createCopilotz(
       resources: options.resources,
       pluginResolver: options.pluginResolver,
       toolCatalog: options.toolCatalog,
-      database: persistence.database,
+      persistence,
       id: workerId,
       transport,
       capacity: options.worker?.capacity,
@@ -96,16 +96,9 @@ export async function createCopilotz(
     throw error;
   }
 
-  const stopObservingPersistence = persistence.recovery?.register({
-    onUnavailable: (error) => gateway!.disconnectAttachments(error),
-    async onReady() {
-      await gateway!.recoverAll({ limit: 1_000 });
-    },
-  }) ?? (() => undefined);
   let shutdownTask: Promise<void> | undefined;
   const shutdown = (reason = "copilotz_embedded_shutdown"): Promise<void> => {
     if (shutdownTask) return shutdownTask;
-    stopObservingPersistence();
     shutdownTask = (async () => {
       const roleResults = await Promise.allSettled([
         gateway!.shutdown(reason),

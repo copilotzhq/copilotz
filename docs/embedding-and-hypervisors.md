@@ -19,11 +19,15 @@ The returned application intentionally hides those topology details.
 ```ts
 import {
   createCopilotzGateway,
+  createCopilotzPersistence,
   createCopilotzWorker,
 } from "@copilotz/copilotz";
 
+const persistence = await createCopilotzPersistence({
+  database: { connect: () => Ominipg.connect({ url }) },
+});
 const composition = {
-  database: ominipg,
+  persistence,
   namespace: "acme",
   plugins,
 };
@@ -50,7 +54,7 @@ const run = await gateway.run(input);
 await run.done;
 
 await Promise.all([gateway.shutdown(), worker.stop()]);
-await closeOminipg();
+await persistence.close();
 ```
 
 The local `topic` is a rendezvous address, analogous to a WebSocket URL. It is
@@ -58,11 +62,11 @@ not a work broadcast topic. Oxian admits one Worker connection and assigns each
 operation exactly; the event fabric carries the same lifecycle/protocol used by
 remote transports.
 
-An injected database is always application-owned. Copilotz never closes it.
-Passing database configuration instead makes the Copilotz role own and close the
-database it opens. Configuration-created databases and explicit `connect`
-capabilities are reconnectable; an already-open injected database is not
-replaced implicitly.
+An injected database or shared persistence record is always application-owned.
+Copilotz roles never close it. Passing database configuration instead makes the
+Copilotz role own and close the database it opens. Configuration-created
+databases and explicit `connect` capabilities are reconnectable; an already-open
+injected database is not replaced implicitly.
 
 ```ts
 const app = await createCopilotz({
@@ -78,16 +82,17 @@ const app = await createCopilotz({
 });
 ```
 
-All repositories and role components capture one stable persistence facade.
-When its physical connection fails, concurrent callers share one reconnect,
-late results from the retired connection are rejected as indeterminate, active
+All repositories and role components capture one stable persistence facade. When
+its physical connection fails, concurrent callers share one reconnect, late
+results from the retired connection are rejected as indeterminate, active
 attachments terminate, and pending durable deliveries are recovered. The same
 Gateway endpoint remains valid throughout the transition.
 
-Gateway and Worker roles may share the same Ominipg instance in-process. One
-instance safely serializes transaction ownership, while each Copilotz role
-adapts it to its private narrow SQL seam. This avoids duplicate connections
-without exposing a public session abstraction.
+Gateway and Worker roles may share one `CopilotzPersistence` record in-process.
+Its stable database facade safely serializes transaction ownership and replaces
+physical connections when necessary, while each role retains its private narrow
+SQL seam. This avoids duplicate pools without exposing a public session
+abstraction.
 
 ## Multiple physical schemas
 

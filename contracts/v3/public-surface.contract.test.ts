@@ -81,6 +81,7 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
   assertFunctions(application, [
     "createCopilotz",
     "createCopilotzGateway",
+    "createCopilotzPersistence",
     "createCopilotzWorker",
   ]);
   assertEquals("createCopilotzApplication" in application, false);

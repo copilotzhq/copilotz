@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.59.25 — 2026-08-14
+
+This release replaces the mixed memory model with a queryable semantic memory
+ontology and keeps embedded applications available across recoverable database
+connection failures.
+
+### Added
+
+- Memory records use explicit semantic forms, lifecycle states, temporal scope,
+  provenance, epistemic metadata, and typed relations for agent and user query.
+- Consolidation is an ordinary guarded tool flow, with plugin-provided context
+  contributors and post-response similarity retrieval.
+- An isolated, idempotent memory-v4 migration preserves legacy records,
+  continuity, provenance, history, and relations.
+- `createCopilotzPersistence()` lets co-located Gateway, Worker, and application
+  services share one stable reconnectable database facade without exposing the
+  private SQL session abstraction or transferring ownership to a role.
+
+### Fixed
+
+- Reconnectable persistence now classifies connection failures, serializes
+  recovery, fences stale generations, bounds request admission, terminates
+  indeterminate live work, and recovers durable deliveries after reconnection.
+- Gateway persistence outages return retryable HTTP 503 responses with
+  `Retry-After` instead of leaving requests hanging or requiring process
+  replacement.
+
 ## 0.59.24 — 2026-08-13
 
 This patch aligns the framework and frontend package releases after preserving

@@ -1,5 +1,9 @@
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
-import { createCopilotzGateway, createCopilotzWorker } from "./index.ts";
+import {
+  createCopilotzGateway,
+  createCopilotzPersistence,
+  createCopilotzWorker,
+} from "./index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { listen } from "../adapters/deno/listen.ts";
 import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
@@ -273,9 +277,7 @@ Deno.test("Gateway bounds persistence outages as retryable HTTP 503 responses", 
   const database = await createTestDatabase({ url: ":memory:" });
   let generation = 0;
   let failNextQuery = false;
-  const gateway = await createCopilotzGateway({
-    namespace,
-    core: false,
+  const persistence = await createCopilotzPersistence({
     database: {
       connect({ signal }) {
         generation += 1;
@@ -307,7 +309,13 @@ Deno.test("Gateway bounds persistence outages as retryable HTTP 503 responses", 
     },
     databaseRecovery: { waitMs: 5, retryAfterSeconds: 3 },
   });
+  const gateway = await createCopilotzGateway({
+    namespace,
+    core: false,
+    persistence,
+  });
   try {
+    assertEquals(gateway.config.databaseOwnership, "injected");
     failNextQuery = true;
     const failure = await assertRejects(() =>
       gateway.conversation.listMessages(namespace, "missing-thread")
@@ -324,6 +332,7 @@ Deno.test("Gateway bounds persistence outages as retryable HTTP 503 responses", 
     assertEquals(generation, 2);
   } finally {
     await gateway.shutdown();
+    await persistence.close();
     await database.close();
   }
 });

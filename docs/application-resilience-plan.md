@@ -50,8 +50,8 @@ const app = await createCopilotz({ database });
 
 Database configuration such as `{ url }` is also Copilotz-owned and therefore
 reconnectable. The connector form exists for applications that need to obtain
-credentials, configure providers, or otherwise control creation of each
-physical connection. Ownership remains explicit and factory/closure based.
+credentials, configure providers, or otherwise control creation of each physical
+connection. Ownership remains explicit and factory/closure based.
 
 ### Stable facade and runtime generations
 

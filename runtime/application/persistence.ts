@@ -69,6 +69,8 @@ export type CopilotzDatabaseRecoveryOptions = Readonly<{
 }>;
 
 export type CopilotzPersistenceOptions = Readonly<{
+  /** Shared stable persistence created by createCopilotzPersistence(). */
+  persistence?: CopilotzPersistence;
   /** Database configuration, reconnect capability, or injected open database. */
   database?: CopilotzDatabaseInput;
   databaseRecovery?: CopilotzDatabaseRecoveryOptions;
@@ -101,13 +103,21 @@ export type CopilotzPersistenceRecovery = Readonly<{
   ): () => void;
 }>;
 
-export type OpenCopilotzPersistence = Readonly<{
+export type CopilotzPersistence = Readonly<{
   database: CopilotzDatabase;
-  session: SqlSession;
   ownership: "application" | "injected";
   recovery?: CopilotzPersistenceRecovery;
   close(reason?: string): Promise<void>;
 }>;
+
+export type CreateCopilotzPersistenceOptions = Omit<
+  CopilotzPersistenceOptions,
+  "persistence"
+>;
+
+export type OpenCopilotzPersistence =
+  & CopilotzPersistence
+  & Readonly<{ session: SqlSession }>;
 
 const DEFAULT_RECOVERY_WAIT_MS = 2_000;
 const DEFAULT_RETRY_AFTER_SECONDS = 1;
@@ -604,6 +614,26 @@ export async function openCopilotzPersistence(
   lifecycle: CopilotzPersistenceLifecycleCallbacks =
     options.databaseLifecycle ?? {},
 ): Promise<OpenCopilotzPersistence> {
+  if (options.persistence) {
+    if (
+      options.database !== undefined ||
+      options.databaseRecovery !== undefined ||
+      options.databaseLifecycle !== undefined
+    ) {
+      throw new TypeError(
+        "Shared persistence cannot be combined with database or database lifecycle options.",
+      );
+    }
+    return Object.freeze({
+      database: options.persistence.database,
+      session: createOminipgSqlSession(options.persistence.database),
+      ownership: "injected" as const,
+      ...(options.persistence.recovery
+        ? { recovery: options.persistence.recovery }
+        : {}),
+      close: () => Promise.resolve(),
+    });
+  }
   if (options.database && isDatabase(options.database)) {
     return Object.freeze({
       database: options.database,
@@ -620,4 +650,19 @@ export async function openCopilotzPersistence(
     options.databaseRecovery ?? {},
     lifecycle,
   );
+}
+
+/** Creates one stable persistence record that explicit application roles may share. */
+export async function createCopilotzPersistence(
+  options: CreateCopilotzPersistenceOptions = {},
+  lifecycle: CopilotzPersistenceLifecycleCallbacks =
+    options.databaseLifecycle ?? {},
+): Promise<CopilotzPersistence> {
+  const opened = await openCopilotzPersistence(options, lifecycle);
+  return Object.freeze({
+    database: opened.database,
+    ownership: opened.ownership,
+    ...(opened.recovery ? { recovery: opened.recovery } : {}),
+    close: opened.close,
+  });
 }

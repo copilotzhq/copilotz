@@ -57,6 +57,15 @@ and include `Retry-After`. Active attachments terminate with the availability
 error; after reconnection, Copilotz recovers durable deliveries from every
 database scope already opened by the application.
 
+### `createCopilotzPersistence(options?, lifecycle?)`
+
+Creates a frozen stable database facade for explicit co-located roles and
+application services. Pass the returned `persistence` record to each Gateway or
+Worker. Those roles observe recovery but never close the shared record; the
+creator calls `persistence.close()` once during application shutdown. The public
+record deliberately exposes the stable `database`, ownership, recovery state,
+and close capability—not Copilotz's private SQL session adapter.
+
 ### `createCopilotzGateway(options?, lifecycle?)`
 
 Creates durable ingress, event/output relay, recovery APIs, plugin/resource
@@ -96,12 +105,16 @@ does not expose the internal application used to host workload closures.
 ## Shared role configuration
 
 Gateway and Worker should receive equivalent domain composition and reachable
-persistence. Ordinary object spread keeps that relationship visible:
+persistence. Explicit co-located roles can share one reconnectable persistence
+record without duplicating pools:
 
 ```ts
+const persistence = await createCopilotzPersistence({
+  database: { connect: () => Ominipg.connect({ url }) },
+});
 const composition = {
   namespace: "acme",
-  database,
+  persistence,
   plugins,
 };
 const transport = {
@@ -121,9 +134,13 @@ const worker = await createCopilotzWorker({
   transport,
 });
 await worker.ready;
+
+await Promise.all([gateway.shutdown(), worker.stop()]);
+await persistence.close();
 ```
 
-No opaque composition factory is required.
+The roles observe and admit through the shared persistence but do not close it.
+Its creator retains ownership. No opaque domain-composition factory is required.
 
 ## `CopilotzApplication`
 

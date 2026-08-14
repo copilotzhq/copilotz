@@ -2,6 +2,7 @@ import { assert, assertEquals, assertRejects } from "@std/assert";
 
 import type { CopilotzDatabase } from "./persistence.ts";
 import {
+  createCopilotzPersistence,
   isCopilotzPersistenceError,
   isPersistenceUnavailable,
   openCopilotzPersistence,
@@ -318,4 +319,34 @@ Deno.test("injected persistence remains caller-owned and is never replaced", asy
   assertEquals(closes, 0);
   await database.close();
   assertEquals(closes, 1);
+});
+
+Deno.test("explicit roles share one stable persistence without taking its ownership", async () => {
+  let closes = 0;
+  const shared = await createCopilotzPersistence({
+    database: {
+      connect: () =>
+        databaseGeneration(1, {
+          close: () => {
+            closes += 1;
+          },
+        }),
+    },
+  });
+  const role = await openCopilotzPersistence({ persistence: shared });
+  assertEquals(shared.ownership, "application");
+  assertEquals(role.ownership, "injected");
+  assertEquals(role.database, shared.database);
+  assertEquals(role.recovery, shared.recovery);
+  assertEquals("session" in shared, false);
+  await role.close();
+  assertEquals(closes, 0);
+  await shared.close();
+  assertEquals(closes, 1);
+
+  await assertRejects(
+    () => openCopilotzPersistence({ persistence: shared, database: {} }),
+    TypeError,
+    "Shared persistence cannot be combined",
+  );
 });

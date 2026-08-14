@@ -1,6 +1,7 @@
 # Application Resilience and Memory Refactor Plan
 
-Status: agreed designs, not yet implemented.
+Status: memory and application-resilience designs implemented; release
+verification pending.
 
 This document freezes two related runtime designs:
 
@@ -16,8 +17,8 @@ without their original idempotency identity.
 
 Copilotz should recover from persistence loss without relying on the process
 manager to replace an otherwise healthy application instance. This is defense in
-depth: Ominipg restores database connectivity, Copilotz restores application
-processing, and the deployment platform remains the final circuit breaker.
+depth: Copilotz replaces an unavailable Ominipg connection, restores application
+processing, and leaves the deployment platform as the final circuit breaker.
 
 ### Ownership boundary
 
@@ -33,7 +34,7 @@ The intended distinction is:
 const app = await createCopilotz(
   {
     database: {
-      connect: ({ signal }) => Ominipg.connect({ url, signal }),
+      connect: () => Ominipg.connect({ url }),
     },
   },
   {
@@ -47,8 +48,10 @@ const app = await createCopilotz(
 const app = await createCopilotz({ database });
 ```
 
-The final callback names and argument shapes may be refined during
-implementation, but ownership must remain explicit and factory/closure based.
+Database configuration such as `{ url }` is also Copilotz-owned and therefore
+reconnectable. The connector form exists for applications that need to obtain
+credentials, configure providers, or otherwise control creation of each
+physical connection. Ownership remains explicit and factory/closure based.
 
 ### Stable facade and runtime generations
 
@@ -56,17 +59,21 @@ The application returned to consumers remains stable while its internal runtime
 may move between generations:
 
 ```text
-Stable Copilotz facade
+Stable Copilotz application, plugins, repositories, Gateway, and Worker
         |
-        +-- generation 1: database + Gateway + Worker  (unavailable)
-        |
-        +-- generation 2: database + Gateway + Worker  (active)
+        +-- stable persistence facade
+                    |
+                    +-- physical DB generation 1  (retired)
+                    |
+                    +-- physical DB generation 2  (active)
 ```
 
-A generation contains every component that captured its database: plugin
-composition, services, Gateway, Worker, delivery pumps, and database scopes.
-Replacing only a variable is insufficient because older closures would retain
-the closed database.
+Every component captures the stable persistence facade rather than one physical
+database. Reconnection can therefore replace and fence the physical generation
+without reconstructing plugin composition, repositories, Gateway, Worker,
+delivery pumps, or database scopes. If a future adapter cannot preserve that
+stable handle, the same public contract permits rebuilding the affected runtime
+generation instead.
 
 ### Recovery lifecycle
 
@@ -76,9 +83,10 @@ When persistence becomes unavailable, Copilotz should:
 2. Reject affected in-flight operations with an explicit indeterminate error.
    Never automatically replay an operation that may already have reached the
    database.
-3. Share one reconnect/rebuild attempt among all callers.
-4. Open a new database and construct the next complete runtime generation.
-5. Atomically route new operations through the new generation.
+3. Share one reconnect attempt among all callers.
+4. Open a new physical database generation behind the stable facade.
+5. Atomically route new operations through that generation and fence late
+   results from the retired generation.
 6. Recover durable pending, retrying, and expired deliveries from the database.
 7. Dispose of the previous generation after it can no longer receive work.
 
@@ -110,20 +118,21 @@ Recovery instead relies on existing durable semantics:
 
 #### Ominipg
 
-- Preserve a stable public database handle while reconnecting its underlying
-  session generation.
-- Fence late results from obsolete generations.
-- Fail active transactions and indeterminate in-flight operations.
-- Restore session-level facilities such as PostgreSQL notifications.
+- Provide one physical database connection per Copilotz-owned generation.
+- Fail operations when its session or underlying connection is unavailable.
+- Close cleanly when Copilotz retires the generation.
 - Never close an injected Oxian dispatcher.
 
 #### Copilotz
 
 - Observe persistence availability.
 - Pause admission and delivery dispatch while unavailable.
+- Preserve a stable persistence facade and replace owned physical connections.
+- Fence late results and fail indeterminate in-flight operations without replay.
 - Resume durable delivery recovery after persistence is ready.
-- Rebuild a complete application generation when the database handle itself
-  cannot be restored.
+- Terminate active attachments with a retryable availability error.
+- Rebuild a larger application generation only when a future adapter cannot
+  preserve the stable persistence handle.
 - Expose lifecycle callbacks without prescribing logging, alerting, or process
   termination policy.
 

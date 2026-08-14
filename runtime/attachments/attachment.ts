@@ -67,6 +67,8 @@ export type CreateAttachmentRuntimeOptions = Readonly<{
 export type AttachmentRuntime = Readonly<{
   connect(input: ConnectAttachmentInput): Promise<ThreadAttachment>;
   run(input: RunInput): Promise<RunHandle>;
+  /** Terminates active attachments with a transport-visible error. */
+  terminate(error: unknown): Promise<void>;
   shutdown(reason?: string): Promise<void>;
 }>;
 
@@ -382,7 +384,10 @@ export function createAttachmentRuntime(
   const createId = options.createId ?? (() => crypto.randomUUID());
   const now = options.now ?? (() => new Date());
   const pollMs = positivePoll(options.settlementPollMs);
-  const openAttachments = new Set<ThreadAttachment>();
+  const openAttachments = new Map<
+    ThreadAttachment,
+    (error: unknown) => Promise<void>
+  >();
 
   const resolveThread = async (
     namespace: string,
@@ -473,6 +478,30 @@ export function createAttachmentRuntime(
       );
       active.clear();
       closeOutputs();
+      openAttachments.delete(attachment);
+    };
+
+    const terminate = async (error: unknown): Promise<void> => {
+      if (closed) return;
+      closed = true;
+      const reason = errorText(error);
+      // Error the consumer-facing stream before cancelling the semantic reader;
+      // its normal completion path would otherwise race and close the output.
+      if (!outputsClosed) {
+        outputsClosed = true;
+        try {
+          outputController?.error(error);
+        } catch {
+          // A consumer may already have cancelled the stream.
+        }
+      }
+      await semanticReader.cancel(reason).catch(() => undefined);
+      await Promise.all(
+        [...active].map((operation) =>
+          operation.cancel(reason).catch(() => undefined)
+        ),
+      );
+      active.clear();
       openAttachments.delete(attachment);
     };
 
@@ -955,7 +984,7 @@ export function createAttachmentRuntime(
       send: send as ThreadAttachment["send"],
       close,
     });
-    openAttachments.add(attachment);
+    openAttachments.set(attachment, terminate);
     return attachment;
   };
 
@@ -1032,9 +1061,16 @@ export function createAttachmentRuntime(
   return Object.freeze({
     connect,
     run,
+    async terminate(error: unknown) {
+      await Promise.all(
+        [...openAttachments.values()].map((terminate) =>
+          terminate(error).catch(() => undefined)
+        ),
+      );
+    },
     async shutdown(reason = "attachment_runtime_shutdown") {
       await Promise.all(
-        [...openAttachments].map((attachment) =>
+        [...openAttachments.keys()].map((attachment) =>
           attachment.close(reason).catch(() => undefined)
         ),
       );

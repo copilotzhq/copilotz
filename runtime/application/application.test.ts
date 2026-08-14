@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 
 import type { TestDatabase } from "../testing/ominipg.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -13,6 +13,8 @@ import { createCopilotzApplication } from "./application.ts";
 import { createCopilotz } from "./copilotz.ts";
 import { createCopilotzCorePlugins } from "./core-plugins.ts";
 import type { WorkflowTool } from "../workflows/index.ts";
+import type { CopilotzDatabase } from "./persistence.ts";
+import { isCopilotzPersistenceError } from "./persistence.ts";
 
 const SCHEMA = "copilotz_application";
 const NAMESPACE = "tenant-a";
@@ -66,6 +68,14 @@ async function collect<T>(stream: ReadableStream<T>): Promise<T[]> {
 
 async function closeDb(db: TestDatabase): Promise<void> {
   await db.close();
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error("Condition was not reached before the test deadline.");
 }
 
 Deno.test("application factory composes plugins and supplies the default tenant scope", async () => {
@@ -277,6 +287,153 @@ Deno.test("application never closes an injected database", async () => {
   await injected.query("SELECT 1");
   await injected.close();
   assertEquals(closes, 1);
+});
+
+Deno.test("application terminates attachments and resumes durable deliveries after reconnect", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  let generation = 0;
+  let failNextQuery = false;
+  let processorCalls = 0;
+  const closedGenerations: number[] = [];
+  const lifecycle: string[] = [];
+  const processor = defineProcessor<CopilotzProcessorContext>({
+    id: "application.recovery",
+    on: ["message.created"],
+    delivery: "durable",
+    handle() {
+      processorCalls += 1;
+      if (processorCalls === 1) throw new Error("retry this delivery");
+    },
+  });
+  const plugin = definePlugin({
+    manifest: {
+      id: "test.application.recovery",
+      version: "1.0.0",
+      provides: { processors: [processor.id] },
+    },
+    resources: { processors: [processor] },
+  });
+  const application = await createCopilotzApplication({
+    database: {
+      connect() {
+        generation += 1;
+        const selected = generation;
+        const query: CopilotzDatabase["query"] = async <
+          TRow extends Record<string, unknown> = Record<string, unknown>,
+        >(sql: string, params?: unknown[]) => {
+          if (selected === 1 && failNextQuery) {
+            failNextQuery = false;
+            throw Object.assign(new Error("connection reset by peer"), {
+              code: "ECONNRESET",
+            });
+          }
+          return await db.query<TRow>(sql, params);
+        };
+        return Object.freeze({
+          query,
+          transaction: db.transaction,
+          close() {
+            closedGenerations.push(selected);
+            return Promise.resolve();
+          },
+        });
+      },
+    },
+    databaseRecovery: { waitMs: 100 },
+    namespace: NAMESPACE,
+    databaseSchema: `${SCHEMA}_recovery`,
+    core: false,
+    plugins: [plugin],
+    engine: { retryBaseMs: 0, random: () => 0 },
+  }, {
+    onUnavailable: ({ generation }) => {
+      lifecycle.push(`unavailable:${generation}`);
+    },
+    onReconnecting: ({ generation }) => {
+      lifecycle.push(`reconnecting:${generation}`);
+    },
+    onReady: ({ generation }) => {
+      lifecycle.push(`ready:${generation}`);
+    },
+  });
+  try {
+    await application.conversation.createThread({
+      namespace: NAMESPACE,
+      id: "recovery-thread",
+      participants: [{
+        id: "recovery-user",
+        externalId: "recovery-user",
+        participantType: "human",
+      }],
+    });
+    const content = await application.content.preparer.prepare("recover", {
+      namespace: NAMESPACE,
+      idempotencyKey: "recovery-message:content",
+    });
+    const message = await application.conversation.createMessage({
+      namespace: NAMESPACE,
+      id: "recovery-message",
+      threadId: "recovery-thread",
+      sender: {
+        id: "recovery-user",
+        externalId: "recovery-user",
+        participantType: "human",
+      },
+      content,
+      identity: { deduplicationId: "recovery-message:create" },
+    });
+    assertEquals(message.dispatch.handles.length, 1);
+    assertEquals(
+      (await message.dispatch.handles[0].done).delivery.status,
+      "retry_wait",
+    );
+    assertEquals(processorCalls, 1);
+
+    const attachment = await application.connect({
+      thread: "recovery-thread",
+      participant: "recovery-user",
+    });
+    const reader = attachment.outputs.getReader();
+    const terminal = assertRejects(() => reader.read());
+    failNextQuery = true;
+    const error = await assertRejects(() =>
+      application.conversation.listMessages(
+        NAMESPACE,
+        "recovery-thread",
+      )
+    );
+    assert(isCopilotzPersistenceError(error));
+    assertEquals(error.code, "persistence_indeterminate");
+    const attachmentError = await terminal;
+    assert(isCopilotzPersistenceError(attachmentError));
+    assertEquals(attachmentError.code, "persistence_indeterminate");
+
+    await waitFor(() => lifecycle.includes("ready:2"));
+    await waitFor(() => processorCalls === 2);
+    const delivery = await application.deliveries.get(
+      NAMESPACE,
+      message.dispatch.handles[0].deliveryId,
+    );
+    assertEquals(delivery?.status, "succeeded");
+    assertEquals(
+      (await application.conversation.listMessages(
+        NAMESPACE,
+        "recovery-thread",
+      )).length,
+      1,
+    );
+    assertEquals(lifecycle, [
+      "ready:1",
+      "unavailable:1",
+      "reconnecting:1",
+      "ready:2",
+    ]);
+    await waitFor(() => closedGenerations.includes(1));
+  } finally {
+    await application.shutdown();
+    await db.close();
+  }
+  assertEquals(closedGenerations, [1, 2]);
 });
 
 Deno.test("application composition remains factory-first and runtime-neutral", async () => {

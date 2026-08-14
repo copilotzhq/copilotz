@@ -15,7 +15,10 @@ import {
   createEventNativeFetchHandler,
   type CreateEventNativeFetchHandlerOptions,
 } from "../../server/fetch.ts";
-import { createCopilotzApplication } from "./application.ts";
+import {
+  createCopilotzApplication,
+  observeApplicationPersistence,
+} from "./application.ts";
 import type {
   CopilotzApplication,
   CreateCopilotzApplicationOptions,
@@ -164,13 +167,27 @@ export async function createCopilotzGateway(
   const native = createEventNativeApp(application, {
     resolveDatabaseSchema: options.resolveDatabaseSchema,
   });
-  fetchApplication = createEventNativeFetchHandler(native, {
-    basePath: "/v3",
-    ...(options.http ?? {}),
-  });
+  fetchApplication = createEventNativeFetchHandler(
+    Object.freeze({
+      resources: native.resources,
+      async handle(request) {
+        await persistence.recovery?.admit();
+        return await native.handle(request);
+      },
+    }),
+    {
+      basePath: "/v3",
+      ...(options.http ?? {}),
+    },
+  );
+  const stopObservingPersistence = observeApplicationPersistence(
+    persistence,
+    application,
+  );
   let shutdownTask: Promise<void> | undefined;
   const shutdown = (reason = "copilotz_gateway_shutdown"): Promise<void> => {
     if (shutdownTask) return shutdownTask;
+    stopObservingPersistence();
     shutdownTask = settleAll([
       () => application!.shutdown(reason),
       () => hypervisor?.shutdown(reason),
@@ -195,6 +212,22 @@ export async function createCopilotzGateway(
     role: "gateway",
     transports,
     ...(hypervisor ? { hypervisor } : {}),
+    async databaseScope(databaseSchema: string) {
+      await persistence.recovery?.admit();
+      return await application!.databaseScope(databaseSchema);
+    },
+    async connect(input: Parameters<CopilotzApplication["connect"]>[0]) {
+      await persistence.recovery?.admit();
+      return await application!.connect(input);
+    },
+    async run(input: Parameters<CopilotzApplication["run"]>[0]) {
+      await persistence.recovery?.admit();
+      return await application!.run(input);
+    },
+    async goal(input: Parameters<CopilotzApplication["goal"]>[0]) {
+      await persistence.recovery?.admit();
+      return await application!.goal(input);
+    },
     fetch: (request: Request) => fetchApplication(request),
     shutdown,
   });

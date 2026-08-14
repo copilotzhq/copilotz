@@ -422,6 +422,8 @@ export type CopilotzEngineDatabaseScope = Readonly<{
   knowledge: KnowledgeRepository;
   connect(input: ConnectAttachmentInput): Promise<ThreadAttachment>;
   run(input: RunInput): Promise<RunHandle>;
+  /** Terminates active text/realtime attachments without shutting down execution. */
+  disconnectAttachments(error?: unknown): Promise<void>;
   events: CopilotzEngine["events"];
   deliveries: CopilotzEngine["deliveries"];
   recover(options?: {
@@ -464,6 +466,7 @@ export type CopilotzEngine = Readonly<{
   knowledge: KnowledgeRepository;
   connect(input: ConnectAttachmentInput): Promise<ThreadAttachment>;
   run(input: RunInput): Promise<RunHandle>;
+  disconnectAttachments(error?: unknown): Promise<void>;
   events: Readonly<{
     append(
       draft: DurableEventDraft,
@@ -510,6 +513,12 @@ export type CopilotzEngine = Readonly<{
     discard(namespace: string, id: string): Promise<boolean>;
   }>;
   recover(options?: {
+    namespace?: string;
+    consumerIds?: readonly string[];
+    limit?: number;
+  }): Promise<DeliveryRecoveryDispatch>;
+  /** Recovers durable work from every database scope opened by this engine. */
+  recoverAll(options?: {
     namespace?: string;
     consumerIds?: readonly string[];
     limit?: number;

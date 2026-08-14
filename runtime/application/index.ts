@@ -27,6 +27,17 @@ export type { CopilotzWorker, CreateCopilotzWorkerOptions } from "./worker.ts";
 export type { GoalHandle, GoalInput } from "../goals/index.ts";
 export type {
   CopilotzDatabase,
+  CopilotzDatabaseConnectContext,
+  CopilotzDatabaseConnector,
   CopilotzDatabaseInput,
+  CopilotzDatabaseRecoveryOptions,
+  CopilotzPersistenceError,
+  CopilotzPersistenceLifecycleCallbacks,
   CopilotzPersistenceOptions,
+  CopilotzPersistenceSnapshot,
+  CopilotzPersistenceState,
+} from "./persistence.ts";
+export {
+  isCopilotzPersistenceError,
+  isPersistenceUnavailable,
 } from "./persistence.ts";

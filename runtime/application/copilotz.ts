@@ -1,7 +1,10 @@
 import type { HypervisorTransport } from "../../dependencies/oxian-hypervisor.ts";
 import { createCopilotzGateway } from "./gateway.ts";
 import type { CreateCopilotzGatewayOptions } from "./gateway.ts";
-import { openCopilotzPersistence } from "./persistence.ts";
+import {
+  type CopilotzPersistenceLifecycleCallbacks,
+  openCopilotzPersistence,
+} from "./persistence.ts";
 import { createCopilotzWorker } from "./worker.ts";
 import type { CopilotzApplication } from "./types.ts";
 
@@ -39,8 +42,10 @@ export type CopilotzEmbeddedApplication =
  */
 export async function createCopilotz(
   options: CreateCopilotzOptions = {},
+  lifecycle: CopilotzPersistenceLifecycleCallbacks =
+    options.databaseLifecycle ?? {},
 ): Promise<CopilotzEmbeddedApplication> {
-  const persistence = await openCopilotzPersistence(options);
+  const persistence = await openCopilotzPersistence(options, lifecycle);
   const workerId = options.worker?.id?.trim() ||
     `copilotz-embedded-${crypto.randomUUID()}`;
   const transport: HypervisorTransport = Object.freeze({
@@ -91,9 +96,16 @@ export async function createCopilotz(
     throw error;
   }
 
+  const stopObservingPersistence = persistence.recovery?.register({
+    onUnavailable: (error) => gateway!.disconnectAttachments(error),
+    async onReady() {
+      await gateway!.recoverAll({ limit: 1_000 });
+    },
+  }) ?? (() => undefined);
   let shutdownTask: Promise<void> | undefined;
   const shutdown = (reason = "copilotz_embedded_shutdown"): Promise<void> => {
     if (shutdownTask) return shutdownTask;
+    stopObservingPersistence();
     shutdownTask = (async () => {
       const roleResults = await Promise.allSettled([
         gateway!.shutdown(reason),
@@ -135,6 +147,22 @@ export async function createCopilotz(
       databaseOwnership: persistence.ownership,
     }),
     role: "embedded",
+    async databaseScope(databaseSchema: string) {
+      await persistence.recovery?.admit();
+      return await gateway!.databaseScope(databaseSchema);
+    },
+    async connect(input: Parameters<CopilotzApplication["connect"]>[0]) {
+      await persistence.recovery?.admit();
+      return await gateway!.connect(input);
+    },
+    async run(input: Parameters<CopilotzApplication["run"]>[0]) {
+      await persistence.recovery?.admit();
+      return await gateway!.run(input);
+    },
+    async goal(input: Parameters<CopilotzApplication["goal"]>[0]) {
+      await persistence.recovery?.admit();
+      return await gateway!.goal(input);
+    },
     shutdown,
   });
 }

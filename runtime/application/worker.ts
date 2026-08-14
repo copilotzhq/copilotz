@@ -14,7 +14,10 @@ import {
   COPILOTZ_DELIVERY_WORKLOAD,
   createCopilotzWorkOutputRelay,
 } from "../execution/index.ts";
-import { createCopilotzApplication } from "./application.ts";
+import {
+  createCopilotzApplication,
+  observeApplicationPersistence,
+} from "./application.ts";
 import type { CreateCopilotzApplicationOptions } from "./types.ts";
 import {
   type CopilotzPersistenceOptions,
@@ -156,9 +159,16 @@ export async function createCopilotzWorker(
     throw error;
   }
 
+  const stopObservingPersistence = observeApplicationPersistence(
+    persistence,
+    application,
+    { recoverDurable: false },
+  );
+
   let cleanupTask: Promise<void> | undefined;
   const cleanup = (reason: string): Promise<void> => {
     if (cleanupTask) return cleanupTask;
+    stopObservingPersistence();
     cleanupTask = Promise.allSettled([
       application.shutdown(reason),
       persistence.close(reason),

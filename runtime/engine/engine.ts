@@ -419,6 +419,45 @@ export async function createCopilotzEngine(
           scope.runtime.public.run(input)
         );
       },
+      async disconnectAttachments(
+        error: unknown = new Error("Application persistence is unavailable."),
+      ) {
+        const scoped = await Promise.allSettled([...additionalScopes.values()]);
+        await Promise.all([
+          attachmentRuntime!.terminate(error),
+          ...scoped.flatMap((result) =>
+            result.status === "fulfilled"
+              ? [result.value.runtime.attachmentRuntime.terminate(error)]
+              : []
+          ),
+        ]);
+      },
+      async recoverAll(recovery = {}) {
+        const scoped = await Promise.allSettled([...additionalScopes.values()]);
+        const unavailableScopes = scoped.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : []
+        );
+        if (unavailableScopes.length) {
+          throw new AggregateError(
+            unavailableScopes,
+            "Could not resolve every Copilotz database scope for recovery.",
+          );
+        }
+        const results = await Promise.all([
+          defaultScope.public.recover(recovery),
+          ...scoped.flatMap((result) =>
+            result.status === "fulfilled"
+              ? [result.value.runtime.public.recover(recovery)]
+              : []
+          ),
+        ]);
+        return Object.freeze({
+          handles: Object.freeze(results.flatMap((result) => result.handles)),
+          failures: Object.freeze(
+            results.flatMap((result) => result.failures),
+          ),
+        });
+      },
       async shutdown(reason = "copilotz_engine_shutdown") {
         if (closed) return;
         closed = true;

@@ -10,7 +10,28 @@ import type {
   CreateCopilotzApplicationOptions,
   InternalCopilotzApplication,
 } from "./types.ts";
-import { openCopilotzPersistence } from "./persistence.ts";
+import {
+  type CopilotzPersistenceLifecycleCallbacks,
+  type OpenCopilotzPersistence,
+  openCopilotzPersistence,
+} from "./persistence.ts";
+
+export function observeApplicationPersistence(
+  persistence: OpenCopilotzPersistence,
+  application: Pick<
+    InternalCopilotzApplication,
+    "disconnectAttachments" | "recoverAll"
+  >,
+  options: Readonly<{ recoverDurable?: boolean }> = {},
+): () => void {
+  return persistence.recovery?.register({
+    onUnavailable: (error) => application.disconnectAttachments(error),
+    async onReady() {
+      if (options.recoverDurable === false) return;
+      await application.recoverAll({ limit: 1_000 });
+    },
+  }) ?? (() => undefined);
+}
 
 function optionalText(value: string | undefined, name: string) {
   if (value === undefined) return undefined;
@@ -38,8 +59,10 @@ function requiredNamespace(
  */
 export async function createCopilotzApplication(
   options: CreateCopilotzApplicationOptions,
+  lifecycle: CopilotzPersistenceLifecycleCallbacks =
+    options.databaseLifecycle ?? {},
 ): Promise<InternalCopilotzApplication> {
-  const persistence = await openCopilotzPersistence(options);
+  const persistence = await openCopilotzPersistence(options, lifecycle);
   const namespace = optionalText(options.namespace, "Namespace");
   const databaseSchema = optionalText(
     options.databaseSchema,
@@ -83,6 +106,7 @@ export async function createCopilotzApplication(
   }
 
   let shutdownTask: Promise<void> | undefined;
+  let stopObservingPersistence: () => void = () => undefined;
   const goalScopes = new Map<
     string,
     Promise<ReturnType<typeof createGoalRuntime>>
@@ -119,6 +143,7 @@ export async function createCopilotzApplication(
   await goalsFor(databaseSchema);
   const shutdown = (reason = "copilotz_application_shutdown") => {
     if (shutdownTask) return shutdownTask;
+    stopObservingPersistence();
     shutdownTask = (async () => {
       const goalRuntimes = await Promise.allSettled([...goalScopes.values()]);
       await Promise.all(
@@ -163,14 +188,20 @@ export async function createCopilotzApplication(
     }),
     capabilities: createAgentCapabilityResolver({ registry, toolCatalog }),
     engine,
-    connect(input: ApplicationConnectInput) {
+    async databaseScope(requestedDatabaseSchema) {
+      await persistence.recovery?.admit();
+      return await engine.databaseScope(requestedDatabaseSchema);
+    },
+    async connect(input: ApplicationConnectInput) {
+      await persistence.recovery?.admit();
       return engine.connect({
         ...input,
         namespace: requiredNamespace(input.namespace, namespace),
         databaseSchema: input.databaseSchema ?? databaseSchema,
       });
     },
-    run(input: ApplicationRunInput) {
+    async run(input: ApplicationRunInput) {
+      await persistence.recovery?.admit();
       return engine.run({
         ...input,
         namespace: requiredNamespace(input.namespace, namespace),
@@ -178,6 +209,7 @@ export async function createCopilotzApplication(
       });
     },
     async goal(input) {
+      await persistence.recovery?.admit();
       const requested = input.databaseSchema?.trim() || databaseSchema;
       return await (await goalsFor(requested)).goal({
         ...input,
@@ -186,5 +218,9 @@ export async function createCopilotzApplication(
     },
     shutdown,
   };
+  stopObservingPersistence = observeApplicationPersistence(
+    persistence,
+    application,
+  );
   return Object.freeze(application);
 }

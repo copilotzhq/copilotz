@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import { createCopilotzGateway, createCopilotzWorker } from "./index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { listen } from "../adapters/deno/listen.ts";
@@ -6,6 +6,8 @@ import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
 import { defineProcessor } from "../plugins/processor.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import type { Agent } from "../resources/index.ts";
+import type { CopilotzDatabase } from "./persistence.ts";
+import { isCopilotzPersistenceError } from "./persistence.ts";
 import {
   type AttachmentOutput,
   type AttachmentStreamOutput,
@@ -263,6 +265,65 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
       gateway.shutdown("topology test complete"),
       worker.stop("topology test complete"),
     ]);
+    await database.close();
+  }
+});
+
+Deno.test("Gateway bounds persistence outages as retryable HTTP 503 responses", async () => {
+  const database = await createTestDatabase({ url: ":memory:" });
+  let generation = 0;
+  let failNextQuery = false;
+  const gateway = await createCopilotzGateway({
+    namespace,
+    core: false,
+    database: {
+      connect({ signal }) {
+        generation += 1;
+        const selected = generation;
+        if (selected > 1) {
+          return new Promise<CopilotzDatabase>((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), {
+              once: true,
+            });
+          });
+        }
+        const query: CopilotzDatabase["query"] = async <
+          TRow extends Record<string, unknown> = Record<string, unknown>,
+        >(sql: string, params?: unknown[]) => {
+          if (failNextQuery) {
+            failNextQuery = false;
+            throw Object.assign(new Error("connection reset by peer"), {
+              code: "ECONNRESET",
+            });
+          }
+          return await database.query<TRow>(sql, params);
+        };
+        return Object.freeze({
+          query,
+          transaction: database.transaction,
+          close: () => Promise.resolve(),
+        });
+      },
+    },
+    databaseRecovery: { waitMs: 5, retryAfterSeconds: 3 },
+  });
+  try {
+    failNextQuery = true;
+    const failure = await assertRejects(() =>
+      gateway.conversation.listMessages(namespace, "missing-thread")
+    );
+    assert(isCopilotzPersistenceError(failure));
+    assertEquals(failure.code, "persistence_indeterminate");
+
+    const response = await gateway.fetch(
+      new Request("https://example.test/v3/agents"),
+    );
+    assertEquals(response.status, 503);
+    assertEquals(response.headers.get("retry-after"), "3");
+    assertEquals((await response.json()).error.code, "persistence_unavailable");
+    assertEquals(generation, 2);
+  } finally {
+    await gateway.shutdown();
     await database.close();
   }
 });

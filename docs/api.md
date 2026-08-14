@@ -12,7 +12,11 @@ not the private Hypervisor, transport, engine, or Worker workload closures.
 Main options:
 
 - `namespace`, `databaseSchema`
-- `database`: Ominipg configuration or an existing Ominipg-compatible instance
+- `database`: Ominipg configuration, a reconnect connector, or an existing
+  Ominipg-compatible instance
+- `databaseRecovery`: bounded wait, retry hint, reconnect delay, and optional
+  availability-error classifier
+- `databaseLifecycle`: persistence callbacks for explicit Gateway/Worker roles
 - `core: false | CopilotzCorePluginOptions`
 - `plugins`, `resources`, `pluginResolver`
 - `toolCatalog` shared by execution and capability introspection
@@ -20,6 +24,38 @@ Main options:
 
 Configuration-created databases are closed by the application. Injected database
 instances are never closed by Copilotz.
+
+Configuration and connector inputs are reconnectable. `createCopilotz()` also
+accepts persistence lifecycle callbacks as its second argument:
+
+```ts
+const app = await createCopilotz({
+  database: {
+    connect: () => Ominipg.connect({ url }),
+  },
+  databaseRecovery: {
+    waitMs: 2_000,
+    retryAfterSeconds: 1,
+  },
+}, {
+  onUnavailable(context) {
+    logger.warn("database unavailable", context);
+  },
+  onReconnecting(context) {
+    logger.info("database reconnecting", context);
+  },
+  onReady(context) {
+    logger.info("database ready", context);
+  },
+});
+```
+
+One failing in-flight operation returns `persistence_indeterminate` and is never
+replayed automatically. New application operations wait only for `waitMs` and
+then return `persistence_unavailable`. Gateway HTTP responses map both to 503
+and include `Retry-After`. Active attachments terminate with the availability
+error; after reconnection, Copilotz recovers durable deliveries from every
+database scope already opened by the application.
 
 ### `createCopilotzGateway(options?, lifecycle?)`
 
@@ -99,7 +135,8 @@ Important members:
 - `events`, `deliveries`
 - `databaseSchema`, `databaseScope(name)`
 - `run(input)`, `connect(input)`, `goal(input)`
-- `recover(options)`, `maintenance(options)`, `shutdown(reason?)`
+- `recover(options)`, `recoverAll(options)`, `maintenance(options)`,
+  `shutdown(reason?)`
 
 All products are factory-created frozen records. Infer their type or import
 `CopilotzApplication`; do not subclass them.

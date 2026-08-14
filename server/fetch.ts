@@ -243,7 +243,9 @@ function errorResponse(
   error: unknown,
   options: CreateEventNativeFetchHandlerOptions,
 ): Response {
-  const typed = error as Partial<EventNativeAppError>;
+  const typed = error as Partial<EventNativeAppError> & {
+    retryAfterSeconds?: unknown;
+  };
   const status = typeof typed?.status === "number" &&
       typed.status >= 400 && typed.status <= 599
     ? typed.status
@@ -251,12 +253,22 @@ function errorResponse(
   const code = typeof typed?.code === "string" && typed.code
     ? typed.code
     : "internal_error";
-  const message = status < 500 && error instanceof Error
+  const availability = code === "persistence_unavailable" ||
+    code === "persistence_indeterminate";
+  const message = (status < 500 || availability) && error instanceof Error
     ? error.message
     : "Internal application error.";
+  const response = responseHeaders(options);
+  if (
+    availability && typeof typed.retryAfterSeconds === "number" &&
+    Number.isSafeInteger(typed.retryAfterSeconds) &&
+    typed.retryAfterSeconds >= 0
+  ) {
+    response.set("retry-after", String(typed.retryAfterSeconds));
+  }
   return new Response(JSON.stringify({ error: { code, message } }), {
     status,
-    headers: responseHeaders(options),
+    headers: response,
   });
 }
 

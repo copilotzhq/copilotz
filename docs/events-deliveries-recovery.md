@@ -64,6 +64,9 @@ scope again in case that event created more work.
 ```ts
 await app.recover({ namespace: "acme", limit: 100 });
 
+// All physical database scopes already opened by this application:
+await app.recoverAll({ limit: 100 });
+
 const result = await app.maintenance({
   namespace: "acme",
   limit: 100,
@@ -87,3 +90,7 @@ is incremental and does not turn a periodic tick into an unbounded database
 transaction.
 
 Detailed contract: [events and deliveries](v3/events-and-deliveries.md).
+
+Copilotz-owned database connections also trigger `recoverAll()` automatically
+after a successful reconnect. This rediscovers durable obligations; it never
+replays the in-flight operation that detected the connection loss.

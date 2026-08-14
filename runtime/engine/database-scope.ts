@@ -326,6 +326,11 @@ export function createDatabaseScope(
         databaseSchema: input.databaseSchema ?? databaseSchema,
       });
     },
+    disconnectAttachments(
+      error: unknown = new Error("Application persistence is unavailable."),
+    ) {
+      return attachmentRuntime.terminate(error);
+    },
     events,
     deliveries,
     recover,

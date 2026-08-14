@@ -99,6 +99,10 @@ is passed once as a `ReadableStream<Uint8Array>` with native backpressure.
   `{ all: true }`.
 - Injected Ominipg databases, Oxian Hypervisors, and dispatchers remain owned by
   the embedding application.
+- Copilotz-owned database configurations and connection capabilities recover
+  through one shared physical-connection generation; indeterminate operations
+  are never replayed, active attachments terminate, and durable deliveries
+  resume after reconnect.
 - Logical `namespace` and physical `databaseSchema` scope are explicit; one
   application can lazily bind multiple schemas without creating another database
   connection or Oxian runtime.

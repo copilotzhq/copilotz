@@ -60,7 +60,29 @@ remote transports.
 
 An injected database is always application-owned. Copilotz never closes it.
 Passing database configuration instead makes the Copilotz role own and close the
-database it opens.
+database it opens. Configuration-created databases and explicit `connect`
+capabilities are reconnectable; an already-open injected database is not
+replaced implicitly.
+
+```ts
+const app = await createCopilotz({
+  namespace: "acme",
+  database: {
+    connect: () => Ominipg.connect({ url }),
+  },
+  databaseRecovery: { waitMs: 2_000, retryAfterSeconds: 1 },
+}, {
+  onUnavailable,
+  onReconnecting,
+  onReady,
+});
+```
+
+All repositories and role components capture one stable persistence facade.
+When its physical connection fails, concurrent callers share one reconnect,
+late results from the retired connection are rejected as indeterminate, active
+attachments terminate, and pending durable deliveries are recovered. The same
+Gateway endpoint remains valid throughout the transition.
 
 Gateway and Worker roles may share the same Ominipg instance in-process. One
 instance safely serializes transaction ownership, while each Copilotz role

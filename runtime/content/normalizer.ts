@@ -32,6 +32,8 @@ export function createContentNormalizer(
             mediaType: candidate.mediaType,
             body: candidate.body,
             idempotencyKey: candidate.idempotencyKey,
+            origin: candidate.origin,
+            metadata: candidate.fields.metadata,
           });
           return withoutUndefined({
             assetId: asset.id,

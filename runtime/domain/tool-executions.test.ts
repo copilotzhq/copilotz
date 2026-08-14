@@ -94,6 +94,7 @@ async function createFixture(): Promise<Fixture> {
     coordinator,
     session,
     eventStore: store,
+    databaseSchema: TEST_SCHEMA,
     createId: () => `storage-${++storageId}`,
   });
   let domainId = 0;

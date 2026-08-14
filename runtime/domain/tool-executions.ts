@@ -323,6 +323,10 @@ export function createToolExecutionRepository(
           ? await options.assets.materialize(context, {
             namespace,
             content: prepared,
+            origin: {
+              scope: { type: "thread", id: existing.threadId },
+              producer: { type: "tool_execution", id },
+            },
           })
           : Object.freeze([]) as ContentSequence;
         const content = replaceContentRoles(
@@ -402,6 +406,10 @@ export function createToolExecutionRepository(
           const expected = await options.assets.resolvePrepared(context, {
             namespace,
             content: prepared,
+            origin: {
+              scope: { type: "thread", id: existing.threadId },
+              producer: { type: "tool_execution", id },
+            },
           });
           assertRoleContentMatches(
             current.content,
@@ -525,6 +533,10 @@ export function createToolExecutionRepository(
           const content = await options.assets.materialize(context, {
             namespace,
             content: prepared,
+            origin: {
+              scope: { type: "thread", id: threadId },
+              producer: { type: "tool_execution", id },
+            },
           });
           const inserted = await context.transaction.query<WorkflowNodeRow>(
             `INSERT INTO ${context.tables.nodes} (

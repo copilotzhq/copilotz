@@ -26,7 +26,7 @@ const prepared = await context.content.prepare([
   {
     type: "image",
     mediaType: "image/png",
-    data: pngBytes,
+    bytes: pngBytes,
     name: "diagram.png",
   },
 ], { operationKey: "prepare-user-content" });
@@ -43,6 +43,53 @@ const resolved = await context.content.resolveMany(message.value.content);
 Asset publication records digest, size, media type, and immutable bytes in the
 same transaction as its owning aggregate when prepared content is committed.
 Resolution rechecks namespace authorization and body integrity.
+
+## Body storage
+
+Database storage is the runtime-neutral default and rejects individual assets
+larger than 8 MiB:
+
+```ts
+const copilotz = await createCopilotz({
+  assets: {
+    storage: {
+      type: "database",
+      config: { maxBytes: 8 * 1024 * 1024 },
+    },
+  },
+});
+```
+
+Production services can place every body in an S3-compatible backend. Google
+Cloud Storage uses its XML interoperability endpoint and HMAC credentials:
+
+```ts
+assets: {
+  storage: {
+    type: "s3",
+    config: {
+      backendId: "gcs:compass-assets",
+      endpoint: "https://storage.googleapis.com",
+      region: "auto",
+      bucket: "compass-assets",
+      accessKeyId,
+      secretAccessKey,
+      pathStyle: true,
+      prefix: "copilotz",
+    },
+  },
+}
+```
+
+Graph nodes retain metadata, ownership, origin, and integrity. Credentials and
+physical keys never enter `ContentRef`, events, or HTTP payloads. Persisted
+locations select the reader, so database and object bodies coexist during a
+rolling migration.
+
+`application.maintenance()` retries external-body deletions and removes uploads
+older than 24 hours that have no corresponding graph asset. The grace period is
+configurable with `assetOrphanAfterMs`; recent uploads are never treated as
+orphans because they may belong to an in-flight graph transaction.
 
 ## Addressing attachments from tools
 
@@ -79,9 +126,15 @@ const result: WorkflowToolResult = {
 };
 ```
 
-Copilotz persists those attachments on the tool execution and its public tool
-message. Attachment bytes never enter `tool_output.delta` or other live event
-frames; clients resolve them through the canonical asset API.
+Copilotz persists those attachments on the tool execution timeline. Attachment
+bytes never enter `tool_output.delta` or other live event frames; clients
+resolve them through the canonical asset API.
+
+Tool returns are also inspected recursively for complete `data:` URLs,
+`{ dataUrl }`, and `{ mimeType, dataBase64 }`. Copilotz replaces each body with
+an `asset://` descriptor before automatic live output, durable JSON, and the
+next LLM turn. Malformed data, cycles, or bounded extraction-limit violations
+fail the tool result instead of persisting raw base64.
 
 ## Streams
 

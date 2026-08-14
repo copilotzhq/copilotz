@@ -21,10 +21,13 @@ import {
 } from "../plugins/index.ts";
 import {
   type ContentError,
+  createAssetStorageRuntime,
   createContentPreparer,
   createContentResolver,
   createDatabaseAssetRepository,
+  createMemoryAssetBodyStore,
   type DatabaseAssetRepository,
+  digestContent,
 } from "./index.ts";
 
 const TEST_SCHEMA = "copilotz_database_assets";
@@ -39,7 +42,10 @@ type Fixture = Readonly<{
   observed: string[];
 }>;
 
-async function createFixture(options: { maxDatabaseBytes?: number } = {}) {
+async function createFixture(options: {
+  maxDatabaseBytes?: number;
+  storage?: Parameters<typeof createAssetStorageRuntime>[0];
+} = {}) {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   for (const statement of createCoreSchemaStatements(TEST_SCHEMA)) {
@@ -77,9 +83,17 @@ async function createFixture(options: { maxDatabaseBytes?: number } = {}) {
     coordinator,
     session,
     eventStore: store,
+    databaseSchema: TEST_SCHEMA,
     createId: () => `asset-store-${++nextId}`,
     now: () => new Date("2026-08-07T00:00:00.000Z"),
-    maxDatabaseBytes: options.maxDatabaseBytes,
+    storage: createAssetStorageRuntime(
+      options.storage ?? {
+        storage: {
+          type: "database",
+          config: { maxBytes: options.maxDatabaseBytes ?? 8 * 1024 * 1024 },
+        },
+      },
+    ),
   });
   return Object.freeze({
     db,
@@ -320,6 +334,130 @@ Deno.test("database asset policy rejects oversized durable content before any wr
       `SELECT COUNT(*) AS count FROM ${fixture.store.tables.nodes}`,
     );
     assertEquals(Number(count.rows[0].count), 0);
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("object-backed assets persist provenance paths and keep bodies outside graph nodes", async () => {
+  const memory = createMemoryAssetBodyStore({ backendId: "gcs:assets" });
+  const objectStore = Object.freeze({ ...memory, kind: "object" as const });
+  const fixture = await createFixture({
+    storage: {
+      storage: {
+        type: "custom",
+        config: { store: objectStore, prefix: "copilotz" },
+      },
+    },
+  });
+  try {
+    const asset = await fixture.assets.publish({
+      namespace: "tenant-a",
+      id: "asset-object",
+      mediaType: "application/json",
+      body: new TextEncoder().encode('{"ok":true}'),
+      origin: {
+        scope: { type: "thread", id: "thread-a" },
+        producer: { type: "tool_execution", id: "tool-a" },
+        path: "/imageUrl",
+      },
+    });
+    assertEquals(asset.location.kind, "object");
+    assertEquals(
+      asset.location.kind === "object" ? asset.location.key : "",
+      "copilotz/schemas/copilotz_database_assets/namespaces/tenant-a/threads/thread-a/tool_execution/tool-a/assets/asset-object",
+    );
+    const row = await fixture.session.query<{ data: unknown }>(
+      `SELECT data FROM ${fixture.store.tables.nodes} WHERE id = 'asset-object'`,
+    );
+    assertEquals(Object.hasOwn(row.rows[0].data as object, "body"), false);
+    assertEquals(JSON.stringify(row.rows[0].data).includes("gcs:assets"), true);
+    assertEquals(JSON.stringify(row.rows[0].data).includes("secret"), false);
+    assertEquals(
+      new TextDecoder().decode(
+        (await fixture.assets.read("tenant-a", asset.id)).bytes,
+      ),
+      '{"ok":true}',
+    );
+    const streamed = await new Response(
+      await fixture.assets.open("tenant-a", asset.id),
+    ).text();
+    assertEquals(streamed, '{"ok":true}');
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("asset maintenance retries body deletion and removes old orphan uploads", async () => {
+  const memory = createMemoryAssetBodyStore({ backendId: "gcs:maintenance" });
+  let rejectNextDelete = true;
+  const objectStore = Object.freeze({
+    ...memory,
+    kind: "object" as const,
+    async delete(key: string) {
+      if (rejectNextDelete) {
+        rejectNextDelete = false;
+        throw new Error("temporary object outage");
+      }
+      await memory.delete(key);
+    },
+  });
+  const fixture = await createFixture({
+    storage: {
+      storage: {
+        type: "custom",
+        config: { store: objectStore, prefix: "copilotz" },
+      },
+    },
+  });
+  try {
+    const body = new TextEncoder().encode("delete me");
+    const asset = await fixture.assets.publish({
+      namespace: "tenant-a",
+      id: "asset-delete",
+      mediaType: "text/plain",
+      body,
+    });
+    const key = asset.location.kind === "object" ? asset.location.key : "";
+    await fixture.assets.markDeleted("tenant-a", asset.id);
+    assert(await memory.head(key));
+    const pendingDeletion = await fixture.session.query<{ data: unknown }>(
+      `SELECT data FROM ${fixture.store.tables.nodes}
+       WHERE id = 'asset-delete' AND type = 'asset'`,
+    );
+    assertEquals(
+      (pendingDeletion.rows[0].data as Record<string, unknown>).bodyDeletedAt,
+      undefined,
+    );
+    const pendingCount = await fixture.session.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM ${fixture.store.tables.nodes}
+       WHERE type = 'asset' AND (data ->> 'state') = 'deleted'
+         AND (data ->> 'bodyDeletedAt') IS NULL
+         AND (data -> 'location' ->> 'kind') <> 'database'`,
+    );
+    assertEquals(Number(pendingCount.rows[0].count), 1);
+
+    const orphanBytes = new TextEncoder().encode("orphan");
+    const orphanKey =
+      "copilotz/schemas/copilotz_database_assets/namespaces/tenant-a/assets/orphan";
+    await memory.put({
+      key: orphanKey,
+      bytes: orphanBytes,
+      mediaType: "text/plain",
+      digest: await digestContent(orphanBytes),
+      ifAbsent: true,
+    });
+
+    const maintained = await fixture.assets.maintainBodies({
+      now: new Date("2030-01-01T00:00:00.000Z"),
+      orphanAfterMs: 24 * 60 * 60 * 1_000,
+    });
+    assertEquals(maintained, {
+      retriedDeletions: 1,
+      orphanedBodiesDeleted: 1,
+    });
+    assertEquals(await memory.head(key), null);
+    assertEquals(await memory.head(orphanKey), null);
   } finally {
     await closeFixture(fixture);
   }

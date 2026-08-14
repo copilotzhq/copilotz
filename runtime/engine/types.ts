@@ -1,5 +1,8 @@
 import type {
+  AssetOrigin,
   AssetRecord,
+  AssetStorageOptions,
+  AssetStorageRuntime,
   AuthorizeContent,
   ContentInput,
   ContentPreparer,
@@ -138,7 +141,7 @@ export type ScopedEvents = Readonly<{
 export type ScopedContent = Readonly<{
   prepare(
     input: ContentInput | readonly ContentInput[],
-    options: { operationKey: string },
+    options: { operationKey: string; origin?: AssetOrigin },
   ): Promise<PreparedContent>;
   publish(
     input: Omit<PublishAssetInput, "namespace" | "idempotencyKey">,
@@ -393,7 +396,9 @@ export type CreateCopilotzEngineOptions = Readonly<{
   now?: () => Date;
   random?: () => number;
   digest?: (bytes: Uint8Array) => Promise<`sha256:${string}`>;
-  maxDatabaseBytes?: number;
+  assets?: AssetStorageOptions;
+  /** Compiled once by the engine so memory/custom stores span database scopes. */
+  assetStorage?: AssetStorageRuntime;
   leaseMs?: number;
   maxAttempts?: number;
   retryBaseMs?: number;
@@ -404,6 +409,10 @@ export type CopilotzEngineMaintenanceResult = Readonly<{
   recovered: number;
   dispatchFailures: number;
   compacted: Readonly<{ events: number; deliveries: number }>;
+  assets: Readonly<{
+    retriedDeletions: number;
+    orphanedBodiesDeleted: number;
+  }>;
 }>;
 
 export type CopilotzEngineDatabaseScope = Readonly<{
@@ -437,6 +446,7 @@ export type CopilotzEngineDatabaseScope = Readonly<{
     limit?: number;
     retentionMs?: number | null;
     now?: Date;
+    assetOrphanAfterMs?: number;
   }): Promise<CopilotzEngineMaintenanceResult>;
 }>;
 
@@ -529,6 +539,7 @@ export type CopilotzEngine = Readonly<{
     limit?: number;
     retentionMs?: number | null;
     now?: Date;
+    assetOrphanAfterMs?: number;
   }): Promise<CopilotzEngineMaintenanceResult>;
   shutdown(reason?: string): Promise<void>;
 }>;

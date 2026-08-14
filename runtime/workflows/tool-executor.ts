@@ -1,9 +1,11 @@
 import type { Agent } from "../resources/index.ts";
 import { assetIdFromRef } from "../content/index.ts";
+import type { PreparedContent } from "../content/index.ts";
 import type { ToolExecution } from "../domain/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import { validateToolCall } from "../tools/validation.ts";
 import { isWorkflowTool } from "./resources.ts";
+import { extractToolResultAssets } from "./tool-result-assets.ts";
 import type {
   DeferredWorkflowToolResult,
   DeferWorkflowToolOptions,
@@ -50,6 +52,7 @@ export type WorkflowToolOutcome =
     status: "completed";
     output: unknown;
     attachments?: WorkflowToolResult["attachments"];
+    extractedAttachments?: PreparedContent;
     durationMs: number;
   }>
   | Readonly<{
@@ -349,21 +352,30 @@ export function createWorkflowToolExecutor(
       }
       const result = isWorkflowToolResult(output) ? output : undefined;
       const projectedOutput = result ? result.output : output;
+      const extracted = await extractToolResultAssets(projectedOutput, {
+        namespace: context.namespace,
+        threadId: execution.threadId,
+        toolExecutionId: execution.id,
+        prepare: context.content.prepare,
+      });
       await outputEmission;
       if (outputEmissionError !== undefined) throw outputEmissionError;
       if (
-        !emittedResult && projectedOutput !== undefined &&
-        automaticLiveOutputFits(projectedOutput)
+        !emittedResult && extracted.output !== undefined &&
+        automaticLiveOutputFits(extracted.output)
       ) {
-        await emitOutput(projectedOutput, {
+        await emitOutput(extracted.output, {
           channel: "result",
           mode: "replace",
         });
       }
       return Object.freeze({
         status: "completed" as const,
-        output: projectedOutput,
+        output: extracted.output,
         ...(result?.attachments ? { attachments: result.attachments } : {}),
+        ...(extracted.attachments
+          ? { extractedAttachments: extracted.attachments }
+          : {}),
         durationMs: elapsed(started),
       });
     } catch (caught) {

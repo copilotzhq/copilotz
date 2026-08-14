@@ -139,6 +139,7 @@ async function createV3Readers(session: SqlSession, schema: string) {
     coordinator,
     session,
     eventStore: store,
+    databaseSchema: schema,
     createId: () => `migration-reader-edge-${++id}`,
   });
   const conversation = createConversationRepository({

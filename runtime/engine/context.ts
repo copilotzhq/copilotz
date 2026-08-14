@@ -141,6 +141,7 @@ export function createCopilotzProcessorCapabilities(
       return options.preparer.prepare(input, {
         namespace,
         idempotencyKey: preparedIdentity.deduplicationId,
+        origin: prepareOptions.origin,
       });
     },
     publish(input, publishOptions) {

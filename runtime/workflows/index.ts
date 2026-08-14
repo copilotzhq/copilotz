@@ -25,6 +25,13 @@ export {
   isWorkflowToolResult,
 } from "./tool-executor.ts";
 export {
+  type ExtractedToolResult,
+  extractToolResultAssets,
+  type ExtractToolResultAssetsOptions,
+  type ToolResultAssetError,
+  type ToolResultAssetErrorCode,
+} from "./tool-result-assets.ts";
+export {
   agentAskMetadata,
   withAgentAskMetadata,
   withWorkflowMetadata,

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.60.0 — 2026-08-14
+
+This release separates graph asset metadata from pluggable body storage and
+repairs legacy tool-result history.
+
+### Added
+
+- Declarative database, memory, filesystem-capability, S3-compatible, and
+  injected asset body storage with immutable provenance paths and mixed-location
+  reads.
+- Generic nested data-URL extraction for tool results before live output,
+  persistence, and model continuation.
+- The isolated `migration/content-v2` dry-run/apply workflow for canonicalizing
+  legacy tool messages and relocating database bodies to object storage.
+
+### Changed
+
+- Database storage remains the zero-configuration default and now accepts up to
+  8 MiB per asset.
+- The v1 upgrader classifies tool-authored messages as tool executions instead
+  of public conversation and skips their duplicate legacy message events.
+- HTTP asset metadata omits physical body locations.
+
 ## 0.59.25 — 2026-08-14
 
 This release replaces the mixed memory model with a queryable semantic memory

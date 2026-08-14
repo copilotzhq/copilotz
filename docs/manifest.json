@@ -92,6 +92,11 @@
           "title": "Migrate to v3",
           "slug": "migration-v3",
           "description": "Breaking API map and isolated database upgrade."
+        },
+        {
+          "title": "Content-v2 Migration",
+          "slug": "content-v2-migration",
+          "description": "Repair legacy tool history and relocate asset bodies to object storage."
         }
       ]
     }

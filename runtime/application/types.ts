@@ -32,6 +32,7 @@ import type {
   WorkflowToolCatalog,
 } from "../workflows/index.ts";
 import type { CopilotzPersistenceOptions } from "./persistence.ts";
+import type { AssetStorageOptions } from "../content/index.ts";
 
 export type CorePluginSetting<T> = false | Readonly<T>;
 
@@ -62,9 +63,15 @@ export type CreateCopilotzApplicationOptions =
     pluginResolver?: PluginResolver;
     /** Canonical static/generated tool catalog shared by execution and introspection. */
     toolCatalog?: WorkflowToolCatalog;
+    /** Canonical asset body policy shared by every database scope. */
+    assets?: AssetStorageOptions;
     engine?: Omit<
       CreateCopilotzEngineOptions,
-      "session" | "registry" | "defaultDatabaseSchema"
+      | "session"
+      | "registry"
+      | "defaultDatabaseSchema"
+      | "assets"
+      | "assetStorage"
     >;
   }>
   & CopilotzPersistenceOptions;
@@ -72,7 +79,12 @@ export type CreateCopilotzApplicationOptions =
 /** Plain application semantics that can be shared by Gateway and Worker roles. */
 export type CopilotzComposition = Pick<
   CreateCopilotzApplicationOptions,
-  "core" | "plugins" | "resources" | "pluginResolver" | "toolCatalog"
+  | "core"
+  | "plugins"
+  | "resources"
+  | "pluginResolver"
+  | "toolCatalog"
+  | "assets"
 >;
 
 export type CopilotzApplicationConfig = Readonly<{

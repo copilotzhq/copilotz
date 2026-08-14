@@ -43,14 +43,16 @@ preparation, authorization-aware batch resolution, SHA-256 integrity checks, and
 Web Stream reads. A tenant-scoped memory repository remains available for
 isolated tests and explicitly non-durable embedded use.
 
-The graph-native database repository stores ready text, JSON, and binary bodies
-up to the provisional 64 KiB limit as asset nodes. `createContentPreparer()`
-produces refs plus uncommitted immutable bodies; a typed aggregate then commits
-those bodies, its owner, `has_asset` edges, one compact semantic event, and all
-matched deliveries in one Ominipg transaction. Standalone publication emits
-`asset.created`. Message creation now uses this path, validates existing refs
-transactionally, and detects content conflicts on an idempotent replay. Events
-and message nodes never duplicate body data.
+The graph-native repository stores metadata and ownership in asset nodes while
+database, memory, filesystem-capability, S3-compatible, or injected stores own
+the immutable body. Database storage is the default with an 8 MiB per-asset
+limit. `createContentPreparer()` produces refs plus uncommitted immutable
+bodies; a typed aggregate then commits those bodies, its owner, `has_asset`
+edges, one compact semantic event, and all matched deliveries in one Ominipg
+transaction. Standalone publication emits `asset.created`. Message creation now
+uses this path, validates existing refs transactionally, and detects content
+conflicts on an idempotent replay. Events and message nodes never duplicate body
+data.
 
 Tool executions and logical/provider LLM attempts now use the same repository
 for role-labelled arguments, output, projections, errors, model input, answer,
@@ -58,10 +60,12 @@ reasoning, tool calls, and restricted traces. Owner links are synchronized when
 mutable workflow projections replace content, and promoting a tool output or LLM
 answer into a public message reuses its immutable body.
 
-Object-backed staging, document/memory ownership, realtime finalization,
-retention, and v1 compatibility projection remain subsequent verticals. The
-current v1 runtime remains authoritative until those A29–A35 paths move end to
-end; no dual canonical write path has been introduced.
+S3-compatible writes use deterministic provenance paths, conditional creation,
+and post-write metadata verification. Persisted locations dispatch mixed reads
+during migration. Generic tool-result extraction removes nested encoded bodies
+before live output, persistence, and model reuse. The isolated content-v2
+migration repairs tool-authored legacy messages and performs resumable
+database-to-object relocation.
 
 ## Goals
 
@@ -366,11 +370,10 @@ model.
 
 Initial policy:
 
-- UTF-8 text, JSON, and small binary bodies up to a configurable threshold are
-  eligible for database storage.
-- The provisional default threshold is 64 KiB after encoding. It must be
-  benchmark-validated before release.
-- Larger bodies use a configured object backend.
+- Every durable body is stored in the selected backend. Database storage is the
+  default and accepts up to 8 MiB of decoded content per asset.
+- Explicit S3-compatible storage places text, JSON, and binary bodies in the
+  configured object backend.
 - A runtime without durable object storage rejects oversized durable content or
   uses an explicitly configured remote asset backend; it never silently drops
   the body.
@@ -739,22 +742,17 @@ Unless review changes them, implementation and tests should use these defaults:
 8. Compatibility is an edge projection, not dual canonical storage.
 9. Runtime construction is factory-first and capability-injected.
 
-## Open Decisions
+## Follow-up Decisions
 
-These decisions should be closed with benchmarks or product input before their
-implementation gate, but they do not invalidate the model:
-
-1. Confirm or adjust the provisional 64 KiB database/object threshold using
-   PGlite, PostgreSQL, history-hydration, and remote-worker benchmarks.
-2. Decide whether v3 REST exposes content sequences directly at `/v2`, through
+1. Decide whether v3 REST exposes content sequences directly at `/v2`, through
    content negotiation, or both.
-3. Define which custom collection schema helper marks a field as
+2. Define which custom collection schema helper marks a field as
    asset-backed/large content.
-4. Choose searchable-text projection and indexing policy per content/media type.
-5. Define default retention durations for opt-in recordings and diagnostic
+3. Choose searchable-text projection and indexing policy per content/media type.
+4. Define default retention durations for opt-in recordings and diagnostic
    provider traces.
-6. Decide whether tenant-local dedupe is worthwhile after measuring body reuse
+5. Decide whether tenant-local dedupe is worthwhile after measuring body reuse
    and privacy/GC complexity.
-7. Define encryption key ownership/rotation for database and object bodies.
-8. Decide whether standalone asset publication emits one general `asset.created`
+6. Define encryption key ownership/rotation for database and object bodies.
+7. Decide whether standalone asset publication emits one general `asset.created`
    event or media-specific semantic subtypes.

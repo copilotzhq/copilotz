@@ -4,6 +4,7 @@ import type { CopilotzProcessorContext } from "../engine/index.ts";
 import type { EphemeralEvent } from "../events/index.ts";
 import type { WorkflowTool } from "./types.ts";
 import { createWorkflowToolExecutor } from "./tool-executor.ts";
+import { createContentPreparer } from "../content/index.ts";
 
 function fixture(
   execute: WorkflowTool["execute"],
@@ -22,6 +23,10 @@ function fixture(
     inputSchema: { type: "object" },
     execute,
   };
+  let assetId = 0;
+  const preparer = createContentPreparer({
+    createId: () => `extracted-${++assetId}`,
+  });
   const context = {
     namespace: "tenant-a",
     databaseSchema: "copilotz_test",
@@ -72,6 +77,14 @@ function fixture(
     },
     collections: {},
     content: {
+      prepare: (
+        input: Parameters<typeof preparer.prepare>[0],
+        options: { operationKey: string },
+      ) =>
+        preparer.prepare(input, {
+          namespace: "tenant-a",
+          idempotencyKey: options.operationKey,
+        }),
       get: () => Promise.resolve(null),
       resolve: () =>
         Promise.resolve({
@@ -153,6 +166,53 @@ Deno.test("tool executor orders explicit output chunks and emits a final result 
     mode: "replace",
     delta: { stdout: "one", stderr: "two", exitCode: 0 },
   }]);
+});
+
+Deno.test("automatic tool output extracts nested data URLs before streaming", async () => {
+  const dataUrl = "data:image/png;base64,iVBORw0KGgo=";
+  const test = fixture(() => Promise.resolve({ ok: true, imageUrl: dataUrl }));
+  const outcome = await test.run({
+    execution: {
+      id: "execution-a",
+      namespace: "tenant-a",
+      threadId: "thread-a",
+      participantId: "agent-a",
+      toolCallId: "call-a",
+      tool: { id: "terminal", name: "Terminal" },
+      status: "running",
+      content: [],
+      startedAt: "2026-08-13T12:00:00.000Z",
+      metadata: {},
+      createdAt: "2026-08-13T12:00:00.000Z",
+      updatedAt: "2026-08-13T12:00:00.000Z",
+    },
+    tool: test.tool,
+    availableTools: [test.tool],
+    arguments: {},
+    context: test.context,
+  });
+  assertEquals(outcome.status, "completed");
+  if (outcome.status !== "completed") return;
+  assertEquals(outcome.extractedAttachments?.assets.length, 1);
+  assertEquals(JSON.stringify(outcome.output).includes("base64"), false);
+  assertEquals(JSON.stringify(test.events).includes("base64"), false);
+  assertEquals(test.events[0].payload, {
+    toolExecutionId: "execution-a",
+    toolCallId: "call-a",
+    toolId: "terminal",
+    toolName: "Terminal",
+    channel: "result",
+    mode: "replace",
+    delta: {
+      ok: true,
+      imageUrl: {
+        assetRef: "asset://tenant-a/extracted-1",
+        kind: "image",
+        mediaType: "image/png",
+        byteLength: 8,
+      },
+    },
+  });
 });
 
 Deno.test("an explicit result channel prevents duplicate automatic output", async () => {

@@ -4,7 +4,10 @@ import {
   createRealtimeProviderContext,
   createRealtimeStreamWorkload,
 } from "../attachments/index.ts";
-import { createContentPreparer } from "../content/index.ts";
+import {
+  createAssetStorageRuntime,
+  createContentPreparer,
+} from "../content/index.ts";
 import {
   type CopilotzEvent,
   type CopilotzEventHub,
@@ -75,6 +78,12 @@ export async function createCopilotzEngine(
   options: CreateCopilotzEngineOptions,
 ): Promise<CopilotzEngine> {
   const databaseSchema = options.defaultDatabaseSchema ?? "public";
+  const engineOptions: CreateCopilotzEngineOptions = options.assetStorage
+    ? options
+    : Object.freeze({
+      ...options,
+      assetStorage: createAssetStorageRuntime(options.assets),
+    });
   await prepareDefaultDatabaseSchema(options, databaseSchema);
   const now = options.now ?? (() => new Date());
   const eventHub = options.eventHub ?? createCopilotzEventHub();
@@ -323,7 +332,7 @@ export async function createCopilotzEngine(
     const defaultScope = createDatabaseScope({
       databaseSchema,
       store,
-      engine: options,
+      engine: engineOptions,
       registry: options.registry,
       executor,
       preparer,
@@ -352,7 +361,7 @@ export async function createCopilotzEngine(
           await validateCopilotzSchema(options.session, normalized);
           const runtime = createDatabaseScope({
             databaseSchema: normalized,
-            engine: options,
+            engine: engineOptions,
             registry: options.registry,
             executor,
             preparer,

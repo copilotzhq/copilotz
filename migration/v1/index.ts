@@ -13,6 +13,7 @@ import {
   validateEventSchemaName,
 } from "../../runtime/events/schema.ts";
 import type { SqlExecutor, SqlSession } from "../../runtime/events/session.ts";
+import { repairLegacyToolMessages } from "../content-v2/semantic.ts";
 
 type LegacyThreadRow = Record<string, unknown> & {
   id: string;
@@ -1432,6 +1433,9 @@ async function normalizeMessages(
   let participantsCreated = 0;
   for await (const row of loadNodes(transaction, schema, ["message"])) {
     const data = object(row.data);
+    // Tool results are workflow artifacts, not public conversation messages.
+    // The dedicated repair pass merges or synthesizes their executions.
+    if (optionalString(data.senderType) === "tool") continue;
     const threadId = optionalString(data.threadId) ??
       (row.source_type === "thread" ? optionalString(row.source_id) : null);
     const thread = threadId
@@ -2438,6 +2442,10 @@ async function copyEvents(
        FROM ${legacy} event
        WHERE event.status NOT IN ('pending', 'processing')
          AND event."eventType" <> ALL($2::text[])
+         AND NOT (
+           event."eventType" = 'NEW_MESSAGE'
+           AND event.payload -> 'sender' ->> 'type' = 'tool'
+         )
        ORDER BY event."createdAt", event.id
        ON CONFLICT (id) DO NOTHING
        RETURNING 1
@@ -2570,8 +2578,9 @@ export async function upgradeV1Schema(
       transaction,
       schema,
     );
-    participantsCreated += await normalizeMessages(transaction, schema);
     participantsCreated += await normalizeToolExecutions(transaction, schema);
+    await repairLegacyToolMessages(transaction, schema, { includeRawV1: true });
+    participantsCreated += await normalizeMessages(transaction, schema);
     participantsCreated += await normalizeLlmAttempts(transaction, schema);
     await normalizeKnowledgeDocuments(transaction, schema);
     await normalizeLongTermMemory(transaction, schema);

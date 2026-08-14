@@ -1,5 +1,6 @@
 import type { CopilotzApplication } from "../runtime/application/index.ts";
-import type { AssetRecord, ContentRef } from "../runtime/content/index.ts";
+import type { ContentRef } from "../runtime/content/index.ts";
+import { type EventNativeAsset, eventNativeAsset } from "./assets.ts";
 import {
   type ConversationMessage,
   type LlmAttempt,
@@ -13,7 +14,7 @@ export type EventNativeHistoryInclude = "content" | "workflow";
 /** JSON transport representation of canonical resolved content. */
 export type EventNativeResolvedContent = Readonly<{
   ref: ContentRef;
-  asset: AssetRecord;
+  asset: EventNativeAsset;
   base64: string;
 }>;
 
@@ -192,7 +193,7 @@ export async function createEventNativeMessageHistoryIncluded(
     content: Object.freeze(resolved.map((value) =>
       Object.freeze({
         ref: value.ref,
-        asset: value.asset,
+        asset: eventNativeAsset(value.asset),
         base64: base64(value.bytes),
       })
     )),

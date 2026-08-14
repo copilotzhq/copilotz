@@ -313,6 +313,10 @@ export function createLlmAttemptRepository(
           ? await options.assets.materialize(context, {
             namespace,
             content: prepared,
+            origin: {
+              scope: { type: "thread", id: existing.threadId },
+              producer: { type: "llm_attempt", id },
+            },
           })
           : Object.freeze([]) as ContentSequence;
         const content = replaceContentRoles(
@@ -540,6 +544,10 @@ export function createLlmAttemptRepository(
             ? await options.assets.materialize(context, {
               namespace,
               content: prepared,
+              origin: {
+                scope: { type: "thread", id: threadId },
+                producer: { type: "llm_attempt", id },
+              },
             })
             : Object.freeze([]) as ContentSequence;
           const name = (participantId ?? input.agentId ?? "agent") + ":" +

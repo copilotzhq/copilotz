@@ -357,7 +357,18 @@ async function canonicalizeCollectionContent(
     setNestedValue(
       value,
       field,
-      await assets.materialize(context, { namespace, content }),
+      await assets.materialize(context, {
+        namespace,
+        content,
+        origin: {
+          scope: {
+            type: "collection",
+            collection: name,
+            id: String(value.id),
+          },
+          producer: { type: name, id: String(value.id) },
+        },
+      }),
     );
   }
 }

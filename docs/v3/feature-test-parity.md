@@ -230,7 +230,7 @@ digest/size/media integrity, batched reads, and portable Web Streams. Prepared
 bodies now commit atomically with a message owner, typed graph links, its
 compact event, and sparse deliveries; rollback and replay tests prove there is
 no asset orphan and no body duplication in the event. The provisional
-database-only limit is 64 KiB and oversized durable bodies fail until an object
+database-only limit is 8 MiB and oversized durable bodies fail until an object
 backend is configured. The core has no unconditional Deno, Node, Bun,
 filesystem, CLI, or server dependency and introduces no stateful class. These
 eleven content tests are additive; A29–A35 continue to guard the current public

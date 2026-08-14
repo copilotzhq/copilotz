@@ -112,6 +112,7 @@ export async function createCopilotzWorker(
       resources: options.resources,
       pluginResolver: options.pluginResolver,
       toolCatalog: options.toolCatalog,
+      assets: options.assets,
       database: persistence.database,
       engine: {
         ...(options.engine ?? {}),

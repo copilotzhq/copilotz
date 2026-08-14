@@ -121,10 +121,11 @@ export function createDatabaseScope(
     coordinator,
     session: engine.session,
     eventStore: store,
+    databaseSchema,
     createId: engine.createId,
     now: engine.now,
     digest: engine.digest,
-    maxDatabaseBytes: engine.maxDatabaseBytes,
+    storage: engine.assetStorage,
   });
   const resolver = createContentResolver({
     assets,
@@ -297,10 +298,16 @@ export function createDatabaseScope(
       now: maintenanceOptions.now,
       limit: maintenanceOptions.limit,
     });
+    const assetMaintenance = await assets.maintainBodies({
+      now: maintenanceOptions.now,
+      orphanAfterMs: maintenanceOptions.assetOrphanAfterMs,
+      limit: maintenanceOptions.limit,
+    });
     const result: CopilotzEngineMaintenanceResult = Object.freeze({
       recovered: recovery.handles.length,
       dispatchFailures: recovery.failures.length,
       compacted: Object.freeze(compacted),
+      assets: assetMaintenance,
     });
     return result;
   };

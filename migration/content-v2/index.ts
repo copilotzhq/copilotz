@@ -31,6 +31,8 @@ type AssetRow = {
 };
 
 type AssetBodyRow = {
+  id: string;
+  namespace: string;
   body: string;
   encoding: string;
   media_type: string;
@@ -411,71 +413,92 @@ async function relocateAssetPage(
       message: string;
       conflict: boolean;
     }>;
-  const results = await mapBounded(
-    rows,
-    uploadConcurrency,
-    async (row): Promise<UploadResult> => {
-      try {
-        // The page query carries metadata only. Fetching one body per active
-        // uploader bounds resident memory by upload concurrency rather than
-        // by page size, even when every asset is near the database limit.
-        const body = await session.query<AssetBodyRow>(
-          `SELECT data ->> 'body' AS body,
-             data -> 'location' ->> 'encoding' AS encoding,
-             data ->> 'mediaType' AS media_type,
-             data ->> 'digest' AS digest,
-             data ->> 'byteLength' AS byte_length
-           FROM ${q(schema, "nodes")}
-           WHERE namespace = $1 AND id = $2 AND type = 'asset'
-             AND data ->> 'state' = 'ready'
-             AND data -> 'location' ->> 'kind' = 'database'`,
-          [row.namespace, row.id],
-        );
-        if (body.rows.length !== 1) {
-          throw new Error("database asset body changed during relocation");
+  const results: UploadResult[] = [];
+  for (let offset = 0; offset < rows.length; offset += uploadConcurrency) {
+    const slice = rows.slice(offset, offset + uploadConcurrency);
+    // Fetch exactly one upload-sized slice per round trip. This keeps the
+    // worst-case resident body set bounded by upload concurrency while
+    // avoiding one SQL query for every small asset.
+    const bodies = await session.query<AssetBodyRow>(
+      `WITH requested AS (
+         SELECT * FROM UNNEST($1::text[], $2::text[])
+           AS item(namespace, id)
+       )
+       SELECT asset.id, asset.namespace,
+         asset.data ->> 'body' AS body,
+         asset.data -> 'location' ->> 'encoding' AS encoding,
+         asset.data ->> 'mediaType' AS media_type,
+         asset.data ->> 'digest' AS digest,
+         asset.data ->> 'byteLength' AS byte_length
+       FROM requested
+       JOIN ${q(schema, "nodes")} asset
+         ON asset.namespace = requested.namespace AND asset.id = requested.id
+       WHERE asset.type = 'asset'
+         AND asset.data ->> 'state' = 'ready'
+         AND asset.data -> 'location' ->> 'kind' = 'database'`,
+      [
+        slice.map((row) => row.namespace),
+        slice.map((row) => row.id),
+      ],
+    );
+    const bodiesByAsset = new Map(
+      bodies.rows.map((body) => [
+        `${body.namespace}\u0000${body.id}`,
+        body,
+      ]),
+    );
+    const uploaded = await mapBounded(
+      slice,
+      uploadConcurrency,
+      async (row): Promise<UploadResult> => {
+        try {
+          const stored = bodiesByAsset.get(`${row.namespace}\u0000${row.id}`);
+          if (!stored) {
+            throw new Error("database asset body changed during relocation");
+          }
+          const mediaType = stored.media_type;
+          const digest = stored.digest as `sha256:${string}`;
+          const byteLength = Number(stored.byte_length);
+          const bytes = databaseBytes(row.id, stored);
+          if (
+            !mediaType || !digest.startsWith("sha256:") ||
+            bytes.byteLength !== byteLength ||
+            await digestContent(bytes) !== digest
+          ) {
+            throw new Error("database asset integrity verification failed");
+          }
+          const origin = origins.get(row.id);
+          if (!origin) throw new Error("asset origin inference failed");
+          const key = assetBodyKey({
+            prefix,
+            databaseSchema: schema,
+            namespace: row.namespace,
+            assetId: row.id,
+            origin,
+          });
+          const head = await objectWriter.put({
+            key,
+            bytes,
+            mediaType,
+            digest,
+            ifAbsent: true,
+          });
+          return {
+            status: "uploaded",
+            value: { row, origin, head, key },
+          };
+        } catch (error) {
+          return {
+            status: "failed",
+            id: row.id,
+            message: error instanceof Error ? error.message : String(error),
+            conflict: (error as { code?: string }).code === "asset_conflict",
+          };
         }
-        const stored = body.rows[0];
-        const mediaType = stored.media_type;
-        const digest = stored.digest as `sha256:${string}`;
-        const byteLength = Number(stored.byte_length);
-        const bytes = databaseBytes(row.id, stored);
-        if (
-          !mediaType || !digest.startsWith("sha256:") ||
-          bytes.byteLength !== byteLength ||
-          await digestContent(bytes) !== digest
-        ) {
-          throw new Error("database asset integrity verification failed");
-        }
-        const origin = origins.get(row.id);
-        if (!origin) throw new Error("asset origin inference failed");
-        const key = assetBodyKey({
-          prefix,
-          databaseSchema: schema,
-          namespace: row.namespace,
-          assetId: row.id,
-          origin,
-        });
-        const head = await objectWriter.put({
-          key,
-          bytes,
-          mediaType,
-          digest,
-          ifAbsent: true,
-        });
-        return {
-          status: "uploaded",
-          value: { row, origin, head, key },
-        };
-      } catch (error) {
-        return {
-          status: "failed",
-          id: row.id,
-          message: error instanceof Error ? error.message : String(error),
-          conflict: (error as { code?: string }).code === "asset_conflict",
-        };
-      }
-    },
-  );
+      },
+    );
+    results.push(...uploaded);
+  }
   const conflict = results.find((result) =>
     result.status === "failed" && result.conflict
   );

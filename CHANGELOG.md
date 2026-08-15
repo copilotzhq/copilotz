@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.60.16 — 2026-08-15
+
+- Fetch database asset bodies in upload-sized SQL batches before bounded
+  concurrent object writes, eliminating one database round trip per asset while
+  retaining the upload-concurrency memory cap.
+
 ## 0.60.15 — 2026-08-15
 
 - Relocate database assets through metadata-only keyset pages and fetch one body

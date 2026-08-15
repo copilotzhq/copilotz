@@ -75,9 +75,11 @@ is `"blocking"`, which also works with PGlite. In concurrent mode,
 `semanticBatchSize` remains the planner page size and progress-reporting
 cadence. Asset relocation remains independently resumable and uses `batchSize`
 for metadata-only keyset pages. It creates a migration-scoped partial index for
-remaining database assets, then fetches one body per active uploader. Resident
-body memory is therefore bounded by `uploadConcurrency`, not by page size; the
-index is removed after success and retained after interruption for reuse.
+remaining database assets, then fetches only one upload-sized body slice at a
+time. Resident body memory is therefore bounded by `uploadConcurrency`, not by
+page size. Each upload-sized body slice is fetched in one SQL query, so
+small-asset migrations do not pay one database round trip per object. The index
+is removed after success and retained after interruption for reuse.
 `uploadConcurrency` controls object-store parallelism independently.
 `onProgress` reports planning, semantic, asset, and completion stages without
 coupling the migration to a logger.

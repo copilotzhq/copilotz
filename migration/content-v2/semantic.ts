@@ -41,11 +41,31 @@ export type ToolMessageRepairPlan = Readonly<{
   databaseAssetDelta: number;
 }>;
 
+type ToolMessageRepairPagePlan =
+  & ToolMessageRepairPlan
+  & Readonly<{
+    shadowExecutionIds: ReadonlySet<string>;
+    cursor: Readonly<{ createdAt: string; id: string }> | null;
+  }>;
+
 export type RepairLegacyToolMessagesOptions = Readonly<{
   includeRawV1?: boolean;
   batchSize?: number;
   finalize?: boolean;
 }>;
+
+function addRepairReport(
+  target: ToolMessageRepairReport,
+  source: ToolMessageRepairReport,
+): void {
+  target.candidateMessages += source.candidateMessages;
+  target.mergedExecutions += source.mergedExecutions;
+  target.synthesizedExecutions += source.synthesizedExecutions;
+  target.extractedAssets += source.extractedAssets;
+  target.deletedMessages += source.deletedMessages;
+  target.deletedDuplicateEvents += source.deletedDuplicateEvents;
+  target.deletedOrphanAssets += source.deletedOrphanAssets;
+}
 
 type AssetSnapshot = Readonly<{
   id: string;
@@ -1096,20 +1116,28 @@ async function planExistingExecutionSanitization(
  * Reads are page/batch based; expensive digest checks remain limited to truly
  * ambiguous execution identities.
  */
-export async function planLegacyToolMessageRepair(
+async function planLegacyToolMessageRepairPage(
   transaction: SqlExecutor,
   schema: string,
-  options: Readonly<{ includeRawV1?: boolean }> = {},
-): Promise<ToolMessageRepairPlan> {
-  const rows = await transaction.query<NodeRow>(
+  options: Readonly<{
+    includeRawV1?: boolean;
+    limit: number;
+    cursorCreatedAt: string | null;
+    cursorId: string;
+  }>,
+): Promise<ToolMessageRepairPagePlan> {
+  const rows = await transaction.query<NodeRow & { cursor_created_at: string }>(
     `SELECT id, namespace, name, content, data, source_type, source_id,
-       created_at, updated_at
+       created_at, updated_at, created_at::text AS cursor_created_at
      FROM ${q(schema, "nodes")}
      WHERE type = 'message' AND (
        data -> 'metadata' -> 'migratedFromV1' ->> 'senderType' = 'tool'
        ${options.includeRawV1 ? "OR data ->> 'senderType' = 'tool'" : ""}
      )
-     ORDER BY created_at, id`,
+       AND ($1::timestamptz IS NULL OR (created_at, id) > ($1::timestamptz, $2))
+     ORDER BY created_at, id
+     LIMIT $3`,
+    [options.cursorCreatedAt, options.cursorId, options.limit],
   );
   const report: ToolMessageRepairReport = {
     candidateMessages: rows.rows.length,
@@ -1121,13 +1149,12 @@ export async function planLegacyToolMessageRepair(
     deletedOrphanAssets: 0,
   };
   if (rows.rows.length === 0) {
-    const delta = await planExistingExecutionSanitization(
-      transaction,
-      schema,
+    return Object.freeze({
       report,
-      new Set(),
-    );
-    return Object.freeze({ report, databaseAssetDelta: delta });
+      databaseAssetDelta: 0,
+      shadowExecutionIds: new Set<string>(),
+      cursor: null,
+    });
   }
 
   const rawCandidates = rows.rows.map((row) => {
@@ -1547,6 +1574,63 @@ export async function planLegacyToolMessageRepair(
     }
     report.deletedOrphanAssets++;
     if (databaseReadyAsset(asset)) databaseAssetDelta--;
+  }
+  const last = rows.rows.at(-1)!;
+  return Object.freeze({
+    report,
+    databaseAssetDelta,
+    shadowExecutionIds,
+    cursor: Object.freeze({ createdAt: last.cursor_created_at, id: last.id }),
+  });
+}
+
+/**
+ * Builds the exact semantic repair report without mutating production rows.
+ * Candidate payloads are released between bounded pages so memory depends on
+ * the configured batch rather than tenant history size.
+ */
+export async function planLegacyToolMessageRepair(
+  transaction: SqlExecutor,
+  schema: string,
+  options: Readonly<{
+    includeRawV1?: boolean;
+    batchSize?: number;
+  }> = {},
+): Promise<ToolMessageRepairPlan> {
+  const batchSize = options.batchSize ?? 250;
+  if (
+    !Number.isSafeInteger(batchSize) || batchSize <= 0 || batchSize > 1_000
+  ) {
+    throw new TypeError(
+      "content-v2 semantic batchSize must be between 1 and 1000.",
+    );
+  }
+  const report: ToolMessageRepairReport = {
+    candidateMessages: 0,
+    mergedExecutions: 0,
+    synthesizedExecutions: 0,
+    extractedAssets: 0,
+    deletedMessages: 0,
+    deletedDuplicateEvents: 0,
+    deletedOrphanAssets: 0,
+  };
+  const shadowExecutionIds = new Set<string>();
+  let databaseAssetDelta = 0;
+  let cursorCreatedAt: string | null = null;
+  let cursorId = "";
+  while (true) {
+    const page = await planLegacyToolMessageRepairPage(transaction, schema, {
+      includeRawV1: options.includeRawV1,
+      limit: batchSize,
+      cursorCreatedAt,
+      cursorId,
+    });
+    addRepairReport(report, page.report);
+    databaseAssetDelta += page.databaseAssetDelta;
+    for (const id of page.shadowExecutionIds) shadowExecutionIds.add(id);
+    if (!page.cursor || page.report.candidateMessages < batchSize) break;
+    cursorCreatedAt = page.cursor.createdAt;
+    cursorId = page.cursor.id;
   }
   databaseAssetDelta += await planExistingExecutionSanitization(
     transaction,

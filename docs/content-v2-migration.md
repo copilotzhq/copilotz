@@ -42,9 +42,10 @@ synthesized with a deterministic migration ID. Ambiguous matches abort the
 schema transaction. Repaired messages and their duplicate migrated events are
 removed; ordinary human and agent messages are unchanged.
 
-Dry-run is a read-only bulk planner. It preloads matching executions,
-participants, asset references, and ownership counts in bounded SQL queries,
-then simulates the exact semantic repair without issuing writes or opening a
+Dry-run is a read-only bulk planner. It keyset-pages legacy messages by
+`semanticBatchSize`, loads only each page's matching executions, participants,
+asset references, and ownership counts, then releases those payloads before the
+next page. It simulates semantic repair without issuing writes or opening a
 rollback-only transaction. Existing canonical tool output and projected-output
 JSON are inspected too, even when no duplicate legacy message remains.
 

@@ -293,7 +293,9 @@ export async function migrateContentV2Schema(
     total: counts.messages,
   });
   if (mode === "dry-run") {
-    const planned = await planLegacyToolMessageRepair(session, schema);
+    const planned = await planLegacyToolMessageRepair(session, schema, {
+      batchSize: semanticBatchSize,
+    });
     const result = Object.freeze({
       schema,
       mode,
@@ -320,7 +322,9 @@ export async function migrateContentV2Schema(
     );
   }
   // Refuse ambiguous history before committing any resumable batch.
-  const preflight = await planLegacyToolMessageRepair(session, schema);
+  const preflight = await planLegacyToolMessageRepair(session, schema, {
+    batchSize: semanticBatchSize,
+  });
   const semantic = emptySemanticReport();
   while (semantic.candidateMessages < preflight.report.candidateMessages) {
     const batch = await session.transaction((transaction) =>

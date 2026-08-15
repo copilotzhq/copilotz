@@ -711,7 +711,7 @@ Deno.test("content-v2 aborts ambiguous tool-message repair without partial write
   }
 });
 
-Deno.test("content-v2 dry-run keeps SQL round trips bounded at scale", async () => {
+Deno.test("content-v2 dry-run keeps SQL and memory pages bounded at scale", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   try {
@@ -774,11 +774,13 @@ Deno.test("content-v2 dry-run keeps SQL round trips bounded at scale", async () 
         throw new Error("scaled dry-run must remain read-only");
       },
     };
-    const report = await migrateContentV2Schema(countedSession, SCHEMA);
+    const report = await migrateContentV2Schema(countedSession, SCHEMA, {
+      semanticBatchSize: 100,
+    });
     assertEquals(report.candidateMessages, 1000);
     assertEquals(report.mergedExecutions, 1000);
     assertEquals(report.deletedMessages, 1000);
-    assertEquals(queryCount <= 15, true);
+    assertEquals(queryCount <= 100, true);
   } finally {
     await db.close();
   }

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.60.8 — 2026-08-15
+
+### Fixed
+
+- Content-v2 dry-run and ambiguity preflight now use keyset-paginated semantic
+  planning, releasing legacy payloads between batches so memory use is bounded
+  by `semanticBatchSize` instead of total tenant history.
+- Large legacy payload sets no longer exhaust the JavaScript heap while
+  retaining read-only planning, deterministic ordering, and strict ambiguity
+  rejection.
+
 ## 0.60.7 — 2026-08-15
 
 ### Changed

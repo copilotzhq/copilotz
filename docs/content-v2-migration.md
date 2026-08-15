@@ -51,9 +51,9 @@ JSON are inspected too, even when no duplicate legacy message remains.
 Apply runs the same planner first, so ambiguous history is rejected before any
 mutation commits. It then repairs legacy messages in resumable transactions of
 `semanticBatchSize` records. Asset relocation remains independently resumable
-and uses `batchSize` plus `uploadConcurrency` for bounded memory and object-store
-parallelism. `onProgress` reports planning, semantic, asset, and completion
-stages without coupling the migration to a logger.
+and uses `batchSize` plus `uploadConcurrency` for bounded memory and
+object-store parallelism. `onProgress` reports planning, semantic, asset, and
+completion stages without coupling the migration to a logger.
 
 The object phase uploads and verifies one deterministic immutable key before it
 conditionally changes the graph location and deletes the database body. A crash

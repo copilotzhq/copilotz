@@ -785,3 +785,95 @@ Deno.test("content-v2 dry-run keeps SQL and memory pages bounded at scale", asyn
     await db.close();
   }
 });
+
+Deno.test("content-v2 applies independent messages with bounded semantic concurrency", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const session = createSqlSession(db);
+  try {
+    for (const statement of createCoreSchemaStatements(SCHEMA)) {
+      await session.query(statement);
+    }
+    await session.query(
+      `INSERT INTO ${q("nodes")} (id, namespace, type, name, data)
+       VALUES ('agent-concurrent', 'tenant-a', 'participant', 'Agent', '{}')`,
+    );
+    await session.query(
+      `INSERT INTO ${q("nodes")} (id, namespace, type, name, data)
+       SELECT 'thread-concurrent-' || value::text,
+         'tenant-a', 'thread', 'Thread', '{}'
+       FROM generate_series(1, 8) AS value`,
+    );
+    await session.query(
+      `INSERT INTO ${q("nodes")} (
+         id, namespace, type, name, data, created_at, updated_at
+       )
+       SELECT 'message-concurrent-' || value::text,
+         'tenant-a', 'message', 'Tool',
+         jsonb_build_object(
+           'threadId', 'thread-concurrent-' || value::text,
+           'senderId', 'agent-concurrent',
+           'metadata', jsonb_build_object(
+             'migratedFromV1', jsonb_build_object(
+               'senderType', 'tool', 'senderId', 'agent-concurrent'
+             ),
+             'toolCalls', jsonb_build_array(jsonb_build_object(
+               'id', 'call-concurrent-' || value::text,
+               'tool', jsonb_build_object('id', 'lookup'),
+               'args', jsonb_build_object('index', value),
+               'output', jsonb_build_object('ok', true, 'index', value),
+               'status', 'completed'
+             ))
+           )
+         ), NOW(), NOW()
+       FROM generate_series(1, 8) AS value`,
+    );
+    await session.query(
+      `INSERT INTO ${q("nodes")} (
+         id, namespace, type, name, data, source_type, source_id
+       )
+       SELECT 'execution-concurrent-' || value::text,
+         'tenant-a', 'tool_execution', 'lookup',
+         jsonb_build_object(
+           'threadId', 'thread-concurrent-' || value::text,
+           'participantId', 'agent-concurrent',
+           'toolCallId', 'call-concurrent-' || value::text,
+           'tool', jsonb_build_object('id', 'lookup'),
+           'status', 'completed', 'content', '[]'::jsonb,
+           'metadata', '{}'::jsonb
+         ), 'tool_call', 'call-concurrent-' || value::text
+       FROM generate_series(1, 8) AS value`,
+    );
+
+    const memory = createMemoryAssetBodyStore({ backendId: "gcs:concurrent" });
+    const progress: number[] = [];
+    const report = await migrateContentV2Schema(session, SCHEMA, {
+      mode: "apply",
+      semanticBatchSize: 2,
+      semanticConcurrency: 4,
+      assets: {
+        storage: {
+          type: "custom",
+          config: {
+            store: Object.freeze({ ...memory, kind: "object" as const }),
+            prefix: "copilotz",
+          },
+        },
+      },
+      onProgress(event) {
+        if (event.stage === "semantic") progress.push(event.processed);
+      },
+    });
+    assertEquals(report.candidateMessages, 8);
+    assertEquals(report.mergedExecutions, 8);
+    assertEquals(report.failures, []);
+    assertEquals(progress.at(-1), 8);
+    assertEquals(
+      (await session.query(
+        `SELECT id FROM ${q("nodes")} WHERE type = 'message'`,
+      )).rows.length,
+      0,
+    );
+  } finally {
+    await db.close();
+  }
+});

@@ -52,6 +52,7 @@ export type RepairLegacyToolMessagesOptions = Readonly<{
   includeRawV1?: boolean;
   batchSize?: number;
   finalize?: boolean;
+  concurrent?: boolean;
 }>;
 
 function addRepairReport(
@@ -1656,6 +1657,11 @@ export async function repairLegacyToolMessages(
       "content-v2 semantic batchSize must be between 1 and 1000.",
     );
   }
+  if (options.concurrent && options.batchSize !== 1) {
+    throw new TypeError(
+      "Concurrent content-v2 repair must claim exactly one message per transaction.",
+    );
+  }
   const rows = await transaction.query<NodeRow>(
     `SELECT id, namespace, name, content, data, source_type, source_id,
        created_at, updated_at
@@ -1665,7 +1671,8 @@ export async function repairLegacyToolMessages(
        ${options.includeRawV1 ? "OR data ->> 'senderType' = 'tool'" : ""}
      )
      ORDER BY created_at, id
-     ${options.batchSize === undefined ? "" : "LIMIT $1"}`,
+     ${options.batchSize === undefined ? "" : "LIMIT $1"}
+     ${options.concurrent ? "FOR UPDATE SKIP LOCKED" : ""}`,
     options.batchSize === undefined ? [] : [options.batchSize],
   );
   const report: ToolMessageRepairReport = {
@@ -1681,6 +1688,15 @@ export async function repairLegacyToolMessages(
     let row = sourceRow;
     const data = record(row.data);
     const threadId = messageThread(row, data);
+    if (options.concurrent) {
+      // Different workers may claim different messages from one thread. The
+      // transaction-scoped lock keeps their execution matching and graph
+      // mutations ordered without reducing concurrency across threads.
+      await transaction.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, $2))",
+        [threadId, 2_026_081_500],
+      );
+    }
     const thread = await transaction.query<{ namespace: string }>(
       `SELECT namespace FROM ${q(schema, "nodes")}
        WHERE id = $1 AND type = 'thread' LIMIT 1`,

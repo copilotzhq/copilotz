@@ -56,6 +56,7 @@ export type MigrateContentV2SchemaOptions = Readonly<{
   assets?: AssetStorageOptions;
   batchSize?: number;
   semanticBatchSize?: number;
+  semanticConcurrency?: number;
   uploadConcurrency?: number;
   onProgress?: (
     progress: ContentV2MigrationProgress,
@@ -264,6 +265,7 @@ export async function migrateContentV2Schema(
   const mode = options.mode ?? "dry-run";
   const batchSize = options.batchSize ?? 100;
   const semanticBatchSize = options.semanticBatchSize ?? 250;
+  const semanticConcurrency = options.semanticConcurrency ?? 1;
   const uploadConcurrency = options.uploadConcurrency ?? 8;
   if (!Number.isSafeInteger(batchSize) || batchSize <= 0 || batchSize > 1_000) {
     throw new TypeError("content-v2 batchSize must be between 1 and 1000.");
@@ -274,6 +276,14 @@ export async function migrateContentV2Schema(
   ) {
     throw new TypeError(
       "content-v2 semanticBatchSize must be between 1 and 1000.",
+    );
+  }
+  if (
+    !Number.isSafeInteger(semanticConcurrency) || semanticConcurrency <= 0 ||
+    semanticConcurrency > 32
+  ) {
+    throw new TypeError(
+      "content-v2 semanticConcurrency must be between 1 and 32.",
     );
   }
   if (
@@ -326,23 +336,68 @@ export async function migrateContentV2Schema(
     batchSize: semanticBatchSize,
   });
   const semantic = emptySemanticReport();
-  while (semantic.candidateMessages < preflight.report.candidateMessages) {
-    const batch = await session.transaction((transaction) =>
-      repairLegacyToolMessages(transaction, schema, {
-        batchSize: semanticBatchSize,
-        finalize: false,
+  let semanticFailure: unknown;
+  let lastReported = 0;
+  let progressTail = Promise.resolve();
+  const reportProgress = (processed: number) => {
+    if (
+      processed !== preflight.report.candidateMessages &&
+      processed - lastReported < semanticBatchSize
+    ) return progressTail;
+    lastReported = processed;
+    progressTail = progressTail.then(() =>
+      options.onProgress?.({
+        schema,
+        mode,
+        stage: "semantic",
+        processed,
+        total: preflight.report.candidateMessages,
       })
-    );
-    if (batch.candidateMessages === 0) break;
-    addSemanticReport(semantic, batch);
-    await options.onProgress?.({
-      schema,
-      mode,
-      stage: "semantic",
-      processed: semantic.candidateMessages,
-      total: preflight.report.candidateMessages,
-    });
-  }
+    ).then(() => undefined);
+    return progressTail;
+  };
+  const repairWorker = async () => {
+    while (
+      semanticFailure === undefined &&
+      semantic.candidateMessages < preflight.report.candidateMessages
+    ) {
+      let batch: ToolMessageRepairReport;
+      try {
+        batch = await session.transaction((transaction) =>
+          repairLegacyToolMessages(transaction, schema, {
+            batchSize: semanticConcurrency === 1 ? semanticBatchSize : 1,
+            finalize: false,
+            concurrent: semanticConcurrency > 1,
+          })
+        );
+      } catch (error) {
+        semanticFailure ??= error;
+        return;
+      }
+      if (batch.candidateMessages === 0) {
+        if (semanticConcurrency === 1) return;
+        const remaining = await dryRunCounts(session, schema);
+        if (remaining.messages === 0) return;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        continue;
+      }
+      addSemanticReport(semantic, batch);
+      await reportProgress(semantic.candidateMessages);
+    }
+  };
+  await Promise.all(
+    Array.from(
+      {
+        length: Math.min(
+          semanticConcurrency,
+          preflight.report.candidateMessages,
+        ),
+      },
+      () => repairWorker(),
+    ),
+  );
+  await progressTail;
+  if (semanticFailure !== undefined) throw semanticFailure;
   const finalized = await session.transaction((transaction) =>
     finalizeLegacyToolMessageRepair(transaction, schema)
   );

@@ -13,6 +13,7 @@ const reports = await migrateContentV2Schemas(session, {
   mode: "dry-run", // change to "apply" after inspecting the report
   schemas: ["tenant_copilotz_com"],
   semanticBatchSize: 250,
+  semanticConcurrency: 8,
   batchSize: 250,
   uploadConcurrency: 16,
   onProgress(progress) {
@@ -50,9 +51,15 @@ rollback-only transaction. Existing canonical tool output and projected-output
 JSON are inspected too, even when no duplicate legacy message remains.
 
 Apply runs the same planner first, so ambiguous history is rejected before any
-mutation commits. It then repairs legacy messages in resumable transactions of
-`semanticBatchSize` records. Asset relocation remains independently resumable
-and uses `batchSize` plus `uploadConcurrency` for bounded memory and
+mutation commits. With the default `semanticConcurrency: 1`, it repairs legacy
+messages in resumable transactions of `semanticBatchSize` records. PostgreSQL
+migrations may increase `semanticConcurrency` up to the available connection
+pool: workers claim individual messages with `FOR UPDATE SKIP LOCKED`, while a
+transaction-scoped advisory lock serializes messages from the same thread. This
+avoids remote-database N+1 latency without allowing duplicate work or reordering
+one thread. In concurrent mode, `semanticBatchSize` remains the planner page
+size and progress-reporting cadence. Asset relocation remains independently
+resumable and uses `batchSize` plus `uploadConcurrency` for bounded memory and
 object-store parallelism. `onProgress` reports planning, semantic, asset, and
 completion stages without coupling the migration to a logger.
 

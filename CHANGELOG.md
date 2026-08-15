@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.60.9 — 2026-08-15
+
+### Changed
+
+- Content-v2 apply can now run independent semantic repairs concurrently with
+  bounded `semanticConcurrency`, using `FOR UPDATE SKIP LOCKED` claims and
+  transaction-scoped per-thread advisory locks.
+- Concurrent repair keeps strict preflight, per-message resumability, thread
+  ordering, and bounded progress telemetry while eliminating the sequential N+1
+  latency multiplier on remote PostgreSQL databases.
+
 ## 0.60.8 — 2026-08-15
 
 ### Fixed

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.60.17 — 2026-08-15
+
+- Permit up to 128 concurrent object writes for high-latency small-asset
+  migrations while bounding each fetched body slice by a configurable total byte
+  budget.
+
 ## 0.60.16 — 2026-08-15
 
 - Fetch database asset bodies in upload-sized SQL batches before bounded

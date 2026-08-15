@@ -177,7 +177,7 @@ Deno.test("content-v2 repairs tool messages, extracts data URLs, relocates bodie
   }
 });
 
-Deno.test("content-v2 relocates asset batches with bounded upload concurrency", async () => {
+Deno.test("content-v2 bounds asset batches by upload count and body bytes", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   try {
@@ -245,7 +245,8 @@ Deno.test("content-v2 relocates asset batches with bounded upload concurrency", 
     const report = await migrateContentV2Schema(observedSession, SCHEMA, {
       mode: "apply",
       batchSize: 4,
-      uploadConcurrency: 2,
+      uploadConcurrency: 4,
+      bodyBatchMaxBytes: 14,
       assets: {
         storage: { type: "custom", config: { store, prefix: "copilotz" } },
       },

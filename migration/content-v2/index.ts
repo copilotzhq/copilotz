@@ -71,6 +71,7 @@ export type MigrateContentV2SchemaOptions = Readonly<{
   semanticConcurrency?: number;
   semanticIndexMode?: ContentV2SemanticIndexMode;
   uploadConcurrency?: number;
+  bodyBatchMaxBytes?: number;
   onProgress?: (
     progress: ContentV2MigrationProgress,
   ) => void | Promise<void>;
@@ -163,6 +164,8 @@ const ASSET_RELOCATION_INDEX: SemanticIndex = Object.freeze({
 // round trips, but bounded so a retry never rolls back an unreasonably large
 // partition. The planner page size remains independently tunable up to 1,000.
 const MAX_CONCURRENT_SEMANTIC_TRANSACTION_SIZE = 100;
+const DEFAULT_BODY_BATCH_MAX_BYTES = 64 * 1024 * 1024;
+const MAX_BODY_BATCH_MAX_BYTES = 1024 * 1024 * 1024;
 
 async function createSemanticIndexes(
   session: SqlSession,
@@ -397,6 +400,7 @@ async function relocateAssetPage(
   objectWriter: AssetBodyStore,
   prefix: string,
   uploadConcurrency: number,
+  bodyBatchMaxBytes: number,
 ): Promise<AssetRelocationPageResult> {
   const origins = await inferOrigins(session, schema, rows);
   type Uploaded = Readonly<{
@@ -413,9 +417,30 @@ async function relocateAssetPage(
       message: string;
       conflict: boolean;
     }>;
+  const slices: AssetRow[][] = [];
+  let slice: AssetRow[] = [];
+  let sliceBytes = 0;
+  for (const row of rows) {
+    const rawByteLength = Number(record(row.data).byteLength);
+    const byteLength = Number.isSafeInteger(rawByteLength) && rawByteLength >= 0
+      ? rawByteLength
+      : bodyBatchMaxBytes;
+    if (
+      slice.length > 0 &&
+      (slice.length >= uploadConcurrency ||
+        sliceBytes + byteLength > bodyBatchMaxBytes)
+    ) {
+      slices.push(slice);
+      slice = [];
+      sliceBytes = 0;
+    }
+    slice.push(row);
+    sliceBytes += byteLength;
+  }
+  if (slice.length > 0) slices.push(slice);
+
   const results: UploadResult[] = [];
-  for (let offset = 0; offset < rows.length; offset += uploadConcurrency) {
-    const slice = rows.slice(offset, offset + uploadConcurrency);
+  for (const slice of slices) {
     // Fetch exactly one upload-sized slice per round trip. This keeps the
     // worst-case resident body set bounded by upload concurrency while
     // avoiding one SQL query for every small asset.
@@ -597,6 +622,8 @@ export async function migrateContentV2Schema(
   const semanticConcurrency = options.semanticConcurrency ?? 1;
   const semanticIndexMode = options.semanticIndexMode ?? "blocking";
   const uploadConcurrency = options.uploadConcurrency ?? 8;
+  const bodyBatchMaxBytes = options.bodyBatchMaxBytes ??
+    DEFAULT_BODY_BATCH_MAX_BYTES;
   if (!Number.isSafeInteger(batchSize) || batchSize <= 0 || batchSize > 1_000) {
     throw new TypeError("content-v2 batchSize must be between 1 and 1000.");
   }
@@ -625,10 +652,18 @@ export async function migrateContentV2Schema(
   }
   if (
     !Number.isSafeInteger(uploadConcurrency) || uploadConcurrency <= 0 ||
-    uploadConcurrency > 32
+    uploadConcurrency > 128
   ) {
     throw new TypeError(
-      "content-v2 uploadConcurrency must be between 1 and 32.",
+      "content-v2 uploadConcurrency must be between 1 and 128.",
+    );
+  }
+  if (
+    !Number.isSafeInteger(bodyBatchMaxBytes) || bodyBatchMaxBytes <= 0 ||
+    bodyBatchMaxBytes > MAX_BODY_BATCH_MAX_BYTES
+  ) {
+    throw new TypeError(
+      "content-v2 bodyBatchMaxBytes must be between 1 byte and 1 GiB.",
     );
   }
   const counts = await dryRunCounts(session, schema);
@@ -797,6 +832,7 @@ export async function migrateContentV2Schema(
       objectWriter,
       storage.prefix,
       uploadConcurrency,
+      bodyBatchMaxBytes,
     );
     uploadedObjects += relocated.uploadedObjects;
     bytesMoved += relocated.bytesMoved;

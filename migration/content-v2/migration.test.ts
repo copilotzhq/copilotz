@@ -3,6 +3,7 @@ import {
   createCoreSchemaStatements,
   createSqlSession,
 } from "../../runtime/events/index.ts";
+import type { SqlSession } from "../../runtime/events/index.ts";
 import {
   createMemoryAssetBodyStore,
   digestContent,
@@ -107,12 +108,26 @@ Deno.test("content-v2 repairs tool messages, extracts data URLs, relocates bodie
        )`,
     );
 
-    const dryRun = await migrateContentV2Schema(session, SCHEMA);
+    let dryRunQueries = 0;
+    let dryRunTransactions = 0;
+    const readOnlySession: SqlSession = {
+      query(sql, params) {
+        dryRunQueries++;
+        return session.query(sql, params);
+      },
+      transaction() {
+        dryRunTransactions++;
+        throw new Error("dry-run must not open a write transaction");
+      },
+    };
+    const dryRun = await migrateContentV2Schema(readOnlySession, SCHEMA);
     assertEquals(dryRun.candidateMessages, 1);
     assertEquals(dryRun.mergedExecutions, 1);
     assertEquals(dryRun.extractedAssets, 1);
     assertEquals(dryRun.deletedMessages, 1);
     assertEquals(dryRun.databaseAssets, 3);
+    assertEquals(dryRunTransactions, 0);
+    assertEquals(dryRunQueries <= 20, true);
 
     const memory = createMemoryAssetBodyStore({ backendId: "gcs:test" });
     const store = Object.freeze({ ...memory, kind: "object" as const });
@@ -224,6 +239,76 @@ Deno.test("content-v2 relocates asset batches with bounded upload concurrency", 
          AND data -> 'location' ->> 'kind' = 'database'`,
     );
     assertEquals(Number(remaining.rows[0].count), 0);
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("content-v2 apply commits semantic repair in resumable batches", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const session = createSqlSession(db);
+  try {
+    for (const statement of createCoreSchemaStatements(SCHEMA)) {
+      await session.query(statement);
+    }
+    await session.query(
+      `INSERT INTO ${q("nodes")} (id, namespace, type, name, data) VALUES
+       ('thread-batches', 'tenant-a', 'thread', 'Thread', '{}'),
+       ('agent-batches', 'tenant-a', 'participant', 'Agent', '{}'),
+       ('message-batch-1', 'tenant-a', 'message', 'Tool', $1::jsonb),
+       ('message-batch-2', 'tenant-a', 'message', 'Tool', $2::jsonb)`,
+      [1, 2].map((index) =>
+        JSON.stringify({
+          threadId: "thread-batches",
+          senderId: "agent-batches",
+          metadata: {
+            migratedFromV1: {
+              senderType: "tool",
+              senderId: "agent-batches",
+            },
+            toolCalls: [{
+              id: `call-batch-${index}`,
+              tool: { id: "lookup" },
+              args: { index },
+              output: { ok: true, index },
+              status: "completed",
+            }],
+          },
+        })
+      ),
+    );
+    const memory = createMemoryAssetBodyStore({ backendId: "gcs:batches" });
+    const semanticProgress: number[] = [];
+    const report = await migrateContentV2Schema(session, SCHEMA, {
+      mode: "apply",
+      semanticBatchSize: 1,
+      assets: {
+        storage: {
+          type: "custom",
+          config: {
+            store: Object.freeze({ ...memory, kind: "object" as const }),
+          },
+        },
+      },
+      onProgress(progress) {
+        if (progress.stage === "semantic") {
+          semanticProgress.push(progress.processed);
+        }
+      },
+    });
+    assertEquals(report.candidateMessages, 2);
+    assertEquals(report.synthesizedExecutions, 2);
+    assertEquals(report.deletedMessages, 2);
+    assertEquals(semanticProgress, [1, 2]);
+    assertEquals(
+      Number(
+        (await session.query<{ count: string | number }>(
+          `SELECT COUNT(*) AS count FROM ${q("nodes")}
+         WHERE type = 'message'`,
+        )).rows[0].count,
+      ),
+      0,
+    );
   } finally {
     await db.close();
   }
@@ -621,6 +706,79 @@ Deno.test("content-v2 aborts ambiguous tool-message repair without partial write
       )).rows.length,
       1,
     );
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("content-v2 dry-run keeps SQL round trips bounded at scale", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const session = createSqlSession(db);
+  try {
+    for (const statement of createCoreSchemaStatements(SCHEMA)) {
+      await session.query(statement);
+    }
+    await session.query(
+      `INSERT INTO ${q("nodes")} (id, namespace, type, name, data) VALUES
+       ('thread-scale', 'tenant-a', 'thread', 'Thread', '{}'),
+       ('agent-scale', 'tenant-a', 'participant', 'Agent', '{}')`,
+    );
+    await session.query(
+      `INSERT INTO ${q("nodes")} (
+         id, namespace, type, name, data, created_at, updated_at
+       )
+       SELECT 'message-scale-' || LPAD(value::text, 4, '0'),
+         'tenant-a', 'message', 'Tool',
+         jsonb_build_object(
+           'threadId', 'thread-scale',
+           'senderId', 'agent-scale',
+           'metadata', jsonb_build_object(
+             'migratedFromV1', jsonb_build_object(
+               'senderType', 'tool', 'senderId', 'agent-scale'
+             ),
+             'toolCalls', jsonb_build_array(jsonb_build_object(
+               'id', 'call-scale-' || value::text,
+               'tool', jsonb_build_object('id', 'lookup'),
+               'args', jsonb_build_object('index', value),
+               'output', jsonb_build_object('ok', true, 'index', value),
+               'status', 'completed'
+             ))
+           )
+         ), NOW(), NOW()
+       FROM generate_series(1, 1000) AS value`,
+    );
+    await session.query(
+      `INSERT INTO ${q("nodes")} (
+         id, namespace, type, name, data, source_type, source_id
+       )
+       SELECT 'execution-scale-' || LPAD(value::text, 4, '0'),
+         'tenant-a', 'tool_execution', 'lookup',
+         jsonb_build_object(
+           'threadId', 'thread-scale',
+           'participantId', 'agent-scale',
+           'toolCallId', 'call-scale-' || value::text,
+           'tool', jsonb_build_object('id', 'lookup'),
+           'status', 'completed', 'content', '[]'::jsonb,
+           'metadata', '{}'::jsonb
+         ), 'tool_call', 'call-scale-' || value::text
+       FROM generate_series(1, 1000) AS value`,
+    );
+
+    let queryCount = 0;
+    const countedSession: SqlSession = {
+      query(sql, params) {
+        queryCount++;
+        return session.query(sql, params);
+      },
+      transaction() {
+        throw new Error("scaled dry-run must remain read-only");
+      },
+    };
+    const report = await migrateContentV2Schema(countedSession, SCHEMA);
+    assertEquals(report.candidateMessages, 1000);
+    assertEquals(report.mergedExecutions, 1000);
+    assertEquals(report.deletedMessages, 1000);
+    assertEquals(queryCount <= 15, true);
   } finally {
     await db.close();
   }

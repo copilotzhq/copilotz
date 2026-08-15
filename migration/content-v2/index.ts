@@ -15,6 +15,8 @@ import {
 } from "../../runtime/events/schema.ts";
 import type { SqlExecutor, SqlSession } from "../../runtime/events/index.ts";
 import {
+  finalizeLegacyToolMessageRepair,
+  planLegacyToolMessageRepair,
   repairLegacyToolMessages,
   type ToolMessageRepairReport,
 } from "./semantic.ts";
@@ -40,12 +42,50 @@ export type ContentV2SchemaReport =
     failures: readonly Readonly<{ id: string; message: string }>[];
   }>;
 
+export type ContentV2MigrationProgress = Readonly<{
+  schema: string;
+  mode: ContentV2MigrationMode;
+  stage: "planning" | "semantic" | "assets" | "complete";
+  processed: number;
+  total?: number;
+  bytesMoved?: number;
+}>;
+
 export type MigrateContentV2SchemaOptions = Readonly<{
   mode?: ContentV2MigrationMode;
   assets?: AssetStorageOptions;
   batchSize?: number;
+  semanticBatchSize?: number;
   uploadConcurrency?: number;
+  onProgress?: (
+    progress: ContentV2MigrationProgress,
+  ) => void | Promise<void>;
 }>;
+
+function emptySemanticReport(): ToolMessageRepairReport {
+  return {
+    candidateMessages: 0,
+    mergedExecutions: 0,
+    synthesizedExecutions: 0,
+    extractedAssets: 0,
+    deletedMessages: 0,
+    deletedDuplicateEvents: 0,
+    deletedOrphanAssets: 0,
+  };
+}
+
+function addSemanticReport(
+  target: ToolMessageRepairReport,
+  source: ToolMessageRepairReport,
+): void {
+  target.candidateMessages += source.candidateMessages;
+  target.mergedExecutions += source.mergedExecutions;
+  target.synthesizedExecutions += source.synthesizedExecutions;
+  target.extractedAssets += source.extractedAssets;
+  target.deletedMessages += source.deletedMessages;
+  target.deletedDuplicateEvents += source.deletedDuplicateEvents;
+  target.deletedOrphanAssets += source.deletedOrphanAssets;
+}
 
 function q(schema: string, table: string): string {
   return `${quoteEventIdentifier(schema)}.${quoteEventIdentifier(table)}`;
@@ -223,9 +263,18 @@ export async function migrateContentV2Schema(
   const schema = validateEventSchemaName(schemaName);
   const mode = options.mode ?? "dry-run";
   const batchSize = options.batchSize ?? 100;
+  const semanticBatchSize = options.semanticBatchSize ?? 250;
   const uploadConcurrency = options.uploadConcurrency ?? 8;
   if (!Number.isSafeInteger(batchSize) || batchSize <= 0 || batchSize > 1_000) {
     throw new TypeError("content-v2 batchSize must be between 1 and 1000.");
+  }
+  if (
+    !Number.isSafeInteger(semanticBatchSize) || semanticBatchSize <= 0 ||
+    semanticBatchSize > 1_000
+  ) {
+    throw new TypeError(
+      "content-v2 semanticBatchSize must be between 1 and 1000.",
+    );
   }
   if (
     !Number.isSafeInteger(uploadConcurrency) || uploadConcurrency <= 0 ||
@@ -236,39 +285,32 @@ export async function migrateContentV2Schema(
     );
   }
   const counts = await dryRunCounts(session, schema);
+  await options.onProgress?.({
+    schema,
+    mode,
+    stage: "planning",
+    processed: 0,
+    total: counts.messages,
+  });
   if (mode === "dry-run") {
-    const marker = Symbol("content-v2-dry-run");
-    type DryRunRollback = Error & {
-      marker: symbol;
-      semantic: ToolMessageRepairReport;
-      databaseAssets: number;
-    };
-    try {
-      await session.transaction(async (transaction) => {
-        const semantic = await repairLegacyToolMessages(transaction, schema);
-        const simulated = await dryRunCounts(transaction, schema);
-        const rollback = new Error(
-          "Rollback successful content-v2 dry-run simulation.",
-        ) as DryRunRollback;
-        rollback.marker = marker;
-        rollback.semantic = semantic;
-        rollback.databaseAssets = simulated.assets;
-        throw rollback;
-      });
-    } catch (error) {
-      const rollback = error as Partial<DryRunRollback>;
-      if (rollback.marker !== marker || !rollback.semantic) throw error;
-      return Object.freeze({
-        schema,
-        mode,
-        ...rollback.semantic,
-        databaseAssets: rollback.databaseAssets ?? counts.assets,
-        uploadedObjects: 0,
-        bytesMoved: 0,
-        failures: Object.freeze([]),
-      });
-    }
-    throw new Error("content-v2 dry-run did not roll back as expected.");
+    const planned = await planLegacyToolMessageRepair(session, schema);
+    const result = Object.freeze({
+      schema,
+      mode,
+      ...planned.report,
+      databaseAssets: counts.assets + planned.databaseAssetDelta,
+      uploadedObjects: 0,
+      bytesMoved: 0,
+      failures: Object.freeze([]),
+    });
+    await options.onProgress?.({
+      schema,
+      mode,
+      stage: "complete",
+      processed: planned.report.candidateMessages,
+      total: planned.report.candidateMessages,
+    });
+    return result;
   }
   const storage = createAssetStorageRuntime(options.assets);
   const objectWriter = storage.writer;
@@ -277,9 +319,30 @@ export async function migrateContentV2Schema(
       `Schema '${schema}' apply mode requires an object body store.`,
     );
   }
-  const semantic = await session.transaction((transaction) =>
-    repairLegacyToolMessages(transaction, schema)
+  // Refuse ambiguous history before committing any resumable batch.
+  const preflight = await planLegacyToolMessageRepair(session, schema);
+  const semantic = emptySemanticReport();
+  while (semantic.candidateMessages < preflight.report.candidateMessages) {
+    const batch = await session.transaction((transaction) =>
+      repairLegacyToolMessages(transaction, schema, {
+        batchSize: semanticBatchSize,
+        finalize: false,
+      })
+    );
+    if (batch.candidateMessages === 0) break;
+    addSemanticReport(semantic, batch);
+    await options.onProgress?.({
+      schema,
+      mode,
+      stage: "semantic",
+      processed: semantic.candidateMessages,
+      total: preflight.report.candidateMessages,
+    });
+  }
+  const finalized = await session.transaction((transaction) =>
+    finalizeLegacyToolMessageRepair(transaction, schema)
   );
+  addSemanticReport(semantic, finalized);
   const postRepairCounts = await dryRunCounts(session, schema);
   /*
    * Semantic repair commits before relocation so each copied body remains
@@ -440,8 +503,16 @@ export async function migrateContentV2Schema(
     const last: AssetRow = page.rows.at(-1)!;
     cursorCreatedAt = last.cursor_created_at;
     cursorId = last.id;
+    await options.onProgress?.({
+      schema,
+      mode,
+      stage: "assets",
+      processed: uploadedObjects + failures.length,
+      total: postRepairCounts.assets,
+      bytesMoved,
+    });
   }
-  return Object.freeze({
+  const result = Object.freeze({
     schema,
     mode,
     ...semantic,
@@ -450,6 +521,15 @@ export async function migrateContentV2Schema(
     bytesMoved,
     failures: Object.freeze(failures),
   });
+  await options.onProgress?.({
+    schema,
+    mode,
+    stage: "complete",
+    processed: uploadedObjects + failures.length,
+    total: postRepairCounts.assets,
+    bytesMoved,
+  });
+  return result;
 }
 
 export async function discoverContentV2Schemas(

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.60.6 — 2026-08-15
+
+### Changed
+
+- Content-v2 dry-run is now a read-only bulk planner with a bounded number of
+  SQL round trips instead of applying every repair inside a rollback-only
+  transaction.
+- Apply preflights ambiguous history before writes, commits semantic repair in
+  resumable bounded batches, and exposes semantic, asset, and byte progress.
+
+### Fixed
+
+- Large content-v2 dry-runs no longer generate production-sized writes, WAL,
+  MVCC churn, or multi-hour open transactions merely to calculate a report.
+
 ## 0.60.5 — 2026-08-14
 
 ### Fixed

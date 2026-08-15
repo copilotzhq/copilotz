@@ -12,6 +12,12 @@ import {
 const reports = await migrateContentV2Schemas(session, {
   mode: "dry-run", // change to "apply" after inspecting the report
   schemas: ["tenant_copilotz_com"],
+  semanticBatchSize: 250,
+  batchSize: 250,
+  uploadConcurrency: 16,
+  onProgress(progress) {
+    console.log(progress);
+  },
   assets: {
     storage: {
       type: "s3",
@@ -36,11 +42,18 @@ synthesized with a deterministic migration ID. Ambiguous matches abort the
 schema transaction. Repaired messages and their duplicate migrated events are
 removed; ordinary human and agent messages are unchanged.
 
-Dry-run executes this semantic phase inside a transaction that is deliberately
-rolled back, so merged/synthesized execution and extracted/deleted asset counts
-reflect the actual repair rather than a shallow row count. Existing canonical
-tool output and projected-output JSON are inspected too, even when no duplicate
-legacy message remains.
+Dry-run is a read-only bulk planner. It preloads matching executions,
+participants, asset references, and ownership counts in bounded SQL queries,
+then simulates the exact semantic repair without issuing writes or opening a
+rollback-only transaction. Existing canonical tool output and projected-output
+JSON are inspected too, even when no duplicate legacy message remains.
+
+Apply runs the same planner first, so ambiguous history is rejected before any
+mutation commits. It then repairs legacy messages in resumable transactions of
+`semanticBatchSize` records. Asset relocation remains independently resumable
+and uses `batchSize` plus `uploadConcurrency` for bounded memory and object-store
+parallelism. `onProgress` reports planning, semantic, asset, and completion
+stages without coupling the migration to a logger.
 
 The object phase uploads and verifies one deterministic immutable key before it
 conditionally changes the graph location and deletes the database body. A crash

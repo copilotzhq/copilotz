@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.60.14 — 2026-08-15
+
+- Release completed S3-compatible PUT response streams immediately, avoid
+  copying upload buffers, and isolate decoded bodies in short-lived page frames,
+  keeping long-running object relocation memory-bounded.
+
 ## 0.60.13 — 2026-08-15
 
 - Amortize concurrent content-v2 repair commits with bounded, partition-safe

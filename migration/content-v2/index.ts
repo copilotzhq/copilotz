@@ -6,6 +6,7 @@ import {
 } from "../../runtime/content/index.ts";
 import type {
   AssetBodyHead,
+  AssetBodyStore,
   AssetOrigin,
   AssetStorageOptions,
 } from "../../runtime/content/index.ts";
@@ -342,6 +343,158 @@ async function mapBounded<T, R>(
   return Object.freeze(results);
 }
 
+type AssetRelocationFailure = Readonly<{ id: string; message: string }>;
+
+type AssetRelocationPageResult = Readonly<{
+  uploadedObjects: number;
+  bytesMoved: number;
+  failures: readonly AssetRelocationFailure[];
+}>;
+
+/**
+ * Keeps every decoded body, upload request, and row snapshot inside one
+ * short-lived async frame. Large migrations can therefore release a complete
+ * page before fetching the next one instead of retaining loop-frame transport
+ * state until the whole schema settles.
+ */
+async function relocateAssetPage(
+  session: SqlSession,
+  schema: string,
+  rows: readonly AssetRow[],
+  objectWriter: AssetBodyStore,
+  prefix: string,
+  uploadConcurrency: number,
+): Promise<AssetRelocationPageResult> {
+  const origins = await inferOrigins(session, schema, rows);
+  type Uploaded = Readonly<{
+    row: AssetRow;
+    origin: AssetOrigin;
+    head: AssetBodyHead;
+    key: string;
+  }>;
+  type UploadResult =
+    | Readonly<{ status: "uploaded"; value: Uploaded }>
+    | Readonly<{
+      status: "failed";
+      id: string;
+      message: string;
+      conflict: boolean;
+    }>;
+  const results = await mapBounded(
+    rows,
+    uploadConcurrency,
+    async (row): Promise<UploadResult> => {
+      try {
+        const data = record(row.data);
+        const mediaType = String(data.mediaType ?? "");
+        const digest = String(data.digest ?? "") as `sha256:${string}`;
+        const byteLength = Number(data.byteLength);
+        const bytes = databaseBytes(row);
+        if (
+          !mediaType || !digest.startsWith("sha256:") ||
+          bytes.byteLength !== byteLength ||
+          await digestContent(bytes) !== digest
+        ) {
+          throw new Error("database asset integrity verification failed");
+        }
+        const origin = origins.get(row.id);
+        if (!origin) throw new Error("asset origin inference failed");
+        const key = assetBodyKey({
+          prefix,
+          databaseSchema: schema,
+          namespace: row.namespace,
+          assetId: row.id,
+          origin,
+        });
+        const head = await objectWriter.put({
+          key,
+          bytes,
+          mediaType,
+          digest,
+          ifAbsent: true,
+        });
+        return {
+          status: "uploaded",
+          value: { row, origin, head, key },
+        };
+      } catch (error) {
+        return {
+          status: "failed",
+          id: row.id,
+          message: error instanceof Error ? error.message : String(error),
+          conflict: (error as { code?: string }).code === "asset_conflict",
+        };
+      }
+    },
+  );
+  const conflict = results.find((result) =>
+    result.status === "failed" && result.conflict
+  );
+  if (conflict?.status === "failed") {
+    throw new Error(
+      `Asset '${conflict.id}' conflicts with its existing object: ${conflict.message}`,
+    );
+  }
+  const failures = results.flatMap((result) =>
+    result.status === "failed"
+      ? [{ id: result.id, message: result.message }]
+      : []
+  );
+  const uploaded = results.flatMap((result) =>
+    result.status === "uploaded" ? [result.value] : []
+  );
+  if (uploaded.length === 0) {
+    return Object.freeze({ uploadedObjects: 0, bytesMoved: 0, failures });
+  }
+  const moved = uploaded.map(({ row, origin, head, key }) => ({
+    id: row.id,
+    namespace: row.namespace,
+    digest: String(record(row.data).digest),
+    location: {
+      kind: "object",
+      backendId: objectWriter.backendId,
+      key,
+      ...(head.etag ? { etag: head.etag } : {}),
+    },
+    origin,
+  }));
+  const changed = await session.transaction((transaction) =>
+    transaction.query<{ id: string }>(
+      `WITH moved AS (
+         SELECT * FROM jsonb_to_recordset($1::jsonb) AS item(
+           id text,
+           namespace text,
+           digest text,
+           location jsonb,
+           origin jsonb
+         )
+       )
+       UPDATE ${q(schema, "nodes")} asset
+       SET data = (asset.data - 'body') || jsonb_build_object(
+         'location', moved.location,
+         'origin', moved.origin
+       ), updated_at = NOW()
+       FROM moved
+       WHERE asset.namespace = moved.namespace AND asset.id = moved.id
+         AND asset.type = 'asset'
+         AND asset.data ->> 'state' = 'ready'
+         AND asset.data -> 'location' ->> 'kind' = 'database'
+         AND asset.data ->> 'digest' = moved.digest
+       RETURNING asset.id`,
+      [JSON.stringify(moved)],
+    )
+  );
+  const changedIds = new Set(changed.rows.map((row) => row.id));
+  let uploadedObjects = 0;
+  let bytesMoved = 0;
+  for (const item of uploaded) {
+    if (!changedIds.has(item.row.id)) continue;
+    uploadedObjects++;
+    bytesMoved += Number(record(item.row.data).byteLength);
+  }
+  return Object.freeze({ uploadedObjects, bytesMoved, failures });
+}
+
 async function dryRunCounts(session: SqlExecutor, schema: string) {
   const messages = await session.query<{ count: string | number }>(
     `SELECT COUNT(*) AS count FROM ${q(schema, "nodes")}
@@ -561,130 +714,17 @@ export async function migrateContentV2Schema(
       [cursorCreatedAt, cursorId, batchSize],
     );
     if (page.rows.length === 0) break;
-    const origins = await inferOrigins(session, schema, page.rows);
-    type Uploaded = Readonly<{
-      row: AssetRow;
-      origin: AssetOrigin;
-      head: AssetBodyHead;
-      key: string;
-    }>;
-    type UploadResult =
-      | Readonly<{ status: "uploaded"; value: Uploaded }>
-      | Readonly<{
-        status: "failed";
-        id: string;
-        message: string;
-        conflict: boolean;
-      }>;
-    const results = await mapBounded(
+    const relocated = await relocateAssetPage(
+      session,
+      schema,
       page.rows,
+      objectWriter,
+      storage.prefix,
       uploadConcurrency,
-      async (row): Promise<UploadResult> => {
-        try {
-          const data = record(row.data);
-          const mediaType = String(data.mediaType ?? "");
-          const digest = String(data.digest ?? "") as `sha256:${string}`;
-          const byteLength = Number(data.byteLength);
-          const bytes = databaseBytes(row);
-          if (
-            !mediaType || !digest.startsWith("sha256:") ||
-            bytes.byteLength !== byteLength ||
-            await digestContent(bytes) !== digest
-          ) {
-            throw new Error("database asset integrity verification failed");
-          }
-          const origin = origins.get(row.id);
-          if (!origin) throw new Error("asset origin inference failed");
-          const key = assetBodyKey({
-            prefix: storage.prefix,
-            databaseSchema: schema,
-            namespace: row.namespace,
-            assetId: row.id,
-            origin,
-          });
-          const head = await objectWriter.put({
-            key,
-            bytes,
-            mediaType,
-            digest,
-            ifAbsent: true,
-          });
-          return {
-            status: "uploaded",
-            value: { row, origin, head, key },
-          };
-        } catch (error) {
-          return {
-            status: "failed",
-            id: row.id,
-            message: error instanceof Error ? error.message : String(error),
-            conflict: (error as { code?: string }).code === "asset_conflict",
-          };
-        }
-      },
     );
-    const conflict = results.find((result) =>
-      result.status === "failed" && result.conflict
-    );
-    if (conflict?.status === "failed") {
-      throw new Error(
-        `Asset '${conflict.id}' conflicts with its existing object: ${conflict.message}`,
-      );
-    }
-    for (const result of results) {
-      if (result.status === "failed") {
-        failures.push({ id: result.id, message: result.message });
-      }
-    }
-    const uploaded = results.flatMap((result) =>
-      result.status === "uploaded" ? [result.value] : []
-    );
-    if (uploaded.length > 0) {
-      const moved = uploaded.map(({ row, origin, head, key }) => ({
-        id: row.id,
-        namespace: row.namespace,
-        digest: String(record(row.data).digest),
-        location: {
-          kind: "object",
-          backendId: objectWriter.backendId,
-          key,
-          ...(head.etag ? { etag: head.etag } : {}),
-        },
-        origin,
-      }));
-      const changed = await session.transaction((transaction) =>
-        transaction.query<{ id: string }>(
-          `WITH moved AS (
-             SELECT * FROM jsonb_to_recordset($1::jsonb) AS item(
-               id text,
-               namespace text,
-               digest text,
-               location jsonb,
-               origin jsonb
-             )
-           )
-           UPDATE ${q(schema, "nodes")} asset
-           SET data = (asset.data - 'body') || jsonb_build_object(
-             'location', moved.location,
-             'origin', moved.origin
-           ), updated_at = NOW()
-           FROM moved
-           WHERE asset.namespace = moved.namespace AND asset.id = moved.id
-             AND asset.type = 'asset'
-             AND asset.data ->> 'state' = 'ready'
-             AND asset.data -> 'location' ->> 'kind' = 'database'
-             AND asset.data ->> 'digest' = moved.digest
-           RETURNING asset.id`,
-          [JSON.stringify(moved)],
-        )
-      );
-      const changedIds = new Set(changed.rows.map((row) => row.id));
-      for (const item of uploaded) {
-        if (!changedIds.has(item.row.id)) continue;
-        uploadedObjects++;
-        bytesMoved += Number(record(item.row.data).byteLength);
-      }
-    }
+    uploadedObjects += relocated.uploadedObjects;
+    bytesMoved += relocated.bytesMoved;
+    failures.push(...relocated.failures);
     const last: AssetRow = page.rows.at(-1)!;
     cursorCreatedAt = last.cursor_created_at;
     cursorId = last.id;

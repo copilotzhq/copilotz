@@ -48,6 +48,14 @@ function assertStored(input: PutAssetBodyInput, head: AssetBodyHead): void {
   }
 }
 
+function requestPayload(
+  bytes: Uint8Array<ArrayBufferLike>,
+): Uint8Array<ArrayBuffer> {
+  return bytes.buffer instanceof ArrayBuffer
+    ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    : new Uint8Array(bytes);
+}
+
 /** Creates the default S3-compatible store, including GCS XML/HMAC usage. */
 export function createS3AssetBodyStore(
   config: S3AssetStorageConfig,
@@ -131,7 +139,7 @@ export function createS3AssetBodyStore(
           objectName: input.key,
           bucketName: bucket,
           statusCode: 200,
-          payload: new Uint8Array(input.bytes),
+          payload: requestPayload(input.bytes),
           headers: new Headers({
             "content-type": input.mediaType,
             "content-length": String(input.bytes.byteLength),
@@ -151,10 +159,18 @@ export function createS3AssetBodyStore(
         }
         throw error;
       }
-      if (!response.ok) {
+      const responseStatus = response.status;
+      const responseOk = response.ok;
+      // GCS and S3 may return a response stream even for a zero-length PUT
+      // result. The body is not part of the body-store contract, so drain it
+      // immediately; retaining thousands of unread streams keeps transport
+      // buffers and connections alive during large migrations. Draining also
+      // lets the HTTP client reuse the connection.
+      if (!response.bodyUsed) await response.arrayBuffer();
+      if (!responseOk) {
         throw createContentError(
           "asset_storage_unavailable",
-          `Object upload failed with status ${response.status}.`,
+          `Object upload failed with status ${responseStatus}.`,
         );
       }
       const stored = await head(input.key);

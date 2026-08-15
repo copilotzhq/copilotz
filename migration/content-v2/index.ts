@@ -427,8 +427,7 @@ async function relocateAssetPage(
       : bodyBatchMaxBytes;
     if (
       slice.length > 0 &&
-      (slice.length >= uploadConcurrency ||
-        sliceBytes + byteLength > bodyBatchMaxBytes)
+      sliceBytes + byteLength > bodyBatchMaxBytes
     ) {
       slices.push(slice);
       slice = [];
@@ -441,9 +440,9 @@ async function relocateAssetPage(
 
   const results: UploadResult[] = [];
   for (const slice of slices) {
-    // Fetch exactly one upload-sized slice per round trip. This keeps the
-    // worst-case resident body set bounded by upload concurrency while
-    // avoiding one SQL query for every small asset.
+    // Fetch exactly one byte-bounded slice per round trip. The slice can feed
+    // multiple continuous uploader waves without a straggler barrier while
+    // keeping the worst-case resident body set inside bodyBatchMaxBytes.
     const bodies = await session.query<AssetBodyRow>(
       `WITH requested AS (
          SELECT * FROM UNNEST($1::text[], $2::text[])

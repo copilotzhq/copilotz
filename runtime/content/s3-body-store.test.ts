@@ -20,6 +20,7 @@ Deno.test("S3 asset body store conditionally writes, verifies, streams, lists, a
   const objects = new Map<string, StoredObject>();
   let headRequests = 0;
   let putRequests = 0;
+  const putPayloadDigests: string[] = [];
   const server = Deno.serve(
     { hostname: "127.0.0.1", port: 0 },
     async (request) => {
@@ -62,18 +63,28 @@ Deno.test("S3 asset body store conditionally writes, verifies, streams, lists, a
       }
       if (request.method === "PUT") {
         putRequests++;
+        putPayloadDigests.push(
+          request.headers.get("x-amz-content-sha256") ?? "",
+        );
         if (existing && request.headers.get("if-none-match") === "*") {
           return new Response(null, { status: 412 });
         }
         const bytes = new Uint8Array(await request.arrayBuffer());
-        objects.set(path, {
+        const stored = {
           bytes,
           mediaType: request.headers.get("content-type") ??
             "application/octet-stream",
           digest: `sha256:${request.headers.get("x-amz-meta-copilotz-sha256")}`,
           modified: new Date().toUTCString(),
+        };
+        objects.set(path, stored);
+        return new Response(null, {
+          status: 200,
+          headers: {
+            etag: '"etag"',
+            "last-modified": stored.modified,
+          },
         });
-        return new Response(null, { status: 200 });
       }
       if (request.method === "GET") {
         return existing
@@ -118,12 +129,16 @@ Deno.test("S3 asset body store conditionally writes, verifies, streams, lists, a
     assertEquals(first.byteLength, bytes.byteLength);
     assertEquals({ putRequests, headRequests }, {
       putRequests: 1,
-      headRequests: 1,
+      headRequests: 0,
     });
+    assertEquals(
+      putPayloadDigests[0],
+      input.digest.slice("sha256:".length),
+    );
     assertEquals(await store.put(input), first);
     assertEquals({ putRequests, headRequests }, {
       putRequests: 2,
-      headRequests: 2,
+      headRequests: 1,
     });
     assertEquals(await store.read(input.key), bytes);
     assertEquals(

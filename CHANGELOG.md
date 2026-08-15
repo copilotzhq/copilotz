@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.60.18 — 2026-08-15
+
+- Treat the successful signed conditional PUT as the canonical acknowledgement
+  for new immutable objects, removing the redundant post-upload HEAD while
+  retaining HEAD-based verification for resumable conflicts.
+- Feed each byte-bounded body slice continuously through the upload pool instead
+  of imposing upload-count synchronization barriers.
+
 ## 0.60.17 — 2026-08-15
 
 - Permit up to 128 concurrent object writes for high-latency small-asset

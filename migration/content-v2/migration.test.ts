@@ -177,7 +177,7 @@ Deno.test("content-v2 repairs tool messages, extracts data URLs, relocates bodie
   }
 });
 
-Deno.test("content-v2 bounds asset batches by upload count and body bytes", async () => {
+Deno.test("content-v2 bounds asset batches by body bytes and upload concurrency", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   try {

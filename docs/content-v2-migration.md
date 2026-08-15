@@ -77,20 +77,20 @@ is `"blocking"`, which also works with PGlite. In concurrent mode,
 cadence. Asset relocation remains independently resumable and uses `batchSize`
 for metadata-only keyset pages. It creates a migration-scoped partial index for
 remaining database assets, then fetches only one upload-sized body slice at a
-time. Resident body memory is therefore bounded by `uploadConcurrency`, not by
-page size. Each upload-sized body slice is fetched in one SQL query, so
-small-asset migrations do not pay one database round trip per object.
-`bodyBatchMaxBytes` bounds each slice by total unencoded body bytes even when
-`uploadConcurrency` is raised for small-object latency. The index is removed
-after success and retained after interruption for reuse. `uploadConcurrency`
-controls object-store parallelism independently. `onProgress` reports planning,
-semantic, asset, and completion stages without coupling the migration to a
-logger.
+time. Resident body memory is therefore bounded by `bodyBatchMaxBytes`, not by
+page size. Each byte-bounded body slice is fetched in one SQL query, so
+small-asset migrations do not pay one database round trip per object and one
+slice can continuously feed multiple uploader waves without a synchronization
+barrier. The index is removed after success and retained after interruption for
+reuse. `uploadConcurrency` controls object-store parallelism independently.
+`onProgress` reports planning, semantic, asset, and completion stages without
+coupling the migration to a logger.
 
 S3-compatible writes use the conditional PUT itself as the existence probe and
-verify the stored metadata with HEAD after success. Existing/racing keys are
-read and checksum-verified before reuse. This keeps immutable idempotency while
-removing one network request from every newly uploaded object.
+use the successful signed request as the acknowledgement for a new immutable
+body. Existing or racing keys still take the HEAD path and are checksum-verified
+before reuse. This keeps immutable idempotency while avoiding a redundant
+post-success metadata request for every newly uploaded object.
 
 The object phase uploads and verifies one deterministic immutable key before it
 conditionally changes the graph location and deletes the database body. A crash

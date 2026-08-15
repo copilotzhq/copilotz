@@ -60,12 +60,13 @@ reasoning, tool calls, and restricted traces. Owner links are synchronized when
 mutable workflow projections replace content, and promoting a tool output or LLM
 answer into a public message reuses its immutable body.
 
-S3-compatible writes use deterministic provenance paths, conditional creation,
-and post-write metadata verification. Persisted locations dispatch mixed reads
-during migration. Generic tool-result extraction removes nested encoded bodies
-before live output, persistence, and model reuse. The isolated content-v2
-migration repairs tool-authored legacy messages and performs resumable
-database-to-object relocation.
+S3-compatible writes use deterministic provenance paths and signed conditional
+creation. A successful immutable PUT acknowledges the sent payload and metadata;
+existing or racing keys are verified with HEAD before reuse. Persisted locations
+dispatch mixed reads during migration. Generic tool-result extraction removes
+nested encoded bodies before live output, persistence, and model reuse. The
+isolated content-v2 migration repairs tool-authored legacy messages and performs
+resumable database-to-object relocation.
 
 ## Goals
 

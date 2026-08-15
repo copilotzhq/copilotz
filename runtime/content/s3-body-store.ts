@@ -173,15 +173,28 @@ export function createS3AssetBodyStore(
           `Object upload failed with status ${responseStatus}.`,
         );
       }
-      const stored = await head(input.key);
-      if (!stored) {
-        throw createContentError(
-          "asset_storage_unavailable",
-          "Uploaded object is not visible after completion.",
-        );
-      }
-      assertStored(input, stored);
-      return stored;
+      /*
+       * A successful signed PUT already authenticates the complete payload
+       * hash, content length, media type, and canonical digest metadata sent
+       * above. Returning that acknowledged representation avoids a redundant
+       * HEAD round trip for every new immutable object. Conflicts still take
+       * the HEAD path in the catch block so resumability verifies the existing
+       * winner before reusing it.
+       */
+      const etagHeader = response.headers.get("etag");
+      const etag = etagHeader?.replace(/^"|"$/g, "") || undefined;
+      const lastModifiedHeader = response.headers.get("last-modified");
+      const lastModified = lastModifiedHeader
+        ? new Date(lastModifiedHeader).toISOString()
+        : undefined;
+      return Object.freeze({
+        key: input.key,
+        byteLength: input.bytes.byteLength,
+        mediaType: input.mediaType,
+        digest: input.digest,
+        ...(etag ? { etag } : {}),
+        ...(lastModified ? { lastModified } : {}),
+      });
     },
     head,
     async read(key) {

@@ -1699,11 +1699,6 @@ export async function repairLegacyToolMessages(
       "content-v2 semantic batchSize must be between 1 and 1000.",
     );
   }
-  if (options.concurrent && options.batchSize !== 1) {
-    throw new TypeError(
-      "Concurrent content-v2 repair must claim exactly one message per transaction.",
-    );
-  }
   const partition = options.partition;
   if (
     partition &&
@@ -1762,8 +1757,9 @@ export async function repairLegacyToolMessages(
     const parsed = oneToolCall(data, row.id);
     if (options.concurrent) {
       // The stable partition already keeps one logical execution identity on
-      // one worker. The lock is a defensive fence for direct callers or a
-      // concurrent migration restarted with a different worker count.
+      // one worker, including when this transaction claims a bounded batch.
+      // The lock is a defensive fence for direct callers or a concurrent
+      // migration restarted with a different worker count.
       await transaction.query(
         "SELECT pg_advisory_xact_lock(hashtextextended($1, $2))",
         [

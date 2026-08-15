@@ -18,6 +18,8 @@ function xmlEscape(value: string): string {
 
 Deno.test("S3 asset body store conditionally writes, verifies, streams, lists, and deletes", async () => {
   const objects = new Map<string, StoredObject>();
+  let headRequests = 0;
+  let putRequests = 0;
   const server = Deno.serve(
     { hostname: "127.0.0.1", port: 0 },
     async (request) => {
@@ -43,6 +45,7 @@ Deno.test("S3 asset body store conditionally writes, verifies, streams, lists, a
       }
       const existing = objects.get(path);
       if (request.method === "HEAD") {
+        headRequests++;
         if (!existing) return new Response(null, { status: 404 });
         return new Response(null, {
           headers: {
@@ -58,6 +61,7 @@ Deno.test("S3 asset body store conditionally writes, verifies, streams, lists, a
         });
       }
       if (request.method === "PUT") {
+        putRequests++;
         if (existing && request.headers.get("if-none-match") === "*") {
           return new Response(null, { status: 412 });
         }
@@ -112,7 +116,15 @@ Deno.test("S3 asset body store conditionally writes, verifies, streams, lists, a
     } as const;
     const first = await store.put(input);
     assertEquals(first.byteLength, bytes.byteLength);
+    assertEquals({ putRequests, headRequests }, {
+      putRequests: 1,
+      headRequests: 1,
+    });
     assertEquals(await store.put(input), first);
+    assertEquals({ putRequests, headRequests }, {
+      putRequests: 2,
+      headRequests: 2,
+    });
     assertEquals(await store.read(input.key), bytes);
     assertEquals(
       await new Response(await store.open(input.key)).text(),

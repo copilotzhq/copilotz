@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.60.13 — 2026-08-15
+
+- Amortize concurrent content-v2 repair commits with bounded, partition-safe
+  semantic transaction batches.
+- Use conditional S3-compatible PUT as the immutable-object existence probe,
+  removing one network round trip for every newly relocated asset while
+  retaining post-write checksum verification and idempotent conflict handling.
+
 ## 0.60.12 — 2026-08-15
 
 ### Fixed

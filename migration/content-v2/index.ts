@@ -139,6 +139,11 @@ const SEMANTIC_INDEXES: readonly SemanticIndex[] = Object.freeze([
   },
 ]);
 
+// Keep concurrent transactions large enough to amortize commit and connection
+// round trips, but bounded so a retry never rolls back an unreasonably large
+// partition. The planner page size remains independently tunable up to 1,000.
+const MAX_CONCURRENT_SEMANTIC_TRANSACTION_SIZE = 100;
+
 async function createSemanticIndexes(
   session: SqlSession,
   schema: string,
@@ -482,7 +487,10 @@ export async function migrateContentV2Schema(
       try {
         batch = await session.transaction((transaction) =>
           repairLegacyToolMessages(transaction, schema, {
-            batchSize: semanticWorkerCount <= 1 ? semanticBatchSize : 1,
+            batchSize: semanticWorkerCount <= 1 ? semanticBatchSize : Math.min(
+              semanticBatchSize,
+              MAX_CONCURRENT_SEMANTIC_TRANSACTION_SIZE,
+            ),
             finalize: false,
             concurrent: semanticWorkerCount > 1,
             ...(semanticWorkerCount <= 1 ? {} : {

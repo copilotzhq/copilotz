@@ -124,29 +124,33 @@ export function createS3AssetBodyStore(
     kind: "object",
     backendId,
     async put(input) {
-      const existing = await head(input.key);
-      if (existing) {
-        assertStored(input, existing);
-        return existing;
-      }
-      const response = await client.makeRequest({
-        method: "PUT",
-        objectName: input.key,
-        bucketName: bucket,
-        statusCode: 200,
-        payload: new Uint8Array(input.bytes),
-        headers: new Headers({
-          "content-type": input.mediaType,
-          "content-length": String(input.bytes.byteLength),
-          "if-none-match": "*",
-          "x-amz-meta-copilotz-sha256": input.digest.slice("sha256:".length),
-          "x-amz-meta-copilotz-media-type": input.mediaType,
-        }),
-      }).catch(async (error) => {
+      let response: Response;
+      try {
+        response = await client.makeRequest({
+          method: "PUT",
+          objectName: input.key,
+          bucketName: bucket,
+          statusCode: 200,
+          payload: new Uint8Array(input.bytes),
+          headers: new Headers({
+            "content-type": input.mediaType,
+            "content-length": String(input.bytes.byteLength),
+            "if-none-match": "*",
+            "x-amz-meta-copilotz-sha256": input.digest.slice("sha256:".length),
+            "x-amz-meta-copilotz-media-type": input.mediaType,
+          }),
+        });
+      } catch (error) {
+        // Conditional PUT is the existence probe. A preflight HEAD adds a full
+        // network round trip to every new immutable object; on a conflict or
+        // race, inspect the winner and preserve the same idempotency checks.
         const raced = await head(input.key);
-        if (raced) return new Response(null, { status: 200 });
+        if (raced) {
+          assertStored(input, raced);
+          return raced;
+        }
         throw error;
-      });
+      }
       if (!response.ok) {
         throw createContentError(
           "asset_storage_unavailable",

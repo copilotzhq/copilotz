@@ -846,10 +846,18 @@ Deno.test("content-v2 applies independent messages with bounded semantic concurr
 
     const memory = createMemoryAssetBodyStore({ backendId: "gcs:concurrent" });
     const progress: number[] = [];
-    const report = await migrateContentV2Schema(session, SCHEMA, {
+    let transactionCount = 0;
+    const countedSession: SqlSession = {
+      query: (sql, params) => session.query(sql, params),
+      transaction(operation) {
+        transactionCount++;
+        return session.transaction(operation);
+      },
+    };
+    const report = await migrateContentV2Schema(countedSession, SCHEMA, {
       mode: "apply",
       semanticBatchSize: 2,
-      semanticConcurrency: 12,
+      semanticConcurrency: 2,
       assets: {
         storage: {
           type: "custom",
@@ -867,6 +875,9 @@ Deno.test("content-v2 applies independent messages with bounded semantic concurr
     assertEquals(report.mergedExecutions, 8);
     assertEquals(report.failures, []);
     assertEquals(progress.at(-1), 8);
+    // Two-message claims need fewer semantic commits than the old one-message
+    // worker loop; the count also includes finalization and asset relocation.
+    assertEquals(transactionCount < 10, true);
     assertEquals(
       (await session.query(
         `SELECT id FROM ${q("nodes")} WHERE type = 'message'`,

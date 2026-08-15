@@ -1,6 +1,6 @@
 ---
 title: Copilotz v3 Events and Durable Deliveries
-description: Immutable semantic facts, sparse guaranteed-work obligations, causal settlement, and the explicit v1 database upgrade.
+description: Immutable semantic facts, sparse guaranteed-work obligations, explicit settlement scopes, and the v1 database upgrade.
 section: Internal Design
 status: implementation
 ---
@@ -33,10 +33,11 @@ deduplication, and creation time. It has no processing status or update time. A
 database trigger rejects direct event updates; retention may delete an event
 only after its durable work is safely settled.
 
-Delivery records use stable logical consumer IDs. Physical Oxian worker IDs are
-never persisted. The unique `(event_id, consumer_id)` constraint means duplicate
-consumer matching cannot multiply work. Passive observers and events with no
-actionable consumer create no delivery rows.
+Delivery records use stable logical consumer IDs and explicit settlement scope
+IDs. Physical Oxian worker IDs are never persisted. The unique
+`(event_id, consumer_id)` constraint means duplicate consumer matching cannot
+multiply work. Passive observers and events with no actionable consumer create
+no delivery rows.
 
 ## Atomic Mutation Protocol
 
@@ -50,8 +51,9 @@ existing event and deliveries without rerunning the mutation. Reusing a
 deduplication ID for different payload, routing, visibility, subject, or
 causation data fails explicitly.
 
-Consumers are resolved before this call by the plugin registry. The store
-accepts IDs, never filters, processor closures, or worker placement.
+Consumers and their `inherit` or `detached` settlement policy are resolved
+before this call by the plugin registry. The store never receives filters,
+processor closures, or worker placement.
 
 The implemented [Oxian execution seam](./oxian-execution.md) consumes these
 logical delivery rows through `copilotz.delivery.v1`. The worker claims the row
@@ -78,16 +80,18 @@ This covers a process crash after commit and before dispatch. Idempotent output
 events use semantic deduplication, so a crash after output commit but before
 source settlement cannot duplicate the output.
 
-## Causal Settlement
+## Settlement Scopes
 
-Settlement follows the transitive `causation_id` tree rooted at the accepted
-input event. It does not wait for unrelated work that happens to share a
-correlation ID. The scope reports unsettled, succeeded, cancelled, and
-dead-lettered deliveries independently. Cancellation changes only unsettled
-deliveries in that causal tree.
+The accepted input event creates the foreground settlement scope. Durable
+deliveries inherit that scope unless their processor declares
+`settlement: "detached"`, in which case the event/consumer pair receives a
+stable forked scope. Mutations produced while executing a delivery inherit its
+scope automatically.
 
-This is the persistence primitive that will back `RunHandle.done` and attachment
-send handles when the runtime is ported.
+Causation and correlation remain independent metadata. They preserve provenance
+and observability, while `settlement_scope_id` alone decides what
+`RunHandle.done`, cancellation, dead letters, and in-flight Worker output waits
+belong to.
 
 ## Retention
 
@@ -165,7 +169,8 @@ await upgradeV1Schemas(session, {
   leases, and idempotent output replay.
 - A22: priority claims, heartbeat ownership, jittered retry, attempt exhaustion,
   dead letters, manual retry/discard, cancellation, and safe compaction.
-- A23: descendant-only causal settlement and cancellation.
+- A23: explicit inherited/detached settlement, descendant propagation, and
+  scope-local cancellation.
 - A28: multi-tenant upgrade safety, domain/ID preservation, participant union,
   frame removal, positioned event translation, and rerun idempotency.
 - A47/A55: passive-delivery growth invariants and runtime-neutral factory code.

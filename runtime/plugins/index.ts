@@ -9,6 +9,7 @@ export type {
   ProcessorContext,
   ProcessorDelivery,
   ProcessorMatchEvent,
+  ProcessorSettlement,
 } from "./processor.ts";
 export { createPluginRegistry } from "./registry.ts";
 export type {

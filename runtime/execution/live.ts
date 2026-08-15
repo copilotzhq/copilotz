@@ -15,6 +15,7 @@ export type LiveDispatchMetadata = Readonly<{
   namespace: string;
   eventType: string;
   correlationId: string;
+  settlementScopeId?: string;
   dispatchAttemptId: string;
   idempotencyKey: string;
 }>;
@@ -26,6 +27,7 @@ export type LiveProcessorContextBase = Readonly<{
   processorId: string;
   dispatchAttemptId: string;
   idempotencyKey: string;
+  settlementScopeId?: string;
   createMutationIdentity(
     operationKey: string,
     metadata?: Record<string, unknown>,
@@ -36,6 +38,7 @@ export type LiveMutationIdentity = Readonly<{
   causationId?: string;
   correlationId: string;
   deduplicationId: string;
+  settlementScopeId?: string;
   metadata: Readonly<Record<string, unknown>>;
 }>;
 
@@ -54,6 +57,7 @@ export type InvokeLiveProcessorsOptions = Readonly<{
   registry: PluginRegistry;
   event: CopilotzEvent;
   signal: AbortSignal;
+  settlementScopeId?: string;
   createContext?: LiveProcessorContextFactory;
   createDispatchAttemptId?: () => string;
 }>;
@@ -70,6 +74,7 @@ export type LiveEventDispatcher = Readonly<{
   dispatch(
     event: CopilotzEvent,
     databaseSchema?: string,
+    settlementScopeId?: string,
   ): Promise<LiveEventDispatchHandle>;
 }>;
 
@@ -120,6 +125,10 @@ function parseMetadata(
       value.correlationId,
       "Live correlation ID",
     ),
+    ...(typeof value.settlementScopeId === "string" &&
+        value.settlementScopeId.trim()
+      ? { settlementScopeId: value.settlementScopeId.trim() }
+      : {}),
     dispatchAttemptId: requiredText(
       value.dispatchAttemptId,
       "Live dispatch attempt ID",
@@ -215,6 +224,7 @@ function mutationIdentity(
   event: CopilotzEvent,
   processorId: string,
   dispatchAttemptId: string,
+  settlementScopeId?: string,
 ): LiveProcessorContextBase["createMutationIdentity"] {
   return (operationKey, metadata = {}) => {
     const key = requiredText(operationKey, "Live mutation operation key");
@@ -223,6 +233,7 @@ function mutationIdentity(
       ...(causationId ? { causationId } : {}),
       correlationId: event.correlationId,
       deduplicationId: `live:${dispatchAttemptId}:${processorId}:${key}`,
+      ...(settlementScopeId ? { settlementScopeId } : {}),
       metadata: Object.freeze({
         ...structuredClone(metadata),
         ...(causationId ? { sourceEventId: causationId } : {}),
@@ -251,10 +262,14 @@ async function invokeOne(
     processorId,
     dispatchAttemptId,
     idempotencyKey: `live:${dispatchAttemptId}:${processorId}`,
+    ...(options.settlementScopeId
+      ? { settlementScopeId: options.settlementScopeId }
+      : {}),
     createMutationIdentity: mutationIdentity(
       options.event,
       processorId,
       dispatchAttemptId,
+      options.settlementScopeId,
     ),
   });
   const extension = await options.createContext?.(base);
@@ -307,6 +322,7 @@ export function createLiveProcessorWorkload(
         event,
         signal,
         createContext: options.createContext,
+        settlementScopeId: metadata.settlementScopeId,
       },
       metadata.processorId,
       metadata.dispatchAttemptId,
@@ -339,7 +355,7 @@ export function createLiveEventDispatcher(
 
   return Object.freeze({
     workload,
-    async dispatch(event, databaseSchemaInput) {
+    async dispatch(event, databaseSchemaInput, settlementScopeId) {
       const databaseSchema = requiredText(
         databaseSchemaInput ?? defaultDatabaseSchema,
         "Live database schema",
@@ -363,6 +379,7 @@ export function createLiveEventDispatcher(
             namespace: event.namespace,
             eventType: event.type,
             correlationId: event.correlationId,
+            ...(settlementScopeId ? { settlementScopeId } : {}),
             dispatchAttemptId,
             idempotencyKey: `live:${dispatchAttemptId}:${processor.id}`,
           });

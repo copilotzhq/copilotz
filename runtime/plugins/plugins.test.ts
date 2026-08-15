@@ -235,6 +235,7 @@ Deno.test("processor stable IDs override while different IDs remain independent"
     id: "audit.observe",
     on: ["message.created"],
     delivery: "durable",
+    settlement: "detached",
     filter: (event) => event.namespace === "tenant-a",
     handle: () => {
       calls.push("independent");
@@ -253,9 +254,9 @@ Deno.test("processor stable IDs override while different IDs remain independent"
   } as const;
 
   assertEquals(registry.matchDurable(draft), [replacement, independent]);
-  assertEquals(registry.durableConsumerIds(draft), [
-    "processor:memory.observe",
-    "processor:audit.observe",
+  assertEquals(registry.durableConsumers(draft), [
+    { consumerId: "processor:memory.observe", settlement: "inherit" },
+    { consumerId: "processor:audit.observe", settlement: "detached" },
   ]);
   assertEquals(
     registry.processorForConsumer("processor:memory.observe"),
@@ -291,7 +292,7 @@ Deno.test("durable matching rejects asynchronous filters before commit", async (
   });
   assertThrows(
     () =>
-      registry.durableConsumerIds({
+      registry.durableConsumers({
         type: "control.created",
         namespace: "tenant-a",
         payload: {},
@@ -302,6 +303,18 @@ Deno.test("durable matching rejects asynchronous filters before commit", async (
 });
 
 Deno.test("live subscriptions receive ephemeral events without durable matching", async () => {
+  assertThrows(
+    () =>
+      defineProcessor({
+        id: "invalid.detached-live",
+        on: ["audio.delta"],
+        delivery: "live",
+        settlement: "detached",
+        handle: () => undefined,
+      }),
+    TypeError,
+    "cannot use detached durable settlement",
+  );
   const live = defineProcessor({
     id: "captions.live",
     on: ["audio.delta"],

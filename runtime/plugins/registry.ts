@@ -1,4 +1,8 @@
-import type { CopilotzEvent, DurableEventDraft } from "../events/types.ts";
+import type {
+  CopilotzEvent,
+  DurableConsumerObligation,
+  DurableEventDraft,
+} from "../events/types.ts";
 import {
   isProcessor,
   type Processor,
@@ -39,7 +43,9 @@ export type PluginRegistry = Readonly<{
     id: string,
   ): PluginResourceOrigin | undefined;
   matchDurable(draft: DurableEventDraft): readonly Processor[];
-  durableConsumerIds(draft: DurableEventDraft): readonly string[];
+  durableConsumers(
+    draft: DurableEventDraft,
+  ): readonly DurableConsumerObligation[];
   matchLive(event: CopilotzEvent): readonly Processor[];
   processorForConsumer(consumerId: string): Processor | undefined;
 }>;
@@ -240,11 +246,16 @@ export async function createPluginRegistry(
       ),
     );
 
-  const durableConsumerIds = (
+  const durableConsumers = (
     draft: DurableEventDraft,
-  ): readonly string[] =>
+  ): readonly DurableConsumerObligation[] =>
     Object.freeze(
-      matchDurable(draft).map((processor) => processorConsumerId(processor.id)),
+      matchDurable(draft).map((processor) =>
+        Object.freeze({
+          consumerId: processorConsumerId(processor.id),
+          settlement: processor.settlement ?? "inherit",
+        })
+      ),
     );
 
   const matchLive = (event: CopilotzEvent): readonly Processor[] =>
@@ -271,7 +282,7 @@ export async function createPluginRegistry(
       return maps.get(type)!.get(id)?.origin;
     },
     matchDurable,
-    durableConsumerIds,
+    durableConsumers,
     matchLive,
     processorForConsumer(consumerId) {
       const id = processorIdFromConsumer(consumerId);

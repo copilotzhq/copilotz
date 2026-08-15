@@ -97,6 +97,7 @@ export async function createCopilotzApplication(
       session: persistence.session,
       registry,
       defaultDatabaseSchema: databaseSchema,
+      assets: options.assets,
     });
   } catch (error) {
     await persistence.close("copilotz_application_initialization_failed").catch(

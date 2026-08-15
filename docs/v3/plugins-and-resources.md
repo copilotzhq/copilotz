@@ -77,8 +77,12 @@ phase, claim, swallowing behavior, or produced-event side channel.
   transaction as the semantic event. Their filters must return synchronously so
   matching can finish before commit. Dynamic or asynchronous checks belong in
   `handle`.
+- Durable subscriptions use `settlement: "inherit"` by default. A subscription
+  may declare `settlement: "detached"` to fork durable background work from the
+  caller's completion scope while retaining causation, retries, recovery, and
+  automatic scope inheritance for its descendants.
 - `live` subscriptions observe ephemeral events such as stream frames. They do
-  not create delivery rows.
+  not create delivery rows and cannot declare detached durable settlement.
 - Logical durable consumer IDs are derived from processor IDs, never from an
   Oxian worker identity.
 

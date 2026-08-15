@@ -9,6 +9,7 @@ import type { SqlExecutor, SqlSession } from "./session.ts";
 import type {
   DeliveryScopeSettlement,
   DeliveryStatus,
+  DurableConsumerObligation,
   DurableEvent,
   DurableEventDraft,
   EventDelivery,
@@ -41,6 +42,7 @@ type DeliveryRow = Record<string, unknown> & {
   id: string;
   event_id: string;
   consumer_id: string;
+  settlement_scope_id: string;
   status: DeliveryStatus;
   attempts: number;
   max_attempts: number;
@@ -74,7 +76,7 @@ export type EventMutationContext = {
 
 export type CommitEventMutationOptions<T> = {
   draft: DurableEventDraft;
-  consumerIds: readonly string[];
+  consumers: readonly DurableConsumerObligation[];
   priority?: number;
   maxAttempts?: number;
   mutate(context: EventMutationContext): Promise<T>;
@@ -88,6 +90,7 @@ export type CommitEventMutationResult<T> = Readonly<{
   value: T | undefined;
   event: DurableEvent;
   deliveries: readonly EventDelivery[];
+  settlementScopeId: string;
   deduplicated: boolean;
 }>;
 
@@ -166,11 +169,11 @@ export type EventStore = {
   nextRecoveryDelayMs(): Promise<number | null>;
   scopeSettlement(
     namespace: string,
-    rootEventId: string,
+    settlementScopeId: string,
   ): Promise<DeliveryScopeSettlement>;
   cancelScope(
     namespace: string,
-    rootEventId: string,
+    settlementScopeId: string,
     reason?: string,
   ): Promise<number>;
   retryDeadLetter(id: string): Promise<boolean>;
@@ -291,6 +294,7 @@ function mapDelivery(row: DeliveryRow, databaseSchema: string): EventDelivery {
     id: String(row.id),
     eventId: String(row.event_id),
     consumerId: String(row.consumer_id),
+    settlementScopeId: String(row.settlement_scope_id),
     status: row.status,
     attempts: Number(row.attempts),
     maxAttempts: Number(row.max_attempts),
@@ -383,7 +387,7 @@ function assertDuplicateMatches(
   }
 }
 
-function uniqueConsumers(values: readonly string[]): string[] {
+function uniqueConsumerIds(values: readonly string[]): string[] {
   const consumers = new Set<string>();
   for (const value of values) {
     const consumer = value.trim();
@@ -396,6 +400,42 @@ function uniqueConsumers(values: readonly string[]): string[] {
     consumers.add(consumer);
   }
   return [...consumers];
+}
+
+function uniqueConsumers(
+  values: readonly DurableConsumerObligation[],
+): DurableConsumerObligation[] {
+  const consumers = new Map<string, DurableConsumerObligation>();
+  for (const value of values) {
+    const consumerId = value.consumerId.trim();
+    if (!consumerId) {
+      throw createEventStoreError(
+        "event_invalid",
+        "Durable consumer IDs must be non-empty strings.",
+      );
+    }
+    if (value.settlement !== "inherit" && value.settlement !== "detached") {
+      throw createEventStoreError(
+        "event_invalid",
+        `Durable consumer '${consumerId}' has an invalid settlement mode.`,
+      );
+    }
+    const existing = consumers.get(consumerId);
+    if (existing && existing.settlement !== value.settlement) {
+      throw createEventStoreError(
+        "event_invalid",
+        `Durable consumer '${consumerId}' has conflicting settlement modes.`,
+      );
+    }
+    consumers.set(
+      consumerId,
+      Object.freeze({
+        consumerId,
+        settlement: value.settlement,
+      }),
+    );
+  }
+  return [...consumers.values()];
 }
 
 function boundedInteger(
@@ -434,7 +474,7 @@ function filtersForConsumers(
   params: unknown[],
 ): string | undefined {
   if (!consumerIds?.length) return undefined;
-  const consumers = uniqueConsumers(consumerIds);
+  const consumers = uniqueConsumerIds(consumerIds);
   const placeholders = consumers.map((consumer) => {
     params.push(consumer);
     return `$${params.length}`;
@@ -484,6 +524,7 @@ export function createEventStore(
       value,
       event,
       deliveries: await deliveriesForEvent(executor, event.id),
+      settlementScopeId: options.draft.settlementScopeId?.trim() || event.id,
       deduplicated: true,
     });
   };
@@ -512,8 +553,9 @@ export function createEventStore(
       deduplicationId: mutation.draft.deduplicationId?.trim() || undefined,
     };
     const encoded = encodeDraft(draft);
-    const consumers = uniqueConsumers(mutation.consumerIds);
+    const consumers = uniqueConsumers(mutation.consumers);
     const eventId = createId();
+    const settlementScopeId = draft.settlementScopeId?.trim() || eventId;
     const correlationId = draft.correlationId ?? eventId;
     const createdAt = (draft.createdAt ? new Date(draft.createdAt) : now())
       .toISOString();
@@ -572,14 +614,25 @@ export function createEventStore(
         const event = mapEvent(inserted.rows[0]);
 
         const deliveries: EventDelivery[] = [];
-        for (const consumerId of consumers) {
+        for (const consumer of consumers) {
+          const deliveryScopeId = consumer.settlement === "detached"
+            ? `detached:${event.id}:${consumer.consumerId}`
+            : settlementScopeId;
           const result = await transaction.query<DeliveryRow>(
             `INSERT INTO ${tables.event_deliveries} (
-              id, event_id, consumer_id, status, attempts, max_attempts,
+              id, event_id, consumer_id, settlement_scope_id,
+              status, attempts, max_attempts,
               priority, available_at, created_at, updated_at
-            ) VALUES ($1, $2, $3, 'pending', 0, $4, $5, NOW(), NOW(), NOW())
+            ) VALUES ($1, $2, $3, $4, 'pending', 0, $5, $6, NOW(), NOW(), NOW())
             RETURNING *`,
-            [createId(), event.id, consumerId, maxAttempts, priority],
+            [
+              createId(),
+              event.id,
+              consumer.consumerId,
+              deliveryScopeId,
+              maxAttempts,
+              priority,
+            ],
           );
           deliveries.push(mapDelivery(result.rows[0], databaseSchema));
         }
@@ -606,6 +659,7 @@ export function createEventStore(
           value,
           event,
           deliveries,
+          settlementScopeId,
           deduplicated: false,
         });
       });
@@ -795,15 +849,6 @@ export function createEventStore(
     return result.rows[0] ? mapDelivery(result.rows[0], databaseSchema) : null;
   };
 
-  const scopeCte = `WITH RECURSIVE scope(id) AS (
-    SELECT id FROM ${tables.events}
-      WHERE namespace = $1 AND id = $2
-    UNION
-    SELECT event.id FROM ${tables.events} event
-      JOIN scope parent ON event.causation_id = parent.id
-      WHERE event.namespace = $1
-  )`;
-
   return {
     databaseSchema,
     tables,
@@ -811,7 +856,10 @@ export function createEventStore(
     append(draft, consumerIds = [], appendOptions = {}) {
       return commitMutation({
         draft,
-        consumerIds,
+        consumers: consumerIds.map((consumerId) => ({
+          consumerId,
+          settlement: "inherit",
+        })),
         priority: appendOptions.priority,
         maxAttempts: appendOptions.maxAttempts,
         mutate: () => Promise.resolve(undefined),
@@ -956,7 +1004,7 @@ export function createEventStore(
       const value = result.rows[0]?.delay_ms;
       return value == null ? null : Math.max(0, Number(value));
     },
-    async scopeSettlement(namespace, rootEventId) {
+    async scopeSettlement(namespace, settlementScopeId) {
       await deadLetterExhaustedLeases();
       const result = await session.query<{
         unsettled: string | number;
@@ -964,15 +1012,15 @@ export function createEventStore(
         cancelled: string | number;
         succeeded: string | number;
       }>(
-        `${scopeCte}
-         SELECT
+        `SELECT
            COUNT(*) FILTER (WHERE d.status IN ('pending', 'leased', 'retry_wait')) AS unsettled,
            COUNT(*) FILTER (WHERE d.status = 'dead_letter') AS dead_letters,
            COUNT(*) FILTER (WHERE d.status = 'cancelled') AS cancelled,
            COUNT(*) FILTER (WHERE d.status = 'succeeded') AS succeeded
          FROM ${tables.event_deliveries} d
-         JOIN scope ON scope.id = d.event_id`,
-        [namespace, rootEventId],
+         JOIN ${tables.events} e ON e.id = d.event_id
+         WHERE e.namespace = $1 AND d.settlement_scope_id = $2`,
+        [namespace, settlementScopeId],
       );
       const row = result.rows[0];
       return deepFreeze({
@@ -982,20 +1030,21 @@ export function createEventStore(
         succeeded: Number(row?.succeeded ?? 0),
       });
     },
-    async cancelScope(namespace, rootEventId, reason) {
+    async cancelScope(namespace, settlementScopeId, reason) {
       const result = await session.query<{ id: string }>(
-        `${scopeCte}
-         UPDATE ${tables.event_deliveries} AS delivery
+        `UPDATE ${tables.event_deliveries} AS delivery
          SET status = 'cancelled', lease_owner = NULL,
              lease_expires_at = NULL, last_error = $3::jsonb,
              updated_at = NOW(), settled_at = NOW()
-         FROM scope
-         WHERE delivery.event_id = scope.id
+         FROM ${tables.events} AS event
+         WHERE delivery.event_id = event.id
+           AND event.namespace = $1
+           AND delivery.settlement_scope_id = $2
            AND delivery.status IN ('pending', 'leased', 'retry_wait')
          RETURNING delivery.id`,
         [
           namespace,
-          rootEventId,
+          settlementScopeId,
           JSON.stringify({ reason: reason ?? "cancelled" }),
         ],
       );

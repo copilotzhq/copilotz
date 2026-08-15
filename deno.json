@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.59.26",
+  "version": "0.60.7",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -31,6 +31,7 @@
     "./plugins": "./runtime/plugins/index.ts",
     "./migration/v1": "./migration/v1/index.ts",
     "./migration/memory-v4": "./migration/memory-v4/index.ts",
+    "./migration/content-v2": "./migration/content-v2/index.ts",
     "./resources": "./runtime/resources/index.ts",
     "./tokens": "./runtime/tokens/index.ts",
     "./server": "./server/index.ts"
@@ -47,6 +48,7 @@
       "docs/manifest.json",
       "migration/v1/index.ts",
       "migration/memory-v4/index.ts",
+      "migration/content-v2/**/*.ts",
       "runtime/**/*.ts",
       "server/**/*.ts",
       "utils/**/*.ts"
@@ -69,6 +71,7 @@
     "raw-imports"
   ],
   "imports": {
+    "@bradenmacdonald/s3-lite-client": "jsr:@bradenmacdonald/s3-lite-client@^0.9.6",
     "@std/assert": "jsr:@std/assert@1",
     "@std/yaml": "jsr:@std/yaml@1"
   },
@@ -89,7 +92,7 @@
     "check:surface": "deno run --allow-read --allow-run=deno scripts/check-package-surface.ts",
     "check": "deno task check:forbidden && deno task check:surface",
     "publish:dry-run": "deno publish --dry-run --allow-dirty",
-    "test": "deno test --allow-all contracts/v3 runtime migration/v1 migration/memory-v4 server utils",
+    "test": "deno test --allow-all contracts/v3 runtime migration/v1 migration/memory-v4 migration/content-v2 server utils",
     "test:v3-contracts": "deno task test"
   },
   "lock": false

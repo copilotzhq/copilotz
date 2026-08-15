@@ -51,7 +51,9 @@ Deno.test({
             namespace: "tenant-a",
             payload: { rollback: true },
           },
-          consumerIds: ["postgres.consumer"],
+          consumers: [
+            { consumerId: "postgres.consumer", settlement: "inherit" },
+          ],
           mutate: async ({ transaction, tables }) => {
             await transaction.query(
               `INSERT INTO ${tables.nodes}
@@ -77,7 +79,11 @@ Deno.test({
           correlationId: "postgres-correlation-a",
           deduplicationId: "postgres-widget-a",
         },
-        consumerIds: ["widget.index", "widget.audit", "widget.index"],
+        consumers: [
+          { consumerId: "widget.index", settlement: "inherit" },
+          { consumerId: "widget.audit", settlement: "inherit" },
+          { consumerId: "widget.index", settlement: "inherit" },
+        ],
         mutate: async ({ transaction, tables }) => {
           await transaction.query(
             `INSERT INTO ${tables.nodes}

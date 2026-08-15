@@ -1,5 +1,6 @@
 import { createContentError } from "./errors.ts";
 import type {
+  AssetOrigin,
   ContentInput,
   ContentKind,
   ContentRef,
@@ -15,6 +16,7 @@ export type ContentBodyCandidate = Readonly<{
   role: ContentRole | string;
   index: number;
   idempotencyKey?: string;
+  origin?: AssetOrigin;
   fields: Omit<ContentRef, "assetId" | "kind" | "role" | "mediaType">;
 }>;
 
@@ -95,6 +97,7 @@ export async function materializeContentInput(
     role: ContentRole | string | undefined,
     index: number,
     fields: ContentBodyCandidate["fields"],
+    origin?: AssetOrigin,
   ) => {
     refs.push(
       await materializer.materialize({
@@ -104,6 +107,7 @@ export async function materializeContentInput(
         role: role ?? defaultRole(kind),
         index,
         idempotencyKey: childIdempotencyKey(options.idempotencyKey, index),
+        origin: origin ?? options.origin,
         fields,
       }),
     );
@@ -144,6 +148,7 @@ export async function materializeContentInput(
         value.role,
         index,
         textFields(value),
+        value.origin,
       );
       continue;
     }
@@ -176,6 +181,7 @@ export async function materializeContentInput(
           name: value.name,
           metadata: cloneMetadata(value.metadata),
         }),
+        value.origin,
       );
       continue;
     }
@@ -205,6 +211,7 @@ export async function materializeContentInput(
         value.role,
         index,
         binaryFields(value),
+        value.origin,
       );
       continue;
     }

@@ -168,6 +168,9 @@ function identityDraft(identity: MutationIdentity | undefined) {
     ...(identity?.deduplicationId?.trim()
       ? { deduplicationId: identity.deduplicationId.trim() }
       : {}),
+    ...(identity?.settlementScopeId?.trim()
+      ? { settlementScopeId: identity.settlementScopeId.trim() }
+      : {}),
     metadata: structuredClone(identity?.metadata ?? {}),
   };
 }
@@ -357,7 +360,18 @@ async function canonicalizeCollectionContent(
     setNestedValue(
       value,
       field,
-      await assets.materialize(context, { namespace, content }),
+      await assets.materialize(context, {
+        namespace,
+        content,
+        origin: {
+          scope: {
+            type: "collection",
+            collection: name,
+            id: String(value.id),
+          },
+          producer: { type: name, id: String(value.id) },
+        },
+      }),
     );
   }
 }

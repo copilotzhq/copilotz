@@ -144,6 +144,7 @@ export async function createCopilotzGateway(
       resources: options.resources,
       pluginResolver: options.pluginResolver,
       toolCatalog: options.toolCatalog,
+      assets: options.assets,
       database: persistence.database,
       engine: {
         ...(options.engine ?? {}),

@@ -1,4 +1,25 @@
 export { digestContent } from "./digest.ts";
+export {
+  assetBodyKey,
+  assetBodySchemaPrefix,
+  createFilesystemAssetBodyStore,
+  createMemoryAssetBodyStore,
+  DEFAULT_MAX_DATABASE_ASSET_BYTES,
+  readAssetBodiesBounded,
+} from "./body-store.ts";
+export type {
+  AssetBodyHead,
+  AssetBodyStore,
+  AssetBodyStoreKind,
+  AssetFilesystemAccess,
+  AssetStorageConfig,
+  AssetStorageOptions,
+  AssetStorageRuntime,
+  PutAssetBodyInput,
+  S3AssetStorageConfig,
+} from "./body-store.ts";
+export { createS3AssetBodyStore } from "./s3-body-store.ts";
+export { createAssetStorageRuntime } from "./storage.ts";
 export { assetIdFromRef, formatAssetRef } from "./asset-ref.ts";
 export {
   base64ToBytes,
@@ -7,6 +28,7 @@ export {
   toDataUrl,
 } from "./encoding.ts";
 export {
+  type AssetBodyMaintenanceResult,
   type AssetMutationInput,
   createDatabaseAssetRepository,
   type CreateDatabaseAssetRepositoryOptions,
@@ -23,6 +45,7 @@ export {
   createContentPreparer,
   type CreateContentPreparerOptions,
 } from "./preparer.ts";
+export { mergePreparedContent } from "./prepared.ts";
 export {
   createMemoryAssetRepository,
   type CreateMemoryAssetRepositoryOptions,
@@ -32,6 +55,7 @@ export type {
   AssetBody,
   AssetBodyLocation,
   AssetId,
+  AssetOrigin,
   AssetRecord,
   AssetRepository,
   AssetState,

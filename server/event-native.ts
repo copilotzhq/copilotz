@@ -27,6 +27,7 @@ import {
   createEventNativeMessageHistoryIncluded,
   type EventNativeHistoryInclude,
 } from "./history.ts";
+import { eventNativeAsset } from "./assets.ts";
 
 export type EventNativeAppRequest = FeatureRequest;
 
@@ -769,19 +770,20 @@ async function handleAssets(
     throw appError(404, "asset_not_found", "Asset was not found.");
   }
   const format = queryText(request.query, "format") ?? "metadata";
-  if (format === "metadata") return { status: 200, data: body.asset };
+  const asset = eventNativeAsset(body.asset);
+  if (format === "metadata") return { status: 200, data: asset };
   const encoded = base64(body.bytes);
   if (format === "base64") {
     return {
       status: 200,
-      data: { asset: body.asset, base64: encoded },
+      data: { asset, base64: encoded },
     };
   }
   if (format === "dataUrl") {
     return {
       status: 200,
       data: {
-        asset: body.asset,
+        asset,
         dataUrl: `data:${body.asset.mediaType};base64,${encoded}`,
       },
     };

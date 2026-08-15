@@ -406,6 +406,9 @@ function identityDraft(identity: MutationIdentity | undefined) {
     ...(identity?.deduplicationId
       ? { deduplicationId: identity.deduplicationId }
       : {}),
+    ...(identity?.settlementScopeId
+      ? { settlementScopeId: identity.settlementScopeId }
+      : {}),
     metadata: structuredClone(identity?.metadata ?? {}),
   };
 }
@@ -1212,7 +1215,14 @@ export function createConversationRepository(
           const content = normalizeContent(
             await assets.materialize(
               mutationContext,
-              { namespace, content: input.content },
+              {
+                namespace,
+                content: input.content,
+                origin: {
+                  scope: { type: "thread", id: threadId },
+                  producer: { type: "message", id },
+                },
+              },
             ),
           );
           const inserted = await transaction.query<NodeRow>(
@@ -1269,7 +1279,14 @@ export function createConversationRepository(
           const expectedContent = normalizeContent(
             await assets.resolvePrepared(
               { transaction, tables: names },
-              { namespace, content: input.content },
+              {
+                namespace,
+                content: input.content,
+                origin: {
+                  scope: { type: "thread", id: threadId },
+                  producer: { type: "message", id },
+                },
+              },
             ),
           );
           const message = await getMessageWith(

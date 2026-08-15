@@ -114,6 +114,9 @@ function identityDraft(identity: MutationIdentity | undefined) {
     ...(identity?.deduplicationId
       ? { deduplicationId: identity.deduplicationId }
       : {}),
+    ...(identity?.settlementScopeId
+      ? { settlementScopeId: identity.settlementScopeId }
+      : {}),
     metadata: structuredClone(identity?.metadata ?? {}),
   };
 }

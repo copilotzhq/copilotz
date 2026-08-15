@@ -176,7 +176,7 @@ function sleep(milliseconds: number): Promise<void> {
 async function waitForScope(
   options: CreateScheduledJobRepositoryOptions,
   namespace: string,
-  eventId: string,
+  settlementScopeId: string,
   pollMs: number,
   timeoutMs: number,
 ): Promise<void> {
@@ -184,18 +184,20 @@ async function waitForScope(
   while (true) {
     const settlement = await options.eventStore.scopeSettlement(
       namespace,
-      eventId,
+      settlementScopeId,
     );
     if (settlement.deadLetters > 0) {
-      throw new Error(`Scheduled occurrence '${eventId}' dead-lettered.`);
+      throw new Error(
+        `Scheduled scope '${settlementScopeId}' dead-lettered.`,
+      );
     }
     if (settlement.cancelled > 0) {
-      throw new Error(`Scheduled occurrence '${eventId}' was cancelled.`);
+      throw new Error(`Scheduled scope '${settlementScopeId}' was cancelled.`);
     }
     if (settlement.unsettled === 0) return;
     if (Date.now() >= expires) {
       throw new Error(
-        `Scheduled occurrence '${eventId}' did not settle in time.`,
+        `Scheduled scope '${settlementScopeId}' did not settle in time.`,
       );
     }
     await sleep(pollMs);
@@ -387,6 +389,9 @@ export function createScheduledJobRepository(
           : {}),
         correlationId: existingEvent.correlationId,
         deduplicationId,
+        ...(runIdentity.settlementScopeId
+          ? { settlementScopeId: runIdentity.settlementScopeId }
+          : {}),
       }
       : {
         type: "scheduled_job.due",
@@ -403,6 +408,9 @@ export function createScheduledJobRepository(
           : {}),
         correlationId: runIdentity.correlationId ?? occurrenceId,
         deduplicationId,
+        ...(runIdentity.settlementScopeId
+          ? { settlementScopeId: runIdentity.settlementScopeId }
+          : {}),
         metadata: {
           ...structuredClone(runIdentity.metadata ?? {}),
           scheduledJob: {
@@ -471,7 +479,7 @@ export function createScheduledJobRepository(
       await waitForScope(
         options,
         namespace,
-        committed.event.id,
+        committed.settlementScopeId,
         positiveInteger(
           runOptions.settlementPollMs,
           10,
@@ -490,6 +498,7 @@ export function createScheduledJobRepository(
       name: committedPayload.jobName,
       occurrenceId: committedPayload.occurrenceId,
       eventId: committed.event.id,
+      settlementScopeId: committed.settlementScopeId,
       deduplicated: committed.deduplicated,
       dispatchFailures: committed.dispatch.failures.length,
     });
@@ -607,7 +616,7 @@ export function createScheduledJobRepository(
           await waitForScope(
             options,
             namespace,
-            committed.event.id,
+            committed.settlementScopeId,
             pollMs,
             timeoutMs,
           );

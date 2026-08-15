@@ -1,5 +1,87 @@
 # Changelog
 
+## 0.60.7 — 2026-08-15
+
+### Changed
+
+- Content-v2 dry-run is now a read-only bulk planner with a bounded number of
+  SQL round trips instead of applying every repair inside a rollback-only
+  transaction.
+- Apply preflights ambiguous history before writes, commits semantic repair in
+  resumable bounded batches, and exposes semantic, asset, and byte progress.
+
+### Fixed
+
+- Large content-v2 dry-runs no longer generate production-sized writes, WAL,
+  MVCC churn, or multi-hour open transactions merely to calculate a report.
+
+## 0.60.5 — 2026-08-14
+
+### Fixed
+
+- Content-v2 now audits existing tool outputs in indexed batches, resolves
+  provenance once per batch, uploads bodies with bounded concurrency, and
+  commits each relocated batch in one database update instead of performing
+  history-sized N+1 queries and per-asset transactions.
+
+## 0.60.4 — 2026-08-14
+
+### Fixed
+
+- Content-v2 now uses explicit legacy execution IDs, projected-output and error
+  digests, and original result creation times to disambiguate reused tool calls.
+
+## 0.60.3 — 2026-08-14
+
+### Fixed
+
+- Existing delivery settlement-scope backfills now recurse only from delivery
+  obligations that need migration, avoiding history-sized temporary results.
+
+## 0.60.2 — 2026-08-14
+
+### Added
+
+- Delivery-level settlement scopes with declarative detached durable processors,
+  automatic descendant propagation, scope-local cancellation, and Worker-output
+  settlement.
+
+### Changed
+
+- Long-term memory consolidation now runs as durable background work without
+  blocking or failing the user-facing run.
+
+## 0.60.1 — 2026-08-14
+
+### Fixed
+
+- Content-v2 now disambiguates reused legacy tool-call IDs with canonical
+  output/argument digests, participant/message evidence, and causal timestamps
+  before refusing an uncertain match.
+
+## 0.60.0 — 2026-08-14
+
+This release separates graph asset metadata from pluggable body storage and
+repairs legacy tool-result history.
+
+### Added
+
+- Declarative database, memory, filesystem-capability, S3-compatible, and
+  injected asset body storage with immutable provenance paths and mixed-location
+  reads.
+- Generic nested data-URL extraction for tool results before live output,
+  persistence, and model continuation.
+- The isolated `migration/content-v2` dry-run/apply workflow for canonicalizing
+  legacy tool messages and relocating database bodies to object storage.
+
+### Changed
+
+- Database storage remains the zero-configuration default and now accepts up to
+  8 MiB per asset.
+- The v1 upgrader classifies tool-authored messages as tool executions instead
+  of public conversation and skips their duplicate legacy message events.
+- HTTP asset metadata omits physical body locations.
+
 ## 0.59.26 — 2026-08-14
 
 ### Fixed

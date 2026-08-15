@@ -18,7 +18,11 @@ import type {
   ProviderAPI,
   TokenUsage,
 } from "../llm/types.ts";
-import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
+import {
+  createPluginRegistry,
+  definePlugin,
+  type Processor,
+} from "../plugins/index.ts";
 import { defineContextResource } from "../context/index.ts";
 import {
   createTextWorkflowPlugin,
@@ -59,6 +63,19 @@ type FixtureOptions = Readonly<{
   embed?: MemoryEmbed | false;
   validateCollection?: ValidateCollectionRecord;
 }>;
+
+Deno.test("memory consolidation starts in a detached durable settlement scope", () => {
+  const plugin = createLongTermMemoryPlugin();
+  const processors = plugin.resources.processors as
+    | readonly Processor[]
+    | undefined;
+  const reservation = processors?.find((processor) =>
+    processor.id === "copilotz.memory.reserve"
+  );
+  assertExists(reservation);
+  assertEquals(reservation.delivery, "durable");
+  assertEquals(reservation.settlement, "detached");
+});
 
 function response(
   request: ChatRequest,

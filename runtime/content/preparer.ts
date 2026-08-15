@@ -61,6 +61,12 @@ export function createContentPreparer(
               byteLength: body.byteLength,
               digest: await digest(body),
               idempotencyKey: candidate.idempotencyKey,
+              origin: candidate.origin
+                ? structuredClone(candidate.origin)
+                : undefined,
+              metadata: candidate.fields.metadata
+                ? structuredClone(candidate.fields.metadata)
+                : undefined,
             })) as PreparedAsset);
             return withoutUndefined({
               assetId: id,

@@ -296,8 +296,7 @@ async function waitForScope(
   store: EventStore,
   databaseSchema: string,
   namespace: string,
-  eventId: string,
-  correlationId: string,
+  settlementScopeId: string,
   executor: DeliveryExecutor,
   signal: AbortSignal,
   pollMs: number,
@@ -309,39 +308,46 @@ async function waitForScope(
         errorText(signal.reason ?? "Attachment operation cancelled."),
       );
     }
-    const settlement = await store.scopeSettlement(namespace, eventId);
+    const settlement = await store.scopeSettlement(
+      namespace,
+      settlementScopeId,
+    );
     if (settlement.deadLetters > 0) {
       throw attachmentError(
         "attachment_dead_letter",
-        `Causal event scope '${eventId}' contains dead-lettered work.`,
+        `Settlement scope '${settlementScopeId}' contains dead-lettered work.`,
       );
     }
     if (settlement.cancelled > 0) {
       throw attachmentError(
         "attachment_cancelled",
-        `Causal event scope '${eventId}' was cancelled.`,
+        `Settlement scope '${settlementScopeId}' was cancelled.`,
       );
     }
     if (settlement.unsettled === 0) {
       // A remote Worker settles its database delivery just before the final
-      // output frame reaches this Gateway. Await correlated relays, then
+      // output frame reaches this Gateway. Await relays in this settlement
+      // scope, then
       // confirm the durable scope once more in case a frame created more work.
       await executor.settleOutputs({
         databaseSchema,
         namespace,
-        correlationId,
+        settlementScopeId,
       });
-      const confirmed = await store.scopeSettlement(namespace, eventId);
+      const confirmed = await store.scopeSettlement(
+        namespace,
+        settlementScopeId,
+      );
       if (confirmed.deadLetters > 0) {
         throw attachmentError(
           "attachment_dead_letter",
-          `Causal event scope '${eventId}' contains dead-lettered work.`,
+          `Settlement scope '${settlementScopeId}' contains dead-lettered work.`,
         );
       }
       if (confirmed.cancelled > 0) {
         throw attachmentError(
           "attachment_cancelled",
-          `Causal event scope '${eventId}' was cancelled.`,
+          `Settlement scope '${settlementScopeId}' was cancelled.`,
         );
       }
       if (confirmed.unsettled === 0) return;
@@ -548,7 +554,10 @@ export function createAttachmentRuntime(
 
     const scopeHandle = (
       event: CopilotzEvent,
-      operations: readonly ActiveOperation[] = [],
+      scopeOptions: Readonly<{
+        settlementScopeId?: string;
+        operations?: readonly ActiveOperation[];
+      }> = {},
     ): AttachmentEventHandle => {
       const correlationId = event.correlationId;
       if (!event.durable) {
@@ -559,14 +568,14 @@ export function createAttachmentRuntime(
           cancel: () => Promise.resolve(),
         });
       }
+      const settlementScopeId = scopeOptions.settlementScopeId ?? event.id;
       const abort = new AbortController();
       let settled = false;
       const done = waitForScope(
         options.store,
         options.databaseSchema,
         namespace,
-        event.id,
-        event.correlationId,
+        settlementScopeId,
         options.executor,
         abort.signal,
         pollMs,
@@ -580,9 +589,13 @@ export function createAttachmentRuntime(
         done,
         async cancel(reason = "attachment_operation_cancelled") {
           if (settled || abort.signal.aborted) return;
-          await options.store.cancelScope(namespace, event.id, reason);
+          await options.store.cancelScope(
+            namespace,
+            settlementScopeId,
+            reason,
+          );
           await Promise.all(
-            operations.map((operation) =>
+            (scopeOptions.operations ?? []).map((operation) =>
               operation.cancel(reason).catch(() => undefined)
             ),
           );
@@ -591,6 +604,28 @@ export function createAttachmentRuntime(
         },
       });
       return track(handle);
+    };
+
+    const dispatchedOperationsForScope = (
+      result: Readonly<{
+        settlementScopeId: string;
+        deliveries: readonly Readonly<{
+          id: string;
+          settlementScopeId: string;
+        }>[];
+        dispatch: Readonly<{
+          handles: readonly (ActiveOperation & { deliveryId: string })[];
+        }>;
+      }>,
+    ): readonly ActiveOperation[] => {
+      const deliveryIds = new Set(
+        result.deliveries.filter((delivery) =>
+          delivery.settlementScopeId === result.settlementScopeId
+        ).map((delivery) => delivery.id),
+      );
+      return result.dispatch.handles.filter((handle) =>
+        deliveryIds.has(handle.deliveryId)
+      );
     };
 
     const sendMessage = async (
@@ -628,7 +663,10 @@ export function createAttachmentRuntime(
       });
       const messageId = result.value?.id;
       if (!messageId) throw new Error("Message mutation returned no record.");
-      const base = scopeHandle(result.event, result.dispatch.handles);
+      const base = scopeHandle(result.event, {
+        settlementScopeId: result.settlementScopeId,
+        operations: dispatchedOperationsForScope(result),
+      });
       return Object.freeze({ ...base, messageId }) as AttachmentMessageHandle;
     };
 
@@ -687,7 +725,10 @@ export function createAttachmentRuntime(
         deduplicationId: inputEvent.deduplicationId?.trim() ||
           `${id}:event:${correlationId}:${type}`,
       });
-      return scopeHandle(result.event, result.dispatch.handles);
+      return scopeHandle(result.event, {
+        settlementScopeId: result.settlementScopeId,
+        operations: dispatchedOperationsForScope(result),
+      });
     };
 
     const appendStreamTerminal = async (
@@ -920,7 +961,6 @@ export function createAttachmentRuntime(
           options.databaseSchema,
           namespace,
           opened.event.id,
-          correlationId,
           options.executor,
           new AbortController().signal,
           pollMs,

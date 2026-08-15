@@ -4,7 +4,10 @@ import {
   createRealtimeProviderContext,
   createRealtimeStreamWorkload,
 } from "../attachments/index.ts";
-import { createContentPreparer } from "../content/index.ts";
+import {
+  createAssetStorageRuntime,
+  createContentPreparer,
+} from "../content/index.ts";
 import {
   type CopilotzEvent,
   type CopilotzEventHub,
@@ -75,6 +78,12 @@ export async function createCopilotzEngine(
   options: CreateCopilotzEngineOptions,
 ): Promise<CopilotzEngine> {
   const databaseSchema = options.defaultDatabaseSchema ?? "public";
+  const engineOptions: CreateCopilotzEngineOptions = options.assetStorage
+    ? options
+    : Object.freeze({
+      ...options,
+      assetStorage: createAssetStorageRuntime(options.assets),
+    });
   await prepareDefaultDatabaseSchema(options, databaseSchema);
   const now = options.now ?? (() => new Date());
   const eventHub = options.eventHub ?? createCopilotzEventHub();
@@ -139,6 +148,7 @@ export async function createCopilotzEngine(
           signal: base.signal,
           databaseSchema: base.databaseSchema,
           eventHub: scopedEventHub,
+          settlementScopeId: base.settlementScopeId,
         });
         await dispatched.done;
       },
@@ -278,6 +288,7 @@ export async function createCopilotzEngine(
       signal?: AbortSignal;
       databaseSchema?: string;
       eventHub?: typeof eventHub;
+      settlementScopeId?: string;
     } = {},
   ): Promise<LiveEventDispatchHandle> => {
     const scopedDatabaseSchema = publishOptions.databaseSchema ??
@@ -286,7 +297,11 @@ export async function createCopilotzEngine(
     await scopedEventHub.publish(event);
     await options.publish?.(event);
     if (!publishOptions.inline && !workerOriginated(event)) {
-      return await liveDispatcher.dispatch(event, scopedDatabaseSchema);
+      return await liveDispatcher.dispatch(
+        event,
+        scopedDatabaseSchema,
+        publishOptions.settlementScopeId,
+      );
     }
 
     const abort = new AbortController();
@@ -300,6 +315,7 @@ export async function createCopilotzEngine(
       registry: options.registry,
       event,
       signal: abort.signal,
+      settlementScopeId: publishOptions.settlementScopeId,
       createContext: createLiveContext,
     }).finally(() => {
       publishOptions.signal?.removeEventListener("abort", relay);
@@ -323,14 +339,15 @@ export async function createCopilotzEngine(
     const defaultScope = createDatabaseScope({
       databaseSchema,
       store,
-      engine: options,
+      engine: engineOptions,
       registry: options.registry,
       executor,
       preparer,
       eventHub,
       streamWorkload,
       now,
-      publishLive: (event) => publishLive(event),
+      publishLive: (event, settlementScopeId) =>
+        publishLive(event, { settlementScopeId }),
     });
     capabilities = defaultScope.capabilities;
     resolver = defaultScope.public.content.resolver;
@@ -352,17 +369,18 @@ export async function createCopilotzEngine(
           await validateCopilotzSchema(options.session, normalized);
           const runtime = createDatabaseScope({
             databaseSchema: normalized,
-            engine: options,
+            engine: engineOptions,
             registry: options.registry,
             executor,
             preparer,
             eventHub: hub,
             streamWorkload,
             now,
-            publishLive: (event) =>
+            publishLive: (event, settlementScopeId) =>
               publishLive(event, {
                 databaseSchema: normalized,
                 eventHub: hub,
+                settlementScopeId,
               }),
           });
           return Object.freeze({ runtime, hub });

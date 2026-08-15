@@ -8,9 +8,16 @@ import type {
 import { digestContent } from "./digest.ts";
 import { createContentError } from "./errors.ts";
 import { cloneContentRef } from "./input.ts";
+import {
+  assetBodyKey,
+  assetBodySchemaPrefix,
+  readAssetBodiesBounded,
+} from "./body-store.ts";
+import { createAssetStorageRuntime } from "./storage.ts";
 import type {
   AssetBody,
   AssetBodyLocation,
+  AssetOrigin,
   AssetRecord,
   AssetRepository,
   AssetState,
@@ -21,8 +28,7 @@ import type {
   PreparedContent,
   PublishAssetInput,
 } from "./types.ts";
-
-const DEFAULT_MAX_DATABASE_BYTES = 64 * 1024;
+import type { AssetStorageRuntime } from "./body-store.ts";
 
 type AssetNodeRow = Record<string, unknown> & {
   id: string;
@@ -40,12 +46,18 @@ type AssetNodeRow = Record<string, unknown> & {
 export type AssetMutationInput = Readonly<{
   namespace: string;
   content: DurableContentInput;
+  origin?: AssetOrigin;
 }>;
 
 export type LinkAssetOwnerInput = Readonly<{
   namespace: string;
   ownerId: string;
   content: ContentSequence;
+}>;
+
+export type AssetBodyMaintenanceResult = Readonly<{
+  retriedDeletions: number;
+  orphanedBodiesDeleted: number;
 }>;
 
 export type DatabaseAssetRepository =
@@ -71,16 +83,25 @@ export type DatabaseAssetRepository =
       context: EventMutationContext,
       input: LinkAssetOwnerInput,
     ): Promise<void>;
+    /** Retries deleted bodies and removes old uploads without graph metadata. */
+    maintainBodies(
+      options?: Readonly<{
+        now?: Date;
+        orphanAfterMs?: number;
+        limit?: number;
+      }>,
+    ): Promise<AssetBodyMaintenanceResult>;
   }>;
 
 export type CreateDatabaseAssetRepositoryOptions = Readonly<{
   coordinator: EventCoordinator;
   session: SqlExecutor;
   eventStore: Pick<EventStore, "tables">;
+  databaseSchema: string;
+  storage?: AssetStorageRuntime;
   createId?: () => string;
   now?: () => Date;
   digest?: (bytes: Uint8Array) => Promise<`sha256:${string}`>;
-  maxDatabaseBytes?: number;
 }>;
 
 function iso(value: string | Date): string {
@@ -105,6 +126,38 @@ function record(value: unknown): Record<string, unknown> {
 function cloneMetadata(value: unknown): Record<string, unknown> | undefined {
   const fields = record(value);
   return Object.keys(fields).length > 0 ? structuredClone(fields) : undefined;
+}
+
+function cloneOrigin(value: unknown): AssetOrigin | undefined {
+  const fields = record(value);
+  const scope = record(fields.scope);
+  const producer = record(fields.producer);
+  const validScope = scope.type === "thread" && typeof scope.id === "string"
+    ? { type: "thread" as const, id: scope.id }
+    : scope.type === "collection" && typeof scope.collection === "string" &&
+        typeof scope.id === "string"
+    ? {
+      type: "collection" as const,
+      collection: scope.collection,
+      id: scope.id,
+    }
+    : scope.type === "namespace" && typeof scope.id === "string"
+    ? { type: "namespace" as const, id: scope.id }
+    : undefined;
+  if (
+    !validScope || typeof producer.type !== "string" ||
+    typeof producer.id !== "string"
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    scope: validScope,
+    producer: { type: producer.type, id: producer.id },
+    ...(typeof fields.path === "string" ? { path: fields.path } : {}),
+    ...(typeof fields.inferred === "boolean"
+      ? { inferred: fields.inferred }
+      : {}),
+  });
 }
 
 function requiredText(value: string, name: string): string {
@@ -138,7 +191,21 @@ function location(value: unknown, assetId: string): AssetBodyLocation {
   ) {
     return { kind: "database", encoding: fields.encoding };
   }
-  if (fields.kind === "memory") return { kind: "memory" };
+  if (fields.kind === "memory") {
+    return {
+      kind: "memory",
+      ...(typeof fields.backendId === "string"
+        ? { backendId: fields.backendId }
+        : {}),
+      ...(typeof fields.key === "string" ? { key: fields.key } : {}),
+    };
+  }
+  if (
+    fields.kind === "filesystem" && typeof fields.backendId === "string" &&
+    typeof fields.key === "string"
+  ) {
+    return { kind: "filesystem", backendId: fields.backendId, key: fields.key };
+  }
   if (
     fields.kind === "object" && typeof fields.backendId === "string" &&
     typeof fields.key === "string"
@@ -180,6 +247,7 @@ function mapAsset(row: AssetNodeRow): AssetRecord {
     digest: digest as `sha256:${string}`,
     state: state(data.state, row.id),
     location: location(data.location, row.id),
+    ...(cloneOrigin(data.origin) ? { origin: cloneOrigin(data.origin) } : {}),
     createdAt: iso(row.created_at),
     ...(typeof data.readyAt === "string" ? { readyAt: data.readyAt } : {}),
     ...(typeof data.deletedAt === "string"
@@ -350,11 +418,8 @@ export function createDatabaseAssetRepository(
   const createId = options.createId ?? ulid;
   const now = options.now ?? (() => new Date());
   const digest = options.digest ?? digestContent;
-  const maxDatabaseBytes = options.maxDatabaseBytes ??
-    DEFAULT_MAX_DATABASE_BYTES;
-  if (!Number.isSafeInteger(maxDatabaseBytes) || maxDatabaseBytes < 0) {
-    throw new TypeError("maxDatabaseBytes must be a non-negative integer.");
-  }
+  const storage = options.storage ?? createAssetStorageRuntime();
+  const maxDatabaseBytes = storage.maxDatabaseBytes;
   const tables = options.eventStore.tables;
 
   const findById = async (
@@ -429,7 +494,7 @@ export function createDatabaseAssetRepository(
         { namespace, assetId: candidate.id },
       );
     }
-    if (candidate.byteLength > maxDatabaseBytes) {
+    if (!storage.writer && candidate.byteLength > maxDatabaseBytes) {
       throw createContentError(
         "asset_storage_unavailable",
         `Asset exceeds the ${maxDatabaseBytes}-byte database limit and no object backend is configured.`,
@@ -442,6 +507,7 @@ export function createDatabaseAssetRepository(
     context: EventMutationContext,
     namespace: string,
     candidate: PreparedAsset,
+    fallbackOrigin?: AssetOrigin,
   ): Promise<AssetRecord> => {
     const key = candidate.idempotencyKey?.trim() || undefined;
     if (key) {
@@ -468,7 +534,39 @@ export function createDatabaseAssetRepository(
         { namespace, assetId: candidate.id },
       );
     }
-    const encoded = encodeDatabaseBody(candidate.mediaType, candidate.body);
+    const origin = candidate.origin ?? fallbackOrigin;
+    let storedBody: string | undefined;
+    let storedLocation: AssetBodyLocation;
+    if (storage.writer) {
+      const key = assetBodyKey({
+        prefix: storage.prefix,
+        databaseSchema: options.databaseSchema,
+        namespace,
+        assetId: candidate.id,
+        origin,
+      });
+      const head = await storage.writer.put({
+        key,
+        bytes: candidate.body,
+        mediaType: candidate.mediaType,
+        digest: candidate.digest,
+        ifAbsent: true,
+      });
+      storedLocation = storage.writer.kind === "object"
+        ? {
+          kind: "object",
+          backendId: storage.writer.backendId,
+          key,
+          ...(head.etag ? { etag: head.etag } : {}),
+        }
+        : storage.writer.kind === "filesystem"
+        ? { kind: "filesystem", backendId: storage.writer.backendId, key }
+        : { kind: "memory", backendId: storage.writer.backendId, key };
+    } else {
+      const encoded = encodeDatabaseBody(candidate.mediaType, candidate.body);
+      storedBody = encoded.body;
+      storedLocation = encoded.location;
+    }
     const readyAt = now().toISOString();
     let data: string;
     try {
@@ -477,9 +575,10 @@ export function createDatabaseAssetRepository(
         byteLength: candidate.byteLength,
         digest: candidate.digest,
         state: "ready",
-        location: encoded.location,
-        body: encoded.body,
+        location: storedLocation,
+        ...(storedBody !== undefined ? { body: storedBody } : {}),
         readyAt,
+        ...(origin ? { origin: structuredClone(origin) } : {}),
         metadata: structuredClone(candidate.metadata ?? {}),
       });
     } catch (cause) {
@@ -539,7 +638,12 @@ export function createDatabaseAssetRepository(
     for (const candidate of candidates.values()) {
       let asset: AssetRecord;
       if (write) {
-        asset = await insertCandidate(context, namespace, candidate);
+        asset = await insertCandidate(
+          context,
+          namespace,
+          candidate,
+          input.origin,
+        );
       } else {
         const row = candidate.idempotencyKey?.trim()
           ? await findByIdempotency(
@@ -632,14 +736,52 @@ export function createDatabaseAssetRepository(
     assetIds: readonly string[],
   ): Promise<readonly AssetBody[]> => {
     const rows = await getRows(options.session, namespace, assetIds);
-    return rows.map((row) => {
+    const assets = rows.map((row) => {
       const asset = mapAsset(row);
       assertReadable(asset);
-      return Object.freeze({
-        asset,
-        bytes: decodeDatabaseBody(row, asset),
-      });
+      return asset;
     });
+    const bytes = await readAssetBodiesBounded(
+      rows.map((row, index) => ({ row, asset: assets[index] })),
+      storage.readConcurrency,
+      async ({ row, asset }) => {
+        let body: Uint8Array;
+        if (asset.location.kind === "database") {
+          body = decodeDatabaseBody(row, asset);
+        } else {
+          const backendId = asset.location.backendId;
+          const key = asset.location.key;
+          const store = backendId ? storage.readers.get(backendId) : undefined;
+          if (!store || !key) {
+            throw createContentError(
+              "asset_storage_unavailable",
+              `Body backend '${
+                backendId ?? "memory"
+              }' is not configured for asset: ${asset.id}`,
+              { namespace: asset.namespace, assetId: asset.id },
+            );
+          }
+          body = await store.read(key);
+        }
+        if (
+          body.byteLength !== asset.byteLength ||
+          await digest(body) !== asset.digest
+        ) {
+          throw createContentError(
+            "asset_corrupted",
+            `Asset body integrity check failed: ${asset.id}`,
+            { namespace: asset.namespace, assetId: asset.id },
+          );
+        }
+        return body;
+      },
+    );
+    return Object.freeze(assets.map((asset, index) =>
+      Object.freeze({
+        asset,
+        bytes: bytes[index],
+      })
+    ));
   };
 
   const linkOwner = async (
@@ -671,17 +813,15 @@ export function createDatabaseAssetRepository(
           { namespace },
         );
       }
-      if (input.location && input.location.kind !== "database") {
-        throw createContentError(
-          "asset_storage_unavailable",
-          "The database repository cannot publish to the requested body backend.",
-          { namespace, assetId: input.id },
-        );
-      }
       const key = input.idempotencyKey?.trim() || undefined;
       const body = input.body.slice();
+      const assetId = input.id?.trim() || createId();
+      const defaultOrigin: AssetOrigin = {
+        scope: { type: "namespace", id: namespace },
+        producer: { type: "asset", id: assetId },
+      };
       const candidate: PreparedAsset = Object.freeze({
-        id: input.id?.trim() || createId(),
+        id: assetId,
         namespace,
         mediaType,
         body,
@@ -691,6 +831,7 @@ export function createDatabaseAssetRepository(
         ...(input.metadata
           ? { metadata: structuredClone(input.metadata) }
           : {}),
+        origin: structuredClone(input.origin ?? defaultOrigin),
       });
       await validateCandidate(namespace, candidate);
 
@@ -789,8 +930,39 @@ export function createDatabaseAssetRepository(
       );
     },
 
-    async open(namespace, assetId) {
-      const { bytes } = await repository.read(namespace, assetId);
+    async open(namespaceInput, assetIdInput) {
+      const namespace = requiredText(namespaceInput, "Asset namespace");
+      const assetId = requiredText(assetIdInput, "Asset ID");
+      const row = await requireRow(options.session, namespace, assetId);
+      const asset = mapAsset(row);
+      assertReadable(asset);
+      if (asset.location.kind !== "database") {
+        const backendId = asset.location.backendId;
+        const key = asset.location.key;
+        const store = backendId ? storage.readers.get(backendId) : undefined;
+        if (!store || !key) {
+          throw createContentError(
+            "asset_storage_unavailable",
+            `Body backend '${
+              backendId ?? "memory"
+            }' is not configured for asset: ${asset.id}`,
+            { namespace, assetId },
+          );
+        }
+        const head = await store.head(key);
+        if (
+          !head || head.byteLength !== asset.byteLength ||
+          head.digest !== asset.digest || head.mediaType !== asset.mediaType
+        ) {
+          throw createContentError(
+            "asset_corrupted",
+            `Asset body metadata integrity check failed: ${asset.id}`,
+            { namespace, assetId },
+          );
+        }
+        return await store.open(key);
+      }
+      const bytes = decodeDatabaseBody(row, asset);
       return new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(bytes);
@@ -840,7 +1012,101 @@ export function createDatabaseAssetRepository(
         recoverDuplicate: async (_event, { transaction }) =>
           mapAsset(await requireRow(transaction, namespace, assetId)),
       });
-      return result.value!;
+      const deleted = result.value!;
+      if (
+        current.location.kind !== "database" && current.location.backendId &&
+        current.location.key
+      ) {
+        const bodyStore = storage.readers.get(current.location.backendId);
+        if (bodyStore) {
+          await bodyStore.delete(current.location.key).then(async () => {
+            await options.session.query(
+              `UPDATE ${tables.nodes}
+               SET data = data || jsonb_build_object('bodyDeletedAt', $3::text),
+                   updated_at = NOW()
+               WHERE namespace = $1 AND id = $2 AND type = 'asset'
+                 AND data ->> 'state' = 'deleted'`,
+              [namespace, assetId, deletedAt],
+            );
+          }).catch(() => undefined);
+        }
+      }
+      return deleted;
+    },
+
+    async maintainBodies(maintenance = {}) {
+      const maintenanceNow = maintenance.now ?? now();
+      const orphanAfterMs = maintenance.orphanAfterMs ?? 24 * 60 * 60 * 1_000;
+      const limit = maintenance.limit ?? 100;
+      if (!Number.isFinite(orphanAfterMs) || orphanAfterMs < 0) {
+        throw new TypeError("assets orphanAfterMs must be non-negative.");
+      }
+      if (!Number.isSafeInteger(limit) || limit <= 0 || limit > 10_000) {
+        throw new TypeError(
+          "assets maintenance limit must be between 1 and 10000.",
+        );
+      }
+      let retriedDeletions = 0;
+      let orphanedBodiesDeleted = 0;
+      const pending = await options.session.query<AssetNodeRow>(
+        `SELECT * FROM ${tables.nodes}
+         WHERE type = 'asset' AND (data ->> 'state') = 'deleted'
+           AND (data ->> 'bodyDeletedAt') IS NULL
+           AND (data -> 'location' ->> 'kind') <> 'database'
+         ORDER BY updated_at, id LIMIT $1`,
+        [limit],
+      );
+      for (const row of pending.rows) {
+        const asset = mapAsset(row);
+        if (
+          asset.location.kind === "database" ||
+          !asset.location.backendId || !asset.location.key
+        ) continue;
+        const bodyStore = storage.readers.get(asset.location.backendId);
+        if (!bodyStore) continue;
+        try {
+          await bodyStore.delete(asset.location.key);
+          await options.session.query(
+            `UPDATE ${tables.nodes}
+             SET data = data || jsonb_build_object('bodyDeletedAt', $3::text),
+                 updated_at = NOW()
+             WHERE namespace = $1 AND id = $2 AND type = 'asset'
+               AND data ->> 'state' = 'deleted'`,
+            [asset.namespace, asset.id, maintenanceNow.toISOString()],
+          );
+          retriedDeletions++;
+        } catch {
+          // Keep the durable location for a later retry.
+        }
+      }
+      const remaining = limit - retriedDeletions;
+      if (storage.writer && remaining > 0) {
+        const prefix = assetBodySchemaPrefix({
+          prefix: storage.prefix,
+          databaseSchema: options.databaseSchema,
+        });
+        const cutoff = maintenanceNow.getTime() - orphanAfterMs;
+        let inspected = 0;
+        for await (const body of storage.writer.list({ prefix })) {
+          if (inspected++ >= remaining) break;
+          const modified = body.lastModified
+            ? new Date(body.lastModified).getTime()
+            : Number.NaN;
+          if (!Number.isFinite(modified) || modified > cutoff) continue;
+          const owner = await options.session.query<{ id: string }>(
+            `SELECT id FROM ${tables.nodes}
+             WHERE type = 'asset'
+               AND data -> 'location' ->> 'backendId' = $1
+               AND data -> 'location' ->> 'key' = $2
+             LIMIT 1`,
+            [storage.writer.backendId, body.key],
+          );
+          if (owner.rows[0]) continue;
+          await storage.writer.delete(body.key);
+          orphanedBodiesDeleted++;
+        }
+      }
+      return Object.freeze({ retriedDeletions, orphanedBodiesDeleted });
     },
 
     materialize(context, input) {

@@ -6,6 +6,7 @@ import type {
   PreparedContent,
   ResolvedContent,
 } from "../content/index.ts";
+import { mergePreparedContent } from "../content/index.ts";
 import {
   type LlmAttempt,
   llmAttemptContent,
@@ -719,15 +720,24 @@ function executeToolProcessor(
         context,
       });
       if (outcome.status === "completed") {
+        const origin = {
+          scope: { type: "thread" as const, id: execution.threadId },
+          producer: { type: "tool_execution", id: execution.id },
+        };
         const prepared = await context.content.prepare(
           valueContent(outcome.output, "tool.output"),
-          { operationKey: "tool:output" },
+          { operationKey: "tool:output", origin },
         );
-        const attachments = outcome.attachments
+        const explicitAttachments = outcome.attachments
           ? await context.content.prepare(outcome.attachments, {
             operationKey: "tool:attachments",
+            origin,
           })
           : undefined;
+        const attachments = mergePreparedContent(
+          outcome.extractedAttachments,
+          explicitAttachments,
+        );
         await context.toolExecutions.complete({
           id: execution.id,
           output: prepared,

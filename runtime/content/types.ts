@@ -9,6 +9,17 @@ export type AssetState =
   | "abandoned"
   | "deleted";
 
+/** Immutable provenance used for storage layout and operational correlation. */
+export type AssetOrigin = Readonly<{
+  scope:
+    | Readonly<{ type: "thread"; id: string }>
+    | Readonly<{ type: "collection"; collection: string; id: string }>
+    | Readonly<{ type: "namespace"; id: string }>;
+  producer: Readonly<{ type: string; id: string }>;
+  path?: string;
+  inferred?: boolean;
+}>;
+
 /** Physical placement of an asset body. */
 export type AssetBodyLocation =
   | {
@@ -17,6 +28,13 @@ export type AssetBodyLocation =
   }
   | {
     kind: "memory";
+    backendId?: string;
+    key?: string;
+  }
+  | {
+    kind: "filesystem";
+    backendId: string;
+    key: string;
   }
   | {
     kind: "object";
@@ -34,6 +52,7 @@ export interface AssetRecord {
   digest: `sha256:${string}`;
   state: AssetState;
   location: AssetBodyLocation;
+  origin?: AssetOrigin;
   createdAt: string;
   readyAt?: string;
   deletedAt?: string;
@@ -88,6 +107,7 @@ export type PreparedAsset = Readonly<{
   byteLength: number;
   digest: `sha256:${string}`;
   idempotencyKey?: string;
+  origin?: AssetOrigin;
   metadata?: Readonly<Record<string, unknown>>;
 }>;
 
@@ -112,6 +132,7 @@ export type ContentInput =
     name?: string;
     language?: string;
     metadata?: Record<string, unknown>;
+    origin?: AssetOrigin;
   }
   | {
     type: "json";
@@ -120,6 +141,7 @@ export type ContentInput =
     mediaType?: string;
     name?: string;
     metadata?: Record<string, unknown>;
+    origin?: AssetOrigin;
   }
   | {
     type: "image" | "audio" | "video" | "file";
@@ -131,12 +153,14 @@ export type ContentInput =
     language?: string;
     disposition?: "inline" | "attachment";
     metadata?: Record<string, unknown>;
+    origin?: AssetOrigin;
   };
 
 /** Context used to publish normalized content. */
 export interface NormalizeContentOptions {
   namespace: string;
   idempotencyKey?: string;
+  origin?: AssetOrigin;
 }
 
 /** Input for publishing one immutable body. */
@@ -147,6 +171,7 @@ export interface PublishAssetInput {
   id?: AssetId;
   idempotencyKey?: string;
   metadata?: Record<string, unknown>;
+  origin?: AssetOrigin;
   location?: AssetBodyLocation;
 }
 

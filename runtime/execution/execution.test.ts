@@ -32,6 +32,7 @@ type Fixture = Readonly<{
         causationId: string;
         correlationId: string;
         deduplicationId: string;
+        settlementScopeId: string;
         metadata: Readonly<Record<string, unknown>>;
       }>;
     }>
@@ -96,7 +97,7 @@ async function appendMessage(fixture: Fixture) {
   } as const;
   return await fixture.store.append(
     draft,
-    fixture.registry.durableConsumerIds(draft),
+    fixture.registry.durableConsumers(draft).map((item) => item.consumerId),
   );
 }
 
@@ -133,6 +134,7 @@ Deno.test("A24 private in-process Oxian recovers and executes a durable delivery
         causationId: committed.event.id,
         correlationId: committed.event.correlationId,
         deduplicationId: `delivery:${committed.deliveries[0].id}:effect`,
+        settlementScopeId: committed.event.id,
         metadata: {
           custom: "value",
           sourceEventId: committed.event.id,

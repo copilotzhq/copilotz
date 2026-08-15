@@ -52,6 +52,7 @@ export type DeliveryContextBase = Readonly<{
   databaseSchema: string;
   event: DurableEvent;
   delivery: EventDelivery;
+  settlementScopeId: string;
   signal: AbortSignal;
   idempotencyKey: string;
   dispatchAttemptId: string;
@@ -62,6 +63,7 @@ export type DeliveryMutationIdentity = Readonly<{
   causationId: string;
   correlationId: string;
   deduplicationId: string;
+  settlementScopeId: string;
   metadata: Readonly<Record<string, unknown>>;
 }>;
 
@@ -182,7 +184,7 @@ export type DeliveryExecutor = Readonly<{
   settleOutputs(scope: {
     databaseSchema?: string;
     namespace: string;
-    correlationId: string;
+    settlementScopeId: string;
   }): Promise<void>;
   shutdown(reason?: string): Promise<void>;
 }>;

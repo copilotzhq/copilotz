@@ -138,6 +138,7 @@ export function createRealtimeStreamWorkload(
           causationId: event.id,
           correlationId: event.correlationId,
           deduplicationId: `stream:${metadata.streamId}:${key}`,
+          settlementScopeId: event.id,
           metadata: Object.freeze({
             ...structuredClone(mutationMetadata),
             sourceEventId: event.id,
@@ -151,6 +152,7 @@ export function createRealtimeStreamWorkload(
         databaseSchema: metadata.databaseSchema,
         event,
         metadata,
+        settlementScopeId: event.id,
         signal,
         createMutationIdentity,
       }));

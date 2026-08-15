@@ -283,19 +283,89 @@ Deno.test("event-native run is a temporary attachment over one causal scope", as
   }
 });
 
-Deno.test("run cancellation aborts accepted durable work and rejects settlement", async () => {
-  let announceStarted!: () => void;
-  const started = new Promise<void>((resolve) => announceStarted = resolve);
-  let processorAborted = false;
-  const processor = defineProcessor<CopilotzProcessorContext>({
+Deno.test("detached durable descendants do not block the triggering run", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => release = resolve);
+  let announceDescendant!: () => void;
+  const descendantStarted = new Promise<void>((resolve) => {
+    announceDescendant = resolve;
+  });
+  const reserve = defineProcessor<CopilotzProcessorContext>({
+    id: "test.detached-reserve",
+    on: ["message.created"],
+    delivery: "durable",
+    settlement: "detached",
+    async handle(_event, context) {
+      await context.conversation.updateThread("thread-a", {
+        metadata: { detached: true },
+      });
+    },
+  });
+  const descendant = defineProcessor<CopilotzProcessorContext>({
+    id: "test.detached-descendant",
+    on: ["thread.updated"],
+    delivery: "durable",
+    async handle() {
+      announceDescendant();
+      await gate;
+    },
+  });
+  const fixture = await createFixture({
+    registry: await registryFor({ processors: [reserve, descendant] }),
+  });
+  try {
+    await createThread(fixture.engine);
+    const run = await fixture.engine.run({
+      namespace: NAMESPACE,
+      thread: "thread-a",
+      participant: "user-a",
+      recipientIds: ["support"],
+      content: "Consolidate later",
+    });
+    await descendantStarted;
+    await run.done;
+
+    const deliveries = await fixture.engine.deliveries.list({
+      namespace: NAMESPACE,
+    });
+    const reserveDelivery = deliveries.find((delivery) =>
+      delivery.consumerId === "processor:test.detached-reserve"
+    );
+    const descendantDelivery = deliveries.find((delivery) =>
+      delivery.consumerId === "processor:test.detached-descendant"
+    );
+    assertExists(reserveDelivery);
+    assertExists(descendantDelivery);
+    assertEquals(
+      descendantDelivery.settlementScopeId,
+      reserveDelivery.settlementScopeId,
+    );
+    assert(
+      reserveDelivery.settlementScopeId !== run.eventId,
+      "detached processor must fork the foreground settlement scope",
+    );
+    assertEquals(descendantDelivery.status, "leased");
+  } finally {
+    release?.();
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("run cancellation aborts only its foreground settlement scope", async () => {
+  let announceForegroundStarted!: () => void;
+  const foregroundStarted = new Promise<void>((resolve) => {
+    announceForegroundStarted = resolve;
+  });
+  let foregroundAborted = false;
+  const foreground = defineProcessor<CopilotzProcessorContext>({
     id: "test.run-cancellation",
     on: ["message.created"],
     delivery: "durable",
     async handle(_event, context) {
-      announceStarted();
+      announceForegroundStarted();
       await new Promise<void>((resolve, reject) => {
         const abort = () => {
-          processorAborted = true;
+          foregroundAborted = true;
           reject(context.signal.reason);
         };
         if (context.signal.aborted) abort();
@@ -303,8 +373,30 @@ Deno.test("run cancellation aborts accepted durable work and rejects settlement"
       });
     },
   });
+  let releaseDetached!: () => void;
+  const detachedGate = new Promise<void>((resolve) => {
+    releaseDetached = resolve;
+  });
+  let announceDetachedStarted!: () => void;
+  const detachedStarted = new Promise<void>((resolve) => {
+    announceDetachedStarted = resolve;
+  });
+  let detachedAborted = false;
+  const detached = defineProcessor<CopilotzProcessorContext>({
+    id: "test.detached-cancellation",
+    on: ["message.created"],
+    delivery: "durable",
+    settlement: "detached",
+    async handle(_event, context) {
+      announceDetachedStarted();
+      context.signal.addEventListener("abort", () => detachedAborted = true, {
+        once: true,
+      });
+      await detachedGate;
+    },
+  });
   const fixture = await createFixture({
-    registry: await registryFor({ processors: [processor] }),
+    registry: await registryFor({ processors: [foreground, detached] }),
   });
   try {
     await createThread(fixture.engine);
@@ -315,17 +407,51 @@ Deno.test("run cancellation aborts accepted durable work and rejects settlement"
       recipientIds: ["support"],
       content: "Cancel this run",
     });
-    await started;
+    await Promise.all([foregroundStarted, detachedStarted]);
     const rejected = assertRejects(() => run.done, Error, "user_stop");
     await run.cancel("user_stop");
     await rejected;
-    assertEquals(processorAborted, true);
-    const deliveries = await fixture.engine.deliveries.list({
+    assertEquals(foregroundAborted, true);
+    assertEquals(detachedAborted, false);
+
+    let deliveries = await fixture.engine.deliveries.list({
       namespace: NAMESPACE,
     });
-    assertEquals(deliveries.length, 1);
-    assertEquals(deliveries[0].status, "cancelled");
+    assertEquals(deliveries.length, 2);
+    assertEquals(
+      deliveries.find((delivery) =>
+        delivery.consumerId === "processor:test.run-cancellation"
+      )?.status,
+      "cancelled",
+    );
+    assertEquals(
+      deliveries.find((delivery) =>
+        delivery.consumerId === "processor:test.detached-cancellation"
+      )?.status,
+      "leased",
+    );
+
+    releaseDetached();
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      deliveries = await fixture.engine.deliveries.list({
+        namespace: NAMESPACE,
+      });
+      if (
+        deliveries.find((delivery) =>
+          delivery.consumerId === "processor:test.detached-cancellation"
+        )?.status === "succeeded"
+      ) break;
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    assertEquals(detachedAborted, false);
+    assertEquals(
+      deliveries.find((delivery) =>
+        delivery.consumerId === "processor:test.detached-cancellation"
+      )?.status,
+      "succeeded",
+    );
   } finally {
+    releaseDetached?.();
     await closeFixture(fixture);
   }
 });

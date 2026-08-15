@@ -95,6 +95,7 @@ async function createFixture(): Promise<Fixture> {
     coordinator,
     session,
     eventStore: store,
+    databaseSchema: TEST_SCHEMA,
     createId: () => `asset-edge-${++nextAssetEdgeId}`,
   });
   let nextDomainId = 0;

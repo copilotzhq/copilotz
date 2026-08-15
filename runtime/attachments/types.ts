@@ -272,6 +272,7 @@ export type RealtimeProviderContextBase = Readonly<{
   databaseSchema: string;
   event: DurableEvent;
   metadata: StreamDispatchMetadata;
+  settlementScopeId: string;
   signal: AbortSignal;
   createMutationIdentity: CreateDeliveryMutationIdentity;
 }>;

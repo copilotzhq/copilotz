@@ -27,7 +27,9 @@ result remains asset-backed durable content.
 A delivery is one guaranteed obligation for `(eventId, consumerId)`. Its states
 are `pending`, `leased`, `retry_wait`, `succeeded`, `cancelled`, and
 `dead_letter`. Rows track attempts, availability, lease owner/expiry, last
-error, and settlement timestamps—but never physical Oxian worker identity.
+error, and settlement timestamps—but never physical Oxian worker identity. Each
+delivery also owns a `settlementScopeId`, independently of the event's causation
+and correlation metadata.
 
 Defaults:
 
@@ -48,16 +50,25 @@ Execution is at-least-once. Built-in projections use delivery-derived
 deduplication IDs; external tools receive an idempotency key and must use it
 when calling non-idempotent systems.
 
-## Causal settlement
+## Explicit settlement scopes
 
-`run.done` and attachment send handles settle a causal tree, not every event
-sharing a correlation ID. Cancellation marks unsettled work in that scope and
-rejects the handle. Dead-lettered descendants also reject settlement.
+`run.done` and attachment send handles wait for deliveries in their explicit
+settlement scope, not every causally related event or every event sharing a
+correlation ID. Durable processor work inherits its triggering scope by default.
+A processor can declare `settlement: "detached"` to fork a durable, recoverable
+scope whose completion and failure do not block the caller.
 
-For detached Workers, settlement also waits for correlated Worker output frames
-already in flight. This prevents the database's final delivery update from
-racing the Gateway's final semantic event. The Gateway then confirms the durable
-scope again in case that event created more work.
+Causation remains unchanged across a detached boundary, so provenance and
+debugging still lead back to the triggering message. Descendant mutations
+automatically inherit the executing delivery's scope. Cancellation marks only
+unsettled deliveries in the selected scope; dead letters reject only handles
+waiting for that same scope.
+
+For remote Workers, settlement also waits for Worker output frames already in
+flight in the same settlement scope. This prevents the database's final delivery
+update from racing the Gateway's final semantic event without making detached
+work block the foreground handle. The Gateway then confirms the durable scope
+again in case that event created more work.
 
 ## Operations
 

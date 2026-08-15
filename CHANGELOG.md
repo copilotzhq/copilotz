@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.60.10 — 2026-08-15
+
+### Fixed
+
+- Content-v2 apply now builds a temporary partial candidate index before
+  semantic repair, eliminating a full candidate sort and PostgreSQL temporary
+  spill for every repaired message.
+- Concurrent semantic workers use stable thread-hash partitions, keeping every
+  thread on one worker while avoiding idle workers contending for adjacent
+  messages from the same thread.
+- Successful semantic repair removes the temporary index; interrupted runs
+  retain it so a resumable rerun can reuse the completed index build.
+
 ## 0.60.9 — 2026-08-15
 
 ### Changed

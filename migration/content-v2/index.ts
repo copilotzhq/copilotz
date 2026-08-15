@@ -30,6 +30,7 @@ type AssetRow = {
 };
 
 export type ContentV2MigrationMode = "dry-run" | "apply";
+export type ContentV2SemanticIndexMode = "blocking" | "concurrent";
 
 export type ContentV2SchemaReport =
   & ToolMessageRepairReport
@@ -57,6 +58,7 @@ export type MigrateContentV2SchemaOptions = Readonly<{
   batchSize?: number;
   semanticBatchSize?: number;
   semanticConcurrency?: number;
+  semanticIndexMode?: ContentV2SemanticIndexMode;
   uploadConcurrency?: number;
   onProgress?: (
     progress: ContentV2MigrationProgress,
@@ -90,6 +92,49 @@ function addSemanticReport(
 
 function q(schema: string, table: string): string {
   return `${quoteEventIdentifier(schema)}.${quoteEventIdentifier(table)}`;
+}
+
+const SEMANTIC_CANDIDATE_INDEX =
+  "_copilotz_content_v2_tool_message_created_idx";
+
+async function createSemanticCandidateIndex(
+  session: SqlSession,
+  schema: string,
+  mode: ContentV2SemanticIndexMode,
+): Promise<void> {
+  const valid = await session.query<{ valid: boolean }>(
+    `SELECT index_state.indisvalid AND index_state.indisready AS valid
+     FROM pg_catalog.pg_index index_state
+     JOIN pg_catalog.pg_class index_class
+       ON index_class.oid = index_state.indexrelid
+     JOIN pg_catalog.pg_namespace index_namespace
+       ON index_namespace.oid = index_class.relnamespace
+     WHERE index_namespace.nspname = $1 AND index_class.relname = $2`,
+    [schema, SEMANTIC_CANDIDATE_INDEX],
+  );
+  if (valid.rows[0]?.valid === true) return;
+  // PostgreSQL leaves an invalid relation behind when a concurrent build is
+  // interrupted. Remove it explicitly so IF NOT EXISTS cannot mask a broken
+  // resumability index on the next run.
+  await dropSemanticCandidateIndex(session, schema, mode);
+  await session.query(
+    `CREATE INDEX ${mode === "concurrent" ? "CONCURRENTLY " : ""}IF NOT EXISTS
+       ${quoteEventIdentifier(SEMANTIC_CANDIDATE_INDEX)}
+     ON ${q(schema, "nodes")} (created_at, id)
+     WHERE type = 'message'
+       AND data -> 'metadata' -> 'migratedFromV1' ->> 'senderType' = 'tool'`,
+  );
+}
+
+async function dropSemanticCandidateIndex(
+  session: SqlSession,
+  schema: string,
+  mode: ContentV2SemanticIndexMode,
+): Promise<void> {
+  await session.query(
+    `DROP INDEX ${mode === "concurrent" ? "CONCURRENTLY " : ""}IF EXISTS
+       ${q(schema, SEMANTIC_CANDIDATE_INDEX)}`,
+  );
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -266,6 +311,7 @@ export async function migrateContentV2Schema(
   const batchSize = options.batchSize ?? 100;
   const semanticBatchSize = options.semanticBatchSize ?? 250;
   const semanticConcurrency = options.semanticConcurrency ?? 1;
+  const semanticIndexMode = options.semanticIndexMode ?? "blocking";
   const uploadConcurrency = options.uploadConcurrency ?? 8;
   if (!Number.isSafeInteger(batchSize) || batchSize <= 0 || batchSize > 1_000) {
     throw new TypeError("content-v2 batchSize must be between 1 and 1000.");
@@ -284,6 +330,13 @@ export async function migrateContentV2Schema(
   ) {
     throw new TypeError(
       "content-v2 semanticConcurrency must be between 1 and 32.",
+    );
+  }
+  if (
+    semanticIndexMode !== "blocking" && semanticIndexMode !== "concurrent"
+  ) {
+    throw new TypeError(
+      "content-v2 semanticIndexMode must be 'blocking' or 'concurrent'.",
     );
   }
   if (
@@ -331,6 +384,12 @@ export async function migrateContentV2Schema(
       `Schema '${schema}' apply mode requires an object body store.`,
     );
   }
+  if (counts.messages > 0) {
+    // Concurrent workers otherwise sort every shrinking candidate set once per
+    // message. A small partial index turns that quadratic spill-heavy scan into
+    // a resumable ordered claim and is removed after semantic repair settles.
+    await createSemanticCandidateIndex(session, schema, semanticIndexMode);
+  }
   // Refuse ambiguous history before committing any resumable batch.
   const preflight = await planLegacyToolMessageRepair(session, schema, {
     batchSize: semanticBatchSize,
@@ -339,6 +398,10 @@ export async function migrateContentV2Schema(
   let semanticFailure: unknown;
   let lastReported = 0;
   let progressTail = Promise.resolve();
+  const semanticWorkerCount = Math.min(
+    semanticConcurrency,
+    preflight.report.candidateMessages,
+  );
   const reportProgress = (processed: number) => {
     if (
       processed !== preflight.report.candidateMessages &&
@@ -356,7 +419,7 @@ export async function migrateContentV2Schema(
     ).then(() => undefined);
     return progressTail;
   };
-  const repairWorker = async () => {
+  const repairWorker = async (workerIndex: number) => {
     while (
       semanticFailure === undefined &&
       semantic.candidateMessages < preflight.report.candidateMessages
@@ -365,9 +428,15 @@ export async function migrateContentV2Schema(
       try {
         batch = await session.transaction((transaction) =>
           repairLegacyToolMessages(transaction, schema, {
-            batchSize: semanticConcurrency === 1 ? semanticBatchSize : 1,
+            batchSize: semanticWorkerCount <= 1 ? semanticBatchSize : 1,
             finalize: false,
-            concurrent: semanticConcurrency > 1,
+            concurrent: semanticWorkerCount > 1,
+            ...(semanticWorkerCount <= 1 ? {} : {
+              partition: {
+                index: workerIndex,
+                count: semanticWorkerCount,
+              },
+            }),
           })
         );
       } catch (error) {
@@ -375,11 +444,9 @@ export async function migrateContentV2Schema(
         return;
       }
       if (batch.candidateMessages === 0) {
-        if (semanticConcurrency === 1) return;
-        const remaining = await dryRunCounts(session, schema);
-        if (remaining.messages === 0) return;
-        await new Promise((resolve) => setTimeout(resolve, 25));
-        continue;
+        // Every concurrent worker owns a stable thread-hash partition, so an
+        // empty claim means that partition is complete; no polling is needed.
+        return;
       }
       addSemanticReport(semantic, batch);
       await reportProgress(semantic.candidateMessages);
@@ -387,13 +454,8 @@ export async function migrateContentV2Schema(
   };
   await Promise.all(
     Array.from(
-      {
-        length: Math.min(
-          semanticConcurrency,
-          preflight.report.candidateMessages,
-        ),
-      },
-      () => repairWorker(),
+      { length: semanticWorkerCount },
+      (_, workerIndex) => repairWorker(workerIndex),
     ),
   );
   await progressTail;
@@ -402,6 +464,7 @@ export async function migrateContentV2Schema(
     finalizeLegacyToolMessageRepair(transaction, schema)
   );
   addSemanticReport(semantic, finalized);
+  await dropSemanticCandidateIndex(session, schema, semanticIndexMode);
   const postRepairCounts = await dryRunCounts(session, schema);
   /*
    * Semantic repair commits before relocation so each copied body remains

@@ -849,7 +849,7 @@ Deno.test("content-v2 applies independent messages with bounded semantic concurr
     const report = await migrateContentV2Schema(session, SCHEMA, {
       mode: "apply",
       semanticBatchSize: 2,
-      semanticConcurrency: 4,
+      semanticConcurrency: 12,
       assets: {
         storage: {
           type: "custom",
@@ -870,6 +870,15 @@ Deno.test("content-v2 applies independent messages with bounded semantic concurr
     assertEquals(
       (await session.query(
         `SELECT id FROM ${q("nodes")} WHERE type = 'message'`,
+      )).rows.length,
+      0,
+    );
+    assertEquals(
+      (await session.query(
+        `SELECT indexname FROM pg_indexes
+         WHERE schemaname = $1
+           AND indexname = '_copilotz_content_v2_tool_message_created_idx'`,
+        [SCHEMA],
       )).rows.length,
       0,
     );

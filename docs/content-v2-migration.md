@@ -14,6 +14,7 @@ const reports = await migrateContentV2Schemas(session, {
   schemas: ["tenant_copilotz_com"],
   semanticBatchSize: 250,
   semanticConcurrency: 8,
+  semanticIndexMode: "concurrent", // PostgreSQL; avoids blocking live writes
   batchSize: 250,
   uploadConcurrency: 16,
   onProgress(progress) {
@@ -54,14 +55,23 @@ Apply runs the same planner first, so ambiguous history is rejected before any
 mutation commits. With the default `semanticConcurrency: 1`, it repairs legacy
 messages in resumable transactions of `semanticBatchSize` records. PostgreSQL
 migrations may increase `semanticConcurrency` up to the available connection
-pool: workers claim individual messages with `FOR UPDATE SKIP LOCKED`, while a
-transaction-scoped advisory lock serializes messages from the same thread. This
-avoids remote-database N+1 latency without allowing duplicate work or reordering
-one thread. In concurrent mode, `semanticBatchSize` remains the planner page
-size and progress-reporting cadence. Asset relocation remains independently
-resumable and uses `batchSize` plus `uploadConcurrency` for bounded memory and
-object-store parallelism. `onProgress` reports planning, semantic, asset, and
-completion stages without coupling the migration to a logger.
+pool. Apply creates a small partial index over only the remaining legacy tool
+messages, so each ordered claim does not repeatedly scan, sort, or spill the
+whole candidate set. Concurrent workers own stable thread-hash partitions and
+claim individual messages with `FOR UPDATE SKIP LOCKED`; the thread advisory
+lock remains a defensive ordering guard. This avoids duplicate work and keeps
+one thread ordered without concentrating every worker on the oldest thread. The
+index is removed after successful semantic repair and retained after an
+interruption for the next resumable run.
+
+Use `semanticIndexMode: "concurrent"` on live PostgreSQL databases so the
+one-time index build does not block ordinary writes. The runtime-neutral default
+is `"blocking"`, which also works with PGlite. In concurrent mode,
+`semanticBatchSize` remains the planner page size and progress-reporting
+cadence. Asset relocation remains independently resumable and uses `batchSize`
+plus `uploadConcurrency` for bounded memory and object-store parallelism.
+`onProgress` reports planning, semantic, asset, and completion stages without
+coupling the migration to a logger.
 
 The object phase uploads and verifies one deterministic immutable key before it
 conditionally changes the graph location and deletes the database body. A crash

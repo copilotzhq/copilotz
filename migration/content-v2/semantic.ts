@@ -53,6 +53,10 @@ export type RepairLegacyToolMessagesOptions = Readonly<{
   batchSize?: number;
   finalize?: boolean;
   concurrent?: boolean;
+  partition?: Readonly<{
+    index: number;
+    count: number;
+  }>;
 }>;
 
 function addRepairReport(
@@ -1662,6 +1666,38 @@ export async function repairLegacyToolMessages(
       "Concurrent content-v2 repair must claim exactly one message per transaction.",
     );
   }
+  const partition = options.partition;
+  if (
+    partition &&
+    (
+      !Number.isSafeInteger(partition.count) ||
+      partition.count < 1 || partition.count > 32 ||
+      !Number.isSafeInteger(partition.index) ||
+      partition.index < 0 || partition.index >= partition.count
+    )
+  ) {
+    throw new TypeError(
+      "Content-v2 repair partition index must be within a partition count between 1 and 32.",
+    );
+  }
+  const queryParameters: unknown[] = [];
+  const partitionSql = partition
+    ? (() => {
+      queryParameters.push(partition.count, partition.index);
+      return `AND mod(
+        mod(hashtextextended(COALESCE(
+          NULLIF(BTRIM(data ->> 'threadId'), ''),
+          CASE WHEN source_type = 'thread'
+            THEN NULLIF(BTRIM(source_id), '') END
+        ), 2026081501), $1) + $1,
+        $1
+      ) = $2`;
+    })()
+    : "";
+  const limitSql = options.batchSize === undefined ? "" : (() => {
+    queryParameters.push(options.batchSize);
+    return `LIMIT $${queryParameters.length}`;
+  })();
   const rows = await transaction.query<NodeRow>(
     `SELECT id, namespace, name, content, data, source_type, source_id,
        created_at, updated_at
@@ -1670,10 +1706,11 @@ export async function repairLegacyToolMessages(
        data -> 'metadata' -> 'migratedFromV1' ->> 'senderType' = 'tool'
        ${options.includeRawV1 ? "OR data ->> 'senderType' = 'tool'" : ""}
      )
+     ${partitionSql}
      ORDER BY created_at, id
-     ${options.batchSize === undefined ? "" : "LIMIT $1"}
+     ${limitSql}
      ${options.concurrent ? "FOR UPDATE SKIP LOCKED" : ""}`,
-    options.batchSize === undefined ? [] : [options.batchSize],
+    queryParameters,
   );
   const report: ToolMessageRepairReport = {
     candidateMessages: rows.rows.length,

@@ -55,14 +55,16 @@ Apply runs the same planner first, so ambiguous history is rejected before any
 mutation commits. With the default `semanticConcurrency: 1`, it repairs legacy
 messages in resumable transactions of `semanticBatchSize` records. PostgreSQL
 migrations may increase `semanticConcurrency` up to the available connection
-pool. Apply creates a small partial index over only the remaining legacy tool
-messages, so each ordered claim does not repeatedly scan, sort, or spill the
-whole candidate set. Concurrent workers own stable thread-hash partitions and
-claim individual messages with `FOR UPDATE SKIP LOCKED`; the thread advisory
-lock remains a defensive ordering guard. This avoids duplicate work and keeps
-one thread ordered without concentrating every worker on the oldest thread. The
-index is removed after successful semantic repair and retained after an
-interruption for the next resumable run.
+pool. Apply creates migration-scoped partial indexes over the remaining legacy
+tool messages and the execution, participant, and migrated-event identities
+needed to repair them. Ordered claims and per-message identity resolution then
+avoid repeatedly scanning, sorting, or spilling the whole history. Concurrent
+workers own stable thread-hash partitions and claim individual messages with
+`FOR UPDATE SKIP LOCKED`; the thread advisory lock remains a defensive ordering
+guard. Prepared asset nodes and ownership edges are written in bounded sets.
+This avoids duplicate work and keeps one thread ordered without concentrating
+every worker on the oldest thread. The indexes are removed after successful
+semantic repair and retained after an interruption for the next resumable run.
 
 Use `semanticIndexMode: "concurrent"` on live PostgreSQL databases so the
 one-time index build does not block ordinary writes. The runtime-neutral default

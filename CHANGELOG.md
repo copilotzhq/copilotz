@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.60.11 — 2026-08-15
+
+### Fixed
+
+- Content-v2 apply now builds migration-scoped partial indexes for execution,
+  participant, and migrated-event identity lookups instead of repeatedly
+  scanning JSON history for every repaired message.
+- Prepared asset nodes and ownership edges are inserted in bounded sets,
+  reducing the number of database round trips in the semantic repair path.
+- Participants synthesized by content-v2 now use the canonical external-ID
+  source identity.
+
 ## 0.60.10 — 2026-08-15
 
 ### Fixed

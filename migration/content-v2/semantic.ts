@@ -289,38 +289,45 @@ function encodeBody(mediaType: string, body: Uint8Array) {
   };
 }
 
-async function insertPreparedAsset(
+async function insertPreparedAssets(
   transaction: SqlExecutor,
   schema: string,
-  asset: PreparedAsset,
+  assets: readonly PreparedAsset[],
 ): Promise<void> {
-  const encoded = encodeBody(asset.mediaType, asset.body);
-  const readyAt = new Date().toISOString();
-  await transaction.query(
-    `INSERT INTO ${q(schema, "nodes")} (
-       id, namespace, type, name, data, source_type, source_id
-     ) VALUES ($1, $2, 'asset', $3, $4::jsonb, 'content_v2', $5)
-     ON CONFLICT (id) DO NOTHING`,
-    [
-      asset.id,
-      asset.namespace,
-      asset.mediaType,
-      json({
+  if (assets.length === 0) return;
+  const rows = assets.map((asset) => {
+    const encoded = encodeBody(asset.mediaType, asset.body);
+    return {
+      id: asset.id,
+      namespace: asset.namespace,
+      name: asset.mediaType,
+      data: {
         mediaType: asset.mediaType,
         byteLength: asset.byteLength,
         digest: asset.digest,
         state: "ready",
         location: encoded.location,
         body: encoded.body,
-        readyAt,
+        readyAt: new Date().toISOString(),
         ...(asset.origin ? { origin: asset.origin } : {}),
         metadata: {
           ...(asset.metadata ?? {}),
           migratedBy: "copilotz.content-v2",
         },
-      }),
-      asset.idempotencyKey ?? asset.id,
-    ],
+      },
+      source_id: asset.idempotencyKey ?? asset.id,
+    };
+  });
+  await transaction.query(
+    `INSERT INTO ${q(schema, "nodes")} (
+       id, namespace, type, name, data, source_type, source_id
+     ) SELECT item.id, item.namespace, 'asset', item.name, item.data,
+         'content_v2', item.source_id
+       FROM jsonb_to_recordset($1::jsonb) AS item(
+         id text, namespace text, name text, data jsonb, source_id text
+       )
+     ON CONFLICT (id) DO NOTHING`,
+    [json(rows)],
   );
 }
 
@@ -331,15 +338,19 @@ async function ensureAssetEdges(
   ownerId: string,
   refs: readonly ContentRef[],
 ): Promise<void> {
-  for (const ref of refs) {
-    await transaction.query(
-      `INSERT INTO ${q(schema, "edges")} (
-         id, namespace, source_node_id, target_node_id, type, data, weight
-       ) VALUES ($1, $2, $3, $4, 'has_asset', '{}', 1)
-       ON CONFLICT DO NOTHING`,
-      [ulid(), namespace, ownerId, ref.assetId],
-    );
-  }
+  if (refs.length === 0) return;
+  await transaction.query(
+    `INSERT INTO ${q(schema, "edges")} (
+       id, namespace, source_node_id, target_node_id, type, data, weight
+     ) SELECT item.id, $2, $3, item.asset_id, 'has_asset', '{}', 1
+       FROM jsonb_to_recordset($1::jsonb) AS item(id text, asset_id text)
+     ON CONFLICT DO NOTHING`,
+    [
+      json(refs.map((ref) => ({ id: ulid(), asset_id: ref.assetId }))),
+      namespace,
+      ownerId,
+    ],
+  );
 }
 
 function content(value: unknown): ContentRef[] {
@@ -515,7 +526,7 @@ async function participantId(
        id, namespace, type, name, data, source_type, source_id,
        created_at, updated_at
      ) VALUES ($1, $2, 'participant', $3, $4::jsonb,
-       'external_id', $3, $5::timestamptz, $5::timestamptz)
+       'participant_external_id', $3, $5::timestamptz, $5::timestamptz)
      ON CONFLICT (id) DO NOTHING`,
     [
       id,
@@ -734,9 +745,11 @@ async function sanitizeExistingToolExecutionContent(
           continue;
         }
         report.extractedAssets += replacement.extractedAssets;
-        for (const asset of replacement.prepared.assets) {
-          await insertPreparedAsset(transaction, schema, asset);
-        }
+        await insertPreparedAssets(
+          transaction,
+          schema,
+          replacement.prepared.assets,
+        );
         removedAssetIds.push(ref.assetId);
         refs = replaceRoles(refs, [replacement.prepared], new Set([role]));
         changed = true;
@@ -1876,11 +1889,11 @@ export async function repairLegacyToolMessages(
     const prepared = outputs.flatMap((item) =>
       item.prepared ? [item.prepared] : []
     );
-    for (const batch of prepared) {
-      for (const asset of batch.assets) {
-        await insertPreparedAsset(transaction, schema, asset);
-      }
-    }
+    await insertPreparedAssets(
+      transaction,
+      schema,
+      prepared.flatMap((batch) => batch.assets),
+    );
     const attachments = await legacyAttachmentRefs(
       transaction,
       schema,

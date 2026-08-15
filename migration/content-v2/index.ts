@@ -94,47 +94,101 @@ function q(schema: string, table: string): string {
   return `${quoteEventIdentifier(schema)}.${quoteEventIdentifier(table)}`;
 }
 
-const SEMANTIC_CANDIDATE_INDEX =
-  "_copilotz_content_v2_tool_message_created_idx";
+type SemanticIndex = Readonly<{
+  name: string;
+  table: "nodes" | "events";
+  definition: string;
+}>;
 
-async function createSemanticCandidateIndex(
+const SEMANTIC_INDEXES: readonly SemanticIndex[] = Object.freeze([
+  {
+    name: "_copilotz_content_v2_tool_message_created_idx",
+    table: "nodes",
+    definition: `(created_at, id)
+      WHERE type = 'message'
+        AND data -> 'metadata' -> 'migratedFromV1' ->> 'senderType' = 'tool'`,
+  },
+  {
+    name: "_copilotz_content_v2_tool_execution_lookup_idx",
+    table: "nodes",
+    definition: `(namespace, (data ->> 'threadId'),
+        (data ->> 'toolCallId'),
+        (COALESCE(data -> 'tool' ->> 'id', data ->> 'toolId')),
+        created_at, id)
+      WHERE type = 'tool_execution'`,
+  },
+  {
+    name: "_copilotz_content_v2_participant_external_idx",
+    table: "nodes",
+    definition: `(namespace, (data ->> 'externalId'), created_at, id)
+      WHERE type = 'participant'`,
+  },
+  {
+    name: "_copilotz_content_v2_message_event_subject_idx",
+    table: "events",
+    definition: `(namespace, subject_id)
+      WHERE type = 'message.created'
+        AND metadata ->> 'migratedFromV1' = 'true'`,
+  },
+  {
+    name: "_copilotz_content_v2_message_event_payload_idx",
+    table: "events",
+    definition: `(namespace, (payload ->> 'messageId'))
+      WHERE type = 'message.created'
+        AND metadata ->> 'migratedFromV1' = 'true'`,
+  },
+]);
+
+async function createSemanticIndexes(
   session: SqlSession,
   schema: string,
   mode: ContentV2SemanticIndexMode,
 ): Promise<void> {
-  const valid = await session.query<{ valid: boolean }>(
-    `SELECT index_state.indisvalid AND index_state.indisready AS valid
-     FROM pg_catalog.pg_index index_state
-     JOIN pg_catalog.pg_class index_class
-       ON index_class.oid = index_state.indexrelid
-     JOIN pg_catalog.pg_namespace index_namespace
-       ON index_namespace.oid = index_class.relnamespace
-     WHERE index_namespace.nspname = $1 AND index_class.relname = $2`,
-    [schema, SEMANTIC_CANDIDATE_INDEX],
-  );
-  if (valid.rows[0]?.valid === true) return;
-  // PostgreSQL leaves an invalid relation behind when a concurrent build is
-  // interrupted. Remove it explicitly so IF NOT EXISTS cannot mask a broken
-  // resumability index on the next run.
-  await dropSemanticCandidateIndex(session, schema, mode);
-  await session.query(
-    `CREATE INDEX ${mode === "concurrent" ? "CONCURRENTLY " : ""}IF NOT EXISTS
-       ${quoteEventIdentifier(SEMANTIC_CANDIDATE_INDEX)}
-     ON ${q(schema, "nodes")} (created_at, id)
-     WHERE type = 'message'
-       AND data -> 'metadata' -> 'migratedFromV1' ->> 'senderType' = 'tool'`,
-  );
+  for (const index of SEMANTIC_INDEXES) {
+    const valid = await session.query<{ valid: boolean }>(
+      `SELECT index_state.indisvalid AND index_state.indisready AS valid
+       FROM pg_catalog.pg_index index_state
+       JOIN pg_catalog.pg_class index_class
+         ON index_class.oid = index_state.indexrelid
+       JOIN pg_catalog.pg_namespace index_namespace
+         ON index_namespace.oid = index_class.relnamespace
+       WHERE index_namespace.nspname = $1 AND index_class.relname = $2`,
+      [schema, index.name],
+    );
+    if (valid.rows[0]?.valid === true) continue;
+    // PostgreSQL leaves an invalid relation behind when a concurrent build is
+    // interrupted. Remove it explicitly so IF NOT EXISTS cannot mask a broken
+    // resumability index on the next run.
+    await dropSemanticIndex(session, schema, mode, index.name);
+    await session.query(
+      `CREATE INDEX ${
+        mode === "concurrent" ? "CONCURRENTLY " : ""
+      }IF NOT EXISTS ${quoteEventIdentifier(index.name)}
+       ON ${q(schema, index.table)} ${index.definition}`,
+    );
+  }
 }
 
-async function dropSemanticCandidateIndex(
+async function dropSemanticIndex(
   session: SqlSession,
   schema: string,
   mode: ContentV2SemanticIndexMode,
+  name: string,
 ): Promise<void> {
   await session.query(
     `DROP INDEX ${mode === "concurrent" ? "CONCURRENTLY " : ""}IF EXISTS
-       ${q(schema, SEMANTIC_CANDIDATE_INDEX)}`,
+       ${q(schema, name)}`,
   );
+}
+
+async function dropSemanticIndexes(
+  session: SqlSession,
+  schema: string,
+  mode: ContentV2SemanticIndexMode,
+): Promise<void> {
+  for (const index of [...SEMANTIC_INDEXES].reverse()) {
+    await dropSemanticIndex(session, schema, mode, index.name);
+  }
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -385,10 +439,10 @@ export async function migrateContentV2Schema(
     );
   }
   if (counts.messages > 0) {
-    // Concurrent workers otherwise sort every shrinking candidate set once per
-    // message. A small partial index turns that quadratic spill-heavy scan into
-    // a resumable ordered claim and is removed after semantic repair settles.
-    await createSemanticCandidateIndex(session, schema, semanticIndexMode);
+    // Migration-scoped partial indexes turn the ordered claim and repeated
+    // execution, participant, and migrated-event resolution into bounded
+    // lookups. They are removed after semantic repair settles.
+    await createSemanticIndexes(session, schema, semanticIndexMode);
   }
   // Refuse ambiguous history before committing any resumable batch.
   const preflight = await planLegacyToolMessageRepair(session, schema, {
@@ -464,7 +518,7 @@ export async function migrateContentV2Schema(
     finalizeLegacyToolMessageRepair(transaction, schema)
   );
   addSemanticReport(semantic, finalized);
-  await dropSemanticCandidateIndex(session, schema, semanticIndexMode);
+  await dropSemanticIndexes(session, schema, semanticIndexMode);
   const postRepairCounts = await dryRunCounts(session, schema);
   /*
    * Semantic repair commits before relocation so each copied body remains

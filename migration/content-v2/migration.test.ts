@@ -877,7 +877,7 @@ Deno.test("content-v2 applies independent messages with bounded semantic concurr
       (await session.query(
         `SELECT indexname FROM pg_indexes
          WHERE schemaname = $1
-           AND indexname = '_copilotz_content_v2_tool_message_created_idx'`,
+           AND indexname LIKE '_copilotz_content_v2_%'`,
         [SCHEMA],
       )).rows.length,
       0,

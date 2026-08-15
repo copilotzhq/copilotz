@@ -223,7 +223,26 @@ Deno.test("content-v2 relocates asset batches with bounded upload concurrency", 
         }
       },
     });
-    const report = await migrateContentV2Schema(session, SCHEMA, {
+    let metadataPageQueries = 0;
+    let bodyQueries = 0;
+    const observedSession: SqlSession = {
+      query(sql, params) {
+        if (
+          sql.includes("SELECT id, namespace, data - 'body' AS data")
+        ) {
+          metadataPageQueries++;
+        }
+        if (
+          sql.includes("data ->> 'body' AS body") &&
+          sql.includes("namespace = $1 AND id = $2")
+        ) {
+          bodyQueries++;
+        }
+        return session.query(sql, params);
+      },
+      transaction: (operation) => session.transaction(operation),
+    };
+    const report = await migrateContentV2Schema(observedSession, SCHEMA, {
       mode: "apply",
       batchSize: 4,
       uploadConcurrency: 2,
@@ -233,6 +252,8 @@ Deno.test("content-v2 relocates asset batches with bounded upload concurrency", 
     });
     assertEquals(report.uploadedObjects, 4);
     assertEquals(maximumActive, 2);
+    assertEquals(metadataPageQueries, 2);
+    assertEquals(bodyQueries, 4);
     const remaining = await session.query<{ count: string | number }>(
       `SELECT COUNT(*) AS count FROM ${q("nodes")}
        WHERE type = 'asset'

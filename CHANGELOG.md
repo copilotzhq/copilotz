@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.60.15 — 2026-08-15
+
+- Relocate database assets through metadata-only keyset pages and fetch one body
+  per active uploader, bounding resident body memory by upload concurrency
+  instead of page size.
+- Add an interruption-safe partial relocation index so resumable runs avoid
+  repeatedly scanning unrelated graph nodes.
+
 ## 0.60.14 — 2026-08-15
 
 - Release completed S3-compatible PUT response streams immediately, avoid

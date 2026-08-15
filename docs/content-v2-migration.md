@@ -74,7 +74,11 @@ one-time index build does not block ordinary writes. The runtime-neutral default
 is `"blocking"`, which also works with PGlite. In concurrent mode,
 `semanticBatchSize` remains the planner page size and progress-reporting
 cadence. Asset relocation remains independently resumable and uses `batchSize`
-plus `uploadConcurrency` for bounded memory and object-store parallelism.
+for metadata-only keyset pages. It creates a migration-scoped partial index for
+remaining database assets, then fetches one body per active uploader. Resident
+body memory is therefore bounded by `uploadConcurrency`, not by page size; the
+index is removed after success and retained after interruption for reuse.
+`uploadConcurrency` controls object-store parallelism independently.
 `onProgress` reports planning, semantic, asset, and completion stages without
 coupling the migration to a logger.
 

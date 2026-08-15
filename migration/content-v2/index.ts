@@ -30,6 +30,14 @@ type AssetRow = {
   cursor_created_at: string;
 };
 
+type AssetBodyRow = {
+  body: string;
+  encoding: string;
+  media_type: string;
+  digest: string;
+  byte_length: string | number;
+};
+
 export type ContentV2MigrationMode = "dry-run" | "apply";
 export type ContentV2SemanticIndexMode = "blocking" | "concurrent";
 
@@ -140,6 +148,15 @@ const SEMANTIC_INDEXES: readonly SemanticIndex[] = Object.freeze([
   },
 ]);
 
+const ASSET_RELOCATION_INDEX: SemanticIndex = Object.freeze({
+  name: "_copilotz_content_v2_database_asset_created_idx",
+  table: "nodes",
+  definition: `(created_at, id)
+    WHERE type = 'asset'
+      AND data ->> 'state' = 'ready'
+      AND data -> 'location' ->> 'kind' = 'database'`,
+});
+
 // Keep concurrent transactions large enough to amortize commit and connection
 // round trips, but bounded so a retry never rolls back an unreasonably large
 // partition. The planner page size remains independently tunable up to 1,000.
@@ -151,28 +168,44 @@ async function createSemanticIndexes(
   mode: ContentV2SemanticIndexMode,
 ): Promise<void> {
   for (const index of SEMANTIC_INDEXES) {
-    const valid = await session.query<{ valid: boolean }>(
-      `SELECT index_state.indisvalid AND index_state.indisready AS valid
-       FROM pg_catalog.pg_index index_state
-       JOIN pg_catalog.pg_class index_class
-         ON index_class.oid = index_state.indexrelid
-       JOIN pg_catalog.pg_namespace index_namespace
-         ON index_namespace.oid = index_class.relnamespace
-       WHERE index_namespace.nspname = $1 AND index_class.relname = $2`,
-      [schema, index.name],
-    );
-    if (valid.rows[0]?.valid === true) continue;
-    // PostgreSQL leaves an invalid relation behind when a concurrent build is
-    // interrupted. Remove it explicitly so IF NOT EXISTS cannot mask a broken
-    // resumability index on the next run.
-    await dropSemanticIndex(session, schema, mode, index.name);
-    await session.query(
-      `CREATE INDEX ${
-        mode === "concurrent" ? "CONCURRENTLY " : ""
-      }IF NOT EXISTS ${quoteEventIdentifier(index.name)}
-       ON ${q(schema, index.table)} ${index.definition}`,
-    );
+    await createMigrationIndex(session, schema, mode, index);
   }
+}
+
+async function createAssetRelocationIndex(
+  session: SqlSession,
+  schema: string,
+  mode: ContentV2SemanticIndexMode,
+): Promise<void> {
+  await createMigrationIndex(session, schema, mode, ASSET_RELOCATION_INDEX);
+}
+
+async function createMigrationIndex(
+  session: SqlSession,
+  schema: string,
+  mode: ContentV2SemanticIndexMode,
+  index: SemanticIndex,
+): Promise<void> {
+  const valid = await session.query<{ valid: boolean }>(
+    `SELECT index_state.indisvalid AND index_state.indisready AS valid
+     FROM pg_catalog.pg_index index_state
+     JOIN pg_catalog.pg_class index_class
+       ON index_class.oid = index_state.indexrelid
+     JOIN pg_catalog.pg_namespace index_namespace
+       ON index_namespace.oid = index_class.relnamespace
+     WHERE index_namespace.nspname = $1 AND index_class.relname = $2`,
+    [schema, index.name],
+  );
+  if (valid.rows[0]?.valid === true) return;
+  // PostgreSQL leaves an invalid relation behind when a concurrent build is
+  // interrupted. Remove it explicitly so IF NOT EXISTS cannot mask a broken
+  // resumability index on the next run.
+  await dropSemanticIndex(session, schema, mode, index.name);
+  await session.query(
+    `CREATE INDEX ${mode === "concurrent" ? "CONCURRENTLY " : ""}IF NOT EXISTS
+       ${quoteEventIdentifier(index.name)} ON ${q(schema, index.table)}
+       ${index.definition}`,
+  );
 }
 
 async function dropSemanticIndex(
@@ -219,15 +252,13 @@ function decodeBase64(value: string): Uint8Array {
   return bytes;
 }
 
-function databaseBytes(row: AssetRow): Uint8Array {
-  const data = record(row.data);
-  const location = record(data.location);
-  if (location.kind !== "database" || typeof data.body !== "string") {
-    throw new Error(`Asset '${row.id}' is not a readable database body.`);
+function databaseBytes(assetId: string, row: AssetBodyRow): Uint8Array {
+  if (typeof row.body !== "string") {
+    throw new Error(`Asset '${assetId}' is not a readable database body.`);
   }
-  return location.encoding === "base64"
-    ? decodeBase64(data.body)
-    : new TextEncoder().encode(data.body);
+  return row.encoding === "base64"
+    ? decodeBase64(row.body)
+    : new TextEncoder().encode(row.body);
 }
 
 function storedOrigin(value: unknown): AssetOrigin | undefined {
@@ -385,11 +416,29 @@ async function relocateAssetPage(
     uploadConcurrency,
     async (row): Promise<UploadResult> => {
       try {
-        const data = record(row.data);
-        const mediaType = String(data.mediaType ?? "");
-        const digest = String(data.digest ?? "") as `sha256:${string}`;
-        const byteLength = Number(data.byteLength);
-        const bytes = databaseBytes(row);
+        // The page query carries metadata only. Fetching one body per active
+        // uploader bounds resident memory by upload concurrency rather than
+        // by page size, even when every asset is near the database limit.
+        const body = await session.query<AssetBodyRow>(
+          `SELECT data ->> 'body' AS body,
+             data -> 'location' ->> 'encoding' AS encoding,
+             data ->> 'mediaType' AS media_type,
+             data ->> 'digest' AS digest,
+             data ->> 'byteLength' AS byte_length
+           FROM ${q(schema, "nodes")}
+           WHERE namespace = $1 AND id = $2 AND type = 'asset'
+             AND data ->> 'state' = 'ready'
+             AND data -> 'location' ->> 'kind' = 'database'`,
+          [row.namespace, row.id],
+        );
+        if (body.rows.length !== 1) {
+          throw new Error("database asset body changed during relocation");
+        }
+        const stored = body.rows[0];
+        const mediaType = stored.media_type;
+        const digest = stored.digest as `sha256:${string}`;
+        const byteLength = Number(stored.byte_length);
+        const bytes = databaseBytes(row.id, stored);
         if (
           !mediaType || !digest.startsWith("sha256:") ||
           bytes.byteLength !== byteLength ||
@@ -697,6 +746,10 @@ export async function migrateContentV2Schema(
       failures: Object.freeze([]),
     });
   }
+  // Keep interrupted relocation resumable without repeatedly scanning every
+  // graph node. A successful run removes this migration-only index; an
+  // interrupted run reuses it on the next attempt.
+  await createAssetRelocationIndex(session, schema, semanticIndexMode);
   let cursorCreatedAt: string | null = null;
   let cursorId = "";
   let uploadedObjects = 0;
@@ -704,7 +757,7 @@ export async function migrateContentV2Schema(
   const failures: { id: string; message: string }[] = [];
   while (true) {
     const page: { rows: AssetRow[] } = await session.query<AssetRow>(
-      `SELECT id, namespace, data, created_at,
+      `SELECT id, namespace, data - 'body' AS data, created_at,
          created_at::text AS cursor_created_at
        FROM ${q(schema, "nodes")}
        WHERE type = 'asset' AND data ->> 'state' = 'ready'
@@ -736,6 +789,14 @@ export async function migrateContentV2Schema(
       total: postRepairCounts.assets,
       bytesMoved,
     });
+  }
+  if (failures.length === 0) {
+    await dropSemanticIndex(
+      session,
+      schema,
+      semanticIndexMode,
+      ASSET_RELOCATION_INDEX.name,
+    );
   }
   const result = Object.freeze({
     schema,

@@ -498,8 +498,9 @@ export async function migrateContentV2Schema(
         return;
       }
       if (batch.candidateMessages === 0) {
-        // Every concurrent worker owns a stable thread-hash partition, so an
-        // empty claim means that partition is complete; no polling is needed.
+        // Every concurrent worker owns a stable logical-execution partition,
+        // so an empty claim means that partition is complete; no polling is
+        // needed.
         return;
       }
       addSemanticReport(semantic, batch);

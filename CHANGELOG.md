@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.60.12 — 2026-08-15
+
+### Fixed
+
+- Concurrent content-v2 workers now partition and lock by logical tool execution
+  identity instead of whole thread. Independent calls in very large legacy
+  threads can repair in parallel while reused call identities remain ordered on
+  one worker.
+
 ## 0.60.11 — 2026-08-15
 
 ### Fixed

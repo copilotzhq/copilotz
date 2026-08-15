@@ -59,12 +59,14 @@ pool. Apply creates migration-scoped partial indexes over the remaining legacy
 tool messages and the execution, participant, and migrated-event identities
 needed to repair them. Ordered claims and per-message identity resolution then
 avoid repeatedly scanning, sorting, or spilling the whole history. Concurrent
-workers own stable thread-hash partitions and claim individual messages with
-`FOR UPDATE SKIP LOCKED`; the thread advisory lock remains a defensive ordering
-guard. Prepared asset nodes and ownership edges are written in bounded sets.
-This avoids duplicate work and keeps one thread ordered without concentrating
-every worker on the oldest thread. The indexes are removed after successful
-semantic repair and retained after an interruption for the next resumable run.
+workers own stable logical-execution partitions and claim individual messages
+with `FOR UPDATE SKIP LOCKED`; an advisory lock keeps repeated
+`thread + tool-call + tool` identities ordered. Independent tool calls inside
+one large thread can therefore use separate workers. Prepared asset nodes and
+ownership edges are written in bounded sets. This avoids duplicate work without
+concentrating an entire large thread on one worker. The indexes are removed
+after successful semantic repair and retained after an interruption for the next
+resumable run.
 
 Use `semanticIndexMode: "concurrent"` on live PostgreSQL databases so the
 one-time index build does not block ordinary writes. The runtime-neutral default

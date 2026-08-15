@@ -90,6 +90,31 @@ function q(schema: string, table: string): string {
   return `${quoteEventIdentifier(schema)}.${quoteEventIdentifier(table)}`;
 }
 
+// Keep the SQL identity equivalent to oneToolCall(): a reused provider call is
+// ordered with its peers, while independent calls inside one large thread can
+// be repaired by different workers.
+const REPAIR_IDENTITY_SQL = `jsonb_build_array(
+  COALESCE(
+    NULLIF(BTRIM(data ->> 'threadId'), ''),
+    CASE WHEN source_type = 'thread'
+      THEN NULLIF(BTRIM(source_id), '') END
+  ),
+  COALESCE(
+    data -> 'metadata' -> 'toolCalls' -> 0 ->> 'id',
+    data -> 'metadata' -> 'toolCalls' -> 0 ->> 'toolCallId',
+    data -> 'toolCalls' -> 0 ->> 'id',
+    data -> 'toolCalls' -> 0 ->> 'toolCallId'
+  ),
+  COALESCE(
+    data -> 'metadata' -> 'toolCalls' -> 0 -> 'tool' ->> 'id',
+    data -> 'metadata' -> 'toolCalls' -> 0 -> 'tool' ->> 'name',
+    data -> 'metadata' -> 'toolCalls' -> 0 ->> 'toolId',
+    data -> 'toolCalls' -> 0 -> 'tool' ->> 'id',
+    data -> 'toolCalls' -> 0 -> 'tool' ->> 'name',
+    data -> 'toolCalls' -> 0 ->> 'toolId'
+  )
+)::text`;
+
 function record(value: unknown): Record<string, unknown> {
   if (typeof value === "string") {
     try {
@@ -1698,11 +1723,7 @@ export async function repairLegacyToolMessages(
     ? (() => {
       queryParameters.push(partition.count, partition.index);
       return `AND mod(
-        mod(hashtextextended(COALESCE(
-          NULLIF(BTRIM(data ->> 'threadId'), ''),
-          CASE WHEN source_type = 'thread'
-            THEN NULLIF(BTRIM(source_id), '') END
-        ), 2026081501), $1) + $1,
+        mod(hashtextextended(${REPAIR_IDENTITY_SQL}, 2026081501), $1) + $1,
         $1
       ) = $2`;
     })()
@@ -1738,13 +1759,17 @@ export async function repairLegacyToolMessages(
     let row = sourceRow;
     const data = record(row.data);
     const threadId = messageThread(row, data);
+    const parsed = oneToolCall(data, row.id);
     if (options.concurrent) {
-      // Different workers may claim different messages from one thread. The
-      // transaction-scoped lock keeps their execution matching and graph
-      // mutations ordered without reducing concurrency across threads.
+      // The stable partition already keeps one logical execution identity on
+      // one worker. The lock is a defensive fence for direct callers or a
+      // concurrent migration restarted with a different worker count.
       await transaction.query(
         "SELECT pg_advisory_xact_lock(hashtextextended($1, $2))",
-        [threadId, 2_026_081_500],
+        [
+          JSON.stringify([threadId, parsed.toolCallId, parsed.toolId]),
+          2_026_081_500,
+        ],
       );
     }
     const thread = await transaction.query<{ namespace: string }>(
@@ -1771,7 +1796,6 @@ export async function repairLegacyToolMessages(
       );
       row = { ...row, namespace: threadNamespace };
     }
-    const parsed = oneToolCall(data, row.id);
     const baseMatches = await transaction.query<NodeRow>(
       `SELECT id, namespace, name, content, data, source_type, source_id,
          created_at, updated_at

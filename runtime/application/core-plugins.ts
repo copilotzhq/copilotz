@@ -7,11 +7,6 @@ import {
 import { createUsageWorkflowPlugin } from "../usage/index.ts";
 import { createScheduledJobsPlugin } from "../schedules/index.ts";
 import { createKnowledgePlugin } from "../knowledge/index.ts";
-import {
-  createAgentAskPlugin,
-  createBuiltInLlmProvidersPlugin,
-  createTextWorkflowPlugin,
-} from "../workflows/index.ts";
 import type {
   CopilotzCorePluginOptions,
   CreateCopilotzCorePlugins,
@@ -29,36 +24,25 @@ function enabled<T>(
 /** Creates the ordered built-in plugin layer used by the public runtime. */
 export const createCopilotzCorePlugins: CreateCopilotzCorePlugins = (
   options: false | CopilotzCorePluginOptions = {},
-  defaults = {},
+  _defaults = {},
 ) => {
   if (options === false) return Object.freeze([]);
   const plugins = [];
-  const providers = enabled(options.providers, true);
   const tools = enabled(options.tools, false);
   const webTools = enabled(options.webTools, false);
   const finance = enabled(options.finance, false);
   const memory = enabled(options.memory, false);
   const usage = enabled(options.usage, false);
-  const text = enabled(options.text, true);
-  const ask = enabled(options.ask, false);
   const schedules = enabled(options.schedules, false);
   const knowledge =
     options.knowledge === false || options.knowledge === undefined
       ? undefined
       : options.knowledge;
-  if (providers) plugins.push(createBuiltInLlmProvidersPlugin(providers));
   if (tools) plugins.push(createBuiltInToolsPlugin(tools));
   if (webTools) plugins.push(createWebToolsPlugin(webTools));
   if (finance) plugins.push(createFinanceToolsPlugin(finance));
   if (memory) plugins.push(createLongTermMemoryPlugin(memory));
   if (usage) plugins.push(createUsageWorkflowPlugin(usage));
-  if (text) {
-    plugins.push(createTextWorkflowPlugin({
-      ...text,
-      toolCatalog: text.toolCatalog ?? defaults.toolCatalog,
-    }));
-  }
-  if (ask) plugins.push(createAgentAskPlugin(ask));
   if (schedules) plugins.push(createScheduledJobsPlugin(schedules));
   if (knowledge) plugins.push(createKnowledgePlugin(knowledge));
   return Object.freeze(plugins);

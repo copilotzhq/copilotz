@@ -181,12 +181,7 @@ async function createFixture(): Promise<Fixture> {
   const processorAttempts: Fixture["processorAttempts"] = [];
   const processor = defineProcessor({
     id: "contract.child.observe",
-    on: [
-      "contract_child.created",
-      "contract_child.updated",
-      "contract_child.deleted",
-    ],
-    delivery: "durable",
+    on: [{ eventType: "contract_child.created" }, { eventType: "contract_child.updated" }, { eventType: "contract_child.deleted" }],
     async handle(event, context) {
       assert(event.durable);
       const id = event.subject!.id;

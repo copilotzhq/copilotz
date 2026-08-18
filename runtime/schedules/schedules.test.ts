@@ -4,12 +4,12 @@ import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import type { Agent } from "../resources/index.ts";
 import { createCopilotzApplication } from "../application/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
-import { createSqlSession } from "../events/index.ts";
 import { definePlugin, defineProcessor } from "../plugins/index.ts";
+import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "../workflows/index.ts";
+} from "../tools/index.ts";
 import { createScheduledJobsPlugin, getNextScheduledRunAt } from "./index.ts";
 
 const NAMESPACE = "tenant-schedules";
@@ -27,6 +27,7 @@ Deno.test("scheduled due transition atomically advances and dispatches one publi
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_schedules",
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [createScheduledJobsPlugin()],
     resources: { agents: [agent] },
     engine: { now: () => BASE },
@@ -172,8 +173,7 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
   const outputs = new Map<string, unknown>();
   const driver = defineProcessor<CopilotzProcessorContext>({
     id: "fixture.scheduled-jobs-tool",
-    on: ["fixture.scheduled_jobs.requested"],
-    delivery: "durable",
+    on: [{ eventType: "fixture.scheduled_jobs.requested" }],
     async handle(event, processor) {
       if (!event.durable) return;
       const tool = processor.resources.require<WorkflowTool>(
@@ -223,6 +223,7 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
     database: db,
     databaseSchema: "copilotz_v3_schedule_tool",
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [createScheduledJobsPlugin(), fixturePlugin],
     resources: { agents: [agent] },
     engine: { now: () => BASE },
@@ -325,6 +326,7 @@ Deno.test("scheduled lifecycle and concurrent ticks remain tenant scoped and lea
     database: db,
     databaseSchema: "copilotz_v3_schedule_lifecycle",
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [createScheduledJobsPlugin()],
     resources: { agents: [agent] },
     engine: { now: () => BASE },

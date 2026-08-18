@@ -2,7 +2,7 @@ import type { ContentKind, ContentRef } from "../content/index.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "../workflows/index.ts";
+} from "../tools/index.ts";
 import { embedKnowledgeTexts } from "./resources.ts";
 import type {
   KnowledgeDocumentSourceInput,

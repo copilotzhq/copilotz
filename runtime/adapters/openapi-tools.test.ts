@@ -1,6 +1,6 @@
 import { assertEquals, assertStrictEquals } from "@std/assert";
 import type { API } from "../resources/index.ts";
-import type { WorkflowToolExecutionContext } from "../workflows/index.ts";
+import type { WorkflowToolExecutionContext } from "../tools/index.ts";
 import { generateApiTools } from "./openapi-tools.ts";
 
 Deno.test("OpenAPI preparation receives the trusted database and collection scope", async () => {

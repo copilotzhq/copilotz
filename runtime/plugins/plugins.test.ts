@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import {
   createPluginRegistry,
+  createTransientProcessorSet,
   definePlugin,
   defineProcessor,
   type Processor,
@@ -217,26 +218,22 @@ Deno.test("processor stable IDs override while different IDs remain independent"
   const calls: string[] = [];
   const first = defineProcessor({
     id: "memory.observe",
-    on: ["message.created"],
-    delivery: "durable",
+    on: [{ eventType: "message.created" }],
     handle: () => {
       calls.push("first");
     },
   });
   const replacement = defineProcessor({
     id: "memory.observe",
-    on: ["message.created"],
-    delivery: "durable",
+    on: [{ eventType: "message.created" }],
     handle: () => {
       calls.push("replacement");
     },
   });
   const independent = defineProcessor({
     id: "audit.observe",
-    on: ["message.created"],
-    delivery: "durable",
+    on: [{ eventType: "message.created", namespace: "tenant-a" }],
     settlement: "detached",
-    filter: (event) => event.namespace === "tenant-a",
     handle: () => {
       calls.push("independent");
     },
@@ -274,56 +271,35 @@ Deno.test("processor stable IDs override while different IDs remain independent"
       metadata: {},
       correlationId: "event-a",
       createdAt: new Date().toISOString(),
+      data: draft.payload,
     }, {});
   }
   assertEquals(calls, ["replacement", "independent"]);
 });
 
-Deno.test("durable matching rejects asynchronous filters before commit", async () => {
-  const invalid = defineProcessor({
-    id: "invalid.async-filter",
-    on: ["control.created"],
-    delivery: "durable",
-    filter: (() => Promise.resolve(true)) as unknown as () => boolean,
-    handle: () => undefined,
-  });
-  const registry = await createPluginRegistry({
-    plugins: [plugin({ id: "invalid", processors: [invalid] })],
-  });
-  assertThrows(
-    () =>
-      registry.durableConsumers({
-        type: "control.created",
-        namespace: "tenant-a",
-        payload: {},
-      }),
-    TypeError,
-    "synchronous and pure",
-  );
-});
-
-Deno.test("live subscriptions receive ephemeral events without durable matching", async () => {
+Deno.test("defineProcessor rejects string matchers", () => {
   assertThrows(
     () =>
       defineProcessor({
-        id: "invalid.detached-live",
-        on: ["audio.delta"],
-        delivery: "live",
-        settlement: "detached",
+        id: "invalid.string-on",
+        on: ["control.created"] as unknown as Processor["on"],
         handle: () => undefined,
       }),
     TypeError,
-    "cannot use detached durable settlement",
+    "matcher object",
   );
+});
+
+Deno.test("transient processors observe events without durable matching", async () => {
   const live = defineProcessor({
     id: "captions.live",
-    on: ["audio.delta"],
-    delivery: "live",
+    on: [{ eventType: "audio.delta" }],
     handle: () => undefined,
   });
   const registry = await createPluginRegistry({
-    plugins: [plugin({ id: "live", processors: [live] })],
+    plugins: [plugin({ id: "static", processors: [] })],
   });
+  const transients = createTransientProcessorSet([live]);
   const event = {
     durable: false,
     type: "audio.delta",
@@ -337,7 +313,7 @@ Deno.test("live subscriptions receive ephemeral events without durable matching"
     sequence: 1,
     createdAt: new Date().toISOString(),
   } as const;
-  assertEquals(registry.matchLive(event), [live]);
+  assertEquals(transients.match(event), [live]);
   assertEquals(
     registry.matchDurable({
       type: "audio.delta",
@@ -350,7 +326,13 @@ Deno.test("live subscriptions receive ephemeral events without durable matching"
 
 Deno.test("A55 plugin core is runtime-neutral and contains no legacy processor controls", async () => {
   for (
-    const module of ["index.ts", "processor.ts", "registry.ts", "types.ts"]
+    const module of [
+      "index.ts",
+      "processor.ts",
+      "registry.ts",
+      "types.ts",
+      "match.ts",
+    ]
   ) {
     const source = await Deno.readTextFile(new URL(module, import.meta.url));
     assert(!/\bDeno\b|\bBun\b|\bprocess\b/.test(source));
@@ -358,5 +340,6 @@ Deno.test("A55 plugin core is runtime-neutral and contains no legacy processor c
     assert(!/\bclass\s+\w+/.test(source));
     assert(!/loaders\/resources|runtime\/cli|server\//.test(source));
     assert(!/producedEvents|shouldProcess|\bpriority\b/.test(source));
+    assert(!/ProcessorDelivery|\bfilter\?:/.test(source));
   }
 });

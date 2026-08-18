@@ -4,6 +4,7 @@ import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { type CopilotzEngine, createCopilotzEngine } from "../engine/index.ts";
 import { createSqlSession } from "../events/index.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
+import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import {
   createUsageWorkflowPlugin,
   type CreateUsageWorkflowPluginOptions,
@@ -22,7 +23,7 @@ async function createFixture(
 ): Promise<Fixture> {
   const db = await createTestDatabase({ url: ":memory:" });
   const registry = await createPluginRegistry({
-    plugins: [createUsageWorkflowPlugin(options)],
+    plugins: [coreCollectionsPlugin, createUsageWorkflowPlugin(options)],
   });
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),

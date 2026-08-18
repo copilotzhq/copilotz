@@ -8,7 +8,9 @@ import type {
   ContentPreparer,
   ContentRef,
   ContentResolver,
+  ContentSequence,
   DatabaseAssetRepository,
+  DurableContentInput,
   PreparedContent,
   PublishAssetInput,
   ResolvedContent,
@@ -66,6 +68,7 @@ import type {
   EventDispatchReport,
   EventPublisher,
   EventStore,
+  SqlExecutor,
   SqlSession,
 } from "../events/index.ts";
 import type {
@@ -76,11 +79,14 @@ import type {
   DeliveryWorkload,
   LiveProcessorContextBase,
 } from "../execution/index.ts";
+import type { CollectionRuntime } from "../collections/index.ts";
+import type { FeatureInvoker } from "../features/index.ts";
 import type {
   PluginRegistry,
   PluginResource,
   PluginResourceOrigin,
   PluginResourceType,
+  Processor,
 } from "../plugins/index.ts";
 import type {
   ConnectAttachmentInput,
@@ -143,6 +149,11 @@ export type ScopedContent = Readonly<{
     input: ContentInput | readonly ContentInput[],
     options: { operationKey: string; origin?: AssetOrigin },
   ): Promise<PreparedContent>;
+  materialize(
+    input: DurableContentInput,
+    options?: { origin?: AssetOrigin },
+  ): Promise<ContentSequence>;
+  linkOwner(ownerId: string, content: ContentSequence): Promise<void>;
   publish(
     input: Omit<PublishAssetInput, "namespace" | "idempotencyKey">,
     options: { operationKey: string },
@@ -317,15 +328,18 @@ export type CopilotzProcessorCapabilities = Readonly<{
   events: ScopedEvents;
   resources: ScopedPluginResources;
   content: ScopedContent;
-  conversation: ScopedConversation;
   collections: Readonly<Record<string, ScopedEventCollection>>;
-  llmAttempts: ScopedLlmAttempts;
-  toolExecutions: ScopedToolExecutions;
   relations: ScopedRelations;
   schedules: ScopedScheduledJobs;
   knowledge: ScopedKnowledge;
   /** Internal typed aggregate used by semantic-memory consolidation. */
   memory: ScopedMemoryConsolidation;
+  /** Phase 2 collection kernel transaction. */
+  transaction: CollectionRuntime["transaction"];
+  /** Bound collection kernel. Processors query and write through this. */
+  collectionRuntime: CollectionRuntime;
+  /** Reusable plugin commands. Joins this delivery's collection runtime. */
+  features: FeatureInvoker;
 }>;
 
 export type CopilotzProcessorContext =
@@ -404,6 +418,8 @@ export type CreateCopilotzEngineOptions = Readonly<{
   maxAttempts?: number;
   retryBaseMs?: number;
   retryCapMs?: number;
+  /** Connection-bound processors. Same contract as static, no delivery rows. */
+  transientProcessors?: readonly Processor[];
 }>;
 
 export type CopilotzEngineMaintenanceResult = Readonly<{
@@ -425,6 +441,7 @@ export type CopilotzEngineDatabaseScope = Readonly<{
   }>;
   conversation: ConversationRepository;
   collections: EventCollections;
+  collectionRuntime: CollectionRuntime;
   llmAttempts: LlmAttemptRepository;
   toolExecutions: ToolExecutionRepository;
   relations: DomainRelationRepository;
@@ -470,6 +487,7 @@ export type CopilotzEngine = Readonly<{
   }>;
   conversation: ConversationRepository;
   collections: EventCollections;
+  collectionRuntime: CollectionRuntime;
   llmAttempts: LlmAttemptRepository;
   toolExecutions: ToolExecutionRepository;
   relations: DomainRelationRepository;
@@ -543,6 +561,14 @@ export type CopilotzEngine = Readonly<{
     assetOrphanAfterMs?: number;
   }): Promise<CopilotzEngineMaintenanceResult>;
   shutdown(reason?: string): Promise<void>;
+  bindTransient(
+    processor: Processor,
+    options?: Readonly<{
+      namespace?: string;
+      afterPosition?: string;
+      signal?: AbortSignal;
+    }>,
+  ): Promise<() => void>;
 }>;
 
 export type CreateCopilotzProcessorCapabilitiesOptions = Readonly<{
@@ -561,8 +587,10 @@ export type CreateCopilotzProcessorCapabilitiesOptions = Readonly<{
   memory: MemoryConsolidationRepository;
   eventHub: CopilotzEventHub;
   publishEvent?: (event: CopilotzEvent) => Promise<void>;
-  eventStore: Pick<EventStore, "listEvents">;
+  eventStore: Pick<EventStore, "listEvents" | "tables">;
+  session: SqlExecutor;
   now?: () => Date;
+  collectionRuntime: CollectionRuntime;
 }>;
 
 export type CopilotzEngineDispatchReport = EventDispatchReport;

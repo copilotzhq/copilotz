@@ -1,15 +1,24 @@
+import type { CollectionRecord } from "../collections/index.ts";
 import type { Agent } from "../resources/index.ts";
 import { assetIdFromRef, formatAssetRef } from "../content/index.ts";
 import {
-  type Participant,
   type ParticipantInput,
   toolExecutionContent,
 } from "../domain/index.ts";
+import {
+  createMessageRecord,
+  createThreadRecord,
+  ensureParticipantRecord,
+  findParticipantByExternalId,
+  loadCollectionRecord,
+  updateParticipantRecord,
+  updateThreadRecord,
+} from "../engine/collection-writes.ts";
 import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "../workflows/index.ts";
+} from "../tools/index.ts";
 
 export const BUILT_IN_CORE_TOOL_IDS = [
   "get_current_time",
@@ -196,6 +205,47 @@ function slicedResult(
       ? offset + content.length
       : null,
   };
+}
+
+function participantInputFromRecord(record: CollectionRecord): ParticipantInput {
+  const metadata = record.metadata && typeof record.metadata === "object" &&
+      !Array.isArray(record.metadata)
+    ? record.metadata as Record<string, unknown>
+    : {};
+  return Object.freeze({
+    id: record.id,
+    externalId: String(record.externalId ?? record.id),
+    participantType: record.participantType as ParticipantInput["participantType"],
+    ...(typeof record.name === "string" && record.name
+      ? { name: record.name }
+      : {}),
+    ...(typeof record.email === "string" && record.email
+      ? { email: record.email }
+      : {}),
+    ...(typeof record.agentId === "string" && record.agentId
+      ? { agentId: record.agentId }
+      : {}),
+    metadata: structuredClone(metadata),
+  });
+}
+
+async function loadCallerParticipant(
+  ctx: WorkflowToolExecutionContext,
+): Promise<CollectionRecord | null> {
+  if (ctx.execution.participantId) {
+    return await loadCollectionRecord(
+      ctx.processor,
+      "participant",
+      ctx.execution.participantId,
+    );
+  }
+  if (ctx.execution.agentId) {
+    return await findParticipantByExternalId(
+      ctx.processor,
+      ctx.execution.agentId,
+    );
+  }
+  return null;
 }
 
 function getCurrentTimeTool(now: () => Date): WorkflowTool {
@@ -408,8 +458,12 @@ function readToolResultTool(): WorkflowTool {
         input.toolExecutionId,
         "toolExecutionId",
       );
-      const execution = await ctx.processor.toolExecutions.get(executionId);
-      if (!execution || execution.threadId !== ctx.execution.threadId) {
+      const execution = await loadCollectionRecord(
+        ctx.processor,
+        "tool_execution",
+        executionId,
+      );
+      if (!execution || String(execution.threadId) !== ctx.execution.threadId) {
         throw new Error(
           `Tool execution '${executionId}' was not found in this thread.`,
         );
@@ -469,19 +523,13 @@ function updateMyMemoryTool(): WorkflowTool {
       ) {
         throw new TypeError("operation must be set, append, or remove.");
       }
-      const participant = ctx.execution.participantId
-        ? await ctx.processor.conversation.getParticipant(
-          ctx.execution.participantId,
-        )
-        : ctx.execution.agentId
-        ? await ctx.processor.conversation.getParticipantByExternalId(
-          ctx.execution.agentId,
-        )
-        : null;
+      const participant = await loadCallerParticipant(ctx);
       if (!participant || participant.participantType !== "agent") {
         throw new Error("The calling agent participant was not found.");
       }
-      const metadata: JsonRecord = structuredClone(participant.metadata);
+      const metadata: JsonRecord = structuredClone(
+        record(participant.metadata),
+      );
       if (operation === "remove") delete metadata[key];
       else {
         const item = requiredText(input.value, "value");
@@ -494,7 +542,8 @@ function updateMyMemoryTool(): WorkflowTool {
             : [previous, item];
         } else metadata[key] = item;
       }
-      await ctx.processor.conversation.updateParticipant(
+      await updateParticipantRecord(
+        ctx.processor,
         participant.id,
         { metadata },
         { operationKey: `update_my_memory:${key}` },
@@ -560,12 +609,16 @@ function updateUserMemoryTool(now: () => Date): WorkflowTool {
         ctx.userExternalId,
         "Current user external ID",
       );
-      const participant = await ctx.processor.conversation
-        .getParticipantByExternalId(externalId);
+      const participant = await findParticipantByExternalId(
+        ctx.processor,
+        externalId,
+      );
       if (!participant || participant.participantType !== "human") {
         throw new Error("The current human participant was not found.");
       }
-      const metadata: JsonRecord = structuredClone(participant.metadata);
+      const metadata: JsonRecord = structuredClone(
+        record(participant.metadata),
+      );
       const previous = userMemoryItems(metadata);
       let item: UserMemoryItem | undefined;
       let items: UserMemoryItem[];
@@ -593,7 +646,8 @@ function updateUserMemoryTool(now: () => Date): WorkflowTool {
       }
       metadata.memories = { ...record(metadata.memories), items };
       metadata.updatedAt = now().toISOString();
-      await ctx.processor.conversation.updateParticipant(
+      await updateParticipantRecord(
+        ctx.processor,
         participant.id,
         { metadata },
         { operationKey: `update_user_memory:${String(operation)}` },
@@ -608,16 +662,8 @@ function updateUserMemoryTool(now: () => Date): WorkflowTool {
   });
 }
 
-function participantInput(participant: Participant): ParticipantInput {
-  return Object.freeze({
-    id: participant.id,
-    externalId: participant.externalId,
-    participantType: participant.participantType,
-    ...(participant.name ? { name: participant.name } : {}),
-    ...(participant.email ? { email: participant.email } : {}),
-    ...(participant.agentId ? { agentId: participant.agentId } : {}),
-    metadata: structuredClone(participant.metadata),
-  });
+function participantInput(participant: CollectionRecord): ParticipantInput {
+  return participantInputFromRecord(participant);
 }
 
 async function resolveThreadParticipant(
@@ -625,8 +671,8 @@ async function resolveThreadParticipant(
   reference: unknown,
 ): Promise<ParticipantInput> {
   const id = requiredText(reference, "participant");
-  const existing = await ctx.processor.conversation.getParticipant(id) ??
-    await ctx.processor.conversation.getParticipantByExternalId(id);
+  const existing = await loadCollectionRecord(ctx.processor, "participant", id) ??
+    await findParticipantByExternalId(ctx.processor, id);
   if (existing) return participantInput(existing);
   const agent = ctx.processor.resources.get<Agent>("agents", id) ??
     ctx.processor.resources.list<Agent>("agents").find((candidate) =>
@@ -682,15 +728,7 @@ function createThreadTool(): WorkflowTool {
       if (mode !== "background" && mode !== "immediate") {
         throw new TypeError("mode must be background or immediate.");
       }
-      const caller = ctx.execution.participantId
-        ? await ctx.processor.conversation.getParticipant(
-          ctx.execution.participantId,
-        )
-        : ctx.execution.agentId
-        ? await ctx.processor.conversation.getParticipantByExternalId(
-          ctx.execution.agentId,
-        )
-        : null;
+      const caller = await loadCallerParticipant(ctx);
       if (!caller || caller.participantType !== "agent") {
         throw new Error("The calling agent participant was not found.");
       }
@@ -718,16 +756,34 @@ function createThreadTool(): WorkflowTool {
           : {}),
         createdByToolExecutionId: ctx.execution.id,
       };
-      const created = await ctx.processor.conversation.createThread({
+      const ensured: CollectionRecord[] = [];
+      for (const participant of participants.values()) {
+        ensured.push(
+          await ensureParticipantRecord(ctx.processor, {
+            ...(participant.id ? { id: participant.id } : {}),
+            externalId: participant.externalId,
+            participantType: participant.participantType,
+            ...(participant.name ? { name: participant.name } : {}),
+            ...(participant.email ? { email: participant.email } : {}),
+            ...(participant.agentId ? { agentId: participant.agentId } : {}),
+            metadata: structuredClone(participant.metadata ?? {}),
+          }, {
+            operationKey:
+              `create_thread:${threadId}:participant:${participant.externalId}`,
+            threadId,
+          }),
+        );
+      }
+      const created = await createThreadRecord(ctx.processor, {
         id: threadId,
         ...(typeof input.externalId === "string" && input.externalId.trim()
           ? { externalId: input.externalId.trim() }
           : {}),
         parentThreadId: ctx.execution.threadId,
-        participants: [...participants.values()],
+        name,
+        participantIds: ensured.map((item) => item.id),
         metadata,
       }, { operationKey: `create_thread:${threadId}` });
-      if (!created.value) throw new Error("Separate thread was not created.");
 
       const initialMessage = typeof input.initialMessage === "string" &&
           input.initialMessage.trim()
@@ -736,13 +792,14 @@ function createThreadTool(): WorkflowTool {
       const content = await ctx.processor.content.prepare(initialMessage, {
         operationKey: `create_thread:${threadId}:initial-content`,
       });
-      const message = await ctx.processor.conversation.createMessage({
+      const recipientIds = ensured
+        .filter((participant) => participant.id !== caller.id)
+        .map((participant) => participant.id);
+      const message = await createMessageRecord(ctx.processor, {
         id: `message:${threadId}:initial`,
         threadId,
-        sender: participantInput(caller),
-        recipientIds: created.value.participants
-          .filter((participant) => participant.id !== caller.id)
-          .map((participant) => participant.id),
+        senderId: caller.id,
+        recipientIds,
         content,
         visibility: { kind: "public" },
         metadata: {
@@ -754,11 +811,11 @@ function createThreadTool(): WorkflowTool {
       return {
         threadId,
         name,
-        participantIds: created.value.participants.map((item) => item.id),
+        participantIds: ensured.map((item) => item.id),
         mode,
         status: "started",
-        eventId: created.event.id,
-        messageEventId: message.event.id,
+        eventId: created.id,
+        messageEventId: message.id,
       };
     },
   });
@@ -777,15 +834,18 @@ function endThreadTool(): WorkflowTool {
     async execute(raw, value) {
       const ctx = context(value);
       const summary = requiredText(record(raw).summary, "summary");
-      const thread = await ctx.processor.conversation.getThread(
+      const thread = await loadCollectionRecord(
+        ctx.processor,
+        "thread",
         ctx.execution.threadId,
       );
       if (!thread) throw new Error("The active thread was not found.");
-      await ctx.processor.conversation.updateThread(
+      await updateThreadRecord(
+        ctx.processor,
         thread.id,
         {
           status: "archived",
-          metadata: { ...thread.metadata, summary },
+          metadata: { ...record(thread.metadata), summary },
         },
         { operationKey: "end_thread" },
       );

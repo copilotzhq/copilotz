@@ -1,4 +1,54 @@
 export { chat } from "./orchestrator.ts";
+export { chat as defaultChat } from "./orchestrator.ts";
 export { classifyLLMError, LLMProviderError } from "./errors.ts";
 export type { LLMProviderAttempt } from "./errors.ts";
 export * from "./types.ts";
+export { materializeAssetRefsForProvider } from "./asset-materialization.ts";
+export {
+  defineLlmProviderResource,
+  generateFromChat,
+  generateFromFactory,
+  invocationFromChat,
+  isLlmProviderResource,
+  isLlmResource,
+  requireLlmGenerate,
+  requireLlmResource,
+} from "./provider-resource.ts";
+export type {
+  LlmFrame,
+  LlmGenerate,
+  LlmGenerateInput,
+  LlmInvocation,
+  LlmProviderResource,
+  LlmResource,
+  LlmResult,
+  LlmSession,
+  LlmSessionInput,
+} from "./provider-resource.ts";
+export type {
+  AgentTextPrompt,
+  CreateAgentAskPluginOptions,
+  CreateTextWorkflowPluginOptions,
+  LlmChat,
+  ResolveAgentTextConfig,
+  ResolveWorkflowAgentInstructions,
+  WorkflowAgentsFileInstructions,
+  WorkflowHistoryTransform,
+  WorkflowPromptContextContribution,
+} from "./chat-types.ts";
+export {
+  providerAttemptId,
+  providerAttemptMetadata,
+  recordProviderAttemptLifecycle,
+} from "./attempt-lifecycle.ts";
+export { withInclusiveInputTokens } from "./usage.ts";
+export { processStream, resolveProviderStopSequences } from "./utils.ts";
+export {
+  isOpenAIReasoningModel,
+  resolveOpenAIApiMode,
+} from "./openai-api-mode.ts";
+export type { OpenAIApiMode } from "./openai-api-mode.ts";
+export {
+  readInternalPromptCacheKey,
+  withInternalPromptCacheKey,
+} from "./internal-cache-key.ts";

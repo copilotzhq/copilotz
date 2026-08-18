@@ -634,8 +634,7 @@ export function createGoalRuntime(
           channel.emit(observation);
           if (
             event.durable &&
-            (event.type === "message.created" ||
-              event.type === "message.revised") &&
+            event.type === "message.created" &&
             event.subject?.type === "message" &&
             !seenMessages.has(event.subject.id)
           ) {

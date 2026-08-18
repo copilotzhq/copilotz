@@ -2,18 +2,19 @@ import { isProcessor } from "./processor.ts";
 
 export const PLUGIN_RESOURCE_TYPES = [
   "agents",
-  "tools",
-  "processors",
   "collections",
-  "providers",
-  "channels",
-  "skills",
+  "processors",
   "context",
-  "memoryKinds",
-  "apis",
-  "mcpServers",
+  "llm",
+  "embedding",
+  "tools",
+  "skills",
   "features",
   "storage",
+  "mcp",
+  "api",
+  "channels",
+  "memoryKinds",
 ] as const;
 
 export type PluginResourceType = typeof PLUGIN_RESOURCE_TYPES[number];

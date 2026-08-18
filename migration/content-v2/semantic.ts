@@ -11,7 +11,7 @@ import type {
   PreparedContent,
 } from "../../runtime/content/index.ts";
 import type { SqlExecutor } from "../../runtime/events/index.ts";
-import { extractToolResultAssets } from "../../runtime/workflows/index.ts";
+import { extractToolResultAssets } from "../../runtime/tools/index.ts";
 import { quoteEventIdentifier } from "../../runtime/events/schema.ts";
 
 type NodeRow = {

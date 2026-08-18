@@ -1,7 +1,7 @@
 import { createServerWorkflowToolCatalog as createGenericServerWorkflowToolCatalog } from "./server-tool-catalog.ts";
 import { connectMcp } from "./stdio-mcp.ts";
 import type { CreateServerWorkflowToolCatalogOptions as GenericCatalogOptions } from "./types.ts";
-import type { WorkflowToolCatalog } from "../workflows/index.ts";
+import type { WorkflowToolCatalog } from "../tools/index.ts";
 
 export { connectMcp } from "./stdio-mcp.ts";
 export type CreateServerWorkflowToolCatalogOptions = Omit<

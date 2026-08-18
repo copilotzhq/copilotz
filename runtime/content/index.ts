@@ -47,6 +47,19 @@ export {
 } from "./preparer.ts";
 export { mergePreparedContent } from "./prepared.ts";
 export {
+  assertRoleContentMatches,
+  composeRoleContent,
+  contentSequence,
+  contentWithRole,
+  firstContentWithRole,
+  LLM_CONTENT_ROLE,
+  llmAttemptContent,
+  replaceContentRoles,
+  TOOL_CONTENT_ROLE,
+  toolExecutionContent,
+} from "./roles.ts";
+export type { RoleContentInput, RoleContentOwner } from "./roles.ts";
+export {
   createMemoryAssetRepository,
   type CreateMemoryAssetRepositoryOptions,
 } from "./repository.ts";

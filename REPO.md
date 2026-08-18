@@ -44,7 +44,10 @@ placement.
 - Immutable events/deliveries: `runtime/events/`
 - Oxian placement: `runtime/execution/`
 - Plugins/resources: `runtime/plugins/`, `runtime/resources/`
-- Text, tools, and public agent ask: `runtime/workflows/`
+- Agents, prompt, and transcript: `runtime/agents/`
+- LLM providers and attempt lifecycle: `runtime/llm/`
+- Tool catalog, executor, and jq pipelines: `runtime/tools/`
+- Text/ask processors: `plugins/core/`
 - Persistent text/realtime attachments: `runtime/attachments/`
 - Memory, knowledge, schedules, usage, goals: corresponding `runtime/` modules
 - Channels/features/admin: corresponding `runtime/` modules

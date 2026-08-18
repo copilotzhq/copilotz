@@ -15,12 +15,22 @@ import type { CopilotzEvent, DurableEventDraft } from "./types.ts";
 export type CoordinatedMutationOptions<T> = Omit<
   CommitEventMutationOptions<T>,
   "consumers"
->;
+> & Readonly<{
+  /** When false, insert deliveries but do not publish or dispatch yet. */
+  dispatch?: boolean;
+  /** Prepared JSON body used for precommit matching. Not persisted. */
+  matchData?: unknown;
+}>;
 
 export type EventDispatchReport = Readonly<{
   handles: readonly DeliveryExecutionHandle[];
   failures: readonly DeliveryDispatchFailure[];
 }>;
+
+const EMPTY_DISPATCH: EventDispatchReport = Object.freeze({
+  handles: Object.freeze([]),
+  failures: Object.freeze([]),
+});
 
 export type CoordinatedMutationResult<T> =
   & CommitEventMutationResult<T>
@@ -46,6 +56,9 @@ export type EventCoordinator = Readonly<{
   commitMutation<T>(
     options: CoordinatedMutationOptions<T>,
   ): Promise<CoordinatedMutationResult<T>>;
+  flushCommitted(
+    result: CommitEventMutationResult<unknown>,
+  ): Promise<EventDispatchReport>;
   append(
     draft: DurableEventDraft,
     options?: { priority?: number; maxAttempts?: number },
@@ -122,12 +135,27 @@ export function createEventCoordinator(
   ): Promise<CoordinatedMutationResult<T>> => {
     // Durable filters are synchronous so the complete obligation set is known
     // before entering the database transaction.
-    const consumers = options.registry.durableConsumers(mutation.draft);
+    const enableDispatch = mutation.dispatch !== false;
+    const consumers = options.registry.durableConsumers(
+      mutation.draft,
+      mutation.matchData,
+    );
     const committed = await options.store.commitMutation({
-      ...mutation,
+      draft: mutation.draft,
+      mutate: mutation.mutate,
+      recoverDuplicate: mutation.recoverDuplicate,
+      priority: mutation.priority,
+      maxAttempts: mutation.maxAttempts,
+      transaction: mutation.transaction,
       consumers,
     });
 
+    if (!enableDispatch) {
+      return Object.freeze({
+        ...committed,
+        dispatch: EMPTY_DISPATCH,
+      });
+    }
     let publishError: unknown;
     if (!committed.deduplicated) {
       try {
@@ -146,8 +174,23 @@ export function createEventCoordinator(
     });
   };
 
+  const flushCommitted = async (
+    result: CommitEventMutationResult<unknown>,
+  ): Promise<EventDispatchReport> => {
+    if (result.deduplicated) return EMPTY_DISPATCH;
+    try {
+      await options.publish?.(result.event, {
+        settlementScopeId: result.settlementScopeId,
+      });
+    } catch {
+      // Publication cannot roll back already committed domain state.
+    }
+    return await dispatch(result);
+  };
+
   return Object.freeze({
     commitMutation,
+    flushCommitted,
     append(draft, appendOptions = {}) {
       return commitMutation({
         draft,

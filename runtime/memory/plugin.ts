@@ -4,16 +4,33 @@ import type {
   PreparedAsset,
   PreparedContent,
 } from "../content/index.ts";
-import {
-  type CollectionRecord,
-  type ConversationMessage,
-  llmAttemptContent,
-  type Participant,
-  type SafeWorkflowError,
-  toolExecutionContent,
+import type { CollectionRecord } from "../domain/index.ts";
+import type {
+  ConversationMessage,
+  ConversationThread,
+  Participant,
+  SafeWorkflowError,
 } from "../domain/index.ts";
+import {
+  llmAttemptContent,
+  toolExecutionContent,
+} from "../content/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
-import { chat as defaultChat } from "../llm/index.ts";
+import {
+  listThreadMessageRecords,
+  loadParticipantRecord,
+  loadThreadRecord,
+  mapLlmAttemptRecord,
+} from "../engine/collection-graph.ts";
+import {
+  completeLlmAttemptCollection,
+  createLlmAttemptRecord,
+  createToolExecutionCollection,
+  failLlmAttemptCollection,
+  loadCollectionRecord,
+  requireBoundCollection,
+} from "../engine/collection-writes.ts";
+import { isLlmResource, requireLlmGenerate } from "../llm/provider-resource.ts";
 import type {
   ChatResponse,
   ProviderConfig,
@@ -32,19 +49,20 @@ import {
   defineProcessor,
   type Processor,
 } from "../plugins/index.ts";
+import { buildAgentTextPrompt } from "../agents/index.ts";
+import { recordProviderAttemptLifecycle } from "../llm/attempt-lifecycle.ts";
 import {
-  buildAgentTextPrompt,
-  recordProviderAttemptLifecycle,
   withWorkflowMetadata,
   workflowMetadata,
-  type WorkflowTool,
-  type WorkflowToolExecutionContext,
-} from "../workflows/index.ts";
+} from "../events/workflow-metadata.ts";
+import type {
+  WorkflowTool,
+  WorkflowToolExecutionContext,
+} from "../tools/types.ts";
 import {
   agentTextBaseConfig,
-  providerRegistry,
   staticAgentTextConfig,
-} from "../workflows/resources.ts";
+} from "../agents/config.ts";
 import { validateToolCall } from "../tools/validation.ts";
 import {
   buildMemoryConsolidationInstruction,
@@ -311,7 +329,10 @@ async function sourceMessages(
     let toolCalls: unknown;
     let reasoning: string | undefined;
     if (workflow?.llmAttemptId) {
-      const attempt = await context.llmAttempts.get(workflow.llmAttemptId);
+      const attempt = await requireBoundCollection(context, "llm_attempt").get(
+        workflow.llmAttemptId,
+        context.namespace,
+      );
       if (attempt) {
         const content = llmAttemptContent(attempt);
         if (content.toolCalls) {
@@ -428,7 +449,7 @@ async function candidateRecords(
     embed?: CreateLongTermMemoryPluginOptions["embed"];
   }>,
 ) {
-  const thread = await context.conversation.getThread(input.threadId);
+  const thread = await loadThreadRecord(context, input.threadId);
   if (!thread) {
     throw new Error(`Memory thread '${input.threadId}' was not found.`);
   }
@@ -517,9 +538,7 @@ async function captureContextSnapshot(
     checkpoint: CollectionRecord;
     agent: Agent;
     participant: Participant;
-    thread: NonNullable<
-      Awaited<ReturnType<CopilotzProcessorContext["conversation"]["getThread"]>>
-    >;
+    thread: ConversationThread;
     rangeMessages: readonly ConversationMessage[];
   }>,
 ) {
@@ -629,9 +648,7 @@ function parseToolArgs(value: string): unknown {
 
 async function toolCallsFromAttempt(
   context: CopilotzProcessorContext,
-  attempt: NonNullable<
-    Awaited<ReturnType<CopilotzProcessorContext["llmAttempts"]["get"]>>
-  >,
+  attempt: CollectionRecord,
 ) {
   const ref = llmAttemptContent(attempt).toolCalls;
   if (!ref) return Object.freeze([] as ToolInvocation[]);
@@ -684,7 +701,10 @@ async function repairOrFail(
     maxRepairAttempts: number;
   }>,
 ) {
-  const attempt = await context.llmAttempts.get(input.attemptId);
+  const attempt = await requireBoundCollection(context, "llm_attempt").get(
+    input.attemptId,
+    context.namespace,
+  );
   const repairIndex = Number(record(attempt?.metadata).memoryRepairIndex ?? 0);
   if (!attempt || repairIndex >= input.maxRepairAttempts) {
     await failCheckpoint(context, input.checkpointId, new Error(input.reason));
@@ -697,9 +717,9 @@ async function repairOrFail(
     memoryRepairReason: input.reason,
   }, {
     kind: "memory_consolidation",
-    agentParticipantId: attempt.participantId,
+    agentParticipantId: optionalText(attempt.participantId),
   });
-  await context.llmAttempts.create({
+  await createLlmAttemptRecord(context, {
     id: `${input.checkpointId}:llm:${nextIndex}`,
     threadId: attempt.threadId,
     messageId: attempt.messageId,
@@ -1049,7 +1069,7 @@ function consolidateMemoryTool(
       const threadId = requiredText(checkpoint.threadId, "Memory thread id");
       const agentId = requiredText(checkpoint.agentId, "Memory agent id");
       const agent = context.resources.require<Agent>("agents", agentId);
-      const thread = await context.conversation.getThread(threadId);
+      const thread = await loadThreadRecord(context, threadId);
       if (!thread) {
         throw new Error(`Memory thread '${threadId}' was not found.`);
       }
@@ -1057,9 +1077,7 @@ function consolidateMemoryTool(
         checkpoint,
         await threadMemorySpaces(context, threadId),
       );
-      const allMessages = await context.conversation.listMessages(threadId, {
-        limit: 1_000,
-      });
+      const allMessages = await listThreadMessageRecords(context, threadId);
       const range = rangeMessages(allMessages, checkpoint);
       const snapshot = frozenSnapshot(checkpoint);
       const catalog = sourceCatalog(range, snapshot);
@@ -1655,14 +1673,27 @@ function memoryReservationProcessor(
 ): Processor<CopilotzProcessorContext> {
   return defineProcessor({
     id: "copilotz.memory.reserve",
-    on: ["message.created"],
-    delivery: "durable",
+    on: [{ eventType: "message.created" }],
     settlement: "detached",
-    filter: (event) => event.visibility?.kind !== "internal",
     async handle(event, context) {
+      if (event.visibility?.kind === "internal") return;
       if (!event.durable || !event.threadId || !event.subject) return;
-      const message = await context.conversation.getMessage(event.subject.id);
-      if (!message || message.sender.participantType !== "agent") return;
+      const messageRecord = await loadCollectionRecord(
+        context,
+        "message",
+        event.subject.id,
+      );
+      if (!messageRecord) return;
+      const sender = await loadParticipantRecord(
+        context,
+        String(messageRecord.senderId),
+      );
+      if (!sender || sender.participantType !== "agent") return;
+      const message = Object.freeze({
+        ...messageRecord,
+        threadId: String(messageRecord.threadId),
+        sender,
+      });
       const agentId = participantAgentId(message.sender);
       if (!context.resources.get<Agent>("agents", agentId)) return;
       if (
@@ -1676,9 +1707,9 @@ function memoryReservationProcessor(
         agentId,
         spaces,
       );
-      const history = await context.conversation.listMessages(
+      const history = await listThreadMessageRecords(
+        context,
         message.threadId,
-        { limit: 1_000 },
       );
       const range = selectLongTermMemoryRange({
         messages: await sourceMessages(context, history),
@@ -1741,11 +1772,10 @@ function memoryReservationProcessor(
   });
 }
 
-function prepareMemoryAttemptProcessor(): Processor<CopilotzProcessorContext> {
-  return defineProcessor({
+const prepareMemoryAttemptProcessor: Processor<CopilotzProcessorContext> =
+  defineProcessor({
     id: "copilotz.memory.prepare-attempt",
-    on: ["long_term_memory.created"],
-    delivery: "durable",
+    on: [{ eventType: "long_term_memory.created" }],
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
       let checkpoint = await collection(context, longTermMemoryCollection.name)
@@ -1757,17 +1787,15 @@ function prepareMemoryAttemptProcessor(): Processor<CopilotzProcessorContext> {
         record(checkpoint.metadata).agentParticipantId,
         "Memory participant id",
       );
-      const participant = await context.conversation.getParticipant(
-        participantId,
-      );
-      const thread = await context.conversation.getThread(threadId);
+      const participant = await loadParticipantRecord(context, participantId);
+      const thread = await loadThreadRecord(context, threadId);
       if (!participant || participant.participantType !== "agent" || !thread) {
         throw new Error(
           "Memory checkpoint participant or thread is unavailable.",
         );
       }
       const messages = rangeMessages(
-        await context.conversation.listMessages(threadId, { limit: 1_000 }),
+        await listThreadMessageRecords(context, threadId),
         checkpoint,
       );
       await captureContextSnapshot(context, {
@@ -1787,7 +1815,7 @@ function prepareMemoryAttemptProcessor(): Processor<CopilotzProcessorContext> {
         kind: "memory_consolidation",
         agentParticipantId: participant.id,
       });
-      await context.llmAttempts.create({
+      await createLlmAttemptRecord(context, {
         id: `${checkpoint.id}:llm:0`,
         threadId,
         messageId: requiredText(
@@ -1803,23 +1831,24 @@ function prepareMemoryAttemptProcessor(): Processor<CopilotzProcessorContext> {
       }, { operationKey: `memory-attempt:${checkpoint.id}:0`, metadata });
     },
   });
-}
 
 function executeMemoryAttemptProcessor(
   options: CreateLongTermMemoryPluginOptions,
   consolidateTool: WorkflowTool,
 ): Processor<CopilotzProcessorContext> {
-  const runChat = options.chat ?? defaultChat;
   return defineProcessor({
     id: "copilotz.memory.execute-attempt",
-    on: ["llm_attempt.created"],
-    delivery: "durable",
-    filter: (event) =>
-      workflowMetadata(event.metadata)?.kind === "memory_consolidation",
+    on: [{
+      eventType: "llm_attempt.created",
+      metadata: { copilotzWorkflow: { kind: "memory_consolidation" } },
+    }],
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
-      const attempt = await context.llmAttempts.get(event.subject.id);
-      if (!attempt || attempt.status !== "running") return;
+      const attempt = await requireBoundCollection(context, "llm_attempt").get(
+        event.subject.id,
+        context.namespace,
+      );
+      if (!attempt || String(attempt.status) !== "running") return;
       const checkpointId = memoryCheckpointId(attempt.metadata);
       const checkpoint = await collection(
         context,
@@ -1830,22 +1859,22 @@ function executeMemoryAttemptProcessor(
         "agents",
         requiredText(attempt.agentId, "Memory agent id"),
       );
-      const participant = attempt.participantId
-        ? await context.conversation.getParticipant(attempt.participantId)
+      const participant = optionalText(attempt.participantId)
+        ? await loadParticipantRecord(context, optionalText(attempt.participantId)!)
         : null;
-      const thread = await context.conversation.getThread(attempt.threadId);
+      const thread = await loadThreadRecord(context, String(attempt.threadId));
       if (!participant || participant.participantType !== "agent" || !thread) {
         throw new Error("Memory attempt participant or thread is unavailable.");
       }
-      const allMessages = await context.conversation.listMessages(
-        attempt.threadId,
-        { limit: 1_000 },
+      const allMessages = await listThreadMessageRecords(
+        context,
+        String(attempt.threadId),
       );
       const messages = rangeMessages(allMessages, checkpoint);
       const sources = await sourceMessages(context, messages);
       const spaces = activeSpacesForCheckpoint(
         checkpoint,
-        await threadMemorySpaces(context, attempt.threadId),
+        await threadMemorySpaces(context, String(attempt.threadId)),
       );
       const previous = (await activeMemoryRecords(context, spaces, agent.id))
         .filter((item) => !terminalStatus(item.status)).slice(0, 100);
@@ -1895,7 +1924,7 @@ function executeMemoryAttemptProcessor(
         ? await options.resolveLlmConfig({
           agent,
           participant,
-          attempt,
+          attempt: mapLlmAttemptRecord(attempt),
           thread,
           messages: prompt.messages,
           sourceEvent: event,
@@ -1903,8 +1932,8 @@ function executeMemoryAttemptProcessor(
           baseConfig,
         })
         : staticAgentTextConfig(agent);
-      const providers = providerRegistry(context.resources);
-      if (!providers[String(config.provider)]) {
+      const llm = context.resources.get("llm", String(config.provider));
+      if (!isLlmResource(llm)) {
         throw new Error(
           `LLM provider resource '${
             String(config.provider)
@@ -1912,8 +1941,8 @@ function executeMemoryAttemptProcessor(
         );
       }
       try {
-        const response: ChatResponse = await runChat(
-          {
+        const response: ChatResponse = await requireLlmGenerate(llm)({
+          request: {
             messages: [...prompt.messages],
             tools: [...prompt.tools],
             signal: context.signal,
@@ -1923,10 +1952,8 @@ function executeMemoryAttemptProcessor(
               recordProviderAttemptLifecycle(attempt, lifecycle, context),
           },
           config,
-          { ...(options.env ?? {}) },
-          undefined,
-          providers,
-        );
+          env: { ...(options.env ?? {}) },
+        }).result;
         const answer = response.answer
           ? await context.content.prepare({
             type: "text",
@@ -1948,8 +1975,7 @@ function executeMemoryAttemptProcessor(
             role: "llm.tool_calls",
           }, { operationKey: "memory:tool-calls" })
           : undefined;
-        await context.llmAttempts.complete({
-          id: attempt.id,
+        await completeLlmAttemptCollection(context, attempt, {
           ...(answer ? { answer } : {}),
           ...(reasoning ? { reasoning } : {}),
           ...(toolCalls ? { toolCalls } : {}),
@@ -1962,22 +1988,21 @@ function executeMemoryAttemptProcessor(
             provider: response.provider ?? config.provider,
             model: response.model ?? config.model,
           },
-        }, { operationKey: "memory:complete", metadata: attempt.metadata });
+        }, { operationKey: "memory:complete" });
       } catch (error) {
         const detail = await context.content.prepare({
           type: "text",
           text: error instanceof Error ? error.message : String(error),
           role: "provider.error_detail",
         }, { operationKey: "memory:error" });
-        await context.llmAttempts.fail({
-          id: attempt.id,
+        await failLlmAttemptCollection(context, attempt, {
           safeError: safeError(
             "memory_provider_error",
             "Memory provider attempt failed.",
             true,
           ),
           errorDetail: detail,
-        }, { operationKey: "memory:fail", metadata: attempt.metadata });
+        }, { operationKey: "memory:fail" });
       }
     },
   });
@@ -1989,23 +2014,35 @@ function projectMemoryAttemptProcessor(
   return defineProcessor({
     id: "copilotz.memory.project-attempt",
     on: [
-      "llm_attempt.completed",
-      "llm_attempt.failed",
-      "llm_attempt.cancelled",
+      {
+        eventType: "llm_attempt.updated",
+        metadata: { copilotzWorkflow: { kind: "memory_consolidation" } },
+        data: { record: { status: "completed" } },
+      },
+      {
+        eventType: "llm_attempt.updated",
+        metadata: { copilotzWorkflow: { kind: "memory_consolidation" } },
+        data: { record: { status: "failed" } },
+      },
+      {
+        eventType: "llm_attempt.updated",
+        metadata: { copilotzWorkflow: { kind: "memory_consolidation" } },
+        data: { record: { status: "cancelled" } },
+      },
     ],
-    delivery: "durable",
-    filter: (event) =>
-      workflowMetadata(event.metadata)?.kind === "memory_consolidation",
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
-      const attempt = await context.llmAttempts.get(event.subject.id);
+      const attempt = await requireBoundCollection(context, "llm_attempt").get(
+        event.subject.id,
+        context.namespace,
+      );
       if (!attempt) return;
       const checkpointId = memoryCheckpointId(attempt.metadata);
       if (attempt.status !== "completed") {
         await repairOrFail(context, {
           checkpointId,
           attemptId: attempt.id,
-          reason: attempt.safeError?.message ??
+          reason: optionalText(record(attempt.safeError).message) ??
             "Memory LLM attempt did not complete.",
           maxRepairAttempts,
         });
@@ -2039,10 +2076,10 @@ function projectMemoryAttemptProcessor(
         llmAttemptId: attempt.id,
         parentLlmAttemptId: attempt.id,
         toolCallId: call.id,
-        agentParticipantId: attempt.participantId,
+        agentParticipantId: optionalText(attempt.participantId),
         continuation: "none",
       });
-      await context.toolExecutions.create({
+      await createToolExecutionCollection(context, {
         id: `${checkpointId}:tool:${
           Number(record(attempt.metadata).memoryRepairIndex ?? 0)
         }`,
@@ -2051,11 +2088,14 @@ function projectMemoryAttemptProcessor(
         agentId: attempt.agentId,
         toolCallId: call.id,
         tool: { id: CONSOLIDATE_MEMORY_TOOL_ID, name: "Consolidate Memory" },
-        arguments: prepared,
         status: "running",
         historyVisibility: "requester_only",
         metadata,
-      }, { operationKey: `memory:${checkpointId}:tool`, metadata });
+      }, {
+        operationKey: `memory:${checkpointId}:tool`,
+        metadata,
+        content: prepared,
+      });
     },
   });
 }
@@ -2066,26 +2106,36 @@ function settleMemoryToolProcessor(
   return defineProcessor({
     id: "copilotz.memory.settle-tool",
     on: [
-      "tool_execution.completed",
-      "tool_execution.failed",
-      "tool_execution.cancelled",
+      {
+        eventType: "tool_execution.updated",
+        data: { record: { status: "completed" } },
+        metadata: { copilotzWorkflow: { kind: "memory_consolidation" } },
+      },
+      {
+        eventType: "tool_execution.updated",
+        data: { record: { status: "failed" } },
+        metadata: { copilotzWorkflow: { kind: "memory_consolidation" } },
+      },
+      {
+        eventType: "tool_execution.updated",
+        data: { record: { status: "cancelled" } },
+        metadata: { copilotzWorkflow: { kind: "memory_consolidation" } },
+      },
     ],
-    delivery: "durable",
-    filter: (event) =>
-      workflowMetadata(event.metadata)?.kind === "memory_consolidation",
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
-      const execution = await context.toolExecutions.get(event.subject.id);
+      const execution = await requireBoundCollection(context, "tool_execution")
+        .get(event.subject.id, context.namespace);
       if (
-        !execution || execution.status === "running" ||
-        execution.status === "completed"
+        !execution || String(execution.status) === "running" ||
+        String(execution.status) === "completed"
       ) return;
       const checkpointId = memoryCheckpointId(execution.metadata);
       const attemptId = requiredText(
-        workflowMetadata(execution.metadata)?.parentLlmAttemptId,
+        workflowMetadata(record(execution.metadata))?.parentLlmAttemptId,
         "Memory attempt id",
       );
-      let reason = execution.safeError?.message ??
+      let reason = optionalText(record(execution.safeError).message) ??
         "consolidate_memory execution failed.";
       const detail = toolExecutionContent(execution).errorDetail;
       if (detail) {
@@ -2181,7 +2231,7 @@ export function createLongTermMemoryPlugin(
   const processors = enabled
     ? Object.freeze([
       memoryReservationProcessor(config),
-      prepareMemoryAttemptProcessor(),
+      prepareMemoryAttemptProcessor,
       executeMemoryAttemptProcessor(options, consolidate),
       projectMemoryAttemptProcessor(maxRepairAttempts),
       settleMemoryToolProcessor(maxRepairAttempts),

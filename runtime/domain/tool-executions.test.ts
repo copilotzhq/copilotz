@@ -60,14 +60,7 @@ async function createFixture(): Promise<Fixture> {
   const observed: string[] = [];
   const processor = defineProcessor({
     id: "tool.lifecycle.observe",
-    on: [
-      "tool_execution.created",
-      "tool_execution.updated",
-      "tool_execution.completed",
-      "tool_execution.failed",
-      "tool_execution.cancelled",
-    ],
-    delivery: "durable",
+    on: [{ eventType: "tool_execution.created" }, { eventType: "tool_execution.updated" }, { eventType: "tool_execution.completed" }, { eventType: "tool_execution.failed" }, { eventType: "tool_execution.cancelled" }],
     handle(event) {
       observed.push(event.type);
     },

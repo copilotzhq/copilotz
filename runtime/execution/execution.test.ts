@@ -56,8 +56,7 @@ async function createFixture(options?: {
   const calls: Fixture["calls"] = [];
   const processor = defineProcessor({
     id: "messages.observe",
-    on: ["message.created"],
-    delivery: "durable",
+    on: [{ eventType: "message.created" }],
     async handle(event, context) {
       if (!event.durable) throw new Error("Expected a durable event.");
       const idempotencyKey = String(context.idempotencyKey);

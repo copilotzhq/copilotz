@@ -8,6 +8,7 @@ import {
   defineProcessor,
 } from "../plugins/index.ts";
 import { createSqlSession } from "../events/index.ts";
+import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import {
   type CopilotzLiveProcessorContext,
   type CopilotzProcessorContext,
@@ -46,8 +47,7 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
   let leakedDelivery = false;
   const live = defineProcessor<CopilotzLiveProcessorContext>({
     id: "test.live-message-audit",
-    on: ["message.created"],
-    delivery: "live",
+    on: [{ eventType: "message.created" }],
     async handle(event, context) {
       liveCalls += 1;
       leakedDelivery = leakedDelivery || "delivery" in context;
@@ -60,24 +60,23 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
   });
   const durable = defineProcessor<CopilotzProcessorContext>({
     id: "test.observe-live-audit",
-    on: ["live_audit.created"],
-    delivery: "durable",
+    on: [{ eventType: "live_audit.created" }],
     handle() {
       durableCalls += 1;
     },
   });
   const registry = await createPluginRegistry({
-    plugins: [definePlugin({
+    plugins: [coreCollectionsPlugin, definePlugin({
       manifest: {
         id: "test.live",
         version: "1.0.0",
         provides: {
-          processors: [live.id, durable.id],
+          processors: [durable.id],
           collections: [auditCollection.name],
         },
       },
       resources: {
-        processors: [live, durable],
+        processors: [durable],
         collections: [auditCollection],
       },
     })],
@@ -86,6 +85,7 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry,
+    transientProcessors: [live],
     defaultDatabaseSchema: "copilotz_live_nested",
     execution: { capacity: 1 },
   });
@@ -122,13 +122,7 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
     });
     assertEquals(liveCalls, 1);
     assertEquals(leakedDelivery, false);
-    await waitUntil(async () => {
-      const settlement = await engine.events.settlement(
-        "tenant-live",
-        result.event.id,
-      );
-      return settlement.unsettled === 0 && settlement.succeeded === 1;
-    });
+    await waitUntil(async () => durableCalls === 1);
     assertEquals(durableCalls, 1);
 
     const audit = await engine.collections.get("live_audit").get(
@@ -161,16 +155,14 @@ Deno.test("live subscription failures remain independent and ephemeral", async (
   const calls: string[] = [];
   const good = defineProcessor<CopilotzLiveProcessorContext>({
     id: "test.live-good",
-    on: ["cursor.changed"],
-    delivery: "live",
+    on: [{ eventType: "cursor.changed" }],
     handle() {
       calls.push("good");
     },
   });
   const bad = defineProcessor<CopilotzLiveProcessorContext>({
     id: "test.live-bad",
-    on: ["cursor.changed"],
-    delivery: "live",
+    on: [{ eventType: "cursor.changed" }],
     handle() {
       calls.push("bad");
       throw new Error("synthetic live failure");
@@ -181,15 +173,16 @@ Deno.test("live subscription failures remain independent and ephemeral", async (
       manifest: {
         id: "test.live-errors",
         version: "1.0.0",
-        provides: { processors: [good.id, bad.id] },
+        provides: { processors: [] },
       },
-      resources: { processors: [good, bad] },
+      resources: {},
     })],
   });
   const db = await createTestDatabase({ url: ":memory:" });
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry,
+    transientProcessors: [good, bad],
     defaultDatabaseSchema: "copilotz_live_errors",
     execution: { capacity: 2 },
   });
@@ -222,6 +215,69 @@ Deno.test("live subscription failures remain independent and ephemeral", async (
       await engine.deliveries.list({ namespace: "tenant-live" }),
       [],
     );
+  } finally {
+    await engine.shutdown();
+    await db.close();
+  }
+});
+
+Deno.test("transient catch-up replays committed events without delivery rows", async () => {
+  const seen: string[] = [];
+  const observer = defineProcessor({
+    id: "test.transient-catch-up",
+    on: [{ eventType: "thread.created" }],
+    handle(event) {
+      if (event.durable) seen.push(event.id);
+    },
+  });
+  const registry = await createPluginRegistry({
+    plugins: [coreCollectionsPlugin, definePlugin({
+      manifest: {
+        id: "test.transient-catch-up",
+        version: "1.0.0",
+        provides: {},
+      },
+      resources: {},
+    })],
+  });
+  const db = await createTestDatabase({ url: ":memory:" });
+  const engine = await createCopilotzEngine({
+    session: createSqlSession(db),
+    registry,
+    defaultDatabaseSchema: "copilotz_transient_catchup",
+  });
+  try {
+    const first = await engine.conversation.createThread({
+      namespace: "tenant-live",
+      id: "thread-a",
+      participants: [{
+        id: "user-a",
+        externalId: "user-a",
+        participantType: "human",
+      }],
+    });
+    assertEquals(seen, []);
+    const unbind = await engine.bindTransient(observer, {
+      namespace: "tenant-live",
+      afterPosition: "0",
+    });
+    assertEquals(seen, [first.event.id]);
+    const second = await engine.conversation.createThread({
+      namespace: "tenant-live",
+      id: "thread-b",
+      participants: [{
+        id: "user-b",
+        externalId: "user-b",
+        participantType: "human",
+      }],
+    });
+    await waitUntil(() => seen.includes(second.event.id));
+    assertEquals(seen, [first.event.id, second.event.id]);
+    assertEquals(
+      (await engine.deliveries.list({ namespace: "tenant-live" })).length,
+      0,
+    );
+    unbind();
   } finally {
     await engine.shutdown();
     await db.close();

@@ -56,8 +56,7 @@ async function createFixture(): Promise<Fixture> {
   let conversation!: ConversationRepository;
   const processor = defineProcessor({
     id: "conversation.message.observe",
-    on: ["message.created", "message.revised"],
-    delivery: "durable",
+    on: [{ eventType: "message.created" }, { eventType: "message.revised" }],
     async handle(event, context) {
       assert(event.durable);
       assertEquals(

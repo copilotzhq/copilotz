@@ -60,7 +60,7 @@ export async function embedKnowledgeTexts(
   options: Readonly<{ signal: AbortSignal; idempotencyKey: string }>,
 ): Promise<KnowledgeEmbeddingResponse> {
   const id = required(config.provider, "Embedding provider resource ID");
-  const candidate = resources.get("providers", id);
+  const candidate = resources.get("llm", id);
   if (!isKnowledgeEmbeddingProvider(candidate)) {
     throw new Error(`Embedding provider resource '${id}' was not found.`);
   }

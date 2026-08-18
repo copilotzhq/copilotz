@@ -10,7 +10,7 @@ import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
   WorkflowToolResult,
-} from "../workflows/index.ts";
+} from "../tools/index.ts";
 import { ToolExecutionError } from "../tools/errors.ts";
 
 type AuthConfig = NonNullable<API["auth"]>;

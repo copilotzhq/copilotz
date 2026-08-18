@@ -18,7 +18,7 @@ threads + participants
 ## Install
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.59.0";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.61.0";
 ```
 
 The root package is runtime-neutral. Host capabilities such as MCP stdio,
@@ -28,7 +28,7 @@ explicit package subpaths.
 ## Minimal application
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.59.0";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.61.0";
 
 const namespace = "example";
 const copilotz = await createCopilotz({
@@ -117,7 +117,8 @@ is passed once as a `ReadableStream<Uint8Array>` with native backpressure.
 | `/capabilities`                    | Explicit agent grants and canonical introspection                   |
 | `/events`                          | Immutable events and durable delivery contracts                     |
 | `/content`, `/domain`              | Canonical assets and graph-native repositories                      |
-| `/attachments`, `/workflows`       | Text/realtime ingress, LLM/tools, and public agent ask              |
+| `/attachments`                     | Persistent text/realtime ingress                                    |
+| `/agents`, `/llm`, `/tools`        | Agent prompt/config, LLM providers, tool catalog and executor       |
 | `/skills`                          | Optional Open Skill resources and portable disclosure tools         |
 | `/channels`, `/features`, `/admin` | App and transport resources                                         |
 | `/adapters`                        | Runtime-neutral OpenAPI/MCP injection and Ominipg adapters          |

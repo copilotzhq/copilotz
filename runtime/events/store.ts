@@ -79,6 +79,8 @@ export type CommitEventMutationOptions<T> = {
   consumers: readonly DurableConsumerObligation[];
   priority?: number;
   maxAttempts?: number;
+  /** Join an already-open SQL transaction instead of opening a nested one. */
+  transaction?: SqlExecutor;
   mutate(context: EventMutationContext): Promise<T>;
   recoverDuplicate?: (
     event: DurableEvent,
@@ -108,6 +110,7 @@ export type CreateEventStoreOptions = {
 
 export type EventStore = {
   databaseSchema: string;
+  session: SqlSession;
   tables: Readonly<Record<CoreTableName, string>>;
   commitMutation<T>(
     options: CommitEventMutationOptions<T>,
@@ -567,23 +570,22 @@ export function createEventStore(
     const priority = boundedInteger(mutation.priority, 0, -2147483648);
     const normalized = { ...mutation, draft };
 
-    const run = () =>
-      session.transaction(async (transaction) => {
-        if (draft.deduplicationId) {
-          const existing = await loadDuplicate(
-            transaction,
-            draft.namespace,
-            draft.deduplicationId,
-          );
-          if (existing) {
-            return await duplicateResult(transaction, existing, normalized);
-          }
+    const runOn = async (transaction: SqlExecutor) => {
+      if (draft.deduplicationId) {
+        const existing = await loadDuplicate(
+          transaction,
+          draft.namespace,
+          draft.deduplicationId,
+        );
+        if (existing) {
+          return await duplicateResult(transaction, existing, normalized);
         }
+      }
 
-        const context = { transaction, tables };
-        const value = await mutation.mutate(context);
-        const inserted = await transaction.query<EventRow>(
-          `INSERT INTO ${tables.events} (
+      const context = { transaction, tables };
+      const value = await mutation.mutate(context);
+      const inserted = await transaction.query<EventRow>(
+        `INSERT INTO ${tables.events} (
             id, schema_version, type, namespace, thread_id,
             subject_type, subject_id, payload, delta, routing, visibility,
             metadata, causation_id, correlation_id, deduplication_id, created_at
@@ -592,93 +594,102 @@ export function createEventStore(
             $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb,
             $12::jsonb, $13, $14, $15, $16::timestamptz
           ) RETURNING *`,
-          [
-            eventId,
-            EVENT_SCHEMA_VERSION,
-            draft.type,
-            draft.namespace,
-            draft.threadId ?? null,
-            draft.subject?.type ?? null,
-            draft.subject?.id ?? null,
-            encoded.payload.text,
-            encoded.delta.text,
-            encoded.routing.text,
-            encoded.visibility.text,
-            encoded.metadata.text,
-            draft.causationId ?? null,
-            correlationId,
-            draft.deduplicationId ?? null,
-            createdAt,
-          ],
-        );
-        const event = mapEvent(inserted.rows[0]);
+        [
+          eventId,
+          EVENT_SCHEMA_VERSION,
+          draft.type,
+          draft.namespace,
+          draft.threadId ?? null,
+          draft.subject?.type ?? null,
+          draft.subject?.id ?? null,
+          encoded.payload.text,
+          encoded.delta.text,
+          encoded.routing.text,
+          encoded.visibility.text,
+          encoded.metadata.text,
+          draft.causationId ?? null,
+          correlationId,
+          draft.deduplicationId ?? null,
+          createdAt,
+        ],
+      );
+      const event = mapEvent(inserted.rows[0]);
 
-        const deliveries: EventDelivery[] = [];
-        for (const consumer of consumers) {
-          const deliveryScopeId = consumer.settlement === "detached"
-            ? `detached:${event.id}:${consumer.consumerId}`
-            : settlementScopeId;
-          const result = await transaction.query<DeliveryRow>(
-            `INSERT INTO ${tables.event_deliveries} (
+      const deliveries: EventDelivery[] = [];
+      for (const consumer of consumers) {
+        const deliveryScopeId = consumer.settlement === "detached"
+          ? `detached:${event.id}:${consumer.consumerId}`
+          : settlementScopeId;
+        const result = await transaction.query<DeliveryRow>(
+          `INSERT INTO ${tables.event_deliveries} (
               id, event_id, consumer_id, settlement_scope_id,
               status, attempts, max_attempts,
               priority, available_at, created_at, updated_at
             ) VALUES ($1, $2, $3, $4, 'pending', 0, $5, $6, NOW(), NOW(), NOW())
             RETURNING *`,
-            [
-              createId(),
-              event.id,
-              consumer.consumerId,
-              deliveryScopeId,
-              maxAttempts,
-              priority,
-            ],
-          );
-          deliveries.push(mapDelivery(result.rows[0], databaseSchema));
-        }
+          [
+            createId(),
+            event.id,
+            consumer.consumerId,
+            deliveryScopeId,
+            maxAttempts,
+            priority,
+          ],
+        );
+        deliveries.push(mapDelivery(result.rows[0], databaseSchema));
+      }
 
-        if (draft.threadId) {
-          await transaction.query(
-            `UPDATE ${tables.nodes}
+      if (draft.threadId) {
+        await transaction.query(
+          `UPDATE ${tables.nodes}
              SET data = COALESCE(data, '{}'::jsonb) || $1::jsonb,
                  updated_at = NOW()
              WHERE id = $2 AND namespace = $3 AND type = 'thread'`,
-            [
-              JSON.stringify({
-                lastEventId: event.id,
-                lastEventPosition: event.position,
-                lastEventAt: event.createdAt,
-              }),
-              draft.threadId,
-              draft.namespace,
-            ],
-          );
-        }
+          [
+            JSON.stringify({
+              lastEventId: event.id,
+              lastEventPosition: event.position,
+              lastEventAt: event.createdAt,
+            }),
+            draft.threadId,
+            draft.namespace,
+          ],
+        );
+      }
 
-        return Object.freeze({
-          value,
-          event,
-          deliveries,
-          settlementScopeId,
-          deduplicated: false,
-        });
+      return Object.freeze({
+        value,
+        event,
+        deliveries,
+        settlementScopeId,
+        deduplicated: false,
       });
+    };
+
+    const recoverOn = async (
+      transaction: SqlExecutor,
+      error: unknown,
+    ) => {
+      const existing = await loadDuplicate(
+        transaction,
+        draft.namespace,
+        draft.deduplicationId!,
+      );
+      if (!existing) throw error;
+      return await duplicateResult(transaction, existing, normalized);
+    };
 
     try {
-      return await run();
+      return mutation.transaction
+        ? await runOn(mutation.transaction)
+        : await session.transaction(runOn);
     } catch (error) {
       if (!draft.deduplicationId || !isDeduplicationViolation(error)) {
         throw error;
       }
-      return await session.transaction(async (transaction) => {
-        const existing = await loadDuplicate(
-          transaction,
-          draft.namespace,
-          draft.deduplicationId!,
-        );
-        if (!existing) throw error;
-        return await duplicateResult(transaction, existing, normalized);
-      });
+      return mutation.transaction
+        ? await recoverOn(mutation.transaction, error)
+        : await session.transaction((transaction) => recoverOn(transaction, error));
     }
   };
 
@@ -851,6 +862,7 @@ export function createEventStore(
 
   return {
     databaseSchema,
+    session: options.session,
     tables,
     commitMutation,
     append(draft, consumerIds = [], appendOptions = {}) {

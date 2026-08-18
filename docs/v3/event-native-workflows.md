@@ -172,7 +172,7 @@ import it without another upload.
 Tests now prove user → agent → tool → same agent → public final output, one
 external tool execution after recovery, explicit provider fallback children,
 concurrent tools, and one post-batch continuation. The plugin is exported from
-the root and `copilotz/workflows` package surfaces.
+the root and `@copilotz/copilotz/{agents,llm,tools,events}` package surfaces.
 
 The public `createCopilotz()` adapter and bundled core catalog still retain a
 legacy composition path while downstream migration gates remain. The

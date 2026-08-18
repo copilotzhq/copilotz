@@ -1,8 +1,8 @@
 import type {
-  CopilotzEvent,
   DurableConsumerObligation,
   DurableEventDraft,
 } from "../events/types.ts";
+import { matchProcessor } from "./match.ts";
 import {
   isProcessor,
   type Processor,
@@ -42,11 +42,14 @@ export type PluginRegistry = Readonly<{
     type: PluginResourceType,
     id: string,
   ): PluginResourceOrigin | undefined;
-  matchDurable(draft: DurableEventDraft): readonly Processor[];
+  matchDurable(
+    draft: DurableEventDraft,
+    data?: unknown,
+  ): readonly Processor[];
   durableConsumers(
     draft: DurableEventDraft,
+    data?: unknown,
   ): readonly DurableConsumerObligation[];
-  matchLive(event: CopilotzEvent): readonly Processor[];
   processorForConsumer(consumerId: string): Processor | undefined;
 }>;
 
@@ -127,31 +130,6 @@ function selectedResources(
     );
   }
   return Object.freeze(result);
-}
-
-function isThenable(value: unknown): boolean {
-  return Boolean(
-    value && (typeof value === "object" || typeof value === "function") &&
-      typeof (value as { then?: unknown }).then === "function",
-  );
-}
-
-function matches(
-  processor: Processor,
-  delivery: Processor["delivery"],
-  event: DurableEventDraft | CopilotzEvent,
-): boolean {
-  if (processor.delivery !== delivery || !processor.on.includes(event.type)) {
-    return false;
-  }
-  if (!processor.filter) return true;
-  const accepted: unknown = processor.filter(event);
-  if (isThenable(accepted)) {
-    throw new TypeError(
-      `Processor '${processor.id}' filter must be synchronous and pure.`,
-    );
-  }
-  return accepted === true;
 }
 
 /**
@@ -239,28 +217,27 @@ export async function createPluginRegistry(
       .map((entry) => entry.value)
       .filter(isProcessor);
 
-  const matchDurable = (draft: DurableEventDraft): readonly Processor[] =>
+  const matchDurable = (
+    draft: DurableEventDraft,
+    data?: unknown,
+  ): readonly Processor[] =>
     Object.freeze(
       listProcessors().filter((processor) =>
-        matches(processor, "durable", draft)
+        matchProcessor(processor, draft, data)
       ),
     );
 
   const durableConsumers = (
     draft: DurableEventDraft,
+    data?: unknown,
   ): readonly DurableConsumerObligation[] =>
     Object.freeze(
-      matchDurable(draft).map((processor) =>
+      matchDurable(draft, data).map((processor) =>
         Object.freeze({
           consumerId: processorConsumerId(processor.id),
           settlement: processor.settlement ?? "inherit",
         })
       ),
-    );
-
-  const matchLive = (event: CopilotzEvent): readonly Processor[] =>
-    Object.freeze(
-      listProcessors().filter((processor) => matches(processor, "live", event)),
     );
 
   const registry: PluginRegistry = {
@@ -283,7 +260,6 @@ export async function createPluginRegistry(
     },
     matchDurable,
     durableConsumers,
-    matchLive,
     processorForConsumer(consumerId) {
       const id = processorIdFromConsumer(consumerId);
       const value = id ? maps.get("processors")!.get(id)?.value : undefined;

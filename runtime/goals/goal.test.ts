@@ -11,6 +11,12 @@ import {
   definePlugin,
   defineProcessor,
 } from "../plugins/index.ts";
+import { loadMessageRecord, loadParticipantRecord } from "../engine/collection-graph.ts";
+import {
+  createMessageRecord,
+  ensureParticipantRecord,
+} from "../engine/collection-writes.ts";
+import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import type { GoalStreamEvent } from "./types.ts";
 
 const NAMESPACE = "goal-tenant";
@@ -39,7 +45,7 @@ async function messageText(
   context: CopilotzProcessorContext,
   messageId: string,
 ): Promise<string> {
-  const message = await context.conversation.getMessage(messageId);
+  const message = await loadMessageRecord(context, messageId);
   assertExists(message);
   const resolved = await context.content.resolveMany(message.content);
   return resolved.map((value) => value.text ?? "").join("\n");
@@ -48,16 +54,15 @@ async function messageText(
 function scriptedGoalPlugin(mode: ScriptMode = "normal"): CopilotzPlugin {
   const processor = defineProcessor<CopilotzProcessorContext>({
     id: `fixture.goal-script.${mode}`,
-    on: ["message.created"],
-    delivery: "durable",
-    filter: (event) => Boolean(event.routing?.recipientIds?.length),
+    on: [{ eventType: "message.created" }],
     async handle(event, context) {
+      if (!event.routing?.recipientIds?.length) return;
       if (!event.durable || !event.subject) return;
       const recipientId = event.routing.recipientIds?.[0];
       if (!recipientId) return;
-      const recipient = await context.conversation.getParticipant(recipientId);
+      const recipient = await loadParticipantRecord(context, recipientId);
       if (!recipient || recipient.participantType !== "agent") return;
-      const incoming = await context.conversation.getMessage(event.subject.id);
+      const incoming = await loadMessageRecord(context, event.subject.id);
       assertExists(incoming);
       const input = await messageText(context, incoming.id);
       const agentId = recipient.agentId ?? recipient.externalId;
@@ -67,13 +72,19 @@ function scriptedGoalPlugin(mode: ScriptMode = "normal"): CopilotzPlugin {
           { type: "text", text: "SECRET_TOOL_RESULT" },
           { operationKey: "fixture:secret-tool-content" },
         );
-        await context.conversation.createMessage({
+        const toolSender = await ensureParticipantRecord(context, {
+          externalId: "fixture-secret-tool",
+          participantType: "tool",
+          name: "Fixture secret tool",
+        }, {
+          operationKey: "fixture:secret-tool-participant",
           threadId: incoming.threadId,
-          sender: {
-            externalId: "fixture-secret-tool",
-            participantType: "tool",
-            name: "Fixture secret tool",
-          },
+        });
+        await createMessageRecord(context, {
+          id: `secret-tool:${incoming.id}`,
+          threadId: incoming.threadId,
+          senderId: toolSender.id,
+          recipientIds: [],
           content: toolContent,
           metadata: { historyVisibility: "public_status" },
         }, { operationKey: "fixture:secret-tool-message" });
@@ -97,15 +108,11 @@ function scriptedGoalPlugin(mode: ScriptMode = "normal"): CopilotzPlugin {
         { type: "text", text: answer },
         { operationKey: "fixture:answer-content" },
       );
-      await context.conversation.createMessage({
+      await createMessageRecord(context, {
+        id: `answer:${incoming.id}:${agentId}`,
         threadId: incoming.threadId,
-        sender: {
-          id: recipient.id,
-          externalId: recipient.externalId,
-          participantType: "agent",
-          agentId,
-          name: recipient.name,
-        },
+        senderId: recipient.id,
+        recipientIds: [incoming.sender.id],
         content,
       }, { operationKey: "fixture:answer-message" });
     },
@@ -141,6 +148,7 @@ async function createFixture(
     namespace: NAMESPACE,
     databaseSchema: schema,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [scriptedGoalPlugin(mode)],
     engine: { retryBaseMs: 0, random: () => 0 },
   });

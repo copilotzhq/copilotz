@@ -20,6 +20,7 @@ import {
   provisionCopilotzSchema,
 } from "../runtime/events/index.ts";
 import { definePlugin } from "../runtime/plugins/index.ts";
+import { coreCollectionsPlugin } from "../plugins/core/plugin.ts";
 import type { Agent } from "../runtime/resources/index.ts";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import {
@@ -65,14 +66,16 @@ const echoFeature: EventNativeFeatureResource = Object.freeze({
   id: "echo",
   actions: Object.freeze({
     ping(
-      request: EventNativeAppRequest,
+      input: unknown,
       context: EventNativeFeatureContext,
     ) {
+      const request = input as EventNativeAppRequest;
       return {
         namespace: context.namespace,
         body: request.body,
-        hasTypedConversation: typeof context.application.conversation
-          .createMessage === "function",
+        hasFeatureInvoke: typeof context.features.invoke === "function",
+        hasApplication: "application" in context,
+        hasScopedCollections: typeof context.collections === "object",
       };
     },
   }),
@@ -129,6 +132,7 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
     namespace: NAMESPACE,
     databaseSchema: SCHEMA,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [adapterPlugin],
   });
   const app = createEventNativeApp(application);
@@ -418,9 +422,11 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
         query: { correlationId: "http:correlation:message:a:edit" },
       })).data,
     );
-    assertEquals(revisionEvents.length, 1);
-    assertEquals(object(revisionEvents[0]).type, "message.revised");
-    const revisionEventId = object(revisionEvents[0]).id as string;
+    const revisionCreated = revisionEvents.find((event) =>
+      object(event).type === "message.created"
+    );
+    assertExists(revisionCreated);
+    const revisionEventId = object(revisionCreated).id as string;
     await expectAppError(
       () => app.handle({ resource: "events", method: "POST" }),
       405,
@@ -480,7 +486,9 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
       data: {
         namespace: NAMESPACE,
         body: { value: 42 },
-        hasTypedConversation: true,
+        hasFeatureInvoke: true,
+        hasApplication: false,
+        hasScopedCollections: true,
       },
     });
 
@@ -559,7 +567,7 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
           path: [revisionEventId],
         })).data,
       ).type,
-      "message.revised",
+      "message.created",
     );
 
     const deletedThread = await app.handle({
@@ -606,6 +614,7 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_history`,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
   });
   const app = createEventNativeApp(application);
   try {
@@ -851,6 +860,7 @@ Deno.test("trusted schema resolution isolates identical HTTP resource identities
     namespace: NAMESPACE,
     databaseSchema: defaultSchema,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     database,
   });
   let authorizedSchema = defaultSchema;
@@ -907,6 +917,7 @@ Deno.test("event-native app returns request-bound channel output before delivery
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_request_bound`,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
   });
   let release!: () => void;
   const settlement = new Promise<void>((resolve) => {

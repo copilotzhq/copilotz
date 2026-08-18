@@ -140,6 +140,7 @@ export async function createCopilotzGateway(
       namespace: options.namespace,
       databaseSchema: options.databaseSchema,
       core: options.core,
+      canonicalCore: options.canonicalCore,
       plugins: options.plugins,
       resources: options.resources,
       pluginResolver: options.pluginResolver,

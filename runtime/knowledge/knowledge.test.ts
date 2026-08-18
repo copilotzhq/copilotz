@@ -9,12 +9,12 @@ import {
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzApplication } from "../application/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
-import { createSqlSession } from "../events/index.ts";
 import { definePlugin, defineProcessor } from "../plugins/index.ts";
+import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "../workflows/index.ts";
+} from "../tools/index.ts";
 import {
   createKnowledgePlugin,
   defineKnowledgeEmbeddingProvider,
@@ -85,6 +85,7 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_knowledge",
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [createKnowledgePlugin({
       embedding: {
         provider: "fixture.embedding",
@@ -93,7 +94,7 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
       },
       chunking: { chunkSize: 512, chunkOverlap: 0 },
     })],
-    resources: { providers: [embeddingProvider(calls)] },
+    resources: { llm: [embeddingProvider(calls)] },
     engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
@@ -295,6 +296,7 @@ Deno.test("knowledge source failures retry through Oxian and settle as one durab
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_knowledge_failure",
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [createKnowledgePlugin({
       embedding: { provider: "fixture.embedding", dimensions: 2 },
       sourceLoader(input) {
@@ -302,7 +304,7 @@ Deno.test("knowledge source failures retry through Oxian and settle as one durab
         return Promise.reject(new Error("fixture source unavailable"));
       },
     })],
-    resources: { providers: [embeddingProvider([])] },
+    resources: { llm: [embeddingProvider([])] },
     engine: { retryBaseMs: 0, random: () => 0, maxAttempts: 3 },
   });
   try {
@@ -365,8 +367,7 @@ Deno.test("knowledge tools execute through scoped factory capabilities", async (
   const outputs = new Map<string, unknown>();
   const driver = defineProcessor<CopilotzProcessorContext>({
     id: "fixture.knowledge-tools",
-    on: ["fixture.knowledge_tool.requested"],
-    delivery: "durable",
+    on: [{ eventType: "fixture.knowledge_tool.requested" }],
     async handle(event, processor) {
       if (!event.durable || !event.threadId) return;
       const payload = event.payload as {
@@ -426,6 +427,7 @@ Deno.test("knowledge tools execute through scoped factory capabilities", async (
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_knowledge_tools",
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [
       createKnowledgePlugin({
         embedding: { provider: "fixture.embedding", dimensions: 2 },
@@ -433,7 +435,7 @@ Deno.test("knowledge tools execute through scoped factory capabilities", async (
       }),
       driverPlugin,
     ],
-    resources: { providers: [embeddingProvider([])] },
+    resources: { llm: [embeddingProvider([])] },
     engine: { retryBaseMs: 0, random: () => 0 },
   });
   const invoke = async (

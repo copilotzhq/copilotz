@@ -3,11 +3,11 @@ import { assertEquals, assertRejects } from "@std/assert";
 import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
 import type { Agent, CapabilitySelection } from "../resources/index.ts";
 import { createSkillsPlugin, defineInlineSkill } from "../skills/index.ts";
+import { corePlugin } from "@copilotz/copilotz/plugins/core";
 import {
-  createAgentAskPlugin,
   createWorkflowToolCatalog,
   type WorkflowTool,
-} from "../workflows/index.ts";
+} from "../tools/index.ts";
 import { createAgentCapabilityResolver } from "./resolver.ts";
 import { selectCapabilityResources } from "./selection.ts";
 
@@ -61,7 +61,7 @@ async function registry() {
   });
   return await createPluginRegistry({
     plugins: [
-      createAgentAskPlugin(),
+      corePlugin,
       createSkillsPlugin({
         id: "test.capabilities.skills",
         version: "1.0.0",

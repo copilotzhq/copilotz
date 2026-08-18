@@ -7,33 +7,28 @@ import {
   definePlugin,
   defineProcessor,
 } from "../../index.ts";
+import { loadMessageRecord } from "../../runtime/engine/collection-graph.ts";
+import { createMessageRecord } from "../../runtime/engine/collection-writes.ts";
+import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 
 const NAMESPACE = "v3-root-contract";
 
 function publicReplyPlugin(): CopilotzPlugin {
   const processor = defineProcessor<CopilotzProcessorContext>({
     id: "contract.public-reply",
-    on: ["message.created"],
-    delivery: "durable",
-    filter: (event) => event.routing?.senderId === "contract-user",
+    on: [{ eventType: "message.created", routing: { senderId: "contract-user" } }],
     async handle(event, context) {
       assert(event.durable);
       assertExists(event.subject);
-      const source = await context.conversation.getMessage(event.subject.id);
+      const source = await loadMessageRecord(context, event.subject.id);
       assertExists(source);
       const content = await context.content.prepare("Hello from v3", {
         operationKey: "reply-content",
       });
-      await context.conversation.createMessage({
+      await createMessageRecord(context, {
         id: "contract-reply",
         threadId: source.threadId,
-        sender: {
-          id: "contract-agent",
-          externalId: "support",
-          participantType: "agent",
-          agentId: "support",
-          name: "Support",
-        },
+        senderId: "contract-agent",
         recipientIds: [source.sender.id],
         content,
       }, { operationKey: "reply-message" });
@@ -59,6 +54,7 @@ Deno.test("root createCopilotz runs one causal event scope without queue state",
   const copilotz = await createCopilotz({
     namespace: NAMESPACE,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [publicReplyPlugin()],
     engine: { retryBaseMs: 0, random: () => 0 },
   });

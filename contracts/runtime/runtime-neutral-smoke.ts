@@ -38,39 +38,36 @@ export async function runRuntimeNeutralSmoke(): Promise<
   }
   const assetText = await new Response(body).text();
 
+  const providerEndpoint = "https://runtime-smoke.invalid/v1/chat";
   const provider = defineLlmProviderResource({
     id: "runtime-smoke",
     type: "llm",
-    factory: () => ({
-      endpoint: "https://runtime-smoke.invalid/v1/chat",
-      headers: () => ({ "content-type": "application/json" }),
-      body: (messages) => ({ messages }),
-      extractContent: () => null,
-    }),
+    generate: () => {
+      throw new Error("runtime-smoke generate is not invoked");
+    },
   });
   const plugin = definePlugin({
     manifest: {
       id: "@copilotz/runtime-smoke",
       version: "3.0.0",
-      provides: { providers: [provider.id] },
+      provides: { llm: [provider.id] },
     },
-    resources: { providers: [provider] },
+    resources: { llm: [provider] },
   });
   const registry = await createPluginRegistry({ plugins: [plugin] });
   const resolved = registry.require<LlmProviderResource>(
-    "providers",
+    "llm",
     provider.id,
   );
-  const providerApi = resolved.factory({
-    provider: "runtime-smoke" as never,
-    model: "injected",
-  });
+  if (typeof resolved.generate !== "function") {
+    throw new TypeError("Runtime-smoke llm resource must implement generate().");
+  }
 
   return Object.freeze({
     assetId: published.id,
     assetText,
     pluginId: plugin.manifest.id,
-    providerEndpoint: providerApi.endpoint,
+    providerEndpoint,
     webStreams: true,
   });
 }

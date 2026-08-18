@@ -148,17 +148,15 @@ function joinRecoveredContent(prefix: string, continuation: string): string {
   return `${prefix} ${continuation}`;
 }
 
-let defaultProviderRegistryPromise: Promise<ProviderRegistry> | undefined;
-
-async function getProviderRegistry(
+function requireProviderRegistry(
   registry?: ProviderRegistry,
-): Promise<ProviderRegistry> {
-  if (registry) return registry;
-  if (!defaultProviderRegistryPromise) {
-    defaultProviderRegistryPromise = import("./registry.ts")
-      .then((mod) => mod.providers);
+): ProviderRegistry {
+  if (!registry || Object.keys(registry).length === 0) {
+    throw new Error(
+      "LLM chat requires an explicit provider registry. Ship adapters as llm resources on a plugin.",
+    );
   }
-  return await defaultProviderRegistryPromise;
+  return registry;
 }
 
 function buildAttemptConfig(
@@ -390,7 +388,7 @@ export async function chat(
       buildAttemptConfig(baseConfig, env, fallback)
     ),
   ];
-  const registry = await getProviderRegistry(providerRegistry);
+  const registry = requireProviderRegistry(providerRegistry);
   const llmCallId = crypto.randomUUID();
   const knownToolNames = (request.tools ?? [])
     .map((tool) => tool?.function?.name)

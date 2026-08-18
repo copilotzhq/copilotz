@@ -17,11 +17,12 @@ import {
   type ChannelRuntime,
   createChannelRuntime,
 } from "../runtime/channels/index.ts";
-import type {
-  FeatureContext,
-  FeatureRequest,
-  FeatureResource,
-  FeatureResponse,
+import {
+  createFeatureContext,
+  type FeatureContext,
+  type FeatureRequest,
+  type FeatureResource,
+  type FeatureResponse,
 } from "../runtime/features/index.ts";
 import {
   createEventNativeMessageHistoryIncluded,
@@ -866,16 +867,29 @@ async function handleFeatures(
   const feature = application.plugins.list<FeatureResource>(
     "features",
   ).find((candidate) => featureId(candidate) === path[0]);
-  const action = feature?.actions[path[1]];
-  if (!feature || !action) {
+  if (!feature?.actions[path[1]]) {
     throw appError(404, "feature_not_found", "Feature action was not found.");
   }
-  const output = await action(request, {
-    application,
+  const context = createFeatureContext({
     namespace,
-    databaseSchema: application.config.databaseSchema,
-    request,
+    plugins: application.plugins,
+    collections: application.collections,
+    collectionRuntime: application.collectionRuntime,
+    contentResolver: application.content.resolver,
+    events: application.events,
+    deliveries: application.deliveries,
+    relations: application.relations,
   });
+  let output: unknown;
+  try {
+    output = await context.features.invoke(path[0], path[1], request);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("is not registered")) {
+      throw appError(404, "feature_not_found", "Feature action was not found.");
+    }
+    throw error;
+  }
   const response = record(output);
   return "status" in response && typeof response.status === "number"
     ? response as EventNativeAppResponse

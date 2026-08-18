@@ -18,6 +18,8 @@ import {
   type PluginRegistry,
   type Processor,
 } from "../plugins/index.ts";
+import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
+import { updateThreadRecord } from "../engine/collection-writes.ts";
 import {
   type AttachmentOutput,
   type AttachmentStreamOutput,
@@ -92,13 +94,13 @@ async function registryFor(options: {
   const providers = options.providers ?? [echoProvider()];
   const processors = options.processors ?? [];
   return await createPluginRegistry({
-    plugins: [definePlugin({
+    plugins: [coreCollectionsPlugin, definePlugin({
       manifest: {
         id: "test.attachments",
         version: "1.0.0",
         provides: {
           agents: agents.map((resource) => resource.id),
-          providers: providers.map((resource) => resource.id),
+          llm: providers.map((resource) => resource.id),
           ...(processors.length
             ? { processors: processors.map((resource) => resource.id) }
             : {}),
@@ -106,7 +108,7 @@ async function registryFor(options: {
       },
       resources: {
         agents,
-        providers,
+        llm: providers,
         ...(processors.length ? { processors } : {}),
       },
     })],
@@ -116,6 +118,9 @@ async function registryFor(options: {
 async function createFixture(options: {
   registry?: PluginRegistry;
   execution?: Parameters<typeof createCopilotzEngine>[0]["execution"];
+  transientProcessors?: Parameters<
+    typeof createCopilotzEngine
+  >[0]["transientProcessors"];
 } = {}): Promise<Fixture> {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
@@ -124,6 +129,7 @@ async function createFixture(options: {
   const engine = await createCopilotzEngine({
     session,
     registry,
+    transientProcessors: options.transientProcessors,
     defaultDatabaseSchema: SCHEMA,
     createId: () => `attachment-${++nextId}`,
     execution: options.execution,
@@ -227,8 +233,7 @@ Deno.test("event-native run is a temporary attachment over one causal scope", as
   const gate = new Promise<void>((resolve) => release = resolve);
   const processor = defineProcessor<CopilotzProcessorContext>({
     id: "test.run-gate",
-    on: ["message.created"],
-    delivery: "durable",
+    on: [{ eventType: "message.created" }],
     handle: () => gate,
   });
   const fixture = await createFixture({
@@ -292,19 +297,17 @@ Deno.test("detached durable descendants do not block the triggering run", async 
   });
   const reserve = defineProcessor<CopilotzProcessorContext>({
     id: "test.detached-reserve",
-    on: ["message.created"],
-    delivery: "durable",
+    on: [{ eventType: "message.created" }],
     settlement: "detached",
     async handle(_event, context) {
-      await context.conversation.updateThread("thread-a", {
+      await updateThreadRecord(context, "thread-a", {
         metadata: { detached: true },
-      });
+      }, { operationKey: "detached-reserve-thread" });
     },
   });
   const descendant = defineProcessor<CopilotzProcessorContext>({
     id: "test.detached-descendant",
-    on: ["thread.updated"],
-    delivery: "durable",
+    on: [{ eventType: "thread.updated" }],
     async handle() {
       announceDescendant();
       await gate;
@@ -359,8 +362,7 @@ Deno.test("run cancellation aborts only its foreground settlement scope", async 
   let foregroundAborted = false;
   const foreground = defineProcessor<CopilotzProcessorContext>({
     id: "test.run-cancellation",
-    on: ["message.created"],
-    delivery: "durable",
+    on: [{ eventType: "message.created" }],
     async handle(_event, context) {
       announceForegroundStarted();
       await new Promise<void>((resolve, reject) => {
@@ -384,8 +386,7 @@ Deno.test("run cancellation aborts only its foreground settlement scope", async 
   let detachedAborted = false;
   const detached = defineProcessor<CopilotzProcessorContext>({
     id: "test.detached-cancellation",
-    on: ["message.created"],
-    delivery: "durable",
+    on: [{ eventType: "message.created" }],
     settlement: "detached",
     async handle(_event, context) {
       announceDetachedStarted();
@@ -534,15 +535,14 @@ Deno.test("ephemeral attachment handles settle with independent live processors"
   const started = new Promise<void>((resolve) => announceStarted = resolve);
   const live = defineProcessor({
     id: "test.attachment-live",
-    on: ["control.cursor"],
-    delivery: "live",
+    on: [{ eventType: "control.cursor" }],
     async handle() {
       announceStarted();
       await gate;
     },
   });
   const fixture = await createFixture({
-    registry: await registryFor({ processors: [live] }),
+    transientProcessors: [live],
   });
   try {
     await createThread(fixture.engine);
@@ -652,7 +652,8 @@ Deno.test("one-call stream ingress stays raw and returns participant-labelled ou
     );
     const assets = await fixture.session.query<{ count: string | number }>(
       `SELECT COUNT(*) AS count FROM ${SCHEMA}.nodes
-       WHERE namespace = $1 AND type = 'asset'`,
+       WHERE namespace = $1 AND type = 'asset'
+         AND id NOT LIKE 'event-body:%'`,
       [NAMESPACE],
     );
     assertEquals(Number(assets.rows[0].count), 0);

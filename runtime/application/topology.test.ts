@@ -9,9 +9,11 @@ import { listen } from "../adapters/deno/listen.ts";
 import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
 import { defineProcessor } from "../plugins/processor.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
+import { createMessageRecord } from "../engine/collection-writes.ts";
 import type { Agent } from "../resources/index.ts";
 import type { CopilotzDatabase } from "./persistence.ts";
 import { isCopilotzPersistenceError } from "./persistence.ts";
+import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import {
   type AttachmentOutput,
   type AttachmentStreamOutput,
@@ -25,24 +27,17 @@ const decoder = new TextDecoder();
 function cascadingPlugin(): CopilotzPlugin {
   const first = defineProcessor<CopilotzProcessorContext>({
     id: "topology.first",
-    on: ["message.created"],
-    delivery: "durable",
-    filter: (event) => event.routing?.senderId === "topology-user",
+    on: [{ eventType: "message.created", routing: { senderId: "topology-user" } }],
     async handle(event, context) {
       assert(event.durable);
       assertExists(event.threadId);
       const content = await context.content.prepare("first worker reply", {
         operationKey: "first-content",
       });
-      await context.conversation.createMessage({
+      await createMessageRecord(context, {
         id: "topology-first-reply",
         threadId: event.threadId,
-        sender: {
-          id: "topology-agent",
-          externalId: "topology-agent",
-          participantType: "agent",
-          agentId: "topology-agent",
-        },
+        senderId: "topology-agent",
         recipientIds: ["topology-user"],
         content,
       }, { operationKey: "first-message" });
@@ -55,24 +50,17 @@ function cascadingPlugin(): CopilotzPlugin {
   });
   const second = defineProcessor<CopilotzProcessorContext>({
     id: "topology.second",
-    on: ["message.created"],
-    delivery: "durable",
-    filter: (event) => event.routing?.senderId === "topology-agent",
+    on: [{ eventType: "message.created", routing: { senderId: "topology-agent" } }],
     async handle(event, context) {
       assert(event.durable);
       assertExists(event.threadId);
       const content = await context.content.prepare("cascaded worker reply", {
         operationKey: "second-content",
       });
-      await context.conversation.createMessage({
+      await createMessageRecord(context, {
         id: "topology-second-reply",
         threadId: event.threadId,
-        sender: {
-          id: "topology-second-agent",
-          externalId: "topology-second-agent",
-          participantType: "agent",
-          agentId: "topology-second-agent",
-        },
+        senderId: "topology-second-agent",
         recipientIds: ["topology-user"],
         content,
       }, { operationKey: "second-message" });
@@ -125,12 +113,12 @@ function realtimePlugin(): CopilotzPlugin {
       version: "1.0.0",
       provides: {
         agents: [agent.id],
-        providers: [provider.id],
+        llm: [provider.id],
       },
     },
     resources: {
       agents: [agent],
-      providers: [provider],
+      llm: [provider],
     },
   });
 }
@@ -186,6 +174,7 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
   const gateway = await createCopilotzGateway({
     namespace,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     database,
     plugins: [plugin],
     transports: [transport],
@@ -199,6 +188,7 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
   const worker = await createCopilotzWorker({
     namespace,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     database,
     plugins: [plugin],
     id: workerId,
@@ -312,6 +302,7 @@ Deno.test("Gateway bounds persistence outages as retryable HTTP 503 responses", 
   const gateway = await createCopilotzGateway({
     namespace,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     persistence,
   });
   try {
@@ -364,6 +355,7 @@ Deno.test({
     const gateway = await createCopilotzGateway({
       namespace,
       core: false,
+      canonicalCore: [coreCollectionsPlugin],
       database,
       plugins: [plugin, realtime],
       transports: [transport],
@@ -401,6 +393,7 @@ Deno.test({
     const worker = await createCopilotzWorker({
       namespace,
       core: false,
+      canonicalCore: [coreCollectionsPlugin],
       database,
       plugins: [plugin, realtime],
       id: workerId,

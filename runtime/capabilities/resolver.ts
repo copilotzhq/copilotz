@@ -1,6 +1,6 @@
 import type { PluginResourceOrigin } from "../plugins/index.ts";
 import type { Agent, Skill } from "../resources/index.ts";
-import type { WorkflowTool } from "../workflows/index.ts";
+import type { WorkflowTool } from "../tools/index.ts";
 import {
   capabilitySelectionMode,
   selectCapabilityResources,
@@ -21,10 +21,10 @@ function generatedToolOrigin(
   if (direct) return direct;
   const [kind, resourceId] = tool.id.split(":", 3);
   if (kind === "api" && resourceId) {
-    return options.registry.origin("apis", resourceId);
+    return options.registry.origin("api", resourceId);
   }
   if (kind === "mcp" && resourceId) {
-    return options.registry.origin("mcpServers", resourceId);
+    return options.registry.origin("mcp", resourceId);
   }
   return undefined;
 }

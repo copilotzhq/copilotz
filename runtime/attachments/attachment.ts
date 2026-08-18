@@ -816,7 +816,7 @@ export function createAttachmentRuntime(
         );
       }
       const provider = options.registry.get<RealtimeProviderResource>(
-        "providers",
+        "llm",
         runtime.provider,
       );
       if (!provider || !isRealtimeProviderResource(provider)) {

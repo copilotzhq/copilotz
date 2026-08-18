@@ -1,8 +1,18 @@
 import type { Participant, ParticipantInput } from "../domain/index.ts";
 import { toolExecutionContent } from "../domain/index.ts";
 import type { CopilotzProcessorCapabilities } from "../engine/index.ts";
-import { withWorkflowMetadata } from "../workflows/resources.ts";
-import { deriveWorkflowId } from "../workflows/identity.ts";
+import {
+  loadMessageRecord,
+  loadThreadRecord,
+  loadToolExecutionRecord,
+} from "../engine/collection-graph.ts";
+import {
+  createMessageRecord,
+  createToolExecutionCollection,
+} from "../engine/collection-writes.ts";
+import { withWorkflowMetadata } from "../events/workflow-metadata.ts";
+import { deriveWorkflowId } from "../events/workflow-id.ts";
+import type { DurableEvent } from "../events/index.ts";
 import type {
   RealtimeAgentAskInput,
   RealtimeAgentAskResult,
@@ -75,6 +85,27 @@ function resolvedValue(value: { value?: unknown; text?: string }): unknown {
   return value.value !== undefined ? value.value : value.text;
 }
 
+async function requireDurableEvent(
+  capabilities: CopilotzProcessorCapabilities,
+  input: Readonly<{
+    threadId: string;
+    types: readonly string[];
+    subject: { type: string; id: string };
+    timeoutMs?: number;
+  }>,
+): Promise<DurableEvent> {
+  const event = await capabilities.events.waitFor({
+    threadId: input.threadId,
+    types: [...input.types],
+    subject: input.subject,
+    timeoutMs: input.timeoutMs,
+  });
+  if (!event.durable) {
+    throw new Error(`Realtime event '${input.types.join(",")}' was not durable.`);
+  }
+  return event;
+}
+
 /** Adds semantic messages, tools, and public asks to one realtime worker scope. */
 export function createRealtimeProviderContext(
   options: CreateRealtimeProviderContextOptions,
@@ -85,9 +116,7 @@ export function createRealtimeProviderContext(
   const nextKey = (kind: string): string => `${kind}:${++sequence}`;
 
   const participants = async () => {
-    const thread = await capabilities.conversation.getThread(
-      metadata.threadId,
-    );
+    const thread = await loadThreadRecord(capabilities, metadata.threadId);
     if (!thread) {
       throw new Error(`Thread '${metadata.threadId}' was not found.`);
     }
@@ -138,19 +167,28 @@ export function createRealtimeProviderContext(
       realtimeStreamId: metadata.streamId,
       agentParticipantId: agentParticipant.id,
     });
-    const result = await capabilities.conversation.createMessage({
-      ...(input.id ? { id: requiredText(input.id, "Message ID") } : {}),
+    const messageId = input.id
+      ? requiredText(input.id, "Message ID")
+      : `realtime:${metadata.streamId}:${operationKey}`;
+    const record = await createMessageRecord(capabilities, {
+      id: messageId,
       threadId: metadata.threadId,
-      sender,
+      senderId,
       recipientIds,
       content,
       visibility: input.visibility ?? { kind: "public" },
       metadata: messageMetadata,
-    }, { operationKey, metadata: messageMetadata });
-    if (!result.value) {
+    }, { operationKey });
+    const event = await requireDurableEvent(capabilities, {
+      threadId: metadata.threadId,
+      types: ["message.created"],
+      subject: { type: "message", id: record.id },
+    });
+    const message = await loadMessageRecord(capabilities, record.id);
+    if (!message) {
       throw new Error("Realtime message mutation returned no record.");
     }
-    return Object.freeze({ message: result.value, event: result.event });
+    return Object.freeze({ message, event });
   };
 
   const tool = async (
@@ -185,7 +223,7 @@ export function createRealtimeProviderContext(
       batchIndex: 0,
       agentParticipantId: metadata.recipientId,
     });
-    const created = await capabilities.toolExecutions.create({
+    const created = await createToolExecutionCollection(capabilities, {
       id: executionId,
       threadId: metadata.threadId,
       participantId: metadata.recipientId,
@@ -195,13 +233,16 @@ export function createRealtimeProviderContext(
         id: toolId,
         name: typeof resource?.name === "string" ? resource.name : toolId,
       },
-      arguments: preparedArguments,
       status: "running",
       historyVisibility: input.historyVisibility ?? "public_status",
       metadata: workflow,
-    }, { operationKey: `${ordinal}:create`, metadata: workflow });
-    const current = created.value ??
-      await capabilities.toolExecutions.get(executionId);
+    }, {
+      operationKey: `${ordinal}:create`,
+      metadata: workflow,
+      content: preparedArguments,
+    });
+    const current = await loadToolExecutionRecord(capabilities, created.id) ??
+      await loadToolExecutionRecord(capabilities, executionId);
     if (!current) {
       throw new Error(`Realtime tool execution '${executionId}' vanished.`);
     }
@@ -210,18 +251,20 @@ export function createRealtimeProviderContext(
       ? await capabilities.events.waitFor({
         threadId: metadata.threadId,
         types: [
-          "tool_execution.completed",
-          "tool_execution.failed",
-          "tool_execution.cancelled",
+          "tool_execution.updated",
         ],
         subject: { type: "tool_execution", id: executionId },
         timeoutMs: timeout(input.timeoutMs),
       })
-      : created.event;
+      : await requireDurableEvent(capabilities, {
+        threadId: metadata.threadId,
+        types: ["tool_execution.created"],
+        subject: { type: "tool_execution", id: executionId },
+      });
     if (!terminalEvent.durable) {
       throw new Error("Realtime tool terminal event was not durable.");
     }
-    const execution = await capabilities.toolExecutions.get(executionId);
+    const execution = await loadToolExecutionRecord(capabilities, executionId);
     if (!execution) {
       throw new Error(`Realtime tool execution '${executionId}' vanished.`);
     }
@@ -241,7 +284,8 @@ export function createRealtimeProviderContext(
     if (!projectionEvent.durable || !projectionEvent.subject) {
       throw new Error("Realtime tool result projection was not durable.");
     }
-    const message = await capabilities.conversation.getMessage(
+    const message = await loadMessageRecord(
+      capabilities,
       projectionEvent.subject.id,
     );
     if (!message) {
@@ -278,7 +322,7 @@ export function createRealtimeProviderContext(
       ? (value as Record<string, string>).answerMessageId
       : undefined;
     const answer = answerMessageId
-      ? await capabilities.conversation.getMessage(answerMessageId)
+      ? await loadMessageRecord(capabilities, answerMessageId)
       : null;
     return Object.freeze({
       ...result,

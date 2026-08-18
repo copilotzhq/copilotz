@@ -7,8 +7,13 @@ import {
 import type { Agent } from "../../resources/index.ts";
 import { createCopilotzApplication } from "../../application/index.ts";
 import type { CopilotzProcessorContext } from "../../engine/index.ts";
-import { createSqlSession } from "../../events/index.ts";
+import {
+  loadMessageRecord,
+  loadParticipantRecord,
+} from "../../engine/collection-graph.ts";
+import { createMessageRecord } from "../../engine/collection-writes.ts";
 import { definePlugin, defineProcessor } from "../../plugins/index.ts";
+import { coreCollectionsPlugin } from "../../../plugins/core/plugin.ts";
 import { createChannelRuntime } from "../runtime.ts";
 import { createDiscordChannel, createDiscordChannelPlugin } from "./index.ts";
 import type {
@@ -87,14 +92,14 @@ function fakeTransport() {
 function replyPlugin() {
   const processor = defineProcessor<CopilotzProcessorContext>({
     id: "discord.reply",
-    on: ["message.created"],
-    delivery: "durable",
+    on: [{ eventType: "message.created" }],
     async handle(event, context) {
       if (!event.durable || event.subject?.type !== "message") return;
-      const input = await context.conversation.getMessage(event.subject.id);
+      const input = await loadMessageRecord(context, event.subject.id);
       assertExists(input);
       if (input.sender.participantType !== "human") return;
-      const recipient = await context.conversation.getParticipant(
+      const recipient = await loadParticipantRecord(
+        context,
         input.recipientIds[0],
       );
       assertExists(recipient);
@@ -117,16 +122,10 @@ function replyPlugin() {
           name: "answer.pdf",
         },
       ], { operationKey: "discord-reply-content" });
-      await context.conversation.createMessage({
+      await createMessageRecord(context, {
         id: `reply:${input.id}`,
         threadId: input.threadId,
-        sender: {
-          id: recipient.id,
-          externalId: recipient.externalId,
-          participantType: "agent",
-          agentId: recipient.agentId,
-          name: recipient.name,
-        },
+        senderId: recipient.id,
         recipientIds: [input.sender.id],
         content,
       }, { operationKey: "discord-reply-message" });
@@ -155,6 +154,7 @@ Deno.test("Discord channel verifies interactions and preserves native media/acti
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_discord",
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [
       replyPlugin(),
       createDiscordChannelPlugin({

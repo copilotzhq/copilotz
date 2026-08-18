@@ -3,7 +3,7 @@ import {
   type CreateFinanceToolOptions,
 } from "./finance/index.ts";
 import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
-import type { WorkflowTool } from "../workflows/index.ts";
+import type { WorkflowTool } from "./types.ts";
 
 export type CreateFinanceToolsPluginOptions =
   & CreateFinanceToolOptions

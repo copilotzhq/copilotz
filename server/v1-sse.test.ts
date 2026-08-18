@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 
 import { createCopilotz } from "../runtime/application/index.ts";
+import { coreCollectionsPlugin } from "../plugins/core/plugin.ts";
 import type { AttachmentStreamOutput } from "../runtime/attachments/index.ts";
 import { createEphemeralEvent } from "../runtime/events/index.ts";
 import { createV1SseProjector } from "./v1-sse.ts";
@@ -12,6 +13,7 @@ Deno.test("v1 SSE projector maps live vocabulary and hydrates canonical public m
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v1_sse",
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
   });
   try {
     await application.conversation.createThread({
@@ -141,6 +143,7 @@ Deno.test("v1 SSE projector leaves media as references and never serializes a by
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v1_sse_media",
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
   });
   try {
     const project = createV1SseProjector(application, {

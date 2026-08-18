@@ -25,12 +25,7 @@ import type { CreateUsageWorkflowPluginOptions } from "../usage/index.ts";
 import type { CreateScheduledJobsPluginOptions } from "../schedules/index.ts";
 import type { CreateKnowledgePluginOptions } from "../knowledge/index.ts";
 import type { GoalHandle, GoalInput } from "../goals/index.ts";
-import type {
-  CreateAgentAskPluginOptions,
-  CreateBuiltInLlmProvidersPluginOptions,
-  CreateTextWorkflowPluginOptions,
-  WorkflowToolCatalog,
-} from "../workflows/index.ts";
+import type { WorkflowToolCatalog } from "../tools/index.ts";
 import type { CopilotzPersistenceOptions } from "./persistence.ts";
 import type { AssetStorageOptions } from "../content/index.ts";
 
@@ -38,14 +33,11 @@ export type CorePluginSetting<T> = false | Readonly<T>;
 
 /** Built-in plugins included before application-declared plugins. */
 export type CopilotzCorePluginOptions = Readonly<{
-  providers?: CorePluginSetting<CreateBuiltInLlmProvidersPluginOptions>;
   tools?: CorePluginSetting<CreateBuiltInToolsPluginOptions>;
   webTools?: CorePluginSetting<CreateWebToolsPluginOptions>;
   finance?: CorePluginSetting<CreateFinanceToolsPluginOptions>;
   memory?: CorePluginSetting<CreateLongTermMemoryPluginOptions>;
   usage?: CorePluginSetting<CreateUsageWorkflowPluginOptions>;
-  text?: CorePluginSetting<CreateTextWorkflowPluginOptions>;
-  ask?: CorePluginSetting<CreateAgentAskPluginOptions>;
   schedules?: CorePluginSetting<CreateScheduledJobsPluginOptions>;
   /** Opt-in because an embedding provider resource is required. */
   knowledge?: CorePluginSetting<CreateKnowledgePluginOptions>;
@@ -58,6 +50,8 @@ export type CreateCopilotzApplicationOptions =
     databaseSchema?: string;
     /** Disable every built-in plugin with false, or configure them individually. */
     core?: false | CopilotzCorePluginOptions;
+    /** Static canonical plugins. Package root defaults this to `[corePlugin]`. */
+    canonicalCore?: readonly CopilotzPlugin[];
     plugins?: readonly PluginSource[];
     resources?: PluginResources;
     pluginResolver?: PluginResolver;

@@ -7,8 +7,13 @@ import {
 import type { Agent } from "../../resources/index.ts";
 import { createCopilotzApplication } from "../../application/index.ts";
 import type { CopilotzProcessorContext } from "../../engine/index.ts";
-import { createSqlSession } from "../../events/index.ts";
+import {
+  loadMessageRecord,
+  loadParticipantRecord,
+} from "../../engine/collection-graph.ts";
+import { createMessageRecord } from "../../engine/collection-writes.ts";
 import { definePlugin, defineProcessor } from "../../plugins/index.ts";
+import { coreCollectionsPlugin } from "../../../plugins/core/plugin.ts";
 import { createChannelRuntime } from "../runtime.ts";
 import {
   buildWhatsAppReplyButtonsMessage,
@@ -77,14 +82,14 @@ function fakeTransport() {
 function replyPlugin() {
   const processor = defineProcessor<CopilotzProcessorContext>({
     id: "whatsapp.reply",
-    on: ["message.created"],
-    delivery: "durable",
+    on: [{ eventType: "message.created" }],
     async handle(event, context) {
       if (!event.durable || event.subject?.type !== "message") return;
-      const message = await context.conversation.getMessage(event.subject.id);
+      const message = await loadMessageRecord(context, event.subject.id);
       assertExists(message);
       if (message.sender.participantType !== "human") return;
-      const recipient = await context.conversation.getParticipant(
+      const recipient = await loadParticipantRecord(
+        context,
         message.recipientIds[0],
       );
       assertExists(recipient);
@@ -107,16 +112,10 @@ function replyPlugin() {
           name: "answer.ogg",
         },
       ], { operationKey: "reply-content" });
-      await context.conversation.createMessage({
+      await createMessageRecord(context, {
         id: `reply:${message.id}`,
         threadId: message.threadId,
-        sender: {
-          id: recipient.id,
-          externalId: recipient.externalId,
-          participantType: "agent",
-          agentId: recipient.agentId,
-          name: recipient.name,
-        },
+        senderId: recipient.id,
         recipientIds: [message.sender.id],
         content,
       }, { operationKey: "reply-message" });
@@ -160,6 +159,7 @@ Deno.test("WhatsApp channel normalizes signed media ingress and native semantic 
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_whatsapp",
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [
       replyPlugin(),
       createWhatsAppChannelPlugin({

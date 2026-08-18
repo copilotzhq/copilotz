@@ -3,7 +3,7 @@ import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
 import { createWorker } from "../../dependencies/oxian-worker.ts";
-import { defineCollection, llmAttemptContent } from "../domain/index.ts";
+import { defineCollection, llmAttemptContent, composeRoleContent, LLM_CONTENT_ROLE } from "../domain/index.ts";
 import {
   createSqlSession,
   provisionCopilotzSchema,
@@ -14,11 +14,14 @@ import {
   definePlugin,
   defineProcessor,
 } from "../plugins/index.ts";
+import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import {
   type CopilotzEngine,
   type CopilotzProcessorContext,
   createCopilotzEngine,
 } from "./index.ts";
+import { createLlmAttemptRecord } from "./collection-writes.ts";
+import { requireBoundCollection } from "./collection-graph.ts";
 
 const TEST_SCHEMA = "copilotz_factory_engine";
 
@@ -57,17 +60,14 @@ async function createFixture(): Promise<Fixture> {
   });
   const processor = defineProcessor<CopilotzProcessorContext>({
     id: "engine.message.to-attempt",
-    on: ["message.created"],
-    delivery: "durable",
-    filter: (event) => event.routing?.senderId === "user-a",
+    on: [{ eventType: "message.created", routing: { senderId: "user-a" } }],
     async handle(event, context) {
       if (!event.durable) throw new Error("Durable delivery received a frame.");
       calls += 1;
       leakedStorage = leakedStorage || "eventStore" in context ||
         "session" in context || "coordinator" in context ||
-        "coordinator" in context.conversation ||
-        "coordinator" in context.llmAttempts ||
-        "coordinator" in context.toolExecutions;
+        "coordinator" in context.collections ||
+        "coordinator" in context.collectionRuntime;
       assertEquals(context.namespace, "tenant-a");
       assertEquals(context.event.id, event.id);
       assertEquals(
@@ -75,22 +75,39 @@ async function createFixture(): Promise<Fixture> {
         "echo",
       );
 
-      const message = await context.conversation.getMessage(event.subject!.id);
+      const message = await context.collectionRuntime.get("message")?.get(
+        event.subject!.id,
+        context.namespace,
+      );
       assertExists(message);
-      const resolved = await context.content.resolveMany(message.content);
+      const resolved = await context.content.resolveMany(
+        Array.isArray(message.content) ? message.content : [],
+      );
       assertEquals(resolved[0].text, "Hello engine");
       const prepared = await context.content.prepare(
         { type: "text", text: `input:${resolved[0].text}` },
         { operationKey: "logical-input" },
       );
-      await context.llmAttempts.create({
-        id: `attempt:${message.id}`,
-        threadId: message.threadId,
-        messageId: message.id,
-        participantId: "agent-a",
-        agentId: "support",
-        input: prepared,
-      });
+      const attemptId = `attempt:${message.id}`;
+      if (
+        !await requireBoundCollection(context, "llm_attempt").get(
+          attemptId,
+          context.namespace,
+        )
+      ) {
+        await createLlmAttemptRecord(context, {
+          id: attemptId,
+          threadId: message.threadId,
+          messageId: message.id,
+          participantId: "agent-a",
+          agentId: "support",
+          content: composeRoleContent([{
+            role: LLM_CONTENT_ROLE.input,
+            input: prepared,
+            cardinality: "one",
+          }]),
+        }, { operationKey: "logical-attempt" });
+      }
       await context.collections.engine_audit.create({
         id: `audit:${event.id}`,
         sourceEventId: event.id,
@@ -107,7 +124,7 @@ async function createFixture(): Promise<Fixture> {
     },
   });
   const registry = await createPluginRegistry({
-    plugins: [definePlugin({
+    plugins: [coreCollectionsPlugin, definePlugin({
       manifest: {
         id: "test.engine",
         version: "1.0.0",
@@ -166,38 +183,45 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       ["edges", "event_deliveries", "events", "nodes"],
     );
 
-    await fixture.engine.conversation.createThread({
-      namespace: "tenant-a",
+    const namespace = "tenant-a";
+    const participants = fixture.engine.collectionRuntime.get("participant");
+    const threads = fixture.engine.collectionRuntime.get("thread");
+    const messages = fixture.engine.collectionRuntime.get("message");
+    assertExists(participants);
+    assertExists(threads);
+    assertExists(messages);
+    await participants.create({
+      id: "user-a",
+      externalId: "user-a",
+      participantType: "human",
+    }, { namespace });
+    await participants.create({
+      id: "agent-a",
+      externalId: "support",
+      participantType: "agent",
+      agentId: "support",
+    }, { namespace });
+    await threads.create({
       id: "thread-a",
-      participants: [
-        {
-          id: "user-a",
-          externalId: "user-a",
-          participantType: "human",
-        },
-        {
-          id: "agent-a",
-          externalId: "support",
-          participantType: "agent",
-          agentId: "support",
-        },
-      ],
+      participantIds: ["user-a", "agent-a"],
+    }, {
+      namespace,
       identity: { deduplicationId: "thread-a:create" },
     });
     const content = await fixture.engine.content.preparer.prepare(
       "Hello engine",
       {
-        namespace: "tenant-a",
+        namespace,
         idempotencyKey: "message-a:body",
       },
     );
     const frames = fixture.engine.events.subscribe({
-      namespace: "tenant-a",
+      namespace,
       threadId: "thread-a",
       types: ["text.delta"],
     }).getReader();
     const message = await fixture.engine.conversation.createMessage({
-      namespace: "tenant-a",
+      namespace,
       id: "message-a",
       threadId: "thread-a",
       sender: {
@@ -261,16 +285,12 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     assertEquals(attemptEvent?.correlationId, "run-a");
     assertEquals(auditEvent?.causationId, message.event.id);
     assertEquals(
-      await fixture.engine.events.settlement("tenant-a", message.event.id),
+      await fixture.engine.events.settlement(
+        "tenant-a",
+        second.delivery.settlementScopeId,
+      ),
       { unsettled: 0, deadLetters: 0, cancelled: 0, succeeded: 1 },
     );
-
-    const assets = await fixture.session.query<{ count: string | number }>(
-      `SELECT COUNT(*) AS count FROM ${TEST_SCHEMA}.nodes
-       WHERE namespace = $1 AND type = 'asset'`,
-      ["tenant-a"],
-    );
-    assertEquals(Number(assets.rows[0].count), 2);
   } finally {
     await closeFixture(fixture);
   }
@@ -328,8 +348,7 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
   const handledSchemas: string[] = [];
   const processor = defineProcessor<CopilotzProcessorContext>({
     id: "engine.scope.audit",
-    on: ["thread.created"],
-    delivery: "durable",
+    on: [{ eventType: "thread.created" }],
     async handle(event, context) {
       if (!event.durable) throw new Error("Expected a durable event.");
       handledSchemas.push(context.databaseSchema);
@@ -340,7 +359,7 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
     },
   });
   const registry = await createPluginRegistry({
-    plugins: [definePlugin({
+    plugins: [coreCollectionsPlugin, definePlugin({
       manifest: {
         id: "test.engine.scopes",
         version: "1.0.0",

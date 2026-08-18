@@ -10,6 +10,7 @@ const canonicalEntries = [
   "runtime/application",
   "runtime/attachments",
   "runtime/channels",
+  "runtime/collections",
   "runtime/content",
   "runtime/domain",
   "runtime/engine",
@@ -24,7 +25,9 @@ const canonicalEntries = [
   "runtime/skills",
   "runtime/tools",
   "runtime/usage",
-  "runtime/workflows",
+  "runtime/agents",
+  "runtime/llm",
+  "plugins",
 ] as const;
 
 async function collectProductionFiles(path: string): Promise<string[]> {

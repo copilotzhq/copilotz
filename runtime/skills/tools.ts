@@ -3,7 +3,7 @@ import type { Agent, Skill } from "../resources/index.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "../workflows/index.ts";
+} from "../tools/index.ts";
 import { normalizeSkillPath, readSkillFileText } from "./skill.ts";
 import { parseSkillMarkdown } from "./parser.ts";
 

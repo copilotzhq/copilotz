@@ -55,8 +55,7 @@ async function createFixture(options: {
   const observed: string[] = [];
   const observer = defineProcessor({
     id: "asset.observe",
-    on: ["asset.created", "asset.deleted"],
-    delivery: "durable",
+    on: [{ eventType: "asset.created" }, { eventType: "asset.deleted" }],
     handle(event) {
       observed.push(event.type);
     },

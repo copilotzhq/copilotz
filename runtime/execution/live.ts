@@ -1,8 +1,12 @@
 import type { CopilotzEvent } from "../events/index.ts";
 import {
   isProcessor,
+  matchProcessor,
   type PluginRegistry,
+  type Processor,
   type ProcessorContext,
+  type TransientProcessorSet,
+  withProcessorEventData,
 } from "../plugins/index.ts";
 import type { DeliveryExecutor, DeliveryWorkload } from "./types.ts";
 
@@ -48,6 +52,7 @@ export type LiveProcessorContextFactory = (
 
 export type CreateLiveProcessorWorkloadOptions = Readonly<{
   registry: PluginRegistry;
+  transients?: TransientProcessorSet;
   createContext?: LiveProcessorContextFactory;
   maxEventBytes?: number;
 }>;
@@ -55,6 +60,7 @@ export type CreateLiveProcessorWorkloadOptions = Readonly<{
 export type InvokeLiveProcessorsOptions = Readonly<{
   databaseSchema: string;
   registry: PluginRegistry;
+  transients?: TransientProcessorSet;
   event: CopilotzEvent;
   signal: AbortSignal;
   settlementScopeId?: string;
@@ -80,6 +86,7 @@ export type LiveEventDispatcher = Readonly<{
 
 export type CreateLiveEventDispatcherOptions = Readonly<{
   registry: PluginRegistry;
+  transients?: TransientProcessorSet;
   executor: Pick<DeliveryExecutor, "dispatchWork">;
   workload?: string;
   createDispatchAttemptId?: () => string;
@@ -192,28 +199,18 @@ function encodedEvent(event: CopilotzEvent): Uint8Array {
   }
 }
 
-function isThenable(value: unknown): boolean {
-  return Boolean(
-    value && (typeof value === "object" || typeof value === "function") &&
-      typeof (value as { then?: unknown }).then === "function",
-  );
+function lookupProcessor(
+  options: Pick<InvokeLiveProcessorsOptions, "registry" | "transients">,
+  processorId: string,
+): Processor | undefined {
+  return options.transients?.get(processorId) ??
+    options.registry.get("processors", processorId);
 }
 
-function processorMatches(
-  processor: ReturnType<PluginRegistry["matchLive"]>[number],
-  event: CopilotzEvent,
-): boolean {
-  if (processor.delivery !== "live" || !processor.on.includes(event.type)) {
-    return false;
-  }
-  if (!processor.filter) return true;
-  const accepted: unknown = processor.filter(event);
-  if (isThenable(accepted)) {
-    throw new TypeError(
-      `Processor '${processor.id}' filter must be synchronous and pure.`,
-    );
-  }
-  return accepted === true;
+function matchingTransient(
+  options: Pick<InvokeLiveProcessorsOptions, "transients" | "event">,
+): readonly Processor[] {
+  return options.transients?.match(options.event) ?? [];
 }
 
 function sourceEventId(event: CopilotzEvent): string | undefined {
@@ -249,8 +246,8 @@ async function invokeOne(
   processorId: string,
   dispatchAttemptId: string,
 ): Promise<void> {
-  const processor = options.registry.get("processors", processorId);
-  if (!isProcessor(processor) || !processorMatches(processor, options.event)) {
+  const processor = lookupProcessor(options, processorId);
+  if (!isProcessor(processor) || !matchProcessor(processor, options.event)) {
     throw new Error(
       `Live processor '${processorId}' is unavailable or no longer matches.`,
     );
@@ -275,7 +272,10 @@ async function invokeOne(
   const extension = await options.createContext?.(base);
   const context = Object.freeze({ ...(extension ?? {}), ...base });
   options.signal.throwIfAborted();
-  await processor.handle(options.event, context);
+  await processor.handle(
+    withProcessorEventData(options.event, options.event.payload),
+    context,
+  );
   options.signal.throwIfAborted();
 }
 
@@ -285,7 +285,7 @@ export async function invokeLiveProcessors(
 ): Promise<void> {
   const createId = options.createDispatchAttemptId ??
     (() => crypto.randomUUID());
-  const processors = options.registry.matchLive(options.event);
+  const processors = matchingTransient(options);
   const settled = await Promise.allSettled(
     processors.map((processor) => invokeOne(options, processor.id, createId())),
   );
@@ -322,6 +322,7 @@ export function createLiveProcessorWorkload(
         event,
         signal,
         createContext: options.createContext,
+        transients: options.transients,
         settlementScopeId: metadata.settlementScopeId,
       },
       metadata.processorId,
@@ -360,7 +361,7 @@ export function createLiveEventDispatcher(
         databaseSchemaInput ?? defaultDatabaseSchema,
         "Live database schema",
       );
-      const processors = options.registry.matchLive(event);
+      const processors = options.transients?.match(event) ?? [];
       if (!processors.length) {
         return Object.freeze({
           event,

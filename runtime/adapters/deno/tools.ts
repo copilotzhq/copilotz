@@ -9,7 +9,7 @@ import showFileDiff from "./tools/show-file-diff.ts";
 import writeFile from "./tools/write-file.ts";
 import type { NewTool } from "../../resources/index.ts";
 import { type CopilotzPlugin, definePlugin } from "../../plugins/index.ts";
-import type { WorkflowTool } from "../../workflows/index.ts";
+import type { WorkflowTool } from "../../tools/index.ts";
 
 export const WORKSPACE_TOOL_IDS = [
   "read_file",

@@ -63,6 +63,7 @@ export async function createCopilotz(
       namespace: options.namespace,
       databaseSchema: options.databaseSchema,
       core: options.core,
+      canonicalCore: options.canonicalCore,
       plugins: options.plugins,
       resources: options.resources,
       pluginResolver: options.pluginResolver,
@@ -77,6 +78,7 @@ export async function createCopilotz(
       namespace: options.namespace,
       databaseSchema: options.databaseSchema,
       core: options.core,
+      canonicalCore: options.canonicalCore,
       plugins: options.plugins,
       resources: options.resources,
       pluginResolver: options.pluginResolver,
@@ -85,7 +87,7 @@ export async function createCopilotz(
       persistence,
       id: workerId,
       transport,
-      capacity: options.worker?.capacity,
+      capacity: options.worker?.capacity ?? 8,
       engine: workerEngine,
     });
     await worker.ready;

@@ -5,8 +5,13 @@ import type { Agent } from "../resources/index.ts";
 import { createEventNativeApp } from "../../server/event-native.ts";
 import { createCopilotzApplication } from "../application/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
-import { createSqlSession } from "../events/index.ts";
+import {
+  loadMessageRecord,
+  loadParticipantRecord,
+} from "../engine/collection-graph.ts";
+import { createMessageRecord } from "../engine/collection-writes.ts";
 import { definePlugin, defineProcessor } from "../plugins/index.ts";
+import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import { createChannelRuntime } from "./runtime.ts";
 import { createWebChannelPlugin } from "./web.ts";
 
@@ -22,30 +27,24 @@ const supportAgent: Agent = {
 function replyPlugin() {
   const processor = defineProcessor<CopilotzProcessorContext>({
     id: "channel.reply",
-    on: ["message.created"],
-    delivery: "durable",
+    on: [{ eventType: "message.created" }],
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
-      const message = await context.conversation.getMessage(event.subject.id);
+      const message = await loadMessageRecord(context, event.subject.id);
       assertExists(message);
       if (message.sender.participantType !== "human") return;
-      const agent = message.recipientIds.length
-        ? await context.conversation.getParticipant(message.recipientIds[0])
-        : null;
-      assertExists(agent);
+      const recipient = await loadParticipantRecord(
+        context,
+        message.recipientIds[0],
+      );
+      assertExists(recipient);
       const content = await context.content.prepare("Channel reply", {
         operationKey: "channel-reply-content",
       });
-      await context.conversation.createMessage({
+      await createMessageRecord(context, {
         id: `reply:${message.id}`,
         threadId: message.threadId,
-        sender: {
-          id: agent.id,
-          externalId: agent.externalId,
-          participantType: "agent",
-          agentId: agent.agentId,
-          name: agent.name,
-        },
+        senderId: recipient.id,
         recipientIds: [message.sender.id],
         content,
       }, { operationKey: "channel-reply-message" });
@@ -72,6 +71,7 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
     namespace: NAMESPACE,
     databaseSchema: SCHEMA,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [
       replyPlugin(),
       createWebChannelPlugin({ defaultAgentIds: [supportAgent.id] }),
@@ -220,6 +220,7 @@ Deno.test("request-bound channel delivery reports missing callbacks through done
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_callback`,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [createWebChannelPlugin()],
   });
   try {

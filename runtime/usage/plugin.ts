@@ -1,4 +1,8 @@
 import type { CopilotzProcessorContext } from "../engine/index.ts";
+import {
+  loadCollectionRecord,
+  requireBoundCollection,
+} from "../engine/collection-writes.ts";
 import type { CopilotzEvent } from "../events/index.ts";
 import {
   type CopilotzPlugin,
@@ -6,11 +10,7 @@ import {
   defineProcessor,
   type Processor,
 } from "../plugins/index.ts";
-import type {
-  LlmAttempt,
-  ScopedEventCollection,
-  ToolExecution,
-} from "../domain/index.ts";
+import type { CollectionRecord, ScopedEventCollection } from "../domain/index.ts";
 import { usageCollection } from "./collection.ts";
 import type { UsageCost, UsageOptions, UsageRecord } from "./types.ts";
 
@@ -121,8 +121,12 @@ async function participantExternalId(
   participantId: string | undefined,
 ): Promise<string | null> {
   if (!participantId) return null;
-  const participant = await context.conversation.getParticipant(participantId);
-  return participant?.externalId ?? participantId;
+  const participant = await loadCollectionRecord(
+    context,
+    "participant",
+    participantId,
+  );
+  return optionalText(participant?.externalId) ?? participantId;
 }
 
 function workflowAttemptId(metadata: unknown): string | undefined {
@@ -242,7 +246,7 @@ async function persistUsage(
 }
 
 function llmUsageRecord(
-  attempt: LlmAttempt,
+  attempt: CollectionRecord,
   event: CopilotzEvent,
   initiatedById: string | null,
 ): UsageRecord {
@@ -251,21 +255,23 @@ function llmUsageRecord(
   return {
     id,
     kind: "llm",
-    resource: attempt.model ?? attempt.provider ?? "unknown",
-    provider: attempt.provider ?? null,
+    resource: optionalText(attempt.model) ?? optionalText(attempt.provider) ??
+      "unknown",
+    provider: optionalText(attempt.provider) ?? null,
     operation: "chat",
-    status: attempt.status,
+    status: optionalText(attempt.status) ?? null,
     statusReason: optionalText(usage.statusReason) ??
-      attempt.safeError?.code ?? null,
-    threadId: attempt.threadId,
+      optionalText(record(attempt.safeError).code) ?? null,
+    threadId: String(attempt.threadId),
     eventId: event.durable ? event.id : null,
-    messageId: attempt.messageId ?? null,
-    agentId: attempt.agentId ?? null,
+    messageId: optionalText(attempt.messageId) ?? null,
+    agentId: optionalText(attempt.agentId) ?? null,
     initiatedById,
     metrics: tokenMetrics(usage),
     cost: normalizedCost(attempt.cost),
     dedupeKey: attempt.id,
-    occurredAt: attempt.finishedAt ?? attempt.updatedAt,
+    occurredAt: optionalText(attempt.finishedAt) ??
+      String(attempt.updatedAt),
     raw: {
       source: usage.source,
       rawUsage: usage.rawUsage,
@@ -276,7 +282,7 @@ function llmUsageRecord(
 }
 
 function toolUsageRecord(
-  execution: ToolExecution,
+  execution: CollectionRecord,
   event: CopilotzEvent,
   initiatedById: string | null,
 ): UsageRecord {
@@ -288,12 +294,12 @@ function toolUsageRecord(
     kind: "tool",
     resource: optionalText(tool.id) ?? optionalText(tool.name) ?? "unknown",
     operation: "tool.exec",
-    status: execution.status,
-    statusReason: execution.safeError?.code ?? null,
-    threadId: execution.threadId,
+    status: optionalText(execution.status) ?? null,
+    statusReason: optionalText(record(execution.safeError).code) ?? null,
+    threadId: String(execution.threadId),
     eventId: event.durable ? event.id : null,
-    messageId: execution.messageId ?? null,
-    agentId: execution.agentId ?? null,
+    messageId: optionalText(execution.messageId) ?? null,
+    agentId: optionalText(execution.agentId) ?? null,
     initiatedById,
     metrics: {
       calls: 1,
@@ -301,7 +307,8 @@ function toolUsageRecord(
     },
     cost: null,
     dedupeKey: execution.id,
-    occurredAt: execution.finishedAt ?? execution.updatedAt,
+    occurredAt: optionalText(execution.finishedAt) ??
+      String(execution.updatedAt),
     raw: { source: "copilotz" },
   };
 }
@@ -312,24 +319,26 @@ function llmUsageProcessor(
   return defineProcessor<CopilotzProcessorContext>({
     id: "copilotz.core.record-llm-usage",
     on: [
-      "llm_attempt.completed",
-      "llm_attempt.failed",
-      "llm_attempt.cancelled",
-      "llm_attempt.updated",
+      { eventType: "llm_attempt.updated" },
+      { eventType: "llm_attempt.completed" },
+      { eventType: "llm_attempt.failed" },
+      { eventType: "llm_attempt.cancelled" },
     ],
-    delivery: "durable",
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
-      const attempt = await context.llmAttempts.get(event.subject.id);
+      const attempt = await requireBoundCollection(context, "llm_attempt").get(
+        event.subject.id,
+        context.namespace,
+      );
       if (
         !attempt || !isProviderAttemptMetadata(attempt.metadata) ||
         !["completed", "failed", "cancelled", "superseded"].includes(
-          attempt.status,
+          String(attempt.status),
         )
       ) return;
       const initiatedById = await participantExternalId(
         context,
-        attempt.initiatorParticipantId,
+        optionalText(attempt.initiatorParticipantId),
       );
       await persistUsage(
         llmUsageRecord(attempt, event, initiatedById),
@@ -347,25 +356,29 @@ function toolUsageProcessor(
   return defineProcessor<CopilotzProcessorContext>({
     id: "copilotz.core.record-tool-usage",
     on: [
-      "tool_execution.completed",
-      "tool_execution.failed",
-      "tool_execution.cancelled",
+      { eventType: "tool_execution.updated" },
+      { eventType: "tool_execution.completed" },
+      { eventType: "tool_execution.failed" },
+      { eventType: "tool_execution.cancelled" },
     ],
-    delivery: "durable",
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
-      const execution = await context.toolExecutions.get(event.subject.id);
+      const execution = await requireBoundCollection(context, "tool_execution")
+        .get(event.subject.id, context.namespace);
       if (
-        !execution || execution.status === "pending" ||
-        execution.status === "running"
+        !execution || String(execution.status) === "pending" ||
+        String(execution.status) === "running"
       ) return;
       const parentAttemptId = workflowAttemptId(execution.metadata);
       const parentAttempt = parentAttemptId
-        ? await context.llmAttempts.get(parentAttemptId)
+        ? await requireBoundCollection(context, "llm_attempt").get(
+          parentAttemptId,
+          context.namespace,
+        )
         : null;
       const initiatedById = await participantExternalId(
         context,
-        parentAttempt?.initiatorParticipantId,
+        optionalText(parentAttempt?.initiatorParticipantId),
       );
       await persistUsage(
         toolUsageRecord(execution, event, initiatedById),

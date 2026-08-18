@@ -111,7 +111,7 @@ Tools that create files return a bounded projection separately from durable
 attachments:
 
 ```ts
-import type { WorkflowToolResult } from "@copilotz/copilotz/workflows";
+import type { WorkflowToolResult } from "@copilotz/copilotz/tools";
 
 const result: WorkflowToolResult = {
   kind: "copilotz.workflow-tool.result.v1",

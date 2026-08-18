@@ -320,7 +320,7 @@ bodies reuse attempt/execution assets; parallel tools execute concurrently;
 every result returns to the producing agent; and only one continuation starts
 after a complete result batch. Recovery does not repeat the external tool, whose
 context receives a stable delivery-derived idempotency key. The root and
-`copilotz/workflows` entrypoints export factory-only resource adapters and
+`@copilotz/copilotz/{agents,llm,tools}` entrypoints export factory-only resource adapters and
 plugin composition. The bundled core and public `createCopilotz()` path now use
 this execution model, with the retained prompt, tool, accounting, and live-frame
 parity suites guarding it.

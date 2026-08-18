@@ -28,6 +28,11 @@ import {
   type LiveEventDispatchHandle,
   type LiveProcessorContextBase,
 } from "../execution/index.ts";
+import {
+  createTransientProcessorSet,
+  matchProcessor,
+  type Processor,
+} from "../plugins/index.ts";
 import { createCopilotzProcessorCapabilities } from "./context.ts";
 import {
   createDatabaseScope,
@@ -92,6 +97,9 @@ export async function createCopilotzEngine(
     options.attachments?.streamWorkload,
   );
 
+  const transients = createTransientProcessorSet(
+    options.transientProcessors ?? [],
+  );
   const store: EventStore = createEventStore({
     session: options.session,
     schema: databaseSchema,
@@ -222,6 +230,7 @@ export async function createCopilotzEngine(
       }),
       [COPILOTZ_LIVE_WORKLOAD]: createLiveProcessorWorkload({
         registry: options.registry,
+        transients,
         createContext: createLiveContext,
       }),
     }),
@@ -278,6 +287,7 @@ export async function createCopilotzEngine(
   });
   const liveDispatcher = createLiveEventDispatcher({
     registry: options.registry,
+    transients,
     executor,
     defaultDatabaseSchema: databaseSchema,
   });
@@ -313,6 +323,7 @@ export async function createCopilotzEngine(
     const done = invokeLiveProcessors({
       databaseSchema: scopedDatabaseSchema,
       registry: options.registry,
+      transients,
       event,
       signal: abort.signal,
       settlementScopeId: publishOptions.settlementScopeId,
@@ -324,7 +335,7 @@ export async function createCopilotzEngine(
     return Object.freeze({
       event,
       processorIds: Object.freeze(
-        options.registry.matchLive(event).map((processor) => processor.id),
+        transients.match(event).map((processor) => processor.id),
       ),
       done,
       async cancel(reason = "live_event_cancelled") {
@@ -475,6 +486,31 @@ export async function createCopilotzEngine(
             results.flatMap((result) => result.failures),
           ),
         });
+      },
+      async bindTransient(processor: Processor, bindOptions = {}) {
+        const unbind = transients.add(processor);
+        if (bindOptions.afterPosition === undefined) return unbind;
+        const namespace = bindOptions.namespace?.trim();
+        if (!namespace) {
+          throw new TypeError("Transient catch-up requires a namespace.");
+        }
+        const events = await store.listEvents({
+          namespace,
+          afterPosition: bindOptions.afterPosition,
+        });
+        const solo = createTransientProcessorSet([processor]);
+        for (const event of events) {
+          if (!matchProcessor(processor, event)) continue;
+          await invokeLiveProcessors({
+            databaseSchema,
+            registry: options.registry,
+            transients: solo,
+            event,
+            signal: bindOptions.signal ?? new AbortController().signal,
+            createContext: createLiveContext,
+          });
+        }
+        return unbind;
       },
       async shutdown(reason = "copilotz_engine_shutdown") {
         if (closed) return;

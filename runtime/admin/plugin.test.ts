@@ -4,7 +4,7 @@ import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import type { Agent } from "../resources/index.ts";
 import { createEventNativeApp } from "../../server/event-native.ts";
 import { createCopilotzApplication } from "../application/index.ts";
-import type { CopilotzEvent } from "../events/index.ts";
+import { corePlugin } from "../../plugins/core/index.ts";
 import { createSqlSession } from "../events/index.ts";
 import { createLongTermMemoryPlugin } from "../memory/index.ts";
 import { createUsageWorkflowPlugin } from "../usage/index.ts";
@@ -30,14 +30,6 @@ function array(value: unknown): readonly unknown[] {
   return value;
 }
 
-async function collect(
-  stream: ReadableStream<CopilotzEvent>,
-): Promise<readonly CopilotzEvent[]> {
-  const result: CopilotzEvent[] = [];
-  for await (const value of stream) result.push(value);
-  return result;
-}
-
 async function close(db: TestDatabase): Promise<void> {
   await db.close();
 }
@@ -49,6 +41,7 @@ Deno.test("admin plugin projects event-native application state without raw stor
     namespace: NAMESPACE,
     databaseSchema: SCHEMA,
     core: false,
+    canonicalCore: [corePlugin],
     plugins: [
       createUsageWorkflowPlugin({ enabled: false }),
       createLongTermMemoryPlugin({ enabled: false }),
@@ -85,16 +78,23 @@ Deno.test("admin plugin projects event-native application state without raw stor
         participantType: "human",
       }],
     });
-    const run = await application.run({
-      thread: "thread-a",
-      participant: "user-a",
-      content: "Admin-visible message",
-      messageId: "message-a",
-      correlationId: "admin-run-a",
+    const prepared = await application.content.preparer.prepare(
+      "Admin-visible message",
+      { namespace: NAMESPACE, idempotencyKey: "admin-message-a" },
+    );
+    await application.conversation.createMessage({
+      namespace: NAMESPACE,
+      id: "message-a",
+      threadId: "thread-a",
+      sender: {
+        id: "user-a",
+        externalId: "external-user-a",
+        participantType: "human",
+      },
+      recipientIds: [],
+      content: prepared,
+      identity: { correlationId: "admin-run-a" },
     });
-    const observed = collect(run.events);
-    await run.done;
-    await observed;
 
     await application.collections.get("usage").create({
       id: "usage-a",

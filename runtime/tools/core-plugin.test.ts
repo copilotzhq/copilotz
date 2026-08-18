@@ -15,10 +15,16 @@ import {
   defineProcessor,
   type PluginRegistry,
 } from "../plugins/index.ts";
+import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
+import { loadToolExecutionRecord } from "../engine/collection-graph.ts";
+import {
+  createToolExecutionCollection,
+  loadCollectionRecord,
+} from "../engine/collection-writes.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "../workflows/index.ts";
+} from "./types.ts";
 import {
   BUILT_IN_CORE_TOOL_IDS,
   createBuiltInToolsPlugin,
@@ -62,8 +68,7 @@ async function createFixture(
   let failure: unknown;
   const runner = defineProcessor<CopilotzProcessorContext>({
     id: "test.core-tools.runner",
-    on: ["message.created"],
-    delivery: "durable",
+    on: [{ eventType: "message.created" }],
     async handle(event, context) {
       if (event.threadId !== "thread-a") return;
       try {
@@ -86,6 +91,7 @@ async function createFixture(
   });
   const registry = await createPluginRegistry({
     plugins: [
+      coreCollectionsPlugin,
       builtIns,
       createSkillsPlugin({
         id: "test.core-tools.skills",
@@ -102,22 +108,30 @@ async function createFixture(
     retryBaseMs: 0,
     random: () => 0,
   });
-  await engine.conversation.createThread({
-    namespace: "tenant-a",
+  const namespace = "tenant-a";
+  const participants = engine.collectionRuntime.get("participant");
+  const threads = engine.collectionRuntime.get("thread");
+  const messages = engine.collectionRuntime.get("message");
+  if (!participants || !threads || !messages) {
+    throw new Error("Core collections are not bound.");
+  }
+  await participants.create({
+    id: "user-participant",
+    externalId: "user-a",
+    participantType: "human",
+    metadata: { profile: true },
+  }, { namespace });
+  await participants.create({
+    id: "agent-participant",
+    externalId: "agent-a",
+    participantType: "agent",
+    agentId: "agent-a",
+    metadata: { retained: true },
+  }, { namespace });
+  await threads.create({
     id: "thread-a",
-    participants: [{
-      id: "user-participant",
-      externalId: "user-a",
-      participantType: "human",
-      metadata: { profile: true },
-    }, {
-      id: "agent-participant",
-      externalId: "agent-a",
-      participantType: "agent",
-      agentId: "agent-a",
-      metadata: { retained: true },
-    }],
-  });
+    participantIds: ["user-participant", "agent-participant"],
+  }, { namespace });
   let trigger = 0;
   return Object.freeze({
     db,
@@ -129,18 +143,36 @@ async function createFixture(
       failure = undefined;
       const content = await engine.content.preparer.prepare(
         `trigger-${++trigger}`,
-        { namespace: "tenant-a", idempotencyKey: `trigger:${trigger}` },
+        { namespace, idempotencyKey: `trigger:${trigger}` },
       );
-      const created = await engine.conversation.createMessage({
-        namespace: "tenant-a",
+      for (const asset of content.assets) {
+        if (await engine.content.assets.get(asset.namespace, asset.id)) continue;
+        await engine.content.assets.publish({
+          namespace: asset.namespace,
+          id: asset.id,
+          mediaType: asset.mediaType,
+          body: asset.body,
+          ...(asset.idempotencyKey
+            ? { idempotencyKey: asset.idempotencyKey }
+            : {}),
+          ...(asset.origin ? { origin: asset.origin } : {}),
+          ...(asset.metadata ? { metadata: { ...asset.metadata } } : {}),
+        });
+      }
+      const created = await messages.create({
         id: `trigger-${trigger}`,
         threadId: "thread-a",
-        sender: {
-          id: "user-participant",
-          externalId: "user-a",
-          participantType: "human",
+        senderId: "user-participant",
+        recipientIds: ["agent-participant"],
+        content: content.content,
+        metadata: {},
+      }, {
+        namespace,
+        threadId: "thread-a",
+        routing: {
+          senderId: "user-participant",
+          recipientIds: ["agent-participant"],
         },
-        content,
       });
       await Promise.all(created.dispatch.handles.map((handle) => handle.done));
       active = undefined;
@@ -164,22 +196,25 @@ async function toolContext(
     role: "tool.arguments",
     value: {},
   }, { operationKey: `fixture:${id}:arguments` });
-  const created = await context.toolExecutions.create({
+  const created = await createToolExecutionCollection(context, {
     id,
     threadId: "thread-a",
     participantId: "agent-participant",
     agentId: agent.id,
     toolCallId: `call:${id}`,
     tool: { id: "fixture", name: "Fixture" },
-    arguments: argumentsContent,
     status: "running",
-  }, { operationKey: `fixture:${id}:create` });
-  assertExists(created.value);
+  }, {
+    operationKey: `fixture:${id}:create`,
+    content: argumentsContent,
+  });
+  const execution = await loadToolExecutionRecord(context, created.id);
+  assertExists(execution);
   return {
     namespace: context.namespace,
     correlationId: context.event.correlationId ?? context.event.id,
     idempotencyKey: context.idempotencyKey,
-    execution: created.value,
+    execution,
     processor: context,
     threadId: "thread-a",
     toolExecutionId: id,
@@ -242,25 +277,57 @@ Deno.test("asset, result, skill, clock, and wait tools use typed capabilities", 
         role: "tool.arguments",
         value: {},
       }, { operationKey: "target:arguments" });
-      await processor.toolExecutions.create({
+      await createToolExecutionCollection(processor, {
         id: "target-execution",
         threadId: "thread-a",
         participantId: "agent-participant",
         agentId: agent.id,
         toolCallId: "target-call",
         tool: { id: "target", name: "Target" },
-        arguments: targetArguments,
         status: "running",
-      }, { operationKey: "target:create" });
+      }, {
+        operationKey: "target:create",
+        content: targetArguments,
+      });
       const targetOutput = await processor.content.prepare({
         type: "json",
         role: "tool.output",
         value: { text: "needle", large: "x".repeat(100) },
       }, { operationKey: "target:output" });
-      await processor.toolExecutions.complete({
-        id: "target-execution",
-        output: targetOutput,
-      }, { operationKey: "target:complete" });
+      const materializedOutput = await processor.content.materialize(
+        targetOutput,
+        {
+          origin: {
+            scope: { type: "thread", id: "thread-a" },
+            producer: { type: "tool_execution", id: "target-execution" },
+          },
+        },
+      );
+      const targetExecution = await loadCollectionRecord(
+        processor,
+        "tool_execution",
+        "target-execution",
+      );
+      assertExists(targetExecution);
+      const existingContent = Array.isArray(targetExecution.content)
+        ? targetExecution.content
+        : [];
+      await processor.transaction({
+        operationKey: "target:complete",
+        namespace: processor.namespace,
+        execute: async ({ collections }) => {
+          await collections.tool_execution.mutate("target-execution", "complete", {
+            content: [...existingContent, ...materializedOutput],
+            finishedAt: new Date().toISOString(),
+          }, {
+            namespace: processor.namespace,
+            threadId: "thread-a",
+          });
+        },
+      });
+      if (materializedOutput.length) {
+        await processor.content.linkOwner("target-execution", materializedOutput);
+      }
       const read = await tool(processor, "read_tool_result").execute!(
         { toolExecutionId: "target-execution", regex: "needle", limit: 40 },
         ctx,

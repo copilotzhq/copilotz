@@ -56,8 +56,6 @@ Deno.test("v3 root exposes the factory-first application vocabulary", () => {
     "createContentPreparer",
     "createConversationRepository",
     "createEventStore",
-    "createAgentAskPlugin",
-    "createTextWorkflowPlugin",
     "createAgentCapabilityResolver",
   ]);
   for (

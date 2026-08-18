@@ -3,7 +3,7 @@ import type {
   GenerateMcpWorkflowTools,
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "../workflows/index.ts";
+} from "../tools/index.ts";
 import type {
   CreateMcpWorkflowToolGeneratorOptions,
   McpRuntimeConnection,

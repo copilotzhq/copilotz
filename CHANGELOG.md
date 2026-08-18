@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.61.0 — 2026-08-18
+
+Plugin-first event-sourced core. Conversation collections, text/ask processors,
+and bundled vendor adapters ship on `@copilotz/core`. Runtime keeps host
+mechanism and does not own a vendor catalog.
+
+### Added
+
+- Static `corePlugin` / `coreCollectionsPlugin` with participant, thread,
+  message, llm_attempt, tool_execution, and stream collections.
+- `llm` resources expose `generate()`. Shipped adapters live on the core plugin
+  as `{ id, type: "llm", generate }`.
+- `copilotz.core.thread-message` `create` feature for ensure-participant,
+  thread membership, and `message.create` in one transaction.
+- Processor `context.features.invoke` and `FeatureContext` over the same
+  primitives as processors.
+
+### Changed
+
+- Core processors and writes use bound collections and `CollectionRecord`.
+  Characterization ingress is `message.create` via `collectionRuntime`.
+- `chat()` requires an explicit provider registry. No hardcoded vendor map in
+  runtime. `generateFromFactory` binds one adapter as one resource.
+- Package-root `createCopilotz` injects `canonicalCore: [corePlugin]`.
+
 ## 0.60.18 — 2026-08-15
 
 - Treat the successful signed conditional PUT as the canonical acknowledgement

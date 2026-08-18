@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 
 import { createCopilotz } from "../runtime/application/index.ts";
+import { coreCollectionsPlugin } from "../plugins/core/plugin.ts";
 import type { AttachmentOutput } from "../runtime/attachments/index.ts";
 import type {
   ChannelRequest,
@@ -71,6 +72,7 @@ Deno.test("v1 Fetch handler isolates legacy providers projection from canonical 
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v1_fetch",
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
   });
   let dispatched: ChannelRequest | undefined;
   const channel: ChannelResource = Object.freeze({

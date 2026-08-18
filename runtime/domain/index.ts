@@ -78,6 +78,11 @@ export type {
   UpdateThreadInput,
 } from "./types.ts";
 export {
+  composeRoleContent,
+  replaceContentRoles,
+} from "./workflow-content.ts";
+export type { RoleContentInput } from "./workflow-content.ts";
+export {
   LLM_CONTENT_ROLE,
   llmAttemptContent,
   TOOL_CONTENT_ROLE,

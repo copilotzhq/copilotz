@@ -1,6 +1,8 @@
-export { createCopilotz } from "./copilotz.ts";
-export { createCopilotzGateway } from "./gateway.ts";
-export { createCopilotzWorker } from "./worker.ts";
+export {
+  createCopilotz,
+  createCopilotzGateway,
+  createCopilotzWorker,
+} from "../../create-copilotz.ts";
 export { createCopilotzCorePlugins } from "./core-plugins.ts";
 export type {
   ApplicationConnectInput,

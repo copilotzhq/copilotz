@@ -23,3 +23,45 @@ export type {
 } from "./persistent-terminal-plugin.ts";
 export { formatToolsForPrompt } from "./format-tools-for-prompt.ts";
 export { truncateToolOutputForHistory } from "./history.ts";
+export { evaluateJq, resetJqRuntime } from "./jq.ts";
+export {
+  advanceWorkflowPipeline,
+  createWorkflowPipelineMetadata,
+} from "./jq-pipeline.ts";
+export { createWorkflowToolCatalog } from "./catalog.ts";
+export {
+  createWorkflowToolExecutor,
+  deferWorkflowTool,
+  executeTool,
+  isDeferredWorkflowToolResult,
+  isWorkflowToolResult,
+} from "./executor.ts";
+export type {
+  CreateWorkflowToolExecutorOptions,
+  WorkflowToolExecutor,
+  WorkflowToolOutcome,
+} from "./executor.ts";
+export {
+  extractToolResultAssets,
+  type ExtractedToolResult,
+  type ExtractToolResultAssetsOptions,
+  type ToolResultAssetError,
+  type ToolResultAssetErrorCode,
+} from "./result-assets.ts";
+export {
+  isWorkflowTool,
+  type CreateWorkflowToolCatalogOptions,
+  type DeferredWorkflowToolResult,
+  type DeferWorkflowToolOptions,
+  type GenerateApiWorkflowTools,
+  type GenerateMcpWorkflowTools,
+  type ResolveWorkflowAgentTools,
+  type WorkflowJqEvaluator,
+  type WorkflowPipelineAdvance,
+  type WorkflowPipelineMetadata,
+  type WorkflowTool,
+  type WorkflowToolCatalog,
+  type WorkflowToolExecutionContext,
+  type WorkflowToolOutputOptions,
+  type WorkflowToolResult,
+} from "./types.ts";

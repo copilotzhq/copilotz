@@ -2,7 +2,7 @@ import type { ContentInput } from "../content/index.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "../workflows/index.ts";
+} from "../tools/index.ts";
 import type {
   ScheduledJobRunInput,
   ScheduledJobSchedule,

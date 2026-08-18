@@ -25,10 +25,15 @@ import {
 } from "../plugins/index.ts";
 import { defineContextResource } from "../context/index.ts";
 import {
-  createTextWorkflowPlugin,
+  coreCollectionsPlugin,
+  corePlugin,
+} from "@copilotz/copilotz/plugins/core";
+import { executeToolProcessor } from "../../plugins/core/resources/processors/text.ts";
+import {
   defineLlmProviderResource,
+  generateFromChat,
   type LlmChat,
-} from "../workflows/index.ts";
+} from "../llm/index.ts";
 import { createLongTermMemoryPlugin } from "./plugin.ts";
 import { type MemoryKindDefinition, memorySourceKey } from "./ontology.ts";
 import type { MemoryEmbed } from "./types.ts";
@@ -62,7 +67,18 @@ type FixtureOptions = Readonly<{
   memoryEnabled?: boolean;
   embed?: MemoryEmbed | false;
   validateCollection?: ValidateCollectionRecord;
+  /** Install core text/ask processors. Default is collections + execute-tool only. */
+  withTextWorkflow?: boolean;
 }>;
+
+const coreExecuteToolPlugin = definePlugin({
+  manifest: {
+    id: "test.core.execute-tool",
+    version: "1.0.0",
+    provides: { processors: ["copilotz.core.execute-tool"] },
+  },
+  resources: { processors: [executeToolProcessor] },
+});
 
 Deno.test("memory consolidation starts in a detached durable settlement scope", () => {
   const plugin = createLongTermMemoryPlugin();
@@ -73,7 +89,6 @@ Deno.test("memory consolidation starts in a detached durable settlement scope", 
     processor.id === "copilotz.memory.reserve"
   );
   assertExists(reservation);
-  assertEquals(reservation.delivery, "durable");
   assertEquals(reservation.settlement, "detached");
 });
 
@@ -119,16 +134,22 @@ async function createFixture(
     const provider = defineLlmProviderResource({
       id: "openai",
       type: "llm",
-      factory: () => ({}) as ProviderAPI,
+      generate: generateFromChat(chat),
     });
     const configuredAgent = options.agent ?? agent;
     const resources = definePlugin({
       manifest: {
         id: "test.memory.resources",
         version: "1.0.0",
-        provides: { agents: [configuredAgent.id], providers: [provider.id] },
+        provides: {
+          agents: [configuredAgent.id],
+          llm: [provider.id],
+        },
       },
-      resources: { agents: [configuredAgent], providers: [provider] },
+      resources: {
+        agents: [configuredAgent],
+        llm: [provider],
+      },
     });
     stage = "registry";
     const registry = await createPluginRegistry({
@@ -140,14 +161,14 @@ async function createFixture(
             maxContentEstimatedTokens: 2_000,
             retrievalLimit: 10,
           },
-          chat,
           ...(options.embed === false ? {} : {
             embed: options.embed ??
               ((texts) =>
                 Promise.resolve(texts.map((text) => [text.length, 1]))),
           }),
         }),
-        createTextWorkflowPlugin({ chat }),
+        options.withTextWorkflow ? corePlugin : coreCollectionsPlugin,
+        ...(options.withTextWorkflow ? [] : [coreExecuteToolPlugin]),
         ...extras,
         resources,
       ],
@@ -973,7 +994,12 @@ Deno.test("memory query tools enforce thread access, explain provenance, and pre
       return response(request, undefined, "Memory reviewed.");
     },
     [],
-    { agent: queryAgent, memoryEnabled: false, embed: false },
+    {
+      agent: queryAgent,
+      memoryEnabled: false,
+      embed: false,
+      withTextWorkflow: true,
+    },
   );
   try {
     const scoped = fixture.engine.collections.withScope({

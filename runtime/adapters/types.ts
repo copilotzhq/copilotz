@@ -2,7 +2,7 @@ import type { MCPServer } from "../resources/index.ts";
 import type {
   GenerateApiWorkflowTools,
   WorkflowToolCatalog,
-} from "../workflows/index.ts";
+} from "../tools/index.ts";
 
 export type McpToolDescriptor = Readonly<{
   name: string;

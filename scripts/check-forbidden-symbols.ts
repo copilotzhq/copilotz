@@ -79,6 +79,7 @@ function allowed(path: string): boolean {
     path === "docs/v3/feature-test-parity.md" ||
     path === "docs/application-resilience-plan.md" ||
     path === "docs/memory.md" ||
+    path === "plugin-first-event-sourced-refactor-handoff.md" ||
     path === "scripts/check-forbidden-symbols.ts";
 }
 

@@ -1,5 +1,6 @@
 import { digestContent } from "../content/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
+import { loadCollectionRecord } from "../engine/collection-writes.ts";
 import {
   type CopilotzPlugin,
   definePlugin,
@@ -133,14 +134,21 @@ async function announce(
   }>,
 ): Promise<void> {
   if (!document.threadId) return;
-  if (!await context.conversation.getThread(document.threadId)) return;
-  const content = await context.content.prepare({
+  if (!await loadCollectionRecord(context, "thread", document.threadId)) return;
+  const messageId = `${document.id}:knowledge:${input.status}`;
+  const prepared = await context.content.prepare({
     type: "text",
     text: input.message,
     role: "body",
   }, { operationKey: `knowledge-announce:${document.id}:${input.status}` });
-  await context.conversation.createMessage({
-    id: `${document.id}:knowledge:${input.status}`,
+  const content = await context.content.materialize(prepared, {
+    origin: {
+      scope: { type: "thread", id: document.threadId },
+      producer: { type: "message", id: messageId },
+    },
+  });
+  await context.features.invoke("copilotz.core.thread-message", "create", {
+    id: messageId,
     threadId: document.threadId,
     sender: {
       externalId: "copilotz.knowledge",
@@ -158,7 +166,9 @@ async function announce(
         ...structuredClone(input.metadata ?? {}),
       },
     },
-  }, { operationKey: `knowledge-announce:${document.id}:${input.status}` });
+    operationKey: `knowledge-announce:${document.id}:${input.status}`,
+  });
+  if (content.length) await context.content.linkOwner(messageId, content);
 }
 
 function createIndexProcessor(
@@ -171,11 +181,10 @@ function createIndexProcessor(
 ) {
   return defineProcessor<CopilotzProcessorContext>({
     id: PROCESSOR_ID,
-    on: ["document.created"],
-    delivery: "durable",
-    filter: (event) =>
-      "subject" in event &&
-      event.subject?.type === KNOWLEDGE_DOCUMENT_COLLECTION,
+    on: [{
+      eventType: "document.created",
+      subject: { type: KNOWLEDGE_DOCUMENT_COLLECTION },
+    }],
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
       const id = event.subject.id;

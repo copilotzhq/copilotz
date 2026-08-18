@@ -11,13 +11,13 @@ import type {
   TokenUsage,
 } from "../llm/types.ts";
 import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
+import { corePlugin } from "@copilotz/copilotz/plugins/core";
 import {
-  createAgentAskPlugin,
-  createTextWorkflowPlugin,
   defineLlmProviderResource,
+  generateFromChat,
   type LlmChat,
-  workflowMetadata,
-} from "../workflows/index.ts";
+} from "../llm/index.ts";
+import { workflowMetadata } from "../events/workflow-metadata.ts";
 import {
   type AttachmentOutput,
   type AttachmentStreamOutput,
@@ -135,18 +135,18 @@ Deno.test("realtime context executes a tool and resumes without a text attempt",
       version: "1.0.0",
       provides: {
         agents: [support.id],
-        providers: [realtime.id],
+        llm: [realtime.id],
         tools: [weather.key],
       },
     },
     resources: {
       agents: [support],
-      providers: [realtime],
+      llm: [realtime],
       tools: [weather],
     },
   });
   const registry = await createPluginRegistry({
-    plugins: [createTextWorkflowPlugin(), app],
+    plugins: [corePlugin, app],
   });
   const db = await createTestDatabase({ url: ":memory:" });
   const engine = await createCopilotzEngine({
@@ -274,11 +274,6 @@ Deno.test("realtime context asks another agent publicly and resumes the stream",
     capabilities: { tools: [] },
     llmOptions: { provider: "openai", model: "realtime-ask-model" },
   };
-  const llm = defineLlmProviderResource({
-    id: "openai",
-    type: "llm",
-    factory: () => ({}) as ProviderAPI,
-  });
   let chatCalls = 0;
   const chat: LlmChat = async (request) => {
     chatCalls += 1;
@@ -290,24 +285,28 @@ Deno.test("realtime context asks another agent publicly and resumes the stream",
     );
     return textResponse(request, "Expert public answer");
   };
+  const llm = defineLlmProviderResource({
+    id: "openai",
+    type: "llm",
+    generate: generateFromChat(chat),
+  });
   const app = definePlugin({
     manifest: {
       id: "test.realtime-ask",
       version: "1.0.0",
       provides: {
         agents: [caller.id, expert.id],
-        providers: [realtime.id, llm.id],
+        llm: [realtime.id, llm.id],
       },
     },
     resources: {
       agents: [caller, expert],
-      providers: [realtime, llm],
+      llm: [realtime, llm],
     },
   });
   const registry = await createPluginRegistry({
     plugins: [
-      createTextWorkflowPlugin({ chat }),
-      createAgentAskPlugin(),
+      corePlugin,
       app,
     ],
   });

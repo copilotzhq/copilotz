@@ -33,6 +33,18 @@ const DEFAULT_PLUGIN_ID = "@copilotz/admin";
 const DEFAULT_PLUGIN_VERSION = "3.0.0";
 const DEFAULT_FEATURE_ID = "admin";
 
+function asRequest(input: unknown): FeatureRequest {
+  if (
+    input &&
+    typeof input === "object" &&
+    "method" in input &&
+    typeof (input as { method?: unknown }).method === "string"
+  ) {
+    return input as FeatureRequest;
+  }
+  throw new TypeError("Admin actions expect a FeatureRequest.");
+}
+
 function readOnly(request: FeatureRequest): FeatureResponse | undefined {
   return request.method === "GET" ? undefined : {
     status: 405,
@@ -78,22 +90,19 @@ function createdInRange(
   return inDateRange(occurredAt, dates.from, dates.to);
 }
 
-const overview: FeatureAction = async (request, context) => {
+const overview: FeatureAction = async (input, context) => {
+  const request = asRequest(input);
   const rejected = readOnly(request);
   if (rejected) return rejected;
   const dates = range(request);
   const [threads, participants, usage] = await Promise.all([
-    allThreads(context.application, context.namespace),
-    allParticipants(context.application, context.namespace),
-    allCollectionRecords(context.application, context.namespace, "usage"),
+    allThreads(context),
+    allParticipants(context),
+    allCollectionRecords(context, "usage"),
   ]);
   let messageTotal = 0;
   for (const thread of threads) {
-    const messages = await allMessages(
-      context.application,
-      context.namespace,
-      thread.id,
-    );
+    const messages = await allMessages(context, thread.id);
     messageTotal += messages.filter((message) =>
       inDateRange(message.createdAt, dates.from, dates.to)
     ).length;
@@ -111,8 +120,7 @@ const overview: FeatureAction = async (request, context) => {
   ] as const;
   const deliveryCounts = await Promise.all(
     deliveryStatuses.map(async (status) =>
-      (await context.application.deliveries.list({
-        namespace: context.namespace,
+      (await context.deliveries.list({
         status,
         limit: 1_000,
       })).length
@@ -199,14 +207,15 @@ function emptyActivity(bucketValue: string): MutableActivityPoint {
   };
 }
 
-const activity: FeatureAction = async (request, context) => {
+const activity: FeatureAction = async (input, context) => {
+  const request = asRequest(input);
   const rejected = readOnly(request);
   if (rejected) return rejected;
   const unit = interval(request);
   const dates = range(request);
   const [events, usage] = await Promise.all([
-    allEvents(context.application, context.namespace),
-    allCollectionRecords(context.application, context.namespace, "usage"),
+    allEvents(context),
+    allCollectionRecords(context, "usage"),
   ]);
   const points = new Map<string, MutableActivityPoint>();
   const point = (createdAt: string) => {
@@ -242,14 +251,15 @@ const activity: FeatureAction = async (request, context) => {
   };
 };
 
-const events: FeatureAction = async (request, context) => {
+const events: FeatureAction = async (input, context) => {
+  const request = asRequest(input);
   const rejected = readOnly(request);
   if (rejected) return rejected;
   const limit = queryLimit(request);
   const dates = range(request);
   const types = queryTexts(request, "type") ?? queryTexts(request, "eventType");
   const search = queryText(request, "search")?.toLowerCase();
-  const values = (await allEvents(context.application, context.namespace, {
+  const values = (await allEvents(context, {
     threadId: queryText(request, "threadId"),
     correlationId: queryText(request, "correlationId"),
     afterPosition: queryText(request, "afterPosition"),
@@ -277,7 +287,8 @@ function metadataText(
     : undefined;
 }
 
-const threads: FeatureAction = async (request, context) => {
+const threads: FeatureAction = async (input, context) => {
+  const request = asRequest(input);
   const rejected = readOnly(request);
   if (rejected) return rejected;
   const limit = queryLimit(request);
@@ -290,7 +301,7 @@ const threads: FeatureAction = async (request, context) => {
   );
   const search = queryText(request, "search")?.toLowerCase();
   let values = [
-    ...await allThreads(context.application, context.namespace, {
+    ...await allThreads(context, {
       participantId: queryText(request, "participantId"),
       status: statuses?.length ? statuses : undefined,
       order,
@@ -315,11 +326,7 @@ const threads: FeatureAction = async (request, context) => {
   const selected = values.slice(0, limit);
   const data = [];
   for (const thread of selected) {
-    const messages = await allMessages(
-      context.application,
-      context.namespace,
-      thread.id,
-    );
+    const messages = await allMessages(context, thread.id);
     data.push({
       id: thread.id,
       threadId: thread.id,
@@ -328,14 +335,12 @@ const threads: FeatureAction = async (request, context) => {
         thread.externalId ?? thread.id,
       summary: metadataText(record(thread.metadata), "summary") ?? null,
       status: thread.status,
-      participantIds: thread.participants.map((participant) => participant.id),
+      participantIds: Array.isArray(thread.participantIds)
+        ? thread.participantIds
+        : [],
       messageCount: messages.length,
       lastActivityAt: thread.lastEventAt ?? thread.updatedAt,
-      lastMessagePreview: await messagePreview(
-        context.application,
-        context.namespace,
-        messages.at(-1),
-      ),
+      lastMessagePreview: await messagePreview(context, messages.at(-1)),
       metadata: thread.metadata,
       createdAt: thread.createdAt,
       updatedAt: thread.updatedAt,
@@ -344,7 +349,8 @@ const threads: FeatureAction = async (request, context) => {
   return { status: 200, data, pageInfo: pageInfo(selected, limit) };
 };
 
-const participants: FeatureAction = async (request, context) => {
+const participants: FeatureAction = async (input, context) => {
+  const request = asRequest(input);
   const rejected = readOnly(request);
   if (rejected) return rejected;
   const limit = queryLimit(request);
@@ -352,7 +358,7 @@ const participants: FeatureAction = async (request, context) => {
     queryText(request, "participantType");
   const search = queryText(request, "search")?.toLowerCase();
   let values = [
-    ...await allParticipants(context.application, context.namespace),
+    ...await allParticipants(context),
   ];
   if (type && type !== "all") {
     values = values.filter((participant) =>
@@ -375,23 +381,17 @@ const participants: FeatureAction = async (request, context) => {
   const selected = values.slice(0, limit);
   const data = [];
   for (const participant of selected) {
-    const participantThreads = await allThreads(
-      context.application,
-      context.namespace,
-      { participantId: participant.id },
-    );
+    const participantThreads = await allThreads(context, {
+      participantId: participant.id,
+    });
     let messageCount = 0;
     let lastActivityAt: string | null = null;
     for (const thread of participantThreads) {
-      const messages = await allMessages(
-        context.application,
-        context.namespace,
-        thread.id,
-      );
+      const messages = await allMessages(context, thread.id);
       messageCount += messages.filter((message) =>
-        message.sender.id === participant.id
+        message.senderId === participant.id
       ).length;
-      const candidate = thread.lastEventAt ?? thread.updatedAt;
+      const candidate = String(thread.lastEventAt ?? thread.updatedAt);
       if (!lastActivityAt || candidate > lastActivityAt) {
         lastActivityAt = candidate;
       }
@@ -433,14 +433,14 @@ function exactUsageWhere(
   return Object.keys(where).length ? where : undefined;
 }
 
-const usage: FeatureAction = async (request, context) => {
+const usage: FeatureAction = async (input, context) => {
+  const request = asRequest(input);
   const rejected = readOnly(request);
   if (rejected) return rejected;
   const limit = queryLimit(request);
   let values = [
     ...await allCollectionRecords(
-      context.application,
-      context.namespace,
+      context,
       "usage",
       exactUsageWhere(request),
     ),
@@ -481,7 +481,8 @@ function brainNode(value: CollectionRecord) {
   };
 }
 
-const brain: FeatureAction = async (request, context) => {
+const brain: FeatureAction = async (input, context) => {
+  const request = asRequest(input);
   const rejected = readOnly(request);
   if (rejected) return rejected;
   const limit = queryLimit(request);
@@ -502,8 +503,7 @@ const brain: FeatureAction = async (request, context) => {
   }
   let values = [
     ...await allCollectionRecords(
-      context.application,
-      context.namespace,
+      context,
       "memory_record",
       Object.keys(where).length ? where : undefined,
     ),
@@ -525,8 +525,7 @@ const brain: FeatureAction = async (request, context) => {
   const relations = new Map<string, unknown>();
   for (const value of selected) {
     for (
-      const relation of await context.application.relations.list({
-        namespace: context.namespace,
+      const relation of await context.relations.list({
         nodeId: value.id,
         direction: "both",
         limit: 1_000,
@@ -574,12 +573,13 @@ function publicAgent(agent: Agent): Record<string, unknown> {
   };
 }
 
-const agents: FeatureAction = (request, context) => {
+const agents: FeatureAction = (input, context) => {
+  const request = asRequest(input);
   const rejected = readOnly(request);
   if (rejected) return rejected;
   return {
     status: 200,
-    data: context.application.plugins.list<Agent>("agents").map(publicAgent),
+    data: context.resources.list<Agent>("agents").map(publicAgent),
   };
 };
 

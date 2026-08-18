@@ -1,9 +1,14 @@
 import type {
-  ContentRef,
   ContentSequence,
   DatabaseAssetRepository,
   DurableContentInput,
 } from "../content/index.ts";
+import {
+  LLM_CONTENT_ROLE,
+  llmAttemptContent,
+  TOOL_CONTENT_ROLE,
+  toolExecutionContent,
+} from "../content/roles.ts";
 import type {
   CoordinatedMutationResult,
   EventCoordinator,
@@ -13,39 +18,12 @@ import type {
 } from "../events/index.ts";
 import type { MutationIdentity } from "./types.ts";
 
-export const TOOL_CONTENT_ROLE: Readonly<{
-  arguments: "tool.arguments";
-  output: "tool.output";
-  projectedOutput: "tool.projected_output";
-  errorDetail: "tool.error_detail";
-}> = Object.freeze(
-  {
-    arguments: "tool.arguments",
-    output: "tool.output",
-    projectedOutput: "tool.projected_output",
-    errorDetail: "tool.error_detail",
-  } as const,
-);
-
-export const LLM_CONTENT_ROLE: Readonly<{
-  input: "llm.input";
-  toolDefinitions: "llm.tool_definitions";
-  answer: "body";
-  reasoning: "reasoning";
-  toolCalls: "llm.tool_calls";
-  errorDetail: "provider.error_detail";
-  trace: "provider.trace";
-}> = Object.freeze(
-  {
-    input: "llm.input",
-    toolDefinitions: "llm.tool_definitions",
-    answer: "body",
-    reasoning: "reasoning",
-    toolCalls: "llm.tool_calls",
-    errorDetail: "provider.error_detail",
-    trace: "provider.trace",
-  } as const,
-);
+export {
+  LLM_CONTENT_ROLE,
+  llmAttemptContent,
+  TOOL_CONTENT_ROLE,
+  toolExecutionContent,
+};
 
 export type SafeWorkflowError = Readonly<{
   name?: string;
@@ -354,65 +332,3 @@ type WorkflowRepositoryOptions = Readonly<{
 
 export type CreateToolExecutionRepositoryOptions = WorkflowRepositoryOptions;
 export type CreateLlmAttemptRepositoryOptions = WorkflowRepositoryOptions;
-
-export function toolExecutionContent(execution: ToolExecution): Readonly<{
-  arguments: ContentRef;
-  output?: ContentRef;
-  projectedOutput?: ContentRef;
-  errorDetail?: ContentRef;
-  attachments: ContentSequence;
-}> {
-  const first = (role: string) =>
-    execution.content.find((ref) => ref.role === role);
-  const argumentsRef = first(TOOL_CONTENT_ROLE.arguments);
-  if (!argumentsRef) {
-    throw new Error(`Tool execution '${execution.id}' has no arguments.`);
-  }
-  const reserved = new Set<string>(Object.values(TOOL_CONTENT_ROLE));
-  return Object.freeze({
-    arguments: argumentsRef,
-    ...(first(TOOL_CONTENT_ROLE.output)
-      ? { output: first(TOOL_CONTENT_ROLE.output) }
-      : {}),
-    ...(first(TOOL_CONTENT_ROLE.projectedOutput)
-      ? { projectedOutput: first(TOOL_CONTENT_ROLE.projectedOutput) }
-      : {}),
-    ...(first(TOOL_CONTENT_ROLE.errorDetail)
-      ? { errorDetail: first(TOOL_CONTENT_ROLE.errorDetail) }
-      : {}),
-    attachments: Object.freeze(
-      execution.content.filter((ref) => !reserved.has(ref.role)),
-    ),
-  });
-}
-
-export function llmAttemptContent(attempt: LlmAttempt): Readonly<{
-  input: ContentSequence;
-  toolDefinitions?: ContentRef;
-  answer?: ContentRef;
-  reasoning?: ContentRef;
-  toolCalls?: ContentRef;
-  errorDetail?: ContentRef;
-  trace?: ContentRef;
-}> {
-  const first = (role: string) =>
-    attempt.content.find((ref) => ref.role === role);
-  const input = Object.freeze(
-    attempt.content.filter((ref) => ref.role === LLM_CONTENT_ROLE.input),
-  );
-  const toolDefinitions = first(LLM_CONTENT_ROLE.toolDefinitions);
-  const answer = first(LLM_CONTENT_ROLE.answer);
-  const reasoning = first(LLM_CONTENT_ROLE.reasoning);
-  const toolCalls = first(LLM_CONTENT_ROLE.toolCalls);
-  const errorDetail = first(LLM_CONTENT_ROLE.errorDetail);
-  const trace = first(LLM_CONTENT_ROLE.trace);
-  return Object.freeze({
-    input,
-    ...(toolDefinitions ? { toolDefinitions } : {}),
-    ...(answer ? { answer } : {}),
-    ...(reasoning ? { reasoning } : {}),
-    ...(toolCalls ? { toolCalls } : {}),
-    ...(errorDetail ? { errorDetail } : {}),
-    ...(trace ? { trace } : {}),
-  });
-}

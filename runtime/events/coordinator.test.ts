@@ -32,12 +32,7 @@ Deno.test("event coordinator matches before commit, publishes, then dispatches",
   const order: string[] = [];
   const processor = defineProcessor({
     id: "widgets.observe",
-    on: ["widget.created"],
-    delivery: "durable",
-    filter() {
-      order.push("matched");
-      return true;
-    },
+    on: [{ eventType: "widget.created" }],
     handle(event, context) {
       assert(event.durable);
       assertEquals(
@@ -47,7 +42,7 @@ Deno.test("event coordinator matches before commit, publishes, then dispatches",
       order.push("handled");
     },
   });
-  const registry = await createPluginRegistry({
+  const baseRegistry = await createPluginRegistry({
     plugins: [definePlugin({
       manifest: {
         id: "test.widgets",
@@ -56,6 +51,13 @@ Deno.test("event coordinator matches before commit, publishes, then dispatches",
       },
       resources: { processors: [processor] },
     })],
+  });
+  const registry = Object.freeze({
+    ...baseRegistry,
+    durableConsumers(draft: Parameters<typeof baseRegistry.durableConsumers>[0]) {
+      order.push("matched");
+      return baseRegistry.durableConsumers(draft);
+    },
   });
   const executor = createDeliveryExecutor({
     store: fixture.store,
@@ -111,8 +113,7 @@ Deno.test("post-commit publication and placement failures leave delivery recover
   const fixture = await createStore();
   const processor = defineProcessor({
     id: "audit.observe",
-    on: ["audit.created"],
-    delivery: "durable",
+    on: [{ eventType: "audit.created" }],
     handle: () => undefined,
   });
   const registry = await createPluginRegistry({
@@ -172,8 +173,7 @@ Deno.test("deduplicated settled events do not dispatch a second operation", asyn
   let calls = 0;
   const processor = defineProcessor({
     id: "once.observe",
-    on: ["once.created"],
-    delivery: "durable",
+    on: [{ eventType: "once.created" }],
     handle: () => {
       calls++;
     },

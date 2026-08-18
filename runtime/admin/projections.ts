@@ -1,13 +1,7 @@
-import type { CopilotzApplication } from "../application/index.ts";
 import type { ResolvedContent } from "../content/index.ts";
-import type {
-  CollectionRecord,
-  ConversationMessage,
-  ConversationThread,
-  Participant,
-} from "../domain/index.ts";
+import type { CollectionRecord } from "../domain/index.ts";
 import type { DurableEvent } from "../events/index.ts";
-import type { FeatureRequest } from "../features/index.ts";
+import type { FeatureContext, FeatureRequest } from "../features/index.ts";
 
 export function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -82,67 +76,53 @@ export function inDateRange(
 }
 
 export async function allThreads(
-  application: CopilotzApplication,
-  namespace: string,
+  context: FeatureContext,
   options: {
     participantId?: string;
     status?: string | readonly string[];
     order?: "asc" | "desc";
   } = {},
-): Promise<readonly ConversationThread[]> {
-  const result: ConversationThread[] = [];
-  let after: string | undefined;
-  do {
-    const page = await application.conversation.listThreads(namespace, {
-      ...options,
-      after,
-      limit: 1_000,
-    });
-    result.push(...page);
-    after = page.length === 1_000 ? page.at(-1)?.id : undefined;
-  } while (after);
-  return Object.freeze(result);
+): Promise<readonly CollectionRecord[]> {
+  let values = [...await allCollectionRecords(context, "thread")];
+  if (options.participantId) {
+    values = values.filter((thread) =>
+      Array.isArray(thread.participantIds) &&
+      thread.participantIds.includes(options.participantId)
+    );
+  }
+  if (options.status) {
+    const statuses = typeof options.status === "string"
+      ? [options.status]
+      : options.status;
+    values = values.filter((thread) =>
+      statuses.includes(String(thread.status))
+    );
+  }
+  const direction = options.order === "asc" ? 1 : -1;
+  values.sort((left, right) =>
+    direction *
+    String(left.lastEventAt ?? left.updatedAt).localeCompare(
+      String(right.lastEventAt ?? right.updatedAt),
+    )
+  );
+  return Object.freeze(values);
 }
 
 export async function allParticipants(
-  application: CopilotzApplication,
-  namespace: string,
-): Promise<readonly Participant[]> {
-  const result: Participant[] = [];
-  let after: string | undefined;
-  do {
-    const page = await application.conversation.listParticipants(namespace, {
-      after,
-      limit: 1_000,
-    });
-    result.push(...page);
-    after = page.length === 1_000 ? page.at(-1)?.id : undefined;
-  } while (after);
-  return Object.freeze(result);
+  context: FeatureContext,
+): Promise<readonly CollectionRecord[]> {
+  return await allCollectionRecords(context, "participant");
 }
 
 export async function allMessages(
-  application: CopilotzApplication,
-  namespace: string,
+  context: FeatureContext,
   threadId: string,
-): Promise<readonly ConversationMessage[]> {
-  const result: ConversationMessage[] = [];
-  let after: string | undefined;
-  do {
-    const page = await application.conversation.listMessages(
-      namespace,
-      threadId,
-      { after, limit: 1_000 },
-    );
-    result.push(...page);
-    after = page.length === 1_000 ? page.at(-1)?.id : undefined;
-  } while (after);
-  return Object.freeze(result);
+): Promise<readonly CollectionRecord[]> {
+  return await allCollectionRecords(context, "message", { threadId });
 }
 
 export async function allEvents(
-  application: CopilotzApplication,
-  namespace: string,
+  context: FeatureContext,
   options: {
     threadId?: string;
     correlationId?: string;
@@ -152,8 +132,7 @@ export async function allEvents(
   const result: DurableEvent[] = [];
   let afterPosition = options.afterPosition;
   do {
-    const page = await application.events.list({
-      namespace,
+    const page = await context.events.list({
       threadId: options.threadId,
       correlationId: options.correlationId,
       afterPosition,
@@ -166,17 +145,16 @@ export async function allEvents(
 }
 
 export async function allCollectionRecords(
-  application: CopilotzApplication,
-  namespace: string,
+  context: FeatureContext,
   name: string,
   where?: Readonly<Record<string, unknown>>,
 ): Promise<readonly CollectionRecord[]> {
-  if (!application.collections.names.includes(name)) return Object.freeze([]);
-  const collection = application.collections.get(name);
+  const collection = context.collections[name];
+  if (!collection) return Object.freeze([]);
   const result: CollectionRecord[] = [];
   let after: string | undefined;
   do {
-    const page = await collection.list(namespace, {
+    const page = await collection.list({
       after,
       limit: 1_000,
       where,
@@ -200,16 +178,16 @@ function resolvedText(value: ResolvedContent): string {
 }
 
 export async function messagePreview(
-  application: CopilotzApplication,
-  namespace: string,
-  message: ConversationMessage | undefined,
+  context: FeatureContext,
+  message: CollectionRecord | undefined,
   maximum = 280,
 ): Promise<string | null> {
   if (!message) return null;
   try {
-    const resolved = await application.content.resolver.getMany(
-      message.content,
-      { namespace },
+    const content = Array.isArray(message.content) ? message.content : [];
+    const resolved = await context.content.resolver.getMany(
+      content as Parameters<FeatureContext["content"]["resolver"]["getMany"]>[0],
+      { namespace: context.namespace },
     );
     const text = resolved.map(resolvedText).join("\n").trim();
     return text ? text.slice(0, maximum) : null;

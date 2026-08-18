@@ -4,7 +4,7 @@ import {
   type GenerateApiWorkflowTools,
   isWorkflowTool,
   type WorkflowToolCatalog,
-} from "../workflows/index.ts";
+} from "../tools/index.ts";
 import { createMcpWorkflowToolGenerator } from "./mcp-tools.ts";
 import type { CreateServerWorkflowToolCatalogOptions } from "./types.ts";
 

@@ -8,6 +8,7 @@
  * @module
  */
 
+export { corePlugin, corePluginManifest } from "./plugins/core/index.ts";
 export * from "./runtime/application/public.ts";
 export * from "./runtime/capabilities/index.ts";
 export * from "./runtime/admin/index.ts";
@@ -28,7 +29,8 @@ export * from "./runtime/resources/index.ts";
 export * from "./runtime/schedules/index.ts";
 export * from "./runtime/tools/index.ts";
 export * from "./runtime/usage/index.ts";
-export * from "./runtime/workflows/index.ts";
+export * from "./runtime/llm/index.ts";
+export * from "./runtime/agents/index.ts";
 export type {
   CopilotzOminipgOptions,
   OminipgDatabaseLike,

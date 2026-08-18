@@ -3,7 +3,7 @@ import { assetIdFromRef, formatAssetRef } from "../content/index.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "../workflows/index.ts";
+} from "./types.ts";
 
 export type PersistentTerminalScope = "agent" | "project" | "tenant";
 

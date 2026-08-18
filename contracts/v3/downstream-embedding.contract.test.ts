@@ -12,6 +12,9 @@ import {
   type LlmProviderResource,
 } from "../../index.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
+import { loadMessageRecord } from "../../runtime/engine/collection-graph.ts";
+import { createMessageRecord } from "../../runtime/engine/collection-writes.ts";
+import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 
 const NAMESPACE = "downstream-embedding";
 
@@ -19,35 +22,25 @@ function migratedApplicationPlugin() {
   const provider = defineLlmProviderResource({
     id: "downstream-injected",
     type: "llm",
-    factory: () => ({
-      endpoint: "https://downstream.invalid/v1/chat",
-      headers: () => ({ "content-type": "application/json" }),
-      body: (messages) => ({ messages }),
-      extractContent: () => null,
-    }),
+    generate: () => {
+      throw new Error("downstream llm is not invoked");
+    },
   });
   const processor = defineProcessor<CopilotzProcessorContext>({
     id: "downstream.reply",
-    on: ["message.created"],
-    delivery: "durable",
-    filter: (event) => event.routing?.senderId === "downstream-user",
+    on: [{ eventType: "message.created", routing: { senderId: "downstream-user" } }],
     async handle(event, context) {
       if (!event.durable) throw new TypeError("Durable delivery required.");
       assertExists(event.subject);
-      const source = await context.conversation.getMessage(event.subject.id);
+      const source = await loadMessageRecord(context, event.subject.id);
       assertExists(source);
       const content = await context.content.prepare("embedded reply", {
         operationKey: "downstream-reply-content",
       });
-      await context.conversation.createMessage({
+      await createMessageRecord(context, {
         id: "downstream-reply",
         threadId: source.threadId,
-        sender: {
-          id: "downstream-agent",
-          externalId: "support",
-          participantType: "agent",
-          agentId: "support",
-        },
+        senderId: "downstream-agent",
         recipientIds: [source.sender.id],
         content,
       }, { operationKey: "downstream-reply-message" });
@@ -59,7 +52,7 @@ function migratedApplicationPlugin() {
       version: "3.0.0",
       provides: {
         agents: ["support"],
-        providers: [provider.id],
+        llm: [provider.id],
         processors: [processor.id],
       },
     },
@@ -72,7 +65,7 @@ function migratedApplicationPlugin() {
           text: { type: "llm", provider: provider.id, model: "injected" },
         },
       }],
-      providers: [provider],
+      llm: [provider],
       processors: [processor],
     },
   });
@@ -93,6 +86,7 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
     database,
     namespace: NAMESPACE,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [plugin],
     dispatcher: hypervisor,
     target: { workerId },
@@ -105,9 +99,11 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
     database,
     namespace: NAMESPACE,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [plugin],
     id: workerId,
     transport,
+    capacity: 8,
     engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
@@ -117,7 +113,7 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
     assertEquals("execution" in application, false);
     assertEquals(
       application.plugins.require<LlmProviderResource>(
-        "providers",
+        "llm",
         "downstream-injected",
       ).id,
       "downstream-injected",

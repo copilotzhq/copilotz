@@ -7,7 +7,7 @@ import {
 
 import type { API, MCPServer } from "../resources/index.ts";
 import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
-import { createWorkflowToolCatalog } from "../workflows/index.ts";
+import { createWorkflowToolCatalog } from "../tools/index.ts";
 import { createMcpWorkflowToolGenerator } from "./mcp-tools.ts";
 import { createServerWorkflowToolCatalog } from "./server-tool-catalog.ts";
 import type { McpRuntimeConnection } from "./types.ts";
@@ -45,13 +45,16 @@ async function resourcesFor(input: {
       id: "test.catalog-adapters",
       version: "1.0.0",
       provides: {
-        ...(input.apis ? { apis: input.apis.map((value) => value.id) } : {}),
+        ...(input.apis ? { api: input.apis.map((value) => value.id) } : {}),
         ...(input.mcpServers
-          ? { mcpServers: input.mcpServers.map((value) => value.id) }
+          ? { mcp: input.mcpServers.map((value) => value.id) }
           : {}),
       },
     },
-    resources: input,
+    resources: {
+      ...(input.apis ? { api: input.apis } : {}),
+      ...(input.mcpServers ? { mcp: input.mcpServers } : {}),
+    },
   });
   return await createPluginRegistry({ plugins: [plugin] });
 }
@@ -64,14 +67,14 @@ Deno.test("runtime-neutral catalogs require explicit adapters only when descript
   await assertRejects(
     () => createWorkflowToolCatalog().all(apiResources),
     Error,
-    "Plugin resources 'apis' require an explicit tool-catalog adapter",
+    "Plugin resources 'api' require an explicit tool-catalog adapter",
   );
 
   const mcpResources = await resourcesFor({ mcpServers: [mcpServer] });
   await assertRejects(
     () => createWorkflowToolCatalog().all(mcpResources),
     Error,
-    "Plugin resources 'mcpServers' require an explicit tool-catalog adapter",
+    "Plugin resources 'mcp' require an explicit tool-catalog adapter",
   );
 });
 
@@ -138,13 +141,13 @@ Deno.test("generic server catalog never grants stdio implicitly", async () => {
   await assertRejects(
     () => createServerWorkflowToolCatalog().all(resources),
     Error,
-    "Plugin resources 'mcpServers' require an explicit tool-catalog adapter",
+    "Plugin resources 'mcp' require an explicit tool-catalog adapter",
   );
 });
 
 Deno.test("adapter boundary is factory-first and leaves runtime APIs out of core", async () => {
   const core = await Deno.readTextFile(
-    new URL("../workflows/tool-catalog.ts", import.meta.url),
+    new URL("../tools/catalog.ts", import.meta.url),
   );
   assert(!core.includes('import("../api/index.ts")'));
   assert(!core.includes('import("../mcp/index.ts")'));

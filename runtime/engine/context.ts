@@ -4,6 +4,10 @@ import {
   matchesCopilotzEvent,
   waitForCopilotzEvent,
 } from "../events/index.ts";
+import {
+  createFeatureInvoker,
+  type FeatureContext,
+} from "../features/index.ts";
 import type {
   CopilotzCapabilityBase,
   CopilotzProcessorCapabilities,
@@ -144,6 +148,22 @@ export function createCopilotzProcessorCapabilities(
         origin: prepareOptions.origin,
       });
     },
+    materialize(input, materializeOptions = {}) {
+      return options.assets.materialize({
+        transaction: options.session,
+        tables: options.eventStore.tables,
+      }, {
+        namespace,
+        content: input,
+        origin: materializeOptions.origin,
+      });
+    },
+    linkOwner(ownerId, content) {
+      return options.assets.linkOwner({
+        transaction: options.session,
+        tables: options.eventStore.tables,
+      }, { namespace, ownerId, content });
+    },
     publish(input, publishOptions) {
       const publishIdentity = mutation(
         `content.publish:${publishOptions.operationKey}`,
@@ -160,230 +180,6 @@ export function createCopilotzProcessorCapabilities(
     resolveMany: (refs) => options.resolver.getMany(refs, { namespace }),
     open: (ref) => options.resolver.open(ref, { namespace }),
   });
-
-  const conversation: CopilotzProcessorCapabilities["conversation"] = Object
-    .freeze({
-      createParticipant(input, mutationOptions) {
-        const key = input.participant.id ?? input.participant.externalId;
-        return options.conversation.createParticipant({
-          ...input,
-          namespace,
-          identity: mutation(`participant.create:${key}`, mutationOptions),
-        });
-      },
-      updateParticipant(id, patch, mutationOptions) {
-        return options.conversation.updateParticipant({
-          namespace,
-          id,
-          patch,
-          identity: mutation(
-            `participant.update:${id}`,
-            mutationOptions,
-          ),
-        });
-      },
-      getParticipant: (id) =>
-        options.conversation.getParticipant(namespace, id),
-      getParticipantByExternalId: (externalId) =>
-        options.conversation.getParticipantByExternalId(namespace, externalId),
-      listParticipants: (listOptions) =>
-        options.conversation.listParticipants(namespace, listOptions),
-      createThread(input, mutationOptions) {
-        const key = input.id ?? input.externalId ?? "thread";
-        return options.conversation.createThread({
-          ...input,
-          namespace,
-          identity: mutation(`thread.create:${key}`, mutationOptions),
-        });
-      },
-      addThreadParticipant(input, mutationOptions) {
-        return options.conversation.addThreadParticipant({
-          ...input,
-          namespace,
-          identity: mutation(
-            `thread.participant.add:${input.threadId}:${input.participant.externalId}`,
-            mutationOptions,
-          ),
-        });
-      },
-      updateThread(id, patch, mutationOptions) {
-        return options.conversation.updateThread({
-          namespace,
-          id,
-          patch,
-          identity: mutation(`thread.update:${id}`, mutationOptions),
-        });
-      },
-      deleteThread(id, mutationOptions) {
-        return options.conversation.deleteThread({
-          namespace,
-          id,
-          identity: mutation(`thread.delete:${id}`, mutationOptions),
-        });
-      },
-      getThread: (id) => options.conversation.getThread(namespace, id),
-      getThreadByExternalId: (externalId) =>
-        options.conversation.getThreadByExternalId(namespace, externalId),
-      listThreads: (listOptions) =>
-        options.conversation.listThreads(namespace, listOptions),
-      createMessage(input, mutationOptions) {
-        const key = input.id ?? input.threadId;
-        return options.conversation.createMessage({
-          ...input,
-          namespace,
-          identity: mutation(`message.create:${key}`, mutationOptions),
-        });
-      },
-      reviseMessage(input, mutationOptions) {
-        const key = input.id ?? input.messageId;
-        return options.conversation.reviseMessage({
-          ...input,
-          namespace,
-          identity: mutation(`message.revise:${key}`, mutationOptions),
-        });
-      },
-      deleteThreadMessages(threadId, mutationOptions) {
-        return options.conversation.deleteThreadMessages({
-          namespace,
-          threadId,
-          identity: mutation(
-            `thread.messages.delete:${threadId}`,
-            mutationOptions,
-          ),
-        });
-      },
-      getMessage: (id) => options.conversation.getMessage(namespace, id),
-      listMessages: (threadId, listOptions) =>
-        options.conversation.listMessages(namespace, threadId, listOptions),
-      listMessageRevisions: (rootMessageId) =>
-        options.conversation.listMessageRevisions(namespace, rootMessageId),
-    });
-
-  const llmAttempts: CopilotzProcessorCapabilities["llmAttempts"] = Object
-    .freeze({
-      create(input, mutationOptions) {
-        const key = input.id ??
-          `${input.threadId}:${input.attemptIndex ?? 0}:${
-            input.provider ?? "logical"
-          }`;
-        return options.llmAttempts.create({
-          ...input,
-          namespace,
-          identity: mutation(`llm_attempt.create:${key}`, mutationOptions),
-        });
-      },
-      update(input, mutationOptions) {
-        return options.llmAttempts.update({
-          ...input,
-          namespace,
-          identity: mutation(
-            `llm_attempt.update:${input.id}`,
-            mutationOptions,
-          ),
-        });
-      },
-      complete(input, mutationOptions) {
-        return options.llmAttempts.complete({
-          ...input,
-          namespace,
-          identity: mutation(
-            `llm_attempt.complete:${input.id}`,
-            mutationOptions,
-          ),
-        });
-      },
-      fail(input, mutationOptions) {
-        return options.llmAttempts.fail({
-          ...input,
-          namespace,
-          identity: mutation(`llm_attempt.fail:${input.id}`, mutationOptions),
-        });
-      },
-      cancel(input, mutationOptions) {
-        return options.llmAttempts.cancel({
-          ...input,
-          namespace,
-          identity: mutation(
-            `llm_attempt.cancel:${input.id}`,
-            mutationOptions,
-          ),
-        });
-      },
-      get: (id) => options.llmAttempts.get(namespace, id),
-      list: (threadId, listOptions) =>
-        options.llmAttempts.list(namespace, threadId, listOptions),
-    });
-
-  const toolExecutions: CopilotzProcessorCapabilities["toolExecutions"] = Object
-    .freeze({
-      create(input, mutationOptions) {
-        const key = input.id ?? `${input.threadId}:${input.toolCallId}`;
-        return options.toolExecutions.create({
-          ...input,
-          namespace,
-          identity: mutation(
-            `tool_execution.create:${key}`,
-            mutationOptions,
-          ),
-        });
-      },
-      update(input, mutationOptions) {
-        return options.toolExecutions.update({
-          ...input,
-          namespace,
-          identity: mutation(
-            `tool_execution.update:${input.id}`,
-            mutationOptions,
-          ),
-        });
-      },
-      complete(input, mutationOptions) {
-        return options.toolExecutions.complete({
-          ...input,
-          namespace,
-          identity: mutation(
-            `tool_execution.complete:${input.id}`,
-            mutationOptions,
-          ),
-        });
-      },
-      fail(input, mutationOptions) {
-        return options.toolExecutions.fail({
-          ...input,
-          namespace,
-          identity: mutation(
-            `tool_execution.fail:${input.id}`,
-            mutationOptions,
-          ),
-        });
-      },
-      cancel(input, mutationOptions) {
-        return options.toolExecutions.cancel({
-          ...input,
-          namespace,
-          identity: mutation(
-            `tool_execution.cancel:${input.id}`,
-            mutationOptions,
-          ),
-        });
-      },
-      get: (id) => options.toolExecutions.get(namespace, id),
-      getByToolCallId: (threadId, toolCallId) =>
-        options.toolExecutions.getByToolCallId(
-          namespace,
-          threadId,
-          toolCallId,
-        ),
-      getByMessageToolCallId: (threadId, messageId, toolCallId) =>
-        options.toolExecutions.getByMessageToolCallId(
-          namespace,
-          threadId,
-          messageId,
-          toolCallId,
-        ),
-      list: (threadId, listOptions) =>
-        options.toolExecutions.list(namespace, threadId, listOptions),
-    });
 
   const relations: CopilotzProcessorCapabilities["relations"] = Object.freeze({
     create(input, mutationOptions) {
@@ -547,21 +343,72 @@ export function createCopilotzProcessorCapabilities(
     },
   });
 
-  return Object.freeze({
+  const capabilities: Omit<CopilotzProcessorCapabilities, "features"> =
+    Object.freeze({
     namespace,
     events,
     resources,
     content,
-    conversation,
     collections: options.collections.withScope({
       namespace,
       createMutationIdentity: options.base.createMutationIdentity,
     }),
-    llmAttempts,
-    toolExecutions,
     relations,
     schedules,
     knowledge,
     memory,
+    transaction: (input) => {
+      const source = options.base.createMutationIdentity(
+        input.operationKey,
+        input.identity?.metadata,
+      );
+      return options.collectionRuntime.transaction({
+        ...input,
+        identity: {
+          causationId: input.identity?.causationId ?? source.causationId,
+          correlationId: input.identity?.correlationId ?? source.correlationId,
+          settlementScopeId: input.identity?.settlementScopeId ??
+            source.settlementScopeId,
+          ...(input.identity?.deduplicationId
+            ? { deduplicationId: input.identity.deduplicationId }
+            : {}),
+          metadata: {
+            ...source.metadata,
+            ...input.identity?.metadata,
+          },
+        },
+      });
+    },
+    collectionRuntime: options.collectionRuntime,
   });
+  return Object.freeze({
+    ...capabilities,
+    features: attachProcessorFeatures(options, capabilities),
+  });
+}
+
+function attachProcessorFeatures(
+  options: CreateCopilotzProcessorCapabilitiesOptions,
+  capabilities: Omit<CopilotzProcessorCapabilities, "features">,
+): CopilotzProcessorCapabilities["features"] {
+  const holder: { current?: FeatureContext } = {};
+  const features = createFeatureInvoker(options.registry, () => {
+    if (!holder.current) throw new Error("Feature context is not ready.");
+    return holder.current;
+  });
+  holder.current = Object.freeze({
+    namespace: capabilities.namespace,
+    collections: capabilities.collections,
+    collectionRuntime: capabilities.collectionRuntime,
+    transaction: capabilities.transaction,
+    content: Object.freeze({ resolver: options.resolver }),
+    resources: capabilities.resources,
+    features,
+    events: Object.freeze({ list: capabilities.events.list }),
+    deliveries: Object.freeze({
+      list: () => Promise.resolve(Object.freeze([])),
+    }),
+    relations: Object.freeze({ list: capabilities.relations.list }),
+  });
+  return features;
 }

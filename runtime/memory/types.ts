@@ -7,7 +7,6 @@ import type {
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import type { CopilotzEvent } from "../events/index.ts";
 import type { ChatMessage, ProviderConfig } from "../llm/types.ts";
-import type { LlmChat } from "../workflows/index.ts";
 import type { LongTermMemoryConfig } from "./resources.ts";
 
 export type MemoryEmbeddingInput = Readonly<{
@@ -40,7 +39,6 @@ export type CreateLongTermMemoryPluginOptions = Readonly<{
   version?: string;
   enabled?: boolean;
   config?: Partial<LongTermMemoryConfig>;
-  chat?: LlmChat;
   env?: Readonly<Record<string, string>>;
   resolveLlmConfig?: ResolveMemoryLlmConfig;
   embed?: MemoryEmbed;

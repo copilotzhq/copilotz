@@ -1,4 +1,5 @@
 import type { EventDelivery } from "../events/index.ts";
+import { resolveProcessorEvent } from "../plugins/event-data.ts";
 import type {
   CreateDeliveryWorkloadOptions,
   DeliveryContextBase,
@@ -222,7 +223,7 @@ export function createDeliveryWorkload(
         ...base,
       });
       abort.signal.throwIfAborted();
-      await processor.handle(event, context);
+      await processor.handle(await resolveProcessorEvent(store, event), context);
       abort.signal.throwIfAborted();
       const succeeded = await store.succeedDelivery(
         delivery.id,

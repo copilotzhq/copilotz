@@ -108,6 +108,7 @@ export async function createCopilotzWorker(
       namespace: options.namespace,
       databaseSchema: options.databaseSchema,
       core: options.core,
+      canonicalCore: options.canonicalCore,
       plugins: options.plugins,
       resources: options.resources,
       pluginResolver: options.pluginResolver,
@@ -146,7 +147,7 @@ export async function createCopilotzWorker(
       maxReconnectDelayMs: options.maxReconnectDelayMs,
       createHandshakeId: options.createHandshakeId,
       now: options.now,
-      capacity: options.capacity,
+      capacity: options.capacity ?? 8,
       signal: options.signal,
       workloads: relay.wrap(application.execution.workloads),
     }, lifecycle);

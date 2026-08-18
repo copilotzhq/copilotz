@@ -3,7 +3,7 @@ import { assert, assertEquals, assertRejects } from "@std/assert";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
-} from "../workflows/index.ts";
+} from "./types.ts";
 import {
   createPersistentTerminalToolsPlugin,
   type PersistentTerminalService,

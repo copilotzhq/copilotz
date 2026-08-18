@@ -3,7 +3,7 @@ import httpRequest from "./web/http-request.ts";
 import webSearch from "./web/web-search.ts";
 import type { NewTool } from "../resources/index.ts";
 import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
-import type { WorkflowTool } from "../workflows/index.ts";
+import type { WorkflowTool } from "./types.ts";
 
 export const WEB_TOOL_IDS = [
   "http_request",

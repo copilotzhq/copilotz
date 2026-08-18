@@ -12,9 +12,12 @@ import type { CopilotzProcessorContext } from "../engine/index.ts";
 import { createCopilotzApplication } from "./application.ts";
 import { createCopilotz } from "./copilotz.ts";
 import { createCopilotzCorePlugins } from "./core-plugins.ts";
-import type { WorkflowTool } from "../workflows/index.ts";
+import type { WorkflowTool } from "../tools/index.ts";
 import type { CopilotzDatabase } from "./persistence.ts";
 import { isCopilotzPersistenceError } from "./persistence.ts";
+import { loadMessageRecord } from "../engine/collection-graph.ts";
+import { createMessageRecord } from "../engine/collection-writes.ts";
+import { coreCollectionsPlugin, corePlugin } from "../../plugins/core/plugin.ts";
 
 const SCHEMA = "copilotz_application";
 const NAMESPACE = "tenant-a";
@@ -22,12 +25,11 @@ const NAMESPACE = "tenant-a";
 function replyPlugin(): CopilotzPlugin {
   const processor = defineProcessor<CopilotzProcessorContext>({
     id: "application.reply",
-    on: ["message.created"],
-    delivery: "durable",
-    filter: (event) => event.routing?.senderId === "user-a",
+    on: [{ eventType: "message.created", routing: { senderId: "user-a" } }],
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
-      const incoming = await context.conversation.getMessage(
+      const incoming = await loadMessageRecord(
+        context,
         event.subject.id,
       );
       assertExists(incoming);
@@ -35,16 +37,10 @@ function replyPlugin(): CopilotzPlugin {
         { type: "text", text: "application reply" },
         { operationKey: "reply-content" },
       );
-      await context.conversation.createMessage({
+      await createMessageRecord(context, {
         id: `reply:${incoming.id}`,
         threadId: incoming.threadId,
-        sender: {
-          id: "agent-a",
-          externalId: "support",
-          participantType: "agent",
-          agentId: "support",
-          name: "Support",
-        },
+        senderId: "agent-a",
         recipientIds: [incoming.sender.id],
         content,
       }, { operationKey: "reply-message" });
@@ -85,6 +81,7 @@ Deno.test("application factory composes plugins and supplies the default tenant 
     namespace: NAMESPACE,
     databaseSchema: SCHEMA,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [replyPlugin()],
     engine: { retryBaseMs: 0, random: () => 0 },
   });
@@ -93,7 +90,7 @@ Deno.test("application factory composes plugins and supplies the default tenant 
     assertEquals(application.config, {
       namespace: NAMESPACE,
       databaseSchema: SCHEMA,
-      corePluginIds: [],
+      corePluginIds: ["@copilotz/core-collections"],
       declaredPluginIds: ["test.application.reply"],
       databaseOwnership: "injected",
     });
@@ -151,6 +148,7 @@ Deno.test("createCopilotz owns a configured Ominipg database", async () => {
     namespace: NAMESPACE,
     databaseSchema: "public",
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     database: { url: ":memory:" },
   });
   try {
@@ -171,6 +169,7 @@ Deno.test("createCopilotz owns its default private database", async () => {
   const application = await createCopilotz({
     namespace: NAMESPACE,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
   });
   assertEquals(application.config.databaseOwnership, "application");
   await application.shutdown();
@@ -183,21 +182,23 @@ Deno.test("minimal built-ins precede explicit application resources", async () =
     id: "openai",
     type: "llm",
     marker: "application",
-    factory: () => ({}),
+    generate: () => {
+      throw new Error("application llm is not invoked");
+    },
   });
   const application = await createCopilotzApplication({
     database: db,
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_core`,
-    resources: { providers: [replacement] },
+    canonicalCore: [corePlugin],
+    resources: { llm: [replacement] },
   });
   try {
     assertEquals(application.config.corePluginIds, [
-      "@copilotz/built-in-llm-providers",
-      "@copilotz/core-text",
+      "@copilotz/core",
     ]);
     assertEquals(
-      application.plugins.require("providers", "openai"),
+      application.plugins.require("llm", "openai"),
       replacement,
     );
     const agent: Agent | undefined = application.plugins.get(
@@ -214,14 +215,11 @@ Deno.test("minimal built-ins precede explicit application resources", async () =
 Deno.test("knowledge is an explicit core-plugin opt-in", () => {
   assertEquals(
     createCopilotzCorePlugins({
-      providers: false,
       tools: false,
       webTools: false,
       finance: false,
       memory: false,
       usage: false,
-      text: false,
-      ask: false,
       schedules: false,
       knowledge: { embedding: { provider: "fixture.embedding" } },
     }).map((plugin) => plugin.manifest.id),
@@ -249,6 +247,7 @@ Deno.test("application exposes canonical effective capability introspection", as
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_capabilities`,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     resources: { agents: [agent], tools: [tool] },
   });
   try {
@@ -280,6 +279,7 @@ Deno.test("application never closes an injected database", async () => {
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_owned`,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
   });
   await Promise.all([application.shutdown(), application.shutdown()]);
   assertEquals(closes, 0);
@@ -298,8 +298,7 @@ Deno.test("application terminates attachments and resumes durable deliveries aft
   const lifecycle: string[] = [];
   const processor = defineProcessor<CopilotzProcessorContext>({
     id: "application.recovery",
-    on: ["message.created"],
-    delivery: "durable",
+    on: [{ eventType: "message.created" }],
     handle() {
       processorCalls += 1;
       if (processorCalls === 1) throw new Error("retry this delivery");
@@ -343,6 +342,7 @@ Deno.test("application terminates attachments and resumes durable deliveries aft
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_recovery`,
     core: false,
+    canonicalCore: [coreCollectionsPlugin],
     plugins: [plugin],
     engine: { retryBaseMs: 0, random: () => 0 },
   }, {

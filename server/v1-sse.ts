@@ -218,7 +218,7 @@ export function createV1SseProjector(
     }
     if (
       output.durable && output.subject?.type === "message" &&
-      (output.type === "message.created" || output.type === "message.revised")
+      output.type === "message.created"
     ) {
       const message = await application.conversation.getMessage(
         output.namespace,

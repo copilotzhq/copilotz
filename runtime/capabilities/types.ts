@@ -1,6 +1,6 @@
 import type { PluginResourceOrigin } from "../plugins/index.ts";
 import type { Agent, Skill } from "../resources/index.ts";
-import type { WorkflowTool, WorkflowToolCatalog } from "../workflows/index.ts";
+import type { WorkflowTool, WorkflowToolCatalog } from "../tools/index.ts";
 import type { PluginRegistry } from "../plugins/index.ts";
 
 export type CapabilityGrantSource = "explicit" | "all" | "derived";

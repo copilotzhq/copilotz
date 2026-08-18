@@ -96,7 +96,7 @@ export function createRealtimeStreamWorkload(
   return async ({ metadata: rawMetadata, input, signal }) => {
     const metadata = parseStreamDispatchMetadata(rawMetadata);
     const provider = options.registry.get<RealtimeProviderResource>(
-      "providers",
+      "llm",
       metadata.providerId,
     );
     if (!provider || !isRealtimeProviderResource(provider)) {

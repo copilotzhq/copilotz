@@ -236,7 +236,7 @@ flatten message senders, content refs, or workflow records into a legacy DTO.
 
 The authoritative subpath list is `deno.json`. Public groups are application,
 capabilities, plugins, resources, content, domain, events, attachments,
-workflows, memory, knowledge, schedules, usage, skills, tools, channels,
+agents, llm, memory, knowledge, schedules, usage, skills, tools, channels,
 features, admin, goals, adapters, the transitional server projection, and the
 isolated v1 and memory-v4 migrations.
 

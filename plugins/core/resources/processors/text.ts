@@ -24,19 +24,27 @@ import {
 import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import {
+  agentSessionBaseConfig,
   agentTextBaseConfig,
+  agentUsesSessionRuntime,
   buildAgentTextPrompt,
   requireAgent,
+  staticAgentSessionConfig,
   staticAgentTextConfig,
 } from "@copilotz/copilotz/agents";
 import {
   type AgentTextPrompt,
   type ChatMessage,
+  type ChatRequest,
   type CreateTextWorkflowPluginOptions,
+  generateChainFromResources,
+  type LlmFrame,
   materializeAssetRefsForProvider,
   type ProviderConfig,
   recordProviderAttemptLifecycle,
-  requireLlmGenerate,
+  runGenerateChain,
+  runSessionChain,
+  sessionChainFromResources,
   type ToolInvocation,
 } from "@copilotz/copilotz/llm";
 import {
@@ -53,7 +61,6 @@ import {
   collectionEventRecord,
   errorText,
   listThreadMessages,
-  llmResource,
   mapLlmAttempt,
   optionalText,
   participantAgentId,
@@ -79,6 +86,108 @@ const defaultToolCatalog = createWorkflowToolCatalog();
 
 function recordThreadId(record: CollectionRecord): string {
   return requiredText(optionalText(record.threadId), "thread id");
+}
+
+const utf8 = new TextEncoder();
+
+function frameBytes(frame: LlmFrame): Readonly<{
+  lane: string;
+  mediaType: string;
+  bytes: Uint8Array;
+}> | undefined {
+  if (frame.type === "reasoning") {
+    const text = typeof frame.payload === "string"
+      ? frame.payload
+      : typeof asRecord(frame.payload).text === "string"
+      ? String(asRecord(frame.payload).text)
+      : "";
+    if (!text) return undefined;
+    return { lane: "reasoning", mediaType: "text/plain", bytes: utf8.encode(text) };
+  }
+  if (frame.type === "tool_call") {
+    return {
+      lane: "tool_call",
+      mediaType: "application/x-ndjson",
+      bytes: utf8.encode(`${JSON.stringify(frame.payload ?? {})}\n`),
+    };
+  }
+  if (frame.type === "audio") {
+    const payload = frame.payload;
+    const record = asRecord(payload);
+    const mediaType = optionalText(record.mediaType) ?? "audio/pcm";
+    const raw = payload instanceof Uint8Array
+      ? payload
+      : record.bytes instanceof Uint8Array
+      ? record.bytes
+      : undefined;
+    if (!raw?.byteLength) return undefined;
+    return { lane: "content", mediaType, bytes: raw };
+  }
+  if (frame.type === "text" || frame.type === "content") {
+    const text = typeof frame.payload === "string"
+      ? frame.payload
+      : typeof asRecord(frame.payload).text === "string"
+      ? String(asRecord(frame.payload).text)
+      : "";
+    if (!text) return undefined;
+    return { lane: "content", mediaType: "text/plain", bytes: utf8.encode(text) };
+  }
+  return undefined;
+}
+
+function openSessionIngress(
+  context: CopilotzProcessorContext,
+  threadId: string,
+): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    async start(controller) {
+      const seen = new Set<string>();
+      const pumps = new Set<Promise<void>>();
+      const attach = async () => {
+        const records = await requireCollection(context, "stream").query
+          .byThreadLaneState(context.namespace, {
+            threadId,
+            lane: "transcript",
+            state: "open",
+          });
+        for (const record of records) {
+          if (seen.has(record.id)) continue;
+          seen.add(record.id);
+          const pump = (async () => {
+            try {
+              const follower = await context.streams.follow({
+                streamId: record.id,
+              });
+              const reader = follower.body.getReader();
+              while (true) {
+                const next = await reader.read();
+                if (next.done) break;
+                controller.enqueue(next.value);
+              }
+            } catch (error) {
+              try {
+                controller.error(error);
+              } catch {
+                // Consumer already cancelled.
+              }
+            }
+          })();
+          pumps.add(pump);
+          void pump.finally(() => pumps.delete(pump));
+        }
+      };
+      await attach();
+      while (pumps.size > 0) {
+        await Promise.race(pumps);
+        await attach();
+      }
+      try {
+        controller.close();
+      } catch {
+        // Consumer already cancelled.
+      }
+    },
+  });
 }
 
 function toolField(record: CollectionRecord, field: string): unknown {
@@ -175,8 +284,11 @@ async function resolveAgentConfig(
   event: Parameters<Processor<CopilotzProcessorContext>["handle"]>[0],
   context: CopilotzProcessorContext,
   prompt: AgentTextPrompt,
+  mode: "generate" | "session" = "generate",
 ): Promise<ProviderConfig> {
-  const baseConfig = agentTextBaseConfig(agent);
+  const baseConfig = mode === "session"
+    ? agentSessionBaseConfig(agent)
+    : agentTextBaseConfig(agent);
   const config = options.resolveAgentTextConfig
     ? await options.resolveAgentTextConfig({
       agent,
@@ -188,9 +300,15 @@ async function resolveAgentConfig(
       messages: prompt.messages,
       tools: prompt.tools,
     })
+    : mode === "session"
+    ? staticAgentSessionConfig(agent)
     : staticAgentTextConfig(agent);
   if (!config.provider) {
-    throw new Error(`Agent '${agent.id}' has no text runtime provider.`);
+    throw new Error(
+      mode === "session"
+        ? `Agent '${agent.id}' has no session runtime provider.`
+        : `Agent '${agent.id}' has no generate runtime provider.`,
+    );
   }
   return config;
 }
@@ -284,6 +402,15 @@ export const messageRouterProcessor: Processor<CopilotzProcessorContext> =
         const agentId = participantAgentId(participant);
         const agent = context.resources.get<Agent>("agents", agentId);
         if (!agent) continue;
+        if (agentUsesSessionRuntime(agent)) {
+          const running = await requireCollection(context, "llm_attempt")
+            .query.byThreadParticipantStatus(context.namespace, {
+              threadId: String(record.threadId),
+              participantId: participant.id,
+              status: "running",
+            });
+          if (running.length > 0) continue;
+        }
         const options = policyOptions(agent);
         const toolCatalog = toolCatalogFor(context, agent);
         const available = await toolCatalog.forAgent(context.resources, agent);
@@ -394,6 +521,7 @@ export const executeTextAttemptProcessor: Processor<CopilotzProcessorContext> =
         sourceEvent: event,
         tools,
       });
+      const useSession = agentUsesSessionRuntime(agent);
       const config = await resolveAgentConfig(
         options,
         agent,
@@ -401,9 +529,8 @@ export const executeTextAttemptProcessor: Processor<CopilotzProcessorContext> =
         event,
         context,
         prompt,
+        useSession ? "session" : "generate",
       );
-      const llm = llmResource(context, String(config.provider));
-      const generate = requireLlmGenerate(llm);
       if (
         attempt.provider !== config.provider || attempt.model !== config.model
       ) {
@@ -426,74 +553,143 @@ export const executeTextAttemptProcessor: Processor<CopilotzProcessorContext> =
         name: agent.name,
         participantId: participant.id,
       });
-      let liveSequence = 0;
-      let liveEmission = Promise.resolve();
-      let liveEmissionError: unknown;
-      const emitLive = (type: string, payload: unknown): void => {
-        const sequence = liveSequence++;
-        liveEmission = liveEmission.then(async () => {
-          if (liveEmissionError !== undefined) return;
+      const encoder = new TextEncoder();
+      const writers = new Map<
+        string,
+        ReturnType<CopilotzProcessorContext["streams"]["write"]>
+      >();
+      let liveWrites = Promise.resolve();
+      let liveWriteError: unknown;
+      const enqueueLive = (work: () => Promise<void>): void => {
+        liveWrites = liveWrites.then(async () => {
+          if (liveWriteError !== undefined) return;
           try {
-            await context.events.emit({
-              type,
-              threadId: recordThreadId(attempt),
-              payload,
-              routing: {
-                senderId: participant.id,
-                recipientIds: [],
-              },
-              visibility: { kind: "public" },
-              metadata: { llmAttemptId: attempt.id },
-              correlationId: event.correlationId,
-              causationId: event.id,
-              streamId: attempt.id,
-              sequence,
-            });
+            await work();
           } catch (error) {
-            liveEmissionError = error;
+            liveWriteError = error;
           }
         });
       };
-      const settleLiveEmissions = async (): Promise<void> => {
-        await liveEmission;
-        if (liveEmissionError !== undefined) throw liveEmissionError;
+      const writerFor = (lane: string, mediaType: string) => {
+        const key = `${lane}:${mediaType}`;
+        const existing = writers.get(key);
+        if (existing) return existing;
+        const created = context.streams.write({
+          threadId: recordThreadId(attempt),
+          lane,
+          mediaType,
+          participantId: participant.id,
+          metadata: {
+            llmAttemptId: attempt.id,
+            agent: publicAgent,
+          },
+          routing: {
+            senderId: participant.id,
+            recipientIds: [],
+          },
+          visibility: { kind: "public" },
+        });
+        writers.set(key, created);
+        return created;
+      };
+      const sealWriters = async (
+        action: "finalize" | "abandon" | "fail",
+        reason?: string,
+      ): Promise<void> => {
+        await liveWrites;
+        const mode = action === "finalize" && liveWriteError !== undefined
+          ? "fail"
+          : action;
+        const pending = [...writers.values()];
+        writers.clear();
+        await Promise.all(pending.map(async (opened) => {
+          const writer = await opened;
+          if (mode === "finalize") {
+            await writer.finalize();
+            return;
+          }
+          if (mode === "fail") {
+            await writer.fail(reason ?? "Stream failed");
+            return;
+          }
+          await writer.abandon(reason);
+        }));
+        if (liveWriteError !== undefined) throw liveWriteError;
       };
 
       try {
-        const response = await generate({
-          request: {
-            messages: [...prompt.messages],
-            tools: [...prompt.tools],
-            signal: context.signal,
-            idempotencyKey: context.idempotencyKey,
-            strictAttemptLifecycle: true,
-            reasoningHistory: options.reasoningHistory,
-            materializeMessages: agent.assetOptions?.resolveInLLM === false
-              ? (messages) => textOnlyMessages(messages)
-              : (messages, providerConfig) =>
-                materializeAssetRefsForProvider(messages, providerConfig),
-            onToolCallDelta: (delta) =>
-              emitLive("tool_call.delta", {
-                ...structuredClone(delta),
-                agent: publicAgent,
-                llmAttemptId: attempt.id,
-              }),
-            onAttemptLifecycle: (lifecycle) =>
-              recordProviderAttemptLifecycle(attempt, lifecycle, context),
-          },
-          config,
-          env: { ...(options.env ?? {}) },
-          stream: (chunk, streamOptions) =>
-            emitLive(
-              streamOptions?.isReasoning ? "reasoning.delta" : "text.delta",
-              {
-                text: chunk,
-                agent: publicAgent,
-                llmAttemptId: attempt.id,
-              },
-            ),
-        }).result;
-        await settleLiveEmissions();
+        const request: ChatRequest = {
+          messages: [...prompt.messages],
+          tools: [...prompt.tools],
+          signal: context.signal,
+          idempotencyKey: context.idempotencyKey,
+          strictAttemptLifecycle: true,
+          reasoningHistory: options.reasoningHistory,
+          materializeMessages: agent.assetOptions?.resolveInLLM === false
+            ? (messages) => textOnlyMessages(messages)
+            : (messages, providerConfig) =>
+              materializeAssetRefsForProvider(messages, providerConfig),
+          onToolCallDelta: (delta) =>
+            enqueueLive(async () => {
+              const writer = await writerFor(
+                "tool_call",
+                "application/x-ndjson",
+              );
+              await writer.write(encoder.encode(
+                `${JSON.stringify(structuredClone(delta))}\n`,
+              ));
+            }),
+          onAttemptLifecycle: (lifecycle) =>
+            recordProviderAttemptLifecycle(attempt, lifecycle, context),
+        };
+        const stream = (
+          chunk: string,
+          streamOptions?: { isReasoning?: boolean },
+        ) =>
+          enqueueLive(async () => {
+            const lane = streamOptions?.isReasoning ? "reasoning" : "content";
+            const writer = await writerFor(lane, "text/plain");
+            await writer.write(encoder.encode(chunk));
+          });
+        const env = { ...(options.env ?? {}) };
+        let response;
+        if (useSession) {
+          const invocation = runSessionChain(
+            sessionChainFromResources(context.resources, config),
+            {
+              request,
+              env,
+              stream,
+              input: openSessionIngress(context, recordThreadId(attempt)),
+            },
+          );
+          const reader = invocation.frames.getReader();
+          const pumping = (async () => {
+            while (true) {
+              const next = await reader.read();
+              if (next.done) break;
+              const mapped = frameBytes(next.value);
+              if (!mapped) continue;
+              enqueueLive(async () => {
+                const writer = await writerFor(mapped.lane, mapped.mediaType);
+                await writer.write(mapped.bytes);
+              });
+            }
+          })();
+          try {
+            response = await invocation.result;
+            await pumping;
+          } catch (error) {
+            await reader.cancel().catch(() => undefined);
+            throw error;
+          }
+        } else {
+          response = await runGenerateChain(
+            generateChainFromResources(context.resources, config),
+            { request, env, stream },
+          ).result;
+        }
+        await sealWriters("finalize");
 
         let usage = response.usage as unknown as
           | Record<string, unknown>
@@ -549,8 +745,19 @@ export const executeTextAttemptProcessor: Processor<CopilotzProcessorContext> =
           },
         }, { operationKey: "logical:complete" });
       } catch (error) {
-        await liveEmission;
-        const failure = liveEmissionError ?? error;
+        await liveWrites;
+        const failure = liveWriteError ?? error;
+        await Promise.all([...writers.values()].map(async (opened) => {
+          const writer = await opened.catch(() => undefined);
+          if (!writer) return;
+          if (context.signal.aborted) {
+            await writer.abandon(errorText(context.signal.reason ?? failure))
+              .catch(() => undefined);
+            return;
+          }
+          await writer.fail(errorText(failure)).catch(() => undefined);
+        }));
+        writers.clear();
         if (context.signal.aborted) {
           await cancelLlmAttemptRecord(context, attempt, {
             reason: errorText(context.signal.reason ?? failure),

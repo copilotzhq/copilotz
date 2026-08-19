@@ -22,6 +22,15 @@ import {
   type PluginSource,
 } from "./types.ts";
 
+function rejectStaticWildcardProcessor(value: object, id: string): void {
+  if (!isProcessor(value)) return;
+  if (value.on.some((clause) => clause.eventType === "*")) {
+    throw new TypeError(
+      `Processor '${id}' cannot register eventType '*' as a static resource.`,
+    );
+  }
+}
+
 type RegistryEntry = {
   value: object;
   origin: PluginResourceOrigin;
@@ -155,6 +164,7 @@ export async function createPluginRegistry(
       const map = maps.get(type)!;
       for (const value of values) {
         const id = pluginResourceId(type, value);
+        if (type === "processors") rejectStaticWildcardProcessor(value, id);
         map.delete(id);
         map.set(id, { value, origin: stableOrigin });
       }

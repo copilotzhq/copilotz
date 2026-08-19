@@ -286,12 +286,6 @@ function sendInput(
   recipientIds: readonly string[],
 ): AttachmentSendInput {
   if (isMessageInput(input)) return { ...input, recipientIds };
-  if ("mediaType" in input) {
-    return {
-      ...input,
-      ...(recipientIds[0] ? { recipientId: recipientIds[0] } : {}),
-    };
-  }
   return { ...input, recipientIds };
 }
 

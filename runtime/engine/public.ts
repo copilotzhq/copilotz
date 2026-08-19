@@ -23,5 +23,7 @@ export type {
   ScopedMutationOptions,
   ScopedPluginResources,
   ScopedRelations,
+  ScopedStreams,
+  ScopedStreamWriteInput,
   ScopedToolExecutions,
 } from "./types.ts";

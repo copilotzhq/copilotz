@@ -3,8 +3,10 @@ import {
   createAttachmentRuntime,
 } from "../attachments/index.ts";
 import {
+  type AssetBodyStore,
   type ContentPreparer,
   createContentResolver,
+  createDatabaseAssetBodyStore,
   createDatabaseAssetRepository,
   type DatabaseAssetRepository,
 } from "../content/index.ts";
@@ -51,7 +53,8 @@ import {
   createCollectionLlmAttemptRepository,
   createCollectionToolExecutionRepository,
 } from "./collection-ingress.ts";
-import type { PluginRegistry } from "../plugins/index.ts";
+import type { FeatureContextBindings } from "../features/index.ts";
+import type { PluginRegistry, TransientProcessorSet } from "../plugins/index.ts";
 import {
   createScheduledJobRepository,
   type ScheduledJobRepository,
@@ -87,6 +90,7 @@ export type DatabaseScopeCapabilities = Readonly<{
   knowledge: KnowledgeRepository;
   memory: MemoryConsolidationRepository;
   collectionRuntime: CollectionRuntime;
+  streamBodyStore: AssetBodyStore;
 }>;
 
 export type DatabaseScopeRuntime = Readonly<{
@@ -95,6 +99,8 @@ export type DatabaseScopeRuntime = Readonly<{
   coordinator: EventCoordinator;
   attachmentRuntime: AttachmentRuntime;
   capabilities: DatabaseScopeCapabilities;
+  streamBodyStore: AssetBodyStore;
+  transients: TransientProcessorSet;
 }>;
 
 export type CreateDatabaseScopeOptions = Readonly<{
@@ -104,13 +110,13 @@ export type CreateDatabaseScopeOptions = Readonly<{
   executor: DeliveryExecutor;
   preparer: ContentPreparer;
   eventHub: CopilotzEventHub;
-  streamWorkload: string;
   now: () => Date;
   publishLive(
     event: CopilotzEvent,
     settlementScopeId?: string,
   ): Promise<LiveEventDispatchHandle>;
   store?: EventStore;
+  transients: TransientProcessorSet;
 }>;
 
 function isKernelCollection(value: unknown): value is CollectionDefinition {
@@ -189,11 +195,34 @@ export function createDatabaseScope(
   for (const resource of options.registry.list("collections")) {
     if (isKernelCollection(resource)) collectionRuntime.bind(resource);
   }
+  const relations = createDomainRelationRepository({
+    coordinator,
+    session: engine.session,
+    eventStore: store,
+    createId: engine.createId,
+  });
+  const featureBindings: Omit<FeatureContextBindings, "namespace"> =
+    Object.freeze({
+      plugins: options.registry,
+      collections,
+      collectionRuntime,
+      contentResolver: resolver,
+      events: {
+        list: (listOptions) => store.listEvents(listOptions),
+      },
+      deliveries: {
+        list: (listOptions) => store.listDeliveries(listOptions),
+      },
+      relations: {
+        list: (listOptions) => relations.list(listOptions),
+      },
+    });
   const ingress = {
     collectionRuntime,
     session: engine.session,
     eventStore: store,
     assets,
+    featureBindings,
     createId: engine.createId,
     now: engine.now ?? options.now,
   };
@@ -207,12 +236,6 @@ export function createDatabaseScope(
   const toolExecutions = useKernelIngress
     ? createCollectionToolExecutionRepository(ingress)
     : unboundCoreRepository<ToolExecutionRepository>("tool_execution");
-  const relations = createDomainRelationRepository({
-    coordinator,
-    session: engine.session,
-    eventStore: store,
-    createId: engine.createId,
-  });
   const schedules = createScheduledJobRepository({
     collections,
     coordinator,
@@ -236,6 +259,11 @@ export function createDatabaseScope(
     assets,
     validate: engine.validateCollection,
   });
+  const streamBodyStore = engine.assetStorage?.writer ??
+    createDatabaseAssetBodyStore({
+      session: engine.session,
+      schema: databaseSchema,
+    });
   const capabilities: DatabaseScopeCapabilities = Object.freeze({
     assets,
     session: engine.session,
@@ -248,18 +276,22 @@ export function createDatabaseScope(
     knowledge,
     memory,
     collectionRuntime,
+    streamBodyStore,
   });
   const attachmentRuntime = createAttachmentRuntime({
     databaseSchema,
     coordinator,
     store,
-    conversation,
+    session: engine.session,
+    assets,
     preparer: options.preparer,
     eventHub: options.eventHub,
     executor: options.executor,
-    registry: options.registry,
+    collectionRuntime,
+    transients: options.transients,
+    featureBindings,
+    streamBodyStore,
     dispatchEvent: options.publishLive,
-    workload: options.streamWorkload,
     createId: engine.createId,
     now: options.now,
     settlementPollMs: engine.attachments?.settlementPollMs,
@@ -395,5 +427,7 @@ export function createDatabaseScope(
     coordinator,
     attachmentRuntime,
     capabilities,
+    streamBodyStore,
+    transients: options.transients,
   });
 }

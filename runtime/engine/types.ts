@@ -1,4 +1,5 @@
 import type {
+  AssetBodyStore,
   AssetOrigin,
   AssetRecord,
   AssetStorageOptions,
@@ -12,9 +13,11 @@ import type {
   DatabaseAssetRepository,
   DurableContentInput,
   PreparedContent,
+  ProgressiveBodyFollower,
   PublishAssetInput,
   ResolvedContent,
 } from "../content/index.ts";
+import type { StreamWriter } from "../streams/writer.ts";
 import type {
   AddThreadParticipantInput,
   CancelLlmAttemptInput,
@@ -67,7 +70,9 @@ import type {
   EventDelivery,
   EventDispatchReport,
   EventPublisher,
+  EventRouting,
   EventStore,
+  EventVisibility,
   SqlExecutor,
   SqlSession,
 } from "../events/index.ts";
@@ -77,6 +82,8 @@ import type {
   DeliveryExecutorOwnership,
   DeliveryRecoveryDispatch,
   DeliveryWorkload,
+  ExecutionWorkHandle,
+  ExecutionWorkInput,
   LiveProcessorContextBase,
 } from "../execution/index.ts";
 import type { CollectionRuntime } from "../collections/index.ts";
@@ -163,6 +170,25 @@ export type ScopedContent = Readonly<{
   resolve(ref: ContentRef): Promise<ResolvedContent>;
   resolveMany(refs: readonly ContentRef[]): Promise<readonly ResolvedContent[]>;
   open(ref: ContentRef): Promise<ReadableStream<Uint8Array>>;
+}>;
+
+export type ScopedStreamWriteInput = Readonly<{
+  threadId: string;
+  lane: string;
+  mediaType: string;
+  participantId?: string;
+  metadata?: Record<string, unknown>;
+  id?: string;
+  routing?: EventRouting;
+  visibility?: EventVisibility;
+}>;
+
+export type ScopedStreams = Readonly<{
+  write(input: ScopedStreamWriteInput): Promise<StreamWriter>;
+  follow(input: {
+    streamId: string;
+    offset?: number;
+  }): Promise<ProgressiveBodyFollower>;
 }>;
 
 export type ScopedConversation = Readonly<{
@@ -328,6 +354,7 @@ export type CopilotzProcessorCapabilities = Readonly<{
   events: ScopedEvents;
   resources: ScopedPluginResources;
   content: ScopedContent;
+  streams: ScopedStreams;
   collections: Readonly<Record<string, ScopedEventCollection>>;
   relations: ScopedRelations;
   schedules: ScopedScheduledJobs;
@@ -381,7 +408,7 @@ export type CopilotzEngineExecutionOptions = Omit<
 >;
 
 export type CopilotzEngineAttachmentOptions = Readonly<{
-  /** Logical Oxian workload used for raw realtime streams. */
+  /** Logical Oxian workload used for durable stream write/follow. */
   streamWorkload?: string;
   /** Capacity of the separate embedded stream worker. */
   streamCapacity?: number;
@@ -479,6 +506,7 @@ export type CopilotzEngine = Readonly<{
     streamWorkload: string;
     /** Register these closures in a worker created within this runtime. */
     workloads: Readonly<Record<string, DeliveryWorkload>>;
+    dispatchWork(input: ExecutionWorkInput): Promise<ExecutionWorkHandle>;
   }>;
   content: Readonly<{
     assets: DatabaseAssetRepository;
@@ -587,10 +615,11 @@ export type CreateCopilotzProcessorCapabilitiesOptions = Readonly<{
   memory: MemoryConsolidationRepository;
   eventHub: CopilotzEventHub;
   publishEvent?: (event: CopilotzEvent) => Promise<void>;
-  eventStore: Pick<EventStore, "listEvents" | "tables">;
+  eventStore: Pick<EventStore, "listDeliveries" | "listEvents" | "tables">;
   session: SqlExecutor;
   now?: () => Date;
   collectionRuntime: CollectionRuntime;
+  streamBodyStore: AssetBodyStore;
 }>;
 
 export type CopilotzEngineDispatchReport = EventDispatchReport;

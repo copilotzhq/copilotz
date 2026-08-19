@@ -107,7 +107,6 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
   ]);
   assertFunctions(attachments, [
     "createAttachmentRuntime",
-    "defineRealtimeProviderResource",
   ]);
   assertFunctions(capabilities, [
     "createAgentCapabilityResolver",

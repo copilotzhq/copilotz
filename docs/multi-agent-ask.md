@@ -13,14 +13,14 @@ resources: {
       name: "Coordinator",
       role: "Coordinate specialists and synthesize the final answer.",
       capabilities: { agents: ["researcher", "writer"] },
-      runtimes: { text: { type: "llm", provider: "openai" } },
+      runtime: { provider: "openai" },
     },
     {
       id: "researcher",
       name: "Researcher",
       role: "Research facts and answer peers publicly.",
       capabilities: { agents: ["coordinator"] },
-      runtimes: { text: { type: "llm", provider: "openai" } },
+      runtime: { provider: "openai" },
     },
   ],
 }

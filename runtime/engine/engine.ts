@@ -1,9 +1,4 @@
-import {
-  type AttachmentRuntime,
-  COPILOTZ_STREAM_WORKLOAD,
-  createRealtimeProviderContext,
-  createRealtimeStreamWorkload,
-} from "../attachments/index.ts";
+import type { AttachmentRuntime } from "../attachments/index.ts";
 import {
   createAssetStorageRuntime,
   createContentPreparer,
@@ -33,6 +28,10 @@ import {
   matchProcessor,
   type Processor,
 } from "../plugins/index.ts";
+import {
+  COPILOTZ_STREAM_WORKLOAD,
+  createStreamWorkload,
+} from "../streams/index.ts";
 import { createCopilotzProcessorCapabilities } from "./context.ts";
 import {
   createDatabaseScope,
@@ -65,17 +64,9 @@ function streamWorkloadName(value: string | undefined): string {
   if (value === undefined) return COPILOTZ_STREAM_WORKLOAD;
   const workload = value.trim();
   if (!workload) {
-    throw new TypeError("Realtime stream workload must be non-empty.");
+    throw new TypeError("Stream workload must be non-empty.");
   }
   return workload;
-}
-
-function workerOriginated(event: CopilotzEvent): boolean {
-  return [
-    event.metadata.sourceDeliveryId,
-    event.metadata.sourceStreamId,
-    event.metadata.sourceLiveDispatchId,
-  ].some((value) => typeof value === "string" && value.trim().length > 0);
 }
 
 /** Composes the event-native Copilotz core without taking session ownership. */
@@ -97,9 +88,20 @@ export async function createCopilotzEngine(
     options.attachments?.streamWorkload,
   );
 
-  const transients = createTransientProcessorSet(
-    options.transientProcessors ?? [],
-  );
+  const configuredTransients = () =>
+    createTransientProcessorSet(options.transientProcessors ?? []);
+  const transientsBySchema = new Map<string, ReturnType<typeof createTransientProcessorSet>>();
+  const transients = configuredTransients();
+  transientsBySchema.set(databaseSchema, transients);
+  const transientsFor = (schema: string) => {
+    const scoped = transientsBySchema.get(schema);
+    if (!scoped) {
+      throw new Error(
+        `Transient processors for schema '${schema}' are not initialized.`,
+      );
+    }
+    return scoped;
+  };
   const store: EventStore = createEventStore({
     session: options.session,
     schema: databaseSchema,
@@ -121,6 +123,7 @@ export async function createCopilotzEngine(
   let resolveAdditionalScope: (
     databaseSchema: string,
   ) => Promise<AdditionalDatabaseScope>;
+  let defaultScope: DatabaseScopeRuntime | undefined;
 
   let capabilities: DatabaseScopeRuntime["capabilities"] | undefined;
   const preparer = createContentPreparer({
@@ -212,21 +215,21 @@ export async function createCopilotzEngine(
     ...(options.execution ?? {}),
     workloads: Object.freeze({
       ...configuredWorkloads,
-      [streamWorkload]: createRealtimeStreamWorkload({
-        registry: options.registry,
-        resolveEventStore: async (requestedDatabaseSchema) =>
-          requestedDatabaseSchema === databaseSchema
-            ? store
-            : (await resolveAdditionalScope(requestedDatabaseSchema)).runtime
-              .store,
-        createContext: async (base) =>
-          createRealtimeProviderContext({
-            base,
-            capabilities: await createCapabilities({
-              ...base,
-              source: { kind: "stream", id: base.metadata.streamId },
-            }),
-          }),
+      [streamWorkload]: createStreamWorkload({
+        async resolve(requestedDatabaseSchema) {
+          const requested = requestedDatabaseSchema.trim();
+          const runtime = requested === databaseSchema
+            ? defaultScope
+            : (await resolveAdditionalScope(requested)).runtime;
+          if (!runtime) {
+            throw new Error("Copilotz stream workload is not initialized.");
+          }
+          const streams = runtime.public.collectionRuntime.get("stream");
+          if (!streams) {
+            throw new TypeError("Stream collection is not bound.");
+          }
+          return { streams, store: runtime.streamBodyStore };
+        },
       }),
       [COPILOTZ_LIVE_WORKLOAD]: createLiveProcessorWorkload({
         registry: options.registry,
@@ -272,6 +275,14 @@ export async function createCopilotzEngine(
       }
       if (publish) {
         await scoped.hub.publish(event);
+        await invokeLiveProcessors({
+          databaseSchema: context.databaseSchema,
+          registry: options.registry,
+          transients: transientsFor(context.databaseSchema),
+          event,
+          signal: new AbortController().signal,
+          createContext: createLiveContext,
+        }).catch(() => undefined);
         await options.publish?.(event);
         await options.execution?.onOutputEvent?.(event, context);
       }
@@ -306,24 +317,18 @@ export async function createCopilotzEngine(
     const scopedEventHub = publishOptions.eventHub ?? eventHub;
     await scopedEventHub.publish(event);
     await options.publish?.(event);
-    if (!publishOptions.inline && !workerOriginated(event)) {
-      return await liveDispatcher.dispatch(
-        event,
-        scopedDatabaseSchema,
-        publishOptions.settlementScopeId,
-      );
-    }
-
+    // Transient processors are connection-local. Never place them on a Worker.
     const abort = new AbortController();
     const relay = () => abort.abort(publishOptions.signal?.reason);
     if (publishOptions.signal?.aborted) relay();
     else {publishOptions.signal?.addEventListener("abort", relay, {
         once: true,
       });}
+    const scopedTransients = transientsFor(scopedDatabaseSchema);
     const done = invokeLiveProcessors({
       databaseSchema: scopedDatabaseSchema,
       registry: options.registry,
-      transients,
+      transients: scopedTransients,
       event,
       signal: abort.signal,
       settlementScopeId: publishOptions.settlementScopeId,
@@ -335,7 +340,7 @@ export async function createCopilotzEngine(
     return Object.freeze({
       event,
       processorIds: Object.freeze(
-        transients.match(event).map((processor) => processor.id),
+        scopedTransients.match(event).map((processor) => processor.id),
       ),
       done,
       async cancel(reason = "live_event_cancelled") {
@@ -347,7 +352,7 @@ export async function createCopilotzEngine(
   let attachmentRuntime: AttachmentRuntime | undefined;
 
   try {
-    const defaultScope = createDatabaseScope({
+    const scope = createDatabaseScope({
       databaseSchema,
       store,
       engine: engineOptions,
@@ -355,14 +360,15 @@ export async function createCopilotzEngine(
       executor,
       preparer,
       eventHub,
-      streamWorkload,
       now,
+      transients,
       publishLive: (event, settlementScopeId) =>
         publishLive(event, { settlementScopeId }),
     });
-    capabilities = defaultScope.capabilities;
-    resolver = defaultScope.public.content.resolver;
-    attachmentRuntime = defaultScope.attachmentRuntime;
+    defaultScope = scope;
+    capabilities = scope.capabilities;
+    resolver = scope.public.content.resolver;
+    attachmentRuntime = scope.attachmentRuntime;
 
     resolveAdditionalScope = (requested: string) => {
       const normalized = requested.trim();
@@ -378,6 +384,8 @@ export async function createCopilotzEngine(
           // Selecting a tenant scope is a request-path operation. It must never
           // acquire DDL locks or implicitly create tenant infrastructure.
           await validateCopilotzSchema(options.session, normalized);
+          const scopedTransients = configuredTransients();
+          transientsBySchema.set(normalized, scopedTransients);
           const runtime = createDatabaseScope({
             databaseSchema: normalized,
             engine: engineOptions,
@@ -385,8 +393,8 @@ export async function createCopilotzEngine(
             executor,
             preparer,
             eventHub: hub,
-            streamWorkload,
             now,
+            transients: scopedTransients,
             publishLive: (event, settlementScopeId) =>
               publishLive(event, {
                 databaseSchema: normalized,
@@ -396,10 +404,12 @@ export async function createCopilotzEngine(
           });
           return Object.freeze({ runtime, hub });
         } catch (error) {
+          transientsBySchema.delete(normalized);
           hub.close(error);
           throw error;
         }
       })().catch((error) => {
+        transientsBySchema.delete(normalized);
         if (additionalScopes.get(normalized) === pending) {
           additionalScopes.delete(normalized);
         }
@@ -409,7 +419,7 @@ export async function createCopilotzEngine(
       return pending;
     };
     const engine: CopilotzEngine = {
-      ...defaultScope.public,
+      ...scope.public,
       databaseSchema,
       async databaseScope(requestedDatabaseSchema) {
         if (requestedDatabaseSchema.trim() === databaseSchema) return engine;
@@ -423,6 +433,7 @@ export async function createCopilotzEngine(
         liveWorkload: liveDispatcher.workload,
         streamWorkload,
         workloads: executor.workloads,
+        dispatchWork: (input) => executor.dispatchWork(input),
       }),
       connect(input) {
         const requested = input.databaseSchema?.trim() || databaseSchema;
@@ -473,7 +484,7 @@ export async function createCopilotzEngine(
           );
         }
         const results = await Promise.all([
-          defaultScope.public.recover(recovery),
+          scope.public.recover(recovery),
           ...scoped.flatMap((result) =>
             result.status === "fulfilled"
               ? [result.value.runtime.public.recover(recovery)]
@@ -488,29 +499,68 @@ export async function createCopilotzEngine(
         });
       },
       async bindTransient(processor: Processor, bindOptions = {}) {
-        const unbind = transients.add(processor);
-        if (bindOptions.afterPosition === undefined) return unbind;
+        if (bindOptions.afterPosition === undefined) {
+          return transients.add(processor);
+        }
         const namespace = bindOptions.namespace?.trim();
         if (!namespace) {
           throw new TypeError("Transient catch-up requires a namespace.");
         }
-        const events = await store.listEvents({
-          namespace,
-          afterPosition: bindOptions.afterPosition,
+        let catchingUp = true;
+        const handled = new Set<string>();
+        let serial = Promise.resolve();
+        const catchupProcessor: Processor = Object.freeze({
+          id: processor.id,
+          on: processor.on,
+          settlement: processor.settlement,
+          handle(event, context) {
+            const next = serial.then(async () => {
+              const eventId = event.durable ? event.id : undefined;
+              if (catchingUp && eventId && handled.has(eventId)) return;
+              await processor.handle(event, context);
+              if (catchingUp && eventId) handled.add(eventId);
+            });
+            serial = next.catch(() => undefined);
+            return next;
+          },
         });
-        const solo = createTransientProcessorSet([processor]);
-        for (const event of events) {
-          if (!matchProcessor(processor, event)) continue;
-          await invokeLiveProcessors({
-            databaseSchema,
-            registry: options.registry,
-            transients: solo,
-            event,
-            signal: bindOptions.signal ?? new AbortController().signal,
-            createContext: createLiveContext,
-          });
+        const unbind = transients.add(catchupProcessor);
+        const solo = createTransientProcessorSet([catchupProcessor]);
+        const signal = bindOptions.signal ?? new AbortController().signal;
+        let afterPosition = bindOptions.afterPosition;
+        try {
+          while (true) {
+            const events = await store.listEvents({
+              namespace,
+              afterPosition,
+              limit: 1_000,
+            });
+            for (const event of events) {
+              if (!matchProcessor(catchupProcessor, event)) continue;
+              await invokeLiveProcessors({
+                databaseSchema,
+                registry: options.registry,
+                transients: solo,
+                event,
+                signal,
+                createContext: createLiveContext,
+              });
+            }
+            if (events.length < 1_000) break;
+            const nextPosition = events.at(-1)?.position;
+            if (!nextPosition || nextPosition === afterPosition) {
+              throw new Error("Transient catch-up pagination did not advance.");
+            }
+            afterPosition = nextPosition;
+          }
+          await serial;
+          catchingUp = false;
+          handled.clear();
+          return unbind;
+        } catch (error) {
+          unbind();
+          throw error;
         }
-        return unbind;
       },
       async shutdown(reason = "copilotz_engine_shutdown") {
         if (closed) return;

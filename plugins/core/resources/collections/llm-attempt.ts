@@ -106,6 +106,17 @@ export const llmAttemptCollection: CollectionDefinition = defineCollection({
     thread: relation.belongsTo("thread", "threadId", "has_llm_attempt"),
     message: relation.belongsTo("message", "messageId", "has_llm_attempt"),
   },
+  queries: {
+    byThreadParticipantStatus: {
+      filter({ input }) {
+        return {
+          threadId: String(input.threadId ?? ""),
+          participantId: String(input.participantId ?? ""),
+          status: String(input.status ?? ""),
+        };
+      },
+    },
+  },
   commands: {
     complete: {
       mutate({ current, input }) {

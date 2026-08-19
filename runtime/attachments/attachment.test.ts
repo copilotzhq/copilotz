@@ -1,8 +1,6 @@
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
-import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
-import { createWorker } from "../../dependencies/oxian-worker.ts";
 import type { Agent } from "../resources/index.ts";
 import type { SqlSession } from "../events/index.ts";
 import { createSqlSession } from "../events/index.ts";
@@ -20,19 +18,10 @@ import {
 } from "../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import { updateThreadRecord } from "../engine/collection-writes.ts";
-import {
-  type AttachmentOutput,
-  type AttachmentStreamOutput,
-  COPILOTZ_STREAM_WORKLOAD,
-  createRealtimeStreamWorkload,
-  defineRealtimeProviderResource,
-  type RealtimeProviderResource,
-} from "./index.ts";
+import type { AttachmentOutput, AttachmentStreamOutput } from "./index.ts";
 
 const NAMESPACE = "tenant-attachments";
 const SCHEMA = "copilotz_attachments";
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
 
 type Fixture = Readonly<{
   db: TestDatabase;
@@ -41,57 +30,20 @@ type Fixture = Readonly<{
   engine: CopilotzEngine;
 }>;
 
-function agent(
-  id: string,
-  provider = "realtime.echo",
-): Agent {
+function agent(id: string): Agent {
   return Object.freeze({
     id,
     name: id,
     role: `${id} agent`,
-    runtimes: {
-      realtime: { type: "realtime" as const, provider },
-    },
-  });
-}
-
-function echoProvider(
-  id = "realtime.echo",
-  onOpen?: (input: {
-    streamId: string;
-    signal: AbortSignal;
-    metadata: Readonly<Record<string, unknown>>;
-  }) => void,
-): RealtimeProviderResource {
-  return defineRealtimeProviderResource({
-    id,
-    type: "realtime",
-    open(input) {
-      onOpen?.(input);
-      return {
-        mediaType: "audio/pcm;rate=24000",
-        metadata: { provider: id },
-        output: input.input.pipeThrough(
-          new TransformStream({
-            transform(chunk, controller) {
-              controller.enqueue(
-                encoder.encode(decoder.decode(chunk).toUpperCase()),
-              );
-            },
-          }),
-        ),
-      };
-    },
-  });
+    runtime: { provider: "openai", model: "gpt-4.1-mini" },
+  } satisfies Agent);
 }
 
 async function registryFor(options: {
   agents?: readonly Agent[];
-  providers?: readonly RealtimeProviderResource[];
   processors?: readonly Processor[];
 } = {}): Promise<PluginRegistry> {
   const agents = options.agents ?? [agent("support")];
-  const providers = options.providers ?? [echoProvider()];
   const processors = options.processors ?? [];
   return await createPluginRegistry({
     plugins: [coreCollectionsPlugin, definePlugin({
@@ -100,7 +52,6 @@ async function registryFor(options: {
         version: "1.0.0",
         provides: {
           agents: agents.map((resource) => resource.id),
-          llm: providers.map((resource) => resource.id),
           ...(processors.length
             ? { processors: processors.map((resource) => resource.id) }
             : {}),
@@ -108,7 +59,6 @@ async function registryFor(options: {
       },
       resources: {
         agents,
-        llm: providers,
         ...(processors.length ? { processors } : {}),
       },
     })],
@@ -176,20 +126,6 @@ function isStreamOutput(
     output.payload instanceof ReadableStream;
 }
 
-async function nextStreamOutput(
-  reader: ReadableStreamDefaultReader<AttachmentOutput>,
-  streamId?: string,
-): Promise<AttachmentStreamOutput> {
-  while (true) {
-    const next = await reader.read();
-    if (next.done) throw new Error("Attachment outputs closed unexpectedly.");
-    if (
-      isStreamOutput(next.value) &&
-      (streamId === undefined || next.value.streamId === streamId)
-    ) return next.value;
-  }
-}
-
 async function nextSemanticType(
   reader: ReadableStreamDefaultReader<AttachmentOutput>,
   type: string,
@@ -203,29 +139,14 @@ async function nextSemanticType(
   }
 }
 
-async function readText(stream: ReadableStream<Uint8Array>): Promise<string> {
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for await (const chunk of stream) {
-    chunks.push(chunk);
-    size += chunk.byteLength;
+async function nextStreamOutput(
+  reader: ReadableStreamDefaultReader<AttachmentOutput>,
+) {
+  while (true) {
+    const next = await reader.read();
+    if (next.done) throw new Error("Attachment outputs closed unexpectedly.");
+    if (isStreamOutput(next.value)) return next.value;
   }
-  const merged = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return decoder.decode(merged);
-}
-
-function bytes(value: string): ReadableStream<Uint8Array> {
-  return new ReadableStream({
-    start(controller) {
-      controller.enqueue(encoder.encode(value));
-      controller.close();
-    },
-  });
 }
 
 Deno.test("event-native run is a temporary attachment over one causal scope", async () => {
@@ -579,20 +500,24 @@ Deno.test("ephemeral attachment handles settle with independent live processors"
   }
 });
 
-Deno.test("one-call stream ingress stays raw and returns participant-labelled output", async () => {
-  let inputController!: ReadableStreamDefaultController<Uint8Array>;
-  let providerSignal: AbortSignal | undefined;
-  const input = new ReadableStream<Uint8Array>({
-    start(controller) {
-      inputController = controller;
+Deno.test("attachment outputs follow stream.created as a live byte stream", async () => {
+  const processor = defineProcessor<CopilotzProcessorContext>({
+    id: "test.attachment-stream-write",
+    on: [{ eventType: "message.created" }],
+    async handle(event, context) {
+      if (!event.durable || !event.threadId) return;
+      const writer = await context.streams.write({
+        threadId: event.threadId,
+        lane: "content",
+        mediaType: "text/plain",
+        participantId: event.routing.senderId,
+      });
+      await writer.write(new TextEncoder().encode("hello stream"));
+      await writer.finalize();
     },
   });
   const fixture = await createFixture({
-    registry: await registryFor({
-      providers: [echoProvider("realtime.echo", ({ signal }) => {
-        providerSignal = signal;
-      })],
-    }),
+    registry: await registryFor({ processors: [processor] }),
   });
   try {
     await createThread(fixture.engine);
@@ -600,356 +525,48 @@ Deno.test("one-call stream ingress stays raw and returns participant-labelled ou
       namespace: NAMESPACE,
       thread: "thread-a",
       participant: "user-a",
-      recipientIds: ["support"],
     });
     const reader = attachment.outputs.getReader();
-    const handle = await Promise.race([
-      attachment.send({
-        type: "audio.input",
-        mediaType: "audio/pcm;rate=24000",
-        payload: input,
-        correlationId: "stream-correlation",
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error("Stream send waited for input EOF.")),
-          500,
-        )
-      ),
-    ]);
-    const output = await nextStreamOutput(reader, handle.streamId);
-    assertExists(providerSignal);
-    assertEquals(providerSignal.aborted, false);
-    assertEquals(output.participant.id, "participant:support");
-    assertEquals(output.participant.externalId, "support");
-    assertEquals(output.mediaType, "audio/pcm;rate=24000");
-    assertEquals(output.correlationId, "stream-correlation");
-
-    for (const value of ["one-", "two-", "three"]) {
-      inputController.enqueue(encoder.encode(value));
+    const sent = attachment.send({
+      content: [{ type: "text", text: "Start a stream." }],
+    });
+    const created = await nextSemanticType(reader, "stream.created");
+    assert(created.durable);
+    assertEquals(created.subject?.type, "stream");
+    const output = await nextStreamOutput(reader);
+    assertEquals(output.type, "stream.output");
+    assertEquals(output.streamId, created.subject?.id);
+    assertEquals(output.mediaType, "text/plain");
+    assertEquals(output.metadata.lane, "content");
+    const pending = output.payload.getReader();
+    const chunks: Uint8Array[] = [];
+    const reading = (async () => {
+      while (true) {
+        const next = await pending.read();
+        if (next.done) break;
+        chunks.push(next.value);
+      }
+    })();
+    await (await sent).done;
+    await reading;
+    const bytes = new Uint8Array(
+      chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0),
+    );
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
     }
-    inputController.close();
-    assertEquals(await readText(output.payload), "ONE-TWO-THREE");
-    await handle.done;
-    await nextSemanticType(reader, "stream.closed");
-
-    const events = await fixture.engine.events.list({
-      namespace: NAMESPACE,
-      threadId: "thread-a",
-      correlationId: "stream-correlation",
-    });
-    assertEquals(events.map((event) => event.type), [
-      "stream.opened",
-      "stream.closed",
-    ]);
-    assertEquals(
-      events.some((event) => event.type.endsWith(".delta")),
-      false,
-    );
-    assertEquals(
-      await fixture.engine.deliveries.list({ namespace: NAMESPACE }),
-      [],
-    );
-    const assets = await fixture.session.query<{ count: string | number }>(
-      `SELECT COUNT(*) AS count FROM ${SCHEMA}.nodes
-       WHERE namespace = $1 AND type = 'asset'
-         AND id NOT LIKE 'event-body:%'`,
-      [NAMESPACE],
-    );
-    assertEquals(Number(assets.rows[0].count), 0);
-
+    assertEquals(new TextDecoder().decode(bytes), "hello stream");
     await reader.cancel();
   } finally {
     await closeFixture(fixture);
-  }
-});
-
-Deno.test("realtime ingress and output preserve Web Stream backpressure", async () => {
-  // Oxian intentionally buffers a bounded amount at each side of the
-  // in-process bridge. Make the source substantially larger than those
-  // transport windows so this verifies backpressure instead of zero buffering.
-  const totalChunks = 1024;
-  const chunk = encoder.encode("x".repeat(1024));
-  let pulls = 0;
-  const input = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      pulls += 1;
-      controller.enqueue(chunk);
-      if (pulls === totalChunks) controller.close();
-    },
-  }, { highWaterMark: 0 });
-  const fixture = await createFixture();
-  try {
-    await createThread(fixture.engine);
-    const attachment = await fixture.engine.connect({
-      namespace: NAMESPACE,
-      thread: "thread-a",
-      participant: "user-a",
-      recipientIds: ["support"],
-    });
-    const reader = attachment.outputs.getReader();
-    const handle = await attachment.send({
-      type: "audio.input",
-      mediaType: "audio/pcm;rate=24000",
-      payload: input,
-    });
-    const output = await nextStreamOutput(reader, handle.streamId);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert(
-      pulls < totalChunks,
-      `Input was fully drained before the output consumer read (${pulls} pulls).`,
-    );
-    let outputBytes = 0;
-    for await (const value of output.payload) outputBytes += value.byteLength;
-    assertEquals(outputBytes, totalChunks * chunk.byteLength);
-    assertEquals(pulls, totalChunks);
-    await handle.done;
-    await reader.cancel();
-  } finally {
-    await closeFixture(fixture);
-  }
-});
-
-Deno.test("realtime providers can emit durable semantic work in the stream causal scope", async () => {
-  const semanticProvider = defineRealtimeProviderResource({
-    id: "realtime.semantic",
-    type: "realtime",
-    open(input) {
-      assertExists(input.context);
-      const context = input.context;
-      return {
-        mediaType: "audio/pcm;rate=24000",
-        output: input.input.pipeThrough(
-          new TransformStream({
-            transform(chunk, controller) {
-              controller.enqueue(chunk);
-            },
-            async flush() {
-              await context.send({
-                id: `message:${input.streamId}:final`,
-                sender: "agent",
-                recipientIds: [input.participantId],
-                content: "Final realtime answer",
-                visibility: { kind: "public" },
-                metadata: { modality: "realtime" },
-                operationKey: "final-answer:message",
-              });
-            },
-          }),
-        ),
-      };
-    },
-  });
-  const fixture = await createFixture({
-    registry: await registryFor({
-      agents: [agent("support", semanticProvider.id)],
-      providers: [semanticProvider],
-    }),
-  });
-  try {
-    await createThread(fixture.engine);
-    const attachment = await fixture.engine.connect({
-      namespace: NAMESPACE,
-      thread: "thread-a",
-      participant: "user-a",
-      recipientIds: ["support"],
-    });
-    const reader = attachment.outputs.getReader();
-    const handle = await attachment.send({
-      type: "audio.input",
-      mediaType: "audio/pcm;rate=24000",
-      payload: bytes("answer"),
-      correlationId: "semantic-stream",
-    });
-    const output = await nextStreamOutput(reader, handle.streamId);
-    assertEquals(await readText(output.payload), "answer");
-    const messageEvent = await nextSemanticType(reader, "message.created");
-    assert(messageEvent.durable);
-    assertEquals(messageEvent.causationId, handle.eventId);
-    assertEquals(messageEvent.correlationId, "semantic-stream");
-    assertEquals(messageEvent.metadata.sourceStreamId, handle.streamId);
-    const message = await fixture.engine.conversation.getMessage(
-      NAMESPACE,
-      messageEvent.subject!.id,
-    );
-    assertExists(message);
-    assertEquals(message.sender.id, "participant:support");
-    assertEquals(message.recipientIds, ["user-a"]);
-    assertEquals(message.metadata.modality, "realtime");
-    assertEquals(
-      (await fixture.engine.content.resolver.get(message.content[0], {
-        namespace: NAMESPACE,
-      })).text,
-      "Final realtime answer",
-    );
-    await handle.done;
-    await nextSemanticType(reader, "stream.closed");
-    await reader.cancel();
-  } finally {
-    await closeFixture(fixture);
-  }
-});
-
-Deno.test("stream cancellation is semantic and aborts the Oxian workload", async () => {
-  let providerSignal: AbortSignal | undefined;
-  let inputCancelled = false;
-  const input = new ReadableStream<Uint8Array>({
-    cancel() {
-      inputCancelled = true;
-    },
-  });
-  const fixture = await createFixture({
-    registry: await registryFor({
-      providers: [echoProvider("realtime.echo", ({ signal }) => {
-        providerSignal = signal;
-      })],
-    }),
-  });
-  try {
-    await createThread(fixture.engine);
-    const attachment = await fixture.engine.connect({
-      namespace: NAMESPACE,
-      thread: "thread-a",
-      participant: "user-a",
-      recipientIds: ["support"],
-    });
-    const reader = attachment.outputs.getReader();
-    const handle = await attachment.send({
-      type: "audio.input",
-      mediaType: "audio/pcm;rate=24000",
-      payload: input,
-    });
-    const output = await nextStreamOutput(reader, handle.streamId);
-    await handle.cancel("barge_in");
-    await output.payload.cancel("consumer_cancelled").catch(() => undefined);
-    await assertRejects(() => handle.done, Error, "barge_in");
-    assertEquals(providerSignal?.aborted, true);
-    assertEquals(inputCancelled, true);
-    const cancelled = await nextSemanticType(reader, "stream.cancelled");
-    assertEquals(cancelled.causationId, handle.eventId);
-    await reader.cancel();
-  } finally {
-    await closeFixture(fixture);
-  }
-});
-
-Deno.test("concurrent realtime outputs retain distinct participant labels", async () => {
-  const fixture = await createFixture({
-    registry: await registryFor({
-      agents: [agent("alpha"), agent("beta")],
-    }),
-  });
-  try {
-    await createThread(fixture.engine, ["alpha", "beta"]);
-    const attachment = await fixture.engine.connect({
-      namespace: NAMESPACE,
-      thread: "thread-a",
-      participant: "user-a",
-    });
-    const reader = attachment.outputs.getReader();
-    const [alpha, beta] = await Promise.all([
-      attachment.send({
-        type: "audio.input",
-        mediaType: "audio/pcm;rate=24000",
-        payload: bytes("alpha"),
-        recipientId: "alpha",
-      }),
-      attachment.send({
-        type: "audio.input",
-        mediaType: "audio/pcm;rate=24000",
-        payload: bytes("beta"),
-        recipientId: "beta",
-      }),
-    ]);
-    const outputs = [
-      await nextStreamOutput(reader),
-      await nextStreamOutput(reader),
-    ];
-    const decoded = await Promise.all(outputs.map(async (output) => ({
-      participant: output.participant.externalId,
-      text: await readText(output.payload),
-    })));
-    assertEquals(
-      decoded.sort((left, right) =>
-        left.participant.localeCompare(right.participant)
-      ),
-      [
-        { participant: "alpha", text: "ALPHA" },
-        { participant: "beta", text: "BETA" },
-      ],
-    );
-    await Promise.all([alpha.done, beta.done]);
-    await reader.cancel();
-  } finally {
-    await closeFixture(fixture);
-  }
-});
-
-Deno.test("injected stream dispatcher survives engine shutdown", async () => {
-  const registry = await registryFor();
-  const transport = {
-    type: "in-process",
-    config: { topic: `copilotz.stream.${crypto.randomUUID()}` },
-  } as const;
-  const hypervisor = createHypervisor({
-    transports: [transport],
-  });
-  const worker = createWorker({
-    id: "application-worker",
-    transport,
-    workloads: {
-      [COPILOTZ_STREAM_WORKLOAD]: createRealtimeStreamWorkload({ registry }),
-      "application.probe.v1": () => ({ metadata: { alive: true } }),
-    },
-  });
-  await worker.ready;
-  const fixture = await createFixture({
-    registry,
-    execution: {
-      dispatcher: hypervisor,
-      target: { workerId: "application-worker" },
-    },
-  });
-  try {
-    assertEquals(fixture.engine.execution.ownership, "injected_dispatcher");
-    await createThread(fixture.engine);
-    const attachment = await fixture.engine.connect({
-      namespace: NAMESPACE,
-      thread: "thread-a",
-      participant: "user-a",
-      recipientIds: ["support"],
-    });
-    const reader = attachment.outputs.getReader();
-    const handle = await attachment.send({
-      type: "audio.input",
-      mediaType: "audio/pcm;rate=24000",
-      payload: bytes("remote"),
-    });
-    const output = await nextStreamOutput(reader, handle.streamId);
-    assertEquals(await readText(output.payload), "REMOTE");
-    await handle.done;
-    await reader.cancel();
-
-    await fixture.engine.shutdown();
-    assertEquals(hypervisor.snapshot().inProcessWorkers, 1);
-    const probe = await hypervisor.dispatch({
-      workload: "application.probe.v1",
-      target: { workerId: "application-worker" },
-    });
-    assertEquals(await probe.metadata, { alive: true });
-    assertEquals((await probe.completed).status, "completed");
-  } finally {
-    await fixture.engine.shutdown();
-    await worker.stop();
-    await worker.closed;
-    await hypervisor.shutdown();
-    await fixture.db.close();
   }
 });
 
 Deno.test("attachment core is factory-first and runtime-neutral", async () => {
   for (
-    const module of ["attachment.ts", "index.ts", "types.ts", "workload.ts"]
+    const module of ["attachment.ts", "index.ts", "types.ts"]
   ) {
     const source = await Deno.readTextFile(new URL(module, import.meta.url));
     assert(!/\bDeno\b|\bBun\b|\bprocess\b/.test(source), module);

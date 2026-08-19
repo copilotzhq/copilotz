@@ -133,8 +133,8 @@ those capabilities. It contributes five ordinary durable subscriptions:
 5. terminal tool executions project tool messages addressed back to their
    producing agent.
 
-An agent's explicit `runtimes.text` selects its provider/model; static
-`llmOptions` remains the shorthand. Existing low-level provider factories are
+An agent's `runtime` selects its provider/model; `fallbacks` stay in the
+same mode and are consumed by `runGenerateChain`. Existing low-level provider factories are
 wrapped by `defineLlmProviderResource()`, so the mature chat fallback and
 recovery orchestrator remains reusable without making provider placement part of
 the database model.

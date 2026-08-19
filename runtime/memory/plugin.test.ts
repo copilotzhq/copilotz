@@ -43,7 +43,7 @@ const agent: Agent = {
   name: "North",
   role: "assistant",
   instructions: "Preserve durable meaning and provenance.",
-  llmOptions: { provider: "openai", model: "contract-model" },
+  runtime: { provider: "openai", model: "contract-model" },
 };
 
 const usage: TokenUsage = {

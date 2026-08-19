@@ -1,4 +1,4 @@
-import type { ProviderConfig } from "../llm/types.ts";
+import type { ProviderConfig, ProviderFallbackConfig } from "../llm/types.ts";
 import type { ScopedEventCollection } from "../domain/index.ts";
 
 export type ToolHistoryVisibility =
@@ -37,23 +37,23 @@ export type NewTool =
   & Partial<Tool>
   & Pick<Tool, "key" | "name" | "description">;
 
-export type AgentTextRuntime = Readonly<{
-  type: "llm";
-  provider: string;
-  model?: string;
-}>;
+export type AgentRuntimeMode = "generate" | "session";
 
-export type AgentRealtimeRuntime = Readonly<{
-  type: "realtime";
-  provider: string;
-  model?: string;
-  voice?: string;
-}>;
+export type AgentRuntimeFallback = ProviderFallbackConfig;
 
-export type AgentRuntimes = Readonly<{
-  text?: AgentTextRuntime;
-  realtime?: AgentRealtimeRuntime;
-}>;
+/** One lifecycle mode. An array on Agent is at most one runtime per mode. */
+export type AgentRuntime =
+  & Omit<ProviderConfig, "provider" | "model" | "fallbacks">
+  & Readonly<{
+    mode?: AgentRuntimeMode;
+    provider: string;
+    model?: string;
+    input?: readonly ("text" | "image" | "audio" | "video" | "file")[];
+    output?: readonly ("text" | "image" | "audio" | "video" | "file")[];
+    options?: Readonly<Record<string, unknown>>;
+    fallbacks?: readonly AgentRuntimeFallback[];
+    voice?: string;
+  }>;
 
 /** Explicit resource grant. Omission grants nothing; broad access is opt-in. */
 export type CapabilitySelection =
@@ -80,9 +80,8 @@ export type Agent = Readonly<{
   /** Least-authority grants resolved against composed plugin resources. */
   capabilities?: AgentCapabilities;
   metadata?: Readonly<Record<string, unknown>> | null;
-  /** Shorthand for `runtimes.text`; dynamic policy belongs in the text plugin. */
-  llmOptions?: ProviderConfig;
-  runtimes?: AgentRuntimes;
+  /** Generate/session adapter selection. Failovers stay in the same mode. */
+  runtime?: AgentRuntime | readonly AgentRuntime[];
   ragOptions?: Readonly<Record<string, unknown>>;
   assetOptions?: Readonly<{
     resolveInLLM?: boolean;

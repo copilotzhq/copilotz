@@ -22,8 +22,12 @@ import type {
   TokenUsage,
   ToolInvocation,
 } from "../../runtime/llm/types.ts";
-import { createSqlSession, type EphemeralEvent } from "../../runtime/events/index.ts";
+import { createSqlSession } from "../../runtime/events/index.ts";
 import { type CopilotzEngine, createCopilotzEngine } from "../../runtime/engine/index.ts";
+import {
+  COPILOTZ_STREAM_WORKLOAD,
+  jsonStreamDispatchMetadata,
+} from "../../runtime/streams/index.ts";
 import {
   createPluginRegistry,
   definePlugin,
@@ -69,7 +73,7 @@ const north: Agent = {
     tools: ["contract_tool"],
     skills: ["contract-skill"],
   },
-  llmOptions: {
+  runtime: {
     provider: "openai",
     model: "primary-model",
     fallbacks: [{ provider: "openai", model: "fallback-model" }],
@@ -485,6 +489,47 @@ async function waitForSettlement(
   throw new Error(`Timed out waiting for '${rootEventId}' to settle.`);
 }
 
+const decoder = new TextDecoder();
+
+async function readAllBytes(
+  stream: ReadableStream<Uint8Array>,
+): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    byteLength += value.byteLength;
+  }
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+async function followStream(
+  fixture: Fixture,
+  streamId: string,
+): Promise<string> {
+  const work = await fixture.engine.execution.dispatchWork({
+    workload: COPILOTZ_STREAM_WORKLOAD,
+    metadata: jsonStreamDispatchMetadata({
+      schema: "copilotz.stream.dispatch.v1",
+      databaseSchema: TEST_SCHEMA,
+      action: "follow",
+      namespace: "tenant-a",
+      threadId: "thread-a",
+      streamId,
+    }),
+  });
+  return decoder.decode(await readAllBytes(work.output));
+}
+
 async function messageText(
   fixture: Fixture,
   message: Awaited<ReturnType<CopilotzEngine["conversation"]["getMessage"]>>,
@@ -499,7 +544,7 @@ async function messageText(
   ).join("\n");
 }
 
-Deno.test("text workflow emits ordered non-durable text, reasoning, and tool-call frames", async () => {
+Deno.test("text workflow writes ordered content, reasoning, and tool-call streams", async () => {
   const fixture = await createFixture(
     async (request, _config, _env, stream) => {
       await lifecycleStarted(request, 0, "primary-model");
@@ -526,45 +571,68 @@ Deno.test("text workflow emits ordered non-durable text, reasoning, and tool-cal
       });
     },
   );
-  const reader = fixture.engine.events.subscribe({
+  const createdReader = fixture.engine.events.subscribe({
+    namespace: "tenant-a",
+    types: ["stream.created"],
+  }).getReader();
+  const deltaReader = fixture.engine.events.subscribe({
     namespace: "tenant-a",
     types: ["text.delta", "reasoning.delta", "tool_call.delta"],
   }).getReader();
   try {
     const root = await startRun(fixture, "Stream this response.");
     await waitForRun(fixture, root.event.id, 2);
-    const frames: EphemeralEvent[] = [];
+    const created: Array<{ id: string; lane: string }> = [];
     for (let index = 0; index < 3; index += 1) {
-      const next = await reader.read();
+      const next = await createdReader.read();
       assertEquals(next.done, false);
       assertExists(next.value);
-      assert(!next.value.durable);
-      frames.push(next.value);
+      assert(next.value.durable);
+      assertEquals(next.value.type, "stream.created");
+      const streamId = next.value.subject?.id;
+      assertExists(streamId);
+      const record = await boundCollection(fixture.engine, "stream").get(
+        streamId,
+        "tenant-a",
+      );
+      assertExists(record);
+      created.push({ id: streamId, lane: String(record.lane) });
     }
-    assertEquals(frames.map((frame) => frame.type), [
-      "text.delta",
-      "reasoning.delta",
-      "tool_call.delta",
+    const byLane = Object.fromEntries(
+      created.map((item) => [item.lane, item.id]),
+    );
+    assertEquals(Object.keys(byLane).sort(), [
+      "content",
+      "reasoning",
+      "tool_call",
     ]);
-    assertEquals(frames.map((frame) => frame.durable), [false, false, false]);
-    assertEquals(frames.map((frame) => frame.sequence), [0, 1, 2]);
+    assertEquals(await followStream(fixture, byLane.content), "Visible token");
+    assertEquals(await followStream(fixture, byLane.reasoning), "Private thought");
     assertEquals(
-      (frames[0].payload as { text: string }).text,
-      "Visible token",
-    );
-    assertEquals(
-      (frames[1].payload as { text: string }).text,
-      "Private thought",
-    );
-    assertEquals(
-      (frames[2].payload as { delta: string }).delta,
-      '{"value":',
+      JSON.parse((await followStream(fixture, byLane.tool_call)).trim()),
+      {
+        providerAttemptId: "provider-attempt-a",
+        draftId: "draft-a",
+        callIndex: 0,
+        sequence: 0,
+        toolName: "contract_tool",
+        phase: "delta",
+        delta: '{"value":',
+      },
     );
     const durable = await fixture.engine.events.list({
       namespace: "tenant-a",
       threadId: "thread-a",
       limit: 1_000,
     });
+    assertEquals(
+      durable.filter((event) => event.type === "stream.created").length,
+      3,
+    );
+    assertEquals(
+      durable.filter((event) => event.type === "stream.updated").length,
+      3,
+    );
     assertEquals(
       durable.some((event) =>
         ["text.delta", "reasoning.delta", "tool_call.delta"].includes(
@@ -573,8 +641,16 @@ Deno.test("text workflow emits ordered non-durable text, reasoning, and tool-cal
       ),
       false,
     );
+    const firstDelta = await Promise.race([
+      deltaReader.read(),
+      new Promise<{ done: true; value?: undefined }>((resolve) =>
+        setTimeout(() => resolve({ done: true }), 50)
+      ),
+    ]);
+    assertEquals(firstDelta.done, true);
   } finally {
-    await reader.cancel();
+    await createdReader.cancel();
+    await deltaReader.cancel();
     await closeFixture(fixture);
   }
 });

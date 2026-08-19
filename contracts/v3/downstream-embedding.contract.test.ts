@@ -61,9 +61,7 @@ function migratedApplicationPlugin() {
         id: "support",
         name: "Support",
         role: "Support agent",
-        runtimes: {
-          text: { type: "llm", provider: provider.id, model: "injected" },
-        },
+        runtime: { provider: provider.id, model: "injected" },
       }],
       llm: [provider],
       processors: [processor],

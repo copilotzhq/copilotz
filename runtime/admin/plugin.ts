@@ -568,7 +568,7 @@ function publicAgent(agent: Agent): Record<string, unknown> {
     id: agent.id,
     name: agent.name,
     role: agent.role,
-    runtimes: structuredClone(agent.runtimes ?? {}),
+    runtime: structuredClone(agent.runtime ?? null),
     capabilities: structuredClone(agent.capabilities ?? {}),
   };
 }

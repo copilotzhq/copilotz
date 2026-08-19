@@ -10,15 +10,14 @@ import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
 import { defineProcessor } from "../plugins/processor.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import { createMessageRecord } from "../engine/collection-writes.ts";
-import type { Agent } from "../resources/index.ts";
 import type { CopilotzDatabase } from "./persistence.ts";
 import { isCopilotzPersistenceError } from "./persistence.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import {
-  type AttachmentOutput,
-  type AttachmentStreamOutput,
-  defineRealtimeProviderResource,
-} from "../attachments/index.ts";
+  COPILOTZ_STREAM_WORKLOAD,
+  jsonStreamDispatchMetadata,
+} from "../streams/index.ts";
+import { relayCopilotzWorkHandle } from "../execution/index.ts";
 
 const namespace = "copilotz-topology-test";
 const encoder = new TextEncoder();
@@ -76,53 +75,6 @@ function cascadingPlugin(): CopilotzPlugin {
   });
 }
 
-function realtimePlugin(): CopilotzPlugin {
-  const agent: Agent = Object.freeze({
-    id: "topology-realtime-agent",
-    name: "Topology realtime agent",
-    role: "Echo realtime input",
-    runtimes: {
-      realtime: {
-        type: "realtime" as const,
-        provider: "topology.realtime.echo",
-      },
-    },
-  });
-  const provider = defineRealtimeProviderResource({
-    id: "topology.realtime.echo",
-    type: "realtime",
-    open(input) {
-      return {
-        mediaType: input.mediaType,
-        metadata: { provider: "topology.realtime.echo" },
-        output: input.input.pipeThrough(
-          new TransformStream<Uint8Array, Uint8Array>({
-            transform(chunk, controller) {
-              controller.enqueue(
-                encoder.encode(decoder.decode(chunk).toUpperCase()),
-              );
-            },
-          }),
-        ),
-      };
-    },
-  });
-  return definePlugin({
-    manifest: {
-      id: "@copilotz/topology-realtime-test",
-      version: "1.0.0",
-      provides: {
-        agents: [agent.id],
-        llm: [provider.id],
-      },
-    },
-    resources: {
-      agents: [agent],
-      llm: [provider],
-    },
-  });
-}
-
 function byteStream(value: string): ReadableStream<Uint8Array> {
   return new ReadableStream({
     start(controller) {
@@ -130,12 +82,6 @@ function byteStream(value: string): ReadableStream<Uint8Array> {
       controller.close();
     },
   });
-}
-
-function isStreamOutput(
-  output: AttachmentOutput,
-): output is AttachmentStreamOutput {
-  return output.type === "stream.output" && "payload" in output;
 }
 
 async function readText(stream: ReadableStream<Uint8Array>): Promise<string> {
@@ -333,7 +279,6 @@ Deno.test({
   async fn() {
     const database = await createTestDatabase({ url: ":memory:" });
     const plugin = cascadingPlugin();
-    const realtime = realtimePlugin();
     const workerId = "copilotz-websocket-topology-worker";
     const identity = {
       workerId,
@@ -357,7 +302,7 @@ Deno.test({
       core: false,
       canonicalCore: [coreCollectionsPlugin],
       database,
-      plugins: [plugin, realtime],
+      plugins: [plugin],
       transports: [transport],
       target: { workerId },
       admit(context) {
@@ -395,7 +340,7 @@ Deno.test({
       core: false,
       canonicalCore: [coreCollectionsPlugin],
       database,
-      plugins: [plugin, realtime],
+      plugins: [plugin],
       id: workerId,
       transport: {
         type: "websocket",
@@ -475,59 +420,43 @@ Deno.test({
 
       await gateway.conversation.createThread({
         namespace,
-        id: "topology-realtime-thread",
+        id: "topology-stream-thread",
         participants: [{
-          id: "topology-realtime-user",
-          externalId: "topology-realtime-user",
+          id: "topology-stream-user",
+          externalId: "topology-stream-user",
           participantType: "human",
-        }, {
-          id: "topology-realtime-participant",
-          externalId: "topology-realtime-agent",
-          participantType: "agent",
-          agentId: "topology-realtime-agent",
         }],
       });
-      const attachment = await gateway.connect({
-        thread: "topology-realtime-thread",
-        participant: "topology-realtime-user",
-        recipientIds: ["topology-realtime-agent"],
+      const dispatched = await gateway.hypervisor!.dispatch({
+        workload: COPILOTZ_STREAM_WORKLOAD,
+        target: { workerId },
+        metadata: jsonStreamDispatchMetadata({
+          schema: "copilotz.stream.dispatch.v1",
+          databaseSchema: "public",
+          action: "write",
+          namespace,
+          threadId: "topology-stream-thread",
+          lane: "content",
+          mediaType: "text/plain",
+        }),
+        body: byteStream("stream over websocket"),
       });
-      const reader = attachment.outputs.getReader();
-      const stream = await attachment.send({
-        type: "audio.input",
-        mediaType: "audio/pcm;rate=24000",
-        payload: byteStream("realtime over websocket"),
-        correlationId: "topology-realtime-correlation",
-      });
-      const semanticTypes: string[] = [];
-      let output: AttachmentStreamOutput | undefined;
-      while (!output) {
-        const next = await reader.read();
-        assertEquals(next.done, false);
-        if (isStreamOutput(next.value!)) output = next.value;
-        else semanticTypes.push(next.value!.type);
-      }
-      assertEquals(output.participant.externalId, "topology-realtime-agent");
-      assertEquals(output.correlationId, "topology-realtime-correlation");
-      assertEquals(await readText(output.payload), "REALTIME OVER WEBSOCKET");
-      await stream.done;
-      while (!semanticTypes.includes("stream.closed")) {
-        const next = await reader.read();
-        assertEquals(next.done, false);
-        if (!isStreamOutput(next.value!)) semanticTypes.push(next.value!.type);
-      }
-      assert(semanticTypes.includes("stream.opened"));
+      const work = relayCopilotzWorkHandle(dispatched);
+      const result = await work.metadata;
+      assertEquals(result.schema, "copilotz.stream.result.v1");
+      assertEquals(typeof result.streamId, "string");
+      assertEquals(await readText(work.output), "stream over websocket");
+      assertEquals((await work.completed).status, "completed");
       const persisted = await gateway.events.list({
         namespace,
-        threadId: "topology-realtime-thread",
-        correlationId: "topology-realtime-correlation",
+        threadId: "topology-stream-thread",
       });
-      assertEquals(persisted.map((event) => event.type), [
-        "stream.opened",
-        "stream.closed",
-      ]);
-      await reader.cancel();
-      await attachment.close();
+      assertEquals(
+        persisted.filter((event) => event.type.startsWith("stream.")).map(
+          (event) => event.type,
+        ),
+        ["stream.created", "stream.updated"],
+      );
     } finally {
       await Promise.allSettled([
         gateway.shutdown("WebSocket topology test complete"),

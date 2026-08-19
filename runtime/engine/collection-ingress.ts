@@ -8,6 +8,11 @@ import type {
   CollectionWriteOptions,
 } from "../collections/index.ts";
 import { isCollectionNoop } from "../collections/index.ts";
+import { activeCollectionTransaction } from "../collections/kernel.ts";
+import {
+  createFeatureContext,
+  type FeatureContextBindings,
+} from "../features/index.ts";
 import type {
   ContentSequence,
   DatabaseAssetRepository,
@@ -44,6 +49,8 @@ import type {
   SqlExecutor,
 } from "../events/index.ts";
 
+const THREAD_MESSAGE_FEATURE_ID = "copilotz.core.thread-message";
+
 export type CreateCollectionIngressOptions = Readonly<{
   collectionRuntime: CollectionRuntime;
   session: SqlExecutor;
@@ -52,6 +59,7 @@ export type CreateCollectionIngressOptions = Readonly<{
     DatabaseAssetRepository,
     "materialize" | "resolvePrepared" | "linkOwner" | "syncOwner"
   >;
+  featureBindings: Omit<FeatureContextBindings, "namespace">;
   createId?: () => string;
   now?: () => Date;
 }>;
@@ -121,6 +129,24 @@ function emptyDispatch() {
     handles: Object.freeze([] as const),
     failures: Object.freeze([] as const),
   });
+}
+
+function writeForSubject(
+  writes: readonly CollectionWrite<CollectionRecord>[],
+  eventType: string,
+  id: string,
+): CollectionWrite<CollectionRecord> {
+  const matched = writes.filter((write) => String(write.record.id) === id);
+  for (const write of matched) {
+    if (!isCollectionNoop(write) && write.event.eventType === eventType) {
+      return write;
+    }
+  }
+  const noop = matched.find((write) => isCollectionNoop(write));
+  if (noop) return noop;
+  throw new Error(
+    `Record '${id}' was created without a ${eventType} collection write.`,
+  );
 }
 
 function fromMutation<T>(
@@ -676,61 +702,58 @@ export function createCollectionConversationRepository(
         createId,
       );
       const recipientIds = stringArray(input.recipientIds);
-      const content = await options.assets.materialize(mutationContext, {
-        namespace,
-        content: input.content,
-        origin: {
-          scope: { type: "thread", id: threadId },
-          producer: { type: "message", id },
-        },
-      });
+      const operationKey = input.identity?.deduplicationId ??
+        `message.create:${id}`;
       const result = await runtime.transaction({
-        operationKey: input.identity?.deduplicationId ?? `message.create:${id}`,
+        operationKey,
         namespace,
         identity: input.identity,
-        execute: async ({ collections }) => {
-          const thread = await collections.thread.get(threadId, namespace);
-          if (!thread) throw new Error(`Thread '${threadId}' was not found.`);
-          const sender = await ensureParticipant(
+        execute: async () => {
+          const context = {
+            transaction: activeCollectionTransaction(runtime) ??
+              options.session,
+            tables: options.eventStore.tables,
+          };
+          const content = await options.assets.materialize(context, {
             namespace,
-            input.sender,
-            undefined,
-            collections.participant,
-            threadId,
-          );
-          const created = await collections.message.create({
-            id,
-            threadId,
-            senderId: sender.id,
-            recipientIds,
-            content,
-            metadata: structuredClone(input.metadata ?? {}),
-          }, writeOptions(namespace, input.identity, {
-            threadId,
-            routing: { senderId: sender.id, recipientIds },
-            visibility: input.visibility ?? { kind: "public" },
-          }));
-          const participantIds = [
-            ...new Set([...stringArray(thread.participantIds), sender.id]),
-          ];
-          if (participantIds.length !== stringArray(thread.participantIds).length) {
-            await collections.thread.update(threadId, {
-              set: { participantIds },
-            }, writeOptions(namespace, followOnIdentity(input.identity), {
+            content: input.content,
+            origin: {
+              scope: { type: "thread", id: threadId },
+              producer: { type: "message", id },
+            },
+          });
+          const features = createFeatureContext({
+            ...options.featureBindings,
+            namespace,
+          });
+          const record = await features.features.invoke(
+            THREAD_MESSAGE_FEATURE_ID,
+            "create",
+            {
+              id,
               threadId,
-            }));
+              sender: input.sender,
+              recipientIds: [...recipientIds],
+              content,
+              metadata: structuredClone(input.metadata ?? {}),
+              visibility: input.visibility ?? { kind: "public" },
+              identity: input.identity,
+              operationKey,
+            },
+          ) as CollectionRecord;
+          if (content.length) {
+            await options.assets.linkOwner(context, {
+              namespace,
+              ownerId: String(record.id),
+              content,
+            });
           }
-          return { created, sender };
+          return record;
         },
       });
-      await options.assets.linkOwner(mutationContext, {
-        namespace,
-        ownerId: id,
-        content,
-      });
       return fromMutation(
-        result.value.created,
-        mapMessage(result.value.created.record, result.value.sender),
+        writeForSubject(result.writes, "message.created", id),
+        await hydrateMessage(result.value, namespace),
         result.dispatch,
       );
     },

@@ -24,6 +24,8 @@ export class LLMProviderError extends Error {
   visibleStreamStarted: boolean;
   usageAttempts: LLMUsageAttempt[];
   providerError?: ProviderErrorDetails;
+  /** This generate exhausted same-resource recovery; a later chain target remains. */
+  crossResourceFailover: boolean;
 
   constructor(
     message: string,
@@ -37,11 +39,15 @@ export class LLMProviderError extends Error {
       visibleStreamStarted?: boolean;
       usageAttempts?: LLMUsageAttempt[];
       providerError?: ProviderErrorDetails;
+      crossResourceFailover?: boolean;
       cause?: unknown;
     },
   ) {
     super(message);
-    this.name = "LLMProviderError";
+    this.crossResourceFailover = options.crossResourceFailover === true;
+    this.name = this.crossResourceFailover
+      ? "LLMCrossResourceFailover"
+      : "LLMProviderError";
     this.reason = options.reason;
     this.provider = options.provider;
     this.model = options.model;
@@ -55,6 +61,12 @@ export class LLMProviderError extends Error {
       (this as Error & { cause?: unknown }).cause = options.cause;
     }
   }
+}
+
+export function isCrossResourceFailover(
+  error: unknown,
+): error is LLMProviderError {
+  return error instanceof LLMProviderError && error.crossResourceFailover;
 }
 
 const MAX_PROVIDER_ERROR_FIELD_LENGTH = 2_000;

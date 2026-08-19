@@ -1,6 +1,11 @@
 export { chat } from "./orchestrator.ts";
 export { chat as defaultChat } from "./orchestrator.ts";
-export { classifyLLMError, LLMProviderError } from "./errors.ts";
+export type { ChatOptions } from "./orchestrator.ts";
+export {
+  classifyLLMError,
+  isCrossResourceFailover,
+  LLMProviderError,
+} from "./errors.ts";
 export type { LLMProviderAttempt } from "./errors.ts";
 export * from "./types.ts";
 export { materializeAssetRefsForProvider } from "./asset-materialization.ts";
@@ -13,6 +18,8 @@ export {
   isLlmResource,
   requireLlmGenerate,
   requireLlmResource,
+  requireLlmSession,
+  sessionFromHandler,
 } from "./provider-resource.ts";
 export type {
   LlmFrame,
@@ -25,6 +32,15 @@ export type {
   LlmSession,
   LlmSessionInput,
 } from "./provider-resource.ts";
+export {
+  generateChainFromResources,
+  generateTargetsFromConfig,
+  isSameResourceFallback,
+  runGenerateChain,
+  runSessionChain,
+  sessionChainFromResources,
+} from "./generate-chain.ts";
+export type { GenerateChainTarget, SessionChainTarget } from "./generate-chain.ts";
 export type {
   AgentTextPrompt,
   CreateAgentAskPluginOptions,

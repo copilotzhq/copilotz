@@ -24,6 +24,8 @@ mechanism and does not own a vendor catalog.
 - `chat()` requires an explicit provider registry. No hardcoded vendor map in
   runtime. `generateFromFactory` binds one adapter as one resource.
 - Package-root `createCopilotz` injects `canonicalCore: [corePlugin]`.
+- `agent.runtime` replaces `llmOptions` and `runtimes.text` /
+  `runtimes.realtime`. Same-mode `fallbacks` feed `runGenerateChain`.
 
 ## 0.60.18 — 2026-08-15
 

@@ -28,9 +28,16 @@ export type LlmGenerateInput = Readonly<{
   config: ProviderConfig;
   env?: Record<string, string>;
   stream?: StreamCallback;
+  /** A later `runGenerateChain` target exists after this resource. */
+  hasExternalFallback?: boolean;
 }>;
 
-export type LlmSessionInput = LlmGenerateInput;
+export type LlmSessionInput =
+  & LlmGenerateInput
+  & Readonly<{
+    /** Ongoing user/audio ingress. Bytes, not Copilotz events. */
+    input?: ReadableStream<Uint8Array>;
+  }>;
 
 export type LlmGenerate = (input: LlmGenerateInput) => LlmInvocation;
 export type LlmSession = (input: LlmSessionInput) => LlmInvocation;
@@ -98,8 +105,75 @@ export function generateFromFactory(
         input.env ?? {},
         input.stream,
         { [id]: factory },
+        { hasExternalFallback: input.hasExternalFallback === true },
       ),
     );
+}
+
+export function sessionFromHandler(
+  handler: (
+    input: LlmSessionInput,
+    emit: (frame: LlmFrame) => void,
+  ) => Promise<LlmResult>,
+): LlmSession {
+  return (input) => {
+    const abort = new AbortController();
+    const requestSignal = input.request.signal;
+    const onAbort = () => {
+      if (!abort.signal.aborted) abort.abort(requestSignal?.reason);
+    };
+    requestSignal?.addEventListener("abort", onAbort, { once: true });
+    let closed = false;
+    let controller: ReadableStreamDefaultController<LlmFrame> | undefined;
+    const pending: LlmFrame[] = [];
+    const frames = new ReadableStream<LlmFrame>({
+      start(started) {
+        controller = started;
+        for (const frame of pending) started.enqueue(frame);
+        pending.length = 0;
+        if (closed) {
+          try {
+            started.close();
+          } catch {
+            // Consumer already cancelled.
+          }
+        }
+      },
+      cancel(reason) {
+        if (!abort.signal.aborted) abort.abort(reason);
+      },
+    });
+    const emit = (frame: LlmFrame): void => {
+      if (closed) return;
+      if (controller) controller.enqueue(frame);
+      else pending.push(frame);
+    };
+    const result = (async () => {
+      try {
+        return await handler({
+          ...input,
+          request: { ...input.request, signal: abort.signal },
+        }, emit);
+      } finally {
+        requestSignal?.removeEventListener("abort", onAbort);
+        if (!closed) {
+          closed = true;
+          try {
+            controller?.close();
+          } catch {
+            // Consumer already cancelled.
+          }
+        }
+      }
+    })();
+    return Object.freeze({
+      frames,
+      result,
+      cancel(reason) {
+        if (!abort.signal.aborted) abort.abort(reason);
+      },
+    });
+  };
 }
 
 export function defineLlmProviderResource(
@@ -147,6 +221,15 @@ export function requireLlmGenerate(resource: LlmResource): LlmGenerate {
     );
   }
   return resource.generate;
+}
+
+export function requireLlmSession(resource: LlmResource): LlmSession {
+  if (typeof resource.session !== "function") {
+    throw new Error(
+      `LLM resource '${resource.id}' does not implement session().`,
+    );
+  }
+  return resource.session;
 }
 
 export function requireLlmResource(

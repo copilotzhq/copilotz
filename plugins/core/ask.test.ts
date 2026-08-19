@@ -56,7 +56,7 @@ function agent(
     role: "assistant",
     instructions: `ACTIVE_AGENT=${id}`,
     capabilities: { agents: [...agentCapabilities] },
-    llmOptions: { provider: "openai", model: "ask-model" },
+    runtime: { provider: "openai", model: "ask-model" },
   };
 }
 

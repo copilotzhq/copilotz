@@ -30,7 +30,10 @@ import {
   loadCollectionRecord,
   requireBoundCollection,
 } from "../engine/collection-writes.ts";
-import { isLlmResource, requireLlmGenerate } from "../llm/provider-resource.ts";
+import {
+  generateChainFromResources,
+  runGenerateChain,
+} from "../llm/generate-chain.ts";
 import type {
   ChatResponse,
   ProviderConfig,
@@ -1932,28 +1935,22 @@ function executeMemoryAttemptProcessor(
           baseConfig,
         })
         : staticAgentTextConfig(agent);
-      const llm = context.resources.get("llm", String(config.provider));
-      if (!isLlmResource(llm)) {
-        throw new Error(
-          `LLM provider resource '${
-            String(config.provider)
-          }' is not registered.`,
-        );
-      }
       try {
-        const response: ChatResponse = await requireLlmGenerate(llm)({
-          request: {
-            messages: [...prompt.messages],
-            tools: [...prompt.tools],
-            signal: context.signal,
-            idempotencyKey: context.idempotencyKey,
-            strictAttemptLifecycle: true,
-            onAttemptLifecycle: (lifecycle) =>
-              recordProviderAttemptLifecycle(attempt, lifecycle, context),
+        const response: ChatResponse = await runGenerateChain(
+          generateChainFromResources(context.resources, config),
+          {
+            request: {
+              messages: [...prompt.messages],
+              tools: [...prompt.tools],
+              signal: context.signal,
+              idempotencyKey: context.idempotencyKey,
+              strictAttemptLifecycle: true,
+              onAttemptLifecycle: (lifecycle) =>
+                recordProviderAttemptLifecycle(attempt, lifecycle, context),
+            },
+            env: { ...(options.env ?? {}) },
           },
-          config,
-          env: { ...(options.env ?? {}) },
-        }).result;
+        ).result;
         const answer = response.answer
           ? await context.content.prepare({
             type: "text",

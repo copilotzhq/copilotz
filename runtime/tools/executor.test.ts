@@ -13,8 +13,12 @@ function fixture(
   tool: WorkflowTool;
   context: CopilotzProcessorContext;
   events: EphemeralEvent[];
+  chunks: Array<Record<string, unknown>>;
+  finalized: () => number;
 }> {
   const events: EphemeralEvent[] = [];
+  const chunks: Array<Record<string, unknown>> = [];
+  let finalized = 0;
   const tool: WorkflowTool = {
     id: "terminal",
     key: "terminal",
@@ -66,6 +70,30 @@ function fixture(
         return Promise.resolve(events.at(-1)!);
       },
     },
+    streams: {
+      write() {
+        return Promise.resolve({
+          write(bytes: Uint8Array) {
+            const text = new TextDecoder().decode(bytes);
+            for (const line of text.split("\n")) {
+              if (!line.trim()) continue;
+              chunks.push(JSON.parse(line) as Record<string, unknown>);
+            }
+            return Promise.resolve();
+          },
+          finalize() {
+            finalized += 1;
+            return Promise.resolve({});
+          },
+          fail() {
+            return Promise.resolve();
+          },
+          abandon() {
+            return Promise.resolve();
+          },
+        });
+      },
+    },
     resources: {
       list: () => [tool],
       get: () => undefined,
@@ -103,6 +131,8 @@ function fixture(
     tool,
     context,
     events,
+    chunks,
+    finalized: () => finalized,
   });
 }
 
@@ -135,35 +165,22 @@ Deno.test("tool executor orders explicit output chunks and emits a final result 
   });
 
   assertEquals(outcome.status, "completed");
-  assertEquals(test.events.map((event) => event.type), [
-    "tool_output.delta",
-    "tool_output.delta",
-    "tool_output.delta",
-  ]);
-  assertEquals(test.events.map((event) => event.sequence), [0, 1, 2]);
-  assertEquals(test.events.map((event) => event.payload), [{
-    toolExecutionId: "execution-a",
-    toolCallId: "call-a",
-    toolId: "terminal",
-    toolName: "Terminal",
+  assertEquals(test.events, []);
+  assertEquals(test.finalized(), 1);
+  assertEquals(test.chunks, [{
     channel: "stdout",
     mode: "append",
+    sequence: 0,
     delta: "one",
   }, {
-    toolExecutionId: "execution-a",
-    toolCallId: "call-a",
-    toolId: "terminal",
-    toolName: "Terminal",
     channel: "stderr",
     mode: "append",
+    sequence: 1,
     delta: "two",
   }, {
-    toolExecutionId: "execution-a",
-    toolCallId: "call-a",
-    toolId: "terminal",
-    toolName: "Terminal",
     channel: "result",
     mode: "replace",
+    sequence: 2,
     delta: { stdout: "one", stderr: "two", exitCode: 0 },
   }]);
 });
@@ -195,14 +212,11 @@ Deno.test("automatic tool output extracts nested data URLs before streaming", as
   if (outcome.status !== "completed") return;
   assertEquals(outcome.extractedAttachments?.assets.length, 1);
   assertEquals(JSON.stringify(outcome.output).includes("base64"), false);
-  assertEquals(JSON.stringify(test.events).includes("base64"), false);
-  assertEquals(test.events[0].payload, {
-    toolExecutionId: "execution-a",
-    toolCallId: "call-a",
-    toolId: "terminal",
-    toolName: "Terminal",
+  assertEquals(JSON.stringify(test.chunks).includes("base64"), false);
+  assertEquals(test.chunks[0], {
     channel: "result",
     mode: "replace",
+    sequence: 0,
     delta: {
       ok: true,
       imageUrl: {
@@ -243,14 +257,12 @@ Deno.test("an explicit result channel prevents duplicate automatic output", asyn
     context: test.context,
   });
 
-  assertEquals(test.events.length, 1);
-  assertEquals(test.events[0].payload, {
-    toolExecutionId: "execution-a",
-    toolCallId: "call-a",
-    toolId: "terminal",
-    toolName: "Terminal",
+  assertEquals(test.events.length, 0);
+  assertEquals(test.chunks.length, 1);
+  assertEquals(test.chunks[0], {
     channel: "result",
     mode: "replace",
+    sequence: 0,
     delta: result,
   });
 });
@@ -282,6 +294,7 @@ Deno.test("large returned values remain on the asset-backed durable path", async
 
   assertEquals(outcome.status, "completed");
   assertEquals(test.events, []);
+  assertEquals(test.chunks, []);
 });
 
 Deno.test("tool result envelopes keep attachment bytes off the live result channel", async () => {
@@ -325,14 +338,12 @@ Deno.test("tool result envelopes keep attachment bytes off the live result chann
   if (outcome.status !== "completed") throw new Error("Expected completion");
   assertEquals(outcome.output, output);
   assertEquals(outcome.attachments, [attachment]);
-  assertEquals(test.events.length, 1);
-  assertEquals(test.events[0].payload, {
-    toolExecutionId: "execution-a",
-    toolCallId: "call-a",
-    toolId: "terminal",
-    toolName: "Terminal",
+  assertEquals(test.events.length, 0);
+  assertEquals(test.chunks.length, 1);
+  assertEquals(test.chunks[0], {
     channel: "result",
     mode: "replace",
+    sequence: 0,
     delta: output,
   });
 });

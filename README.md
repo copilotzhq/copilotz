@@ -40,7 +40,7 @@ const copilotz = await createCopilotz({
       name: "Support",
       role: "Helpful support agent",
       capabilities: {}, // omission also grants no tools, agents, or skills
-      llmOptions: {
+      runtime: {
         provider: "openai",
         model: "gpt-5-mini",
         apiKey,

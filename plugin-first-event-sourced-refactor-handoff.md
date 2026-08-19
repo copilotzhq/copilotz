@@ -781,7 +781,10 @@ type LlmInvocation = Readonly<{
 - either mode may support any declared modality;
 - `agent.runtime.provider` selects the resource by stable id;
 - `agent.runtime.fallbacks` are same-mode adapter failover, not a chat
-  resource;
+  resource. `decideRecovery` is the only recovery policy.
+  `generate()` executes `retry_same` and same-resource fallbacks.
+  Cross-resource failover is `runGenerateChain` (processor/memory), not
+  a vendor map inside one `generate()`;
 - the core processor calls `resources.require("llm", provider).generate`
   (or `session`); it never imports a vendor SDK;
 - adapters never select recipients, mutate collections, or publish public
@@ -1876,10 +1879,10 @@ vendor adapters are core plugin `llm` resources, not a runtime catalog.
 - Runtime keeps types, orchestrator, attempt lifecycle, and adapter
   helpers. It does not know which vendors exist.
 - Do not rewrite `agent.runtime` / `llmOptions` in this slice.
-- Cross-provider `config.fallbacks` inside one `generate()` only work
-  if that generate's registry contains the fallback factory. Core
-  adapters ship one factory each. Processor-level same-mode fallbacks
-  remain later (`agent.runtime.fallbacks`).
+- Cross-resource failover is the following leftover
+  (`runGenerateChain`). `session` is Phase 8. Ingress `createMessage`
+  is Phase 9. `agent.runtime` rename is the leftover after the
+  failover split.
 
 ### Phase 7 leftover — core-plugin llm adapters results — 2026-08-18
 
@@ -1905,18 +1908,18 @@ Prove:
 
 Deviations:
 
-- `session` is still declared and unimplemented.
+- `session` is still declared and unimplemented (Phase 8).
 - `generateFromFactory` still uses `ProviderFactory` internally.
   Orchestrator unit tests still pass an explicit registry into `chat()`.
-- `defaultChat` remains a public alias of `chat()`.
+- `defaultChat` remains a public alias of `chat()` (Phase 11).
 - Adapter helpers (`withInclusiveInputTokens`,
   `resolveProviderStopSequences`, OpenAI mode/cache helpers,
   `processStream`) are exported from `@copilotz/copilotz/llm` so plugin
   adapters can import the public subpath.
-- `agent.runtime` / `llmOptions` were not rewritten.
-- Cross-provider `config.fallbacks` inside one `generate()` only work
-  if that generate's registry contains the fallback factory. Core
-  adapters ship one factory each.
+- `agent.runtime` / `llmOptions` were not rewritten (Phase 7 leftover
+  after the failover split).
+- Cross-resource failover is the following leftover
+  (`runGenerateChain`). One `generate()` is one vendor.
 
 ### Phase 7 leftover — thread-message feature (locked 2026-08-18)
 
@@ -1944,9 +1947,8 @@ wrapper around `message.create`.
   slice: it must return `CoordinatedMutationResult` (event + dispatch
   handles) and dies in Phase 9. Do not wrap `message.create` as
   `postMessage`.
-- Do not start Phase 8. Do not move cross-vendor LLM failover in this
-  slice (`generateFromFactory` stays 1 adapter = 1 resource;
-  processor-level `agent.runtime.fallbacks` remain later).
+- Do not start Phase 8. Cross-resource failover is the following
+  leftover. `session` is Phase 8. Ingress `createMessage` is Phase 9.
 
 ### Phase 7 leftover — thread-message feature results — 2026-08-18
 
@@ -1974,10 +1976,108 @@ Deviations:
   It must return `CoordinatedMutationResult` (event + dispatch handles)
   and dies in Phase 9. Not a `postMessage` wrapper.
 - Tool-execution batch still ensures participant + membership without a
-  message. Not this feature.
-- `session` and processor-level `agent.runtime.fallbacks` remain later.
-  `generateFromFactory` is the correct 1 adapter = 1 resource wrap;
-  cross-vendor failover does not belong inside one `generate()`.
+  message. Optional later `ensureMember`; not this feature.
+- `session` is Phase 8. Cross-resource failover is the following
+  leftover. `agent.runtime` rename is the leftover after that split.
+
+### Phase 7 leftover — generate failover split (locked 2026-08-18)
+
+User-locked before coding. One policy, two executors. Do not copy
+`decideRecovery` into the processor.
+
+- `decideRecovery` stays the only recovery brain.
+- `generate()` / `chat()` executes `retry_same` and **same-resource**
+  fallbacks only (same `llm` id: other model, other credential/endpoint).
+  `config.fallbacks` entries with a different provider id are not
+  executed inside that call.
+- When the policy says `fallback` and this generate has no remaining
+  same-resource attempt, **surface** it (tagged `LLMProviderError`
+  with `crossResourceFailover`, `name: LLMCrossResourceFailover`).
+  Do not walk other vendor ids. `hasExternalFallback` tells the policy
+  that a later chain target exists, so auth/empty-output can still
+  choose `fallback` instead of `fail`.
+- `runGenerateChain(targets, input)` in `runtime/llm` is the shared
+  loop for text and memory. Consecutive same-id fallbacks stay one
+  `generate()`; a different id starts the next target.
+- Target list is today’s `llmOptions.fallbacks` (same mode). Do **not**
+  rename to `agent.runtime` in this slice.
+- Child `llm_attempt` rows stay one physical `generate()` attempt each
+  (`recordProviderAttemptLifecycle`).
+- Out of scope: `session`, ingress `createMessage`, Phase 8,
+  `llmOptions` → `agent.runtime`.
+
+### Phase 7 leftover — generate failover split results — 2026-08-18
+
+Recorded on branch `feat/plugin-first-event-source`. This leftover
+slice is closed. Do not start leftover 2 (`agent.runtime`) or Phase 8
+until asked.
+
+`decideRecovery` stays the only recovery brain. `chat()` / `generate()`
+execute `retry_same` and same-resource fallbacks only. Different-provider
+`config.fallbacks` are ignored inside that call. When the policy says
+`fallback` and no local attempt remains, a tagged `LLMProviderError`
+(`crossResourceFailover`, `name: LLMCrossResourceFailover`) is thrown.
+`hasExternalFallback` lets auth/empty-output still choose `fallback`.
+
+`runGenerateChain` is the shared text/memory loop. Consecutive same-id
+fallbacks stay one `generate()`. A different id starts the next target.
+The chain continues only on that tagged error. `finalize_partial`
+returns and stops. Target list is still `llmOptions.fallbacks`. Text
+processor and memory both use the chain.
+
+Prove:
+
+- `deno task check` — 34 exports, 302 production modules, release-clean.
+- `deno task test` — **601 passed** (4 steps), 0 failed, 6 ignored.
+
+Deviations:
+
+- Architecture forbids a new non-Error class, so failover is a tagged
+  `LLMProviderError` rather than a subclass.
+- `llmOptions` → `agent.runtime` was not renamed (leftover 2).
+- `session` remains declared (Phase 8).
+- Ingress `createMessage` still duplicates thread-message (Phase 9).
+
+### Phase 7 leftover — `agent.runtime` (locked 2026-08-18)
+
+User-locked before coding. Rename-only. Do not invent recovery rules.
+
+- Replace `llmOptions` and `runtimes.text` / `runtimes.realtime` with
+  `agent.runtime?: AgentRuntime | readonly AgentRuntime[]`.
+- One object is the common case. An array is at most one runtime per
+  mode (`generate` default, `session`). Modes are lifecycle, not
+  provider failover.
+- `agent.runtime.provider` / `agent.runtime.fallbacks` are the list
+  `runGenerateChain` already consumes.
+- `agentTextBaseConfig` reads the generate-mode runtime.
+- Attachment stream lookup uses `mode: "session"`, not
+  `runtimes.realtime`.
+- No `llmOptions` alias. No `runtimes` bag. Do not implement `session`.
+- Out of scope: Phase 8, ingress `createMessage`, recovery policy.
+
+### Phase 7 leftover — `agent.runtime` results — 2026-08-18
+
+Recorded on branch `feat/plugin-first-event-source`. This leftover
+slice is closed. Do not start Phase 8 until asked.
+
+`agent.runtime` replaces `llmOptions` and `runtimes.text` /
+`runtimes.realtime`. One object is the common case; an array is at most
+one runtime per mode (`generate` default, `session`).
+`agentTextBaseConfig` / `runGenerateChain` consume the generate-mode
+runtime. Attachment streams look up `mode: "session"`. No
+`llmOptions` alias. `session()` is still unimplemented.
+
+Prove:
+
+- `deno task check` — 34 exports, 302 production modules, release-clean.
+- `deno task test` — **605 passed** (4 steps), 0 failed, 6 ignored.
+
+Deviations:
+
+- `AgentRuntime` still carries `ProviderConfig` fields (`apiKey`,
+  timeouts) so this stays a rename, not a credentials-injection rewrite.
+- `session` remains declared (Phase 8).
+- Ingress `createMessage` still duplicates thread-message (Phase 9).
 
 ### Phase 8 — Progressive assets and durable streams
 
@@ -1985,12 +2085,375 @@ Implement progressive body-store writers/followers for database, memory,
 filesystem and S3-compatible storage. Then port stream as a core collection and
 connect it to provider/tool execution and Oxian.
 
+`LlmResource.session` stays declared until this phase. Implement the
+bidirectional adapter after stream collection and durable offsets exist.
+Do not fake `session` on ephemeral deltas.
+
 Test bounded memory, backpressure, offsets, crash recovery, retained partials,
 discard, checksum verification, one writer, many followers, in-process and
 remote transport.
 
 Exit gate: no raw frame is stored as an event; active streams recover from
-durable offsets; attempt/tool progress requires no incremental domain updates.
+durable offsets; attempt/tool progress requires no incremental domain updates;
+`session` can host an ongoing interaction over those offsets.
+
+### Phase 8 slice 1 — progressive body-store writers (locked 2026-08-18)
+
+User-locked before coding. `session()` waits until stream collection and
+durable offsets exist. Do not fake it on ephemeral deltas.
+
+- Today's `AssetBodyStore` `put`/`open` is whole-blob. Add a factory
+  progressive writer and follower over the same stores.
+- One writer per key. Many independent followers from committed offsets.
+- Writer: accept chunks, backpressure, finalize (checksum + `put`), or
+  abandon (discard staging).
+- Memory may keep the in-process prefix until finalize. Filesystem /
+  database / S3 must spill so a slow follower cannot block others.
+- No `stream.created` wiring, no Oxian stream transport, no
+  `LlmResource.session` in this slice.
+- Out of scope: Phase 9 attachment rebuild, ingress `createMessage`.
+
+### Phase 8 slice 1 — progressive body-store writers results — 2026-08-18
+
+Recorded on branch `feat/plugin-first-event-source`. Memory contract is
+in. Filesystem / database / S3 spill remains this slice. Do not
+implement `session`.
+
+`createProgressiveBodyWriter` / `openProgressiveBodyFollower` sit on
+`AssetBodyStore`. One writer per key. Independent followers from
+committed offsets. Finalize checksums and `put`s. Abandon discards
+staging. Memory keeps the in-process prefix until finalize.
+
+Prove:
+
+- `deno task check` — 34 exports, 303 production modules, release-clean.
+- `deno task test` — **610 passed** (4 steps), 0 failed, 6 ignored.
+
+Remaining in this slice: filesystem, database, and S3 writers that
+spill so a slow follower cannot block others.
+
+### Phase 8 slice 1 — spill and verified prefix (locked 2026-08-18)
+
+User-locked before coding. Still this slice. Do not wire
+`stream.created`, Oxian stream transport, or `session()`.
+
+Whole-blob `put`/`open` stays. Progressive writers sit on
+`AssetBodyStore`. Memory may keep the in-process prefix until
+finalize. Filesystem, database, and S3 must spill committed bytes so a
+slow follower cannot block the writer or other followers.
+
+- `createProgressiveBodyWriter` is async so it can resume from spilled
+  staging when no live writer owns the key.
+- One live writer per key per process. Existing staging with no live
+  writer is a resume, not a conflict.
+- Writer methods: `write`, `retain(byteLength?)`, `discard(byteLength?)`,
+  `finalize`, `abandon`. Offsets are absolute and do not compact.
+- `retain` checksums `[discarded, n]` (default n = committed), `put`s
+  that prefix, closes the writer, and followers then see EOF. This is
+  barge-in / kept partials.
+- `discard` raises the discarded watermark (default n = committed),
+  drops that prefix from staging, and leaves the writer open.
+  Followers whose cursor is below the watermark fail `asset_deleted`.
+  Later `finalize` `put`s only `[discarded, committed]`.
+- `finalize` checksums the retained remainder and `put`s it. `abandon`
+  deletes staging and errors live followers. Neither path writes frames
+  as events.
+- Spill lives on the body store (`store.spill`), not on the asset
+  repository. Database bodies remain graph `nodes.content` until a later
+  slice; this slice adds `createDatabaseAssetBodyStore` as a real
+  `AssetBodyStore` with `kind: "database"` plus its own staging tables,
+  not a core event-schema change.
+- Filesystem staging is `{key}.progressive` plus `{key}.progressive.json`.
+  S3 staging is `{key}.progressive/` parts. Cross-process writer locks
+  are out of scope; exclusive write is in-process.
+- `createStreamingAssetWriterFactory({ assets })` staging/`ready`
+  publish stays later. Stream `contentRef` stays later.
+
+### Phase 8 slice 1 — spill and verified prefix results — 2026-08-18
+
+Recorded on branch `feat/plugin-first-event-source`. Slice 1 body-store
+writers are complete. Do not implement `session`.
+
+Filesystem, database, and S3 spill committed bytes through
+`AssetBodyStore.spill`. Memory still keeps the in-process prefix and
+backpressures a lagging follower. `createProgressiveBodyWriter` resumes
+from staging when no live writer owns the key. `retain` checksums and
+`put`s `[discarded, n]`. `discard` raises the watermark and drops that
+prefix from staging. `finalize` `put`s the remainder. `abandon` deletes
+staging. `createDatabaseAssetBodyStore` is a body store with its own
+staging tables; graph `nodes.content` is unchanged.
+
+Prove:
+
+- `deno task check` — 34 exports, 304 production modules, release-clean.
+- `deno task test` — **618 passed** (4 steps), 0 failed, 6 ignored.
+
+Next Phase 8 slice: port/connect `stream` as a core collection. Then
+`LlmResource.session` over durable offsets. No Oxian stream transport
+and no attachment rebuild until those exist.
+
+### Phase 8 slice 2 — stream collection and writer factory (locked 2026-08-18)
+
+User-locked before coding. Do not implement `session()`, Oxian stream
+transport, attachment `send({ payload: ReadableStream })`, or LLM/tool
+token pumping.
+
+`stream` is already registered. This slice connects it to progressive
+bodies.
+
+- Record fields: required `lane` and `mediaType`; `content` is a
+  ContentSequence (normally one ref); optional `participantId` for
+  speaker routing; `state` stays `open` / `closed` / `failed` /
+  `abandoned`.
+- Named queries: `byThreadId`, `byThreadLaneState`. Commands: `close`,
+  `fail`, `abandon`. Each terminal command emits one `stream.updated`.
+  A terminal stream cannot be mutated again.
+- Do **not** declare `content: { fields: ["content"] }` yet.
+  Collection materialize requires a ready asset. An open stream reserves
+  an asset ID and body-store key only. Graph `asset.created` waits until
+  a later slice adds staging/`ready` publish. Followers use the stream
+  record's content ref plus `openProgressiveBodyFollower`.
+- `runtime/streams/` owns the mechanics. `createStreamWriter` /
+  `openStreamFollower` take a bound `stream` collection and an
+  `AssetBodyStore`. Runtime does not import `plugins/**`.
+- Lifecycle: reserve ids → commit `stream.created` (and static
+  deliveries) → only then accept bytes → `retain`/`finalize` `put`s the
+  body then `close`, or `abandon`/`fail` drops staging. No raw frame is
+  an event row.
+- Out of scope: `LlmResource.session`, Oxian frames, Phase 9
+  attachments, text-processor cutover, `context.streams` processor
+  capability.
+
+### Phase 8 slice 2 — stream collection and writer factory results — 2026-08-18
+
+Recorded on branch `feat/plugin-first-event-source`. Stream collection
+is connected to progressive bodies. Do not implement `session`.
+
+`createStreamWriter` commits `stream.created` before accepting bytes,
+then `put`s the body and emits one terminal `stream.updated`. Followers
+use the stream record's content ref and `openProgressiveBodyFollower`.
+Chunk count does not create events. Graph `asset.created` is still
+deferred until staging/`ready` publish. Runtime does not import
+`plugins/**`.
+
+Prove:
+
+- `deno task check` — 34 exports, 308 production modules, release-clean.
+- `deno task test` — **622 passed** (4 steps), 0 failed, 6 ignored.
+
+Next Phase 8 slice: retarget Oxian onto these durable streams before
+`session()`. Do not implement `session()` on an in-process writer.
+
+### Phase 8 slice 3 — Oxian stream workload (locked 2026-08-18)
+
+User-locked before coding. One transport: Oxian, in-process or WebSocket.
+Do not implement `LlmResource.session`. Do not keep a second stream path.
+
+- Replace `createRealtimeStreamWorkload` with `createStreamWorkload` in
+  `runtime/streams/`. Dispatch metadata is `copilotz.stream.dispatch.v1`
+  with `action: "write" | "follow"`, stream id, namespace, thread, lane,
+  media type, offset, and cancel. Worker reconstructs from IDs and the
+  bound `stream` collection plus the body store. Runtime still does not
+  import `plugins/**`.
+- `write` commits `stream.created` via `createStreamWriter`, pumps the
+  Oxian input body, returns a live follower as output, then
+  `finalize`s. `follow` is reconnect from offset via
+  `openStreamFollower`. Local may pass Web Streams; remote uses the
+  existing bounded Copilotz work frames. Neither path changes domain
+  semantics. Bytes stay in the progressive asset.
+- Delete the leftover path this replaces: `RealtimeProviderResource`,
+  `defineRealtimeProviderResource`, `createRealtimeStreamWorkload`,
+  `createRealtimeProviderContext`, attachment `send({ payload })`
+  that looked up a `type: "realtime"` provider, and
+  `stream.opened` / `stream.closed` / `stream.cancelled` producers.
+  `AttachmentStreamOutput` stays for SSE/channel projection. Stream
+  ingress through attachments is Phase 9; this slice's producer is
+  `dispatchWork` / the workload itself.
+- Engine installs the new workload as `copilotz.stream.v1`. Body store
+  is `assetStorage.writer` when configured, otherwise
+  `createDatabaseAssetBodyStore` for that schema so gateway and worker
+  share spilled bytes.
+- Out of scope: `LlmResource.session`, Phase 9 attachment/`run()`
+  rebuild, staging/`ready` `asset.created`, `context.streams`.
+
+### Phase 8 slice 3 — Oxian stream workload results — 2026-08-18
+
+Recorded on branch `feat/plugin-first-event-source`. Oxian is the only
+stream transport. Do not implement `session` on a private in-process
+writer.
+
+`createStreamWorkload` lives in `runtime/streams/`. `write` commits
+`stream.created`, pumps Oxian input into `createStreamWriter`, returns a
+live follower, then `finalize`s. `follow` reconnects from offset.
+Gateway/worker WebSocket uses the same descriptors and Copilotz work
+frames. Bytes stay in the progressive asset.
+
+Deleted the leftover path: `RealtimeProviderResource`,
+`defineRealtimeProviderResource`, `createRealtimeStreamWorkload`,
+`createRealtimeProviderContext`, attachment `send({ payload })`, and
+`stream.opened` / `stream.closed` / `stream.cancelled` producers.
+`AttachmentStreamOutput` remains for SSE/channel projection.
+
+Prove:
+
+- `deno task check` — 34 exports, 307 production modules, release-clean.
+- `deno task test` — **616 passed** (4 steps), 0 failed, 6 ignored.
+
+Next Phase 8 slice: `generate()` writes these durable streams. `session`
+is the same mechanism with a bidirectional lifecycle, not a second pipe.
+No attachment/`run()` rebuild until asked.
+
+### Phase 8 slice 4 — generate writes durable streams (locked 2026-08-18)
+
+User-locked before coding. One streaming mechanism: the stream
+collection, progressive bodies, and Oxian transport. `generate` is a
+producer of that mechanism. Do not implement `LlmResource.session`.
+
+- Add `context.streams` on processor capabilities. `write` / `follow`
+  wrap `createStreamWriter` / `openStreamFollower` over the same bound
+  `stream` collection and body store as `copilotz.stream.v1`. Runtime
+  still does not import `plugins/**`.
+- `execute-text-attempt` pumps `generate` tokens into core lanes
+  (`content`, `reasoning`, `tool_call`) and issues one terminal
+  `stream.updated` per opened lane. Stop emitting `text.delta` /
+  `reasoning.delta` / `tool_call.delta` from that processor. Lazily open
+  a lane on first chunk. Finalize on success; abandon/fail on
+  cancel/error. Pass correlation/causation, participant routing, and
+  public visibility so observers see `stream.created`.
+- Attachment `outputs` follow `stream.created` with the same follower
+  API and yield `AttachmentStreamOutput`. That is observation, not a
+  second transport. Do not rebuild `send` / `run` / channels.
+- Out of scope: `LlmResource.session`, Phase 9 attachment/`run()`
+  rebuild, staging/`ready` `asset.created`, `tool_output` lane, deleting
+  `EphemeralEvent` types.
+
+### Phase 8 slice 4 — generate writes durable streams results — 2026-08-18
+
+Recorded on branch `feat/plugin-first-event-source`. `generate` writes
+the same durable streams Oxian already transports. Do not implement
+`session` as a second pipe.
+
+`context.streams` wraps `createStreamWriter` / `openStreamFollower` over
+the bound `stream` collection and body store. `execute-text-attempt`
+pumps `content`, `reasoning`, and `tool_call` lanes and stops emitting
+`text.delta` / `reasoning.delta` / `tool_call.delta`. Staging is reserved
+before `stream.created` so followers can attach immediately. Attachment
+`outputs` follow `stream.created` lazily as `AttachmentStreamOutput`.
+
+Prove:
+
+- `deno task check` — 34 exports, 307 production modules, release-clean.
+- `deno task test` — **617 passed** (4 steps), 0 failed, 6 ignored.
+
+Next Phase 8 slice: `LlmResource.session` on this same writer/follow
+path. No attachment/`run()` rebuild until asked.
+
+### Phase 8 slice 5 — session and remaining stream producers (locked 2026-08-18)
+
+User-locked before coding. Finish Phase 8. One streaming mechanism.
+Do not fake `session` on ephemeral deltas. Do not rebuild
+attachment/`run()`/channels.
+
+- `LlmSessionInput` is generate input plus optional
+  `input: ReadableStream<Uint8Array>` for ongoing ingress. `LlmInvocation`
+  stays `frames` / `result` / `cancel`. Provider-native session ids stay
+  inside the adapter. `sessionFromHandler` builds that invocation.
+- Same-mode session failover mirrors `runGenerateChain` (`requireLlmSession`).
+  `decideRecovery` remains the only recovery policy.
+- `execute-text-attempt` calls `session` when the agent has a session
+  runtime and no generate runtime. Ingress is follow of open `transcript`
+  streams (and later `stream.created` on that lane) from durable offsets.
+  Output frames map to `content` / `reasoning` / `tool_call` (audio uses
+  `content` plus an audio media type). Message routing does not start a
+  second attempt while that session attempt is running.
+- `execute-tool` `emitOutput` writes the `tool_output` lane instead of
+  `tool_output.delta`. One terminal `stream.updated` per opened stream.
+- Bundled adapters stay `generate` only. Tests inject `session` resources.
+- Out of scope: Phase 9 attachment/`run()` rebuild, staging/`ready`
+  `asset.created`, deleting `EphemeralEvent` types.
+
+### Phase 8 slice 5 — session and remaining stream producers results — 2026-08-18
+
+Recorded on branch `feat/plugin-first-event-source`. Phase 8 is complete.
+`generate` and `session` write the same durable streams. Oxian remains the
+only transport. Do not reopen a second realtime pipe.
+
+`execute-text-attempt` calls `session` when the agent has a session runtime
+and no generate runtime. Ingress follows currently open `transcript`
+streams from durable offsets and closes when those pumps EOF. Output
+frames map to `content` / `reasoning` / `tool_call`; audio uses `content`
+plus an audio media type. Writer identity is
+`stream.write:${lane}:${mediaType}` so text and audio can share a lane.
+Message routing skips a second attempt while that session attempt is
+running. `execute-tool` `emitOutput` writes the `tool_output` lane
+(NDJSON) and one terminal `stream.updated` per opened stream.
+
+Prove:
+
+- `deno task check` — 34 exports, 307 production modules, release-clean.
+- `deno task test` — **622 passed** (4 steps), 0 failed, 6 ignored.
+
+Next: Phase 8 leftover regression fixes, then Phase 9 unless asked
+otherwise.
+
+### Phase 8 leftover — event-source regression fixes results — 2026-08-19
+
+Recorded on branch `feat/plugin-first-event-source`. This leftover
+slice is closed. Do not start Phase 9 until this branch is committed
+unless asked otherwise.
+
+Regression tests added in `75b7210` failed on pagination, catch-up
+overlap, feature deliveries, collection-write transaction join, empty
+progressive reservation, and thread activity after rebuild. The
+working-tree fixes:
+
+- Collection verify/replay page events and stored projections at 1,000
+  with `afterPosition` / `after` id cursors.
+- Transient catch-up pages at 1,000, binds live-tail before catch-up,
+  and dedupes durable ids while `catchingUp`.
+- Feature `deliveries.list` reads `eventStore.listDeliveries` with the
+  processor namespace (no longer hardcoded `[]`).
+- `materialize` / `linkOwner` run inside `context.transaction`.
+  `activeCollectionTransaction` joins the open collection SQL executor.
+- Progressive writers `reserve` an empty spill row so a remote follower
+  can `head` it. A second store without `takeover` is rejected.
+
+Deviations from the original leftover split:
+
+- Thread `lastEventId` / `lastEventPosition` / `lastEventAt` after
+  `rebuild`/`verify` was deferred to Phase 11 (store-side
+  denormalization, not thread collection events). It is implemented as
+  an overlay in `runtime/collections/replay.ts` so verify matches the
+  store side-write. It is still not a thread collection event.
+- Cross-process writer locks stay out of scope (Phase 8 slice 1).
+  Exclusive write across store instances is spill `reservation_id`
+  without `takeover`, not a lock table.
+
+Prove:
+
+- `deno task check` — 34 exports, 307 production modules, release-clean.
+- `deno task test` — **631 passed** (4 steps), 0 failed, 6 ignored.
+- Leftover regression files: 11 passed, 0 failed, 1 ignored.
+
+Residual risks (not defects; do not reopen this leftover to chase them):
+
+- The collection-write regression asserts call order against a mock
+  `content.materialize` / `linkOwner`. It does not prove SQL rollback
+  of asset nodes/edges when the collection command fails.
+- Catch-up∩live-tail dedupe is an in-memory id set for the overlap
+  window. It matches the coordinator path that `await`s
+  `dispatched.done` before `createThread` returns. A live dispatcher
+  that returns before `handle` runs could still double-deliver after
+  `catchingUp = false` and `handled.clear()`.
+- Exclusive writer ownership is the spill reservation, not a
+  cross-process lock service. `takeover` is an explicit recovery fence.
+- Thread activity cursors remain a store side-write plus rebuild
+  overlay. Phase 11 still owns whether that denormalization stays,
+  becomes a collection event, or is rebuilt another way.
+
+Next: Phase 9 attachment/`run()` rebuild unless asked otherwise. Do not
+broad-move `/runtime` files or fail CI on the final twelve resource
+categories until this ingress cutover lands.
 
 ### Phase 9 — Attachments and channel composition
 
@@ -1998,6 +2461,13 @@ Rebuild attachments and `run()` over feature invoke plus transient processor
 bindings. Replace channel runtime/resource abstractions with plugin
 composition while retaining public HTTP/SSE/WebSocket behavior. Do not
 bring back `engine.conversation` as the ingress API.
+
+`collection-ingress` `createMessage` still duplicates
+`copilotz.core.thread-message` because it must return
+`CoordinatedMutationResult` (event + dispatch handles). Cut it over
+when this ingress dies. Do not wrap `message.create` as `postMessage`.
+Tool-execution batch ensure+membership without a message may become an
+`ensureMember` action here or stay local.
 
 `lib/packages` chat adapter, SSE event-position resume and per-stream offsets
 are in this exit gate. Compass client migration waits; the adapter contract
@@ -2007,6 +2477,166 @@ Exit gate: reconnect from event/stream cursors, slow-client bounds, parallel
 participant streams, stream ingress, cancellation and durable external egress
 all pass. Adapter resume IDs remain event position plus stream offsets, or are
 explicitly versioned.
+
+### Phase 9 slice 1 — attachment ingress cutover (locked 2026-08-19)
+
+User-locked before coding. Cut `attachment.send` / `run()` off
+`ConversationRepository`. Observation uses the same transient processor
+contract as live bindings. Do not dissolve the engine host. Do not
+broad-move `/runtime`.
+
+- `send(message)` materializes content, then invokes
+  `copilotz.core.thread-message` `create`. No `postMessage`. No
+  `conversation.createMessage`. Pass `identity.settlementScopeId` so
+  `waitForScope` matches deliveries. `linkOwner` stays in the same
+  collection transaction as the feature (nested).
+- Resolve thread and participants from bound collections (`thread` get /
+  `byExternalId`, include `participants`). Map to the existing
+  `ConversationThread` / `Participant` DTOs for this slice. Drop
+  `conversation` from `CreateAttachmentRuntimeOptions`.
+- `outputs` is a unique-id transient processor
+  (`eventType: "*"`, namespace, threadId) added at `connect`, not
+  `eventHub.subscribe`. Buffer until the output stream starts so
+  `run()` can `send` before the consumer reads. Follow `stream.created`
+  through `openStreamFollower` as today.
+- Matcher: `eventType: "*"` matches any type. For transient observers
+  only in this slice; do not register `*` as a static plugin processor.
+- `run()` stays a temporary attachment: one send, observe the
+  correlation, wait settlement, close.
+- Out of scope: deleting `collection-ingress`, `engine.conversation`
+  public API, `ChannelRuntime` replacement, SSE/WebSocket reconnect
+  cursors, `EphemeralEvent` deletion, HTTP `/channels/...`, Phase 10
+  plugin moves.
+
+### Phase 9 slice 1 — attachment ingress cutover results — 2026-08-19
+
+Recorded on branch `feat/plugin-first-event-source`. `attachment.send`
+and `run()` no longer call `ConversationRepository.createMessage`.
+Do not restore hub subscribe as attachment observation.
+
+`send(message)` materializes content, invokes
+`copilotz.core.thread-message` `create`, and `linkOwner`s in the same
+collection transaction. Thread and participants resolve from bound
+collections. `conversation` is gone from
+`CreateAttachmentRuntimeOptions`. `outputs` is a unique-id transient
+processor (`eventType: "*"`, namespace, threadId) that buffers until
+the output stream starts. `run()` remains a temporary attachment.
+
+Matcher: `eventType: "*"` matches any type. Registered only on
+transient observers in this slice.
+
+Deviations from the slice lock:
+
+- Connection-bound transients always run inline via
+  `invokeLiveProcessors`. They are never placed on a Worker through
+  Oxian `liveDispatcher.dispatch`. Gateway attachments never saw
+  Worker-produced events on that path.
+- Worker → Gateway `onOutputEvent` now invokes local transients on the
+  receiving engine, then hub-publishes. Observation stays transients
+  only; hub subscribe was not restored.
+- `settlementScopeId` is the generated message record id. Cancel
+  filters collection-tx dispatch handles by that scope so detached
+  Oxian work is not aborted.
+- `live.test.ts` expects `"live processor(s) failed"` (inline
+  `invokeLiveProcessors`), not `"live processor operation"`.
+- Unused `workerOriginated` was deleted after `publishLive` stopped
+  branching on Worker origin for transient placement.
+- `collection-ingress` / `engine.conversation` remain for tests, HTTP,
+  and admin. `ChannelRuntime` still bootstraps identities through
+  `application.conversation` and sends through attachments.
+
+Prove:
+
+- `deno task check` — 34 exports, 307 production modules, release-clean.
+- `deno task test` — **632 passed** (4 steps), 0 failed, 6 ignored.
+
+Next: Phase 9 slice 1 leftover (schema isolation, send
+dedup, stream follow, static wildcard fence) before proving
+slice 2. Do not replace `ChannelRuntime` or dissolve
+`engine.conversation` in that leftover.
+
+### Phase 9 slice 1 leftover — attachment observer isolation (locked 2026-08-19)
+
+User-locked before coding. Five regressions fail on the slice 1
+cutover. Do not change `ProgressiveBodyFollower` to
+`{ body, cancel, done }` in this leftover.
+
+- Each `DatabaseScopeRuntime` owns a `TransientProcessorSet`. Seed
+  from configured transients; never share the mutable set across
+  physical schemas. Route `publishLive`, `onOutputEvent`, attachments,
+  and catch-up through the resolved scope’s set. `engine.bindTransient`
+  without a schema stays on the default scope.
+- `send(message)` resolves identity before the feature invoke. Reuse
+  `workflowMutationId` for `messageId` when only a deduplication id is
+  given. Derive correlation and `settlementScopeId` from that id when
+  omitted. After the transaction, take `message.created` from
+  `tx.writes` instead of scanning `listEvents` by regenerated
+  correlation.
+- Attachment stream following is demand-driven `pull()`, not an eager
+  `start()` pump. Keep an internal follower reader so `close` can
+  cancel it while the exposed payload is locked. Honor cancel-before-
+  open and drop the active operation in `finally`.
+- Keep `eventType: "*"` in `matchProcessor` for transients.
+  `PluginRegistry` `add` rejects wildcard clauses on static processor
+  resources (plugins and application resources). `defineProcessor` and
+  `transients.add` still accept `*`.
+- Out of scope: `ProgressiveBodyFollower` contract change,
+  `ChannelRuntime` replacement, dissolving `engine.conversation`,
+  Phase 10.
+
+### Phase 9 slice 1 leftover — attachment observer isolation results — 2026-08-19
+
+Recorded on branch `feat/plugin-first-event-source`. Do not change
+`ProgressiveBodyFollower` to `{ body, cancel, done }` in a follow-up
+unless asked.
+
+Each physical schema gets its own `TransientProcessorSet`, seeded from
+configured transients. `publishLive` and Worker `onOutputEvent` invoke
+the resolved schema’s set. `engine.bindTransient` remains default-schema.
+
+`send(message)` derives `messageId` with `workflowMutationId` when only
+a deduplication id is given, and derives correlation /
+`settlementScopeId` from that id. The handle is built from the
+`message.created` write on `tx.writes`.
+
+Stream following uses demand-driven `pull()`, an internal follower
+reader, cancel-before-open, and drops the active operation on settle.
+The payload stream prefetches one extra chunk (`highWaterMark: 2`) so a
+locked reader still has an in-flight follower read that `close` can
+cancel.
+
+`PluginRegistry` `add` rejects static `eventType: "*"`. Matcher and
+`transients.add` still accept it.
+
+Prove:
+
+- `deno task check` — 34 exports, 307 production modules, release-clean.
+- `deno task test` — **637 passed** (4 steps), 0 failed, 6 ignored.
+- Leftover regressions: 5 passed, 0 failed.
+
+Next: prove Phase 9 slice 2 (`createMessage` onto the same feature)
+unless asked otherwise. Do not replace `ChannelRuntime` yet.
+
+### Phase 9 slice 2 — cut collection-ingress createMessage (locked 2026-08-19)
+
+User-locked before coding. Stop duplicating `copilotz.core.thread-message`
+in `collection-ingress` `createMessage`. App ingress remains
+attachments / `run()`. Do not wrap as `postMessage`.
+
+- `createMessage` materializes content, then invokes
+  `copilotz.core.thread-message` `create` (same nested collection
+  transaction as attachment `send`, including `linkOwner`). Map the
+  `message.created` write plus outer-tx dispatch back to
+  `CoordinatedMutationResult`. No second local `collections.message.create`
+  sequence.
+- Pass `featureBindings` into collection ingress. Runtime must not
+  import `plugins/**`; use the feature id string.
+- Keep `engine.conversation` and the rest of collection-ingress
+  (threads, participants, revise, attempts, executions). Tests and
+  channels may still call `createMessage`.
+- Out of scope: deleting `engine.conversation`, `ChannelRuntime`
+  replacement, SSE/WebSocket reconnect cursors, `EphemeralEvent`
+  deletion, contract extraction, Phase 10 plugin moves.
 
 ### Phase 10 — Optional first-party plugins
 
@@ -2069,15 +2699,17 @@ Cleanup is part of the phase, not deferred compatibility work. Remove:
   (`registry.ts`, `builtInLlmResources`, `LlmResource.factory`) (gone in
   Phase 7). The `LlmChat` function type and
   `CreateTextWorkflowPluginOptions` policy bag remain until this
-  cleanup pass. `session` and processor-level `agent.runtime.fallbacks`
-  are still later work;
+  cleanup pass. `session` is Phase 8. Cross-resource failover is Phase 7
+  leftover (`runGenerateChain`). `agent.runtime` is gone in Phase 7
+  leftover 2;
 - old workflow executors and event adapters;
 - `runtime/workflows/` and the `./workflows` package export (gone in
   Phase 7 Step A; do not revive a compatibility barrel);
 - `EphemeralEvent` and modality delta event types;
 - callback processor filters and delivery mode flags;
 - `ChannelResource`, `ChannelRuntime` and `memoryKinds`;
-- `llmOptions`, `runtimes.text` and `runtimes.realtime`;
+- `llmOptions`, `runtimes.text` and `runtimes.realtime` (gone in Phase 7
+  leftover 2; do not revive);
 - generic relation collection/repository;
 - duplicate validators and resource interfaces;
 - obsolete exports, docs, fixtures, dependencies and tasks.

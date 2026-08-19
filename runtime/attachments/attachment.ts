@@ -1,54 +1,71 @@
-import type { ContentPreparer } from "../content/index.ts";
 import type {
-  ConversationRepository,
+  AssetBodyStore,
+  ContentPreparer,
+  DatabaseAssetRepository,
+} from "../content/index.ts";
+import {
+  activeCollectionTransaction,
+  type CollectionRuntime,
+} from "../collections/kernel.ts";
+import {
+  isCollectionNoop,
+  type CollectionMutation,
+  type CollectionRecord,
+  type CollectionWrite,
+} from "../collections/index.ts";
+import type {
   ConversationThread,
   Participant,
   ParticipantInput,
 } from "../domain/index.ts";
+import { workflowMutationId } from "../domain/workflow-support.ts";
 import {
   createEphemeralEvent,
   type EventCoordinator,
+  type EventMutationContext,
   type EventStore,
+  type SqlExecutor,
 } from "../events/index.ts";
 import type {
   CopilotzEvent,
   CopilotzEventHub,
-  EventVisibility,
+  DurableEvent,
 } from "../events/index.ts";
-import type {
-  DeliveryExecutor,
-  ExecutionWorkInput,
-} from "../execution/index.ts";
-import type { PluginRegistry } from "../plugins/index.ts";
+import type { DeliveryExecutor } from "../execution/index.ts";
 import {
-  type AttachmentEventHandle,
-  type AttachmentEventInput,
-  type AttachmentMessageHandle,
-  type AttachmentMessageInput,
-  type AttachmentOutput,
-  type AttachmentOutputParticipant,
-  type AttachmentSendInput,
-  type AttachmentSendResult,
-  type AttachmentStreamHandle,
-  type AttachmentStreamInput,
-  type AttachmentStreamOutput,
-  type ConnectAttachmentInput,
-  COPILOTZ_STREAM_WORKLOAD,
-  type RealtimeProviderResource,
-  type RunHandle,
-  type RunInput,
-  type StreamDispatchMetadata,
-  type ThreadAttachment,
+  createFeatureContext,
+  type FeatureContextBindings,
+} from "../features/index.ts";
+import {
+  defineProcessor,
+  type TransientProcessorSet,
+} from "../plugins/index.ts";
+import { openStreamFollower } from "../streams/index.ts";
+import type {
+  AttachmentEventHandle,
+  AttachmentEventInput,
+  AttachmentMessageHandle,
+  AttachmentMessageInput,
+  AttachmentOutput,
+  AttachmentOutputParticipant,
+  AttachmentSendInput,
+  AttachmentSendResult,
+  AttachmentStreamOutput,
+  ConnectAttachmentInput,
+  RunHandle,
+  RunInput,
+  ThreadAttachment,
 } from "./types.ts";
-import { isRealtimeProviderResource } from "./workload.ts";
-import type { Agent } from "../resources/index.ts";
+
+const THREAD_MESSAGE_FEATURE_ID = "copilotz.core.thread-message";
 
 export type CreateAttachmentRuntimeOptions = Readonly<{
   databaseSchema: string;
   coordinator: EventCoordinator;
   store: EventStore;
-  conversation: ConversationRepository;
+  session: SqlExecutor;
   preparer: ContentPreparer;
+  assets: Pick<DatabaseAssetRepository, "materialize" | "linkOwner">;
   eventHub: CopilotzEventHub;
   dispatchEvent?: (event: CopilotzEvent) => Promise<
     Readonly<{
@@ -57,8 +74,10 @@ export type CreateAttachmentRuntimeOptions = Readonly<{
     }>
   >;
   executor: DeliveryExecutor;
-  registry: PluginRegistry;
-  workload?: string;
+  collectionRuntime: CollectionRuntime;
+  transients: TransientProcessorSet;
+  featureBindings: Omit<FeatureContextBindings, "namespace">;
+  streamBodyStore?: AssetBodyStore;
   createId?: () => string;
   now?: () => Date;
   settlementPollMs?: number;
@@ -79,8 +98,7 @@ type ActiveOperation = Readonly<{
 type AttachmentErrorCode =
   | "attachment_invalid"
   | "attachment_cancelled"
-  | "attachment_dead_letter"
-  | "stream_failed";
+  | "attachment_dead_letter";
 
 function attachmentError(
   code: AttachmentErrorCode,
@@ -129,35 +147,137 @@ function isStreamOutput(
     isByteStream(value.payload);
 }
 
-function jsonDispatchMetadata(
-  value: StreamDispatchMetadata,
-): NonNullable<ExecutionWorkInput["metadata"]> {
-  try {
-    const encoded = JSON.stringify(value);
-    const parsed = JSON.parse(encoded) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new TypeError("Stream dispatch metadata must be a JSON object.");
-    }
-    return parsed as NonNullable<ExecutionWorkInput["metadata"]>;
-  } catch (cause) {
-    throw attachmentError(
-      "attachment_invalid",
-      "Stream metadata must be JSON-compatible.",
-      cause,
-    );
-  }
-}
-
 function isMessageInput(
   input: AttachmentSendInput,
 ): input is AttachmentMessageInput {
   return "content" in input;
 }
 
-function isStreamInput(
-  input: AttachmentSendInput,
-): input is AttachmentStreamInput {
-  return "payload" in input && isByteStream(input.payload);
+function optionalText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function stringArray(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return Object.freeze([]);
+  return Object.freeze(
+    value.filter((item): item is string =>
+      typeof item === "string" && Boolean(item.trim())
+    ),
+  );
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? { ...value as Record<string, unknown> }
+    : {};
+}
+
+function mapParticipant(record: CollectionRecord): Participant {
+  return Object.freeze({
+    id: String(record.id),
+    namespace: String(record.namespace),
+    externalId: String(record.externalId ?? record.id),
+    participantType: record.participantType as Participant["participantType"],
+    ...(optionalText(record.name) ? { name: optionalText(record.name) } : {}),
+    ...(optionalText(record.email) ? { email: optionalText(record.email) } : {}),
+    ...(optionalText(record.agentId)
+      ? { agentId: optionalText(record.agentId) }
+      : {}),
+    metadata: asRecord(record.metadata),
+    createdAt: String(record.createdAt),
+    updatedAt: String(record.updatedAt),
+  });
+}
+
+function mapThread(
+  record: CollectionRecord,
+  participants: readonly Participant[],
+): ConversationThread {
+  const branch = record.activeMessageBranch &&
+      typeof record.activeMessageBranch === "object"
+    ? record.activeMessageBranch as ConversationThread["activeMessageBranch"]
+    : undefined;
+  return Object.freeze({
+    id: String(record.id),
+    namespace: String(record.namespace),
+    ...(optionalText(record.externalId)
+      ? { externalId: optionalText(record.externalId) }
+      : {}),
+    ...(optionalText(record.name) ? { name: optionalText(record.name) } : {}),
+    ...(optionalText(record.description)
+      ? { description: optionalText(record.description) }
+      : {}),
+    status: String(record.status ?? "active"),
+    ...(optionalText(record.parentThreadId)
+      ? { parentThreadId: optionalText(record.parentThreadId) }
+      : {}),
+    metadata: asRecord(record.metadata),
+    participants,
+    ...(branch ? { activeMessageBranch: branch } : {}),
+    ...(optionalText(record.lastEventId)
+      ? { lastEventId: optionalText(record.lastEventId) }
+      : {}),
+    ...(optionalText(record.lastEventPosition)
+      ? { lastEventPosition: optionalText(record.lastEventPosition) }
+      : {}),
+    ...(optionalText(record.lastEventAt)
+      ? { lastEventAt: optionalText(record.lastEventAt) }
+      : {}),
+    createdAt: String(record.createdAt),
+    updatedAt: String(record.updatedAt),
+  });
+}
+
+function mutationContext(
+  runtime: CollectionRuntime,
+  session: SqlExecutor,
+  tables: EventStore["tables"],
+): EventMutationContext {
+  return {
+    transaction: activeCollectionTransaction(runtime) ?? session,
+    tables,
+  };
+}
+
+function toDurableEvent(
+  event: CollectionMutation<CollectionRecord>["event"],
+): DurableEvent {
+  return Object.freeze({
+    durable: true as const,
+    id: event.id,
+    position: event.position,
+    schemaVersion: event.schemaVersion,
+    type: event.eventType,
+    namespace: event.namespace,
+    ...(event.threadId ? { threadId: event.threadId } : {}),
+    ...(event.subject ? { subject: event.subject } : {}),
+    payload: { dataRef: event.dataRef },
+    routing: event.routing,
+    visibility: event.visibility,
+    metadata: event.metadata,
+    ...(event.causationId ? { causationId: event.causationId } : {}),
+    correlationId: event.correlationId,
+    ...(event.deduplicationId ? { deduplicationId: event.deduplicationId } : {}),
+    createdAt: event.createdAt,
+  });
+}
+
+function writeForSubject(
+  writes: readonly CollectionWrite<CollectionRecord>[],
+  eventType: string,
+  id: string,
+): CollectionWrite<CollectionRecord> {
+  const matched = writes.filter((write) => String(write.record.id) === id);
+  for (const write of matched) {
+    if (!isCollectionNoop(write) && write.event.eventType === eventType) {
+      return write;
+    }
+  }
+  const noop = matched.find((write) => isCollectionNoop(write));
+  if (noop) return noop;
+  throw new Error(
+    `Record '${id}' was created without a ${eventType} collection write.`,
+  );
 }
 
 function participantInput(participant: Participant): ParticipantInput {
@@ -172,7 +292,7 @@ function participantInput(participant: Participant): ParticipantInput {
   };
 }
 
-function participantOutput(
+function outputParticipant(
   participant: Participant,
 ): AttachmentOutputParticipant {
   return Object.freeze({
@@ -356,37 +476,10 @@ async function waitForScope(
   }
 }
 
-function streamResultMetadata(
-  value: Readonly<Record<string, unknown>>,
-): Readonly<{
-  hasOutput: boolean;
-  mediaType: string;
-  metadata: Readonly<Record<string, unknown>>;
-}> {
-  if (value.schema !== "copilotz.stream.result.v1") {
-    throw attachmentError(
-      "stream_failed",
-      `Unsupported stream result schema '${String(value.schema)}'.`,
-    );
-  }
-  const mediaType = requiredText(value.mediaType, "Output media type");
-  const { schema: _schema, streamId: _streamId, hasOutput, ...metadata } =
-    value;
-  return Object.freeze({
-    hasOutput: hasOutput === true,
-    mediaType,
-    metadata: Object.freeze(structuredClone(metadata)),
-  });
-}
-
 /** Creates persistent thread attachments and temporary text run handles. */
 export function createAttachmentRuntime(
   options: CreateAttachmentRuntimeOptions,
 ): AttachmentRuntime {
-  const workload = requiredText(
-    options.workload ?? COPILOTZ_STREAM_WORKLOAD,
-    "Stream workload",
-  );
   const createId = options.createId ?? (() => crypto.randomUUID());
   const now = options.now ?? (() => new Date());
   const pollMs = positivePoll(options.settlementPollMs);
@@ -408,18 +501,34 @@ export function createAttachmentRuntime(
     const id = typeof value === "string"
       ? requiredText(value, "Thread")
       : value.id;
-    const byId = await options.conversation.getThread(namespace, id);
-    const thread = byId ??
-      (typeof value === "string"
-        ? await options.conversation.getThreadByExternalId(namespace, id)
-        : null);
-    if (!thread) {
+    const threads = options.collectionRuntime.get("thread");
+    const participants = options.collectionRuntime.get("participant");
+    if (!threads) {
+      throw attachmentError(
+        "attachment_invalid",
+        "Thread collection is not bound.",
+      );
+    }
+    let record = await threads.get(id, namespace);
+    if (!record && typeof value === "string" && threads.query.byExternalId) {
+      const [byExternal] = await threads.query.byExternalId(namespace, {
+        externalId: id,
+      });
+      record = byExternal ?? null;
+    }
+    if (!record) {
       throw attachmentError(
         "attachment_invalid",
         `Thread '${id}' was not found in namespace '${namespace}'.`,
       );
     }
-    return thread;
+    const memberIds = stringArray(record.participantIds);
+    const members: Participant[] = [];
+    for (const participantId of memberIds) {
+      const member = await participants?.get(participantId, namespace);
+      if (member) members.push(mapParticipant(member));
+    }
+    return mapThread(record, members);
   };
 
   const connect = async (
@@ -449,25 +558,35 @@ export function createAttachmentRuntime(
     let outputController:
       | ReadableStreamDefaultController<AttachmentOutput>
       | undefined;
-    const semantic = options.eventHub.subscribe({
-      namespace,
-      threadId: thread.id,
-    });
-    const semanticReader = semantic.getReader();
+    const pendingOutputs: AttachmentOutput[] = [];
+    let unbindOutputs = () => {};
 
     const closeOutputs = (): void => {
       if (outputsClosed) return;
+      if (!outputController) return;
       outputsClosed = true;
+      for (const output of pendingOutputs) {
+        try {
+          outputController.enqueue(output);
+        } catch {
+          break;
+        }
+      }
+      pendingOutputs.length = 0;
       try {
-        outputController?.close();
+        outputController.close();
       } catch {
         // A consumer may already have cancelled the stream.
       }
     };
     const emitOutput = (output: AttachmentOutput): void => {
       if (closed || outputsClosed) return;
+      if (!outputController) {
+        pendingOutputs.push(output);
+        return;
+      }
       try {
-        outputController?.enqueue(output);
+        outputController.enqueue(output);
       } catch {
         // Closing an attachment wins races with late stream metadata.
       }
@@ -476,7 +595,7 @@ export function createAttachmentRuntime(
     const close = async (reason = "attachment_closed"): Promise<void> => {
       if (closed) return;
       closed = true;
-      await semanticReader.cancel(reason).catch(() => undefined);
+      unbindOutputs();
       await Promise.all(
         [...active].map((operation) =>
           operation.cancel(reason).catch(() => undefined)
@@ -491,7 +610,7 @@ export function createAttachmentRuntime(
       if (closed) return;
       closed = true;
       const reason = errorText(error);
-      // Error the consumer-facing stream before cancelling the semantic reader;
+      // Error the consumer-facing stream before unbinding the observer;
       // its normal completion path would otherwise race and close the output.
       if (!outputsClosed) {
         outputsClosed = true;
@@ -501,7 +620,7 @@ export function createAttachmentRuntime(
           // A consumer may already have cancelled the stream.
         }
       }
-      await semanticReader.cancel(reason).catch(() => undefined);
+      unbindOutputs();
       await Promise.all(
         [...active].map((operation) =>
           operation.cancel(reason).catch(() => undefined)
@@ -511,24 +630,144 @@ export function createAttachmentRuntime(
       openAttachments.delete(attachment);
     };
 
+    const followCreated = async (event: DurableEvent): Promise<void> => {
+      const streamId = event.subject?.id?.trim();
+      const streams = options.collectionRuntime.get("stream");
+      if (!streamId || !streams || !options.streamBodyStore) return;
+      const record = await streams.get(streamId, namespace).catch(() => null);
+      if (!record || record.state === "abandoned") return;
+      const emitterId = typeof record.participantId === "string"
+        ? record.participantId
+        : event.routing.senderId;
+      const emitter = emitterId
+        ? thread.participants.find((item) =>
+          participantMatches(item, emitterId)
+        )
+        : undefined;
+      let followerReader:
+        | ReadableStreamDefaultReader<Uint8Array>
+        | undefined;
+      let cancelRequested: unknown;
+      let cancelled = false;
+      const tracked: { operation?: ActiveOperation } = {};
+      const settle = () => {
+        if (tracked.operation) active.delete(tracked.operation);
+      };
+      const cancelFollower = async (reason: unknown) => {
+        cancelled = true;
+        cancelRequested = reason ?? "attachment_stream_cancelled";
+        try {
+          await followerReader?.cancel(cancelRequested).then(
+            () => undefined,
+            () => undefined,
+          );
+        } finally {
+          settle();
+        }
+      };
+      const payload = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            if (cancelled) {
+              controller.close();
+              return;
+            }
+            if (!followerReader) {
+              const follower = await openStreamFollower({
+                streams,
+                store: options.streamBodyStore!,
+                namespace,
+                streamId,
+              });
+              if (cancelled) {
+                await follower.body.cancel(cancelRequested).then(
+                  () => undefined,
+                  () => undefined,
+                );
+                controller.close();
+                return;
+              }
+              followerReader = follower.body.getReader();
+            }
+            const next = await followerReader.read();
+            if (next.done) {
+              controller.close();
+              settle();
+              return;
+            }
+            controller.enqueue(next.value);
+          } catch (error) {
+            settle();
+            try {
+              controller.error(error);
+            } catch {
+              // The consumer may already have cancelled.
+            }
+          }
+        },
+        cancel(reason) {
+          return cancelFollower(reason);
+        },
+      }, {
+        // Prefetch one extra chunk so a locked payload still has an in-flight
+        // follower read that attachment close can cancel.
+        highWaterMark: 2,
+      });
+      const operation: ActiveOperation = Object.freeze({
+        cancel: (reason) => cancelFollower(reason),
+      });
+      tracked.operation = operation;
+      active.add(operation);
+      try {
+        emitOutput({
+          type: "stream.output",
+          streamId,
+          participant: outputParticipant(emitter ?? participant),
+          mediaType: String(record.mediaType ?? "application/octet-stream"),
+          causationId: event.id,
+          correlationId: event.correlationId,
+          metadata: Object.freeze({
+            ...structuredClone(event.metadata),
+            ...(typeof record.lane === "string" ? { lane: record.lane } : {}),
+          }),
+          payload,
+        });
+      } catch (error) {
+        active.delete(operation);
+        await cancelFollower(error).catch(() => undefined);
+        throw error;
+      }
+    };
+
+    unbindOutputs = options.transients.add(defineProcessor({
+      id: `${id}:outputs`,
+      on: [{
+        eventType: "*",
+        namespace,
+        threadId: thread.id,
+      }],
+      handle(event) {
+        if (!visibleTo(event, participant.id)) return;
+        emitOutput(event);
+        if (event.durable && event.type === "stream.created") {
+          void followCreated(event);
+        }
+      },
+    }));
+
     const outputs = new ReadableStream<AttachmentOutput>({
       start(controller) {
         outputController = controller;
-        void (async () => {
+        const queued = pendingOutputs.splice(0);
+        for (const output of queued) {
+          if (outputsClosed) break;
           try {
-            while (!closed) {
-              const next = await semanticReader.read();
-              if (next.done) break;
-              if (visibleTo(next.value, participant.id)) emitOutput(next.value);
-            }
-            closeOutputs();
-          } catch (error) {
-            if (!closed && !outputsClosed) {
-              outputsClosed = true;
-              controller.error(error);
-            }
+            controller.enqueue(output);
+          } catch {
+            break;
           }
-        })();
+        }
+        if (closed) closeOutputs();
       },
       cancel(reason) {
         return close(errorText(reason ?? "attachment_output_cancelled"));
@@ -635,39 +874,121 @@ export function createAttachmentRuntime(
         throw attachmentError("attachment_invalid", "Attachment is closed.");
       }
       assertSender(message.sender, participant);
-      const correlationId = message.correlationId?.trim() || createId();
-      const deduplicationId = message.deduplicationId?.trim() ||
+      const explicitDedup = message.deduplicationId?.trim();
+      const correlationId = message.correlationId?.trim() ||
+        (explicitDedup
+          ? `${namespace}:correlation:${explicitDedup}`
+          : createId());
+      const deduplicationId = explicitDedup ||
         `${id}:message:${correlationId}`;
-      const content = await options.preparer.prepare(message.content, {
+      const messageId = workflowMutationId(
+        "message",
+        namespace,
+        message.id,
+        { deduplicationId },
+        createId,
+      );
+      const settlementScopeId = messageId;
+      const prepared = await options.preparer.prepare(message.content, {
         namespace,
         idempotencyKey: `${deduplicationId}:content`,
       });
       const metadata = structuredClone(message.metadata ?? {});
-      const result = await options.conversation.createMessage({
-        namespace,
-        ...(message.id ? { id: requiredText(message.id, "Message ID") } : {}),
-        threadId: thread.id,
-        sender: participantInput(participant),
-        recipientIds: resolveRecipientIds(
-          thread,
-          message.recipientIds ?? defaultRecipientIds,
-        ),
-        content,
-        visibility: message.visibility ?? { kind: "public" },
+      const recipientIds = resolveRecipientIds(
+        thread,
+        message.recipientIds ?? defaultRecipientIds,
+      );
+      const identity = {
+        correlationId,
+        deduplicationId,
+        settlementScopeId,
         metadata,
-        identity: {
-          correlationId,
-          deduplicationId,
-          metadata,
+      };
+      const tx = await options.collectionRuntime.transaction({
+        operationKey: deduplicationId,
+        namespace,
+        identity,
+        execute: async () => {
+          const context = mutationContext(
+            options.collectionRuntime,
+            options.session,
+            options.store.tables,
+          );
+          const content = await options.assets.materialize(context, {
+            namespace,
+            content: prepared,
+            origin: {
+              scope: { type: "thread", id: thread.id },
+              producer: { type: "message", id: messageId },
+            },
+          });
+          const features = createFeatureContext({
+            ...options.featureBindings,
+            namespace,
+          });
+          const record = await features.features.invoke(
+            THREAD_MESSAGE_FEATURE_ID,
+            "create",
+            {
+              id: messageId,
+              threadId: thread.id,
+              sender: participantInput(participant),
+              recipientIds: [...recipientIds],
+              content,
+              metadata,
+              visibility: message.visibility ?? { kind: "public" },
+              identity,
+              operationKey: deduplicationId,
+            },
+          ) as CollectionRecord;
+          if (content.length) {
+            await options.assets.linkOwner(context, {
+              namespace,
+              ownerId: String(record.id),
+              content,
+            });
+          }
+          return record;
         },
       });
-      const messageId = result.value?.id;
-      if (!messageId) throw new Error("Message mutation returned no record.");
-      const base = scopeHandle(result.event, {
-        settlementScopeId: result.settlementScopeId,
-        operations: dispatchedOperationsForScope(result),
+      const write = writeForSubject(tx.writes, "message.created", messageId);
+      const created = isCollectionNoop(write)
+        ? (await options.store.listEvents({
+          namespace,
+          threadId: thread.id,
+          limit: 1_000,
+        })).find((event) =>
+          event.type === "message.created" && event.subject?.id === messageId
+        )
+        : toDurableEvent(write.event);
+      if (!created) {
+        throw new Error(
+          `Message '${messageId}' was created without a durable event.`,
+        );
+      }
+      const deliveries = isCollectionNoop(write)
+        ? await options.store.listDeliveries({
+          namespace,
+          eventId: created.id,
+          limit: 1_000,
+        })
+        : write.deliveries;
+      const base = scopeHandle(created, {
+        settlementScopeId: isCollectionNoop(write)
+          ? tx.settlementScopeId
+          : write.settlementScopeId,
+        operations: dispatchedOperationsForScope({
+          settlementScopeId: isCollectionNoop(write)
+            ? tx.settlementScopeId
+            : write.settlementScopeId,
+          deliveries,
+          dispatch: tx.dispatch,
+        }),
       });
-      return Object.freeze({ ...base, messageId }) as AttachmentMessageHandle;
+      return Object.freeze({
+        ...base,
+        messageId: String(write.record.id),
+      }) as AttachmentMessageHandle;
     };
 
     const sendEvent = async (
@@ -731,287 +1052,10 @@ export function createAttachmentRuntime(
       });
     };
 
-    const appendStreamTerminal = async (
-      streamId: string,
-      rootEventId: string,
-      correlationId: string,
-      inputType: string,
-      mediaType: string,
-      recipient: Participant,
-      visibility: EventVisibility,
-      metadata: Readonly<Record<string, unknown>>,
-      terminal: "closed" | "cancelled" | "failed",
-      detail?: string,
-    ) => {
-      return await options.coordinator.append({
-        type: `stream.${terminal}`,
-        namespace,
-        threadId: thread.id,
-        subject: { type: "stream", id: streamId },
-        payload: {
-          streamId,
-          inputType,
-          mediaType,
-          participantId: participant.id,
-          recipientId: recipient.id,
-          ...(detail ? { detail } : {}),
-        },
-        routing: {
-          senderId: participant.id,
-          recipientIds: [recipient.id],
-        },
-        visibility,
-        metadata: structuredClone(metadata),
-        causationId: rootEventId,
-        correlationId,
-        deduplicationId: `${id}:stream:${streamId}:${terminal}`,
-      });
-    };
-
-    const sendStream = async (
-      stream: AttachmentStreamInput,
-    ): Promise<AttachmentStreamHandle> => {
-      if (closed) {
-        throw attachmentError("attachment_invalid", "Attachment is closed.");
-      }
-      const inputType = requiredText(stream.type, "Stream input type");
-      const mediaType = requiredText(stream.mediaType, "Stream media type");
-      if (!isByteStream(stream.payload)) {
-        throw attachmentError(
-          "attachment_invalid",
-          "Stream payload must be a Web ReadableStream.",
-        );
-      }
-      const candidateRecipients = stream.recipientId
-        ? [stream.recipientId]
-        : defaultRecipientIds;
-      if (candidateRecipients.length !== 1) {
-        throw attachmentError(
-          "attachment_invalid",
-          "A stream input requires exactly one recipient agent.",
-        );
-      }
-      const recipient = resolveParticipant(
-        thread,
-        candidateRecipients[0],
-        "Stream recipient",
-      );
-      if (recipient.participantType !== "agent") {
-        throw attachmentError(
-          "attachment_invalid",
-          "A stream recipient must be an agent participant.",
-        );
-      }
-      const agentId = requiredText(
-        recipient.agentId ?? recipient.externalId,
-        "Realtime agent ID",
-      );
-      const agent = options.registry.get<Agent>("agents", agentId);
-      if (!agent) throw new Error(`Agent '${agentId}' is not registered.`);
-      const runtime = agent.runtimes?.realtime;
-      if (!runtime || runtime.type !== "realtime") {
-        throw attachmentError(
-          "attachment_invalid",
-          `Agent '${agent.id}' has no realtime runtime.`,
-        );
-      }
-      const provider = options.registry.get<RealtimeProviderResource>(
-        "llm",
-        runtime.provider,
-      );
-      if (!provider || !isRealtimeProviderResource(provider)) {
-        throw attachmentError(
-          "attachment_invalid",
-          `Realtime provider '${runtime.provider}' is not registered.`,
-        );
-      }
-
-      const streamId = `stream:${createId()}`;
-      const correlationId = stream.correlationId?.trim() || createId();
-      const visibility = stream.visibility ?? { kind: "public" };
-      const metadata = Object.freeze({
-        ...structuredClone(stream.metadata ?? {}),
-        ...(stream.outputMediaType
-          ? {
-            outputMediaType: requiredText(
-              stream.outputMediaType,
-              "Output media type",
-            ),
-          }
-          : {}),
-      });
-      const opened = await options.coordinator.append({
-        type: "stream.opened",
-        namespace,
-        threadId: thread.id,
-        subject: { type: "stream", id: streamId },
-        payload: {
-          streamId,
-          inputType,
-          mediaType,
-          participantId: participant.id,
-          recipientId: recipient.id,
-          agentId,
-          providerId: provider.id,
-        },
-        routing: {
-          senderId: participant.id,
-          recipientIds: [recipient.id],
-        },
-        visibility,
-        metadata: structuredClone(metadata),
-        correlationId,
-        deduplicationId: `${id}:stream:${streamId}:opened`,
-      });
-      const dispatchMetadata: StreamDispatchMetadata = Object.freeze({
-        schema: "copilotz.stream.dispatch.v1",
-        databaseSchema: options.databaseSchema,
-        streamId,
-        eventId: opened.event.id,
-        namespace,
-        threadId: thread.id,
-        correlationId,
-        inputType,
-        mediaType,
-        participantId: participant.id,
-        recipientId: recipient.id,
-        agentId,
-        providerId: provider.id,
-        metadata,
-      });
-
-      let work: Awaited<ReturnType<DeliveryExecutor["dispatchWork"]>>;
-      try {
-        work = await options.executor.dispatchWork({
-          workload,
-          metadata: jsonDispatchMetadata(dispatchMetadata),
-          body: stream.payload,
-        });
-      } catch (error) {
-        await stream.payload.cancel(error).catch(() => undefined);
-        await appendStreamTerminal(
-          streamId,
-          opened.event.id,
-          correlationId,
-          inputType,
-          mediaType,
-          recipient,
-          visibility,
-          metadata,
-          "failed",
-          errorText(error),
-        );
-        throw error;
-      }
-
-      let cancellationReason: string | undefined;
-      let settled = false;
-      const responseMetadata = work.metadata.then((value) => {
-        const response = streamResultMetadata(value);
-        if (response.hasOutput) {
-          const output: AttachmentStreamOutput = Object.freeze({
-            type: "stream.output",
-            streamId,
-            participant: participantOutput(recipient),
-            mediaType: response.mediaType,
-            causationId: opened.event.id,
-            correlationId,
-            metadata: response.metadata,
-            payload: work.output,
-          });
-          emitOutput(output);
-        } else {
-          void work.output.pipeTo(new WritableStream<Uint8Array>()).catch(
-            () => undefined,
-          );
-        }
-        return response;
-      });
-      responseMetadata.catch(() => undefined);
-
-      const done = (async () => {
-        const terminal = await work.completed;
-        const response = await responseMetadata.catch((error) => ({
-          hasOutput: false,
-          mediaType,
-          metadata: Object.freeze({ responseError: errorText(error) }),
-        }));
-        const failed = terminal.status !== "completed";
-        const terminalType = cancellationReason
-          ? "cancelled" as const
-          : failed
-          ? "failed" as const
-          : "closed" as const;
-        const detail = cancellationReason ?? terminal.terminal?.message ??
-          (failed ? `Oxian stream ended as '${terminal.status}'.` : undefined);
-        await appendStreamTerminal(
-          streamId,
-          opened.event.id,
-          correlationId,
-          inputType,
-          response.mediaType,
-          recipient,
-          visibility,
-          metadata,
-          terminalType,
-          detail,
-        );
-        await waitForScope(
-          options.store,
-          options.databaseSchema,
-          namespace,
-          opened.event.id,
-          options.executor,
-          new AbortController().signal,
-          pollMs,
-        );
-        settled = true;
-        if (terminalType === "cancelled") {
-          throw attachmentError(
-            "attachment_cancelled",
-            detail ?? "Stream cancelled.",
-          );
-        }
-        if (terminalType === "failed") {
-          throw attachmentError(
-            "stream_failed",
-            detail ?? "Realtime stream failed.",
-          );
-        }
-      })();
-      const handle: AttachmentStreamHandle = Object.freeze({
-        streamId,
-        eventId: opened.event.id,
-        correlationId,
-        done,
-        async cancel(reason = "stream_cancelled") {
-          if (settled || cancellationReason) return;
-          cancellationReason = reason;
-          await options.store.cancelScope(namespace, opened.event.id, reason);
-          await Promise.all(
-            opened.dispatch.handles.map((operation) =>
-              operation.cancel(reason).catch(() => undefined)
-            ),
-          );
-          await work.cancel(reason).catch(() => undefined);
-          await done.catch(() => undefined);
-        },
-      });
-      track(handle);
-      try {
-        await work.started;
-      } catch (error) {
-        await done.catch(() => undefined);
-        throw error;
-      }
-      return handle;
-    };
-
     const send = async (
       value: AttachmentSendInput,
     ): Promise<AttachmentSendResult> => {
       if (isMessageInput(value)) return await sendMessage(value);
-      if (isStreamInput(value)) return await sendStream(value);
       return await sendEvent(value);
     };
 

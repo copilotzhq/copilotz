@@ -129,7 +129,9 @@ export async function createThreadRecord(
         ...(input.externalId ? { externalId: input.externalId } : {}),
         ...(input.name ? { name: input.name } : {}),
         ...(input.status ? { status: input.status } : {}),
-        ...(input.parentThreadId ? { parentThreadId: input.parentThreadId } : {}),
+        ...(input.parentThreadId
+          ? { parentThreadId: input.parentThreadId }
+          : {}),
         metadata: structuredClone(input.metadata ?? {}),
         participantIds: [...input.participantIds],
       }, { namespace: context.namespace });
@@ -174,16 +176,16 @@ export async function createMessageRecord(
   }>,
   options: Readonly<{ operationKey: string }>,
 ): Promise<CollectionRecord> {
-  const content = await context.content.materialize(input.content, {
-    origin: {
-      scope: { type: "thread", id: input.threadId },
-      producer: { type: "message", id: input.id },
-    },
-  });
   const result = await context.transaction({
     operationKey: options.operationKey,
     namespace: context.namespace,
     execute: async ({ collections }) => {
+      const content = await context.content.materialize(input.content, {
+        origin: {
+          scope: { type: "thread", id: input.threadId },
+          producer: { type: "message", id: input.id },
+        },
+      });
       const created = await collections.message.create({
         id: input.id,
         threadId: input.threadId,
@@ -200,10 +202,10 @@ export async function createMessageRecord(
         },
         visibility: input.visibility ?? { kind: "public" },
       });
+      if (content.length) await context.content.linkOwner(input.id, content);
       return created.record;
     },
   });
-  if (content.length) await context.content.linkOwner(input.id, content);
   return result.value;
 }
 
@@ -224,33 +226,43 @@ export async function listMessageRecords(
 export async function createLlmAttemptRecord(
   context: CopilotzProcessorCapabilities,
   input: Record<string, unknown>,
-  options: Readonly<{ operationKey: string; metadata?: Record<string, unknown> }>,
+  options: Readonly<
+    { operationKey: string; metadata?: Record<string, unknown> }
+  >,
 ): Promise<CollectionRecord> {
   const { content: suppliedContent, ...fields } = input;
-  const content = suppliedContent !== undefined
-    ? await context.content.materialize(suppliedContent as DurableContentInput, {
-      origin: {
-        scope: { type: "thread", id: String(input.threadId) },
-        producer: { type: "llm_attempt", id: String(input.id) },
-      },
-    })
-    : undefined;
   const result = await context.transaction({
     operationKey: options.operationKey,
     namespace: context.namespace,
     ...(options.metadata ? { identity: { metadata: options.metadata } } : {}),
     execute: async ({ collections }) => {
-      return await collections.llm_attempt.create({
+      const content = suppliedContent !== undefined
+        ? await context.content.materialize(
+          suppliedContent as DurableContentInput,
+          {
+            origin: {
+              scope: { type: "thread", id: String(input.threadId) },
+              producer: { type: "llm_attempt", id: String(input.id) },
+            },
+          },
+        )
+        : undefined;
+      const created = await collections.llm_attempt.create({
         ...fields,
         ...(content ? { content } : {}),
       }, {
         namespace: context.namespace,
         threadId: String(input.threadId),
-        ...(options.metadata ? { identity: { metadata: options.metadata } } : {}),
+        ...(options.metadata
+          ? { identity: { metadata: options.metadata } }
+          : {}),
       });
+      if (content?.length) {
+        await context.content.linkOwner(String(input.id), content);
+      }
+      return created;
     },
   });
-  if (content?.length) await context.content.linkOwner(String(input.id), content);
   return result.value.record;
 }
 
@@ -270,35 +282,47 @@ export async function completeLlmAttemptCollection(
 ): Promise<void> {
   const fields = [
     ...(input.answer
-      ? [{ role: LLM_CONTENT_ROLE.answer, input: input.answer, cardinality: "one" as const }]
+      ? [{
+        role: LLM_CONTENT_ROLE.answer,
+        input: input.answer,
+        cardinality: "one" as const,
+      }]
       : []),
     ...(input.reasoning
-      ? [{ role: LLM_CONTENT_ROLE.reasoning, input: input.reasoning, cardinality: "one" as const }]
+      ? [{
+        role: LLM_CONTENT_ROLE.reasoning,
+        input: input.reasoning,
+        cardinality: "one" as const,
+      }]
       : []),
     ...(input.toolCalls
-      ? [{ role: LLM_CONTENT_ROLE.toolCalls, input: input.toolCalls, cardinality: "one" as const }]
+      ? [{
+        role: LLM_CONTENT_ROLE.toolCalls,
+        input: input.toolCalls,
+        cardinality: "one" as const,
+      }]
       : []),
   ];
-  const replacement = fields.length
-    ? await context.content.materialize(composeRoleContent(fields), {
-      origin: {
-        scope: { type: "thread", id: String(attempt.threadId) },
-        producer: { type: "llm_attempt", id: attempt.id },
-      },
-    })
-    : contentSequence(attempt.content);
-  const content = fields.length
-    ? replaceContentRoles(
-      contentSequence(attempt.content),
-      replacement,
-      new Set(fields.map((field) => field.role)),
-    )
-    : contentSequence(attempt.content);
   await context.transaction({
     operationKey: options.operationKey,
     namespace: context.namespace,
     identity: { metadata: asRecord(attempt.metadata) },
     execute: async ({ collections }) => {
+      const replacement = fields.length
+        ? await context.content.materialize(composeRoleContent(fields), {
+          origin: {
+            scope: { type: "thread", id: String(attempt.threadId) },
+            producer: { type: "llm_attempt", id: attempt.id },
+          },
+        })
+        : contentSequence(attempt.content);
+      const content = fields.length
+        ? replaceContentRoles(
+          contentSequence(attempt.content),
+          replacement,
+          new Set(fields.map((field) => field.role)),
+        )
+        : contentSequence(attempt.content);
       await collections.llm_attempt.mutate(attempt.id, "complete", {
         content,
         ...(input.finishReason ? { finishReason: input.finishReason } : {}),
@@ -306,16 +330,18 @@ export async function completeLlmAttemptCollection(
         ...(input.cost ? { cost: input.cost } : {}),
         finishedAt: new Date().toISOString(),
         ...(input.metadataPatch
-          ? { metadata: { ...asRecord(attempt.metadata), ...input.metadataPatch } }
+          ? {
+            metadata: { ...asRecord(attempt.metadata), ...input.metadataPatch },
+          }
           : {}),
       }, {
         namespace: context.namespace,
         threadId: String(attempt.threadId),
         identity: { metadata: asRecord(attempt.metadata) },
       });
+      if (content.length) await context.content.linkOwner(attempt.id, content);
     },
   });
-  if (content.length) await context.content.linkOwner(attempt.id, content);
 }
 
 export async function failLlmAttemptCollection(
@@ -327,30 +353,30 @@ export async function failLlmAttemptCollection(
   }>,
   options: Readonly<{ operationKey: string }>,
 ): Promise<void> {
-  const content = input.errorDetail
-    ? replaceContentRoles(
-      contentSequence(attempt.content),
-      await context.content.materialize(
-        composeRoleContent([{
-          role: LLM_CONTENT_ROLE.errorDetail,
-          input: input.errorDetail,
-          cardinality: "one",
-        }]),
-        {
-          origin: {
-            scope: { type: "thread", id: String(attempt.threadId) },
-            producer: { type: "llm_attempt", id: attempt.id },
-          },
-        },
-      ),
-      new Set([LLM_CONTENT_ROLE.errorDetail]),
-    )
-    : contentSequence(attempt.content);
   await context.transaction({
     operationKey: options.operationKey,
     namespace: context.namespace,
     identity: { metadata: asRecord(attempt.metadata) },
     execute: async ({ collections }) => {
+      const content = input.errorDetail
+        ? replaceContentRoles(
+          contentSequence(attempt.content),
+          await context.content.materialize(
+            composeRoleContent([{
+              role: LLM_CONTENT_ROLE.errorDetail,
+              input: input.errorDetail,
+              cardinality: "one",
+            }]),
+            {
+              origin: {
+                scope: { type: "thread", id: String(attempt.threadId) },
+                producer: { type: "llm_attempt", id: attempt.id },
+              },
+            },
+          ),
+          new Set([LLM_CONTENT_ROLE.errorDetail]),
+        )
+        : contentSequence(attempt.content);
       await collections.llm_attempt.mutate(attempt.id, "fail", {
         message: input.safeError.message,
         ...(input.safeError.code ? { code: input.safeError.code } : {}),
@@ -361,9 +387,9 @@ export async function failLlmAttemptCollection(
         threadId: String(attempt.threadId),
         identity: { metadata: asRecord(attempt.metadata) },
       });
+      if (content.length) await context.content.linkOwner(attempt.id, content);
     },
   });
-  if (content.length) await context.content.linkOwner(attempt.id, content);
 }
 
 export async function createToolExecutionCollection(
@@ -375,20 +401,20 @@ export async function createToolExecutionCollection(
     content?: DurableContentInput;
   }>,
 ): Promise<CollectionRecord> {
-  const content = options.content
-    ? await context.content.materialize(options.content, {
-      origin: {
-        scope: { type: "thread", id: String(input.threadId) },
-        producer: { type: "tool_execution", id: String(input.id) },
-      },
-    })
-    : undefined;
   const result = await context.transaction({
     operationKey: options.operationKey,
     namespace: context.namespace,
     ...(options.metadata ? { identity: { metadata: options.metadata } } : {}),
     execute: async ({ collections }) => {
-      return await collections.tool_execution.create({
+      const content = options.content
+        ? await context.content.materialize(options.content, {
+          origin: {
+            scope: { type: "thread", id: String(input.threadId) },
+            producer: { type: "tool_execution", id: String(input.id) },
+          },
+        })
+        : undefined;
+      const created = await collections.tool_execution.create({
         ...input,
         ...(content ? { content } : {}),
       }, {
@@ -398,13 +424,16 @@ export async function createToolExecutionCollection(
         ...(optionalText(input.participantId)
           ? { routing: { senderId: String(input.participantId) } }
           : {}),
-        ...(options.metadata ? { identity: { metadata: options.metadata } } : {}),
+        ...(options.metadata
+          ? { identity: { metadata: options.metadata } }
+          : {}),
       });
+      if (content?.length) {
+        await context.content.linkOwner(String(input.id), content);
+      }
+      return created;
     },
   });
-  if (content?.length) {
-    await context.content.linkOwner(String(input.id), content);
-  }
   return result.value.record;
 }
 
@@ -445,9 +474,4 @@ export async function updateThreadRecord(
   return result.value.record;
 }
 
-export {
-  asRecord,
-  optionalText,
-  requireBoundCollection,
-  stringArray,
-};
+export { asRecord, optionalText, requireBoundCollection, stringArray };

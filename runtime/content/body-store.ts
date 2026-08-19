@@ -1,7 +1,12 @@
 import { createContentError } from "./errors.ts";
+import { digestContent } from "./digest.ts";
 import type { AssetOrigin } from "./types.ts";
 
-export type AssetBodyStoreKind = "memory" | "filesystem" | "object";
+export type AssetBodyStoreKind =
+  | "memory"
+  | "filesystem"
+  | "object"
+  | "database";
 
 export type AssetBodyHead = Readonly<{
   key: string;
@@ -20,6 +25,49 @@ export type PutAssetBodyInput = Readonly<{
   ifAbsent?: boolean;
 }>;
 
+/** Durable prefix for an open progressive write. Memory stores omit this. */
+export type AssetBodySpillHead = Readonly<{
+  key: string;
+  mediaType: string;
+  byteLength: number;
+  discarded: number;
+  reservationId: string;
+}>;
+
+export type AssetBodySpill = Readonly<{
+  reserve(
+    input: Readonly<{
+      key: string;
+      mediaType: string;
+      reservationId: string;
+      takeover?: boolean;
+    }>,
+  ): Promise<AssetBodySpillHead>;
+  head(key: string): Promise<AssetBodySpillHead | null>;
+  append(
+    input: Readonly<{
+      key: string;
+      mediaType: string;
+      reservationId: string;
+      bytes: Uint8Array;
+    }>,
+  ): Promise<AssetBodySpillHead>;
+  read(
+    input: Readonly<{ key: string; offset: number; end: number }>,
+  ): Promise<Uint8Array>;
+  truncate(
+    key: string,
+    byteLength: number,
+    reservationId: string,
+  ): Promise<AssetBodySpillHead>;
+  discardPrefix(
+    key: string,
+    byteLength: number,
+    reservationId: string,
+  ): Promise<AssetBodySpillHead>;
+  delete(key: string, reservationId: string): Promise<void>;
+}>;
+
 /** Runtime-neutral body storage contract. Implementations own no graph state. */
 export type AssetBodyStore = Readonly<{
   kind: AssetBodyStoreKind;
@@ -30,6 +78,7 @@ export type AssetBodyStore = Readonly<{
   open(key: string): Promise<ReadableStream<Uint8Array>>;
   delete(key: string): Promise<void>;
   list(options?: Readonly<{ prefix?: string }>): AsyncIterable<AssetBodyHead>;
+  spill?: AssetBodySpill;
 }>;
 
 export type AssetStorageConfig =
@@ -80,9 +129,15 @@ export type S3AssetStorageConfig = Readonly<{
 /** Host callbacks used by filesystem adapters; core never imports host APIs. */
 export type AssetFilesystemAccess = Readonly<{
   writeExclusive(input: PutAssetBodyInput): Promise<"created" | "exists">;
+  writeReplace(
+    input: Readonly<{ key: string; bytes: Uint8Array }>,
+  ): Promise<void>;
+  append(input: Readonly<{ key: string; bytes: Uint8Array }>): Promise<number>;
+  truncate(path: string, byteLength: number): Promise<void>;
   stat(path: string): Promise<AssetBodyHead | null>;
   read(path: string): Promise<Uint8Array>;
   open(path: string): Promise<ReadableStream<Uint8Array>>;
+  openFrom(path: string, offset: number): Promise<ReadableStream<Uint8Array>>;
   delete(path: string): Promise<void>;
   list(prefix: string): AsyncIterable<AssetBodyHead>;
 }>;
@@ -226,6 +281,269 @@ export function createMemoryAssetBodyStore(
   return Object.freeze(store);
 }
 
+function stagingDataKey(key: string): string {
+  return `${key}.progressive`;
+}
+
+function stagingMetaKey(key: string): string {
+  return `${key}.progressive.json`;
+}
+
+async function readStreamRange(
+  stream: ReadableStream<Uint8Array>,
+  length: number,
+): Promise<Uint8Array> {
+  if (length <= 0) {
+    await stream.cancel().catch(() => undefined);
+    return new Uint8Array();
+  }
+  const reader = stream.getReader();
+  const output = new Uint8Array(length);
+  let offset = 0;
+  try {
+    while (offset < length) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const take = Math.min(value.byteLength, length - offset);
+      output.set(value.subarray(0, take), offset);
+      offset += take;
+    }
+  } finally {
+    reader.releaseLock();
+    await stream.cancel().catch(() => undefined);
+  }
+  if (offset < length) {
+    throw createContentError(
+      "asset_corrupted",
+      "Progressive staging ended before the requested range.",
+    );
+  }
+  return output;
+}
+
+function parseSpillHead(
+  key: string,
+  bytes: Uint8Array,
+): AssetBodySpillHead | null {
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Record<
+      string,
+      unknown
+    >;
+    if (
+      typeof parsed.mediaType !== "string" ||
+      typeof parsed.byteLength !== "number" ||
+      typeof parsed.discarded !== "number"
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      key,
+      mediaType: parsed.mediaType,
+      byteLength: parsed.byteLength,
+      discarded: parsed.discarded,
+      reservationId: typeof parsed.reservationId === "string"
+        ? parsed.reservationId
+        : "",
+    });
+  } catch {
+    return null;
+  }
+}
+
+function encodeSpillHead(head: AssetBodySpillHead): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify({
+    mediaType: head.mediaType,
+    byteLength: head.byteLength,
+    discarded: head.discarded,
+    reservationId: head.reservationId,
+  }));
+}
+
+function isNotFound(error: unknown): boolean {
+  return error instanceof Error &&
+    (error.name === "NotFound" || /not found/i.test(error.message));
+}
+
+function createFilesystemSpill(access: AssetFilesystemAccess): AssetBodySpill {
+  const readHead = async (key: string): Promise<AssetBodySpillHead | null> => {
+    try {
+      return parseSpillHead(key, await access.read(stagingMetaKey(key)));
+    } catch (error) {
+      if (isNotFound(error)) return null;
+      throw error;
+    }
+  };
+  const writeHead = (head: AssetBodySpillHead) =>
+    access.writeReplace({
+      key: stagingMetaKey(head.key),
+      bytes: encodeSpillHead(head),
+    });
+  const requireHead = async (key: string): Promise<AssetBodySpillHead> => {
+    const head = await readHead(key);
+    if (!head) {
+      throw createContentError(
+        "asset_not_found",
+        "Progressive staging was not found.",
+      );
+    }
+    return head;
+  };
+  const requireOwner = async (
+    key: string,
+    reservationId: string,
+  ): Promise<AssetBodySpillHead> => {
+    const head = await requireHead(key);
+    if (head.reservationId !== reservationId) {
+      throw createContentError(
+        "asset_conflict",
+        "Progressive writer no longer owns this asset body.",
+      );
+    }
+    return head;
+  };
+  const spill: AssetBodySpill = {
+    async reserve(input) {
+      const existing = await readHead(input.key);
+      if (existing) {
+        if (existing.mediaType !== input.mediaType) {
+          throw createContentError(
+            "asset_conflict",
+            "Progressive staging media type does not match the writer.",
+          );
+        }
+        if (!input.takeover) {
+          throw createContentError(
+            "asset_conflict",
+            "A progressive writer already owns this asset body.",
+          );
+        }
+        const taken = Object.freeze({
+          ...existing,
+          reservationId: input.reservationId,
+        });
+        await writeHead(taken);
+        return taken;
+      }
+      const created = Object.freeze({
+        key: input.key,
+        mediaType: input.mediaType,
+        byteLength: 0,
+        discarded: 0,
+        reservationId: input.reservationId,
+      });
+      const bytes = encodeSpillHead(created);
+      const result = await access.writeExclusive({
+        key: stagingMetaKey(input.key),
+        bytes,
+        mediaType: "application/json",
+        digest: await digestContent(bytes),
+        ifAbsent: true,
+      });
+      if (result === "created") return created;
+      const raced = await readHead(input.key);
+      if (
+        input.takeover && raced && raced.mediaType === input.mediaType
+      ) {
+        const taken = Object.freeze({
+          ...raced,
+          reservationId: input.reservationId,
+        });
+        await writeHead(taken);
+        return taken;
+      }
+      throw createContentError(
+        "asset_conflict",
+        "A progressive writer already owns this asset body.",
+      );
+    },
+    head: readHead,
+    async append(input) {
+      const existing = await requireOwner(input.key, input.reservationId);
+      if (existing.mediaType !== input.mediaType) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive staging media type does not match the writer.",
+        );
+      }
+      if (input.bytes.byteLength === 0) return existing;
+      if (input.bytes.byteLength > 0) {
+        await access.append({
+          key: stagingDataKey(input.key),
+          bytes: input.bytes,
+        });
+      }
+      const head = Object.freeze({
+        key: input.key,
+        mediaType: input.mediaType,
+        byteLength: existing.byteLength + input.bytes.byteLength,
+        discarded: existing.discarded,
+        reservationId: existing.reservationId,
+      });
+      await writeHead(head);
+      return head;
+    },
+    async read(input) {
+      const head = await requireHead(input.key);
+      const start = Math.max(input.offset, head.discarded);
+      const end = Math.min(input.end, head.byteLength);
+      if (end <= start) return new Uint8Array();
+      const stream = await access.openFrom(
+        stagingDataKey(input.key),
+        start - head.discarded,
+      );
+      return await readStreamRange(stream, end - start);
+    },
+    async truncate(key, byteLength, reservationId) {
+      const head = await requireOwner(key, reservationId);
+      if (byteLength < head.discarded || byteLength > head.byteLength) {
+        throw createContentError(
+          "content_invalid",
+          "Progressive truncate is outside the committed range.",
+        );
+      }
+      await access.truncate(
+        stagingDataKey(key),
+        byteLength - head.discarded,
+      );
+      const next = Object.freeze({ ...head, byteLength });
+      await writeHead(next);
+      return next;
+    },
+    async discardPrefix(key, byteLength, reservationId) {
+      const head = await requireOwner(key, reservationId);
+      if (byteLength < head.discarded || byteLength > head.byteLength) {
+        throw createContentError(
+          "content_invalid",
+          "Progressive discard is outside the committed range.",
+        );
+      }
+      if (byteLength > head.discarded) {
+        const kept = await spill.read({
+          key,
+          offset: byteLength,
+          end: head.byteLength,
+        });
+        await access.writeReplace({
+          key: stagingDataKey(key),
+          bytes: kept,
+        });
+      }
+      const next = Object.freeze({ ...head, discarded: byteLength });
+      await writeHead(next);
+      return next;
+    },
+    async delete(key, reservationId) {
+      await requireOwner(key, reservationId);
+      await Promise.all([
+        access.delete(stagingDataKey(key)),
+        access.delete(stagingMetaKey(key)),
+      ]);
+    },
+  };
+  return Object.freeze(spill);
+}
+
 export function createFilesystemAssetBodyStore(
   options: Readonly<{
     backendId: string;
@@ -256,6 +574,7 @@ export function createFilesystemAssetBodyStore(
     open: options.access.open,
     delete: options.access.delete,
     list: ({ prefix = "" } = {}) => options.access.list(prefix),
+    spill: createFilesystemSpill(options.access),
   };
   return Object.freeze(store);
 }

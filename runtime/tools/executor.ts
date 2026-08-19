@@ -4,6 +4,7 @@ import { assetIdFromRef } from "../content/index.ts";
 import type { PreparedContent } from "../content/index.ts";
 import type { ToolExecution } from "../domain/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
+import type { StreamWriter } from "../streams/index.ts";
 import {
   loadParticipantRecord,
   loadThreadRecord,
@@ -259,6 +260,36 @@ function createExecutor(
     let emittedResult = false;
     let outputEmissionError: unknown;
     let outputEmission = Promise.resolve();
+    const writers = new Map<string, Promise<StreamWriter>>();
+    let sealMode: "finalize" | "fail" | "abandon" = "finalize";
+    const writerFor = () => {
+      const key = "tool_output:application/x-ndjson";
+      const existing = writers.get(key);
+      if (existing) return existing;
+      const created = context.streams.write({
+        threadId: execution.threadId,
+        lane: "tool_output",
+        mediaType: "application/x-ndjson",
+        ...(execution.participantId
+          ? { participantId: execution.participantId }
+          : {}),
+        metadata: {
+          toolExecutionId: execution.id,
+          toolCallId: execution.toolCallId,
+          toolId,
+          ...(typeof execution.tool.name === "string" &&
+              execution.tool.name.trim()
+            ? { toolName: execution.tool.name.trim() }
+            : {}),
+        },
+        routing: execution.participantId
+          ? { senderId: execution.participantId }
+          : {},
+        visibility: context.event.visibility,
+      });
+      writers.set(key, created);
+      return created;
+    };
     const emitOutput: WorkflowToolExecutionContext["emitOutput"] = (
       delta,
       outputOptions = {},
@@ -272,33 +303,16 @@ function createExecutor(
       const emission = outputEmission.then(async () => {
         if (outputEmissionError !== undefined) throw outputEmissionError;
         try {
-          await context.events.emit({
-            type: "tool_output.delta",
-            threadId: execution.threadId,
-            payload: {
-              toolExecutionId: execution.id,
-              toolCallId: execution.toolCallId,
-              toolId,
-              ...(typeof execution.tool.name === "string" &&
-                  execution.tool.name.trim()
-                ? { toolName: execution.tool.name.trim() }
-                : {}),
+          const writer = await writerFor();
+          await writer.write(outputEncoder.encode(
+            `${JSON.stringify({
               channel,
               mode,
               ...(mediaType ? { mediaType } : {}),
+              sequence,
               delta,
-            },
-            routing: execution.participantId
-              ? { senderId: execution.participantId }
-              : {},
-            visibility: context.event.visibility,
-            metadata: {
-              toolExecutionId: execution.id,
-              toolCallId: execution.toolCallId,
-            },
-            streamId: execution.id,
-            sequence,
-          });
+            })}\n`,
+          ));
         } catch (error) {
           outputEmissionError = error;
           throw error;
@@ -306,6 +320,26 @@ function createExecutor(
       });
       outputEmission = emission.catch(() => undefined);
       return emission;
+    };
+    const sealWriters = async (): Promise<void> => {
+      await outputEmission;
+      const pending = [...writers.values()];
+      writers.clear();
+      await Promise.all(pending.map(async (opened) => {
+        const writer = await opened.catch(() => undefined);
+        if (!writer) return;
+        if (sealMode === "finalize") {
+          await writer.finalize().catch(() => undefined);
+          return;
+        }
+        if (sealMode === "fail") {
+          await writer.fail(
+            errorText(outputEmissionError ?? "Stream failed"),
+          ).catch(() => undefined);
+          return;
+        }
+        await writer.abandon().catch(() => undefined);
+      }));
     };
     const cancellationPromise = new Promise<never>((_, reject) => {
       rejectCancellation = reject;
@@ -373,6 +407,7 @@ function createExecutor(
       if (isDeferredWorkflowToolResult(output)) {
         await outputEmission;
         if (outputEmissionError !== undefined) throw outputEmissionError;
+        await sealWriters();
         return Object.freeze({
           status: "deferred" as const,
           metadata: output.metadata,
@@ -398,6 +433,7 @@ function createExecutor(
           mode: "replace",
         });
       }
+      await sealWriters();
       return Object.freeze({
         status: "completed" as const,
         output: extracted.output,
@@ -411,6 +447,8 @@ function createExecutor(
       await outputEmission;
       const error = outputEmissionError ?? caught;
       if (cancellation.cancelled()) {
+        sealMode = "abandon";
+        await sealWriters();
         const reason = cancellation.reason() ?? errorText(error);
         const timedOut = reason.startsWith("timeout:");
         return Object.freeze({
@@ -422,6 +460,8 @@ function createExecutor(
           durationMs: elapsed(started),
         });
       }
+      sealMode = "fail";
+      await sealWriters();
       return Object.freeze({
         status: "failed" as const,
         code: "tool_error" as const,

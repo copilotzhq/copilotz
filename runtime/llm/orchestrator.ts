@@ -307,7 +307,7 @@ function mergeReasoningParts(...parts: Array<string | string[] | undefined>) {
 function warnRecoveryAttempt(
   reason: string | null,
   current: ProviderConfig,
-  next: ProviderConfig,
+  next?: ProviderConfig,
   message?: string,
 ): void {
   try {
@@ -316,8 +316,9 @@ function warnRecoveryAttempt(
       model: current.model,
       reason,
       ...(message ? { message } : {}),
-      nextProvider: next.provider,
-      nextModel: next.model,
+      ...(next
+        ? { nextProvider: next.provider, nextModel: next.model }
+        : { crossResourceFailover: true }),
     });
   } catch {
     // Ignore logging failures.
@@ -351,12 +352,18 @@ function toUsageStatusReason(
   }
 }
 
+export type ChatOptions = {
+  /** A later `runGenerateChain` target exists after this resource. */
+  hasExternalFallback?: boolean;
+};
+
 /**
  * Unified AI Chat endpoint.
  *
  * Streams an LLM response through the configured provider. Before user-visible
- * output is emitted it may recover with retry/fallback attempts; after visible
- * output starts it preserves that partial response and avoids hidden fallbacks.
+ * output is emitted it may recover with retry/same-resource fallback attempts;
+ * after visible output starts it preserves that partial response and avoids
+ * hidden fallbacks. Different-provider fallbacks are not executed here.
  */
 export async function chat(
   request: ChatRequest,
@@ -364,6 +371,7 @@ export async function chat(
   env: Record<string, string> = {},
   stream?: StreamCallback,
   providerRegistry?: ProviderRegistry,
+  options?: ChatOptions,
 ): Promise<ChatResponse> {
   if (request.answer) {
     return createMockResponse(request);
@@ -382,12 +390,16 @@ export async function chat(
     throw new Error("No LLM provider configured for chat request");
   }
 
+  const localFallbacks = (baseConfig.fallbacks ?? []).filter((fallback) =>
+    !fallback.provider || fallback.provider === baseConfig.provider
+  );
   const attemptConfigs = [
     buildAttemptConfig(baseConfig, env),
-    ...(baseConfig.fallbacks ?? []).map((fallback) =>
+    ...localFallbacks.map((fallback) =>
       buildAttemptConfig(baseConfig, env, fallback)
     ),
   ];
+  const hasExternalFallback = options?.hasExternalFallback === true;
   const registry = requireProviderRegistry(providerRegistry);
   const llmCallId = crypto.randomUUID();
   const knownToolNames = (request.tools ?? [])
@@ -440,6 +452,25 @@ export async function chat(
   let lastUsageRecord: LLMUsageAttempt | undefined;
   let lastPrompt: ChatMessage[] = request.messages;
   let lastAttemptConfig = attemptConfigs[0];
+
+  const throwCrossResourceFailover = (message: string): never => {
+    const lastAttempt = attempts[attempts.length - 1];
+    throw new LLMProviderError(message, {
+      reason: lastAttempt?.reason ?? classifyLLMError(lastError),
+      provider: lastAttempt?.provider ?? baseConfig.provider,
+      model: lastAttempt?.model ?? baseConfig.model,
+      status: lastAttempt?.status ?? getErrorStatus(lastError),
+      attempts,
+      fallbackAttempted: attempts.length > 1 || hasExternalFallback,
+      visibleStreamStarted: state.visibleOutputStarted,
+      usageAttempts,
+      providerError: lastAttempt?.details,
+      crossResourceFailover: true,
+      ...(lastError !== null && lastError !== undefined
+        ? { cause: lastError }
+        : {}),
+    });
+  };
 
   const DEFAULT_TOTAL_TIMEOUT_MS = 3_600_000;
   const configuredTotalTimeoutMs = baseConfig.totalTimeoutMs === undefined
@@ -661,7 +692,8 @@ export async function chat(
           visibleOutputStarted: state.visibleOutputStarted,
           sameProviderRecoveryUsed: state.sameProviderRecoveryUsed,
           streamContinuationUsed: state.streamContinuationUsed,
-          hasFallback: state.providerIndex < attemptConfigs.length - 1,
+          hasFallback: state.providerIndex < attemptConfigs.length - 1 ||
+            hasExternalFallback,
           hasSameModelFallback: false,
         });
         const statusReason = decision.action === "accept"
@@ -818,6 +850,18 @@ export async function chat(
             state.forceRecoveryCue = false;
             continue;
           }
+          if (hasExternalFallback && decision.action === "fallback") {
+            lastError = new Error(
+              `LLM attempt produced no reusable output (${decision.reason})`,
+            );
+            warnRecoveryAttempt(
+              decision.reason,
+              attemptConfig,
+              undefined,
+              "Cross-resource failover",
+            );
+            throwCrossResourceFailover(getErrorMessage(lastError));
+          }
           lastError = new Error(
             `LLM attempt produced no reusable output (${decision.reason})`,
           );
@@ -842,6 +886,21 @@ export async function chat(
         }
 
         if (decision.action === "fallback") {
+          if (state.providerIndex >= attemptConfigs.length - 1) {
+            lastError = lastError ?? new Error(
+              `LLM generate exhausted this resource (${decision.reason})`,
+            );
+            if (hasExternalFallback) {
+              warnRecoveryAttempt(
+                decision.reason,
+                attemptConfig,
+                undefined,
+                "Cross-resource failover",
+              );
+              throwCrossResourceFailover(getErrorMessage(lastError));
+            }
+            break;
+          }
           state.recoveryContext = nextRecoveryContext;
           state.lastRecoveryReason = decision.reason;
           state.providerIndex++;
@@ -969,7 +1028,8 @@ export async function chat(
           visibleOutputStarted: state.visibleOutputStarted,
           sameProviderRecoveryUsed: state.sameProviderRecoveryUsed,
           streamContinuationUsed: state.streamContinuationUsed,
-          hasFallback: !totalTimedOut && nextIndex < attemptConfigs.length,
+          hasFallback: (!totalTimedOut && nextIndex < attemptConfigs.length) ||
+            hasExternalFallback,
           hasSameModelFallback: !totalTimedOut &&
             nextIndex < attemptConfigs.length &&
             sharesProviderModel(
@@ -1074,6 +1134,15 @@ export async function chat(
           state.forceRecoveryCue = false;
           continue;
         }
+        if (hasExternalFallback && decision.action === "fallback") {
+          warnRecoveryAttempt(
+            state.lastRecoveryReason,
+            attemptConfig,
+            undefined,
+            "Cross-resource failover",
+          );
+          throwCrossResourceFailover(getErrorMessage(lastError));
+        }
         break;
       }
 
@@ -1090,6 +1159,18 @@ export async function chat(
 
       if (decision.action === "fallback") {
         const nextConfig = attemptConfigs[nextIndex];
+        if (!nextConfig) {
+          if (hasExternalFallback) {
+            warnRecoveryAttempt(
+              state.lastRecoveryReason,
+              attemptConfig,
+              undefined,
+              getErrorMessage(error),
+            );
+            throwCrossResourceFailover(getErrorMessage(lastError));
+          }
+          break;
+        }
         warnRecoveryAttempt(
           state.lastRecoveryReason,
           attemptConfig,

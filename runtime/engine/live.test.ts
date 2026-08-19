@@ -200,7 +200,7 @@ Deno.test("live subscription failures remain independent and ephemeral", async (
           correlationId: "cursor-a",
         }),
       AggregateError,
-      "live processor operation",
+      "live processor(s) failed",
     );
     assertEquals(calls.sort(), ["bad", "good"]);
     const event = await observed.read();

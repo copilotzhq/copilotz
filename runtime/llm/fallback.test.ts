@@ -5,7 +5,7 @@ import {
   assertRejects,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import { chat, LLMProviderError } from "./index.ts";
+import { chat, isCrossResourceFailover, LLMProviderError } from "./index.ts";
 import type { ProviderRegistry } from "./types.ts";
 
 const registry: ProviderRegistry = {
@@ -198,36 +198,9 @@ Deno.test("chat records content-free full and reusable-prefix fingerprints", asy
   }
 });
 
-Deno.test("chat materializes messages separately for each provider attempt", async () => {
+Deno.test("chat does not execute a different-provider fallback", async () => {
   const originalFetch = globalThis.fetch;
-  const seenContents: string[] = [];
   let calls = 0;
-
-  const registry: ProviderRegistry = {
-    anthropic: () => ({
-      endpoint: "https://example.test/anthropic",
-      headers: () => ({}),
-      body: (messages) => {
-        seenContents.push(String(messages[0]?.content ?? ""));
-        return {};
-      },
-      extractContent: () => null,
-    }),
-    openai: () => ({
-      endpoint: "https://example.test/openai",
-      headers: () => ({}),
-      body: (messages) => {
-        seenContents.push(String(messages[0]?.content ?? ""));
-        return {};
-      },
-      extractContent: (data: any) => {
-        const content = data?.choices?.[0]?.delta?.content;
-        return typeof content === "string" && content.length > 0
-          ? [{ text: content }]
-          : null;
-      },
-    }),
-  };
 
   globalThis.fetch = (url) => {
     calls += 1;
@@ -248,45 +221,35 @@ Deno.test("chat materializes messages separately for each provider attempt", asy
   };
 
   try {
-    const response = await chat(
-      {
-        messages: [{ role: "user", content: "hello" }],
-        materializeMessages: (messages, config) =>
-          messages.map((message) => ({
-            ...message,
-            content: `${message.content} via ${config.provider}`,
-          })),
-      },
-      {
-        provider: "anthropic",
-        model: "primary",
-        apiKey: "test",
-        estimateCost: false,
-        fallbacks: [{ provider: "openai", model: "fallback" }],
-      },
-      {},
-      undefined,
-      registry,
+    await assertRejects(
+      () =>
+        chat(
+          { messages: [{ role: "user", content: "hello" }] },
+          {
+            provider: "anthropic",
+            model: "primary",
+            apiKey: "test",
+            estimateCost: false,
+            fallbacks: [{ provider: "openai", model: "fallback" }],
+          },
+          {},
+          undefined,
+          registry,
+        ),
+      LLMProviderError,
     );
-
-    assertEquals(response.answer, "ok");
-    assertEquals(response.provider, "openai");
-    assertEquals(calls, 2);
-    assertEquals(seenContents, ["hello via anthropic", "hello via openai"]);
+    assertEquals(calls, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-Deno.test("chat skips same-provider fallbacks for auth failures", async () => {
+Deno.test("chat skips same-provider fallbacks for auth failures without leaving the resource", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
-  const warnings: unknown[][] = [];
   let calls = 0;
 
-  console.warn = (...args: unknown[]) => {
-    warnings.push(args);
-  };
+  console.warn = () => {};
   globalThis.fetch = () => {
     calls += 1;
     if (calls === 1) {
@@ -310,36 +273,27 @@ Deno.test("chat skips same-provider fallbacks for auth failures", async () => {
   };
 
   try {
-    const response = await chat(
-      { messages: [{ role: "user", content: "hello" }] },
-      {
-        provider: "anthropic",
-        model: "primary",
-        apiKey: "test",
-        estimateCost: false,
-        fallbacks: [
-          { provider: "anthropic", model: "same-provider-fallback" },
-          { provider: "openai", model: "cross-provider-fallback" },
-        ],
-      },
-      {},
-      undefined,
-      registry,
+    await assertRejects(
+      () =>
+        chat(
+          { messages: [{ role: "user", content: "hello" }] },
+          {
+            provider: "anthropic",
+            model: "primary",
+            apiKey: "test",
+            estimateCost: false,
+            fallbacks: [
+              { provider: "anthropic", model: "same-provider-fallback" },
+              { provider: "openai", model: "cross-provider-fallback" },
+            ],
+          },
+          {},
+          undefined,
+          registry,
+        ),
+      LLMProviderError,
     );
-
-    assertEquals(response.answer, "ok");
-    assertEquals(response.provider, "openai");
-    assertEquals(response.model, "cross-provider-fallback");
-    assertEquals(calls, 2);
-    assertEquals(warnings.length, 1);
-    assertEquals(
-      (warnings[0][1] as Record<string, unknown>).reason,
-      "auth_error",
-    );
-    assertEquals(
-      (warnings[0][1] as Record<string, unknown>).nextModel,
-      "cross-provider-fallback",
-    );
+    assertEquals(calls, 1);
   } finally {
     globalThis.fetch = originalFetch;
     console.warn = originalWarn;
@@ -591,30 +545,30 @@ Deno.test("chat preserves safe billing details and skips same-provider fallbacks
   };
 
   try {
-    const response = await chat(
-      { messages: [{ role: "user", content: "hello" }] },
-      {
-        provider: "anthropic",
-        model: "primary",
-        apiKey: "test",
-        estimateCost: false,
-        fallbacks: [
-          { provider: "anthropic", model: "same-provider-fallback" },
-          { provider: "openai", model: "cross-provider-fallback" },
-        ],
-      },
-      {},
-      undefined,
-      registry,
+    const thrown = await assertRejects(
+      () =>
+        chat(
+          { messages: [{ role: "user", content: "hello" }] },
+          {
+            provider: "anthropic",
+            model: "primary",
+            apiKey: "test",
+            estimateCost: false,
+            fallbacks: [
+              { provider: "anthropic", model: "same-provider-fallback" },
+              { provider: "openai", model: "cross-provider-fallback" },
+            ],
+          },
+          {},
+          undefined,
+          registry,
+        ),
+      LLMProviderError,
     );
 
-    assertEquals(response.answer, "ok");
-    assertEquals(calls, [
-      "https://example.test/anthropic",
-      "https://example.test/openai",
-    ]);
-    assertEquals(response.usageAttempts?.[0]?.error?.reason, "billing_error");
-    assertEquals(response.usageAttempts?.[0]?.error?.details, {
+    assertEquals(calls, ["https://example.test/anthropic"]);
+    assertEquals(thrown.usageAttempts?.[0]?.error?.reason, "billing_error");
+    assertEquals(thrown.usageAttempts?.[0]?.error?.details, {
       type: "billing_error",
       code: "insufficient_quota",
       message: "Credit balance is too low",
@@ -626,38 +580,11 @@ Deno.test("chat preserves safe billing details and skips same-provider fallbacks
   }
 });
 
-Deno.test("chat resolves provider-specific fallback api keys when provider changes", async () => {
+Deno.test("chat surfaces LLMCrossResourceFailover when a later chain target exists", async () => {
   const originalFetch = globalThis.fetch;
-  const calls: Array<{ url: string; authorization: string | null }> = [];
-  const registry: ProviderRegistry = {
-    anthropic: () => ({
-      endpoint: "https://example.test/anthropic",
-      headers: (config) => ({ "x-api-key": config.apiKey ?? "" }),
-      body: () => ({}),
-      extractContent: () => null,
-    }),
-    openai: () => ({
-      endpoint: "https://example.test/openai",
-      headers: (config) => ({ Authorization: `Bearer ${config.apiKey}` }),
-      body: () => ({}),
-      extractContent: (data: any) => {
-        const content = data?.choices?.[0]?.delta?.content;
-        return typeof content === "string" && content.length > 0
-          ? [{ text: content }]
-          : null;
-      },
-    }),
-  };
-
-  globalThis.fetch = (url, init?: RequestInit) => {
-    const requestInit = init as { headers?: HeadersInit } | undefined;
-    const headers = new Headers(requestInit?.headers);
-    calls.push({
-      url: String(url),
-      authorization: headers.get("authorization") ??
-        headers.get("x-api-key"),
-    });
-
+  let calls = 0;
+  globalThis.fetch = (url) => {
+    calls += 1;
     if (String(url).includes("/anthropic")) {
       return Promise.resolve(
         new Response("bad anthropic request", {
@@ -666,16 +593,6 @@ Deno.test("chat resolves provider-specific fallback api keys when provider chang
         }),
       );
     }
-
-    if (headers.get("authorization") !== "Bearer openai-secret") {
-      return Promise.resolve(
-        new Response("wrong key", {
-          status: 401,
-          statusText: "Unauthorized",
-        }),
-      );
-    }
-
     return Promise.resolve(
       new Response(
         `data: ${
@@ -689,26 +606,25 @@ Deno.test("chat resolves provider-specific fallback api keys when provider chang
   };
 
   try {
-    const response = await chat(
-      { messages: [{ role: "user", content: "hello" }] },
-      {
-        provider: "anthropic",
-        model: "primary",
-        apiKey: "anthropic-secret",
-        estimateCost: false,
-        fallbacks: [{ provider: "openai", model: "fallback" }],
-      },
-      { OPENAI_API_KEY: "openai-secret" },
-      undefined,
-      registry,
+    const thrown = await assertRejects(
+      () =>
+        chat(
+          { messages: [{ role: "user", content: "hello" }] },
+          {
+            provider: "anthropic",
+            model: "primary",
+            apiKey: "test",
+            estimateCost: false,
+            fallbacks: [{ provider: "openai", model: "fallback" }],
+          },
+          {},
+          undefined,
+          registry,
+          { hasExternalFallback: true },
+        ),
     );
-
-    assertEquals(response.answer, "ok");
-    assertEquals(response.provider, "openai");
-    assertEquals(response.model, "fallback");
-    assertEquals(calls.length, 2);
-    assertEquals(calls[0].authorization, "anthropic-secret");
-    assertEquals(calls[1].authorization, "Bearer openai-secret");
+    assertEquals(isCrossResourceFailover(thrown), true);
+    assertEquals(calls, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

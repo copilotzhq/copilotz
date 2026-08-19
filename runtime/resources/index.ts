@@ -1,9 +1,9 @@
 export type {
   Agent,
   AgentCapabilities,
-  AgentRealtimeRuntime,
-  AgentRuntimes,
-  AgentTextRuntime,
+  AgentRuntime,
+  AgentRuntimeFallback,
+  AgentRuntimeMode,
   API,
   APIAuth,
   APIPrepareRequest,

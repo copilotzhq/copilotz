@@ -136,6 +136,18 @@ export type CollectionRuntime = Readonly<{
   ): Promise<void>;
 }>;
 
+const activeTransactions = new WeakMap<
+  CollectionRuntime,
+  () => SqlExecutor | undefined
+>();
+
+/** Internal bridge for capabilities that must join a collection transaction. */
+export function activeCollectionTransaction(
+  runtime: CollectionRuntime,
+): SqlExecutor | undefined {
+  return activeTransactions.get(runtime)?.();
+}
+
 type PreparedWrite = Readonly<{
   body: CollectionEventBody<CollectionRecord>;
   record: CollectionRecord;
@@ -327,7 +339,12 @@ export function createCollectionRuntime(
   const rememberWrite = <TWrite extends CollectionWrite<CollectionRecord>>(
     write: TWrite,
   ): TWrite => {
-    activeScope()?.writes.push(write);
+    const scope = activeScope();
+    if (!scope) return write;
+    if (Object.isFrozen(scope.writes) || !Object.isExtensible(scope.writes)) {
+      scope.writes = [...scope.writes];
+    }
+    scope.writes.push(write);
     return write;
   };
 
@@ -854,7 +871,7 @@ export function createCollectionRuntime(
       namespace,
       settlementScopeId,
       correlationId,
-      writes: Object.freeze(writes),
+      writes: Object.freeze(writes.slice()),
       dispatch: Object.freeze({
         handles: Object.freeze(reports.flatMap((item) => [...item.handles])),
         failures: Object.freeze(reports.flatMap((item) => [...item.failures])),
@@ -862,7 +879,7 @@ export function createCollectionRuntime(
     });
   };
 
-  return Object.freeze({
+  const runtime: CollectionRuntime = Object.freeze({
     bind,
     get: <
       TSelect extends CollectionRecord = CollectionRecord,
@@ -884,6 +901,8 @@ export function createCollectionRuntime(
         namespace,
       ),
   });
+  activeTransactions.set(runtime, () => activeScope()?.transaction);
+  return runtime;
 }
 
 export async function resolveCollectionEventBody<
@@ -899,4 +918,3 @@ export async function resolveCollectionEventBody<
     event.dataRef,
   );
 }
-

@@ -208,7 +208,7 @@ function publicAgent(agent: Agent): Readonly<Record<string, unknown>> {
     name: agent.name,
     role: agent.role ?? null,
     ...(agent.description ? { description: agent.description } : {}),
-    ...(agent.runtimes ? { runtimes: structuredClone(agent.runtimes) } : {}),
+    ...(agent.runtime ? { runtime: structuredClone(agent.runtime) } : {}),
     ...(agent.capabilities
       ? { capabilities: structuredClone(agent.capabilities) }
       : {}),

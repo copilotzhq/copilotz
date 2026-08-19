@@ -92,10 +92,49 @@ export function denoAssetFilesystem(
       }
       return "created";
     },
+    async writeReplace(input) {
+      const path = safePath(root, input.key);
+      await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), {
+        recursive: true,
+      });
+      await Deno.writeFile(path, input.bytes);
+    },
+    async append(input) {
+      const path = safePath(root, input.key);
+      await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), {
+        recursive: true,
+      });
+      const file = await Deno.open(path, {
+        create: true,
+        write: true,
+        append: true,
+      });
+      try {
+        await writeAll(file, input.bytes);
+        await file.sync();
+        return (await file.stat()).size;
+      } finally {
+        file.close();
+      }
+    },
+    async truncate(path, byteLength) {
+      const full = safePath(root, path);
+      try {
+        await Deno.truncate(full, byteLength);
+      } catch (error) {
+        if (error instanceof Deno.errors.NotFound && byteLength === 0) return;
+        throw error;
+      }
+    },
     stat: (key) => readHead(safePath(root, key)),
     read: (key) => Deno.readFile(safePath(root, key)),
     async open(key) {
       const file = await Deno.open(safePath(root, key), { read: true });
+      return file.readable;
+    },
+    async openFrom(key, offset) {
+      const file = await Deno.open(safePath(root, key), { read: true });
+      if (offset > 0) await file.seek(offset, Deno.SeekMode.Start);
       return file.readable;
     },
     async delete(key) {

@@ -38,6 +38,11 @@ const forbidden = [
   "continuityPatch",
   "MemoryConsolidator",
   "WorkflowPromptMemory",
+  "defineRealtimeProviderResource",
+  "createRealtimeStreamWorkload",
+  "createRealtimeProviderContext",
+  "isRealtimeProviderResource",
+  "RealtimeProviderResource",
 ] as const;
 
 const retiredOxian = [

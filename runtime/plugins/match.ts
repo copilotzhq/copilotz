@@ -65,7 +65,9 @@ function matchesClause(
   event: ProcessorMatchInput,
   data: unknown,
 ): boolean {
-  if (clause.eventType !== event.type) return false;
+  if (clause.eventType !== "*" && clause.eventType !== event.type) {
+    return false;
+  }
   if (
     clause.namespace !== undefined &&
     !matchesPartial(clause.namespace, event.namespace)

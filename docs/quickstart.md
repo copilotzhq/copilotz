@@ -17,10 +17,11 @@ const app = await createCopilotz({
       name: "Support",
       role: "Answer clearly and use tools when useful.",
       capabilities: {},
-      runtimes: {
-        text: { type: "llm", provider: "openai", model: "gpt-5-mini" },
+      runtime: {
+        provider: "openai",
+        model: "gpt-5-mini",
+        apiKey,
       },
-      llmOptions: { apiKey },
     }],
   },
 });

@@ -9,6 +9,8 @@ export {
 } from "./body-store.ts";
 export type {
   AssetBodyHead,
+  AssetBodySpill,
+  AssetBodySpillHead,
   AssetBodyStore,
   AssetBodyStoreKind,
   AssetFilesystemAccess,
@@ -19,6 +21,15 @@ export type {
   S3AssetStorageConfig,
 } from "./body-store.ts";
 export { createS3AssetBodyStore } from "./s3-body-store.ts";
+export { createDatabaseAssetBodyStore } from "./database-body-store.ts";
+export {
+  createProgressiveBodyWriter,
+  openProgressiveBodyFollower,
+} from "./progressive.ts";
+export type {
+  ProgressiveBodyFollower,
+  ProgressiveBodyWriter,
+} from "./progressive.ts";
 export { createAssetStorageRuntime } from "./storage.ts";
 export { assetIdFromRef, formatAssetRef } from "./asset-ref.ts";
 export {

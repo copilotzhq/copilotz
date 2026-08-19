@@ -2,6 +2,8 @@ import { S3Client } from "@bradenmacdonald/s3-lite-client";
 import { createContentError } from "./errors.ts";
 import type {
   AssetBodyHead,
+  AssetBodySpill,
+  AssetBodySpillHead,
   AssetBodyStore,
   PutAssetBodyInput,
   S3AssetStorageConfig,
@@ -128,6 +130,312 @@ export function createS3AssetBodyStore(
     }
   };
 
+  const putObject = async (
+    key: string,
+    bytes: Uint8Array,
+    mediaType: string,
+    headers: Record<string, string> = {},
+  ): Promise<void> => {
+    const response = await client.makeRequest({
+      method: "PUT",
+      objectName: key,
+      bucketName: bucket,
+      statusCode: 200,
+      payload: requestPayload(bytes),
+      headers: new Headers({
+        "content-type": mediaType,
+        "content-length": String(bytes.byteLength),
+        ...headers,
+      }),
+    });
+    if (!response.bodyUsed) await response.arrayBuffer();
+    if (!response.ok) {
+      throw createContentError(
+        "asset_storage_unavailable",
+        `Object upload failed with status ${response.status}.`,
+      );
+    }
+  };
+
+  const getObjectBytes = async (key: string): Promise<Uint8Array | null> => {
+    try {
+      const response = await client.getObject(key, { bucketName: bucket });
+      if (response.status === 404) return null;
+      return new Uint8Array(await response.arrayBuffer());
+    } catch (error) {
+      const status =
+        (error as { status?: number; statusCode?: number }).status ??
+          (error as { statusCode?: number }).statusCode;
+      const code = (error as { code?: string }).code;
+      if (status === 404 || code === "NoSuchKey" || code === "NotFound") {
+        return null;
+      }
+      throw error;
+    }
+  };
+
+  const stagingPrefix = (key: string) => `${key}.progressive/`;
+  const stagingMetaKey = (key: string) => `${stagingPrefix(key)}meta.json`;
+  const stagingPartKey = (key: string, seq: number) =>
+    `${stagingPrefix(key)}${String(seq).padStart(8, "0")}`;
+
+  type S3SpillMeta = {
+    mediaType: string;
+    byteLength: number;
+    discarded: number;
+    reservationId: string;
+    parts: { seq: number; offset: number; length: number }[];
+  };
+
+  const readSpillMeta = async (key: string): Promise<S3SpillMeta | null> => {
+    const bytes = await getObjectBytes(stagingMetaKey(key));
+    if (!bytes) return null;
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as S3SpillMeta;
+    if (
+      typeof parsed.mediaType !== "string" ||
+      typeof parsed.byteLength !== "number" ||
+      typeof parsed.discarded !== "number" ||
+      !Array.isArray(parsed.parts)
+    ) {
+      throw createContentError(
+        "asset_corrupted",
+        "Progressive object staging metadata is invalid.",
+      );
+    }
+    parsed.reservationId = typeof parsed.reservationId === "string"
+      ? parsed.reservationId
+      : "";
+    return parsed;
+  };
+
+  const writeSpillMeta = (key: string, meta: S3SpillMeta) =>
+    putObject(
+      stagingMetaKey(key),
+      new TextEncoder().encode(JSON.stringify(meta)),
+      "application/json",
+    );
+
+  const deleteObject = (key: string) =>
+    client.deleteObject(key, { bucketName: bucket });
+
+  const spillHead = (
+    key: string,
+    meta: S3SpillMeta,
+  ): AssetBodySpillHead =>
+    Object.freeze({
+      key,
+      mediaType: meta.mediaType,
+      byteLength: meta.byteLength,
+      discarded: meta.discarded,
+      reservationId: meta.reservationId,
+    });
+
+  const requireSpillMeta = async (key: string): Promise<S3SpillMeta> => {
+    const meta = await readSpillMeta(key);
+    if (!meta) {
+      throw createContentError(
+        "asset_not_found",
+        "Progressive staging was not found.",
+      );
+    }
+    return meta;
+  };
+
+  const requireOwner = (
+    meta: S3SpillMeta,
+    reservationId: string,
+  ): void => {
+    if (meta.reservationId !== reservationId) {
+      throw createContentError(
+        "asset_conflict",
+        "Progressive writer no longer owns this asset body.",
+      );
+    }
+  };
+
+  const spill: AssetBodySpill = {
+    async reserve(input) {
+      const existing = await readSpillMeta(input.key);
+      if (existing) {
+        if (existing.mediaType !== input.mediaType) {
+          throw createContentError(
+            "asset_conflict",
+            "Progressive staging media type does not match the writer.",
+          );
+        }
+        if (!input.takeover) {
+          throw createContentError(
+            "asset_conflict",
+            "A progressive writer already owns this asset body.",
+          );
+        }
+        existing.reservationId = input.reservationId;
+        await writeSpillMeta(input.key, existing);
+        return spillHead(input.key, existing);
+      }
+      const created: S3SpillMeta = {
+        mediaType: input.mediaType,
+        byteLength: 0,
+        discarded: 0,
+        reservationId: input.reservationId,
+        parts: [],
+      };
+      try {
+        await putObject(
+          stagingMetaKey(input.key),
+          new TextEncoder().encode(JSON.stringify(created)),
+          "application/json",
+          { "if-none-match": "*" },
+        );
+      } catch (error) {
+        const raced = await readSpillMeta(input.key);
+        if (raced) {
+          throw createContentError(
+            "asset_conflict",
+            "A progressive writer already owns this asset body.",
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      return spillHead(input.key, created);
+    },
+    async head(key) {
+      const meta = await readSpillMeta(key);
+      return meta ? spillHead(key, meta) : null;
+    },
+    async append(input) {
+      const existing = await requireSpillMeta(input.key);
+      requireOwner(existing, input.reservationId);
+      if (existing.mediaType !== input.mediaType) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive staging media type does not match the writer.",
+        );
+      }
+      const meta: S3SpillMeta = existing;
+      if (input.bytes.byteLength > 0) {
+        const seq = (meta.parts.at(-1)?.seq ?? -1) + 1;
+        await putObject(
+          stagingPartKey(input.key, seq),
+          input.bytes,
+          input.mediaType,
+        );
+        meta.parts.push({
+          seq,
+          offset: meta.byteLength,
+          length: input.bytes.byteLength,
+        });
+        meta.byteLength += input.bytes.byteLength;
+      }
+      await writeSpillMeta(input.key, meta);
+      return spillHead(input.key, meta);
+    },
+    async read(input) {
+      const meta = await requireSpillMeta(input.key);
+      const start = Math.max(input.offset, meta.discarded);
+      const end = Math.min(input.end, meta.byteLength);
+      if (end <= start) return new Uint8Array();
+      const output = new Uint8Array(end - start);
+      let cursor = 0;
+      for (const part of meta.parts) {
+        const partEnd = part.offset + part.length;
+        if (partEnd <= start || part.offset >= end) continue;
+        const bytes = await getObjectBytes(
+          stagingPartKey(input.key, part.seq),
+        );
+        if (!bytes || bytes.byteLength !== part.length) {
+          throw createContentError(
+            "asset_corrupted",
+            "Progressive object staging part is missing.",
+          );
+        }
+        const from = Math.max(0, start - part.offset);
+        const to = Math.min(part.length, end - part.offset);
+        output.set(bytes.subarray(from, to), cursor);
+        cursor += to - from;
+      }
+      return output;
+    },
+    async truncate(key, byteLength, reservationId) {
+      const meta = await requireSpillMeta(key);
+      requireOwner(meta, reservationId);
+      if (byteLength < meta.discarded || byteLength > meta.byteLength) {
+        throw createContentError(
+          "content_invalid",
+          "Progressive truncate is outside the committed range.",
+        );
+      }
+      const kept: S3SpillMeta["parts"] = [];
+      for (const part of meta.parts) {
+        if (part.offset >= byteLength) {
+          await client.deleteObject(
+            stagingPartKey(key, part.seq),
+            { bucketName: bucket },
+          );
+          continue;
+        }
+        if (part.offset + part.length <= byteLength) {
+          kept.push(part);
+          continue;
+        }
+        const length = byteLength - part.offset;
+        const bytes = await getObjectBytes(stagingPartKey(key, part.seq));
+        if (!bytes) {
+          throw createContentError(
+            "asset_corrupted",
+            "Progressive object staging part is missing.",
+          );
+        }
+        await putObject(
+          stagingPartKey(key, part.seq),
+          bytes.subarray(0, length),
+          meta.mediaType,
+        );
+        kept.push({ ...part, length });
+      }
+      meta.parts = kept;
+      meta.byteLength = byteLength;
+      await writeSpillMeta(key, meta);
+      return spillHead(key, meta);
+    },
+    async discardPrefix(key, byteLength, reservationId) {
+      const meta = await requireSpillMeta(key);
+      requireOwner(meta, reservationId);
+      if (byteLength < meta.discarded || byteLength > meta.byteLength) {
+        throw createContentError(
+          "content_invalid",
+          "Progressive discard is outside the committed range.",
+        );
+      }
+      const kept: S3SpillMeta["parts"] = [];
+      for (const part of meta.parts) {
+        if (part.offset + part.length <= byteLength) {
+          await client.deleteObject(
+            stagingPartKey(key, part.seq),
+            { bucketName: bucket },
+          );
+          continue;
+        }
+        kept.push(part);
+      }
+      meta.parts = kept;
+      meta.discarded = byteLength;
+      await writeSpillMeta(key, meta);
+      return spillHead(key, meta);
+    },
+    async delete(key, reservationId) {
+      const meta = await readSpillMeta(key);
+      if (meta) {
+        requireOwner(meta, reservationId);
+        for (const part of meta.parts) {
+          await deleteObject(stagingPartKey(key, part.seq));
+        }
+      }
+      await deleteObject(stagingMetaKey(key));
+    },
+  };
+
   const store: AssetBodyStore = {
     kind: "object",
     backendId,
@@ -212,6 +520,7 @@ export function createS3AssetBodyStore(
       return response.body;
     },
     delete: (key) => client.deleteObject(key, { bucketName: bucket }),
+    spill,
     async *list(options = {}) {
       for await (
         const entry of client.listObjects({

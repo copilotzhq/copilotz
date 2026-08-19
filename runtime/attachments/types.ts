@@ -1,11 +1,8 @@
-import type { Agent } from "../resources/index.ts";
 import type { ContentInput } from "../content/index.ts";
 import type {
-  ConversationMessage,
   ConversationThread,
   Participant,
   ParticipantInput,
-  ToolExecution,
 } from "../domain/index.ts";
 import type {
   CopilotzEvent,
@@ -13,11 +10,6 @@ import type {
   EventSubject,
   EventVisibility,
 } from "../events/index.ts";
-import type { CopilotzProcessorCapabilities } from "../engine/types.ts";
-import type { CreateDeliveryMutationIdentity } from "../execution/index.ts";
-import type { ResolvedContent } from "../content/index.ts";
-
-export const COPILOTZ_STREAM_WORKLOAD = "copilotz.stream.v1";
 
 export type AttachmentParticipantRef = string | Participant;
 
@@ -53,21 +45,9 @@ export type AttachmentEventInput = Readonly<{
   visibility?: EventVisibility;
 }>;
 
-export type AttachmentStreamInput = Readonly<{
-  type: string;
-  mediaType: string;
-  payload: ReadableStream<Uint8Array>;
-  recipientId?: string;
-  correlationId?: string;
-  metadata?: Record<string, unknown>;
-  visibility?: EventVisibility;
-  outputMediaType?: string;
-}>;
-
 export type AttachmentSendInput =
   | AttachmentMessageInput
-  | AttachmentEventInput
-  | AttachmentStreamInput;
+  | AttachmentEventInput;
 
 export type AttachmentEventHandle = Readonly<{
   event: CopilotzEvent;
@@ -85,18 +65,9 @@ export type AttachmentMessageHandle =
     messageId: string;
   }>;
 
-export type AttachmentStreamHandle = Readonly<{
-  streamId: string;
-  eventId: string;
-  correlationId: string;
-  done: Promise<void>;
-  cancel(reason?: string): Promise<void>;
-}>;
-
 export type AttachmentSendResult =
   | AttachmentEventHandle
-  | AttachmentMessageHandle
-  | AttachmentStreamHandle;
+  | AttachmentMessageHandle;
 
 export type AttachmentOutputParticipant = Readonly<{
   id: string;
@@ -125,7 +96,6 @@ export type ThreadAttachment = Readonly<{
   participant: Participant;
   outputs: ReadableStream<AttachmentOutput>;
   send(input: AttachmentMessageInput): Promise<AttachmentMessageHandle>;
-  send(input: AttachmentStreamInput): Promise<AttachmentStreamHandle>;
   send(input: AttachmentEventInput): Promise<AttachmentEventHandle>;
   close(reason?: string): Promise<void>;
 }>;
@@ -153,133 +123,3 @@ export type RunHandle = Readonly<{
   done: Promise<void>;
   cancel(reason?: string): Promise<void>;
 }>;
-
-export type RealtimeProviderInput = Readonly<{
-  streamId: string;
-  namespace: string;
-  threadId: string;
-  correlationId: string;
-  inputType: string;
-  mediaType: string;
-  participantId: string;
-  recipientId: string;
-  agentId: string;
-  agent: Agent;
-  input: ReadableStream<Uint8Array>;
-  metadata: Readonly<Record<string, unknown>>;
-  /** Typed domain/event capabilities when the hosting worker supplies them. */
-  context?: RealtimeProviderContext;
-  signal: AbortSignal;
-}>;
-
-export type RealtimeContextMessageInput = Readonly<{
-  content: ContentInput | readonly ContentInput[];
-  sender?: "participant" | "agent" | ParticipantInput;
-  recipientIds?: readonly string[];
-  id?: string;
-  operationKey?: string;
-  metadata?: Record<string, unknown>;
-  visibility?: EventVisibility;
-}>;
-
-export type RealtimeContextMessageResult = Readonly<{
-  message: ConversationMessage;
-  event: DurableEvent;
-}>;
-
-export type RealtimeToolCallInput = Readonly<{
-  tool: string;
-  arguments?: unknown;
-  id?: string;
-  toolCallId?: string;
-  timeoutMs?: number;
-  metadata?: Record<string, unknown>;
-  historyVisibility?: "requester_only" | "public_status" | "public";
-}>;
-
-export type RealtimeToolCallResult = Readonly<{
-  execution: ToolExecution;
-  event: DurableEvent;
-  message: ConversationMessage;
-  output?: ResolvedContent;
-}>;
-
-export type RealtimeAgentAskInput = Readonly<{
-  target: string;
-  message: string;
-  id?: string;
-  toolCallId?: string;
-  timeoutMs?: number;
-  metadata?: Record<string, unknown>;
-}>;
-
-export type RealtimeAgentAskResult =
-  & RealtimeToolCallResult
-  & Readonly<{
-    answer?: ConversationMessage;
-    answerContent?: readonly ResolvedContent[];
-  }>;
-
-export type RealtimeProviderContext =
-  & CopilotzProcessorCapabilities
-  & Readonly<{
-    streamId: string;
-    threadId: string;
-    correlationId: string;
-    participantId: string;
-    agentParticipantId: string;
-    agentId: string;
-    signal: AbortSignal;
-    send(
-      input: RealtimeContextMessageInput,
-    ): Promise<RealtimeContextMessageResult>;
-    tool(input: RealtimeToolCallInput): Promise<RealtimeToolCallResult>;
-    ask(input: RealtimeAgentAskInput): Promise<RealtimeAgentAskResult>;
-  }>;
-
-export type RealtimeProviderOutput = Readonly<{
-  output?: Uint8Array | ReadableStream<Uint8Array>;
-  mediaType?: string;
-  metadata?: Record<string, unknown>;
-}>;
-
-export type RealtimeProviderResource = Readonly<{
-  id: string;
-  type: "realtime";
-  open(
-    input: RealtimeProviderInput,
-  ): RealtimeProviderOutput | Promise<RealtimeProviderOutput>;
-}>;
-
-export type StreamDispatchMetadata = Readonly<{
-  schema: "copilotz.stream.dispatch.v1";
-  databaseSchema: string;
-  streamId: string;
-  eventId: string;
-  namespace: string;
-  threadId: string;
-  correlationId: string;
-  inputType: string;
-  mediaType: string;
-  participantId: string;
-  recipientId: string;
-  agentId: string;
-  providerId: string;
-  metadata: Readonly<Record<string, unknown>>;
-}>;
-
-export type RealtimeProviderContextBase = Readonly<{
-  databaseSchema: string;
-  event: DurableEvent;
-  metadata: StreamDispatchMetadata;
-  settlementScopeId: string;
-  signal: AbortSignal;
-  createMutationIdentity: CreateDeliveryMutationIdentity;
-}>;
-
-export type RealtimeProviderContextFactory = (
-  base: RealtimeProviderContextBase,
-) =>
-  | RealtimeProviderContext
-  | void
-  | Promise<RealtimeProviderContext | void>;

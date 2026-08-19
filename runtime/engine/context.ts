@@ -1,4 +1,5 @@
 import type { MutationIdentity } from "../domain/index.ts";
+import { activeCollectionTransaction } from "../collections/kernel.ts";
 import {
   createEphemeralEvent,
   matchesCopilotzEvent,
@@ -8,6 +9,8 @@ import {
   createFeatureInvoker,
   type FeatureContext,
 } from "../features/index.ts";
+import { createStreamWriter } from "../streams/writer.ts";
+import { openStreamFollower } from "../streams/follower.ts";
 import type {
   CopilotzCapabilityBase,
   CopilotzProcessorCapabilities,
@@ -52,6 +55,16 @@ function capabilitySourceMetadata(
     return { sourceStreamId: base.source.id };
   }
   return { sourceLiveDispatchId: base.source.id };
+}
+
+function contentMutationContext(
+  options: CreateCopilotzProcessorCapabilitiesOptions,
+) {
+  return {
+    transaction: activeCollectionTransaction(options.collectionRuntime) ??
+      options.session,
+    tables: options.eventStore.tables,
+  };
 }
 
 /** Binds typed processor capabilities to one delivery's tenant and identity. */
@@ -149,20 +162,17 @@ export function createCopilotzProcessorCapabilities(
       });
     },
     materialize(input, materializeOptions = {}) {
-      return options.assets.materialize({
-        transaction: options.session,
-        tables: options.eventStore.tables,
-      }, {
+      return options.assets.materialize(contentMutationContext(options), {
         namespace,
         content: input,
         origin: materializeOptions.origin,
       });
     },
     linkOwner(ownerId, content) {
-      return options.assets.linkOwner({
-        transaction: options.session,
-        tables: options.eventStore.tables,
-      }, { namespace, ownerId, content });
+      return options.assets.linkOwner(
+        contentMutationContext(options),
+        { namespace, ownerId, content },
+      );
     },
     publish(input, publishOptions) {
       const publishIdentity = mutation(
@@ -179,6 +189,42 @@ export function createCopilotzProcessorCapabilities(
     resolve: (ref) => options.resolver.get(ref, { namespace }),
     resolveMany: (refs) => options.resolver.getMany(refs, { namespace }),
     open: (ref) => options.resolver.open(ref, { namespace }),
+  });
+
+  const boundStreams = () => {
+    const streams = options.collectionRuntime.get("stream");
+    if (!streams) {
+      throw new TypeError("Stream collection is not bound.");
+    }
+    return streams;
+  };
+
+  const streams: CopilotzProcessorCapabilities["streams"] = Object.freeze({
+    write(input) {
+      return createStreamWriter({
+        streams: boundStreams(),
+        store: options.streamBodyStore,
+        namespace,
+        threadId: input.threadId,
+        lane: input.lane,
+        mediaType: input.mediaType,
+        ...(input.participantId ? { participantId: input.participantId } : {}),
+        ...(input.metadata ? { metadata: input.metadata } : {}),
+        ...(input.id ? { id: input.id } : {}),
+        identity: mutation(`stream.write:${input.lane}:${input.mediaType}`),
+        ...(input.routing ? { routing: input.routing } : {}),
+        ...(input.visibility ? { visibility: input.visibility } : {}),
+      });
+    },
+    follow(input) {
+      return openStreamFollower({
+        streams: boundStreams(),
+        store: options.streamBodyStore,
+        namespace,
+        streamId: input.streamId,
+        ...(input.offset !== undefined ? { offset: input.offset } : {}),
+      });
+    },
   });
 
   const relations: CopilotzProcessorCapabilities["relations"] = Object.freeze({
@@ -343,44 +389,46 @@ export function createCopilotzProcessorCapabilities(
     },
   });
 
-  const capabilities: Omit<CopilotzProcessorCapabilities, "features"> =
-    Object.freeze({
-    namespace,
-    events,
-    resources,
-    content,
-    collections: options.collections.withScope({
+  const capabilities: Omit<CopilotzProcessorCapabilities, "features"> = Object
+    .freeze({
       namespace,
-      createMutationIdentity: options.base.createMutationIdentity,
-    }),
-    relations,
-    schedules,
-    knowledge,
-    memory,
-    transaction: (input) => {
-      const source = options.base.createMutationIdentity(
-        input.operationKey,
-        input.identity?.metadata,
-      );
-      return options.collectionRuntime.transaction({
-        ...input,
-        identity: {
-          causationId: input.identity?.causationId ?? source.causationId,
-          correlationId: input.identity?.correlationId ?? source.correlationId,
-          settlementScopeId: input.identity?.settlementScopeId ??
-            source.settlementScopeId,
-          ...(input.identity?.deduplicationId
-            ? { deduplicationId: input.identity.deduplicationId }
-            : {}),
-          metadata: {
-            ...source.metadata,
-            ...input.identity?.metadata,
+      events,
+      resources,
+      content,
+      streams,
+      collections: options.collections.withScope({
+        namespace,
+        createMutationIdentity: options.base.createMutationIdentity,
+      }),
+      relations,
+      schedules,
+      knowledge,
+      memory,
+      transaction: (input) => {
+        const source = options.base.createMutationIdentity(
+          input.operationKey,
+          input.identity?.metadata,
+        );
+        return options.collectionRuntime.transaction({
+          ...input,
+          identity: {
+            causationId: input.identity?.causationId ?? source.causationId,
+            correlationId: input.identity?.correlationId ??
+              source.correlationId,
+            settlementScopeId: input.identity?.settlementScopeId ??
+              source.settlementScopeId,
+            ...(input.identity?.deduplicationId
+              ? { deduplicationId: input.identity.deduplicationId }
+              : {}),
+            metadata: {
+              ...source.metadata,
+              ...input.identity?.metadata,
+            },
           },
-        },
-      });
-    },
-    collectionRuntime: options.collectionRuntime,
-  });
+        });
+      },
+      collectionRuntime: options.collectionRuntime,
+    });
   return Object.freeze({
     ...capabilities,
     features: attachProcessorFeatures(options, capabilities),
@@ -406,7 +454,11 @@ function attachProcessorFeatures(
     features,
     events: Object.freeze({ list: capabilities.events.list }),
     deliveries: Object.freeze({
-      list: () => Promise.resolve(Object.freeze([])),
+      list: (listOptions = {}) =>
+        options.eventStore.listDeliveries({
+          ...listOptions,
+          namespace: capabilities.namespace,
+        }),
     }),
     relations: Object.freeze({ list: capabilities.relations.list }),
   });

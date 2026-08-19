@@ -140,6 +140,28 @@ const jobNoteDefinition = defineCollection({
   },
 });
 
+const projectionScaleDefinition = defineCollection({
+  name: "projection_scale",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      id: { type: "string" },
+      namespace: { type: "string" },
+      sequence: { type: "integer" },
+      createdAt: { type: "string" },
+      updatedAt: { type: "string" },
+    },
+    required: [
+      "id",
+      "namespace",
+      "sequence",
+      "createdAt",
+      "updatedAt",
+    ],
+  } as const,
+});
+
 type Fixture = Readonly<{
   db: TestDatabase;
   session: SqlSession;
@@ -531,6 +553,44 @@ async function runKernelSuite(url: string, schema: string): Promise<void> {
 
 Deno.test("collection kernel on PGlite", async () => {
   await runKernelSuite(":memory:", "copilotz_collection_kernel");
+});
+
+Deno.test("collection verification scans every projection page", async () => {
+  const fixture = await createFixture(
+    ":memory:",
+    "copilotz_collection_projection_pages",
+  );
+  fixture.runtime.bind(projectionScaleDefinition);
+  try {
+    await fixture.runtime.transaction({
+      operationKey: "projection-scale:create",
+      namespace: "tenant-scale",
+      async execute({ collections }) {
+        for (let sequence = 0; sequence < 1_001; sequence += 1) {
+          await collections.projection_scale.create({
+            id: `projection-${sequence.toString().padStart(4, "0")}`,
+            sequence,
+          }, { namespace: "tenant-scale" });
+        }
+      },
+    });
+
+    assertEquals(
+      await count(
+        fixture.session,
+        `SELECT count(*)::int AS n FROM ${fixture.store.tables.nodes}
+         WHERE namespace = $1 AND type = $2`,
+        ["tenant-scale", "projection_scale"],
+      ),
+      1_001,
+    );
+    assertEquals(
+      await fixture.runtime.verify(projectionScaleDefinition, "tenant-scale"),
+      { ok: true },
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
 });
 
 Deno.test({

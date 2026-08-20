@@ -619,6 +619,32 @@ Deno.test("A28 upgrade refuses active queue work and live thread leases", async 
   }
 });
 
+Deno.test("A28 upgrade refuses schemas with unsupported legacy markers", async () => {
+  const { db, session } = await createFixture();
+  try {
+    await session.query(
+      `CREATE TABLE "asset_bodies" (
+         "key" TEXT PRIMARY KEY,
+         "media_type" TEXT NOT NULL,
+         "body" TEXT NOT NULL
+       )`,
+    );
+    const blocked = await assertRejects(() =>
+      upgradeV1Schema(session, "public")
+    );
+    assert(blocked instanceof Error);
+    assertStringIncludes(blocked.message, "unsupported tables");
+    assertStringIncludes(blocked.message, "asset_bodies");
+    const tables = await session.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema = 'public' AND table_name = 'asset_bodies'`,
+    );
+    assertEquals(tables.rows.length, 1);
+  } finally {
+    await db.close();
+  }
+});
+
 Deno.test("A28 upgrade rolls back when legacy assets have no resolver", async () => {
   const { db, session } = await createFixture();
   const schema = uniqueSchema("asset_rollback");

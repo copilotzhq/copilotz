@@ -129,6 +129,17 @@ const EPHEMERAL_TYPES = Object.freeze([
   "tool_call.delta",
 ]);
 
+const UNSUPPORTED_UPGRADE_MARKERS = Object.freeze([
+  "asset_bodies",
+  "asset_body_staging",
+  "body_references",
+  "content_bodies",
+  "content_parts",
+  "event_bodies",
+  "streams",
+  "streams_v1_staging",
+]);
+
 const NODE_MIGRATION_BATCH_SIZE = 100;
 const LLM_ATTEMPT_MIGRATION_BATCH_SIZE = 1;
 
@@ -383,6 +394,25 @@ async function assertLegacyWorkDrained(
         `Refusing to upgrade '${schema}': thread worker leases are active.`,
       );
     }
+  }
+}
+
+async function assertNoUnreleasedUpgradeMarkers(
+  session: SqlSession,
+  schema: string,
+): Promise<void> {
+  const markers: string[] = [];
+  for (const table of UNSUPPORTED_UPGRADE_MARKERS) {
+    if (await tableExists(session, schema, table)) {
+      markers.push(table);
+    }
+  }
+  if (markers.length > 0) {
+    throw new Error(
+      `Refusing to upgrade '${schema}': unsupported tables ${
+        markers.join(", ")
+      } indicate a partially migrated or unsupported source schema.`,
+    );
   }
 }
 
@@ -2535,6 +2565,7 @@ export async function upgradeV1Schema(
     throw new Error(`Schema '${schema}' has no Copilotz event table.`);
   }
   await assertLegacyWorkDrained(session, schema);
+  await assertNoUnreleasedUpgradeMarkers(session, schema);
 
   return await session.transaction(async (transaction) => {
     const eventsStaged = await stageTable(transaction, schema, "events");

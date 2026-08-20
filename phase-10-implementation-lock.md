@@ -1,12 +1,16 @@
 # Phase 10 implementation lock — declarative collections, resources, plugins, and streams
 
-Status: **simplified implementation lock; implementation not started**
+Status: **implementation lock; implementation not started. Next slice is 10A
+only.**
 
 Locked: 2026-08-19
 
 Simplification review: 2026-08-19
 
 First-principles rewrite: 2026-08-19
+
+Slice split: 2026-08-20 — 10B is three independently approved slices (EventBodyStore,
+BodyStore, composition). 10C does not wait for composition.
 
 Repository: `lib/copilotz`
 
@@ -1531,26 +1535,30 @@ migration; server projection tests remain in `server/`.
 Implement Phase 10 in this order:
 
 1. **10A — Feature action descriptors and effects.**
-2. **10B — typed resource requirements, narrow injection, root plugin
-   composition, final BodyStore, mandatory EventBodyStore, and replay-manifest
-   cutover.**
-3. **10C — canonical declared content.**
-4. **10D1–10D6 — first-party domain plugins**, one vertical slice at a time:
+2. **10B1 — mandatory EventBodyStore.** Kernel event/replay consumer in the same
+   slice. No dual reader.
+3. **10B2 — final BodyStore and `body_references`.** Existing asset and stream
+   byte callers move in the same slice. No dual reader.
+4. **10C — canonical declared content.** Starts after 10B2. Does not wait for
+   10B3. This is the slice that removes `materialize`/`linkOwner` from Features.
+5. **10B3 — typed resource requirements, flat plugins, and root composition.**
+   Starts after 10C. Deletes `PLUGIN_RESOURCE_TYPES` and `resources.list`.
+6. **10D1–10D6 — first-party domain plugins**, one vertical slice at a time:
    1. usage;
    2. knowledge;
    3. memory;
    4. schedules;
    5. Stream semantic/plugin cutover over the shared BodyStore;
    6. goals.
-5. **10E1–10E5 — remaining first-party capability families**, one vertical slice
+7. **10E1–10E5 — remaining first-party capability families**, one vertical slice
    at a time:
    1. agents and context policy;
    2. LLM and embedding;
    3. tools, API, and MCP;
    4. skills; and
    5. channels and admin.
-6. **10F — production convergence and old-tree deletion.**
-7. **Phase 10 closure — schema freeze and Phase 11 published-data migration
+8. **10F — production convergence and old-tree deletion.**
+9. **Phase 10 closure — schema freeze and Phase 11 published-data migration
    inventory.**
 
 The dependency shape is:
@@ -1558,9 +1566,13 @@ The dependency shape is:
 ```text
 10A action effects
   |
-10B typed requirements + flat plugins + BodyStore + EventBodyStore
+10B1 EventBodyStore
+  |
+10B2 BodyStore + body_references
   |
 10C declared content
+  |
+10B3 typed resources + flat plugins
   |
 10D1 usage -> D2 knowledge -> D3 memory -> D4 schedules
                                             |
@@ -1577,6 +1589,9 @@ The dependency shape is:
                                          Phase 11
 ```
 
+10B1, 10B2, and 10B3 are independently approved green slices. Closing one does
+not authorize the next. Do not reassemble them into one cutover.
+
 Streams precede goals so the ordinary `ConversationRunner` binding can compose
 over the plugin-owned Stream implementation. Goals depend on
 `ConversationRunner`, not Stream internals.
@@ -1585,24 +1600,35 @@ over the plugin-owned Stream implementation. Goals depend on
 
 ### 8.1 Implementation scope
 
-- Change Feature definitions from a resource-wide read/write mode to action
-  descriptors with one input schema, `effect`, Collection/Feature `requires`,
-  and `execute`.
+- Introduce `defineFeature()`. A Feature is `{ id, actions }`. `id` is the only
+  global identity. Delete `FeatureResource.alias` and the resource-wide `mode`.
+  Consumer-local names come only from keys in that consumer's
+  `requires.features` / `requires.collections`.
+- Every action is a descriptor with required JSON Schema `input`, `effect`,
+  Collection/Feature `requires`, and `execute`. There is no raw function action
+  and no `{ effect, execute }` wrapper without `input` and `requires`.
 - Source-rewrite every Feature definition through the mapping in 5.1, migrate
   all callers/tests, and delete the resource-wide shape.
 - Build the final effect-specific Collection/Feature handle types and inject
   only each action's declared aliases: query actions cannot mutate, transaction
   actions receive no workflow-only operation, and workflow actions receive no
-  ambient transaction. 10B adds typed resource aliases to these same context
+  ambient transaction. 10B3 adds typed resource aliases to these same context
   types; it does not replace them.
 - Reuse current same-namespace transaction joining and operation identity.
-- Add `content.fields` to the action descriptor but activate its preflight in
-  10C.
+- Add `content.fields` to the action descriptor type but activate its preflight
+  in 10C.
+
+10A does not change Feature execute bodies except to read declared aliases
+(`context.collections.messages` instead of a global map). Keep
+`materialize`/`linkOwner` until 10C. Do not add `ResourceRequirement` injection,
+invoke-time “not supported” stubs, EventBodyStore, BodyStore cutover, or a
+`/migration` facade.
 
 Do not inventory source strings such as provider/sleep/body-pump method names.
 That is brittle. 10A rejects invalid Collection/Feature calls structurally.
-Existing fixed resource buckets remain only until their one global 10B cutover;
-10A adds no adapter or second context path for them.
+`resources.list` / `get` / `require` and `PLUGIN_RESOURCE_TYPES` remain only
+until 10B3. `context.streams` remains only until 10D5. 10A adds no adapter or
+second context path for them.
 
 ### 8.2 Exit proof
 
@@ -1622,68 +1648,106 @@ schema-free invocation rejection.
 
 Use an admin query and a content-free transaction Feature as real descriptor
 consumers. Prove every Feature is source-migrated, the old shape is rejected,
-and no normalizer remains. Record that 10B has not started.
+and no normalizer remains. Record that 10B1 has not started.
 
-## 9. Slice 10B — typed resources and composition
+## 9. Slices 10B1–10B3 — EventBodyStore, BodyStore, and composition
 
-### 9.1 Global cutover
+These are three independently approved slices. Do not implement them as one
+cutover. 10C starts after 10B2 and must not wait for 10B3.
 
-Implement 5.2–5.4 as one global cutover before any new consumer uses it:
+### 9.0 Consumers
 
-- extend the existing plugin registry rather than creating another registry;
-- change plugin authoring to the flat shape in 6.8, source-migrate every plugin,
-  derive introspection metadata, and delete `manifest.provides`, `manifest.ts`,
-  and `{ manifest, resources }` input support;
-- delete partial-resource imports/presets and migrate callers to whole plugins
-  or explicit configured plugin factories;
-- define the real target contracts for every installed fixed-family value,
-  migrate every provider and consumer to bindings, and delete
-  `PLUGIN_RESOURCE_TYPES` plus type/id-based `list/get/require` lookup;
-- resolve requirements after stable binding-ID override precedence;
-- complete typed resource `requires` on every Feature action, add all `requires`
-  to Processors, and construct their exact effect-shaped aliased contexts using
-  the handle types already established in 10A, subject only to the Stream
-  sequencing exception below;
-- remove broad registry/context access from every definition except that one
-  inventoried Stream handle; and
-- delete `PluginSource`, `PluginResolver`, module resolution, hidden semantic
-  plugin selection, and first-party shorthand.
+| Slice | Primitive | Real consumer in the same slice | Forbidden |
+| ----- | --------- | ------------------------------- | --------- |
+| 10B1 | EventBodyStore | Collection kernel and event replay | Dual reader, `ContentRef`, asset-node fallback, `CREATE TABLE` during mutation |
+| 10B2 | BodyStore + `body_references` | Existing asset and stream byte callers | Dual reader, old `asset_bodies` bridge, retain/discard |
+| 10B3 | Typed resources + flat plugins | Feature/Processor `requires.resources` and the synthesized BodyStore binding | Temporary bucket contracts, `resources.list`, starting before 10C |
 
-10B defines no temporary bucket contracts. When a definition depends on a
-fixed-family value, introduce that family's real target contract and migrate its
-provider and consumer together. Physical/domain moves that do not affect
-injection remain in 10D/10E.
+### 9.1 Slice 10B1 — EventBodyStore
 
-One sequencing exception is explicit. The core text Processor and current Tool
-executor still call the sole pre-existing `context.streams.write/follow` handle;
-attachment fixtures exercise that same path. The final Stream Feature cannot
-exist before 10C assetization. Until 10D5 closes, that single inherited field
-remains on workflow Processor contexts, but static inventory permits only those
-callers to use it; no selective legacy injector, target Stream Feature, or
-second lookup path is added, and no new caller may use it. 10D5 introduces the
-final Feature, migrates those callers to their declared Feature alias, rewrites
-the fixtures, and deletes `context.streams` in the same slice.
+Introduce one internal SQL-transactional `EventBodyStore` and move every new
+event/replay caller to it. Event Bodies use their own `event_bodies` rows and
+`EventBodyRef`; they are never Asset nodes or `ContentRef`s. Delete the
+unreleased Asset-node event-body writer/reader once all callers move. There is
+no published event-body-as-asset dataset on this branch, so there is nothing to
+dual-read.
 
-### 9.2 Protected BodyStore adapter and scoped facade
+The runtime does not expose EventBodyStore as a plugin resource because
+event-body atomicity is mandatory kernel behavior.
 
-BodyStore is the first real protected runtime consumer of the final resolver.
+The physical Event Body layout is intentionally one table:
+
+```text
+event_bodies
+  namespace, event_body_id, schema_version
+  body JSONB, digest, created_at
+```
+
+`(namespace, event_body_id)` is the primary key. Rows are insert-only,
+digest-verified, and written in the same SQL transaction as the envelope,
+projection, edges, Body-reference rows, and deliveries. Event bodies are bounded
+canonical JSON, so they need neither the semantic BodyStore lifecycle nor chunk
+state.
+
+Provision `event_bodies` with the ordinary event-schema provisioner. Do not run
+`CREATE TABLE IF NOT EXISTS` inside a mutation. Do not add `updated_at`. Do not
+return `{ assetId }` or any `ContentRef`.
+
+Every Collection Event Body carries one bounded metadata-only manifest:
+
+```ts
+type AssetManifestEntry = Readonly<{
+  assetId: string;
+  bodyId: string;
+  mediaType: string;
+  byteLength: number;
+  digest: `sha256:${string}`;
+  origin?: AssetOrigin;
+  metadata?: Readonly<Record<string, unknown>>;
+  createdAt: string;
+}>;
+
+type AssetManifest = readonly AssetManifestEntry[];
+```
+
+The manifest contains only Assets first materialized by that stable logical
+mutation and is `[]` otherwise. Membership follows operation/Asset identity, not
+whether this particular attempt executed the insert: after an indeterminate
+commit, a retry loads/verifies the existing Asset and reproduces the exact entry
+from the already-committed event; a genuinely pre-existing bare ref contributes
+none. It contains no bytes or physical locator. Parent mutations and standalone
+Asset publication use the same entry shape. This is immutable replay authority
+for protected Asset metadata and its Body reference, not a second record field
+or semantic event.
+
+10B1 exit proof: same-transaction envelope/body/projection/edge/delivery commit,
+immutable digest verification, replay, and the absence of Event Body Asset nodes,
+Asset-backed readers, dual readers, and mutation-time DDL. Record that 10B2 has
+not started.
+
+### 9.2 Slice 10B2 — Protected BodyStore adapter and scoped facade
+
+`defineProtectedResource` may appear here as the BodyStore contract object the
+engine holds. Plugins cannot bind it. The composer that synthesizes the
+database default binding is 10B3; 10B2 does not wait for that composer.
+
 Evolve the useful implementation code—deterministic IDs, conditional writes,
 integrity validation, progressive append/follow/seal, fencing, and grace-based
-orphan maintenance—into one final contract. In the same 10B slice, migrate every
-Asset and Stream byte caller and adapter, then delete `AssetBodyStore`,
+orphan maintenance—into one final contract. In the same 10B2 slice, migrate
+every Asset and Stream byte caller and adapter, then delete `AssetBodyStore`,
 `AssetStorageOptions`, `retain`/`discard`, `asset_bodies`, `asset_body_staging`,
 and their tests/schema assumptions. There is no adapter, option, table, or read
 bridge between the unreleased and final body shapes.
 
-10B also implements 5.6 and moves protected Asset liveness plus the current
+10B2 also implements 5.6 and moves protected Asset liveness plus the current
 Stream's `bodyId` onto the one `body_references` projection. An open Stream and
 the interim successfully closed Stream pin their Body. `fail`/`abandon` unset
 `bodyId` only with their abort/cleanup transition. This liveness cutover belongs
-to physical Body correctness. After 10B the sole interim Stream writer surface
+to physical Body correctness. After 10B2 the sole interim Stream writer surface
 is `write`, implemented over `append` with an internally retry-stable append ID,
 plus `finalize`/`fail`/`abandon` over `seal`/`abort`. `retain`, `discard`,
 physical `key`, provisional writer `assetId`, and their tests/types are deleted.
-10B adds no target Stream API, alias, re-export, normalizer, or second protocol
+10B2 adds no target Stream API, alias, re-export, normalizer, or second protocol
 path. 10D5 migrates handle `write` to Feature `open`, handle `follow` to Feature
 `follow`, writer `write` to `append`, and the three terminal methods to
 `settle`; it atomically swaps the closed Stream pin to the Asset pin and deletes
@@ -1932,57 +1996,48 @@ absent -> open -> sealing -> ready     progressive success
 Ready is immutable. Failed versus abandoned is Stream semantics, not a physical
 body state.
 
-### 9.3 Mandatory Event Bodies and Asset manifest
+### 9.3 Slice 10B3 — typed resources and flat plugins
 
-In the same 10B architecture cutover, introduce one internal SQL-transactional
-`EventBodyStore` and move every new event/replay caller to it. Event Bodies use
-their own `event_bodies` rows and `EventBodyRef`; they are never Asset nodes or
-`ContentRef`s. Delete the unreleased Asset-node event-body writer/reader once
-all callers move. The runtime does not expose EventBodyStore as a plugin
-resource because event-body atomicity is mandatory kernel behavior.
+Implement after 10C is green. Implement 5.2–5.4 before any new semantic consumer
+uses typed resource injection:
 
-The physical Event Body layout is intentionally one table:
+- extend the existing plugin registry rather than creating another registry;
+- change plugin authoring to the flat shape in 6.8, source-migrate every plugin,
+  derive introspection metadata, and delete `manifest.provides`, `manifest.ts`,
+  and `{ manifest, resources }` input support;
+- delete partial-resource imports/presets and migrate callers to whole plugins
+  or explicit configured plugin factories;
+- define the real target contracts for every installed fixed-family value,
+  migrate every provider and consumer to bindings, and delete
+  `PLUGIN_RESOURCE_TYPES` plus type/id-based `list/get/require` lookup;
+- resolve requirements after stable binding-ID override precedence;
+- complete typed resource `requires` on every Feature action, add all `requires`
+  to Processors, and construct their exact effect-shaped aliased contexts using
+  the handle types already established in 10A, subject only to the Stream
+  sequencing exception below;
+- synthesize the one lowest-precedence database BodyStore binding from the
+  10B2 contract; an explicit application binding with that tuple replaces it;
+- remove broad registry/context access from every definition except that one
+  inventoried Stream handle; and
+- delete `PluginSource`, `PluginResolver`, module resolution, hidden semantic
+  plugin selection, and first-party shorthand.
 
-```text
-event_bodies
-  namespace, event_body_id, schema_version
-  body JSONB, digest, created_at
-```
+10B3 defines no temporary bucket contracts. When a definition depends on a
+fixed-family value, introduce that family's real target contract and migrate its
+provider and consumer together. Physical/domain moves that do not affect
+injection remain in 10D/10E.
 
-`(namespace, event_body_id)` is the primary key. Rows are insert-only,
-digest-verified, and written in the same SQL transaction as the envelope,
-projection, edges, Body-reference rows, and deliveries. Event bodies are bounded
-canonical JSON, so they need neither the semantic BodyStore lifecycle nor chunk
-state.
+One sequencing exception is explicit. The core text Processor and current Tool
+executor still call the sole pre-existing `context.streams.write/follow` handle;
+attachment fixtures exercise that same path. The final Stream Feature cannot
+exist before 10C assetization. Until 10D5 closes, that single inherited field
+remains on workflow Processor contexts, but static inventory permits only those
+callers to use it; no selective legacy injector, target Stream Feature, or
+second lookup path is added, and no new caller may use it. 10D5 introduces the
+final Feature, migrates those callers to their declared Feature alias, rewrites
+the fixtures, and deletes `context.streams` in the same slice.
 
-Every Collection Event Body carries one bounded metadata-only manifest:
-
-```ts
-type AssetManifestEntry = Readonly<{
-  assetId: string;
-  bodyId: string;
-  mediaType: string;
-  byteLength: number;
-  digest: `sha256:${string}`;
-  origin?: AssetOrigin;
-  metadata?: Readonly<Record<string, unknown>>;
-  createdAt: string;
-}>;
-
-type AssetManifest = readonly AssetManifestEntry[];
-```
-
-The manifest contains only Assets first materialized by that stable logical
-mutation and is `[]` otherwise. Membership follows operation/Asset identity, not
-whether this particular attempt executed the insert: after an indeterminate
-commit, a retry loads/verifies the existing Asset and reproduces the exact entry
-from the already-committed event; a genuinely pre-existing bare ref contributes
-none. It contains no bytes or physical locator. Parent mutations and standalone
-Asset publication use the same entry shape. This is immutable replay authority
-for protected Asset metadata and its Body reference, not a second record field
-or semantic event.
-
-### 9.4 Database body layout
+### 9.4 Database body layout (10B2)
 
 ```text
 content_bodies
@@ -2044,9 +2099,30 @@ this layout. They cover inline database, filesystem, and object/S3/GCS
 locations; normal BodyStore reads have no old-table, old-locator, or inline
 fallback.
 
-### 9.5 Exit proof
+### 9.5 Exit proofs
 
-The reusable resolution/injection suite proves:
+**10B2** runs common immutable/progressive/lease/fencing conformance for every
+BodyStore adapter. Run restart persistence only for durable adapters and
+cross-instance writer/follower cases only for cluster-reach adapters. Prove
+exactly one winner for expired-generation compare-and-takeover and rejection
+while a lease is live. Prove trusted scope and maintenance projection, bounded
+compare-and-delete, and that every Asset/Stream byte caller uses the final
+BodyStore. Prove all superseded types/options/methods/tables/readers/writers/
+tests absent, including `asset_bodies`, `asset_body_staging`, `retain`,
+`discard`, and dual readers.
+
+Prove `bodyRefs` derives only from final canonical records, commits with graph
+state, and rebuilds through replay. Cover direct-put rollback, reserve-before-
+record failure, interim open/closed Stream pins, failed/abandoned reference
+removal, seal-before-close recovery, Asset reference creation/deletion,
+zero-reference grace, protection/deadline expiry, live-writer rejection,
+cross-instance races, and compare-delete races. No cleanup test may inspect a
+Stream name or rely on a process-local in-flight set.
+
+Close 10B2 only after the old body path is absent. EventBodyStore is already
+frozen from 10B1. Record that 10C has not started.
+
+**10B3** runs after 10C. The reusable resolution/injection suite proves:
 
 - required, optional, many, exact-binding, ambiguity, declaration order, and
   exact injected result shapes;
@@ -2067,33 +2143,11 @@ Application acceptance also proves the role-discriminated `createCopilotz`,
 Processor binding, missing-selection failure, and the absence of namespace or
 physical-schema overrides on every operation.
 
-Add one EventBodyStore/kernel suite proving same-transaction envelope/body/
-projection/edge/Body-reference/delivery commit, immutable digest verification,
-metadata-manifest retry stability, replay, and the absence of Event Body Asset
-nodes and Asset-backed readers.
-
-Run common immutable/progressive/lease/fencing conformance for every BodyStore
-adapter. Run restart persistence only for durable adapters and cross-instance
-writer/follower cases only for cluster-reach adapters. Prove exactly one winner
-for expired-generation compare-and-takeover and rejection while a lease is live.
-Prove trusted scope and maintenance projection, bounded compare-and-delete, the
-database default and application override, deployment rejection, plugin-binding
-rejection, and that every Asset/Stream byte caller uses the final BodyStore.
-Prove all superseded types/options/methods/tables/readers/writers/tests absent.
-
-Prove `bodyRefs` derives only from final canonical records, commits with graph
-state, and rebuilds through replay. Cover direct-put rollback, reserve-before-
-record failure, interim open/closed Stream pins, failed/abandoned reference
-removal, seal-before-close recovery, Asset reference creation/deletion,
-zero-reference grace, protection/deadline expiry, live-writer rejection,
-cross-instance races, and compare-delete races. No cleanup test may inspect a
-Stream name or rely on a process-local in-flight set.
-
-Close 10B only after the fixed registry, old plugin shape, broad contexts other
-than the inventoried sole-path Stream handle, alternate composition inputs, and
-old body path are absent. There is one final resolver, BodyStore,
-EventBodyStore, and Asset-manifest contract before 10C starts. Record that 10C
-has not started.
+Prove the database BodyStore default and application override, deployment
+rejection, and plugin-binding rejection of the protected contract. Close 10B3
+only after the fixed registry, old plugin shape, broad contexts other than the
+inventoried sole-path Stream handle, and alternate composition inputs are
+absent. Record that 10D1 has not started.
 
 ## 10. Slice 10C — canonical declared content
 
@@ -2113,11 +2167,12 @@ SQL before kernel preflight and must be rejected.
 
 Stream content remains excluded until 10D5 because an open Stream has no Asset.
 The final BodyStore, its database layout, every byte caller, and deletion of the
-unreleased body path are already complete in 10B. 10C uses that frozen scoped
+unreleased body path are already complete in 10B2. 10C uses that frozen scoped
 content mechanism and does not alter resource composition or physical body APIs.
+10B3 has not started.
 
 The final EventBodyStore and Asset manifest are already mandatory and frozen in
-10B. 10C populates that manifest through the declared-content path but adds no
+10B1. 10C populates that manifest through the declared-content path but adds no
 event-body persistence shape or reader.
 
 ### 10.2 One reusable preflight
@@ -2138,7 +2193,7 @@ The sidecar is not destination-bound: the actual Collection call determines
 ownership, and one prepared Asset may serve several fields or owners. Do not add
 durable receipts, ledgers, holds, adoption rows, destination binding, or
 mid-attempt worker handoff. A retry repeats the deterministic preflight and
-reuses the 10B manifest membership rule.
+reuses the 10B1 manifest membership rule.
 
 ### 10.3 Mutation pipeline
 
@@ -2216,12 +2271,12 @@ The same suite proves scoped standalone
 resolution, retry-stable Asset events, and deletion rejection while any owner
 edge remains.
 
-Keep the 10B BodyStore/protected-binding suites green and prove declared content
+Keep the 10B2 BodyStore suites green and prove declared content
 uses only that scoped facade and frozen EventBodyStore/manifest. 10C adds no
 body adapter, event-body, or storage-selection path.
 
 Each core Collection proves its declaration and removal of manual
-`materialize`/`linkOwner` choreography. Record that 10D1 has not started.
+`materialize`/`linkOwner` choreography. Record that 10B3 has not started.
 
 ## 11. Slices 10D1–10D6 — first-party domain plugins
 
@@ -2248,7 +2303,7 @@ Every slice follows the same recipe:
 | ----- | --------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | 10D1  | usage     | usage; no content fields                                                      | Records attempts once without payload copies.                                                                  |
 | 10D2  | knowledge | `document.source`; chunk has no content                                       | Loading/embedding is workflow work; document/chunk commit is one transaction action.                           |
-| 10D3  | memory    | `long_term_memory.content`, `contextSnapshotContent`, `memory_record.content` | Consumes the `memoryKinds` `many` bindings already cut over in 10B.                                            |
+| 10D3  | memory    | `long_term_memory.content`, `contextSnapshotContent`, `memory_record.content` | Consumes the `memoryKinds` `many` bindings already cut over in 10B3.                                           |
 | 10D4  | schedules | `scheduled_job.run.content`                                                   | Host trigger calls a workflow; one pure command advances state and emits the event consumed by a Processor.    |
 | 10D5  | streams   | `stream.content` only after successful settlement                             | Stream owns semantics; one BodyStore supplies bytes; settlement reuses kernel assetization.                    |
 | 10D6  | goals     | no new Collection                                                             | Goal orchestration is a workflow over one cohesive ConversationRunner resource plus exact domain dependencies. |
@@ -2268,11 +2323,11 @@ Every slice follows the same recipe:
 
 ## 12. Slice 10D5 — Stream semantic/plugin cutover
 
-10B has already migrated every byte caller and adapter to the frozen BodyStore,
+10B2 has already migrated every byte caller and adapter to the frozen BodyStore,
 deleted the intermediate body API/schema, and proved all implementations. 10D5
 changes only Stream semantics, ownership, public API, recovery policy, and
 plugin placement. It adds no body abstraction, capability negotiation, or table.
-It also replaces the inventoried `context.streams` callers from 10B with an
+It also replaces the inventoried `context.streams` callers from 10B3 with an
 ordinary declared Stream Feature alias and deletes that last context exception.
 
 ### 12.1 Stream declaration and API
@@ -2492,7 +2547,7 @@ gateway heuristic, or deployment negotiator.
 
 ### 12.4 Exit proof
 
-Keep the 10B BodyStore conformance suites green, then run one Stream vertical
+Keep the 10B2 BodyStore conformance suites green, then run one Stream vertical
 suite proving:
 
 - direct put and progressive open/append/follow/seal/abort;
@@ -2515,7 +2570,7 @@ suite proving:
 
 ## 13. Slices 10E1–10E5 — remaining capability plugins
 
-10B has already replaced the fixed registry buckets with real contracts and
+10B3 has already replaced the fixed registry buckets with real contracts and
 bindings. The architecture is still incomplete while the business semantics for
 agents, LLM/embedding, tools/API/MCP, skills, channels, or admin remain in
 runtime modules. Move each family vertically to ordinary plugins and delete its
@@ -2535,7 +2590,7 @@ binding being installed never grants an agent permission to use it.
 Each slice must:
 
 1. preserve the real target contracts, provider/consumer bindings, and narrow
-   requirements already cut over in 10B;
+   requirements already cut over in 10B3;
 2. move the remaining business policy and adapter factory source to its final
    plugin owner;
 3. migrate package subpaths and every in-repository/downstream compile fixture;
@@ -2655,7 +2710,9 @@ Phase 10 does not:
 - build a generalized DI lifecycle/authority/placement framework;
 - add distributed composition fingerprints when explicit workload IDs suffice;
 - keep any superseded internal API, table, protocol, or directory for an
-  unreleased phase; or
+  unreleased phase;
+- publish `/migration` or a published-schema facade before the Phase 10 schema
+  freeze; or
 - weaken namespace, capability, idempotency, or immutable-event guarantees.
 
 At lock time, Phase 10 implementation has not started. The next permitted

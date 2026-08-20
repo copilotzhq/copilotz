@@ -2940,7 +2940,8 @@ Phase 10 not started
 
 ### Phase 10 — Declarative Collections, resources, plugins and Streams
 
-Status: **simplified implementation lock written; implementation not started**.
+Status: **implementation lock written; implementation not started. Next slice is
+10A only.**
 
 This handoff incorporates
 [phase-10-implementation-lock.md](phase-10-implementation-lock.md) as the
@@ -2969,25 +2970,30 @@ semantic event.
 Phase 10 proceeds through independently approved green slices:
 
 1. 10A — per-action query/transaction/workflow Feature descriptors with exact
-   Collection/Feature aliases.
-2. 10B — flat plugin declarations, minimal typed resource requirements, narrow
-   alias injection, package-root composition, the final BodyStore
-   adapter/caller/schema cutover, mandatory EventBodyStore, and Asset replay
-   manifest as one global architecture slice. Only the inventoried pre-existing
-   `context.streams` handle remains for its current text/tool callers until
-   10D5; no parallel Stream Feature exists.
-3. 10C — canonical-kernel declared content for `message`, `llm_attempt`, and
-   `tool_execution` over the frozen Body/Event substrate. Stream content remains
-   excluded until its settlement is real.
-4. 10D1–10D6 — usage, knowledge, memory, schedules, Stream semantic/plugin
+   Collection/Feature aliases. `defineFeature({ id, actions })`. No global
+   Feature alias. Do not drop `materialize`/`linkOwner` in this slice.
+2. 10B1 — mandatory EventBodyStore (`EventBodyRef`, no `ContentRef`, no dual
+   reader). Collection kernel is the consumer.
+3. 10B2 — final BodyStore and `body_references`. Existing asset/stream byte
+   callers move; `asset_bodies` / retain-discard are deleted. No dual reader.
+4. 10C — canonical-kernel declared content for `message`, `llm_attempt`, and
+   `tool_execution` over the frozen Body/Event substrate. This slice removes
+   Feature `materialize`/`linkOwner`. Stream content remains excluded until
+   settlement is real. Does not wait for 10B3.
+5. 10B3 — flat plugin declarations, typed resource requirements, narrow
+   resource injection, and package-root composition. Deletes
+   `PLUGIN_RESOURCE_TYPES` and `resources.list`. Only the inventoried
+   pre-existing `context.streams` handle remains for its current text/tool
+   callers until 10D5; no parallel Stream Feature exists.
+6. 10D1–10D6 — usage, knowledge, memory, schedules, Stream semantic/plugin
    cutover over the shared BodyStore, and goals, one vertical plugin slice at a
    time. 10D5 introduces the final Stream Feature, migrates those callers, and
    deletes the sole interim handle.
-5. 10E1–10E5 — agents/context, LLM/embedding, tools/API/MCP, skills, and
+7. 10E1–10E5 — agents/context, LLM/embedding, tools/API/MCP, skills, and
    channels/admin, one vertical capability slice at a time.
-6. 10F — production convergence, old-tree deletion, and exact package-surface
+8. 10F — production convergence, old-tree deletion, and exact package-surface
    proof.
-7. Closure — persisted-schema freeze and Phase 11 published-data migration
+9. Closure — persisted-schema freeze and Phase 11 published-data migration
    inventory. Every superseded in-repository path is already deleted.
 
 Streams precede goals so the ordinary `ConversationRunner` binding can compose
@@ -3042,8 +3048,8 @@ Migration requirements:
 
 The published `0.60.18` baseline contains no Stream Collection, Stream events,
 `asset_bodies`, or `asset_body_staging`. Those were introduced on this
-unreleased branch and are deleted in 10B; Phase 11 must not migrate or decode
-them.
+unreleased branch and are deleted in 10B2; Phase 11 must not migrate or decode
+them. Unreleased asset-node event bodies are deleted in 10B1, not dual-read.
 
 Migration code is isolated under `migration/`. Normal application startup never
 dual-reads an old schema. Immutable historical events may use explicit versioned

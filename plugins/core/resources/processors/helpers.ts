@@ -1,4 +1,7 @@
-import type { BoundCollection, CollectionRecord } from "@copilotz/copilotz/collections";
+import type {
+  CollectionRecord,
+  ScopedCollection,
+} from "@copilotz/copilotz/collections";
 import type {
   ConversationMessage,
   ConversationThread,
@@ -50,8 +53,8 @@ export function stringArray(value: unknown): readonly string[] {
 export function requireCollection<T extends CollectionRecord>(
   context: CopilotzProcessorContext,
   name: string,
-): BoundCollection<T> {
-  const bound = context.collectionRuntime.get<T>(name);
+): ScopedCollection<T> {
+  const bound = context.collections[name] as ScopedCollection<T> | undefined;
   if (!bound) throw new Error(`Collection '${name}' is not bound.`);
   return bound;
 }
@@ -69,7 +72,9 @@ export function firstLlmResource(
   return context.resources.list("llm").find(isLlmResource);
 }
 
-export function collectionEventRecord(event: { data?: unknown }): CollectionRecord {
+export function collectionEventRecord(
+  event: { data?: unknown },
+): CollectionRecord {
   const data = asRecord(event.data);
   const record = asRecord(data.record);
   if (!record.id) throw new Error("Collection event is missing data.record.");
@@ -83,7 +88,9 @@ export function mapParticipant(record: CollectionRecord): Participant {
     externalId: String(record.externalId ?? record.id),
     participantType: record.participantType as Participant["participantType"],
     ...(optionalText(record.name) ? { name: optionalText(record.name) } : {}),
-    ...(optionalText(record.email) ? { email: optionalText(record.email) } : {}),
+    ...(optionalText(record.email)
+      ? { email: optionalText(record.email) }
+      : {}),
     ...(optionalText(record.agentId)
       ? { agentId: optionalText(record.agentId) }
       : {}),
@@ -103,9 +110,8 @@ export function mapMessage(
     threadId: String(record.threadId),
     sender,
     recipientIds: stringArray(record.recipientIds),
-    content: (Array.isArray(record.content)
-      ? record.content
-      : []) as ContentSequence,
+    content:
+      (Array.isArray(record.content) ? record.content : []) as ContentSequence,
     metadata: asRecord(record.metadata),
     ...(record.revision && typeof record.revision === "object"
       ? { revision: record.revision as ConversationMessage["revision"] }
@@ -155,11 +161,15 @@ export function mapLlmAttempt(record: CollectionRecord): LlmAttempt {
     ...(optionalText(record.initiatorParticipantId)
       ? { initiatorParticipantId: optionalText(record.initiatorParticipantId) }
       : {}),
-    ...(optionalText(record.agentId) ? { agentId: optionalText(record.agentId) } : {}),
+    ...(optionalText(record.agentId)
+      ? { agentId: optionalText(record.agentId) }
+      : {}),
     ...(optionalText(record.provider)
       ? { provider: optionalText(record.provider) }
       : {}),
-    ...(optionalText(record.model) ? { model: optionalText(record.model) } : {}),
+    ...(optionalText(record.model)
+      ? { model: optionalText(record.model) }
+      : {}),
     status: record.status as LlmAttempt["status"],
     attemptIndex: Number(record.attemptIndex ?? 0),
     ...(optionalText(record.parentAttemptId)
@@ -167,9 +177,8 @@ export function mapLlmAttempt(record: CollectionRecord): LlmAttempt {
       : {}),
     inputMessageIds: stringArray(record.inputMessageIds),
     availableToolIds: stringArray(record.availableToolIds),
-    content: (Array.isArray(record.content)
-      ? record.content
-      : []) as ContentSequence,
+    content:
+      (Array.isArray(record.content) ? record.content : []) as ContentSequence,
     ...(optionalText(record.finishReason)
       ? { finishReason: optionalText(record.finishReason) }
       : {}),
@@ -203,13 +212,14 @@ export function mapToolExecution(record: CollectionRecord): ToolExecution {
     ...(optionalText(record.participantId)
       ? { participantId: optionalText(record.participantId) }
       : {}),
-    ...(optionalText(record.agentId) ? { agentId: optionalText(record.agentId) } : {}),
+    ...(optionalText(record.agentId)
+      ? { agentId: optionalText(record.agentId) }
+      : {}),
     toolCallId: String(record.toolCallId),
     tool: asRecord(record.tool),
     status: record.status as ToolExecution["status"],
-    content: (Array.isArray(record.content)
-      ? record.content
-      : []) as ContentSequence,
+    content:
+      (Array.isArray(record.content) ? record.content : []) as ContentSequence,
     ...(optionalText(record.historyVisibility)
       ? { historyVisibility: optionalText(record.historyVisibility) }
       : {}),
@@ -238,8 +248,11 @@ export function participantInput(participant: CollectionRecord) {
   return {
     id: String(participant.id),
     externalId: String(participant.externalId ?? participant.id),
-    participantType: participant.participantType as Participant["participantType"],
-    ...(optionalText(participant.name) ? { name: optionalText(participant.name) } : {}),
+    participantType: participant
+      .participantType as Participant["participantType"],
+    ...(optionalText(participant.name)
+      ? { name: optionalText(participant.name) }
+      : {}),
     ...(optionalText(participant.email)
       ? { email: optionalText(participant.email) }
       : {}),
@@ -250,7 +263,9 @@ export function participantInput(participant: CollectionRecord) {
   } as const;
 }
 
-export function preparedContent(value: { content?: unknown } | unknown): unknown {
+export function preparedContent(
+  value: { content?: unknown } | unknown,
+): unknown {
   if (value && typeof value === "object" && "content" in value) {
     return (value as { content: unknown }).content;
   }
@@ -263,8 +278,8 @@ export async function listThreadMessages(
 ): Promise<readonly CollectionRecord[]> {
   const threads = requireCollection(context, "thread");
   const messages = requireCollection(context, "message");
-  const thread = await threads.get(threadId, context.namespace);
-  const records = await messages.list(context.namespace, {
+  const thread = await threads.get({ id: threadId });
+  const records = await messages.list({
     where: { threadId },
     order: { field: "createdAt", direction: "asc" },
     limit: 1_000,

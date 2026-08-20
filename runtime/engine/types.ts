@@ -43,16 +43,13 @@ import type {
   FailToolExecutionInput,
   ListDomainRelationsOptions,
   LlmAttempt,
-  LlmAttemptRepository,
   MessageRevisionResult,
   MutationIdentity,
   Participant,
   ParticipantPatch,
   ReviseMessageInput,
-  ScopedEventCollection,
   ThreadPatch,
   ToolExecution,
-  ToolExecutionRepository,
   UpdateLlmAttemptInput,
   UpdateToolExecutionInput,
   ValidateCollectionRecord,
@@ -86,7 +83,10 @@ import type {
   ExecutionWorkInput,
   LiveProcessorContextBase,
 } from "../execution/index.ts";
-import type { CollectionRuntime } from "../collections/index.ts";
+import type {
+  CollectionRuntime,
+  ScopedCollections,
+} from "../collections/index.ts";
 import type { FeatureInvoker } from "../features/index.ts";
 import type {
   PluginRegistry,
@@ -355,16 +355,12 @@ export type CopilotzProcessorCapabilities = Readonly<{
   resources: ScopedPluginResources;
   content: ScopedContent;
   streams: ScopedStreams;
-  collections: Readonly<Record<string, ScopedEventCollection>>;
+  collections: ScopedCollections;
   relations: ScopedRelations;
   schedules: ScopedScheduledJobs;
   knowledge: ScopedKnowledge;
   /** Internal typed aggregate used by semantic-memory consolidation. */
   memory: ScopedMemoryConsolidation;
-  /** Phase 2 collection kernel transaction. */
-  transaction: CollectionRuntime["transaction"];
-  /** Bound collection kernel. Processors query and write through this. */
-  collectionRuntime: CollectionRuntime;
   /** Reusable plugin commands. Joins this delivery's collection runtime. */
   features: FeatureInvoker;
 }>;
@@ -466,11 +462,8 @@ export type CopilotzEngineDatabaseScope = Readonly<{
     preparer: ContentPreparer;
     resolver: ContentResolver;
   }>;
-  conversation: ConversationRepository;
   collections: EventCollections;
   collectionRuntime: CollectionRuntime;
-  llmAttempts: LlmAttemptRepository;
-  toolExecutions: ToolExecutionRepository;
   relations: DomainRelationRepository;
   schedules: ScheduledJobRepository;
   knowledge: KnowledgeRepository;
@@ -513,11 +506,8 @@ export type CopilotzEngine = Readonly<{
     preparer: ContentPreparer;
     resolver: ContentResolver;
   }>;
-  conversation: ConversationRepository;
   collections: EventCollections;
   collectionRuntime: CollectionRuntime;
-  llmAttempts: LlmAttemptRepository;
-  toolExecutions: ToolExecutionRepository;
   relations: DomainRelationRepository;
   schedules: ScheduledJobRepository;
   knowledge: KnowledgeRepository;
@@ -605,10 +595,7 @@ export type CreateCopilotzProcessorCapabilitiesOptions = Readonly<{
   assets: DatabaseAssetRepository;
   preparer: ContentPreparer;
   resolver: ContentResolver;
-  conversation: ConversationRepository;
   collections: EventCollections;
-  llmAttempts: LlmAttemptRepository;
-  toolExecutions: ToolExecutionRepository;
   relations: DomainRelationRepository;
   schedules: ScheduledJobRepository;
   knowledge: KnowledgeRepository;

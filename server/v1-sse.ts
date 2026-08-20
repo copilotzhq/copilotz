@@ -1,4 +1,5 @@
 import type { CopilotzApplication } from "../runtime/application/index.ts";
+import { getMessage } from "./collection-projections.ts";
 import type {
   AttachmentOutput,
   AttachmentStreamOutput,
@@ -220,8 +221,10 @@ export function createV1SseProjector(
       output.durable && output.subject?.type === "message" &&
       output.type === "message.created"
     ) {
-      const message = await application.conversation.getMessage(
-        output.namespace,
+      const message = await getMessage(
+        application.collectionRuntime.withScope({
+          namespace: output.namespace,
+        }),
         output.subject.id,
       );
       if (!message) return null;

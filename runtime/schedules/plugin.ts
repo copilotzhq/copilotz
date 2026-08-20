@@ -2,16 +2,6 @@ import type { Agent } from "../resources/index.ts";
 import type { CollectionRecord } from "../domain/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import {
-  addParticipantToThreadRecord,
-  createMessageRecord,
-  createThreadRecord,
-  ensureParticipantRecord,
-  findParticipantByExternalId,
-  findThreadByExternalId,
-  loadCollectionRecord,
-  stringArray,
-} from "../engine/collection-writes.ts";
-import {
   type CopilotzPlugin,
   definePlugin,
   defineProcessor,
@@ -29,6 +19,22 @@ function required(value: unknown, name: string): string {
     throw new TypeError(`${name} must be non-empty.`);
   }
   return value.trim();
+}
+
+function stringArray(value: unknown): readonly string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+async function byExternalId(
+  context: CopilotzProcessorContext,
+  collection: "participant" | "thread",
+  externalId: string,
+): Promise<CollectionRecord | null> {
+  return (await context.collections[collection].queries.byExternalId({
+    externalId,
+  }))[0] ?? null;
 }
 
 function occurrence(value: unknown): ScheduledJobOccurrence {
@@ -55,8 +61,8 @@ async function sender(
   const descriptor = item.run.sender;
   const externalId = descriptor?.externalId?.trim() || item.jobId;
   const existing = descriptor?.id
-    ? await loadCollectionRecord(context, "participant", descriptor.id)
-    : await findParticipantByExternalId(context, externalId);
+    ? await context.collections.participant.get({ id: descriptor.id })
+    : await byExternalId(context, "participant", externalId);
   if (existing) {
     if (existing.participantType !== "job") {
       throw new Error(
@@ -65,7 +71,7 @@ async function sender(
     }
     return existing;
   }
-  return await ensureParticipantRecord(context, {
+  return await context.collections.participant.create({
     ...(descriptor?.id ? { id: descriptor.id } : {}),
     externalId,
     participantType: "job",
@@ -83,7 +89,7 @@ async function agentParticipant(
   context: CopilotzProcessorContext,
 ): Promise<CollectionRecord> {
   const externalId = agent.externalId?.trim() || agent.id;
-  const existing = await findParticipantByExternalId(context, externalId);
+  const existing = await byExternalId(context, "participant", externalId);
   if (existing) {
     if (existing.participantType !== "agent") {
       throw new Error(
@@ -92,7 +98,7 @@ async function agentParticipant(
     }
     return existing;
   }
-  return await ensureParticipantRecord(context, {
+  return await context.collections.participant.create({
     externalId,
     participantType: "agent",
     agentId: agent.id,
@@ -105,8 +111,8 @@ async function recipient(
   context: CopilotzProcessorContext,
 ): Promise<CollectionRecord> {
   const id = required(reference, "Scheduled recipient");
-  const existing = await loadCollectionRecord(context, "participant", id) ??
-    await findParticipantByExternalId(context, id);
+  const existing = await context.collections.participant.get({ id }) ??
+    await byExternalId(context, "participant", id);
   if (existing) return existing;
   const agent = context.resources.get<Agent>("agents", id);
   if (agent) return await agentParticipant(agent, context);
@@ -121,12 +127,12 @@ async function resolveThread(
 ): Promise<CollectionRecord> {
   const descriptor = item.run.thread;
   let thread = descriptor?.id
-    ? await loadCollectionRecord(context, "thread", descriptor.id)
+    ? await context.collections.thread.get({ id: descriptor.id })
     : descriptor?.externalId
-    ? await findThreadByExternalId(context, descriptor.externalId)
-    : await findThreadByExternalId(context, `scheduled-job:${item.jobId}`);
+    ? await byExternalId(context, "thread", descriptor.externalId)
+    : await byExternalId(context, "thread", `scheduled-job:${item.jobId}`);
   if (!thread) {
-    thread = await createThreadRecord(context, {
+    thread = await context.collections.thread.create({
       ...(descriptor?.id ? { id: descriptor.id } : {}),
       externalId: descriptor?.externalId?.trim() ||
         `scheduled-job:${item.jobId}`,
@@ -135,21 +141,23 @@ async function resolveThread(
         ...structuredClone(descriptor?.metadata ?? {}),
         scheduledJobId: item.jobId,
       },
-      participantIds: [senderParticipant.id, ...recipients.map((value) => value.id)],
+      participantIds: [
+        senderParticipant.id,
+        ...recipients.map((value) => value.id),
+      ],
     }, { operationKey: `scheduled-thread:${item.jobId}` });
   }
   const ids = new Set(stringArray(thread.participantIds));
   for (const participant of [senderParticipant, ...recipients]) {
     if (ids.has(participant.id)) continue;
-    thread = await addParticipantToThreadRecord(
-      context,
-      thread.id,
-      participant.id,
-      {
-        operationKey:
-          `scheduled-thread-participant:${item.occurrenceId}:${participant.id}`,
-      },
-    );
+    thread = await context.collections.thread.update({
+      id: thread.id,
+      set: { participantIds: [...ids, participant.id] },
+    }, {
+      operationKey:
+        `scheduled-thread-participant:${item.occurrenceId}:${participant.id}`,
+      threadId: thread.id,
+    });
     ids.add(participant.id);
   }
   return thread;
@@ -172,9 +180,7 @@ async function dispatchOccurrence(
   if (recipients.length === 0) {
     const participantIds = stringArray(thread.participantIds);
     recipients = (await Promise.all(
-      participantIds.map((id) =>
-        loadCollectionRecord(context, "participant", id)
-      ),
+      participantIds.map((id) => context.collections.participant.get({ id })),
     )).filter((value): value is CollectionRecord =>
       value !== null && value.participantType === "agent"
     );
@@ -188,10 +194,10 @@ async function dispatchOccurrence(
     recipients,
     context,
   );
-  await createMessageRecord(context, {
+  await context.features.threadMessage.create({
     id: `scheduled:${item.occurrenceId}`,
     threadId: thread.id,
-    senderId: sendingParticipant.id,
+    sender: sendingParticipant,
     recipientIds: recipients.map((value) => value.id),
     content: item.run.content,
     metadata: {

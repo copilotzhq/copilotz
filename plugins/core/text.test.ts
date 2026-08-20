@@ -4,17 +4,38 @@ import {
   assertExists,
   assertStringIncludes,
 } from "@std/assert";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 
 import type { Agent, API, MCPServer } from "../../runtime/resources/index.ts";
-import { createTestDatabase, type TestDatabase } from "../../runtime/testing/ominipg.ts";
+import {
+  createTestDatabase,
+  type TestDatabase,
+} from "../../runtime/testing/ominipg.ts";
 import type { ContentInput } from "../../runtime/content/index.ts";
 import {
   type ContextResource,
   defineContextResource,
 } from "../../runtime/context/index.ts";
-import { toolExecutionContent } from "../../runtime/domain/index.ts";
+import {
+  type ConversationMessage,
+  toolExecutionContent,
+} from "../../runtime/domain/index.ts";
 import type { ProviderAPI } from "../../runtime/llm/types.ts";
-import { createSkillsPlugin, defineInlineSkill } from "../../runtime/skills/index.ts";
+import {
+  createSkillsPlugin,
+  defineInlineSkill,
+} from "../../runtime/skills/index.ts";
 import type {
   ChatRequest,
   ChatResponse,
@@ -23,7 +44,10 @@ import type {
   ToolInvocation,
 } from "../../runtime/llm/types.ts";
 import { createSqlSession } from "../../runtime/events/index.ts";
-import { type CopilotzEngine, createCopilotzEngine } from "../../runtime/engine/index.ts";
+import {
+  type CopilotzEngine,
+  createCopilotzEngine,
+} from "../../runtime/engine/index.ts";
 import {
   COPILOTZ_STREAM_WORKLOAD,
   jsonStreamDispatchMetadata,
@@ -33,9 +57,7 @@ import {
   definePlugin,
   type PluginRegistry,
 } from "../../runtime/plugins/index.ts";
-import {
-  corePlugin,
-} from "@copilotz/copilotz/plugins/core";
+import { corePlugin } from "@copilotz/copilotz/plugins/core";
 import {
   type CreateTextWorkflowPluginOptions,
   defineLlmProviderResource,
@@ -261,7 +283,9 @@ async function createFixture(
       id: "test.text-workflow.resources",
       version: "1.0.0",
       provides: {
-        agents: [policyAgent, ...additionalAgents].map((candidate) => candidate.id),
+        agents: [policyAgent, ...additionalAgents].map((candidate) =>
+          candidate.id
+        ),
         tools: [tool, ...(generatedResources.tools ?? [])].map((candidate) =>
           candidate.key
         ),
@@ -271,9 +295,7 @@ async function createFixture(
           : {}),
         ...(generatedResources.mcpServers?.length
           ? {
-            mcp: generatedResources.mcpServers.map((server) =>
-              server.id
-            ),
+            mcp: generatedResources.mcpServers.map((server) => server.id),
           }
           : {}),
         ...(generatedResources.context?.length
@@ -339,7 +361,9 @@ function boundCollection(engine: CopilotzEngine, name: string) {
 
 async function persistPreparedContent(
   engine: CopilotzEngine,
-  prepared: Awaited<ReturnType<CopilotzEngine["content"]["preparer"]["prepare"]>>,
+  prepared: Awaited<
+    ReturnType<CopilotzEngine["content"]["preparer"]["prepare"]>
+  >,
 ) {
   for (const asset of prepared.assets) {
     if (await engine.content.assets.get(asset.namespace, asset.id)) continue;
@@ -348,9 +372,7 @@ async function persistPreparedContent(
       id: asset.id,
       mediaType: asset.mediaType,
       body: asset.body,
-      ...(asset.idempotencyKey
-        ? { idempotencyKey: asset.idempotencyKey }
-        : {}),
+      ...(asset.idempotencyKey ? { idempotencyKey: asset.idempotencyKey } : {}),
       ...(asset.origin ? { origin: asset.origin } : {}),
       ...(asset.metadata ? { metadata: { ...asset.metadata } } : {}),
     });
@@ -425,7 +447,8 @@ async function waitForRun(
       "tenant-a",
       rootEventId,
     );
-    const messages = await fixture.engine.conversation.listMessages(
+    const messages = await projectMessages(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -446,11 +469,13 @@ async function waitForRun(
     namespace: "tenant-a",
     limit: 100,
   });
-  const messages = await fixture.engine.conversation.listMessages(
+  const messages = await projectMessages(
+    fixture.engine,
     "tenant-a",
     "thread-a",
   );
-  const attempts = await fixture.engine.llmAttempts.list(
+  const attempts = await projectLlmAttempts(
+    fixture.engine,
     "tenant-a",
     "thread-a",
   );
@@ -487,6 +512,19 @@ async function waitForSettlement(
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Timed out waiting for '${rootEventId}' to settle.`);
+}
+
+async function latestSubjectEventId(
+  fixture: Fixture,
+  subjectId: string,
+): Promise<string> {
+  const event = (await fixture.engine.events.list({
+    namespace: "tenant-a",
+    threadId: "thread-a",
+    limit: 1_000,
+  })).filter((candidate) => candidate.subject?.id === subjectId).at(-1);
+  assertExists(event);
+  return event.id;
 }
 
 const decoder = new TextDecoder();
@@ -532,7 +570,7 @@ async function followStream(
 
 async function messageText(
   fixture: Fixture,
-  message: Awaited<ReturnType<CopilotzEngine["conversation"]["getMessage"]>>,
+  message: ConversationMessage | null,
 ): Promise<string> {
   assertExists(message);
   const resolved = await fixture.engine.content.resolver.getMany(
@@ -607,7 +645,10 @@ Deno.test("text workflow writes ordered content, reasoning, and tool-call stream
       "tool_call",
     ]);
     assertEquals(await followStream(fixture, byLane.content), "Visible token");
-    assertEquals(await followStream(fixture, byLane.reasoning), "Private thought");
+    assertEquals(
+      await followStream(fixture, byLane.reasoning),
+      "Private thought",
+    );
     assertEquals(
       JSON.parse((await followStream(fixture, byLane.tool_call)).trim()),
       {
@@ -717,7 +758,8 @@ Deno.test("event-native text workflow preserves user -> tool -> same-agent conti
         fixture.toolContexts[0].idempotencyKey.length > 0,
     );
 
-    const messages = await fixture.engine.conversation.listMessages(
+    const messages = await projectMessages(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -750,7 +792,8 @@ Deno.test("event-native text workflow preserves user -> tool -> same-agent conti
       "north retry-safe public final",
     );
 
-    const attempts = await fixture.engine.llmAttempts.list(
+    const attempts = await projectLlmAttempts(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -766,7 +809,8 @@ Deno.test("event-native text workflow preserves user -> tool -> same-agent conti
       providerAttempts.map((attempt) => attempt.status),
       ["completed", "failed", "completed"],
     );
-    const executions = await fixture.engine.toolExecutions.list(
+    const executions = await projectToolExecutions(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -775,10 +819,9 @@ Deno.test("event-native text workflow preserves user -> tool -> same-agent conti
 
     await fixture.engine.recover({ namespace: "tenant-a" });
     assertEquals(
-      (await fixture.engine.conversation.listMessages(
-        "tenant-a",
-        "thread-a",
-      )).map((message) => message.id),
+      (await projectMessages(fixture.engine, "tenant-a", "thread-a")).map((
+        message,
+      ) => message.id),
       messages.map((message) => message.id),
     );
     assertEquals(fixture.toolCalls(), 1);
@@ -815,15 +858,18 @@ Deno.test("text workflow bounds synthesized identities across a long tool chain"
     const root = await startRun(fixture, "Run a deeply identified tool.");
     await waitForRun(fixture, root.event.id, 4);
 
-    const attempts = await fixture.engine.llmAttempts.list(
+    const attempts = await projectLlmAttempts(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
-    const executions = await fixture.engine.toolExecutions.list(
+    const executions = await projectToolExecutions(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
-    const messages = await fixture.engine.conversation.listMessages(
+    const messages = await projectMessages(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -911,7 +957,8 @@ Deno.test("tool attachments persist and remain addressable in the next model tur
     await waitForRun(fixture, root.event.id, 4);
     assertEquals(logicalCalls, 2);
 
-    const executions = await fixture.engine.toolExecutions.list(
+    const executions = await projectToolExecutions(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -921,7 +968,8 @@ Deno.test("tool attachments persist and remain addressable in the next model tur
     assertEquals(executionContent.attachments[0].name, "report.csv");
     assertEquals(executionContent.attachments[0].mediaType, "text/csv");
 
-    const messages = await fixture.engine.conversation.listMessages(
+    const messages = await projectMessages(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -967,7 +1015,8 @@ Deno.test("revising a human turn runs the agent from the projected branch", asyn
   try {
     const original = await startRun(fixture, "Original question");
     await waitForRun(fixture, original.event.id, 2);
-    const beforeRevision = await fixture.engine.conversation.listMessages(
+    const beforeRevision = await projectMessages(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -980,21 +1029,27 @@ Deno.test("revising a human turn runs the agent from the projected branch", asyn
         idempotencyKey: "message:user:revision:1:content",
       },
     );
-    const revision = await fixture.engine.conversation.reviseMessage({
-      namespace: "tenant-a",
-      id: "message:user:revision:1",
-      threadId: "thread-a",
-      messageId: "message:user",
-      content,
-      identity: {
-        correlationId: "run-a:revision:1",
-        deduplicationId: "message:user:revision:1",
-      },
-    });
-    await waitForRun(fixture, revision.event.id, 2);
+    await createTestDomainContext(fixture.engine, "tenant-a").features.message
+      .revise({
+        id: "message:user:revision:1",
+        threadId: "thread-a",
+        messageId: "message:user",
+        content,
+      }, {
+        identity: {
+          correlationId: "run-a:revision:1",
+          deduplicationId: "message:user:revision:1",
+        },
+      });
+    await waitForRun(
+      fixture,
+      await latestSubjectEventId(fixture, "message:user:revision:1"),
+      2,
+    );
 
     assertEquals(logicalCalls, 2);
-    const active = await fixture.engine.conversation.listMessages(
+    const active = await projectMessages(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -1004,11 +1059,9 @@ Deno.test("revising a human turn runs the agent from the projected branch", asyn
       await messageText(fixture, active[1]),
       "Answer to the active branch",
     );
-    const all = await fixture.engine.conversation.listMessages(
-      "tenant-a",
-      "thread-a",
-      { view: "all" },
-    );
+    const all = await projectMessages(fixture.engine, "tenant-a", "thread-a", {
+      view: "all",
+    });
     assertEquals(all.map((message) => message.id), [
       "message:user",
       beforeRevision[1].id,
@@ -1020,7 +1073,7 @@ Deno.test("revising a human turn runs the agent from the projected branch", asyn
       "Answer to the superseded branch",
     );
     assertEquals(
-      (await fixture.engine.llmAttempts.list("tenant-a", "thread-a"))
+      (await projectLlmAttempts(fixture.engine, "tenant-a", "thread-a"))
         .filter((attempt) => !attempt.id.includes(":provider:")).length,
       2,
     );
@@ -1079,7 +1132,8 @@ Deno.test("parallel tool completions produce one continuation after every labell
     assertEquals(maximumActiveTools, 2);
     assertStringIncludes(continuationTranscript, "parallel:alpha");
     assertStringIncludes(continuationTranscript, "parallel:beta");
-    const messages = await fixture.engine.conversation.listMessages(
+    const messages = await projectMessages(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -1148,7 +1202,8 @@ Deno.test("invalid and unknown tool calls settle as labelled failures and resume
         await waitForRun(fixture, root.event.id, 4);
         assertEquals(logicalCalls, 2);
         assertEquals(fixture.toolCalls(), 0);
-        const executions = await fixture.engine.toolExecutions.list(
+        const executions = await projectToolExecutions(
+          fixture.engine,
           "tenant-a",
           "thread-a",
         );
@@ -1157,10 +1212,9 @@ Deno.test("invalid and unknown tool calls settle as labelled failures and resume
         assertEquals(
           await messageText(
             fixture,
-            (await fixture.engine.conversation.listMessages(
-              "tenant-a",
-              "thread-a",
-            )).at(-1) ?? null,
+            (await projectMessages(fixture.engine, "tenant-a", "thread-a")).at(
+              -1,
+            ) ?? null,
           ),
           "north recovered from the tool failure",
         );
@@ -1212,7 +1266,8 @@ Deno.test("tool timeout cancels the durable execution and resumes the agent", as
     await waitForRun(fixture, root.event.id, 4);
     assertEquals(logicalCalls, 2);
     assertEquals(observedCancellation, true);
-    const executions = await fixture.engine.toolExecutions.list(
+    const executions = await projectToolExecutions(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -1371,7 +1426,8 @@ Deno.test("agent tool policy is resolved once and persisted on the text attempt"
   try {
     const root = await startRun(fixture, "Apply the tenant tool policy.");
     await waitForRun(fixture, root.event.id, 2);
-    const attempts = await fixture.engine.llmAttempts.list(
+    const attempts = await projectLlmAttempts(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -1500,8 +1556,8 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
       text: "south private reasoning",
       role: "reasoning",
     }, { namespace: "tenant-a", idempotencyKey: "peer:reasoning" });
-    await fixture.engine.llmAttempts.create({
-      namespace: "tenant-a",
+    const domain = createTestDomainContext(fixture.engine, "tenant-a");
+    await domain.features.llmAttempt.create({
       id: "seed-peer-attempt",
       threadId: "thread-a",
       participantId: "agent-south",
@@ -1509,22 +1565,26 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
       status: "running",
       inputMessageIds: [],
       metadata: providerMetadata,
+    }, {
       identity: {
         deduplicationId: "seed-peer-attempt:create",
         metadata: providerMetadata,
       },
     });
-    const peerCompleted = await fixture.engine.llmAttempts.complete({
-      namespace: "tenant-a",
+    await domain.features.llmAttempt.complete({
       id: "seed-peer-attempt",
       answer: peerAnswer,
       reasoning: peerReasoning,
+    }, {
       identity: {
         deduplicationId: "seed-peer-attempt:complete",
         metadata: providerMetadata,
       },
     });
-    await waitForSettlement(fixture, peerCompleted.event.id);
+    await waitForSettlement(
+      fixture,
+      await latestSubjectEventId(fixture, "seed-peer-attempt"),
+    );
     await boundCollection(fixture.engine, "message").create({
       id: "message:peer",
       threadId: "thread-a",
@@ -1567,8 +1627,7 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
         value: { id },
         role: "tool.arguments",
       }, { namespace: "tenant-a", idempotencyKey: `${id}:args` });
-      const created = await fixture.engine.toolExecutions.create({
-        namespace: "tenant-a",
+      await domain.features.toolExecution.create({
         id: `execution:${id}`,
         threadId: "thread-a",
         participantId: "agent-south",
@@ -1579,29 +1638,36 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
         status: "pending",
         historyVisibility: visibility,
         metadata,
+      }, {
         identity: {
           deduplicationId: `execution:${id}:create`,
           metadata,
         },
       });
-      await waitForSettlement(fixture, created.event.id);
+      await waitForSettlement(
+        fixture,
+        await latestSubjectEventId(fixture, `execution:${id}`),
+      );
       const projected = await fixture.engine.content.preparer.prepare({
         type: "json",
         value: { output },
         role: "tool.projected_output",
       }, { namespace: "tenant-a", idempotencyKey: `${id}:output` });
-      const completed = await fixture.engine.toolExecutions.complete({
-        namespace: "tenant-a",
+      await domain.features.toolExecution.complete({
         id: `execution:${id}`,
         output: projected,
         projectedOutput: projected,
         historyVisibility: visibility,
+      }, {
         identity: {
           deduplicationId: `execution:${id}:complete`,
           metadata,
         },
       });
-      await waitForSettlement(fixture, completed.event.id);
+      await waitForSettlement(
+        fixture,
+        await latestSubjectEventId(fixture, `execution:${id}`),
+      );
     };
     await seedTool("status-call", "public_status", "status-secret");
     await seedTool("private-call", "requester_only", "requester-secret");
@@ -1837,7 +1903,8 @@ Deno.test("OpenAPI and MCP descriptors resolve worker-locally for both prompt an
     assertEquals(generatedContext?.senderId, generatedAgent.id);
     assert(typeof generatedContext?.idempotencyKey === "string");
     assert(typeof generatedContext?.resolveAsset === "function");
-    const executions = await fixture.engine.toolExecutions.list(
+    const executions = await projectToolExecutions(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -1983,7 +2050,8 @@ Deno.test("tool pipelines keep jq internal, persist actual stages, and resume on
       { region: "south" },
       { records: [{ id: 1, status: "paid" }], mode: "priority" },
     ]);
-    const executions = await fixture.engine.toolExecutions.list(
+    const executions = await projectToolExecutions(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -2000,7 +2068,8 @@ Deno.test("tool pipelines keep jq internal, persist actual stages, and resume on
       ),
       [0, 2],
     );
-    const messages = await fixture.engine.conversation.listMessages(
+    const messages = await projectMessages(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );

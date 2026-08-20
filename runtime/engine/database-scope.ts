@@ -11,13 +11,10 @@ import {
   type DatabaseAssetRepository,
 } from "../content/index.ts";
 import {
-  type ConversationRepository,
   createDomainRelationRepository,
   createEventCollections,
   type DomainRelationRepository,
   type EventCollections,
-  type LlmAttemptRepository,
-  type ToolExecutionRepository,
 } from "../domain/index.ts";
 import {
   type CopilotzEvent,
@@ -43,18 +40,16 @@ import {
   type MemoryConsolidationRepository,
 } from "../memory/repository.ts";
 import {
-  createCollectionRuntime,
+  activeCollectionTransaction,
   type CollectionDefinition,
   type CollectionRuntime,
+  createCollectionRuntime,
 } from "../collections/index.ts";
-import {
-  coreCollectionsBound,
-  createCollectionConversationRepository,
-  createCollectionLlmAttemptRepository,
-  createCollectionToolExecutionRepository,
-} from "./collection-ingress.ts";
 import type { FeatureContextBindings } from "../features/index.ts";
-import type { PluginRegistry, TransientProcessorSet } from "../plugins/index.ts";
+import type {
+  PluginRegistry,
+  TransientProcessorSet,
+} from "../plugins/index.ts";
 import {
   createScheduledJobRepository,
   type ScheduledJobRepository,
@@ -65,26 +60,10 @@ import type {
   CreateCopilotzEngineOptions,
 } from "./types.ts";
 
-function unboundCoreRepository<T extends object>(kind: string): T {
-  const message =
-    `Core ${kind} collections are not bound. Register the core conversation collections before using ${kind}.`;
-  return new Proxy({} as T, {
-    get(_target, property) {
-      if (property === "then") return undefined;
-      return () => {
-        throw new Error(message);
-      };
-    },
-  });
-}
-
 export type DatabaseScopeCapabilities = Readonly<{
   assets: DatabaseAssetRepository;
   session: SqlExecutor;
-  conversation: ConversationRepository;
   collections: EventCollections;
-  llmAttempts: LlmAttemptRepository;
-  toolExecutions: ToolExecutionRepository;
   relations: DomainRelationRepository;
   schedules: ScheduledJobRepository;
   knowledge: KnowledgeRepository;
@@ -175,22 +154,24 @@ export function createDatabaseScope(
     authorize: engine.authorizeContent,
     digest: engine.digest,
   });
-  const collections = createEventCollections({
-    registry: options.registry,
-    coordinator,
-    session: engine.session,
-    eventStore: store,
-    assets,
-    validate: engine.validateCollection,
-    createId: engine.createId,
-    now: engine.now,
-  });
   const collectionRuntime = createCollectionRuntime({
     coordinator,
     session: engine.session,
     eventStore: store,
     createId: engine.createId,
     now: options.now,
+  });
+  const collections = createEventCollections({
+    registry: options.registry,
+    coordinator,
+    session: engine.session,
+    readExecutor: () =>
+      activeCollectionTransaction(collectionRuntime) ?? engine.session,
+    eventStore: store,
+    assets,
+    validate: engine.validateCollection,
+    createId: engine.createId,
+    now: engine.now,
   });
   for (const resource of options.registry.list("collections")) {
     if (isKernelCollection(resource)) collectionRuntime.bind(resource);
@@ -201,12 +182,32 @@ export function createDatabaseScope(
     eventStore: store,
     createId: engine.createId,
   });
-  const featureBindings: Omit<FeatureContextBindings, "namespace"> =
-    Object.freeze({
+  const featureBindings: Omit<FeatureContextBindings, "namespace"> = Object
+    .freeze({
       plugins: options.registry,
       collections,
       collectionRuntime,
       contentResolver: resolver,
+      content: (namespace) =>
+        Object.freeze({
+          resolver,
+          materialize: (input, materializeOptions = {}) =>
+            assets.materialize({
+              transaction: activeCollectionTransaction(collectionRuntime) ??
+                engine.session,
+              tables: store.tables,
+            }, {
+              namespace,
+              content: input,
+              origin: materializeOptions.origin,
+            }),
+          linkOwner: (ownerId, content) =>
+            assets.linkOwner({
+              transaction: activeCollectionTransaction(collectionRuntime) ??
+                engine.session,
+              tables: store.tables,
+            }, { namespace, ownerId, content }),
+        }),
       events: {
         list: (listOptions) => store.listEvents(listOptions),
       },
@@ -217,25 +218,6 @@ export function createDatabaseScope(
         list: (listOptions) => relations.list(listOptions),
       },
     });
-  const ingress = {
-    collectionRuntime,
-    session: engine.session,
-    eventStore: store,
-    assets,
-    featureBindings,
-    createId: engine.createId,
-    now: engine.now ?? options.now,
-  };
-  const useKernelIngress = coreCollectionsBound(collectionRuntime);
-  const conversation = useKernelIngress
-    ? createCollectionConversationRepository(ingress)
-    : unboundCoreRepository<ConversationRepository>("conversation");
-  const llmAttempts = useKernelIngress
-    ? createCollectionLlmAttemptRepository(ingress)
-    : unboundCoreRepository<LlmAttemptRepository>("llm_attempt");
-  const toolExecutions = useKernelIngress
-    ? createCollectionToolExecutionRepository(ingress)
-    : unboundCoreRepository<ToolExecutionRepository>("tool_execution");
   const schedules = createScheduledJobRepository({
     collections,
     coordinator,
@@ -267,10 +249,7 @@ export function createDatabaseScope(
   const capabilities: DatabaseScopeCapabilities = Object.freeze({
     assets,
     session: engine.session,
-    conversation,
     collections,
-    llmAttempts,
-    toolExecutions,
     relations,
     schedules,
     knowledge,
@@ -390,11 +369,8 @@ export function createDatabaseScope(
   const publicScope: CopilotzEngineDatabaseScope = Object.freeze({
     databaseSchema,
     content: Object.freeze({ assets, preparer: options.preparer, resolver }),
-    conversation,
     collections,
     collectionRuntime,
-    llmAttempts,
-    toolExecutions,
     relations,
     schedules,
     knowledge,

@@ -4,7 +4,10 @@ import type {
   AttachmentOutput,
   AttachmentStreamOutput,
 } from "../runtime/attachments/index.ts";
-import { createEphemeralEvent } from "../runtime/events/index.ts";
+import {
+  createEphemeralEvent,
+  type DurableEvent,
+} from "../runtime/events/index.ts";
 import {
   EVENT_NATIVE_OUTPUT_STREAM,
   type EventNativeApp,
@@ -163,6 +166,17 @@ Deno.test("Fetch adapter preserves feature response headers for JSON, empty, and
   }
 });
 
+function sseData(frame: string): Record<string, unknown> {
+  const line = frame.split("\n").find((item) => item.startsWith("data: "));
+  if (!line) throw new Error(`SSE frame missing data: ${frame}`);
+  return JSON.parse(line.slice("data: ".length)) as Record<string, unknown>;
+}
+
+function sseId(frame: string): string | undefined {
+  const line = frame.split("\n").find((item) => item.startsWith("id: "));
+  return line?.slice("id: ".length);
+}
+
 Deno.test("Fetch adapter is runtime-neutral and factory-first", async () => {
   const source = await Deno.readTextFile(new URL("fetch.ts", import.meta.url));
   assert(!/\bDeno\./.test(source));
@@ -221,11 +235,10 @@ Deno.test("Fetch adapter incrementally projects request-bound outputs as SSE wit
     "text/event-stream; charset=utf-8",
   );
   assertEquals(response.headers.get("cache-control"), "no-cache");
-  const frames = (await response.text()).trim().split("\n\n").map((frame) =>
-    JSON.parse(frame.slice("data: ".length)) as Record<string, unknown>
-  );
-  assertEquals(frames[0].type, "text.delta");
-  assertEquals(frames[1], {
+  const frames = (await response.text()).trim().split("\n\n");
+  assertEquals(sseData(frames[0]).type, "text.delta");
+  assertEquals(sseId(frames[0]), undefined);
+  assertEquals(sseData(frames[1]), {
     type: "stream.output",
     streamId: "audio-a",
     participant: {
@@ -287,4 +300,45 @@ Deno.test("Fetch adapter supports versioned SSE projection and cancels request w
   await reader.cancel("client_disconnected");
   assertEquals(sourceCancelled, true);
   assertEquals(workCancelled, "client_disconnected");
+});
+
+Deno.test("Fetch adapter emits durable event position as SSE id", async () => {
+  const durable: DurableEvent = Object.freeze({
+    durable: true,
+    id: "event-uuid",
+    position: "42",
+    schemaVersion: 1,
+    type: "message.created",
+    namespace: "tenant-a",
+    threadId: "thread-a",
+    payload: { ok: true },
+    routing: {},
+    visibility: { kind: "public" as const },
+    metadata: {},
+    correlationId: "correlation-a",
+    createdAt: "2026-08-19T00:00:00.000Z",
+  });
+  const stream: EventNativeOutputStream = Object.freeze({
+    type: EVENT_NATIVE_OUTPUT_STREAM,
+    outputs: new ReadableStream<AttachmentOutput>({
+      start(controller) {
+        controller.enqueue(durable);
+        controller.close();
+      },
+    }),
+    done: Promise.resolve(),
+    cancel: () => Promise.resolve(),
+  });
+  const app: EventNativeApp = Object.freeze({
+    resources: () => [],
+    handle: () => Promise.resolve({ status: 200, data: stream }),
+  });
+  const response = await createEventNativeFetchHandler(app)(
+    new Request("https://example.test/channels/web", { method: "POST" }),
+  );
+  const frame = (await response.text()).trim();
+  assertEquals(sseId(frame), "42");
+  assertEquals(sseData(frame).id, "event-uuid");
+  const source = await Deno.readTextFile(new URL("fetch.ts", import.meta.url));
+  assertEquals(source.includes("id: ${resumeId}"), true);
 });

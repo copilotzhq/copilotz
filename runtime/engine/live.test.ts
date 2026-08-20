@@ -1,12 +1,21 @@
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
-
-import { createTestDatabase } from "../testing/ominipg.ts";
-import { defineCollection } from "../domain/index.ts";
 import {
   createPluginRegistry,
   definePlugin,
   defineProcessor,
 } from "../plugins/index.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 import { createSqlSession } from "../events/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import {
@@ -14,6 +23,8 @@ import {
   type CopilotzProcessorContext,
   createCopilotzEngine,
 } from "./index.ts";
+import { createTestDatabase } from "../testing/ominipg.ts";
+import { defineCollection } from "../domain/index.ts";
 
 const auditCollection = defineCollection({
   name: "live_audit",
@@ -66,20 +77,23 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
     },
   });
   const registry = await createPluginRegistry({
-    plugins: [coreCollectionsPlugin, definePlugin({
-      manifest: {
-        id: "test.live",
-        version: "1.0.0",
-        provides: {
-          processors: [durable.id],
-          collections: [auditCollection.name],
+    plugins: [
+      coreCollectionsPlugin,
+      definePlugin({
+        manifest: {
+          id: "test.live",
+          version: "1.0.0",
+          provides: {
+            processors: [durable.id],
+            collections: [auditCollection.name],
+          },
         },
-      },
-      resources: {
-        processors: [durable],
-        collections: [auditCollection],
-      },
-    })],
+        resources: {
+          processors: [durable],
+          collections: [auditCollection],
+        },
+      }),
+    ],
   });
   const db = await createTestDatabase({ url: ":memory:" });
   const engine = await createCopilotzEngine({
@@ -90,36 +104,45 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
     execution: { capacity: 1 },
   });
   try {
-    await engine.conversation.createThread({
-      namespace: "tenant-live",
-      id: "thread-a",
-      participants: [
-        {
-          id: "user-a",
-          externalId: "user-a",
-          participantType: "human",
-        },
-      ],
-    });
+    await createTestDomainContext(engine, "tenant-live").features.thread.create(
+      {
+        namespace: "tenant-live",
+        id: "thread-a",
+        participants: [
+          {
+            id: "user-a",
+            externalId: "user-a",
+            participantType: "human",
+          },
+        ],
+      },
+    );
     const content = await engine.content.preparer.prepare("hello", {
       namespace: "tenant-live",
       idempotencyKey: "live-message:content",
     });
-    const result = await engine.conversation.createMessage({
+    await createTestDomainContext(engine, "tenant-live").features.threadMessage
+      .create({
+        id: "message-a",
+        threadId: "thread-a",
+        sender: {
+          id: "user-a",
+          externalId: "user-a",
+          participantType: "human",
+        },
+        content,
+      }, {
+        identity: {
+          correlationId: "live-root",
+          deduplicationId: "live-message:create",
+        },
+      });
+    const resultEvent = (await engine.events.list({
       namespace: "tenant-live",
-      id: "message-a",
       threadId: "thread-a",
-      sender: {
-        id: "user-a",
-        externalId: "user-a",
-        participantType: "human",
-      },
-      content,
-      identity: {
-        correlationId: "live-root",
-        deduplicationId: "live-message:create",
-      },
-    });
+      limit: 100,
+    })).find((event) => event.subject?.id === "message-a");
+    assertExists(resultEvent);
     assertEquals(liveCalls, 1);
     assertEquals(leakedDelivery, false);
     await waitUntil(async () => durableCalls === 1);
@@ -127,7 +150,7 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
 
     const audit = await engine.collections.get("live_audit").get(
       "tenant-live",
-      `audit:${result.event.id}`,
+      `audit:${resultEvent.id}`,
     );
     assertExists(audit);
     const deliveries = await engine.deliveries.list({
@@ -140,7 +163,7 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
       event.type === "live_audit.created"
     );
     assertExists(auditEvent);
-    assertEquals(auditEvent.causationId, result.event.id);
+    assertEquals(auditEvent.causationId, resultEvent.id);
     assertEquals(
       typeof auditEvent.metadata.sourceLiveDispatchId,
       "string",
@@ -231,14 +254,17 @@ Deno.test("transient catch-up replays committed events without delivery rows", a
     },
   });
   const registry = await createPluginRegistry({
-    plugins: [coreCollectionsPlugin, definePlugin({
-      manifest: {
-        id: "test.transient-catch-up",
-        version: "1.0.0",
-        provides: {},
-      },
-      resources: {},
-    })],
+    plugins: [
+      coreCollectionsPlugin,
+      definePlugin({
+        manifest: {
+          id: "test.transient-catch-up",
+          version: "1.0.0",
+          provides: {},
+        },
+        resources: {},
+      }),
+    ],
   });
   const db = await createTestDatabase({ url: ":memory:" });
   const engine = await createCopilotzEngine({
@@ -247,32 +273,46 @@ Deno.test("transient catch-up replays committed events without delivery rows", a
     defaultDatabaseSchema: "copilotz_transient_catchup",
   });
   try {
-    const first = await engine.conversation.createThread({
+    await createTestDomainContext(engine, "tenant-live").features.thread.create(
+      {
+        namespace: "tenant-live",
+        id: "thread-a",
+        participants: [{
+          id: "user-a",
+          externalId: "user-a",
+          participantType: "human",
+        }],
+      },
+    );
+    const firstEvent = (await engine.events.list({
       namespace: "tenant-live",
-      id: "thread-a",
-      participants: [{
-        id: "user-a",
-        externalId: "user-a",
-        participantType: "human",
-      }],
-    });
+      limit: 100,
+    })).find((event) => event.subject?.id === "thread-a");
+    assertExists(firstEvent);
     assertEquals(seen, []);
     const unbind = await engine.bindTransient(observer, {
       namespace: "tenant-live",
       afterPosition: "0",
     });
-    assertEquals(seen, [first.event.id]);
-    const second = await engine.conversation.createThread({
+    assertEquals(seen, [firstEvent.id]);
+    await createTestDomainContext(engine, "tenant-live").features.thread.create(
+      {
+        namespace: "tenant-live",
+        id: "thread-b",
+        participants: [{
+          id: "user-b",
+          externalId: "user-b",
+          participantType: "human",
+        }],
+      },
+    );
+    const secondEvent = (await engine.events.list({
       namespace: "tenant-live",
-      id: "thread-b",
-      participants: [{
-        id: "user-b",
-        externalId: "user-b",
-        participantType: "human",
-      }],
-    });
-    await waitUntil(() => seen.includes(second.event.id));
-    assertEquals(seen, [first.event.id, second.event.id]);
+      limit: 100,
+    })).find((event) => event.subject?.id === "thread-b");
+    assertExists(secondEvent);
+    await waitUntil(() => seen.includes(secondEvent.id));
+    assertEquals(seen, [firstEvent.id, secondEvent.id]);
     assertEquals(
       (await engine.deliveries.list({ namespace: "tenant-live" })).length,
       0,

@@ -88,13 +88,16 @@ async function createFixture() {
     createId: () => `stream-${++nextId}`,
     now: () => new Date(NOW),
   });
-  const threads = runtime.bind(threadCollection);
-  const streams = runtime.bind(streamCollection);
+  runtime.bind(threadCollection);
+  runtime.bind(streamCollection);
+  const { thread: threads, stream: streams } = runtime.withScope({
+    namespace: NAMESPACE,
+  });
   await threads.create({
     id: "thread-a",
     name: "Inbox",
     externalId: "ext-thread-a",
-  }, { namespace: NAMESPACE });
+  });
   return Object.freeze({
     db,
     session,
@@ -122,11 +125,7 @@ Deno.test("stream writer commits created before bytes and one terminal updated",
       id: "stream-a",
       assetId: "asset-a",
     });
-    await Promise.all(
-      writer.created.dispatch.handles.map((handle) => handle.done),
-    );
-    assertEquals(writer.created.event.eventType, "stream.created");
-    assertEquals(writer.created.record.state, "open");
+    assertEquals(writer.created.state, "open");
 
     const follower = await openStreamFollower({
       streams: fixture.streams,
@@ -141,7 +140,7 @@ Deno.test("stream writer commits created before bytes and one terminal updated",
     assertEquals(decoder.decode(await pending), "hello");
     assertEquals(head.digest, await digestContent(encoder.encode("hello")));
 
-    const record = await fixture.streams.get(writer.id, NAMESPACE);
+    const record = await fixture.streams.get({ id: writer.id });
     assertEquals(record?.state, "closed");
     const events = await fixture.store.listEvents({
       namespace: NAMESPACE,
@@ -223,7 +222,7 @@ Deno.test("abandoning a stream errors followers and writes no ready body", async
     assertEquals(isContentError(error) && error.code, "asset_deleted");
     assertEquals(await fixture.bodyStore.head(writer.key), null);
     assertEquals(
-      (await fixture.streams.get(writer.id, NAMESPACE))?.state,
+      (await fixture.streams.get({ id: writer.id }))?.state,
       "abandoned",
     );
     const later = await assertRejects(() =>
@@ -266,7 +265,7 @@ Deno.test("retain keeps a verified prefix and closes the stream", async () => {
     });
     assertEquals(decoder.decode(await readAll(follower.body)), "hello");
     assertEquals(
-      (await fixture.streams.get(writer.id, NAMESPACE))?.state,
+      (await fixture.streams.get({ id: writer.id }))?.state,
       "closed",
     );
   } finally {

@@ -4,9 +4,9 @@ import type {
   ToolPipelineToolStage,
 } from "../llm/types.ts";
 import type {
-  ScopedEventCollection,
   ToolExecution,
 } from "../domain/index.ts";
+import type { ScopedCollections } from "../collections/index.ts";
 import type { CopilotzEvent } from "../events/types.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import type { ScopedPluginResources } from "../engine/index.ts";
@@ -105,7 +105,7 @@ export type WorkflowToolExecutionContext = {
   agent?: Agent | null;
   agents: readonly Agent[];
   tools: readonly WorkflowTool[];
-  collections: Readonly<Record<string, ScopedEventCollection>>;
+  collections: ScopedCollections;
   userMetadata?: Readonly<Record<string, unknown>>;
   threadMetadata?: Readonly<Record<string, unknown>>;
   resolveAsset?: (

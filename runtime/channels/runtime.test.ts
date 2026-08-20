@@ -1,19 +1,29 @@
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
-
+import {
+  loadMessageRecord,
+  loadParticipantRecord,
+} from "../engine/collection-graph.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
+import { definePlugin, defineProcessor } from "../plugins/index.ts";
+import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
+import { createChannelRuntime } from "./runtime.ts";
+import { createWebChannelPlugin } from "./web.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import type { Agent } from "../resources/index.ts";
 import { createEventNativeApp } from "../../server/event-native.ts";
 import { createCopilotzApplication } from "../application/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
-import {
-  loadMessageRecord,
-  loadParticipantRecord,
-} from "../engine/collection-graph.ts";
-import { createMessageRecord } from "../engine/collection-writes.ts";
-import { definePlugin, defineProcessor } from "../plugins/index.ts";
-import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
-import { createChannelRuntime } from "./runtime.ts";
-import { createWebChannelPlugin } from "./web.ts";
 
 const SCHEMA = "copilotz_channel_runtime";
 const NAMESPACE = "tenant-a";
@@ -41,13 +51,15 @@ function replyPlugin() {
       const content = await context.content.prepare("Channel reply", {
         operationKey: "channel-reply-content",
       });
-      await createMessageRecord(context, {
+      const persisted = await context.content.materialize(content);
+      await context.collections.message.create({
         id: `reply:${message.id}`,
         threadId: message.threadId,
         senderId: recipient.id,
         recipientIds: [message.sender.id],
-        content,
+        content: persisted,
       }, { operationKey: "channel-reply-message" });
+      await context.content.linkOwner(`reply:${message.id}`, persisted);
     },
   });
   return definePlugin({
@@ -137,7 +149,8 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
         !["TOKEN", "REASONING", "TOOL_CALL_DELTA"].includes(output.type)
       ),
     );
-    const thread = await application.conversation.getThreadByExternalId(
+    const thread = await projectThreadByExternalId(
+      application,
       NAMESPACE,
       "web-thread-a",
     );
@@ -150,10 +163,7 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
         .sort(),
       ["agent", "human", "job"],
     );
-    const messages = await application.conversation.listMessages(
-      NAMESPACE,
-      thread.id,
-    );
+    const messages = await projectMessages(application, NAMESPACE, thread.id);
     assertEquals(messages.map((message) => message.id), [
       "channel-message-a",
       "reply:channel-message-a",
@@ -196,15 +206,16 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
     });
     assertEquals(second, { status: 202, data: { accepted: true } });
     assertEquals(
-      (await application.conversation.getThread(NAMESPACE, thread.id))?.name,
+      (await projectThreadById(application, NAMESPACE, thread.id))
+        ?.name,
       "Renamed Web support",
     );
     assertEquals(
-      (await application.conversation.listParticipants(NAMESPACE)).length,
+      (await projectParticipants(application, NAMESPACE)).length,
       3,
     );
     assertEquals(
-      (await application.conversation.listThreads(NAMESPACE)).length,
+      (await projectThreads(application, NAMESPACE)).length,
       1,
     );
   } finally {
@@ -224,15 +235,15 @@ Deno.test("request-bound channel delivery reports missing callbacks through done
     plugins: [createWebChannelPlugin()],
   });
   try {
-    await application.conversation.createThread({
-      namespace: NAMESPACE,
-      id: "thread-a",
-      participants: [{
-        id: "user-a",
-        externalId: "user-a",
-        participantType: "human",
-      }],
-    });
+    await createTestDomainContext(application, NAMESPACE).features.thread
+      .create({
+        id: "thread-a",
+        participants: [{
+          id: "user-a",
+          externalId: "user-a",
+          participantType: "human",
+        }],
+      });
     const dispatched = await createChannelRuntime(application).dispatch(
       NAMESPACE,
       {

@@ -31,6 +31,12 @@ export const corePluginManifest: PluginManifest = Object.freeze({
       "minimax",
     ]),
     tools: Object.freeze(["ask"]),
-    features: Object.freeze(["copilotz.core.thread-message"]),
+    features: Object.freeze([
+      "copilotz.core.thread-message",
+      "copilotz.core.llm-attempt",
+      "copilotz.core.tool-execution",
+      "copilotz.core.thread",
+      "copilotz.core.message",
+    ]),
   }),
 });

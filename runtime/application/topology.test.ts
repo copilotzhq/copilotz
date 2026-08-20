@@ -9,7 +9,6 @@ import { listen } from "../adapters/deno/listen.ts";
 import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
 import { defineProcessor } from "../plugins/processor.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
-import { createMessageRecord } from "../engine/collection-writes.ts";
 import type { CopilotzDatabase } from "./persistence.ts";
 import { isCopilotzPersistenceError } from "./persistence.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
@@ -18,6 +17,18 @@ import {
   jsonStreamDispatchMetadata,
 } from "../streams/index.ts";
 import { relayCopilotzWorkHandle } from "../execution/index.ts";
+import { createTestDomainContext } from "../testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../testing/projections.ts";
 
 const namespace = "copilotz-topology-test";
 const encoder = new TextEncoder();
@@ -26,20 +37,25 @@ const decoder = new TextDecoder();
 function cascadingPlugin(): CopilotzPlugin {
   const first = defineProcessor<CopilotzProcessorContext>({
     id: "topology.first",
-    on: [{ eventType: "message.created", routing: { senderId: "topology-user" } }],
+    on: [{
+      eventType: "message.created",
+      routing: { senderId: "topology-user" },
+    }],
     async handle(event, context) {
       assert(event.durable);
       assertExists(event.threadId);
       const content = await context.content.prepare("first worker reply", {
         operationKey: "first-content",
       });
-      await createMessageRecord(context, {
+      const persisted = await context.content.materialize(content);
+      await context.collections.message.create({
         id: "topology-first-reply",
         threadId: event.threadId,
         senderId: "topology-agent",
         recipientIds: ["topology-user"],
-        content,
+        content: persisted,
       }, { operationKey: "first-message" });
+      await context.content.linkOwner("topology-first-reply", persisted);
       await context.events.emit({
         type: "text.delta",
         threadId: event.threadId,
@@ -49,20 +65,25 @@ function cascadingPlugin(): CopilotzPlugin {
   });
   const second = defineProcessor<CopilotzProcessorContext>({
     id: "topology.second",
-    on: [{ eventType: "message.created", routing: { senderId: "topology-agent" } }],
+    on: [{
+      eventType: "message.created",
+      routing: { senderId: "topology-agent" },
+    }],
     async handle(event, context) {
       assert(event.durable);
       assertExists(event.threadId);
       const content = await context.content.prepare("cascaded worker reply", {
         operationKey: "second-content",
       });
-      await createMessageRecord(context, {
+      const persisted = await context.content.materialize(content);
+      await context.collections.message.create({
         id: "topology-second-reply",
         threadId: event.threadId,
         senderId: "topology-second-agent",
         recipientIds: ["topology-user"],
-        content,
+        content: persisted,
       }, { operationKey: "second-message" });
+      await context.content.linkOwner("topology-second-reply", persisted);
     },
   });
   return definePlugin({
@@ -152,8 +173,7 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
 
   try {
     await worker.ready;
-    await gateway.conversation.createThread({
-      namespace,
+    await createTestDomainContext(gateway, namespace).features.thread.create({
       id: "topology-thread",
       participants: [{
         id: "topology-user",
@@ -190,7 +210,7 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
       1,
     );
     assertEquals(
-      (await gateway.conversation.listMessages(namespace, "topology-thread"))
+      (await projectMessages(gateway, namespace, "topology-thread"))
         .length,
       3,
     );
@@ -255,7 +275,7 @@ Deno.test("Gateway bounds persistence outages as retryable HTTP 503 responses", 
     assertEquals(gateway.config.databaseOwnership, "injected");
     failNextQuery = true;
     const failure = await assertRejects(() =>
-      gateway.conversation.listMessages(namespace, "missing-thread")
+      projectMessages(gateway, namespace, "missing-thread")
     );
     assert(isCopilotzPersistenceError(failure));
     assertEquals(failure.code, "persistence_indeterminate");
@@ -380,8 +400,7 @@ Deno.test({
         (await fetch(new URL("v3/agents", listener.url))).status,
         200,
       );
-      await gateway.conversation.createThread({
-        namespace,
+      await createTestDomainContext(gateway, namespace).features.thread.create({
         id: "topology-thread",
         participants: [{
           id: "topology-user",
@@ -418,8 +437,7 @@ Deno.test({
       );
       assertEquals(worker.snapshot().transport, "websocket");
 
-      await gateway.conversation.createThread({
-        namespace,
+      await createTestDomainContext(gateway, namespace).features.thread.create({
         id: "topology-stream-thread",
         participants: [{
           id: "topology-stream-user",

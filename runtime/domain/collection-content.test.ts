@@ -96,10 +96,10 @@ Deno.test("custom collection content materializes and links atomically", async (
       namespace: "tenant-a",
       idempotencyKey: "second-body",
     });
-    const updated = await scoped.contract_content_owner.update(
-      "content-owner",
-      { body: second },
-    );
+    const updated = await scoped.contract_content_owner.update({
+      id: "content-owner",
+      set: { body: second },
+    });
     assertEquals(updated.body, second.content);
 
     const links = await db.query<{

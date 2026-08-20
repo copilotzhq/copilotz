@@ -5,8 +5,8 @@ import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import { resolveAgentGrants } from "@copilotz/copilotz/capabilities";
 import {
-  agentAskMetadata,
   type AgentAskMetadata,
+  agentAskMetadata,
   deriveWorkflowId,
   withAgentAskMetadata,
   workflowMetadata,
@@ -23,13 +23,6 @@ import {
   requireCollection,
   requiredText,
 } from "./helpers.ts";
-import {
-  cancelToolExecutionRecord,
-  completeToolExecutionRecord,
-  createThreadMessage,
-  failToolExecutionRecord,
-} from "./writes.ts";
-
 const DEFAULT_TOOL_ID = "ask";
 const DEFAULT_MAX_DEPTH = 8;
 
@@ -175,8 +168,11 @@ export function defineAskTool(
         execution.participantId,
         "Asking participant ID",
       );
-      const askingRecord = await requireCollection(context.processor, "participant")
-        .get(askingParticipantId, context.processor.namespace);
+      const askingRecord = await requireCollection(
+        context.processor,
+        "participant",
+      )
+        .get({ id: askingParticipantId });
       const askingParticipant = askingRecord;
       if (
         !askingParticipant || askingParticipant.participantType !== "agent"
@@ -199,7 +195,7 @@ export function defineAskTool(
       assertAgentAllowed(askingAgent, askedAgent, agents);
 
       const threadRecord = await requireCollection(context.processor, "thread")
-        .get(execution.threadId, context.processor.namespace);
+        .get({ id: execution.threadId });
       if (!threadRecord) {
         throw new Error(`Thread '${execution.threadId}' was not found.`);
       }
@@ -211,8 +207,7 @@ export function defineAskTool(
       const participants = (await Promise.all(
         participantIds.map((id) =>
           requireCollection(context.processor, "participant").get(
-            id,
-            context.processor.namespace,
+            { id },
           )
         ),
       )).filter((item): item is NonNullable<typeof item> => item !== null);
@@ -262,7 +257,7 @@ export function defineAskTool(
       const content = await context.processor.content.prepare(message, {
         operationKey: `ask:${askId}:question-content`,
       });
-      await createThreadMessage(context.processor, {
+      await context.processor.features.threadMessage.create({
         id: questionMessageId,
         threadId: execution.threadId,
         sender: askingParticipant,
@@ -272,7 +267,7 @@ export function defineAskTool(
         metadata,
       }, {
         operationKey: `ask:${askId}:question`,
-        metadata,
+        identity: { metadata },
       });
       return deferWorkflowTool({
         metadata: { askId, questionMessageId, askedAgentId: askedAgent.id },
@@ -291,8 +286,7 @@ export const completeAskProcessor: Processor<CopilotzProcessorContext> =
     async handle(event, context) {
       const record = collectionEventRecord(event);
       const sender = await requireCollection(context, "participant").get(
-        String(record.senderId),
-        context.namespace,
+        { id: String(record.senderId) },
       );
       if (!sender) {
         throw new Error(`Ask answer '${record.id}' sender was not found.`);
@@ -300,7 +294,7 @@ export const completeAskProcessor: Processor<CopilotzProcessorContext> =
       const ask = agentAskMetadata(asRecord(record.metadata));
       if (!ask || ask.phase !== "answer") return;
       const executionRecord = await requireCollection(context, "tool_execution")
-        .get(ask.toolExecutionId, context.namespace);
+        .get({ id: ask.toolExecutionId });
       if (!executionRecord) {
         throw new Error(
           `Ask tool execution '${ask.toolExecutionId}' was not found.`,
@@ -315,7 +309,10 @@ export const completeAskProcessor: Processor<CopilotzProcessorContext> =
       ) {
         throw new Error(`Ask '${ask.askId}' answer ownership does not match.`);
       }
-      if (String(execution.status) !== "running" && String(execution.status) !== "pending") {
+      if (
+        String(execution.status) !== "running" &&
+        String(execution.status) !== "pending"
+      ) {
         return;
       }
       const output = await context.content.prepare({
@@ -330,10 +327,12 @@ export const completeAskProcessor: Processor<CopilotzProcessorContext> =
         },
         role: "tool.output",
       }, { operationKey: `ask:${ask.askId}:answer-output` });
-      await completeToolExecutionRecord(context, execution, {
+      await context.features.toolExecution.complete({
+        id: execution.id,
         output,
         projectedOutput: output,
-        historyVisibility: optionalText(execution.historyVisibility) ?? "public_status",
+        historyVisibility: optionalText(execution.historyVisibility) ??
+          "public_status",
       }, { operationKey: `ask:${ask.askId}:complete` });
     },
   });
@@ -354,7 +353,10 @@ export const failAskProcessor: Processor<CopilotzProcessorContext> =
     async handle(event, context) {
       const record = collectionEventRecord(event);
       const attempt = record;
-      if (String(attempt.status) !== "failed" && String(attempt.status) !== "cancelled") {
+      if (
+        String(attempt.status) !== "failed" &&
+        String(attempt.status) !== "cancelled"
+      ) {
         return;
       }
       const ask = agentAskMetadata(asRecord(attempt.metadata));
@@ -363,14 +365,17 @@ export const failAskProcessor: Processor<CopilotzProcessorContext> =
         throw new Error(`Ask '${ask.askId}' failure ownership does not match.`);
       }
       const executionRecord = await requireCollection(context, "tool_execution")
-        .get(ask.toolExecutionId, context.namespace);
+        .get({ id: ask.toolExecutionId });
       if (!executionRecord) {
         throw new Error(
           `Ask tool execution '${ask.toolExecutionId}' was not found.`,
         );
       }
       const execution = executionRecord;
-      if (String(execution.status) !== "running" && String(execution.status) !== "pending") {
+      if (
+        String(execution.status) !== "running" &&
+        String(execution.status) !== "pending"
+      ) {
         return;
       }
       const cancelled = String(attempt.status) === "cancelled";
@@ -391,19 +396,23 @@ export const failAskProcessor: Processor<CopilotzProcessorContext> =
         role: "tool.projected_output",
       }, { operationKey: `ask:${ask.askId}:failure-output` });
       if (cancelled) {
-        await cancelToolExecutionRecord(context, execution, {
+        await context.features.toolExecution.cancel({
+          id: execution.id,
           reason: failure.message,
           errorDetail: detail,
           projectedOutput: projected,
-          historyVisibility: optionalText(execution.historyVisibility) ?? "public_status",
+          historyVisibility: optionalText(execution.historyVisibility) ??
+            "public_status",
         }, { operationKey: `ask:${ask.askId}:cancel` });
         return;
       }
-      await failToolExecutionRecord(context, execution, {
+      await context.features.toolExecution.fail({
+        id: execution.id,
         safeError: failure,
         errorDetail: detail,
         projectedOutput: projected,
-        historyVisibility: optionalText(execution.historyVisibility) ?? "public_status",
+        historyVisibility: optionalText(execution.historyVisibility) ??
+          "public_status",
       }, { operationKey: `ask:${ask.askId}:fail` });
     },
   });

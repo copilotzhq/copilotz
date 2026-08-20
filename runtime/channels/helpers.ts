@@ -4,6 +4,7 @@ import type {
 } from "../attachments/index.ts";
 import type { ResolvedContent } from "../content/index.ts";
 import type { ConversationMessage } from "../domain/index.ts";
+import { loadChannelMessage } from "./identity.ts";
 import type { ChannelEgressContext } from "./types.ts";
 
 export function channelMetadata(
@@ -89,7 +90,8 @@ export async function resolveAgentMessageOutput(
     ? payload.messageId
     : "";
   if (!messageId) return null;
-  const message = await context.application.conversation.getMessage(
+  const message = await loadChannelMessage(
+    context.application,
     context.namespace,
     messageId,
   );

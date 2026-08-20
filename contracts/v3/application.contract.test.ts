@@ -1,5 +1,4 @@
 import { assert, assertEquals, assertExists } from "@std/assert";
-
 import {
   type CopilotzPlugin,
   type CopilotzProcessorContext,
@@ -7,8 +6,19 @@ import {
   definePlugin,
   defineProcessor,
 } from "../../index.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 import { loadMessageRecord } from "../../runtime/engine/collection-graph.ts";
-import { createMessageRecord } from "../../runtime/engine/collection-writes.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 
 const NAMESPACE = "v3-root-contract";
@@ -16,7 +26,10 @@ const NAMESPACE = "v3-root-contract";
 function publicReplyPlugin(): CopilotzPlugin {
   const processor = defineProcessor<CopilotzProcessorContext>({
     id: "contract.public-reply",
-    on: [{ eventType: "message.created", routing: { senderId: "contract-user" } }],
+    on: [{
+      eventType: "message.created",
+      routing: { senderId: "contract-user" },
+    }],
     async handle(event, context) {
       assert(event.durable);
       assertExists(event.subject);
@@ -25,13 +38,15 @@ function publicReplyPlugin(): CopilotzPlugin {
       const content = await context.content.prepare("Hello from v3", {
         operationKey: "reply-content",
       });
-      await createMessageRecord(context, {
+      const persisted = await context.content.materialize(content);
+      await context.collections.message.create({
         id: "contract-reply",
         threadId: source.threadId,
         senderId: "contract-agent",
         recipientIds: [source.sender.id],
-        content,
+        content: persisted,
       }, { operationKey: "reply-message" });
+      await context.content.linkOwner("contract-reply", persisted);
     },
   });
   return definePlugin({
@@ -64,8 +79,7 @@ Deno.test("root createCopilotz runs one causal event scope without queue state",
     assertEquals("execution" in copilotz, false);
     assertEquals("hypervisor" in copilotz, false);
     assertEquals("transports" in copilotz, false);
-    await copilotz.conversation.createThread({
-      namespace: NAMESPACE,
+    await createTestDomainContext(copilotz, NAMESPACE).features.thread.create({
       id: "contract-thread",
       participants: [
         {
@@ -100,7 +114,8 @@ Deno.test("root createCopilotz runs one causal event scope without queue state",
         .length,
       2,
     );
-    const messages = await copilotz.conversation.listMessages(
+    const messages = await projectMessages(
+      copilotz,
       NAMESPACE,
       "contract-thread",
     );

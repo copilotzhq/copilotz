@@ -5,6 +5,7 @@ import { coreCollectionsPlugin } from "../plugins/core/plugin.ts";
 import type { AttachmentStreamOutput } from "../runtime/attachments/index.ts";
 import { createEphemeralEvent } from "../runtime/events/index.ts";
 import { createV1SseProjector } from "./v1-sse.ts";
+import { createTestDomainContext } from "../runtime/testing/domain-context.ts";
 
 const NAMESPACE = "tenant-a";
 
@@ -16,8 +17,8 @@ Deno.test("v1 SSE projector maps live vocabulary and hydrates canonical public m
     canonicalCore: [coreCollectionsPlugin],
   });
   try {
-    await application.conversation.createThread({
-      namespace: NAMESPACE,
+    const domain = createTestDomainContext(application, NAMESPACE);
+    await domain.features.thread.create({
       id: "thread-a",
       participants: [{
         id: "agent-a",
@@ -31,8 +32,7 @@ Deno.test("v1 SSE projector maps live vocabulary and hydrates canonical public m
       namespace: NAMESPACE,
       idempotencyKey: "v1-message-content",
     });
-    const created = await application.conversation.createMessage({
-      namespace: NAMESPACE,
+    await domain.features.threadMessage.create({
       id: "message-a",
       threadId: "thread-a",
       sender: {
@@ -114,7 +114,13 @@ Deno.test("v1 SSE projector maps live vocabulary and hydrates canonical public m
       delta: "hello\n",
     });
 
-    const message = await project(created.event, request) as Record<
+    const createdEvent = (await application.events.list({
+      namespace: NAMESPACE,
+      threadId: "thread-a",
+      limit: 100,
+    })).find((event) => event.subject?.id === "message-a");
+    assert(createdEvent);
+    const message = await project(createdEvent, request) as Record<
       string,
       unknown
     >;

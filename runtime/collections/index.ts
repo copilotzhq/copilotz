@@ -1,7 +1,4 @@
-export {
-  defineCollection,
-  relation,
-} from "./definition.ts";
+export { defineCollection, relation } from "./definition.ts";
 export type {
   CollectionCommandDefinition,
   CollectionDefinition,
@@ -14,6 +11,7 @@ export type {
   CollectionRelation,
 } from "./definition.ts";
 export {
+  activeCollectionTransaction,
   createCollectionRuntime,
   resolveCollectionEventBody,
 } from "./kernel.ts";
@@ -21,10 +19,18 @@ export type {
   BoundCollection,
   BoundCollectionQuery,
   CollectionRuntime,
+  CollectionScope,
   CollectionTransactionCollections,
   CollectionTransactionOptions,
   CollectionTransactionResult,
   CreateCollectionRuntimeOptions,
+  ScopedCollection,
+  ScopedCollectionCallOptions,
+  ScopedCollectionCommand,
+  ScopedCollectionDeleteInput,
+  ScopedCollectionNamedQuery,
+  ScopedCollections,
+  ScopedCollectionUpdateInput,
 } from "./kernel.ts";
 export {
   foldCollectionBodies,

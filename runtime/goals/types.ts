@@ -1,16 +1,17 @@
+import type { CollectionRuntime } from "../collections/index.ts";
 import type {
   ContentInput,
   ContentResolver,
   ContentSequence,
 } from "../content/index.ts";
 import type {
-  ConversationRepository,
   ConversationThread,
   Participant,
   ParticipantInput,
 } from "../domain/index.ts";
 import type { CopilotzEvent } from "../events/index.ts";
 import type { PluginRegistry } from "../plugins/index.ts";
+import type { FeatureInvoker } from "../features/index.ts";
 import type { RunHandle, RunInput } from "../attachments/index.ts";
 
 export type GoalStatus =
@@ -215,14 +216,8 @@ export type GoalRuntime = Readonly<{
 
 export type CreateGoalRuntimeOptions = Readonly<{
   registry: Pick<PluginRegistry, "require">;
-  conversation: Pick<
-    ConversationRepository,
-    | "createThread"
-    | "addThreadParticipant"
-    | "getThread"
-    | "getThreadByExternalId"
-    | "getMessage"
-  >;
+  collectionRuntime: CollectionRuntime;
+  features(namespace: string): FeatureInvoker;
   resolver: Pick<ContentResolver, "getMany">;
   run(input: RunInput): Promise<RunHandle>;
   defaultNamespace?: string;

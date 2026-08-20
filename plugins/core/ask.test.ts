@@ -4,11 +4,32 @@ import {
   assertExists,
   assertStringIncludes,
 } from "@std/assert";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 
 import type { Agent } from "../../runtime/resources/index.ts";
-import { createTestDatabase, type TestDatabase } from "../../runtime/testing/ominipg.ts";
-import { toolExecutionContent } from "../../runtime/domain/index.ts";
-import { type CopilotzEngine, createCopilotzEngine } from "../../runtime/engine/index.ts";
+import {
+  createTestDatabase,
+  type TestDatabase,
+} from "../../runtime/testing/ominipg.ts";
+import {
+  type ConversationMessage,
+  toolExecutionContent,
+} from "../../runtime/domain/index.ts";
+import {
+  type CopilotzEngine,
+  createCopilotzEngine,
+} from "../../runtime/engine/index.ts";
 import { createSqlSession } from "../../runtime/events/index.ts";
 import type {
   ChatRequest,
@@ -28,9 +49,7 @@ import {
   generateFromChat,
   type LlmChat,
 } from "@copilotz/copilotz/llm";
-import {
-  agentAskMetadata,
-} from "@copilotz/copilotz/events";
+import { agentAskMetadata } from "@copilotz/copilotz/events";
 import {
   deferWorkflowTool,
   isDeferredWorkflowToolResult,
@@ -168,7 +187,9 @@ function boundCollection(engine: CopilotzEngine, name: string) {
 
 async function persistPreparedContent(
   engine: CopilotzEngine,
-  prepared: Awaited<ReturnType<CopilotzEngine["content"]["preparer"]["prepare"]>>,
+  prepared: Awaited<
+    ReturnType<CopilotzEngine["content"]["preparer"]["prepare"]>
+  >,
 ) {
   for (const asset of prepared.assets) {
     if (await engine.content.assets.get(asset.namespace, asset.id)) continue;
@@ -177,9 +198,7 @@ async function persistPreparedContent(
       id: asset.id,
       mediaType: asset.mediaType,
       body: asset.body,
-      ...(asset.idempotencyKey
-        ? { idempotencyKey: asset.idempotencyKey }
-        : {}),
+      ...(asset.idempotencyKey ? { idempotencyKey: asset.idempotencyKey } : {}),
       ...(asset.origin ? { origin: asset.origin } : {}),
       ...(asset.metadata ? { metadata: { ...asset.metadata } } : {}),
     });
@@ -246,7 +265,8 @@ async function waitForRun(
       "tenant-a",
       rootEventId,
     );
-    const messages = await fixture.engine.conversation.listMessages(
+    const messages = await projectMessages(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -267,7 +287,8 @@ async function waitForRun(
     "tenant-a",
     rootEventId,
   );
-  const messages = await fixture.engine.conversation.listMessages(
+  const messages = await projectMessages(
+    fixture.engine,
     "tenant-a",
     "thread-a",
   );
@@ -308,9 +329,7 @@ async function waitForRun(
 
 async function messageText(
   fixture: Fixture,
-  message: NonNullable<
-    Awaited<ReturnType<CopilotzEngine["conversation"]["getMessage"]>>
-  >,
+  message: NonNullable<ConversationMessage>,
 ): Promise<string> {
   const values = await fixture.engine.content.resolver.getMany(
     message.content,
@@ -365,7 +384,8 @@ Deno.test("public ask resumes its caller without occupying worker capacity", asy
     await waitForRun(fixture, root.event.id, 6);
     assertEquals(calls, ["a", "b", "a"]);
 
-    const messages = await fixture.engine.conversation.listMessages(
+    const messages = await projectMessages(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -405,7 +425,8 @@ Deno.test("public ask resumes its caller without occupying worker capacity", asy
     assertEquals(answer?.askId, question?.askId);
     assertEquals(question?.depth, 1);
 
-    const executions = await fixture.engine.toolExecutions.list(
+    const executions = await projectToolExecutions(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -479,7 +500,8 @@ Deno.test("nested public asks return through each caller in one thread", async (
     const root = await startRun(fixture, "Start nested asks.");
     await waitForRun(fixture, root.event.id, 10);
     assertEquals(calls, ["a", "b", "c", "b", "a"]);
-    const messages = await fixture.engine.conversation.listMessages(
+    const messages = await projectMessages(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -514,7 +536,8 @@ Deno.test("nested public asks return through each caller in one thread", async (
       agentAskMetadata(publicAgentMessages[5].metadata)?.askId,
       firstAsk.askId,
     );
-    const executions = await fixture.engine.toolExecutions.list(
+    const executions = await projectToolExecutions(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -554,13 +577,15 @@ Deno.test("asked-agent failure settles the ask and resumes the caller", async ()
     const root = await startRun(fixture, "Exercise ask failure.");
     await waitForRun(fixture, root.event.id, 5);
     assertEquals(calls, ["a", "b", "a"]);
-    const executions = await fixture.engine.toolExecutions.list(
+    const executions = await projectToolExecutions(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
     assertEquals(executions.length, 1);
     assertEquals(executions[0].status, "failed");
-    const messages = await fixture.engine.conversation.listMessages(
+    const messages = await projectMessages(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );

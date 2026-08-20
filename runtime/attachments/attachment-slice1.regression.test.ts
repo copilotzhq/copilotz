@@ -1,12 +1,10 @@
 import { assert, assertEquals, assertExists } from "@std/assert";
-
-import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
-import type { AssetBodyHead, AssetBodyStore } from "../content/index.ts";
 import {
   createSqlSession,
   type DurableEvent,
   provisionCopilotzSchema,
 } from "../events/index.ts";
+import { createFeatureContext } from "../features/index.ts";
 import {
   type CopilotzEngine,
   type CopilotzEngineDatabaseScope,
@@ -25,6 +23,8 @@ import {
   type CreateAttachmentRuntimeOptions,
   type ThreadAttachment,
 } from "./index.ts";
+import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
+import type { AssetBodyHead, AssetBodyStore } from "../content/index.ts";
 
 const NAMESPACE = "tenant-attachment-slice-1";
 const THREAD_ID = "same-thread";
@@ -53,9 +53,21 @@ async function createEngineFixture(schema: string): Promise<EngineFixture> {
   return Object.freeze({ db, engine });
 }
 
-async function createThread(scope: CopilotzEngineDatabaseScope): Promise<void> {
-  await scope.conversation.createThread({
+async function createThread(
+  engine: CopilotzEngine,
+  scope: CopilotzEngineDatabaseScope,
+): Promise<void> {
+  const context = createFeatureContext({
     namespace: NAMESPACE,
+    plugins: engine.plugins,
+    collections: scope.collections,
+    collectionRuntime: scope.collectionRuntime,
+    contentResolver: scope.content.resolver,
+    events: scope.events,
+    deliveries: scope.deliveries,
+    relations: scope.relations,
+  });
+  await context.features.thread.create({
     id: THREAD_ID,
     participants: [{
       id: PARTICIPANT_ID,
@@ -63,6 +75,7 @@ async function createThread(scope: CopilotzEngineDatabaseScope): Promise<void> {
       participantType: "human",
       name: "Same User",
     }],
+  }, {
     identity: {
       deduplicationId: `${scope.databaseSchema}:${THREAD_ID}:create`,
     },
@@ -121,8 +134,8 @@ Deno.test("attachment observers stay isolated to their physical database schema"
     await provisionCopilotzSchema(session, otherSchema);
     const first = await fixture.engine.databaseScope(defaultSchema);
     const second = await fixture.engine.databaseScope(otherSchema);
-    await createThread(first);
-    await createThread(second);
+    await createThread(fixture.engine, first);
+    await createThread(fixture.engine, second);
     firstAttachment = await first.connect({
       namespace: NAMESPACE,
       thread: THREAD_ID,
@@ -172,7 +185,7 @@ Deno.test("attachment message retries return the original deduplicated handle", 
     const scope = await fixture.engine.databaseScope(
       "copilotz_attachment_deduplication",
     );
-    await createThread(scope);
+    await createThread(fixture.engine, scope);
     attachment = await scope.connect({
       namespace: NAMESPACE,
       thread: THREAD_ID,
@@ -210,9 +223,26 @@ type StreamHarness = Readonly<{
   output: AttachmentStreamOutput;
 }>;
 
+type StreamHarnessBase = Omit<StreamHarness, "output">;
+
+type StreamHarnessOptions = Readonly<{
+  waitForOutput: false;
+  beforeStreamGet?: () => Promise<void>;
+  onStoreOpen?: () => void;
+}>;
+
+function createStreamHarness(
+  source: ReadableStream<Uint8Array>,
+): Promise<StreamHarness>;
+function createStreamHarness(
+  source: ReadableStream<Uint8Array>,
+  options: StreamHarnessOptions,
+): Promise<StreamHarnessBase>;
+
 async function createStreamHarness(
   source: ReadableStream<Uint8Array>,
-): Promise<StreamHarness> {
+  options?: StreamHarnessOptions,
+): Promise<StreamHarness | StreamHarnessBase> {
   const timestamp = "2026-08-19T00:00:00.000Z";
   const head: AssetBodyHead = Object.freeze({
     key: "ignored-by-regression-store",
@@ -226,7 +256,10 @@ async function createStreamHarness(
     put: () => Promise.resolve(head),
     head: () => Promise.resolve(head),
     read: () => Promise.resolve(new Uint8Array()),
-    open: () => Promise.resolve(source),
+    open: () => {
+      options?.onStoreOpen?.();
+      return Promise.resolve(source);
+    },
     delete: () => Promise.resolve(),
     async *list() {
       yield head;
@@ -274,13 +307,19 @@ async function createStreamHarness(
   const runtime = createAttachmentRuntime({
     databaseSchema: "copilotz_attachment_stream_harness",
     collectionRuntime: {
-      get(name: string) {
-        const record = records[name as keyof typeof records];
-        if (!record) return undefined;
-        return {
-          get: () => Promise.resolve(record),
-          query: {},
-        };
+      withScope() {
+        return Object.freeze(Object.fromEntries(
+          Object.entries(records).map(([name, record]) => [
+            name,
+            Object.freeze({
+              async get() {
+                if (name === "stream") await options?.beforeStreamGet?.();
+                return record;
+              },
+              queries: Object.freeze({}),
+            }),
+          ]),
+        ));
       },
     },
     transients,
@@ -312,6 +351,9 @@ async function createStreamHarness(
   const observer = transients.match(event).at(0);
   assertExists(observer);
   await observer.handle(withProcessorEventData(event, event.payload), {});
+  if (options?.waitForOutput === false) {
+    return Object.freeze({ attachment, outputReader });
+  }
   const output = await nextStreamOutput(outputReader);
   return Object.freeze({ attachment, outputReader, output });
 }
@@ -392,4 +434,40 @@ Deno.test("closing an attachment cancels a reader-locked stream follower", async
     true,
     "Attachment close did not cancel the locked payload's follower.",
   );
+});
+
+Deno.test("closing during stream lookup prevents a late follower from opening", async () => {
+  let announceLookup!: () => void;
+  const lookupStarted = new Promise<void>((resolve) =>
+    announceLookup = resolve
+  );
+  let releaseLookup!: () => void;
+  const lookupBlocked = new Promise<void>((resolve) => releaseLookup = resolve);
+  let opens = 0;
+  const source = new ReadableStream<Uint8Array>({
+    pull() {
+      return new Promise<void>(() => {});
+    },
+  }, { highWaterMark: 0 });
+  const harness = await createStreamHarness(source, {
+    waitForOutput: false,
+    async beforeStreamGet() {
+      announceLookup();
+      await lookupBlocked;
+    },
+    onStoreOpen() {
+      opens += 1;
+    },
+  });
+  try {
+    await lookupStarted;
+    await harness.attachment.close("close_during_stream_lookup");
+    releaseLookup();
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    assertEquals(opens, 0);
+  } finally {
+    releaseLookup?.();
+    await harness.outputReader.cancel().catch(() => undefined);
+    await harness.attachment.close().catch(() => undefined);
+  }
 });

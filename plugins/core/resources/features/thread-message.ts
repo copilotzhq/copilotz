@@ -1,13 +1,21 @@
 import type {
-  CollectionMutationIdentity,
   CollectionRecord,
-  CollectionTransactionCollections,
-  CollectionWriteOptions,
+  ScopedCollectionCallOptions,
+  ScopedCollections,
 } from "@copilotz/copilotz/collections";
-import type { ContentSequence } from "@copilotz/copilotz/content";
-import type { ParticipantInput, ParticipantType } from "@copilotz/copilotz/domain";
+import type {
+  ContentSequence,
+  DurableContentInput,
+} from "@copilotz/copilotz/content";
+import type {
+  ParticipantInput,
+  ParticipantType,
+} from "@copilotz/copilotz/domain";
 import type { EventVisibility } from "@copilotz/copilotz/events";
-import type { FeatureContext, FeatureResource } from "@copilotz/copilotz/features";
+import type {
+  FeatureContext,
+  FeatureResource,
+} from "@copilotz/copilotz/features";
 
 export const THREAD_MESSAGE_FEATURE_ID = "copilotz.core.thread-message";
 
@@ -51,10 +59,14 @@ function contentSequence(value: unknown): ContentSequence {
 }
 
 function participantType(value: unknown): ParticipantType {
-  if (typeof value === "string" && PARTICIPANT_TYPES.has(value as ParticipantType)) {
+  if (
+    typeof value === "string" && PARTICIPANT_TYPES.has(value as ParticipantType)
+  ) {
     return value as ParticipantType;
   }
-  throw new TypeError("Sender participantType must be human, agent, tool, or job.");
+  throw new TypeError(
+    "Sender participantType must be human, agent, tool, or job.",
+  );
 }
 
 function visibility(value: unknown): EventVisibility | undefined {
@@ -64,7 +76,10 @@ function visibility(value: unknown): EventVisibility | undefined {
   if (kind === "public") return { kind: "public" };
   if (kind === "internal") return { kind: "internal" };
   if (kind === "participants") {
-    return { kind: "participants", participantIds: stringArray(record.participantIds) };
+    return {
+      kind: "participants",
+      participantIds: stringArray(record.participantIds),
+    };
   }
   if (kind === "tool") {
     const policy = optionalText(record.policy);
@@ -77,40 +92,13 @@ function visibility(value: unknown): EventVisibility | undefined {
     return {
       kind: "tool",
       policy,
-      requesterId: requireText(record.requesterId, "Tool visibility requesterId"),
+      requesterId: requireText(
+        record.requesterId,
+        "Tool visibility requesterId",
+      ),
     };
   }
   throw new TypeError(`Unknown visibility kind '${kind}'.`);
-}
-
-function mutationIdentity(value: unknown): CollectionMutationIdentity | undefined {
-  const record = asRecord(value);
-  const next = {
-    ...(optionalText(record.causationId)
-      ? { causationId: optionalText(record.causationId) }
-      : {}),
-    ...(optionalText(record.correlationId)
-      ? { correlationId: optionalText(record.correlationId) }
-      : {}),
-    ...(optionalText(record.deduplicationId)
-      ? { deduplicationId: optionalText(record.deduplicationId) }
-      : {}),
-    ...(optionalText(record.settlementScopeId)
-      ? { settlementScopeId: optionalText(record.settlementScopeId) }
-      : {}),
-    ...(record.metadata && typeof record.metadata === "object" &&
-        !Array.isArray(record.metadata)
-      ? { metadata: structuredClone(record.metadata as Record<string, unknown>) }
-      : {}),
-  };
-  return Object.keys(next).length > 0 ? next : undefined;
-}
-
-function writeOptions(
-  namespace: string,
-  extra: Omit<CollectionWriteOptions, "namespace"> = {},
-): CollectionWriteOptions {
-  return { namespace, ...extra };
 }
 
 export function senderFields(input: ThreadMessageSender): ParticipantInput {
@@ -130,24 +118,25 @@ export function senderFields(input: ThreadMessageSender): ParticipantInput {
 }
 
 export async function ensureParticipantInTransaction(
-  collections: CollectionTransactionCollections,
-  namespace: string,
+  collections: ScopedCollections,
   input: ThreadMessageSender,
-  threadId: string,
+  threadId?: string,
 ): Promise<CollectionRecord> {
   const collection = collections.participant;
   if (!collection) throw new Error("Collection 'participant' is not bound.");
   const id = optionalText(
-    typeof input === "object" && input ? (input as { id?: unknown }).id : undefined,
+    typeof input === "object" && input
+      ? (input as { id?: unknown }).id
+      : undefined,
   );
   if (id) {
-    const existing = await collection.get(id, namespace);
+    const existing = await collection.get({ id });
     if (existing) return existing;
   }
   const fields = senderFields(input);
   const externalId = fields.externalId?.trim();
-  if (externalId && collection.query.byExternalId) {
-    const [byExternal] = await collection.query.byExternalId(namespace, {
+  if (externalId && collection.queries.byExternalId) {
+    const [byExternal] = await collection.queries.byExternalId({
       externalId,
     });
     if (byExternal) return byExternal;
@@ -163,23 +152,23 @@ export async function ensureParticipantInTransaction(
     ...(fields.email ? { email: fields.email } : {}),
     ...(fields.agentId ? { agentId: fields.agentId } : {}),
     metadata: structuredClone(fields.metadata ?? {}),
-  }, writeOptions(namespace, { threadId }));
-  return created.record;
+  }, threadId ? { threadId } : undefined);
+  return created;
 }
 
 export async function addSenderToThreadInTransaction(
-  collections: CollectionTransactionCollections,
-  namespace: string,
+  collections: ScopedCollections,
   threadId: string,
   senderId: string,
 ): Promise<void> {
-  const thread = await collections.thread.get(threadId, namespace);
+  const thread = await collections.thread.get({ id: threadId });
   if (!thread) throw new Error(`Thread '${threadId}' was not found.`);
   const current = stringArray(thread.participantIds);
   if (current.includes(senderId)) return;
-  await collections.thread.update(threadId, {
+  await collections.thread.update({
+    id: threadId,
     set: { participantIds: [...new Set([...current, senderId])] },
-  }, writeOptions(namespace, { threadId }));
+  }, { threadId });
 }
 
 function asSender(value: unknown): ThreadMessageSender {
@@ -197,52 +186,59 @@ async function createThreadMessageAction(
   const data = asRecord(input);
   const id = requireText(data.id, "Message ID");
   const threadId = requireText(data.threadId, "Thread ID");
-  const operationKey = requireText(data.operationKey, "Operation key");
   const sender = asSender(data.sender);
   const recipientIds = stringArray(data.recipientIds);
-  const content = contentSequence(data.content);
+  const suppliedContent = data.content as DurableContentInput | undefined;
+  const materialized = suppliedContent !== undefined &&
+    !Array.isArray(suppliedContent);
+  const content = !materialized
+    ? contentSequence(suppliedContent)
+    : await context.content.materialize(suppliedContent, {
+      origin: {
+        scope: { type: "thread", id: threadId },
+        producer: { type: "message", id },
+      },
+    });
   const eventVisibility = visibility(data.visibility);
-  const identity = mutationIdentity(data.identity);
-  const result = await context.transaction({
-    operationKey,
-    namespace: context.namespace,
-    ...(identity ? { identity } : {}),
-    execute: async ({ collections }) => {
-      if (!collections.message) throw new Error("Collection 'message' is not bound.");
-      if (!collections.thread) throw new Error("Collection 'thread' is not bound.");
-      const ensured = await ensureParticipantInTransaction(
-        collections,
-        context.namespace,
-        sender,
-        threadId,
-      );
-      const created = await collections.message.create({
-        id,
-        threadId,
-        senderId: ensured.id,
-        recipientIds: [...recipientIds],
-        content,
-        metadata: structuredClone(asRecord(data.metadata)),
-      }, writeOptions(context.namespace, {
-        threadId,
-        routing: { senderId: ensured.id, recipientIds: [...recipientIds] },
-        visibility: eventVisibility ?? { kind: "public" },
-        ...(identity ? { identity } : {}),
-      }));
-      await addSenderToThreadInTransaction(
-        collections,
-        context.namespace,
-        threadId,
-        ensured.id,
-      );
-      return created.record;
-    },
-  });
-  return result.value;
+  const collections = context.collections;
+  if (!collections.message) {
+    throw new Error("Collection 'message' is not bound.");
+  }
+  if (!collections.thread) {
+    throw new Error("Collection 'thread' is not bound.");
+  }
+  const ensured = await ensureParticipantInTransaction(
+    collections,
+    sender,
+    threadId,
+  );
+  const options: ScopedCollectionCallOptions = {
+    threadId,
+    routing: { senderId: ensured.id, recipientIds: [...recipientIds] },
+    visibility: eventVisibility ?? { kind: "public" },
+  };
+  const created = await collections.message.create({
+    id,
+    threadId,
+    senderId: ensured.id,
+    recipientIds: [...recipientIds],
+    content,
+    metadata: structuredClone(asRecord(data.metadata)),
+  }, options);
+  await addSenderToThreadInTransaction(
+    collections,
+    threadId,
+    ensured.id,
+  );
+  if (materialized && content.length) {
+    await context.content.linkOwner(id, content);
+  }
+  return created;
 }
 
 export const threadMessageFeature: FeatureResource = Object.freeze({
   id: THREAD_MESSAGE_FEATURE_ID,
+  alias: "threadMessage",
   actions: Object.freeze({
     create: createThreadMessageAction,
   }),

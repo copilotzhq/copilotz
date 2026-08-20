@@ -1,6 +1,5 @@
 import { digestContent } from "../content/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
-import { loadCollectionRecord } from "../engine/collection-writes.ts";
 import {
   type CopilotzPlugin,
   definePlugin,
@@ -134,7 +133,7 @@ async function announce(
   }>,
 ): Promise<void> {
   if (!document.threadId) return;
-  if (!await loadCollectionRecord(context, "thread", document.threadId)) return;
+  if (!await context.collections.thread.get({ id: document.threadId })) return;
   const messageId = `${document.id}:knowledge:${input.status}`;
   const prepared = await context.content.prepare({
     type: "text",
@@ -147,7 +146,7 @@ async function announce(
       producer: { type: "message", id: messageId },
     },
   });
-  await context.features.invoke("copilotz.core.thread-message", "create", {
+  await context.features.threadMessage.create({
     id: messageId,
     threadId: document.threadId,
     sender: {
@@ -166,8 +165,7 @@ async function announce(
         ...structuredClone(input.metadata ?? {}),
       },
     },
-    operationKey: `knowledge-announce:${document.id}:${input.status}`,
-  });
+  }, { operationKey: `knowledge-announce:${document.id}:${input.status}` });
   if (content.length) await context.content.linkOwner(messageId, content);
 }
 

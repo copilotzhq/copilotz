@@ -42,8 +42,29 @@ export type CollectionCommandDefinition<TRecord = Record<string, unknown>> =
     ): CollectionMutatePatch<TRecord> | void;
   }>;
 
+export type CollectionNamedQueryRead = Readonly<{
+  get(collection: string, id: string): Promise<Record<string, unknown> | null>;
+  list(
+    collection: string,
+    query?: CollectionQuery,
+  ): Promise<readonly Record<string, unknown>[]>;
+}>;
+
 export type CollectionNamedQuery = Readonly<{
-  filter(context: Readonly<{ input: Record<string, unknown> }>): CollectionQuery["where"];
+  filter?: (
+    context: Readonly<{ input: Record<string, unknown> }>,
+  ) => CollectionQuery["where"];
+  query?: (
+    context: Readonly<{ input: Record<string, unknown> }>,
+  ) => CollectionQuery;
+  select?: (
+    context: Readonly<{
+      input: Record<string, unknown>;
+      read: CollectionNamedQueryRead;
+    }>,
+  ) =>
+    | readonly Record<string, unknown>[]
+    | Promise<readonly Record<string, unknown>[]>;
 }>;
 
 export type CollectionDefinition<
@@ -119,7 +140,9 @@ function requiredMemberName(value: string, kind: string): string {
     throw new TypeError(`Invalid collection ${kind} '${name}'.`);
   }
   if (RESERVED_COLLECTION_MEMBERS.includes(name)) {
-    throw new TypeError(`Collection ${kind} '${name}' collides with a kernel method.`);
+    throw new TypeError(
+      `Collection ${kind} '${name}' collides with a kernel method.`,
+    );
   }
   return name;
 }
@@ -217,9 +240,13 @@ export function defineCollection<S extends JsonSchema>(
         input.queries as Record<string, CollectionNamedQuery>,
       ).map(([queryName, definition]) => {
         const name = requiredMemberName(queryName, "query");
-        if (typeof definition.filter !== "function") {
+        if (
+          typeof definition.filter !== "function" &&
+          typeof definition.query !== "function" &&
+          typeof definition.select !== "function"
+        ) {
           throw new TypeError(
-            `Collection query '${name}' requires a filter function.`,
+            `Collection query '${name}' requires filter, query, or select.`,
           );
         }
         return [name, Object.freeze({ ...definition })];
@@ -238,8 +265,14 @@ export function defineCollection<S extends JsonSchema>(
     ...(input.identity
       ? {
         identity: Object.freeze({
-          sourceType: requiredText(input.identity.sourceType, "Identity sourceType"),
-          sourceField: requiredText(input.identity.sourceField, "Identity sourceField"),
+          sourceType: requiredText(
+            input.identity.sourceType,
+            "Identity sourceType",
+          ),
+          sourceField: requiredText(
+            input.identity.sourceField,
+            "Identity sourceField",
+          ),
         }),
       }
       : {}),

@@ -9,6 +9,18 @@ import { createSqlSession } from "../events/index.ts";
 import { createLongTermMemoryPlugin } from "../memory/index.ts";
 import { createUsageWorkflowPlugin } from "../usage/index.ts";
 import { createAdminPlugin } from "./plugin.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 
 const SCHEMA = "copilotz_admin_plugin";
 const NAMESPACE = "tenant-a";
@@ -51,50 +63,49 @@ Deno.test("admin plugin projects event-native application state without raw stor
   });
   const app = createEventNativeApp(application);
   try {
-    await application.conversation.createThread({
-      namespace: NAMESPACE,
-      id: "thread-a",
-      externalId: "external-thread-a",
-      metadata: { name: "Visible thread", summary: "A useful summary" },
-      participants: [{
-        id: "user-a",
-        externalId: "external-user-a",
-        participantType: "human",
-        name: "Alice",
-      }, {
-        id: "agent-a",
-        externalId: "support",
-        participantType: "agent",
-        agentId: "support",
-        name: "Support",
-      }],
-    });
-    await application.conversation.createThread({
-      namespace: "tenant-b",
-      id: "thread-b",
-      participants: [{
-        id: "user-b",
-        externalId: "external-user-b",
-        participantType: "human",
-      }],
-    });
+    await createTestDomainContext(application, NAMESPACE).features.thread
+      .create({
+        id: "thread-a",
+        externalId: "external-thread-a",
+        metadata: { name: "Visible thread", summary: "A useful summary" },
+        participants: [{
+          id: "user-a",
+          externalId: "external-user-a",
+          participantType: "human",
+          name: "Alice",
+        }, {
+          id: "agent-a",
+          externalId: "support",
+          participantType: "agent",
+          agentId: "support",
+          name: "Support",
+        }],
+      });
+    await createTestDomainContext(application, "tenant-b").features.thread
+      .create({
+        id: "thread-b",
+        participants: [{
+          id: "user-b",
+          externalId: "external-user-b",
+          participantType: "human",
+        }],
+      });
     const prepared = await application.content.preparer.prepare(
       "Admin-visible message",
       { namespace: NAMESPACE, idempotencyKey: "admin-message-a" },
     );
-    await application.conversation.createMessage({
-      namespace: NAMESPACE,
-      id: "message-a",
-      threadId: "thread-a",
-      sender: {
-        id: "user-a",
-        externalId: "external-user-a",
-        participantType: "human",
-      },
-      recipientIds: [],
-      content: prepared,
-      identity: { correlationId: "admin-run-a" },
-    });
+    await createTestDomainContext(application, NAMESPACE).features.threadMessage
+      .create({
+        id: "message-a",
+        threadId: "thread-a",
+        sender: {
+          id: "user-a",
+          externalId: "external-user-a",
+          participantType: "human",
+        },
+        recipientIds: [],
+        content: prepared,
+      }, { identity: { correlationId: "admin-run-a" } });
 
     await application.collections.get("usage").create({
       id: "usage-a",

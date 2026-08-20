@@ -1,13 +1,22 @@
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
-
-import type { Agent } from "../resources/index.ts";
-import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
-import { createSkillsPlugin, defineInlineSkill } from "../skills/index.ts";
 import {
   type CopilotzEngine,
   type CopilotzProcessorContext,
   createCopilotzEngine,
 } from "../engine/index.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipantById,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 import { createSqlSession } from "../events/index.ts";
 import {
   createPluginRegistry,
@@ -17,18 +26,14 @@ import {
 } from "../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import { loadToolExecutionRecord } from "../engine/collection-graph.ts";
-import {
-  createToolExecutionCollection,
-  loadCollectionRecord,
-} from "../engine/collection-writes.ts";
-import type {
-  WorkflowTool,
-  WorkflowToolExecutionContext,
-} from "./types.ts";
+import type { WorkflowTool, WorkflowToolExecutionContext } from "./types.ts";
 import {
   BUILT_IN_CORE_TOOL_IDS,
   createBuiltInToolsPlugin,
 } from "./core-plugin.ts";
+import type { Agent } from "../resources/index.ts";
+import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
+import { createSkillsPlugin, defineInlineSkill } from "../skills/index.ts";
 
 const TEST_SCHEMA = "copilotz_core_tools";
 
@@ -146,7 +151,9 @@ async function createFixture(
         { namespace, idempotencyKey: `trigger:${trigger}` },
       );
       for (const asset of content.assets) {
-        if (await engine.content.assets.get(asset.namespace, asset.id)) continue;
+        if (await engine.content.assets.get(asset.namespace, asset.id)) {
+          continue;
+        }
         await engine.content.assets.publish({
           namespace: asset.namespace,
           id: asset.id,
@@ -196,7 +203,7 @@ async function toolContext(
     role: "tool.arguments",
     value: {},
   }, { operationKey: `fixture:${id}:arguments` });
-  const created = await createToolExecutionCollection(context, {
+  const created = await context.features.toolExecution.create({
     id,
     threadId: "thread-a",
     participantId: "agent-participant",
@@ -204,10 +211,8 @@ async function toolContext(
     toolCallId: `call:${id}`,
     tool: { id: "fixture", name: "Fixture" },
     status: "running",
-  }, {
-    operationKey: `fixture:${id}:create`,
-    content: argumentsContent,
-  });
+    arguments: argumentsContent,
+  }, { operationKey: `fixture:${id}:create` }) as { id: string };
   const execution = await loadToolExecutionRecord(context, created.id);
   assertExists(execution);
   return {
@@ -277,7 +282,7 @@ Deno.test("asset, result, skill, clock, and wait tools use typed capabilities", 
         role: "tool.arguments",
         value: {},
       }, { operationKey: "target:arguments" });
-      await createToolExecutionCollection(processor, {
+      await processor.features.toolExecution.create({
         id: "target-execution",
         threadId: "thread-a",
         participantId: "agent-participant",
@@ -285,10 +290,8 @@ Deno.test("asset, result, skill, clock, and wait tools use typed capabilities", 
         toolCallId: "target-call",
         tool: { id: "target", name: "Target" },
         status: "running",
-      }, {
-        operationKey: "target:create",
-        content: targetArguments,
-      });
+        arguments: targetArguments,
+      }, { operationKey: "target:create" });
       const targetOutput = await processor.content.prepare({
         type: "json",
         role: "tool.output",
@@ -303,30 +306,23 @@ Deno.test("asset, result, skill, clock, and wait tools use typed capabilities", 
           },
         },
       );
-      const targetExecution = await loadCollectionRecord(
-        processor,
-        "tool_execution",
-        "target-execution",
-      );
+      const targetExecution = await processor.collections.tool_execution.get({
+        id: "target-execution",
+      });
       assertExists(targetExecution);
       const existingContent = Array.isArray(targetExecution.content)
         ? targetExecution.content
         : [];
-      await processor.transaction({
-        operationKey: "target:complete",
-        namespace: processor.namespace,
-        execute: async ({ collections }) => {
-          await collections.tool_execution.mutate("target-execution", "complete", {
-            content: [...existingContent, ...materializedOutput],
-            finishedAt: new Date().toISOString(),
-          }, {
-            namespace: processor.namespace,
-            threadId: "thread-a",
-          });
-        },
-      });
+      await processor.collections.tool_execution.commands.complete({
+        id: "target-execution",
+        content: [...existingContent, ...materializedOutput],
+        finishedAt: new Date().toISOString(),
+      }, { operationKey: "target:complete", threadId: "thread-a" });
       if (materializedOutput.length) {
-        await processor.content.linkOwner("target-execution", materializedOutput);
+        await processor.content.linkOwner(
+          "target-execution",
+          materializedOutput,
+        );
       }
       const read = await tool(processor, "read_tool_result").execute!(
         { toolExecutionId: "target-execution", regex: "needle", limit: 40 },
@@ -429,15 +425,18 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
     });
     assertEquals(result.separate, result.separateReplay);
 
-    const agentParticipant = await fixture.engine.conversation.getParticipant(
+    const agentParticipant = await projectParticipantById(
+      fixture.engine,
       "tenant-a",
       "agent-participant",
     );
-    const userParticipant = await fixture.engine.conversation.getParticipant(
+    const userParticipant = await projectParticipantById(
+      fixture.engine,
       "tenant-a",
       "user-participant",
     );
-    const thread = await fixture.engine.conversation.getThread(
+    const thread = await projectThreadById(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -452,7 +451,8 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
     assertEquals((items[0] as { id: string }).id, "memory:execution-memory");
     assertEquals(thread?.status, "archived");
     assertEquals(thread?.metadata.summary, "Core tool migration complete");
-    const child = await fixture.engine.conversation.getThread(
+    const child = await projectThreadById(
+      fixture.engine,
       "tenant-a",
       "thread:execution-memory",
     );
@@ -462,7 +462,8 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
     assertEquals(child?.participants.map((item) => item.id), [
       "agent-participant",
     ]);
-    const childMessages = await fixture.engine.conversation.listMessages(
+    const childMessages = await projectMessages(
+      fixture.engine,
       "tenant-a",
       "thread:execution-memory",
     );

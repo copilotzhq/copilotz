@@ -1,9 +1,20 @@
 import { assertEquals, assertRejects } from "@std/assert";
-
 import {
   streamCollection,
   threadCollection,
 } from "../../plugins/core/index.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 import { createCollectionRuntime } from "../collections/index.ts";
 import { createMemoryAssetBodyStore } from "../content/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -87,7 +98,7 @@ async function createFixture() {
     })],
   });
   const bodyStore = createMemoryAssetBodyStore();
-  let streams!: ReturnType<ReturnType<typeof createCollectionRuntime>["bind"]>;
+  let collectionRuntime!: ReturnType<typeof createCollectionRuntime>;
   const executor = createDeliveryExecutor({
     store,
     registry,
@@ -95,7 +106,7 @@ async function createFixture() {
     defaultDatabaseSchema: schema,
     workloads: {
       [COPILOTZ_STREAM_WORKLOAD]: createStreamWorkload({
-        resolve: () => ({ streams, store: bodyStore }),
+        resolve: () => ({ collectionRuntime, store: bodyStore }),
       }),
     },
     localWorkloadWorkers: {
@@ -112,13 +123,17 @@ async function createFixture() {
     eventStore: store,
     now: () => new Date(NOW),
   });
-  const threads = runtime.bind(threadCollection);
-  streams = runtime.bind(streamCollection);
+  collectionRuntime = runtime;
+  runtime.bind(threadCollection);
+  runtime.bind(streamCollection);
+  const { thread: threads, stream: streams } = runtime.withScope({
+    namespace: NAMESPACE,
+  });
   await threads.create({
     id: "thread-a",
     name: "Inbox",
     externalId: "ext-thread-a",
-  }, { namespace: NAMESPACE });
+  });
   return Object.freeze({
     db,
     store,
@@ -219,7 +234,7 @@ Deno.test("Oxian stream cancel abandons the durable stream", async () => {
     let state = "open";
     for (let attempt = 0; attempt < 50; attempt += 1) {
       state = String(
-        (await fixture.streams.get("stream-cancel", NAMESPACE))?.state ??
+        (await fixture.streams.get({ id: "stream-cancel" }))?.state ??
           "missing",
       );
       if (state === "abandoned") break;
@@ -243,8 +258,7 @@ Deno.test("engine stream workload write and follow share one body store", async 
     defaultDatabaseSchema: "copilotz_stream_engine",
   });
   try {
-    await engine.conversation.createThread({
-      namespace: NAMESPACE,
+    await createTestDomainContext(engine, NAMESPACE).features.thread.create({
       id: "thread-a",
       participants: [{
         id: "user-a",

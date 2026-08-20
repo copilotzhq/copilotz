@@ -1,9 +1,8 @@
 import { ulid } from "../../dependencies/ulid.ts";
 import type {
-  BoundCollection,
-  CollectionMutation,
   CollectionMutationIdentity,
   CollectionRecord,
+  ScopedCollection,
 } from "../collections/index.ts";
 import type { EventRouting, EventVisibility } from "../events/index.ts";
 import type {
@@ -27,7 +26,7 @@ export type StreamWriter = Readonly<{
   key: string;
   offset(): number;
   discarded(): number;
-  created: CollectionMutation<CollectionRecord>;
+  created: CollectionRecord;
   write(chunk: Uint8Array): Promise<void>;
   retain(byteLength?: number): Promise<AssetBodyHead>;
   discard(byteLength?: number): Promise<void>;
@@ -37,7 +36,7 @@ export type StreamWriter = Readonly<{
 }>;
 
 export type CreateStreamWriterInput = Readonly<{
-  streams: BoundCollection;
+  streams: ScopedCollection;
   store: AssetBodyStore;
   namespace: string;
   threadId: string;
@@ -79,7 +78,7 @@ export async function createStreamWriter(
     input.store,
     { key, mediaType },
   );
-  let created: CollectionMutation<CollectionRecord>;
+  let created: CollectionRecord;
   try {
     created = await input.streams.create({
       id,
@@ -92,7 +91,6 @@ export async function createStreamWriter(
         : {}),
       ...(input.metadata ? { metadata: input.metadata } : {}),
     }, {
-      namespace,
       threadId,
       ...(input.identity ? { identity: input.identity } : {}),
       ...(input.routing ? { routing: input.routing } : {}),
@@ -103,8 +101,14 @@ export async function createStreamWriter(
     throw error;
   }
 
-  const close = (command: "close" | "fail" | "abandon", payload: unknown) =>
-    input.streams.mutate(id, command, payload, { namespace, threadId });
+  const close = (
+    command: "close" | "fail" | "abandon",
+    payload: unknown,
+  ) => {
+    const invoke = input.streams.commands[command];
+    if (!invoke) throw new Error(`Stream command '${command}' is not bound.`);
+    return invoke({ id, ...payload as Record<string, unknown> }, { threadId });
+  };
 
   return Object.freeze({
     id,

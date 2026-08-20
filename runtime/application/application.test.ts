@@ -1,13 +1,22 @@
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
-
-import type { TestDatabase } from "../testing/ominipg.ts";
-import { createTestDatabase } from "../testing/ominipg.ts";
-import type { Agent } from "../resources/index.ts";
 import {
   type CopilotzPlugin,
   definePlugin,
   defineProcessor,
 } from "../plugins/index.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import { waitForTestDelivery } from "../../runtime/testing/deliveries.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import { createCopilotzApplication } from "./application.ts";
 import { createCopilotz } from "./copilotz.ts";
@@ -16,8 +25,13 @@ import type { WorkflowTool } from "../tools/index.ts";
 import type { CopilotzDatabase } from "./persistence.ts";
 import { isCopilotzPersistenceError } from "./persistence.ts";
 import { loadMessageRecord } from "../engine/collection-graph.ts";
-import { createMessageRecord } from "../engine/collection-writes.ts";
-import { coreCollectionsPlugin, corePlugin } from "../../plugins/core/plugin.ts";
+import {
+  coreCollectionsPlugin,
+  corePlugin,
+} from "../../plugins/core/plugin.ts";
+import type { TestDatabase } from "../testing/ominipg.ts";
+import { createTestDatabase } from "../testing/ominipg.ts";
+import type { Agent } from "../resources/index.ts";
 
 const SCHEMA = "copilotz_application";
 const NAMESPACE = "tenant-a";
@@ -37,13 +51,15 @@ function replyPlugin(): CopilotzPlugin {
         { type: "text", text: "application reply" },
         { operationKey: "reply-content" },
       );
-      await createMessageRecord(context, {
+      const persisted = await context.content.materialize(content);
+      await context.collections.message.create({
         id: `reply:${incoming.id}`,
         threadId: incoming.threadId,
         senderId: "agent-a",
         recipientIds: [incoming.sender.id],
-        content,
+        content: persisted,
       }, { operationKey: "reply-message" });
+      await context.content.linkOwner(`reply:${incoming.id}`, persisted);
     },
   });
   return definePlugin({
@@ -94,23 +110,23 @@ Deno.test("application factory composes plugins and supplies the default tenant 
       declaredPluginIds: ["test.application.reply"],
       databaseOwnership: "injected",
     });
-    await application.conversation.createThread({
-      namespace: NAMESPACE,
-      id: "thread-a",
-      participants: [
-        {
-          id: "user-a",
-          externalId: "user-a",
-          participantType: "human",
-        },
-        {
-          id: "agent-a",
-          externalId: "support",
-          participantType: "agent",
-          agentId: "support",
-        },
-      ],
-    });
+    await createTestDomainContext(application, NAMESPACE).features.thread
+      .create({
+        id: "thread-a",
+        participants: [
+          {
+            id: "user-a",
+            externalId: "user-a",
+            participantType: "human",
+          },
+          {
+            id: "agent-a",
+            externalId: "support",
+            participantType: "agent",
+            agentId: "support",
+          },
+        ],
+      });
     const run = await application.run({
       thread: "thread-a",
       participant: "user-a",
@@ -124,10 +140,7 @@ Deno.test("application factory composes plugins and supplies the default tenant 
         .length,
       2,
     );
-    const messages = await application.conversation.listMessages(
-      NAMESPACE,
-      "thread-a",
-    );
+    const messages = await projectMessages(application, NAMESPACE, "thread-a");
     assertEquals(messages.length, 2);
     const reply = await application.content.resolver.getMany(
       messages[1].content,
@@ -153,12 +166,12 @@ Deno.test("createCopilotz owns a configured Ominipg database", async () => {
   });
   try {
     assertEquals(application.config.databaseOwnership, "application");
-    const created = await application.conversation.createThread({
-      namespace: NAMESPACE,
-      id: "owned-database-thread",
-      participants: [],
-    });
-    assertEquals(created.value?.id, "owned-database-thread");
+    const created = await createTestDomainContext(application, NAMESPACE)
+      .features.thread.create({
+        id: "owned-database-thread",
+        participants: [],
+      });
+    assertEquals((created as { id: string }).id, "owned-database-thread");
   } finally {
     await application.shutdown();
     await application.shutdown();
@@ -357,36 +370,43 @@ Deno.test("application terminates attachments and resumes durable deliveries aft
     },
   });
   try {
-    await application.conversation.createThread({
-      namespace: NAMESPACE,
-      id: "recovery-thread",
-      participants: [{
-        id: "recovery-user",
-        externalId: "recovery-user",
-        participantType: "human",
-      }],
-    });
+    await createTestDomainContext(application, NAMESPACE).features.thread
+      .create({
+        id: "recovery-thread",
+        participants: [{
+          id: "recovery-user",
+          externalId: "recovery-user",
+          participantType: "human",
+        }],
+      });
     const content = await application.content.preparer.prepare("recover", {
       namespace: NAMESPACE,
       idempotencyKey: "recovery-message:content",
     });
-    const message = await application.conversation.createMessage({
+    await createTestDomainContext(application, NAMESPACE).features.threadMessage
+      .create({
+        id: "recovery-message",
+        threadId: "recovery-thread",
+        sender: {
+          id: "recovery-user",
+          externalId: "recovery-user",
+          participantType: "human",
+        },
+        content,
+      }, { identity: { deduplicationId: "recovery-message:create" } });
+    const messageEvent = (await application.events.list({
       namespace: NAMESPACE,
-      id: "recovery-message",
       threadId: "recovery-thread",
-      sender: {
-        id: "recovery-user",
-        externalId: "recovery-user",
-        participantType: "human",
-      },
-      content,
-      identity: { deduplicationId: "recovery-message:create" },
-    });
-    assertEquals(message.dispatch.handles.length, 1);
-    assertEquals(
-      (await message.dispatch.handles[0].done).delivery.status,
+      limit: 100,
+    })).find((event) => event.subject?.id === "recovery-message");
+    assertExists(messageEvent);
+    const messageDelivery = await waitForTestDelivery(
+      application,
+      NAMESPACE,
+      messageEvent.id,
       "retry_wait",
     );
+    assertEquals(messageDelivery.status, "retry_wait");
     assertEquals(processorCalls, 1);
 
     const attachment = await application.connect({
@@ -397,10 +417,7 @@ Deno.test("application terminates attachments and resumes durable deliveries aft
     const terminal = assertRejects(() => reader.read());
     failNextQuery = true;
     const error = await assertRejects(() =>
-      application.conversation.listMessages(
-        NAMESPACE,
-        "recovery-thread",
-      )
+      projectMessages(application, NAMESPACE, "recovery-thread")
     );
     assert(isCopilotzPersistenceError(error));
     assertEquals(error.code, "persistence_indeterminate");
@@ -412,14 +429,11 @@ Deno.test("application terminates attachments and resumes durable deliveries aft
     await waitFor(() => processorCalls === 2);
     const delivery = await application.deliveries.get(
       NAMESPACE,
-      message.dispatch.handles[0].deliveryId,
+      messageDelivery.id,
     );
     assertEquals(delivery?.status, "succeeded");
     assertEquals(
-      (await application.conversation.listMessages(
-        NAMESPACE,
-        "recovery-thread",
-      )).length,
+      (await projectMessages(application, NAMESPACE, "recovery-thread")).length,
       1,
     );
     assertEquals(lifecycle, [

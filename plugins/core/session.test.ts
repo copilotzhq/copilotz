@@ -1,7 +1,16 @@
+import { assertEquals, assertExists } from "@std/assert";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
-  assertEquals,
-  assertExists,
-} from "@std/assert";
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 
 import type { Agent } from "../../runtime/resources/index.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
@@ -111,7 +120,9 @@ function boundCollection(engine: CopilotzEngine, name: string) {
 
 async function persistPreparedContent(
   engine: CopilotzEngine,
-  prepared: Awaited<ReturnType<CopilotzEngine["content"]["preparer"]["prepare"]>>,
+  prepared: Awaited<
+    ReturnType<CopilotzEngine["content"]["preparer"]["prepare"]>
+  >,
 ) {
   for (const asset of prepared.assets) {
     if (await engine.content.assets.get(asset.namespace, asset.id)) continue;
@@ -120,9 +131,7 @@ async function persistPreparedContent(
       id: asset.id,
       mediaType: asset.mediaType,
       body: asset.body,
-      ...(asset.idempotencyKey
-        ? { idempotencyKey: asset.idempotencyKey }
-        : {}),
+      ...(asset.idempotencyKey ? { idempotencyKey: asset.idempotencyKey } : {}),
       ...(asset.origin ? { origin: asset.origin } : {}),
       ...(asset.metadata ? { metadata: { ...asset.metadata } } : {}),
     });
@@ -210,7 +219,9 @@ async function openTranscriptWrite(fixture: Fixture): Promise<
   });
   const metadata = await work.metadata;
   const streamId = String(metadata.streamId ?? "");
-  if (!streamId) throw new Error("Transcript write did not return a stream id.");
+  if (!streamId) {
+    throw new Error("Transcript write did not return a stream id.");
+  }
   const drain = work.output.getReader();
   void (async () => {
     while (true) {
@@ -273,7 +284,8 @@ async function waitForRun(
       NAMESPACE,
       rootEventId,
     );
-    const messages = await fixture.engine.conversation.listMessages(
+    const messages = await projectMessages(
+      fixture.engine,
       NAMESPACE,
       "thread-a",
     );
@@ -288,7 +300,8 @@ async function waitForRun(
       });
       throw new Error(`Run dead-lettered: ${JSON.stringify(deliveries)}`);
     }
-    const attempts = await fixture.engine.llmAttempts.list(
+    const attempts = await projectLlmAttempts(
+      fixture.engine,
       NAMESPACE,
       "thread-a",
     );
@@ -301,11 +314,9 @@ async function waitForRun(
     namespace: NAMESPACE,
     limit: 100,
   });
-  const messages = await fixture.engine.conversation.listMessages(
-    NAMESPACE,
-    "thread-a",
-  );
-  const attempts = await fixture.engine.llmAttempts.list(
+  const messages = await projectMessages(fixture.engine, NAMESPACE, "thread-a");
+  const attempts = await projectLlmAttempts(
+    fixture.engine,
     NAMESPACE,
     "thread-a",
   );
@@ -375,35 +386,41 @@ Deno.test("session writes content and audio streams from frames and transcript i
   const receivedBytes = new Promise<void>((resolve) => {
     received = resolve;
   });
-  const fixture = await createFixture(sessionFromHandler(async (input, emit) => {
-    const chunks: string[] = [];
-    const reader = input.input?.getReader();
-    reading();
-    if (reader) {
-      while (true) {
-        const next = await reader.read();
-        if (next.done) break;
-        chunks.push(decoder.decode(next.value));
-        if (chunks.length === 1) received();
+  const fixture = await createFixture(
+    sessionFromHandler(async (input, emit) => {
+      const chunks: string[] = [];
+      const reader = input.input?.getReader();
+      reading();
+      if (reader) {
+        while (true) {
+          const next = await reader.read();
+          if (next.done) break;
+          chunks.push(decoder.decode(next.value));
+          if (chunks.length === 1) received();
+        }
       }
-    }
-    const heard = chunks.join("");
-    emit({ type: "text", payload: `echo:${heard}` });
-    emit({
-      type: "audio",
-      payload: { bytes: encoder.encode("pcm"), mediaType: "audio/pcm" },
-    });
-    emit({
-      type: "tool_call",
-      payload: { tool: "noop", args: { heard } },
-    });
-    emit({ type: "reasoning", payload: "thinking" });
-    return sessionResponse(input, `echo:${heard}`);
-  }));
+      const heard = chunks.join("");
+      emit({ type: "text", payload: `echo:${heard}` });
+      emit({
+        type: "audio",
+        payload: { bytes: encoder.encode("pcm"), mediaType: "audio/pcm" },
+      });
+      emit({
+        type: "tool_call",
+        payload: { tool: "noop", args: { heard } },
+      });
+      emit({ type: "reasoning", payload: "thinking" });
+      return sessionResponse(input, `echo:${heard}`);
+    }),
+  );
   try {
     await createThread(fixture);
     const transcript = await openTranscriptWrite(fixture);
-    const root = await createUserMessage(fixture, "Speak with me.", "message:user");
+    const root = await createUserMessage(
+      fixture,
+      "Speak with me.",
+      "message:user",
+    );
     await startedReading;
     await transcript.write("hello session");
     await receivedBytes;
@@ -443,7 +460,12 @@ Deno.test("session writes content and audio streams from frames and transcript i
     });
     assertEquals(
       durable.some((event) =>
-        ["text.delta", "reasoning.delta", "tool_call.delta", "tool_output.delta"]
+        [
+          "text.delta",
+          "reasoning.delta",
+          "tool_call.delta",
+          "tool_output.delta",
+        ]
           .includes(event.type)
       ),
       false,
@@ -458,16 +480,23 @@ Deno.test("session routing does not start a second attempt while one is running"
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const fixture = await createFixture(sessionFromHandler(async (input, emit) => {
-    await held;
-    emit({ type: "text", payload: "done" });
-    return sessionResponse(input, "done");
-  }));
+  const fixture = await createFixture(
+    sessionFromHandler(async (input, emit) => {
+      await held;
+      emit({ type: "text", payload: "done" });
+      return sessionResponse(input, "done");
+    }),
+  );
   try {
     await createThread(fixture);
-    const first = await createUserMessage(fixture, "Stay open.", "message:user");
+    const first = await createUserMessage(
+      fixture,
+      "Stay open.",
+      "message:user",
+    );
     await waitUntil(async () => {
-      const attempts = await fixture.engine.llmAttempts.list(
+      const attempts = await projectLlmAttempts(
+        fixture.engine,
         NAMESPACE,
         "thread-a",
       );
@@ -490,12 +519,20 @@ Deno.test("session routing does not start a second attempt while one is running"
       }
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    const during = await fixture.engine.llmAttempts.list(NAMESPACE, "thread-a");
+    const during = await projectLlmAttempts(
+      fixture.engine,
+      NAMESPACE,
+      "thread-a",
+    );
     assertEquals(during.length, 1);
     assertEquals(during[0]?.status, "running");
     release();
     await waitForRun(fixture, first.event.id, 3);
-    const after = await fixture.engine.llmAttempts.list(NAMESPACE, "thread-a");
+    const after = await projectLlmAttempts(
+      fixture.engine,
+      NAMESPACE,
+      "thread-a",
+    );
     assertEquals(after.length, 1);
     assertEquals(after[0]?.status, "completed");
   } finally {

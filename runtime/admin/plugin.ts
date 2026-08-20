@@ -586,6 +586,8 @@ const agents: FeatureAction = (input, context) => {
 function feature(options: CreateAdminPluginOptions): FeatureResource {
   return Object.freeze({
     id: options.featureId?.trim() || DEFAULT_FEATURE_ID,
+    alias: "admin",
+    mode: "read",
     actions: Object.freeze({
       overview,
       activity,

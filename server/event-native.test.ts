@@ -5,6 +5,7 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
+import { createTestDomainContext } from "../runtime/testing/domain-context.ts";
 
 import { createCopilotz } from "../runtime/application/index.ts";
 import type { AttachmentOutput } from "../runtime/attachments/index.ts";
@@ -62,6 +63,7 @@ const supportAgent = Object.freeze(
 
 const echoFeature: EventNativeFeatureResource = Object.freeze({
   id: "echo",
+  alias: "echo",
   actions: Object.freeze({
     ping(
       input: unknown,
@@ -71,7 +73,7 @@ const echoFeature: EventNativeFeatureResource = Object.freeze({
       return {
         namespace: context.namespace,
         body: request.body,
-        hasFeatureInvoke: typeof context.features.invoke === "function",
+        hasFeatureInvoke: typeof context.features.echo?.ping === "function",
         hasApplication: "application" in context,
         hasScopedCollections: typeof context.collections === "object",
       };
@@ -616,8 +618,8 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
   });
   const app = createEventNativeApp(application);
   try {
-    await application.conversation.createThread({
-      namespace: NAMESPACE,
+    const domain = createTestDomainContext(application, NAMESPACE);
+    await domain.features.thread.create({
       id: "history-thread",
       participants: [{
         id: "history-human",
@@ -632,8 +634,7 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
         name: "Support",
       }],
     });
-    await application.conversation.createMessage({
-      namespace: NAMESPACE,
+    await domain.features.threadMessage.create({
       id: "history-user-message",
       threadId: "history-thread",
       sender: {
@@ -647,8 +648,7 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
         idempotencyKey: "history:user:body",
       }),
     });
-    await application.llmAttempts.create({
-      namespace: NAMESPACE,
+    await domain.features.llmAttempt.create({
       id: "history-attempt",
       threadId: "history-thread",
       messageId: "history-user-message",
@@ -657,8 +657,7 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
       agentId: "support",
       inputMessageIds: ["history-user-message"],
     });
-    await application.llmAttempts.complete({
-      namespace: NAMESPACE,
+    await domain.features.llmAttempt.complete({
       id: "history-attempt",
       reasoning: await application.content.preparer.prepare({
         type: "text",
@@ -682,8 +681,7 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
       }),
       finishReason: "tool_calls",
     });
-    await application.conversation.createMessage({
-      namespace: NAMESPACE,
+    await domain.features.threadMessage.create({
       id: "history-agent-message",
       threadId: "history-thread",
       sender: {
@@ -704,8 +702,7 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
         },
       },
     });
-    await application.toolExecutions.create({
-      namespace: NAMESPACE,
+    await domain.features.toolExecution.create({
       id: "history-execution",
       threadId: "history-thread",
       messageId: "history-agent-message",
@@ -722,8 +719,7 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
         idempotencyKey: "history:execution:arguments",
       }),
     });
-    await application.toolExecutions.fail({
-      namespace: NAMESPACE,
+    await domain.features.toolExecution.fail({
       id: "history-execution",
       safeError: { message: "Lookup unavailable", code: "lookup_failed" },
       projectedOutput: await application.content.preparer.prepare({
@@ -735,8 +731,7 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
         idempotencyKey: "history:execution:output",
       }),
     });
-    await application.conversation.createMessage({
-      namespace: NAMESPACE,
+    await domain.features.threadMessage.create({
       id: "history-tool-message",
       threadId: "history-thread",
       sender: {
@@ -745,10 +740,11 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
         name: "Lookup",
       },
       recipientIds: ["history-agent"],
-      content: (await application.toolExecutions.get(
-        NAMESPACE,
-        "history-execution",
-      ))!.content.filter((ref) => ref.role === "tool.projected_output"),
+      content: ((await domain.collections.tool_execution.get({
+        id: "history-execution",
+      }))!.content as { role?: string }[]).filter((ref) =>
+        ref.role === "tool.projected_output"
+      ),
       metadata: {
         toolId: "lookup",
         toolStatus: "failed",

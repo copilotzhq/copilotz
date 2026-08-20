@@ -11,10 +11,7 @@ import type {
   Participant,
   SafeWorkflowError,
 } from "../domain/index.ts";
-import {
-  llmAttemptContent,
-  toolExecutionContent,
-} from "../content/index.ts";
+import { llmAttemptContent, toolExecutionContent } from "../content/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import {
   listThreadMessageRecords,
@@ -22,14 +19,6 @@ import {
   loadThreadRecord,
   mapLlmAttemptRecord,
 } from "../engine/collection-graph.ts";
-import {
-  completeLlmAttemptCollection,
-  createLlmAttemptRecord,
-  createToolExecutionCollection,
-  failLlmAttemptCollection,
-  loadCollectionRecord,
-  requireBoundCollection,
-} from "../engine/collection-writes.ts";
 import {
   generateChainFromResources,
   runGenerateChain,
@@ -215,9 +204,9 @@ async function threadMemorySpaces(
   for (const grant of grants) {
     const memorySpaceId = optionalText(grant.memorySpaceId);
     if (!memorySpaceId) continue;
-    const space = await collection(context, memorySpaceCollection.name).get(
-      memorySpaceId,
-    );
+    const space = await collection(context, memorySpaceCollection.name).get({
+      id: memorySpaceId,
+    });
     if (!space) continue;
     const access = grant.access === "read_write" ? "read_write" : "read";
     spaces.push(Object.freeze({
@@ -332,10 +321,9 @@ async function sourceMessages(
     let toolCalls: unknown;
     let reasoning: string | undefined;
     if (workflow?.llmAttemptId) {
-      const attempt = await requireBoundCollection(context, "llm_attempt").get(
-        workflow.llmAttemptId,
-        context.namespace,
-      );
+      const attempt = await context.collections.llm_attempt.get({
+        id: workflow.llmAttemptId,
+      });
       if (attempt) {
         const content = llmAttemptContent(attempt);
         if (content.toolCalls) {
@@ -592,13 +580,15 @@ async function captureContextSnapshot(
     ),
   );
   await collection(context, longTermMemoryCollection.name).update(
-    input.checkpoint.id,
     {
-      contextSnapshotContent: combinePrepared(prepared),
-      contextSnapshot: snapshot,
-      metadata: {
-        ...record(input.checkpoint.metadata),
-        contextCapturedAt: capturedAt,
+      id: input.checkpoint.id,
+      set: {
+        contextSnapshotContent: combinePrepared(prepared),
+        contextSnapshot: snapshot,
+        metadata: {
+          ...record(input.checkpoint.metadata),
+          contextCapturedAt: capturedAt,
+        },
       },
     },
     { operationKey: `checkpoint:${input.checkpoint.id}:context` },
@@ -680,15 +670,17 @@ async function failCheckpoint(
   error: unknown,
 ) {
   const checkpoint = await collection(context, longTermMemoryCollection.name)
-    .get(checkpointId);
+    .get({ id: checkpointId });
   if (!checkpoint || checkpoint.status !== "pending") return;
   await collection(context, longTermMemoryCollection.name).update(
-    checkpointId,
     {
-      status: "failed",
-      error: {
-        name: error instanceof Error ? error.name : "Error",
-        message: error instanceof Error ? error.message : String(error),
+      id: checkpointId,
+      set: {
+        status: "failed",
+        error: {
+          name: error instanceof Error ? error.name : "Error",
+          message: error instanceof Error ? error.message : String(error),
+        },
       },
     },
     { operationKey: `checkpoint:${checkpointId}:failed` },
@@ -704,10 +696,9 @@ async function repairOrFail(
     maxRepairAttempts: number;
   }>,
 ) {
-  const attempt = await requireBoundCollection(context, "llm_attempt").get(
-    input.attemptId,
-    context.namespace,
-  );
+  const attempt = await context.collections.llm_attempt.get({
+    id: input.attemptId,
+  });
   const repairIndex = Number(record(attempt?.metadata).memoryRepairIndex ?? 0);
   if (!attempt || repairIndex >= input.maxRepairAttempts) {
     await failCheckpoint(context, input.checkpointId, new Error(input.reason));
@@ -722,7 +713,7 @@ async function repairOrFail(
     kind: "memory_consolidation",
     agentParticipantId: optionalText(attempt.participantId),
   });
-  await createLlmAttemptRecord(context, {
+  await context.features.llmAttempt.create({
     id: `${input.checkpointId}:llm:${nextIndex}`,
     threadId: attempt.threadId,
     messageId: attempt.messageId,
@@ -736,7 +727,7 @@ async function repairOrFail(
     metadata,
   }, {
     operationKey: `memory-attempt:${input.checkpointId}:${nextIndex}`,
-    metadata,
+    identity: { metadata },
   });
 }
 
@@ -977,10 +968,12 @@ async function settleCheckpoint(
 ) {
   const settlement = await prepareCheckpointSettlement(context, input);
   await collection(context, longTermMemoryCollection.name).update(
-    input.checkpoint.id,
     {
-      ...settlement.patch,
-      content: settlement.content,
+      id: input.checkpoint.id,
+      set: {
+        ...settlement.patch,
+        content: settlement.content,
+      },
     },
     { operationKey: `checkpoint:${input.checkpoint.id}:ready` },
   );
@@ -1058,7 +1051,7 @@ function consolidateMemoryTool(
       const checkpoint = await collection(
         context,
         longTermMemoryCollection.name,
-      ).get(checkpointId);
+      ).get({ id: checkpointId });
       if (!checkpoint) {
         throw new Error(`Memory checkpoint '${checkpointId}' was not found.`);
       }
@@ -1399,7 +1392,7 @@ function consolidateMemoryTool(
           continue;
         }
         const rawTarget = await collection(context, memoryRecordCollection.name)
-          .get(target.id);
+          .get({ id: target.id });
         const pendingTarget = updatedRecords.get(target.id);
         stageUpdate(target.id, {
           status: change.status,
@@ -1590,7 +1583,7 @@ function inspectMemoryTool(): WorkflowTool {
       const tool = workflowToolContext(value);
       const id = requiredText(record(raw).id, "Memory id");
       const item = await collection(tool.processor, memoryRecordCollection.name)
-        .get(id);
+        .get({ id });
       if (!item) throw new Error(`Memory '${id}' was not found.`);
       const spaces = new Set(
         (await threadMemorySpaces(tool.processor, tool.threadId)).map((space) =>
@@ -1641,7 +1634,7 @@ function setMemoryStatusTool(): WorkflowTool {
       const id = requiredText(input.id, "Memory id");
       const status = requiredText(input.status, "Memory status");
       const item = await collection(tool.processor, memoryRecordCollection.name)
-        .get(id);
+        .get({ id });
       const mapped = item ? memoryRecord(item) : null;
       if (!mapped) throw new Error(`Memory '${id}' was not found.`);
       const spaces = new Set(
@@ -1657,13 +1650,16 @@ function setMemoryStatusTool(): WorkflowTool {
           `Status '${status}' is invalid for '${mapped.form}'.`,
         );
       }
-      await collection(tool.processor, memoryRecordCollection.name).update(id, {
-        status,
-        temporal: {
-          ...record(item!.temporal),
-          invalidatedAt: terminalStatus(status)
-            ? new Date().toISOString()
-            : undefined,
+      await collection(tool.processor, memoryRecordCollection.name).update({
+        id,
+        set: {
+          status,
+          temporal: {
+            ...record(item!.temporal),
+            invalidatedAt: terminalStatus(status)
+              ? new Date().toISOString()
+              : undefined,
+          },
         },
       }, { operationKey: `memory-status:${id}:${status}` });
       return { id, status };
@@ -1681,11 +1677,9 @@ function memoryReservationProcessor(
     async handle(event, context) {
       if (event.visibility?.kind === "internal") return;
       if (!event.durable || !event.threadId || !event.subject) return;
-      const messageRecord = await loadCollectionRecord(
-        context,
-        "message",
-        event.subject.id,
-      );
+      const messageRecord = await context.collections.message.get({
+        id: event.subject.id,
+      });
       if (!messageRecord) return;
       const sender = await loadParticipantRecord(
         context,
@@ -1782,7 +1776,7 @@ const prepareMemoryAttemptProcessor: Processor<CopilotzProcessorContext> =
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
       let checkpoint = await collection(context, longTermMemoryCollection.name)
-        .get(event.subject.id);
+        .get({ id: event.subject.id });
       if (!checkpoint || checkpoint.status !== "pending") return;
       const threadId = requiredText(checkpoint.threadId, "Memory thread id");
       const agentId = requiredText(checkpoint.agentId, "Memory agent id");
@@ -1808,9 +1802,10 @@ const prepareMemoryAttemptProcessor: Processor<CopilotzProcessorContext> =
         thread,
         rangeMessages: messages,
       });
-      checkpoint = await collection(context, longTermMemoryCollection.name).get(
-        checkpoint.id,
-      ) ?? checkpoint;
+      checkpoint =
+        await collection(context, longTermMemoryCollection.name).get({
+          id: checkpoint.id,
+        }) ?? checkpoint;
       const metadata = withWorkflowMetadata({
         memoryCheckpointId: checkpoint.id,
         memoryRepairIndex: 0,
@@ -1818,7 +1813,7 @@ const prepareMemoryAttemptProcessor: Processor<CopilotzProcessorContext> =
         kind: "memory_consolidation",
         agentParticipantId: participant.id,
       });
-      await createLlmAttemptRecord(context, {
+      await context.features.llmAttempt.create({
         id: `${checkpoint.id}:llm:0`,
         threadId,
         messageId: requiredText(
@@ -1831,7 +1826,10 @@ const prepareMemoryAttemptProcessor: Processor<CopilotzProcessorContext> =
         availableToolIds: [CONSOLIDATE_MEMORY_TOOL_ID],
         status: "running",
         metadata,
-      }, { operationKey: `memory-attempt:${checkpoint.id}:0`, metadata });
+      }, {
+        operationKey: `memory-attempt:${checkpoint.id}:0`,
+        identity: { metadata },
+      });
     },
   });
 
@@ -1847,23 +1845,25 @@ function executeMemoryAttemptProcessor(
     }],
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
-      const attempt = await requireBoundCollection(context, "llm_attempt").get(
-        event.subject.id,
-        context.namespace,
-      );
+      const attempt = await context.collections.llm_attempt.get({
+        id: event.subject.id,
+      });
       if (!attempt || String(attempt.status) !== "running") return;
       const checkpointId = memoryCheckpointId(attempt.metadata);
       const checkpoint = await collection(
         context,
         longTermMemoryCollection.name,
-      ).get(checkpointId);
+      ).get({ id: checkpointId });
       if (!checkpoint || checkpoint.status !== "pending") return;
       const agent = context.resources.require<Agent>(
         "agents",
         requiredText(attempt.agentId, "Memory agent id"),
       );
       const participant = optionalText(attempt.participantId)
-        ? await loadParticipantRecord(context, optionalText(attempt.participantId)!)
+        ? await loadParticipantRecord(
+          context,
+          optionalText(attempt.participantId)!,
+        )
         : null;
       const thread = await loadThreadRecord(context, String(attempt.threadId));
       if (!participant || participant.participantType !== "agent" || !thread) {
@@ -1972,7 +1972,8 @@ function executeMemoryAttemptProcessor(
             role: "llm.tool_calls",
           }, { operationKey: "memory:tool-calls" })
           : undefined;
-        await completeLlmAttemptCollection(context, attempt, {
+        await context.features.llmAttempt.complete({
+          id: attempt.id,
           ...(answer ? { answer } : {}),
           ...(reasoning ? { reasoning } : {}),
           ...(toolCalls ? { toolCalls } : {}),
@@ -1985,21 +1986,28 @@ function executeMemoryAttemptProcessor(
             provider: response.provider ?? config.provider,
             model: response.model ?? config.model,
           },
-        }, { operationKey: "memory:complete" });
+        }, {
+          operationKey: "memory:complete",
+          identity: { metadata: record(attempt.metadata) },
+        });
       } catch (error) {
         const detail = await context.content.prepare({
           type: "text",
           text: error instanceof Error ? error.message : String(error),
           role: "provider.error_detail",
         }, { operationKey: "memory:error" });
-        await failLlmAttemptCollection(context, attempt, {
+        await context.features.llmAttempt.fail({
+          id: attempt.id,
           safeError: safeError(
             "memory_provider_error",
             "Memory provider attempt failed.",
             true,
           ),
           errorDetail: detail,
-        }, { operationKey: "memory:fail" });
+        }, {
+          operationKey: "memory:fail",
+          identity: { metadata: record(attempt.metadata) },
+        });
       }
     },
   });
@@ -2029,10 +2037,9 @@ function projectMemoryAttemptProcessor(
     ],
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
-      const attempt = await requireBoundCollection(context, "llm_attempt").get(
-        event.subject.id,
-        context.namespace,
-      );
+      const attempt = await context.collections.llm_attempt.get({
+        id: event.subject.id,
+      });
       if (!attempt) return;
       const checkpointId = memoryCheckpointId(attempt.metadata);
       if (attempt.status !== "completed") {
@@ -2076,7 +2083,7 @@ function projectMemoryAttemptProcessor(
         agentParticipantId: optionalText(attempt.participantId),
         continuation: "none",
       });
-      await createToolExecutionCollection(context, {
+      await context.features.toolExecution.create({
         id: `${checkpointId}:tool:${
           Number(record(attempt.metadata).memoryRepairIndex ?? 0)
         }`,
@@ -2087,11 +2094,11 @@ function projectMemoryAttemptProcessor(
         tool: { id: CONSOLIDATE_MEMORY_TOOL_ID, name: "Consolidate Memory" },
         status: "running",
         historyVisibility: "requester_only",
+        arguments: prepared,
         metadata,
       }, {
         operationKey: `memory:${checkpointId}:tool`,
-        metadata,
-        content: prepared,
+        identity: { metadata },
       });
     },
   });
@@ -2121,8 +2128,9 @@ function settleMemoryToolProcessor(
     ],
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
-      const execution = await requireBoundCollection(context, "tool_execution")
-        .get(event.subject.id, context.namespace);
+      const execution = await context.collections.tool_execution.get({
+        id: event.subject.id,
+      });
       if (
         !execution || String(execution.status) === "running" ||
         String(execution.status) === "completed"

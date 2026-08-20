@@ -1,9 +1,20 @@
 import { assert, assertEquals, assertExists, assertThrows } from "@std/assert";
-
 import {
   createTestDatabase,
   type TestDatabase,
 } from "../../testing/ominipg.ts";
+import { createTestDomainContext } from "../../../runtime/testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../../runtime/testing/projections.ts";
 import type { Agent } from "../../resources/index.ts";
 import { createCopilotzApplication } from "../../application/index.ts";
 import type { CopilotzProcessorContext } from "../../engine/index.ts";
@@ -11,7 +22,6 @@ import {
   loadMessageRecord,
   loadParticipantRecord,
 } from "../../engine/collection-graph.ts";
-import { createMessageRecord } from "../../engine/collection-writes.ts";
 import { definePlugin, defineProcessor } from "../../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../../plugins/core/plugin.ts";
 import { createChannelRuntime } from "../runtime.ts";
@@ -112,13 +122,15 @@ function replyPlugin() {
           name: "answer.ogg",
         },
       ], { operationKey: "reply-content" });
-      await createMessageRecord(context, {
+      const persisted = await context.content.materialize(content);
+      await context.collections.message.create({
         id: `reply:${message.id}`,
         threadId: message.threadId,
         senderId: recipient.id,
         recipientIds: [message.sender.id],
-        content,
+        content: persisted,
       }, { operationKey: "reply-message" });
+      await context.content.linkOwner(`reply:${message.id}`, persisted);
     },
   });
   return definePlugin({
@@ -222,7 +234,8 @@ Deno.test("WhatsApp channel normalizes signed media ingress and native semantic 
     assertEquals(fake.sends[1].text, { body: "Native WhatsApp reply" });
     assertEquals(fake.sends[2].audio, { id: "uploaded-1" });
 
-    const thread = await application.conversation.getThreadByExternalId(
+    const thread = await projectThreadByExternalId(
+      application,
       NAMESPACE,
       "5511999999999",
     );
@@ -238,10 +251,7 @@ Deno.test("WhatsApp channel normalizes signed media ingress and native semantic 
         lastInboundMessageId: "wamid.input-a",
       },
     );
-    const messages = await application.conversation.listMessages(
-      NAMESPACE,
-      thread.id,
-    );
+    const messages = await projectMessages(application, NAMESPACE, thread.id);
     assertEquals(messages.map((value) => value.id), [
       "wamid.input-a",
       "reply:wamid.input-a",
@@ -265,11 +275,11 @@ Deno.test("WhatsApp channel normalizes signed media ingress and native semantic 
     await retry.done;
     assertEquals(fake.sends.length, beforeRetry);
     assertEquals(
-      (await application.conversation.listThreads(NAMESPACE)).length,
+      (await projectThreads(application, NAMESPACE)).length,
       1,
     );
     assertEquals(
-      (await application.conversation.listMessages(NAMESPACE, thread.id))
+      (await projectMessages(application, NAMESPACE, thread.id))
         .length,
       2,
     );

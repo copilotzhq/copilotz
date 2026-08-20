@@ -1,14 +1,20 @@
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
-
-import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
-import type { Agent } from "../resources/index.ts";
-import type { SqlSession } from "../events/index.ts";
-import { createSqlSession } from "../events/index.ts";
-import type { CopilotzEngine } from "../engine/index.ts";
 import {
   type CopilotzProcessorContext,
   createCopilotzEngine,
 } from "../engine/index.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 import {
   createPluginRegistry,
   definePlugin,
@@ -17,8 +23,12 @@ import {
   type Processor,
 } from "../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
-import { updateThreadRecord } from "../engine/collection-writes.ts";
 import type { AttachmentOutput, AttachmentStreamOutput } from "./index.ts";
+import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
+import type { Agent } from "../resources/index.ts";
+import type { SqlSession } from "../events/index.ts";
+import { createSqlSession } from "../events/index.ts";
+import type { CopilotzEngine } from "../engine/index.ts";
 
 const NAMESPACE = "tenant-attachments";
 const SCHEMA = "copilotz_attachments";
@@ -31,12 +41,14 @@ type Fixture = Readonly<{
 }>;
 
 function agent(id: string): Agent {
-  return Object.freeze({
-    id,
-    name: id,
-    role: `${id} agent`,
-    runtime: { provider: "openai", model: "gpt-4.1-mini" },
-  } satisfies Agent);
+  return Object.freeze(
+    {
+      id,
+      name: id,
+      role: `${id} agent`,
+      runtime: { provider: "openai", model: "gpt-4.1-mini" },
+    } satisfies Agent,
+  );
 }
 
 async function registryFor(options: {
@@ -46,22 +58,25 @@ async function registryFor(options: {
   const agents = options.agents ?? [agent("support")];
   const processors = options.processors ?? [];
   return await createPluginRegistry({
-    plugins: [coreCollectionsPlugin, definePlugin({
-      manifest: {
-        id: "test.attachments",
-        version: "1.0.0",
-        provides: {
-          agents: agents.map((resource) => resource.id),
-          ...(processors.length
-            ? { processors: processors.map((resource) => resource.id) }
-            : {}),
+    plugins: [
+      coreCollectionsPlugin,
+      definePlugin({
+        manifest: {
+          id: "test.attachments",
+          version: "1.0.0",
+          provides: {
+            agents: agents.map((resource) => resource.id),
+            ...(processors.length
+              ? { processors: processors.map((resource) => resource.id) }
+              : {}),
+          },
         },
-      },
-      resources: {
-        agents,
-        ...(processors.length ? { processors } : {}),
-      },
-    })],
+        resources: {
+          agents,
+          ...(processors.length ? { processors } : {}),
+        },
+      }),
+    ],
   });
 }
 
@@ -97,8 +112,7 @@ async function createThread(
   engine: CopilotzEngine,
   agentIds: readonly string[] = ["support"],
 ): Promise<void> {
-  await engine.conversation.createThread({
-    namespace: NAMESPACE,
+  await createTestDomainContext(engine, NAMESPACE).features.thread.create({
     id: "thread-a",
     participants: [
       {
@@ -115,8 +129,7 @@ async function createThread(
         name: id,
       })),
     ],
-    identity: { deduplicationId: "thread-a:create" },
-  });
+  }, { identity: { deduplicationId: "thread-a:create" } });
 }
 
 function isStreamOutput(
@@ -190,7 +203,8 @@ Deno.test("event-native run is a temporary attachment over one causal scope", as
 
     const messageId = event.value?.durable ? event.value.subject?.id : null;
     assertExists(messageId);
-    const message = await fixture.engine.conversation.getMessage(
+    const message = await projectMessageById(
+      fixture.engine,
       NAMESPACE,
       messageId,
     );
@@ -221,8 +235,9 @@ Deno.test("detached durable descendants do not block the triggering run", async 
     on: [{ eventType: "message.created" }],
     settlement: "detached",
     async handle(_event, context) {
-      await updateThreadRecord(context, "thread-a", {
-        metadata: { detached: true },
+      await context.collections.thread.update({
+        id: "thread-a",
+        set: { metadata: { detached: true } },
       }, { operationKey: "detached-reserve-thread" });
     },
   });
@@ -559,6 +574,134 @@ Deno.test("attachment outputs follow stream.created as a live byte stream", asyn
     }
     assertEquals(new TextDecoder().decode(bytes), "hello stream");
     await reader.cancel();
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("attachment reconnects from afterPosition and streamOffsets", async () => {
+  const fixture = await createFixture();
+  try {
+    await createThread(fixture.engine);
+    const first = await fixture.engine.connect({
+      namespace: NAMESPACE,
+      thread: "thread-a",
+      participant: "user-a",
+    });
+    const firstReader = first.outputs.getReader();
+    const created = await first.send({
+      content: [{ type: "text", text: "first" }],
+      id: "message-first",
+    });
+    const firstEvent = await nextSemanticType(firstReader, "message.created");
+    assert(firstEvent.durable);
+    await created.done;
+    await firstReader.cancel();
+    await first.close();
+
+    const replay = await fixture.engine.connect({
+      namespace: NAMESPACE,
+      thread: "thread-a",
+      participant: "user-a",
+      afterPosition: "0",
+    });
+    const replayReader = replay.outputs.getReader();
+    const replayed = await nextSemanticType(replayReader, "message.created");
+    assert(replayed.durable);
+    assertEquals(replayed.id, firstEvent.id);
+    await replayReader.cancel();
+    await replay.close();
+
+    const skipped = await fixture.engine.connect({
+      namespace: NAMESPACE,
+      thread: "thread-a",
+      participant: "user-a",
+      afterPosition: firstEvent.position,
+    });
+    const skippedReader = skipped.outputs.getReader();
+    const second = await skipped.send({
+      content: [{ type: "text", text: "second" }],
+      id: "message-second",
+    });
+    const next = await nextSemanticType(skippedReader, "message.created");
+    assert(next.durable);
+    assertEquals(next.id, second.eventId);
+    await second.done;
+    await skippedReader.cancel();
+    await skipped.close();
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("attachment follows in-flight streams from a byte offset after stream.created", async () => {
+  const processor = defineProcessor<CopilotzProcessorContext>({
+    id: "test.attachment-stream-resume",
+    on: [{ eventType: "message.created" }],
+    async handle(event, context) {
+      if (!event.durable || !event.threadId) return;
+      const writer = await context.streams.write({
+        threadId: event.threadId,
+        lane: "content",
+        mediaType: "text/plain",
+        participantId: event.routing.senderId,
+      });
+      await writer.write(new TextEncoder().encode("hello stream"));
+      await writer.finalize();
+    },
+  });
+  const fixture = await createFixture({
+    registry: await registryFor({ processors: [processor] }),
+  });
+  try {
+    await createThread(fixture.engine);
+    const first = await fixture.engine.connect({
+      namespace: NAMESPACE,
+      thread: "thread-a",
+      participant: "user-a",
+    });
+    const firstReader = first.outputs.getReader();
+    const sent = first.send({
+      content: [{ type: "text", text: "Start a stream." }],
+    });
+    const created = await nextSemanticType(firstReader, "stream.created");
+    assert(created.durable);
+    const output = await nextStreamOutput(firstReader);
+    assertEquals(output.streamId, created.subject?.id);
+    await (await sent).done;
+    await firstReader.cancel();
+    await first.close();
+
+    const resumed = await fixture.engine.connect({
+      namespace: NAMESPACE,
+      thread: "thread-a",
+      participant: "user-a",
+      afterPosition: created.position,
+      streamOffsets: Object.freeze({
+        [created.subject!.id]: 6,
+      }),
+    });
+    const resumedReader = resumed.outputs.getReader();
+    const resumedOutput = await nextStreamOutput(resumedReader);
+    assertEquals(resumedOutput.streamId, created.subject?.id);
+    const rest = resumedOutput.payload.getReader();
+    const chunks: Uint8Array[] = [];
+    while (true) {
+      const next = await rest.read();
+      if (next.done) break;
+      chunks.push(next.value);
+    }
+    const bytes = new Uint8Array(
+      chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0),
+    );
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    assertEquals(new TextDecoder().decode(bytes), "stream");
+    await resumedReader.cancel();
+    await resumed.close();
   } finally {
     await closeFixture(fixture);
   }

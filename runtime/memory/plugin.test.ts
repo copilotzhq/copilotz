@@ -4,6 +4,18 @@ import {
   assertExists,
   assertStringIncludes,
 } from "@std/assert";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 import type { Agent } from "../resources/index.ts";
 import {
   toolExecutionContent,
@@ -185,8 +197,7 @@ async function createFixture(
       validateCollection: options.validateCollection,
     });
     stage = "thread";
-    await engine.conversation.createThread({
-      namespace: "tenant-a",
+    await createTestDomainContext(engine, "tenant-a").features.thread.create({
       id: "thread-a",
       participants: [
         { id: "user-a", externalId: "user-a", participantType: "human" },
@@ -197,8 +208,7 @@ async function createFixture(
           agentId: configuredAgent.id,
         },
       ],
-      identity: { deduplicationId: "thread-a:create" },
-    });
+    }, { identity: { deduplicationId: "thread-a:create" } });
     return Object.freeze({ db, engine, requests });
   } catch (cause) {
     throw new Error(`Memory fixture failed during ${stage}.`, { cause });
@@ -215,24 +225,25 @@ async function addMessage(
     namespace: "tenant-a",
     idempotencyKey: `${id}:content`,
   });
-  return await fixture.engine.conversation.createMessage({
-    namespace: "tenant-a",
-    id,
-    threadId: "thread-a",
-    sender: sender === "user"
-      ? { id: "user-a", externalId: "user-a", participantType: "human" }
-      : {
-        id: "agent-north",
-        externalId: agent.id,
-        participantType: "agent",
-        agentId: agent.id,
+  return await createTestDomainContext(fixture.engine, "tenant-a").features
+    .threadMessage.create({
+      id,
+      threadId: "thread-a",
+      sender: sender === "user"
+        ? { id: "user-a", externalId: "user-a", participantType: "human" }
+        : {
+          id: "agent-north",
+          externalId: agent.id,
+          participantType: "agent",
+          agentId: agent.id,
+        },
+      content,
+    }, {
+      identity: {
+        correlationId: `correlation:${id}`,
+        deduplicationId: `${id}:create`,
       },
-    content,
-    identity: {
-      correlationId: `correlation:${id}`,
-      deduplicationId: `${id}:create`,
-    },
-  });
+    });
 }
 
 async function trigger(fixture: Fixture, suffix = "a") {
@@ -306,7 +317,8 @@ async function close(fixture: Fixture) {
 async function waitForToolSettlement(fixture: Fixture, count: number) {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    const executions = await fixture.engine.toolExecutions.list(
+    const executions = await projectToolExecutions(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -360,7 +372,8 @@ Deno.test("native consolidation uses one internal tool grant and emits no public
     assertEquals(records.every((item) => item.layer === undefined), true);
     assertEquals(record(checkpoint.metadata).continuity, undefined);
 
-    const attempts = await fixture.engine.llmAttempts.list(
+    const attempts = await projectLlmAttempts(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -372,7 +385,8 @@ Deno.test("native consolidation uses one internal tool grant and emits no public
     const executions = await waitForToolSettlement(fixture, 1);
     assertEquals(executions.length, 1);
     assertEquals(executions[0].status, "completed");
-    const messages = await fixture.engine.conversation.listMessages(
+    const messages = await projectMessages(
+      fixture.engine,
       "tenant-a",
       "thread-a",
       { limit: 100 },
@@ -427,7 +441,8 @@ Deno.test("a missing consolidation call receives one bounded internal repair", a
       JSON.stringify(fixture.requests[1].messages),
       "did not call consolidate_memory",
     );
-    const messages = await fixture.engine.conversation.listMessages(
+    const messages = await projectMessages(
+      fixture.engine,
       "tenant-a",
       "thread-a",
       { limit: 100 },
@@ -680,10 +695,10 @@ Deno.test("corrections preserve temporal history and create explicit supersessio
     const scoped = fixture.engine.collections.withScope({
       namespace: "tenant-a",
     });
-    const oldState = await scoped.memory_record.get(oldStateId);
-    const corrected = await scoped.memory_record.get(
-      "memory:thread-a:north:2:record:state-corrected",
-    );
+    const oldState = await scoped.memory_record.get({ id: oldStateId });
+    const corrected = await scoped.memory_record.get({
+      id: "memory:thread-a:north:2:record:state-corrected",
+    });
     assertEquals(oldState?.status, "superseded");
     assertEquals(corrected?.status, "current");
     assertExists(record(oldState?.temporal).invalidatedAt);
@@ -708,7 +723,8 @@ Deno.test("provider failure receives one internal repair without publishing an a
     await trigger(fixture);
     await waitForCheckpoint(fixture, "ready");
     assertEquals(fixture.requests.length, 2);
-    const messages = await fixture.engine.conversation.listMessages(
+    const messages = await projectMessages(
+      fixture.engine,
       "tenant-a",
       "thread-a",
       { limit: 100 },
@@ -1115,7 +1131,8 @@ Deno.test("memory query tools enforce thread access, explain provenance, and pre
     await run.done;
     await observed;
 
-    const executions = await fixture.engine.toolExecutions.list(
+    const executions = await projectToolExecutions(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -1154,7 +1171,7 @@ Deno.test("memory query tools enforce thread access, explain provenance, and pre
       ),
       ["space-visible"],
     );
-    const updated = await scoped.memory_record.get("memory-visible");
+    const updated = await scoped.memory_record.get({ id: "memory-visible" });
     assertEquals(updated?.status, "retracted");
     assertExists(record(updated?.temporal).invalidatedAt);
   } finally {

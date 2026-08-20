@@ -6,6 +6,7 @@ import { createPluginRegistry } from "../../runtime/plugins/index.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
 import { coreCollectionsPlugin } from "./plugin.ts";
 import { threadCollection } from "./resources/collections/thread.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 
 Deno.test("thread replay preserves activity cursors derived from thread-scoped events", async () => {
   const namespace = "tenant-thread-replay-cursor";
@@ -16,8 +17,8 @@ Deno.test("thread replay preserves activity cursors derived from thread-scoped e
     defaultDatabaseSchema: "copilotz_thread_replay_cursor",
   });
   try {
-    await engine.conversation.createThread({
-      namespace,
+    const domain = createTestDomainContext(engine, namespace);
+    await domain.features.thread.create({
       id: "thread-a",
       participants: [{
         id: "user-a",
@@ -29,8 +30,7 @@ Deno.test("thread replay preserves activity cursors derived from thread-scoped e
       namespace,
       idempotencyKey: "thread-replay-message-content",
     });
-    const message = await engine.conversation.createMessage({
-      namespace,
+    await domain.features.threadMessage.create({
       id: "message-a",
       threadId: "thread-a",
       sender: {
@@ -40,17 +40,21 @@ Deno.test("thread replay preserves activity cursors derived from thread-scoped e
       },
       content,
     });
-    const threads = engine.collectionRuntime.get("thread");
-    assertExists(threads);
-    const before = await threads.get("thread-a", namespace);
-    assertEquals(before?.lastEventId, message.event.id);
-    assertEquals(before?.lastEventPosition, message.event.position);
+    const messageEvent = (await engine.events.list({
+      namespace,
+      threadId: "thread-a",
+      limit: 100,
+    })).find((event) => event.subject?.id === "message-a");
+    assertExists(messageEvent);
+    const before = await domain.collections.thread.get({ id: "thread-a" });
+    assertEquals(before?.lastEventId, messageEvent.id);
+    assertEquals(before?.lastEventPosition, messageEvent.position);
 
     await engine.collectionRuntime.rebuild(threadCollection, namespace);
 
-    const rebuilt = await threads.get("thread-a", namespace);
-    assertEquals(rebuilt?.lastEventId, message.event.id);
-    assertEquals(rebuilt?.lastEventPosition, message.event.position);
+    const rebuilt = await domain.collections.thread.get({ id: "thread-a" });
+    assertEquals(rebuilt?.lastEventId, messageEvent.id);
+    assertEquals(rebuilt?.lastEventPosition, messageEvent.position);
   } finally {
     await engine.shutdown();
     await db.close();

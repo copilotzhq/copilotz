@@ -1,14 +1,26 @@
 import { assert, assertEquals, assertExists } from "@std/assert";
-
+import {
+  createUsageWorkflowPlugin,
+  type CreateUsageWorkflowPluginOptions,
+} from "./index.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import { waitForTestDelivery } from "../../runtime/testing/deliveries.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { type CopilotzEngine, createCopilotzEngine } from "../engine/index.ts";
 import { createSqlSession } from "../events/index.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
-import {
-  createUsageWorkflowPlugin,
-  type CreateUsageWorkflowPluginOptions,
-} from "./index.ts";
 
 const NAMESPACE = "tenant-a";
 const THREAD_ID = "thread-a";
@@ -32,8 +44,7 @@ async function createFixture(
     retryBaseMs: 0,
     random: () => 0,
   });
-  await engine.conversation.createThread({
-    namespace: NAMESPACE,
+  await createTestDomainContext(engine, NAMESPACE).features.thread.create({
     id: THREAD_ID,
     participants: [
       {
@@ -55,22 +66,6 @@ async function createFixture(
 async function closeFixture(fixture: Fixture): Promise<void> {
   await fixture.engine.shutdown();
   await fixture.db.close();
-}
-
-async function waitForSettlement(
-  engine: CopilotzEngine,
-  eventId: string,
-): Promise<void> {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    const settlement = await engine.events.settlement(NAMESPACE, eventId);
-    if (settlement.unsettled === 0 && settlement.deadLetters === 0) return;
-    if (settlement.deadLetters > 0) {
-      throw new Error(`Usage event '${eventId}' dead-lettered.`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error(`Timed out waiting for usage event '${eventId}'.`);
 }
 
 function providerMetadata(parentLlmAttemptId: string) {
@@ -123,29 +118,26 @@ Deno.test("usage workflow records physical provider attempts and tools once with
     },
   });
   try {
-    const logical = await fixture.engine.llmAttempts.create({
-      namespace: NAMESPACE,
+    const domain = createTestDomainContext(fixture.engine, NAMESPACE);
+    const logical = await domain.features.llmAttempt.create({
       id: "logical-1",
       threadId: THREAD_ID,
       participantId: "agent-node",
       initiatorParticipantId: "user-node",
       agentId: "north",
       status: "running",
-    });
+    }) as { id: string };
     const logicalAnswer = await fixture.engine.content.preparer.prepare(
       "logical output must not be copied into usage",
       { namespace: NAMESPACE, idempotencyKey: "logical-1:answer" },
     );
-    const logicalTerminal = await fixture.engine.llmAttempts.complete({
-      namespace: NAMESPACE,
-      id: logical.value!.id,
+    await domain.features.llmAttempt.complete({
+      id: logical.id,
       answer: logicalAnswer,
       usage: { inputTokens: 20, outputTokens: 10, totalTokens: 30 },
     });
-    await waitForSettlement(fixture.engine, logicalTerminal.event.id);
 
-    await fixture.engine.llmAttempts.create({
-      namespace: NAMESPACE,
+    await domain.features.llmAttempt.create({
       id: "logical-1:provider:0",
       threadId: THREAD_ID,
       participantId: "agent-node",
@@ -153,16 +145,15 @@ Deno.test("usage workflow records physical provider attempts and tools once with
       agentId: "north",
       provider: "openai",
       model: "primary-model",
-      parentAttemptId: logical.value!.id,
+      parentAttemptId: logical.id,
       status: "running",
-      metadata: providerMetadata(logical.value!.id),
+      metadata: providerMetadata(logical.id),
     });
     const providerAnswer = await fixture.engine.content.preparer.prepare(
       "provider output must not be copied into usage",
       { namespace: NAMESPACE, idempotencyKey: "provider-0:answer" },
     );
-    const completed = await fixture.engine.llmAttempts.complete({
-      namespace: NAMESPACE,
+    await domain.features.llmAttempt.complete({
       id: "logical-1:provider:0",
       answer: providerAnswer,
       usage: {
@@ -183,9 +174,13 @@ Deno.test("usage workflow records physical provider attempts and tools once with
       finishedAt: "2026-08-06T12:00:01.000Z",
       metricsFinalizedAt: "2026-08-06T12:00:01.000Z",
     });
-
-    await fixture.engine.llmAttempts.create({
+    const completedEvent = (await fixture.engine.events.list({
       namespace: NAMESPACE,
+      threadId: THREAD_ID,
+      limit: 1_000,
+    })).filter((event) => event.subject?.id === "logical-1:provider:0").at(-1)!;
+
+    await domain.features.llmAttempt.create({
       id: "logical-1:provider:1",
       threadId: THREAD_ID,
       participantId: "agent-node",
@@ -193,21 +188,24 @@ Deno.test("usage workflow records physical provider attempts and tools once with
       agentId: "north",
       provider: "openai",
       model: "fallback-model",
-      parentAttemptId: logical.value!.id,
+      parentAttemptId: logical.id,
       attemptIndex: 1,
       status: "running",
-      metadata: providerMetadata(logical.value!.id),
+      metadata: providerMetadata(logical.id),
     });
-    const failed = await fixture.engine.llmAttempts.fail({
-      namespace: NAMESPACE,
+    await domain.features.llmAttempt.fail({
       id: "logical-1:provider:1",
       safeError: { message: "provider unavailable", code: "server_error" },
       usage: { inputTokens: 4, totalTokens: 4, source: "provider" },
       finishedAt: "2026-08-06T12:00:02.000Z",
     });
-
-    await fixture.engine.llmAttempts.create({
+    const failedEvent = (await fixture.engine.events.list({
       namespace: NAMESPACE,
+      threadId: THREAD_ID,
+      limit: 1_000,
+    })).filter((event) => event.subject?.id === "logical-1:provider:1").at(-1)!;
+
+    await domain.features.llmAttempt.create({
       id: "logical-1:provider:2",
       threadId: THREAD_ID,
       participantId: "agent-node",
@@ -215,25 +213,30 @@ Deno.test("usage workflow records physical provider attempts and tools once with
       agentId: "north",
       provider: "openai",
       model: "hedged-model",
-      parentAttemptId: logical.value!.id,
+      parentAttemptId: logical.id,
       attemptIndex: 2,
       status: "running",
-      metadata: providerMetadata(logical.value!.id),
+      metadata: providerMetadata(logical.id),
     });
-    const superseded = await fixture.engine.llmAttempts.update({
-      namespace: NAMESPACE,
+    await domain.collections.llm_attempt.update({
       id: "logical-1:provider:2",
-      status: "superseded",
-      usage: { inputTokens: 2, totalTokens: 2, source: "provider" },
-      metricsFinalizedAt: "2026-08-06T12:00:03.000Z",
+      set: {
+        status: "superseded",
+        usage: { inputTokens: 2, totalTokens: 2, source: "provider" },
+        metricsFinalizedAt: "2026-08-06T12:00:03.000Z",
+      },
     });
+    const supersededEvent = (await fixture.engine.events.list({
+      namespace: NAMESPACE,
+      threadId: THREAD_ID,
+      limit: 1_000,
+    })).filter((event) => event.subject?.id === "logical-1:provider:2").at(-1)!;
 
     const argumentsContent = await fixture.engine.content.preparer.prepare(
       { type: "json", value: { secretPrompt: "do not duplicate" } },
       { namespace: NAMESPACE, idempotencyKey: "tool-1:arguments" },
     );
-    await fixture.engine.toolExecutions.create({
-      namespace: NAMESPACE,
+    await domain.features.toolExecution.create({
       id: "tool-1",
       threadId: THREAD_ID,
       participantId: "agent-node",
@@ -245,7 +248,7 @@ Deno.test("usage workflow records physical provider attempts and tools once with
       metadata: {
         copilotzWorkflow: {
           kind: "tool_execution",
-          llmAttemptId: logical.value!.id,
+          llmAttemptId: logical.id,
         },
       },
     });
@@ -253,20 +256,32 @@ Deno.test("usage workflow records physical provider attempts and tools once with
       { type: "json", value: { privateResult: "do not duplicate" } },
       { namespace: NAMESPACE, idempotencyKey: "tool-1:output" },
     );
-    const toolTerminal = await fixture.engine.toolExecutions.complete({
-      namespace: NAMESPACE,
+    await domain.features.toolExecution.complete({
       id: "tool-1",
       output: toolOutput,
       durationMs: 25,
       finishedAt: "2026-08-06T12:00:04.000Z",
     });
+    const toolEvent = (await fixture.engine.events.list({
+      namespace: NAMESPACE,
+      threadId: THREAD_ID,
+      limit: 1_000,
+    })).filter((event) => event.subject?.id === "tool-1").at(-1)!;
 
     await Promise.all([
-      completed,
-      failed,
-      superseded,
-      toolTerminal,
-    ].map((result) => waitForSettlement(fixture.engine, result.event.id)));
+      completedEvent,
+      failedEvent,
+      supersededEvent,
+      toolEvent,
+    ].map((event) =>
+      waitForTestDelivery(
+        fixture.engine,
+        NAMESPACE,
+        event.id,
+        "succeeded",
+        10_000,
+      )
+    ));
 
     const rows = [
       ...await fixture.engine.collections.get("usage").list(

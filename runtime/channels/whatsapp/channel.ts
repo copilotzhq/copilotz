@@ -1,6 +1,7 @@
 import type { ContentInput } from "../../content/index.ts";
 import type { ConversationMessage } from "../../domain/index.ts";
 import { type CopilotzPlugin, definePlugin } from "../../plugins/index.ts";
+import { loadChannelMessage } from "../identity.ts";
 import type {
   ChannelEgressContext,
   ChannelIngressEnvelope,
@@ -563,7 +564,8 @@ export function createWhatsAppChannel(
               : "";
             if (!messageId || deliveredMessages.has(messageId)) continue;
             deliveredMessages.add(messageId);
-            const message = await context.application.conversation.getMessage(
+            const message = await loadChannelMessage(
+              context.application,
               context.namespace,
               messageId,
             );

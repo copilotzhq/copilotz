@@ -1,8 +1,4 @@
 import type { CopilotzProcessorContext } from "../engine/index.ts";
-import {
-  loadCollectionRecord,
-  requireBoundCollection,
-} from "../engine/collection-writes.ts";
 import type { CopilotzEvent } from "../events/index.ts";
 import {
   type CopilotzPlugin,
@@ -10,7 +6,8 @@ import {
   defineProcessor,
   type Processor,
 } from "../plugins/index.ts";
-import type { CollectionRecord, ScopedEventCollection } from "../domain/index.ts";
+import type { CollectionRecord } from "../domain/index.ts";
+import type { ScopedCollection } from "../collections/index.ts";
 import { usageCollection } from "./collection.ts";
 import type { UsageCost, UsageOptions, UsageRecord } from "./types.ts";
 
@@ -106,7 +103,7 @@ function normalizedCost(value: unknown): UsageCost | null {
 
 function usageCollectionFrom(
   context: CopilotzProcessorContext,
-): ScopedEventCollection {
+): ScopedCollection {
   const collection = context.collections.usage;
   if (!collection) {
     throw new Error(
@@ -121,11 +118,9 @@ async function participantExternalId(
   participantId: string | undefined,
 ): Promise<string | null> {
   if (!participantId) return null;
-  const participant = await loadCollectionRecord(
-    context,
-    "participant",
-    participantId,
-  );
+  const participant = await context.collections.participant.get({
+    id: participantId,
+  });
   return optionalText(participant?.externalId) ?? participantId;
 }
 
@@ -326,10 +321,9 @@ function llmUsageProcessor(
     ],
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
-      const attempt = await requireBoundCollection(context, "llm_attempt").get(
-        event.subject.id,
-        context.namespace,
-      );
+      const attempt = await context.collections.llm_attempt.get({
+        id: event.subject.id,
+      });
       if (
         !attempt || !isProviderAttemptMetadata(attempt.metadata) ||
         !["completed", "failed", "cancelled", "superseded"].includes(
@@ -363,18 +357,16 @@ function toolUsageProcessor(
     ],
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
-      const execution = await requireBoundCollection(context, "tool_execution")
-        .get(event.subject.id, context.namespace);
+      const execution = await context.collections.tool_execution.get({
+        id: event.subject.id,
+      });
       if (
         !execution || String(execution.status) === "pending" ||
         String(execution.status) === "running"
       ) return;
       const parentAttemptId = workflowAttemptId(execution.metadata);
       const parentAttempt = parentAttemptId
-        ? await requireBoundCollection(context, "llm_attempt").get(
-          parentAttemptId,
-          context.namespace,
-        )
+        ? await context.collections.llm_attempt.get({ id: parentAttemptId })
         : null;
       const initiatedById = await participantExternalId(
         context,

@@ -33,7 +33,7 @@ function contentSequence(value: unknown): ContentSequence {
   return Object.freeze(value) as ContentSequence;
 }
 
-function projectActiveBranch<T extends { id: string }>(
+export function projectActiveBranch<T extends { id: string }>(
   messages: readonly T[],
   branch: ConversationThread["activeMessageBranch"],
 ): readonly T[] {
@@ -52,11 +52,11 @@ function projectActiveBranch<T extends { id: string }>(
   ]);
 }
 
-export function requireBoundCollection(
+export function requireScopedCollection(
   context: CopilotzProcessorCapabilities,
   name: string,
 ) {
-  const bound = context.collectionRuntime?.get(name);
+  const bound = context.collections[name];
   if (!bound) throw new Error(`Collection '${name}' is not bound.`);
   return bound;
 }
@@ -68,7 +68,9 @@ export function mapParticipantRecord(record: CollectionRecord): Participant {
     externalId: String(record.externalId ?? record.id),
     participantType: record.participantType as Participant["participantType"],
     ...(optionalText(record.name) ? { name: optionalText(record.name) } : {}),
-    ...(optionalText(record.email) ? { email: optionalText(record.email) } : {}),
+    ...(optionalText(record.email)
+      ? { email: optionalText(record.email) }
+      : {}),
     ...(optionalText(record.agentId)
       ? { agentId: optionalText(record.agentId) }
       : {}),
@@ -78,7 +80,7 @@ export function mapParticipantRecord(record: CollectionRecord): Participant {
   });
 }
 
-function mapMessageRecord(
+export function mapMessageRecord(
   record: CollectionRecord,
   sender: Participant,
 ): ConversationMessage {
@@ -98,7 +100,7 @@ function mapMessageRecord(
   });
 }
 
-function mapThreadRecord(
+export function mapThreadRecord(
   record: CollectionRecord,
   participants: readonly Participant[],
 ): ConversationThread {
@@ -109,7 +111,13 @@ function mapThreadRecord(
       ? { externalId: optionalText(record.externalId) }
       : {}),
     ...(optionalText(record.name) ? { name: optionalText(record.name) } : {}),
+    ...(optionalText(record.description)
+      ? { description: optionalText(record.description) }
+      : {}),
     status: String(record.status ?? "active"),
+    ...(optionalText(record.parentThreadId)
+      ? { parentThreadId: optionalText(record.parentThreadId) }
+      : {}),
     metadata: asRecord(record.metadata),
     participants,
     ...(record.activeMessageBranch &&
@@ -118,6 +126,15 @@ function mapThreadRecord(
         activeMessageBranch: record
           .activeMessageBranch as ConversationThread["activeMessageBranch"],
       }
+      : {}),
+    ...(optionalText(record.lastEventId)
+      ? { lastEventId: optionalText(record.lastEventId) }
+      : {}),
+    ...(optionalText(record.lastEventPosition)
+      ? { lastEventPosition: optionalText(record.lastEventPosition) }
+      : {}),
+    ...(optionalText(record.lastEventAt)
+      ? { lastEventAt: optionalText(record.lastEventAt) }
       : {}),
     createdAt: String(record.createdAt),
     updatedAt: String(record.updatedAt),
@@ -138,11 +155,15 @@ export function mapLlmAttemptRecord(record: CollectionRecord): LlmAttempt {
     ...(optionalText(record.initiatorParticipantId)
       ? { initiatorParticipantId: optionalText(record.initiatorParticipantId) }
       : {}),
-    ...(optionalText(record.agentId) ? { agentId: optionalText(record.agentId) } : {}),
+    ...(optionalText(record.agentId)
+      ? { agentId: optionalText(record.agentId) }
+      : {}),
     ...(optionalText(record.provider)
       ? { provider: optionalText(record.provider) }
       : {}),
-    ...(optionalText(record.model) ? { model: optionalText(record.model) } : {}),
+    ...(optionalText(record.model)
+      ? { model: optionalText(record.model) }
+      : {}),
     status: record.status as LlmAttempt["status"],
     attemptIndex: Number(record.attemptIndex ?? 0),
     ...(optionalText(record.parentAttemptId)
@@ -173,7 +194,9 @@ export function mapLlmAttemptRecord(record: CollectionRecord): LlmAttempt {
   });
 }
 
-export function mapToolExecutionRecord(record: CollectionRecord): ToolExecution {
+export function mapToolExecutionRecord(
+  record: CollectionRecord,
+): ToolExecution {
   return Object.freeze({
     id: String(record.id),
     namespace: String(record.namespace),
@@ -184,7 +207,9 @@ export function mapToolExecutionRecord(record: CollectionRecord): ToolExecution 
     ...(optionalText(record.participantId)
       ? { participantId: optionalText(record.participantId) }
       : {}),
-    ...(optionalText(record.agentId) ? { agentId: optionalText(record.agentId) } : {}),
+    ...(optionalText(record.agentId)
+      ? { agentId: optionalText(record.agentId) }
+      : {}),
     toolCallId: String(record.toolCallId),
     tool: asRecord(record.tool),
     status: record.status as ToolExecution["status"],
@@ -212,9 +237,9 @@ export async function loadParticipantRecord(
   context: CopilotzProcessorCapabilities,
   id: string,
 ): Promise<Participant | null> {
-  const bound = context.collectionRuntime?.get("participant");
+  const bound = context.collections.participant;
   if (!bound) return null;
-  const record = await bound.get(id, context.namespace);
+  const record = await bound.get({ id });
   return record ? mapParticipantRecord(record) : null;
 }
 
@@ -222,14 +247,14 @@ export async function loadThreadRecord(
   context: CopilotzProcessorCapabilities,
   threadId: string,
 ): Promise<ConversationThread | null> {
-  const threads = context.collectionRuntime?.get("thread");
-  const participants = context.collectionRuntime?.get("participant");
+  const threads = context.collections.thread;
+  const participants = context.collections.participant;
   if (!threads || !participants) return null;
-  const record = await threads.get(threadId, context.namespace);
+  const record = await threads.get({ id: threadId });
   if (!record) return null;
   const ids = stringArray(record.participantIds);
   const loaded = await Promise.all(
-    ids.map((id) => participants.get(id, context.namespace)),
+    ids.map((id) => participants.get({ id })),
   );
   return mapThreadRecord(
     record,
@@ -243,20 +268,17 @@ export async function listThreadMessageRecords(
   context: CopilotzProcessorCapabilities,
   threadId: string,
 ): Promise<readonly ConversationMessage[]> {
-  const messages = requireBoundCollection(context, "message");
-  const participants = requireBoundCollection(context, "participant");
+  const messages = requireScopedCollection(context, "message");
+  const participants = requireScopedCollection(context, "participant");
   const thread = await loadThreadRecord(context, threadId);
-  const records = await messages.list(context.namespace, {
+  const records = await messages.list({
     where: { threadId },
     order: { field: "createdAt", direction: "asc" },
     limit: 1_000,
   });
   const hydrated: ConversationMessage[] = [];
   for (const record of records) {
-    const sender = await participants.get(
-      String(record.senderId),
-      context.namespace,
-    );
+    const sender = await participants.get({ id: String(record.senderId) });
     if (!sender) {
       throw new Error(`Message '${record.id}' sender was not found.`);
     }
@@ -269,15 +291,11 @@ export async function loadMessageRecord(
   context: CopilotzProcessorCapabilities,
   id: string,
 ): Promise<ConversationMessage | null> {
-  const record = await requireBoundCollection(context, "message").get(
-    id,
-    context.namespace,
-  );
+  const record = await requireScopedCollection(context, "message").get({ id });
   if (!record) return null;
-  const sender = await requireBoundCollection(context, "participant").get(
-    String(record.senderId),
-    context.namespace,
-  );
+  const sender = await requireScopedCollection(context, "participant").get({
+    id: String(record.senderId),
+  });
   if (!sender) {
     throw new Error(`Message '${id}' sender was not found.`);
   }
@@ -288,10 +306,9 @@ export async function loadLlmAttemptRecord(
   context: CopilotzProcessorCapabilities,
   id: string,
 ): Promise<LlmAttempt | null> {
-  const record = await requireBoundCollection(context, "llm_attempt").get(
+  const record = await requireScopedCollection(context, "llm_attempt").get({
     id,
-    context.namespace,
-  );
+  });
   return record ? mapLlmAttemptRecord(record) : null;
 }
 
@@ -299,9 +316,8 @@ export async function loadToolExecutionRecord(
   context: CopilotzProcessorCapabilities,
   id: string,
 ): Promise<ToolExecution | null> {
-  const record = await requireBoundCollection(context, "tool_execution").get(
+  const record = await requireScopedCollection(context, "tool_execution").get({
     id,
-    context.namespace,
-  );
+  });
   return record ? mapToolExecutionRecord(record) : null;
 }

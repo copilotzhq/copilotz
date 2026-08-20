@@ -11,11 +11,10 @@ import {
   definePlugin,
   defineProcessor,
 } from "../plugins/index.ts";
-import { loadMessageRecord, loadParticipantRecord } from "../engine/collection-graph.ts";
 import {
-  createMessageRecord,
-  ensureParticipantRecord,
-} from "../engine/collection-writes.ts";
+  loadMessageRecord,
+  loadParticipantRecord,
+} from "../engine/collection-graph.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import type { GoalStreamEvent } from "./types.ts";
 
@@ -72,22 +71,30 @@ function scriptedGoalPlugin(mode: ScriptMode = "normal"): CopilotzPlugin {
           { type: "text", text: "SECRET_TOOL_RESULT" },
           { operationKey: "fixture:secret-tool-content" },
         );
-        const toolSender = await ensureParticipantRecord(context, {
-          externalId: "fixture-secret-tool",
-          participantType: "tool",
-          name: "Fixture secret tool",
-        }, {
-          operationKey: "fixture:secret-tool-participant",
-          threadId: incoming.threadId,
-        });
-        await createMessageRecord(context, {
+        const [existingToolSender] = await context.collections.participant
+          .queries.byExternalId({ externalId: "fixture-secret-tool" });
+        const toolSender = existingToolSender ??
+          await context.collections.participant.create({
+            externalId: "fixture-secret-tool",
+            participantType: "tool",
+            name: "Fixture secret tool",
+          }, {
+            operationKey: "fixture:secret-tool-participant",
+            threadId: incoming.threadId,
+          });
+        const toolContentRefs = await context.content.materialize(toolContent);
+        await context.collections.message.create({
           id: `secret-tool:${incoming.id}`,
           threadId: incoming.threadId,
           senderId: toolSender.id,
           recipientIds: [],
-          content: toolContent,
+          content: toolContentRefs,
           metadata: { historyVisibility: "public_status" },
         }, { operationKey: "fixture:secret-tool-message" });
+        await context.content.linkOwner(
+          `secret-tool:${incoming.id}`,
+          toolContentRefs,
+        );
       }
 
       const answer = agentId === "tested"
@@ -108,13 +115,18 @@ function scriptedGoalPlugin(mode: ScriptMode = "normal"): CopilotzPlugin {
         { type: "text", text: answer },
         { operationKey: "fixture:answer-content" },
       );
-      await createMessageRecord(context, {
+      const answerContent = await context.content.materialize(content);
+      await context.collections.message.create({
         id: `answer:${incoming.id}:${agentId}`,
         threadId: incoming.threadId,
         senderId: recipient.id,
         recipientIds: [incoming.sender.id],
-        content,
+        content: answerContent,
       }, { operationKey: "fixture:answer-message" });
+      await context.content.linkOwner(
+        `answer:${incoming.id}:${agentId}`,
+        answerContent,
+      );
     },
   });
   return definePlugin({

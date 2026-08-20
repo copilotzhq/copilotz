@@ -1,4 +1,5 @@
 import { ulid } from "../../dependencies/ulid.ts";
+import { AsyncLocalStorage } from "../../dependencies/async-hooks.ts";
 import type {
   CoordinatedMutationResult,
   DurableEvent,
@@ -12,10 +13,7 @@ import type {
 import { eventDataRef, readEventBody, writeEventBody } from "./body.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { sameValue } from "./equal.ts";
-import {
-  loadCollectionRecord,
-  projectCollectionEvent,
-} from "./reducer.ts";
+import { loadCollectionRecord, projectCollectionEvent } from "./reducer.ts";
 import { getCollectionRecord, queryCollectionRecords } from "./query.ts";
 import {
   rebuildCollectionProjections,
@@ -84,7 +82,74 @@ export type BoundCollection<
   get(id: string, namespace: string): Promise<TSelect | null>;
   list(namespace: string, query?: CollectionQuery): Promise<readonly TSelect[]>;
   query: BoundCollectionQuery<TSelect>;
-  search(namespace: string, query: CollectionQuery): Promise<readonly TSelect[]>;
+  search(
+    namespace: string,
+    query: CollectionQuery,
+  ): Promise<readonly TSelect[]>;
+}>;
+
+export type ScopedCollectionCallOptions = Readonly<
+  & Omit<CollectionWriteOptions, "namespace">
+  & {
+    operationKey?: string;
+  }
+>;
+
+export type ScopedCollectionUpdateInput<
+  TRecord extends CollectionRecord = CollectionRecord,
+> = Readonly<{
+  id: string;
+  set?: Partial<TRecord>;
+  unset?: readonly string[];
+}>;
+
+export type ScopedCollectionDeleteInput = Readonly<{ id: string }>;
+
+export type ScopedCollectionCommand<
+  TRecord extends CollectionRecord = CollectionRecord,
+> = (
+  input: Readonly<Record<string, unknown> & { id: string }>,
+  options?: ScopedCollectionCallOptions,
+) => Promise<TRecord>;
+
+export type ScopedCollectionNamedQuery<
+  TRecord extends CollectionRecord = CollectionRecord,
+> = (
+  input?: Readonly<Record<string, unknown>>,
+) => Promise<readonly TRecord[]>;
+
+export type ScopedCollection<
+  TSelect extends CollectionRecord = CollectionRecord,
+  TInsert extends object = Record<string, unknown>,
+> = Readonly<{
+  definition: Readonly<{ name: string; schema: unknown }>;
+  create(
+    input: TInsert,
+    options?: ScopedCollectionCallOptions,
+  ): Promise<TSelect>;
+  update(
+    input: ScopedCollectionUpdateInput<TSelect>,
+    options?: ScopedCollectionCallOptions,
+  ): Promise<TSelect>;
+  delete(
+    input: ScopedCollectionDeleteInput,
+    options?: ScopedCollectionCallOptions,
+  ): Promise<Readonly<{ id: string; deleted: true }>>;
+  get(input: Readonly<{ id: string }>): Promise<TSelect | null>;
+  list(query?: CollectionQuery): Promise<readonly TSelect[]>;
+  search(query: CollectionQuery): Promise<readonly TSelect[]>;
+  commands: Readonly<Record<string, ScopedCollectionCommand<TSelect>>>;
+  queries: Readonly<Record<string, ScopedCollectionNamedQuery<TSelect>>>;
+}>;
+
+export type ScopedCollections = Readonly<Record<string, ScopedCollection>>;
+
+export type CollectionScope = Readonly<{
+  namespace: string;
+  createMutationIdentity?: (
+    operationKey: string,
+    metadata?: Record<string, unknown>,
+  ) => CollectionMutationIdentity;
 }>;
 
 export type CollectionTransactionCollections = Readonly<
@@ -126,6 +191,7 @@ export type CollectionRuntime = Readonly<{
   transaction<T>(
     options: CollectionTransactionOptions<T>,
   ): Promise<CollectionTransactionResult<T>>;
+  withScope(scope: CollectionScope): ScopedCollections;
   verify(
     definition: CollectionDefinition,
     namespace: string,
@@ -213,6 +279,30 @@ function stamp(
   };
 }
 
+function timestampKeys(
+  timestamps: Readonly<{ createdAt?: string; updatedAt?: string }>,
+): readonly string[] {
+  return Object.freeze([
+    timestamps.createdAt ?? "createdAt",
+    timestamps.updatedAt ?? "updatedAt",
+  ]);
+}
+
+function mutationFingerprint(
+  body: unknown,
+  keys: readonly string[],
+): unknown {
+  if (!body || typeof body !== "object") return body;
+  const clone = structuredClone(body) as Record<string, unknown>;
+  const record = clone.record;
+  if (record && typeof record === "object" && !Array.isArray(record)) {
+    for (const key of keys) {
+      delete (record as Record<string, unknown>)[key];
+    }
+  }
+  return clone;
+}
+
 function applyStaticDefaults(
   definition: CollectionDefinition,
   input: Record<string, unknown>,
@@ -269,7 +359,9 @@ function canonicalEvent(event: DurableEvent): CollectionDurableEvent {
     metadata: event.metadata,
     ...(event.causationId ? { causationId: event.causationId } : {}),
     correlationId: event.correlationId,
-    ...(event.deduplicationId ? { deduplicationId: event.deduplicationId } : {}),
+    ...(event.deduplicationId
+      ? { deduplicationId: event.deduplicationId }
+      : {}),
     dataRef: eventDataRef(event.payload),
     createdAt: event.createdAt,
   });
@@ -315,7 +407,7 @@ export function createCollectionRuntime(
   const now = options.now ?? (() => new Date());
   const tables = options.eventStore.tables;
   const bound = new Map<string, BoundCollection>();
-  const stack: Array<{
+  type TransactionScope = {
     operationKey: string;
     namespace: string;
     settlementScopeId: string;
@@ -325,13 +417,14 @@ export function createCollectionRuntime(
     transaction: SqlExecutor;
     writes: CollectionWrite<CollectionRecord>[];
     pending: CoordinatedMutationResult<CollectionRecord>[];
-  }> = [];
+  };
+  const transactions = new AsyncLocalStorage<TransactionScope>();
   const emptyDispatch: EventDispatchReport = Object.freeze({
     handles: Object.freeze([]),
     failures: Object.freeze([]),
   });
 
-  const activeScope = () => stack.at(-1);
+  const activeScope = () => transactions.getStore();
 
   const executor = (): SqlExecutor =>
     activeScope()?.transaction ?? options.session;
@@ -367,7 +460,9 @@ export function createCollectionRuntime(
       namespace,
       ...(writeOptions.threadId ? { threadId: writeOptions.threadId } : {}),
       ...(writeOptions.routing ? { routing: writeOptions.routing } : {}),
-      ...(writeOptions.visibility ? { visibility: writeOptions.visibility } : {}),
+      ...(writeOptions.visibility
+        ? { visibility: writeOptions.visibility }
+        : {}),
       identity: {
         settlementScopeId: inherited?.settlementScopeId ??
           scope.settlementScopeId,
@@ -460,6 +555,24 @@ export function createCollectionRuntime(
           if (!existingId) {
             throw new Error(`Deduplicated ${name} event is missing a subject.`);
           }
+          if (matchData !== undefined) {
+            const existingBody = await readEventBody(
+              context,
+              event.namespace,
+              eventDataRef(event.payload),
+            );
+            const keys = timestampKeys(timestamps);
+            if (
+              !sameValue(
+                mutationFingerprint(existingBody, keys),
+                mutationFingerprint(matchData, keys),
+              )
+            ) {
+              throw new Error(
+                "Deduplicated event was reused with a different collection mutation.",
+              );
+            }
+          }
           const record = await loadCollectionRecord(
             context.transaction,
             tables,
@@ -543,10 +656,11 @@ export function createCollectionRuntime(
         id,
         "create",
         envelopeFrom(writeOptions, frozen, name),
-        () => Promise.resolve({
-          body,
-          record: frozen,
-        }),
+        () =>
+          Promise.resolve({
+            body,
+            record: frozen,
+          }),
         body,
       );
     };
@@ -570,16 +684,19 @@ export function createCollectionRuntime(
         created: false,
       });
       if (definition.beforeUpdate && label === "update") {
-        next = stamp(definition.beforeUpdate(next, {
-          namespace: current.namespace,
-        }), {
-          namespace: current.namespace,
-          id: current.id,
-          createdAt: String(current[createdAtKey]),
-          updatedAt: timestamp,
-          timestamps,
-          created: false,
-        });
+        next = stamp(
+          definition.beforeUpdate(next, {
+            namespace: current.namespace,
+          }),
+          {
+            namespace: current.namespace,
+            id: current.id,
+            createdAt: String(current[createdAtKey]),
+            updatedAt: timestamp,
+            timestamps,
+            created: false,
+          },
+        );
       }
       const comparable = {
         ...current,
@@ -692,7 +809,9 @@ export function createCollectionRuntime(
       if (!definitionCommand) {
         throw new Error(`Unknown ${name} command '${command}'.`);
       }
-      if (definitionCommand.input && typeof definitionCommand.input === "object") {
+      if (
+        definitionCommand.input && typeof definitionCommand.input === "object"
+      ) {
         validateCollectionRecord(
           definitionCommand.input,
           asRecord(input),
@@ -774,8 +893,41 @@ export function createCollectionRuntime(
     const namedQueries = Object.fromEntries(
       Object.entries(definition.queries ?? {}).map(([queryName, spec]) => [
         queryName,
-        (namespace: string, input: Record<string, unknown> = {}) =>
-          list(namespace, { where: spec.filter({ input: asRecord(input) }) }),
+        async (namespace: string, input: Record<string, unknown> = {}) => {
+          const queryInput = asRecord(input);
+          if (spec.select) {
+            const read = Object.freeze({
+              get: (collectionName: string, id: string) => {
+                const target = bound.get(collectionName);
+                if (!target) {
+                  throw new Error(
+                    `Collection '${collectionName}' is not bound.`,
+                  );
+                }
+                return target.get(id, namespace);
+              },
+              list: (collectionName: string, query?: CollectionQuery) => {
+                const target = bound.get(collectionName);
+                if (!target) {
+                  throw new Error(
+                    `Collection '${collectionName}' is not bound.`,
+                  );
+                }
+                return target.list(namespace, query);
+              },
+            });
+            return await spec.select({
+              input: queryInput,
+              read,
+            }) as readonly TSelect[];
+          }
+          if (spec.query) {
+            return await list(namespace, spec.query({ input: queryInput }));
+          }
+          return await list(namespace, {
+            where: spec.filter?.({ input: queryInput }),
+          });
+        },
       ]),
     );
 
@@ -803,7 +955,7 @@ export function createCollectionRuntime(
   const transaction = async <T>(
     input: CollectionTransactionOptions<T>,
   ): Promise<CollectionTransactionResult<T>> => {
-    const parent = stack.at(-1);
+    const parent = activeScope();
     const operationKey = requireText(input.operationKey, "Operation key");
     const namespace = requireText(input.namespace, "Namespace");
     if (parent && namespace !== parent.namespace) {
@@ -816,16 +968,11 @@ export function createCollectionRuntime(
       : operationKey;
     const collections = Object.freeze(Object.fromEntries(bound));
 
-    const run = async (
-      scope: (typeof stack)[number],
-    ): Promise<T> => {
-      stack.push(scope);
-      try {
-        return await input.execute({ collections });
-      } finally {
-        stack.pop();
-      }
-    };
+    const run = (scope: TransactionScope): Promise<T> =>
+      transactions.run(
+        scope,
+        () => input.execute({ collections }),
+      );
 
     if (parent) {
       const start = parent.writes.length;
@@ -879,13 +1026,135 @@ export function createCollectionRuntime(
     });
   };
 
+  const withScope = (scopeInput: CollectionScope): ScopedCollections => {
+    const namespace = requireText(scopeInput.namespace, "Namespace");
+    const scoped: Record<string, ScopedCollection> = {};
+
+    const writeOptions = (
+      collection: string,
+      operation: string,
+      recordId: string | undefined,
+      input: ScopedCollectionCallOptions | undefined,
+    ): CollectionWriteOptions => {
+      const { operationKey, identity: explicit, ...options } = input ?? {};
+      const key = operationKey?.trim() ||
+        (recordId ? `${collection}.${operation}:${recordId}` : undefined);
+      if (scopeInput.createMutationIdentity && !key && !activeScope()) {
+        throw new TypeError(
+          `Collection '${collection}' ${operation} requires an id or operationKey in a delivery context.`,
+        );
+      }
+      const inherited = key
+        ? scopeInput.createMutationIdentity?.(key, {
+          collection,
+          operation,
+          ...(recordId ? { recordId } : {}),
+          ...explicit?.metadata,
+        })
+        : undefined;
+      const identity = inherited || explicit
+        ? {
+          causationId: explicit?.causationId ?? inherited?.causationId,
+          correlationId: explicit?.correlationId ?? inherited?.correlationId,
+          deduplicationId: explicit?.deduplicationId ??
+            inherited?.deduplicationId,
+          settlementScopeId: explicit?.settlementScopeId ??
+            inherited?.settlementScopeId,
+          metadata: { ...inherited?.metadata, ...explicit?.metadata },
+        }
+        : undefined;
+      return {
+        namespace,
+        ...options,
+        ...(identity ? { identity } : {}),
+      };
+    };
+
+    for (const [name, collection] of bound.entries()) {
+      const commands = Object.freeze(Object.fromEntries(
+        Object.keys(collection.definition.commands ?? {}).map((command) => [
+          command,
+          async (
+            input: Readonly<Record<string, unknown> & { id: string }>,
+            options?: ScopedCollectionCallOptions,
+          ) => {
+            const id = requireText(input.id, `${name} id`);
+            const { id: _id, ...commandInput } = input;
+            const result = await collection.mutate(
+              id,
+              command,
+              commandInput,
+              writeOptions(name, `command:${command}`, id, options),
+            );
+            return result.record;
+          },
+        ]),
+      ));
+      const queries = Object.freeze(Object.fromEntries(
+        Object.keys(collection.definition.queries ?? {}).map((queryName) => [
+          queryName,
+          (input: Readonly<Record<string, unknown>> = {}) => {
+            const query = collection.query[queryName];
+            if (!query) {
+              throw new Error(`Unknown ${name} query '${queryName}'.`);
+            }
+            return query(namespace, { ...input });
+          },
+        ]),
+      ));
+      scoped[name] = Object.freeze({
+        definition: collection.definition,
+        async create(input, options) {
+          const rawId = (input as Record<string, unknown>).id;
+          const id = typeof rawId === "string" && rawId.trim()
+            ? rawId.trim()
+            : undefined;
+          return (await collection.create(
+            input,
+            writeOptions(name, "create", id, options),
+          )).record;
+        },
+        async update(input, options) {
+          const id = requireText(input.id, `${name} id`);
+          return (await collection.update(
+            id,
+            { set: input.set, unset: input.unset },
+            writeOptions(name, "update", id, options),
+          )).record;
+        },
+        async delete(input, options) {
+          const id = requireText(input.id, `${name} id`);
+          await collection.delete(
+            id,
+            writeOptions(name, "delete", id, options),
+          );
+          return Object.freeze({ id, deleted: true as const });
+        },
+        get(input) {
+          return collection.get(requireText(input.id, `${name} id`), namespace);
+        },
+        list(query) {
+          return collection.list(namespace, query);
+        },
+        search(query) {
+          return collection.search(namespace, query);
+        },
+        commands,
+        queries,
+      });
+    }
+    return Object.freeze(scoped);
+  };
+
   const runtime: CollectionRuntime = Object.freeze({
     bind,
     get: <
       TSelect extends CollectionRecord = CollectionRecord,
       TInsert extends object = Record<string, unknown>,
-    >(name: string) => bound.get(name) as BoundCollection<TSelect, TInsert> | undefined,
+    >(name: string) =>
+      bound.get(name) as BoundCollection<TSelect, TInsert> | undefined,
     transaction,
+    withScope,
     verify: (definition, namespace) =>
       verifyCollectionProjections(
         options.session,

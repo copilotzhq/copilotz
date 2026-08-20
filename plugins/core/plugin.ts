@@ -1,11 +1,15 @@
 import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
 import {
-  definePlugin,
   type CopilotzPlugin,
+  definePlugin,
   type Processor,
 } from "@copilotz/copilotz/plugins";
 import { corePluginManifest } from "./manifest.ts";
 import { threadMessageFeature } from "./resources/features/thread-message.ts";
+import { llmAttemptFeature } from "./resources/features/llm-attempt.ts";
+import { toolExecutionFeature } from "./resources/features/tool-execution.ts";
+import { threadFeature } from "./resources/features/thread.ts";
+import { messageFeature } from "./resources/features/message.ts";
 import { coreLlmResources } from "./resources/llm/index.ts";
 import {
   llmAttemptCollection,
@@ -48,6 +52,14 @@ const collections = Object.freeze([
   streamCollection,
 ]);
 
+const features = Object.freeze([
+  threadMessageFeature,
+  llmAttemptFeature,
+  toolExecutionFeature,
+  threadFeature,
+  messageFeature,
+]);
+
 /** Collections without text/ask processors. Tests that must not run core routing. */
 export const coreCollectionsPlugin: CopilotzPlugin = definePlugin({
   manifest: {
@@ -60,7 +72,7 @@ export const coreCollectionsPlugin: CopilotzPlugin = definePlugin({
   },
   resources: {
     collections: [...collections],
-    features: [threadMessageFeature],
+    features: [...features],
   },
 });
 
@@ -72,6 +84,6 @@ export const corePlugin: CopilotzPlugin = definePlugin({
     processors,
     llm: [...coreLlmResources],
     tools: [askTool],
-    features: [threadMessageFeature],
+    features: [...features],
   },
 });

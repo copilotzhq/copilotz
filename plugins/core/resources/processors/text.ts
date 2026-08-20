@@ -16,9 +16,9 @@ import {
   agentAskMetadata,
   deriveWorkflowId,
   textWorkflowAttemptEventMetadata,
-  type WorkflowMetadata,
   withAgentAskMetadata,
   withWorkflowMetadata,
+  type WorkflowMetadata,
   workflowMetadata,
 } from "@copilotz/copilotz/events";
 import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
@@ -68,19 +68,6 @@ import {
   requiredText,
   stringArray,
 } from "./helpers.ts";
-import {
-  cancelLlmAttemptRecord,
-  cancelToolExecutionRecord,
-  completeLlmAttemptRecord,
-  completeToolExecutionRecord,
-  createThreadMessage,
-  createToolExecutionBatch,
-  createToolExecutionRecord,
-  failLlmAttemptRecord,
-  failToolExecutionRecord,
-  patchToolExecutionRecord,
-} from "./writes.ts";
-
 const DEFAULT_TOOL_TIMEOUT_MS = 300_000;
 const defaultToolCatalog = createWorkflowToolCatalog();
 
@@ -90,11 +77,13 @@ function recordThreadId(record: CollectionRecord): string {
 
 const utf8 = new TextEncoder();
 
-function frameBytes(frame: LlmFrame): Readonly<{
-  lane: string;
-  mediaType: string;
-  bytes: Uint8Array;
-}> | undefined {
+function frameBytes(frame: LlmFrame):
+  | Readonly<{
+    lane: string;
+    mediaType: string;
+    bytes: Uint8Array;
+  }>
+  | undefined {
   if (frame.type === "reasoning") {
     const text = typeof frame.payload === "string"
       ? frame.payload
@@ -102,7 +91,11 @@ function frameBytes(frame: LlmFrame): Readonly<{
       ? String(asRecord(frame.payload).text)
       : "";
     if (!text) return undefined;
-    return { lane: "reasoning", mediaType: "text/plain", bytes: utf8.encode(text) };
+    return {
+      lane: "reasoning",
+      mediaType: "text/plain",
+      bytes: utf8.encode(text),
+    };
   }
   if (frame.type === "tool_call") {
     return {
@@ -130,7 +123,11 @@ function frameBytes(frame: LlmFrame): Readonly<{
       ? String(asRecord(frame.payload).text)
       : "";
     if (!text) return undefined;
-    return { lane: "content", mediaType: "text/plain", bytes: utf8.encode(text) };
+    return {
+      lane: "content",
+      mediaType: "text/plain",
+      bytes: utf8.encode(text),
+    };
   }
   return undefined;
 }
@@ -144,8 +141,8 @@ function openSessionIngress(
       const seen = new Set<string>();
       const pumps = new Set<Promise<void>>();
       const attach = async () => {
-        const records = await requireCollection(context, "stream").query
-          .byThreadLaneState(context.namespace, {
+        const records = await requireCollection(context, "stream").queries
+          .byThreadLaneState({
             threadId,
             lane: "transcript",
             state: "open",
@@ -202,7 +199,9 @@ function toolCatalogFor(
   _context: CopilotzProcessorContext,
   agent?: Agent,
 ): WorkflowToolCatalog {
-  const extra = agent as Agent & Partial<CreateTextWorkflowPluginOptions> | undefined;
+  const extra = agent as
+    | Agent & Partial<CreateTextWorkflowPluginOptions>
+    | undefined;
   return extra?.toolCatalog ?? defaultToolCatalog;
 }
 
@@ -210,7 +209,9 @@ function jqFor(
   _context: CopilotzProcessorContext,
   agent?: Agent,
 ): WorkflowJqEvaluator {
-  const extra = agent as Agent & Partial<CreateTextWorkflowPluginOptions> | undefined;
+  const extra = agent as
+    | Agent & Partial<CreateTextWorkflowPluginOptions>
+    | undefined;
   return extra?.evaluateJq ?? defaultEvaluateJq;
 }
 
@@ -328,7 +329,7 @@ async function isLastSettledToolResult(
     "Tool execution id",
   );
   const executions = requireCollection(context, "tool_execution");
-  const history = await executions.list(context.namespace, {
+  const history = await executions.list({
     where: { threadId },
     order: { field: "createdAt", direction: "asc" },
     limit: 1_000,
@@ -355,10 +356,7 @@ async function loadParticipant(
   context: CopilotzProcessorContext,
   id: string,
 ): Promise<CollectionRecord | null> {
-  return await requireCollection(context, "participant").get(
-    id,
-    context.namespace,
-  );
+  return await requireCollection(context, "participant").get({ id });
 }
 
 export const messageRouterProcessor: Processor<CopilotzProcessorContext> =
@@ -388,7 +386,10 @@ export const messageRouterProcessor: Processor<CopilotzProcessorContext> =
         )
       ) return;
 
-      const history = await listThreadMessages(context, String(record.threadId));
+      const history = await listThreadMessages(
+        context,
+        String(record.threadId),
+      );
       const triggerIndex = history.findIndex((item) => item.id === record.id);
       if (triggerIndex < 0) {
         throw new Error(`Trigger message '${record.id}' was not found.`);
@@ -404,7 +405,7 @@ export const messageRouterProcessor: Processor<CopilotzProcessorContext> =
         if (!agent) continue;
         if (agentUsesSessionRuntime(agent)) {
           const running = await requireCollection(context, "llm_attempt")
-            .query.byThreadParticipantStatus(context.namespace, {
+            .queries.byThreadParticipantStatus({
               threadId: String(record.threadId),
               participantId: participant.id,
               status: "running",
@@ -445,41 +446,32 @@ export const messageRouterProcessor: Processor<CopilotzProcessorContext> =
           ...(metadata?.batchId ? { batchId: metadata.batchId } : {}),
         };
         const id = await deriveWorkflowId("llm", continuationKey);
-        await context.transaction({
-          operationKey: `route:${continuationKey}`,
-          namespace: event.namespace,
-          identity: { metadata: ask
+        await context.collections.llm_attempt.create({
+          id,
+          threadId: String(record.threadId),
+          messageId: record.id,
+          participantId: participant.id,
+          initiatorParticipantId: sender.id,
+          agentId,
+          ...(metadata?.parentLlmAttemptId ?? ask?.callingAttemptId
+            ? {
+              parentAttemptId: metadata?.parentLlmAttemptId ??
+                ask?.callingAttemptId,
+            }
+            : {}),
+          inputMessageIds: [...historyIds],
+          availableToolIds: tools.map((tool) => tool.key),
+          status: "running",
+          metadata: ask
             ? withAgentAskMetadata(attemptMetadata, ask)
-            : attemptMetadata },
-          execute: async ({ collections }) => {
-            await collections.llm_attempt.create({
-              id,
-              threadId: String(record.threadId),
-              messageId: record.id,
-              participantId: participant.id,
-              initiatorParticipantId: sender.id,
-              agentId,
-              ...(metadata?.parentLlmAttemptId ?? ask?.callingAttemptId
-                ? {
-                  parentAttemptId: metadata?.parentLlmAttemptId ??
-                    ask?.callingAttemptId,
-                }
-                : {}),
-              inputMessageIds: [...historyIds],
-              availableToolIds: tools.map((tool) => tool.key),
-              status: "running",
-              metadata: ask
-                ? withAgentAskMetadata(attemptMetadata, ask)
-                : attemptMetadata,
-            }, {
-              namespace: event.namespace,
-              threadId: String(record.threadId),
-              identity: {
-                metadata: ask
-                  ? withAgentAskMetadata(attemptMetadata, ask)
-                  : attemptMetadata,
-              },
-            });
+            : attemptMetadata,
+        }, {
+          operationKey: `route:${continuationKey}`,
+          threadId: String(record.threadId),
+          identity: {
+            metadata: ask
+              ? withAgentAskMetadata(attemptMetadata, ask)
+              : attemptMetadata,
           },
         });
       }
@@ -534,17 +526,15 @@ export const executeTextAttemptProcessor: Processor<CopilotzProcessorContext> =
       if (
         attempt.provider !== config.provider || attempt.model !== config.model
       ) {
-        await context.transaction({
-          operationKey: "logical:runtime-config",
-          namespace: event.namespace,
-          execute: async ({ collections }) => {
-            await collections.llm_attempt.update(attempt.id, {
-              set: {
-                provider: String(config.provider),
-                model: config.model,
-              },
-            }, { namespace: event.namespace, threadId: String(attempt.threadId) });
+        await context.collections.llm_attempt.update({
+          id: attempt.id,
+          set: {
+            provider: String(config.provider),
+            model: config.model,
           },
+        }, {
+          operationKey: "logical:runtime-config",
+          threadId: String(attempt.threadId),
         });
       }
 
@@ -729,7 +719,8 @@ export const executeTextAttemptProcessor: Processor<CopilotzProcessorContext> =
             role: "llm.tool_calls",
           }, { operationKey: "logical:tool-calls" })
           : undefined;
-        await completeLlmAttemptRecord(context, attempt, {
+        await context.features.llmAttempt.complete({
+          id: attempt.id,
           ...(answer ? { answer } : {}),
           ...(reasoning ? { reasoning } : {}),
           ...(toolCalls ? { toolCalls } : {}),
@@ -759,9 +750,14 @@ export const executeTextAttemptProcessor: Processor<CopilotzProcessorContext> =
         }));
         writers.clear();
         if (context.signal.aborted) {
-          await cancelLlmAttemptRecord(context, attempt, {
+          await context.collections.llm_attempt.commands.cancel({
+            id: attempt.id,
             reason: errorText(context.signal.reason ?? failure),
-          }, { operationKey: "logical:cancel" });
+            finishedAt: new Date().toISOString(),
+          }, {
+            operationKey: "logical:cancel",
+            threadId: recordThreadId(attempt),
+          });
           return;
         }
         const detail = await context.content.prepare({
@@ -769,7 +765,8 @@ export const executeTextAttemptProcessor: Processor<CopilotzProcessorContext> =
           text: errorText(failure),
           role: "provider.error_detail",
         }, { operationKey: "logical:error" });
-        await failLlmAttemptRecord(context, attempt, {
+        await context.features.llmAttempt.fail({
+          id: attempt.id,
           safeError: safeError(
             "provider_error",
             "The agent's text runtime failed.",
@@ -830,7 +827,7 @@ export const projectTextResultProcessor: Processor<CopilotzProcessorContext> =
           agentParticipantId: participant.id,
         },
       );
-      const outputMessage = await createThreadMessage(context, {
+      const outputMessage = await context.features.threadMessage.create({
         id: await deriveWorkflowId("message", attempt.id, "output"),
         threadId: recordThreadId(attempt),
         sender: participant,
@@ -840,8 +837,8 @@ export const projectTextResultProcessor: Processor<CopilotzProcessorContext> =
         metadata: messageMetadata,
       }, {
         operationKey: "project:agent-message",
-        metadata: messageMetadata,
-      });
+        identity: { metadata: messageMetadata },
+      }) as CollectionRecord;
       const outputMessageId = String(outputMessage.id);
       if (!toolCalls.length) return;
 
@@ -909,7 +906,7 @@ export const projectTextResultProcessor: Processor<CopilotzProcessorContext> =
           },
         });
       }
-      await createToolExecutionBatch(context, {
+      await context.features.toolExecution.createBatch({
         threadId: recordThreadId(attempt),
         items,
       }, { operationKey: `project:tools:${attempt.id}:create` });
@@ -925,7 +922,10 @@ export const executeToolProcessor: Processor<CopilotzProcessorContext> =
       const execution = record;
       if (String(execution.status) !== "running") return;
       const agent = optionalText(execution.agentId)
-        ? context.resources.get<Agent>("agents", optionalText(execution.agentId)!)
+        ? context.resources.get<Agent>(
+          "agents",
+          optionalText(execution.agentId)!,
+        )
         : undefined;
       const toolCatalog = toolCatalogFor(context, agent);
       const options = agent ? policyOptions(agent) : {};
@@ -942,7 +942,7 @@ export const executeToolProcessor: Processor<CopilotzProcessorContext> =
       const attemptId = workflow?.parentLlmAttemptId ?? workflow?.llmAttemptId;
       if (attemptId) {
         const attemptRecord = await requireCollection(context, "llm_attempt")
-          .get(attemptId, context.namespace);
+          .get({ id: attemptId });
         if (attemptRecord) {
           const attempt = attemptRecord;
           const granted = new Set(stringArray(attempt.availableToolIds));
@@ -984,13 +984,17 @@ export const executeToolProcessor: Processor<CopilotzProcessorContext> =
           outcome.extractedAttachments,
           explicitAttachments,
         );
-        await completeToolExecutionRecord(context, execution, {
+        await context.features.toolExecution.complete({
+          id: execution.id,
           output: prepared,
           projectedOutput: prepared,
           ...(attachments ? { attachments } : {}),
           historyVisibility: historyVisibilityOf(execution),
           durationMs: outcome.durationMs,
-        }, { operationKey: "tool:complete", metadata: asRecord(execution.metadata) });
+        }, {
+          operationKey: "tool:complete",
+          identity: { metadata: asRecord(execution.metadata) },
+        });
         return;
       }
       if (outcome.status === "deferred") return;
@@ -1014,16 +1018,21 @@ export const executeToolProcessor: Processor<CopilotzProcessorContext> =
         role: "tool.projected_output",
       }, { operationKey: "tool:error-projection" });
       if (outcome.status === "cancelled") {
-        await cancelToolExecutionRecord(context, execution, {
+        await context.features.toolExecution.cancel({
+          id: execution.id,
           reason: outcome.reason,
           errorDetail: detail,
           projectedOutput: projection,
           historyVisibility: historyVisibilityOf(execution),
           durationMs: outcome.durationMs,
-        }, { operationKey: "tool:cancel", metadata: asRecord(execution.metadata) });
+        }, {
+          operationKey: "tool:cancel",
+          identity: { metadata: asRecord(execution.metadata) },
+        });
         return;
       }
-      await failToolExecutionRecord(context, execution, {
+      await context.features.toolExecution.fail({
+        id: execution.id,
         safeError: safeError(
           outcome.code,
           "Tool execution failed.",
@@ -1033,7 +1042,10 @@ export const executeToolProcessor: Processor<CopilotzProcessorContext> =
         projectedOutput: projection,
         historyVisibility: historyVisibilityOf(execution),
         durationMs: outcome.durationMs,
-      }, { operationKey: "tool:fail", metadata: asRecord(execution.metadata) });
+      }, {
+        operationKey: "tool:fail",
+        identity: { metadata: asRecord(execution.metadata) },
+      });
     },
   });
 
@@ -1136,8 +1148,11 @@ export const projectToolResultProcessor: Processor<CopilotzProcessorContext> =
           const attemptId = metadata.parentLlmAttemptId ??
             metadata.llmAttemptId;
           if (attemptId) {
-            const attemptRecord = await requireCollection(context, "llm_attempt")
-              .get(attemptId, context.namespace);
+            const attemptRecord = await requireCollection(
+              context,
+              "llm_attempt",
+            )
+              .get({ id: attemptId });
             if (attemptRecord) {
               const attempt = attemptRecord;
               const granted = new Set(stringArray(attempt.availableToolIds));
@@ -1171,7 +1186,7 @@ export const projectToolResultProcessor: Processor<CopilotzProcessorContext> =
           );
           const parentAttemptId = metadata.parentLlmAttemptId ??
             metadata.llmAttemptId ?? "pipeline";
-          await createToolExecutionRecord(context, {
+          await context.features.toolExecution.create({
             id: await deriveWorkflowId(
               "tool",
               parentAttemptId,
@@ -1197,7 +1212,7 @@ export const projectToolResultProcessor: Processor<CopilotzProcessorContext> =
           }, {
             operationKey:
               `pipeline:${advancement.pipeline.id}:${advancement.stageIndex}:create`,
-            metadata: nextMetadata,
+            identity: { metadata: nextMetadata },
           });
           return;
         }
@@ -1209,12 +1224,13 @@ export const projectToolResultProcessor: Processor<CopilotzProcessorContext> =
               operationKey: `pipeline:${metadata.pipeline.id}:final-projection`,
             },
           );
-          const updated = await patchToolExecutionRecord(context, execution, {
+          const updated = await context.features.toolExecution.patch({
+            id: execution.id,
             projectedOutput: projectedContent,
           }, {
             operationKey:
               `pipeline:${metadata.pipeline.id}:persist-final-projection`,
-          });
+          }) as CollectionRecord;
           if (updated) execution = updated;
         }
 
@@ -1239,12 +1255,13 @@ export const projectToolResultProcessor: Processor<CopilotzProcessorContext> =
               message: advancement.message,
             },
           };
-          const updated = await patchToolExecutionRecord(context, execution, {
+          const updated = await context.features.toolExecution.patch({
+            id: execution.id,
             projectedOutput: projectedContent,
             metadataPatch: withWorkflowMetadata(undefined, failedWorkflow),
           }, {
             operationKey: `pipeline:${metadata.pipeline.id}:persist-failure`,
-          });
+          }) as CollectionRecord;
           if (updated) execution = updated;
           metadata = failedWorkflow;
         }
@@ -1295,7 +1312,7 @@ export const projectToolResultProcessor: Processor<CopilotzProcessorContext> =
           ? { pipelineFailure: metadata.pipelineFailure }
           : {}),
       });
-      await createThreadMessage(context, {
+      await context.features.threadMessage.create({
         id: await deriveWorkflowId("message", execution.id, "result"),
         threadId: recordThreadId(execution),
         sender: {
@@ -1311,7 +1328,7 @@ export const projectToolResultProcessor: Processor<CopilotzProcessorContext> =
         metadata: messageMetadata,
       }, {
         operationKey: `project:tool-result:message:${execution.id}`,
-        metadata: messageMetadata,
+        identity: { metadata: messageMetadata },
       });
     },
   });

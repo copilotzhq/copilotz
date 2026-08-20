@@ -1,9 +1,20 @@
 import { assertEquals, assertExists } from "@std/assert";
-
 import {
   createTestDatabase,
   type TestDatabase,
 } from "../../testing/ominipg.ts";
+import { createTestDomainContext } from "../../../runtime/testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../../runtime/testing/projections.ts";
 import type { Agent } from "../../resources/index.ts";
 import { createCopilotzApplication } from "../../application/index.ts";
 import type { CopilotzProcessorContext } from "../../engine/index.ts";
@@ -11,7 +22,6 @@ import {
   loadMessageRecord,
   loadParticipantRecord,
 } from "../../engine/collection-graph.ts";
-import { createMessageRecord } from "../../engine/collection-writes.ts";
 import { definePlugin, defineProcessor } from "../../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../../plugins/core/plugin.ts";
 import { createChannelRuntime } from "../runtime.ts";
@@ -122,13 +132,15 @@ function replyPlugin() {
           name: "answer.pdf",
         },
       ], { operationKey: "discord-reply-content" });
-      await createMessageRecord(context, {
+      const persisted = await context.content.materialize(content);
+      await context.collections.message.create({
         id: `reply:${input.id}`,
         threadId: input.threadId,
         senderId: recipient.id,
         recipientIds: [input.sender.id],
-        content,
+        content: persisted,
       }, { operationKey: "discord-reply-message" });
+      await context.content.linkOwner(`reply:${input.id}`, persisted);
     },
   });
   return definePlugin({
@@ -210,15 +222,13 @@ Deno.test("Discord channel verifies interactions and preserves native media/acti
     assertEquals(fake.media.length, 1);
     assertEquals(fake.media[0].initial, false);
     assertEquals(fake.media[0].value.name, "answer.pdf");
-    const thread = await application.conversation.getThreadByExternalId(
+    const thread = await projectThreadByExternalId(
+      application,
       NAMESPACE,
       "channel-a",
     );
     assertExists(thread);
-    const messages = await application.conversation.listMessages(
-      NAMESPACE,
-      thread.id,
-    );
+    const messages = await projectMessages(application, NAMESPACE, thread.id);
     assertEquals(messages[0].id, "discord:interaction-a");
     const inbound = await application.content.resolver.getMany(
       messages[0].content,

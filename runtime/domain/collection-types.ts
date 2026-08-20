@@ -9,6 +9,11 @@ import type {
 import type { MutationIdentity } from "./types.ts";
 import type { PluginRegistry } from "../plugins/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
+import type {
+  ScopedCollection,
+  ScopedCollectionCallOptions,
+  ScopedCollections,
+} from "../collections/index.ts";
 
 export type CollectionMutationOperation = "create" | "update" | "delete";
 
@@ -98,6 +103,8 @@ export type CreateEventCollectionRepositoryOptions<
   definition: CollectionDefinition<S, TSelect, TInsert>;
   coordinator: EventCoordinator;
   session: SqlExecutor;
+  /** Joins a private feature transaction for reads when one is active. */
+  readExecutor?: () => SqlExecutor;
   eventStore: Pick<EventStore, "tables">;
   assets?: Pick<
     DatabaseAssetRepository,
@@ -108,39 +115,10 @@ export type CreateEventCollectionRepositoryOptions<
   now?: () => Date;
 }>;
 
-export type ScopedCollectionMutationOptions = Readonly<{
-  operationKey?: string;
-  identity?: MutationIdentity;
-}>;
+export type ScopedCollectionMutationOptions = ScopedCollectionCallOptions;
 
-export type ScopedEventCollection = Readonly<{
-  definition: CollectionResourceDescriptor;
-  create(
-    input: Record<string, unknown>,
-    options?: ScopedCollectionMutationOptions,
-  ): Promise<CollectionRecord>;
-  update(
-    id: string,
-    patch: Record<string, unknown>,
-    options?: ScopedCollectionMutationOptions,
-  ): Promise<CollectionRecord>;
-  delete(
-    id: string,
-    options?: ScopedCollectionMutationOptions,
-  ): Promise<{ id: string; deleted: true }>;
-  command(
-    id: string,
-    command: string,
-    input: unknown,
-    options?: ScopedCollectionMutationOptions,
-  ): Promise<CollectionCommandResult>;
-  get(id: string): Promise<CollectionRecord | null>;
-  list(options?: {
-    after?: string;
-    limit?: number;
-    where?: Readonly<Record<string, unknown>>;
-  }): Promise<readonly CollectionRecord[]>;
-}>;
+/** @deprecated Use the scoped collection call API from `collections`. */
+export type ScopedEventCollection = ScopedCollection;
 
 export type CollectionMutationIdentityFactory = (
   operationKey: string,
@@ -155,9 +133,7 @@ export type EventCollectionsScope = Readonly<{
 export type EventCollections = Readonly<{
   names: readonly string[];
   get(name: string): ErasedEventCollectionRepository;
-  withScope(scope: EventCollectionsScope): Readonly<
-    Record<string, ScopedEventCollection>
-  >;
+  withScope(scope: EventCollectionsScope): ScopedCollections;
 }>;
 
 export type ErasedEventCollectionRepository = Readonly<{
@@ -192,6 +168,8 @@ export type CreateEventCollectionsOptions = Readonly<{
   registry: PluginRegistry;
   coordinator: EventCoordinator;
   session: SqlExecutor;
+  /** Joins a private feature transaction for reads when one is active. */
+  readExecutor?: () => SqlExecutor;
   eventStore: Pick<EventStore, "tables">;
   assets?: Pick<
     DatabaseAssetRepository,

@@ -1,23 +1,26 @@
 import { assertEquals, assertExists } from "@std/assert";
-
-import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
-import type { FeatureResource } from "../features/index.ts";
 import {
   createPluginRegistry,
   definePlugin,
   defineProcessor,
 } from "../plugins/index.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import { waitForTestDelivery } from "../../runtime/testing/deliveries.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
   type CopilotzProcessorContext,
   createCopilotzEngine,
 } from "./index.ts";
+import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
+import type { FeatureResource } from "../features/index.ts";
 
 Deno.test("features see the same deliveries from processor and direct contexts", async () => {
   const namespace = "tenant-feature-deliveries";
   let processorDeliveryIds: readonly string[] | undefined;
   const feature: FeatureResource = Object.freeze({
     id: "test.delivery-probe",
+    alias: "deliveryProbe",
+    mode: "read",
     actions: {
       async list(_input, context) {
         return (await context.deliveries.list()).map((delivery) => delivery.id);
@@ -28,10 +31,8 @@ Deno.test("features see the same deliveries from processor and direct contexts",
     id: "test.delivery-probe-processor",
     on: [{ eventType: "thread.created" }],
     async handle(_event, context) {
-      processorDeliveryIds = await context.features.invoke(
-        feature.id,
-        "list",
-      ) as readonly string[];
+      processorDeliveryIds = await context.features.deliveryProbe
+        .list() as readonly string[];
     },
   });
   const plugin = definePlugin({
@@ -57,8 +58,7 @@ Deno.test("features see the same deliveries from processor and direct contexts",
     defaultDatabaseSchema: "copilotz_feature_delivery_parity",
   });
   try {
-    const created = await engine.conversation.createThread({
-      namespace,
+    await createTestDomainContext(engine, namespace).features.thread.create({
       id: "thread-a",
       participants: [{
         id: "user-a",
@@ -66,7 +66,12 @@ Deno.test("features see the same deliveries from processor and direct contexts",
         participantType: "human",
       }],
     });
-    await Promise.all(created.dispatch.handles.map((handle) => handle.done));
+    const created = (await engine.events.list({ namespace, limit: 100 })).find(
+      (event) =>
+        event.type === "thread.created" && event.subject?.id === "thread-a",
+    );
+    assertExists(created);
+    await waitForTestDelivery(engine, namespace, created.id, "succeeded");
     assertExists(processorDeliveryIds);
 
     const directDeliveryIds = (await engine.deliveries.list({ namespace }))

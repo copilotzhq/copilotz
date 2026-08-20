@@ -1,7 +1,4 @@
 import { assertEquals, assertExists } from "@std/assert";
-import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
-import { createWorker } from "../../dependencies/oxian-worker.ts";
-
 import {
   type CopilotzProcessorContext,
   createCopilotzGateway,
@@ -11,10 +8,23 @@ import {
   defineProcessor,
   type LlmProviderResource,
 } from "../../index.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
 import { loadMessageRecord } from "../../runtime/engine/collection-graph.ts";
-import { createMessageRecord } from "../../runtime/engine/collection-writes.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
+import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
+import { createWorker } from "../../dependencies/oxian-worker.ts";
 
 const NAMESPACE = "downstream-embedding";
 
@@ -28,7 +38,10 @@ function migratedApplicationPlugin() {
   });
   const processor = defineProcessor<CopilotzProcessorContext>({
     id: "downstream.reply",
-    on: [{ eventType: "message.created", routing: { senderId: "downstream-user" } }],
+    on: [{
+      eventType: "message.created",
+      routing: { senderId: "downstream-user" },
+    }],
     async handle(event, context) {
       if (!event.durable) throw new TypeError("Durable delivery required.");
       assertExists(event.subject);
@@ -37,13 +50,15 @@ function migratedApplicationPlugin() {
       const content = await context.content.prepare("embedded reply", {
         operationKey: "downstream-reply-content",
       });
-      await createMessageRecord(context, {
+      const persisted = await context.content.materialize(content);
+      await context.collections.message.create({
         id: "downstream-reply",
         threadId: source.threadId,
         senderId: "downstream-agent",
         recipientIds: [source.sender.id],
-        content,
+        content: persisted,
       }, { operationKey: "downstream-reply-message" });
+      await context.content.linkOwner("downstream-reply", persisted);
     },
   });
   return definePlugin({
@@ -116,23 +131,24 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
       ).id,
       "downstream-injected",
     );
-    await application.conversation.createThread({
-      id: "downstream-thread",
-      namespace: NAMESPACE,
-      participants: [
-        {
-          id: "downstream-user",
-          externalId: "user-1",
-          participantType: "human",
-        },
-        {
-          id: "downstream-agent",
-          externalId: "support",
-          participantType: "agent",
-          agentId: "support",
-        },
-      ],
-    });
+    await createTestDomainContext(application, NAMESPACE).features.thread
+      .create({
+        id: "downstream-thread",
+        namespace: NAMESPACE,
+        participants: [
+          {
+            id: "downstream-user",
+            externalId: "user-1",
+            participantType: "human",
+          },
+          {
+            id: "downstream-agent",
+            externalId: "support",
+            participantType: "agent",
+            agentId: "support",
+          },
+        ],
+      });
     const run = await application.run({
       thread: "downstream-thread",
       participant: "downstream-user",
@@ -141,10 +157,8 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
     });
     await run.done;
     assertEquals(
-      (await application.conversation.listMessages(
-        NAMESPACE,
-        "downstream-thread",
-      )).length,
+      (await projectMessages(application, NAMESPACE, "downstream-thread"))
+        .length,
       2,
     );
   } finally {

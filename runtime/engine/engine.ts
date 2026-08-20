@@ -90,7 +90,10 @@ export async function createCopilotzEngine(
 
   const configuredTransients = () =>
     createTransientProcessorSet(options.transientProcessors ?? []);
-  const transientsBySchema = new Map<string, ReturnType<typeof createTransientProcessorSet>>();
+  const transientsBySchema = new Map<
+    string,
+    ReturnType<typeof createTransientProcessorSet>
+  >();
   const transients = configuredTransients();
   transientsBySchema.set(databaseSchema, transients);
   const transientsFor = (schema: string) => {
@@ -224,11 +227,13 @@ export async function createCopilotzEngine(
           if (!runtime) {
             throw new Error("Copilotz stream workload is not initialized.");
           }
-          const streams = runtime.public.collectionRuntime.get("stream");
-          if (!streams) {
+          if (!runtime.public.collectionRuntime.get("stream")) {
             throw new TypeError("Stream collection is not bound.");
           }
-          return { streams, store: runtime.streamBodyStore };
+          return {
+            collectionRuntime: runtime.public.collectionRuntime,
+            store: runtime.streamBodyStore,
+          };
         },
       }),
       [COPILOTZ_LIVE_WORKLOAD]: createLiveProcessorWorkload({

@@ -555,6 +555,53 @@ Deno.test("collection kernel on PGlite", async () => {
   await runKernelSuite(":memory:", "copilotz_collection_kernel");
 });
 
+Deno.test("scoped collection calls own namespace and expose property commands and queries", async () => {
+  const fixture = await createFixture(
+    ":memory:",
+    "copilotz_scoped_collection_calls",
+  );
+  try {
+    const jobs = fixture.runtime.withScope({ namespace: "tenant-scoped" }).job;
+    const created = await jobs.create({
+      id: "job-scoped",
+      externalId: "external-scoped",
+      title: "Scoped",
+    }, { operationKey: "job:create" });
+    assertEquals(created.namespace, "tenant-scoped");
+
+    const updated = await jobs.update({
+      id: created.id,
+      set: { title: "Updated" },
+    });
+    assertEquals(updated.title, "Updated");
+
+    const found = await jobs.queries.byExternalId({
+      externalId: "external-scoped",
+    });
+    assertEquals(found.map((record) => record.id), [created.id]);
+
+    const claimed = await jobs.commands.claim({
+      id: created.id,
+      claimedBy: "agent-scoped",
+    });
+    assertEquals(claimed.status, "claimed");
+    assertEquals(claimed.claimedBy, "agent-scoped");
+
+    assertEquals(
+      await fixture.runtime.withScope({ namespace: "tenant-other" }).job.get({
+        id: created.id,
+      }),
+      null,
+    );
+    assertEquals(await jobs.delete({ id: created.id }), {
+      id: created.id,
+      deleted: true,
+    });
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
 Deno.test("collection verification scans every projection page", async () => {
   const fixture = await createFixture(
     ":memory:",

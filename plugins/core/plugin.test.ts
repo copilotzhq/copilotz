@@ -3,16 +3,31 @@ import { assert, assertEquals } from "@std/assert";
 import { createCollectionRuntime } from "@copilotz/copilotz/collections";
 import { createPluginRegistry } from "@copilotz/copilotz/plugins";
 import { createCopilotz } from "../../create-copilotz.ts";
-import { corePlugin, coreCollectionsPlugin, CORE_COLLECTION_NAMES } from "./index.ts";
+import {
+  CORE_COLLECTION_NAMES,
+  coreCollectionsPlugin,
+  corePlugin,
+} from "./index.ts";
 
-Deno.test("core plugin is static data and provides the six collections", () => {
+const CORE_FEATURE_IDS = [
+  "copilotz.core.thread-message",
+  "copilotz.core.llm-attempt",
+  "copilotz.core.tool-execution",
+  "copilotz.core.thread",
+  "copilotz.core.message",
+];
+
+Deno.test("core plugin is static data and provides its domain resources", () => {
   assertEquals(corePlugin.manifest.id, "@copilotz/core");
   assertEquals(corePlugin.manifest.provides.collections, [
     ...CORE_COLLECTION_NAMES,
   ]);
-  assertEquals(corePlugin.resources.collections?.map((item) =>
-    (item as { name: string }).name
-  ), [...CORE_COLLECTION_NAMES]);
+  assertEquals(
+    corePlugin.resources.collections?.map((item) =>
+      (item as { name: string }).name
+    ),
+    [...CORE_COLLECTION_NAMES],
+  );
   assertEquals(
     corePlugin.resources.processors?.map((item) => (item as { id: string }).id),
     [
@@ -44,17 +59,17 @@ Deno.test("core plugin is static data and provides the six collections", () => {
   );
   assertEquals(
     corePlugin.manifest.provides.features,
-    ["copilotz.core.thread-message"],
+    CORE_FEATURE_IDS,
   );
   assertEquals(
     corePlugin.resources.features?.map((item) => (item as { id: string }).id),
-    ["copilotz.core.thread-message"],
+    CORE_FEATURE_IDS,
   );
   assertEquals(
     coreCollectionsPlugin.resources.features?.map((item) =>
       (item as { id: string }).id
     ),
-    ["copilotz.core.thread-message"],
+    CORE_FEATURE_IDS,
   );
 });
 
@@ -97,13 +112,17 @@ Deno.test("core plugin collections win until a later plugin replaces a stable ID
       resources: { collections: [replacement] },
     }],
   });
-  assertEquals(registry.require("collections", "participant"), 
+  assertEquals(
+    registry.require("collections", "participant"),
     corePlugin.resources.collections?.find((item) =>
       (item as { name: string }).name === "participant"
     ),
   );
   assertEquals(registry.require("collections", "stream"), replacement);
-  assertEquals(registry.origin("collections", "stream")?.pluginId, "acme.streams");
+  assertEquals(
+    registry.origin("collections", "stream")?.pluginId,
+    "acme.streams",
+  );
 });
 
 Deno.test("package-root createCopilotz injects corePlugin before optional built-ins", async () => {

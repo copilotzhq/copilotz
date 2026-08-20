@@ -7,8 +7,11 @@ import type {
   EventCollections,
   EventCollectionsScope,
   ScopedCollectionMutationOptions,
-  ScopedEventCollection,
 } from "./collection-types.ts";
+import type {
+  ScopedCollection,
+  ScopedCollections,
+} from "../collections/index.ts";
 import { createEventCollectionRepository } from "./collections.ts";
 import type { MutationIdentity } from "./types.ts";
 import type { CollectionDefinition } from "./definition.ts";
@@ -63,6 +66,7 @@ export function createEventCollections(
       definition,
       coordinator: options.coordinator,
       session: options.session,
+      readExecutor: options.readExecutor,
       eventStore: options.eventStore,
       assets: options.assets,
       validate: options.validate,
@@ -85,12 +89,37 @@ export function createEventCollections(
 
   const withScope = (
     scopeInput: EventCollectionsScope,
-  ): Readonly<Record<string, ScopedEventCollection>> => {
+  ): ScopedCollections => {
     const namespace = requireText(scopeInput.namespace, "Namespace");
-    const scoped: Record<string, ScopedEventCollection> = {};
+    const scoped: Record<string, ScopedCollection> = {};
     for (const name of names) {
       const repository = get(name);
-      const binding: ScopedEventCollection = Object.freeze({
+      const commands = Object.freeze(Object.fromEntries(
+        Object.keys(
+          (repository.definition as CollectionDefinition).commands ?? {},
+        ).map((command) => [
+          command,
+          async (
+            input: Readonly<Record<string, unknown> & { id: string }>,
+            mutationOptions?: ScopedCollectionMutationOptions,
+          ) => {
+            const id = requireText(input.id, `${name} ID`);
+            const { id: _id, ...commandInput } = input;
+            const result = await repository.command(id, command, commandInput, {
+              namespace,
+              identity: mutationIdentity(
+                name,
+                `command:${command}`,
+                id,
+                mutationOptions,
+                scopeInput.createMutationIdentity,
+              ),
+            });
+            return requiredValue(result.value, `${name}.${command}`).record;
+          },
+        ]),
+      ));
+      const binding: ScopedCollection = Object.freeze({
         definition: repository.definition,
         async create(input, mutationOptions) {
           const rawId = input.id;
@@ -112,8 +141,15 @@ export function createEventCollections(
             `${name}.create`,
           ) as CollectionRecord;
         },
-        async update(idInput, patch, mutationOptions) {
-          const id = requireText(idInput, `${name} ID`);
+        async update(input, mutationOptions) {
+          const id = requireText(input.id, `${name} ID`);
+          const patch = {
+            ...(input.set ?? {}),
+            ...Object.fromEntries((input.unset ?? []).map((field) => [
+              field,
+              undefined,
+            ])),
+          };
           const result = await repository.update(id, patch, {
             namespace,
             identity: mutationIdentity(
@@ -129,8 +165,8 @@ export function createEventCollections(
             `${name}.update`,
           ) as CollectionRecord;
         },
-        async delete(idInput, mutationOptions) {
-          const id = requireText(idInput, `${name} ID`);
+        async delete(input, mutationOptions) {
+          const id = requireText(input.id, `${name} ID`);
           const result = await repository.delete(id, {
             namespace,
             identity: mutationIdentity(
@@ -143,27 +179,21 @@ export function createEventCollections(
           });
           return requiredValue(result.value, `${name}.delete`);
         },
-        async command(idInput, commandInput, input, mutationOptions) {
-          const id = requireText(idInput, `${name} ID`);
-          const command = requireText(commandInput, `${name} command`);
-          const result = await repository.command(id, command, input, {
-            namespace,
-            identity: mutationIdentity(
-              name,
-              `command:${command}`,
-              id,
-              mutationOptions,
-              scopeInput.createMutationIdentity,
-            ),
-          });
-          return requiredValue(result.value, `${name}.${command}`);
-        },
-        get(id) {
-          return repository.get(namespace, id);
+        get(input) {
+          return repository.get(namespace, input.id);
         },
         list(listOptions) {
           return repository.list(namespace, listOptions);
         },
+        search(query) {
+          return repository.list(namespace, {
+            after: query.after,
+            limit: query.limit,
+            where: query.where,
+          });
+        },
+        commands,
+        queries: Object.freeze({}),
       });
       scoped[name] = binding;
     }

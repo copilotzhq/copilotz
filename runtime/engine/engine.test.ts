@@ -1,14 +1,22 @@
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
-
-import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
-import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
-import { createWorker } from "../../dependencies/oxian-worker.ts";
-import { defineCollection, llmAttemptContent, composeRoleContent, LLM_CONTENT_ROLE } from "../domain/index.ts";
 import {
   createSqlSession,
   provisionCopilotzSchema,
   type SqlSession,
 } from "../events/index.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import { waitForTestDelivery } from "../../runtime/testing/deliveries.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 import {
   createPluginRegistry,
   definePlugin,
@@ -20,8 +28,15 @@ import {
   type CopilotzProcessorContext,
   createCopilotzEngine,
 } from "./index.ts";
-import { createLlmAttemptRecord } from "./collection-writes.ts";
-import { requireBoundCollection } from "./collection-graph.ts";
+import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
+import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
+import { createWorker } from "../../dependencies/oxian-worker.ts";
+import {
+  composeRoleContent,
+  defineCollection,
+  LLM_CONTENT_ROLE,
+  llmAttemptContent,
+} from "../domain/index.ts";
 
 const TEST_SCHEMA = "copilotz_factory_engine";
 
@@ -67,7 +82,7 @@ async function createFixture(): Promise<Fixture> {
       leakedStorage = leakedStorage || "eventStore" in context ||
         "session" in context || "coordinator" in context ||
         "coordinator" in context.collections ||
-        "coordinator" in context.collectionRuntime;
+        "collectionRuntime" in context;
       assertEquals(context.namespace, "tenant-a");
       assertEquals(context.event.id, event.id);
       assertEquals(
@@ -75,10 +90,9 @@ async function createFixture(): Promise<Fixture> {
         "echo",
       );
 
-      const message = await context.collectionRuntime.get("message")?.get(
-        event.subject!.id,
-        context.namespace,
-      );
+      const message = await context.collections.message.get({
+        id: event.subject!.id,
+      });
       assertExists(message);
       const resolved = await context.content.resolveMany(
         Array.isArray(message.content) ? message.content : [],
@@ -90,12 +104,9 @@ async function createFixture(): Promise<Fixture> {
       );
       const attemptId = `attempt:${message.id}`;
       if (
-        !await requireBoundCollection(context, "llm_attempt").get(
-          attemptId,
-          context.namespace,
-        )
+        !await context.collections.llm_attempt.get({ id: attemptId })
       ) {
-        await createLlmAttemptRecord(context, {
+        await context.features.llmAttempt.create({
           id: attemptId,
           threadId: message.threadId,
           messageId: message.id,
@@ -124,22 +135,25 @@ async function createFixture(): Promise<Fixture> {
     },
   });
   const registry = await createPluginRegistry({
-    plugins: [coreCollectionsPlugin, definePlugin({
-      manifest: {
-        id: "test.engine",
-        version: "1.0.0",
-        provides: {
-          processors: [processor.id],
-          collections: [auditCollection.name],
-          tools: [echoTool.key],
+    plugins: [
+      coreCollectionsPlugin,
+      definePlugin({
+        manifest: {
+          id: "test.engine",
+          version: "1.0.0",
+          provides: {
+            processors: [processor.id],
+            collections: [auditCollection.name],
+            tools: [echoTool.key],
+          },
         },
-      },
-      resources: {
-        processors: [processor],
-        collections: [auditCollection],
-        tools: [echoTool],
-      },
-    })],
+        resources: {
+          processors: [processor],
+          collections: [auditCollection],
+          tools: [echoTool],
+        },
+      }),
+    ],
   });
   let nextId = 0;
   const engine = await createCopilotzEngine({
@@ -220,29 +234,40 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       threadId: "thread-a",
       types: ["text.delta"],
     }).getReader();
-    const message = await fixture.engine.conversation.createMessage({
+    await createTestDomainContext(fixture.engine, namespace).features
+      .threadMessage.create({
+        id: "message-a",
+        threadId: "thread-a",
+        sender: {
+          id: "user-a",
+          externalId: "user-a",
+          participantType: "human",
+        },
+        recipientIds: ["agent-a"],
+        content,
+      }, {
+        identity: {
+          correlationId: "run-a",
+          deduplicationId: "message-a:create",
+        },
+      });
+    const messageEvent = (await fixture.engine.events.list({
       namespace,
-      id: "message-a",
       threadId: "thread-a",
-      sender: {
-        id: "user-a",
-        externalId: "user-a",
-        participantType: "human",
-      },
-      recipientIds: ["agent-a"],
-      content,
-      identity: {
-        correlationId: "run-a",
-        deduplicationId: "message-a:create",
-      },
-    });
-    assertEquals(message.dispatch.handles.length, 1);
-    const first = await message.dispatch.handles[0].done;
-    assertEquals(first.delivery.status, "retry_wait");
+      limit: 100,
+    })).find((event) => event.subject?.id === "message-a");
+    assertExists(messageEvent);
+    const first = await waitForTestDelivery(
+      fixture.engine,
+      namespace,
+      messageEvent.id,
+      "retry_wait",
+    );
+    assertEquals(first.status, "retry_wait");
     const frame = (await frames.read()).value!;
     assertEquals(frame.durable, false);
     assertEquals(frame.correlationId, "run-a");
-    assertEquals(frame.causationId, message.event.id);
+    assertEquals(frame.causationId, messageEvent.id);
     await frames.cancel();
 
     const recovery = await fixture.engine.recover({ namespace: "tenant-a" });
@@ -253,7 +278,8 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     assertEquals(fixture.processorCalls(), 2);
     assertEquals(fixture.leakedStorage(), false);
 
-    const attempts = await fixture.engine.llmAttempts.list(
+    const attempts = await projectLlmAttempts(
+      fixture.engine,
       "tenant-a",
       "thread-a",
     );
@@ -272,7 +298,7 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       "tenant-a",
     );
     assertEquals(audits.length, 1);
-    assertEquals(audits[0].id, `audit:${message.event.id}`);
+    assertEquals(audits[0].id, `audit:${messageEvent.id}`);
     const events = await fixture.engine.events.list({ namespace: "tenant-a" });
     assertEquals(events.some((event) => event.type === "text.delta"), false);
     const attemptEvent = events.find((event) =>
@@ -281,9 +307,9 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     const auditEvent = events.find((event) =>
       event.type === "engine_audit.created"
     );
-    assertEquals(attemptEvent?.causationId, message.event.id);
+    assertEquals(attemptEvent?.causationId, messageEvent.id);
     assertEquals(attemptEvent?.correlationId, "run-a");
-    assertEquals(auditEvent?.causationId, message.event.id);
+    assertEquals(auditEvent?.causationId, messageEvent.id);
     assertEquals(
       await fixture.engine.events.settlement(
         "tenant-a",
@@ -359,20 +385,23 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
     },
   });
   const registry = await createPluginRegistry({
-    plugins: [coreCollectionsPlugin, definePlugin({
-      manifest: {
-        id: "test.engine.scopes",
-        version: "1.0.0",
-        provides: {
-          collections: [auditCollection.name],
-          processors: [processor.id],
+    plugins: [
+      coreCollectionsPlugin,
+      definePlugin({
+        manifest: {
+          id: "test.engine.scopes",
+          version: "1.0.0",
+          provides: {
+            collections: [auditCollection.name],
+            processors: [processor.id],
+          },
         },
-      },
-      resources: {
-        collections: [auditCollection],
-        processors: [processor],
-      },
-    })],
+        resources: {
+          collections: [auditCollection],
+          processors: [processor],
+        },
+      }),
+    ],
   });
   const engine = await createCopilotzEngine({
     session,
@@ -383,30 +412,40 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
     await provisionCopilotzSchema(session, "copilotz_scope_b");
     const first = await engine.databaseScope("copilotz_scope_a");
     const second = await engine.databaseScope("copilotz_scope_b");
-    const firstThread = await first.conversation.createThread({
-      namespace: "tenant",
-      id: "same-thread",
-      status: "first",
-      participants: [],
-    });
-    const secondThread = await second.conversation.createThread({
-      namespace: "tenant",
-      id: "same-thread",
-      status: "second",
-      participants: [],
-    });
-    await Promise.all(
-      [...firstThread.dispatch.handles, ...secondThread.dispatch.handles].map(
-        (handle) => handle.done,
-      ),
-    );
+    await first.collectionRuntime.withScope({ namespace: "tenant" }).thread
+      .create({
+        id: "same-thread",
+        status: "first",
+      });
+    await second.collectionRuntime.withScope({ namespace: "tenant" }).thread
+      .create({
+        id: "same-thread",
+        status: "second",
+      });
+    for (const scope of [first, second]) {
+      const created = (await scope.events.list({
+        namespace: "tenant",
+        limit: 100,
+      })).find((event) =>
+        event.type === "thread.created" && event.subject?.id === "same-thread"
+      );
+      assertExists(created);
+      await waitForTestDelivery(
+        scope,
+        "tenant",
+        created.id,
+        "succeeded",
+      );
+    }
 
     assertEquals(
-      (await first.conversation.getThread("tenant", "same-thread"))?.status,
+      (await first.collectionRuntime.withScope({ namespace: "tenant" }).thread
+        .get({ id: "same-thread" }))?.status,
       "first",
     );
     assertEquals(
-      (await second.conversation.getThread("tenant", "same-thread"))?.status,
+      (await second.collectionRuntime.withScope({ namespace: "tenant" }).thread
+        .get({ id: "same-thread" }))?.status,
       "second",
     );
     assertEquals(

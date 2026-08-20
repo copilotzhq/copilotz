@@ -10,6 +10,18 @@ import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
 } from "../tools/index.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 import { createScheduledJobsPlugin, getNextScheduledRunAt } from "./index.ts";
 
 const NAMESPACE = "tenant-schedules";
@@ -81,14 +93,15 @@ Deno.test("scheduled due transition atomically advances and dispatches one publi
     assertExists(updated);
     assertEquals(updated.lastRunAt, "2026-01-01T00:01:00.000Z");
     assertEquals(updated.nextRunAt, "2026-01-01T00:02:00.000Z");
-    const threads = await application.conversation.listThreads(NAMESPACE);
+    const threads = await projectThreads(application, NAMESPACE);
     assertEquals(threads.length, 1);
     assertEquals(threads[0].externalId, "scheduled-job:morning-brief");
     assertEquals(
       threads[0].participants.map((value) => value.participantType).sort(),
       ["agent", "job"],
     );
-    const messages = await application.conversation.listMessages(
+    const messages = await projectMessages(
+      application,
       NAMESPACE,
       threads[0].id,
     );
@@ -143,10 +156,7 @@ Deno.test("scheduled due transition atomically advances and dispatches one publi
     assertEquals(retriedManual.occurrenceId, manual.occurrenceId);
     assertEquals(retriedManual.deduplicated, true);
     assertEquals(
-      (await application.conversation.listMessages(
-        NAMESPACE,
-        threads[0].id,
-      )).length,
+      (await projectMessages(application, NAMESPACE, threads[0].id)).length,
       2,
     );
 
@@ -156,10 +166,7 @@ Deno.test("scheduled due transition atomically advances and dispatches one publi
     });
     assertEquals(retryTick.claimed, 0);
     assertEquals(
-      (await application.conversation.listMessages(
-        NAMESPACE,
-        threads[0].id,
-      )).length,
+      (await projectMessages(application, NAMESPACE, threads[0].id)).length,
       2,
     );
   } finally {
@@ -229,11 +236,11 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
     engine: { now: () => BASE },
   });
   try {
-    await application.conversation.createThread({
-      namespace: NAMESPACE,
-      id: "thread-tool",
-      externalId: "thread-tool",
-    });
+    await createTestDomainContext(application, NAMESPACE).features.thread
+      .create({
+        id: "thread-tool",
+        externalId: "thread-tool",
+      });
     const invoke = async (payload: Record<string, unknown>) => {
       const appended = await application.events.append({
         type: "fixture.scheduled_jobs.requested",
@@ -297,7 +304,8 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    const messages = await application.conversation.listMessages(
+    const messages = await projectMessages(
+      application,
       NAMESPACE,
       "thread-tool",
     );

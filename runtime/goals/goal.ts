@@ -1,12 +1,10 @@
 import type { Agent } from "../resources/index.ts";
-import type { ContentInput, ResolvedContent } from "../content/index.ts";
-import type {
-  ConversationMessage,
-  ConversationThread,
-  Participant,
-  ParticipantInput,
-} from "../domain/index.ts";
-import type { RunHandle } from "../attachments/index.ts";
+import {
+  mapMessageRecord,
+  mapParticipantRecord,
+  mapThreadRecord,
+} from "../engine/collection-graph.ts";
+import type { CollectionRecord } from "../collections/index.ts";
 import type {
   CreateGoalRuntimeOptions,
   GoalAssessment,
@@ -25,6 +23,14 @@ import type {
   GoalThreadRef,
   GoalTranscriptMessage,
 } from "./types.ts";
+import type { ContentInput, ResolvedContent } from "../content/index.ts";
+import type {
+  ConversationMessage,
+  ConversationThread,
+  Participant,
+  ParticipantInput,
+} from "../domain/index.ts";
+import type { RunHandle } from "../attachments/index.ts";
 
 const GOAL_METADATA_KEY = "copilotzGoal";
 const DEFAULT_MAX_TURNS = 20;
@@ -197,6 +203,68 @@ function requireCompatibleParticipant(
   return participant;
 }
 
+async function loadParticipant(
+  options: CreateGoalRuntimeOptions,
+  namespace: string,
+  id: string,
+): Promise<Participant | null> {
+  const record = await options.collectionRuntime.withScope({ namespace })
+    .participant.get({ id });
+  return record ? mapParticipantRecord(record) : null;
+}
+
+async function projectThread(
+  options: CreateGoalRuntimeOptions,
+  namespace: string,
+  record: CollectionRecord,
+): Promise<ConversationThread> {
+  const participantIds = Array.isArray(record.participantIds)
+    ? record.participantIds.filter((id): id is string => typeof id === "string")
+    : [];
+  const participants = await Promise.all(
+    participantIds.map((id) => loadParticipant(options, namespace, id)),
+  );
+  return mapThreadRecord(
+    record,
+    participants.filter((value): value is Participant => value !== null),
+  );
+}
+
+async function loadThreadById(
+  options: CreateGoalRuntimeOptions,
+  namespace: string,
+  id: string,
+): Promise<ConversationThread | null> {
+  const record = await options.collectionRuntime.withScope({ namespace })
+    .thread.get({ id });
+  return record ? await projectThread(options, namespace, record) : null;
+}
+
+async function loadThreadByExternalId(
+  options: CreateGoalRuntimeOptions,
+  namespace: string,
+  externalId: string,
+): Promise<ConversationThread | null> {
+  const [record] = await options.collectionRuntime.withScope({ namespace })
+    .thread.queries.byExternalId({ externalId });
+  return record ? await projectThread(options, namespace, record) : null;
+}
+
+async function loadMessage(
+  options: CreateGoalRuntimeOptions,
+  namespace: string,
+  id: string,
+): Promise<ConversationMessage | null> {
+  const collections = options.collectionRuntime.withScope({ namespace });
+  const record = await collections.message.get({ id });
+  if (!record) return null;
+  const sender = await collections.participant.get({
+    id: String(record.senderId),
+  });
+  if (!sender) throw new Error(`Message '${id}' sender was not found.`);
+  return mapMessageRecord(record, mapParticipantRecord(sender));
+}
+
 function goalMetadata(
   metadata: Readonly<Record<string, unknown>> | undefined,
   input: Readonly<{
@@ -318,9 +386,9 @@ async function loadThread(
   const value = typeof ref === "string"
     ? requiredText(ref, "Goal thread")
     : ref.id;
-  const thread = await options.conversation.getThread(namespace, value) ??
+  const thread = await loadThreadById(options, namespace, value) ??
     (typeof ref === "string"
-      ? await options.conversation.getThreadByExternalId(namespace, value)
+      ? await loadThreadByExternalId(options, namespace, value)
       : null);
   if (!thread) {
     throw new Error(`Goal thread '${value}' was not found in '${namespace}'.`);
@@ -345,17 +413,18 @@ async function ensureParticipant(
       participant: requireCompatibleParticipant(existing, input),
     });
   }
-  const result = await options.conversation.addThreadParticipant({
-    namespace,
+  await options.features(namespace).thread.addParticipant({
     threadId: thread.id,
     participant: input,
+  }, {
+    operationKey: `goal:${operationKey}`,
     identity: {
       correlationId: goalId,
       deduplicationId: `${goalId}:${operationKey}`,
       metadata: goalMetadata(undefined, { id: goalId, role: operationKey }),
     },
   });
-  const updated = result.value;
+  const updated = await loadThreadById(options, namespace, thread.id);
   if (!updated) throw new Error("Participant mutation returned no thread.");
   const participant = updated.participants.find((candidate) =>
     participantMatches(candidate, input)
@@ -384,17 +453,17 @@ async function createOrLoadTargetThread(
   }
   const descriptor = threadDescriptor(input.thread);
   const existing = descriptor.id?.trim()
-    ? await options.conversation.getThread(namespace, descriptor.id.trim())
+    ? await loadThreadById(options, namespace, descriptor.id.trim())
     : descriptor.externalId?.trim()
-    ? await options.conversation.getThreadByExternalId(
+    ? await loadThreadByExternalId(
+      options,
       namespace,
       descriptor.externalId.trim(),
     )
     : null;
   if (existing) return existing;
   const id = descriptor.id?.trim() || `${goalId}:target`;
-  const result = await options.conversation.createThread({
-    namespace,
+  const record = await options.features(namespace).thread.create({
     id,
     ...(descriptor.externalId?.trim()
       ? { externalId: descriptor.externalId.trim() }
@@ -407,14 +476,15 @@ async function createOrLoadTargetThread(
       id: goalId,
       role: "target",
     }),
+  }, {
+    operationKey: "goal:thread:target",
     identity: {
       correlationId: goalId,
       deduplicationId: `${goalId}:thread:target`,
       metadata: goalMetadata(undefined, { id: goalId, role: "target" }),
     },
-  });
-  if (!result.value) throw new Error("Goal target thread was not created.");
-  return result.value;
+  }) as CollectionRecord;
+  return await projectThread(options, namespace, record);
 }
 
 async function createPrivateThread(
@@ -437,12 +507,10 @@ async function createPrivateThread(
   }
   const descriptor = threadDescriptor(input.descriptor);
   const existing = descriptor.id?.trim()
-    ? await options.conversation.getThread(
-      input.namespace,
-      descriptor.id.trim(),
-    )
+    ? await loadThreadById(options, input.namespace, descriptor.id.trim())
     : descriptor.externalId?.trim()
-    ? await options.conversation.getThreadByExternalId(
+    ? await loadThreadByExternalId(
+      options,
       input.namespace,
       descriptor.externalId.trim(),
     )
@@ -450,8 +518,7 @@ async function createPrivateThread(
   if (existing) return existing;
   const label = input.suffix ? `${input.role}:${input.suffix}` : input.role;
   const id = descriptor.id?.trim() || `${input.goalId}:${label}`;
-  const result = await options.conversation.createThread({
-    namespace: input.namespace,
+  const record = await options.features(input.namespace).thread.create({
     id,
     ...(descriptor.externalId?.trim()
       ? { externalId: descriptor.externalId.trim() }
@@ -464,6 +531,8 @@ async function createPrivateThread(
       id: input.goalId,
       role: input.role,
     }),
+  }, {
+    operationKey: `goal:thread:${label}`,
     identity: {
       correlationId: input.goalId,
       deduplicationId: `${input.goalId}:thread:${label}`,
@@ -472,11 +541,8 @@ async function createPrivateThread(
         role: input.role,
       }),
     },
-  });
-  if (!result.value) {
-    throw new Error(`Goal ${input.role} thread was not created.`);
-  }
-  return result.value;
+  }) as CollectionRecord;
+  return await projectThread(options, input.namespace, record);
 }
 
 async function prepareGoal(
@@ -638,7 +704,8 @@ export function createGoalRuntime(
             event.subject?.type === "message" &&
             !seenMessages.has(event.subject.id)
           ) {
-            const message = await options.conversation.getMessage(
+            const message = await loadMessage(
+              options,
               prepared.namespace,
               event.subject.id,
             );

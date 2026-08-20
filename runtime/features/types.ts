@@ -1,9 +1,17 @@
 import type { CollectionRuntime } from "../collections/index.ts";
-import type { ContentResolver } from "../content/index.ts";
+import type {
+  CollectionMutationIdentity,
+  ScopedCollections,
+} from "../collections/index.ts";
+import type {
+  AssetOrigin,
+  ContentResolver,
+  ContentSequence,
+  DurableContentInput,
+} from "../content/index.ts";
 import type {
   DomainRelation,
   ListDomainRelationsOptions,
-  ScopedEventCollection,
 } from "../domain/index.ts";
 import type { DurableEvent, EventDelivery } from "../events/index.ts";
 import type {
@@ -42,13 +50,19 @@ export type FeatureResponse = Readonly<{
   }>;
 }>;
 
-export type FeatureInvoker = Readonly<{
-  invoke(
-    resourceId: string,
-    action: string,
-    input?: unknown,
-  ): Promise<unknown>;
+export type FeatureCallOptions = Readonly<{
+  operationKey?: string;
+  identity?: CollectionMutationIdentity;
 }>;
+
+export type FeatureActionInvoker = (
+  input?: unknown,
+  options?: FeatureCallOptions,
+) => Promise<unknown>;
+
+export type FeatureInvoker = Readonly<
+  Record<string, Readonly<Record<string, FeatureActionInvoker>>>
+>;
 
 export type FeatureResources = Readonly<{
   list<T extends PluginResource = PluginResource>(
@@ -71,11 +85,14 @@ export type FeatureResources = Readonly<{
 /** Same primitives as processors. No application god-object. No HTTP request. */
 export type FeatureContext = Readonly<{
   namespace: string;
-  collections: Readonly<Record<string, ScopedEventCollection>>;
-  collectionRuntime: CollectionRuntime;
-  transaction: CollectionRuntime["transaction"];
+  collections: ScopedCollections;
   content: Readonly<{
     resolver: Pick<ContentResolver, "getMany">;
+    materialize(
+      input: DurableContentInput,
+      options?: { origin?: AssetOrigin },
+    ): Promise<ContentSequence>;
+    linkOwner(ownerId: string, content: ContentSequence): Promise<void>;
   }>;
   resources: FeatureResources;
   features: FeatureInvoker;
@@ -110,17 +127,22 @@ export type FeatureAction = (
 /** Transport-neutral named command contributed by a plugin. */
 export type FeatureResource = Readonly<{
   id: string;
+  alias: string;
+  /** Read actions do not open a write transaction. Defaults to `write`. */
+  mode?: "read" | "write";
   actions: Readonly<Record<string, FeatureAction>>;
 }>;
 
 export type FeatureContextBindings = Readonly<{
   namespace: string;
   plugins: PluginRegistry;
-  collections: {
-    withScope(scope: { namespace: string }): FeatureContext["collections"];
+  collections?: {
+    withScope(scope: { namespace: string }): ScopedCollections;
   };
   collectionRuntime: CollectionRuntime;
+  transaction?: CollectionRuntime["transaction"];
   contentResolver: Pick<ContentResolver, "getMany">;
+  content?: (namespace: string) => FeatureContext["content"];
   events: {
     list(options: {
       namespace: string;
@@ -140,6 +162,8 @@ export type FeatureContextBindings = Readonly<{
     }): Promise<readonly EventDelivery[]>;
   };
   relations: {
-    list(options: ListDomainRelationsOptions): Promise<readonly DomainRelation[]>;
+    list(
+      options: ListDomainRelationsOptions,
+    ): Promise<readonly DomainRelation[]>;
   };
 }>;

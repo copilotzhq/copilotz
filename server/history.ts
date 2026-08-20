@@ -1,6 +1,4 @@
 import type { CopilotzApplication } from "../runtime/application/index.ts";
-import type { ContentRef } from "../runtime/content/index.ts";
-import { type EventNativeAsset, eventNativeAsset } from "./assets.ts";
 import {
   type ConversationMessage,
   type LlmAttempt,
@@ -8,6 +6,12 @@ import {
   type ToolExecution,
   toolExecutionContent,
 } from "../runtime/domain/index.ts";
+import {
+  projectLlmAttempt,
+  projectToolExecution,
+} from "./collection-projections.ts";
+import type { ContentRef } from "../runtime/content/index.ts";
+import { type EventNativeAsset, eventNativeAsset } from "./assets.ts";
 
 export type EventNativeHistoryInclude = "content" | "workflow";
 
@@ -90,6 +94,7 @@ export async function createEventNativeMessageHistoryIncluded(
   includes: ReadonlySet<EventNativeHistoryInclude>,
 ): Promise<EventNativeMessageHistoryIncluded | undefined> {
   if (includes.size === 0) return undefined;
+  const collections = application.collectionRuntime.withScope({ namespace });
 
   const attemptIds = new Set<string>();
   const executionIds = new Set<string>();
@@ -109,9 +114,11 @@ export async function createEventNativeMessageHistoryIncluded(
   }
 
   const llmAttempts = includes.has("workflow")
-    ? uniqueById((await Promise.all(
-      [...attemptIds].map((id) => application.llmAttempts.get(namespace, id)),
-    )).filter((value): value is LlmAttempt => value !== null))
+    ? uniqueById(
+      (await Promise.all(
+        [...attemptIds].map((id) => collections.llm_attempt.get({ id })),
+      )).filter((value) => value !== null).map(projectLlmAttempt),
+    )
     : [];
 
   const attemptToolCallRefs = llmAttempts.flatMap((attempt) => {
@@ -134,23 +141,22 @@ export async function createEventNativeMessageHistoryIncluded(
           ? sourceMessageByAttempt.get(attempt.id)
           : undefined;
         if (!sourceMessageId) return [];
-        return decodeToolCallIds(resolved.value).map((id) =>
-          application.toolExecutions.getByMessageToolCallId(
-            namespace,
-            threadId,
-            sourceMessageId,
-            id,
-          )
-        );
+        return decodeToolCallIds(resolved.value).map(async (id) => {
+          const [execution] = await collections.tool_execution.queries
+            .byMessageToolCallId({
+              threadId,
+              messageId: sourceMessageId,
+              toolCallId: id,
+            });
+          return execution ? projectToolExecution(execution) : null;
+        });
       }),
     )).filter((value): value is ToolExecution => value !== null)
     : [];
   const executionsById = includes.has("workflow")
     ? (await Promise.all(
-      [...executionIds].map((id) =>
-        application.toolExecutions.get(namespace, id)
-      ),
-    )).filter((value): value is ToolExecution => value !== null)
+      [...executionIds].map((id) => collections.tool_execution.get({ id })),
+    )).filter((value) => value !== null).map(projectToolExecution)
     : [];
   const toolExecutions = uniqueById([
     ...executionsByCall,

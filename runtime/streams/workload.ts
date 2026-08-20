@@ -1,4 +1,4 @@
-import type { BoundCollection } from "../collections/index.ts";
+import type { CollectionRuntime } from "../collections/index.ts";
 import type { AssetBodyStore } from "../content/index.ts";
 import type {
   DeliveryWorkload,
@@ -36,7 +36,7 @@ export type StreamResultMetadata = Readonly<{
 }>;
 
 export type StreamWorkloadScope = Readonly<{
-  streams: BoundCollection;
+  collectionRuntime: CollectionRuntime;
   store: AssetBodyStore;
 }>;
 
@@ -98,7 +98,9 @@ export function parseStreamDispatchMetadata(
     action,
     namespace: requiredText(value.namespace, "namespace"),
     threadId: requiredText(value.threadId, "threadId"),
-    ...(optionalText(value.streamId) ? { streamId: optionalText(value.streamId) } : {}),
+    ...(optionalText(value.streamId)
+      ? { streamId: optionalText(value.streamId) }
+      : {}),
     ...(optionalText(value.lane) ? { lane: optionalText(value.lane) } : {}),
     ...(optionalText(value.mediaType)
       ? { mediaType: optionalText(value.mediaType) }
@@ -219,9 +221,12 @@ export function createStreamWorkload(
   return async (context) => {
     const metadata = parseStreamDispatchMetadata(record(context.metadata));
     const scope = await options.resolve(metadata.databaseSchema);
+    const streams = scope.collectionRuntime.withScope({
+      namespace: metadata.namespace,
+    }).stream;
     if (metadata.action === "follow") {
       const follower = await openStreamFollower({
-        streams: scope.streams,
+        streams,
         store: scope.store,
         namespace: metadata.namespace,
         streamId: metadata.streamId!,
@@ -239,7 +244,7 @@ export function createStreamWorkload(
     }
 
     const writer = await createStreamWriter({
-      streams: scope.streams,
+      streams,
       store: scope.store,
       namespace: metadata.namespace,
       threadId: metadata.threadId,
@@ -254,7 +259,7 @@ export function createStreamWorkload(
         : {}),
     });
     const follower = await openStreamFollower({
-      streams: scope.streams,
+      streams,
       store: scope.store,
       namespace: metadata.namespace,
       streamId: writer.id,
@@ -277,9 +282,15 @@ export function createStreamWorkload(
     pumping.finally(() => {
       context.signal.removeEventListener("abort", onAbort);
     }).catch(() => undefined);
-    return followUntilSettled(follower.body, pumping, (reason) =>
-      writer.abandon(
-        reason instanceof Error ? reason.message : String(reason ?? "cancelled"),
-      ));
+    return followUntilSettled(
+      follower.body,
+      pumping,
+      (reason) =>
+        writer.abandon(
+          reason instanceof Error
+            ? reason.message
+            : String(reason ?? "cancelled"),
+        ),
+    );
   };
 }

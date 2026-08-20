@@ -1,7 +1,7 @@
 import {
+  type CollectionDefinition,
   defineCollection,
   relation,
-  type CollectionDefinition,
 } from "@copilotz/copilotz/collections";
 import {
   contentSequenceSchema,
@@ -147,6 +147,32 @@ export const toolExecutionCollection: CollectionDefinition = defineCollection({
               : {}),
             ...(body.metadata ? { metadata: body.metadata } : {}),
           },
+        };
+      },
+    },
+  },
+  queries: {
+    byToolCallId: {
+      query({ input }) {
+        return {
+          where: {
+            threadId: String(input.threadId ?? ""),
+            toolCallId: String(input.toolCallId ?? ""),
+          },
+          order: { field: "createdAt", direction: "desc" },
+          limit: 1,
+        };
+      },
+    },
+    byMessageToolCallId: {
+      query({ input }) {
+        return {
+          where: {
+            threadId: String(input.threadId ?? ""),
+            messageId: String(input.messageId ?? ""),
+            toolCallId: String(input.toolCallId ?? ""),
+          },
+          limit: 1,
         };
       },
     },

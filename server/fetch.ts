@@ -182,10 +182,28 @@ export function projectEventNativeSseOutput(
   });
 }
 
-function sseFrame(value: unknown, event?: string): Uint8Array {
+function durablePosition(output: AttachmentOutput): string | undefined {
+  if (
+    !("durable" in output) || output.durable !== true ||
+    !("position" in output) || typeof output.position !== "string"
+  ) {
+    return undefined;
+  }
+  const position = output.position.replace(/[\r\n]/g, "").trim();
+  return position || undefined;
+}
+
+function sseFrame(
+  value: unknown,
+  event?: string,
+  id?: string,
+): Uint8Array {
   const name = event?.replace(/[\r\n]/g, "").trim();
+  const resumeId = id?.replace(/[\r\n]/g, "").trim();
   return new TextEncoder().encode(
-    `${name ? `event: ${name}\n` : ""}data: ${JSON.stringify(value)}\n\n`,
+    `${name ? `event: ${name}\n` : ""}${
+      resumeId ? `id: ${resumeId}\n` : ""
+    }data: ${JSON.stringify(value)}\n\n`,
   );
 }
 
@@ -215,8 +233,11 @@ function sseResponse(
           : projectEventNativeSseOutput(next.value);
         if (projected === null || projected === undefined) return;
         const values = Array.isArray(projected) ? projected : [projected];
+        const position = durablePosition(next.value);
         for (const value of values) {
-          controller.enqueue(sseFrame(value, options.sseEventName?.(value)));
+          controller.enqueue(
+            sseFrame(value, options.sseEventName?.(value), position),
+          );
         }
       } catch (error) {
         await stream.cancel(cancellationReason(error)).catch(() => undefined);

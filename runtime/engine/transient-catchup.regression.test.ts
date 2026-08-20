@@ -1,10 +1,22 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertExists } from "@std/assert";
 
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import { createCoreTableNames, type SqlSession } from "../events/index.ts";
 import { createPluginRegistry, defineProcessor } from "../plugins/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzEngine } from "./index.ts";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 
 const NAMESPACE = "tenant-transient-regression";
 
@@ -115,8 +127,7 @@ Deno.test("transient catch-up delivers a concurrently committed event once", asy
     });
     await queryStarted;
 
-    const created = await engine.conversation.createThread({
-      namespace: NAMESPACE,
+    await createTestDomainContext(engine, NAMESPACE).features.thread.create({
       id: "thread-racing-catchup",
       participants: [{
         id: "user-a",
@@ -124,10 +135,15 @@ Deno.test("transient catch-up delivers a concurrently committed event once", asy
         participantType: "human",
       }],
     });
+    const createdEvent = (await engine.events.list({
+      namespace: NAMESPACE,
+      limit: 100,
+    })).find((event) => event.subject?.id === "thread-racing-catchup");
+    assertExists(createdEvent);
     releaseQuery();
     unbind = await binding;
 
-    assertEquals(seen, [created.event.id]);
+    assertEquals(seen, [createdEvent.id]);
   } finally {
     releaseQuery();
     unbind?.();

@@ -19,6 +19,10 @@ export type ConnectAttachmentInput = Readonly<{
   participant: AttachmentParticipantRef;
   recipientIds?: readonly string[];
   databaseSchema?: string;
+  /** Resume after this durable event position. SSE `id:` / Last-Event-ID. */
+  afterPosition?: string;
+  /** Byte offsets for in-flight `stream.created` followers, keyed by stream id. */
+  streamOffsets?: Readonly<Record<string, number>>;
 }>;
 
 export type AttachmentMessageInput = Readonly<{

@@ -3,8 +3,8 @@ import type {
   ConversationMessage,
   ConversationThread,
   Participant,
-  ScopedEventCollection,
 } from "../domain/index.ts";
+import type { ScopedCollections } from "../collections/index.ts";
 import type { ContentInput, ContentRef } from "../content/index.ts";
 import type { MemorySourceRef } from "../memory/ontology.ts";
 
@@ -20,7 +20,7 @@ export type ContextContributionInput = Readonly<{
     endMessageId: string;
     messages: readonly ConversationMessage[];
   }>;
-  collections: Readonly<Record<string, ScopedEventCollection>>;
+  collections: ScopedCollections;
   signal: AbortSignal;
   idempotencyKey: string;
 }>;

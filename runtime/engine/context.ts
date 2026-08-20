@@ -192,7 +192,10 @@ export function createCopilotzProcessorCapabilities(
   });
 
   const boundStreams = () => {
-    const streams = options.collectionRuntime.get("stream");
+    const streams = options.collectionRuntime.withScope({
+      namespace,
+      createMutationIdentity: options.base.createMutationIdentity,
+    }).stream;
     if (!streams) {
       throw new TypeError("Stream collection is not bound.");
     }
@@ -396,38 +399,20 @@ export function createCopilotzProcessorCapabilities(
       resources,
       content,
       streams,
-      collections: options.collections.withScope({
-        namespace,
-        createMutationIdentity: options.base.createMutationIdentity,
+      collections: Object.freeze({
+        ...options.collections.withScope({
+          namespace,
+          createMutationIdentity: options.base.createMutationIdentity,
+        }),
+        ...options.collectionRuntime.withScope({
+          namespace,
+          createMutationIdentity: options.base.createMutationIdentity,
+        }),
       }),
       relations,
       schedules,
       knowledge,
       memory,
-      transaction: (input) => {
-        const source = options.base.createMutationIdentity(
-          input.operationKey,
-          input.identity?.metadata,
-        );
-        return options.collectionRuntime.transaction({
-          ...input,
-          identity: {
-            causationId: input.identity?.causationId ?? source.causationId,
-            correlationId: input.identity?.correlationId ??
-              source.correlationId,
-            settlementScopeId: input.identity?.settlementScopeId ??
-              source.settlementScopeId,
-            ...(input.identity?.deduplicationId
-              ? { deduplicationId: input.identity.deduplicationId }
-              : {}),
-            metadata: {
-              ...source.metadata,
-              ...input.identity?.metadata,
-            },
-          },
-        });
-      },
-      collectionRuntime: options.collectionRuntime,
     });
   return Object.freeze({
     ...capabilities,
@@ -443,13 +428,36 @@ function attachProcessorFeatures(
   const features = createFeatureInvoker(options.registry, () => {
     if (!holder.current) throw new Error("Feature context is not ready.");
     return holder.current;
+  }, (input) => {
+    const source = options.base.createMutationIdentity(
+      input.operationKey,
+      input.identity?.metadata,
+    );
+    return options.collectionRuntime.transaction({
+      ...input,
+      identity: {
+        causationId: input.identity?.causationId ?? source.causationId,
+        correlationId: input.identity?.correlationId ?? source.correlationId,
+        settlementScopeId: input.identity?.settlementScopeId ??
+          source.settlementScopeId,
+        ...(input.identity?.deduplicationId
+          ? { deduplicationId: input.identity.deduplicationId }
+          : {}),
+        metadata: {
+          ...source.metadata,
+          ...input.identity?.metadata,
+        },
+      },
+    });
   });
   holder.current = Object.freeze({
     namespace: capabilities.namespace,
     collections: capabilities.collections,
-    collectionRuntime: capabilities.collectionRuntime,
-    transaction: capabilities.transaction,
-    content: Object.freeze({ resolver: options.resolver }),
+    content: Object.freeze({
+      resolver: options.resolver,
+      materialize: capabilities.content.materialize,
+      linkOwner: capabilities.content.linkOwner,
+    }),
     resources: capabilities.resources,
     features,
     events: Object.freeze({ list: capabilities.events.list }),

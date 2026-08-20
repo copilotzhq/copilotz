@@ -1,4 +1,4 @@
-import type { BoundCollection } from "../collections/index.ts";
+import type { ScopedCollection } from "../collections/index.ts";
 import type { AssetBodyStore } from "../content/index.ts";
 import {
   openProgressiveBodyFollower,
@@ -8,7 +8,7 @@ import { createContentError } from "../content/index.ts";
 import { streamBodyKey } from "./keys.ts";
 
 export type OpenStreamFollowerInput = Readonly<{
-  streams: BoundCollection;
+  streams: ScopedCollection;
   store: AssetBodyStore;
   namespace: string;
   streamId: string;
@@ -38,7 +38,7 @@ export async function openStreamFollower(
 ): Promise<ProgressiveBodyFollower> {
   const namespace = input.namespace.trim();
   const streamId = input.streamId.trim();
-  const record = await input.streams.get(streamId, namespace);
+  const record = await input.streams.get({ id: streamId });
   if (!record) {
     throw createContentError(
       "asset_not_found",

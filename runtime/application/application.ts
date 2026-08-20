@@ -1,7 +1,13 @@
 import { createAgentCapabilityResolver } from "../capabilities/index.ts";
+import {
+  type CopilotzPersistenceLifecycleCallbacks,
+  type OpenCopilotzPersistence,
+  openCopilotzPersistence,
+} from "./persistence.ts";
 import { createCopilotzEngine } from "../engine/index.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
 import { createGoalRuntime } from "../goals/index.ts";
+import { createFeatureContext } from "../features/index.ts";
 import { createWorkflowToolCatalog } from "../tools/index.ts";
 import { createCopilotzCorePlugins } from "./core-plugins.ts";
 import type {
@@ -10,11 +16,6 @@ import type {
   CreateCopilotzApplicationOptions,
   InternalCopilotzApplication,
 } from "./types.ts";
-import {
-  type CopilotzPersistenceLifecycleCallbacks,
-  type OpenCopilotzPersistence,
-  openCopilotzPersistence,
-} from "./persistence.ts";
 
 export function observeApplicationPersistence(
   persistence: OpenCopilotzPersistence,
@@ -112,7 +113,18 @@ export async function createCopilotzApplication(
     const pending = engine.databaseScope(requested).then((scope) =>
       createGoalRuntime({
         registry,
-        conversation: scope.conversation,
+        collectionRuntime: scope.collectionRuntime,
+        features: (requestedNamespace) =>
+          createFeatureContext({
+            namespace: requestedNamespace,
+            plugins: registry,
+            collections: scope.collections,
+            collectionRuntime: scope.collectionRuntime,
+            contentResolver: scope.content.resolver,
+            events: { list: (input) => scope.events.list(input) },
+            deliveries: { list: (input) => scope.deliveries.list(input) },
+            relations: { list: (input) => scope.relations.list(input) },
+          }).features,
         resolver: scope.content.resolver,
         run: (input) =>
           scope.run({

@@ -8,10 +8,10 @@ import {
   type CollectionRuntime,
 } from "../collections/kernel.ts";
 import {
-  isCollectionNoop,
   type CollectionMutation,
   type CollectionRecord,
   type CollectionWrite,
+  isCollectionNoop,
 } from "../collections/index.ts";
 import type {
   ConversationThread,
@@ -56,8 +56,6 @@ import type {
   RunInput,
   ThreadAttachment,
 } from "./types.ts";
-
-const THREAD_MESSAGE_FEATURE_ID = "copilotz.core.thread-message";
 
 export type CreateAttachmentRuntimeOptions = Readonly<{
   databaseSchema: string;
@@ -179,7 +177,9 @@ function mapParticipant(record: CollectionRecord): Participant {
     externalId: String(record.externalId ?? record.id),
     participantType: record.participantType as Participant["participantType"],
     ...(optionalText(record.name) ? { name: optionalText(record.name) } : {}),
-    ...(optionalText(record.email) ? { email: optionalText(record.email) } : {}),
+    ...(optionalText(record.email)
+      ? { email: optionalText(record.email) }
+      : {}),
     ...(optionalText(record.agentId)
       ? { agentId: optionalText(record.agentId) }
       : {}),
@@ -257,7 +257,9 @@ function toDurableEvent(
     metadata: event.metadata,
     ...(event.causationId ? { causationId: event.causationId } : {}),
     correlationId: event.correlationId,
-    ...(event.deduplicationId ? { deduplicationId: event.deduplicationId } : {}),
+    ...(event.deduplicationId
+      ? { deduplicationId: event.deduplicationId }
+      : {}),
     createdAt: event.createdAt,
   });
 }
@@ -314,6 +316,25 @@ function visibleTo(event: CopilotzEvent, participantId: string): boolean {
   }
   return visibility.policy !== "requester_only" ||
     visibility.requesterId === participantId;
+}
+
+function normalizeStreamOffsets(
+  value: Readonly<Record<string, number>> | undefined,
+): Readonly<Record<string, number>> {
+  if (!value) return Object.freeze({});
+  const next: Record<string, number> = {};
+  for (const [streamId, offset] of Object.entries(value)) {
+    const id = streamId.trim();
+    if (!id) continue;
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw attachmentError(
+        "attachment_invalid",
+        `Stream offset for '${id}' must be a non-negative integer.`,
+      );
+    }
+    next[id] = offset;
+  }
+  return Object.freeze(next);
 }
 
 function participantMatches(
@@ -501,17 +522,18 @@ export function createAttachmentRuntime(
     const id = typeof value === "string"
       ? requiredText(value, "Thread")
       : value.id;
-    const threads = options.collectionRuntime.get("thread");
-    const participants = options.collectionRuntime.get("participant");
+    const collections = options.collectionRuntime.withScope({ namespace });
+    const threads = collections.thread;
+    const participants = collections.participant;
     if (!threads) {
       throw attachmentError(
         "attachment_invalid",
         "Thread collection is not bound.",
       );
     }
-    let record = await threads.get(id, namespace);
-    if (!record && typeof value === "string" && threads.query.byExternalId) {
-      const [byExternal] = await threads.query.byExternalId(namespace, {
+    let record = await threads.get({ id });
+    if (!record && typeof value === "string" && threads.queries.byExternalId) {
+      const [byExternal] = await threads.queries.byExternalId({
         externalId: id,
       });
       record = byExternal ?? null;
@@ -525,7 +547,7 @@ export function createAttachmentRuntime(
     const memberIds = stringArray(record.participantIds);
     const members: Participant[] = [];
     for (const participantId of memberIds) {
-      const member = await participants?.get(participantId, namespace);
+      const member = await participants?.get({ id: participantId });
       if (member) members.push(mapParticipant(member));
     }
     return mapThread(record, members);
@@ -551,6 +573,8 @@ export function createAttachmentRuntime(
       "Attachment participant",
     );
     const defaultRecipientIds = resolveRecipientIds(thread, input.recipientIds);
+    const afterPosition = optionalText(input.afterPosition);
+    const streamOffsets = normalizeStreamOffsets(input.streamOffsets);
     const id = `attachment:${createId()}`;
     const active = new Set<ActiveOperation>();
     let closed = false;
@@ -630,20 +654,30 @@ export function createAttachmentRuntime(
       openAttachments.delete(attachment);
     };
 
-    const followCreated = async (event: DurableEvent): Promise<void> => {
-      const streamId = event.subject?.id?.trim();
-      const streams = options.collectionRuntime.get("stream");
-      if (!streamId || !streams || !options.streamBodyStore) return;
-      const record = await streams.get(streamId, namespace).catch(() => null);
+    const followedStreams = new Set<string>();
+    const handledCatchupIds = new Set<string>();
+    let catchingUp = afterPosition !== undefined;
+
+    const followStream = async (
+      streamId: string,
+      event?: DurableEvent,
+    ): Promise<void> => {
+      if (followedStreams.has(streamId)) return;
+      followedStreams.add(streamId);
+      const streams = options.collectionRuntime.withScope({ namespace }).stream;
+      if (!streams || !options.streamBodyStore) return;
+      const record = await streams.get({ id: streamId }).catch(() => null);
+      if (closed) return;
       if (!record || record.state === "abandoned") return;
       const emitterId = typeof record.participantId === "string"
         ? record.participantId
-        : event.routing.senderId;
+        : event?.routing.senderId;
       const emitter = emitterId
         ? thread.participants.find((item) =>
           participantMatches(item, emitterId)
         )
         : undefined;
+      const offset = streamOffsets[streamId];
       let followerReader:
         | ReadableStreamDefaultReader<Uint8Array>
         | undefined;
@@ -678,6 +712,7 @@ export function createAttachmentRuntime(
                 store: options.streamBodyStore!,
                 namespace,
                 streamId,
+                ...(offset !== undefined ? { offset } : {}),
               });
               if (cancelled) {
                 await follower.body.cancel(cancelRequested).then(
@@ -724,10 +759,10 @@ export function createAttachmentRuntime(
           streamId,
           participant: outputParticipant(emitter ?? participant),
           mediaType: String(record.mediaType ?? "application/octet-stream"),
-          causationId: event.id,
-          correlationId: event.correlationId,
+          ...(event?.id ? { causationId: event.id } : {}),
+          correlationId: event?.correlationId ?? "",
           metadata: Object.freeze({
-            ...structuredClone(event.metadata),
+            ...(event ? structuredClone(event.metadata) : {}),
             ...(typeof record.lane === "string" ? { lane: record.lane } : {}),
           }),
           payload,
@@ -739,6 +774,12 @@ export function createAttachmentRuntime(
       }
     };
 
+    const followCreated = async (event: DurableEvent): Promise<void> => {
+      const streamId = event.subject?.id?.trim();
+      if (!streamId) return;
+      await followStream(streamId, event);
+    };
+
     unbindOutputs = options.transients.add(defineProcessor({
       id: `${id}:outputs`,
       on: [{
@@ -748,12 +789,51 @@ export function createAttachmentRuntime(
       }],
       handle(event) {
         if (!visibleTo(event, participant.id)) return;
+        const eventId = event.durable ? event.id : undefined;
+        if (catchingUp && eventId && handledCatchupIds.has(eventId)) return;
         emitOutput(event);
+        if (catchingUp && eventId) handledCatchupIds.add(eventId);
         if (event.durable && event.type === "stream.created") {
           void followCreated(event);
         }
       },
     }));
+
+    if (afterPosition !== undefined) {
+      let cursor = afterPosition;
+      while (true) {
+        const events = await options.store.listEvents({
+          namespace,
+          threadId: thread.id,
+          afterPosition: cursor,
+          limit: 1_000,
+        });
+        for (const event of events) {
+          if (!visibleTo(event, participant.id)) continue;
+          if (handledCatchupIds.has(event.id)) continue;
+          emitOutput(event);
+          handledCatchupIds.add(event.id);
+          if (event.type === "stream.created") {
+            void followCreated(event);
+          }
+        }
+        if (events.length < 1_000) break;
+        const nextPosition = events.at(-1)?.position;
+        if (!nextPosition || nextPosition === cursor) {
+          throw attachmentError(
+            "attachment_invalid",
+            "Attachment catch-up pagination did not advance.",
+          );
+        }
+        cursor = nextPosition;
+      }
+    }
+    catchingUp = false;
+    handledCatchupIds.clear();
+    for (const streamId of Object.keys(streamOffsets)) {
+      if (followedStreams.has(streamId)) continue;
+      void followStream(streamId);
+    }
 
     const outputs = new ReadableStream<AttachmentOutput>({
       start(controller) {
@@ -926,9 +1006,7 @@ export function createAttachmentRuntime(
             ...options.featureBindings,
             namespace,
           });
-          const record = await features.features.invoke(
-            THREAD_MESSAGE_FEATURE_ID,
-            "create",
+          const record = await features.features.threadMessage.create(
             {
               id: messageId,
               threadId: thread.id,
@@ -937,9 +1015,8 @@ export function createAttachmentRuntime(
               content,
               metadata,
               visibility: message.visibility ?? { kind: "public" },
-              identity,
-              operationKey: deduplicationId,
             },
+            { operationKey: deduplicationId, identity },
           ) as CollectionRecord;
           if (content.length) {
             await options.assets.linkOwner(context, {

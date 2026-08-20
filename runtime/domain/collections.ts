@@ -412,6 +412,7 @@ export function createEventCollectionRepository<
   options: CreateEventCollectionRepositoryOptions<S, TSelect, TInsert>,
 ): EventCollectionRepository<S, TSelect, TInsert> {
   const { definition, coordinator, session } = options;
+  const readExecutor = options.readExecutor ?? (() => session);
   const tables = options.eventStore.tables;
   const name = assertDefinition(definition);
   const contentFields = configuredContentFields(definition);
@@ -860,11 +861,12 @@ export function createEventCollectionRepository<
     async get(namespaceInput, idInput) {
       const namespace = requireText(namespaceInput, "Namespace");
       const id = requireText(idInput, `${name} ID`);
-      const row = await findNode(session, namespace, id);
+      const row = await findNode(readExecutor(), namespace, id);
       return row ? mapNode<EventCollectionValue<TSelect>>(row) : null;
     },
     async list(namespaceInput, listOptions = {}) {
       const namespace = requireText(namespaceInput, "Namespace");
+      const executor = readExecutor();
       const params: unknown[] = [namespace, name];
       let cursorFilter = "";
       let whereFilter = "";
@@ -880,7 +882,7 @@ export function createEventCollectionRepository<
       }
       const after = listOptions.after?.trim();
       if (after) {
-        const cursor = await findNode(session, namespace, after);
+        const cursor = await findNode(executor, namespace, after);
         if (!cursor) {
           throw new Error(
             `Unknown ${name} cursor '${after}' in '${namespace}'.`,
@@ -892,7 +894,7 @@ export function createEventCollectionRepository<
         }::timestamptz, $${params.length})`;
       }
       params.push(boundedLimit(listOptions.limit));
-      const result = await session.query<NodeRow>(
+      const result = await executor.query<NodeRow>(
         `SELECT * FROM ${tables.nodes}
          WHERE namespace = $1 AND type = $2 ${whereFilter} ${cursorFilter}
          ORDER BY created_at, id LIMIT $${params.length}`,

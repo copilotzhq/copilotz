@@ -5,6 +5,18 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
+import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
+import {
+  projectLlmAttempts,
+  projectMessageById,
+  projectMessages,
+  projectParticipants,
+  projectThreadByExternalId,
+  projectThreadById,
+  projectThreads,
+  projectToolExecutionById,
+  projectToolExecutions,
+} from "../../runtime/testing/projections.ts";
 
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzApplication } from "../application/index.ts";
@@ -56,8 +68,7 @@ function embeddingProvider(
 async function createThread(
   application: Awaited<ReturnType<typeof createCopilotzApplication>>,
 ): Promise<void> {
-  await application.conversation.createThread({
-    namespace: NAMESPACE,
+  await createTestDomainContext(application, NAMESPACE).features.thread.create({
     id: "thread-a",
     participants: [{
       id: "human-a",
@@ -69,8 +80,7 @@ async function createThread(
       participantType: "agent",
       agentId: "support",
     }],
-    identity: { deduplicationId: "thread-a:create" },
-  });
+  }, { identity: { deduplicationId: "thread-a:create" } });
 }
 
 Deno.test("knowledge indexing keeps one canonical source asset and atomic searchable projections", async () => {
@@ -195,10 +205,7 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
       calls.every((call) => call.idempotencyKey.includes("knowledge-embed")),
     );
 
-    const messages = await application.conversation.listMessages(
-      NAMESPACE,
-      "thread-a",
-    );
+    const messages = await projectMessages(application, NAMESPACE, "thread-a");
     assertEquals(messages.length, 1);
     assertEquals(messages[0].sender.participantType, "job");
     assertEquals(messages[0].recipientIds, []);
@@ -346,10 +353,7 @@ Deno.test("knowledge source failures retry through Oxian and settle as one durab
       events.filter((event) => event.type === "document.failed").length,
       1,
     );
-    const messages = await application.conversation.listMessages(
-      NAMESPACE,
-      "thread-a",
-    );
+    const messages = await projectMessages(application, NAMESPACE, "thread-a");
     assertEquals(messages.length, 1);
     const content = await application.content.resolver.getMany(
       messages[0].content,

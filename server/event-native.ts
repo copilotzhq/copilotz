@@ -1,22 +1,15 @@
 import type { Agent } from "../runtime/resources/index.ts";
-import type { CopilotzApplication } from "../runtime/application/index.ts";
-import type { AttachmentOutput } from "../runtime/attachments/index.ts";
-import type { ContentInput } from "../runtime/content/index.ts";
-import type {
-  ConversationThread,
-  CreateThreadInput,
-  Participant,
-  ParticipantInput,
-} from "../runtime/domain/index.ts";
-import type {
-  DeliveryStatus,
-  DurableEvent,
-  EventDelivery,
-} from "../runtime/events/index.ts";
 import {
   type ChannelRuntime,
   createChannelRuntime,
 } from "../runtime/channels/index.ts";
+import {
+  getThread,
+  listMessages,
+  listThreads,
+  projectParticipant,
+  projectThread,
+} from "./collection-projections.ts";
 import {
   createFeatureContext,
   type FeatureContext,
@@ -29,6 +22,27 @@ import {
   type EventNativeHistoryInclude,
 } from "./history.ts";
 import { eventNativeAsset } from "./assets.ts";
+import type { CopilotzApplication } from "../runtime/application/index.ts";
+import type { AttachmentOutput } from "../runtime/attachments/index.ts";
+import type {
+  ContentInput,
+  ContentSequence,
+  PreparedContent,
+} from "../runtime/content/index.ts";
+import type {
+  ConversationThread,
+  Participant,
+} from "../runtime/domain/index.ts";
+import type {
+  CollectionMutationIdentity,
+  CollectionRecord,
+} from "../runtime/collections/index.ts";
+import { workflowMutationId } from "../runtime/domain/workflow-support.ts";
+import type {
+  DeliveryStatus,
+  DurableEvent,
+  EventDelivery,
+} from "../runtime/events/index.ts";
 
 export type EventNativeAppRequest = FeatureRequest;
 
@@ -193,6 +207,76 @@ function header(
   return undefined;
 }
 
+function mutationIdentity(
+  request: EventNativeAppRequest,
+): CollectionMutationIdentity {
+  return Object.freeze({
+    correlationId: header(request.headers, "x-copilotz-correlation-id"),
+    deduplicationId: header(request.headers, "idempotency-key"),
+    metadata: { sourceAdapter: "http" },
+  });
+}
+
+function nullablePatch(
+  value: Record<string, unknown>,
+  nullable: readonly string[],
+): Readonly<{ set: Record<string, unknown>; unset: readonly string[] }> {
+  const set: Record<string, unknown> = {};
+  const unset: string[] = [];
+  for (const [key, item] of Object.entries(value)) {
+    if (item === null && nullable.includes(key)) unset.push(key);
+    else if (item !== undefined) set[key] = structuredClone(item);
+  }
+  return Object.freeze({ set, unset: Object.freeze(unset) });
+}
+
+async function persistPreparedContent(
+  application: CopilotzApplication,
+  prepared: PreparedContent,
+): Promise<ContentSequence> {
+  const publishedIds = new Map<string, string>();
+  for (const asset of prepared.assets) {
+    const existing = await application.content.assets.get(
+      asset.namespace,
+      asset.id,
+    );
+    if (existing) {
+      publishedIds.set(asset.id, existing.id);
+      continue;
+    }
+    const published = await application.content.assets.publish({
+      namespace: asset.namespace,
+      id: asset.id,
+      mediaType: asset.mediaType,
+      body: asset.body,
+      ...(asset.idempotencyKey ? { idempotencyKey: asset.idempotencyKey } : {}),
+      ...(asset.origin ? { origin: asset.origin } : {}),
+      ...(asset.metadata ? { metadata: { ...asset.metadata } } : {}),
+    });
+    publishedIds.set(asset.id, published.id);
+  }
+  return Object.freeze(prepared.content.map((ref) => {
+    const assetId = publishedIds.get(ref.assetId) ?? ref.assetId;
+    return assetId === ref.assetId ? ref : Object.freeze({ ...ref, assetId });
+  }));
+}
+
+function featureContext(
+  application: CopilotzApplication,
+  namespace: string,
+): FeatureContext {
+  return createFeatureContext({
+    namespace,
+    plugins: application.plugins,
+    collections: application.collections,
+    collectionRuntime: application.collectionRuntime,
+    contentResolver: application.content.resolver,
+    events: application.events,
+    deliveries: application.deliveries,
+    relations: application.relations,
+  });
+}
+
 function base64(bytes: Uint8Array): string {
   let binary = "";
   const chunk = 0x8000;
@@ -296,13 +380,14 @@ async function messageList(
   threadId: string,
   request: EventNativeAppRequest,
 ): Promise<EventNativeAppResponse> {
-  const thread = await application.conversation.getThread(namespace, threadId);
+  const collections = application.collectionRuntime.withScope({ namespace });
+  const thread = await getThread(collections, threadId);
   if (!thread) {
     throw appError(404, "thread_not_found", "Thread was not found.");
   }
   const limit = queryNumber(request.query, "limit");
-  const messages = await application.conversation.listMessages(
-    namespace,
+  const messages = await listMessages(
+    collections,
     threadId,
     {
       after: queryText(request.query, "after"),
@@ -429,10 +514,11 @@ async function handleThreads(
   request: EventNativeAppRequest,
   path: readonly string[],
 ): Promise<EventNativeAppResponse> {
+  const collections = application.collectionRuntime.withScope({ namespace });
   if (request.method === "GET" && path.length === 0) {
     const limit = queryNumber(request.query, "limit");
     const statuses = queryTexts(request.query, "status");
-    const threads = await application.conversation.listThreads(namespace, {
+    const threads = await listThreads(collections, {
       participantId: queryText(request.query, "participantId"),
       status: statuses,
       after: queryText(request.query, "after"),
@@ -443,52 +529,52 @@ async function handleThreads(
   }
   if (request.method === "POST" && path.length === 0) {
     const body = record(request.body);
-    const created = await application.conversation.createThread({
-      ...body,
+    const identity = mutationIdentity(request);
+    const id = workflowMutationId(
+      "thread",
       namespace,
-      identity: {
-        correlationId: header(request.headers, "x-copilotz-correlation-id"),
-        deduplicationId: header(request.headers, "idempotency-key"),
-        metadata: { sourceAdapter: "http" },
-      },
-    } as CreateThreadInput);
-    return { status: created.deduplicated ? 200 : 201, data: created.value };
+      typeof body.id === "string" ? body.id : undefined,
+      identity,
+      () => crypto.randomUUID(),
+    );
+    const existed = await collections.thread.get({ id }) !== null;
+    const created = await featureContext(application, namespace).features.thread
+      .create({ ...body, id }, {
+        operationKey: header(request.headers, "idempotency-key") ??
+          `http:thread:create:${id}`,
+        identity,
+      });
+    return {
+      status: existed ? 200 : 201,
+      data: await projectThread(collections, created as CollectionRecord),
+    };
   }
   if (path.length === 1 && request.method === "GET") {
     return await threadResponse(
       namespace,
-      await application.conversation.getThread(namespace, path[0]),
+      await getThread(collections, path[0]),
     );
   }
   if (path.length === 1 && request.method === "PATCH") {
-    const updated = await application.conversation.updateThread({
-      namespace,
+    const patch = nullablePatch(record(request.body), ["name", "description"]);
+    const updated = await collections.thread.update({
       id: path[0],
-      patch: record(request.body),
-      identity: {
-        correlationId: header(request.headers, "x-copilotz-correlation-id"),
-        deduplicationId: header(request.headers, "idempotency-key"),
-        metadata: { sourceAdapter: "http" },
-      },
-    });
-    return { status: 200, data: updated.value };
+      set: patch.set,
+      unset: patch.unset,
+    }, { threadId: path[0], identity: mutationIdentity(request) });
+    return { status: 200, data: await projectThread(collections, updated) };
   }
   if (path.length === 1 && request.method === "DELETE") {
-    await application.conversation.deleteThread({
-      namespace,
-      id: path[0],
-      identity: {
-        correlationId: header(request.headers, "x-copilotz-correlation-id"),
-        deduplicationId: header(request.headers, "idempotency-key"),
-        metadata: { sourceAdapter: "http" },
-      },
+    await collections.thread.delete({ id: path[0] }, {
+      threadId: path[0],
+      identity: mutationIdentity(request),
     });
     return { status: 204 };
   }
   if (
     path.length === 2 && path[1] === "activity" && request.method === "GET"
   ) {
-    const thread = await application.conversation.getThread(namespace, path[0]);
+    const thread = await getThread(collections, path[0]);
     if (!thread) {
       throw appError(404, "thread_not_found", "Thread was not found.");
     }
@@ -497,7 +583,7 @@ async function handleThreads(
   if (
     path.length === 2 && path[1] === "events" && request.method === "GET"
   ) {
-    const thread = await application.conversation.getThread(namespace, path[0]);
+    const thread = await getThread(collections, path[0]);
     if (!thread) {
       throw appError(404, "thread_not_found", "Thread was not found.");
     }
@@ -524,15 +610,16 @@ async function handleThreads(
     path.length === 2 && path[1] === "messages" &&
     request.method === "DELETE"
   ) {
-    await application.conversation.deleteThreadMessages({
-      namespace,
-      threadId: path[0],
-      identity: {
-        correlationId: header(request.headers, "x-copilotz-correlation-id"),
-        deduplicationId: header(request.headers, "idempotency-key"),
-        metadata: { sourceAdapter: "http" },
+    await featureContext(application, namespace).features.thread.deleteMessages(
+      {
+        threadId: path[0],
       },
-    });
+      {
+        operationKey: header(request.headers, "idempotency-key") ??
+          `http:thread:delete-messages:${path[0]}`,
+        identity: mutationIdentity(request),
+      },
+    );
     return { status: 204 };
   }
   if (
@@ -544,7 +631,7 @@ async function handleThreads(
       throw appError(400, "content_required", "Edited content is required.");
     }
     const deduplicationId = header(request.headers, "idempotency-key");
-    const content = await application.content.preparer.prepare(
+    const prepared = await application.content.preparer.prepare(
       body.content as ContentInput | readonly ContentInput[],
       {
         namespace,
@@ -553,23 +640,33 @@ async function handleThreads(
           : {}),
       },
     );
-    const revised = await application.conversation.reviseMessage({
+    const content = await persistPreparedContent(application, prepared);
+    const identity = mutationIdentity(request);
+    const id = workflowMutationId(
+      "message_revision",
       namespace,
-      threadId: path[0],
-      messageId: path[2],
-      content,
-      ...(body.metadata === undefined
-        ? {}
-        : { metadata: record(body.metadata) }),
-      identity: {
-        correlationId: header(request.headers, "x-copilotz-correlation-id"),
-        deduplicationId,
-        metadata: { sourceAdapter: "http" },
-      },
-    });
+      undefined,
+      identity,
+      () => crypto.randomUUID(),
+    );
+    const existed = await collections.message.get({ id }) !== null;
+    const revised = await featureContext(application, namespace).features
+      .message.revise({
+        id,
+        threadId: path[0],
+        messageId: path[2],
+        content,
+        ...(body.metadata === undefined
+          ? {}
+          : { metadata: record(body.metadata) }),
+      }, {
+        operationKey: deduplicationId ??
+          `http:message:revise:${path[2]}:${crypto.randomUUID()}`,
+        identity,
+      });
     return {
-      status: revised.deduplicated ? 200 : 201,
-      data: revised.value,
+      status: existed ? 200 : 201,
+      data: revised,
     };
   }
   throw appError(404, "route_not_found", "Thread route was not found.");
@@ -581,20 +678,20 @@ async function handleParticipants(
   request: EventNativeAppRequest,
   path: readonly string[],
 ): Promise<EventNativeAppResponse> {
+  const collections = application.collectionRuntime.withScope({ namespace });
   if (request.method === "GET" && path.length === 0) {
     const limit = queryNumber(request.query, "limit");
-    const participants = await application.conversation.listParticipants(
-      namespace,
-      {
-        participantType: queryChoice<Participant["participantType"]>(
-          request.query,
-          "type",
-          ["human", "agent", "tool", "job"],
-        ),
-        after: queryText(request.query, "after"),
-        limit,
-      },
+    const participantType = queryChoice<Participant["participantType"]>(
+      request.query,
+      "type",
+      ["human", "agent", "tool", "job"],
     );
+    const values = await collections.participant.list({
+      ...(participantType ? { where: { participantType } } : {}),
+      after: queryText(request.query, "after"),
+      limit,
+    });
+    const participants = values.map(projectParticipant);
     return {
       status: 200,
       data: participants,
@@ -603,24 +700,24 @@ async function handleParticipants(
   }
   if (request.method === "POST" && path.length === 0) {
     const body = record(request.body);
-    const created = await application.conversation.createParticipant({
-      namespace,
-      participant: body as ParticipantInput,
-      identity: {
-        correlationId: header(request.headers, "x-copilotz-correlation-id"),
-        deduplicationId: header(request.headers, "idempotency-key"),
-        metadata: { sourceAdapter: "http" },
-      },
+    const created = await collections.participant.create(body, {
+      operationKey: header(request.headers, "idempotency-key") ??
+        `http:participant:create:${crypto.randomUUID()}`,
+      identity: mutationIdentity(request),
     });
-    return { status: created.deduplicated ? 200 : 201, data: created.value };
+    return { status: 201, data: projectParticipant(created) };
   }
   if (path.length !== 1) {
     throw appError(404, "route_not_found", "Participant route was not found.");
   }
-  const participant = await application.conversation.getParticipantByExternalId(
-    namespace,
-    path[0],
-  ) ?? await application.conversation.getParticipant(namespace, path[0]);
+  const [byExternalId] = await collections.participant.queries.byExternalId({
+    externalId: path[0],
+  });
+  const participantRecord = byExternalId ??
+    await collections.participant.get({ id: path[0] });
+  const participant = participantRecord
+    ? projectParticipant(participantRecord)
+    : null;
   if (request.method === "GET") {
     if (!participant) {
       throw appError(
@@ -639,17 +736,17 @@ async function handleParticipants(
         "Participant was not found.",
       );
     }
-    const updated = await application.conversation.updateParticipant({
-      namespace,
+    const patch = nullablePatch(record(request.body), [
+      "name",
+      "email",
+      "agentId",
+    ]);
+    const updated = await collections.participant.update({
       id: participant.id,
-      patch: record(request.body),
-      identity: {
-        correlationId: header(request.headers, "x-copilotz-correlation-id"),
-        deduplicationId: header(request.headers, "idempotency-key"),
-        metadata: { sourceAdapter: "http" },
-      },
-    });
-    return { status: 200, data: updated.value };
+      set: patch.set,
+      unset: patch.unset,
+    }, { identity: mutationIdentity(request) });
+    return { status: 200, data: projectParticipant(updated) };
   }
   throw appError(
     405,
@@ -671,10 +768,11 @@ async function handleCollections(
   if (!name) {
     throw appError(404, "route_not_found", "Collection route was not found.");
   }
-  let collection;
-  try {
-    collection = application.collections.get(name);
-  } catch {
+  const collection = {
+    ...application.collections.withScope({ namespace }),
+    ...application.collectionRuntime.withScope({ namespace }),
+  }[name];
+  if (!collection) {
     throw appError(
       404,
       "collection_not_found",
@@ -683,7 +781,7 @@ async function handleCollections(
   }
   if (request.method === "GET" && path.length === 1) {
     const limit = queryNumber(request.query, "limit");
-    const values = await collection.list(namespace, {
+    const values = await collection.list({
       after: queryText(request.query, "after"),
       limit,
       where: queryObject(request.query, "where"),
@@ -692,60 +790,49 @@ async function handleCollections(
   }
   if (request.method === "POST" && path.length === 1) {
     const created = await collection.create(record(request.body), {
-      namespace,
-      identity: {
-        correlationId: header(request.headers, "x-copilotz-correlation-id"),
-        deduplicationId: header(request.headers, "idempotency-key"),
-        metadata: { sourceAdapter: "http" },
-      },
+      operationKey: header(request.headers, "idempotency-key") ??
+        `http:${name}:create:${crypto.randomUUID()}`,
+      identity: mutationIdentity(request),
     });
-    return { status: created.deduplicated ? 200 : 201, data: created.value };
+    return { status: 201, data: created };
   }
   const id = path[1];
   if (
     id && request.method === "POST" && path.length === 4 &&
     path[2] === "commands"
   ) {
-    const commanded = await collection.command(id, path[3], request.body, {
-      namespace,
-      identity: {
-        correlationId: header(request.headers, "x-copilotz-correlation-id"),
-        deduplicationId: header(request.headers, "idempotency-key"),
-        metadata: { sourceAdapter: "http" },
-      },
+    const command = collection.commands[path[3]];
+    if (!command) {
+      throw appError(
+        404,
+        "command_not_found",
+        "Collection command was not found.",
+      );
+    }
+    const commanded = await command({ id, ...record(request.body) }, {
+      identity: mutationIdentity(request),
     });
-    return { status: 200, data: commanded.value };
+    return { status: 200, data: commanded };
   }
   if (!id || path.length !== 2) {
     throw appError(404, "route_not_found", "Collection route was not found.");
   }
   if (request.method === "GET") {
-    const value = await collection.get(namespace, id);
+    const value = await collection.get({ id });
     if (!value) {
       throw appError(404, "record_not_found", "Record was not found.");
     }
     return { status: 200, data: value };
   }
   if (request.method === "PATCH" || request.method === "PUT") {
-    const updated = await collection.update(id, record(request.body), {
-      namespace,
-      identity: {
-        correlationId: header(request.headers, "x-copilotz-correlation-id"),
-        deduplicationId: header(request.headers, "idempotency-key"),
-        metadata: { sourceAdapter: "http" },
-      },
-    });
-    return { status: 200, data: updated.value };
+    const updated = await collection.update({
+      id,
+      set: record(request.body),
+    }, { identity: mutationIdentity(request) });
+    return { status: 200, data: updated };
   }
   if (request.method === "DELETE") {
-    await collection.delete(id, {
-      namespace,
-      identity: {
-        correlationId: header(request.headers, "x-copilotz-correlation-id"),
-        deduplicationId: header(request.headers, "idempotency-key"),
-        metadata: { sourceAdapter: "http" },
-      },
-    });
+    await collection.delete({ id }, { identity: mutationIdentity(request) });
     return { status: 204 };
   }
   throw appError(
@@ -870,19 +957,14 @@ async function handleFeatures(
   if (!feature?.actions[path[1]]) {
     throw appError(404, "feature_not_found", "Feature action was not found.");
   }
-  const context = createFeatureContext({
-    namespace,
-    plugins: application.plugins,
-    collections: application.collections,
-    collectionRuntime: application.collectionRuntime,
-    contentResolver: application.content.resolver,
-    events: application.events,
-    deliveries: application.deliveries,
-    relations: application.relations,
-  });
+  const context = featureContext(application, namespace);
   let output: unknown;
   try {
-    output = await context.features.invoke(path[0], path[1], request);
+    const action = context.features[feature.alias]?.[path[1]];
+    if (!action) {
+      throw appError(404, "feature_not_found", "Feature action was not found.");
+    }
+    output = await action(request);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes("is not registered")) {

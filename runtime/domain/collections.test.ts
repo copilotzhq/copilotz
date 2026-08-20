@@ -181,7 +181,9 @@ async function createFixture(): Promise<Fixture> {
   const processorAttempts: Fixture["processorAttempts"] = [];
   const processor = defineProcessor({
     id: "contract.child.observe",
-    on: [{ eventType: "contract_child.created" }, { eventType: "contract_child.updated" }, { eventType: "contract_child.deleted" }],
+    on: [{ eventType: "contract_child.created" }, {
+      eventType: "contract_child.updated",
+    }, { eventType: "contract_child.deleted" }],
     async handle(event, context) {
       assert(event.durable);
       const id = event.subject!.id;
@@ -590,7 +592,7 @@ Deno.test("delivery-scoped collections deduplicate a committed projection across
     const auditId = `audit:${created.event.id}`;
     assertExists(
       await fixture.collections.withScope({ namespace: "tenant-a" })
-        .contract_audit.get(auditId),
+        .contract_audit.get({ id: auditId }),
     );
     const retry = await fixture.executor.dispatchDelivery(
       created.deliveries[0].id,

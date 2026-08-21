@@ -1,14 +1,27 @@
 import type { DurableContentInput } from "@copilotz/copilotz/content";
-import type {
-  FeatureContext,
-  FeatureResource,
+import type { CollectionRecord } from "@copilotz/copilotz/collections";
+import {
+  defineFeature,
+  type FeatureAction,
+  type FeatureDefinition,
+  type FeatureExecuteContext,
 } from "@copilotz/copilotz/features";
 import type { EventVisibility } from "@copilotz/copilotz/events";
 import { asRecord, contentSequence, requiredText } from "./content-policy.ts";
 
 export const MESSAGE_FEATURE_ID = "copilotz.core.message";
 
-async function revise(input: unknown, context: FeatureContext) {
+type MessageRevisionResult = Readonly<{
+  message: CollectionRecord;
+  rootMessageId: string;
+  previousRevisionMessageId: string;
+  revisionIndex: number;
+}>;
+
+async function revise(
+  input: unknown,
+  context: FeatureExecuteContext,
+): Promise<MessageRevisionResult> {
   const data = asRecord(input);
   const id = requiredText(data.id, "Message revision ID");
   const threadId = requiredText(data.threadId, "Thread ID");
@@ -40,67 +53,96 @@ async function revise(input: unknown, context: FeatureContext) {
       ? existingRevision.revisedAt
       : new Date().toISOString(),
   });
-  const supplied = data.content as DurableContentInput | undefined;
-  if (supplied === undefined) {
-    throw new TypeError("Edited content is required.");
-  }
-  const materialized = !Array.isArray(supplied);
-  const content = !materialized
-    ? contentSequence(supplied)
-    : await context.content.materialize(supplied, {
-      origin: {
-        scope: { type: "thread", id: threadId },
-        producer: { type: "message", id },
-      },
-    });
   const recipientIds = Array.isArray(previous.recipientIds)
     ? previous.recipientIds.filter((value): value is string =>
       typeof value === "string"
     )
     : [];
-  const created = await context.collections.message.create({
-    id,
-    threadId,
-    senderId: sender.id,
-    recipientIds,
-    content,
-    metadata: structuredClone(
-      Object.keys(asRecord(data.metadata)).length
-        ? asRecord(data.metadata)
-        : asRecord(previous.metadata),
-    ),
-    revision,
-  }, {
-    threadId,
-    routing: { senderId: sender.id, recipientIds },
-    visibility: (data.visibility as EventVisibility | undefined) ?? {
-      kind: "public",
-    },
-  });
-  await context.collections.thread.update({
-    id: threadId,
-    set: {
-      activeMessageBranch: {
-        rootMessageId: revision.rootMessageId,
-        headMessageId: id,
-        previousRevisionMessageId: previous.id,
-        revisionIndex: revision.revisionIndex,
+  return await context.transaction(async (tx) => {
+    const supplied = data.content as DurableContentInput | undefined;
+    if (supplied === undefined) {
+      throw new TypeError("Edited content is required.");
+    }
+    const materialized = !Array.isArray(supplied);
+    const content = !materialized
+      ? contentSequence(supplied)
+      : await context.content.materialize(supplied, {
+        origin: {
+          scope: { type: "thread", id: threadId },
+          producer: { type: "message", id },
+        },
+      });
+    const created = await tx.collections.message.create({
+      id,
+      threadId,
+      senderId: sender.id,
+      recipientIds,
+      content,
+      metadata: structuredClone(
+        Object.keys(asRecord(data.metadata)).length
+          ? asRecord(data.metadata)
+          : asRecord(previous.metadata),
+      ),
+      revision,
+    }, {
+      threadId,
+      routing: { senderId: sender.id, recipientIds },
+      visibility: (data.visibility as EventVisibility | undefined) ?? {
+        kind: "public",
       },
-    },
-  }, { threadId });
-  if (materialized && content.length) {
-    await context.content.linkOwner(id, content);
-  }
-  return Object.freeze({
-    message: created,
-    rootMessageId: revision.rootMessageId,
-    previousRevisionMessageId: previous.id,
-    revisionIndex: revision.revisionIndex,
+    });
+    await tx.collections.thread.update({
+      id: threadId,
+      set: {
+        activeMessageBranch: {
+          rootMessageId: revision.rootMessageId,
+          headMessageId: id,
+          previousRevisionMessageId: previous.id,
+          revisionIndex: revision.revisionIndex,
+        },
+      },
+    }, { threadId });
+    if (materialized && content.length) {
+      await context.content.linkOwner(id, content);
+    }
+    return Object.freeze({
+      message: created,
+      rootMessageId: revision.rootMessageId,
+      previousRevisionMessageId: previous.id,
+      revisionIndex: revision.revisionIndex,
+    });
   });
 }
 
-export const messageFeature: FeatureResource = Object.freeze({
+const reviseInput = {
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    id: { type: "string" },
+    threadId: { type: "string" },
+    messageId: { type: "string" },
+    content: {},
+    metadata: { type: "object" },
+    visibility: { type: "object" },
+  },
+  required: ["id", "threadId", "messageId", "content"],
+} as const;
+
+type MessageFeature = FeatureDefinition<{
+  revise: FeatureAction<
+    typeof reviseInput,
+    MessageRevisionResult
+  >;
+}>;
+
+const messageFeatureDefinition: MessageFeature = defineFeature({
   id: MESSAGE_FEATURE_ID,
-  alias: "message",
-  actions: Object.freeze({ revise }),
+  actions: {
+    revise: {
+      inputSchema: reviseInput,
+      execute: revise,
+    },
+  },
 });
+
+export const messageFeature: MessageFeature = messageFeatureDefinition;

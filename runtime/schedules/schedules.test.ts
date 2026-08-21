@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists } from "@std/assert";
 
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
@@ -236,7 +237,8 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
     engine: { now: () => BASE },
   });
   try {
-    await createTestDomainContext(application, NAMESPACE).features.thread
+    await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
+      .features.thread
       .create({
         id: "thread-tool",
         externalId: "thread-tool",

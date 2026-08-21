@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import {
   assert,
   assertEquals,
@@ -68,19 +69,20 @@ function embeddingProvider(
 async function createThread(
   application: Awaited<ReturnType<typeof createCopilotzApplication>>,
 ): Promise<void> {
-  await createTestDomainContext(application, NAMESPACE).features.thread.create({
-    id: "thread-a",
-    participants: [{
-      id: "human-a",
-      externalId: "human-a",
-      participantType: "human",
-    }, {
-      id: "agent-a",
-      externalId: "support",
-      participantType: "agent",
-      agentId: "support",
-    }],
-  }, { identity: { deduplicationId: "thread-a:create" } });
+  await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
+    .features.thread.create({
+      id: "thread-a",
+      participants: [{
+        id: "human-a",
+        externalId: "human-a",
+        participantType: "human",
+      }, {
+        id: "agent-a",
+        externalId: "support",
+        participantType: "agent",
+        agentId: "support",
+      }],
+    }, { identity: { deduplicationId: "thread-a:create" } });
 }
 
 Deno.test("knowledge indexing keeps one canonical source asset and atomic searchable projections", async () => {

@@ -41,7 +41,9 @@ export function matchDataFromPayload(payload: unknown): unknown {
   if (!isRecord(payload)) return payload;
   const ref = payload.dataRef;
   if (
-    isRecord(ref) && typeof ref.assetId === "string" && ref.assetId.trim() &&
+    isRecord(ref) &&
+    typeof ref.eventBodyId === "string" &&
+    ref.eventBodyId.trim() &&
     Object.keys(payload).length === 1
   ) {
     return undefined;

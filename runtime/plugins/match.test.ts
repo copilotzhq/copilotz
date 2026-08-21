@@ -1,14 +1,20 @@
 import { assert, assertEquals } from "@std/assert";
 
 import { defineProcessor } from "./processor.ts";
-import { matchProcessor, matchesPartial } from "./match.ts";
+import { matchesPartial, matchProcessor } from "./match.ts";
 
 const envelope = {
   type: "stream.created",
   namespace: "tenant-a",
   threadId: "thread-a",
   subject: { type: "stream", id: "stream-a" },
-  payload: { dataRef: { assetId: "body-a" } },
+  payload: {
+    dataRef: {
+      eventBodyId: "body-a",
+      schemaVersion: 1,
+      mediaType: "application/json",
+    },
+  },
   routing: { senderId: "user-a", recipientIds: ["agent-a"] },
   visibility: { kind: "public" as const },
   metadata: { copilotzWorkflow: { kind: "agent_output" } },
@@ -26,21 +32,33 @@ Deno.test("matcher entries are OR and fields in one entry are AND", () => {
     ],
     handle() {},
   });
-  assertEquals(matchProcessor(processor, envelope, {
-    record: { lane: "content", mediaType: "audio/pcm" },
-  }), true);
-  assertEquals(matchProcessor(processor, {
-    ...envelope,
-    type: "message.created",
-  }), true);
-  assertEquals(matchProcessor(processor, {
-    ...envelope,
-    type: "message.created",
-    routing: { senderId: "other" },
-  }), false);
-  assertEquals(matchProcessor(processor, envelope, {
-    record: { lane: "progress", mediaType: "audio/pcm" },
-  }), false);
+  assertEquals(
+    matchProcessor(processor, envelope, {
+      record: { lane: "content", mediaType: "audio/pcm" },
+    }),
+    true,
+  );
+  assertEquals(
+    matchProcessor(processor, {
+      ...envelope,
+      type: "message.created",
+    }),
+    true,
+  );
+  assertEquals(
+    matchProcessor(processor, {
+      ...envelope,
+      type: "message.created",
+      routing: { senderId: "other" },
+    }),
+    false,
+  );
+  assertEquals(
+    matchProcessor(processor, envelope, {
+      record: { lane: "progress", mediaType: "audio/pcm" },
+    }),
+    false,
+  );
 });
 
 Deno.test("nested objects use partial equality and media wildcards", () => {
@@ -53,7 +71,10 @@ Deno.test("nested objects use partial equality and media wildcards", () => {
     matchesPartial({ mediaType: "audio/pcm" }, { mediaType: "audio/wav" }),
     false,
   );
-  assertEquals(matchesPartial({ lane: "content" }, { lane: "progress" }), false);
+  assertEquals(
+    matchesPartial({ lane: "content" }, { lane: "progress" }),
+    false,
+  );
 });
 
 Deno.test("matching ignores dataRef-only payloads unless match data is provided", () => {

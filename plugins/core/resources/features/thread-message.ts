@@ -12,9 +12,11 @@ import type {
   ParticipantType,
 } from "@copilotz/copilotz/domain";
 import type { EventVisibility } from "@copilotz/copilotz/events";
-import type {
-  FeatureContext,
-  FeatureResource,
+import {
+  defineFeature,
+  type FeatureAction,
+  type FeatureDefinition,
+  type FeatureExecuteContext,
 } from "@copilotz/copilotz/features";
 
 export const THREAD_MESSAGE_FEATURE_ID = "copilotz.core.thread-message";
@@ -121,6 +123,7 @@ export async function ensureParticipantInTransaction(
   collections: ScopedCollections,
   input: ThreadMessageSender,
   threadId?: string,
+  eventMetadata?: Readonly<Record<string, unknown>>,
 ): Promise<CollectionRecord> {
   const collection = collections.participant;
   if (!collection) throw new Error("Collection 'participant' is not bound.");
@@ -144,15 +147,23 @@ export async function ensureParticipantInTransaction(
   if (!externalId) {
     throw new TypeError("Sender externalId must be non-empty.");
   }
-  const created = await collection.create({
-    ...(fields.id?.trim() ? { id: fields.id.trim() } : {}),
-    externalId,
-    participantType: fields.participantType,
-    ...(fields.name ? { name: fields.name } : {}),
-    ...(fields.email ? { email: fields.email } : {}),
-    ...(fields.agentId ? { agentId: fields.agentId } : {}),
-    metadata: structuredClone(fields.metadata ?? {}),
-  }, threadId ? { threadId } : undefined);
+  const created = await collection.create(
+    {
+      ...(fields.id?.trim() ? { id: fields.id.trim() } : {}),
+      externalId,
+      participantType: fields.participantType,
+      ...(fields.name ? { name: fields.name } : {}),
+      ...(fields.email ? { email: fields.email } : {}),
+      ...(fields.agentId ? { agentId: fields.agentId } : {}),
+      metadata: structuredClone(fields.metadata ?? {}),
+    },
+    threadId || eventMetadata
+      ? {
+        ...(threadId ? { threadId } : {}),
+        ...(eventMetadata ? { identity: { metadata: eventMetadata } } : {}),
+      }
+      : undefined,
+  );
   return created;
 }
 
@@ -160,6 +171,7 @@ export async function addSenderToThreadInTransaction(
   collections: ScopedCollections,
   threadId: string,
   senderId: string,
+  eventMetadata?: Readonly<Record<string, unknown>>,
 ): Promise<void> {
   const thread = await collections.thread.get({ id: threadId });
   if (!thread) throw new Error(`Thread '${threadId}' was not found.`);
@@ -168,7 +180,10 @@ export async function addSenderToThreadInTransaction(
   await collections.thread.update({
     id: threadId,
     set: { participantIds: [...new Set([...current, senderId])] },
-  }, { threadId });
+  }, {
+    threadId,
+    ...(eventMetadata ? { identity: { metadata: eventMetadata } } : {}),
+  });
 }
 
 function asSender(value: unknown): ThreadMessageSender {
@@ -181,65 +196,96 @@ function asSender(value: unknown): ThreadMessageSender {
 
 async function createThreadMessageAction(
   input: unknown,
-  context: FeatureContext,
+  context: FeatureExecuteContext,
 ): Promise<CollectionRecord> {
   const data = asRecord(input);
   const id = requireText(data.id, "Message ID");
   const threadId = requireText(data.threadId, "Thread ID");
   const sender = asSender(data.sender);
   const recipientIds = stringArray(data.recipientIds);
-  const suppliedContent = data.content as DurableContentInput | undefined;
-  const materialized = suppliedContent !== undefined &&
-    !Array.isArray(suppliedContent);
-  const content = !materialized
-    ? contentSequence(suppliedContent)
-    : await context.content.materialize(suppliedContent, {
-      origin: {
-        scope: { type: "thread", id: threadId },
-        producer: { type: "message", id },
-      },
-    });
   const eventVisibility = visibility(data.visibility);
-  const collections = context.collections;
-  if (!collections.message) {
-    throw new Error("Collection 'message' is not bound.");
-  }
-  if (!collections.thread) {
-    throw new Error("Collection 'thread' is not bound.");
-  }
-  const ensured = await ensureParticipantInTransaction(
-    collections,
-    sender,
-    threadId,
-  );
-  const options: ScopedCollectionCallOptions = {
-    threadId,
-    routing: { senderId: ensured.id, recipientIds: [...recipientIds] },
-    visibility: eventVisibility ?? { kind: "public" },
-  };
-  const created = await collections.message.create({
-    id,
-    threadId,
-    senderId: ensured.id,
-    recipientIds: [...recipientIds],
-    content,
-    metadata: structuredClone(asRecord(data.metadata)),
-  }, options);
-  await addSenderToThreadInTransaction(
-    collections,
-    threadId,
-    ensured.id,
-  );
-  if (materialized && content.length) {
-    await context.content.linkOwner(id, content);
-  }
-  return created;
+  const metadata = structuredClone(asRecord(data.metadata));
+  return await context.transaction(async (tx) => {
+    const suppliedContent = data.content as DurableContentInput | undefined;
+    const materialized = suppliedContent !== undefined &&
+      !Array.isArray(suppliedContent);
+    const content = !materialized
+      ? contentSequence(suppliedContent)
+      : await context.content.materialize(suppliedContent, {
+        origin: {
+          scope: { type: "thread", id: threadId },
+          producer: { type: "message", id },
+        },
+      });
+    const collections = tx.collections;
+    if (!collections.message) {
+      throw new Error("Collection 'message' is not bound.");
+    }
+    if (!collections.thread) {
+      throw new Error("Collection 'thread' is not bound.");
+    }
+    const ensured = await ensureParticipantInTransaction(
+      collections,
+      sender,
+      threadId,
+    );
+    const options: ScopedCollectionCallOptions = {
+      threadId,
+      routing: { senderId: ensured.id, recipientIds: [...recipientIds] },
+      visibility: eventVisibility ?? { kind: "public" },
+      identity: { metadata },
+    };
+    const created = await collections.message.create({
+      id,
+      threadId,
+      senderId: ensured.id,
+      recipientIds: [...recipientIds],
+      content,
+      metadata,
+    }, options);
+    await addSenderToThreadInTransaction(
+      collections,
+      threadId,
+      ensured.id,
+    );
+    if (materialized && content.length) {
+      await context.content.linkOwner(id, content);
+    }
+    return created;
+  });
 }
 
-export const threadMessageFeature: FeatureResource = Object.freeze({
+const createInputSchema = {
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    id: { type: "string" },
+    threadId: { type: "string" },
+    sender: { type: "object" },
+    recipientIds: { type: "array", items: { type: "string" } },
+    content: {},
+    metadata: { type: "object" },
+    visibility: { type: "object" },
+  },
+  required: ["id", "threadId", "sender"],
+} as const;
+
+type ThreadMessageFeature = FeatureDefinition<{
+  create: FeatureAction<
+    typeof createInputSchema,
+    CollectionRecord
+  >;
+}>;
+
+const threadMessageFeatureDefinition: ThreadMessageFeature = defineFeature({
   id: THREAD_MESSAGE_FEATURE_ID,
-  alias: "threadMessage",
-  actions: Object.freeze({
-    create: createThreadMessageAction,
-  }),
+  actions: {
+    create: {
+      inputSchema: createInputSchema,
+      execute: createThreadMessageAction,
+    },
+  },
 });
+
+export const threadMessageFeature: ThreadMessageFeature =
+  threadMessageFeatureDefinition;

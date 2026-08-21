@@ -21,9 +21,9 @@ function createAjv() {
 
 const ajv = createAjv();
 
-export function validateCollectionRecord(
+export function validateAgainstJsonSchema(
   schema: object,
-  record: Readonly<Record<string, unknown>>,
+  value: unknown,
   label: string,
 ): void {
   let validator = validators.get(schema);
@@ -31,7 +31,16 @@ export function validateCollectionRecord(
     validator = ajv.compile(schema as JsonSchema) as AjvValidator;
     validators.set(schema, validator);
   }
-  if (validator(structuredClone(record))) return;
+  const candidate = structuredClone(value);
+  if (validator(candidate)) return;
   const details = ajv.errorsText(validator.errors ?? [], { separator: "; " });
   throw new TypeError(`${label} failed schema validation: ${details}`);
+}
+
+export function validateCollectionRecord(
+  schema: object,
+  record: Readonly<Record<string, unknown>>,
+  label: string,
+): void {
+  validateAgainstJsonSchema(schema, record, label);
 }

@@ -31,6 +31,7 @@ import type {
   ParticipantInput,
 } from "../domain/index.ts";
 import type { RunHandle } from "../attachments/index.ts";
+import { requireFeatureActions } from "../features/context.ts";
 
 const GOAL_METADATA_KEY = "copilotzGoal";
 const DEFAULT_MAX_TURNS = 20;
@@ -413,17 +414,24 @@ async function ensureParticipant(
       participant: requireCompatibleParticipant(existing, input),
     });
   }
-  await options.features(namespace).thread.addParticipant({
-    threadId: thread.id,
-    participant: input,
-  }, {
-    operationKey: `goal:${operationKey}`,
-    identity: {
-      correlationId: goalId,
-      deduplicationId: `${goalId}:${operationKey}`,
-      metadata: goalMetadata(undefined, { id: goalId, role: operationKey }),
-    },
-  });
+  await requireFeatureActions(
+    options.features(namespace),
+    "copilotz.core.thread",
+  )
+    .addParticipant({
+      threadId: thread.id,
+      participant: input,
+      eventMetadata: goalMetadata(undefined, {
+        id: goalId,
+        role: operationKey,
+      }),
+    }, {
+      operationKey: `goal:${operationKey}`,
+      identity: {
+        correlationId: goalId,
+        deduplicationId: `${goalId}:${operationKey}`,
+      },
+    });
   const updated = await loadThreadById(options, namespace, thread.id);
   if (!updated) throw new Error("Participant mutation returned no thread.");
   const participant = updated.participants.find((candidate) =>
@@ -463,7 +471,10 @@ async function createOrLoadTargetThread(
     : null;
   if (existing) return existing;
   const id = descriptor.id?.trim() || `${goalId}:target`;
-  const record = await options.features(namespace).thread.create({
+  const record = await requireFeatureActions(
+    options.features(namespace),
+    "copilotz.core.thread",
+  ).create({
     id,
     ...(descriptor.externalId?.trim()
       ? { externalId: descriptor.externalId.trim() }
@@ -481,7 +492,6 @@ async function createOrLoadTargetThread(
     identity: {
       correlationId: goalId,
       deduplicationId: `${goalId}:thread:target`,
-      metadata: goalMetadata(undefined, { id: goalId, role: "target" }),
     },
   }) as CollectionRecord;
   return await projectThread(options, namespace, record);
@@ -518,7 +528,10 @@ async function createPrivateThread(
   if (existing) return existing;
   const label = input.suffix ? `${input.role}:${input.suffix}` : input.role;
   const id = descriptor.id?.trim() || `${input.goalId}:${label}`;
-  const record = await options.features(input.namespace).thread.create({
+  const record = await requireFeatureActions(
+    options.features(input.namespace),
+    "copilotz.core.thread",
+  ).create({
     id,
     ...(descriptor.externalId?.trim()
       ? { externalId: descriptor.externalId.trim() }
@@ -536,10 +549,6 @@ async function createPrivateThread(
     identity: {
       correlationId: input.goalId,
       deduplicationId: `${input.goalId}:thread:${label}`,
-      metadata: goalMetadata(undefined, {
-        id: input.goalId,
-        role: input.role,
-      }),
     },
   }) as CollectionRecord;
   return await projectThread(options, input.namespace, record);

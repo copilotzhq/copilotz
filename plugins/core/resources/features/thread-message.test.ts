@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assertEquals } from "@std/assert";
 import { THREAD_MESSAGE_FEATURE_ID } from "./thread-message.ts";
 import { createTestDomainContext } from "../../../../runtime/testing/domain-context.ts";
@@ -19,7 +20,8 @@ Deno.test("thread-message feature ensures participant, membership, and message i
     engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
-    await createTestDomainContext(application, NAMESPACE).features.thread
+    await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
+      .features.thread
       .create({
         id: "thread-a",
         participants: [{
@@ -32,12 +34,13 @@ Deno.test("thread-message feature ensures participant, membership, and message i
       namespace: NAMESPACE,
       plugins: application.plugins,
       collectionRuntime: application.collectionRuntime,
+      featureAliases: coreFeatureAliases,
       contentResolver: application.content.resolver,
       events: application.events,
       deliveries: application.deliveries,
       relations: application.relations,
     });
-    assertEquals("transaction" in context, false);
+    assertEquals(typeof context.transaction, "function");
     const created = await context.features.threadMessage.create(
       {
         id: "message-job",

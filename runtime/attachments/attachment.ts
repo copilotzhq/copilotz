@@ -1,5 +1,5 @@
 import type {
-  AssetBodyStore,
+  BodyStore,
   ContentPreparer,
   DatabaseAssetRepository,
 } from "../content/index.ts";
@@ -36,6 +36,7 @@ import {
   createFeatureContext,
   type FeatureContextBindings,
 } from "../features/index.ts";
+import { requireFeatureActions } from "../features/context.ts";
 import {
   defineProcessor,
   type TransientProcessorSet,
@@ -75,7 +76,7 @@ export type CreateAttachmentRuntimeOptions = Readonly<{
   collectionRuntime: CollectionRuntime;
   transients: TransientProcessorSet;
   featureBindings: Omit<FeatureContextBindings, "namespace">;
-  streamBodyStore?: AssetBodyStore;
+  streamBodyStore?: BodyStore;
   createId?: () => string;
   now?: () => Date;
   settlementPollMs?: number;
@@ -453,6 +454,12 @@ async function waitForScope(
       namespace,
       settlementScopeId,
     );
+    if (signal.aborted) {
+      throw attachmentError(
+        "attachment_cancelled",
+        errorText(signal.reason ?? "Attachment operation cancelled."),
+      );
+    }
     if (settlement.deadLetters > 0) {
       throw attachmentError(
         "attachment_dead_letter",
@@ -479,6 +486,12 @@ async function waitForScope(
         namespace,
         settlementScopeId,
       );
+      if (signal.aborted) {
+        throw attachmentError(
+          "attachment_cancelled",
+          errorText(signal.reason ?? "Attachment operation cancelled."),
+        );
+      }
       if (confirmed.deadLetters > 0) {
         throw attachmentError(
           "attachment_dead_letter",
@@ -908,6 +921,7 @@ export function createAttachmentRuntime(
         done,
         async cancel(reason = "attachment_operation_cancelled") {
           if (settled || abort.signal.aborted) return;
+          abort.abort(attachmentError("attachment_cancelled", reason));
           await options.store.cancelScope(
             namespace,
             settlementScopeId,
@@ -918,7 +932,6 @@ export function createAttachmentRuntime(
               operation.cancel(reason).catch(() => undefined)
             ),
           );
-          abort.abort(attachmentError("attachment_cancelled", reason));
           await done.catch(() => undefined);
         },
       });
@@ -1006,7 +1019,10 @@ export function createAttachmentRuntime(
             ...options.featureBindings,
             namespace,
           });
-          const record = await features.features.threadMessage.create(
+          const record = await requireFeatureActions(
+            features,
+            "copilotz.core.thread-message",
+          ).create(
             {
               id: messageId,
               threadId: thread.id,

@@ -2,119 +2,270 @@ import { createContentError } from "./errors.ts";
 import { digestContent } from "./digest.ts";
 import type { AssetOrigin } from "./types.ts";
 
-export type AssetBodyStoreKind =
+export type BodyStoreKind =
   | "memory"
   | "filesystem"
   | "object"
   | "database";
 
-export type AssetBodyHead = Readonly<{
-  key: string;
+export type BodyState = "open" | "sealing" | "ready" | "aborted";
+
+export type BodyProtection = Readonly<{ remainingMs: number }>;
+
+export type BodyHead = Readonly<{
+  bodyId: string;
+  state: "ready";
   byteLength: number;
   mediaType: string;
   digest: `sha256:${string}`;
+  maintenanceVersion: number;
+  protectedUntil?: string;
   etag?: string;
   lastModified?: string;
 }>;
 
-export type PutAssetBodyInput = Readonly<{
-  key: string;
+export const DEFAULT_BODY_PROTECTION_MS = 60_000;
+
+export type PutBodyInput = Readonly<{
+  bodyId: string;
   bytes: Uint8Array;
   mediaType: string;
   digest: `sha256:${string}`;
   ifAbsent?: boolean;
+  protectedUntil?: string;
 }>;
 
-/** Durable prefix for an open progressive write. Memory stores omit this. */
-export type AssetBodySpillHead = Readonly<{
-  key: string;
+/** Mutable header for an open progressive body. */
+type MutableBodyHeadBase = Readonly<{
+  bodyId: string;
   mediaType: string;
   byteLength: number;
   discarded: number;
+  maintenanceVersion: number;
   reservationId: string;
 }>;
 
-export type AssetBodySpill = Readonly<{
-  reserve(
-    input: Readonly<{
-      key: string;
-      mediaType: string;
-      reservationId: string;
-      takeover?: boolean;
-    }>,
-  ): Promise<AssetBodySpillHead>;
-  head(key: string): Promise<AssetBodySpillHead | null>;
-  append(
-    input: Readonly<{
-      key: string;
-      mediaType: string;
-      reservationId: string;
-      bytes: Uint8Array;
-    }>,
-  ): Promise<AssetBodySpillHead>;
-  read(
-    input: Readonly<{ key: string; offset: number; end: number }>,
-  ): Promise<Uint8Array>;
-  truncate(
-    key: string,
-    byteLength: number,
-    reservationId: string,
-  ): Promise<AssetBodySpillHead>;
-  discardPrefix(
-    key: string,
-    byteLength: number,
-    reservationId: string,
-  ): Promise<AssetBodySpillHead>;
-  delete(key: string, reservationId: string): Promise<void>;
+export type ActiveMutableBodyHead =
+  & MutableBodyHeadBase
+  & Readonly<{
+    state: "open" | "sealing";
+    writerGeneration: number;
+    writerLeaseRemainingMs: number;
+  }>;
+
+export type MutableBodyHead =
+  | ActiveMutableBodyHead
+  | (
+    & MutableBodyHeadBase
+    & Readonly<{
+      state: "aborted";
+      writerGeneration?: never;
+      writerLeaseRemainingMs?: never;
+    }>
+  );
+
+export type WriterCapability = Readonly<{
+  bodyId: string;
+  mediaType: string;
+  reservationId: string;
+  generation: number;
+  byteLength: number;
+  discarded: number;
+  protection: BodyProtection;
+}>;
+
+export type ReserveBodyInput = Readonly<{
+  bodyId: string;
+  mediaType: string;
+  expectedGeneration?: number;
+}>;
+
+export type AppendBodyInput = Readonly<{
+  writer: WriterCapability;
+  expectedOffset: number;
+  appendId: string;
+  bytes: Uint8Array;
+}>;
+
+export type AppendResult = Readonly<{
+  startOffset: number;
+  endOffset: number;
+  protection: BodyProtection;
+}>;
+
+export type ReadBodyRangeInput = Readonly<{
+  bodyId: string;
+  offset: number;
+  end: number;
+}>;
+
+export type AbortBodyInput = Readonly<{
+  writer: WriterCapability;
+}>;
+
+export type SealBodyInput = Readonly<{
+  writer: WriterCapability;
+  expectedByteLength?: number;
+  expectedDigest?: `sha256:${string}`;
+}>;
+
+export type BodyMaintenanceListInput = Readonly<{
+  states: readonly BodyState[];
+  idleForMs: number;
+  after?: string;
+  limit: number;
+}>;
+
+export type BodyMaintenanceDeleteInput = Readonly<{
+  bodyId: string;
+  expectedState: BodyState;
+  expectedMaintenanceVersion: number;
+  idleForMs: number;
+}>;
+
+export type BodyStoreMaintenance = Readonly<{
+  list(
+    input: BodyMaintenanceListInput,
+  ): Promise<
+    Readonly<
+      { bodies: readonly (BodyHead | MutableBodyHead)[]; after?: string }
+    >
+  >;
+  delete(input: BodyMaintenanceDeleteInput): Promise<boolean>;
+}>;
+
+export type BodyStoreDeployment = Readonly<{
+  durability: "ephemeral" | "durable";
+  reach: "process" | "cluster";
+  minimumProtectionMs: number;
+}>;
+
+export type TrustedBodyScope = Readonly<{
+  namespace: string;
+  databaseSchema: string;
+  principal?: unknown;
+}>;
+
+export type TrustedBodyMaintenanceScope =
+  & TrustedBodyScope
+  & Readonly<{
+    maintenance: true;
+  }>;
+
+export type BodyStoreAdapter = Readonly<{
+  deployment: BodyStoreDeployment;
+  forScope(scope: TrustedBodyScope): BodyStore;
+  maintenanceForScope(scope: TrustedBodyMaintenanceScope): BodyStoreMaintenance;
 }>;
 
 /** Runtime-neutral body storage contract. Implementations own no graph state. */
-export type AssetBodyStore = Readonly<{
-  kind: AssetBodyStoreKind;
+export type BodyStore = Readonly<{
+  kind: BodyStoreKind;
   backendId: string;
-  put(input: PutAssetBodyInput): Promise<AssetBodyHead>;
-  head(key: string): Promise<AssetBodyHead | null>;
-  read(key: string): Promise<Uint8Array>;
-  open(key: string): Promise<ReadableStream<Uint8Array>>;
-  delete(key: string): Promise<void>;
-  list(options?: Readonly<{ prefix?: string }>): AsyncIterable<AssetBodyHead>;
-  spill?: AssetBodySpill;
+  put(input: PutBodyInput): Promise<BodyHead>;
+  head(input: { bodyId: string }): Promise<BodyHead | MutableBodyHead | null>;
+  read(input: { bodyId: string }): Promise<ReadableStream<Uint8Array>>;
+  follow(
+    input: { bodyId: string; offset?: number },
+  ): Promise<ReadableStream<Uint8Array>>;
+  reserve(input: ReserveBodyInput): Promise<WriterCapability>;
+  append(input: AppendBodyInput): Promise<AppendResult>;
+  seal(input: SealBodyInput): Promise<BodyHead>;
+  abort(input: AbortBodyInput): Promise<void>;
+  maintenance: BodyStoreMaintenance;
 }>;
 
-export type AssetStorageConfig =
+type ProgressiveBodyOps = Readonly<{
+  reserve(input: ReserveBodyInput): Promise<WriterCapability>;
+  head(bodyId: string): Promise<MutableBodyHead | null>;
+  append(input: AppendBodyInput): Promise<AppendResult>;
+  readRange(input: ReadBodyRangeInput): Promise<Uint8Array>;
+  abort(input: AbortBodyInput): Promise<void>;
+}>;
+
+export function writerCapabilityFromHead(
+  head: MutableBodyHead,
+): WriterCapability {
+  if (head.state !== "open" && head.state !== "sealing") {
+    throw createContentError(
+      "asset_conflict",
+      "Only an active progressive body can produce a writer capability.",
+    );
+  }
+  return Object.freeze({
+    bodyId: head.bodyId,
+    mediaType: head.mediaType,
+    reservationId: head.reservationId,
+    generation: head.writerGeneration ?? 1,
+    byteLength: head.byteLength,
+    discarded: head.discarded,
+    protection: Object.freeze({
+      remainingMs: Math.max(0, head.writerLeaseRemainingMs ?? 0),
+    }),
+  });
+}
+
+export async function readBodyBytes(
+  store: Pick<BodyStore, "read">,
+  input: { bodyId: string },
+): Promise<Uint8Array> {
+  const reader = (await store.read(input)).getReader();
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  while (true) {
+    const next = await reader.read();
+    if (next.done) break;
+    chunks.push(next.value);
+    byteLength += next.value.byteLength;
+  }
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+export type BodyStorageConfig =
   | Readonly<{
     type: "database";
-    config?: Readonly<{ maxBytes?: number }>;
+    config?: Readonly<{ maxBytes?: number; protectionMs?: number }>;
   }>
   | Readonly<{
     type: "memory";
-    config?: Readonly<{ backendId?: string; prefix?: string }>;
+    config?: Readonly<{
+      backendId?: string;
+      prefix?: string;
+      protectionMs?: number;
+    }>;
   }>
   | Readonly<{
     type: "filesystem";
     config: Readonly<{
       backendId: string;
       prefix?: string;
-      access: AssetFilesystemAccess;
+      protectionMs?: number;
+      access: BodyFilesystemAccess;
     }>;
   }>
   | Readonly<{
     type: "s3";
-    config: S3AssetStorageConfig;
+    config: S3BodyStorageConfig;
   }>
   | Readonly<{
     type: "custom";
-    config: Readonly<{ store: AssetBodyStore; prefix?: string }>;
+    config: Readonly<{ store: BodyStore; prefix?: string }>;
   }>;
 
-export type AssetStorageOptions = Readonly<{
-  storage?: AssetStorageConfig;
+export type BodyStorageOptions = Readonly<{
+  storage?: BodyStorageConfig;
   /** Additional readers allow persisted locations from older backends to coexist. */
-  readers?: readonly AssetBodyStore[];
+  readers?: readonly BodyStore[];
   readConcurrency?: number;
 }>;
 
-export type S3AssetStorageConfig = Readonly<{
+export type S3BodyStorageConfig = Readonly<{
   backendId: string;
   endpoint: string;
   region: string;
@@ -124,33 +275,80 @@ export type S3AssetStorageConfig = Readonly<{
   sessionToken?: string;
   pathStyle?: boolean;
   prefix?: string;
+  protectionMs?: number;
 }>;
 
 /** Host callbacks used by filesystem adapters; core never imports host APIs. */
-export type AssetFilesystemAccess = Readonly<{
-  writeExclusive(input: PutAssetBodyInput): Promise<"created" | "exists">;
+export type BodyFilesystemAccess = Readonly<{
+  writeExclusive(input: PutBodyInput): Promise<"created" | "exists">;
   writeReplace(
-    input: Readonly<{ key: string; bytes: Uint8Array }>,
+    input: Readonly<{ bodyId: string; bytes: Uint8Array }>,
   ): Promise<void>;
-  append(input: Readonly<{ key: string; bytes: Uint8Array }>): Promise<number>;
-  truncate(path: string, byteLength: number): Promise<void>;
-  stat(path: string): Promise<AssetBodyHead | null>;
+  append(
+    input: Readonly<{ bodyId: string; bytes: Uint8Array }>,
+  ): Promise<number>;
+  stat(path: string): Promise<BodyHead | null>;
   read(path: string): Promise<Uint8Array>;
   open(path: string): Promise<ReadableStream<Uint8Array>>;
   openFrom(path: string, offset: number): Promise<ReadableStream<Uint8Array>>;
   delete(path: string): Promise<void>;
-  list(prefix: string): AsyncIterable<AssetBodyHead>;
+  list(prefix: string): AsyncIterable<BodyHead>;
 }>;
 
-export type AssetStorageRuntime = Readonly<{
-  writer?: AssetBodyStore;
-  readers: ReadonlyMap<string, AssetBodyStore>;
+export type BodyStorageRuntime = Readonly<{
+  adapter?: BodyStoreAdapter;
+  writer?: BodyStore;
+  readers: ReadonlyMap<string, BodyStore>;
   prefix: string;
   maxDatabaseBytes: number;
   readConcurrency: number;
 }>;
 
+export function createFixedBodyStoreAdapter(
+  store: BodyStore,
+  deployment: BodyStoreDeployment,
+): BodyStoreAdapter {
+  return Object.freeze({
+    deployment: Object.freeze({ ...deployment }),
+    forScope(_scope) {
+      return store;
+    },
+    maintenanceForScope(_scope) {
+      return store.maintenance;
+    },
+  });
+}
+
 export const DEFAULT_MAX_DATABASE_ASSET_BYTES = 8 * 1024 * 1024;
+
+export function bodyProtectionMs(
+  value: number | undefined,
+): number {
+  const resolved = value ?? DEFAULT_BODY_PROTECTION_MS;
+  if (!Number.isSafeInteger(resolved) || resolved < 0) {
+    throw new TypeError(
+      "Body protection duration must be a non-negative integer.",
+    );
+  }
+  return resolved;
+}
+
+export function bodyProtectionUntil(
+  protectionMs: number,
+  now: number = Date.now(),
+): string {
+  return new Date(now + protectionMs).toISOString();
+}
+
+export function bodyProtectionRemainingMs(
+  protectedUntil: string | undefined,
+  now: number = Date.now(),
+): number {
+  if (!protectedUntil) return 0;
+  const expiresAt = Date.parse(protectedUntil);
+  if (!Number.isFinite(expiresAt)) return 0;
+  return Math.max(0, expiresAt - now);
+}
 
 function cleanSegment(value: string): string {
   return encodeURIComponent(value.trim()).replaceAll("%2F", "%252F");
@@ -208,8 +406,8 @@ export function assetBodyKey(
 }
 
 function validateHead(
-  expected: PutAssetBodyInput,
-  actual: AssetBodyHead,
+  expected: PutBodyInput,
+  actual: BodyHead,
 ): void {
   if (
     actual.byteLength !== expected.bytes.byteLength ||
@@ -222,60 +420,353 @@ function validateHead(
   }
 }
 
-export function createMemoryAssetBodyStore(
-  options: Readonly<{ backendId?: string }> = {},
-): AssetBodyStore {
+function sliceChunks(
+  chunks: readonly Uint8Array[],
+  start: number,
+  end: number,
+): Uint8Array {
+  const length = Math.max(0, end - start);
+  const output = new Uint8Array(length);
+  let cursor = 0;
+  let skipped = 0;
+  for (const chunk of chunks) {
+    const next = skipped + chunk.byteLength;
+    if (next <= start) {
+      skipped = next;
+      continue;
+    }
+    const from = Math.max(0, start - skipped);
+    const to = Math.min(chunk.byteLength, end - skipped);
+    output.set(chunk.subarray(from, to), cursor);
+    cursor += to - from;
+    skipped = next;
+    if (skipped >= end) break;
+  }
+  return output;
+}
+
+export function createMemoryBodyStore(
+  options: Readonly<{ backendId?: string; protectionMs?: number }> = {},
+): BodyStore {
   const backendId = options.backendId?.trim() || "memory:default";
-  const entries = new Map<string, { head: AssetBodyHead; bytes: Uint8Array }>();
-  const store: AssetBodyStore = {
+  const protectionMs = bodyProtectionMs(options.protectionMs);
+  const entries = new Map<string, { head: BodyHead; bytes: Uint8Array }>();
+  const mutable = new Map<
+    string,
+    {
+      head: ActiveMutableBodyHead;
+      leaseExpiresAt: number;
+      chunks: Uint8Array[];
+      appendIds: Map<string, Uint8Array>;
+    }
+  >();
+  const withLease = (
+    head: ActiveMutableBodyHead,
+    leaseExpiresAt: number,
+  ): ActiveMutableBodyHead =>
+    Object.freeze({
+      ...head,
+      writerLeaseRemainingMs: Math.max(0, leaseExpiresAt - Date.now()),
+    });
+  const newLeaseExpiresAt = () => Date.now() + protectionMs;
+  const store: BodyStore = {
     kind: "memory",
     backendId,
     put(input) {
-      const existing = entries.get(input.key);
+      const existing = entries.get(input.bodyId);
       if (existing) {
         validateHead(input, existing.head);
         return Promise.resolve(existing.head);
       }
       const head = Object.freeze({
-        key: input.key,
+        bodyId: input.bodyId,
+        state: "ready" as const,
         byteLength: input.bytes.byteLength,
         mediaType: input.mediaType,
         digest: input.digest,
+        maintenanceVersion: 1,
+        protectedUntil: bodyProtectionUntil(protectionMs),
         etag: input.digest.slice("sha256:".length),
         lastModified: new Date().toISOString(),
       });
-      entries.set(input.key, { head, bytes: input.bytes.slice() });
+      entries.set(input.bodyId, { head, bytes: input.bytes.slice() });
       return Promise.resolve(head);
     },
-    head: (key) => Promise.resolve(entries.get(key)?.head ?? null),
-    read(key) {
-      const entry = entries.get(key);
+    head: ({ bodyId }) =>
+      Promise.resolve(
+        entries.get(bodyId)?.head ??
+          (() => {
+            const current = mutable.get(bodyId);
+            return current
+              ? withLease(current.head, current.leaseExpiresAt)
+              : null;
+          })(),
+      ),
+    read({ bodyId }) {
+      const entry = entries.get(bodyId);
       if (!entry) {
         throw createContentError(
           "asset_not_found",
           "Asset body was not found in the configured memory backend.",
         );
       }
-      return Promise.resolve(entry.bytes.slice());
+      const bytes = entry.bytes.slice();
+      return Promise.resolve(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(bytes);
+            controller.close();
+          },
+        }),
+      );
     },
-    async open(key) {
-      const bytes = await store.read(key);
-      return new ReadableStream({
-        start(controller) {
-          controller.enqueue(bytes);
-          controller.close();
-        },
+    follow(input) {
+      const offset = Math.max(0, input.offset ?? 0);
+      const ready = entries.get(input.bodyId);
+      const bytes = ready ? ready.bytes.slice() : (() => {
+        const current = mutable.get(input.bodyId);
+        if (!current) {
+          throw createContentError(
+            "asset_not_found",
+            "Asset body was not found in the configured memory backend.",
+          );
+        }
+        return sliceChunks(
+          current.chunks,
+          Math.max(offset, current.head.discarded) -
+            current.head.discarded,
+          current.head.byteLength,
+        );
+      })();
+      return Promise.resolve(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(ready ? bytes.subarray(offset) : bytes);
+            controller.close();
+          },
+        }),
+      );
+    },
+    reserve(input) {
+      const existing = mutable.get(input.bodyId);
+      if (existing) {
+        if (existing.head.mediaType !== input.mediaType) {
+          throw createContentError(
+            "asset_conflict",
+            "Progressive body media type does not match the writer.",
+          );
+        }
+        if (
+          input.expectedGeneration === undefined ||
+          input.expectedGeneration !== (existing.head.writerGeneration ?? 1)
+        ) {
+          throw createContentError(
+            "asset_conflict",
+            "A progressive writer already owns this body.",
+          );
+        }
+        if (existing.leaseExpiresAt > Date.now()) {
+          throw createContentError(
+            "asset_conflict",
+            "A progressive writer lease is still live for this body.",
+          );
+        }
+        const leaseExpiresAt = newLeaseExpiresAt();
+        const head = Object.freeze({
+          ...existing.head,
+          reservationId: crypto.randomUUID(),
+          maintenanceVersion: existing.head.maintenanceVersion + 1,
+          writerGeneration: (existing.head.writerGeneration ?? 1) + 1,
+          writerLeaseRemainingMs: protectionMs,
+        });
+        mutable.set(input.bodyId, { ...existing, head, leaseExpiresAt });
+        return Promise.resolve(writerCapabilityFromHead(head));
+      }
+      if (entries.has(input.bodyId)) {
+        throw createContentError(
+          "asset_conflict",
+          "A ready body already exists for this id.",
+        );
+      }
+      const head = Object.freeze({
+        bodyId: input.bodyId,
+        state: "open" as const,
+        mediaType: input.mediaType,
+        byteLength: 0,
+        discarded: 0,
+        maintenanceVersion: 1,
+        writerGeneration: 1,
+        writerLeaseRemainingMs: protectionMs,
+        reservationId: crypto.randomUUID(),
       });
+      mutable.set(input.bodyId, {
+        head,
+        leaseExpiresAt: newLeaseExpiresAt(),
+        chunks: [],
+        appendIds: new Map(),
+      });
+      return Promise.resolve(writerCapabilityFromHead(head));
     },
-    delete(key) {
-      entries.delete(key);
+    append(input) {
+      const entry = mutable.get(input.writer.bodyId);
+      if (!entry || entry.head.reservationId !== input.writer.reservationId) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive writer no longer owns this body.",
+        );
+      }
+      if (entry.head.mediaType !== input.writer.mediaType) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body media type does not match the writer.",
+        );
+      }
+      const duplicate = entry.appendIds.get(input.appendId);
+      if (duplicate) {
+        const same = duplicate.byteLength === input.bytes.byteLength &&
+          duplicate.every((byte, index) => byte === input.bytes[index]);
+        if (!same) {
+          throw createContentError(
+            "asset_conflict",
+            "Progressive append id was reused with different bytes.",
+          );
+        }
+        return Promise.resolve(Object.freeze({
+          startOffset: input.expectedOffset,
+          endOffset: entry.head.byteLength,
+          protection: Object.freeze({
+            remainingMs: Math.max(0, entry.leaseExpiresAt - Date.now()),
+          }),
+        }));
+      }
+      if (input.expectedOffset !== entry.head.byteLength) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive append expected offset does not match the body.",
+        );
+      }
+      const leaseExpiresAt = newLeaseExpiresAt();
+      const head = Object.freeze({
+        ...entry.head,
+        byteLength: entry.head.byteLength + input.bytes.byteLength,
+        maintenanceVersion: entry.head.maintenanceVersion + 1,
+        writerLeaseRemainingMs: protectionMs,
+      });
+      const bytes = input.bytes.slice();
+      entry.chunks.push(bytes);
+      entry.appendIds.set(input.appendId, bytes);
+      mutable.set(input.writer.bodyId, {
+        head,
+        leaseExpiresAt,
+        chunks: entry.chunks,
+        appendIds: entry.appendIds,
+      });
+      return Promise.resolve(Object.freeze({
+        startOffset: input.expectedOffset,
+        endOffset: head.byteLength,
+        protection: Object.freeze({
+          remainingMs: Math.max(0, head.writerLeaseRemainingMs ?? 0),
+        }),
+      }));
+    },
+    async seal(input) {
+      const entry = mutable.get(input.writer.bodyId);
+      if (!entry || entry.head.reservationId !== input.writer.reservationId) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive writer no longer owns this body.",
+        );
+      }
+      if (
+        input.expectedByteLength !== undefined &&
+        input.expectedByteLength !== entry.head.byteLength
+      ) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body length does not match seal expectation.",
+        );
+      }
+      const bytes = sliceChunks(entry.chunks, 0, entry.head.byteLength);
+      const digest = await digestContent(bytes);
+      if (input.expectedDigest && input.expectedDigest !== digest) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body digest does not match seal expectation.",
+        );
+      }
+      const head = Object.freeze({
+        bodyId: input.writer.bodyId,
+        state: "ready" as const,
+        byteLength: bytes.byteLength,
+        mediaType: entry.head.mediaType,
+        digest,
+        maintenanceVersion: entry.head.maintenanceVersion + 1,
+        protectedUntil: bodyProtectionUntil(protectionMs),
+        etag: digest.slice("sha256:".length),
+        lastModified: new Date().toISOString(),
+      });
+      entries.set(input.writer.bodyId, { head, bytes });
+      mutable.delete(input.writer.bodyId);
+      return head;
+    },
+    abort(input) {
+      const entry = mutable.get(input.writer.bodyId);
+      if (entry && entry.head.reservationId !== input.writer.reservationId) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive writer no longer owns this body.",
+        );
+      }
+      mutable.delete(input.writer.bodyId);
       return Promise.resolve();
     },
-    async *list(options = {}) {
-      const prefix = options.prefix ?? "";
-      for (const [key, entry] of entries) {
-        if (key.startsWith(prefix)) yield entry.head;
-      }
+    maintenance: {
+      list(input) {
+        const states = new Set<BodyState>(input.states);
+        const bodies: (BodyHead | MutableBodyHead)[] = [];
+        for (const entry of entries.values()) {
+          if (states.has(entry.head.state)) bodies.push(entry.head);
+        }
+        for (const entry of mutable.values()) {
+          if (states.has(entry.head.state)) bodies.push(entry.head);
+        }
+        bodies.sort((left, right) => left.bodyId.localeCompare(right.bodyId));
+        const after = input.after ?? "";
+        const page = bodies.filter((body) => body.bodyId > after).slice(
+          0,
+          input.limit,
+        );
+        return Promise.resolve(Object.freeze({
+          bodies: Object.freeze(page),
+          ...(page.length === input.limit
+            ? { after: page[page.length - 1].bodyId }
+            : {}),
+        }));
+      },
+      delete(input) {
+        const ready = entries.get(input.bodyId);
+        if (
+          ready &&
+          ready.head.state === input.expectedState &&
+          ready.head.maintenanceVersion === input.expectedMaintenanceVersion &&
+          bodyProtectionRemainingMs(ready.head.protectedUntil) === 0
+        ) {
+          entries.delete(input.bodyId);
+          return Promise.resolve(true);
+        }
+        const current = mutable.get(input.bodyId);
+        if (
+          current &&
+          current.head.state === input.expectedState &&
+          current.head.maintenanceVersion ===
+            input.expectedMaintenanceVersion &&
+          current.leaseExpiresAt <= Date.now()
+        ) {
+          mutable.delete(input.bodyId);
+          return Promise.resolve(true);
+        }
+        return Promise.resolve(false);
+      },
     },
   };
   return Object.freeze(store);
@@ -322,9 +813,9 @@ async function readStreamRange(
 }
 
 function parseSpillHead(
-  key: string,
+  bodyId: string,
   bytes: Uint8Array,
-): AssetBodySpillHead | null {
+): (ActiveMutableBodyHead & Readonly<{ leaseExpiresAt?: string }>) | null {
   try {
     const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Record<
       string,
@@ -337,26 +828,43 @@ function parseSpillHead(
     ) {
       return null;
     }
+    const leaseExpiresAt = typeof parsed.leaseExpiresAt === "string"
+      ? parsed.leaseExpiresAt
+      : undefined;
     return Object.freeze({
-      key,
+      bodyId,
+      state: "open",
       mediaType: parsed.mediaType,
       byteLength: parsed.byteLength,
       discarded: parsed.discarded,
+      maintenanceVersion: typeof parsed.maintenanceVersion === "number"
+        ? parsed.maintenanceVersion
+        : 1,
+      writerGeneration: typeof parsed.writerGeneration === "number"
+        ? parsed.writerGeneration
+        : 1,
+      writerLeaseRemainingMs: bodyProtectionRemainingMs(leaseExpiresAt),
       reservationId: typeof parsed.reservationId === "string"
         ? parsed.reservationId
         : "",
+      ...(leaseExpiresAt ? { leaseExpiresAt } : {}),
     });
   } catch {
     return null;
   }
 }
 
-function encodeSpillHead(head: AssetBodySpillHead): Uint8Array {
+function encodeSpillHead(
+  head: MutableBodyHead & Readonly<{ leaseExpiresAt?: string }>,
+): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({
     mediaType: head.mediaType,
     byteLength: head.byteLength,
     discarded: head.discarded,
+    maintenanceVersion: head.maintenanceVersion,
+    writerGeneration: head.writerGeneration,
     reservationId: head.reservationId,
+    leaseExpiresAt: head.leaseExpiresAt,
   }));
 }
 
@@ -365,22 +873,28 @@ function isNotFound(error: unknown): boolean {
     (error.name === "NotFound" || /not found/i.test(error.message));
 }
 
-function createFilesystemSpill(access: AssetFilesystemAccess): AssetBodySpill {
-  const readHead = async (key: string): Promise<AssetBodySpillHead | null> => {
+function createFilesystemProgressive(
+  access: BodyFilesystemAccess,
+  protectionMs: number,
+): ProgressiveBodyOps {
+  type SpillHead =
+    & ActiveMutableBodyHead
+    & Readonly<{ leaseExpiresAt?: string }>;
+  const readHead = async (bodyId: string): Promise<SpillHead | null> => {
     try {
-      return parseSpillHead(key, await access.read(stagingMetaKey(key)));
+      return parseSpillHead(bodyId, await access.read(stagingMetaKey(bodyId)));
     } catch (error) {
       if (isNotFound(error)) return null;
       throw error;
     }
   };
-  const writeHead = (head: AssetBodySpillHead) =>
+  const writeHead = (head: SpillHead) =>
     access.writeReplace({
-      key: stagingMetaKey(head.key),
+      bodyId: stagingMetaKey(head.bodyId),
       bytes: encodeSpillHead(head),
     });
-  const requireHead = async (key: string): Promise<AssetBodySpillHead> => {
-    const head = await readHead(key);
+  const requireHead = async (bodyId: string): Promise<SpillHead> => {
+    const head = await readHead(bodyId);
     if (!head) {
       throw createContentError(
         "asset_not_found",
@@ -390,10 +904,10 @@ function createFilesystemSpill(access: AssetFilesystemAccess): AssetBodySpill {
     return head;
   };
   const requireOwner = async (
-    key: string,
+    bodyId: string,
     reservationId: string,
-  ): Promise<AssetBodySpillHead> => {
-    const head = await requireHead(key);
+  ): Promise<SpillHead> => {
+    const head = await requireHead(bodyId);
     if (head.reservationId !== reservationId) {
       throw createContentError(
         "asset_conflict",
@@ -402,9 +916,9 @@ function createFilesystemSpill(access: AssetFilesystemAccess): AssetBodySpill {
     }
     return head;
   };
-  const spill: AssetBodySpill = {
+  const progressive: ProgressiveBodyOps = {
     async reserve(input) {
-      const existing = await readHead(input.key);
+      const existing = await readHead(input.bodyId);
       if (existing) {
         if (existing.mediaType !== input.mediaType) {
           throw createContentError(
@@ -412,45 +926,70 @@ function createFilesystemSpill(access: AssetFilesystemAccess): AssetBodySpill {
             "Progressive staging media type does not match the writer.",
           );
         }
-        if (!input.takeover) {
+        if (
+          input.expectedGeneration === undefined ||
+          input.expectedGeneration !== existing.writerGeneration
+        ) {
           throw createContentError(
             "asset_conflict",
             "A progressive writer already owns this asset body.",
           );
         }
+        if (bodyProtectionRemainingMs(existing.leaseExpiresAt) > 0) {
+          throw createContentError(
+            "asset_conflict",
+            "A progressive writer lease is still live for this asset body.",
+          );
+        }
         const taken = Object.freeze({
           ...existing,
-          reservationId: input.reservationId,
+          reservationId: crypto.randomUUID(),
+          maintenanceVersion: existing.maintenanceVersion + 1,
+          writerGeneration: existing.writerGeneration + 1,
+          writerLeaseRemainingMs: protectionMs,
+          leaseExpiresAt: bodyProtectionUntil(protectionMs),
         });
         await writeHead(taken);
-        return taken;
+        return writerCapabilityFromHead(taken);
       }
       const created = Object.freeze({
-        key: input.key,
+        bodyId: input.bodyId,
+        state: "open" as const,
         mediaType: input.mediaType,
         byteLength: 0,
         discarded: 0,
-        reservationId: input.reservationId,
+        maintenanceVersion: 1,
+        writerGeneration: 1,
+        writerLeaseRemainingMs: protectionMs,
+        reservationId: crypto.randomUUID(),
+        leaseExpiresAt: bodyProtectionUntil(protectionMs),
       });
       const bytes = encodeSpillHead(created);
       const result = await access.writeExclusive({
-        key: stagingMetaKey(input.key),
+        bodyId: stagingMetaKey(input.bodyId),
         bytes,
         mediaType: "application/json",
         digest: await digestContent(bytes),
         ifAbsent: true,
       });
-      if (result === "created") return created;
-      const raced = await readHead(input.key);
+      if (result === "created") return writerCapabilityFromHead(created);
+      const raced = await readHead(input.bodyId);
       if (
-        input.takeover && raced && raced.mediaType === input.mediaType
+        input.expectedGeneration !== undefined && raced &&
+        raced.mediaType === input.mediaType &&
+        input.expectedGeneration === raced.writerGeneration &&
+        bodyProtectionRemainingMs(raced.leaseExpiresAt) === 0
       ) {
         const taken = Object.freeze({
           ...raced,
-          reservationId: input.reservationId,
+          reservationId: crypto.randomUUID(),
+          maintenanceVersion: raced.maintenanceVersion + 1,
+          writerGeneration: raced.writerGeneration + 1,
+          writerLeaseRemainingMs: protectionMs,
+          leaseExpiresAt: bodyProtectionUntil(protectionMs),
         });
         await writeHead(taken);
-        return taken;
+        return writerCapabilityFromHead(taken);
       }
       throw createContentError(
         "asset_conflict",
@@ -459,107 +998,123 @@ function createFilesystemSpill(access: AssetFilesystemAccess): AssetBodySpill {
     },
     head: readHead,
     async append(input) {
-      const existing = await requireOwner(input.key, input.reservationId);
-      if (existing.mediaType !== input.mediaType) {
+      const existing = await requireOwner(
+        input.writer.bodyId,
+        input.writer.reservationId,
+      );
+      if (existing.mediaType !== input.writer.mediaType) {
         throw createContentError(
           "asset_conflict",
           "Progressive staging media type does not match the writer.",
         );
       }
-      if (input.bytes.byteLength === 0) return existing;
+      if (input.bytes.byteLength === 0) {
+        return Object.freeze({
+          startOffset: input.expectedOffset,
+          endOffset: existing.byteLength,
+          protection: Object.freeze({
+            remainingMs: bodyProtectionRemainingMs(existing.leaseExpiresAt),
+          }),
+        });
+      }
+      if (input.expectedOffset < existing.byteLength) {
+        const existingBytes = await progressive.readRange({
+          bodyId: input.writer.bodyId,
+          offset: input.expectedOffset,
+          end: input.expectedOffset + input.bytes.byteLength,
+        });
+        const same = existingBytes.byteLength === input.bytes.byteLength &&
+          existingBytes.every((byte, index) => byte === input.bytes[index]);
+        if (same) {
+          return Object.freeze({
+            startOffset: input.expectedOffset,
+            endOffset: existing.byteLength,
+            protection: Object.freeze({
+              remainingMs: Math.max(0, existing.writerLeaseRemainingMs ?? 0),
+            }),
+          });
+        }
+        throw createContentError(
+          "asset_conflict",
+          "Progressive append id was reused with different bytes.",
+        );
+      }
+      if (input.expectedOffset !== existing.byteLength) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive append expected offset does not match the body.",
+        );
+      }
       if (input.bytes.byteLength > 0) {
         await access.append({
-          key: stagingDataKey(input.key),
+          bodyId: stagingDataKey(input.writer.bodyId),
           bytes: input.bytes,
         });
       }
       const head = Object.freeze({
-        key: input.key,
-        mediaType: input.mediaType,
+        bodyId: input.writer.bodyId,
+        state: "open" as const,
+        mediaType: input.writer.mediaType,
         byteLength: existing.byteLength + input.bytes.byteLength,
         discarded: existing.discarded,
+        maintenanceVersion: existing.maintenanceVersion + 1,
+        writerGeneration: existing.writerGeneration,
+        writerLeaseRemainingMs: protectionMs,
         reservationId: existing.reservationId,
+        leaseExpiresAt: bodyProtectionUntil(protectionMs),
       });
       await writeHead(head);
-      return head;
+      return Object.freeze({
+        startOffset: input.expectedOffset,
+        endOffset: head.byteLength,
+        protection: Object.freeze({
+          remainingMs: Math.max(0, head.writerLeaseRemainingMs ?? 0),
+        }),
+      });
     },
-    async read(input) {
-      const head = await requireHead(input.key);
+    async readRange(input) {
+      const head = await requireHead(input.bodyId);
       const start = Math.max(input.offset, head.discarded);
       const end = Math.min(input.end, head.byteLength);
       if (end <= start) return new Uint8Array();
       const stream = await access.openFrom(
-        stagingDataKey(input.key),
+        stagingDataKey(input.bodyId),
         start - head.discarded,
       );
       return await readStreamRange(stream, end - start);
     },
-    async truncate(key, byteLength, reservationId) {
-      const head = await requireOwner(key, reservationId);
-      if (byteLength < head.discarded || byteLength > head.byteLength) {
-        throw createContentError(
-          "content_invalid",
-          "Progressive truncate is outside the committed range.",
-        );
-      }
-      await access.truncate(
-        stagingDataKey(key),
-        byteLength - head.discarded,
-      );
-      const next = Object.freeze({ ...head, byteLength });
-      await writeHead(next);
-      return next;
-    },
-    async discardPrefix(key, byteLength, reservationId) {
-      const head = await requireOwner(key, reservationId);
-      if (byteLength < head.discarded || byteLength > head.byteLength) {
-        throw createContentError(
-          "content_invalid",
-          "Progressive discard is outside the committed range.",
-        );
-      }
-      if (byteLength > head.discarded) {
-        const kept = await spill.read({
-          key,
-          offset: byteLength,
-          end: head.byteLength,
-        });
-        await access.writeReplace({
-          key: stagingDataKey(key),
-          bytes: kept,
-        });
-      }
-      const next = Object.freeze({ ...head, discarded: byteLength });
-      await writeHead(next);
-      return next;
-    },
-    async delete(key, reservationId) {
-      await requireOwner(key, reservationId);
+    async abort(input) {
+      await requireOwner(input.writer.bodyId, input.writer.reservationId);
       await Promise.all([
-        access.delete(stagingDataKey(key)),
-        access.delete(stagingMetaKey(key)),
+        access.delete(stagingDataKey(input.writer.bodyId)),
+        access.delete(stagingMetaKey(input.writer.bodyId)),
       ]);
     },
   };
-  return Object.freeze(spill);
+  return Object.freeze(progressive);
 }
 
-export function createFilesystemAssetBodyStore(
+export function createFilesystemBodyStore(
   options: Readonly<{
     backendId: string;
-    access: AssetFilesystemAccess;
+    protectionMs?: number;
+    access: BodyFilesystemAccess;
   }>,
-): AssetBodyStore {
+): BodyStore {
   const backendId = options.backendId.trim();
   if (!backendId) {
     throw new TypeError("Filesystem backendId must be non-empty.");
   }
-  const store: AssetBodyStore = {
+  const protectionMs = bodyProtectionMs(options.protectionMs);
+  const progressive = createFilesystemProgressive(options.access, protectionMs);
+  const store: BodyStore = {
     kind: "filesystem",
     backendId,
     async put(input) {
-      await options.access.writeExclusive(input);
-      const head = await options.access.stat(input.key);
+      const protectedUntil = input.protectedUntil ??
+        bodyProtectionUntil(protectionMs);
+      await options.access.writeExclusive({ ...input, protectedUntil });
+      const head = await options.access.stat(input.bodyId);
       if (!head) {
         throw createContentError(
           "asset_storage_unavailable",
@@ -569,17 +1124,109 @@ export function createFilesystemAssetBodyStore(
       validateHead(input, head);
       return head;
     },
-    head: options.access.stat,
-    read: options.access.read,
-    open: options.access.open,
-    delete: options.access.delete,
-    list: ({ prefix = "" } = {}) => options.access.list(prefix),
-    spill: createFilesystemSpill(options.access),
+    async head({ bodyId }) {
+      return await options.access.stat(bodyId) ??
+        await progressive.head(bodyId);
+    },
+    read: ({ bodyId }) => options.access.open(bodyId),
+    async follow(input) {
+      const offset = Math.max(0, input.offset ?? 0);
+      const ready = await options.access.stat(input.bodyId);
+      if (ready) return await options.access.openFrom(input.bodyId, offset);
+      const staged = await progressive.head(input.bodyId);
+      if (!staged) {
+        throw createContentError(
+          "asset_not_found",
+          "Body was not found in the configured filesystem backend.",
+        );
+      }
+      return await options.access.openFrom(
+        stagingDataKey(input.bodyId),
+        Math.max(offset, staged.discarded) - staged.discarded,
+      );
+    },
+    reserve: progressive.reserve,
+    append: progressive.append,
+    async seal(input) {
+      const current = await progressive.head(input.writer.bodyId);
+      if (!current || current.reservationId !== input.writer.reservationId) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive writer no longer owns this body.",
+        );
+      }
+      if (
+        input.expectedByteLength !== undefined &&
+        input.expectedByteLength !== current.byteLength
+      ) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body length does not match seal expectation.",
+        );
+      }
+      const bytes = await progressive.readRange({
+        bodyId: input.writer.bodyId,
+        offset: 0,
+        end: current.byteLength,
+      });
+      const digest = await digestContent(bytes);
+      if (input.expectedDigest && input.expectedDigest !== digest) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body digest does not match seal expectation.",
+        );
+      }
+      const head = await store.put({
+        bodyId: input.writer.bodyId,
+        bytes,
+        mediaType: current.mediaType,
+        digest,
+      });
+      await progressive.abort(input);
+      return head;
+    },
+    abort: progressive.abort,
+    maintenance: {
+      async list(input) {
+        const states = new Set<BodyState>(input.states);
+        const bodies: BodyHead[] = [];
+        if (states.has("ready")) {
+          for await (const body of options.access.list("")) {
+            bodies.push(body);
+          }
+        }
+        bodies.sort((left, right) => left.bodyId.localeCompare(right.bodyId));
+        const after = input.after ?? "";
+        const page = bodies.filter((body) => body.bodyId > after).slice(
+          0,
+          input.limit,
+        );
+        return Object.freeze({
+          bodies: Object.freeze(page),
+          ...(page.length === input.limit
+            ? { after: page[page.length - 1].bodyId }
+            : {}),
+        });
+      },
+      async delete(input) {
+        if (input.expectedState !== "ready") return false;
+        const head = await options.access.stat(input.bodyId);
+        if (
+          !head ||
+          head.maintenanceVersion !== input.expectedMaintenanceVersion ||
+          bodyProtectionRemainingMs(head.protectedUntil) > 0
+        ) {
+          return false;
+        }
+        await options.access.delete(input.bodyId);
+        return true;
+      },
+    },
   };
   return Object.freeze(store);
 }
 
-export async function readAssetBodiesBounded<T>(
+export async function readBodiesBounded<T>(
   values: readonly T[],
   concurrency: number,
   read: (value: T, index: number) => Promise<Uint8Array>,

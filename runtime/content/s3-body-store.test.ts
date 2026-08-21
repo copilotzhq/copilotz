@@ -1,13 +1,16 @@
 import { assertEquals, assertRejects } from "@std/assert";
 
 import { digestContent } from "./digest.ts";
-import { createS3AssetBodyStore } from "./s3-body-store.ts";
+import { readBodyBytes } from "./body-store.ts";
+import { createS3BodyStore } from "./s3-body-store.ts";
 import type { ContentError } from "./types.ts";
 
 type StoredObject = {
   bytes: Uint8Array;
   mediaType: string;
   digest: string;
+  maintenanceVersion: string;
+  protectedUntil: string;
   modified: string;
 };
 
@@ -16,7 +19,7 @@ function xmlEscape(value: string): string {
     .replaceAll(">", "&gt;");
 }
 
-Deno.test("S3 asset body store conditionally writes, verifies, streams, lists, and deletes", async () => {
+Deno.test("S3 BodyStore conditionally writes, verifies, streams, lists, and deletes", async () => {
   const objects = new Map<string, StoredObject>();
   let headRequests = 0;
   let putRequests = 0;
@@ -58,6 +61,9 @@ Deno.test("S3 asset body store conditionally writes, verifies, streams, lists, a
               "sha256:".length,
             ),
             "x-amz-meta-copilotz-media-type": existing.mediaType,
+            "x-amz-meta-copilotz-maintenance-version":
+              existing.maintenanceVersion,
+            "x-amz-meta-copilotz-protected-until": existing.protectedUntil,
           },
         });
       }
@@ -75,6 +81,11 @@ Deno.test("S3 asset body store conditionally writes, verifies, streams, lists, a
           mediaType: request.headers.get("content-type") ??
             "application/octet-stream",
           digest: `sha256:${request.headers.get("x-amz-meta-copilotz-sha256")}`,
+          maintenanceVersion:
+            request.headers.get("x-amz-meta-copilotz-maintenance-version") ??
+              "1",
+          protectedUntil:
+            request.headers.get("x-amz-meta-copilotz-protected-until") ?? "",
           modified: new Date().toUTCString(),
         };
         objects.set(path, stored);
@@ -108,7 +119,7 @@ Deno.test("S3 asset body store conditionally writes, verifies, streams, lists, a
   );
   try {
     const address = server.addr as Deno.NetAddr;
-    const store = createS3AssetBodyStore({
+    const store = createS3BodyStore({
       backendId: "s3:test",
       endpoint: `http://127.0.0.1:${address.port}`,
       region: "us-east-1",
@@ -116,10 +127,11 @@ Deno.test("S3 asset body store conditionally writes, verifies, streams, lists, a
       accessKeyId: "access",
       secretAccessKey: "secret",
       pathStyle: true,
+      protectionMs: 0,
     });
     const bytes = new TextEncoder().encode("hello s3");
     const input = {
-      key: "copilotz/schemas/test/assets/a",
+      bodyId: "copilotz/schemas/test/assets/a",
       bytes,
       mediaType: "text/plain",
       digest: await digestContent(bytes),
@@ -140,16 +152,17 @@ Deno.test("S3 asset body store conditionally writes, verifies, streams, lists, a
       putRequests: 2,
       headRequests: 1,
     });
-    assertEquals(await store.read(input.key), bytes);
+    assertEquals(await readBodyBytes(store, { bodyId: input.bodyId }), bytes);
     assertEquals(
-      await new Response(await store.open(input.key)).text(),
+      await new Response(await store.read({ bodyId: input.bodyId })).text(),
       "hello s3",
     );
-    const listed = [];
-    for await (const item of store.list({ prefix: "copilotz/" })) {
-      listed.push(item.key);
-    }
-    assertEquals(listed, [input.key]);
+    const listed = await store.maintenance.list({
+      states: ["ready"],
+      idleForMs: 0,
+      limit: 10,
+    });
+    assertEquals(listed.bodies.map((item) => item.bodyId), [input.bodyId]);
     const conflict = await assertRejects(() =>
       store.put({
         ...input,
@@ -159,8 +172,13 @@ Deno.test("S3 asset body store conditionally writes, verifies, streams, lists, a
       })
     );
     assertEquals((conflict as ContentError).code, "asset_conflict");
-    await store.delete(input.key);
-    assertEquals(await store.head(input.key), null);
+    await store.maintenance.delete({
+      bodyId: input.bodyId,
+      expectedState: "ready",
+      expectedMaintenanceVersion: first.maintenanceVersion,
+      idleForMs: 0,
+    });
+    assertEquals(await store.head({ bodyId: input.bodyId }), null);
   } finally {
     await server.shutdown();
   }

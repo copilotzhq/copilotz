@@ -3,13 +3,14 @@ import { assertEquals, assertRejects } from "@std/assert";
 import { denoAssetFilesystem } from "../adapters/deno/assets.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
-  type AssetBodyStore,
-  createDatabaseAssetBodyStore,
-  createFilesystemAssetBodyStore,
-  createMemoryAssetBodyStore,
-  createS3AssetBodyStore,
+  type BodyStore,
+  createDatabaseBodyStore,
+  createFilesystemBodyStore,
+  createMemoryBodyStore,
+  createS3BodyStore,
   digestContent,
   isContentError,
+  readBodyBytes,
 } from "./index.ts";
 import {
   createProgressiveBodyWriter,
@@ -42,9 +43,9 @@ async function readAll(
 
 async function withStore(
   create: () => Promise<
-    Readonly<{ store: AssetBodyStore; close?: () => Promise<void> }>
+    Readonly<{ store: BodyStore; close?: () => Promise<void> }>
   >,
-  run: (store: AssetBodyStore) => Promise<void>,
+  run: (store: BodyStore) => Promise<void>,
 ): Promise<void> {
   const handle = await create();
   try {
@@ -57,8 +58,9 @@ async function withStore(
 async function createFilesystemHandle() {
   const root = await Deno.makeTempDir({ prefix: "copilotz-progressive-" });
   return {
-    store: createFilesystemAssetBodyStore({
+    store: createFilesystemBodyStore({
       backendId: "filesystem:progressive",
+      protectionMs: 0,
       access: denoAssetFilesystem(root),
     }),
     close: () => Deno.remove(root, { recursive: true }),
@@ -68,10 +70,11 @@ async function createFilesystemHandle() {
 async function createDatabaseHandle() {
   const db = await createTestDatabase({ url: ":memory:" });
   return {
-    store: createDatabaseAssetBodyStore({
+    store: createDatabaseBodyStore({
       session: db,
       schema: "copilotz_progressive_bodies",
       backendId: "database:progressive",
+      protectionMs: 0,
     }),
     close: () => db.close(),
   };
@@ -176,20 +179,21 @@ async function createS3Handle() {
     accessKeyId: "access",
     secretAccessKey: "secret",
     pathStyle: true,
+    protectionMs: 0,
   } as const;
   return {
-    store: createS3AssetBodyStore(config),
-    reopen: () => createS3AssetBodyStore(config),
+    store: createS3BodyStore(config),
+    reopen: () => createS3BodyStore(config),
     close: () => server.shutdown(),
   };
 }
 
-async function assertContract(store: AssetBodyStore, key: string) {
+async function assertContract(store: BodyStore, bodyId: string) {
   const writer = await createProgressiveBodyWriter(store, {
-    key,
+    bodyId,
     mediaType: "text/plain",
   });
-  const follower = await openProgressiveBodyFollower(store, { key });
+  const follower = await openProgressiveBodyFollower(store, { bodyId });
   const pending = readAll(follower.body);
   await writer.write(encoder.encode("hel"));
   await writer.write(encoder.encode("lo"));
@@ -197,22 +201,22 @@ async function assertContract(store: AssetBodyStore, key: string) {
   assertEquals(decoder.decode(await pending), "hello");
   assertEquals(head.byteLength, 5);
   assertEquals(head.digest, await digestContent(encoder.encode("hello")));
-  assertEquals(await store.read(key), encoder.encode("hello"));
+  assertEquals(await readBodyBytes(store, { bodyId }), encoder.encode("hello"));
 }
 
 Deno.test("progressive writer finalizes a checksummed body for followers", async () => {
-  await assertContract(createMemoryAssetBodyStore(), "stream/a");
+  await assertContract(createMemoryBodyStore(), "stream/a");
 });
 
 Deno.test("progressive followers start from a committed offset", async () => {
-  const store = createMemoryAssetBodyStore();
+  const store = createMemoryBodyStore();
   const writer = await createProgressiveBodyWriter(store, {
-    key: "stream/b",
+    bodyId: "stream/b",
     mediaType: "text/plain",
   });
   await writer.write(encoder.encode("abcd"));
   const follower = await openProgressiveBodyFollower(store, {
-    key: "stream/b",
+    bodyId: "stream/b",
     offset: 2,
   });
   const pending = readAll(follower.body);
@@ -220,15 +224,15 @@ Deno.test("progressive followers start from a committed offset", async () => {
   assertEquals(decoder.decode(await pending), "cd");
 });
 
-Deno.test("only one progressive writer may own a key", async () => {
-  const store = createMemoryAssetBodyStore();
+Deno.test("only one progressive writer may own a body", async () => {
+  const store = createMemoryBodyStore();
   await createProgressiveBodyWriter(store, {
-    key: "stream/c",
+    bodyId: "stream/c",
     mediaType: "text/plain",
   });
   const error = await assertRejects(() =>
     createProgressiveBodyWriter(store, {
-      key: "stream/c",
+      bodyId: "stream/c",
       mediaType: "text/plain",
     })
   );
@@ -236,31 +240,31 @@ Deno.test("only one progressive writer may own a key", async () => {
 });
 
 Deno.test("abandon discards staging and errors followers", async () => {
-  const store = createMemoryAssetBodyStore();
+  const store = createMemoryBodyStore();
   const writer = await createProgressiveBodyWriter(store, {
-    key: "stream/d",
+    bodyId: "stream/d",
     mediaType: "text/plain",
   });
   const follower = await openProgressiveBodyFollower(store, {
-    key: "stream/d",
+    bodyId: "stream/d",
   });
   const pending = assertRejects(() => readAll(follower.body));
   await writer.write(encoder.encode("partial"));
   await writer.abandon();
   const error = await pending;
   assertEquals(isContentError(error) && error.code, "asset_deleted");
-  assertEquals(await store.head("stream/d"), null);
+  assertEquals(await store.head({ bodyId: "stream/d" }), null);
 });
 
 Deno.test("writer backpressures when a live memory follower lags the bound", async () => {
-  const store = createMemoryAssetBodyStore();
+  const store = createMemoryBodyStore();
   const writer = await createProgressiveBodyWriter(store, {
-    key: "stream/e",
+    bodyId: "stream/e",
     mediaType: "text/plain",
     maxBufferedBytes: 4,
   });
   const follower = await openProgressiveBodyFollower(store, {
-    key: "stream/e",
+    bodyId: "stream/e",
   });
   await writer.write(encoder.encode("abcd"));
   let resumed = false;
@@ -278,71 +282,7 @@ Deno.test("writer backpressures when a live memory follower lags the bound", asy
   await reader.cancel();
 });
 
-Deno.test("retain checksums a verified prefix and closes followers at that offset", async () => {
-  const store = createMemoryAssetBodyStore();
-  const writer = await createProgressiveBodyWriter(store, {
-    key: "stream/retain",
-    mediaType: "text/plain",
-  });
-  const follower = await openProgressiveBodyFollower(store, {
-    key: "stream/retain",
-  });
-  await writer.write(encoder.encode("hello world"));
-  const head = await writer.retain(5);
-  assertEquals(decoder.decode(await readAll(follower.body)), "hello");
-  assertEquals(head.byteLength, 5);
-  assertEquals(head.digest, await digestContent(encoder.encode("hello")));
-  assertEquals(await store.read("stream/retain"), encoder.encode("hello"));
-});
-
-Deno.test("discard drops a verified prefix and finalizes only the remainder", async () => {
-  const store = createMemoryAssetBodyStore();
-  const writer = await createProgressiveBodyWriter(store, {
-    key: "stream/discard",
-    mediaType: "text/plain",
-  });
-  await writer.write(encoder.encode("hello world"));
-  const live = await openProgressiveBodyFollower(store, {
-    key: "stream/discard",
-  });
-  await writer.discard(6);
-  const liveError = await assertRejects(() => readAll(live.body));
-  assertEquals(isContentError(liveError) && liveError.code, "asset_deleted");
-  const openError = await assertRejects(() =>
-    openProgressiveBodyFollower(store, {
-      key: "stream/discard",
-      offset: 0,
-    })
-  );
-  assertEquals(isContentError(openError) && openError.code, "asset_deleted");
-  const follower = await openProgressiveBodyFollower(store, {
-    key: "stream/discard",
-    offset: 6,
-  });
-  const pending = readAll(follower.body);
-  await writer.write(encoder.encode("!"));
-  const head = await writer.finalize();
-  assertEquals(decoder.decode(await pending), "world!");
-  assertEquals(head.digest, await digestContent(encoder.encode("world!")));
-  assertEquals(await store.read("stream/discard"), encoder.encode("world!"));
-});
-
-Deno.test("filesystem retain and discard use spilled staging", async () => {
-  await withStore(createFilesystemHandle, async (store) => {
-    const writer = await createProgressiveBodyWriter(store, {
-      key: "stream/prefix",
-      mediaType: "text/plain",
-    });
-    await writer.write(encoder.encode("keep drop"));
-    await writer.discard(5);
-    const head = await writer.retain();
-    assertEquals(decoder.decode(await store.read("stream/prefix")), "drop");
-    assertEquals(head.digest, await digestContent(encoder.encode("drop")));
-    assertEquals(await store.spill?.head("stream/prefix"), null);
-  });
-});
-
-Deno.test("filesystem, database, and S3 progressive writers spill a checksummed body", async () => {
+Deno.test("filesystem, database, and S3 progressive writers finalize a checksummed body", async () => {
   await withStore(
     createFilesystemHandle,
     (store) => assertContract(store, "stream/fs"),
@@ -357,21 +297,21 @@ Deno.test("filesystem, database, and S3 progressive writers spill a checksummed 
   );
 });
 
-Deno.test("a slow follower does not block other followers on spilled stores", async () => {
+Deno.test("a slow follower does not block other followers on durable stores", async () => {
   await withStore(createFilesystemHandle, async (store) => {
     const writer = await createProgressiveBodyWriter(store, {
-      key: "stream/slow",
+      bodyId: "stream/slow",
       mediaType: "text/plain",
       maxBufferedBytes: 2,
     });
     const slow = await openProgressiveBodyFollower(store, {
-      key: "stream/slow",
+      bodyId: "stream/slow",
     });
     const slowReader = slow.body.getReader();
     await writer.write(encoder.encode("abcd"));
     await writer.write(encoder.encode("efgh"));
     const fast = await openProgressiveBodyFollower(store, {
-      key: "stream/slow",
+      bodyId: "stream/slow",
     });
     const pending = readAll(fast.body);
     await writer.finalize();
@@ -382,101 +322,117 @@ Deno.test("a slow follower does not block other followers on spilled stores", as
   });
 });
 
-Deno.test("spilled stores recover a prefix after the writer process is gone", async () => {
+Deno.test("durable stores recover a prefix after the writer process is gone", async () => {
   const root = await Deno.makeTempDir({
     prefix: "copilotz-progressive-crash-",
   });
   try {
-    const first = createFilesystemAssetBodyStore({
+    const first = createFilesystemBodyStore({
       backendId: "filesystem:crash",
+      protectionMs: 0,
       access: denoAssetFilesystem(root),
     });
     const writer = await createProgressiveBodyWriter(first, {
-      key: "stream/crash",
+      bodyId: "stream/crash",
       mediaType: "text/plain",
     });
     await writer.write(encoder.encode("hel"));
-    const recovered = createFilesystemAssetBodyStore({
+    const recovered = createFilesystemBodyStore({
       backendId: "filesystem:crash",
+      protectionMs: 0,
       access: denoAssetFilesystem(root),
     });
     const resumed = await createProgressiveBodyWriter(recovered, {
-      key: "stream/crash",
+      bodyId: "stream/crash",
       mediaType: "text/plain",
       takeover: true,
     });
     const follower = await openProgressiveBodyFollower(recovered, {
-      key: "stream/crash",
+      bodyId: "stream/crash",
     });
     const pending = readAll(follower.body);
     await resumed.write(encoder.encode("lo"));
     const head = await resumed.finalize();
     assertEquals(decoder.decode(await pending), "hello");
     assertEquals(head.digest, await digestContent(encoder.encode("hello")));
-    assertEquals(await recovered.read("stream/crash"), encoder.encode("hello"));
+    assertEquals(
+      await readBodyBytes(recovered, { bodyId: "stream/crash" }),
+      encoder.encode("hello"),
+    );
   } finally {
     await Deno.remove(root, { recursive: true });
   }
 });
 
-Deno.test("database spilled stores recover a prefix from durable staging", async () => {
+Deno.test("database BodyStore recovers a prefix from durable staging", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   try {
-    const first = createDatabaseAssetBodyStore({
+    const first = createDatabaseBodyStore({
       session: db,
       schema: "copilotz_progressive_crash",
+      protectionMs: 0,
     });
     const writer = await createProgressiveBodyWriter(first, {
-      key: "stream/crash",
+      bodyId: "stream/crash",
       mediaType: "text/plain",
     });
     await writer.write(encoder.encode("ab"));
-    const recovered = createDatabaseAssetBodyStore({
+    const recovered = createDatabaseBodyStore({
       session: db,
       schema: "copilotz_progressive_crash",
+      protectionMs: 0,
     });
     const resumed = await createProgressiveBodyWriter(recovered, {
-      key: "stream/crash",
+      bodyId: "stream/crash",
       mediaType: "text/plain",
       takeover: true,
     });
     const follower = await openProgressiveBodyFollower(recovered, {
-      key: "stream/crash",
+      bodyId: "stream/crash",
     });
     const pending = readAll(follower.body);
-    assertEquals(await recovered.head("stream/crash"), null);
+    assertEquals(
+      (await recovered.head({ bodyId: "stream/crash" }))?.state,
+      "open",
+    );
     await resumed.write(encoder.encode("cd"));
     const head = await resumed.finalize();
     assertEquals(decoder.decode(await pending), "abcd");
     assertEquals(head.byteLength, 4);
-    assertEquals(await recovered.read("stream/crash"), encoder.encode("abcd"));
+    assertEquals(
+      await readBodyBytes(recovered, { bodyId: "stream/crash" }),
+      encoder.encode("abcd"),
+    );
   } finally {
     await db.close();
   }
 });
 
-Deno.test("S3 spilled stores recover a prefix from object staging", async () => {
+Deno.test("S3 BodyStore recovers a prefix from object staging", async () => {
   const handle = await createS3Handle();
   try {
     const writer = await createProgressiveBodyWriter(handle.store, {
-      key: "stream/crash",
+      bodyId: "stream/crash",
       mediaType: "text/plain",
     });
     await writer.write(encoder.encode("xy"));
     const recovered = handle.reopen();
     const resumed = await createProgressiveBodyWriter(recovered, {
-      key: "stream/crash",
+      bodyId: "stream/crash",
       mediaType: "text/plain",
       takeover: true,
     });
     const follower = await openProgressiveBodyFollower(recovered, {
-      key: "stream/crash",
+      bodyId: "stream/crash",
     });
     const pending = readAll(follower.body);
     await resumed.write(encoder.encode("z"));
     await resumed.finalize();
     assertEquals(decoder.decode(await pending), "xyz");
-    assertEquals(await recovered.read("stream/crash"), encoder.encode("xyz"));
+    assertEquals(
+      await readBodyBytes(recovered, { bodyId: "stream/crash" }),
+      encoder.encode("xyz"),
+    );
   } finally {
     await handle.close();
   }

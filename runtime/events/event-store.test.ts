@@ -64,7 +64,7 @@ async function failThreeTimes(
   }
 }
 
-Deno.test("A20 clean v3 baseline contains only the four core tables", async () => {
+Deno.test("A20 clean v3 baseline contains only the six core tables", async () => {
   const fixture = await createFixture();
   try {
     const result = await fixture.session.query<{ table_name: string }>(
@@ -75,7 +75,14 @@ Deno.test("A20 clean v3 baseline contains only the four core tables", async () =
     );
     assertEquals(
       result.rows.map((row) => row.table_name),
-      ["edges", "event_deliveries", "events", "nodes"],
+      [
+        "body_references",
+        "edges",
+        "event_bodies",
+        "event_deliveries",
+        "events",
+        "nodes",
+      ],
     );
 
     const columns = await fixture.session.query<{ column_name: string }>(

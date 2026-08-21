@@ -5,7 +5,7 @@ import {
 } from "../../runtime/events/index.ts";
 import type { SqlSession } from "../../runtime/events/index.ts";
 import {
-  createMemoryAssetBodyStore,
+  createMemoryBodyStore,
   digestContent,
 } from "../../runtime/content/index.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
@@ -129,7 +129,7 @@ Deno.test("content-v2 repairs tool messages, extracts data URLs, relocates bodie
     assertEquals(dryRunTransactions, 0);
     assertEquals(dryRunQueries <= 20, true);
 
-    const memory = createMemoryAssetBodyStore({ backendId: "gcs:test" });
+    const memory = createMemoryBodyStore({ backendId: "gcs:test" });
     const store = Object.freeze({ ...memory, kind: "object" as const });
     const first = await migrateContentV2Schema(session, SCHEMA, {
       mode: "apply",
@@ -206,7 +206,7 @@ Deno.test("content-v2 bounds asset batches by body bytes and upload concurrency"
         ],
       );
     }
-    const memory = createMemoryAssetBodyStore({ backendId: "gcs:bounded" });
+    const memory = createMemoryBodyStore({ backendId: "gcs:bounded" });
     let active = 0;
     let maximumActive = 0;
     const store = Object.freeze({
@@ -299,7 +299,7 @@ Deno.test("content-v2 apply commits semantic repair in resumable batches", async
         })
       ),
     );
-    const memory = createMemoryAssetBodyStore({ backendId: "gcs:batches" });
+    const memory = createMemoryBodyStore({ backendId: "gcs:batches" });
     const semanticProgress: number[] = [];
     const report = await migrateContentV2Schema(session, SCHEMA, {
       mode: "apply",
@@ -418,7 +418,7 @@ Deno.test("content-v2 sanitizes existing canonical tool outputs without duplicat
     assertEquals(dryRun.extractedAssets, 1);
     assertEquals(dryRun.databaseAssets, 2);
 
-    const memory = createMemoryAssetBodyStore({ backendId: "gcs:existing" });
+    const memory = createMemoryBodyStore({ backendId: "gcs:existing" });
     const store = Object.freeze({ ...memory, kind: "object" as const });
     const applied = await migrateContentV2Schema(session, SCHEMA, {
       mode: "apply",
@@ -563,7 +563,7 @@ Deno.test("content-v2 disambiguates a reused tool-call ID by canonical output di
     assertEquals(dryRun.mergedExecutions, 1);
     assertEquals(dryRun.synthesizedExecutions, 0);
 
-    const memory = createMemoryAssetBodyStore({ backendId: "gcs:test" });
+    const memory = createMemoryBodyStore({ backendId: "gcs:test" });
     const report = await migrateContentV2Schema(session, SCHEMA, {
       mode: "apply",
       assets: {
@@ -866,7 +866,7 @@ Deno.test("content-v2 applies independent messages with bounded semantic concurr
        FROM generate_series(1, 8) AS value`,
     );
 
-    const memory = createMemoryAssetBodyStore({ backendId: "gcs:concurrent" });
+    const memory = createMemoryBodyStore({ backendId: "gcs:concurrent" });
     const progress: number[] = [];
     let transactionCount = 0;
     const countedSession: SqlSession = {

@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists } from "@std/assert";
 import {
   createUsageWorkflowPlugin,
@@ -44,22 +45,23 @@ async function createFixture(
     retryBaseMs: 0,
     random: () => 0,
   });
-  await createTestDomainContext(engine, NAMESPACE).features.thread.create({
-    id: THREAD_ID,
-    participants: [
-      {
-        id: "user-node",
-        externalId: "user-external",
-        participantType: "human",
-      },
-      {
-        id: "agent-node",
-        externalId: "north",
-        participantType: "agent",
-        agentId: "north",
-      },
-    ],
-  });
+  await createTestDomainContext(engine, NAMESPACE, coreFeatureAliases).features
+    .thread.create({
+      id: THREAD_ID,
+      participants: [
+        {
+          id: "user-node",
+          externalId: "user-external",
+          participantType: "human",
+        },
+        {
+          id: "agent-node",
+          externalId: "north",
+          participantType: "agent",
+          agentId: "north",
+        },
+      ],
+    });
   return Object.freeze({ db, engine });
 }
 
@@ -118,7 +120,11 @@ Deno.test("usage workflow records physical provider attempts and tools once with
     },
   });
   try {
-    const domain = createTestDomainContext(fixture.engine, NAMESPACE);
+    const domain = createTestDomainContext(
+      fixture.engine,
+      NAMESPACE,
+      coreFeatureAliases,
+    );
     const logical = await domain.features.llmAttempt.create({
       id: "logical-1",
       threadId: THREAD_ID,

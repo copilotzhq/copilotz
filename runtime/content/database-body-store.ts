@@ -4,79 +4,96 @@ import {
   validateEventSchemaName,
 } from "../events/index.ts";
 import type {
-  AssetBodyHead,
-  AssetBodySpill,
-  AssetBodySpillHead,
-  AssetBodyStore,
-  PutAssetBodyInput,
+  AbortBodyInput,
+  AppendBodyInput,
+  AppendResult,
+  BodyHead,
+  BodyStore,
+  BodyStoreAdapter,
+  MutableBodyHead,
+  PutBodyInput,
+  ReadBodyRangeInput,
+  ReserveBodyInput,
+  WriterCapability,
 } from "./body-store.ts";
-import { base64ToBytes, bytesToBase64 } from "./encoding.ts";
+import {
+  bodyProtectionMs,
+  bodyProtectionUntil,
+  readBodyBytes,
+  writerCapabilityFromHead,
+} from "./body-store.ts";
+import { digestContent } from "./digest.ts";
+import { base64ToBytes } from "./encoding.ts";
 import { createContentError } from "./errors.ts";
 
-function validateHead(
-  expected: PutAssetBodyInput,
-  actual: AssetBodyHead,
-): void {
+function validateHead(expected: PutBodyInput, actual: BodyHead): void {
   if (
     actual.byteLength !== expected.bytes.byteLength ||
     actual.digest !== expected.digest || actual.mediaType !== expected.mediaType
   ) {
     throw createContentError(
       "asset_conflict",
-      "Stored asset body conflicts with the canonical asset metadata.",
+      "Stored body conflicts with the canonical metadata.",
     );
   }
 }
 
 type BodyRow = {
-  key: string;
-  media_type: string;
-  digest: string;
-  byte_length: string | number;
-  body: string;
-  etag: string | null;
-  last_modified: string;
-};
-
-type StagingRow = {
-  key: string;
+  body_id: string;
+  state: "open" | "sealing" | "ready" | "aborted";
   media_type: string;
   byte_length: string | number;
-  discarded: string | number;
-  body: string;
-  reservation_id: string | null;
+  digest: string | null;
+  writer_generation: string | number | null;
+  writer_token_hash: string | null;
+  lease_expires_at: string | null;
+  protected_until: string | null;
+  maintenance_version: string | number;
+  created_at: string;
+  updated_at: string;
+  ready_at: string | null;
 };
 
-function asInteger(value: string | number, name: string): number {
+type PartRow = {
+  start_offset: string | number;
+  append_id: string;
+  bytes: Uint8Array | ArrayBuffer | string;
+};
+
+type ProgressiveBodyOps = Readonly<{
+  reserve(input: ReserveBodyInput): Promise<WriterCapability>;
+  head(bodyId: string): Promise<MutableBodyHead | null>;
+  append(input: AppendBodyInput): Promise<AppendResult>;
+  readRange(input: ReadBodyRangeInput): Promise<Uint8Array>;
+  abort(input: AbortBodyInput): Promise<void>;
+}>;
+
+function asInteger(value: string | number | null, name: string): number {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw createContentError(
       "asset_corrupted",
-      `Database asset ${name} is invalid.`,
+      `Database body ${name} is invalid.`,
     );
   }
   return parsed;
 }
 
-function mapHead(row: BodyRow): AssetBodyHead {
-  return Object.freeze({
-    key: row.key,
-    byteLength: asInteger(row.byte_length, "byte length"),
-    mediaType: row.media_type,
-    digest: row.digest as `sha256:${string}`,
-    ...(row.etag ? { etag: row.etag } : {}),
-    lastModified: row.last_modified,
-  });
-}
-
-function mapSpill(row: StagingRow): AssetBodySpillHead {
-  return Object.freeze({
-    key: row.key,
-    mediaType: row.media_type,
-    byteLength: asInteger(row.byte_length, "byte length"),
-    discarded: asInteger(row.discarded, "discarded offset"),
-    reservationId: row.reservation_id ?? "",
-  });
+function bytesFromSql(value: PartRow["bytes"]): Uint8Array {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (typeof value === "string") {
+    if (value.startsWith("\\x")) {
+      const hex = value.slice(2);
+      const bytes = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+      }
+      return bytes;
+    }
+    return base64ToBytes(value);
+  }
+  return new Uint8Array();
 }
 
 function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
@@ -90,156 +107,285 @@ function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
   return output;
 }
 
-/** SQL body store for progressive spill. Not the graph `nodes.content` path. */
-export function createDatabaseAssetBodyStore(
+function mapHead(row: BodyRow): BodyHead {
+  if (row.state !== "ready" || !row.digest) {
+    throw createContentError(
+      "asset_corrupted",
+      `Database body '${row.body_id}' is not ready.`,
+    );
+  }
+  return Object.freeze({
+    bodyId: row.body_id,
+    state: "ready" as const,
+    byteLength: asInteger(row.byte_length, "byte length"),
+    mediaType: row.media_type,
+    digest: row.digest as `sha256:${string}`,
+    maintenanceVersion: asInteger(
+      row.maintenance_version,
+      "maintenance version",
+    ),
+    ...(row.protected_until ? { protectedUntil: row.protected_until } : {}),
+    etag: row.digest.slice("sha256:".length),
+    lastModified: row.ready_at ?? row.updated_at,
+  });
+}
+
+function mapSpill(row: BodyRow): MutableBodyHead {
+  const state = row.state === "sealing"
+    ? "sealing"
+    : row.state === "aborted"
+    ? "aborted"
+    : "open";
+  const byteLength = asInteger(row.byte_length, "byte length");
+  const maintenanceVersion = asInteger(
+    row.maintenance_version,
+    "maintenance version",
+  );
+  if (state === "aborted") {
+    return Object.freeze({
+      bodyId: row.body_id,
+      state,
+      mediaType: row.media_type,
+      byteLength,
+      discarded: 0,
+      maintenanceVersion,
+      reservationId: row.writer_token_hash ?? "",
+    });
+  }
+  return Object.freeze({
+    bodyId: row.body_id,
+    state,
+    mediaType: row.media_type,
+    byteLength,
+    discarded: 0,
+    maintenanceVersion,
+    reservationId: row.writer_token_hash ?? "",
+    writerGeneration: asInteger(
+      row.writer_generation ?? 0,
+      "writer generation",
+    ),
+    writerLeaseRemainingMs: row.lease_expires_at
+      ? Math.max(0, Date.parse(row.lease_expires_at) - Date.now())
+      : 0,
+  });
+}
+
+function mapAnyHead(row: BodyRow): BodyHead | MutableBodyHead {
+  return row.state === "ready" ? mapHead(row) : mapSpill(row);
+}
+
+export function createDatabaseBodyStoreAdapter(
+  options: Readonly<{
+    session: SqlExecutor;
+    backendId?: string;
+    protectionMs?: number;
+  }>,
+): BodyStoreAdapter {
+  const backendId = options.backendId?.trim() || "database:default";
+  const protectionMs = bodyProtectionMs(options.protectionMs);
+  const stores = new Map<string, BodyStore>();
+  const storeFor = (databaseSchema: string): BodyStore => {
+    const schema = databaseSchema.trim();
+    if (!schema) {
+      throw new TypeError("BodyStore scope requires databaseSchema.");
+    }
+    const existing = stores.get(schema);
+    if (existing) return existing;
+    const created = createDatabaseBodyStore({
+      session: options.session,
+      schema,
+      backendId,
+      protectionMs,
+    });
+    stores.set(schema, created);
+    return created;
+  };
+  return Object.freeze({
+    deployment: Object.freeze({
+      durability: "durable" as const,
+      reach: "cluster" as const,
+      minimumProtectionMs: protectionMs,
+    }),
+    forScope(scope) {
+      return storeFor(scope.databaseSchema);
+    },
+    maintenanceForScope(scope) {
+      return storeFor(scope.databaseSchema).maintenance;
+    },
+  });
+}
+
+/** SQL BodyStore using the final content_bodies/content_body_parts layout. */
+export function createDatabaseBodyStore(
   options: Readonly<{
     session: SqlExecutor;
     schema: string;
     backendId?: string;
+    protectionMs?: number;
   }>,
-): AssetBodyStore {
+): BodyStore {
   const session = options.session;
   const backendId = options.backendId?.trim() || "database:default";
+  const protectionMs = bodyProtectionMs(options.protectionMs);
+  const deadline = () => bodyProtectionUntil(protectionMs);
   const schema = quoteEventIdentifier(
     validateEventSchemaName(options.schema.trim()),
   );
-  const bodies = `${schema}."asset_bodies"`;
-  const staging = `${schema}."asset_body_staging"`;
+  const bodies = `${schema}."content_bodies"`;
+  const parts = `${schema}."content_body_parts"`;
   let ready: Promise<void> | undefined;
+
   const ensure = () => {
     ready ??= (async () => {
       await session.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
       await session.query(
         `CREATE TABLE IF NOT EXISTS ${bodies} (
-          key TEXT PRIMARY KEY,
+          body_id TEXT PRIMARY KEY,
+          state TEXT NOT NULL CHECK (state IN ('open', 'sealing', 'ready', 'aborted')),
           media_type TEXT NOT NULL,
-          digest TEXT NOT NULL,
-          byte_length BIGINT NOT NULL,
-          body TEXT NOT NULL,
-          etag TEXT,
-          last_modified TEXT NOT NULL
+          byte_length BIGINT NOT NULL DEFAULT 0 CHECK (byte_length >= 0),
+          digest TEXT,
+          writer_generation BIGINT,
+          writer_token_hash TEXT,
+          lease_expires_at TIMESTAMPTZ,
+          protected_until TIMESTAMPTZ,
+          maintenance_version BIGINT NOT NULL DEFAULT 0,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          ready_at TIMESTAMPTZ
         )`,
       );
       await session.query(
-        `CREATE TABLE IF NOT EXISTS ${staging} (
-          key TEXT PRIMARY KEY,
-          media_type TEXT NOT NULL,
-          byte_length BIGINT NOT NULL,
-          discarded BIGINT NOT NULL,
-          body TEXT NOT NULL,
-          reservation_id TEXT NOT NULL
+        `CREATE TABLE IF NOT EXISTS ${parts} (
+          body_id TEXT NOT NULL REFERENCES ${bodies}(body_id) ON DELETE CASCADE,
+          start_offset BIGINT NOT NULL CHECK (start_offset >= 0),
+          append_id TEXT NOT NULL,
+          bytes BYTEA NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (body_id, start_offset),
+          UNIQUE (body_id, append_id)
         )`,
-      );
-      await session.query(
-        `ALTER TABLE ${staging}
-         ADD COLUMN IF NOT EXISTS reservation_id TEXT`,
       );
     })();
     return ready;
   };
 
-  const loadStaging = async (key: string): Promise<StagingRow | null> => {
+  const loadBody = async (bodyId: string): Promise<BodyRow | null> => {
     await ensure();
-    const result = await session.query<StagingRow>(
-      `SELECT key, media_type, byte_length, discarded, body, reservation_id
-         FROM ${staging} WHERE key = $1 LIMIT 1`,
-      [key],
+    const result = await session.query<BodyRow>(
+      `SELECT body_id, state, media_type, byte_length, digest,
+              writer_generation, writer_token_hash, lease_expires_at,
+              protected_until, maintenance_version, created_at, updated_at,
+              ready_at
+         FROM ${bodies}
+        WHERE body_id = $1
+        LIMIT 1`,
+      [bodyId],
     );
     return result.rows[0] ?? null;
   };
 
-  const writeStaging = async (
-    row: Readonly<{
-      key: string;
-      mediaType: string;
-      byteLength: number;
-      discarded: number;
-      bytes: Uint8Array;
-      reservationId: string;
-    }>,
-  ): Promise<AssetBodySpillHead> => {
-    await ensure();
-    const updated = await session.query<StagingRow>(
-      `UPDATE ${staging}
-       SET media_type = $2,
-           byte_length = $3,
-           discarded = $4,
-           body = $5
-       WHERE key = $1 AND reservation_id = $6
-       RETURNING key, media_type, byte_length, discarded, body, reservation_id`,
-      [
-        row.key,
-        row.mediaType,
-        row.byteLength,
-        row.discarded,
-        bytesToBase64(row.bytes),
-        row.reservationId,
-      ],
-    );
-    if (updated.rows[0]) return mapSpill(updated.rows[0]);
-    const existing = await loadStaging(row.key);
-    throw createContentError(
-      existing ? "asset_conflict" : "asset_not_found",
-      existing
-        ? "Progressive writer no longer owns this asset body."
-        : "Progressive staging was not found.",
-    );
+  const requireBody = async (bodyId: string): Promise<BodyRow> => {
+    const row = await loadBody(bodyId);
+    if (!row) {
+      throw createContentError(
+        "asset_not_found",
+        "Database body was not found.",
+      );
+    }
+    return row;
   };
 
-  const requireOwner = (
-    row: StagingRow,
-    reservationId: string,
-  ): void => {
-    if (row.reservation_id !== reservationId) {
+  const readParts = async (bodyId: string): Promise<Uint8Array> => {
+    await ensure();
+    const result = await session.query<PartRow>(
+      `SELECT start_offset, append_id, bytes
+         FROM ${parts}
+        WHERE body_id = $1
+        ORDER BY start_offset ASC`,
+      [bodyId],
+    );
+    return concatBytes(result.rows.map((row) => bytesFromSql(row.bytes)));
+  };
+
+  const requireOwner = (row: BodyRow, reservationId: string): void => {
+    if (row.writer_token_hash !== reservationId) {
       throw createContentError(
         "asset_conflict",
-        "Progressive writer no longer owns this asset body.",
+        "Progressive writer no longer owns this body.",
       );
     }
   };
 
-  const spill: AssetBodySpill = {
+  const progressive: ProgressiveBodyOps = {
     async reserve(input) {
       await ensure();
-      const inserted = await session.query<StagingRow>(
-        `INSERT INTO ${staging}
-           (key, media_type, byte_length, discarded, body, reservation_id)
-         VALUES ($1, $2, 0, 0, $3, $4)
-         ON CONFLICT (key) DO NOTHING
-         RETURNING key, media_type, byte_length, discarded, body, reservation_id`,
-        [
-          input.key,
-          input.mediaType,
-          bytesToBase64(new Uint8Array()),
-          input.reservationId,
-        ],
+      const reservationId = crypto.randomUUID();
+      const leaseExpiresAt = deadline();
+      const inserted = await session.query<BodyRow>(
+        `INSERT INTO ${bodies}
+           (body_id, state, media_type, byte_length, writer_generation,
+            writer_token_hash, lease_expires_at, maintenance_version, updated_at)
+         VALUES ($1, 'open', $2, 0, 1, $3, $4, 1, NOW())
+         ON CONFLICT (body_id) DO NOTHING
+         RETURNING body_id, state, media_type, byte_length, digest,
+                   writer_generation, writer_token_hash, lease_expires_at,
+                   protected_until, maintenance_version, created_at, updated_at,
+                   ready_at`,
+        [input.bodyId, input.mediaType, reservationId, leaseExpiresAt],
       );
-      if (inserted.rows[0]) return mapSpill(inserted.rows[0]);
-      const existing = await loadStaging(input.key);
-      if (!existing) {
-        throw createContentError(
-          "asset_conflict",
-          "Progressive writer reservation raced with another owner.",
-        );
+      if (inserted.rows[0]) {
+        return writerCapabilityFromHead(mapSpill(inserted.rows[0]));
       }
+      const existing = await requireBody(input.bodyId);
       if (existing.media_type !== input.mediaType) {
         throw createContentError(
           "asset_conflict",
-          "Progressive staging media type does not match the writer.",
+          "Progressive body media type does not match the writer.",
         );
       }
-      if (!input.takeover) {
+      if (existing.state === "ready") {
         throw createContentError(
           "asset_conflict",
-          "A progressive writer already owns this asset body.",
+          "A ready body already exists for this id.",
         );
       }
-      const claimed = await session.query<StagingRow>(
-        `UPDATE ${staging}
-         SET reservation_id = $2
-         WHERE key = $1 AND reservation_id IS NOT DISTINCT FROM $3
-         RETURNING key, media_type, byte_length, discarded, body, reservation_id`,
-        [input.key, input.reservationId, existing.reservation_id],
+      if (
+        input.expectedGeneration === undefined ||
+        input.expectedGeneration !==
+          asInteger(existing.writer_generation ?? 0, "writer generation")
+      ) {
+        throw createContentError(
+          "asset_conflict",
+          "A progressive writer already owns this body.",
+        );
+      }
+      const generation = asInteger(
+        existing.writer_generation ?? 0,
+        "writer generation",
+      ) + 1;
+      const takeoverLeaseExpiresAt = deadline();
+      const claimed = await session.query<BodyRow>(
+        `UPDATE ${bodies}
+            SET writer_generation = $2,
+                writer_token_hash = $3,
+                lease_expires_at = $5,
+                maintenance_version = maintenance_version + 1,
+                updated_at = NOW()
+          WHERE body_id = $1
+            AND writer_token_hash IS NOT DISTINCT FROM $4
+            AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
+          RETURNING body_id, state, media_type, byte_length, digest,
+                    writer_generation, writer_token_hash, lease_expires_at,
+                    protected_until, maintenance_version, created_at,
+                    updated_at, ready_at`,
+        [
+          input.bodyId,
+          generation,
+          reservationId,
+          existing.writer_token_hash,
+          takeoverLeaseExpiresAt,
+        ],
       );
       if (!claimed.rows[0]) {
         throw createContentError(
@@ -247,201 +393,247 @@ export function createDatabaseAssetBodyStore(
           "Progressive writer reservation raced with another owner.",
         );
       }
-      return mapSpill(claimed.rows[0]);
+      return writerCapabilityFromHead(mapSpill(claimed.rows[0]));
     },
-    async head(key) {
-      const row = await loadStaging(key);
-      return row ? mapSpill(row) : null;
+    async head(bodyId) {
+      const row = await loadBody(bodyId);
+      if (!row || row.state === "ready") return null;
+      return mapSpill(row);
     },
     async append(input) {
-      const existing = await loadStaging(input.key);
-      if (!existing) {
-        throw createContentError(
-          "asset_not_found",
-          "Progressive staging was not found.",
-        );
-      }
-      requireOwner(existing, input.reservationId);
-      if (existing && existing.media_type !== input.mediaType) {
+      await ensure();
+      const existing = await requireBody(input.writer.bodyId);
+      requireOwner(existing, input.writer.reservationId);
+      if (existing.state !== "open") {
         throw createContentError(
           "asset_conflict",
-          "Progressive staging media type does not match the writer.",
+          "Progressive body is not open.",
         );
       }
-      const previous = existing
-        ? base64ToBytes(existing.body)
-        : new Uint8Array();
-      const discarded = asInteger(existing.discarded, "discarded offset");
-      const bytes = input.bytes.byteLength === 0
-        ? previous
-        : concatBytes([previous, input.bytes]);
-      return await writeStaging({
-        key: input.key,
-        mediaType: input.mediaType,
-        byteLength: asInteger(existing.byte_length, "byte length") +
+      if (existing.media_type !== input.writer.mediaType) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body media type does not match the writer.",
+        );
+      }
+      if (input.bytes.byteLength === 0) {
+        return Object.freeze({
+          startOffset: input.expectedOffset,
+          endOffset: asInteger(existing.byte_length, "byte length"),
+          protection: Object.freeze({
+            remainingMs: existing.lease_expires_at
+              ? Math.max(0, Date.parse(existing.lease_expires_at) - Date.now())
+              : 0,
+          }),
+        });
+      }
+      const start = asInteger(existing.byte_length, "byte length");
+      const duplicate = await session.query<PartRow>(
+        `SELECT start_offset, append_id, bytes
+           FROM ${parts}
+          WHERE body_id = $1 AND append_id = $2
+          LIMIT 1`,
+        [input.writer.bodyId, input.appendId],
+      );
+      if (duplicate.rows[0]) {
+        const row = duplicate.rows[0];
+        const bytes = bytesFromSql(row.bytes);
+        const same = asInteger(row.start_offset, "append start offset") ===
+            input.expectedOffset &&
+          bytes.byteLength === input.bytes.byteLength &&
+          bytes.every((byte, index) => byte === input.bytes[index]);
+        if (!same) {
+          throw createContentError(
+            "asset_conflict",
+            "Progressive append id was reused with different bytes.",
+          );
+        }
+        return Object.freeze({
+          startOffset: input.expectedOffset,
+          endOffset: asInteger(existing.byte_length, "byte length"),
+          protection: Object.freeze({
+            remainingMs: existing.lease_expires_at
+              ? Math.max(0, Date.parse(existing.lease_expires_at) - Date.now())
+              : 0,
+          }),
+        });
+      }
+      if (input.expectedOffset !== start) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive append expected offset does not match the body.",
+        );
+      }
+      await session.query(
+        `INSERT INTO ${parts} (body_id, start_offset, append_id, bytes)
+         VALUES ($1, $2, $3, $4)`,
+        [input.writer.bodyId, start, input.appendId, input.bytes],
+      );
+      const updated = await session.query<BodyRow>(
+        `UPDATE ${bodies}
+            SET byte_length = byte_length + $2,
+                lease_expires_at = $4,
+                maintenance_version = maintenance_version + 1,
+                updated_at = NOW()
+          WHERE body_id = $1
+            AND writer_token_hash = $3
+          RETURNING body_id, state, media_type, byte_length, digest,
+                    writer_generation, writer_token_hash, lease_expires_at,
+                    protected_until, maintenance_version, created_at,
+                    updated_at, ready_at`,
+        [
+          input.writer.bodyId,
           input.bytes.byteLength,
-        discarded,
-        bytes,
-        reservationId: input.reservationId,
-      });
-    },
-    async read(input) {
-      const row = await loadStaging(input.key);
-      if (!row) {
+          input.writer.reservationId,
+          deadline(),
+        ],
+      );
+      if (!updated.rows[0]) {
         throw createContentError(
-          "asset_not_found",
-          "Progressive staging was not found.",
+          "asset_conflict",
+          "Progressive writer no longer owns this body.",
         );
       }
-      const head = mapSpill(row);
-      const start = Math.max(input.offset, head.discarded);
-      const end = Math.min(input.end, head.byteLength);
+      const head = mapSpill(updated.rows[0]);
+      return Object.freeze({
+        startOffset: input.expectedOffset,
+        endOffset: head.byteLength,
+        protection: Object.freeze({
+          remainingMs: Math.max(0, head.writerLeaseRemainingMs ?? 0),
+        }),
+      });
+    },
+    async readRange(input) {
+      const row = await requireBody(input.bodyId);
+      if (row.state === "ready" || row.state === "aborted") {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body is not open.",
+        );
+      }
+      const start = Math.max(0, input.offset);
+      const end = Math.min(
+        input.end,
+        asInteger(row.byte_length, "byte length"),
+      );
       if (end <= start) return new Uint8Array();
-      const physical = start - head.discarded;
-      return base64ToBytes(row.body).subarray(
-        physical,
-        physical + (end - start),
-      );
+      return (await readParts(input.bodyId)).subarray(start, end);
     },
-    async truncate(key, byteLength, reservationId) {
-      const row = await loadStaging(key);
-      if (!row) {
-        throw createContentError(
-          "asset_not_found",
-          "Progressive staging was not found.",
-        );
-      }
-      requireOwner(row, reservationId);
-      const head = mapSpill(row);
-      if (byteLength < head.discarded || byteLength > head.byteLength) {
-        throw createContentError(
-          "content_invalid",
-          "Progressive truncate is outside the committed range.",
-        );
-      }
-      const kept = base64ToBytes(row.body).subarray(
-        0,
-        byteLength - head.discarded,
-      );
-      return await writeStaging({
-        key,
-        mediaType: head.mediaType,
-        byteLength,
-        discarded: head.discarded,
-        bytes: kept,
-        reservationId,
-      });
-    },
-    async discardPrefix(key, byteLength, reservationId) {
-      const row = await loadStaging(key);
-      if (!row) {
-        throw createContentError(
-          "asset_not_found",
-          "Progressive staging was not found.",
-        );
-      }
-      requireOwner(row, reservationId);
-      const head = mapSpill(row);
-      if (byteLength < head.discarded || byteLength > head.byteLength) {
-        throw createContentError(
-          "content_invalid",
-          "Progressive discard is outside the committed range.",
-        );
-      }
-      const kept = base64ToBytes(row.body).subarray(
-        byteLength - head.discarded,
-      );
-      return await writeStaging({
-        key,
-        mediaType: head.mediaType,
-        byteLength: head.byteLength,
-        discarded: byteLength,
-        bytes: kept,
-        reservationId,
-      });
-    },
-    async delete(key, reservationId) {
+    async abort(input) {
       await ensure();
-      const removed = await session.query<{ key: string }>(
-        `DELETE FROM ${staging}
-         WHERE key = $1 AND reservation_id = $2
-         RETURNING key`,
-        [key, reservationId],
+      const removed = await session.query<{ body_id: string }>(
+        `DELETE FROM ${bodies}
+          WHERE body_id = $1
+            AND state <> 'ready'
+            AND writer_token_hash = $2
+         RETURNING body_id`,
+        [input.writer.bodyId, input.writer.reservationId],
       );
       if (removed.rows[0]) return;
-      const existing = await loadStaging(key);
-      if (existing) {
+      const existing = await loadBody(input.writer.bodyId);
+      if (existing && existing.state !== "ready") {
         throw createContentError(
           "asset_conflict",
-          "Progressive writer no longer owns this asset body.",
+          "Progressive writer no longer owns this body.",
         );
       }
     },
   };
 
-  const store: AssetBodyStore = {
+  const store: BodyStore = {
     kind: "database",
     backendId,
     async put(input) {
       await ensure();
-      const existing = await session.query<BodyRow>(
-        `SELECT * FROM ${bodies} WHERE key = $1 LIMIT 1`,
-        [input.key],
-      );
-      if (existing.rows[0]) {
-        const head = mapHead(existing.rows[0]);
+      const existing = await loadBody(input.bodyId);
+      if (existing) {
+        if (existing.media_type !== input.mediaType) {
+          throw createContentError(
+            "asset_conflict",
+            "Stored body conflicts with the canonical metadata.",
+          );
+        }
+        if (existing.state === "ready") {
+          const head = mapHead(existing);
+          validateHead(input, head);
+          return head;
+        }
+        const bytes = await readParts(input.bodyId);
+        if (
+          bytes.byteLength !== input.bytes.byteLength ||
+          !bytes.every((byte, index) => byte === input.bytes[index])
+        ) {
+          throw createContentError(
+            "asset_conflict",
+            "Progressive body bytes conflict with finalization input.",
+          );
+        }
+        const finalized = await session.query<BodyRow>(
+          `UPDATE ${bodies}
+              SET state = 'ready',
+                  digest = $2,
+                  protected_until = $3,
+                  lease_expires_at = NULL,
+                  maintenance_version = maintenance_version + 1,
+                  updated_at = NOW(),
+                  ready_at = NOW()
+            WHERE body_id = $1
+              AND state <> 'ready'
+            RETURNING body_id, state, media_type, byte_length, digest,
+                      writer_generation, writer_token_hash, lease_expires_at,
+                      protected_until, maintenance_version, created_at,
+                      updated_at, ready_at`,
+          [input.bodyId, input.digest, deadline()],
+        );
+        if (!finalized.rows[0]) {
+          const head = mapHead(await requireBody(input.bodyId));
+          validateHead(input, head);
+          return head;
+        }
+        const head = mapHead(finalized.rows[0]);
         validateHead(input, head);
         return head;
       }
-      const lastModified = new Date().toISOString();
-      const etag = input.digest.slice("sha256:".length);
-      await session.query(
+      const inserted = await session.query<BodyRow>(
         `INSERT INTO ${bodies}
-           (key, media_type, digest, byte_length, body, etag, last_modified)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+           (body_id, state, media_type, byte_length, digest, protected_until,
+            maintenance_version, updated_at, ready_at)
+         VALUES ($1, 'ready', $2, $3, $4, $5, 1, NOW(), NOW())
+         RETURNING body_id, state, media_type, byte_length, digest,
+                   writer_generation, writer_token_hash, lease_expires_at,
+                   protected_until, maintenance_version, created_at, updated_at,
+                   ready_at`,
         [
-          input.key,
+          input.bodyId,
           input.mediaType,
-          input.digest,
           input.bytes.byteLength,
-          bytesToBase64(input.bytes),
-          etag,
-          lastModified,
+          input.digest,
+          deadline(),
         ],
       );
-      return Object.freeze({
-        key: input.key,
-        byteLength: input.bytes.byteLength,
-        mediaType: input.mediaType,
-        digest: input.digest,
-        etag,
-        lastModified,
-      });
-    },
-    async head(key) {
-      await ensure();
-      const result = await session.query<BodyRow>(
-        `SELECT * FROM ${bodies} WHERE key = $1 LIMIT 1`,
-        [key],
+      await session.query(
+        `INSERT INTO ${parts} (body_id, start_offset, append_id, bytes)
+         VALUES ($1, 0, 'put', $2)`,
+        [input.bodyId, input.bytes],
       );
-      return result.rows[0] ? mapHead(result.rows[0]) : null;
+      const head = mapHead(inserted.rows[0]);
+      validateHead(input, head);
+      return head;
     },
-    async read(key) {
-      await ensure();
-      const result = await session.query<BodyRow>(
-        `SELECT * FROM ${bodies} WHERE key = $1 LIMIT 1`,
-        [key],
-      );
-      if (!result.rows[0]) {
+    async head({ bodyId }) {
+      const row = await loadBody(bodyId);
+      if (!row) return null;
+      return row.state === "ready" ? mapHead(row) : mapSpill(row);
+    },
+    async read({ bodyId }) {
+      const row = await requireBody(bodyId);
+      if (row.state !== "ready") {
         throw createContentError(
           "asset_not_found",
-          "Asset body was not found in the configured database backend.",
+          "Database body is not ready.",
         );
       }
-      return base64ToBytes(result.rows[0].body);
-    },
-    async open(key) {
-      const bytes = await store.read(key);
+      const bytes = await readParts(bodyId);
       return new ReadableStream({
         start(controller) {
           controller.enqueue(bytes);
@@ -449,21 +641,133 @@ export function createDatabaseAssetBodyStore(
         },
       });
     },
-    async delete(key) {
-      await ensure();
-      await session.query(`DELETE FROM ${bodies} WHERE key = $1`, [key]);
+    async follow(input) {
+      const row = await requireBody(input.bodyId);
+      const bytes = row.state === "ready"
+        ? await readBodyBytes(store, { bodyId: input.bodyId })
+        : await progressive.readRange({
+          bodyId: input.bodyId,
+          offset: Math.max(0, input.offset ?? 0),
+          end: asInteger(row.byte_length, "byte length"),
+        });
+      const offset = Math.max(0, input.offset ?? 0);
+      return new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            row.state === "ready" ? bytes.subarray(offset) : bytes,
+          );
+          controller.close();
+        },
+      });
     },
-    async *list(listOptions = {}) {
+    reserve: progressive.reserve,
+    append: progressive.append,
+    async seal(input) {
       await ensure();
-      const prefix = listOptions.prefix ?? "";
-      const listed = await session.query<BodyRow>(
-        `SELECT * FROM ${bodies} ORDER BY key`,
-      );
-      for (const row of listed.rows) {
-        if (row.key.startsWith(prefix)) yield mapHead(row);
+      const existing = await requireBody(input.writer.bodyId);
+      requireOwner(existing, input.writer.reservationId);
+      if (existing.state !== "open" && existing.state !== "sealing") {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body is not open.",
+        );
       }
+      const byteLength = asInteger(existing.byte_length, "byte length");
+      if (
+        input.expectedByteLength !== undefined &&
+        input.expectedByteLength !== byteLength
+      ) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body length does not match seal expectation.",
+        );
+      }
+      const digest = await digestContent(await readParts(input.writer.bodyId));
+      if (input.expectedDigest && input.expectedDigest !== digest) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body digest does not match seal expectation.",
+        );
+      }
+      const sealed = await session.query<BodyRow>(
+        `UPDATE ${bodies}
+            SET state = 'ready',
+                digest = $2,
+                protected_until = $4,
+                lease_expires_at = NULL,
+                maintenance_version = maintenance_version + 1,
+                updated_at = NOW(),
+                ready_at = NOW()
+          WHERE body_id = $1
+            AND writer_token_hash = $3
+            AND state IN ('open', 'sealing')
+          RETURNING body_id, state, media_type, byte_length, digest,
+                    writer_generation, writer_token_hash, lease_expires_at,
+                    protected_until, maintenance_version, created_at,
+                    updated_at, ready_at`,
+        [
+          input.writer.bodyId,
+          digest,
+          input.writer.reservationId,
+          deadline(),
+        ],
+      );
+      if (!sealed.rows[0]) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body seal raced with another writer.",
+        );
+      }
+      return mapHead(sealed.rows[0]);
     },
-    spill,
+    abort: progressive.abort,
+    maintenance: {
+      async list(input) {
+        await ensure();
+        const states = input.states.length > 0 ? [...input.states] : [];
+        if (states.length === 0) {
+          return Object.freeze({ bodies: Object.freeze([]) });
+        }
+        const after = input.after ?? "";
+        const result = await session.query<BodyRow>(
+          `SELECT body_id, state, media_type, byte_length, digest,
+                  writer_generation, writer_token_hash, lease_expires_at,
+                  protected_until, maintenance_version, created_at, updated_at,
+                  ready_at
+             FROM ${bodies}
+            WHERE state = ANY($1)
+              AND body_id > $2
+            ORDER BY body_id
+            LIMIT $3`,
+          [states, after, input.limit],
+        );
+        const page = result.rows.map(mapAnyHead);
+        return Object.freeze({
+          bodies: Object.freeze(page),
+          ...(page.length === input.limit
+            ? { after: page[page.length - 1].bodyId }
+            : {}),
+        });
+      },
+      async delete(input) {
+        await ensure();
+        const removed = await session.query<{ body_id: string }>(
+          `DELETE FROM ${bodies}
+            WHERE body_id = $1
+              AND state = $2
+              AND maintenance_version = $3
+              AND (protected_until IS NULL OR protected_until <= NOW())
+              AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
+           RETURNING body_id`,
+          [
+            input.bodyId,
+            input.expectedState,
+            input.expectedMaintenanceVersion,
+          ],
+        );
+        return Boolean(removed.rows[0]);
+      },
+    },
   };
   return Object.freeze(store);
 }

@@ -3,10 +3,10 @@ import {
   createAttachmentRuntime,
 } from "../attachments/index.ts";
 import {
-  type AssetBodyStore,
+  type BodyStore,
   type ContentPreparer,
   createContentResolver,
-  createDatabaseAssetBodyStore,
+  createDatabaseBodyStore,
   createDatabaseAssetRepository,
   type DatabaseAssetRepository,
 } from "../content/index.ts";
@@ -69,7 +69,7 @@ export type DatabaseScopeCapabilities = Readonly<{
   knowledge: KnowledgeRepository;
   memory: MemoryConsolidationRepository;
   collectionRuntime: CollectionRuntime;
-  streamBodyStore: AssetBodyStore;
+  streamBodyStore: BodyStore;
 }>;
 
 export type DatabaseScopeRuntime = Readonly<{
@@ -78,7 +78,7 @@ export type DatabaseScopeRuntime = Readonly<{
   coordinator: EventCoordinator;
   attachmentRuntime: AttachmentRuntime;
   capabilities: DatabaseScopeCapabilities;
-  streamBodyStore: AssetBodyStore;
+  streamBodyStore: BodyStore;
   transients: TransientProcessorSet;
 }>;
 
@@ -241,8 +241,11 @@ export function createDatabaseScope(
     assets,
     validate: engine.validateCollection,
   });
-  const streamBodyStore = engine.assetStorage?.writer ??
-    createDatabaseAssetBodyStore({
+  const streamBodyStore = engine.assetStorage?.adapter?.forScope({
+    namespace: "@copilotz/stream",
+    databaseSchema,
+  }) ?? engine.assetStorage?.writer ??
+    createDatabaseBodyStore({
       session: engine.session,
       schema: databaseSchema,
     });

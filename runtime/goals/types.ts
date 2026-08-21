@@ -11,7 +11,7 @@ import type {
 } from "../domain/index.ts";
 import type { CopilotzEvent } from "../events/index.ts";
 import type { PluginRegistry } from "../plugins/index.ts";
-import type { FeatureInvoker } from "../features/index.ts";
+import type { FeatureHostContext } from "../features/index.ts";
 import type { RunHandle, RunInput } from "../attachments/index.ts";
 
 export type GoalStatus =
@@ -217,7 +217,7 @@ export type GoalRuntime = Readonly<{
 export type CreateGoalRuntimeOptions = Readonly<{
   registry: Pick<PluginRegistry, "require">;
   collectionRuntime: CollectionRuntime;
-  features(namespace: string): FeatureInvoker;
+  features(namespace: string): FeatureHostContext;
   resolver: Pick<ContentResolver, "getMany">;
   run(input: RunInput): Promise<RunHandle>;
   defaultNamespace?: string;

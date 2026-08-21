@@ -11,28 +11,40 @@ import {
   type CopilotzProcessorContext,
   createCopilotzEngine,
 } from "./index.ts";
-import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
-import type { FeatureResource } from "../features/index.ts";
+import {
+  coreCollectionsPlugin,
+  coreFeatureAliases,
+} from "@copilotz/copilotz/plugins/core";
+import {
+  defineFeature,
+  type FeatureExecuteContext,
+} from "../features/index.ts";
 
 Deno.test("features see the same deliveries from processor and direct contexts", async () => {
   const namespace = "tenant-feature-deliveries";
   let processorDeliveryIds: readonly string[] | undefined;
-  const feature: FeatureResource = Object.freeze({
+  const feature = defineFeature({
     id: "test.delivery-probe",
-    alias: "deliveryProbe",
-    mode: "read",
     actions: {
-      async list(_input, context) {
-        return (await context.deliveries.list()).map((delivery) => delivery.id);
+      list: {
+        inputSchema: { type: "object" } as const,
+        async execute(_input: unknown, context: FeatureExecuteContext) {
+          return (await context.deliveries.list()).map((delivery) =>
+            delivery.id
+          );
+        },
       },
     },
   });
   const processor = defineProcessor<CopilotzProcessorContext>({
     id: "test.delivery-probe-processor",
     on: [{ eventType: "thread.created" }],
+    requires: {
+      features: { deliveryProbe: feature },
+    },
     async handle(_event, context) {
       processorDeliveryIds = await context.features.deliveryProbe
-        .list() as readonly string[];
+        .list({}) as readonly string[];
     },
   });
   const plugin = definePlugin({
@@ -58,14 +70,15 @@ Deno.test("features see the same deliveries from processor and direct contexts",
     defaultDatabaseSchema: "copilotz_feature_delivery_parity",
   });
   try {
-    await createTestDomainContext(engine, namespace).features.thread.create({
-      id: "thread-a",
-      participants: [{
-        id: "user-a",
-        externalId: "user-a",
-        participantType: "human",
-      }],
-    });
+    await createTestDomainContext(engine, namespace, coreFeatureAliases)
+      .features.thread.create({
+        id: "thread-a",
+        participants: [{
+          id: "user-a",
+          externalId: "user-a",
+          participantType: "human",
+        }],
+      });
     const created = (await engine.events.list({ namespace, limit: 100 })).find(
       (event) =>
         event.type === "thread.created" && event.subject?.id === "thread-a",

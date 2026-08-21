@@ -5,11 +5,7 @@ import type {
   ScopedCollection,
 } from "../collections/index.ts";
 import type { EventRouting, EventVisibility } from "../events/index.ts";
-import type {
-  AssetBodyHead,
-  AssetBodyStore,
-  ContentRef,
-} from "../content/index.ts";
+import type { BodyHead, BodyStore, ContentRef } from "../content/index.ts";
 import {
   createProgressiveBodyWriter,
   type ProgressiveBodyWriter,
@@ -22,29 +18,23 @@ import {
 
 export type StreamWriter = Readonly<{
   id: string;
-  assetId: string;
-  key: string;
   offset(): number;
-  discarded(): number;
   created: CollectionRecord;
   write(chunk: Uint8Array): Promise<void>;
-  retain(byteLength?: number): Promise<AssetBodyHead>;
-  discard(byteLength?: number): Promise<void>;
-  finalize(): Promise<AssetBodyHead>;
+  finalize(): Promise<BodyHead>;
   abandon(reason?: string): Promise<void>;
   fail(message: string, code?: string): Promise<void>;
 }>;
 
 export type CreateStreamWriterInput = Readonly<{
   streams: ScopedCollection;
-  store: AssetBodyStore;
+  store: BodyStore;
   namespace: string;
   threadId: string;
   lane: string;
   mediaType: string;
   participantId?: string;
   id?: string;
-  assetId?: string;
   metadata?: Record<string, unknown>;
   identity?: CollectionMutationIdentity;
   routing?: EventRouting;
@@ -66,8 +56,8 @@ export async function createStreamWriter(
   }
   const createId = input.createId ?? ulid;
   const id = input.id?.trim() || createId();
-  const assetId = input.assetId?.trim() || createId();
-  const key = streamBodyKey({ namespace, assetId });
+  const assetId = createId();
+  const bodyId = streamBodyKey({ namespace, assetId });
   const content: ContentRef[] = [Object.freeze({
     assetId,
     kind: contentKindFromMediaType(mediaType),
@@ -76,7 +66,7 @@ export async function createStreamWriter(
   })];
   const body: ProgressiveBodyWriter = await createProgressiveBodyWriter(
     input.store,
-    { key, mediaType },
+    { bodyId, mediaType },
   );
   let created: CollectionRecord;
   try {
@@ -85,6 +75,7 @@ export async function createStreamWriter(
       threadId,
       lane,
       mediaType,
+      bodyId,
       content,
       ...(input.participantId?.trim()
         ? { participantId: input.participantId.trim() }
@@ -112,18 +103,9 @@ export async function createStreamWriter(
 
   return Object.freeze({
     id,
-    assetId,
-    key,
     offset: () => body.offset(),
-    discarded: () => body.discarded(),
     created,
     write: (chunk) => body.write(chunk),
-    async retain(byteLength) {
-      const head = await body.retain(byteLength);
-      await close("close", { content });
-      return head;
-    },
-    discard: (byteLength) => body.discard(byteLength),
     async finalize() {
       const head = await body.finalize();
       await close("close", { content });

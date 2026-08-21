@@ -32,6 +32,12 @@ export type Processor<TContext extends ProcessorContext = ProcessorContext> = {
   on: readonly ProcessorMatchClause[];
   /** Defaults to `inherit`. Detached work remains durable but non-blocking. */
   settlement?: ProcessorSettlement;
+  /** Consumer-local Feature aliases. Values must be Feature definitions. */
+  requires?: Readonly<{
+    features?: Readonly<
+      Record<string, { readonly id: string; readonly actions: object }>
+    >;
+  }>;
   handle(
     event: ProcessorEvent,
     context: TContext,

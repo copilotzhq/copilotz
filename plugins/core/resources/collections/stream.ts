@@ -40,6 +40,7 @@ export const streamCollection: CollectionDefinition = defineCollection({
       participantId: { type: "string" },
       lane: { type: "string" },
       mediaType: { type: "string" },
+      bodyId: { type: "string" },
       state: {
         type: "string",
         enum: ["open", "closed", "failed", "abandoned"],
@@ -75,6 +76,7 @@ export const streamCollection: CollectionDefinition = defineCollection({
       "emitted_stream",
     ),
   },
+  bodyRefs: { fields: ["bodyId"] },
   queries: {
     byThreadId: {
       filter({ input }) {
@@ -120,6 +122,7 @@ export const streamCollection: CollectionDefinition = defineCollection({
             ...(body.content ? { content: body.content } : {}),
             ...(body.metadata ? { metadata: body.metadata } : {}),
           },
+          unset: ["bodyId"],
         };
       },
     },
@@ -135,6 +138,7 @@ export const streamCollection: CollectionDefinition = defineCollection({
               : {}),
             ...(body.metadata ? { metadata: body.metadata } : {}),
           },
+          unset: ["bodyId"],
         };
       },
     },

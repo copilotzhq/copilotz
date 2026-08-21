@@ -1,12 +1,24 @@
 import { S3Client } from "@bradenmacdonald/s3-lite-client";
+import { digestContent } from "./digest.ts";
 import { createContentError } from "./errors.ts";
 import type {
-  AssetBodyHead,
-  AssetBodySpill,
-  AssetBodySpillHead,
-  AssetBodyStore,
-  PutAssetBodyInput,
-  S3AssetStorageConfig,
+  AbortBodyInput,
+  AppendBodyInput,
+  AppendResult,
+  BodyHead,
+  BodyStore,
+  MutableBodyHead,
+  PutBodyInput,
+  ReadBodyRangeInput,
+  ReserveBodyInput,
+  S3BodyStorageConfig,
+  WriterCapability,
+} from "./body-store.ts";
+import {
+  bodyProtectionMs,
+  bodyProtectionRemainingMs,
+  bodyProtectionUntil,
+  writerCapabilityFromHead,
 } from "./body-store.ts";
 
 function cleanEndpoint(value: string): string {
@@ -37,7 +49,7 @@ function normalizeDigest(
     : undefined;
 }
 
-function assertStored(input: PutAssetBodyInput, head: AssetBodyHead): void {
+function assertStored(input: PutBodyInput, head: BodyHead): void {
   if (
     head.byteLength !== input.bytes.byteLength ||
     head.digest !== input.digest ||
@@ -58,10 +70,35 @@ function requestPayload(
     : new Uint8Array(bytes);
 }
 
+function skipStreamOffset(
+  stream: ReadableStream<Uint8Array>,
+  offset: number,
+): ReadableStream<Uint8Array> {
+  if (offset <= 0) return stream;
+  let remaining = offset;
+  return stream.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        if (remaining <= 0) {
+          controller.enqueue(chunk);
+          return;
+        }
+        if (chunk.byteLength <= remaining) {
+          remaining -= chunk.byteLength;
+          return;
+        }
+        const rest = chunk.subarray(remaining);
+        remaining = 0;
+        controller.enqueue(rest);
+      },
+    }),
+  );
+}
+
 /** Creates the default S3-compatible store, including GCS XML/HMAC usage. */
-export function createS3AssetBodyStore(
-  config: S3AssetStorageConfig,
-): AssetBodyStore {
+export function createS3BodyStore(
+  config: S3BodyStorageConfig,
+): BodyStore {
   const backendId = config.backendId.trim();
   const bucket = config.bucket.trim();
   if (!backendId || !bucket) {
@@ -76,10 +113,11 @@ export function createS3AssetBodyStore(
     sessionToken: config.sessionToken,
     pathStyle: config.pathStyle ?? true,
   });
+  const protectionMs = bodyProtectionMs(config.protectionMs);
 
-  const head = async (key: string): Promise<AssetBodyHead | null> => {
+  const head = async (bodyId: string): Promise<BodyHead | null> => {
     try {
-      const status = await client.statObject(key, { bucketName: bucket });
+      const status = await client.statObject(bodyId, { bucketName: bucket });
       const fields = status as unknown as Record<string, unknown>;
       const metadata = (fields.metadata ?? fields.headers ?? {}) as Record<
         string,
@@ -111,10 +149,23 @@ export function createS3AssetBodyStore(
         : undefined;
       const etag = typeof fields.etag === "string" ? fields.etag : undefined;
       return Object.freeze({
-        key,
+        bodyId,
+        state: "ready" as const,
         byteLength,
         mediaType,
         digest,
+        maintenanceVersion: Number(
+          metadataValue(metadata, "x-amz-meta-copilotz-maintenance-version") ??
+            1,
+        ),
+        ...(metadataValue(metadata, "x-amz-meta-copilotz-protected-until")
+          ? {
+            protectedUntil: metadataValue(
+              metadata,
+              "x-amz-meta-copilotz-protected-until",
+            )!,
+          }
+          : {}),
         ...(etag ? { etag } : {}),
         ...(lastModified ? { lastModified } : {}),
       });
@@ -184,8 +235,19 @@ export function createS3AssetBodyStore(
     byteLength: number;
     discarded: number;
     reservationId: string;
-    parts: { seq: number; offset: number; length: number }[];
+    writerGeneration: number;
+    leaseExpiresAt: string;
+    maintenanceVersion: number;
+    parts: { seq: number; appendId: string; offset: number; length: number }[];
   };
+
+  type ProgressiveBodyOps = Readonly<{
+    reserve(input: ReserveBodyInput): Promise<WriterCapability>;
+    head(bodyId: string): Promise<MutableBodyHead | null>;
+    append(input: AppendBodyInput): Promise<AppendResult>;
+    readRange(input: ReadBodyRangeInput): Promise<Uint8Array>;
+    abort(input: AbortBodyInput): Promise<void>;
+  }>;
 
   const readSpillMeta = async (key: string): Promise<S3SpillMeta | null> => {
     const bytes = await getObjectBytes(stagingMetaKey(key));
@@ -205,6 +267,15 @@ export function createS3AssetBodyStore(
     parsed.reservationId = typeof parsed.reservationId === "string"
       ? parsed.reservationId
       : "";
+    parsed.writerGeneration = typeof parsed.writerGeneration === "number"
+      ? parsed.writerGeneration
+      : 1;
+    parsed.leaseExpiresAt = typeof parsed.leaseExpiresAt === "string"
+      ? parsed.leaseExpiresAt
+      : "";
+    parsed.maintenanceVersion = typeof parsed.maintenanceVersion === "number"
+      ? parsed.maintenanceVersion
+      : 1;
     return parsed;
   };
 
@@ -219,14 +290,18 @@ export function createS3AssetBodyStore(
     client.deleteObject(key, { bucketName: bucket });
 
   const spillHead = (
-    key: string,
+    bodyId: string,
     meta: S3SpillMeta,
-  ): AssetBodySpillHead =>
+  ): MutableBodyHead =>
     Object.freeze({
-      key,
+      bodyId,
+      state: "open" as const,
       mediaType: meta.mediaType,
       byteLength: meta.byteLength,
       discarded: meta.discarded,
+      maintenanceVersion: meta.maintenanceVersion,
+      writerGeneration: meta.writerGeneration,
+      writerLeaseRemainingMs: bodyProtectionRemainingMs(meta.leaseExpiresAt),
       reservationId: meta.reservationId,
     });
 
@@ -253,9 +328,10 @@ export function createS3AssetBodyStore(
     }
   };
 
-  const spill: AssetBodySpill = {
+  const progressive: ProgressiveBodyOps = {
     async reserve(input) {
-      const existing = await readSpillMeta(input.key);
+      const reservationId = crypto.randomUUID();
+      const existing = await readSpillMeta(input.bodyId);
       if (existing) {
         if (existing.mediaType !== input.mediaType) {
           throw createContentError(
@@ -263,32 +339,47 @@ export function createS3AssetBodyStore(
             "Progressive staging media type does not match the writer.",
           );
         }
-        if (!input.takeover) {
+        if (
+          input.expectedGeneration === undefined ||
+          input.expectedGeneration !== existing.writerGeneration
+        ) {
           throw createContentError(
             "asset_conflict",
             "A progressive writer already owns this asset body.",
           );
         }
-        existing.reservationId = input.reservationId;
-        await writeSpillMeta(input.key, existing);
-        return spillHead(input.key, existing);
+        if (bodyProtectionRemainingMs(existing.leaseExpiresAt) > 0) {
+          throw createContentError(
+            "asset_conflict",
+            "A progressive writer lease is still live for this asset body.",
+          );
+        }
+        existing.reservationId = reservationId;
+        existing.writerGeneration += 1;
+        existing.maintenanceVersion += 1;
+        existing.leaseExpiresAt = bodyProtectionUntil(protectionMs);
+        await writeSpillMeta(input.bodyId, existing);
+        return writerCapabilityFromHead(spillHead(input.bodyId, existing));
       }
       const created: S3SpillMeta = {
         mediaType: input.mediaType,
         byteLength: 0,
         discarded: 0,
-        reservationId: input.reservationId,
+        reservationId,
+        writerGeneration: 1,
+        leaseExpiresAt: bodyProtectionUntil(protectionMs),
+        maintenanceVersion: 1,
         parts: [],
       };
       try {
         await putObject(
-          stagingMetaKey(input.key),
+          stagingMetaKey(input.bodyId),
           new TextEncoder().encode(JSON.stringify(created)),
           "application/json",
           { "if-none-match": "*" },
         );
       } catch (error) {
-        const raced = await readSpillMeta(input.key);
+        const raced = await readSpillMeta(input.bodyId);
         if (raced) {
           throw createContentError(
             "asset_conflict",
@@ -298,16 +389,16 @@ export function createS3AssetBodyStore(
         }
         throw error;
       }
-      return spillHead(input.key, created);
+      return writerCapabilityFromHead(spillHead(input.bodyId, created));
     },
-    async head(key) {
-      const meta = await readSpillMeta(key);
-      return meta ? spillHead(key, meta) : null;
+    async head(bodyId) {
+      const meta = await readSpillMeta(bodyId);
+      return meta ? spillHead(bodyId, meta) : null;
     },
     async append(input) {
-      const existing = await requireSpillMeta(input.key);
-      requireOwner(existing, input.reservationId);
-      if (existing.mediaType !== input.mediaType) {
+      const existing = await requireSpillMeta(input.writer.bodyId);
+      requireOwner(existing, input.writer.reservationId);
+      if (existing.mediaType !== input.writer.mediaType) {
         throw createContentError(
           "asset_conflict",
           "Progressive staging media type does not match the writer.",
@@ -315,24 +406,63 @@ export function createS3AssetBodyStore(
       }
       const meta: S3SpillMeta = existing;
       if (input.bytes.byteLength > 0) {
+        const duplicate = meta.parts.find((part) =>
+          part.appendId === input.appendId
+        );
+        if (duplicate) {
+          const bytes = await getObjectBytes(
+            stagingPartKey(input.writer.bodyId, duplicate.seq),
+          );
+          const same = duplicate.offset === input.expectedOffset &&
+            bytes?.byteLength === input.bytes.byteLength &&
+            bytes.every((byte, index) => byte === input.bytes[index]);
+          if (!same) {
+            throw createContentError(
+              "asset_conflict",
+              "Progressive append id was reused with different bytes.",
+            );
+          }
+          return Object.freeze({
+            startOffset: input.expectedOffset,
+            endOffset: meta.byteLength,
+            protection: Object.freeze({
+              remainingMs: bodyProtectionRemainingMs(meta.leaseExpiresAt),
+            }),
+          });
+        }
+        if (input.expectedOffset !== meta.byteLength) {
+          throw createContentError(
+            "asset_conflict",
+            "Progressive append expected offset does not match the body.",
+          );
+        }
         const seq = (meta.parts.at(-1)?.seq ?? -1) + 1;
         await putObject(
-          stagingPartKey(input.key, seq),
+          stagingPartKey(input.writer.bodyId, seq),
           input.bytes,
-          input.mediaType,
+          input.writer.mediaType,
         );
         meta.parts.push({
           seq,
+          appendId: input.appendId,
           offset: meta.byteLength,
           length: input.bytes.byteLength,
         });
         meta.byteLength += input.bytes.byteLength;
       }
-      await writeSpillMeta(input.key, meta);
-      return spillHead(input.key, meta);
+      meta.maintenanceVersion += 1;
+      meta.leaseExpiresAt = bodyProtectionUntil(protectionMs);
+      await writeSpillMeta(input.writer.bodyId, meta);
+      return Object.freeze({
+        startOffset: input.expectedOffset,
+        endOffset: meta.byteLength,
+        protection: Object.freeze({
+          remainingMs: bodyProtectionRemainingMs(meta.leaseExpiresAt),
+        }),
+      });
     },
-    async read(input) {
-      const meta = await requireSpillMeta(input.key);
+    async readRange(input) {
+      const meta = await requireSpillMeta(input.bodyId);
       const start = Math.max(input.offset, meta.discarded);
       const end = Math.min(input.end, meta.byteLength);
       if (end <= start) return new Uint8Array();
@@ -342,7 +472,7 @@ export function createS3AssetBodyStore(
         const partEnd = part.offset + part.length;
         if (partEnd <= start || part.offset >= end) continue;
         const bytes = await getObjectBytes(
-          stagingPartKey(input.key, part.seq),
+          stagingPartKey(input.bodyId, part.seq),
         );
         if (!bytes || bytes.byteLength !== part.length) {
           throw createContentError(
@@ -357,94 +487,28 @@ export function createS3AssetBodyStore(
       }
       return output;
     },
-    async truncate(key, byteLength, reservationId) {
-      const meta = await requireSpillMeta(key);
-      requireOwner(meta, reservationId);
-      if (byteLength < meta.discarded || byteLength > meta.byteLength) {
-        throw createContentError(
-          "content_invalid",
-          "Progressive truncate is outside the committed range.",
-        );
-      }
-      const kept: S3SpillMeta["parts"] = [];
-      for (const part of meta.parts) {
-        if (part.offset >= byteLength) {
-          await client.deleteObject(
-            stagingPartKey(key, part.seq),
-            { bucketName: bucket },
-          );
-          continue;
-        }
-        if (part.offset + part.length <= byteLength) {
-          kept.push(part);
-          continue;
-        }
-        const length = byteLength - part.offset;
-        const bytes = await getObjectBytes(stagingPartKey(key, part.seq));
-        if (!bytes) {
-          throw createContentError(
-            "asset_corrupted",
-            "Progressive object staging part is missing.",
-          );
-        }
-        await putObject(
-          stagingPartKey(key, part.seq),
-          bytes.subarray(0, length),
-          meta.mediaType,
-        );
-        kept.push({ ...part, length });
-      }
-      meta.parts = kept;
-      meta.byteLength = byteLength;
-      await writeSpillMeta(key, meta);
-      return spillHead(key, meta);
-    },
-    async discardPrefix(key, byteLength, reservationId) {
-      const meta = await requireSpillMeta(key);
-      requireOwner(meta, reservationId);
-      if (byteLength < meta.discarded || byteLength > meta.byteLength) {
-        throw createContentError(
-          "content_invalid",
-          "Progressive discard is outside the committed range.",
-        );
-      }
-      const kept: S3SpillMeta["parts"] = [];
-      for (const part of meta.parts) {
-        if (part.offset + part.length <= byteLength) {
-          await client.deleteObject(
-            stagingPartKey(key, part.seq),
-            { bucketName: bucket },
-          );
-          continue;
-        }
-        kept.push(part);
-      }
-      meta.parts = kept;
-      meta.discarded = byteLength;
-      await writeSpillMeta(key, meta);
-      return spillHead(key, meta);
-    },
-    async delete(key, reservationId) {
-      const meta = await readSpillMeta(key);
+    async abort(input) {
+      const meta = await readSpillMeta(input.writer.bodyId);
       if (meta) {
-        requireOwner(meta, reservationId);
+        requireOwner(meta, input.writer.reservationId);
         for (const part of meta.parts) {
-          await deleteObject(stagingPartKey(key, part.seq));
+          await deleteObject(stagingPartKey(input.writer.bodyId, part.seq));
         }
       }
-      await deleteObject(stagingMetaKey(key));
+      await deleteObject(stagingMetaKey(input.writer.bodyId));
     },
   };
 
-  const store: AssetBodyStore = {
+  const store: BodyStore = {
     kind: "object",
     backendId,
     async put(input) {
       let response: Response;
+      const protectedUntil = bodyProtectionUntil(protectionMs);
       try {
         response = await client.makeRequest({
           method: "PUT",
-          objectName: input.key,
+          objectName: input.bodyId,
           bucketName: bucket,
           statusCode: 200,
           payload: requestPayload(input.bytes),
@@ -454,13 +518,15 @@ export function createS3AssetBodyStore(
             "if-none-match": "*",
             "x-amz-meta-copilotz-sha256": input.digest.slice("sha256:".length),
             "x-amz-meta-copilotz-media-type": input.mediaType,
+            "x-amz-meta-copilotz-maintenance-version": "1",
+            "x-amz-meta-copilotz-protected-until": protectedUntil,
           }),
         });
       } catch (error) {
         // Conditional PUT is the existence probe. A preflight HEAD adds a full
         // network round trip to every new immutable object; on a conflict or
         // race, inspect the winner and preserve the same idempotency checks.
-        const raced = await head(input.key);
+        const raced = await head(input.bodyId);
         if (raced) {
           assertStored(input, raced);
           return raced;
@@ -496,21 +562,22 @@ export function createS3AssetBodyStore(
         ? new Date(lastModifiedHeader).toISOString()
         : undefined;
       return Object.freeze({
-        key: input.key,
+        bodyId: input.bodyId,
+        state: "ready" as const,
         byteLength: input.bytes.byteLength,
         mediaType: input.mediaType,
         digest: input.digest,
+        maintenanceVersion: 1,
+        protectedUntil,
         ...(etag ? { etag } : {}),
         ...(lastModified ? { lastModified } : {}),
       });
     },
-    head,
-    async read(key) {
-      const response = await client.getObject(key, { bucketName: bucket });
-      return new Uint8Array(await response.arrayBuffer());
+    async head({ bodyId }) {
+      return await head(bodyId) ?? await progressive.head(bodyId);
     },
-    async open(key) {
-      const response = await client.getObject(key, { bucketName: bucket });
+    async read({ bodyId }) {
+      const response = await client.getObject(bodyId, { bucketName: bucket });
       if (!response.body) {
         throw createContentError(
           "asset_corrupted",
@@ -519,18 +586,112 @@ export function createS3AssetBodyStore(
       }
       return response.body;
     },
-    delete: (key) => client.deleteObject(key, { bucketName: bucket }),
-    spill,
-    async *list(options = {}) {
-      for await (
-        const entry of client.listObjects({
-          bucketName: bucket,
-          prefix: options.prefix,
-        })
-      ) {
-        const value = await head(entry.key);
-        if (value) yield value;
+    async follow(input) {
+      const ready = await head(input.bodyId);
+      if (!ready) {
+        const staged = await progressive.head(input.bodyId);
+        if (!staged) {
+          throw createContentError(
+            "asset_not_found",
+            "Body was not found in the configured object backend.",
+          );
+        }
+        const bytes = await progressive.readRange({
+          bodyId: input.bodyId,
+          offset: Math.max(0, input.offset ?? 0),
+          end: staged.byteLength,
+        });
+        return new ReadableStream({
+          start(controller) {
+            controller.enqueue(bytes);
+            controller.close();
+          },
+        });
       }
+      return skipStreamOffset(
+        await store.read({ bodyId: input.bodyId }),
+        Math.max(0, input.offset ?? 0),
+      );
+    },
+    reserve: progressive.reserve,
+    append: progressive.append,
+    async seal(input) {
+      const current = await progressive.head(input.writer.bodyId);
+      if (!current || current.reservationId !== input.writer.reservationId) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive writer no longer owns this body.",
+        );
+      }
+      if (
+        input.expectedByteLength !== undefined &&
+        input.expectedByteLength !== current.byteLength
+      ) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body length does not match seal expectation.",
+        );
+      }
+      const bytes = await progressive.readRange({
+        bodyId: input.writer.bodyId,
+        offset: 0,
+        end: current.byteLength,
+      });
+      const digest = await digestContent(bytes);
+      if (input.expectedDigest && input.expectedDigest !== digest) {
+        throw createContentError(
+          "asset_conflict",
+          "Progressive body digest does not match seal expectation.",
+        );
+      }
+      const head = await store.put({
+        bodyId: input.writer.bodyId,
+        bytes,
+        mediaType: current.mediaType,
+        digest,
+      });
+      await progressive.abort(input);
+      return head;
+    },
+    abort: progressive.abort,
+    maintenance: {
+      async list(input) {
+        const states = new Set(input.states);
+        const bodies: BodyHead[] = [];
+        if (states.has("ready")) {
+          for await (
+            const entry of client.listObjects({
+              bucketName: bucket,
+            })
+          ) {
+            const value = await head(entry.key);
+            if (value && value.bodyId > (input.after ?? "")) {
+              bodies.push(value);
+              if (bodies.length >= input.limit) break;
+            }
+          }
+        }
+        bodies.sort((left, right) => left.bodyId.localeCompare(right.bodyId));
+        return Object.freeze({
+          bodies: Object.freeze(bodies),
+          ...(bodies.length === input.limit
+            ? { after: bodies[bodies.length - 1].bodyId }
+            : {}),
+        });
+      },
+      async delete(input) {
+        if (input.expectedState !== "ready") return false;
+        const current = await head(input.bodyId);
+        if (
+          !current ||
+          current.maintenanceVersion !== input.expectedMaintenanceVersion ||
+          bodyProtectionRemainingMs(current.protectedUntil) > 0
+        ) {
+          return false;
+        }
+        await client.deleteObject(input.bodyId, { bucketName: bucket });
+        return true;
+      },
     },
   };
   return Object.freeze(store);

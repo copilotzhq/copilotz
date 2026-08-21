@@ -6,7 +6,7 @@ import {
 } from "../../plugins/core/index.ts";
 import { createCollectionRuntime } from "../collections/index.ts";
 import {
-  createMemoryAssetBodyStore,
+  createMemoryBodyStore,
   digestContent,
   isContentError,
 } from "../content/index.ts";
@@ -49,6 +49,32 @@ async function readAll(
     offset += chunk.byteLength;
   }
   return bytes;
+}
+
+async function streamBodyReferenceCount(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  bodyId: string,
+): Promise<number> {
+  const result = await fixture.session.query<{ n: number | string }>(
+    `SELECT count(*) AS n
+       FROM ${fixture.store.tables.body_references}
+      WHERE namespace = $1
+        AND body_id = $2
+        AND owner_kind = 'stream'`,
+    [NAMESPACE, bodyId],
+  );
+  return Number(result.rows[0].n);
+}
+
+function requireBodyId(record: unknown): string {
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected stream record.");
+  }
+  const bodyId = (record as { bodyId?: unknown }).bodyId;
+  if (typeof bodyId !== "string" || !bodyId) {
+    throw new Error("Expected stream bodyId.");
+  }
+  return bodyId;
 }
 
 async function createFixture() {
@@ -104,7 +130,7 @@ async function createFixture() {
     store,
     executor,
     streams,
-    bodyStore: createMemoryAssetBodyStore(),
+    bodyStore: createMemoryBodyStore(),
     close: async () => {
       await executor.shutdown();
       await db.close();
@@ -123,9 +149,10 @@ Deno.test("stream writer commits created before bytes and one terminal updated",
       lane: "content",
       mediaType: "text/plain",
       id: "stream-a",
-      assetId: "asset-a",
     });
     assertEquals(writer.created.state, "open");
+    const createdBodyId = requireBodyId(writer.created);
+    assertEquals(await streamBodyReferenceCount(fixture, createdBodyId), 1);
 
     const follower = await openStreamFollower({
       streams: fixture.streams,
@@ -142,6 +169,8 @@ Deno.test("stream writer commits created before bytes and one terminal updated",
 
     const record = await fixture.streams.get({ id: writer.id });
     assertEquals(record?.state, "closed");
+    assertEquals(record?.bodyId, createdBodyId);
+    assertEquals(await streamBodyReferenceCount(fixture, createdBodyId), 1);
     const events = await fixture.store.listEvents({
       namespace: NAMESPACE,
       limit: 100,
@@ -218,9 +247,11 @@ Deno.test("abandoning a stream errors followers and writes no ready body", async
     const pending = assertRejects(() => readAll(follower.body));
     await writer.write(encoder.encode("partial"));
     await writer.abandon("cancelled");
+    const bodyId = requireBodyId(writer.created);
+    assertEquals(await streamBodyReferenceCount(fixture, bodyId), 0);
     const error = await pending;
     assertEquals(isContentError(error) && error.code, "asset_deleted");
-    assertEquals(await fixture.bodyStore.head(writer.key), null);
+    assertEquals(await fixture.bodyStore.head({ bodyId }), null);
     assertEquals(
       (await fixture.streams.get({ id: writer.id }))?.state,
       "abandoned",
@@ -234,40 +265,6 @@ Deno.test("abandoning a stream errors followers and writes no ready body", async
       })
     );
     assertEquals(isContentError(later) && later.code, "asset_deleted");
-  } finally {
-    await fixture.close();
-  }
-});
-
-Deno.test("retain keeps a verified prefix and closes the stream", async () => {
-  const fixture = await createFixture();
-  try {
-    const writer = await createStreamWriter({
-      streams: fixture.streams,
-      store: fixture.bodyStore,
-      namespace: NAMESPACE,
-      threadId: "thread-a",
-      lane: "content",
-      mediaType: "text/plain",
-    });
-    await writer.write(encoder.encode("hello world"));
-    const head = await writer.retain(5);
-    assertEquals(head.byteLength, 5);
-    assertEquals(
-      await fixture.bodyStore.read(writer.key),
-      encoder.encode("hello"),
-    );
-    const follower = await openStreamFollower({
-      streams: fixture.streams,
-      store: fixture.bodyStore,
-      namespace: NAMESPACE,
-      streamId: writer.id,
-    });
-    assertEquals(decoder.decode(await readAll(follower.body)), "hello");
-    assertEquals(
-      (await fixture.streams.get({ id: writer.id }))?.state,
-      "closed",
-    );
   } finally {
     await fixture.close();
   }

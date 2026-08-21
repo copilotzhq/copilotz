@@ -124,7 +124,7 @@ export async function createCopilotzApplication(
             events: { list: (input) => scope.events.list(input) },
             deliveries: { list: (input) => scope.deliveries.list(input) },
             relations: { list: (input) => scope.relations.list(input) },
-          }).features,
+          }),
         resolver: scope.content.resolver,
         run: (input) =>
           scope.run({

@@ -1,7 +1,7 @@
 import type {
-  AssetBodyHead,
-  AssetFilesystemAccess,
-  PutAssetBodyInput,
+  BodyFilesystemAccess,
+  BodyHead,
+  PutBodyInput,
 } from "../../content/index.ts";
 
 function safePath(root: string, key: string): string {
@@ -31,8 +31,8 @@ async function writeAll(file: Deno.FsFile, bytes: Uint8Array): Promise<void> {
 /** Deno host capability for declarative filesystem asset storage. */
 export function denoAssetFilesystem(
   root: string,
-): AssetFilesystemAccess {
-  const readHead = async (path: string): Promise<AssetBodyHead | null> => {
+): BodyFilesystemAccess {
+  const readHead = async (path: string): Promise<BodyHead | null> => {
     try {
       const [stat, metadata] = await Promise.all([
         Deno.stat(path),
@@ -41,10 +41,17 @@ export function denoAssetFilesystem(
         >,
       ]);
       return Object.freeze({
-        key: String(metadata.key),
+        bodyId: String(metadata.bodyId),
+        state: "ready" as const,
         byteLength: stat.size,
         mediaType: String(metadata.mediaType),
         digest: String(metadata.digest) as `sha256:${string}`,
+        maintenanceVersion: typeof metadata.maintenanceVersion === "number"
+          ? metadata.maintenanceVersion
+          : 1,
+        ...(typeof metadata.protectedUntil === "string"
+          ? { protectedUntil: metadata.protectedUntil }
+          : {}),
         ...(typeof metadata.etag === "string" ? { etag: metadata.etag } : {}),
         ...(stat.mtime ? { lastModified: stat.mtime.toISOString() } : {}),
       });
@@ -53,9 +60,9 @@ export function denoAssetFilesystem(
       throw error;
     }
   };
-  const access: AssetFilesystemAccess = {
-    async writeExclusive(input: PutAssetBodyInput) {
-      const path = safePath(root, input.key);
+  const access: BodyFilesystemAccess = {
+    async writeExclusive(input: PutBodyInput) {
+      const path = safePath(root, input.bodyId);
       await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), {
         recursive: true,
       });
@@ -79,9 +86,11 @@ export function denoAssetFilesystem(
         await Deno.writeTextFile(
           metadataPath(path),
           JSON.stringify({
-            key: input.key,
+            bodyId: input.bodyId,
             mediaType: input.mediaType,
             digest: input.digest,
+            maintenanceVersion: 1,
+            protectedUntil: input.protectedUntil ?? new Date().toISOString(),
             etag: input.digest.slice("sha256:".length),
           }),
           { createNew: true },
@@ -93,14 +102,14 @@ export function denoAssetFilesystem(
       return "created";
     },
     async writeReplace(input) {
-      const path = safePath(root, input.key);
+      const path = safePath(root, input.bodyId);
       await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), {
         recursive: true,
       });
       await Deno.writeFile(path, input.bytes);
     },
     async append(input) {
-      const path = safePath(root, input.key);
+      const path = safePath(root, input.bodyId);
       await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), {
         recursive: true,
       });
@@ -115,15 +124,6 @@ export function denoAssetFilesystem(
         return (await file.stat()).size;
       } finally {
         file.close();
-      }
-    },
-    async truncate(path, byteLength) {
-      const full = safePath(root, path);
-      try {
-        await Deno.truncate(full, byteLength);
-      } catch (error) {
-        if (error instanceof Deno.errors.NotFound && byteLength === 0) return;
-        throw error;
       }
     },
     stat: (key) => readHead(safePath(root, key)),
@@ -152,7 +152,7 @@ export function denoAssetFilesystem(
       const rootPath = safePath(root, prefix);
       const walk = async function* (
         directory: string,
-      ): AsyncGenerator<AssetBodyHead> {
+      ): AsyncGenerator<BodyHead> {
         let entries: Deno.DirEntry[];
         try {
           entries = [];

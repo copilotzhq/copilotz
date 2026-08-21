@@ -1,49 +1,44 @@
 import type {
-  AssetBodyHead,
-  AssetBodySpill,
-  AssetBodySpillHead,
-  AssetBodyStore,
+  BodyHead,
+  BodyStore,
+  MutableBodyHead,
+  WriterCapability,
 } from "./body-store.ts";
-import { digestContent } from "./digest.ts";
 import { createContentError } from "./errors.ts";
 
 const DEFAULT_MAX_BUFFERED_BYTES = 1_048_576;
 
 export type ProgressiveBodyWriter = Readonly<{
-  key: string;
+  bodyId: string;
   offset(): number;
-  discarded(): number;
   write(chunk: Uint8Array): Promise<void>;
-  retain(byteLength?: number): Promise<AssetBodyHead>;
-  discard(byteLength?: number): Promise<void>;
-  finalize(): Promise<AssetBodyHead>;
+  finalize(): Promise<BodyHead>;
   abandon(): Promise<void>;
 }>;
 
 export type ProgressiveBodyFollower = Readonly<{
-  key: string;
+  bodyId: string;
   offset: number;
   mediaType: string;
   body: ReadableStream<Uint8Array>;
 }>;
 
 type LiveBody = {
-  key: string;
+  bodyId: string;
   mediaType: string;
-  chunks: Uint8Array[];
   byteLength: number;
   discarded: number;
+  chunks: Uint8Array[];
   state: "open" | "finalized" | "abandoned";
   writerOpen: boolean;
   maxBufferedBytes: number;
-  spill?: AssetBodySpill;
   followers: Set<{ offset: number }>;
   waiters: Set<() => void>;
 };
 
-const lives = new WeakMap<AssetBodyStore, Map<string, LiveBody>>();
+const lives = new WeakMap<BodyStore, Map<string, LiveBody>>();
 
-function livesFor(store: AssetBodyStore): Map<string, LiveBody> {
+function livesFor(store: BodyStore): Map<string, LiveBody> {
   const existing = lives.get(store);
   if (existing) return existing;
   const created = new Map<string, LiveBody>();
@@ -95,31 +90,14 @@ function sliceChunks(
   return output;
 }
 
-function requireRange(
-  live: LiveBody,
-  byteLength: number,
-  action: string,
-): number {
-  if (byteLength < live.discarded || byteLength > live.byteLength) {
-    throw createContentError(
-      "content_invalid",
-      `Progressive ${action} is outside the committed range.`,
-    );
-  }
-  return byteLength;
-}
-
-async function readCommitted(
+function readCommitted(
   live: LiveBody,
   offset: number,
   end: number,
-): Promise<Uint8Array> {
+): Uint8Array {
   const start = Math.max(offset, live.discarded);
   const stop = Math.min(end, live.byteLength);
   if (stop <= start) return new Uint8Array();
-  if (live.spill) {
-    return await live.spill.read({ key: live.key, offset: start, end: stop });
-  }
   return sliceChunks(
     live.chunks,
     start - live.discarded,
@@ -128,26 +106,19 @@ async function readCommitted(
 }
 
 export async function createProgressiveBodyWriter(
-  store: AssetBodyStore,
+  store: BodyStore,
   input: Readonly<{
-    key: string;
+    bodyId: string;
     mediaType: string;
     maxBufferedBytes?: number;
     /** Explicitly fence a writer lost during process recovery. */
     takeover?: boolean;
   }>,
 ): Promise<ProgressiveBodyWriter> {
-  const key = input.key.trim();
-  if (!key) throw new TypeError("Progressive body key must be non-empty.");
-  const spill = store.kind === "memory" ? undefined : store.spill;
-  if (store.kind !== "memory" && !spill) {
-    throw createContentError(
-      "asset_storage_unavailable",
-      "Progressive writes require spill on filesystem, database, and object stores.",
-    );
-  }
+  const bodyId = input.bodyId.trim();
+  if (!bodyId) throw new TypeError("Progressive bodyId must be non-empty.");
   const table = livesFor(store);
-  const existing = table.get(key);
+  const existing = table.get(bodyId);
   if (existing?.writerOpen) {
     if (!input.takeover) {
       throw createContentError(
@@ -159,30 +130,39 @@ export async function createProgressiveBodyWriter(
     existing.writerOpen = false;
     notify(existing);
   }
-  const reservationId = crypto.randomUUID();
-  const staged = await spill?.reserve({
-    key,
+  const takeoverHead = input.takeover ? await store.head({ bodyId }) : null;
+  const expectedGeneration = takeoverHead?.state !== "ready"
+    ? takeoverHead?.writerGeneration
+    : undefined;
+  let writer: WriterCapability = await store.reserve({
+    bodyId,
     mediaType: input.mediaType,
-    reservationId,
-    takeover: input.takeover,
+    ...(expectedGeneration !== undefined ? { expectedGeneration } : {}),
   });
+  const initialChunks = writer.byteLength > 0
+    ? [
+      await readStreamBytes(await store.follow({
+        bodyId,
+        offset: writer.discarded,
+      })),
+    ]
+    : [];
   const live: LiveBody = {
-    key,
+    bodyId,
     mediaType: input.mediaType,
-    chunks: [],
-    byteLength: staged?.byteLength ?? 0,
-    discarded: staged?.discarded ?? 0,
+    byteLength: writer.byteLength,
+    discarded: writer.discarded,
+    chunks: initialChunks,
     state: "open",
     writerOpen: true,
     maxBufferedBytes: Math.max(
       1,
       input.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES,
     ),
-    spill,
     followers: existing?.followers ?? new Set(),
     waiters: existing?.waiters ?? new Set(),
   };
-  table.set(key, live);
+  table.set(bodyId, live);
   notify(live);
 
   const requireOpen = (): void => {
@@ -194,86 +174,48 @@ export async function createProgressiveBodyWriter(
     }
   };
 
-  const publish = async (): Promise<AssetBodyHead> => {
-    const bytes = await readCommitted(live, live.discarded, live.byteLength);
-    const digest = await digestContent(bytes);
-    const head = await store.put({
-      key,
-      bytes,
-      mediaType: live.mediaType,
-      digest,
+  const publish = async (): Promise<BodyHead> => {
+    const head = await store.seal({
+      writer,
+      expectedByteLength: live.byteLength,
     });
     live.state = "finalized";
     live.writerOpen = false;
     notify(live);
-    await live.spill?.delete(key, reservationId);
     return head;
   };
 
   return Object.freeze({
-    key,
+    bodyId,
     offset: () => live.byteLength,
-    discarded: () => live.discarded,
     async write(chunk) {
       requireOpen();
       if (chunk.byteLength === 0) return;
-      if (!live.spill) {
-        while (
-          live.followers.size > 0 &&
-          live.byteLength - minFollowerOffset(live) >= live.maxBufferedBytes
-        ) {
-          requireOpen();
-          await wait(live);
-        }
+      while (
+        store.kind === "memory" &&
+        live.followers.size > 0 &&
+        live.byteLength - minFollowerOffset(live) >= live.maxBufferedBytes
+      ) {
         requireOpen();
-        live.chunks.push(chunk.slice());
-        live.byteLength += chunk.byteLength;
-        notify(live);
-        return;
+        await wait(live);
       }
-      const head = await live.spill.append({
-        key,
-        mediaType: live.mediaType,
-        reservationId,
+      requireOpen();
+      const previousOffset = live.byteLength;
+      const result = await store.append({
+        writer,
+        expectedOffset: previousOffset,
+        appendId: `offset:${previousOffset}`,
         bytes: chunk,
       });
-      live.byteLength = head.byteLength;
-      live.discarded = head.discarded;
-      notify(live);
-    },
-    async retain(byteLength) {
-      requireOpen();
-      const n = requireRange(live, byteLength ?? live.byteLength, "retain");
-      if (n < live.byteLength) {
-        if (live.spill) {
-          await live.spill.truncate(key, n, reservationId);
-        } else {
-          live.chunks = [
-            sliceChunks(live.chunks, 0, n - live.discarded),
-          ].filter((chunk) => chunk.byteLength > 0);
-        }
-        live.byteLength = n;
+      if (result.endOffset > previousOffset) {
+        live.chunks.push(chunk.slice());
       }
-      return await publish();
-    },
-    async discard(byteLength) {
-      requireOpen();
-      const n = requireRange(live, byteLength ?? live.byteLength, "discard");
-      if (n === live.discarded) return;
-      if (live.spill) {
-        const head = await live.spill.discardPrefix(key, n, reservationId);
-        live.discarded = head.discarded;
-        live.byteLength = head.byteLength;
-      } else {
-        live.chunks = [
-          sliceChunks(
-            live.chunks,
-            n - live.discarded,
-            live.byteLength - live.discarded,
-          ),
-        ].filter((chunk) => chunk.byteLength > 0);
-        live.discarded = n;
-      }
+      live.byteLength = result.endOffset;
+      writer = {
+        ...writer,
+        byteLength: result.endOffset,
+        protection: result.protection,
+      };
       notify(live);
     },
     async finalize() {
@@ -284,21 +226,20 @@ export async function createProgressiveBodyWriter(
       requireOpen();
       live.state = "abandoned";
       live.writerOpen = false;
-      live.chunks = [];
       notify(live);
-      await live.spill?.delete(key, reservationId);
-      table.delete(key);
+      await store.abort({ writer });
+      table.delete(bodyId);
     },
   });
 }
 
 export async function openProgressiveBodyFollower(
-  store: AssetBodyStore,
-  input: Readonly<{ key: string; offset?: number }>,
+  store: BodyStore,
+  input: Readonly<{ bodyId: string; offset?: number }>,
 ): Promise<ProgressiveBodyFollower> {
-  const key = input.key.trim();
+  const bodyId = input.bodyId.trim();
   const start = Math.max(0, input.offset ?? 0);
-  const live = livesFor(store).get(key);
+  const live = livesFor(store).get(bodyId);
   if (live?.state === "abandoned") {
     throw createContentError(
       "asset_deleted",
@@ -312,20 +253,20 @@ export async function openProgressiveBodyFollower(
         "Progressive asset prefix was discarded.",
       );
     }
-    return followLive(store, live, key, start);
+    return followLive(store, live, bodyId, start);
   }
 
-  const stored = await store.head(key);
-  if (stored) {
+  const stored = await store.head({ bodyId });
+  if (stored?.state === "ready") {
     return Object.freeze({
-      key,
+      bodyId,
       offset: start,
       mediaType: stored.mediaType,
-      body: skipOffset(await store.open(key), start),
+      body: await store.follow({ bodyId, offset: start }),
     });
   }
 
-  const staged = await store.spill?.head(key);
+  const staged = stored;
   if (!staged) {
     throw createContentError(
       "asset_not_found",
@@ -338,40 +279,42 @@ export async function openProgressiveBodyFollower(
       "Progressive asset prefix was discarded.",
     );
   }
-  return followSpill(store, staged, key, start);
+  return followProgressiveStore(store, staged, bodyId, start);
 }
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function followSpill(
-  store: AssetBodyStore,
-  initial: AssetBodySpillHead,
-  key: string,
+function followProgressiveStore(
+  store: BodyStore,
+  initial: MutableBodyHead,
+  bodyId: string,
   start: number,
 ): ProgressiveBodyFollower {
-  const spill = store.spill!;
   let cursor = start;
   let discarded = initial.discarded;
   let cancelled = false;
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
       while (!cancelled) {
-        const stored = await store.head(key);
-        if (stored) {
+        const stored = await store.head({ bodyId });
+        if (stored?.state === "ready") {
           const remaining = await readStreamBytes(
-            skipOffset(await store.open(key), Math.max(0, cursor - discarded)),
+            await store.follow({
+              bodyId,
+              offset: Math.max(0, cursor - discarded),
+            }),
           );
           if (remaining.byteLength > 0) controller.enqueue(remaining);
           controller.close();
           return;
         }
-        const staged = await spill.head(key);
+        const staged = await store.head({ bodyId });
         if (!staged) {
           // Finalization publishes the immutable body before clearing staging.
           // Recheck it to close the small visibility race between those calls.
-          const completed = await store.head(key);
+          const completed = await store.head({ bodyId });
           if (completed) continue;
           controller.error(
             createContentError(
@@ -381,6 +324,7 @@ function followSpill(
           );
           return;
         }
+        if (staged.state === "ready") continue;
         discarded = staged.discarded;
         if (cursor < discarded) {
           controller.error(
@@ -394,12 +338,18 @@ function followSpill(
         if (staged.byteLength > cursor) {
           const end = staged.byteLength;
           try {
-            const bytes = await spill.read({ key, offset: cursor, end });
+            const startOffset = cursor;
+            const bytes = await readStreamBytes(await store.follow({
+              bodyId,
+              offset: startOffset,
+            }));
             cursor = end;
-            if (bytes.byteLength > 0) controller.enqueue(bytes);
+            const next = bytes.subarray(0, end - startOffset);
+            if (next.byteLength > 0) controller.enqueue(next);
             return;
           } catch (error) {
-            if (await spill.head(key)) throw error;
+            const current = await store.head({ bodyId });
+            if (current && current.state !== "ready") throw error;
             continue;
           }
         }
@@ -411,7 +361,7 @@ function followSpill(
     },
   }, { highWaterMark: 0 });
   return Object.freeze({
-    key,
+    bodyId,
     offset: start,
     mediaType: initial.mediaType,
     body,
@@ -419,9 +369,9 @@ function followSpill(
 }
 
 function followLive(
-  store: AssetBodyStore,
+  store: BodyStore,
   live: LiveBody,
-  key: string,
+  bodyId: string,
   start: number,
 ): ProgressiveBodyFollower {
   const cursor = { offset: start };
@@ -442,10 +392,10 @@ function followLive(
         if (live.state === "finalized") {
           live.followers.delete(cursor);
           if (cursor.offset < live.byteLength) {
-            const stored = skipOffset(
-              await store.open(key),
-              Math.max(0, cursor.offset - live.discarded),
-            );
+            const stored = await store.follow({
+              bodyId,
+              offset: Math.max(0, cursor.offset - live.discarded),
+            });
             const rest = await readStreamBytes(stored);
             if (rest.byteLength > 0) controller.enqueue(rest);
           }
@@ -454,7 +404,7 @@ function followLive(
         }
         if (live.byteLength > cursor.offset) {
           const end = live.byteLength;
-          const next = await readCommitted(live, cursor.offset, end);
+          const next = readCommitted(live, cursor.offset, end);
           cursor.offset = end;
           notify(live);
           if (next.byteLength > 0) controller.enqueue(next);
@@ -480,36 +430,11 @@ function followLive(
   }, { highWaterMark: 0 });
 
   return Object.freeze({
-    key,
+    bodyId,
     offset: start,
     mediaType: live.mediaType,
     body,
   });
-}
-
-function skipOffset(
-  stream: ReadableStream<Uint8Array>,
-  offset: number,
-): ReadableStream<Uint8Array> {
-  if (offset <= 0) return stream;
-  let remaining = offset;
-  return stream.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        if (remaining <= 0) {
-          controller.enqueue(chunk);
-          return;
-        }
-        if (chunk.byteLength <= remaining) {
-          remaining -= chunk.byteLength;
-          return;
-        }
-        const rest = chunk.subarray(remaining);
-        remaining = 0;
-        controller.enqueue(rest);
-      },
-    }),
-  );
 }
 
 async function readStreamBytes(

@@ -1,9 +1,9 @@
 import type {
-  AssetBodyStore,
+  BodyStore,
   AssetOrigin,
   AssetRecord,
-  AssetStorageOptions,
-  AssetStorageRuntime,
+  BodyStorageOptions,
+  BodyStorageRuntime,
   AuthorizeContent,
   ContentInput,
   ContentPreparer,
@@ -87,7 +87,11 @@ import type {
   CollectionRuntime,
   ScopedCollections,
 } from "../collections/index.ts";
-import type { FeatureInvoker } from "../features/index.ts";
+import type {
+  AnyFeatureDefinition,
+  FeatureActionsFor,
+  FeatureInvoker,
+} from "../features/index.ts";
 import type {
   PluginRegistry,
   PluginResource,
@@ -363,6 +367,10 @@ export type CopilotzProcessorCapabilities = Readonly<{
   memory: ScopedMemoryConsolidation;
   /** Reusable plugin commands. Joins this delivery's collection runtime. */
   features: FeatureInvoker;
+  /** Invoke a Feature by definition. Consumer-local aliases live on `features`. */
+  feature<F extends AnyFeatureDefinition>(
+    definition: F,
+  ): FeatureActionsFor<F>;
 }>;
 
 export type CopilotzProcessorContext =
@@ -434,9 +442,9 @@ export type CreateCopilotzEngineOptions = Readonly<{
   now?: () => Date;
   random?: () => number;
   digest?: (bytes: Uint8Array) => Promise<`sha256:${string}`>;
-  assets?: AssetStorageOptions;
+  assets?: BodyStorageOptions;
   /** Compiled once by the engine so memory/custom stores span database scopes. */
-  assetStorage?: AssetStorageRuntime;
+  assetStorage?: BodyStorageRuntime;
   leaseMs?: number;
   maxAttempts?: number;
   retryBaseMs?: number;
@@ -606,7 +614,7 @@ export type CreateCopilotzProcessorCapabilitiesOptions = Readonly<{
   session: SqlExecutor;
   now?: () => Date;
   collectionRuntime: CollectionRuntime;
-  streamBodyStore: AssetBodyStore;
+  streamBodyStore: BodyStore;
 }>;
 
 export type CopilotzEngineDispatchReport = EventDispatchReport;

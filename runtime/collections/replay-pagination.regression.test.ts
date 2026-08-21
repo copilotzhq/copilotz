@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 
+import { digestContent } from "../content/digest.ts";
 import type { DurableEvent, EventStore, SqlExecutor } from "../events/index.ts";
 import { loadCollectionEventBodies } from "./replay.ts";
 
@@ -14,6 +15,23 @@ const EVENT_BODY = JSON.stringify({
   },
 });
 
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonical).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${
+      Object.entries(value as Record<string, unknown>).sort((
+        [left],
+        [right],
+      ) => left.localeCompare(right)).map(([key, child]) =>
+        `${JSON.stringify(key)}:${canonical(child)}`
+      ).join(",")
+    }}`;
+  }
+  return JSON.stringify(value);
+}
+
 function durableEvent(position: number): DurableEvent {
   return Object.freeze({
     durable: true,
@@ -22,7 +40,13 @@ function durableEvent(position: number): DurableEvent {
     schemaVersion: 3,
     type: "audit_record.created",
     namespace: "tenant-replay",
-    payload: { dataRef: { assetId: "shared-event-body" } },
+    payload: {
+      dataRef: {
+        eventBodyId: "shared-event-body",
+        schemaVersion: 1,
+        mediaType: "application/json",
+      },
+    },
     routing: {},
     visibility: { kind: "public" as const },
     metadata: {},
@@ -41,6 +65,7 @@ Deno.test("collection replay reads every event page beyond 10,000 events", async
       nodes: "nodes",
       edges: "edges",
       events: "events",
+      event_bodies: "event_bodies",
       event_deliveries: "event_deliveries",
     },
     listEvents(options: { afterPosition?: string; limit?: number }) {
@@ -55,11 +80,18 @@ Deno.test("collection replay reads every event page beyond 10,000 events", async
     },
   } as unknown as EventStore;
   const executor: SqlExecutor = {
-    query<TRow extends Record<string, unknown>>() {
+    async query<TRow extends Record<string, unknown>>() {
+      const body = JSON.parse(EVENT_BODY);
       return Promise.resolve({
         rows: [{
-          id: "shared-event-body",
-          data: { body: EVENT_BODY },
+          namespace: "tenant-replay",
+          event_body_id: "shared-event-body",
+          schema_version: 1,
+          body,
+          digest: await digestContent(
+            new TextEncoder().encode(canonical(body)),
+          ),
+          created_at: "2026-08-19T00:00:00.000Z",
         } as unknown as TRow],
       });
     },

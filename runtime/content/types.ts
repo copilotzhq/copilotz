@@ -24,7 +24,7 @@ export type AssetOrigin = Readonly<{
 export type AssetBodyLocation =
   | {
     kind: "database";
-    encoding: "utf8" | "json" | "base64";
+    key: string;
   }
   | {
     kind: "memory";

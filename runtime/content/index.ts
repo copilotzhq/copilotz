@@ -2,26 +2,45 @@ export { digestContent } from "./digest.ts";
 export {
   assetBodyKey,
   assetBodySchemaPrefix,
-  createFilesystemAssetBodyStore,
-  createMemoryAssetBodyStore,
+  createFilesystemBodyStore,
+  createFixedBodyStoreAdapter,
+  createMemoryBodyStore,
   DEFAULT_MAX_DATABASE_ASSET_BYTES,
-  readAssetBodiesBounded,
+  readBodiesBounded,
+  readBodyBytes,
+  writerCapabilityFromHead,
 } from "./body-store.ts";
 export type {
-  AssetBodyHead,
-  AssetBodySpill,
-  AssetBodySpillHead,
-  AssetBodyStore,
-  AssetBodyStoreKind,
-  AssetFilesystemAccess,
-  AssetStorageConfig,
-  AssetStorageOptions,
-  AssetStorageRuntime,
-  PutAssetBodyInput,
-  S3AssetStorageConfig,
+  AbortBodyInput,
+  AppendBodyInput,
+  AppendResult,
+  BodyFilesystemAccess,
+  BodyHead,
+  BodyMaintenanceDeleteInput,
+  BodyMaintenanceListInput,
+  BodyProtection,
+  BodyState,
+  BodyStorageConfig,
+  BodyStorageOptions,
+  BodyStorageRuntime,
+  BodyStore,
+  BodyStoreAdapter,
+  BodyStoreDeployment,
+  BodyStoreKind,
+  BodyStoreMaintenance,
+  MutableBodyHead,
+  PutBodyInput,
+  ReserveBodyInput,
+  S3BodyStorageConfig,
+  TrustedBodyMaintenanceScope,
+  TrustedBodyScope,
+  WriterCapability,
 } from "./body-store.ts";
-export { createS3AssetBodyStore } from "./s3-body-store.ts";
-export { createDatabaseAssetBodyStore } from "./database-body-store.ts";
+export { createS3BodyStore } from "./s3-body-store.ts";
+export {
+  createDatabaseBodyStore,
+  createDatabaseBodyStoreAdapter,
+} from "./database-body-store.ts";
 export {
   createProgressiveBodyWriter,
   openProgressiveBodyFollower,
@@ -30,7 +49,7 @@ export type {
   ProgressiveBodyFollower,
   ProgressiveBodyWriter,
 } from "./progressive.ts";
-export { createAssetStorageRuntime } from "./storage.ts";
+export { createBodyStorageRuntime } from "./storage.ts";
 export { assetIdFromRef, formatAssetRef } from "./asset-ref.ts";
 export {
   base64ToBytes,

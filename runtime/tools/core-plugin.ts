@@ -6,6 +6,7 @@ import {
   toolExecutionContent,
 } from "../domain/index.ts";
 import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
+import { requireFeatureActions } from "../features/context.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
@@ -801,7 +802,10 @@ function createThreadTool(): WorkflowTool {
       const recipientIds = ensured
         .filter((participant) => participant.id !== caller.id)
         .map((participant) => participant.id);
-      const message = await ctx.processor.features.threadMessage.create({
+      const message = await requireFeatureActions(
+        ctx.processor,
+        "copilotz.core.thread-message",
+      ).create({
         id: `message:${threadId}:initial`,
         threadId,
         sender: caller,

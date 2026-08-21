@@ -25,6 +25,10 @@ import {
   type PluginRegistry,
 } from "../plugins/index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
+import {
+  threadMessageFeature,
+  toolExecutionFeature,
+} from "@copilotz/copilotz/plugins/core";
 import { loadToolExecutionRecord } from "../engine/collection-graph.ts";
 import type { WorkflowTool, WorkflowToolExecutionContext } from "./types.ts";
 import {
@@ -74,6 +78,12 @@ async function createFixture(
   const runner = defineProcessor<CopilotzProcessorContext>({
     id: "test.core-tools.runner",
     on: [{ eventType: "message.created" }],
+    requires: {
+      features: {
+        toolExecution: toolExecutionFeature,
+        threadMessage: threadMessageFeature,
+      },
+    },
     async handle(event, context) {
       if (event.threadId !== "thread-a") return;
       try {

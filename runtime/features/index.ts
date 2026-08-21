@@ -1,13 +1,37 @@
-export { createFeatureContext, createFeatureInvoker } from "./context.ts";
+export {
+  createFeatureContext,
+  createFeatureContextValues,
+  createFeatureInvoker,
+  invokeFeatureAction,
+} from "./context.ts";
+export { defineFeature, isFeatureDefinition } from "./define.ts";
 export type {
+  AnyFeatureDefinition,
+  ErasedFeatureAction,
   FeatureAction,
+  FeatureActionFunction,
+  FeatureActionInput,
   FeatureActionInvoker,
+  FeatureActionMap,
+  FeatureActionsFor,
+  FeatureAliasDefinitions,
   FeatureCallOptions,
+  FeatureContentHandle,
   FeatureContext,
   FeatureContextBindings,
+  FeatureContextServices,
+  FeatureContextValues,
+  FeatureDefinition,
+  FeatureExecuteContext,
+  FeatureHostContext,
   FeatureInvoker,
+  FeatureOperationIdentity,
+  FeatureOperationOptions,
   FeatureRequest,
   FeatureResource,
   FeatureResources,
   FeatureResponse,
+  FeatureTransactionContext,
+  FeatureTransactionOptions,
+  NormalizedFeatureActionMap,
 } from "./types.ts";

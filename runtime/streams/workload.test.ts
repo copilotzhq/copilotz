@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assertEquals, assertRejects } from "@std/assert";
 import {
   streamCollection,
@@ -16,7 +17,7 @@ import {
   projectToolExecutions,
 } from "../../runtime/testing/projections.ts";
 import { createCollectionRuntime } from "../collections/index.ts";
-import { createMemoryAssetBodyStore } from "../content/index.ts";
+import { createMemoryBodyStore } from "../content/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
   createCoreSchemaStatements,
@@ -97,7 +98,7 @@ async function createFixture() {
       resources: { processors: [processor] },
     })],
   });
-  const bodyStore = createMemoryAssetBodyStore();
+  const bodyStore = createMemoryBodyStore();
   let collectionRuntime!: ReturnType<typeof createCollectionRuntime>;
   const executor = createDeliveryExecutor({
     store,
@@ -258,14 +259,15 @@ Deno.test("engine stream workload write and follow share one body store", async 
     defaultDatabaseSchema: "copilotz_stream_engine",
   });
   try {
-    await createTestDomainContext(engine, NAMESPACE).features.thread.create({
-      id: "thread-a",
-      participants: [{
-        id: "user-a",
-        externalId: "user-a",
-        participantType: "human",
-      }],
-    });
+    await createTestDomainContext(engine, NAMESPACE, coreFeatureAliases)
+      .features.thread.create({
+        id: "thread-a",
+        participants: [{
+          id: "user-a",
+          externalId: "user-a",
+          participantType: "human",
+        }],
+      });
     const work = await engine.execution.dispatchWork({
       workload: engine.execution.streamWorkload,
       metadata: jsonStreamDispatchMetadata({

@@ -1,14 +1,14 @@
 /** Explicit current-schema repair and database-to-object content migration. */
 import {
   assetBodyKey,
-  createAssetStorageRuntime,
+  createBodyStorageRuntime,
   digestContent,
 } from "../../runtime/content/index.ts";
 import type {
-  AssetBodyHead,
-  AssetBodyStore,
   AssetOrigin,
-  AssetStorageOptions,
+  BodyHead,
+  BodyStorageOptions,
+  BodyStore,
 } from "../../runtime/content/index.ts";
 import {
   quoteEventIdentifier,
@@ -65,7 +65,7 @@ export type ContentV2MigrationProgress = Readonly<{
 
 export type MigrateContentV2SchemaOptions = Readonly<{
   mode?: ContentV2MigrationMode;
-  assets?: AssetStorageOptions;
+  assets?: BodyStorageOptions;
   batchSize?: number;
   semanticBatchSize?: number;
   semanticConcurrency?: number;
@@ -397,7 +397,7 @@ async function relocateAssetPage(
   session: SqlSession,
   schema: string,
   rows: readonly AssetRow[],
-  objectWriter: AssetBodyStore,
+  objectWriter: BodyStore,
   prefix: string,
   uploadConcurrency: number,
   bodyBatchMaxBytes: number,
@@ -406,7 +406,7 @@ async function relocateAssetPage(
   type Uploaded = Readonly<{
     row: AssetRow;
     origin: AssetOrigin;
-    head: AssetBodyHead;
+    head: BodyHead;
     key: string;
   }>;
   type UploadResult =
@@ -501,7 +501,7 @@ async function relocateAssetPage(
             origin,
           });
           const head = await objectWriter.put({
-            key,
+            bodyId: key,
             bytes,
             mediaType,
             digest,
@@ -695,7 +695,7 @@ export async function migrateContentV2Schema(
     });
     return result;
   }
-  const storage = createAssetStorageRuntime(options.assets);
+  const storage = createBodyStorageRuntime(options.assets);
   const objectWriter = storage.writer;
   if (!objectWriter || objectWriter.kind !== "object") {
     throw new Error(

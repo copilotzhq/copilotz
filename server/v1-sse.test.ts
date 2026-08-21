@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals } from "@std/assert";
 
 import { createCopilotz } from "../runtime/application/index.ts";
@@ -17,7 +18,11 @@ Deno.test("v1 SSE projector maps live vocabulary and hydrates canonical public m
     canonicalCore: [coreCollectionsPlugin],
   });
   try {
-    const domain = createTestDomainContext(application, NAMESPACE);
+    const domain = createTestDomainContext(
+      application,
+      NAMESPACE,
+      coreFeatureAliases,
+    );
     await domain.features.thread.create({
       id: "thread-a",
       participants: [{

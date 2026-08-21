@@ -2,6 +2,7 @@ import type { CollectionRecord } from "../collections/index.ts";
 import type { LlmAttempt } from "../domain/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import { mapLlmAttemptRecord } from "../engine/collection-graph.ts";
+import { requireFeatureActions } from "../features/context.ts";
 import { withWorkflowMetadata } from "../events/workflow-metadata.ts";
 import type { LLMAttemptLifecycleEvent } from "./types.ts";
 
@@ -117,7 +118,7 @@ export async function recordProviderAttemptLifecycle(
       role: "provider.error_detail",
     }, { operationKey: `provider:${lifecycle.attemptIndex}:error` })
     : undefined;
-  await context.features.llmAttempt.fail({
+  await requireFeatureActions(context, "copilotz.core.llm-attempt").fail({
     id,
     safeError: {
       message: "LLM provider attempt failed.",
@@ -130,6 +131,5 @@ export async function recordProviderAttemptLifecycle(
     metadataPatch: { recoveryAction: lifecycle.recoveryAction },
   }, {
     operationKey: `provider:${lifecycle.attemptIndex}:fail`,
-    identity: { metadata },
   });
 }

@@ -1,14 +1,18 @@
 import {
-  createFilesystemAssetBodyStore,
-  createMemoryAssetBodyStore,
+  bodyProtectionMs,
+  createFilesystemBodyStore,
+  createFixedBodyStoreAdapter,
+  createMemoryBodyStore,
+  DEFAULT_BODY_PROTECTION_MS,
   DEFAULT_MAX_DATABASE_ASSET_BYTES,
 } from "./body-store.ts";
 import type {
-  AssetBodyStore,
-  AssetStorageOptions,
-  AssetStorageRuntime,
+  BodyStorageOptions,
+  BodyStorageRuntime,
+  BodyStore,
+  BodyStoreDeployment,
 } from "./body-store.ts";
-import { createS3AssetBodyStore } from "./s3-body-store.ts";
+import { createS3BodyStore } from "./s3-body-store.ts";
 
 function positiveInteger(
   value: number | undefined,
@@ -23,43 +27,74 @@ function positiveInteger(
 }
 
 /** Compiles declarative application configuration into body-store capabilities. */
-export function createAssetStorageRuntime(
-  options: AssetStorageOptions = {},
-): AssetStorageRuntime {
+export function createBodyStorageRuntime(
+  options: BodyStorageOptions = {},
+): BodyStorageRuntime {
   const config = options.storage ?? {
     type: "database" as const,
     config: { maxBytes: DEFAULT_MAX_DATABASE_ASSET_BYTES },
   };
-  let writer: AssetBodyStore | undefined;
+  let writer: BodyStore | undefined;
   let prefix = "";
   let maxDatabaseBytes = DEFAULT_MAX_DATABASE_ASSET_BYTES;
+  let deploymentProtectionMs = DEFAULT_BODY_PROTECTION_MS;
   if (config.type === "database") {
     maxDatabaseBytes = positiveInteger(
       config.config?.maxBytes,
       DEFAULT_MAX_DATABASE_ASSET_BYTES,
       "assets.storage.config.maxBytes",
     );
+    deploymentProtectionMs = bodyProtectionMs(config.config?.protectionMs);
   } else if (config.type === "memory") {
-    writer = createMemoryAssetBodyStore({
+    deploymentProtectionMs = bodyProtectionMs(config.config?.protectionMs);
+    writer = createMemoryBodyStore({
       backendId: config.config?.backendId,
+      protectionMs: config.config?.protectionMs,
     });
     prefix = config.config?.prefix ?? "";
   } else if (config.type === "filesystem") {
-    writer = createFilesystemAssetBodyStore(config.config);
+    deploymentProtectionMs = bodyProtectionMs(config.config.protectionMs);
+    writer = createFilesystemBodyStore(config.config);
     prefix = config.config.prefix ?? "";
   } else if (config.type === "s3") {
-    writer = createS3AssetBodyStore(config.config);
+    deploymentProtectionMs = bodyProtectionMs(config.config.protectionMs);
+    writer = createS3BodyStore(config.config);
     prefix = config.config.prefix ?? "";
   } else {
     writer = config.config.store;
     prefix = config.config.prefix ?? "";
   }
-  const readers = new Map<string, AssetBodyStore>();
+  const deployment: BodyStoreDeployment | undefined = writer
+    ? writer.kind === "memory"
+      ? {
+        durability: "ephemeral",
+        reach: "process",
+        minimumProtectionMs: deploymentProtectionMs,
+      }
+      : writer.kind === "filesystem"
+      ? {
+        durability: "durable",
+        reach: "process",
+        minimumProtectionMs: deploymentProtectionMs,
+      }
+      : writer.kind === "database" || writer.kind === "object"
+      ? {
+        durability: "durable",
+        reach: "cluster",
+        minimumProtectionMs: deploymentProtectionMs,
+      }
+      : undefined
+    : undefined;
+  const adapter = writer && deployment
+    ? createFixedBodyStoreAdapter(writer, deployment)
+    : undefined;
+  const readers = new Map<string, BodyStore>();
   if (writer) readers.set(writer.backendId, writer);
   for (const reader of options.readers ?? []) {
     readers.set(reader.backendId, reader);
   }
   return Object.freeze({
+    ...(adapter ? { adapter } : {}),
     ...(writer ? { writer } : {}),
     readers,
     prefix,

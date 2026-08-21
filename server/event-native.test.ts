@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import {
   assert,
   assertEquals,
@@ -21,6 +22,10 @@ import {
   provisionCopilotzSchema,
 } from "../runtime/events/index.ts";
 import { definePlugin } from "../runtime/plugins/index.ts";
+import {
+  defineFeature,
+  type FeatureExecuteContext,
+} from "../runtime/features/index.ts";
 import { coreCollectionsPlugin } from "../plugins/core/plugin.ts";
 import type { Agent } from "../runtime/resources/index.ts";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
@@ -61,24 +66,26 @@ const supportAgent = Object.freeze(
   } satisfies Agent,
 );
 
-const echoFeature: EventNativeFeatureResource = Object.freeze({
+const echoFeature = defineFeature({
   id: "echo",
-  alias: "echo",
-  actions: Object.freeze({
-    ping(
-      input: unknown,
-      context: EventNativeFeatureContext,
-    ) {
-      const request = input as EventNativeAppRequest;
-      return {
-        namespace: context.namespace,
-        body: request.body,
-        hasFeatureInvoke: typeof context.features.echo?.ping === "function",
-        hasApplication: "application" in context,
-        hasScopedCollections: typeof context.collections === "object",
-      };
+  actions: {
+    ping: {
+      inputSchema: {
+        type: "object",
+        additionalProperties: true,
+      } as const,
+      execute(input: unknown, context: FeatureExecuteContext) {
+        const request = input as EventNativeAppRequest;
+        return {
+          namespace: context.namespace,
+          body: request.body,
+          hasFeatureInvoke: typeof context.features.echo?.ping === "function",
+          hasApplication: "application" in context,
+          hasScopedCollections: typeof context.collections === "object",
+        };
+      },
     },
-  }),
+  },
 });
 
 const adapterPlugin = definePlugin({
@@ -486,7 +493,7 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
       data: {
         namespace: NAMESPACE,
         body: { value: 42 },
-        hasFeatureInvoke: true,
+        hasFeatureInvoke: false,
         hasApplication: false,
         hasScopedCollections: true,
       },
@@ -618,7 +625,11 @@ Deno.test("message history compounds canonical LLM, tool, and content resources 
   });
   const app = createEventNativeApp(application);
   try {
-    const domain = createTestDomainContext(application, NAMESPACE);
+    const domain = createTestDomainContext(
+      application,
+      NAMESPACE,
+      coreFeatureAliases,
+    );
     await domain.features.thread.create({
       id: "history-thread",
       participants: [{

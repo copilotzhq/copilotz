@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   createPluginRegistry,
@@ -104,24 +105,26 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
     execution: { capacity: 1 },
   });
   try {
-    await createTestDomainContext(engine, "tenant-live").features.thread.create(
-      {
-        namespace: "tenant-live",
-        id: "thread-a",
-        participants: [
-          {
-            id: "user-a",
-            externalId: "user-a",
-            participantType: "human",
-          },
-        ],
-      },
-    );
+    await createTestDomainContext(engine, "tenant-live", coreFeatureAliases)
+      .features.thread.create(
+        {
+          namespace: "tenant-live",
+          id: "thread-a",
+          participants: [
+            {
+              id: "user-a",
+              externalId: "user-a",
+              participantType: "human",
+            },
+          ],
+        },
+      );
     const content = await engine.content.preparer.prepare("hello", {
       namespace: "tenant-live",
       idempotencyKey: "live-message:content",
     });
-    await createTestDomainContext(engine, "tenant-live").features.threadMessage
+    await createTestDomainContext(engine, "tenant-live", coreFeatureAliases)
+      .features.threadMessage
       .create({
         id: "message-a",
         threadId: "thread-a",
@@ -273,17 +276,18 @@ Deno.test("transient catch-up replays committed events without delivery rows", a
     defaultDatabaseSchema: "copilotz_transient_catchup",
   });
   try {
-    await createTestDomainContext(engine, "tenant-live").features.thread.create(
-      {
-        namespace: "tenant-live",
-        id: "thread-a",
-        participants: [{
-          id: "user-a",
-          externalId: "user-a",
-          participantType: "human",
-        }],
-      },
-    );
+    await createTestDomainContext(engine, "tenant-live", coreFeatureAliases)
+      .features.thread.create(
+        {
+          namespace: "tenant-live",
+          id: "thread-a",
+          participants: [{
+            id: "user-a",
+            externalId: "user-a",
+            participantType: "human",
+          }],
+        },
+      );
     const firstEvent = (await engine.events.list({
       namespace: "tenant-live",
       limit: 100,
@@ -295,17 +299,18 @@ Deno.test("transient catch-up replays committed events without delivery rows", a
       afterPosition: "0",
     });
     assertEquals(seen, [firstEvent.id]);
-    await createTestDomainContext(engine, "tenant-live").features.thread.create(
-      {
-        namespace: "tenant-live",
-        id: "thread-b",
-        participants: [{
-          id: "user-b",
-          externalId: "user-b",
-          participantType: "human",
-        }],
-      },
-    );
+    await createTestDomainContext(engine, "tenant-live", coreFeatureAliases)
+      .features.thread.create(
+        {
+          namespace: "tenant-live",
+          id: "thread-b",
+          participants: [{
+            id: "user-b",
+            externalId: "user-b",
+            participantType: "human",
+          }],
+        },
+      );
     const secondEvent = (await engine.events.list({
       namespace: "tenant-live",
       limit: 100,

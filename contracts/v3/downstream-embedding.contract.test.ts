@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assertEquals, assertExists } from "@std/assert";
 import {
   type CopilotzProcessorContext,
@@ -131,7 +132,8 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
       ).id,
       "downstream-injected",
     );
-    await createTestDomainContext(application, NAMESPACE).features.thread
+    await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
+      .features.thread
       .create({
         id: "downstream-thread",
         namespace: NAMESPACE,

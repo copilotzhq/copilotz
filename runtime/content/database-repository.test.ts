@@ -20,12 +20,13 @@ import {
   defineProcessor,
 } from "../plugins/index.ts";
 import {
+  type BodyMaintenanceDeleteInput,
   type ContentError,
-  createAssetStorageRuntime,
+  createBodyStorageRuntime,
   createContentPreparer,
   createContentResolver,
   createDatabaseAssetRepository,
-  createMemoryAssetBodyStore,
+  createMemoryBodyStore,
   type DatabaseAssetRepository,
   digestContent,
 } from "./index.ts";
@@ -44,7 +45,7 @@ type Fixture = Readonly<{
 
 async function createFixture(options: {
   maxDatabaseBytes?: number;
-  storage?: Parameters<typeof createAssetStorageRuntime>[0];
+  storage?: Parameters<typeof createBodyStorageRuntime>[0];
 } = {}) {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
@@ -85,7 +86,7 @@ async function createFixture(options: {
     databaseSchema: TEST_SCHEMA,
     createId: () => `asset-store-${++nextId}`,
     now: () => new Date("2026-08-07T00:00:00.000Z"),
-    storage: createAssetStorageRuntime(
+    storage: createBodyStorageRuntime(
       options.storage ?? {
         storage: {
           type: "database",
@@ -139,7 +140,11 @@ Deno.test("database assets publish immutable bodies, events, and deliveries with
       metadata: { origin: "test" },
     });
     assertEquals(first.id, "asset-a");
-    assertEquals(first.location, { kind: "database", encoding: "utf8" });
+    assertEquals(first.location.kind, "database");
+    assertEquals(
+      first.location.kind === "database" ? first.location.key : "",
+      "schemas/copilotz_database_assets/namespaces/tenant-a/assets/asset/asset-a/assets/asset-a",
+    );
     assertEquals(first.state, "ready");
 
     await waitForSettledDeliveries(fixture);
@@ -152,7 +157,27 @@ Deno.test("database assets publish immutable bodies, events, and deliveries with
     const row = await fixture.session.query<{ data: unknown }>(
       `SELECT data FROM ${fixture.store.tables.nodes} WHERE id = 'asset-a'`,
     );
-    assert(JSON.stringify(row.rows[0].data).includes("durable hello"));
+    assertEquals(
+      JSON.stringify(row.rows[0].data).includes("durable hello"),
+      false,
+    );
+    const bodyRows = await fixture.session.query<{ n: number }>(
+      `SELECT count(*)::int AS n
+         FROM "copilotz_database_assets"."content_bodies"
+        WHERE body_id = $1`,
+      [first.location.kind === "database" ? first.location.key : ""],
+    );
+    assertEquals(bodyRows.rows[0].n, 1);
+    const refs = await fixture.session.query<{ n: number }>(
+      `SELECT count(*)::int AS n
+         FROM ${fixture.store.tables.body_references}
+        WHERE namespace = 'tenant-a'
+          AND body_id = $1
+          AND owner_kind = '@copilotz/asset/v1'
+          AND owner_id = 'asset-a'`,
+      [first.location.kind === "database" ? first.location.key : ""],
+    );
+    assertEquals(refs.rows[0].n, 1);
     assertEquals(
       new TextDecoder().decode(
         (await fixture.assets.read("tenant-a", "asset-a")).bytes,
@@ -311,35 +336,34 @@ Deno.test("prepared aggregate bodies roll back with their owner and semantic eve
   }
 });
 
-Deno.test("database asset policy rejects oversized durable content before any write", async () => {
+Deno.test("database asset policy stores large durable content through BodyStore", async () => {
   const fixture = await createFixture({ maxDatabaseBytes: 3 });
   try {
-    const error = await assertRejects(() =>
-      fixture.assets.publish({
-        namespace: "tenant-a",
-        mediaType: "application/octet-stream",
-        body: new Uint8Array([1, 2, 3, 4]),
-      })
-    );
+    const asset = await fixture.assets.publish({
+      namespace: "tenant-a",
+      mediaType: "application/octet-stream",
+      body: new Uint8Array([1, 2, 3, 4]),
+    });
+    assertEquals(asset.location.kind, "database");
     assertEquals(
-      (error as ContentError).code,
-      "asset_storage_unavailable",
+      (await fixture.assets.read("tenant-a", asset.id)).bytes,
+      new Uint8Array([1, 2, 3, 4]),
     );
     assertEquals(
       (await fixture.store.listEvents({ namespace: "tenant-a" })).length,
-      0,
+      1,
     );
     const count = await fixture.session.query<{ count: number | string }>(
       `SELECT COUNT(*) AS count FROM ${fixture.store.tables.nodes}`,
     );
-    assertEquals(Number(count.rows[0].count), 0);
+    assertEquals(Number(count.rows[0].count), 1);
   } finally {
     await closeFixture(fixture);
   }
 });
 
 Deno.test("object-backed assets persist provenance paths and keep bodies outside graph nodes", async () => {
-  const memory = createMemoryAssetBodyStore({ backendId: "gcs:assets" });
+  const memory = createMemoryBodyStore({ backendId: "gcs:assets" });
   const objectStore = Object.freeze({ ...memory, kind: "object" as const });
   const fixture = await createFixture({
     storage: {
@@ -388,17 +412,23 @@ Deno.test("object-backed assets persist provenance paths and keep bodies outside
 });
 
 Deno.test("asset maintenance retries body deletion and removes old orphan uploads", async () => {
-  const memory = createMemoryAssetBodyStore({ backendId: "gcs:maintenance" });
+  const memory = createMemoryBodyStore({
+    backendId: "gcs:maintenance",
+    protectionMs: 0,
+  });
   let rejectNextDelete = true;
   const objectStore = Object.freeze({
     ...memory,
     kind: "object" as const,
-    async delete(key: string) {
-      if (rejectNextDelete) {
-        rejectNextDelete = false;
-        throw new Error("temporary object outage");
-      }
-      await memory.delete(key);
+    maintenance: {
+      ...memory.maintenance,
+      async delete(input: BodyMaintenanceDeleteInput) {
+        if (rejectNextDelete) {
+          rejectNextDelete = false;
+          throw new Error("temporary object outage");
+        }
+        return await memory.maintenance.delete(input);
+      },
     },
   });
   const fixture = await createFixture({
@@ -419,7 +449,7 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
     });
     const key = asset.location.kind === "object" ? asset.location.key : "";
     await fixture.assets.markDeleted("tenant-a", asset.id);
-    assert(await memory.head(key));
+    assert(await memory.head({ bodyId: key }));
     const pendingDeletion = await fixture.session.query<{ data: unknown }>(
       `SELECT data FROM ${fixture.store.tables.nodes}
        WHERE id = 'asset-delete' AND type = 'asset'`,
@@ -436,11 +466,20 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
     );
     assertEquals(Number(pendingCount.rows[0].count), 1);
 
+    const kept = await fixture.assets.publish({
+      namespace: "tenant-a",
+      id: "asset-keep",
+      mediaType: "text/plain",
+      body: new TextEncoder().encode("keep me"),
+    });
+    const keepKey = kept.location.kind === "object" ? kept.location.key : "";
+    assert(await memory.head({ bodyId: keepKey }));
+
     const orphanBytes = new TextEncoder().encode("orphan");
     const orphanKey =
       "copilotz/schemas/copilotz_database_assets/namespaces/tenant-a/assets/orphan";
     await memory.put({
-      key: orphanKey,
+      bodyId: orphanKey,
       bytes: orphanBytes,
       mediaType: "text/plain",
       digest: await digestContent(orphanBytes),
@@ -455,8 +494,9 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
       retriedDeletions: 1,
       orphanedBodiesDeleted: 1,
     });
-    assertEquals(await memory.head(key), null);
-    assertEquals(await memory.head(orphanKey), null);
+    assertEquals(await memory.head({ bodyId: key }), null);
+    assert(await memory.head({ bodyId: keepKey }));
+    assertEquals(await memory.head({ bodyId: orphanKey }), null);
   } finally {
     await closeFixture(fixture);
   }

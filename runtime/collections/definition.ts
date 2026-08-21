@@ -85,6 +85,7 @@ export type CollectionDefinition<
   identity?: Readonly<{ sourceType: string; sourceField: string }>;
   search?: Readonly<{ enabled: boolean; fields: readonly string[] }>;
   content?: Readonly<{ fields: readonly string[] }>;
+  bodyRefs?: Readonly<{ fields: readonly string[] }>;
   beforeCreate?: (
     data: Record<string, unknown>,
     context: CollectionHookContext,
@@ -288,6 +289,13 @@ export function defineCollection<S extends JsonSchema>(
       ? {
         content: Object.freeze({
           fields: Object.freeze([...input.content.fields]),
+        }),
+      }
+      : {}),
+    ...(input.bodyRefs
+      ? {
+        bodyRefs: Object.freeze({
+          fields: Object.freeze([...input.bodyRefs.fields]),
         }),
       }
       : {}),

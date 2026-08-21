@@ -6,8 +6,11 @@ import {
   waitForCopilotzEvent,
 } from "../events/index.ts";
 import {
+  type AnyFeatureDefinition,
+  createFeatureContextValues,
   createFeatureInvoker,
-  type FeatureContext,
+  type FeatureActionsFor,
+  type FeatureHostContext,
 } from "../features/index.ts";
 import { createStreamWriter } from "../streams/writer.ts";
 import { openStreamFollower } from "../streams/follower.ts";
@@ -392,7 +395,10 @@ export function createCopilotzProcessorCapabilities(
     },
   });
 
-  const capabilities: Omit<CopilotzProcessorCapabilities, "features"> = Object
+  const capabilities: Omit<
+    CopilotzProcessorCapabilities,
+    "features" | "feature"
+  > = Object
     .freeze({
       namespace,
       events,
@@ -414,21 +420,32 @@ export function createCopilotzProcessorCapabilities(
       knowledge,
       memory,
     });
+  const attached = attachProcessorFeatures(options, capabilities);
   return Object.freeze({
     ...capabilities,
-    features: attachProcessorFeatures(options, capabilities),
+    features: attached.features,
+    feature: attached.feature,
   });
+}
+
+function processorFeatureAliases(
+  options: CreateCopilotzProcessorCapabilitiesOptions,
+): Readonly<Record<string, AnyFeatureDefinition>> {
+  const consumerId = options.base.source?.consumerId;
+  const processor = consumerId
+    ? options.registry.processorForConsumer(consumerId)
+    : undefined;
+  const aliases = processor?.requires?.features;
+  if (!aliases) return {};
+  return aliases as Readonly<Record<string, AnyFeatureDefinition>>;
 }
 
 function attachProcessorFeatures(
   options: CreateCopilotzProcessorCapabilitiesOptions,
-  capabilities: Omit<CopilotzProcessorCapabilities, "features">,
-): CopilotzProcessorCapabilities["features"] {
-  const holder: { current?: FeatureContext } = {};
-  const features = createFeatureInvoker(options.registry, () => {
-    if (!holder.current) throw new Error("Feature context is not ready.");
-    return holder.current;
-  }, (input) => {
+  capabilities: Omit<CopilotzProcessorCapabilities, "features" | "feature">,
+): Pick<CopilotzProcessorCapabilities, "features" | "feature"> {
+  const holder: { current?: FeatureHostContext } = {};
+  const transaction: Parameters<typeof createFeatureInvoker>[2] = (input) => {
     const source = options.base.createMutationIdentity(
       input.operationKey,
       input.identity?.metadata,
@@ -449,10 +466,61 @@ function attachProcessorFeatures(
         },
       },
     });
-  });
+  };
+  const host = () => {
+    if (!holder.current) throw new Error("Feature context is not ready.");
+    return holder.current;
+  };
+  const features = createFeatureInvoker(
+    processorFeatureAliases(options),
+    host,
+    transaction,
+    {
+      isTransactionActive: () =>
+        activeCollectionTransaction(options.collectionRuntime) !== undefined,
+    },
+  );
+  const feature = <F extends AnyFeatureDefinition>(definition: F) =>
+    createFeatureInvoker({ bound: definition }, host, transaction, {
+      isTransactionActive: () =>
+        activeCollectionTransaction(options.collectionRuntime) !== undefined,
+    }).bound as FeatureActionsFor<F>;
   holder.current = Object.freeze({
     namespace: capabilities.namespace,
+    ...createFeatureContextValues(capabilities.resources),
     collections: capabilities.collections,
+    collection(definition) {
+      const collection = capabilities.collections[definition.name];
+      if (!collection) {
+        throw new TypeError(`Collection '${definition.name}' is not bound.`);
+      }
+      return collection as never;
+    },
+    transaction: async (execute, transactionOptions = {}) => {
+      const operationKey = transactionOptions.operationKey?.trim() ||
+        `processor-feature:${crypto.randomUUID()}`;
+      const result = await transaction({
+        operationKey,
+        namespace: capabilities.namespace,
+        ...(transactionOptions.identity
+          ? { identity: transactionOptions.identity }
+          : {}),
+        execute: async () =>
+          await execute(Object.freeze({
+            collections: capabilities.collections,
+            collection(definition) {
+              const collection = capabilities.collections[definition.name];
+              if (!collection) {
+                throw new TypeError(
+                  `Collection '${definition.name}' is not bound.`,
+                );
+              }
+              return collection as never;
+            },
+          })),
+      });
+      return result.value;
+    },
     content: Object.freeze({
       resolver: options.resolver,
       materialize: capabilities.content.materialize,
@@ -460,6 +528,7 @@ function attachProcessorFeatures(
     }),
     resources: capabilities.resources,
     features,
+    feature,
     events: Object.freeze({ list: capabilities.events.list }),
     deliveries: Object.freeze({
       list: (listOptions = {}) =>
@@ -470,5 +539,5 @@ function attachProcessorFeatures(
     }),
     relations: Object.freeze({ list: capabilities.relations.list }),
   });
-  return features;
+  return Object.freeze({ features, feature });
 }

@@ -15,6 +15,13 @@ export type EventSubject = {
   id: string;
 };
 
+/** Internal immutable JSON body for a durable event. */
+export type EventBodyRef = Readonly<{
+  eventBodyId: string;
+  schemaVersion: number;
+  mediaType: "application/json";
+}>;
+
 /** Conversational routing only; guaranteed work lives in delivery records. */
 export type EventRouting = {
   senderId?: string;

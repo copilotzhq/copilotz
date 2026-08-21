@@ -23,6 +23,9 @@ import {
 } from "@copilotz/copilotz/events";
 import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
+import { llmAttemptFeature } from "../features/llm-attempt.ts";
+import { threadMessageFeature } from "../features/thread-message.ts";
+import { toolExecutionFeature } from "../features/tool-execution.ts";
 import {
   agentSessionBaseConfig,
   agentTextBaseConfig,
@@ -482,6 +485,9 @@ export const executeTextAttemptProcessor: Processor<CopilotzProcessorContext> =
   defineProcessor<CopilotzProcessorContext>({
     id: "copilotz.core.execute-text-attempt",
     on: [{ eventType: "llm_attempt.created" }],
+    requires: {
+      features: { llmAttempt: llmAttemptFeature },
+    },
     async handle(event, context) {
       if (!event.durable) return;
       const record = collectionEventRecord(event);
@@ -796,6 +802,12 @@ export const projectTextResultProcessor: Processor<CopilotzProcessorContext> =
       eventType: "llm_attempt.updated",
       data: { record: { status: "completed" } },
     }],
+    requires: {
+      features: {
+        threadMessage: threadMessageFeature,
+        toolExecution: toolExecutionFeature,
+      },
+    },
     async handle(event, context) {
       const record = collectionEventRecord(event);
       const attempt = record;
@@ -837,7 +849,6 @@ export const projectTextResultProcessor: Processor<CopilotzProcessorContext> =
         metadata: messageMetadata,
       }, {
         operationKey: "project:agent-message",
-        identity: { metadata: messageMetadata },
       }) as CollectionRecord;
       const outputMessageId = String(outputMessage.id);
       if (!toolCalls.length) return;
@@ -917,6 +928,12 @@ export const executeToolProcessor: Processor<CopilotzProcessorContext> =
   defineProcessor<CopilotzProcessorContext>({
     id: "copilotz.core.execute-tool",
     on: [{ eventType: "tool_execution.created" }],
+    requires: {
+      features: {
+        threadMessage: threadMessageFeature,
+        toolExecution: toolExecutionFeature,
+      },
+    },
     async handle(event, context) {
       const record = collectionEventRecord(event);
       const execution = record;
@@ -993,7 +1010,6 @@ export const executeToolProcessor: Processor<CopilotzProcessorContext> =
           durationMs: outcome.durationMs,
         }, {
           operationKey: "tool:complete",
-          identity: { metadata: asRecord(execution.metadata) },
         });
         return;
       }
@@ -1027,7 +1043,6 @@ export const executeToolProcessor: Processor<CopilotzProcessorContext> =
           durationMs: outcome.durationMs,
         }, {
           operationKey: "tool:cancel",
-          identity: { metadata: asRecord(execution.metadata) },
         });
         return;
       }
@@ -1044,7 +1059,6 @@ export const executeToolProcessor: Processor<CopilotzProcessorContext> =
         durationMs: outcome.durationMs,
       }, {
         operationKey: "tool:fail",
-        identity: { metadata: asRecord(execution.metadata) },
       });
     },
   });
@@ -1114,6 +1128,12 @@ export const projectToolResultProcessor: Processor<CopilotzProcessorContext> =
         data: { record: { status: "cancelled" } },
       },
     ],
+    requires: {
+      features: {
+        threadMessage: threadMessageFeature,
+        toolExecution: toolExecutionFeature,
+      },
+    },
     async handle(event, context) {
       const record = collectionEventRecord(event);
       let execution = record;
@@ -1212,7 +1232,6 @@ export const projectToolResultProcessor: Processor<CopilotzProcessorContext> =
           }, {
             operationKey:
               `pipeline:${advancement.pipeline.id}:${advancement.stageIndex}:create`,
-            identity: { metadata: nextMetadata },
           });
           return;
         }
@@ -1328,7 +1347,6 @@ export const projectToolResultProcessor: Processor<CopilotzProcessorContext> =
         metadata: messageMetadata,
       }, {
         operationKey: `project:tool-result:message:${execution.id}`,
-        identity: { metadata: messageMetadata },
       });
     },
   });

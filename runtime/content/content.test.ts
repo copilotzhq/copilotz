@@ -5,11 +5,14 @@ import {
   type AssetRepository,
   type ContentError,
   type ContentRef,
+  createBodyStorageRuntime,
   createContentNormalizer,
   createContentResolver,
   createMemoryAssetRepository,
+  digestContent,
   formatAssetRef,
 } from "./index.ts";
+import { PLUGIN_RESOURCE_TYPES } from "../plugins/index.ts";
 
 function createFixture() {
   let nextId = 0;
@@ -31,6 +34,36 @@ Deno.test("canonical asset refs round-trip and reject cross-namespace access", (
     Error,
     "active namespace",
   );
+});
+
+Deno.test("configured BodyStore is scoped infrastructure, not a plugin resource", async () => {
+  const runtime = createBodyStorageRuntime({
+    storage: { type: "memory", config: { backendId: "memory:test" } },
+  });
+  assert(runtime.adapter);
+  assertEquals(PLUGIN_RESOURCE_TYPES.includes("storage"), true);
+  assertEquals(
+    PLUGIN_RESOURCE_TYPES.includes("bodyStore" as never),
+    false,
+  );
+  const scoped = runtime.adapter.forScope({
+    namespace: "tenant-a",
+    databaseSchema: "public",
+  });
+  const bytes = new TextEncoder().encode("scoped body");
+  const head = await scoped.put({
+    bodyId: "tenant-a/body-a",
+    bytes,
+    mediaType: "text/plain",
+    digest: await digestContent(bytes),
+  });
+  assertEquals(head.bodyId, "tenant-a/body-a");
+  const page = await runtime.adapter.maintenanceForScope({
+    namespace: "tenant-a",
+    databaseSchema: "public",
+    maintenance: true,
+  }).list({ states: ["ready"], idleForMs: 0, limit: 10 });
+  assertEquals(page.bodies.map((body) => body.bodyId), ["tenant-a/body-a"]);
 });
 
 async function readStream(stream: ReadableStream<Uint8Array>) {

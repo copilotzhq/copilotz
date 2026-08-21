@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
@@ -28,7 +29,14 @@ Deno.test("engine conversation factories are gone; messages still use the thread
   const attachment = await Deno.readTextFile(
     new URL("../attachments/attachment.ts", import.meta.url),
   );
-  assertEquals(attachment.includes("features.threadMessage.create"), true);
+  assertEquals(
+    attachment.includes("requireFeatureActions"),
+    true,
+  );
+  assertEquals(
+    attachment.includes("copilotz.core.thread-message"),
+    true,
+  );
 });
 
 Deno.test("createMessage ensures a new sender through the thread-message feature", async () => {
@@ -43,7 +51,11 @@ Deno.test("createMessage ensures a new sender through the thread-message feature
     random: () => 0,
   });
   try {
-    const domain = createTestDomainContext(engine, NAMESPACE);
+    const domain = createTestDomainContext(
+      engine,
+      NAMESPACE,
+      coreFeatureAliases,
+    );
     await domain.features.thread.create({
       id: "thread-a",
       participants: [{
@@ -174,7 +186,10 @@ Deno.test("createMessage fails when the thread-message feature is not bound", as
     random: () => 0,
   });
   try {
-    const domain = createTestDomainContext(engine, NAMESPACE);
+    const domain = createTestDomainContext(
+      engine,
+      NAMESPACE,
+    );
     await domain.collections.participant.create({
       id: "human-a",
       externalId: "human-a",

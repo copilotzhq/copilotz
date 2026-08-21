@@ -10,7 +10,11 @@ import type {
   SqlExecutor,
   SqlSession,
 } from "../events/index.ts";
-import { eventDataRef, readEventBody, writeEventBody } from "./body.ts";
+import {
+  eventDataRef,
+  readEventBody,
+  writeEventBody,
+} from "../events/body-store.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { sameValue } from "./equal.ts";
 import { loadCollectionRecord, projectCollectionEvent } from "./reducer.ts";
@@ -520,9 +524,8 @@ export function createCollectionRuntime(
         subject: { type: name, id: subjectId },
         payload: {
           dataRef: {
-            assetId: bodyId,
-            kind: "json" as const,
-            role: "body",
+            eventBodyId: bodyId,
+            schemaVersion: 1,
             mediaType: "application/json",
           },
         },

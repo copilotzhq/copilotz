@@ -1,5 +1,5 @@
 import type { CollectionRuntime } from "../collections/index.ts";
-import type { AssetBodyStore } from "../content/index.ts";
+import type { BodyStore } from "../content/index.ts";
 import type {
   DeliveryWorkload,
   ExecutionWorkInput,
@@ -37,7 +37,7 @@ export type StreamResultMetadata = Readonly<{
 
 export type StreamWorkloadScope = Readonly<{
   collectionRuntime: CollectionRuntime;
-  store: AssetBodyStore;
+  store: BodyStore;
 }>;
 
 export type CreateStreamWorkloadOptions = Readonly<{

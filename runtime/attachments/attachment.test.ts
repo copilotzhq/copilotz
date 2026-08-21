@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   type CopilotzProcessorContext,
@@ -112,24 +113,25 @@ async function createThread(
   engine: CopilotzEngine,
   agentIds: readonly string[] = ["support"],
 ): Promise<void> {
-  await createTestDomainContext(engine, NAMESPACE).features.thread.create({
-    id: "thread-a",
-    participants: [
-      {
-        id: "user-a",
-        externalId: "user-a",
-        participantType: "human",
-        name: "User A",
-      },
-      ...agentIds.map((id) => ({
-        id: `participant:${id}`,
-        externalId: id,
-        participantType: "agent" as const,
-        agentId: id,
-        name: id,
-      })),
-    ],
-  }, { identity: { deduplicationId: "thread-a:create" } });
+  await createTestDomainContext(engine, NAMESPACE, coreFeatureAliases).features
+    .thread.create({
+      id: "thread-a",
+      participants: [
+        {
+          id: "user-a",
+          externalId: "user-a",
+          participantType: "human",
+          name: "User A",
+        },
+        ...agentIds.map((id) => ({
+          id: `participant:${id}`,
+          externalId: id,
+          participantType: "agent" as const,
+          agentId: id,
+          name: id,
+        })),
+      ],
+    }, { identity: { deduplicationId: "thread-a:create" } });
 }
 
 function isStreamOutput(

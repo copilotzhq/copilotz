@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assertEquals, assertExists } from "@std/assert";
 
 import { createSqlSession } from "../../runtime/events/index.ts";
@@ -17,7 +18,11 @@ Deno.test("thread replay preserves activity cursors derived from thread-scoped e
     defaultDatabaseSchema: "copilotz_thread_replay_cursor",
   });
   try {
-    const domain = createTestDomainContext(engine, namespace);
+    const domain = createTestDomainContext(
+      engine,
+      namespace,
+      coreFeatureAliases,
+    );
     await domain.features.thread.create({
       id: "thread-a",
       participants: [{

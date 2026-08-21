@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   type CopilotzPlugin,
@@ -110,7 +111,8 @@ Deno.test("application factory composes plugins and supplies the default tenant 
       declaredPluginIds: ["test.application.reply"],
       databaseOwnership: "injected",
     });
-    await createTestDomainContext(application, NAMESPACE).features.thread
+    await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
+      .features.thread
       .create({
         id: "thread-a",
         participants: [
@@ -166,7 +168,11 @@ Deno.test("createCopilotz owns a configured Ominipg database", async () => {
   });
   try {
     assertEquals(application.config.databaseOwnership, "application");
-    const created = await createTestDomainContext(application, NAMESPACE)
+    const created = await createTestDomainContext(
+      application,
+      NAMESPACE,
+      coreFeatureAliases,
+    )
       .features.thread.create({
         id: "owned-database-thread",
         participants: [],
@@ -370,7 +376,8 @@ Deno.test("application terminates attachments and resumes durable deliveries aft
     },
   });
   try {
-    await createTestDomainContext(application, NAMESPACE).features.thread
+    await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
+      .features.thread
       .create({
         id: "recovery-thread",
         participants: [{
@@ -383,7 +390,8 @@ Deno.test("application terminates attachments and resumes durable deliveries aft
       namespace: NAMESPACE,
       idempotencyKey: "recovery-message:content",
     });
-    await createTestDomainContext(application, NAMESPACE).features.threadMessage
+    await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
+      .features.threadMessage
       .create({
         id: "recovery-message",
         threadId: "recovery-thread",

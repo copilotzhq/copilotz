@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   createCopilotzGateway,
@@ -173,24 +174,25 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
 
   try {
     await worker.ready;
-    await createTestDomainContext(gateway, namespace).features.thread.create({
-      id: "topology-thread",
-      participants: [{
-        id: "topology-user",
-        externalId: "topology-user",
-        participantType: "human",
-      }, {
-        id: "topology-agent",
-        externalId: "topology-agent",
-        participantType: "agent",
-        agentId: "topology-agent",
-      }, {
-        id: "topology-second-agent",
-        externalId: "topology-second-agent",
-        participantType: "agent",
-        agentId: "topology-second-agent",
-      }],
-    });
+    await createTestDomainContext(gateway, namespace, coreFeatureAliases)
+      .features.thread.create({
+        id: "topology-thread",
+        participants: [{
+          id: "topology-user",
+          externalId: "topology-user",
+          participantType: "human",
+        }, {
+          id: "topology-agent",
+          externalId: "topology-agent",
+          participantType: "agent",
+          agentId: "topology-agent",
+        }, {
+          id: "topology-second-agent",
+          externalId: "topology-second-agent",
+          participantType: "agent",
+          agentId: "topology-second-agent",
+        }],
+      });
     const run = await gateway.run({
       thread: "topology-thread",
       participant: "topology-user",
@@ -400,24 +402,25 @@ Deno.test({
         (await fetch(new URL("v3/agents", listener.url))).status,
         200,
       );
-      await createTestDomainContext(gateway, namespace).features.thread.create({
-        id: "topology-thread",
-        participants: [{
-          id: "topology-user",
-          externalId: "topology-user",
-          participantType: "human",
-        }, {
-          id: "topology-agent",
-          externalId: "topology-agent",
-          participantType: "agent",
-          agentId: "topology-agent",
-        }, {
-          id: "topology-second-agent",
-          externalId: "topology-second-agent",
-          participantType: "agent",
-          agentId: "topology-second-agent",
-        }],
-      });
+      await createTestDomainContext(gateway, namespace, coreFeatureAliases)
+        .features.thread.create({
+          id: "topology-thread",
+          participants: [{
+            id: "topology-user",
+            externalId: "topology-user",
+            participantType: "human",
+          }, {
+            id: "topology-agent",
+            externalId: "topology-agent",
+            participantType: "agent",
+            agentId: "topology-agent",
+          }, {
+            id: "topology-second-agent",
+            externalId: "topology-second-agent",
+            participantType: "agent",
+            agentId: "topology-second-agent",
+          }],
+        });
       const run = await gateway.run({
         thread: "topology-thread",
         participant: "topology-user",
@@ -437,14 +440,15 @@ Deno.test({
       );
       assertEquals(worker.snapshot().transport, "websocket");
 
-      await createTestDomainContext(gateway, namespace).features.thread.create({
-        id: "topology-stream-thread",
-        participants: [{
-          id: "topology-stream-user",
-          externalId: "topology-stream-user",
-          participantType: "human",
-        }],
-      });
+      await createTestDomainContext(gateway, namespace, coreFeatureAliases)
+        .features.thread.create({
+          id: "topology-stream-thread",
+          participants: [{
+            id: "topology-stream-user",
+            externalId: "topology-stream-user",
+            participantType: "human",
+          }],
+        });
       const dispatched = await gateway.hypervisor!.dispatch({
         workload: COPILOTZ_STREAM_WORKLOAD,
         target: { workerId },

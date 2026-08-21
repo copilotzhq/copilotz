@@ -1,10 +1,10 @@
 import type { Agent } from "../resources/index.ts";
 import type { CollectionRecord } from "../domain/index.ts";
-import type {
-  FeatureAction,
-  FeatureRequest,
-  FeatureResource,
-  FeatureResponse,
+import {
+  defineFeature,
+  type FeatureExecuteContext,
+  type FeatureRequest,
+  type FeatureResponse,
 } from "../features/index.ts";
 import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
 import {
@@ -90,7 +90,12 @@ function createdInRange(
   return inDateRange(occurredAt, dates.from, dates.to);
 }
 
-const overview: FeatureAction = async (input, context) => {
+type AdminAction = (
+  input: unknown,
+  context: FeatureExecuteContext,
+) => FeatureResponse | Promise<FeatureResponse>;
+
+const overview: AdminAction = async (input, context) => {
   const request = asRequest(input);
   const rejected = readOnly(request);
   if (rejected) return rejected;
@@ -207,7 +212,7 @@ function emptyActivity(bucketValue: string): MutableActivityPoint {
   };
 }
 
-const activity: FeatureAction = async (input, context) => {
+const activity: AdminAction = async (input, context) => {
   const request = asRequest(input);
   const rejected = readOnly(request);
   if (rejected) return rejected;
@@ -251,7 +256,7 @@ const activity: FeatureAction = async (input, context) => {
   };
 };
 
-const events: FeatureAction = async (input, context) => {
+const events: AdminAction = async (input, context) => {
   const request = asRequest(input);
   const rejected = readOnly(request);
   if (rejected) return rejected;
@@ -287,7 +292,7 @@ function metadataText(
     : undefined;
 }
 
-const threads: FeatureAction = async (input, context) => {
+const threads: AdminAction = async (input, context) => {
   const request = asRequest(input);
   const rejected = readOnly(request);
   if (rejected) return rejected;
@@ -349,7 +354,7 @@ const threads: FeatureAction = async (input, context) => {
   return { status: 200, data, pageInfo: pageInfo(selected, limit) };
 };
 
-const participants: FeatureAction = async (input, context) => {
+const participants: AdminAction = async (input, context) => {
   const request = asRequest(input);
   const rejected = readOnly(request);
   if (rejected) return rejected;
@@ -433,7 +438,7 @@ function exactUsageWhere(
   return Object.keys(where).length ? where : undefined;
 }
 
-const usage: FeatureAction = async (input, context) => {
+const usage: AdminAction = async (input, context) => {
   const request = asRequest(input);
   const rejected = readOnly(request);
   if (rejected) return rejected;
@@ -481,7 +486,7 @@ function brainNode(value: CollectionRecord) {
   };
 }
 
-const brain: FeatureAction = async (input, context) => {
+const brain: AdminAction = async (input, context) => {
   const request = asRequest(input);
   const rejected = readOnly(request);
   if (rejected) return rejected;
@@ -573,31 +578,53 @@ function publicAgent(agent: Agent): Record<string, unknown> {
   };
 }
 
-const agents: FeatureAction = (input, context) => {
+const agents: AdminAction = (input, context) => {
   const request = asRequest(input);
   const rejected = readOnly(request);
   if (rejected) return rejected;
   return {
     status: 200,
-    data: context.resources.list<Agent>("agents").map(publicAgent),
+    data: Object.values(context.agents).filter((agent): agent is Agent =>
+      Boolean(agent)
+    ).map(publicAgent),
   };
 };
 
-function feature(options: CreateAdminPluginOptions): FeatureResource {
-  return Object.freeze({
+const adminRequestSchema = {
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    resource: { type: "string" },
+    method: { type: "string" },
+    path: { type: "array", items: { type: "string" } },
+    query: { type: "object" },
+    body: {},
+    headers: { type: "object" },
+    context: { type: "object" },
+  },
+  required: ["resource", "method"],
+} as const;
+
+function queryAction(execute: AdminAction) {
+  return {
+    inputSchema: adminRequestSchema,
+    execute,
+  };
+}
+
+function feature(options: CreateAdminPluginOptions) {
+  return defineFeature({
     id: options.featureId?.trim() || DEFAULT_FEATURE_ID,
-    alias: "admin",
-    mode: "read",
-    actions: Object.freeze({
-      overview,
-      activity,
-      events,
-      threads,
-      participants,
-      usage,
-      brain,
-      agents,
-    }),
+    actions: {
+      overview: queryAction(overview),
+      activity: queryAction(activity),
+      events: queryAction(events),
+      threads: queryAction(threads),
+      participants: queryAction(participants),
+      usage: queryAction(usage),
+      brain: queryAction(brain),
+      agents: queryAction(agents),
+    },
   });
 }
 

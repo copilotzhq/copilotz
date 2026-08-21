@@ -12,11 +12,13 @@ import {
 } from "./collection-projections.ts";
 import {
   createFeatureContext,
-  type FeatureContext,
+  type FeatureHostContext,
   type FeatureRequest,
   type FeatureResource,
   type FeatureResponse,
+  invokeFeatureAction,
 } from "../runtime/features/index.ts";
+import { requireFeatureActions } from "../runtime/features/context.ts";
 import {
   createEventNativeMessageHistoryIncluded,
   type EventNativeHistoryInclude,
@@ -55,7 +57,7 @@ export type EventNativeAppError =
     code: string;
   }>;
 
-export type EventNativeFeatureContext = FeatureContext;
+export type EventNativeFeatureContext = FeatureHostContext;
 
 export type EventNativeFeatureResource = FeatureResource;
 
@@ -264,7 +266,7 @@ async function persistPreparedContent(
 function featureContext(
   application: CopilotzApplication,
   namespace: string,
-): FeatureContext {
+): FeatureHostContext {
   return createFeatureContext({
     namespace,
     plugins: application.plugins,
@@ -538,12 +540,14 @@ async function handleThreads(
       () => crypto.randomUUID(),
     );
     const existed = await collections.thread.get({ id }) !== null;
-    const created = await featureContext(application, namespace).features.thread
-      .create({ ...body, id }, {
-        operationKey: header(request.headers, "idempotency-key") ??
-          `http:thread:create:${id}`,
-        identity,
-      });
+    const created = await requireFeatureActions(
+      featureContext(application, namespace),
+      "copilotz.core.thread",
+    ).create({ ...body, id }, {
+      operationKey: header(request.headers, "idempotency-key") ??
+        `http:thread:create:${id}`,
+      identity,
+    });
     return {
       status: existed ? 200 : 201,
       data: await projectThread(collections, created as CollectionRecord),
@@ -610,7 +614,10 @@ async function handleThreads(
     path.length === 2 && path[1] === "messages" &&
     request.method === "DELETE"
   ) {
-    await featureContext(application, namespace).features.thread.deleteMessages(
+    await requireFeatureActions(
+      featureContext(application, namespace),
+      "copilotz.core.thread",
+    ).deleteMessages(
       {
         threadId: path[0],
       },
@@ -650,20 +657,22 @@ async function handleThreads(
       () => crypto.randomUUID(),
     );
     const existed = await collections.message.get({ id }) !== null;
-    const revised = await featureContext(application, namespace).features
-      .message.revise({
-        id,
-        threadId: path[0],
-        messageId: path[2],
-        content,
-        ...(body.metadata === undefined
-          ? {}
-          : { metadata: record(body.metadata) }),
-      }, {
-        operationKey: deduplicationId ??
-          `http:message:revise:${path[2]}:${crypto.randomUUID()}`,
-        identity,
-      });
+    const revised = await requireFeatureActions(
+      featureContext(application, namespace),
+      "copilotz.core.message",
+    ).revise({
+      id,
+      threadId: path[0],
+      messageId: path[2],
+      content,
+      ...(body.metadata === undefined
+        ? {}
+        : { metadata: record(body.metadata) }),
+    }, {
+      operationKey: deduplicationId ??
+        `http:message:revise:${path[2]}:${crypto.randomUUID()}`,
+      identity,
+    });
     return {
       status: existed ? 200 : 201,
       data: revised,
@@ -960,11 +969,13 @@ async function handleFeatures(
   const context = featureContext(application, namespace);
   let output: unknown;
   try {
-    const action = context.features[feature.alias]?.[path[1]];
-    if (!action) {
-      throw appError(404, "feature_not_found", "Feature action was not found.");
-    }
-    output = await action(request);
+    output = await invokeFeatureAction(
+      feature,
+      path[1],
+      request,
+      context,
+      application.collectionRuntime.transaction,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes("is not registered")) {

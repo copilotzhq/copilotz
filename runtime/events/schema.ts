@@ -6,6 +6,8 @@ export type CoreTableName =
   | "nodes"
   | "edges"
   | "events"
+  | "event_bodies"
+  | "body_references"
   | "event_deliveries";
 
 export function validateEventSchemaName(value: string): string {
@@ -29,6 +31,8 @@ export function createCoreTableNames(schemaName = "public"): Readonly<
     nodes: table("nodes"),
     edges: table("edges"),
     events: table("events"),
+    event_bodies: table("event_bodies"),
+    body_references: table("body_references"),
     event_deliveries: table("event_deliveries"),
   });
 }
@@ -77,6 +81,21 @@ const CORE_SCHEMA_COLUMNS = Object.freeze(
       "deduplication_id",
       "created_at",
     ]),
+    event_bodies: Object.freeze([
+      "namespace",
+      "event_body_id",
+      "schema_version",
+      "body",
+      "digest",
+      "created_at",
+    ]),
+    body_references: Object.freeze([
+      "namespace",
+      "body_id",
+      "owner_kind",
+      "owner_id",
+      "created_at",
+    ]),
     event_deliveries: Object.freeze([
       "id",
       "event_id",
@@ -118,7 +137,14 @@ export async function validateCopilotzSchema(
     `SELECT table_name, column_name
        FROM information_schema.columns
       WHERE table_schema = $1
-        AND table_name IN ('nodes', 'edges', 'events', 'event_deliveries')`,
+        AND table_name IN (
+          'nodes',
+          'edges',
+          'events',
+          'event_bodies',
+          'body_references',
+          'event_deliveries'
+        )`,
     [schema],
   );
   const actual = new Map<string, Set<string>>();
@@ -264,6 +290,25 @@ export function createCoreSchemaStatements(
       ON ${tables.events} (namespace, correlation_id, position)`,
     `CREATE INDEX IF NOT EXISTS "events_causation_idx"
       ON ${tables.events} (namespace, causation_id, position)`,
+    `CREATE TABLE IF NOT EXISTS ${tables.event_bodies} (
+      namespace TEXT NOT NULL,
+      event_body_id TEXT NOT NULL,
+      schema_version INTEGER NOT NULL,
+      body JSONB NOT NULL,
+      digest TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (namespace, event_body_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS ${tables.body_references} (
+      namespace TEXT NOT NULL,
+      body_id TEXT NOT NULL,
+      owner_kind TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (namespace, body_id, owner_kind, owner_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS "body_references_body_idx"
+      ON ${tables.body_references} (namespace, body_id)`,
     `CREATE TABLE IF NOT EXISTS ${tables.event_deliveries} (
       id TEXT PRIMARY KEY,
       event_id TEXT NOT NULL REFERENCES ${tables.events}(id) ON DELETE CASCADE,

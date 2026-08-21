@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists } from "@std/assert";
 import {
   type CopilotzPlugin,
@@ -79,22 +80,23 @@ Deno.test("root createCopilotz runs one causal event scope without queue state",
     assertEquals("execution" in copilotz, false);
     assertEquals("hypervisor" in copilotz, false);
     assertEquals("transports" in copilotz, false);
-    await createTestDomainContext(copilotz, NAMESPACE).features.thread.create({
-      id: "contract-thread",
-      participants: [
-        {
-          id: "contract-user",
-          externalId: "user-1",
-          participantType: "human",
-        },
-        {
-          id: "contract-agent",
-          externalId: "support",
-          participantType: "agent",
-          agentId: "support",
-        },
-      ],
-    });
+    await createTestDomainContext(copilotz, NAMESPACE, coreFeatureAliases)
+      .features.thread.create({
+        id: "contract-thread",
+        participants: [
+          {
+            id: "contract-user",
+            externalId: "user-1",
+            participantType: "human",
+          },
+          {
+            id: "contract-agent",
+            externalId: "support",
+            participantType: "agent",
+            agentId: "support",
+          },
+        ],
+      });
 
     const run = await copilotz.run({
       thread: "contract-thread",

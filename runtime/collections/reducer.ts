@@ -114,7 +114,13 @@ async function insertRelationEdge(
        id, namespace, source_node_id, target_node_id, type, data, weight
      ) VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, 1)
      ON CONFLICT (id) DO NOTHING`,
-    [edgeId(namespace, type, sourceId, targetId), namespace, sourceId, targetId, type],
+    [
+      edgeId(namespace, type, sourceId, targetId),
+      namespace,
+      sourceId,
+      targetId,
+      type,
+    ],
   );
 }
 
@@ -142,7 +148,9 @@ export async function synchronizeRelations(
            AND edge.type = $2
            AND related.namespace = $1
            AND related.type = $3
-           AND related.id = ${invert ? "edge.target_node_id" : "edge.source_node_id"}
+           AND related.id = ${
+          invert ? "edge.target_node_id" : "edge.source_node_id"
+        }
            AND ${invert ? "edge.source_node_id" : "edge.target_node_id"} = $4`,
         [namespace, type, relation.collection, selfId],
       );
@@ -161,7 +169,9 @@ export async function synchronizeRelations(
       continue;
     }
     if (relation.type !== "hasMany" && relation.type !== "hasOne") continue;
-    if (!Array.isArray(value[relation.foreignKey]) && relation.type === "hasMany") {
+    if (
+      !Array.isArray(value[relation.foreignKey]) && relation.type === "hasMany"
+    ) {
       continue;
     }
     if (relation.type === "hasOne" && !(relation.foreignKey in value)) continue;
@@ -172,11 +182,15 @@ export async function synchronizeRelations(
          AND edge.type = $2
          AND related.namespace = $1
          AND related.type = $3
-         AND related.id = ${invert ? "edge.source_node_id" : "edge.target_node_id"}
+         AND related.id = ${
+        invert ? "edge.source_node_id" : "edge.target_node_id"
+      }
          AND ${invert ? "edge.target_node_id" : "edge.source_node_id"} = $4`,
       [namespace, type, relation.collection, selfId],
     );
-    for (const relatedId of relatedIds(value, relation.foreignKey, relationName)) {
+    for (
+      const relatedId of relatedIds(value, relation.foreignKey, relationName)
+    ) {
       await insertRelationEdge(
         context,
         namespace,
@@ -191,6 +205,51 @@ export async function synchronizeRelations(
   }
 }
 
+function bodyReferenceIds(
+  definition: CollectionDefinition,
+  value: Record<string, unknown>,
+): readonly string[] {
+  const ids = new Set<string>();
+  for (const field of definition.bodyRefs?.fields ?? []) {
+    const raw = value[field];
+    const values = Array.isArray(raw) ? raw : [raw];
+    for (const candidate of values) {
+      if (typeof candidate === "string" && candidate.trim()) {
+        ids.add(candidate.trim());
+      }
+    }
+  }
+  return Object.freeze([...ids]);
+}
+
+export async function synchronizeBodyReferences(
+  context: EventMutationContext,
+  definition: CollectionDefinition,
+  namespace: string,
+  ownerId: string,
+  value: Record<string, unknown>,
+): Promise<void> {
+  if (!definition.bodyRefs?.fields.length) return;
+  const bodyIds = bodyReferenceIds(definition, value);
+  await context.transaction.query(
+    `DELETE FROM ${context.tables.body_references}
+      WHERE namespace = $1
+        AND owner_kind = $2
+        AND owner_id = $3
+        AND NOT (body_id = ANY($4::text[]))`,
+    [namespace, definition.name, ownerId, bodyIds],
+  );
+  for (const bodyId of bodyIds) {
+    await context.transaction.query(
+      `INSERT INTO ${context.tables.body_references} (
+         namespace, body_id, owner_kind, owner_id
+       ) VALUES ($1, $2, $3, $4)
+       ON CONFLICT DO NOTHING`,
+      [namespace, bodyId, definition.name, ownerId],
+    );
+  }
+}
+
 export async function projectCollectionEvent(
   context: EventMutationContext,
   definition: CollectionDefinition,
@@ -199,6 +258,13 @@ export async function projectCollectionEvent(
   const namespace = body.record.namespace;
   const id = body.record.id;
   if (body.operation === "delete") {
+    if (definition.bodyRefs?.fields.length) {
+      await context.transaction.query(
+        `DELETE FROM ${context.tables.body_references}
+          WHERE namespace = $1 AND owner_kind = $2 AND owner_id = $3`,
+        [namespace, definition.name, id],
+      );
+    }
     await context.transaction.query(
       `DELETE FROM ${context.tables.edges}
        WHERE namespace = $1 AND (source_node_id = $2 OR target_node_id = $2)`,
@@ -253,6 +319,13 @@ export async function projectCollectionEvent(
     );
   }
   await synchronizeRelations(context, definition, namespace, id, body.record);
+  await synchronizeBodyReferences(
+    context,
+    definition,
+    namespace,
+    id,
+    body.record,
+  );
   return body.record;
 }
 

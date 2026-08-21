@@ -1,6 +1,6 @@
 import type { AttachmentRuntime } from "../attachments/index.ts";
 import {
-  createAssetStorageRuntime,
+  createBodyStorageRuntime,
   createContentPreparer,
 } from "../content/index.ts";
 import {
@@ -78,7 +78,7 @@ export async function createCopilotzEngine(
     ? options
     : Object.freeze({
       ...options,
-      assetStorage: createAssetStorageRuntime(options.assets),
+      assetStorage: createBodyStorageRuntime(options.assets),
     });
   await prepareDefaultDatabaseSchema(options, databaseSchema);
   const now = options.now ?? (() => new Date());

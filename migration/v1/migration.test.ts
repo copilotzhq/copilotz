@@ -946,7 +946,14 @@ Deno.test("A28 multi-tenant upgrade preserves graph domains and translates settl
       );
       assertEquals(
         tables.rows.map((row) => row.table_name),
-        ["edges", "event_deliveries", "events", "nodes"],
+        [
+          "body_references",
+          "edges",
+          "event_bodies",
+          "event_deliveries",
+          "events",
+          "nodes",
+        ],
       );
 
       const nodeIds = await session.query<{ id: string }>(

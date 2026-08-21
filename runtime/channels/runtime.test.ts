@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   loadMessageRecord,
@@ -235,7 +236,8 @@ Deno.test("request-bound channel delivery reports missing callbacks through done
     plugins: [createWebChannelPlugin()],
   });
   try {
-    await createTestDomainContext(application, NAMESPACE).features.thread
+    await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
+      .features.thread
       .create({
         id: "thread-a",
         participants: [{

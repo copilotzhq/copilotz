@@ -38,6 +38,7 @@ import {
 import { defineContextResource } from "../context/index.ts";
 import {
   coreCollectionsPlugin,
+  coreFeatureAliases,
   corePlugin,
 } from "@copilotz/copilotz/plugins/core";
 import { executeToolProcessor } from "../../plugins/core/resources/processors/text.ts";
@@ -197,18 +198,19 @@ async function createFixture(
       validateCollection: options.validateCollection,
     });
     stage = "thread";
-    await createTestDomainContext(engine, "tenant-a").features.thread.create({
-      id: "thread-a",
-      participants: [
-        { id: "user-a", externalId: "user-a", participantType: "human" },
-        {
-          id: "agent-north",
-          externalId: agent.id,
-          participantType: "agent",
-          agentId: configuredAgent.id,
-        },
-      ],
-    }, { identity: { deduplicationId: "thread-a:create" } });
+    await createTestDomainContext(engine, "tenant-a", coreFeatureAliases)
+      .features.thread.create({
+        id: "thread-a",
+        participants: [
+          { id: "user-a", externalId: "user-a", participantType: "human" },
+          {
+            id: "agent-north",
+            externalId: agent.id,
+            participantType: "agent",
+            agentId: configuredAgent.id,
+          },
+        ],
+      }, { identity: { deduplicationId: "thread-a:create" } });
     return Object.freeze({ db, engine, requests });
   } catch (cause) {
     throw new Error(`Memory fixture failed during ${stage}.`, { cause });
@@ -225,7 +227,11 @@ async function addMessage(
     namespace: "tenant-a",
     idempotencyKey: `${id}:content`,
   });
-  return await createTestDomainContext(fixture.engine, "tenant-a").features
+  return await createTestDomainContext(
+    fixture.engine,
+    "tenant-a",
+    coreFeatureAliases,
+  ).features
     .threadMessage.create({
       id,
       threadId: "thread-a",

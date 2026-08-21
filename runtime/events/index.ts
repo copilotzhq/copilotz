@@ -48,6 +48,7 @@ export type {
   DurableEventDraft,
   EphemeralEvent,
   EphemeralEventDraft,
+  EventBodyRef,
   EventDelivery,
   EventRouting,
   EventStoreError,
@@ -55,7 +56,10 @@ export type {
   EventSubject,
   EventVisibility,
 } from "./types.ts";
-export { deriveWorkflowId, MAX_DERIVED_WORKFLOW_ID_LENGTH } from "./workflow-id.ts";
+export {
+  deriveWorkflowId,
+  MAX_DERIVED_WORKFLOW_ID_LENGTH,
+} from "./workflow-id.ts";
 export {
   agentAskMetadata,
   providerAttemptEventMetadata,

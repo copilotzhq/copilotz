@@ -17,6 +17,7 @@ import {
   mapThreadRecord,
 } from "../engine/collection-graph.ts";
 import {
+  type AnyFeatureDefinition,
   createFeatureContext,
   type FeatureContext,
 } from "../features/index.ts";
@@ -53,12 +54,14 @@ async function materialize(
 export function createTestDomainContext(
   host: TestDomainHost,
   namespace: string,
+  featureAliases: Readonly<Record<string, AnyFeatureDefinition>> = {},
 ): FeatureContext {
   return createFeatureContext({
     namespace,
     plugins: host.plugins,
     collections: host.collections,
     collectionRuntime: host.collectionRuntime,
+    featureAliases,
     contentResolver: host.content.resolver,
     content: (scopedNamespace) =>
       Object.freeze({

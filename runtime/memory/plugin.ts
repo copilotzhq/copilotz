@@ -13,6 +13,7 @@ import type {
 } from "../domain/index.ts";
 import { llmAttemptContent, toolExecutionContent } from "../content/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
+import { requireFeatureActions } from "../features/context.ts";
 import {
   listThreadMessageRecords,
   loadParticipantRecord,
@@ -713,7 +714,7 @@ async function repairOrFail(
     kind: "memory_consolidation",
     agentParticipantId: optionalText(attempt.participantId),
   });
-  await context.features.llmAttempt.create({
+  await requireFeatureActions(context, "copilotz.core.llm-attempt").create({
     id: `${input.checkpointId}:llm:${nextIndex}`,
     threadId: attempt.threadId,
     messageId: attempt.messageId,
@@ -727,7 +728,6 @@ async function repairOrFail(
     metadata,
   }, {
     operationKey: `memory-attempt:${input.checkpointId}:${nextIndex}`,
-    identity: { metadata },
   });
 }
 
@@ -1813,7 +1813,7 @@ const prepareMemoryAttemptProcessor: Processor<CopilotzProcessorContext> =
         kind: "memory_consolidation",
         agentParticipantId: participant.id,
       });
-      await context.features.llmAttempt.create({
+      await requireFeatureActions(context, "copilotz.core.llm-attempt").create({
         id: `${checkpoint.id}:llm:0`,
         threadId,
         messageId: requiredText(
@@ -1828,7 +1828,6 @@ const prepareMemoryAttemptProcessor: Processor<CopilotzProcessorContext> =
         metadata,
       }, {
         operationKey: `memory-attempt:${checkpoint.id}:0`,
-        identity: { metadata },
       });
     },
   });
@@ -1972,31 +1971,31 @@ function executeMemoryAttemptProcessor(
             role: "llm.tool_calls",
           }, { operationKey: "memory:tool-calls" })
           : undefined;
-        await context.features.llmAttempt.complete({
-          id: attempt.id,
-          ...(answer ? { answer } : {}),
-          ...(reasoning ? { reasoning } : {}),
-          ...(toolCalls ? { toolCalls } : {}),
-          ...(response.finishReason
-            ? { finishReason: response.finishReason }
-            : {}),
-          usage: response.usage as unknown as Record<string, unknown>,
-          cost: response.cost as unknown as Record<string, unknown>,
-          metadataPatch: {
-            provider: response.provider ?? config.provider,
-            model: response.model ?? config.model,
-          },
-        }, {
-          operationKey: "memory:complete",
-          identity: { metadata: record(attempt.metadata) },
-        });
+        await requireFeatureActions(context, "copilotz.core.llm-attempt")
+          .complete({
+            id: attempt.id,
+            ...(answer ? { answer } : {}),
+            ...(reasoning ? { reasoning } : {}),
+            ...(toolCalls ? { toolCalls } : {}),
+            ...(response.finishReason
+              ? { finishReason: response.finishReason }
+              : {}),
+            usage: response.usage as unknown as Record<string, unknown>,
+            cost: response.cost as unknown as Record<string, unknown>,
+            metadataPatch: {
+              provider: response.provider ?? config.provider,
+              model: response.model ?? config.model,
+            },
+          }, {
+            operationKey: "memory:complete",
+          });
       } catch (error) {
         const detail = await context.content.prepare({
           type: "text",
           text: error instanceof Error ? error.message : String(error),
           role: "provider.error_detail",
         }, { operationKey: "memory:error" });
-        await context.features.llmAttempt.fail({
+        await requireFeatureActions(context, "copilotz.core.llm-attempt").fail({
           id: attempt.id,
           safeError: safeError(
             "memory_provider_error",
@@ -2006,7 +2005,6 @@ function executeMemoryAttemptProcessor(
           errorDetail: detail,
         }, {
           operationKey: "memory:fail",
-          identity: { metadata: record(attempt.metadata) },
         });
       }
     },
@@ -2083,23 +2081,23 @@ function projectMemoryAttemptProcessor(
         agentParticipantId: optionalText(attempt.participantId),
         continuation: "none",
       });
-      await context.features.toolExecution.create({
-        id: `${checkpointId}:tool:${
-          Number(record(attempt.metadata).memoryRepairIndex ?? 0)
-        }`,
-        threadId: attempt.threadId,
-        participantId: attempt.participantId,
-        agentId: attempt.agentId,
-        toolCallId: call.id,
-        tool: { id: CONSOLIDATE_MEMORY_TOOL_ID, name: "Consolidate Memory" },
-        status: "running",
-        historyVisibility: "requester_only",
-        arguments: prepared,
-        metadata,
-      }, {
-        operationKey: `memory:${checkpointId}:tool`,
-        identity: { metadata },
-      });
+      await requireFeatureActions(context, "copilotz.core.tool-execution")
+        .create({
+          id: `${checkpointId}:tool:${
+            Number(record(attempt.metadata).memoryRepairIndex ?? 0)
+          }`,
+          threadId: attempt.threadId,
+          participantId: attempt.participantId,
+          agentId: attempt.agentId,
+          toolCallId: call.id,
+          tool: { id: CONSOLIDATE_MEMORY_TOOL_ID, name: "Consolidate Memory" },
+          status: "running",
+          historyVisibility: "requester_only",
+          arguments: prepared,
+          metadata,
+        }, {
+          operationKey: `memory:${checkpointId}:tool`,
+        });
     },
   });
 }

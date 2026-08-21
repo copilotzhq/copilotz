@@ -1,6 +1,6 @@
 import type { DurableEvent } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
-import { eventDataRef, readEventBody } from "./body.ts";
+import { eventDataRef, readEventBody } from "../events/body-store.ts";
 import { sameValue } from "./equal.ts";
 import { projectCollectionEvent } from "./reducer.ts";
 import { queryCollectionRecords } from "./query.ts";

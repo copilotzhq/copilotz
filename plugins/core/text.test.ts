@@ -57,7 +57,10 @@ import {
   definePlugin,
   type PluginRegistry,
 } from "../../runtime/plugins/index.ts";
-import { corePlugin } from "@copilotz/copilotz/plugins/core";
+import {
+  coreFeatureAliases,
+  corePlugin,
+} from "@copilotz/copilotz/plugins/core";
 import {
   type CreateTextWorkflowPluginOptions,
   defineLlmProviderResource,
@@ -1029,7 +1032,11 @@ Deno.test("revising a human turn runs the agent from the projected branch", asyn
         idempotencyKey: "message:user:revision:1:content",
       },
     );
-    await createTestDomainContext(fixture.engine, "tenant-a").features.message
+    await createTestDomainContext(
+      fixture.engine,
+      "tenant-a",
+      coreFeatureAliases,
+    ).features.message
       .revise({
         id: "message:user:revision:1",
         threadId: "thread-a",
@@ -1556,7 +1563,11 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
       text: "south private reasoning",
       role: "reasoning",
     }, { namespace: "tenant-a", idempotencyKey: "peer:reasoning" });
-    const domain = createTestDomainContext(fixture.engine, "tenant-a");
+    const domain = createTestDomainContext(
+      fixture.engine,
+      "tenant-a",
+      coreFeatureAliases,
+    );
     await domain.features.llmAttempt.create({
       id: "seed-peer-attempt",
       threadId: "thread-a",
@@ -1568,7 +1579,6 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
     }, {
       identity: {
         deduplicationId: "seed-peer-attempt:create",
-        metadata: providerMetadata,
       },
     });
     await domain.features.llmAttempt.complete({
@@ -1578,7 +1588,6 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
     }, {
       identity: {
         deduplicationId: "seed-peer-attempt:complete",
-        metadata: providerMetadata,
       },
     });
     await waitForSettlement(
@@ -1641,7 +1650,6 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
       }, {
         identity: {
           deduplicationId: `execution:${id}:create`,
-          metadata,
         },
       });
       await waitForSettlement(
@@ -1661,7 +1669,6 @@ Deno.test("participant-relative history labels peer agents and enforces tool and
       }, {
         identity: {
           deduplicationId: `execution:${id}:complete`,
-          metadata,
         },
       });
       await waitForSettlement(

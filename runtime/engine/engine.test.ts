@@ -1,3 +1,8 @@
+import {
+  coreCollectionsPlugin,
+  coreFeatureAliases,
+  llmAttemptFeature,
+} from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   createSqlSession,
@@ -22,7 +27,6 @@ import {
   definePlugin,
   defineProcessor,
 } from "../plugins/index.ts";
-import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
 import {
   type CopilotzEngine,
   type CopilotzProcessorContext,
@@ -76,6 +80,9 @@ async function createFixture(): Promise<Fixture> {
   const processor = defineProcessor<CopilotzProcessorContext>({
     id: "engine.message.to-attempt",
     on: [{ eventType: "message.created", routing: { senderId: "user-a" } }],
+    requires: {
+      features: { llmAttempt: llmAttemptFeature },
+    },
     async handle(event, context) {
       if (!event.durable) throw new Error("Durable delivery received a frame.");
       calls += 1;
@@ -194,7 +201,7 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     );
     assertEquals(
       tables.rows.map((row) => row.table_name),
-      ["edges", "event_deliveries", "events", "nodes"],
+      ["edges", "event_bodies", "event_deliveries", "events", "nodes"],
     );
 
     const namespace = "tenant-a";
@@ -234,7 +241,8 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       threadId: "thread-a",
       types: ["text.delta"],
     }).getReader();
-    await createTestDomainContext(fixture.engine, namespace).features
+    await createTestDomainContext(fixture.engine, namespace, coreFeatureAliases)
+      .features
       .threadMessage.create({
         id: "message-a",
         threadId: "thread-a",

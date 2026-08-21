@@ -3,6 +3,8 @@ import type { Agent } from "@copilotz/copilotz/resources";
 import type { SafeWorkflowError } from "@copilotz/copilotz/domain";
 import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
+import { threadMessageFeature } from "../features/thread-message.ts";
+import { toolExecutionFeature } from "../features/tool-execution.ts";
 import { resolveAgentGrants } from "@copilotz/copilotz/capabilities";
 import {
   type AgentAskMetadata,
@@ -257,7 +259,7 @@ export function defineAskTool(
       const content = await context.processor.content.prepare(message, {
         operationKey: `ask:${askId}:question-content`,
       });
-      await context.processor.features.threadMessage.create({
+      await context.processor.feature(threadMessageFeature).create({
         id: questionMessageId,
         threadId: execution.threadId,
         sender: askingParticipant,
@@ -267,7 +269,6 @@ export function defineAskTool(
         metadata,
       }, {
         operationKey: `ask:${askId}:question`,
-        identity: { metadata },
       });
       return deferWorkflowTool({
         metadata: { askId, questionMessageId, askedAgentId: askedAgent.id },
@@ -283,6 +284,9 @@ export const completeAskProcessor: Processor<CopilotzProcessorContext> =
       eventType: "message.created",
       metadata: { copilotzAsk: { phase: "answer" } },
     }],
+    requires: {
+      features: { toolExecution: toolExecutionFeature },
+    },
     async handle(event, context) {
       const record = collectionEventRecord(event);
       const sender = await requireCollection(context, "participant").get(
@@ -350,6 +354,9 @@ export const failAskProcessor: Processor<CopilotzProcessorContext> =
         data: { record: { status: "cancelled" } },
       },
     ],
+    requires: {
+      features: { toolExecution: toolExecutionFeature },
+    },
     async handle(event, context) {
       const record = collectionEventRecord(event);
       const attempt = record;

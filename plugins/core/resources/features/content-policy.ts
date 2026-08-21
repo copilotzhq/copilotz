@@ -6,7 +6,7 @@ import {
   replaceContentRoles,
   type RoleContentInput,
 } from "@copilotz/copilotz/content";
-import type { FeatureContext } from "@copilotz/copilotz/features";
+import type { FeatureContentHandle } from "@copilotz/copilotz/features";
 
 export type RoleField = Readonly<{
   role: string;
@@ -40,7 +40,7 @@ export function requiredText(value: unknown, name: string): string {
 }
 
 export async function persistRoleContent(
-  context: FeatureContext,
+  context: Readonly<{ content: FeatureContentHandle }>,
   owner: Readonly<{ type: string; id: string; threadId: string }>,
   current: ContentSequence,
   fields: readonly RoleField[],
@@ -70,7 +70,7 @@ export async function persistRoleContent(
 }
 
 export async function linkContent(
-  context: FeatureContext,
+  context: Readonly<{ content: FeatureContentHandle }>,
   ownerId: string,
   content: ContentSequence,
 ): Promise<void> {

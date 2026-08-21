@@ -15,6 +15,7 @@ import type {
   CollectionRuntime,
 } from "../collections/index.ts";
 import { createFeatureContext } from "../features/index.ts";
+import { requireFeatureActions } from "../features/context.ts";
 import type {
   ConversationMessage,
   ConversationThread,
@@ -396,16 +397,19 @@ async function resolveThread(
     { deduplicationId: `channel:thread:${namespace}:${id ?? externalId}` },
     ulid,
   );
-  const created = await createFeatureContext({
-    namespace,
-    plugins: application.plugins,
-    collections: application.collections,
-    collectionRuntime: runtime,
-    contentResolver: application.content.resolver,
-    events: application.events,
-    deliveries: application.deliveries,
-    relations: application.relations,
-  }).features.thread.create({
+  const created = await requireFeatureActions(
+    createFeatureContext({
+      namespace,
+      plugins: application.plugins,
+      collections: application.collections,
+      collectionRuntime: runtime,
+      contentResolver: application.content.resolver,
+      events: application.events,
+      deliveries: application.deliveries,
+      relations: application.relations,
+    }),
+    "copilotz.core.thread",
+  ).create({
     id: threadId,
     ...(externalId ? { externalId } : {}),
     ...(descriptor.name?.trim() ? { name: descriptor.name.trim() } : {}),
@@ -435,16 +439,19 @@ async function addThreadParticipant(
   if (thread.participants.some((item) => item.id === participant.id)) {
     return thread;
   }
-  await createFeatureContext({
-    namespace,
-    plugins: application.plugins,
-    collections: application.collections,
-    collectionRuntime: application.collectionRuntime,
-    contentResolver: application.content.resolver,
-    events: application.events,
-    deliveries: application.deliveries,
-    relations: application.relations,
-  }).features.thread.addParticipant({
+  await requireFeatureActions(
+    createFeatureContext({
+      namespace,
+      plugins: application.plugins,
+      collections: application.collections,
+      collectionRuntime: application.collectionRuntime,
+      contentResolver: application.content.resolver,
+      events: application.events,
+      deliveries: application.deliveries,
+      relations: application.relations,
+    }),
+    "copilotz.core.thread",
+  ).addParticipant({
     threadId: thread.id,
     participant,
   }, {

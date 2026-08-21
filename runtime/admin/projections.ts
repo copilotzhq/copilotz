@@ -1,7 +1,12 @@
 import type { ResolvedContent } from "../content/index.ts";
 import type { CollectionRecord } from "../domain/index.ts";
 import type { DurableEvent } from "../events/index.ts";
-import type { FeatureContext, FeatureRequest } from "../features/index.ts";
+import type {
+  FeatureExecuteContext,
+  FeatureRequest,
+} from "../features/index.ts";
+
+type AdminQueryContext = FeatureExecuteContext;
 
 export function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -76,7 +81,7 @@ export function inDateRange(
 }
 
 export async function allThreads(
-  context: FeatureContext,
+  context: AdminQueryContext,
   options: {
     participantId?: string;
     status?: string | readonly string[];
@@ -109,20 +114,20 @@ export async function allThreads(
 }
 
 export async function allParticipants(
-  context: FeatureContext,
+  context: AdminQueryContext,
 ): Promise<readonly CollectionRecord[]> {
   return await allCollectionRecords(context, "participant");
 }
 
 export async function allMessages(
-  context: FeatureContext,
+  context: AdminQueryContext,
   threadId: string,
 ): Promise<readonly CollectionRecord[]> {
   return await allCollectionRecords(context, "message", { threadId });
 }
 
 export async function allEvents(
-  context: FeatureContext,
+  context: AdminQueryContext,
   options: {
     threadId?: string;
     correlationId?: string;
@@ -145,7 +150,7 @@ export async function allEvents(
 }
 
 export async function allCollectionRecords(
-  context: FeatureContext,
+  context: AdminQueryContext,
   name: string,
   where?: Readonly<Record<string, unknown>>,
 ): Promise<readonly CollectionRecord[]> {
@@ -178,7 +183,7 @@ function resolvedText(value: ResolvedContent): string {
 }
 
 export async function messagePreview(
-  context: FeatureContext,
+  context: AdminQueryContext,
   message: CollectionRecord | undefined,
   maximum = 280,
 ): Promise<string | null> {
@@ -186,7 +191,11 @@ export async function messagePreview(
   try {
     const content = Array.isArray(message.content) ? message.content : [];
     const resolved = await context.content.resolver.getMany(
-      content as Parameters<FeatureContext["content"]["resolver"]["getMany"]>[0],
+      content as Parameters<
+        FeatureExecuteContext[
+          "content"
+        ]["resolver"]["getMany"]
+      >[0],
       { namespace: context.namespace },
     );
     const text = resolved.map(resolvedText).join("\n").trim();

@@ -1,5 +1,5 @@
-import type { ContentRef } from "../content/index.ts";
 import type {
+  EventBodyRef,
   EventDelivery,
   EventDispatchReport,
   EventRouting,
@@ -48,7 +48,7 @@ export type CollectionDurableEvent = Readonly<{
   causationId?: string;
   correlationId: string;
   deduplicationId?: string;
-  dataRef: ContentRef;
+  dataRef: EventBodyRef;
   createdAt: string;
 }>;
 

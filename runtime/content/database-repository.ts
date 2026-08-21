@@ -11,9 +11,14 @@ import { cloneContentRef } from "./input.ts";
 import {
   assetBodyKey,
   assetBodySchemaPrefix,
-  readAssetBodiesBounded,
+  readBodiesBounded,
+  readBodyBytes,
 } from "./body-store.ts";
-import { createAssetStorageRuntime } from "./storage.ts";
+import {
+  createDatabaseBodyStore,
+  createDatabaseBodyStoreAdapter,
+} from "./database-body-store.ts";
+import { createBodyStorageRuntime } from "./storage.ts";
 import type {
   AssetBody,
   AssetBodyLocation,
@@ -28,7 +33,9 @@ import type {
   PreparedContent,
   PublishAssetInput,
 } from "./types.ts";
-import type { AssetStorageRuntime } from "./body-store.ts";
+import type { BodyStorageRuntime, BodyStore } from "./body-store.ts";
+
+const ASSET_BODY_OWNER_KIND = "@copilotz/asset/v1";
 
 type AssetNodeRow = Record<string, unknown> & {
   id: string;
@@ -98,7 +105,7 @@ export type CreateDatabaseAssetRepositoryOptions = Readonly<{
   session: SqlExecutor;
   eventStore: Pick<EventStore, "tables">;
   databaseSchema: string;
-  storage?: AssetStorageRuntime;
+  storage?: BodyStorageRuntime;
   createId?: () => string;
   now?: () => Date;
   digest?: (bytes: Uint8Array) => Promise<`sha256:${string}`>;
@@ -184,12 +191,8 @@ function state(value: unknown, assetId: string): AssetState {
 
 function location(value: unknown, assetId: string): AssetBodyLocation {
   const fields = record(value);
-  if (
-    fields.kind === "database" &&
-    (fields.encoding === "utf8" || fields.encoding === "json" ||
-      fields.encoding === "base64")
-  ) {
-    return { kind: "database", encoding: fields.encoding };
+  if (fields.kind === "database" && typeof fields.key === "string") {
+    return { kind: "database", key: fields.key };
   }
   if (fields.kind === "memory") {
     return {
@@ -260,95 +263,6 @@ function mapAsset(row: AssetNodeRow): AssetRecord {
   return Object.freeze(mapped);
 }
 
-function encodeBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const size = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += size) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + size));
-  }
-  return btoa(binary);
-}
-
-function decodeBase64(value: string): Uint8Array {
-  let binary: string;
-  try {
-    binary = atob(value);
-  } catch (cause) {
-    throw createContentError(
-      "asset_corrupted",
-      "A database asset contains invalid base64 data.",
-      { cause },
-    );
-  }
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index++) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
-
-function jsonMediaType(mediaType: string): boolean {
-  const base = mediaType.toLowerCase().split(";", 1)[0].trim();
-  return base === "application/json" || base.endsWith("+json");
-}
-
-function textMediaType(mediaType: string): boolean {
-  return mediaType.toLowerCase().startsWith("text/");
-}
-
-function encodeDatabaseBody(
-  mediaType: string,
-  body: Uint8Array,
-): { body: string; location: AssetBodyLocation } {
-  if (jsonMediaType(mediaType) || textMediaType(mediaType)) {
-    let text: string;
-    try {
-      text = new TextDecoder("utf-8", { fatal: true }).decode(body);
-      if (jsonMediaType(mediaType)) JSON.parse(text);
-    } catch (cause) {
-      throw createContentError(
-        "content_invalid",
-        `Asset body is not valid ${
-          jsonMediaType(mediaType) ? "JSON" : "UTF-8"
-        }.`,
-        { cause },
-      );
-    }
-    return {
-      body: text,
-      location: {
-        kind: "database",
-        encoding: jsonMediaType(mediaType) ? "json" : "utf8",
-      },
-    };
-  }
-  return {
-    body: encodeBase64(body),
-    location: { kind: "database", encoding: "base64" },
-  };
-}
-
-function decodeDatabaseBody(row: AssetNodeRow, asset: AssetRecord): Uint8Array {
-  const data = record(row.data);
-  if (asset.location.kind !== "database") {
-    throw createContentError(
-      "asset_storage_unavailable",
-      `No configured body backend can read asset: ${asset.id}`,
-      { namespace: asset.namespace, assetId: asset.id },
-    );
-  }
-  if (typeof data.body !== "string") {
-    throw createContentError(
-      "asset_corrupted",
-      `Asset body is unavailable: ${asset.id}`,
-      { namespace: asset.namespace, assetId: asset.id },
-    );
-  }
-  return asset.location.encoding === "base64"
-    ? decodeBase64(data.body)
-    : new TextEncoder().encode(data.body);
-}
-
 function isContentSequence(
   content: DurableContentInput,
 ): content is ContentSequence {
@@ -411,6 +325,10 @@ function assertReadable(asset: AssetRecord): void {
   }
 }
 
+function assetBodyId(asset: AssetRecord): string | undefined {
+  return "key" in asset.location ? asset.location.key : undefined;
+}
+
 /** Creates the graph-native database asset repository and aggregate seam. */
 export function createDatabaseAssetRepository(
   options: CreateDatabaseAssetRepositoryOptions,
@@ -418,7 +336,30 @@ export function createDatabaseAssetRepository(
   const createId = options.createId ?? ulid;
   const now = options.now ?? (() => new Date());
   const digest = options.digest ?? digestContent;
-  const storage = options.storage ?? createAssetStorageRuntime();
+  const configuredStorage = options.storage ?? createBodyStorageRuntime();
+  const defaultDatabaseAdapter = configuredStorage.adapter
+    ? undefined
+    : createDatabaseBodyStoreAdapter({
+      session: options.session,
+      backendId: "database:default",
+    });
+  const adapter = configuredStorage.adapter ?? defaultDatabaseAdapter!;
+  const scope = Object.freeze({
+    namespace: "@copilotz/content",
+    databaseSchema: options.databaseSchema,
+  });
+  const scopedWriter = adapter.forScope(scope);
+  const storage: BodyStorageRuntime = Object.freeze({
+    adapter,
+    writer: scopedWriter,
+    readers: new Map([
+      ...configuredStorage.readers,
+      [scopedWriter.backendId, scopedWriter],
+    ]),
+    prefix: configuredStorage.prefix,
+    maxDatabaseBytes: configuredStorage.maxDatabaseBytes,
+    readConcurrency: configuredStorage.readConcurrency,
+  });
   const maxDatabaseBytes = storage.maxDatabaseBytes;
   const tables = options.eventStore.tables;
 
@@ -535,38 +476,40 @@ export function createDatabaseAssetRepository(
       );
     }
     const origin = candidate.origin ?? fallbackOrigin;
-    let storedBody: string | undefined;
-    let storedLocation: AssetBodyLocation;
-    if (storage.writer) {
-      const key = assetBodyKey({
-        prefix: storage.prefix,
-        databaseSchema: options.databaseSchema,
-        namespace,
-        assetId: candidate.id,
-        origin,
-      });
-      const head = await storage.writer.put({
-        key,
-        bytes: candidate.body,
-        mediaType: candidate.mediaType,
-        digest: candidate.digest,
-        ifAbsent: true,
-      });
-      storedLocation = storage.writer.kind === "object"
-        ? {
-          kind: "object",
-          backendId: storage.writer.backendId,
-          key,
-          ...(head.etag ? { etag: head.etag } : {}),
-        }
-        : storage.writer.kind === "filesystem"
-        ? { kind: "filesystem", backendId: storage.writer.backendId, key }
-        : { kind: "memory", backendId: storage.writer.backendId, key };
-    } else {
-      const encoded = encodeDatabaseBody(candidate.mediaType, candidate.body);
-      storedBody = encoded.body;
-      storedLocation = encoded.location;
-    }
+    const keyForBody = assetBodyKey({
+      prefix: storage.prefix,
+      databaseSchema: options.databaseSchema,
+      namespace,
+      assetId: candidate.id,
+      origin,
+    });
+    const configuredWriter = storage.writer!;
+    const writer = configuredWriter.kind === "database"
+      ? createDatabaseBodyStore({
+        session: context.transaction,
+        schema: options.databaseSchema,
+        backendId: configuredWriter.backendId,
+      })
+      : configuredWriter;
+    const head = await writer.put({
+      bodyId: keyForBody,
+      bytes: candidate.body,
+      mediaType: candidate.mediaType,
+      digest: candidate.digest,
+      ifAbsent: true,
+    });
+    const storedLocation: AssetBodyLocation = writer.kind === "object"
+      ? {
+        kind: "object",
+        backendId: writer.backendId,
+        key: keyForBody,
+        ...(head.etag ? { etag: head.etag } : {}),
+      }
+      : writer.kind === "filesystem"
+      ? { kind: "filesystem", backendId: writer.backendId, key: keyForBody }
+      : writer.kind === "database"
+      ? { kind: "database", key: keyForBody }
+      : { kind: "memory", backendId: writer.backendId, key: keyForBody };
     const readyAt = now().toISOString();
     let data: string;
     try {
@@ -576,7 +519,6 @@ export function createDatabaseAssetRepository(
         digest: candidate.digest,
         state: "ready",
         location: storedLocation,
-        ...(storedBody !== undefined ? { body: storedBody } : {}),
         readyAt,
         ...(origin ? { origin: structuredClone(origin) } : {}),
         metadata: structuredClone(candidate.metadata ?? {}),
@@ -602,7 +544,18 @@ export function createDatabaseAssetRepository(
         key ?? null,
       ],
     );
-    return mapAsset(result.rows[0]);
+    const asset = mapAsset(result.rows[0]);
+    const bodyId = assetBodyId(asset);
+    if (bodyId) {
+      await context.transaction.query(
+        `INSERT INTO ${context.tables.body_references} (
+           namespace, body_id, owner_kind, owner_id
+         ) VALUES ($1, $2, $3, $4)
+         ON CONFLICT DO NOTHING`,
+        [namespace, bodyId, ASSET_BODY_OWNER_KIND, asset.id],
+      );
+    }
+    return asset;
   };
 
   const canonicalize = async (
@@ -731,6 +684,44 @@ export function createDatabaseAssetRepository(
     });
   };
 
+  const bodyStoreForAsset = (asset: AssetRecord): BodyStore => {
+    if (asset.location.kind === "database") {
+      const store = storage.writer?.kind === "database"
+        ? storage.writer
+        : storage.readers.get("database:default");
+      if (store) return store;
+      throw createContentError(
+        "asset_storage_unavailable",
+        `Database BodyStore is not configured for asset: ${asset.id}`,
+        { namespace: asset.namespace, assetId: asset.id },
+      );
+    }
+    const backendId = asset.location.backendId;
+    const store = backendId ? storage.readers.get(backendId) : undefined;
+    if (store) return store;
+    throw createContentError(
+      "asset_storage_unavailable",
+      `Body backend '${
+        backendId ?? "memory"
+      }' is not configured for asset: ${asset.id}`,
+      { namespace: asset.namespace, assetId: asset.id },
+    );
+  };
+
+  const compareDeleteReadyBody = async (
+    store: BodyStore,
+    bodyId: string,
+  ): Promise<boolean> => {
+    const head = await store.head({ bodyId });
+    if (!head) return true;
+    return await store.maintenance.delete({
+      bodyId,
+      expectedState: "ready",
+      expectedMaintenanceVersion: head.maintenanceVersion,
+      idleForMs: 0,
+    });
+  };
+
   const readRows = async (
     namespace: string,
     assetIds: readonly string[],
@@ -741,28 +732,21 @@ export function createDatabaseAssetRepository(
       assertReadable(asset);
       return asset;
     });
-    const bytes = await readAssetBodiesBounded(
+    const bytes = await readBodiesBounded(
       rows.map((row, index) => ({ row, asset: assets[index] })),
       storage.readConcurrency,
-      async ({ row, asset }) => {
-        let body: Uint8Array;
-        if (asset.location.kind === "database") {
-          body = decodeDatabaseBody(row, asset);
-        } else {
-          const backendId = asset.location.backendId;
-          const key = asset.location.key;
-          const store = backendId ? storage.readers.get(backendId) : undefined;
-          if (!store || !key) {
-            throw createContentError(
-              "asset_storage_unavailable",
-              `Body backend '${
-                backendId ?? "memory"
-              }' is not configured for asset: ${asset.id}`,
-              { namespace: asset.namespace, assetId: asset.id },
-            );
-          }
-          body = await store.read(key);
+      async ({ asset }) => {
+        const key = assetBodyId(asset);
+        if (!key) {
+          throw createContentError(
+            "asset_corrupted",
+            `Asset body location is missing a body id: ${asset.id}`,
+            { namespace: asset.namespace, assetId: asset.id },
+          );
         }
+        const body = await readBodyBytes(bodyStoreForAsset(asset), {
+          bodyId: key,
+        });
         if (
           body.byteLength !== asset.byteLength ||
           await digest(body) !== asset.digest
@@ -936,39 +920,28 @@ export function createDatabaseAssetRepository(
       const row = await requireRow(options.session, namespace, assetId);
       const asset = mapAsset(row);
       assertReadable(asset);
-      if (asset.location.kind !== "database") {
-        const backendId = asset.location.backendId;
-        const key = asset.location.key;
-        const store = backendId ? storage.readers.get(backendId) : undefined;
-        if (!store || !key) {
-          throw createContentError(
-            "asset_storage_unavailable",
-            `Body backend '${
-              backendId ?? "memory"
-            }' is not configured for asset: ${asset.id}`,
-            { namespace, assetId },
-          );
-        }
-        const head = await store.head(key);
-        if (
-          !head || head.byteLength !== asset.byteLength ||
-          head.digest !== asset.digest || head.mediaType !== asset.mediaType
-        ) {
-          throw createContentError(
-            "asset_corrupted",
-            `Asset body metadata integrity check failed: ${asset.id}`,
-            { namespace, assetId },
-          );
-        }
-        return await store.open(key);
+      const key = assetBodyId(asset);
+      if (!key) {
+        throw createContentError(
+          "asset_corrupted",
+          `Asset body location is missing a body id: ${asset.id}`,
+          { namespace, assetId },
+        );
       }
-      const bytes = decodeDatabaseBody(row, asset);
-      return new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(bytes);
-          controller.close();
-        },
-      });
+      const store = bodyStoreForAsset(asset);
+      const head = await store.head({ bodyId: key });
+      if (
+        !head || head.state !== "ready" ||
+        head.byteLength !== asset.byteLength ||
+        head.digest !== asset.digest || head.mediaType !== asset.mediaType
+      ) {
+        throw createContentError(
+          "asset_corrupted",
+          `Asset body metadata integrity check failed: ${asset.id}`,
+          { namespace, assetId },
+        );
+      }
+      return await store.read({ bodyId: key });
     },
 
     async markDeleted(namespaceInput, assetIdInput) {
@@ -1007,6 +980,17 @@ export function createDatabaseAssetRepository(
               { namespace, assetId },
             );
           }
+          const bodyId = assetBodyId(current);
+          if (bodyId) {
+            await transaction.query(
+              `DELETE FROM ${names.body_references}
+                WHERE namespace = $1
+                  AND body_id = $2
+                  AND owner_kind = $3
+                  AND owner_id = $4`,
+              [namespace, bodyId, ASSET_BODY_OWNER_KIND, assetId],
+            );
+          }
           return mapAsset(updated.rows[0]);
         },
         recoverDuplicate: async (_event, { transaction }) =>
@@ -1019,16 +1003,24 @@ export function createDatabaseAssetRepository(
       ) {
         const bodyStore = storage.readers.get(current.location.backendId);
         if (bodyStore) {
-          await bodyStore.delete(current.location.key).then(async () => {
-            await options.session.query(
-              `UPDATE ${tables.nodes}
-               SET data = data || jsonb_build_object('bodyDeletedAt', $3::text),
-                   updated_at = NOW()
-               WHERE namespace = $1 AND id = $2 AND type = 'asset'
-                 AND data ->> 'state' = 'deleted'`,
-              [namespace, assetId, deletedAt],
+          try {
+            const deletedBody = await compareDeleteReadyBody(
+              bodyStore,
+              current.location.key,
             );
-          }).catch(() => undefined);
+            if (deletedBody) {
+              await options.session.query(
+                `UPDATE ${tables.nodes}
+                 SET data = data || jsonb_build_object('bodyDeletedAt', $3::text),
+                     updated_at = NOW()
+                 WHERE namespace = $1 AND id = $2 AND type = 'asset'
+                   AND data ->> 'state' = 'deleted'`,
+                [namespace, assetId, deletedAt],
+              );
+            }
+          } catch {
+            // Keep the durable location for maintenance retry.
+          }
         }
       }
       return deleted;
@@ -1065,7 +1057,11 @@ export function createDatabaseAssetRepository(
         const bodyStore = storage.readers.get(asset.location.backendId);
         if (!bodyStore) continue;
         try {
-          await bodyStore.delete(asset.location.key);
+          const deleted = await compareDeleteReadyBody(
+            bodyStore,
+            asset.location.key,
+          );
+          if (!deleted) continue;
           await options.session.query(
             `UPDATE ${tables.nodes}
              SET data = data || jsonb_build_object('bodyDeletedAt', $3::text),
@@ -1086,24 +1082,32 @@ export function createDatabaseAssetRepository(
           databaseSchema: options.databaseSchema,
         });
         const cutoff = maintenanceNow.getTime() - orphanAfterMs;
-        let inspected = 0;
-        for await (const body of storage.writer.list({ prefix })) {
-          if (inspected++ >= remaining) break;
+        const candidates = await storage.writer.maintenance.list({
+          states: ["ready"],
+          idleForMs: orphanAfterMs,
+          limit: remaining,
+        });
+        for (const body of candidates.bodies) {
+          if (body.state !== "ready") continue;
+          if (!body.bodyId.startsWith(prefix)) continue;
           const modified = body.lastModified
             ? new Date(body.lastModified).getTime()
             : Number.NaN;
           if (!Number.isFinite(modified) || modified > cutoff) continue;
-          const owner = await options.session.query<{ id: string }>(
-            `SELECT id FROM ${tables.nodes}
-             WHERE type = 'asset'
-               AND data -> 'location' ->> 'backendId' = $1
-               AND data -> 'location' ->> 'key' = $2
+          const owner = await options.session.query<{ body_id: string }>(
+            `SELECT body_id FROM ${tables.body_references}
+             WHERE body_id = $1
              LIMIT 1`,
-            [storage.writer.backendId, body.key],
+            [body.bodyId],
           );
           if (owner.rows[0]) continue;
-          await storage.writer.delete(body.key);
-          orphanedBodiesDeleted++;
+          const deleted = await storage.writer.maintenance.delete({
+            bodyId: body.bodyId,
+            expectedState: body.state,
+            expectedMaintenanceVersion: body.maintenanceVersion,
+            idleForMs: orphanAfterMs,
+          });
+          if (deleted) orphanedBodiesDeleted++;
         }
       }
       return Object.freeze({ retriedDeletions, orphanedBodiesDeleted });

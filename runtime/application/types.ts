@@ -27,7 +27,7 @@ import type { CreateKnowledgePluginOptions } from "../knowledge/index.ts";
 import type { GoalHandle, GoalInput } from "../goals/index.ts";
 import type { WorkflowToolCatalog } from "../tools/index.ts";
 import type { CopilotzPersistenceOptions } from "./persistence.ts";
-import type { AssetStorageOptions } from "../content/index.ts";
+import type { BodyStorageOptions } from "../content/index.ts";
 
 export type CorePluginSetting<T> = false | Readonly<T>;
 
@@ -58,7 +58,7 @@ export type CreateCopilotzApplicationOptions =
     /** Canonical static/generated tool catalog shared by execution and introspection. */
     toolCatalog?: WorkflowToolCatalog;
     /** Canonical asset body policy shared by every database scope. */
-    assets?: AssetStorageOptions;
+    assets?: BodyStorageOptions;
     engine?: Omit<
       CreateCopilotzEngineOptions,
       | "session"

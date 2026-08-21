@@ -1,3 +1,4 @@
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists } from "@std/assert";
 
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
@@ -63,7 +64,8 @@ Deno.test("admin plugin projects event-native application state without raw stor
   });
   const app = createEventNativeApp(application);
   try {
-    await createTestDomainContext(application, NAMESPACE).features.thread
+    await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
+      .features.thread
       .create({
         id: "thread-a",
         externalId: "external-thread-a",
@@ -81,7 +83,8 @@ Deno.test("admin plugin projects event-native application state without raw stor
           name: "Support",
         }],
       });
-    await createTestDomainContext(application, "tenant-b").features.thread
+    await createTestDomainContext(application, "tenant-b", coreFeatureAliases)
+      .features.thread
       .create({
         id: "thread-b",
         participants: [{
@@ -94,7 +97,8 @@ Deno.test("admin plugin projects event-native application state without raw stor
       "Admin-visible message",
       { namespace: NAMESPACE, idempotencyKey: "admin-message-a" },
     );
-    await createTestDomainContext(application, NAMESPACE).features.threadMessage
+    await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
+      .features.threadMessage
       .create({
         id: "message-a",
         threadId: "thread-a",

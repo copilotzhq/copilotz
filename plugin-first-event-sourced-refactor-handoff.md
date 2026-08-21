@@ -129,26 +129,28 @@ The runtime does not own policy for:
 
 Those behaviors are plugin declarations and policy.
 
-### 3.2 Three executable kinds and typed bindings
+### 3.2 Three executable kinds and composable context
 
 Plugins contribute exactly three executable declaration kinds:
 
 - **Collection** — durable graph state, pure commands, named queries, declared
   content, relations, and canonical events;
-- **Feature** — reusable business actions with one declared effect and exact
-  dependencies per action; and
-- **Processor** — durable or transient event reactions with exact dependencies.
+- **Feature** — reusable business actions with optional `inputSchema` /
+  `outputSchema` validation and explicit `context.transaction(...)` blocks for
+  atomic graph writes; and
+- **Processor** — durable or transient event reactions over committed events.
 
-Everything else is ordinary code or a value behind a typed resource contract.
-LLM/embedding adapters, agent definitions, tools, skills, body stores,
-conversation runners, context contributions, and channel transports are typed
-bindings—not registry categories. A semantic plugin owns contracts it defines;
-adapter modules export factories, while the application/host owns
-lifecycle-bearing concrete values and their bindings.
+Everything else is ordinary code, a plugin dependency, or a typed context value.
+LLM/embedding adapters, agent definitions, tools, skills, conversation runners,
+context contributions, API/MCP connectors, and channel transports are context
+values—not registry categories and not public binding tuples. A semantic plugin
+owns the context namespace and value type it defines; adapter modules export
+factories, while the application/host owns lifecycle-bearing concrete values and
+contributes them through `context`.
 
 This is a static authoring vocabulary, not dynamic type declaration. Plugins do
-not invent resource kinds at runtime. They may export a new typed contract from
-code and other plugins may depend on that contract.
+not invent resource kinds at runtime. They may export a new typed context value
+type from code and other plugins may consume values from that namespace.
 
 The classification rule is:
 
@@ -157,31 +159,34 @@ The classification rule is:
 - a recurring read is a named Collection query;
 - reusable multi-record or external policy is a Feature;
 - an event reaction is a Processor;
-- an injected adapter/value is a typed resource binding; and
+- an injected adapter/value is a typed context value; and
 - locking, event delivery, transactions, byte transport, or privileged graph
   mutation is a runtime mechanism and requires amending this handoff.
 
-A Feature or Processor receives only the aliases it declares. It never receives
-the application, raw SQL, a transaction handle, the plugin registry, or every
-installed resource. A transaction Feature joins one short same-namespace scope;
-a workflow Feature carries no SQL scope across provider calls, waits, or stream
-pumping.
+A Feature or Processor never receives the application, raw SQL, the plugin
+registry, or kernel internals. Feature dependencies are code-driven through
+public context properties such as `context.tools.search`,
+`context.agents.assistant`, and `context.llm.default`. There is no public
+`context.resource(...)` or `context.resources(...)`. A Feature uses
+`context.transaction(...)` for short same-namespace graph writes; provider
+calls, waits, and stream pumping stay outside that callback.
 
 Semantic composition accepts only explicitly supplied Plugin values plus
-application bindings. There is no hidden core, semantic default set, shorthand,
-string source, or module resolver. The sole infrastructure default is the
-database BodyStore binding synthesized from configured persistence; an explicit
-application binding with its exact identity replaces it. Plugin and executable
-declaration IDs must be unique; duplicate IDs fail. Only bindings have
-replacement identity, using `(contract.id, binding.id)`, with application
-bindings applied last. Availability never grants agent authority.
+application context. There is no hidden core, semantic default set, shorthand,
+string source, module resolver, public binding tuple, or fixed-bucket resources
+escape hatch. The sole infrastructure default is the database BodyStore binding
+synthesized from configured persistence; an explicit application infrastructure
+binding with its exact identity replaces it. Plugin and executable declaration
+IDs must be unique; duplicate IDs fail. Plugin/plugin duplicate context keys
+fail by default; application context is the last local authority and may replace
+a plugin context key deliberately. Availability never grants agent authority.
 
 ### 3.3 Dependency direction
 
 The dependency direction is strict:
 
 ```text
-plugin implementation ──► public Copilotz resource contracts
+plugin implementation ──► public Copilotz context/domain contracts
 runtime mechanism      ──► public/internal runtime contracts
 runtime mechanism       X► concrete plugin implementation
 ```
@@ -190,9 +195,9 @@ runtime mechanism       X► concrete plugin implementation
 - A plugin imports Copilotz as an external plugin would, through exported
   package subpaths such as `@copilotz/copilotz/collections`.
 - Plugin modules must not import `runtime/**` by relative path.
-- `runtime/resources` owns only generic contract/binding/requirement machinery.
-  A semantic resource contract lives with the plugin or runtime mechanism that
-  defines it; concrete values live with their adapter/application owner.
+- `runtime/resources` is not public authoring API. A semantic context value type
+  lives with the plugin or runtime mechanism that defines it; concrete values
+  live with their adapter/application owner.
 - Do not maintain separate plugin and runtime versions of the same interface.
 
 ### 3.4 Declarative plugins
@@ -203,15 +208,19 @@ The core plugin is exported as data:
 export const corePlugin = definePlugin({
   id: "@copilotz/core",
   version: "0.61.0",
+  plugins: [...],
   collections: [...],
   features: [...],
   processors: [...],
-  bindings: [...],
+  context: {
+    tools: { ... },
+    agents: { ... },
+  },
 });
 ```
 
 Do not wrap a static plugin in `createCorePlugin()`. A plugin factory may select
-declarations or plugin policy, and may accept an already-constructed binding
+declarations or plugin policy, and may accept an already-constructed context
 value. Adapter factories are separate; the application/host that constructs a
 lifecycle-bearing client owns and disposes it. `definePlugin()` derives
 introspection metadata; authors do not duplicate declarations in
@@ -279,8 +288,10 @@ Application callers first use
 declaration with `scope.collection(definition)` or `scope.feature(definition)`.
 Application configuration may supply the physical schema and principal; there is
 no implicit principal. Namespace, schema, and principal never appear in domain
-args or operation options. Inside Features and Processors, consumer-local
-aliases come only from that action/Processor's typed `requires` references.
+args or operation options. Inside Features and Processors, injected values are
+ordinary context properties such as `context.tools.search`,
+`context.agents.assistant`, and `context.llm.default`; there is no second lookup
+API.
 
 Reads never emit events. The query vocabulary is not a mini-ORM and not raw SQL.
 Phase 3 derives it from the actual read patterns of the five conversation
@@ -410,28 +421,26 @@ it after the locked grace and compare-delete checks.
 
 ### 5.5 Atomic multi-collection commands
 
-Atomic multi-collection policy is a Feature action with `effect: "transaction"`.
-The runtime opens or joins the short same-namespace transaction before `execute`
-and injects only declared aliases:
+Atomic multi-collection policy is ordinary Feature code that enters an explicit
+transaction block. The callback receives transaction-scoped public collection
+handles, never raw SQL:
 
 ```ts
 defineFeature({
   id: "copilotz.core.thread-message",
   actions: {
     create: {
-      input: threadMessageInputSchema,
-      effect: "transaction",
-      requires: {
-        collections: {
-          participants: participantCollection,
-          threads: threadCollection,
-          messages: messageCollection,
-        },
-      },
-      async execute(input, { collections }) {
-        const participant = await collections.participants.create({ ... });
-        const thread = await collections.threads.create({ ... });
-        return await collections.messages.create({ ... });
+      inputSchema: threadMessageInputSchema,
+      async execute(input, context) {
+        const participant = await context.collection(participantCollection).get({
+          id: input.senderId,
+        });
+        if (!participant) throw new Error("Unknown sender.");
+
+        return await context.transaction(async (tx) => {
+          await tx.collection(threadCollection).update({ ... });
+          return await tx.collection(messageCollection).create({ ... });
+        });
       },
     },
   },
@@ -447,8 +456,8 @@ Each non-noop child:
 - receives deterministic correlation, causation and deduplication identities.
 
 All child mutations commit or roll back together. Dispatch happens only after
-the outer transaction commits. Plugins never receive raw SQL or a public
-`context.transaction` escape hatch.
+the outer transaction commits. Plugins receive the public graph transaction
+block, not a SQL transaction or kernel escape hatch.
 
 When a processor would otherwise call `context.conversation` (or grow a plugin
 `utils` helper), put that policy on the owning collection instead:
@@ -461,9 +470,9 @@ When a processor would otherwise call `context.conversation` (or grow a plugin
   itself.
 
 Command evaluators stay pure `mutate` of that one record (§5.3). A sequence that
-touches several collections is a transaction Feature, not a conversation
-repository. Add commands when callers repeat real one-record policy; do not
-pre-build a command catalog.
+touches several collections is a Feature using `context.transaction(...)`, not a
+conversation repository. Add commands when callers repeat real one-record
+policy; do not pre-build a command catalog.
 
 ## 6. Replayable event contract
 
@@ -660,21 +669,24 @@ happened. A processor may query projections for a genuinely new decision. Before
 an external side effect, the selected immutable input is captured in a child
 collection event.
 
-Each Processor declares `requires` and receives only those aliases:
+Processors receive the same composed context values as Features, plus the
+collection and Feature helpers needed by their handler code:
 
 ```text
 context.collections
 context.features
-context.resources
+context.tools
+context.agents
+context.llm
 ```
 
 The immutable event is the first `handle` argument. Invocation facts such as
 namespace, principal, signal, retry-stable idempotency identity, delivery,
 causation, and settlement are supplied separately; context does not duplicate
 the event. Do not inject the application, raw transaction, plugin registry, all
-installed Collections/resources, `conversation`, `llmAttempts`,
-`toolExecutions`, `relations`, or equivalent semantic repository façades.
-Recurring reads use a declared Collection query.
+installed Collections, `conversation`, `llmAttempts`, `toolExecutions`,
+`relations`, or equivalent semantic repository façades. Recurring reads use a
+declared Collection query.
 
 ## 9. Core and optional plugins
 
@@ -767,40 +779,29 @@ type AgentDefinition = Readonly<{
   // identity, instructions, capabilities and metadata
   llm?: AgentLlmPolicy | readonly AgentLlmPolicy[];
 }>;
-
-const agentDefinitionV1 = defineResource<AgentDefinition>({
-  id: "@copilotz/agent-definition/v1",
-  effect: "query-safe",
-});
 ```
 
 - one object is the common case;
 - an array contains at most one runtime per mode;
 - multiple runtimes represent lifecycle modes, not provider failover;
 - fallbacks remain in the same mode;
-- the binding ID selects an `LlmAdapter`; and
-- credentials stay inside the application/adapter-owned binding value.
+- the policy key selects an `LlmAdapter` from `context.llm`; and
+- credentials stay inside the application/adapter-owned context value.
 
-The LLM Feature declares `many` adapter bindings. Its injected value is the
-ordered `readonly { id, value }[]` shape from the Phase 10 lock, so Agent policy
-selects by stable binding ID without a global locator.
+The LLM Feature reads adapters from `context.llm`. Agent policy selects by
+stable context key without a global locator.
 
 ### 10.2 LLM Feature and adapter contract
 
-The LLM plugin owns a workflow Feature for generate/session orchestration and
-one typed contract for vendor adapters. An adapter is not an orchestrator, chat
-bag, prompt builder, or mutation API.
+The LLM plugin owns a Feature for generate/session orchestration and one context
+value type for vendor adapters. An adapter is not an orchestrator, chat bag,
+prompt builder, or mutation API.
 
 ```ts
 type LlmAdapter = Readonly<{
   generate?: (input: LlmGenerateInput) => LlmInvocation;
   session?: (input: LlmSessionInput) => LlmInvocation;
 }>;
-
-const llmAdapterV1 = defineResource<LlmAdapter>({
-  id: "@copilotz/llm-adapter/v1",
-  effect: "workflow-only",
-});
 
 type LlmInvocation = Readonly<{
   frames: ReadableStream<LlmFrame>; // protocol values, not Copilotz events
@@ -2116,6 +2117,11 @@ Deviations:
 
 ### Phase 8 — Progressive assets and durable streams
 
+Phase 10B2 supersedes the Phase 8 prefix-retention experiment. The final body
+surface keeps append/follow/finalize/abandon semantics and deletes
+`retain(byteLength?)`, `discard(byteLength?)`, and filesystem truncate support.
+The Phase 8 notes below remain historical evidence only.
+
 Implement progressive body-store writers/followers for database, memory,
 filesystem and S3-compatible storage. Then port stream as a core collection and
 connect it to provider/tool execution and Oxian.
@@ -2815,14 +2821,13 @@ their callers are ported. Do not wrap a bare collection `create` in a feature.
 In particular, `postMessage` is forbidden; `copilotz.core.thread-message`
 already owns ensure-sender plus create message plus membership.
 
-Processors and feature bodies must not call `context.transaction`. A processor
-performs one collection write or calls a feature. Any multi-collection processor
-operation is a feature. Feature invoke opens or joins the kernel transaction
-scope; a nested feature joins the caller's scope and delivery identity without a
-nested dispatch or second worker turn. Feature bodies use only scoped
-collections and content. Remove `transaction` from `CopilotzProcessorContext`
-and `FeatureContext` after callers are ported. `runtime.transaction` remains a
-kernel implementation detail.
+Processors stay thin: they perform one collection write or call a Feature. Any
+multi-collection processor operation is a Feature. Feature code uses
+`context.transaction(...)` for the short atomic graph-write block; nested blocks
+join the caller's scope and delivery identity without a nested dispatch or
+second worker turn. Feature bodies use public scoped collections, Features,
+resources, content, and transaction blocks. Raw SQL and `runtime.transaction`
+remain kernel implementation details.
 
 The processor/feature collection surface is scoped. Namespace comes only from
 that scope and cannot be supplied or overridden in either domain args or call
@@ -2887,8 +2892,8 @@ a new `*writes.ts` or `*records.ts` in `runtime/engine`.
 
 Prove from `lib/copilotz`: format touched files, run `deno task check`, and run
 `deno task test` with its configured full permissions. Record results and
-deviations here. The next line after results must remain: Phase 10 not started
-unless the user asks.
+deviations here. The sentinel after Phase 9 results was “Phase 10 not started”
+until 10A closed.
 
 ### Phase 9 leftover — dissolve write façades + domain call API results — 2026-08-19
 
@@ -2936,12 +2941,11 @@ Verification results:
   4m55s with localhost topology/S3 tests enabled.
 - `git diff --check` — clean.
 
-Phase 10 not started
+10A and 10B1 complete with proof; 10B2 in progress
 
 ### Phase 10 — Declarative Collections, resources, plugins and Streams
 
-Status: **implementation lock written; implementation not started. Next slice is
-10A only.**
+Status: **10A and 10B1 complete with proof; 10B2 in progress.**
 
 This handoff incorporates
 [phase-10-implementation-lock.md](phase-10-implementation-lock.md) as the
@@ -2958,8 +2962,7 @@ purpose was to preserve code introduced on this unreleased refactor branch.
 Their replacements reuse repository primitives:
 
 - declared paths plus one invocation-local content sidecar;
-- one typed resource contract/binding/requirement shape in the plugin composer;
-  and
+- one composable plugin context contribution path; and
 - one BodyStore and kernel assetization path shared by ordinary content and
   successfully settled Streams.
 
@@ -2969,9 +2972,10 @@ semantic event.
 
 Phase 10 proceeds through independently approved green slices:
 
-1. 10A — per-action query/transaction/workflow Feature descriptors with exact
-   Collection/Feature aliases. `defineFeature({ id, actions })`. No global
-   Feature alias. Do not drop `materialize`/`linkOwner` in this slice.
+1. 10A — code-first Feature actions with optional `inputSchema` / `outputSchema`
+   validation and explicit `context.transaction(...)` blocks.
+   `defineFeature({ id, actions })`. No action-level `effect`, `requires`, or
+   `content`. Do not drop `materialize`/`linkOwner` in this slice.
 2. 10B1 — mandatory EventBodyStore (`EventBodyRef`, no `ContentRef`, no dual
    reader). Collection kernel is the consumer.
 3. 10B2 — final BodyStore and `body_references`. Existing asset/stream byte
@@ -2980,11 +2984,11 @@ Phase 10 proceeds through independently approved green slices:
    `tool_execution` over the frozen Body/Event substrate. This slice removes
    Feature `materialize`/`linkOwner`. Stream content remains excluded until
    settlement is real. Does not wait for 10B3.
-5. 10B3 — flat plugin declarations, typed resource requirements, narrow
-   resource injection, and package-root composition. Deletes
-   `PLUGIN_RESOURCE_TYPES` and `resources.list`. Only the inventoried
-   pre-existing `context.streams` handle remains for its current text/tool
-   callers until 10D5; no parallel Stream Feature exists.
+5. 10B3 — flat plugin declarations, plugin dependencies, composable context
+   contribution, and package-root composition. Deletes `PLUGIN_RESOURCE_TYPES`,
+   `resources.list`, public binding-tuple authoring, and module plugin loading.
+   Only the inventoried pre-existing `context.streams` handle remains for its
+   current text/tool callers until 10D5; no parallel Stream Feature exists.
 6. 10D1–10D6 — usage, knowledge, memory, schedules, Stream semantic/plugin
    cutover over the shared BodyStore, and goals, one vertical plugin slice at a
    time. 10D5 introduces the final Stream Feature, migrates those callers, and
@@ -3006,7 +3010,158 @@ declared-content kernel path. Event bodies remain mandatory and separate.
 Every slice uses the shared conformance suites, records the complete
 check/no-run/test/diff proof plus migrated callers and deleted paths, and ends
 with “next slice not started.” Closing one slice does not authorize continuing.
-The next permitted implementation task is 10A only.
+
+#### 10A — Feature action descriptors and transaction blocks (complete)
+
+`defineFeature({ id, actions })` is the only Feature constructor. A Feature has
+no `alias` and no resource-wide `mode`. Every action is either a plain function
+or a descriptor with optional JSON Schema `inputSchema`, optional JSON Schema
+`outputSchema`, and `execute`. Action-level `effect`, `requires`, `content`, and
+the old descriptor names `input` / `output` are rejected. Feature dependencies
+are code-driven through property context and public collection/Feature helpers;
+atomic graph writes use `context.transaction(...)`. `materialize`/`linkOwner`
+remain until 10C. Legacy registry internals remain until 10B3 but are not
+Feature action context. `context.streams` remains until 10D5.
+
+Source-migrated Features: `copilotz.core.thread`,
+`copilotz.core.thread-message`, `copilotz.core.message`,
+`copilotz.core.llm-attempt`, `copilotz.core.tool-execution`, and the admin query
+Feature. Core processors call static Feature definitions through the public
+helper. The package `/features` surface exposes no ID-based Feature lookup.
+Leftover `runtime/**` and `server/**` mechanisms that cannot yet import plugin
+Feature objects use one internal `requireFeatureActions(context, id)` bridge;
+10B3 deletes that bridge with the fixed resource registry. Plugin code uses a
+static Feature definition. Nested same-namespace `context.transaction(...)`
+blocks join the existing collection kernel. No Feature-shape normalizer remains.
+
+The 10A hardening review also locked schema-derived Feature input/output,
+runtime input/output validation only when `inputSchema` / `outputSchema` exists,
+public `context.collection(definition)` / `context.feature(definition)` lookup,
+and property context access such as `context.tools.search`,
+`context.agents.assistant`, and `context.llm.default`. There is no public
+`context.resource(...)` or `context.resources(...)`. Feature options no longer
+accept event metadata; each Feature passes Collection event metadata
+deliberately from domain input. Every top-level invocation has one root
+(explicit operation key, explicit deduplication identity, or a fresh generated
+key), nested calls derive paths from it, and parent cancellation is inherited
+automatically.
+
+Not started in 10A: EventBodyStore / `event_bodies`, BodyStore /
+`body_references`, `asset_bodies` deletion, `definePlugin({ plugins, context })`
+/ `createCopilotz({ context })` source migration, `PLUGIN_RESOURCE_TYPES`
+deletion, Feature content preflight, Phase 11 `/migration` facade.
+
+Verification results:
+
+- `deno task check` — 34 exports, 313 production modules, release-clean.
+- `deno test --allow-all --no-run` — full configured graph type-checks.
+- `deno task test` — **650 passed** (4 steps), 0 failed, 6 ignored. Elapsed
+  6m31s.
+- `git diff --check` — clean.
+- Conformance: `runtime/features/effects.test.ts` (function shorthand,
+  descriptor actions, optional `inputSchema` / `outputSchema` validation,
+  explicit transaction blocks, code-driven collection/Feature lookup, distinct
+  unkeyed roots, deduplicated retry roots, nested signal inheritance,
+  cancellation without a leaked transaction, old shape rejected, admin and core
+  Feature consumers, every in-repo Feature source-migrated).
+
+#### 10B1 — mandatory EventBodyStore (complete)
+
+Event Bodies are now event-runtime infrastructure, not Asset nodes and not
+semantic `ContentRef`s. `runtime/events/body-store.ts` owns the internal
+transactional `EventBodyStore` helpers. Collection commit, duplicate recovery,
+Collection replay, and Processor event-data resolution all use `EventBodyRef`.
+The physical `event_bodies` table is provisioned by the ordinary event schema
+provisioner, not by mutation-time DDL. Event Body rows are insert-only,
+namespace-scoped, canonical JSON, and digest-verified on retry/read.
+
+Deleted in 10B1: the collection-owned event body implementation path
+`runtime/collections/body.ts`.
+
+Verification results:
+
+- `deno check runtime/events/body-store.ts runtime/collections/kernel.ts
+  runtime/collections/replay.ts runtime/plugins/event-data.ts
+  runtime/collections/kernel.test.ts
+  runtime/collections/replay-pagination.regression.test.ts
+  runtime/collections/processor-authority.test.ts
+  runtime/events/event-store.test.ts runtime/events/postgres.integration.test.ts`
+  — passed.
+- `deno test --allow-all runtime/collections/kernel.test.ts
+  runtime/collections/replay-pagination.regression.test.ts
+  runtime/collections/processor-authority.test.ts
+  runtime/events/event-store.test.ts runtime/events/postgres.integration.test.ts
+  runtime/plugins/match.test.ts`
+  — 24 passed, 0 failed, 2 ignored.
+- `git diff --check` — clean before the status text update.
+
+10B2 is now in progress.
+
+#### 10B2 — final BodyStore and `body_references` (in progress)
+
+Progress as of 2026-08-20:
+
+- `BodyStore` is one public contract: immutable and progressive operations live
+  directly on the store, use `bodyId`, and no exported `BodySpill` /
+  `BodySpillHead` facet remains.
+- Memory, filesystem, database, and S3-compatible stores implement that same
+  direct shape.
+- Database BodyStore writes new bodies to `content_bodies` /
+  `content_body_parts`.
+- Collections can declare `bodyRefs`, and graph commit/replay projects the
+  rebuildable `body_references` table from canonical records.
+- Stream records carry `bodyId`; the interim writer no longer exposes public
+  `key`, caller-supplied `assetId`, `retain`, `discard`, or truncate semantics.
+- Asset publish writes semantic bodies through BodyStore and inserts the
+  protected Asset body-reference row instead of storing database bytes on the
+  Asset node.
+- Body heads carry state and maintenance version; BodyStore exposes the bounded
+  maintenance handle used by protected cleanup.
+- Asset orphan cleanup enumerates maintenance candidates, checks zero
+  `body_references`, and compare-deletes by exact body state/version.
+- Progressive appends require `expectedOffset` and stable `appendId`; the
+  database adapter accepts exact retry of the same append and rejects stale
+  offsets or append-id reuse with different bytes.
+- Progressive `finalize()` now enters an explicit BodyStore `seal(...)` path;
+  memory, filesystem, database, and S3-compatible stores expose `seal` directly.
+- `BodyStoreAdapter` now exists as the content-owned adapter/scoped-facade seam:
+  configured memory/filesystem/S3/custom stores expose a fixed scoped adapter,
+  database persistence synthesizes a database scoped adapter, and
+  `runtime/content` owns trusted scope/maintenance projection without exposing
+  BodyStore as a plugin resource.
+- Progressive writers now receive a single writer capability from `reserve(...)`
+  and pass that capability to `append(...)`, `seal(...)`, and `abort(...)`;
+  callers no longer supply public `reservationId` values.
+- Direct BodyStore `delete`/`list` methods are gone from the protected contract;
+  tests and Asset deletion retry use bounded `maintenance.list/delete` with
+  state/version compare-delete.
+- BodyStore `head`/`read` now use one-object inputs, `read` is stream-oriented,
+  `follow({ bodyId, offset })` exists on every adapter, and byte consumers use
+  the internal `readBodyBytes(...)` helper instead of widening the contract.
+- BodyStore `reserve(...)` uses the `expectedGeneration` compare-and-takeover
+  form, and `append(...)` returns the small public `AppendResult` shape with
+  offsets plus protected timing data.
+- `progressiveHead` / `readRange` are no longer part of the public BodyStore
+  type or content barrel. Adapter modules keep only private range helpers, while
+  shared writer/follower code uses `head(...)` and `follow(...)`.
+- Body protection and writer-lease timing are real by default. Memory,
+  filesystem, database, and S3-compatible stores expose a non-zero default
+  protection window, renew writer leases on append, reject maintenance deletes
+  while ready protection is live, and allow tests that intentionally prove
+  immediate cleanup/takeover to opt into `protectionMs: 0`.
+
+Verification so far:
+
+- Targeted `deno check` for the BodyStore/progressive files — passed.
+- `deno test --allow-all runtime/adapters/deno/assets.test.ts runtime/attachments/attachment-slice1.regression.test.ts runtime/content/database-repository.test.ts runtime/content/progressive-reservation.regression.test.ts runtime/streams/writer.test.ts runtime/streams/workload.test.ts`
+  — 24 passed, 0 failed.
+- Escalated local-S3
+  `deno test --allow-all runtime/content/progressive.test.ts runtime/content/s3-body-store.test.ts runtime/content/s3-minio.test.ts`
+  — 11 passed, 0 failed, 1 ignored.
+- Full 10B2 closure gates: `deno task check`; `deno test --allow-all
+  --no-run`; `git diff --check`.
+
+10B2 implementation is closed locally. 10C has not started.
 
 Generalized binding lifetimes or fleet negotiation, multi-storage routing, and
 advanced Stream retention remain demand-driven later extensions. They are not

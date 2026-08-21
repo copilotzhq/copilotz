@@ -16,7 +16,7 @@ function schemaName(): string {
 
 Deno.test({
   name:
-    "PostgreSQL keeps the four-table baseline and atomic event/delivery semantics",
+    "PostgreSQL keeps the six-table baseline and atomic event/delivery semantics",
   ignore: !POSTGRES_URL,
   sanitizeOps: false,
   sanitizeResources: false,
@@ -36,7 +36,14 @@ Deno.test({
       );
       assertEquals(
         tables.rows.map((row) => row.table_name),
-        ["edges", "event_deliveries", "events", "nodes"],
+        [
+          "body_references",
+          "edges",
+          "event_bodies",
+          "event_deliveries",
+          "events",
+          "nodes",
+        ],
       );
 
       const store = createEventStore({

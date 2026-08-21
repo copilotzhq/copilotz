@@ -1,6 +1,7 @@
 import type { Agent } from "../resources/index.ts";
 import type { CollectionRecord } from "../domain/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
+import { requireFeatureActions } from "../features/context.ts";
 import {
   type CopilotzPlugin,
   definePlugin,
@@ -194,7 +195,7 @@ async function dispatchOccurrence(
     recipients,
     context,
   );
-  await context.features.threadMessage.create({
+  await requireFeatureActions(context, "copilotz.core.thread-message").create({
     id: `scheduled:${item.occurrenceId}`,
     threadId: thread.id,
     sender: sendingParticipant,

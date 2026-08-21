@@ -24,7 +24,9 @@ import {
   type ThreadAttachment,
 } from "./index.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
-import type { AssetBodyHead, AssetBodyStore } from "../content/index.ts";
+import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
+import { writerCapabilityFromHead } from "../content/index.ts";
+import type { BodyHead, BodyStore, MutableBodyHead } from "../content/index.ts";
 
 const NAMESPACE = "tenant-attachment-slice-1";
 const THREAD_ID = "same-thread";
@@ -62,6 +64,7 @@ async function createThread(
     plugins: engine.plugins,
     collections: scope.collections,
     collectionRuntime: scope.collectionRuntime,
+    featureAliases: coreFeatureAliases,
     contentResolver: scope.content.resolver,
     events: scope.events,
     deliveries: scope.deliveries,
@@ -244,25 +247,52 @@ async function createStreamHarness(
   options?: StreamHarnessOptions,
 ): Promise<StreamHarness | StreamHarnessBase> {
   const timestamp = "2026-08-19T00:00:00.000Z";
-  const head: AssetBodyHead = Object.freeze({
-    key: "ignored-by-regression-store",
+  const head: BodyHead = Object.freeze({
+    bodyId: "ignored-by-regression-store",
+    state: "ready",
     byteLength: 64,
     mediaType: "application/octet-stream",
     digest: "sha256:attachment-stream-regression",
+    maintenanceVersion: 1,
   });
-  const store: AssetBodyStore = Object.freeze({
+  const mutableHead: MutableBodyHead = Object.freeze({
+    bodyId: head.bodyId,
+    state: "open",
+    mediaType: head.mediaType,
+    byteLength: 0,
+    discarded: 0,
+    maintenanceVersion: 1,
+    writerGeneration: 1,
+    writerLeaseRemainingMs: 0,
+    reservationId: "mock",
+  });
+  const store: BodyStore = Object.freeze({
     kind: "memory",
     backendId: "memory:attachment-stream-regression",
     put: () => Promise.resolve(head),
     head: () => Promise.resolve(head),
-    read: () => Promise.resolve(new Uint8Array()),
-    open: () => {
+    read: () => Promise.resolve(new ReadableStream<Uint8Array>()),
+    follow: () => {
       options?.onStoreOpen?.();
       return Promise.resolve(source);
     },
     delete: () => Promise.resolve(),
     async *list() {
       yield head;
+    },
+    reserve: () => Promise.resolve(writerCapabilityFromHead(mutableHead)),
+    append: () =>
+      Promise.resolve(Object.freeze({
+        startOffset: 0,
+        endOffset: 0,
+        protection: Object.freeze({ remainingMs: 0 }),
+      })),
+    seal: () => Promise.resolve(head),
+    abort: () => Promise.resolve(),
+    maintenance: {
+      list: () =>
+        Promise.resolve(Object.freeze({ bodies: Object.freeze([head]) })),
+      delete: () => Promise.resolve(false),
     },
   });
   const records = {
@@ -292,6 +322,7 @@ async function createStreamHarness(
       lane: "content",
       mediaType: "application/octet-stream",
       state: "closed",
+      bodyId: head.bodyId,
       content: [{
         assetId: "asset-stream-a",
         kind: "binary",

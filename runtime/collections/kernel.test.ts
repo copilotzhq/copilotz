@@ -1,18 +1,13 @@
-import {
-  assert,
-  assertEquals,
-  assertRejects,
-  assertThrows,
-} from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 
 import {
+  type BoundCollection,
+  type CollectionRecord,
   createCollectionRuntime,
   defineCollection,
   isCollectionNoop,
   relation,
   resolveCollectionEventBody,
-  type BoundCollection,
-  type CollectionRecord,
 } from "./index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import {
@@ -206,7 +201,14 @@ async function createFixture(
   const store = createEventStore({ session, schema });
   const processor = defineProcessor({
     id: "job.audit",
-    on: [{ eventType: "job.created" }, { eventType: "job.updated" }, { eventType: "job.deleted" }, { eventType: "job_note.created" }, { eventType: "job_note.updated" }, { eventType: "job_note.deleted" }],
+    on: [
+      { eventType: "job.created" },
+      { eventType: "job.updated" },
+      { eventType: "job.deleted" },
+      { eventType: "job_note.created" },
+      { eventType: "job_note.updated" },
+      { eventType: "job_note.deleted" },
+    ],
     handle: () => undefined,
   });
   const registry = await createPluginRegistry({
@@ -282,9 +284,12 @@ async function runKernelSuite(url: string, schema: string): Promise<void> {
   try {
     await assertRejects(
       () =>
-        jobs.create({ id: "job-invalid", externalId: "missing-title" } as never, {
-          namespace: "tenant-a",
-        }),
+        jobs.create(
+          { id: "job-invalid", externalId: "missing-title" } as never,
+          {
+            namespace: "tenant-a",
+          },
+        ),
       TypeError,
       "schema validation",
     );
@@ -314,11 +319,18 @@ async function runKernelSuite(url: string, schema: string): Promise<void> {
       ["dataRef"],
     );
     assert(!JSON.stringify(storedEvent).includes(SECRET));
-    assertEquals(created.event.dataRef.assetId, (storedEvent.payload as {
-      dataRef: { assetId: string };
-    }).dataRef.assetId);
+    assertEquals(
+      created.event.dataRef.eventBodyId,
+      (storedEvent.payload as {
+        dataRef: { eventBodyId: string };
+      }).dataRef.eventBodyId,
+    );
 
-    const body = await resolveCollectionEventBody(session, store, created.event);
+    const body = await resolveCollectionEventBody(
+      session,
+      store,
+      created.event,
+    );
     assertEquals(body.operation, "create");
     if (body.operation === "create") {
       assertEquals(body.record.title, SECRET);
@@ -335,6 +347,14 @@ async function runKernelSuite(url: string, schema: string): Promise<void> {
       await count(
         session,
         `SELECT count(*)::int AS n FROM ${tables.nodes} WHERE type = 'asset' AND namespace = $1`,
+        ["tenant-a"],
+      ),
+      0,
+    );
+    assertEquals(
+      await count(
+        session,
+        `SELECT count(*)::int AS n FROM ${tables.event_bodies} WHERE namespace = $1`,
         ["tenant-a"],
       ),
       1,
@@ -396,7 +416,9 @@ async function runKernelSuite(url: string, schema: string): Promise<void> {
       1,
     );
 
-    const claimed = await jobs.mutate("job-a", "claim", { claimedBy: "agent-1" }, {
+    const claimed = await jobs.mutate("job-a", "claim", {
+      claimedBy: "agent-1",
+    }, {
       namespace: "tenant-a",
     });
     await settle(claimed);
@@ -515,7 +537,10 @@ async function runKernelSuite(url: string, schema: string): Promise<void> {
     await runtime.rebuild(jobDefinition, "tenant-a");
     await runtime.rebuild(jobNoteDefinition, "tenant-a");
     assertEquals(await runtime.verify(jobDefinition, "tenant-a"), { ok: true });
-    assertEquals((await jobs.get("job-a", "tenant-a"))?.title, "Priority inbox");
+    assertEquals(
+      (await jobs.get("job-a", "tenant-a"))?.title,
+      "Priority inbox",
+    );
     assertEquals(await runtime.verify(jobNoteDefinition, "tenant-a"), {
       ok: true,
     });

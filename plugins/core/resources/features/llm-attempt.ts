@@ -12,7 +12,6 @@ import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import {
   asRecord,
   contentSequence,
-  linkContent,
   persistRoleContent,
   preparedContent,
   requiredText,
@@ -31,21 +30,12 @@ async function create(
   const metadata = structuredClone(asRecord(data.metadata));
   return await context.transaction(async (tx) => {
     const supplied = data.content as DurableContentInput | undefined;
-    const content = supplied === undefined
-      ? undefined
-      : await context.content.materialize(supplied, {
-        origin: {
-          scope: { type: "thread", id: threadId },
-          producer: { type: "llm_attempt", id },
-        },
-      });
     const created = await tx.collections.llm_attempt.create({
       ...fields,
       id,
       threadId,
-      ...(content ? { content } : {}),
+      ...(supplied === undefined ? {} : { content: supplied }),
     }, { threadId, identity: { metadata } });
-    if (content) await linkContent(context, id, content);
     return created;
   });
 }
@@ -62,9 +52,7 @@ async function complete(
   const metadataPatch = asRecord(data.metadataPatch);
   const metadata = { ...asRecord(current.metadata), ...metadataPatch };
   return await context.transaction(async (tx) => {
-    const content = await persistRoleContent(
-      context,
-      { type: "llm_attempt", id, threadId },
+    const content = persistRoleContent(
       contentSequence(current.content),
       [
         {
@@ -98,7 +86,6 @@ async function complete(
         : {}),
       ...(Object.keys(metadataPatch).length ? { metadata } : {}),
     }, { threadId, identity: { metadata } });
-    await linkContent(context, id, content);
     return updated;
   });
 }
@@ -116,9 +103,7 @@ async function fail(
   const metadataPatch = asRecord(data.metadataPatch);
   const metadata = { ...asRecord(current.metadata), ...metadataPatch };
   return await context.transaction(async (tx) => {
-    const content = await persistRoleContent(
-      context,
-      { type: "llm_attempt", id, threadId },
+    const content = persistRoleContent(
       contentSequence(current.content),
       [{
         role: LLM_CONTENT_ROLE.errorDetail,
@@ -138,7 +123,6 @@ async function fail(
       ...(data.cost ? { cost: data.cost } : {}),
       ...(Object.keys(metadataPatch).length ? { metadata } : {}),
     }, { threadId, identity: { metadata } });
-    await linkContent(context, id, content);
     return updated;
   });
 }

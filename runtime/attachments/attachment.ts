@@ -3,6 +3,7 @@ import type {
   ContentPreparer,
   DatabaseAssetRepository,
 } from "../content/index.ts";
+import { createContentStreamRuntime } from "../content/index.ts";
 import {
   activeCollectionTransaction,
   type CollectionRuntime,
@@ -41,7 +42,6 @@ import {
   defineProcessor,
   type TransientProcessorSet,
 } from "../plugins/index.ts";
-import { openStreamFollower } from "../streams/index.ts";
 import type {
   AttachmentEventHandle,
   AttachmentEventInput,
@@ -51,7 +51,6 @@ import type {
   AttachmentOutputParticipant,
   AttachmentSendInput,
   AttachmentSendResult,
-  AttachmentStreamOutput,
   ConnectAttachmentInput,
   RunHandle,
   RunInput,
@@ -130,20 +129,6 @@ function positivePoll(value: number | undefined): number {
     throw new TypeError("Attachment settlementPollMs must be positive.");
   }
   return resolved;
-}
-
-function isByteStream(value: unknown): value is ReadableStream<Uint8Array> {
-  return Boolean(
-    value && typeof value === "object" &&
-      typeof (value as { getReader?: unknown }).getReader === "function",
-  );
-}
-
-function isStreamOutput(
-  value: AttachmentOutput,
-): value is AttachmentStreamOutput {
-  return value.type === "stream.output" && "payload" in value &&
-    isByteStream(value.payload);
 }
 
 function isMessageInput(
@@ -671,26 +656,36 @@ export function createAttachmentRuntime(
     const handledCatchupIds = new Set<string>();
     let catchingUp = afterPosition !== undefined;
 
-    const followStream = async (
-      streamId: string,
-      event?: DurableEvent,
+    const followRuntimeStream = async (
+      event: CopilotzEvent,
     ): Promise<void> => {
-      if (followedStreams.has(streamId)) return;
+      if (event.durable || event.type !== "stream.output") return;
+      const streamId = event.streamId?.trim();
+      if (!streamId || followedStreams.has(streamId)) return;
       followedStreams.add(streamId);
-      const streams = options.collectionRuntime.withScope({ namespace }).stream;
-      if (!streams || !options.streamBodyStore) return;
-      const record = await streams.get({ id: streamId }).catch(() => null);
-      if (closed) return;
-      if (!record || record.state === "abandoned") return;
-      const emitterId = typeof record.participantId === "string"
-        ? record.participantId
-        : event?.routing.senderId;
+      if (!options.streamBodyStore) return;
+      const payloadRecord =
+        event.payload && typeof event.payload === "object" &&
+          !Array.isArray(event.payload)
+          ? event.payload as Record<string, unknown>
+          : {};
+      const emitterId = typeof payloadRecord.participantId === "string"
+        ? payloadRecord.participantId
+        : event.routing.senderId;
       const emitter = emitterId
         ? thread.participants.find((item) =>
           participantMatches(item, emitterId)
         )
         : undefined;
+      const mediaType = typeof payloadRecord.mediaType === "string" &&
+          payloadRecord.mediaType.trim()
+        ? payloadRecord.mediaType.trim()
+        : "application/octet-stream";
       const offset = streamOffsets[streamId];
+      const runtime = createContentStreamRuntime({
+        namespace,
+        store: options.streamBodyStore,
+      });
       let followerReader:
         | ReadableStreamDefaultReader<Uint8Array>
         | undefined;
@@ -720,11 +715,8 @@ export function createAttachmentRuntime(
               return;
             }
             if (!followerReader) {
-              const follower = await openStreamFollower({
-                streams,
-                store: options.streamBodyStore!,
-                namespace,
-                streamId,
+              const follower = await runtime.follow({
+                id: streamId,
                 ...(offset !== undefined ? { offset } : {}),
               });
               if (cancelled) {
@@ -756,11 +748,7 @@ export function createAttachmentRuntime(
         cancel(reason) {
           return cancelFollower(reason);
         },
-      }, {
-        // Prefetch one extra chunk so a locked payload still has an in-flight
-        // follower read that attachment close can cancel.
-        highWaterMark: 2,
-      });
+      }, { highWaterMark: 2 });
       const operation: ActiveOperation = Object.freeze({
         cancel: (reason) => cancelFollower(reason),
       });
@@ -771,13 +759,10 @@ export function createAttachmentRuntime(
           type: "stream.output",
           streamId,
           participant: outputParticipant(emitter ?? participant),
-          mediaType: String(record.mediaType ?? "application/octet-stream"),
-          ...(event?.id ? { causationId: event.id } : {}),
-          correlationId: event?.correlationId ?? "",
-          metadata: Object.freeze({
-            ...(event ? structuredClone(event.metadata) : {}),
-            ...(typeof record.lane === "string" ? { lane: record.lane } : {}),
-          }),
+          mediaType,
+          causationId: event.causationId,
+          correlationId: event.correlationId,
+          metadata: Object.freeze(structuredClone(event.metadata)),
           payload,
         });
       } catch (error) {
@@ -785,12 +770,6 @@ export function createAttachmentRuntime(
         await cancelFollower(error).catch(() => undefined);
         throw error;
       }
-    };
-
-    const followCreated = async (event: DurableEvent): Promise<void> => {
-      const streamId = event.subject?.id?.trim();
-      if (!streamId) return;
-      await followStream(streamId, event);
     };
 
     unbindOutputs = options.transients.add(defineProcessor({
@@ -802,13 +781,14 @@ export function createAttachmentRuntime(
       }],
       handle(event) {
         if (!visibleTo(event, participant.id)) return;
+        if (!event.durable && event.type === "stream.output") {
+          void followRuntimeStream(event);
+          return;
+        }
         const eventId = event.durable ? event.id : undefined;
         if (catchingUp && eventId && handledCatchupIds.has(eventId)) return;
         emitOutput(event);
         if (catchingUp && eventId) handledCatchupIds.add(eventId);
-        if (event.durable && event.type === "stream.created") {
-          void followCreated(event);
-        }
       },
     }));
 
@@ -826,9 +806,6 @@ export function createAttachmentRuntime(
           if (handledCatchupIds.has(event.id)) continue;
           emitOutput(event);
           handledCatchupIds.add(event.id);
-          if (event.type === "stream.created") {
-            void followCreated(event);
-          }
         }
         if (events.length < 1_000) break;
         const nextPosition = events.at(-1)?.position;
@@ -843,10 +820,6 @@ export function createAttachmentRuntime(
     }
     catchingUp = false;
     handledCatchupIds.clear();
-    for (const streamId of Object.keys(streamOffsets)) {
-      if (followedStreams.has(streamId)) continue;
-      void followStream(streamId);
-    }
 
     const outputs = new ReadableStream<AttachmentOutput>({
       start(controller) {
@@ -1191,29 +1164,6 @@ export function createAttachmentRuntime(
       await attachment.close("run_send_failed");
       throw error;
     }
-    const source = attachment.outputs.getReader();
-    const events = new ReadableStream<CopilotzEvent>({
-      async pull(controller) {
-        while (true) {
-          const next = await source.read();
-          if (next.done) {
-            controller.close();
-            return;
-          }
-          if (!isStreamOutput(next.value)) {
-            controller.enqueue(next.value);
-            return;
-          }
-          await next.value.payload.cancel(
-            "Unexpected stream output in text run",
-          );
-        }
-      },
-      async cancel(reason) {
-        await source.cancel(reason).catch(() => undefined);
-        await attachment.close(errorText(reason ?? "run_events_cancelled"));
-      },
-    });
     const done = (async () => {
       try {
         await sent.done;
@@ -1226,7 +1176,7 @@ export function createAttachmentRuntime(
       eventId: sent.eventId,
       threadId: attachment.thread.id,
       correlationId: sent.correlationId,
-      events,
+      outputs: attachment.outputs,
       done,
       async cancel(reason = "run_cancelled") {
         await sent.cancel(reason);

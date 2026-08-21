@@ -6,7 +6,6 @@ import {
   replaceContentRoles,
   type RoleContentInput,
 } from "@copilotz/copilotz/content";
-import type { FeatureContentHandle } from "@copilotz/copilotz/features";
 
 export type RoleField = Readonly<{
   role: string;
@@ -39,12 +38,10 @@ export function requiredText(value: unknown, name: string): string {
   return normalized;
 }
 
-export async function persistRoleContent(
-  context: Readonly<{ content: FeatureContentHandle }>,
-  owner: Readonly<{ type: string; id: string; threadId: string }>,
+export function persistRoleContent(
   current: ContentSequence,
   fields: readonly RoleField[],
-): Promise<ContentSequence> {
+): DurableContentInput {
   const active: RoleContentInput[] = fields.flatMap((field) =>
     field.input === undefined ? [] : [{
       role: field.role,
@@ -53,26 +50,13 @@ export async function persistRoleContent(
     }]
   );
   if (!active.length) return current;
-  const replacement = await context.content.materialize(
-    composeRoleContent(active),
-    {
-      origin: {
-        scope: { type: "thread", id: owner.threadId },
-        producer: { type: owner.type, id: owner.id },
-      },
-    },
-  );
-  return replaceContentRoles(
-    current,
-    replacement,
-    new Set(active.map((field) => field.role)),
-  );
-}
-
-export async function linkContent(
-  context: Readonly<{ content: FeatureContentHandle }>,
-  ownerId: string,
-  content: ContentSequence,
-): Promise<void> {
-  if (content.length) await context.content.linkOwner(ownerId, content);
+  const replacement = composeRoleContent(active);
+  return Object.freeze({
+    content: replaceContentRoles(
+      current,
+      replacement.content,
+      new Set(active.map((field) => field.role)),
+    ),
+    assets: replacement.assets,
+  });
 }

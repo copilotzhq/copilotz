@@ -132,9 +132,8 @@ path, and SSE projection in one factory. The same handler can therefore be
 mounted by Deno, Node, Bun, browser service workers, or Cloudflare workers
 without bringing a framework or runtime API into the core.
 
-Plugin package loading is also injected. `createModulePluginResolver()` requires
-a runtime-owned `importModule` capability, resolves relative sources only
-against an explicit base URL, and accepts a specifier-policy hook. The registry
-and published package never perform an unanalyzable dynamic import, read a
-directory, or guess how JSR, npm, authenticated URLs, or import maps work in the
-embedding host.
+Plugin package loading is not a runtime adapter. The embedding application uses
+its own module system to import plugin values, then passes concrete plugins to
+composition. The registry and published package never perform an unanalyzable
+dynamic import, read a directory, or guess how JSR, npm, authenticated URLs, or
+import maps work in the embedding host.

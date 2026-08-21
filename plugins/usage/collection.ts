@@ -1,5 +1,7 @@
-import { defineCollection } from "../domain/index.ts";
-import type { CollectionDefinition } from "../domain/index.ts";
+import {
+  type CollectionDefinition,
+  defineCollection,
+} from "@copilotz/copilotz/collections";
 
 const usageSchema = {
   type: "object",

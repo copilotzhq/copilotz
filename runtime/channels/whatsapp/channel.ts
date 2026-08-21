@@ -1,6 +1,7 @@
 import type { ContentInput } from "../../content/index.ts";
 import type { ConversationMessage } from "../../domain/index.ts";
 import { type CopilotzPlugin, definePlugin } from "../../plugins/index.ts";
+import { coreMessageEnvelope } from "../helpers.ts";
 import { loadChannelMessage } from "../identity.ts";
 import type {
   ChannelEgressContext,
@@ -178,7 +179,14 @@ async function ingressEnvelope(
       ...(input.userName ? { name: input.userName } : {}),
       metadata: { phone: senderPhone, provider: "whatsapp" },
     },
-    input: {
+    input: coreMessageEnvelope({
+      thread: externalId,
+      participant: {
+        externalId: senderPhone,
+        participantType: "human" as const,
+        ...(input.userName ? { name: input.userName } : {}),
+        metadata: { phone: senderPhone, provider: "whatsapp" },
+      },
       content: content.length === 1 && text && !descriptor
         ? text
         : Object.freeze(content),
@@ -202,7 +210,7 @@ async function ingressEnvelope(
           }
           : {}),
       },
-    },
+    }),
   });
 }
 
@@ -615,11 +623,8 @@ export function createWhatsAppChannelPlugin(
 ): CopilotzPlugin {
   const channel = createWhatsAppChannel(options);
   return definePlugin({
-    manifest: {
-      id: options.pluginId?.trim() || "@copilotz/channel-whatsapp",
-      version: options.version?.trim() || "3.0.0",
-      provides: { channels: [channel.id] },
-    },
-    resources: { channels: [channel] },
+    id: options.pluginId?.trim() || "@copilotz/channel-whatsapp",
+    version: options.version?.trim() || "3.0.0",
+    channels: [channel],
   });
 }

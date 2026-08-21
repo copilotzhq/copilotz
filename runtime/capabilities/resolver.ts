@@ -1,6 +1,5 @@
-import type { PluginResourceOrigin } from "../plugins/index.ts";
 import type { Agent, Skill } from "../resources/index.ts";
-import type { WorkflowTool } from "../tools/index.ts";
+import type { WorkflowToolCatalogContext } from "../tools/index.ts";
 import {
   capabilitySelectionMode,
   selectCapabilityResources,
@@ -13,34 +12,54 @@ import type {
   ResolvedCapabilityResource,
 } from "./types.ts";
 
-function generatedToolOrigin(
+function definedValues<T>(
+  values: Readonly<Record<string, T | undefined>> | undefined,
+): readonly T[] {
+  return Object.freeze(
+    Object.values(values ?? {}).filter((value): value is T =>
+      value !== undefined
+    ),
+  );
+}
+
+function agentContext(
   options: CreateAgentCapabilityResolverOptions,
-  tool: WorkflowTool,
-): PluginResourceOrigin | undefined {
-  const direct = options.registry.origin("tools", tool.key);
-  if (direct) return direct;
-  const [kind, resourceId] = tool.id.split(":", 3);
-  if (kind === "api" && resourceId) {
-    return options.registry.origin("api", resourceId);
-  }
-  if (kind === "mcp" && resourceId) {
-    return options.registry.origin("mcp", resourceId);
-  }
-  return undefined;
+): Readonly<Record<string, Agent | undefined>> {
+  return (options.registry.context.agents ?? {}) as Readonly<
+    Record<string, Agent | undefined>
+  >;
+}
+
+function skillContext(
+  options: CreateAgentCapabilityResolverOptions,
+): Readonly<Record<string, Skill | undefined>> {
+  return (options.registry.context.skills ?? {}) as Readonly<
+    Record<string, Skill | undefined>
+  >;
 }
 
 function descriptor<T extends object>(
   id: string,
   resource: T,
   grant: CapabilityGrantSource,
-  origin: PluginResourceOrigin | undefined,
 ): ResolvedCapabilityResource<T> {
   return Object.freeze({
     id,
     resource,
     grant,
-    ...(origin ? { origin } : {}),
   });
+}
+
+function catalogContext(
+  options: CreateAgentCapabilityResolverOptions,
+): WorkflowToolCatalogContext {
+  return Object.freeze({
+    agents: Object.freeze({ ...(options.registry.context.agents ?? {}) }),
+    skills: Object.freeze({ ...(options.registry.context.skills ?? {}) }),
+    tools: Object.freeze({ ...(options.registry.context.tools ?? {}) }),
+    apis: Object.freeze({ ...(options.registry.context.apis ?? {}) }),
+    mcp: Object.freeze({ ...(options.registry.context.mcp ?? {}) }),
+  }) as unknown as WorkflowToolCatalogContext;
 }
 
 /** Creates canonical application/adapter introspection over effective grants. */
@@ -51,12 +70,16 @@ export function createAgentCapabilityResolver(
     async resolve(input) {
       const id = input.agent.trim();
       if (!id) throw new TypeError("Agent capability lookup requires an ID.");
-      const agent = options.registry.require<Agent>("agents", id);
-      const availableAgents = options.registry.list<Agent>("agents");
-      const availableSkills = options.registry.list<Skill>("skills");
+      const agentsContext = agentContext(options);
+      const skillsContext = skillContext(options);
+      const agent = agentsContext[id];
+      if (!agent) throw new Error(`Unknown agent context '${id}'.`);
+      const availableAgents = definedValues<Agent>(agentsContext);
+      const availableSkills = definedValues<Skill>(skillsContext);
       const agents = resolveAgentGrants(agent, availableAgents);
       const skills = resolveSkillGrants(agent, availableSkills);
-      const allTools = await options.toolCatalog.all(options.registry);
+      const toolContext = catalogContext(options);
+      const allTools = await options.toolCatalog.all(toolContext);
       const explicitTools = selectCapabilityResources({
         agentId: agent.id,
         kind: "tool",
@@ -65,7 +88,7 @@ export function createAgentCapabilityResolver(
         id: (tool) => tool.key,
       });
       const explicitToolKeys = new Set(explicitTools.map((tool) => tool.key));
-      const tools = await options.toolCatalog.forAgent(options.registry, agent);
+      const tools = await options.toolCatalog.forAgent(toolContext, agent);
       const toolMode = capabilitySelectionMode(agent.capabilities?.tools);
       const agentMode = capabilitySelectionMode(agent.capabilities?.agents);
       const skillMode = capabilitySelectionMode(agent.capabilities?.skills);
@@ -79,7 +102,6 @@ export function createAgentCapabilityResolver(
             explicitToolKeys.has(tool.key)
               ? toolMode === "all" ? "all" : "explicit"
               : "derived",
-            generatedToolOrigin(options, tool),
           )
         )),
         agents: Object.freeze(agents.map((candidate) =>
@@ -87,7 +109,6 @@ export function createAgentCapabilityResolver(
             candidate.id,
             candidate,
             agentMode === "all" ? "all" : "explicit",
-            options.registry.origin("agents", candidate.id),
           )
         )),
         skills: Object.freeze(skills.map((skill) =>
@@ -95,7 +116,6 @@ export function createAgentCapabilityResolver(
             skill.name,
             skill,
             skillMode === "all" ? "all" : "explicit",
-            options.registry.origin("skills", skill.name),
           )
         )),
       });

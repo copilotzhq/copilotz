@@ -23,12 +23,19 @@ import {
 Deno.test("features see the same deliveries from processor and direct contexts", async () => {
   const namespace = "tenant-feature-deliveries";
   let processorDeliveryIds: readonly string[] | undefined;
+  const customAdapter = Object.freeze({ id: "adapter-a" });
   const feature = defineFeature({
     id: "test.delivery-probe",
     actions: {
       list: {
         inputSchema: { type: "object" } as const,
         async execute(_input: unknown, context: FeatureExecuteContext) {
+          assertEquals(
+            ((context as unknown as {
+              customAdapters: Record<string, unknown>;
+            }).customAdapters).primary,
+            customAdapter,
+          );
           return (await context.deliveries.list()).map((delivery) =>
             delivery.id
           );
@@ -43,22 +50,23 @@ Deno.test("features see the same deliveries from processor and direct contexts",
       features: { deliveryProbe: feature },
     },
     async handle(_event, context) {
+      assertEquals(
+        ((context as unknown as {
+          customAdapters: Record<string, unknown>;
+        }).customAdapters).primary,
+        customAdapter,
+      );
       processorDeliveryIds = await context.features.deliveryProbe
         .list({}) as readonly string[];
     },
   });
   const plugin = definePlugin({
-    manifest: {
-      id: "test.feature-delivery-parity",
-      version: "1.0.0",
-      provides: {
-        features: [feature.id],
-        processors: [processor.id],
-      },
-    },
-    resources: {
-      features: [feature],
-      processors: [processor],
+    id: "test.feature-delivery-parity",
+    version: "1.0.0",
+    features: [feature],
+    processors: [processor],
+    context: {
+      customAdapters: { primary: customAdapter },
     },
   });
   const db = await createTestDatabase({ url: ":memory:" });

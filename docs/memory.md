@@ -124,12 +124,13 @@ const workspaceContext = defineContextResource({
 });
 
 export const workspacePlugin = definePlugin({
-  manifest: {
-    id: "@compass/workspace-context",
-    version: "1.0.0",
-    provides: { context: [workspaceContext.id] },
+  id: "@compass/workspace-context",
+  version: "1.0.0",
+  context: {
+    promptContext: {
+      [workspaceContext.id]: workspaceContext,
+    },
   },
-  resources: { context: [workspaceContext] },
 });
 ```
 
@@ -170,12 +171,13 @@ const incidentKind = defineMemoryKind({
 });
 
 const memoryKindsPlugin = definePlugin({
-  manifest: {
-    id: "@compass/memory-kinds",
-    version: "1.0.0",
-    provides: { memoryKinds: [incidentKind.id] },
+  id: "@compass/memory-kinds",
+  version: "1.0.0",
+  context: {
+    memoryKinds: {
+      [incidentKind.id]: incidentKind,
+    },
   },
-  resources: { memoryKinds: [incidentKind] },
 });
 ```
 

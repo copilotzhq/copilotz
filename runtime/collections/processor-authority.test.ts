@@ -1,11 +1,11 @@
 import { assert, assertEquals } from "@std/assert";
 
 import {
+  type CollectionRecord,
   createCollectionRuntime,
   defineCollection,
   isCollectionNoop,
   relation,
-  type CollectionRecord,
 } from "./index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
@@ -119,12 +119,9 @@ Deno.test("static processor uses frozen event body and captures input in a child
   });
   const registry = await createPluginRegistry({
     plugins: [definePlugin({
-      manifest: {
-        id: "test.phase-5",
-        version: "1.0.0",
-        provides: { processors: [processor.id, ignored.id] },
-      },
-      resources: { processors: [processor, ignored] },
+      id: "test.phase-5",
+      version: "1.0.0",
+      processors: [processor, ignored],
     })],
   });
   const executor = createDeliveryExecutor({

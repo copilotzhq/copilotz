@@ -8,7 +8,7 @@ import { createCopilotzApplication } from "../application/index.ts";
 import { corePlugin } from "../../plugins/core/index.ts";
 import { createSqlSession } from "../events/index.ts";
 import { createLongTermMemoryPlugin } from "../memory/index.ts";
-import { createUsageWorkflowPlugin } from "../usage/index.ts";
+import { createUsageWorkflowPlugin } from "../../plugins/usage/index.ts";
 import { createAdminPlugin } from "./plugin.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
@@ -60,7 +60,7 @@ Deno.test("admin plugin projects event-native application state without raw stor
       createLongTermMemoryPlugin({ enabled: false }),
       createAdminPlugin(),
     ],
-    resources: { agents: [supportAgent] },
+    context: { agents: { [supportAgent.id]: supportAgent } },
   });
   const app = createEventNativeApp(application);
   try {

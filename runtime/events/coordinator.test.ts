@@ -44,20 +44,22 @@ Deno.test("event coordinator matches before commit, publishes, then dispatches",
   });
   const baseRegistry = await createPluginRegistry({
     plugins: [definePlugin({
-      manifest: {
-        id: "test.widgets",
-        version: "1.0.0",
-        provides: { processors: [processor.id] },
-      },
-      resources: { processors: [processor] },
+      id: "test.widgets",
+      version: "1.0.0",
+      processors: [processor],
     })],
   });
   const registry = Object.freeze({
     ...baseRegistry,
-    durableConsumers(draft: Parameters<typeof baseRegistry.durableConsumers>[0]) {
-      order.push("matched");
-      return baseRegistry.durableConsumers(draft);
-    },
+    processors: Object.freeze({
+      ...baseRegistry.processors,
+      durableConsumers(
+        draft: Parameters<typeof baseRegistry.processors.durableConsumers>[0],
+      ) {
+        order.push("matched");
+        return baseRegistry.processors.durableConsumers(draft);
+      },
+    }),
   });
   const executor = createDeliveryExecutor({
     store: fixture.store,
@@ -118,12 +120,9 @@ Deno.test("post-commit publication and placement failures leave delivery recover
   });
   const registry = await createPluginRegistry({
     plugins: [definePlugin({
-      manifest: {
-        id: "test.audit",
-        version: "1.0.0",
-        provides: { processors: [processor.id] },
-      },
-      resources: { processors: [processor] },
+      id: "test.audit",
+      version: "1.0.0",
+      processors: [processor],
     })],
   });
   const executor = createDeliveryExecutor({
@@ -180,12 +179,9 @@ Deno.test("deduplicated settled events do not dispatch a second operation", asyn
   });
   const registry = await createPluginRegistry({
     plugins: [definePlugin({
-      manifest: {
-        id: "test.once",
-        version: "1.0.0",
-        provides: { processors: [processor.id] },
-      },
-      resources: { processors: [processor] },
+      id: "test.once",
+      version: "1.0.0",
+      processors: [processor],
     })],
   });
   const executor = createDeliveryExecutor({

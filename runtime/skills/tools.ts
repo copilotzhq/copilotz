@@ -1,5 +1,5 @@
 import { resolveSkillGrants } from "../capabilities/index.ts";
-import type { Agent, Skill } from "../resources/index.ts";
+import type { Skill } from "../resources/index.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
@@ -47,10 +47,12 @@ function defineTool(input: Omit<WorkflowTool, "id">): WorkflowTool {
 }
 
 function availableSkills(ctx: WorkflowToolExecutionContext): readonly Skill[] {
-  const values = ctx.processor.resources.list<Skill>("skills");
+  const values = Object.values(ctx.processor.skills).filter(
+    (value): value is Skill => !!value,
+  );
   const agent = ctx.agent ??
     (ctx.execution.agentId
-      ? ctx.processor.resources.get<Agent>("agents", ctx.execution.agentId)
+      ? ctx.processor.agents[ctx.execution.agentId]
       : undefined);
   if (!agent) return values;
   return resolveSkillGrants(agent, values);

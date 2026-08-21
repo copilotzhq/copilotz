@@ -6,7 +6,6 @@ import type {
   ProviderName,
   StreamCallback,
 } from "./types.ts";
-import type { ScopedPluginResources } from "../engine/index.ts";
 import { chat } from "./orchestrator.ts";
 
 /** Protocol values from one adapter invocation. Not Copilotz events. */
@@ -50,6 +49,10 @@ export type LlmResource = Readonly<{
   session?: LlmSession;
 }>;
 
+export type LlmResourceContext = Readonly<{
+  llm: Readonly<Record<string, LlmResource | undefined>>;
+}>;
+
 /** @deprecated Use LlmResource. */
 export type LlmProviderResource = LlmResource;
 
@@ -70,9 +73,11 @@ export function invocationFromChat(
   cancel: (reason?: unknown) => void = () => undefined,
 ): LlmInvocation {
   return Object.freeze({
-    frames: new ReadableStream<LlmFrame>({ start(controller) {
-      controller.close();
-    } }),
+    frames: new ReadableStream<LlmFrame>({
+      start(controller) {
+        controller.close();
+      },
+    }),
     result,
     cancel,
   });
@@ -233,10 +238,10 @@ export function requireLlmSession(resource: LlmResource): LlmSession {
 }
 
 export function requireLlmResource(
-  resources: ScopedPluginResources,
+  context: LlmResourceContext,
   id: string,
 ): LlmResource {
-  const resource = resources.get("llm", id);
+  const resource = context.llm[id];
   if (isLlmResource(resource)) return resource;
   throw new Error(`LLM resource '${id}' is not registered.`);
 }

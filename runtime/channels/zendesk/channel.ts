@@ -3,6 +3,7 @@ import { type CopilotzPlugin, definePlugin } from "../../plugins/index.ts";
 import {
   channelMetadata,
   collectByteStream,
+  coreMessageEnvelope,
   isAttachmentStreamOutput,
   outboundText,
   requestHeader,
@@ -164,7 +165,20 @@ async function ingressInputs(
           providerExternalId: author.user?.externalId ?? null,
         },
       },
-      input: {
+      input: coreMessageEnvelope({
+        thread: conversation.id,
+        participant: {
+          externalId,
+          participantType: "human" as const,
+          ...(author.displayName?.trim()
+            ? { name: author.displayName.trim() }
+            : {}),
+          metadata: {
+            provider: "zendesk",
+            userId: author.user?.id ?? null,
+            providerExternalId: author.user?.externalId ?? null,
+          },
+        },
         content: content.length === 1 && source.text?.trim() &&
             source.type !== "file"
           ? source.text.trim()
@@ -176,7 +190,7 @@ async function ingressInputs(
           provider: "zendesk",
           providerMessageId: message.id,
         },
-      },
+      }),
     }));
   }
   return Object.freeze(result);
@@ -393,11 +407,8 @@ export function createZendeskChannelPlugin(
 ): CopilotzPlugin {
   const channel = createZendeskChannel(options);
   return definePlugin({
-    manifest: {
-      id: options.pluginId?.trim() || "@copilotz/channel-zendesk",
-      version: options.version?.trim() || "3.0.0",
-      provides: { channels: [channel.id] },
-    },
-    resources: { channels: [channel] },
+    id: options.pluginId?.trim() || "@copilotz/channel-zendesk",
+    version: options.version?.trim() || "3.0.0",
+    channels: [channel],
   });
 }

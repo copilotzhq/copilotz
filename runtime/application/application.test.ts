@@ -1,4 +1,7 @@
-import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
+import {
+  coreFeatureAliases,
+  message as coreMessage,
+} from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   type CopilotzPlugin,
@@ -64,16 +67,13 @@ function replyPlugin(): CopilotzPlugin {
     },
   });
   return definePlugin({
-    manifest: {
-      id: "test.application.reply",
-      version: "1.0.0",
-      provides: { processors: [processor.id] },
-    },
-    resources: { processors: [processor] },
+    id: "test.application.reply",
+    version: "1.0.0",
+    processors: [processor],
   });
 }
 
-async function collect<T>(stream: ReadableStream<T>): Promise<T[]> {
+async function collect<T>(stream: AsyncIterable<T>): Promise<T[]> {
   const values: T[] = [];
   for await (const value of stream) values.push(value);
   return values;
@@ -129,13 +129,13 @@ Deno.test("application factory composes plugins and supplies the default tenant 
           },
         ],
       });
-    const run = await application.run({
+    const run = await application.send(coreMessage({
       thread: "thread-a",
       participant: "user-a",
       recipientIds: ["agent-a"],
       content: "hello",
-    });
-    const observed = collect(run.events);
+    }));
+    const observed = collect(run.outputs);
     await run.done;
     assertEquals(
       (await observed).filter((event) => event.type === "message.created")
@@ -152,6 +152,76 @@ Deno.test("application factory composes plugins and supplies the default tenant 
 
     await application.shutdown();
     await db.query("SELECT 1");
+  } finally {
+    await application.shutdown();
+    await closeDb(db);
+  }
+});
+
+Deno.test("application send publishes one session output stream", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema: SCHEMA,
+    core: false,
+    canonicalCore: [coreCollectionsPlugin],
+    plugins: [replyPlugin()],
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+  try {
+    await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
+      .features.thread
+      .create({
+        id: "thread-a",
+        participants: [
+          {
+            id: "user-a",
+            externalId: "user-a",
+            participantType: "human",
+          },
+          {
+            id: "agent-a",
+            externalId: "support",
+            participantType: "agent",
+            agentId: "support",
+          },
+        ],
+      });
+    const observed = (async () => {
+      const outputs = [];
+      for await (const output of application.observe()) {
+        outputs.push(output);
+        if (
+          outputs.filter((item) => item.type === "message.created").length >= 2
+        ) {
+          break;
+        }
+      }
+      return outputs;
+    })();
+
+    const sent = await application.send(coreMessage({
+      thread: "thread-a",
+      participant: "user-a",
+      recipientIds: ["agent-a"],
+      content: "hello",
+    }));
+    await sent.done;
+
+    const outputs = await observed;
+    assertEquals(
+      outputs.filter((output) => output.type === "message.created").length,
+      2,
+    );
+    assertEquals(
+      (await application.events.list({ namespace: NAMESPACE })).some((event) =>
+        event.id === sent.eventId
+      ),
+      true,
+    );
+
+    await application.close();
   } finally {
     await application.shutdown();
     await closeDb(db);
@@ -195,7 +265,7 @@ Deno.test("createCopilotz owns its default private database", async () => {
   await application.shutdown();
 });
 
-Deno.test("minimal built-ins precede explicit application resources", async () => {
+Deno.test("minimal built-ins precede explicit application context", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const replacement = Object.freeze({
     id: "openai",
@@ -210,20 +280,19 @@ Deno.test("minimal built-ins precede explicit application resources", async () =
     namespace: NAMESPACE,
     databaseSchema: `${SCHEMA}_core`,
     canonicalCore: [corePlugin],
-    resources: { llm: [replacement] },
+    context: { llm: { openai: replacement } },
   });
   try {
     assertEquals(application.config.corePluginIds, [
       "@copilotz/core",
     ]);
     assertEquals(
-      application.plugins.require("llm", "openai"),
+      application.plugins.context.llm.openai,
       replacement,
     );
-    const agent: Agent | undefined = application.plugins.get(
-      "agents",
-      "missing",
-    );
+    const agent = application.plugins.context.agents?.missing as
+      | Agent
+      | undefined;
     assertEquals(agent, undefined);
   } finally {
     await application.shutdown();
@@ -231,18 +300,16 @@ Deno.test("minimal built-ins precede explicit application resources", async () =
   }
 });
 
-Deno.test("knowledge is an explicit core-plugin opt-in", () => {
+Deno.test("runtime core plugins stay domain-agnostic for knowledge", () => {
   assertEquals(
     createCopilotzCorePlugins({
       tools: false,
       webTools: false,
       finance: false,
       memory: false,
-      usage: false,
       schedules: false,
-      knowledge: { embedding: { provider: "fixture.embedding" } },
     }).map((plugin) => plugin.manifest.id),
-    ["@copilotz/knowledge"],
+    [],
   );
 });
 
@@ -267,7 +334,7 @@ Deno.test("application exposes canonical effective capability introspection", as
     databaseSchema: `${SCHEMA}_capabilities`,
     core: false,
     canonicalCore: [coreCollectionsPlugin],
-    resources: { agents: [agent], tools: [tool] },
+    context: { agents: { [agent.id]: agent }, tools: { [tool.key]: tool } },
   });
   try {
     const resolved = await application.capabilities.resolve({
@@ -275,7 +342,7 @@ Deno.test("application exposes canonical effective capability introspection", as
     });
     assertEquals(resolved.agent, agent);
     assertEquals(resolved.tools.map((entry) => entry.id), [tool.key]);
-    assertEquals(resolved.tools[0].origin?.pluginId, "@copilotz/application");
+    assertEquals("origin" in resolved.tools[0], false);
   } finally {
     await application.shutdown();
     await db.close();
@@ -324,12 +391,9 @@ Deno.test("application terminates attachments and resumes durable deliveries aft
     },
   });
   const plugin = definePlugin({
-    manifest: {
-      id: "test.application.recovery",
-      version: "1.0.0",
-      provides: { processors: [processor.id] },
-    },
-    resources: { processors: [processor] },
+    id: "test.application.recovery",
+    version: "1.0.0",
+    processors: [processor],
   });
   const application = await createCopilotzApplication({
     database: {
@@ -417,7 +481,8 @@ Deno.test("application terminates attachments and resumes durable deliveries aft
     assertEquals(messageDelivery.status, "retry_wait");
     assertEquals(processorCalls, 1);
 
-    const attachment = await application.connect({
+    const attachment = await application.engine.connect({
+      namespace: NAMESPACE,
       thread: "recovery-thread",
       participant: "recovery-user",
     });

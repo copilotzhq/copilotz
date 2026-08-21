@@ -152,16 +152,12 @@ Deno.test("skills plugins own disclosure tools and preserve stable-ID overrides"
     plugins: [base, overriding],
   });
   assertEquals(
-    registry.require<{ description: string }>("skills", "portable-skill")
+    (registry.context.skills["portable-skill"] as { description: string })
       .description,
     "Replacement instructions for portable runtime behavior.",
   );
-  assertEquals(registry.origin("skills", "portable-skill"), {
-    pluginId: "@acme/overriding-skills",
-    pluginVersion: "1.0.0",
-  });
   assertEquals(
-    registry.list<{ key: string }>("tools").map((tool) => tool.key),
+    Object.keys(registry.context.tools),
     [...SKILL_TOOL_IDS],
   );
 });

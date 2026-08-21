@@ -1,15 +1,9 @@
-import type { Agent, API, MCPServer, Tool } from "../resources/index.ts";
-import type {
-  ToolPipelineStage,
-  ToolPipelineToolStage,
-} from "../llm/types.ts";
-import type {
-  ToolExecution,
-} from "../domain/index.ts";
+import type { Agent, API, MCPServer, Skill, Tool } from "../resources/index.ts";
+import type { ToolPipelineStage, ToolPipelineToolStage } from "../llm/types.ts";
+import type { ToolExecution } from "../domain/index.ts";
 import type { ScopedCollections } from "../collections/index.ts";
 import type { CopilotzEvent } from "../events/types.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
-import type { ScopedPluginResources } from "../engine/index.ts";
 import type { ContentInput } from "../content/index.ts";
 
 /** Existing custom/native tool shape required by the event-native executor. */
@@ -44,14 +38,22 @@ export type CreateWorkflowToolCatalogOptions = Readonly<{
   generateMcpTools?: GenerateMcpWorkflowTools;
 }>;
 
+export type WorkflowToolCatalogContext = Readonly<{
+  agents: Readonly<Record<string, Agent | undefined>>;
+  skills: Readonly<Record<string, Skill | undefined>>;
+  tools: Readonly<Record<string, Tool | undefined>>;
+  apis: Readonly<Record<string, API | undefined>>;
+  mcp: Readonly<Record<string, MCPServer | undefined>>;
+}>;
+
 export type WorkflowToolCatalog = Readonly<{
-  all(resources: ScopedPluginResources): Promise<readonly WorkflowTool[]>;
+  all(context: WorkflowToolCatalogContext): Promise<readonly WorkflowTool[]>;
   forAgent(
-    resources: ScopedPluginResources,
+    context: WorkflowToolCatalogContext,
     agent: Agent,
   ): Promise<readonly WorkflowTool[]>;
   get(
-    resources: ScopedPluginResources,
+    context: WorkflowToolCatalogContext,
     key: string,
   ): Promise<WorkflowTool | undefined>;
   clear(): void;

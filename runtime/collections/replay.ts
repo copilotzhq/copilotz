@@ -11,10 +11,17 @@ import type {
   SqlExecutor,
 } from "../events/index.ts";
 
-function canonicalName(eventType: string, name: string): boolean {
-  return eventType === `${name}.created` ||
-    eventType === `${name}.updated` ||
-    eventType === `${name}.deleted`;
+function collectionEventNames(
+  definition: CollectionDefinition,
+): ReadonlySet<string> {
+  return new Set([
+    `${definition.name}.created`,
+    `${definition.name}.updated`,
+    `${definition.name}.deleted`,
+    ...Object.values(definition.commands ?? {}).flatMap((command) =>
+      command.event ? [command.event] : []
+    ),
+  ]);
 }
 
 const replayPageSize = 1_000;
@@ -46,13 +53,14 @@ async function readCollectionBodies(
   executor: SqlExecutor,
   store: EventStore,
   namespace: string,
-  name: string,
+  definition: CollectionDefinition,
   events: readonly DurableEvent[],
 ): Promise<readonly CollectionEventBody<CollectionRecord>[]> {
   const bodies: CollectionEventBody<CollectionRecord>[] = [];
   const context = { transaction: executor, tables: store.tables };
+  const eventNames = collectionEventNames(definition);
   for (const event of events) {
-    if (!canonicalName(event.type, name)) continue;
+    if (!eventNames.has(event.type)) continue;
     const dataRef = eventDataRef(event.payload);
     bodies.push(
       await readEventBody<CollectionEventBody<CollectionRecord>>(
@@ -139,10 +147,16 @@ export async function loadCollectionEventBodies(
   executor: SqlExecutor,
   store: EventStore,
   namespace: string,
-  name: string,
+  definition: CollectionDefinition,
 ): Promise<readonly CollectionEventBody<CollectionRecord>[]> {
   const events = await loadNamespaceEvents(store, namespace);
-  return await readCollectionBodies(executor, store, namespace, name, events);
+  return await readCollectionBodies(
+    executor,
+    store,
+    namespace,
+    definition,
+    events,
+  );
 }
 
 export async function verifyCollectionProjections(
@@ -156,7 +170,7 @@ export async function verifyCollectionProjections(
     executor,
     store,
     namespace,
-    definition.name,
+    definition,
     events,
   );
   const replayed = foldCollectionBodies(bodies);
@@ -205,7 +219,7 @@ export async function rebuildCollectionProjections(
     executor,
     store,
     namespace,
-    definition.name,
+    definition,
     events,
   );
   // Delete only this collection's nodes. Declared edges cascade from the
@@ -246,7 +260,12 @@ export async function rebuildCollectionProjections(
 
 export function isCollectionEvent(
   event: DurableEvent,
-  name: string,
+  collection: string | CollectionDefinition,
 ): boolean {
-  return canonicalName(event.type, name);
+  if (typeof collection === "string") {
+    return event.type === `${collection}.created` ||
+      event.type === `${collection}.updated` ||
+      event.type === `${collection}.deleted`;
+  }
+  return collectionEventNames(collection).has(event.type);
 }

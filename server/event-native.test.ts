@@ -1,4 +1,7 @@
-import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
+import {
+  coreFeatureAliases,
+  message as coreMessage,
+} from "@copilotz/copilotz/plugins/core";
 import {
   assert,
   assertEquals,
@@ -89,20 +92,11 @@ const echoFeature = defineFeature({
 });
 
 const adapterPlugin = definePlugin({
-  manifest: {
-    id: "test.event-native-adapter",
-    version: "1.0.0",
-    provides: {
-      agents: [supportAgent.id],
-      collections: [notes.name],
-      features: [echoFeature.id!],
-    },
-  },
-  resources: {
-    agents: [supportAgent],
-    collections: [notes],
-    features: [echoFeature],
-  },
+  id: "test.event-native-adapter",
+  version: "1.0.0",
+  agents: [supportAgent],
+  collections: [notes],
+  features: [echoFeature],
 });
 
 function object(value: unknown): Record<string, unknown> {
@@ -116,9 +110,9 @@ function array(value: unknown): readonly unknown[] {
 }
 
 async function collect(
-  stream: ReadableStream<CopilotzEvent>,
-): Promise<readonly CopilotzEvent[]> {
-  const events: CopilotzEvent[] = [];
+  stream: ReadableStream<AttachmentOutput>,
+): Promise<readonly AttachmentOutput[]> {
+  const events: AttachmentOutput[] = [];
   for await (const event of stream) events.push(event);
   return events;
 }
@@ -253,16 +247,16 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
     });
     assertEquals(array(humanParticipants.data).length, 2);
 
-    const run = await application.run({
+    const run = await application.send(coreMessage({
       thread: "thread-a",
       participant: "user-a",
       recipientIds: ["agent-a"],
       content: "Hello from the event-native adapter",
-      messageId: "message-a",
+      id: "message-a",
       correlationId: "run:message:a",
       deduplicationId: "run:message:a",
-    });
-    const observed = collect(run.events);
+    }));
+    const observed = collect(run.outputs);
     await run.done;
     assertEquals(
       (await observed).filter((event) => event.type === "message.created")
@@ -334,8 +328,13 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
       query: { correlationId: "run:message:a" },
     });
     const durableEvents = array(runEvents.data);
-    assertEquals(durableEvents.length, 1);
-    const messageEvent = object(durableEvents[0]);
+    assertEquals(
+      durableEvents.map((event) => object(event).type),
+      ["copilotz.core.message.input", "message.created"],
+    );
+    const messageEvent = object(
+      durableEvents.find((event) => object(event).type === "message.created"),
+    );
     assertEquals(messageEvent.type, "message.created");
     assertEquals(typeof messageEvent.position, "string");
     const eventById = await app.handle({
@@ -518,7 +517,12 @@ Deno.test("event-native app exposes graph, event, asset, collection, and plugin 
       method: "GET",
       query: { status: "succeeded" },
     });
-    assertEquals(deliveries.data, []);
+    const succeededDeliveries = array(deliveries.data);
+    assertEquals(succeededDeliveries.length, 1);
+    assertEquals(
+      object(succeededDeliveries[0]).consumerId,
+      "processor:copilotz.core.message-input",
+    );
     await expectAppError(
       () =>
         app.handle({

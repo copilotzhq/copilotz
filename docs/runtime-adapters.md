@@ -4,12 +4,12 @@ Plugin resources describe logical behavior; they do not grant filesystem,
 subprocess, package-loader, or server access. The embedding worker grants those
 capabilities explicitly.
 
-| Subpath           | Capability                                                                                                      |
-| ----------------- | --------------------------------------------------------------------------------------------------------------- |
-| `/adapters`       | Ominipg database adaptation, module plugin resolution, Web-fetch OpenAPI generation, and injected MCP transport |
-| `/adapters/stdio` | Official MCP SDK subprocess transport                                                                           |
-| `/adapters/deno`  | Deno listener, workspace/process tools, Open Skill build packer, and persistent terminal service                |
-| `/adapters/node`  | Node terminal I/O for the interactive CLI                                                                       |
+| Subpath           | Capability                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------ |
+| `/adapters`       | Ominipg database adaptation, Web-fetch OpenAPI generation, and injected MCP transport            |
+| `/adapters/stdio` | Official MCP SDK subprocess transport                                                            |
+| `/adapters/deno`  | Deno listener, workspace/process tools, Open Skill build packer, and persistent terminal service |
+| `/adapters/node`  | Node terminal I/O for the interactive CLI                                                        |
 
 Generic OpenAPI with an application-owned MCP transport:
 
@@ -78,18 +78,9 @@ Cloudflare hosts omit unsupported resources or inject a transport they own.
 Missing capabilities fail during resource resolution instead of silently
 dropping tools.
 
-Package/path plugin resolution is explicit too:
-
-```ts
-import { createModulePluginResolver } from "@copilotz/copilotz/adapters";
-
-const pluginResolver = createModulePluginResolver({
-  baseUrl: import.meta.url,
-  importModule: (specifier) => import(specifier),
-});
-```
-
-The importer runs in the embedding host, so its package map, authentication, and
-supported URL schemes remain host-owned.
+Package/path plugin resolution belongs to the embedding host's normal module
+system. Import plugin values directly and pass those concrete plugins to
+`createCopilotz({ plugins: [...] })`; the registry does not accept string
+sources, presets, imports, or a module resolver.
 
 Detailed contract: [runtime adapters](v3/runtime-adapters.md).

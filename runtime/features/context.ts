@@ -17,14 +17,12 @@ import type {
   FeatureExecuteContext,
   FeatureHostContext,
   FeatureInvoker,
-  FeatureResources,
   FeatureTransactionContext,
   FeatureTransactionOptions,
 } from "./types.ts";
 import { isFeatureDefinition } from "./define.ts";
-import { pluginResourceId, type PluginResourceType } from "../plugins/index.ts";
-import type { Agent, API, MCPServer, Skill, Tool } from "../resources/index.ts";
-import type { LlmResource } from "../llm/index.ts";
+import type { PluginContextValues } from "../plugins/index.ts";
+import type { ContextResource } from "../context/types.ts";
 
 const ALIAS_PATTERN = /^[a-z][a-zA-Z0-9_]*$/;
 
@@ -72,6 +70,7 @@ export type FeatureTransaction = CollectionRuntime["transaction"];
 export type CreateFeatureInvokerOptions = Readonly<{
   isTransactionActive?: () => boolean;
   createInvocationKey?: () => string;
+  upsertRelation?: FeatureContextBindings["relations"]["upsert"];
 }>;
 
 type InvocationFrame = Readonly<{
@@ -157,30 +156,42 @@ function collectionHandle(
   return collection;
 }
 
-function resourceMap<T extends object>(
-  resources: Pick<FeatureResources, "list">,
-  type: PluginResourceType,
-): Readonly<Record<string, T>> {
-  return Object.freeze(
-    Object.fromEntries(
-      resources.list<T>(type).map((value) => [
-        pluginResourceId(type, value),
-        value,
-      ]),
-    ),
-  );
-}
-
 export function createFeatureContextValues(
-  resources: Pick<FeatureResources, "list">,
+  context: PluginContextValues = Object.freeze({}),
 ): FeatureContextValues {
+  const namespaces: Record<string, Readonly<Record<string, unknown>>> = {};
+  for (const [namespace, values] of Object.entries(context)) {
+    namespaces[namespace] = Object.freeze({ ...values });
+  }
   return Object.freeze({
-    agents: resourceMap<Agent>(resources, "agents"),
-    tools: resourceMap<Tool>(resources, "tools"),
-    llm: resourceMap<LlmResource>(resources, "llm"),
-    apis: resourceMap<API>(resources, "api"),
-    mcp: resourceMap<MCPServer>(resources, "mcp"),
-    skills: resourceMap<Skill>(resources, "skills"),
+    ...namespaces,
+    agents: Object.freeze({
+      ...(namespaces.agents ?? {}),
+    }) as FeatureContextValues["agents"],
+    tools: Object.freeze({
+      ...(namespaces.tools ?? {}),
+    }) as FeatureContextValues["tools"],
+    llm: Object.freeze({
+      ...(namespaces.llm ?? {}),
+    }) as FeatureContextValues["llm"],
+    apis: Object.freeze({
+      ...(namespaces.apis ?? {}),
+    }) as FeatureContextValues["apis"],
+    mcp: Object.freeze({
+      ...(namespaces.mcp ?? {}),
+    }) as FeatureContextValues["mcp"],
+    skills: Object.freeze({
+      ...(namespaces.skills ?? {}),
+    }) as FeatureContextValues["skills"],
+    embeddings: Object.freeze({
+      ...(namespaces.embeddings ?? {}),
+    }) as Readonly<Record<string, unknown | undefined>>,
+    promptContext: Object.freeze({
+      ...(namespaces.promptContext ?? {}),
+    }) as Readonly<Record<string, ContextResource | undefined>>,
+    featureDefinitions: Object.freeze({
+      ...(namespaces.featureDefinitions ?? {}),
+    }) as FeatureContextValues["featureDefinitions"],
   });
 }
 
@@ -195,12 +206,26 @@ function transactionOperationKey(
 
 function transactionContext(
   collections: ScopedCollections,
+  upsertRelation?: FeatureContextBindings["relations"]["upsert"],
+  namespace?: string,
 ): FeatureTransactionContext {
   return Object.freeze({
     collections,
     collection(definition) {
       return collectionHandle(collections, definition) as never;
     },
+    relations: Object.freeze({
+      upsert(
+        input: Parameters<FeatureTransactionContext["relations"]["upsert"]>[0],
+      ) {
+        if (!upsertRelation || !namespace) {
+          throw new Error(
+            "Feature transaction relation projection is not configured.",
+          );
+        }
+        return upsertRelation({ ...input, namespace });
+      },
+    }),
   });
 }
 
@@ -212,8 +237,10 @@ function createExecuteContext(
   frame: InvocationFrame,
 ): FeatureExecuteContext {
   return Object.freeze({
+    ...hostContext,
     namespace: hostContext.namespace,
     operationKey: frame.path,
+    now: hostContext.now,
     collections: hostContext.collections,
     collection(definition) {
       return collectionHandle(hostContext.collections, definition) as never;
@@ -231,7 +258,13 @@ function createExecuteContext(
         },
         execute: async () => {
           throwIfAborted(signal);
-          return await execute(transactionContext(hostContext.collections));
+          return await execute(
+            transactionContext(
+              hostContext.collections,
+              invokerOptions.upsertRelation,
+              hostContext.namespace,
+            ),
+          );
         },
       });
       throwIfAborted(signal);
@@ -244,6 +277,9 @@ function createExecuteContext(
     apis: hostContext.apis,
     mcp: hostContext.mcp,
     skills: hostContext.skills,
+    embeddings: hostContext.embeddings,
+    promptContext: hostContext.promptContext,
+    featureDefinitions: hostContext.featureDefinitions,
     features: hostContext.features,
     feature(definition) {
       return featureActions(definition, host, transaction, invokerOptions);
@@ -379,12 +415,12 @@ function featureActions<F extends AnyFeatureDefinition>(
 
 /** Internal bridge for pre-10B3 runtime mechanisms; not a package API. */
 export function requireFeatureActions(
-  context: Pick<FeatureHostContext, "feature" | "resources">,
+  context: Pick<FeatureHostContext, "feature" | "featureDefinitions">,
   id: string,
 ): FeatureInvoker[string] {
-  return context.feature(
-    context.resources.require<AnyFeatureDefinition>("features", id),
-  );
+  const definition = context.featureDefinitions[id];
+  if (!definition) throw new Error(`Unknown Feature '${id}'.`);
+  return context.feature(definition);
 }
 
 /** Builds a FeatureContext from engine primitives, not the application. */
@@ -409,21 +445,17 @@ export function createFeatureContext(
     {
       isTransactionActive: () =>
         activeCollectionTransaction(bindings.collectionRuntime) !== undefined,
+      upsertRelation: bindings.relations.upsert,
     },
   );
   const scopedCollections = Object.freeze({
     ...bindings.collections?.withScope({ namespace }),
     ...bindings.collectionRuntime.withScope({ namespace }),
   });
-  const resources = Object.freeze({
-    list: bindings.plugins.list,
-    get: bindings.plugins.get,
-    require: bindings.plugins.require,
-    origin: bindings.plugins.origin,
-  }) satisfies FeatureResources;
   const context: FeatureHostContext = Object.freeze({
     namespace,
-    ...createFeatureContextValues(resources),
+    ...createFeatureContextValues(bindings.plugins.context),
+    now: bindings.now ?? (() => new Date()),
     collections: scopedCollections,
     collection(definition) {
       return collectionHandle(scopedCollections, definition) as never;
@@ -436,7 +468,13 @@ export function createFeatureContext(
         namespace,
         ...(options.identity ? { identity: options.identity } : {}),
         execute: async () =>
-          await execute(transactionContext(scopedCollections)),
+          await execute(
+            transactionContext(
+              scopedCollections,
+              bindings.relations.upsert,
+              namespace,
+            ),
+          ),
       });
       return result.value;
     },
@@ -449,12 +487,12 @@ export function createFeatureContext(
         throw new Error("Feature content ownership is not configured.");
       },
     }),
-    resources,
     features,
     feature(definition) {
       return featureActions(definition, host, transaction, {
         isTransactionActive: () =>
           activeCollectionTransaction(bindings.collectionRuntime) !== undefined,
+        upsertRelation: bindings.relations.upsert,
       });
     },
     events: {

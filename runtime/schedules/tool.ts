@@ -3,12 +3,21 @@ import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
 } from "../tools/index.ts";
+import { scheduledJobsLifecycleFeature } from "./lifecycle.ts";
 import type {
-  ScheduledJobRunInput,
   ScheduledJobSchedule,
+  ScheduledJobSender,
   ScheduledJobStatus,
   ScheduledJobThread,
 } from "./types.ts";
+
+type ScheduledJobToolRunInput = Readonly<{
+  thread?: ScheduledJobThread;
+  sender?: ScheduledJobSender;
+  recipientIds?: readonly string[];
+  content: ContentInput | readonly ContentInput[];
+  metadata?: Record<string, unknown>;
+}>;
 
 type ScheduledJobsAction =
   | "create"
@@ -107,7 +116,7 @@ function thread(value: unknown): ScheduledJobThread | undefined {
   });
 }
 
-function sender(value: unknown): ScheduledJobRunInput["sender"] | undefined {
+function sender(value: unknown): ScheduledJobSender | undefined {
   if (value === undefined) return undefined;
   const input = record(value, "Scheduled sender");
   const externalId = requiredText(
@@ -135,8 +144,8 @@ function sender(value: unknown): ScheduledJobRunInput["sender"] | undefined {
 function run(
   value: unknown,
   options: { partial: boolean; defaultThreadId?: string },
-): Partial<ScheduledJobRunInput> & {
-  content?: ScheduledJobRunInput["content"];
+): Partial<ScheduledJobToolRunInput> & {
+  content?: ScheduledJobToolRunInput["content"];
 } {
   const input = record(value, "Scheduled run");
   if (!options.partial && input.content === undefined) {
@@ -169,10 +178,25 @@ function run(
 function executionContext(
   value: WorkflowToolExecutionContext | undefined,
 ): WorkflowToolExecutionContext {
-  if (!value?.processor?.schedules) {
+  if (!value?.processor) {
     throw new Error("This tool requires an event-native Copilotz context.");
   }
   return value;
+}
+
+async function prepareRunContent<T extends Partial<ScheduledJobToolRunInput>>(
+  input: T,
+  context: WorkflowToolExecutionContext,
+  operationKey: string,
+): Promise<T> {
+  if (input.content === undefined) return input;
+  const content = await context.processor.content.prepare(input.content, {
+    operationKey: `${operationKey}:content`,
+  });
+  return Object.freeze({
+    ...input,
+    content,
+  });
 }
 
 function positiveLimit(value: unknown): number | undefined {
@@ -283,12 +307,19 @@ export function createScheduledJobsTool(
       const input = record(raw);
       const selected = action(input.action);
       const operation = `scheduled_jobs:${selected}`;
+      const lifecycle = context.processor.feature(
+        scheduledJobsLifecycleFeature,
+      );
       if (selected === "create") {
-        const preparedRun = run(input.run, {
-          partial: false,
-          defaultThreadId: context.execution.threadId,
-        }) as ScheduledJobRunInput;
-        const result = await context.processor.schedules.create({
+        const preparedRun = await prepareRunContent(
+          run(input.run, {
+            partial: false,
+            defaultThreadId: context.execution.threadId,
+          }) as ScheduledJobToolRunInput,
+          context,
+          operation,
+        );
+        const job = await lifecycle.create({
           ...(optionalText(input.jobId, "Scheduled job ID")
             ? { id: optionalText(input.jobId, "Scheduled job ID") }
             : {}),
@@ -308,11 +339,11 @@ export function createScheduledJobsTool(
             ),
           }),
         }, { operationKey: operation });
-        return { job: result.value, eventId: result.event.id };
+        return { job };
       }
 
       if (selected === "list") {
-        const jobs = await context.processor.schedules.list({
+        const jobs = await lifecycle.list({
           ...(input.status === undefined
             ? {}
             : { status: jobStatus(input.status) }),
@@ -336,17 +367,20 @@ export function createScheduledJobsTool(
 
       const jobId = requiredText(input.jobId, "Scheduled job ID");
       if (selected === "get") {
-        return { job: await context.processor.schedules.get(jobId) };
+        return { job: await lifecycle.get({ id: jobId }) };
       }
       if (
         selected === "pause" || selected === "resume" || selected === "cancel"
       ) {
-        const result = await context.processor.schedules[selected](jobId, {
+        const job = await lifecycle[selected]({ id: jobId }, {
           operationKey: operation,
         });
-        return { job: result.value, eventId: result.event.id };
+        return { job };
       }
       if (selected === "run_now") {
+        if (!context.processor.schedules) {
+          throw new Error("Scheduled run_now requires the schedule trigger.");
+        }
         return await context.processor.schedules.runNow(jobId, {
           operationKey: operation,
         });
@@ -361,7 +395,11 @@ export function createScheduledJobsTool(
         patch.schedule = schedule(input.schedule);
       }
       if (input.run !== undefined) {
-        patch.run = run(input.run, { partial: true });
+        patch.run = await prepareRunContent(
+          run(input.run, { partial: true }),
+          context,
+          operation,
+        );
       }
       if (input.metadata !== undefined) {
         patch.metadata = structuredClone(
@@ -373,16 +411,16 @@ export function createScheduledJobsTool(
           "Scheduled job update requires at least one field.",
         );
       }
-      const result = await context.processor.schedules.update(
+      const job = await lifecycle.update(
         {
           id: jobId,
           patch,
-        } as Parameters<typeof context.processor.schedules.update>[0],
+        },
         {
           operationKey: operation,
         },
       );
-      return { job: result.value, eventId: result.event.id };
+      return { job };
     },
   });
 }

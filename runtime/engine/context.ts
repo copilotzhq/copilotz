@@ -1,7 +1,13 @@
-import type { MutationIdentity } from "../domain/index.ts";
+import {
+  type MutationIdentity,
+  projectDomainRelation,
+} from "../domain/index.ts";
 import { activeCollectionTransaction } from "../collections/kernel.ts";
+import { createContentStreamRuntime } from "../content/index.ts";
 import {
   createEphemeralEvent,
+  type EventRouting,
+  type EventVisibility,
   matchesCopilotzEvent,
   waitForCopilotzEvent,
 } from "../events/index.ts";
@@ -11,15 +17,15 @@ import {
   createFeatureInvoker,
   type FeatureActionsFor,
   type FeatureHostContext,
+  type FeatureTransactionContext,
 } from "../features/index.ts";
-import { createStreamWriter } from "../streams/writer.ts";
-import { openStreamFollower } from "../streams/follower.ts";
 import type {
   CopilotzCapabilityBase,
   CopilotzProcessorCapabilities,
   CreateCopilotzProcessorCapabilitiesOptions,
   ScopedMutationOptions,
 } from "./types.ts";
+import type { MemoryKindDefinition } from "../memory/ontology.ts";
 
 function requiredText(value: string, name: string): string {
   const normalized = value.trim();
@@ -138,20 +144,10 @@ export function createCopilotzProcessorCapabilities(
     },
   });
 
-  const resources: CopilotzProcessorCapabilities["resources"] = Object.freeze({
-    list: <T extends object = object>(
-      type: Parameters<typeof options.registry.list>[0],
-    ) => options.registry.list<T>(type),
-    get: <T extends object = object>(
-      type: Parameters<typeof options.registry.get>[0],
-      id: string,
-    ) => options.registry.get<T>(type, id),
-    require: <T extends object = object>(
-      type: Parameters<typeof options.registry.require>[0],
-      id: string,
-    ) => options.registry.require<T>(type, id),
-    origin: (type, id) => options.registry.origin(type, id),
-  });
+  const contextValues = createFeatureContextValues(options.registry.context);
+  const memoryKinds = Object.freeze({
+    ...(options.registry.context.memoryKinds ?? {}),
+  }) as Readonly<Record<string, MemoryKindDefinition | undefined>>;
 
   const content: CopilotzProcessorCapabilities["content"] = Object.freeze({
     prepare(input, prepareOptions) {
@@ -192,45 +188,45 @@ export function createCopilotzProcessorCapabilities(
     resolve: (ref) => options.resolver.get(ref, { namespace }),
     resolveMany: (refs) => options.resolver.getMany(refs, { namespace }),
     open: (ref) => options.resolver.open(ref, { namespace }),
-  });
-
-  const boundStreams = () => {
-    const streams = options.collectionRuntime.withScope({
+    stream: createContentStreamRuntime({
       namespace,
-      createMutationIdentity: options.base.createMutationIdentity,
-    }).stream;
-    if (!streams) {
-      throw new TypeError("Stream collection is not bound.");
-    }
-    return streams;
-  };
-
-  const streams: CopilotzProcessorCapabilities["streams"] = Object.freeze({
-    write(input) {
-      return createStreamWriter({
-        streams: boundStreams(),
-        store: options.streamBodyStore,
-        namespace,
-        threadId: input.threadId,
-        lane: input.lane,
-        mediaType: input.mediaType,
-        ...(input.participantId ? { participantId: input.participantId } : {}),
-        ...(input.metadata ? { metadata: input.metadata } : {}),
-        ...(input.id ? { id: input.id } : {}),
-        identity: mutation(`stream.write:${input.lane}:${input.mediaType}`),
-        ...(input.routing ? { routing: input.routing } : {}),
-        ...(input.visibility ? { visibility: input.visibility } : {}),
-      });
-    },
-    follow(input) {
-      return openStreamFollower({
-        streams: boundStreams(),
-        store: options.streamBodyStore,
-        namespace,
-        streamId: input.streamId,
-        ...(input.offset !== undefined ? { offset: input.offset } : {}),
-      });
-    },
+      store: options.streamBodyStore,
+      async onOpen(output) {
+        const threadId = output.threadId ?? options.base.event.threadId;
+        if (!threadId) return;
+        const event = createEphemeralEvent({
+          type: "stream.output",
+          namespace,
+          threadId,
+          streamId: output.id,
+          payload: {
+            streamId: output.id,
+            mediaType: output.mediaType,
+            role: output.role,
+            ...(output.participantId
+              ? { participantId: output.participantId }
+              : {}),
+          },
+          routing: (output.routing as EventRouting | undefined) ??
+            options.base.event.routing,
+          visibility: (output.visibility as EventVisibility | undefined) ??
+            options.base.event.visibility,
+          metadata: {
+            ...structuredClone(output.metadata),
+            ...capabilitySourceMetadata(options.base),
+            contentStream: true,
+            role: output.role,
+          },
+          causationId: options.base.event.durable
+            ? options.base.event.id
+            : options.base.event.causationId,
+          correlationId: output.correlationId ??
+            options.base.event.correlationId,
+        }, options.now);
+        if (options.publishEvent) await options.publishEvent(event);
+        else await options.eventHub.publish(event);
+      },
+    }),
   });
 
   const relations: CopilotzProcessorCapabilities["relations"] = Object.freeze({
@@ -259,47 +255,6 @@ export function createCopilotzProcessorCapabilities(
   });
 
   const schedules: CopilotzProcessorCapabilities["schedules"] = Object.freeze({
-    create(input, mutationOptions) {
-      const key = input.id ?? input.name;
-      return options.schedules.create({
-        ...input,
-        namespace,
-        identity: mutation(`scheduled_job.create:${key}`, mutationOptions),
-      });
-    },
-    update(input, mutationOptions) {
-      return options.schedules.update({
-        ...input,
-        namespace,
-        identity: mutation(
-          `scheduled_job.update:${input.id}`,
-          mutationOptions,
-        ),
-      });
-    },
-    pause(id, mutationOptions) {
-      return options.schedules.pause(
-        namespace,
-        id,
-        mutation(`scheduled_job.pause:${id}`, mutationOptions),
-      );
-    },
-    resume(id, mutationOptions) {
-      return options.schedules.resume(
-        namespace,
-        id,
-        mutation(`scheduled_job.resume:${id}`, mutationOptions),
-      );
-    },
-    cancel(id, mutationOptions) {
-      return options.schedules.cancel(
-        namespace,
-        id,
-        mutation(`scheduled_job.cancel:${id}`, mutationOptions),
-      );
-    },
-    get: (id) => options.schedules.get(namespace, id),
-    list: (listOptions) => options.schedules.list(namespace, listOptions),
     runNow(id, runOptions = {}) {
       const {
         operationKey,
@@ -318,93 +273,15 @@ export function createCopilotzProcessorCapabilities(
     },
   });
 
-  const knowledge: CopilotzProcessorCapabilities["knowledge"] = Object.freeze({
-    create(input, mutationOptions) {
-      const key = input.id ?? input.externalId ??
-        (input.source.kind === "uri" ? input.source.uri : "document");
-      return options.knowledge.create({
-        ...input,
-        namespace,
-        identity: mutation(`document.create:${key}`, mutationOptions),
-      });
-    },
-    begin(id, mutationOptions) {
-      return options.knowledge.begin(
-        namespace,
-        id,
-        mutation(`document.begin:${id}`, mutationOptions),
-      );
-    },
-    complete(input, mutationOptions) {
-      return options.knowledge.complete({
-        ...input,
-        namespace,
-        identity: mutation(`document.complete:${input.id}`, mutationOptions),
-      });
-    },
-    markDuplicate(input, mutationOptions) {
-      return options.knowledge.markDuplicate({
-        ...input,
-        namespace,
-        identity: mutation(
-          `document.duplicate:${input.id}`,
-          mutationOptions,
-        ),
-      });
-    },
-    fail(input, mutationOptions) {
-      return options.knowledge.fail({
-        ...input,
-        namespace,
-        identity: mutation(`document.fail:${input.id}`, mutationOptions),
-      });
-    },
-    delete(id, mutationOptions) {
-      return options.knowledge.delete(
-        namespace,
-        id,
-        mutation(`document.delete:${id}`, mutationOptions),
-      );
-    },
-    get: (id) => options.knowledge.get(namespace, id),
-    getByHash: (hash) => options.knowledge.getByHash(namespace, hash),
-    getBySourceUri: (sourceUri) =>
-      options.knowledge.getBySourceUri(namespace, sourceUri),
-    list: (listOptions) => options.knowledge.list(namespace, listOptions),
-    listChunks: (documentId) =>
-      options.knowledge.listChunks(namespace, documentId),
-    search: (input) => options.knowledge.search({ ...input, namespace }),
-  });
-
-  const memory: CopilotzProcessorCapabilities["memory"] = Object.freeze({
-    async commit(input, mutationOptions) {
-      const committed = await options.memory.commit({
-        ...input,
-        namespace,
-        identity: mutation(
-          `memory.consolidation:${input.checkpointId}`,
-          mutationOptions,
-        ),
-      });
-      if (!committed.value) {
-        throw new Error(
-          `Memory checkpoint '${input.checkpointId}' committed without a result.`,
-        );
-      }
-      return committed.value;
-    },
-  });
-
   const capabilities: Omit<
     CopilotzProcessorCapabilities,
     "features" | "feature"
   > = Object
     .freeze({
       namespace,
+      ...contextValues,
       events,
-      resources,
       content,
-      streams,
       collections: Object.freeze({
         ...options.collections.withScope({
           namespace,
@@ -417,9 +294,8 @@ export function createCopilotzProcessorCapabilities(
       }),
       relations,
       schedules,
-      knowledge,
-      memory,
-    });
+      memoryKinds,
+  });
   const attached = attachProcessorFeatures(options, capabilities);
   return Object.freeze({
     ...capabilities,
@@ -433,7 +309,7 @@ function processorFeatureAliases(
 ): Readonly<Record<string, AnyFeatureDefinition>> {
   const consumerId = options.base.source?.consumerId;
   const processor = consumerId
-    ? options.registry.processorForConsumer(consumerId)
+    ? options.registry.processors.processorForConsumer(consumerId)
     : undefined;
   const aliases = processor?.requires?.features;
   if (!aliases) return {};
@@ -478,16 +354,44 @@ function attachProcessorFeatures(
     {
       isTransactionActive: () =>
         activeCollectionTransaction(options.collectionRuntime) !== undefined,
+      upsertRelation: (input) => {
+        const tx = activeCollectionTransaction(options.collectionRuntime);
+        if (!tx) {
+          throw new Error(
+            "Feature transaction relation projection requires an active transaction.",
+          );
+        }
+        return projectDomainRelation(tx, options.eventStore.tables, input);
+      },
     },
   );
   const feature = <F extends AnyFeatureDefinition>(definition: F) =>
     createFeatureInvoker({ bound: definition }, host, transaction, {
       isTransactionActive: () =>
         activeCollectionTransaction(options.collectionRuntime) !== undefined,
+      upsertRelation: (input) => {
+        const tx = activeCollectionTransaction(options.collectionRuntime);
+        if (!tx) {
+          throw new Error(
+            "Feature transaction relation projection requires an active transaction.",
+          );
+        }
+        return projectDomainRelation(tx, options.eventStore.tables, input);
+      },
     }).bound as FeatureActionsFor<F>;
   holder.current = Object.freeze({
+    ...(capabilities as unknown as Record<string, unknown>),
     namespace: capabilities.namespace,
-    ...createFeatureContextValues(capabilities.resources),
+    now: options.now ?? (() => new Date()),
+    agents: capabilities.agents,
+    tools: capabilities.tools,
+    llm: capabilities.llm,
+    apis: capabilities.apis,
+    mcp: capabilities.mcp,
+    skills: capabilities.skills,
+    embeddings: capabilities.embeddings,
+    promptContext: capabilities.promptContext,
+    featureDefinitions: capabilities.featureDefinitions,
     collections: capabilities.collections,
     collection(definition) {
       const collection = capabilities.collections[definition.name];
@@ -508,7 +412,11 @@ function attachProcessorFeatures(
         execute: async () =>
           await execute(Object.freeze({
             collections: capabilities.collections,
-            collection(definition) {
+            collection(
+              definition: Parameters<
+                FeatureTransactionContext["collection"]
+              >[0],
+            ) {
               const collection = capabilities.collections[definition.name];
               if (!collection) {
                 throw new TypeError(
@@ -517,19 +425,79 @@ function attachProcessorFeatures(
               }
               return collection as never;
             },
-          })),
+            relations: Object.freeze({
+              upsert(
+                input: Parameters<
+                  FeatureTransactionContext["relations"]["upsert"]
+                >[0],
+              ) {
+                const tx = activeCollectionTransaction(
+                  options.collectionRuntime,
+                );
+                if (!tx) {
+                  throw new Error(
+                    "Feature transaction relation projection requires an active transaction.",
+                  );
+                }
+                return projectDomainRelation(
+                  tx,
+                  options.eventStore.tables,
+                  { ...input, namespace: capabilities.namespace },
+                );
+              },
+            }),
+          }) as FeatureTransactionContext),
       });
       return result.value;
     },
     content: Object.freeze({
       resolver: options.resolver,
+      stream: createContentStreamRuntime({
+        namespace: capabilities.namespace,
+        store: options.streamBodyStore,
+        async onOpen(output) {
+          const threadId = output.threadId ?? options.base.event.threadId;
+          if (!threadId) return;
+          const event = createEphemeralEvent({
+            type: "stream.output",
+            namespace: capabilities.namespace,
+            threadId,
+            streamId: output.id,
+            payload: {
+              streamId: output.id,
+              mediaType: output.mediaType,
+              role: output.role,
+              ...(output.participantId
+                ? { participantId: output.participantId }
+                : {}),
+            },
+            routing: (output.routing as EventRouting | undefined) ??
+              options.base.event.routing,
+            visibility: (output.visibility as EventVisibility | undefined) ??
+              options.base.event.visibility,
+            metadata: {
+              ...structuredClone(output.metadata),
+              ...capabilitySourceMetadata(options.base),
+              contentStream: true,
+              role: output.role,
+            },
+            causationId: options.base.event.durable
+              ? options.base.event.id
+              : options.base.event.causationId,
+            correlationId: output.correlationId ??
+              options.base.event.correlationId,
+          }, options.now);
+          if (options.publishEvent) await options.publishEvent(event);
+          else await options.eventHub.publish(event);
+        },
+      }),
+      bodies: options.streamBodyStore,
       materialize: capabilities.content.materialize,
       linkOwner: capabilities.content.linkOwner,
     }),
-    resources: capabilities.resources,
     features,
     feature,
-    events: Object.freeze({ list: capabilities.events.list }),
+    events: capabilities.events,
     deliveries: Object.freeze({
       list: (listOptions = {}) =>
         options.eventStore.listDeliveries({

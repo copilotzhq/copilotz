@@ -10,6 +10,13 @@ import type {
   SqlExecutor,
   SqlSession,
 } from "../events/index.ts";
+import type {
+  AssetManifestEntry,
+  AssetOrigin,
+  ContentRef,
+  ContentSequence,
+  DurableContentInput,
+} from "../content/index.ts";
 import {
   eventDataRef,
   readEventBody,
@@ -40,8 +47,41 @@ export type CreateCollectionRuntimeOptions = Readonly<{
   coordinator: EventCoordinator;
   session: SqlSession;
   eventStore: EventStore;
+  assets?: CollectionContentAssets;
   createId?: () => string;
   now?: () => Date;
+}>;
+
+export type CollectionContentAssets = Readonly<{
+  materialize(
+    context: EventMutationContext,
+    input: Readonly<{
+      namespace: string;
+      content: DurableContentInput;
+      origin?: AssetOrigin;
+    }>,
+  ): Promise<ContentSequence>;
+  materializeWithManifest?(
+    context: EventMutationContext,
+    input: Readonly<{
+      namespace: string;
+      content: DurableContentInput;
+      origin?: AssetOrigin;
+    }>,
+  ): Promise<
+    Readonly<{
+      content: ContentSequence;
+      assets: readonly AssetManifestEntry[];
+    }>
+  >;
+  syncOwner(
+    context: EventMutationContext,
+    input: Readonly<{
+      namespace: string;
+      ownerId: string;
+      content: ContentSequence;
+    }>,
+  ): Promise<void>;
 }>;
 
 export type BoundCollectionQuery<TSelect extends object> =
@@ -223,6 +263,18 @@ type PreparedWrite = Readonly<{
   record: CollectionRecord;
 }>;
 
+const emptyAssetManifest = Object.freeze([]) as readonly AssetManifestEntry[];
+
+function withAssetManifest<T extends CollectionEventBody<CollectionRecord>>(
+  body: T,
+  assets: readonly AssetManifestEntry[],
+): T {
+  return deepFreeze({
+    ...body,
+    assets: Object.freeze([...assets].map((entry) => structuredClone(entry))),
+  }) as T;
+}
+
 function requireText(value: string, name: string): string {
   const normalized = value.trim();
   if (!normalized) throw new TypeError(`${name} must be non-empty.`);
@@ -236,6 +288,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function deepFreeze<T>(value: T): T {
+  if (ArrayBuffer.isView(value)) return value;
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
     for (const child of Object.values(value as Record<string, unknown>)) {
       deepFreeze(child);
@@ -243,6 +296,116 @@ function deepFreeze<T>(value: T): T {
     Object.freeze(value);
   }
   return value;
+}
+
+function getPath(
+  value: Record<string, unknown>,
+  path: string,
+): unknown {
+  let current: unknown = value;
+  for (const part of path.split(".").filter(Boolean)) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
+function setPath(
+  value: Record<string, unknown>,
+  path: string,
+  replacement: unknown,
+): void {
+  const parts = path.split(".").filter(Boolean);
+  if (parts.length === 0) return;
+  let current = value;
+  for (const part of parts.slice(0, -1)) {
+    const child = current[part];
+    if (!child || typeof child !== "object" || Array.isArray(child)) {
+      current[part] = {};
+    }
+    current = current[part] as Record<string, unknown>;
+  }
+  current[parts[parts.length - 1]] = replacement;
+}
+
+function contentRefs(value: unknown): readonly ContentRef[] {
+  return Array.isArray(value) ? value as ContentRef[] : [];
+}
+
+function preparedContentRefs(value: unknown): ContentSequence | undefined {
+  if (
+    value && typeof value === "object" && !Array.isArray(value) &&
+    Array.isArray((value as { content?: unknown }).content) &&
+    Array.isArray((value as { assets?: unknown }).assets)
+  ) {
+    return Object.freeze(
+      [...(value as { content: ContentRef[] }).content].map((ref) =>
+        structuredClone(ref)
+      ),
+    );
+  }
+  return undefined;
+}
+
+function declaredContentRefs(
+  definition: CollectionDefinition,
+  record: Record<string, unknown>,
+): ContentSequence {
+  const refs = new Map<string, ContentRef>();
+  for (const field of definition.content?.fields ?? []) {
+    for (const ref of contentRefs(getPath(record, field))) {
+      refs.set(`${ref.assetId}\u0000${ref.role}\u0000${ref.mediaType}`, ref);
+    }
+  }
+  return Object.freeze([...refs.values()].map((ref) => structuredClone(ref)));
+}
+
+function previewDeclaredContent(
+  definition: CollectionDefinition,
+  body: CollectionEventBody<CollectionRecord>,
+): CollectionEventBody<CollectionRecord> {
+  const fields = definition.content?.fields ?? [];
+  if (fields.length === 0) return body;
+  const record = structuredClone(body.record) as Record<string, unknown>;
+  let changed = false;
+  for (const field of fields) {
+    const refs = preparedContentRefs(getPath(record, field));
+    if (!refs) continue;
+    setPath(record, field, refs);
+    changed = true;
+  }
+  if (!changed) return body;
+  const frozen = deepFreeze(record) as CollectionRecord;
+  if (body.operation === "create") {
+    return withAssetManifest({
+      operation: "create",
+      record: frozen,
+      assets: emptyAssetManifest,
+    }, body.assets);
+  }
+  if (body.operation === "delete") {
+    return withAssetManifest({
+      operation: "delete",
+      id: body.id,
+      record: frozen,
+      assets: emptyAssetManifest,
+    }, body.assets);
+  }
+  const set = { ...(body.set ?? {}) } as Record<string, unknown>;
+  for (const field of fields) {
+    const refs = preparedContentRefs(getPath(set, field));
+    if (refs) setPath(set, field, refs);
+  }
+  return withAssetManifest({
+    operation: "update",
+    id: body.id,
+    set,
+    unset: body.unset,
+    record: frozen,
+    assets: emptyAssetManifest,
+  }, body.assets);
 }
 
 function applyPatch(
@@ -298,6 +461,7 @@ function mutationFingerprint(
 ): unknown {
   if (!body || typeof body !== "object") return body;
   const clone = structuredClone(body) as Record<string, unknown>;
+  delete clone.assets;
   const record = clone.record;
   if (record && typeof record === "object" && !Array.isArray(record)) {
     for (const key of keys) {
@@ -498,6 +662,92 @@ export function createCollectionRuntime(
     const createdAtKey = timestamps.createdAt ?? "createdAt";
     const updatedAtKey = timestamps.updatedAt ?? "updatedAt";
 
+    const canonicalizeDeclaredContent = async (
+      context: EventMutationContext,
+      write: PreparedWrite,
+      namespace: string,
+    ): Promise<PreparedWrite> => {
+      const fields = definition.content?.fields ?? [];
+      if (fields.length === 0) return write;
+      if (!options.assets) {
+        throw new Error(
+          `Collection '${name}' declares content fields but no content asset repository is configured.`,
+        );
+      }
+      const record = structuredClone(write.record) as Record<string, unknown>;
+      const assets: AssetManifestEntry[] = [...write.body.assets];
+      let changed = false;
+      for (const field of fields) {
+        const value = getPath(record, field);
+        if (value === undefined) continue;
+        const input = {
+          namespace,
+          content: value as DurableContentInput,
+          origin: {
+            scope: {
+              type: "collection",
+              collection: name,
+              id: write.record.id,
+            },
+            producer: { type: name, id: write.record.id },
+            path: field,
+          },
+        } as const;
+        const resolved = options.assets.materializeWithManifest
+          ? await options.assets.materializeWithManifest(context, input)
+          : {
+            content: await options.assets.materialize(context, input),
+            assets: emptyAssetManifest,
+          };
+        const canonical = resolved.content;
+        assets.push(...resolved.assets);
+        setPath(record, field, canonical);
+        changed = true;
+      }
+      if (!changed && assets.length === write.body.assets.length) return write;
+      const frozen = deepFreeze(record) as CollectionRecord;
+      if (write.body.operation === "create") {
+        return Object.freeze({
+          record: frozen,
+          body: withAssetManifest(
+            { operation: "create", record: frozen, assets: emptyAssetManifest },
+            assets,
+          ),
+        });
+      }
+      if (write.body.operation === "delete") {
+        return Object.freeze({
+          record: frozen,
+          body: withAssetManifest(
+            {
+              operation: "delete",
+              id: write.body.id,
+              record: frozen,
+              assets: emptyAssetManifest,
+            },
+            assets,
+          ),
+        });
+      }
+      const set = { ...(write.body.set ?? {}) } as Record<string, unknown>;
+      for (const field of fields) {
+        if (getPath(set, field) !== undefined) {
+          setPath(set, field, getPath(frozen, field));
+        }
+      }
+      return Object.freeze({
+        record: frozen,
+        body: withAssetManifest({
+          operation: "update",
+          id: write.body.id,
+          set,
+          unset: write.body.unset,
+          record: frozen,
+          assets: emptyAssetManifest,
+        }, assets),
+      });
+    };
+
     const commit = async (
       eventType: string,
       subjectId: string,
@@ -542,15 +792,39 @@ export function createCollectionRuntime(
         draft,
         transaction: scope?.transaction,
         dispatch: scope ? false : true,
-        ...(matchData === undefined ? {} : { matchData }),
+        ...(matchData === undefined ? {} : {
+          matchData: previewDeclaredContent(
+            definition,
+            matchData as CollectionEventBody<CollectionRecord>,
+          ),
+        }),
         mutate: async (context) => {
-          const prepared = await prepare(context);
+          const prepared = await canonicalizeDeclaredContent(
+            context,
+            await prepare(context),
+            scoped.namespace,
+          );
+          validateCollectionRecord(
+            definition.schema as object,
+            prepared.record,
+            `${name} ${operation}`,
+          );
           await writeEventBody(context, {
             namespace: scoped.namespace,
             id: bodyId,
             json: prepared.body,
           });
           await projectCollectionEvent(context, definition, prepared.body);
+          if (
+            prepared.body.operation !== "delete" &&
+            definition.content?.fields.length && options.assets
+          ) {
+            await options.assets.syncOwner(context, {
+              namespace: scoped.namespace,
+              ownerId: prepared.record.id,
+              content: declaredContentRefs(definition, prepared.record),
+            });
+          }
           return prepared.record;
         },
         recoverDuplicate: async (event, context) => {
@@ -647,13 +921,12 @@ export function createCollectionRuntime(
           created: true,
         });
       }
-      validateCollectionRecord(
-        definition.schema as object,
-        record,
-        `${name} create`,
-      );
       const frozen = deepFreeze(structuredClone(record)) as CollectionRecord;
-      const body = { operation: "create" as const, record: frozen };
+      const body = withAssetManifest({
+        operation: "create" as const,
+        record: frozen,
+        assets: emptyAssetManifest,
+      }, emptyAssetManifest);
       return await commit(
         `${name}.created`,
         id,
@@ -706,11 +979,6 @@ export function createCollectionRuntime(
         [updatedAtKey]: next[updatedAtKey],
       };
       if (sameValue(comparable, next)) throw noopError(current);
-      validateCollectionRecord(
-        definition.schema as object,
-        next,
-        `${name} ${label}`,
-      );
       const frozen = deepFreeze(structuredClone(next)) as CollectionRecord;
       return {
         body: {
@@ -719,6 +987,7 @@ export function createCollectionRuntime(
           set: { ...(patch.set ?? {}) } as Partial<CollectionRecord>,
           unset: Object.freeze([...(patch.unset ?? [])]),
           record: frozen,
+          assets: emptyAssetManifest,
         },
         record: frozen,
       };
@@ -794,7 +1063,12 @@ export function createCollectionRuntime(
           if (!current) throw new Error(`Unknown ${name} '${id}'.`);
           definition.beforeDelete?.(current, { namespace });
           return {
-            body: { operation: "delete", id, record: current },
+            body: withAssetManifest({
+              operation: "delete",
+              id,
+              record: current,
+              assets: emptyAssetManifest,
+            }, emptyAssetManifest),
             record: current,
           };
         },
@@ -846,7 +1120,7 @@ export function createCollectionRuntime(
         if (!preview) throw new Error(`Unknown ${name} '${id}'.`);
         const matchData = applyCommand(preview).body;
         return await commit(
-          `${name}.updated`,
+          definitionCommand.event ?? `${name}.updated`,
           id,
           `mutate:${command}`,
           await existingEnvelope(id, namespace, writeOptions),

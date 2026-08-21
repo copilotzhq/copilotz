@@ -50,7 +50,11 @@ function contentPart(value: unknown): unknown {
 
 function webInput(value: unknown): unknown {
   const input = record(value);
-  if (!input || !("content" in input)) return value;
+  if (!input) return value;
+  if ("payload" in input) {
+    return Object.freeze({ ...input });
+  }
+  if (!("content" in input)) return value;
   const content = Array.isArray(input.content)
     ? Object.freeze(input.content.map(contentPart))
     : contentPart(input.content);
@@ -113,11 +117,8 @@ export function createWebChannelPlugin(
 ): CopilotzPlugin {
   const channel = createWebChannel(options);
   return definePlugin({
-    manifest: {
-      id: options.pluginId?.trim() || "@copilotz/channel-web",
-      version: options.version?.trim() || "3.0.0",
-      provides: { channels: [channel.id] },
-    },
-    resources: { channels: [channel] },
+    id: options.pluginId?.trim() || "@copilotz/channel-web",
+    version: options.version?.trim() || "3.0.0",
+    channels: [channel],
   });
 }

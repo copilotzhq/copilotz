@@ -2,10 +2,67 @@ import type {
   AttachmentOutput,
   AttachmentStreamOutput,
 } from "../attachments/index.ts";
-import type { ResolvedContent } from "../content/index.ts";
+import type { ApplicationSendInput } from "../application/index.ts";
+import { bytesToBase64, type ResolvedContent } from "../content/index.ts";
 import type { ConversationMessage } from "../domain/index.ts";
 import { loadChannelMessage } from "./identity.ts";
 import type { ChannelEgressContext } from "./types.ts";
+
+const MEDIA_TYPES = new Set(["image", "audio", "video", "file"]);
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function jsonSafeContentPart(value: unknown): unknown {
+  const part = record(value);
+  if (!part || typeof part.type !== "string" || !MEDIA_TYPES.has(part.type)) {
+    return value;
+  }
+  if (!(part.bytes instanceof Uint8Array)) return value;
+  const { bytes, ...rest } = part;
+  return Object.freeze({
+    ...rest,
+    dataBase64: bytesToBase64(bytes),
+  });
+}
+
+function jsonSafeContent(value: unknown): unknown {
+  return Array.isArray(value)
+    ? Object.freeze(value.map(jsonSafeContentPart))
+    : jsonSafeContentPart(value);
+}
+
+export function coreMessageEnvelope(
+  input: Readonly<{
+    thread: string;
+    participant: unknown;
+    recipientIds?: readonly string[];
+    content: unknown;
+    id?: string;
+    correlationId?: string;
+    deduplicationId?: string;
+    metadata?: Record<string, unknown>;
+  }>,
+): ApplicationSendInput {
+  return Object.freeze({
+    type: "copilotz.core.message.input",
+    payload: Object.freeze({
+      thread: input.thread,
+      participant: input.participant,
+      ...(input.recipientIds ? { recipientIds: input.recipientIds } : {}),
+      content: jsonSafeContent(input.content),
+      ...(input.id ? { id: input.id } : {}),
+      ...(input.metadata ? { metadata: input.metadata } : {}),
+    }),
+    ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+    ...(input.deduplicationId
+      ? { deduplicationId: input.deduplicationId }
+      : {}),
+  });
+}
 
 export function channelMetadata(
   metadata: Readonly<Record<string, unknown>>,

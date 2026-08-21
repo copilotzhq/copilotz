@@ -28,6 +28,7 @@ export type {
   LlmInvocation,
   LlmProviderResource,
   LlmResource,
+  LlmResourceContext,
   LlmResult,
   LlmSession,
   LlmSessionInput,
@@ -40,7 +41,10 @@ export {
   runSessionChain,
   sessionChainFromResources,
 } from "./generate-chain.ts";
-export type { GenerateChainTarget, SessionChainTarget } from "./generate-chain.ts";
+export type {
+  GenerateChainTarget,
+  SessionChainTarget,
+} from "./generate-chain.ts";
 export type {
   AgentTextPrompt,
   CreateAgentAskPluginOptions,

@@ -94,15 +94,10 @@ async function createFixture(
     },
   });
   const app = definePlugin({
-    manifest: {
-      id: "test.core-tools.resources",
-      version: "1.0.0",
-      provides: {
-        agents: [agent.id],
-        processors: [runner.id],
-      },
-    },
-    resources: { agents: [agent], processors: [runner] },
+    id: "test.core-tools.resources",
+    version: "1.0.0",
+    agents: [agent],
+    processors: [runner],
   });
   const registry = await createPluginRegistry({
     plugins: [
@@ -239,7 +234,9 @@ async function toolContext(
     userExternalId: "user-a",
     agent,
     agents: [agent],
-    tools: [...context.resources.list<WorkflowTool>("tools")],
+    tools: Object.values(context.tools).filter((value): value is WorkflowTool =>
+      !!value
+    ),
     collections: context.collections,
     emitOutput: () => Promise.resolve(),
     cancelled: false,
@@ -250,7 +247,9 @@ function tool(
   context: CopilotzProcessorContext,
   id: string,
 ): WorkflowTool {
-  return context.resources.require<WorkflowTool>("tools", id);
+  const found = context.tools[id];
+  if (!found) throw new Error(`Unknown tool '${id}'.`);
+  return found as WorkflowTool;
 }
 
 Deno.test("built-in tools exclude optional plugin-owned skill tools", () => {

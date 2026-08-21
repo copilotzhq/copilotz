@@ -4,10 +4,10 @@ import { defineProcessor } from "./processor.ts";
 import { matchesPartial, matchProcessor } from "./match.ts";
 
 const envelope = {
-  type: "stream.created",
+  type: "tool_execution.created",
   namespace: "tenant-a",
   threadId: "thread-a",
-  subject: { type: "stream", id: "stream-a" },
+  subject: { type: "tool_execution", id: "tool-execution-a" },
   payload: {
     dataRef: {
       eventBodyId: "body-a",
@@ -26,7 +26,7 @@ Deno.test("matcher entries are OR and fields in one entry are AND", () => {
     on: [
       { eventType: "message.created", routing: { senderId: "user-a" } },
       {
-        eventType: "stream.created",
+        eventType: "tool_execution.created",
         data: { record: { lane: "content", mediaType: "audio/*" } },
       },
     ],
@@ -81,7 +81,7 @@ Deno.test("matching ignores dataRef-only payloads unless match data is provided"
   const processor = defineProcessor({
     id: "core.body",
     on: [{
-      eventType: "stream.created",
+      eventType: "tool_execution.created",
       data: { record: { lane: "content" } },
     }],
     handle() {},

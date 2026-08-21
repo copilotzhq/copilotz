@@ -1,10 +1,6 @@
 import type { CopilotzProcessorContext } from "../engine/index.ts";
 import type { ContentInput, ContentRef } from "../content/index.ts";
-import type {
-  ContextContribution,
-  ContextPurpose,
-  ContextResource,
-} from "./types.ts";
+import type { ContextContribution, ContextPurpose } from "./types.ts";
 import { isContextResource } from "./resources.ts";
 import type { Agent } from "../resources/index.ts";
 import type {
@@ -44,8 +40,9 @@ export async function collectContextContributions(
   const collected: CollectedContextContribution[] = [];
   const ids = new Set<string>();
   for (
-    const resource of context.resources.list<ContextResource>("context")
-      .filter(isContextResource)
+    const resource of Object.values(context.promptContext).filter(
+      isContextResource,
+    )
   ) {
     if (!resource.purposes.includes(input.purpose)) continue;
     const value = await resource.contribute({

@@ -65,8 +65,7 @@ export async function createCopilotz(
       core: options.core,
       canonicalCore: options.canonicalCore,
       plugins: options.plugins,
-      resources: options.resources,
-      pluginResolver: options.pluginResolver,
+      context: options.context,
       toolCatalog: options.toolCatalog,
       assets: options.assets,
       persistence,
@@ -80,8 +79,7 @@ export async function createCopilotz(
       core: options.core,
       canonicalCore: options.canonicalCore,
       plugins: options.plugins,
-      resources: options.resources,
-      pluginResolver: options.pluginResolver,
+      context: options.context,
       toolCatalog: options.toolCatalog,
       assets: options.assets,
       persistence,
@@ -148,18 +146,11 @@ export async function createCopilotz(
       await persistence.recovery?.admit();
       return await gateway!.databaseScope(databaseSchema);
     },
-    async connect(input: Parameters<CopilotzApplication["connect"]>[0]) {
+    async send(input: Parameters<CopilotzApplication["send"]>[0]) {
       await persistence.recovery?.admit();
-      return await gateway!.connect(input);
+      return await gateway!.send(input);
     },
-    async run(input: Parameters<CopilotzApplication["run"]>[0]) {
-      await persistence.recovery?.admit();
-      return await gateway!.run(input);
-    },
-    async goal(input: Parameters<CopilotzApplication["goal"]>[0]) {
-      await persistence.recovery?.admit();
-      return await gateway!.goal(input);
-    },
+    close: shutdown,
     shutdown,
   });
 }

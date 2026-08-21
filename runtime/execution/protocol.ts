@@ -210,12 +210,6 @@ function workSourceKey(metadata: JsonRecord): string | undefined {
     return `delivery:${metadata.deliveryId}`;
   }
   if (
-    metadata.schema === "copilotz.stream.dispatch.v1" &&
-    typeof metadata.streamId === "string"
-  ) {
-    return `stream:${metadata.streamId}`;
-  }
-  if (
     metadata.schema === "copilotz.live.dispatch.v1" &&
     typeof metadata.dispatchAttemptId === "string"
   ) {

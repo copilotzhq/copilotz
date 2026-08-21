@@ -1,5 +1,4 @@
 export { createMcpWorkflowToolGenerator } from "./mcp-tools.ts";
-export { createModulePluginResolver } from "./module-plugin-resolver.ts";
 export {
   createOpenApiWorkflowToolGenerator,
   createServerWorkflowToolCatalog,
@@ -26,7 +25,3 @@ export type {
   McpRuntimeConnection,
   McpToolDescriptor,
 } from "./types.ts";
-export type {
-  CreateModulePluginResolverOptions,
-  ModuleImporter,
-} from "./module-plugin-resolver.ts";

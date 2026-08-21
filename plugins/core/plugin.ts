@@ -15,26 +15,25 @@ import {
   llmAttemptCollection,
   messageCollection,
   participantCollection,
-  streamCollection,
   threadCollection,
   toolExecutionCollection,
 } from "./resources/collections/index.ts";
 import {
-  askTool,
   completeAskProcessor,
-  failAskProcessor,
-} from "./resources/processors/ask.ts";
-import {
   executeTextAttemptProcessor,
   executeToolProcessor,
+  failAskProcessor,
+  messageInputProcessor,
   messageRouterProcessor,
   projectTextResultProcessor,
   projectToolResultProcessor,
-} from "./resources/processors/text.ts";
+} from "./resources/processors/index.ts";
+import { askTool } from "./resources/tools/ask.ts";
 
 const processors: readonly Processor<CopilotzProcessorContext>[] = Object
   .freeze([
     messageRouterProcessor,
+    messageInputProcessor,
     executeTextAttemptProcessor,
     executeToolProcessor,
     projectTextResultProcessor,
@@ -49,7 +48,6 @@ const collections = Object.freeze([
   messageCollection,
   llmAttemptCollection,
   toolExecutionCollection,
-  streamCollection,
 ]);
 
 const features = Object.freeze([
@@ -62,28 +60,20 @@ const features = Object.freeze([
 
 /** Collections without text/ask processors. Tests that must not run core routing. */
 export const coreCollectionsPlugin: CopilotzPlugin = definePlugin({
-  manifest: {
-    id: "@copilotz/core-collections",
-    version: corePluginManifest.version,
-    provides: {
-      collections: corePluginManifest.provides.collections,
-      features: corePluginManifest.provides.features,
-    },
-  },
-  resources: {
-    collections: [...collections],
-    features: [...features],
-  },
+  id: "@copilotz/core-collections",
+  version: corePluginManifest.version,
+  collections: [...collections],
+  processors: [messageInputProcessor],
+  features: [...features],
 });
 
 /** Static core plugin: collections, text/ask processors, llm adapters, ask tool, thread-message feature. */
 export const corePlugin: CopilotzPlugin = definePlugin({
-  manifest: corePluginManifest,
-  resources: {
-    collections: [...collections],
-    processors,
-    llm: [...coreLlmResources],
-    tools: [askTool],
-    features: [...features],
-  },
+  id: corePluginManifest.id,
+  version: corePluginManifest.version,
+  collections: [...collections],
+  processors,
+  llm: [...coreLlmResources],
+  tools: [askTool],
+  features: [...features],
 });

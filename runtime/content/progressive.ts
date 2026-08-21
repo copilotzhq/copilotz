@@ -1,4 +1,5 @@
 import type {
+  AppendResult,
   BodyHead,
   BodyStore,
   MutableBodyHead,
@@ -11,6 +12,9 @@ const DEFAULT_MAX_BUFFERED_BYTES = 1_048_576;
 export type ProgressiveBodyWriter = Readonly<{
   bodyId: string;
   offset(): number;
+  append(input: { bytes: Uint8Array; appendId: string }): Promise<
+    AppendResult
+  >;
   write(chunk: Uint8Array): Promise<void>;
   finalize(): Promise<BodyHead>;
   abandon(): Promise<void>;
@@ -141,10 +145,12 @@ export async function createProgressiveBodyWriter(
   });
   const initialChunks = writer.byteLength > 0
     ? [
-      await readStreamBytes(await store.follow({
-        bodyId,
-        offset: writer.discarded,
-      })),
+      await readStreamBytes(
+        await store.follow({
+          bodyId,
+          offset: writer.discarded,
+        }),
+      ),
     ]
     : [];
   const live: LiveBody = {
@@ -188,9 +194,18 @@ export async function createProgressiveBodyWriter(
   return Object.freeze({
     bodyId,
     offset: () => live.byteLength,
-    async write(chunk) {
+    async append(input) {
       requireOpen();
-      if (chunk.byteLength === 0) return;
+      const appendId = input.appendId.trim();
+      if (!appendId) throw new TypeError("Progressive appendId is required.");
+      const chunk = input.bytes;
+      if (chunk.byteLength === 0) {
+        return Object.freeze({
+          startOffset: live.byteLength,
+          endOffset: live.byteLength,
+          protection: writer.protection,
+        });
+      }
       while (
         store.kind === "memory" &&
         live.followers.size > 0 &&
@@ -204,7 +219,7 @@ export async function createProgressiveBodyWriter(
       const result = await store.append({
         writer,
         expectedOffset: previousOffset,
-        appendId: `offset:${previousOffset}`,
+        appendId,
         bytes: chunk,
       });
       if (result.endOffset > previousOffset) {
@@ -217,6 +232,13 @@ export async function createProgressiveBodyWriter(
         protection: result.protection,
       };
       notify(live);
+      return result;
+    },
+    async write(chunk) {
+      await this.append({
+        bytes: chunk,
+        appendId: `offset:${live.byteLength}`,
+      });
     },
     async finalize() {
       requireOpen();
@@ -339,10 +361,12 @@ function followProgressiveStore(
           const end = staged.byteLength;
           try {
             const startOffset = cursor;
-            const bytes = await readStreamBytes(await store.follow({
-              bodyId,
-              offset: startOffset,
-            }));
+            const bytes = await readStreamBytes(
+              await store.follow({
+                bodyId,
+                offset: startOffset,
+              }),
+            );
             cursor = end;
             const next = bytes.subarray(0, end - startOffset);
             if (next.byteLength > 0) controller.enqueue(next);

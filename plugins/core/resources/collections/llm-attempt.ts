@@ -1,7 +1,7 @@
 import {
+  type CollectionDefinition,
   defineCollection,
   relation,
-  type CollectionDefinition,
 } from "@copilotz/copilotz/collections";
 import {
   contentSequenceSchema,
@@ -98,6 +98,7 @@ export const llmAttemptCollection: CollectionDefinition = defineCollection({
     content: [],
     metadata: {},
   },
+  content: { fields: ["content"] },
   identity: {
     sourceType: "llm_attempt",
     sourceField: "id",

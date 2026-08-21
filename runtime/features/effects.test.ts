@@ -174,26 +174,21 @@ Deno.test("feature context validates optional schemas and runs explicit transact
     handle: () => undefined,
   });
   const searchTool = Object.freeze({
-    id: "search",
-    key: "search",
+    id: "provider-search",
+    key: "provider-search",
     name: "Search",
     description: "Search test notes.",
   });
+  const customAdapter = Object.freeze({ id: "adapter-a" });
   const registry = await createPluginRegistry({
     plugins: [definePlugin({
-      manifest: {
-        id: "test.feature-context",
-        version: "1.0.0",
-        provides: {
-          processors: [processor.id],
-          collections: [noteCollection.name],
-          tools: [searchTool.key],
-        },
-      },
-      resources: {
-        processors: [processor],
-        collections: [noteCollection],
-        tools: [searchTool],
+      id: "test.feature-context",
+      version: "1.0.0",
+      processors: [processor],
+      collections: [noteCollection],
+      context: {
+        tools: { search: searchTool },
+        customAdapters: { primary: customAdapter },
       },
     })],
   });
@@ -256,6 +251,12 @@ Deno.test("feature context validates optional schemas and runs explicit transact
       signal(_input, context: FeatureExecuteContext) {
         seen.signal = context.signal;
         assertEquals(context.tools.search, searchTool);
+        assertEquals(
+          ((context as unknown as {
+            customAdapters: Record<string, unknown>;
+          }).customAdapters).primary,
+          customAdapter,
+        );
         assertEquals("resource" in context, false);
         return { ok: true };
       },

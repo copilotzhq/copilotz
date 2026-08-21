@@ -1,5 +1,8 @@
-import { defineCollection, relation } from "../domain/index.ts";
-import type { CollectionDefinition } from "../domain/index.ts";
+import {
+  type CollectionDefinition,
+  defineCollection,
+  relation,
+} from "@copilotz/copilotz/collections";
 
 const MEMORY_EDGE = Object.freeze({
   usesSpace: "uses_memory_space",
@@ -57,6 +60,7 @@ const memorySpaceAccessSchema = {
   additionalProperties: false,
   properties: {
     id: { type: "string" },
+    namespace: { type: "string" },
     threadId: { type: "string" },
     memorySpaceId: { type: "string" },
     access: {
@@ -120,14 +124,12 @@ const longTermMemorySchema = {
     agentId: { type: "string" },
     sourceStartMessageId: { type: "string" },
     sourceEndMessageId: { type: "string" },
-    // v3 writes canonical ContentRef arrays. String remains accepted only so
-    // isolated v1 upgrades and legacy readers can inspect old checkpoints.
-    content: { type: ["array", "string", "null"] },
+    content: { type: "array" },
     embedding: { type: ["array", "null"] },
     contentHash: { type: ["string", "null"] },
     tokenEstimate: { type: ["number", "null"] },
     error: { type: ["object", "null"] },
-    contextSnapshotContent: { type: ["array", "null"] },
+    contextSnapshotContent: { type: "array" },
     contextSnapshot: { type: ["array", "null"] },
     metadata: { type: ["object", "null"] },
   },
@@ -175,6 +177,7 @@ const memoryRecordSchema = {
   additionalProperties: false,
   properties: {
     id: { type: "string" },
+    namespace: { type: "string" },
     memorySpaceId: { type: "string" },
     consolidationId: { type: "string" },
     createdByAgentId: { type: "string" },
@@ -213,13 +216,15 @@ const memoryRecordSchema = {
     },
     kind: { type: "string" },
     summary: { type: "string" },
-    content: { type: ["array", "null"] },
+    content: { type: "array" },
     temporal: { type: "object" },
     epistemic: { type: ["object", "null"] },
     provenance: { type: "object" },
     data: { type: "object" },
     embedding: { type: ["array", "null"] },
     metadata: { type: ["object", "null"] },
+    createdAt: { type: "string" },
+    updatedAt: { type: "string" },
   },
   required: [
     "memorySpaceId",

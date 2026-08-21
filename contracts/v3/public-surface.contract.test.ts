@@ -84,9 +84,9 @@ Deno.test("v3 package subpaths expose cohesive factories", () => {
   ]);
   assertEquals("createCopilotzApplication" in application, false);
   assertFunctions(adapters, [
-    "createModulePluginResolver",
     "createServerWorkflowToolCatalog",
   ]);
+  assertEquals("createModulePluginResolver" in adapters, false);
   assertEquals("createManagedOminipgSession" in adapters, false);
   assertEquals("createOminipgSqlSession" in adapters, false);
   assertEquals("connectMcp" in adapters, false);

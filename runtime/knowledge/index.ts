@@ -2,11 +2,12 @@ export {
   KNOWLEDGE_CHUNK_COLLECTION,
   KNOWLEDGE_DERIVED_FROM_EDGE,
   KNOWLEDGE_DOCUMENT_COLLECTION,
+  KNOWLEDGE_EVENT_TYPES,
   KNOWLEDGE_HAS_CHUNK_EDGE,
   knowledgeChunkCollection,
   knowledgeDocumentCollection,
 } from "./collections.ts";
-export { createKnowledgeRepository } from "./repository.ts";
+export { KNOWLEDGE_FEATURE_ID, knowledgeFeature } from "./features.ts";
 export { createKnowledgePlugin } from "./plugin.ts";
 export {
   defineKnowledgeEmbeddingProvider,
@@ -26,7 +27,6 @@ export type {
   CompleteKnowledgeDocumentInput,
   CreateKnowledgeDocumentInput,
   CreateKnowledgePluginOptions,
-  CreateKnowledgeRepositoryOptions,
   FailKnowledgeDocumentInput,
   KnowledgeChunk,
   KnowledgeChunkingConfig,
@@ -38,8 +38,6 @@ export type {
   KnowledgeEmbeddingProviderResource,
   KnowledgeEmbeddingRequest,
   KnowledgeEmbeddingResponse,
-  KnowledgeMutationOptions,
-  KnowledgeRepository,
   KnowledgeSearchInput,
   KnowledgeSearchResult,
   KnowledgeSearchScope,
@@ -47,5 +45,4 @@ export type {
   KnowledgeTextExtractor,
   LoadedKnowledgeSource,
   MarkKnowledgeDocumentDuplicateInput,
-  ScopedKnowledge,
 } from "./types.ts";

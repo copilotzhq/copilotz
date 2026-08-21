@@ -3,6 +3,7 @@ import { type CopilotzPlugin, definePlugin } from "../../plugins/index.ts";
 import {
   channelMetadata,
   collectByteStream,
+  coreMessageEnvelope,
   isAttachmentStreamOutput,
   outboundText,
   requestHeader,
@@ -168,7 +169,14 @@ async function messageEnvelope(
       ...(name ? { name } : {}),
       metadata: { provider: "telegram", telegram: structuredClone(user) },
     },
-    input: {
+    input: coreMessageEnvelope({
+      thread: chatId,
+      participant: {
+        externalId: participantId,
+        participantType: "human" as const,
+        ...(name ? { name } : {}),
+        metadata: { provider: "telegram", telegram: structuredClone(user) },
+      },
       content: content.length === 1 && text && !descriptor
         ? text
         : Object.freeze(content),
@@ -179,7 +187,7 @@ async function messageEnvelope(
         provider: "telegram",
         providerMessageId,
       },
-    },
+    }),
   });
 }
 
@@ -218,7 +226,17 @@ function callbackEnvelope(
         telegram: structuredClone(callback.from),
       },
     },
-    input: {
+    input: coreMessageEnvelope({
+      thread: chatId,
+      participant: {
+        externalId: participantId,
+        participantType: "human" as const,
+        ...(name ? { name } : {}),
+        metadata: {
+          provider: "telegram",
+          telegram: structuredClone(callback.from),
+        },
+      },
       content: data,
       id,
       correlationId: id,
@@ -227,7 +245,7 @@ function callbackEnvelope(
         provider: "telegram",
         callbackQueryId: callback.id,
       },
-    },
+    }),
   });
 }
 
@@ -421,11 +439,8 @@ export function createTelegramChannelPlugin(
 ): CopilotzPlugin {
   const channel = createTelegramChannel(options);
   return definePlugin({
-    manifest: {
-      id: options.pluginId?.trim() || "@copilotz/channel-telegram",
-      version: options.version?.trim() || "3.0.0",
-      provides: { channels: [channel.id] },
-    },
-    resources: { channels: [channel] },
+    id: options.pluginId?.trim() || "@copilotz/channel-telegram",
+    version: options.version?.trim() || "3.0.0",
+    channels: [channel],
   });
 }

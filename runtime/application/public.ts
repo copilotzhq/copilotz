@@ -3,28 +3,27 @@ export {
   createCopilotzGateway,
   createCopilotzWorker,
 } from "../../create-copilotz.ts";
+export type {
+  CreateCopilotzGatewayOptions,
+  CreateCopilotzOptions,
+  CreateCopilotzWorkerOptions,
+} from "../../create-copilotz.ts";
 export { createCopilotzCorePlugins } from "./core-plugins.ts";
 export type {
-  ApplicationConnectInput,
-  ApplicationRunInput,
+  ApplicationSendHandle,
+  ApplicationSendInput,
   CopilotzApplication,
   CopilotzApplicationConfig,
+  CopilotzApplicationObservation,
   CopilotzComposition,
   CopilotzCorePluginOptions,
+  CopilotzInputEnvelope,
   CorePluginSetting,
   CreateCopilotzCorePlugins,
 } from "./types.ts";
-export type {
-  CopilotzEmbeddedApplication,
-  CreateCopilotzOptions,
-} from "./copilotz.ts";
-export type {
-  CopilotzGateway,
-  CopilotzGatewayHttpOptions,
-  CreateCopilotzGatewayOptions,
-} from "./gateway.ts";
-export type { CopilotzWorker, CreateCopilotzWorkerOptions } from "./worker.ts";
-export type { GoalHandle, GoalInput } from "../goals/index.ts";
+export type { CopilotzEmbeddedApplication } from "./copilotz.ts";
+export type { CopilotzGateway, CopilotzGatewayHttpOptions } from "./gateway.ts";
+export type { CopilotzWorker } from "./worker.ts";
 export type {
   CopilotzDatabase,
   CopilotzDatabaseConnectContext,

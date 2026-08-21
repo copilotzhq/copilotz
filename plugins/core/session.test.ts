@@ -1,4 +1,4 @@
-import { assertEquals, assertExists } from "@std/assert";
+import { assertEquals } from "@std/assert";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
   projectLlmAttempts,
@@ -21,10 +21,6 @@ import {
   createCopilotzEngine,
 } from "../../runtime/engine/index.ts";
 import {
-  COPILOTZ_STREAM_WORKLOAD,
-  jsonStreamDispatchMetadata,
-} from "../../runtime/streams/index.ts";
-import {
   createPluginRegistry,
   definePlugin,
 } from "../../runtime/plugins/index.ts";
@@ -38,8 +34,6 @@ import type { ChatResponse } from "../../runtime/llm/types.ts";
 
 const TEST_SCHEMA = "copilotz_session_workflow";
 const NAMESPACE = "tenant-a";
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
 
 const echoAgent: Agent = {
   id: "echo",
@@ -80,18 +74,10 @@ async function createFixture(session: LlmSession): Promise<Fixture> {
     session,
   });
   const app = definePlugin({
-    manifest: {
-      id: "test.session-workflow.resources",
-      version: "1.0.0",
-      provides: {
-        agents: [echoAgent.id],
-        llm: [provider.id],
-      },
-    },
-    resources: {
-      agents: [echoAgent],
-      llm: [provider],
-    },
+    id: "test.session-workflow.resources",
+    version: "1.0.0",
+    agents: [echoAgent],
+    llm: [provider],
   });
   const registry = await createPluginRegistry({
     plugins: [corePlugin, app],
@@ -194,85 +180,6 @@ async function createUserMessage(
   });
 }
 
-async function openTranscriptWrite(fixture: Fixture): Promise<
-  Readonly<{
-    streamId: string;
-    write(text: string): Promise<void>;
-    close(): Promise<void>;
-  }>
-> {
-  const stream = new TransformStream<Uint8Array, Uint8Array>();
-  const writer = stream.writable.getWriter();
-  const work = await fixture.engine.execution.dispatchWork({
-    workload: COPILOTZ_STREAM_WORKLOAD,
-    metadata: jsonStreamDispatchMetadata({
-      schema: "copilotz.stream.dispatch.v1",
-      databaseSchema: TEST_SCHEMA,
-      action: "write",
-      namespace: NAMESPACE,
-      threadId: "thread-a",
-      lane: "transcript",
-      mediaType: "text/plain",
-      participantId: "user-a",
-    }),
-    body: stream.readable,
-  });
-  const metadata = await work.metadata;
-  const streamId = String(metadata.streamId ?? "");
-  if (!streamId) {
-    throw new Error("Transcript write did not return a stream id.");
-  }
-  const drain = work.output.getReader();
-  void (async () => {
-    while (true) {
-      const next = await drain.read();
-      if (next.done) break;
-    }
-  })().catch(() => undefined);
-  return Object.freeze({
-    streamId,
-    write(text: string) {
-      return writer.write(encoder.encode(text));
-    },
-    async close() {
-      await writer.close();
-    },
-  });
-}
-
-async function followStream(
-  fixture: Fixture,
-  streamId: string,
-): Promise<string> {
-  const work = await fixture.engine.execution.dispatchWork({
-    workload: COPILOTZ_STREAM_WORKLOAD,
-    metadata: jsonStreamDispatchMetadata({
-      schema: "copilotz.stream.dispatch.v1",
-      databaseSchema: TEST_SCHEMA,
-      action: "follow",
-      namespace: NAMESPACE,
-      threadId: "thread-a",
-      streamId,
-    }),
-  });
-  const reader = work.output.getReader();
-  const chunks: Uint8Array[] = [];
-  let byteLength = 0;
-  while (true) {
-    const next = await reader.read();
-    if (next.done) break;
-    chunks.push(next.value);
-    byteLength += next.value.byteLength;
-  }
-  const bytes = new Uint8Array(byteLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return decoder.decode(bytes);
-}
-
 async function waitForRun(
   fixture: Fixture,
   rootEventId: string,
@@ -320,8 +227,6 @@ async function waitForRun(
     NAMESPACE,
     "thread-a",
   );
-  const streams = await boundCollection(fixture.engine, "stream").query
-    .byThreadId(NAMESPACE, { threadId: "thread-a" });
   const attemptRecords = await Promise.all(
     attempts.map((attempt) =>
       boundCollection(fixture.engine, "llm_attempt").get(attempt.id, NAMESPACE)
@@ -353,12 +258,6 @@ async function waitForRun(
         })),
         attemptRecords,
         errorDetails,
-        streams: streams.map((record) => ({
-          id: record.id,
-          lane: record.lane,
-          state: record.state,
-          mediaType: record.mediaType,
-        })),
         deliveries,
       })
     }`,
@@ -376,104 +275,6 @@ async function waitUntil(
   }
   throw new Error(`Timed out waiting for ${label}`);
 }
-
-Deno.test("session writes content and audio streams from frames and transcript ingress", async () => {
-  let reading!: () => void;
-  const startedReading = new Promise<void>((resolve) => {
-    reading = resolve;
-  });
-  let received!: () => void;
-  const receivedBytes = new Promise<void>((resolve) => {
-    received = resolve;
-  });
-  const fixture = await createFixture(
-    sessionFromHandler(async (input, emit) => {
-      const chunks: string[] = [];
-      const reader = input.input?.getReader();
-      reading();
-      if (reader) {
-        while (true) {
-          const next = await reader.read();
-          if (next.done) break;
-          chunks.push(decoder.decode(next.value));
-          if (chunks.length === 1) received();
-        }
-      }
-      const heard = chunks.join("");
-      emit({ type: "text", payload: `echo:${heard}` });
-      emit({
-        type: "audio",
-        payload: { bytes: encoder.encode("pcm"), mediaType: "audio/pcm" },
-      });
-      emit({
-        type: "tool_call",
-        payload: { tool: "noop", args: { heard } },
-      });
-      emit({ type: "reasoning", payload: "thinking" });
-      return sessionResponse(input, `echo:${heard}`);
-    }),
-  );
-  try {
-    await createThread(fixture);
-    const transcript = await openTranscriptWrite(fixture);
-    const root = await createUserMessage(
-      fixture,
-      "Speak with me.",
-      "message:user",
-    );
-    await startedReading;
-    await transcript.write("hello session");
-    await receivedBytes;
-    await transcript.close();
-    await waitForRun(fixture, root.event.id, 2);
-
-    const records = await boundCollection(fixture.engine, "stream").query
-      .byThreadId(NAMESPACE, { threadId: "thread-a" });
-    const created = records.map((record) => ({
-      id: record.id,
-      lane: String(record.lane),
-      mediaType: String(record.mediaType),
-    }));
-    const content = created.find((item) =>
-      item.lane === "content" && item.mediaType === "text/plain"
-    );
-    const audio = created.find((item) =>
-      item.lane === "content" && item.mediaType === "audio/pcm"
-    );
-    const reasoning = created.find((item) => item.lane === "reasoning");
-    const toolCall = created.find((item) => item.lane === "tool_call");
-    assertExists(content);
-    assertExists(audio);
-    assertExists(reasoning);
-    assertExists(toolCall);
-    assertEquals(await followStream(fixture, content.id), "echo:hello session");
-    assertEquals(await followStream(fixture, audio.id), "pcm");
-    assertEquals(await followStream(fixture, reasoning.id), "thinking");
-    assertEquals(
-      JSON.parse((await followStream(fixture, toolCall.id)).trim()),
-      { tool: "noop", args: { heard: "hello session" } },
-    );
-    const durable = await fixture.engine.events.list({
-      namespace: NAMESPACE,
-      threadId: "thread-a",
-      limit: 1_000,
-    });
-    assertEquals(
-      durable.some((event) =>
-        [
-          "text.delta",
-          "reasoning.delta",
-          "tool_call.delta",
-          "tool_output.delta",
-        ]
-          .includes(event.type)
-      ),
-      false,
-    );
-  } finally {
-    await fixture.close();
-  }
-});
 
 Deno.test("session routing does not start a second attempt while one is running", async () => {
   let release!: () => void;

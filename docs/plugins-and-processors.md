@@ -1,6 +1,6 @@
 # Plugins and Processors
 
-Plugins package logical resources and declare them in a validated manifest.
+Plugins package logical resources and declare them once through `definePlugin`.
 
 ```ts
 import {
@@ -25,35 +25,33 @@ const audit = defineProcessor<CopilotzProcessorContext>({
 });
 
 export default definePlugin({
-  manifest: {
-    id: "@acme/audit",
-    version: "1.0.0",
-    provides: { processors: [audit.id] },
-  },
-  resources: { processors: [audit] },
+  id: "@acme/audit",
+  version: "1.0.0",
+  processors: [audit],
 });
 ```
 
 ## Loading
 
-Inline plugins need no loader. String/package/path sources require an injected
-`PluginResolver`; the core never reads a directory or assumes Deno/Node package
-resolution.
+Plugins are ordinary imported values. Package/path resolution belongs to the
+embedding application's module system; Copilotz composition receives concrete
+plugin objects only.
 
 ```ts
+import auditPlugin from "./plugins/audit.ts";
+import supportPlugin from "jsr:@acme/copilotz-plugin";
+
 plugins: [
-  inlinePlugin,
-  "jsr:@acme/copilotz-plugin@^2",
-  {
-    source: "./plugins/local.ts",
-    imports: ["agents.support", "tools.lookup"],
-    presets: ["production"],
-  },
+  auditPlugin,
+  supportPlugin,
 ];
 ```
 
-`imports` selects stable resources. `presets` expands selectors declared by the
-plugin manifest. A plugin manifest must exactly match the resources it exports.
+Composition does not support string sources, named imports, presets, or module
+loading. A plugin can depend on other plugins with
+`definePlugin({ plugins:
+[...] })`, and the registry composes those dependencies
+before the declaring plugin.
 
 Installing a tool, agent, or skill resource does not grant it to every agent.
 Agents use explicit `capabilities`; see
@@ -77,9 +75,10 @@ Agents use explicit `capabilities`; see
 - Collection `beforeCreate`, `beforeUpdate`, and `beforeDelete` hooks may
   validate/transform the atomic mutation. Reactions after commit are processors.
 
-Processor contexts expose scoped content, conversation, collections, relations,
-LLM attempts, tool executions, events, resources, schedules, and knowledge—not
-raw SQL or graph mutation primitives.
+Processor contexts expose scoped content, collections, events, schedules,
+knowledge, and the composed property context maps such as `context.tools` and
+`context.agents`—not raw SQL, graph mutation primitives, or a generic resource
+registry.
 
 Detailed contracts: [plugins/resources](v3/plugins-and-resources.md) and
 [event-native collections](v3/event-native-collections.md). Skills use the same

@@ -92,10 +92,7 @@ async function createFixture(): Promise<Fixture> {
         "collectionRuntime" in context;
       assertEquals(context.namespace, "tenant-a");
       assertEquals(context.event.id, event.id);
-      assertEquals(
-        context.resources.require<{ key: string }>("tools", "echo").key,
-        "echo",
-      );
+      assertEquals(context.tools.echo?.key, "echo");
 
       const message = await context.collections.message.get({
         id: event.subject!.id,
@@ -145,20 +142,11 @@ async function createFixture(): Promise<Fixture> {
     plugins: [
       coreCollectionsPlugin,
       definePlugin({
-        manifest: {
-          id: "test.engine",
-          version: "1.0.0",
-          provides: {
-            processors: [processor.id],
-            collections: [auditCollection.name],
-            tools: [echoTool.key],
-          },
-        },
-        resources: {
-          processors: [processor],
-          collections: [auditCollection],
-          tools: [echoTool],
-        },
+        id: "test.engine",
+        version: "1.0.0",
+        processors: [processor],
+        collections: [auditCollection],
+        tools: [echoTool],
       }),
     ],
   });
@@ -201,7 +189,14 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     );
     assertEquals(
       tables.rows.map((row) => row.table_name),
-      ["edges", "event_bodies", "event_deliveries", "events", "nodes"],
+      [
+        "body_references",
+        "edges",
+        "event_bodies",
+        "event_deliveries",
+        "events",
+        "nodes",
+      ],
     );
 
     const namespace = "tenant-a";
@@ -396,18 +391,10 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
     plugins: [
       coreCollectionsPlugin,
       definePlugin({
-        manifest: {
-          id: "test.engine.scopes",
-          version: "1.0.0",
-          provides: {
-            collections: [auditCollection.name],
-            processors: [processor.id],
-          },
-        },
-        resources: {
-          collections: [auditCollection],
-          processors: [processor],
-        },
+        id: "test.engine.scopes",
+        version: "1.0.0",
+        collections: [auditCollection],
+        processors: [processor],
       }),
     ],
   });

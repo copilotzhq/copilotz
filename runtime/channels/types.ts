@@ -1,11 +1,10 @@
 import type { Agent } from "../resources/index.ts";
-import type { CopilotzApplication } from "../application/index.ts";
 import type {
-  AttachmentOutput,
-  AttachmentSendInput,
-  AttachmentSendResult,
-  ThreadAttachment,
-} from "../attachments/index.ts";
+  ApplicationSendHandle,
+  ApplicationSendInput,
+  CopilotzApplication,
+} from "../application/index.ts";
+import type { AttachmentOutput } from "../attachments/index.ts";
 import type {
   ConversationThread,
   Participant,
@@ -43,7 +42,7 @@ export type ChannelIngressEnvelope = Readonly<{
   thread: string | ConversationThread | ChannelThreadInput;
   participant: ChannelParticipantRef;
   recipients?: readonly ChannelParticipantRef[];
-  input: AttachmentSendInput;
+  input: ApplicationSendInput;
 }>;
 
 export type ChannelIngressResult = Readonly<{
@@ -66,8 +65,7 @@ export type ChannelIngressAdapter = Readonly<{
 }>;
 
 export type ChannelExecution = Readonly<{
-  attachment: ThreadAttachment;
-  handle: AttachmentSendResult;
+  handle: ApplicationSendHandle;
   thread: ConversationThread;
   participant: Participant;
   recipientIds: readonly string[];

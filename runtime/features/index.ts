@@ -29,7 +29,6 @@ export type {
   FeatureOperationOptions,
   FeatureRequest,
   FeatureResource,
-  FeatureResources,
   FeatureResponse,
   FeatureTransactionContext,
   FeatureTransactionOptions,

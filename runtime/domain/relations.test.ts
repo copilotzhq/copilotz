@@ -22,12 +22,9 @@ Deno.test("typed relations create, query, and delete direct graph edges", async 
   const db = await createTestDatabase({ url: ":memory:" });
   const registry = await createPluginRegistry({
     plugins: [definePlugin({
-      manifest: {
-        id: "test.typed-relations",
-        version: "1.0.0",
-        provides: { collections: [relationNodeCollection.name] },
-      },
-      resources: { collections: [relationNodeCollection] },
+      id: "test.typed-relations",
+      version: "1.0.0",
+      collections: [relationNodeCollection],
     })],
   });
   const engine = await createCopilotzEngine({

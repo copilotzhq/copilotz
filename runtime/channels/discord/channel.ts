@@ -3,6 +3,7 @@ import { type CopilotzPlugin, definePlugin } from "../../plugins/index.ts";
 import {
   channelMetadata,
   collectByteStream,
+  coreMessageEnvelope,
   isAttachmentStreamOutput,
   outboundText,
   requestHeader,
@@ -135,7 +136,14 @@ async function interactionEnvelope(
       ...(name ? { name } : {}),
       metadata: { provider: "discord", discord: structuredClone(user) },
     },
-    input: {
+    input: coreMessageEnvelope({
+      thread: threadId,
+      participant: {
+        externalId: user.id,
+        participantType: "human" as const,
+        ...(name ? { name } : {}),
+        metadata: { provider: "discord", discord: structuredClone(user) },
+      },
       content: content.length === 1 && directText
         ? directText
         : Object.freeze(content),
@@ -147,7 +155,7 @@ async function interactionEnvelope(
         interactionId: interaction.id,
         interactionType: interaction.type,
       },
-    },
+    }),
   });
 }
 
@@ -378,11 +386,8 @@ export function createDiscordChannelPlugin(
 ): CopilotzPlugin {
   const channel = createDiscordChannel(options);
   return definePlugin({
-    manifest: {
-      id: options.pluginId?.trim() || "@copilotz/channel-discord",
-      version: options.version?.trim() || "3.0.0",
-      provides: { channels: [channel.id] },
-    },
-    resources: { channels: [channel] },
+    id: options.pluginId?.trim() || "@copilotz/channel-discord",
+    version: options.version?.trim() || "3.0.0",
+    channels: [channel],
   });
 }

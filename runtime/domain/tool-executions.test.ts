@@ -60,19 +60,22 @@ async function createFixture(): Promise<Fixture> {
   const observed: string[] = [];
   const processor = defineProcessor({
     id: "tool.lifecycle.observe",
-    on: [{ eventType: "tool_execution.created" }, { eventType: "tool_execution.updated" }, { eventType: "tool_execution.completed" }, { eventType: "tool_execution.failed" }, { eventType: "tool_execution.cancelled" }],
+    on: [
+      { eventType: "tool_execution.created" },
+      { eventType: "tool_execution.updated" },
+      { eventType: "tool_execution.completed" },
+      { eventType: "tool_execution.failed" },
+      { eventType: "tool_execution.cancelled" },
+    ],
     handle(event) {
       observed.push(event.type);
     },
   });
   const registry = await createPluginRegistry({
     plugins: [definePlugin({
-      manifest: {
-        id: "test.tool-executions",
-        version: "1.0.0",
-        provides: { processors: [processor.id] },
-      },
-      resources: { processors: [processor] },
+      id: "test.tool-executions",
+      version: "1.0.0",
+      processors: [processor],
     })],
   });
   const executor = createDeliveryExecutor({

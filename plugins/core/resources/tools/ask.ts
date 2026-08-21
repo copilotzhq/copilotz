@@ -1,10 +1,5 @@
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import type { Agent } from "@copilotz/copilotz/resources";
-import type { SafeWorkflowError } from "@copilotz/copilotz/domain";
-import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
-import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
-import { threadMessageFeature } from "../features/thread-message.ts";
-import { toolExecutionFeature } from "../features/tool-execution.ts";
 import { resolveAgentGrants } from "@copilotz/copilotz/capabilities";
 import {
   type AgentAskMetadata,
@@ -18,13 +13,14 @@ import {
   type WorkflowTool,
   type WorkflowToolExecutionContext,
 } from "@copilotz/copilotz/tools";
+import { threadMessageFeature } from "../features/thread-message.ts";
 import {
   asRecord,
-  collectionEventRecord,
   optionalText,
   requireCollection,
   requiredText,
-} from "./helpers.ts";
+} from "../processors/helpers.ts";
+
 const DEFAULT_TOOL_ID = "ask";
 const DEFAULT_MAX_DEPTH = 8;
 
@@ -109,23 +105,6 @@ function participantForAgent(
   );
 }
 
-function askFailure(
-  attempt: CollectionRecord,
-  ask: AgentAskMetadata,
-  cancelled: boolean,
-): SafeWorkflowError {
-  const cause = optionalText(asRecord(attempt.safeError).message) ??
-    (cancelled ? "The asked agent was cancelled." : "The asked agent failed.");
-  return Object.freeze({
-    name: cancelled ? "AgentAskCancelled" : "AgentAskFailed",
-    code: cancelled ? "ask_cancelled" : "ask_failed",
-    message: cancelled
-      ? `Ask to agent '${ask.askedAgentId}' was cancelled: ${cause}`
-      : `Asked agent '${ask.askedAgentId}' failed: ${cause}`,
-    retryable: false,
-  });
-}
-
 export function defineAskTool(
   toolId = DEFAULT_TOOL_ID,
   maxDepth = DEFAULT_MAX_DEPTH,
@@ -183,10 +162,12 @@ export function defineAskTool(
           `Asking participant '${askingParticipantId}' is not an agent.`,
         );
       }
-      const agents = context.processor.resources.list<Agent>("agents");
+      const agents = Object.values(context.processor.agents).filter(
+        (value): value is Agent => !!value,
+      );
       const askingAgent = context.agent ??
         (execution.agentId
-          ? context.processor.resources.get<Agent>("agents", execution.agentId)
+          ? context.processor.agents[execution.agentId]
           : undefined);
       if (!askingAgent) {
         throw new Error(
@@ -276,152 +257,5 @@ export function defineAskTool(
     },
   } as WorkflowTool);
 }
-
-export const completeAskProcessor: Processor<CopilotzProcessorContext> =
-  defineProcessor<CopilotzProcessorContext>({
-    id: "copilotz.core.complete-agent-ask",
-    on: [{
-      eventType: "message.created",
-      metadata: { copilotzAsk: { phase: "answer" } },
-    }],
-    requires: {
-      features: { toolExecution: toolExecutionFeature },
-    },
-    async handle(event, context) {
-      const record = collectionEventRecord(event);
-      const sender = await requireCollection(context, "participant").get(
-        { id: String(record.senderId) },
-      );
-      if (!sender) {
-        throw new Error(`Ask answer '${record.id}' sender was not found.`);
-      }
-      const ask = agentAskMetadata(asRecord(record.metadata));
-      if (!ask || ask.phase !== "answer") return;
-      const executionRecord = await requireCollection(context, "tool_execution")
-        .get({ id: ask.toolExecutionId });
-      if (!executionRecord) {
-        throw new Error(
-          `Ask tool execution '${ask.toolExecutionId}' was not found.`,
-        );
-      }
-      const execution = executionRecord;
-      if (
-        String(record.threadId) !== String(execution.threadId) ||
-        ask.toolExecutionId !== execution.id ||
-        sender.id !== ask.askedParticipantId ||
-        optionalText(execution.participantId) !== ask.askingParticipantId
-      ) {
-        throw new Error(`Ask '${ask.askId}' answer ownership does not match.`);
-      }
-      if (
-        String(execution.status) !== "running" &&
-        String(execution.status) !== "pending"
-      ) {
-        return;
-      }
-      const output = await context.content.prepare({
-        type: "json",
-        value: {
-          status: "answered",
-          askId: ask.askId,
-          questionMessageId: ask.questionMessageId,
-          answerMessageId: record.id,
-          askedAgentId: ask.askedAgentId,
-          askedParticipantId: ask.askedParticipantId,
-        },
-        role: "tool.output",
-      }, { operationKey: `ask:${ask.askId}:answer-output` });
-      await context.features.toolExecution.complete({
-        id: execution.id,
-        output,
-        projectedOutput: output,
-        historyVisibility: optionalText(execution.historyVisibility) ??
-          "public_status",
-      }, { operationKey: `ask:${ask.askId}:complete` });
-    },
-  });
-
-export const failAskProcessor: Processor<CopilotzProcessorContext> =
-  defineProcessor<CopilotzProcessorContext>({
-    id: "copilotz.core.fail-agent-ask",
-    on: [
-      {
-        eventType: "llm_attempt.updated",
-        data: { record: { status: "failed" } },
-      },
-      {
-        eventType: "llm_attempt.updated",
-        data: { record: { status: "cancelled" } },
-      },
-    ],
-    requires: {
-      features: { toolExecution: toolExecutionFeature },
-    },
-    async handle(event, context) {
-      const record = collectionEventRecord(event);
-      const attempt = record;
-      if (
-        String(attempt.status) !== "failed" &&
-        String(attempt.status) !== "cancelled"
-      ) {
-        return;
-      }
-      const ask = agentAskMetadata(asRecord(attempt.metadata));
-      if (!ask || ask.phase === "answer") return;
-      if (optionalText(attempt.participantId) !== ask.askedParticipantId) {
-        throw new Error(`Ask '${ask.askId}' failure ownership does not match.`);
-      }
-      const executionRecord = await requireCollection(context, "tool_execution")
-        .get({ id: ask.toolExecutionId });
-      if (!executionRecord) {
-        throw new Error(
-          `Ask tool execution '${ask.toolExecutionId}' was not found.`,
-        );
-      }
-      const execution = executionRecord;
-      if (
-        String(execution.status) !== "running" &&
-        String(execution.status) !== "pending"
-      ) {
-        return;
-      }
-      const cancelled = String(attempt.status) === "cancelled";
-      const failure = askFailure(attempt, ask, cancelled);
-      const detail = await context.content.prepare({
-        type: "text",
-        text: failure.message,
-        role: "tool.error_detail",
-      }, { operationKey: `ask:${ask.askId}:failure-detail` });
-      const projected = await context.content.prepare({
-        type: "json",
-        value: {
-          status: cancelled ? "cancelled" : "failed",
-          askId: ask.askId,
-          askedAgentId: ask.askedAgentId,
-          error: failure.message,
-        },
-        role: "tool.projected_output",
-      }, { operationKey: `ask:${ask.askId}:failure-output` });
-      if (cancelled) {
-        await context.features.toolExecution.cancel({
-          id: execution.id,
-          reason: failure.message,
-          errorDetail: detail,
-          projectedOutput: projected,
-          historyVisibility: optionalText(execution.historyVisibility) ??
-            "public_status",
-        }, { operationKey: `ask:${ask.askId}:cancel` });
-        return;
-      }
-      await context.features.toolExecution.fail({
-        id: execution.id,
-        safeError: failure,
-        errorDetail: detail,
-        projectedOutput: projected,
-        historyVisibility: optionalText(execution.historyVisibility) ??
-          "public_status",
-      }, { operationKey: `ask:${ask.askId}:fail` });
-    },
-  });
 
 export const askTool: WorkflowTool = defineAskTool();

@@ -680,10 +680,10 @@ async function resolveThreadParticipant(
   const existing = await ctx.processor.collections.participant.get({ id }) ??
     await byExternalId(ctx, id);
   if (existing) return participantInput(existing);
-  const agent = ctx.processor.resources.get<Agent>("agents", id) ??
-    ctx.processor.resources.list<Agent>("agents").find((candidate) =>
-      candidate.name === id || candidate.externalId === id
-    );
+  const agent = ctx.processor.agents[id] ??
+    Object.values(ctx.processor.agents).filter((value): value is Agent =>
+      !!value
+    ).find((candidate) => candidate.name === id || candidate.externalId === id);
   if (!agent) {
     throw new Error(`Thread participant '${id}' was not found.`);
   }
@@ -750,6 +750,25 @@ function createThreadTool(): WorkflowTool {
       const threadId = typeof input.id === "string" && input.id.trim()
         ? input.id.trim()
         : `thread:${ctx.execution.id}`;
+      const initialMessageId = `message:${threadId}:initial`;
+      const existingThread = await ctx.processor.collections.thread.get({
+        id: threadId,
+      });
+      const existingInitialMessage = await ctx.processor.collections.message
+        ?.get({ id: initialMessageId });
+      if (existingThread && existingInitialMessage) {
+        return {
+          threadId,
+          name,
+          participantIds: Array.isArray(existingThread.participantIds)
+            ? [...existingThread.participantIds]
+            : [],
+          mode,
+          status: "started",
+          eventId: existingThread.id,
+          messageEventId: existingInitialMessage.id,
+        };
+      }
       const metadata = {
         ...structuredClone(record(input.metadata)),
         name,
@@ -781,16 +800,17 @@ function createThreadTool(): WorkflowTool {
           ),
         );
       }
-      const created = await ctx.processor.collections.thread.create({
-        id: threadId,
-        ...(typeof input.externalId === "string" && input.externalId.trim()
-          ? { externalId: input.externalId.trim() }
-          : {}),
-        parentThreadId: ctx.execution.threadId,
-        name,
-        participantIds: ensured.map((item) => item.id),
-        metadata,
-      }, { operationKey: `create_thread:${threadId}` });
+      const created = existingThread ??
+        await ctx.processor.collections.thread.create({
+          id: threadId,
+          ...(typeof input.externalId === "string" && input.externalId.trim()
+            ? { externalId: input.externalId.trim() }
+            : {}),
+          parentThreadId: ctx.execution.threadId,
+          name,
+          participantIds: ensured.map((item) => item.id),
+          metadata,
+        }, { operationKey: `create_thread:${threadId}` });
 
       const initialMessage = typeof input.initialMessage === "string" &&
           input.initialMessage.trim()
@@ -806,7 +826,7 @@ function createThreadTool(): WorkflowTool {
         ctx.processor,
         "copilotz.core.thread-message",
       ).create({
-        id: `message:${threadId}:initial`,
+        id: initialMessageId,
         threadId,
         sender: caller,
         recipientIds,
@@ -896,11 +916,8 @@ export function createBuiltInToolsPlugin(
     return factory();
   }));
   return definePlugin({
-    manifest: {
-      id: options.id ?? "@copilotz/built-in-tools",
-      version: options.version ?? "3.0.0",
-      provides: { tools: tools.map((tool) => tool.key) },
-    },
-    resources: { tools },
+    id: options.id ?? "@copilotz/built-in-tools",
+    version: options.version ?? "3.0.0",
+    tools,
   });
 }

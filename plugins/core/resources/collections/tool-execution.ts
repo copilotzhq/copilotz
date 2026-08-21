@@ -69,6 +69,7 @@ export const toolExecutionCollection: CollectionDefinition = defineCollection({
     content: [],
     metadata: {},
   },
+  content: { fields: ["content"] },
   identity: {
     sourceType: "tool_call",
     sourceField: "toolCallId",

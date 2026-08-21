@@ -4,7 +4,6 @@ import type {
   AgentRuntimeMode,
 } from "../resources/index.ts";
 import type { ProviderConfig } from "../llm/types.ts";
-import type { ScopedPluginResources } from "../engine/index.ts";
 
 function requiredText(value: string, name: string): string {
   const normalized = value.trim();
@@ -13,10 +12,15 @@ function requiredText(value: string, name: string): string {
 }
 
 export function requireAgent(
-  resources: ScopedPluginResources,
+  context: Readonly<{
+    agents: Readonly<Record<string, Agent | undefined>>;
+  }>,
   id: string,
 ): Agent {
-  return resources.require<Agent>("agents", requiredText(id, "Agent id"));
+  const agentId = requiredText(id, "Agent id");
+  const agent = context.agents[agentId];
+  if (!agent) throw new Error(`Unknown agent resource '${agentId}'.`);
+  return agent;
 }
 
 function runtimeMode(runtime: AgentRuntime): AgentRuntimeMode {

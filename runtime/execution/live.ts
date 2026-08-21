@@ -204,7 +204,7 @@ function lookupProcessor(
   processorId: string,
 ): Processor | undefined {
   return options.transients?.get(processorId) ??
-    options.registry.get("processors", processorId);
+    options.registry.processors.get(processorId);
 }
 
 function matchingTransient(

@@ -23,6 +23,7 @@ import {
   loadParticipantRecord,
 } from "../../engine/collection-graph.ts";
 import { definePlugin, defineProcessor } from "../../plugins/index.ts";
+import { message as coreMessage } from "../../../plugins/core/index.ts";
 import { coreCollectionsPlugin } from "../../../plugins/core/plugin.ts";
 import { createChannelRuntime } from "../runtime.ts";
 import { createTelegramChannel, createTelegramChannelPlugin } from "./index.ts";
@@ -106,12 +107,9 @@ function replyPlugin() {
     },
   });
   return definePlugin({
-    manifest: {
-      id: "test.telegram-reply",
-      version: "1.0.0",
-      provides: { processors: [processor.id] },
-    },
-    resources: { processors: [processor] },
+    id: "test.telegram-reply",
+    version: "1.0.0",
+    processors: [processor],
   });
 }
 
@@ -136,7 +134,7 @@ Deno.test("Telegram channel preserves identity, canonical media, buttons, and na
         defaultAgentIds: [agent.id],
       }),
     ],
-    resources: { agents: [agent] },
+    context: { agents: { [agent.id]: agent } },
   });
   try {
     const result = await createChannelRuntime(application).dispatch(NAMESPACE, {
@@ -208,13 +206,26 @@ Deno.test("Telegram callback ingress and webhook auth fail closed", async () => 
     },
     route: { ingress: "telegram", egress: "telegram" },
   }, {} as never);
-  assertEquals(accepted.inputs?.[0].input, {
-    content: "selected",
-    id: "telegram:callback:callback-a",
-    correlationId: "telegram:callback:callback-a",
-    deduplicationId: "telegram:callback:callback-a",
-    metadata: { provider: "telegram", callbackQueryId: "callback-a" },
-  });
+  assertEquals(
+    accepted.inputs?.[0].input,
+    coreMessage({
+      thread: "7",
+      participant: {
+        externalId: "42",
+        participantType: "human",
+        name: "V",
+        metadata: {
+          provider: "telegram",
+          telegram: { id: 42, first_name: "V" },
+        },
+      },
+      content: "selected",
+      id: "telegram:callback:callback-a",
+      correlationId: "telegram:callback:callback-a",
+      deduplicationId: "telegram:callback:callback-a",
+      metadata: { provider: "telegram", callbackQueryId: "callback-a" },
+    }),
+  );
 });
 
 Deno.test("Telegram channel core is factory-first and runtime-neutral", async () => {

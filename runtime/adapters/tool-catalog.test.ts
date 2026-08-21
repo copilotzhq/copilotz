@@ -7,10 +7,15 @@ import {
 
 import type { API, MCPServer } from "../resources/index.ts";
 import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
-import { createWorkflowToolCatalog } from "../tools/index.ts";
+import {
+  createWorkflowToolCatalog,
+  type WorkflowTool,
+} from "../tools/index.ts";
 import { createMcpWorkflowToolGenerator } from "./mcp-tools.ts";
 import { createServerWorkflowToolCatalog } from "./server-tool-catalog.ts";
 import type { McpRuntimeConnection } from "./types.ts";
+
+type TestRegistry = Awaited<ReturnType<typeof createPluginRegistry>>;
 
 const api: API = {
   id: "contract-api",
@@ -41,36 +46,47 @@ async function resourcesFor(input: {
   mcpServers?: readonly MCPServer[];
 }) {
   const plugin = definePlugin({
-    manifest: {
-      id: "test.catalog-adapters",
-      version: "1.0.0",
-      provides: {
-        ...(input.apis ? { api: input.apis.map((value) => value.id) } : {}),
-        ...(input.mcpServers
-          ? { mcp: input.mcpServers.map((value) => value.id) }
-          : {}),
-      },
-    },
-    resources: {
-      ...(input.apis ? { api: input.apis } : {}),
-      ...(input.mcpServers ? { mcp: input.mcpServers } : {}),
-    },
+    id: "test.catalog-adapters",
+    version: "1.0.0",
+    ...(input.apis ? { api: input.apis } : {}),
+    ...(input.mcpServers ? { mcp: input.mcpServers } : {}),
   });
   return await createPluginRegistry({ plugins: [plugin] });
 }
 
+function catalogContext(resources: TestRegistry) {
+  return Object.freeze({
+    agents: Object.freeze({}),
+    skills: Object.freeze({}),
+    tools: (resources.context.tools ?? Object.freeze({})) as Record<
+      string,
+      WorkflowTool | undefined
+    >,
+    apis: (resources.context.apis ?? Object.freeze({})) as Record<
+      string,
+      API | undefined
+    >,
+    mcp: (resources.context.mcp ?? Object.freeze({})) as Record<
+      string,
+      MCPServer | undefined
+    >,
+  });
+}
+
 Deno.test("runtime-neutral catalogs require explicit adapters only when descriptors exist", async () => {
-  const empty = await createPluginRegistry();
+  const empty = catalogContext(await createPluginRegistry());
   assertEquals(await createWorkflowToolCatalog().all(empty), []);
 
-  const apiResources = await resourcesFor({ apis: [api] });
+  const apiResources = catalogContext(await resourcesFor({ apis: [api] }));
   await assertRejects(
     () => createWorkflowToolCatalog().all(apiResources),
     Error,
     "Plugin resources 'api' require an explicit tool-catalog adapter",
   );
 
-  const mcpResources = await resourcesFor({ mcpServers: [mcpServer] });
+  const mcpResources = catalogContext(
+    await resourcesFor({ mcpServers: [mcpServer] }),
+  );
   await assertRejects(
     () => createWorkflowToolCatalog().all(mcpResources),
     Error,
@@ -107,7 +123,9 @@ Deno.test("factory MCP adapter discovers and executes logical tools with owned c
       },
     });
   };
-  const resources = await resourcesFor({ mcpServers: [mcpServer] });
+  const resources = catalogContext(
+    await resourcesFor({ mcpServers: [mcpServer] }),
+  );
   const catalog = createWorkflowToolCatalog({
     generateApiTools: () => [],
     generateMcpTools: createMcpWorkflowToolGenerator({ connect }),
@@ -129,7 +147,7 @@ Deno.test("factory MCP adapter discovers and executes logical tools with owned c
 });
 
 Deno.test("first-party server catalog preserves OpenAPI generation as an explicit grant", async () => {
-  const resources = await resourcesFor({ apis: [api] });
+  const resources = catalogContext(await resourcesFor({ apis: [api] }));
   const catalog = createServerWorkflowToolCatalog();
   const tools = await catalog.all(resources);
   assertEquals(tools.map((tool) => tool.key), ["api_lookup"]);
@@ -137,7 +155,9 @@ Deno.test("first-party server catalog preserves OpenAPI generation as an explici
 });
 
 Deno.test("generic server catalog never grants stdio implicitly", async () => {
-  const resources = await resourcesFor({ mcpServers: [mcpServer] });
+  const resources = catalogContext(
+    await resourcesFor({ mcpServers: [mcpServer] }),
+  );
   await assertRejects(
     () => createServerWorkflowToolCatalog().all(resources),
     Error,

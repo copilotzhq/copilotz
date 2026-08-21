@@ -1,4 +1,7 @@
-import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
+import {
+  coreFeatureAliases,
+  message as coreMessage,
+} from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists } from "@std/assert";
 import {
   type CopilotzPlugin,
@@ -51,12 +54,9 @@ function publicReplyPlugin(): CopilotzPlugin {
     },
   });
   return definePlugin({
-    manifest: {
-      id: "contract.public-reply",
-      version: "3.0.0",
-      provides: { processors: [processor.id] },
-    },
-    resources: { processors: [processor] },
+    id: "contract.public-reply",
+    version: "3.0.0",
+    processors: [processor],
   });
 }
 
@@ -98,13 +98,13 @@ Deno.test("root createCopilotz runs one causal event scope without queue state",
         ],
       });
 
-    const run = await copilotz.run({
+    const run = await copilotz.send(coreMessage({
       thread: "contract-thread",
       participant: "contract-user",
       recipientIds: ["contract-agent"],
       content: "Hello",
-    });
-    const observed = collect(run.events);
+    }));
+    const observed = collect(run.outputs);
     await run.done;
 
     assert(run.eventId.length > 0);

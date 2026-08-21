@@ -23,7 +23,12 @@ import {
   projectToolExecutionById,
   projectToolExecutions,
 } from "../../runtime/testing/projections.ts";
-import { createScheduledJobsPlugin, getNextScheduledRunAt } from "./index.ts";
+import {
+  createScheduledJobsPlugin,
+  getNextScheduledRunAt,
+  scheduledJobCollection,
+  scheduledJobsLifecycleFeature,
+} from "./index.ts";
 
 const NAMESPACE = "tenant-schedules";
 const agent: Agent = { id: "support", name: "Support", role: "support" };
@@ -42,12 +47,30 @@ Deno.test("scheduled due transition atomically advances and dispatches one publi
     core: false,
     canonicalCore: [coreCollectionsPlugin],
     plugins: [createScheduledJobsPlugin()],
-    resources: { agents: [agent] },
+    context: { agents: { [agent.id]: agent } },
     engine: { now: () => BASE },
   });
   try {
-    const created = await application.schedules.create({
+    const scheduleContext = createTestDomainContext(
+      application,
+      NAMESPACE,
+      {},
+      { now: () => BASE },
+    );
+    const lifecycle = scheduleContext.feature(scheduledJobsLifecycleFeature);
+    const createdContent = await application.content.preparer.prepare([
+      "Prepare the brief",
+      {
+        type: "file",
+        bytes: new Uint8Array([1, 2, 3]),
+        mediaType: "application/pdf",
+        name: "brief.pdf",
+      },
+    ], {
       namespace: NAMESPACE,
+      idempotencyKey: "schedule-create-a:content",
+    });
+    const created = await lifecycle.create({
       id: "morning-brief",
       name: "Morning brief",
       schedule: {
@@ -57,25 +80,15 @@ Deno.test("scheduled due transition atomically advances and dispatches one publi
       },
       run: {
         recipientIds: [agent.id],
-        content: [
-          "Prepare the brief",
-          {
-            type: "file",
-            bytes: new Uint8Array([1, 2, 3]),
-            mediaType: "application/pdf",
-            name: "brief.pdf",
-          },
-        ],
+        content: createdContent,
         metadata: { source: "schedule-test" },
       },
-      identity: {
-        correlationId: "schedule-create-a",
-        deduplicationId: "schedule-create-a",
-      },
+    }, {
+      operationKey: "schedule-create-a",
     });
-    assertExists(created.value);
-    assertEquals(created.value.nextRunAt, "2026-01-01T00:01:00.000Z");
-    assertEquals(created.value.run.content.length, 2);
+    assertExists(created);
+    assertEquals(created.nextRunAt, "2026-01-01T00:01:00.000Z");
+    assertEquals(created.run.content.length, 2);
 
     const tick = await application.schedules.tick({
       namespace: NAMESPACE,
@@ -87,10 +100,7 @@ Deno.test("scheduled due transition atomically advances and dispatches one publi
     assertEquals(tick.failed, 0);
     assertEquals(tick.jobs[0].occurrenceId, "morning-brief:1767225660000");
 
-    const updated = await application.schedules.get(
-      NAMESPACE,
-      "morning-brief",
-    );
+    const updated = await lifecycle.get({ id: "morning-brief" });
     assertExists(updated);
     assertEquals(updated.lastRunAt, "2026-01-01T00:01:00.000Z");
     assertEquals(updated.nextRunAt, "2026-01-01T00:02:00.000Z");
@@ -170,6 +180,29 @@ Deno.test("scheduled due transition atomically advances and dispatches one publi
       (await projectMessages(application, NAMESPACE, threads[0].id)).length,
       2,
     );
+
+    const commanded = await scheduleContext.collection(scheduledJobCollection)
+      .commands.due({
+        id: "morning-brief",
+        mode: "scheduled",
+        scheduledFor: "2026-01-01T00:02:00.000Z",
+        checkedAt: "2026-01-01T00:02:00.000Z",
+      }, {
+        operationKey: "scheduled-command-due",
+        visibility: { kind: "internal" },
+      });
+    assertEquals(commanded.lastRunAt, "2026-01-01T00:02:00.000Z");
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      if (
+        (await projectMessages(application, NAMESPACE, threads[0].id)).length >=
+          3
+      ) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assertEquals(
+      (await projectMessages(application, NAMESPACE, threads[0].id)).length,
+      3,
+    );
   } finally {
     await application.shutdown();
     await close(db);
@@ -184,10 +217,8 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
     on: [{ eventType: "fixture.scheduled_jobs.requested" }],
     async handle(event, processor) {
       if (!event.durable) return;
-      const tool = processor.resources.require<WorkflowTool>(
-        "tools",
-        "scheduled_jobs",
-      );
+      const tool = processor.tools.scheduled_jobs as WorkflowTool | undefined;
+      if (!tool) throw new Error("Unknown tool 'scheduled_jobs'.");
       const timestamp = event.createdAt;
       const context: WorkflowToolExecutionContext = {
         namespace: processor.namespace,
@@ -220,12 +251,9 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
     },
   });
   const fixturePlugin = definePlugin({
-    manifest: {
-      id: "fixture.scheduled-jobs-tool",
-      version: "1.0.0",
-      provides: { processors: [driver.id] },
-    },
-    resources: { processors: [driver] },
+    id: "fixture.scheduled-jobs-tool",
+    version: "1.0.0",
+    processors: [driver],
   });
   const application = await createCopilotzApplication({
     database: db,
@@ -233,7 +261,7 @@ Deno.test("scheduled_jobs tool uses scoped capabilities for the complete lifecyc
     core: false,
     canonicalCore: [coreCollectionsPlugin],
     plugins: [createScheduledJobsPlugin(), fixturePlugin],
-    resources: { agents: [agent] },
+    context: { agents: { [agent.id]: agent } },
     engine: { now: () => BASE },
   });
   try {
@@ -338,26 +366,46 @@ Deno.test("scheduled lifecycle and concurrent ticks remain tenant scoped and lea
     core: false,
     canonicalCore: [coreCollectionsPlugin],
     plugins: [createScheduledJobsPlugin()],
-    resources: { agents: [agent] },
+    context: { agents: { [agent.id]: agent } },
     engine: { now: () => BASE },
   });
   try {
-    await application.schedules.create({
+    const tenantA = createTestDomainContext(
+      application,
+      "tenant-a",
+      {},
+      { now: () => BASE },
+    )
+      .feature(scheduledJobsLifecycleFeature);
+    const tenantB = createTestDomainContext(
+      application,
+      "tenant-b",
+      {},
+      { now: () => BASE },
+    )
+      .feature(scheduledJobsLifecycleFeature);
+    const contentA = await application.content.preparer.prepare("Run A", {
       namespace: "tenant-a",
+      idempotencyKey: "job-a:content",
+    });
+    const contentB = await application.content.preparer.prepare("Run B", {
+      namespace: "tenant-b",
+      idempotencyKey: "job-b:content",
+    });
+    await tenantA.create({
       id: "job-a",
       name: "Job A",
       schedule: { type: "cron", expression: "* * * * *" },
-      run: { recipientIds: [agent.id], content: "Run A" },
-    });
-    await application.schedules.create({
-      namespace: "tenant-b",
+      run: { recipientIds: [agent.id], content: contentA },
+    }, { operationKey: "job-a:create" });
+    await tenantB.create({
       id: "job-b",
       name: "Job B",
       schedule: { type: "cron", expression: "* * * * *" },
-      run: { recipientIds: [agent.id], content: "Run B" },
-    });
-    const paused = await application.schedules.pause("tenant-b", "job-b");
-    assertEquals(paused.value?.status, "paused");
+      run: { recipientIds: [agent.id], content: contentB },
+    }, { operationKey: "job-b:create" });
+    const paused = await tenantB.pause({ id: "job-b" });
+    assertEquals(paused.status, "paused");
     assertEquals(
       (await application.schedules.tick({
         namespace: "tenant-b",
@@ -365,10 +413,10 @@ Deno.test("scheduled lifecycle and concurrent ticks remain tenant scoped and lea
       })).claimed,
       0,
     );
-    const resumed = await application.schedules.resume("tenant-b", "job-b");
-    assertEquals(resumed.value?.status, "active");
+    const resumed = await tenantB.resume({ id: "job-b" });
+    assertEquals(resumed.status, "active");
     assert(
-      (resumed.value?.nextRunAtMs ?? 0) > BASE.getTime(),
+      (resumed.nextRunAtMs ?? 0) > BASE.getTime(),
     );
     const [left, right] = await Promise.all([
       application.schedules.tick({
@@ -384,16 +432,16 @@ Deno.test("scheduled lifecycle and concurrent ticks remain tenant scoped and lea
     ]);
     assertEquals(left.dispatched + right.dispatched, 1);
     assertEquals(
-      (await application.schedules.list("tenant-a")).map((value) => value.id),
+      (await tenantA.list({})).map((value) => value.id),
       ["job-a"],
     );
     assertEquals(
-      (await application.schedules.list("tenant-b")).map((value) => value.id),
+      (await tenantB.list({})).map((value) => value.id),
       ["job-b"],
     );
-    const cancelled = await application.schedules.cancel("tenant-b", "job-b");
-    assertEquals(cancelled.value?.status, "cancelled");
-    assertEquals(cancelled.value?.nextRunAt, null);
+    const cancelled = await tenantB.cancel({ id: "job-b" });
+    assertEquals(cancelled.status, "cancelled");
+    assertEquals(cancelled.nextRunAt, null);
   } finally {
     await application.shutdown();
     await close(db);
@@ -411,8 +459,10 @@ Deno.test("cron calculation and scheduled runtime stay portable and factory-firs
   for (
     const file of [
       "collection.ts",
+      "lifecycle.ts",
+      "model.ts",
       "plugin.ts",
-      "repository.ts",
+      "trigger.ts",
       "tool.ts",
       "types.ts",
     ]

@@ -1,20 +1,15 @@
 export { scheduledJobCollection } from "./collection.ts";
+export { scheduledJobsLifecycleFeature } from "./lifecycle.ts";
 export { createScheduledJobsPlugin } from "./plugin.ts";
 export { createScheduledJobsTool } from "./tool.ts";
-export {
-  createScheduledJobRepository,
-  getNextScheduledRunAt,
-} from "./repository.ts";
+export { createScheduledJobTrigger } from "./trigger.ts";
+export { getNextScheduledRunAt } from "./model.ts";
 export type {
-  CreateScheduledJobInput,
-  CreateScheduledJobRepositoryOptions,
   CreateScheduledJobsPluginOptions,
+  CreateScheduledJobTriggerOptions,
   ScheduledJob,
-  ScheduledJobMutationOptions,
   ScheduledJobOccurrence,
-  ScheduledJobRepository,
   ScheduledJobRun,
-  ScheduledJobRunInput,
   ScheduledJobRunNowOptions,
   ScheduledJobRunNowResult,
   ScheduledJobSchedule,
@@ -24,6 +19,6 @@ export type {
   ScheduledJobTickItem,
   ScheduledJobTickOptions,
   ScheduledJobTickResult,
-  ScopedScheduledJobs,
-  UpdateScheduledJobInput,
+  ScheduledJobTrigger,
+  ScopedScheduledJobTrigger,
 } from "./types.ts";

@@ -63,12 +63,9 @@ async function createFixture(options: {
   });
   const registry = await createPluginRegistry({
     plugins: [definePlugin({
-      manifest: {
-        id: "test.assets",
-        version: "1.0.0",
-        provides: { processors: [observer.id] },
-      },
-      resources: { processors: [observer] },
+      id: "test.assets",
+      version: "1.0.0",
+      processors: [observer],
     })],
   });
   const executor = createDeliveryExecutor({

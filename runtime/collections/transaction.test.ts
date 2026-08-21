@@ -1,16 +1,12 @@
-import {
-  assert,
-  assertEquals,
-  assertRejects,
-} from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 
 import {
+  type BoundCollection,
+  type CollectionRecord,
   createCollectionRuntime,
   defineCollection,
   isCollectionNoop,
   relation,
-  type BoundCollection,
-  type CollectionRecord,
 } from "./index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import {
@@ -136,12 +132,9 @@ async function createFixture(url: string, schema: string): Promise<Fixture> {
   });
   const registry = await createPluginRegistry({
     plugins: [definePlugin({
-      manifest: {
-        id: "test.collection-transaction",
-        version: "1.0.0",
-        provides: { processors: [processor.id] },
-      },
-      resources: { processors: [processor] },
+      id: "test.collection-transaction",
+      version: "1.0.0",
+      processors: [processor],
     })],
   });
   const executor = createDeliveryExecutor({
@@ -192,7 +185,10 @@ async function runSuite(url: string, schema: string): Promise<void> {
           externalId: "ext-a",
           title: "Scoped job",
         }, { namespace: "tenant-a" });
-        assertEquals(await collections.job.get("job-a", "tenant-a"), job.record);
+        assertEquals(
+          await collections.job.get("job-a", "tenant-a"),
+          job.record,
+        );
         const noop = await collections.job.update("job-a", {
           set: { title: "Scoped job" },
         }, { namespace: "tenant-a" });
@@ -298,9 +294,10 @@ async function runSuite(url: string, schema: string): Promise<void> {
       },
     });
     await Promise.all(nested.dispatch.handles.map((handle) => handle.done));
-    assertEquals(nested.writes.map((write) =>
-      write.noop ? "noop" : write.event.eventType
-    ), ["job.created", "job_note.created"]);
+    assertEquals(
+      nested.writes.map((write) => write.noop ? "noop" : write.event.eventType),
+      ["job.created", "job_note.created"],
+    );
     assertEquals(await notes.get("note-nested", "tenant-a") !== null, true);
 
     await assertRejects(

@@ -52,11 +52,8 @@ export function createWebToolsPlugin(
     return workflowTool(id);
   });
   return definePlugin({
-    manifest: {
-      id: options.id ?? "@copilotz/web-tools",
-      version: options.version ?? "3.0.0",
-      provides: { tools: tools.map((tool) => tool.key) },
-    },
-    resources: { tools },
+    id: options.id ?? "@copilotz/web-tools",
+    version: options.version ?? "3.0.0",
+    tools,
   });
 }

@@ -144,12 +144,9 @@ function replyPlugin() {
     },
   });
   return definePlugin({
-    manifest: {
-      id: "test.discord-reply",
-      version: "1.0.0",
-      provides: { processors: [processor.id] },
-    },
-    resources: { processors: [processor] },
+    id: "test.discord-reply",
+    version: "1.0.0",
+    processors: [processor],
   });
 }
 
@@ -175,7 +172,7 @@ Deno.test("Discord channel verifies interactions and preserves native media/acti
         defaultAgentIds: [agent.id],
       }),
     ],
-    resources: { agents: [agent] },
+    context: { agents: { [agent.id]: agent } },
   });
   const body = {
     id: "interaction-a",

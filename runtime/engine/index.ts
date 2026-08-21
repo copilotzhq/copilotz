@@ -24,10 +24,6 @@ export type {
   ScopedEventWaitOptions,
   ScopedLlmAttempts,
   ScopedMutationOptions,
-  ScopedPluginResources,
   ScopedRelations,
-  ScopedStreams,
-  ScopedStreamWriteInput,
   ScopedToolExecutions,
 } from "./types.ts";
-export type { ScopedKnowledge } from "../knowledge/index.ts";

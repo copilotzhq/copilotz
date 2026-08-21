@@ -18,7 +18,7 @@ Main options:
   availability-error classifier
 - `databaseLifecycle`: persistence callbacks for explicit Gateway/Worker roles
 - `core: false | CopilotzCorePluginOptions`
-- `plugins`, `resources`, `pluginResolver`
+- `plugins`, `context`
 - `toolCatalog` shared by execution and capability introspection
 - `worker: { id?, capacity? }`
 
@@ -151,7 +151,7 @@ Important members:
 - `llmAttempts`, `toolExecutions`, `schedules`, `knowledge`
 - `events`, `deliveries`
 - `databaseSchema`, `databaseScope(name)`
-- `run(input)`, `connect(input)`, `goal(input)`
+- `send(input)`, `events`, `close(reason?)`, `goal(input)`
 - `recover(options)`, `recoverAll(options)`, `maintenance(options)`,
   `shutdown(reason?)`
 
@@ -162,41 +162,42 @@ All products are factory-created frozen records. Infer their type or import
 tool, peer-agent, and skill resources with plugin origins and grant sources.
 Omitted grants resolve to none.
 
-`databaseScope(name)` returns a lightweight physical-schema-bound view of the
-domain repositories, events, deliveries, attachments, and maintenance APIs.
-Scopes share the application's Ominipg database and Oxian execution runtime. For
-`run()`, `connect()`, and `goal()`, `databaseSchema` can select the same scope
-directly. Selecting an additional scope performs a read-only structural
-validation and never creates or upgrades schema objects. Applications must run
-`provisionCopilotzSchema(database, name)` explicitly during tenant onboarding or
-migration. Set `engine.provisionDefaultDatabaseSchema` to `false` when an
-application-owned migration also owns the default schema lifecycle.
-
-## Run handle
+`application.events` is the durable event-store query surface (`append`, `list`,
+`get`, `subscribe`, settlement helpers). `application.observe()` is the
+application-session output stream:
 
 ```ts
-type RunHandle = {
+for await (const output of application.observe()) {
+  // committed CopilotzEvent or runtime stream output
+}
+```
+
+`databaseScope(name)` returns a lightweight physical-schema-bound view of the
+domain repositories, events, deliveries, attachments, and maintenance APIs.
+Scopes share the application's Ominipg database and Oxian execution runtime.
+Applications must run `provisionCopilotzSchema(database, name)` explicitly
+during tenant onboarding or migration. Set
+`engine.provisionDefaultDatabaseSchema` to `false` when an application-owned
+migration also owns the default schema lifecycle.
+
+## Send handle
+
+```ts
+type ApplicationSendHandle = {
   eventId: string;
-  threadId: string;
   correlationId: string;
-  events: ReadableStream<CopilotzEvent>;
+  outputs: ReadableStream<AttachmentOutput>;
   done: Promise<void>;
   cancel(reason?: string): Promise<void>;
 };
 ```
 
-## Attachment
+## Application outputs
 
 ```ts
-type ThreadAttachment = {
-  id: string;
-  namespace: string;
-  thread: ConversationThread;
-  participant: Participant;
-  outputs: ReadableStream<AttachmentOutput>;
-  send(input): Promise<AttachmentSendResult>;
-  close(reason?: string): Promise<void>;
-};
+for await (const output of copilotz.observe()) {
+  // committed semantic event or runtime stream output
+}
 ```
 
 ## Skills
@@ -235,10 +236,10 @@ flatten message senders, content refs, or workflow records into a legacy DTO.
 ## Package exports
 
 The authoritative subpath list is `deno.json`. Public groups are application,
-capabilities, plugins, resources, content, domain, events, attachments,
-agents, llm, memory, knowledge, schedules, usage, skills, tools, channels,
-features, admin, goals, adapters, the transitional server projection, and the
-isolated v1 and memory-v4 migrations.
+capabilities, plugins, resources, content, domain, events, attachments, agents,
+llm, memory, knowledge, schedules, usage, skills, tools, channels, features,
+admin, goals, adapters, the transitional server projection, and the isolated v1
+and memory-v4 migrations.
 
 Internal engine assembly, delivery executors, framed Worker protocol, and raw
 workload maps are implementation details rather than package entry points. Every

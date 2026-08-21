@@ -1,22 +1,25 @@
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 
-import { createTestDatabase } from "../testing/ominipg.ts";
-import type { Agent } from "../resources/index.ts";
-import { createCopilotzApplication } from "../application/index.ts";
-import type { CopilotzApplication } from "../application/index.ts";
-import { createSqlSession } from "../events/index.ts";
-import type { CopilotzProcessorContext } from "../engine/index.ts";
+import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
+import type { Agent } from "../../runtime/resources/index.ts";
+import { createCopilotzApplication } from "../../runtime/application/index.ts";
+import type { CopilotzApplication } from "../../runtime/application/index.ts";
+import type { CopilotzProcessorContext } from "../../runtime/engine/index.ts";
+import { createFeatureContext } from "../../runtime/features/index.ts";
 import {
   type CopilotzPlugin,
   definePlugin,
   defineProcessor,
-} from "../plugins/index.ts";
+} from "../../runtime/plugins/index.ts";
 import {
   loadMessageRecord,
   loadParticipantRecord,
-} from "../engine/collection-graph.ts";
-import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
+} from "../../runtime/engine/collection-graph.ts";
+import { message as coreMessage } from "../core/index.ts";
+import { coreCollectionsPlugin } from "../core/plugin.ts";
 import type { GoalStreamEvent } from "./types.ts";
+import { createGoalRuntime } from "./index.ts";
+import type { GoalRuntime } from "./index.ts";
 
 const NAMESPACE = "goal-tenant";
 
@@ -130,18 +133,10 @@ function scriptedGoalPlugin(mode: ScriptMode = "normal"): CopilotzPlugin {
     },
   });
   return definePlugin({
-    manifest: {
-      id: `fixture.goals.${mode}`,
-      version: "1.0.0",
-      provides: {
-        agents: [testedAgent.id, simulatorAgent.id, judgeAgent.id],
-        processors: [processor.id],
-      },
-    },
-    resources: {
-      agents: [testedAgent, simulatorAgent, judgeAgent],
-      processors: [processor],
-    },
+    id: `fixture.goals.${mode}`,
+    version: "1.0.0",
+    agents: [testedAgent, simulatorAgent, judgeAgent],
+    processors: [processor],
   });
 }
 
@@ -151,6 +146,7 @@ async function createFixture(
 ): Promise<
   Readonly<{
     application: CopilotzApplication;
+    goals: GoalRuntime;
     close(): Promise<void>;
   }>
 > {
@@ -164,9 +160,52 @@ async function createFixture(
     plugins: [scriptedGoalPlugin(mode)],
     engine: { retryBaseMs: 0, random: () => 0 },
   });
+  const scope = await application.databaseScope(schema);
+  const goals = createGoalRuntime({
+    registry: application.plugins,
+    collectionRuntime: scope.collectionRuntime,
+    features: (namespace) =>
+      createFeatureContext({
+        namespace,
+        plugins: application.plugins,
+        collections: scope.collections,
+        collectionRuntime: scope.collectionRuntime,
+        contentResolver: scope.content.resolver,
+        events: { list: (input) => scope.events.list(input) },
+        deliveries: { list: (input) => scope.deliveries.list(input) },
+        relations: { list: (input) => scope.relations.list(input) },
+      }),
+    resolver: scope.content.resolver,
+    run: async (input) => {
+      const handle = await application.send({
+        ...coreMessage({
+          thread: typeof input.thread === "string"
+            ? input.thread
+            : input.thread.id,
+          participant: input.participant,
+          recipientIds: input.recipientIds,
+          content: input.content,
+          ...(input.messageId ? { id: input.messageId } : {}),
+          ...(input.metadata ? { metadata: input.metadata } : {}),
+          ...(input.visibility ? { visibility: input.visibility } : {}),
+        }),
+        databaseSchema: schema,
+      });
+      return Object.freeze({
+        ...handle,
+        threadId: typeof input.thread === "string"
+          ? input.thread
+          : input.thread.id,
+      });
+    },
+    defaultNamespace: NAMESPACE,
+    defaultDatabaseSchema: schema,
+  });
   return Object.freeze({
     application,
+    goals,
     async close() {
+      await goals.shutdown();
       await application.shutdown();
       await database.close();
     },
@@ -184,7 +223,7 @@ async function collect(
 Deno.test("event-native goal runs bounded target and simulator threads", async () => {
   const fixture = await createFixture("goal_loop");
   try {
-    const handle = await fixture.application.goal({
+    const handle = await fixture.goals.goal({
       content: "I want a ticket",
       sender: {
         id: "client-01",
@@ -275,7 +314,7 @@ Deno.test("event-native goal runs bounded target and simulator threads", async (
 Deno.test("goal hands only the target final message assets to its simulator", async () => {
   const fixture = await createFixture("goal_tool_isolation", "tool-isolation");
   try {
-    const handle = await fixture.application.goal({
+    const handle = await fixture.goals.goal({
       content: "I want a ticket",
       sender: {
         externalId: "client-02",
@@ -323,7 +362,7 @@ Deno.test("goal hands only the target final message assets to its simulator", as
 Deno.test("goal evaluation can invoke a declared judge through normal runs", async () => {
   const fixture = await createFixture("goal_judge");
   try {
-    const handle = await fixture.application.goal({
+    const handle = await fixture.goals.goal({
       content: "I want a ticket",
       sender: {
         externalId: "client-03",
@@ -374,7 +413,7 @@ Deno.test("goal cancellation settles without starting another phase", async () =
   try {
     const controller = new AbortController();
     controller.abort("cancel before simulation");
-    const handle = await fixture.application.goal({
+    const handle = await fixture.goals.goal({
       content: "Do not run",
       sender: {
         externalId: "client-04",
@@ -398,12 +437,12 @@ Deno.test("goal cancellation settles without starting another phase", async () =
   }
 });
 
-Deno.test("goal requires declared agent resource identities", async () => {
+Deno.test("goal requires declared agent context identities", async () => {
   const fixture = await createFixture("goal_agents");
   try {
     await assertRejects(
       () =>
-        fixture.application.goal({
+        fixture.goals.goal({
           content: "hello",
           sender: {
             externalId: "client-05",
@@ -412,7 +451,7 @@ Deno.test("goal requires declared agent resource identities", async () => {
           target: "tested",
         }),
       Error,
-      "Unknown agents resource 'inline-or-missing'",
+      "Unknown agent context 'inline-or-missing'",
     );
   } finally {
     await fixture.close();

@@ -1,18 +1,18 @@
-import type { CollectionRuntime } from "../collections/index.ts";
+import type { CollectionRuntime } from "@copilotz/copilotz/collections";
 import type {
   ContentInput,
   ContentResolver,
   ContentSequence,
-} from "../content/index.ts";
+} from "@copilotz/copilotz/content";
 import type {
   ConversationThread,
   Participant,
   ParticipantInput,
-} from "../domain/index.ts";
-import type { CopilotzEvent } from "../events/index.ts";
-import type { PluginRegistry } from "../plugins/index.ts";
-import type { FeatureHostContext } from "../features/index.ts";
-import type { RunHandle, RunInput } from "../attachments/index.ts";
+} from "@copilotz/copilotz/domain";
+import type { CopilotzEvent } from "@copilotz/copilotz/events";
+import type { PluginRegistry } from "@copilotz/copilotz/plugins";
+import type { FeatureHostContext } from "@copilotz/copilotz/features";
+import type { RunHandle, RunInput } from "@copilotz/copilotz/attachments";
 
 export type GoalStatus =
   | "completed"
@@ -215,7 +215,7 @@ export type GoalRuntime = Readonly<{
 }>;
 
 export type CreateGoalRuntimeOptions = Readonly<{
-  registry: Pick<PluginRegistry, "require">;
+  registry: Pick<PluginRegistry, "context">;
   collectionRuntime: CollectionRuntime;
   features(namespace: string): FeatureHostContext;
   resolver: Pick<ContentResolver, "getMany">;

@@ -19,6 +19,7 @@ threads + participants
 
 ```ts
 import { createCopilotz } from "jsr:@copilotz/copilotz@^0.61.0";
+import { core } from "jsr:@copilotz/copilotz@^0.61.0/core";
 ```
 
 The root package is runtime-neutral. Host capabilities such as MCP stdio,
@@ -34,18 +35,20 @@ const namespace = "example";
 const copilotz = await createCopilotz({
   namespace,
   database: { url: ":memory:" },
-  resources: {
-    agents: [{
-      id: "support",
-      name: "Support",
-      role: "Helpful support agent",
-      capabilities: {}, // omission also grants no tools, agents, or skills
-      runtime: {
-        provider: "openai",
-        model: "gpt-5-mini",
-        apiKey,
+  context: {
+    agents: {
+      support: {
+        id: "support",
+        name: "Support",
+        role: "Helpful support agent",
+        capabilities: {}, // omission also grants no tools, agents, or skills
+        runtime: {
+          provider: "openai",
+          model: "gpt-5-mini",
+          apiKey,
+        },
       },
-    }],
+    },
   },
 });
 
@@ -63,23 +66,25 @@ await copilotz.conversation.createThread({
   ],
 });
 
-const run = await copilotz.run({
+const sent = await copilotz.send(core.message({
   thread: "thread-1",
   participant: "user-1",
   recipientIds: ["agent-support"],
   content: "Hello",
-});
+}));
 
-for await (const event of run.events) {
+for await (const event of copilotz.observe()) {
   console.log(event.type, event.correlationId);
+  if (event.correlationId === sent.correlationId) break;
 }
-await run.done;
+await sent.done;
 await copilotz.shutdown();
 ```
 
-`run()` is a convenience attachment for one text correlation scope. Long-lived
-and realtime applications use `connect()` and `attachment.send()`; stream input
-is passed once as a `ReadableStream<Uint8Array>` with native backpressure.
+`send()` accepts one plugin-owned input envelope. Helpers such as
+`core.message(...)` are exported by their owning plugin; the runtime persists
+the envelope opaquely and processors decide what it means. `observe()` is the
+live session output stream; `events` remains the durable event-store API.
 
 ## Core guarantees
 
@@ -92,8 +97,8 @@ is passed once as a `ReadableStream<Uint8Array>` with native backpressure.
 - Raw token/audio/future media frames are ephemeral Web Streams. Final
   transcripts, messages, tools, errors, and stream lifecycle facts are durable.
 - Plugins compose in deterministic order: core, declared plugins, then explicit
-  application resources. Later resources replace earlier resources by type and
-  stable ID.
+  application context. Later context values replace earlier values by namespace
+  and key.
 - Installed resources do not create ambient agent authority. Exact
   `capabilities` grants are required; broad access uses explicit
   `{ all: true }`.

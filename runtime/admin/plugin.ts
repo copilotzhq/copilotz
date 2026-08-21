@@ -634,11 +634,8 @@ export function createAdminPlugin(
 ): CopilotzPlugin {
   const resource = feature(options);
   return definePlugin({
-    manifest: {
-      id: options.id?.trim() || DEFAULT_PLUGIN_ID,
-      version: options.version?.trim() || DEFAULT_PLUGIN_VERSION,
-      provides: { features: [resource.id] },
-    },
-    resources: { features: [resource] },
+    id: options.id?.trim() || DEFAULT_PLUGIN_ID,
+    version: options.version?.trim() || DEFAULT_PLUGIN_VERSION,
+    features: [resource],
   });
 }

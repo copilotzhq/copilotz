@@ -114,12 +114,9 @@ function replyPlugin() {
     },
   });
   return definePlugin({
-    manifest: {
-      id: "test.zendesk-reply",
-      version: "1.0.0",
-      provides: { processors: [processor.id] },
-    },
-    resources: { processors: [processor] },
+    id: "test.zendesk-reply",
+    version: "1.0.0",
+    processors: [processor],
   });
 }
 
@@ -144,7 +141,7 @@ Deno.test("Zendesk channel preserves webhook identity, media, actions, and nativ
         defaultAgentIds: [agent.id],
       }),
     ],
-    resources: { agents: [agent] },
+    context: { agents: { [agent.id]: agent } },
   });
   const body = {
     events: [{

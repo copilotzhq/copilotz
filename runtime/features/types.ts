@@ -9,22 +9,21 @@ import type {
 } from "../collections/index.ts";
 import type {
   AssetOrigin,
+  BodyStore,
   ContentResolver,
   ContentSequence,
+  ContentStreamRuntime,
   DurableContentInput,
 } from "../content/index.ts";
 import type {
   DomainRelation,
   ListDomainRelationsOptions,
+  ProjectDomainRelationInput,
 } from "../domain/index.ts";
 import type { DurableEvent, EventDelivery } from "../events/index.ts";
 import type { LlmResource } from "../llm/index.ts";
-import type {
-  PluginRegistry,
-  PluginResource,
-  PluginResourceOrigin,
-  PluginResourceType,
-} from "../plugins/index.ts";
+import type { ContextResource } from "../context/types.ts";
+import type { PluginRegistry } from "../plugins/index.ts";
 import type { Agent, API, MCPServer, Skill, Tool } from "../resources/index.ts";
 
 /** HTTP projection of a feature invoke. Not the feature action signature. */
@@ -100,23 +99,9 @@ export type FeatureAliasDefinitions = Readonly<
   Record<string, AnyFeatureDefinition>
 >;
 
-export type FeatureResources = Readonly<{
-  list<T extends PluginResource = PluginResource>(
-    type: PluginResourceType,
-  ): readonly T[];
-  get<T extends PluginResource = PluginResource>(
-    type: PluginResourceType,
-    id: string,
-  ): T | undefined;
-  require<T extends PluginResource = PluginResource>(
-    type: PluginResourceType,
-    id: string,
-  ): T;
-  origin(
-    type: PluginResourceType,
-    id: string,
-  ): PluginResourceOrigin | undefined;
-}>;
+export type FeatureContextNamespace = Readonly<
+  Record<string, unknown | undefined>
+>;
 
 export type FeatureContextValues = Readonly<{
   agents: Readonly<Record<string, Agent | undefined>>;
@@ -125,6 +110,11 @@ export type FeatureContextValues = Readonly<{
   apis: Readonly<Record<string, API | undefined>>;
   mcp: Readonly<Record<string, MCPServer | undefined>>;
   skills: Readonly<Record<string, Skill | undefined>>;
+  embeddings: Readonly<Record<string, unknown | undefined>>;
+  promptContext: Readonly<Record<string, ContextResource | undefined>>;
+  featureDefinitions: Readonly<
+    Record<string, AnyFeatureDefinition | undefined>
+  >;
 }>;
 
 type CollectionSelect<D> = D extends {
@@ -158,6 +148,10 @@ export type FeatureInvoker<
 
 export type FeatureContentHandle = Readonly<{
   resolver: Pick<ContentResolver, "getMany">;
+  /** Runtime-native progressive content production. Creates no graph state. */
+  stream?: ContentStreamRuntime;
+  /** Protected workflow body authority. Not exposed on application content scope. */
+  bodies?: BodyStore;
   materialize(
     input: DurableContentInput,
     options?: { origin?: AssetOrigin },
@@ -186,6 +180,11 @@ export type FeatureTransactionContext = Readonly<{
   >(
     definition: D,
   ): ScopedCollectionFor<D>;
+  relations: Readonly<{
+    upsert(
+      input: Omit<ProjectDomainRelationInput, "namespace">,
+    ): Promise<DomainRelation>;
+  }>;
 }>;
 
 export type FeatureContextServices =
@@ -193,6 +192,7 @@ export type FeatureContextServices =
   & Readonly<{
     namespace: string;
     operationKey?: string;
+    now(): Date;
     events: Readonly<{
       list(options?: {
         threadId?: string;
@@ -235,8 +235,6 @@ export type FeatureHostContext =
   & FeatureContextServices
   & Readonly<{
     collections: ScopedCollections;
-    /** Internal bridge for pre-10B3 runtime mechanisms; not action context. */
-    resources: FeatureResources;
     content: FeatureContentHandle;
     features: FeatureInvoker;
     feature<F extends AnyFeatureDefinition>(
@@ -317,6 +315,7 @@ export type FeatureContextBindings = Readonly<{
   };
   collectionRuntime: CollectionRuntime;
   transaction?: CollectionRuntime["transaction"];
+  now?: () => Date;
   /** Consumer-local Feature aliases. Never derived from a global Feature field. */
   featureAliases?: Readonly<Record<string, AnyFeatureDefinition>>;
   contentResolver: Pick<ContentResolver, "getMany">;
@@ -343,5 +342,8 @@ export type FeatureContextBindings = Readonly<{
     list(
       options: ListDomainRelationsOptions,
     ): Promise<readonly DomainRelation[]>;
+    upsert?(
+      input: ProjectDomainRelationInput,
+    ): Promise<DomainRelation>;
   };
 }>;

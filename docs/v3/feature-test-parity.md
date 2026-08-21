@@ -320,10 +320,10 @@ bodies reuse attempt/execution assets; parallel tools execute concurrently;
 every result returns to the producing agent; and only one continuation starts
 after a complete result batch. Recovery does not repeat the external tool, whose
 context receives a stable delivery-derived idempotency key. The root and
-`@copilotz/copilotz/{agents,llm,tools}` entrypoints export factory-only resource adapters and
-plugin composition. The bundled core and public `createCopilotz()` path now use
-this execution model, with the retained prompt, tool, accounting, and live-frame
-parity suites guarding it.
+`@copilotz/copilotz/{agents,llm,tools}` entrypoints export factory-only resource
+adapters and plugin composition. The bundled core and public `createCopilotz()`
+path now use this execution model, with the retained prompt, tool, accounting,
+and live-frame parity suites guarding it.
 
 This is the first batch, not completion of Gate 1. Unimplemented A-tests below
 remain required according to their priority. A temporary-config source check
@@ -462,16 +462,18 @@ unless separately retired with CLI replacement.
 **Coverage:** `runtime/run-thread.test.ts`, `runtime/recovery.test.ts`,
 `server/app.test.ts`, examples, and A05/A24.
 
-### F06 — Text `run()` contract
+### F06 — Application `send()` contract
 
-**Current contract:** `run(message, options)` returns a handle with thread/work
-identity, an async event stream, completion, and cancellation semantics. The
-stream exposes messages, tokens/reasoning, tool lifecycle, LLM lifecycle,
-assets, errors, and custom events. `run()` settles after causally produced work.
+**Current contract:** `send(pluginInputEnvelope)` returns a handle with event
+identity, correlation, a bounded output stream, completion, and cancellation
+semantics. `observe()` exposes semantic events plus runtime stream outputs for
+tokens, reasoning, tool lifecycle, LLM lifecycle, assets, errors, and custom
+events. `send()` settles after causally produced work.
 
-**Disposition:** Adapt, P0. Keep `run()` as the simple text API and implement it
-over a temporary attachment/correlation scope. Queue vocabulary may disappear,
-but cancellation, causal completion, error propagation, and event ordering must
+**Disposition:** Adapt, P0. Replace the public `run()` spelling with the unified
+application session: `send(inputEnvelope)`, `observe()`, durable `events`, and
+`close()`. Runtime may keep private attachment plumbing during the refactor, but
+cancellation, causal completion, error propagation, and event ordering must
 remain characterized.
 
 **Coverage:** `runtime/event-engine.test.ts`, `runtime/run-thread.test.ts`,
@@ -700,10 +702,11 @@ and current-boundary contracts A30–A35.
 **Current contract:** recorded/file audio can be submitted as an attachment;
 there is no foundational bidirectional realtime runtime.
 
-**Disposition:** New, P1. `connect()` creates a persistent thread attachment;
-`attachment.send()` is the sole ingress for discrete and stream inputs;
-participant-labelled output streams can be concurrent; semantic boundaries and
-final results are durable; frames are ephemeral and backpressured.
+**Disposition:** New, P1. The application session is the connection.
+`copilotz.send()` is the sole public ingress for discrete and stream commands;
+`copilotz.observe()` observes participant-labelled output streams and committed
+semantic events. Semantic boundaries and final results are durable; frames are
+backpressured runtime streams.
 
 **Coverage:** A36–A42 against private in-process and injected Oxian dispatchers.
 Provider-specific codecs, VAD, and production audio providers are P2.
@@ -724,7 +727,7 @@ instead of mutating immutable events or reintroducing uppercase schemas.
 Declared agent resource IDs replace inline lead-agent closures so execution can
 remain identity-based across in-process and hypervisor placement.
 
-**Coverage:** `runtime/goals/goal.test.ts` covers bounded turns, stop/result
+**Coverage:** `plugins/goals/goal.test.ts` covers bounded turns, stop/result
 reporting, canonical asset handoff, tool-result isolation, judge runs,
 cancellation, declared agent identities, lowercase stream items, factory style,
 and runtime neutrality. `runtime/goal.test.ts` remains legacy characterization
@@ -968,12 +971,12 @@ behavior; it means the test must stop asserting an obsolete physical mechanism.
 | `runtime/recovery.test.ts`, `runtime/run-generation.test.ts`                 | Adapt                                        | F14                                              |
 | `runtime/run-thread.test.ts`                                                 | Keep/Adapt                                   | F05–F08                                          |
 | `runtime/routing/index.test.ts`                                              | Keep/Adapt                                   | F07/F08                                          |
-| `runtime/goal.test.ts`                                                       | Keep as legacy characterization until switch | F21; replacement in `runtime/goals/goal.test.ts` |
+| `runtime/goal.test.ts`                                                       | Keep as legacy characterization until switch | F21; replacement in `plugins/goals/goal.test.ts` |
 | `runtime/stream-redaction.test.ts`                                           | Keep                                         | F06/F09/F23                                      |
 | `runtime/thread-metadata.test.ts`                                            | Keep                                         | F07                                              |
 | `runtime/collections/native.test.ts`                                         | Keep/Adapt                                   | F13/F16                                          |
 | `runtime/memory/long-term.test.ts`                                           | Keep                                         | F17/F18                                          |
-| `runtime/usage/attribution.test.ts`                                          | Keep/Adapt                                   | F23                                              |
+| `plugins/usage/attribution.test.ts`                                          | Keep/Adapt                                   | F23                                              |
 | `server/app.test.ts`, `server/channels.test.ts`, `server/migrations.test.ts` | Keep/Adapt                                   | F15/F16/F24                                      |
 | `utils/inbound-message.test.ts`                                              | Keep/Adapt                                   | F07/F19                                          |
 | `utils/document-parser.test.ts`                                              | Keep                                         | F18/F19                                          |
@@ -1048,7 +1051,7 @@ Keep behavior; adapt event/content representations and persistence queries:
 - `runtime/tools/format-tools-for-prompt.test.ts`
 - `runtime/tools/jq.test.ts`
 - `runtime/tools/pipeline.test.ts`
-- `runtime/usage/attribution.test.ts` (also listed with runtime ownership)
+- `plugins/usage/attribution.test.ts` (also listed with plugin ownership)
 - `utils/document-parser.test.ts` (also listed with content ownership)
 
 The two cross-owned files are intentionally listed in both owning sections; the

@@ -98,6 +98,21 @@ const jobDefinition = defineCollection({
         return { set: { status: "claimed", claimedBy } };
       },
     },
+    prioritize: {
+      event: "job.prioritized",
+      input: {
+        type: "object",
+        additionalProperties: false,
+        properties: { availableAt: { type: "string" } },
+        required: ["availableAt"],
+      },
+      mutate({ input }) {
+        const availableAt = String(
+          (input as { availableAt?: unknown } | undefined)?.availableAt ?? "",
+        );
+        return { set: { availableAt } };
+      },
+    },
   },
   queries: {
     byExternalId: {
@@ -213,12 +228,9 @@ async function createFixture(
   });
   const registry = await createPluginRegistry({
     plugins: [definePlugin({
-      manifest: {
-        id: "test.collection-kernel",
-        version: "1.0.0",
-        provides: { processors: [processor.id] },
-      },
-      resources: { processors: [processor] },
+      id: "test.collection-kernel",
+      version: "1.0.0",
+      processors: [processor],
     })],
   });
   const executor = createDeliveryExecutor({
@@ -439,6 +451,19 @@ async function runKernelSuite(url: string, schema: string): Promise<void> {
       claimedBy: "agent-1",
     }, { namespace: "tenant-a" });
     assertEquals(isCollectionNoop(noopClaim), true);
+
+    const prioritized = await jobs.mutate("job-a", "prioritize", {
+      availableAt: "2026-08-18T00:00:00.000Z",
+    }, { namespace: "tenant-a" });
+    await settle(prioritized);
+    assertEquals(isCollectionNoop(prioritized), false);
+    if (!isCollectionNoop(prioritized)) {
+      assertEquals(prioritized.event.eventType, "job.prioritized");
+      assertEquals(
+        prioritized.record.availableAt,
+        "2026-08-18T00:00:00.000Z",
+      );
+    }
     assertEquals(
       (await store.listEvents({ namespace: "tenant-a", limit: 100 }))
         .filter((event) => event.type === "job.updated").length,

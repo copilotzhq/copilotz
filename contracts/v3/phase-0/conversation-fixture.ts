@@ -1,4 +1,7 @@
-import { createTestDatabase, type TestDatabase } from "../../../runtime/testing/ominipg.ts";
+import {
+  createTestDatabase,
+  type TestDatabase,
+} from "../../../runtime/testing/ominipg.ts";
 import {
   type ContentPreparer,
   createContentPreparer,
@@ -233,7 +236,9 @@ export async function seedPhase0Conversation(
       namespace: PHASE_0_NAMESPACE,
       idempotencyKey: "phase0:message:agent",
     }),
-    metadata: { copilotzWorkflow: { kind: "agent_output", llmAttemptId: "attempt-1" } },
+    metadata: {
+      copilotzWorkflow: { kind: "agent_output", llmAttemptId: "attempt-1" },
+    },
     identity: {
       correlationId: "phase0-run",
       deduplicationId: "phase0:message:agent",

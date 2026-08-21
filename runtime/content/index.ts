@@ -12,6 +12,7 @@ export {
 } from "./body-store.ts";
 export type {
   AbortBodyInput,
+  ActiveMutableBodyHead,
   AppendBodyInput,
   AppendResult,
   BodyFilesystemAccess,
@@ -49,8 +50,29 @@ export type {
   ProgressiveBodyFollower,
   ProgressiveBodyWriter,
 } from "./progressive.ts";
+export { createContentStreamRuntime } from "./stream.ts";
+export type {
+  ContentStreamAbortInput,
+  ContentStreamAppendInput,
+  ContentStreamAppendResult,
+  ContentStreamCloseInput,
+  ContentStreamFollowInput,
+  ContentStreamOpenInput,
+  ContentStreamRuntime,
+  ContentStreamWriter,
+  CreateContentStreamRuntimeOptions,
+} from "./stream.ts";
+export {
+  EMPTY_PROGRESSIVE_BODY_MAINTENANCE,
+  maintainProgressiveBodies,
+} from "./maintenance.ts";
+export type {
+  ProgressiveBodyMaintenanceError,
+  ProgressiveBodyMaintenanceResult,
+} from "./maintenance.ts";
 export { createBodyStorageRuntime } from "./storage.ts";
 export { assetIdFromRef, formatAssetRef } from "./asset-ref.ts";
+export { ASSET_BODY_OWNER_KIND } from "./types.ts";
 export {
   base64ToBytes,
   bytesToBase64,
@@ -98,6 +120,7 @@ export type {
   AssetBody,
   AssetBodyLocation,
   AssetId,
+  AssetManifestEntry,
   AssetOrigin,
   AssetRecord,
   AssetRepository,

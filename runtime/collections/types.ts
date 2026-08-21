@@ -6,12 +6,14 @@ import type {
   EventSubject,
   EventVisibility,
 } from "../events/index.ts";
+import type { AssetManifestEntry } from "../content/index.ts";
 
 export type CollectionEventOperation = "create" | "update" | "delete";
 
 export type CollectionCreated<TRecord> = Readonly<{
   operation: "create";
   record: TRecord;
+  assets: readonly AssetManifestEntry[];
 }>;
 
 export type CollectionUpdated<TRecord> = Readonly<{
@@ -20,12 +22,14 @@ export type CollectionUpdated<TRecord> = Readonly<{
   set: Partial<TRecord>;
   unset: readonly string[];
   record: TRecord;
+  assets: readonly AssetManifestEntry[];
 }>;
 
 export type CollectionDeleted<TRecord> = Readonly<{
   operation: "delete";
   id: string;
   record: TRecord;
+  assets: readonly AssetManifestEntry[];
 }>;
 
 export type CollectionEventBody<TRecord> =

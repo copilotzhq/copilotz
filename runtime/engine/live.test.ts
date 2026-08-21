@@ -81,18 +81,10 @@ Deno.test("live processors mutate causally without delivery rows or capacity-one
     plugins: [
       coreCollectionsPlugin,
       definePlugin({
-        manifest: {
-          id: "test.live",
-          version: "1.0.0",
-          provides: {
-            processors: [durable.id],
-            collections: [auditCollection.name],
-          },
-        },
-        resources: {
-          processors: [durable],
-          collections: [auditCollection],
-        },
+        id: "test.live",
+        version: "1.0.0",
+        processors: [durable],
+        collections: [auditCollection],
       }),
     ],
   });
@@ -196,12 +188,8 @@ Deno.test("live subscription failures remain independent and ephemeral", async (
   });
   const registry = await createPluginRegistry({
     plugins: [definePlugin({
-      manifest: {
-        id: "test.live-errors",
-        version: "1.0.0",
-        provides: { processors: [] },
-      },
-      resources: {},
+      id: "test.live-errors",
+      version: "1.0.0",
     })],
   });
   const db = await createTestDatabase({ url: ":memory:" });
@@ -260,12 +248,8 @@ Deno.test("transient catch-up replays committed events without delivery rows", a
     plugins: [
       coreCollectionsPlugin,
       definePlugin({
-        manifest: {
-          id: "test.transient-catch-up",
-          version: "1.0.0",
-          provides: {},
-        },
-        resources: {},
+        id: "test.transient-catch-up",
+        version: "1.0.0",
       }),
     ],
   });

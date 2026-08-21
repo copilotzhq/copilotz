@@ -1,6 +1,9 @@
 # Phase 10 implementation lock — declarative collections, resources, plugins, and streams
 
-Status: **10A and 10B1 complete with proof; 10B2 in progress.**
+Status: **10A, 10B1, 10B2, 10C, 10B3, and 10D1–10D5 are complete with proof.
+10D6 is in progress. The unreleased Stream Collection/Feature implementation was
+deleted and replaced by
+[runtime-native progressive streams](docs/v3/runtime-native-progressive-streams.md).**
 
 Locked: 2026-08-19
 
@@ -40,8 +43,9 @@ Phase 10 should make Copilotz easier to understand:
 - Plugins compose those declarations.
 - The runtime executes them without knowing optional-domain names.
 
-10A and 10B1 are complete. **10B2 is in progress.** No later slice starts
-without a green checkpoint and explicit user approval.
+10A, 10B1, 10B2, 10C, 10B3, and 10D1–10D5 are complete with local proof. 10D5
+deleted its unreleased Stream Collection/Feature shape and now provides
+runtime-native progressive content. 10D6 is in progress.
 
 ## 2. Simplicity rules
 
@@ -170,14 +174,19 @@ replayable even when an adapter implementation shares low-level byte code.
 
 `streamId`, `bodyId`, and `assetId` identify different things:
 
-- Stream is the semantic production session and remains a Collection plus
-  Feature owned by the stream plugin.
+- Stream is the runtime-native progressive production session for one Body. It
+  is not a Collection, Feature, plugin resource, durable semantic event family,
+  or application-domain record.
 - Body is operational byte state owned by the configured body store.
-- Asset is immutable semantic content produced by successful settlement.
+- Asset is immutable semantic content produced only when a ready Body is adopted
+  by Collection-declared assetization or standalone content publish.
 
-A Stream is not an Asset. An open Stream has no canonical content ref. A
-successfully settled Stream obtains exactly one canonical asset ref through the
-same declared-content path used by every other collection.
+A Stream is not an Asset. An open Stream has no canonical content ref. Appends
+write only Body parts. Closing a Stream seals a ready Body and returns
+invocation-local prepared content; it creates no Asset node by itself. The Asset
+node, owner edge, Body reference pin, and replay manifest are created only by
+the semantic mutation that adopts the prepared content. A sealed-but-unadopted
+Body remains operational orphan state and is collected after protection/grace.
 
 ## 4. Canonical operation call contract
 
@@ -334,34 +343,32 @@ descriptor is connection-owned, is not added to static composition, and creates
 no durable delivery; its declared dependencies must resolve against the selected
 composition before observation begins. The API does not expose the engine.
 
-Attachment and one-shot ingress stay on the same scope:
+Application ingress and observation use one session surface:
 
 ```ts
-await using attachment = await scope.connect(
-  { thread, participant },
-  options?,
-);
-await attachment.send({ type: "message", content, recipientIds }, options?);
+await using copilotz = await createCopilotz({ ... });
 
-await using run = await scope.run(
-  { thread, participant, content, recipientIds },
-  options?,
-);
+await copilotz.send(core.message({
+  thread: "thread-a",
+  participant: "user-a",
+  content: "hello",
+}));
+
+for await (const output of copilotz.observe()) {
+  // live committed CopilotzEvent or runtime stream output
+}
 ```
 
-`connect` returns an `AsyncDisposable` attachment with `outputs`, `send`, and
-`close`; `send` accepts typed domain/stream commands, never caller-authored
-events. `run` creates a temporary attachment, sends one message, exposes
-`events`, `done`, and `cancel`, and disposes the attachment. Both inherit scope
-and principal. Their second argument is `OperationOptions`; a direct root call
-is optional like every other operation. `/attachments` exports these handle and
-input types, not a second application factory.
-
-`connect` does not leave an invocation root ambient on its returned handle. Each
-later `attachment.send(..., options?)` starts a fresh root; supplying the same
-`operationKey` retries that send, while an unkeyed later send is new work. `run`
-owns one root and derives its internal connect/send/settlement operations from
-it, so the one-shot helper remains one retryable invocation.
+`send` accepts one runtime-neutral plugin input envelope. The runtime persists
+the envelope as an opaque JSON durable input event and never interprets plugin
+fields such as `thread`, `participant`, `recipientIds`, or `content`. Typed
+helpers such as `core.message(...)` are exported by their owning plugin and
+produce JSON-safe envelopes. Plugin Processors consume those input events and
+perform plugin-owned Collection mutations. `observe()` is the live transient
+projection of the session output stream. `events` remains the durable event
+store API (`append`, `list`, `subscribe`, `settlement`, etc.) and is not the
+session output iterator. The old `connect()`/`run()` attachment split is deleted
+during 10D6 rather than retained as a second application API.
 
 ## 5. Minimal declaration model
 
@@ -1515,7 +1522,7 @@ Implement Phase 10 in this order:
    2. knowledge;
    3. memory;
    4. schedules;
-   5. Stream semantic/plugin cutover over the shared BodyStore;
+   5. runtime-native progressive content over the shared BodyStore;
    6. goals.
 7. **10E1–10E5 — remaining first-party capability families**, one vertical slice
    at a time:
@@ -1559,9 +1566,12 @@ The dependency shape is:
 10B1, 10B2, and 10B3 are independently approved green slices. Closing one does
 not authorize the next. Do not reassemble them into one cutover.
 
-Streams precede goals so the ordinary `ConversationRunner` binding can compose
-over the plugin-owned Stream implementation. Goals depend on
-`ConversationRunner`, not Stream internals.
+Runtime-native progressive content precedes the application interaction cleanup.
+The application surface is one scoped session: `send(input)`, `events`, and
+`close()`. `send` submits plugin-owned ingress commands, never caller-authored
+events. The session output stream carries committed semantic events plus
+runtime-native stream outputs. Goals depend on this ordinary application session
+primitive, not Stream internals or a separate `ConversationRunner`.
 
 ## 8. Slice 10A — Feature action descriptors and transaction blocks
 
@@ -1590,10 +1600,10 @@ choreography.
 
 Do not inventory source strings such as provider/sleep/body-pump method names.
 That is brittle. 10A rejects invalid Collection/Feature calls structurally. The
-legacy registry internals `resources.list` / `get` / `require` and
-`PLUGIN_RESOURCE_TYPES` remain only until 10B3. They are not exposed on Feature
-action context. `context.streams` remains only until 10D5. 10A adds no adapter
-or second context path for them.
+legacy registry internals `resources.list` / `get` / `require` and the temporary
+fixed-family resource map remain only until 10B3. They are not exposed on
+Feature action context. The later 10D5 implementation removes public
+`context.streams`; 10A adds no adapter or second context path for it.
 
 ### 8.2 Exit proof
 
@@ -1714,7 +1724,8 @@ runtime/events/event-store.test.ts runtime/events/postgres.integration.test.ts`;
 runtime/collections/replay-pagination.regression.test.ts
 runtime/collections/processor-authority.test.ts runtime/events/event-store.test.ts
 runtime/events/postgres.integration.test.ts runtime/plugins/match.test.ts`
-— 24 passed, 0 failed, 2 ignored. 10B2 is now in progress.
+— 24 passed, 0 failed, 2 ignored. 10B2 later closed with the proof recorded in
+9.2.
 
 ### 9.2 Slice 10B2 — Protected BodyStore adapter and scoped facade
 
@@ -1769,14 +1780,17 @@ runtime/events/postgres.integration.test.ts runtime/plugins/match.test.ts`
   while ready protection is live, and allow tests that intentionally prove
   immediate cleanup/takeover to opt into `protectionMs: 0`.
 - Verified this checkpoint: targeted `deno check` for the BodyStore/progressive
-  files; `deno test --allow-all runtime/adapters/deno/assets.test.ts runtime/attachments/attachment-slice1.regression.test.ts runtime/content/database-repository.test.ts runtime/content/progressive-reservation.regression.test.ts runtime/streams/writer.test.ts runtime/streams/workload.test.ts`
+  files;
+  `deno test --allow-all runtime/adapters/deno/assets.test.ts runtime/attachments/attachment-slice1.regression.test.ts runtime/content/database-repository.test.ts runtime/content/progressive-reservation.regression.test.ts runtime/streams/writer.test.ts`
   — 24 passed, 0 failed; escalated local-S3
   `deno test --allow-all runtime/content/progressive.test.ts runtime/content/s3-body-store.test.ts runtime/content/s3-minio.test.ts`
   — 11 passed, 0 failed, 1 ignored.
-- Full 10B2 closure gates: `deno task check`; `deno test --allow-all
+- Full 10B2 closure gates: `deno task check`;
+  `deno test --allow-all
   --no-run`; `git diff --check`.
 
-10B2 implementation is closed locally. 10C has not started.
+10B2 implementation is closed locally. 10C later closed with the proof recorded
+in section 10.
 
 `defineProtectedResource` may appear here as the BodyStore contract object the
 engine holds. Plugins cannot bind it. The composer that synthesizes the database
@@ -2086,15 +2100,122 @@ fixed-family value, introduce that family's real target context namespace and
 migrate its provider and consumer together. Physical/domain moves that do not
 affect injection remain in 10D/10E.
 
-One sequencing exception is explicit. The core text Processor and current Tool
-executor still call the sole pre-existing `context.streams.write/follow` handle;
-attachment fixtures exercise that same path. The final Stream Feature cannot
-exist before 10C assetization. Until 10D5 closes, that single inherited field
-remains on workflow Processor contexts, but static inventory permits only those
-callers to use it; no selective legacy injector, target Stream Feature, or
-second lookup path is added, and no new caller may use it. 10D5 introduces the
-final Feature, migrates those callers to their declared Feature alias, rewrites
-the fixtures, and deletes `context.streams` in the same slice.
+One sequencing exception was explicit before 10D5. The core text Processor, Tool
+executor, and attachment fixtures temporarily used the sole pre-existing
+`context.streams.write/follow` handle. The superseded local 10D5 moved those
+callers to `streamFeature.open/follow`; the replacement 10D5 must instead move
+them to runtime-native `context.content.stream` and delete the Stream Feature,
+Stream Collection, `context.streams`, and any Stream plugin/resource vocabulary.
+
+10B3 implementation progress:
+
+- `definePlugin({ id, version, plugins, ...resources })` is implemented for the
+  interim flat-source migration. It derives `manifest.provides` from declared
+  resource arrays, validates duplicate resource IDs, and rejects the removed
+  hand-authored `{ manifest, resources }` module export shape.
+- Dependency plugins passed through `plugins` are normalized before the
+  declaring plugin, registered before the declaring plugin, cycle-checked, and
+  shared by object identity when two declaring plugins depend on the same
+  plugin. The declaring plugin still has ordinary later-resource precedence over
+  its dependencies.
+- String plugin sources, injected module plugin resolvers, named
+  imports/presets, and the `createModulePluginResolver` adapter have been
+  deleted. Composition accepts concrete plugin values only, and
+  `createPluginRegistry()` is synchronous.
+- The public/exported `PLUGIN_RESOURCE_TYPES`, `pluginResourceId`,
+  `PluginResourceOrigin`, and generic registry-origin vocabulary have been
+  deleted. `PluginResources` now has an explicit typed shape; the only remaining
+  declaration-type enumerator is private implementation code used to derive
+  manifest metadata and project legacy source declarations into property
+  context.
+- The public application/registry `resources` override option has been deleted.
+  Application-local values are supplied through `createCopilotz({ context })`
+  and receive no fabricated plugin origin.
+- Declared fixed-family resource arrays now project into the same property
+  context maps as hand-authored `context` contributions; the plugin's explicit
+  `context` overlays after its projected declarations, and final application
+  context overlays after every plugin.
+- `definePlugin({ context })` and `createCopilotz({ context })` now accept the
+  property-context contribution shape. Contributions compose through dependency
+  plugins, declaring plugins, and final application context; Feature and
+  Processor contexts receive those values through direct properties such as
+  `context.tools.search`.
+- Property-context projection preserves plugin-defined namespaces as runtime
+  properties instead of copying only the first-party buckets. Known first-party
+  namespaces remain strongly typed; custom namespaces are ordinary local
+  plugin/application contracts and do not introduce a `context.resource(...)`
+  lookup API.
+- Prompt contributors now compose through the property-context namespace
+  `context.promptContext.<id>` instead of the legacy `context` resource bucket
+  or an interim plugin field. Prompt contribution collection now reads the
+  property map directly, so production no longer calls
+  `resources.list("context")`.
+- Processor capabilities now expose the same property-context maps as Feature
+  actions. Central text, ask, schedule, skill-loading, memory, and tool-executor
+  code paths use direct maps for agent/tool/skill/LLM lookup where no old helper
+  API is still in the way.
+- The workflow tool catalog now consumes the same property-context map family
+  instead of `ScopedPluginResources`. Text workflow, capability introspection,
+  server/adapter catalog tests, and tool-catalog tests call
+  `catalog.all(context)` / `catalog.forAgent(context, agent)`.
+- `create_thread` now checks its deterministic thread and initial-message IDs
+  before mutating, so a retry with the same tool execution returns the same
+  result without re-entering declared-content collection creation.
+- LLM provider-chain helpers now consume the property-context LLM map instead of
+  `ScopedPluginResources`. Text workflow and memory consolidation call
+  `generateChainFromResources(context, config)` /
+  `sessionChainFromResources(context, config)`, and `requireLlmResource`
+  resolves through `context.llm[provider]`.
+- Agent config lookup now consumes the property-context agent map instead of
+  `ScopedPluginResources`. Text workflow calls `requireAgent(context, id)`.
+- Capability resolution and goal execution now resolve agent/skill/tool/API/MCP
+  values through property context maps. Capability descriptors for
+  application/context values no longer fabricate plugin origins from a fixed
+  registry bucket; context-supplied values have no registry origin.
+- Knowledge embedding providers now compose through the property-context
+  `context.embeddings.<id>` namespace. Indexing, search tools, and knowledge
+  tests call `embedKnowledgeTexts(context, ...)` instead of passing
+  `ScopedPluginResources`; test drivers fetch tools through `context.tools`.
+- Memory-kind definitions now compose through `context.memoryKinds` instead of
+  the fixed `memoryKinds` resource bucket. The long-term-memory plugin
+  contributes its core kinds through property context, and consolidation reads
+  `context.memoryKinds` directly.
+- The internal `requireFeatureActions(context, id)` bridge no longer reaches
+  through `context.resources.require("features", id)`. It resolves through the
+  scoped `context.featureDefinitions[id]` map and then invokes the already-bound
+  Feature machinery.
+- `createFeatureContextValues()` now consumes only the composed property-context
+  maps. It no longer scans fixed buckets with `resources.list`, and Feature and
+  Processor contexts no longer expose a `resources` handle.
+- Current focused verification for this 10B3 progress:
+  `deno test --allow-all runtime/plugins/plugins.test.ts
+  contracts/v3/public-surface.contract.test.ts
+  contracts/v3/runtime-portability.contract.test.ts
+  runtime/application/application.test.ts runtime/adapters/tool-catalog.test.ts
+  runtime/tools/catalog.test.ts runtime/capabilities/capabilities.test.ts
+  plugins/core/plugin.test.ts runtime/skills/plugin.test.ts`
+  — 48 passed, 0 failed; escalated
+  `deno test --allow-all runtime/application/topology.test.ts` — 3 passed, 0
+  failed. Focused vocabulary deletion verification:
+  `deno test --allow-all runtime/plugins/plugins.test.ts
+  runtime/content/content.test.ts contracts/v3/phase-0/inventory.test.ts
+  runtime/plugins/transient-wildcard.regression.test.ts`
+  — 26 passed, 0 failed.
+- The plugin registry no longer exposes generic
+  `list/get/require/origin(type, id)` methods. Collections use the explicit
+  internal `registry.collections` surface, Processors use `registry.processors`,
+  and every other first-party family resolves through property context maps.
+- Final 10B3 verification:
+  `deno test --allow-all runtime/plugins/plugins.test.ts
+  runtime/capabilities/capabilities.test.ts runtime/application/application.test.ts
+  plugins/core/plugin.test.ts runtime/skills/plugin.test.ts
+  runtime/execution/execution.test.ts runtime/events/coordinator.test.ts
+  runtime/channels/runtime.test.ts server/event-native.test.ts`
+  — 50 passed, 0 failed; `deno test --allow-all --no-run`; `deno task check`;
+  `git diff
+  --check`.
+
+10B3 implementation is closed locally.
 
 ### 9.4 Database body layout (10B2)
 
@@ -2179,7 +2300,7 @@ cross-instance races, and compare-delete races. No cleanup test may inspect a
 Stream name or rely on a process-local in-flight set.
 
 Close 10B2 only after the old body path is absent. EventBodyStore is already
-frozen from 10B1. Record that 10C has not started.
+frozen from 10B1. Record that the next implementation owner has not started.
 
 **10B3** runs after 10C. The reusable resolution/injection suite proves:
 
@@ -2203,10 +2324,10 @@ Processor binding, missing-selection failure, and the absence of namespace or
 physical-schema overrides on every operation.
 
 Prove the database BodyStore default and application override, deployment
-rejection, and plugin-binding rejection of the protected contract. Close 10B3
-only after the fixed registry, old plugin shape, broad contexts other than the
-inventoried sole-path Stream handle, and alternate composition inputs are
-absent. Record that 10D1 has not started.
+rejection, and plugin-binding rejection of the protected contract. 10B3 closed
+after the fixed registry, old plugin shape, broad contexts other than the
+inventoried sole-path Stream handle, and alternate composition inputs were
+absent. 10D1 is also closed locally.
 
 ## 10. Slice 10C — canonical declared content
 
@@ -2228,11 +2349,49 @@ Stream content remains excluded until 10D5 because an open Stream has no Asset.
 The final BodyStore, its database layout, every byte caller, and deletion of the
 unreleased body path are already complete in 10B2. 10C uses that frozen scoped
 content mechanism and does not alter resource composition or physical body APIs.
-10B3 has not started.
+10B3 is closed locally.
 
 The final EventBodyStore and Asset manifest are already mandatory and frozen in
 10B1. 10C populates that manifest through the declared-content path but adds no
 event-body persistence shape or reader.
+
+Implementation progress:
+
+- 10C ran after 10B2 closure and is closed locally. 10B3 is also closed locally.
+- `runtime/collections` now accepts the content asset repository, canonicalizes
+  declared `content.fields` during the collection commit, persists only
+  canonical `ContentSequence` values, and synchronizes `has_asset` ownership
+  from the final record.
+- `message`, `llm_attempt`, and `tool_execution` declare
+  `content: { fields: ["content"] }`.
+- Core message, thread-message, LLM attempt, and tool-execution Feature actions
+  now pass `DurableContentInput` / composed `PreparedContent` into Collection
+  writes instead of calling `context.content.materialize(...)` or
+  `context.content.linkOwner(...)`.
+- Declared-content collection writes now populate the mandatory metadata-only
+  Event Body Asset manifest. Projection/replay consumes that manifest to rebuild
+  protected Asset metadata, the Asset Body pin, and `has_asset` ownership edges
+  without opening BodyStore.
+- Processor matching for content-bearing Collection mutations now receives the
+  canonical declared-content shape (`ContentRef[]`) rather than the raw
+  `PreparedContent` preview.
+- Conformance coverage now includes missing required content, `null`, empty
+  content, existing-ref writes with duplicate refs and no new Asset manifest,
+  required-field `unset` rollback, SQL rollback after prepared body
+  materialization, replacement through update and command, delete ownership
+  cleanup, replayed Asset metadata/Body pin/ownership edges, and parent-only
+  event emission across both database-native and filesystem BodyStores.
+- Focused verification:
+  `deno test --allow-all plugins/core/ask.test.ts
+  plugins/core/resources/features/thread-message.test.ts
+  plugins/core/thread-replay.regression.test.ts plugins/core/text.test.ts
+  runtime/domain/collection-content.test.ts runtime/collections/kernel.test.ts
+  runtime/collections/processor-authority.test.ts
+  runtime/collections/replay-pagination.regression.test.ts`
+  — 31 passed, 0 failed, 1 ignored; `deno task check`;
+  `deno test --allow-all --no-run`; `git diff --check`.
+
+10C and 10B3 implementations are closed locally.
 
 ### 10.2 One reusable preflight
 
@@ -2350,8 +2509,8 @@ Every slice follows the same recipe:
 
 1. convert any Collections it owns to the canonical kernel;
 2. move business declarations/policy to the owning plugin while preserving the
-   final contracts, bindings, `requires`, and narrow contexts established in
-   10B;
+   final contracts, composed property context, and narrow runtime services
+   established in 10B;
 3. move external/unbounded work to workflow actions and durable mutations to
    short transaction actions;
 4. remove that domain's production runtime construction branch;
@@ -2360,14 +2519,249 @@ Every slice follows the same recipe:
 6. prove omission: if another selected plugin requires it, composition fails
    clearly.
 
-| Slice | Plugin    | Collections and declared content                                              | Special boundary                                                                                               |
-| ----- | --------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| 10D1  | usage     | usage; no content fields                                                      | Records attempts once without payload copies.                                                                  |
-| 10D2  | knowledge | `document.source`; chunk has no content                                       | Loading/embedding is workflow work; document/chunk commit is one transaction action.                           |
-| 10D3  | memory    | `long_term_memory.content`, `contextSnapshotContent`, `memory_record.content` | Consumes the `memoryKinds` `many` bindings already cut over in 10B3.                                           |
-| 10D4  | schedules | `scheduled_job.run.content`                                                   | Host trigger calls a workflow; one pure command advances state and emits the event consumed by a Processor.    |
-| 10D5  | streams   | `stream.content` only after successful settlement                             | Stream owns semantics; one BodyStore supplies bytes; settlement reuses kernel assetization.                    |
-| 10D6  | goals     | no new Collection                                                             | Goal orchestration is a workflow over one cohesive ConversationRunner resource plus exact domain dependencies. |
+| Slice | Plugin                             | Collections and declared content                                                                 | Special boundary                                                                                              |
+| ----- | ---------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| 10D1  | usage                              | usage; no content fields                                                                         | Records attempts once without payload copies.                                                                 |
+| 10D2  | knowledge                          | `document.source`; chunk has no content                                                          | Loading/embedding is workflow work; document/chunk commit is one transaction action.                          |
+| 10D3  | memory                             | `long_term_memory.content`, `contextSnapshotContent`, `memory_record.content`                    | Consumes the `memoryKinds` `many` bindings already cut over in 10B3.                                          |
+| 10D4  | schedules                          | `scheduled_job.run.content`                                                                      | Host trigger calls a workflow; one pure command advances state and emits the event consumed by a Processor.   |
+| 10D5  | runtime-native progressive content | no Stream Collection; owning semantic Collections adopt prepared output through declared content | Stream is BodyStore progressive production. Asset nodes are created only by adoption/publish.                 |
+| 10D6  | application session                | no new Collection                                                                                | Collapse `connect`/`run` into one application session shape: `send`, `events`, and `close`.                   |
+| 10D7  | goals                              | no new Collection                                                                                | Goal orchestration is an ordinary plugin workflow over the unified application session plus composed context. |
+
+10D1 implementation progress:
+
+- Usage ownership moved from `runtime/usage` to `plugins/usage`.
+- The public `/usage` subpath and package root now export
+  `plugins/usage/index.ts`.
+- `usageCollection` now uses the canonical `@copilotz/copilotz/collections`
+  definition API.
+- Usage production code imports shared contracts through public semantic
+  subpaths and continues to provide one Collection plus two durable Processors.
+- Package-root `core.usage` still composes the usage plugin as an ordinary
+  plugin; runtime application assembly no longer imports usage.
+- Obsolete `runtime/usage` production/test paths and in-repository references
+  have been removed or repointed.
+- Focused verification:
+  `deno test --allow-all plugins/usage/plugin.test.ts
+  runtime/admin/plugin.test.ts runtime/application/application.test.ts
+  contracts/v3/phase-0/inventory.test.ts
+  contracts/v3/architecture.contract.test.ts`
+  — 24 passed, 0 failed.
+
+10D1 implementation is closed locally.
+
+10D2 implementation progress:
+
+- Runtime application core composition no longer imports or instantiates the
+  knowledge plugin.
+- Package-root `core.knowledge` still composes the knowledge plugin as an
+  ordinary plugin, preserving user-facing DX while keeping runtime application
+  assembly domain-agnostic.
+- Knowledge `document` and `chunk` Collections now use the canonical
+  `@copilotz/copilotz/collections` definition API.
+- Property-context projection now preserves custom namespaces through Feature
+  and Processor-attached Feature contexts, so plugin-defined context contracts
+  can use the same property shape as first-party `tools`, `llm`, `embeddings`,
+  and `memoryKinds` namespaces.
+- Public `CopilotzApplication` no longer exposes the broad
+  `application.knowledge` repository by spreading the internal engine, and the
+  package-root composition test proves `"knowledge" in application` is false.
+- The knowledge ingestion tool now creates `document` records through the
+  canonical Collection API, so its create path uses declared collection content
+  assetization instead of `processor.knowledge.create`.
+- Knowledge search and delete tools now delegate to `knowledgeFeature`
+  (`searchDocuments` and `deleteDocument`) after doing their own tool-local
+  input/embedding work. They no longer require the broad `processor.knowledge`
+  capability.
+- Collection commands can now declare a semantic event type. The knowledge
+  document commands use this to preserve `document.processing`,
+  `document.indexed`, `document.duplicate`, and `document.failed` while still
+  going through the generic Collection kernel. Collection replay includes those
+  command event types.
+- The index processor now performs only workflow work directly: source loading,
+  extraction, embedding, and announcement. Its graph mutations go through
+  `knowledgeFeature` actions and Collection commands, and chunk projections are
+  now real `chunk.created` Collection events instead of direct SQL writes.
+- `ScopedKnowledge`, the engine/database-scope `KnowledgeRepository` capability,
+  the public `createKnowledgeRepository` export, and
+  `runtime/knowledge/repository.ts` have been deleted. Knowledge tests and the
+  isolated v1 migration test read/write through final Collection, Feature,
+  Event, and Content surfaces.
+- `knowledgeDocumentCollection` now declares the thread relation plus named
+  `byExternalId`, `bySourceUri`, and `byContentHash` queries needed by plugin
+  code as it moves off the repository facade.
+- Focused verification:
+  `deno test --allow-all runtime/application/application.test.ts
+  runtime/knowledge/knowledge.test.ts contracts/v3/phase-0/inventory.test.ts
+  contracts/v3/configuration.contract.test.ts`
+  — 22 passed, 0 failed.
+- App-surface focused verification:
+  `deno test --allow-all runtime/knowledge/knowledge.test.ts
+  runtime/application/application.test.ts`
+  — 14 passed, 0 failed;
+  `deno check runtime/application/application.ts
+  runtime/application/types.ts runtime/knowledge/knowledge.test.ts`
+  — passed.
+- Knowledge-ingest focused verification:
+  `deno test --allow-all runtime/knowledge/knowledge.test.ts` — 6 passed, 0
+  failed;
+  `deno check runtime/knowledge/collections.ts runtime/knowledge/tools.ts
+  runtime/knowledge/knowledge.test.ts`
+  — passed.
+- Knowledge tool Feature-delegation focused verification:
+  `deno test --allow-all runtime/knowledge/knowledge.test.ts` — 8 passed, 0
+  failed;
+  `deno check runtime/knowledge/features.ts runtime/knowledge/tools.ts
+  runtime/knowledge/knowledge.test.ts`
+  — passed.
+- Knowledge indexer Feature/Collection focused verification:
+  `deno test --allow-all runtime/collections/kernel.test.ts
+  runtime/collections/replay-pagination.regression.test.ts
+  runtime/knowledge/knowledge.test.ts`
+  — 13 passed, 0 failed, 1 ignored;
+  `deno check runtime/collections/definition.ts runtime/collections/kernel.ts
+  runtime/collections/replay.ts runtime/collections/kernel.test.ts
+  runtime/knowledge/collections.ts runtime/knowledge/features.ts
+  runtime/knowledge/plugin.ts runtime/knowledge/knowledge.test.ts`
+  — passed; `deno test --allow-all contracts/v3/phase-0/inventory.test.ts` — 7
+  passed, 0 failed.
+- Knowledge repository deletion focused verification:
+  `deno test --allow-all runtime/knowledge/knowledge.test.ts
+  runtime/engine/feature-context.regression.test.ts
+  runtime/application/application.test.ts contracts/v3/phase-0/inventory.test.ts`
+  — 25 passed, 0 failed;
+  `deno check migration/v1/migration.test.ts runtime/application/application.ts
+  runtime/engine/types.ts runtime/engine/context.ts
+  runtime/engine/database-scope.ts runtime/application/types.ts
+  runtime/knowledge/index.ts runtime/knowledge/types.ts
+  runtime/knowledge/collections.ts runtime/knowledge/knowledge.test.ts
+  contracts/v3/phase-0/inventory.test.ts`
+  — passed.
+- Broad verification after the indexer Feature/Collection cut:
+  `deno test --allow-all --no-run`, `deno task check`, and `git diff --check`
+  all passed.
+- Broad verification after the tool Feature-delegation cut:
+  `deno test --allow-all --no-run`, `deno task check`, and `git diff --check`
+  all passed.
+- Additional focused verification:
+  `deno test --allow-all runtime/features/effects.test.ts
+  runtime/plugins/plugins.test.ts
+  runtime/engine/feature-context.regression.test.ts`
+  — 14 passed, 0 failed;
+  `deno check runtime/features/types.ts runtime/features/context.ts
+  runtime/features/effects.test.ts runtime/engine/context.ts
+  runtime/engine/feature-context.regression.test.ts`
+  — passed.
+- Broad verification after the repository-deletion/public-surface cleanup:
+  `deno test --allow-all --no-run`, `deno task check`, and `git diff --check`
+  all passed.
+
+10D2, 10D3, 10D4, and 10D5 implementations are closed locally.
+
+10D3 implementation progress:
+
+- Memory `memory_space`, `memory_space_access`, `long_term_memory`, and
+  `memory_record` Collections now use the canonical
+  `@copilotz/copilotz/collections` definition API instead of importing through
+  `runtime/domain`.
+- Final runtime memory content fields now use canonical ContentSequence arrays:
+  `long_term_memory.content`, `long_term_memory.contextSnapshotContent`, and
+  `memory_record.content` no longer accept or write `null`/string-shaped runtime
+  values. Published legacy rows remain Phase 11 migration input only.
+- Strict memory schemas now account for the Collection kernel's persisted
+  envelope fields, preserving canonical validation instead of weakening the
+  kernel.
+- Memory consolidation now commits through the memory-owned
+  `copilotz.memory.consolidation` Feature. The Feature uses
+  `context.transaction(...)` for the aggregate, ordinary Collection writes for
+  `memory_record` and `long_term_memory`, and the narrow transaction-only
+  `tx.relations.upsert(...)` primitive for semantic graph edges. Processors no
+  longer receive `context.memory`.
+- The broad engine/database-scope memory repository construction path,
+  `ScopedMemoryConsolidation`, `MemoryConsolidationRepository`, and
+  `runtime/memory/repository.ts` have been deleted.
+
+Focused verification:
+
+- `deno check runtime/memory/collections.ts runtime/memory/plugin.ts runtime/memory/plugin.test.ts runtime/engine/types.ts runtime/engine/context.ts runtime/engine/database-scope.ts`
+  — passed.
+- `deno test --allow-all runtime/memory/plugin.test.ts runtime/memory/consolidation.test.ts`
+  — 25 passed, 0 failed.
+- Broad verification after the canonical memory Collection/content cut:
+  `deno test --allow-all --no-run`, `deno task check`, and `git diff --check`
+  all passed.
+- Memory repository deletion focused verification:
+  `deno check runtime/memory/plugin.ts runtime/memory/plugin.test.ts
+  runtime/engine/types.ts runtime/engine/context.ts
+  runtime/engine/database-scope.ts runtime/engine/feature-context.regression.test.ts
+  runtime/features/types.ts runtime/features/context.ts
+  contracts/v3/phase-0/inventory.test.ts`
+  — passed.
+- `deno test --allow-all runtime/memory/plugin.test.ts
+  runtime/memory/consolidation.test.ts
+  runtime/engine/feature-context.regression.test.ts
+  contracts/v3/phase-0/inventory.test.ts`
+  — 33 passed, 0 failed.
+- Broad verification after the repository/context deletion:
+  `deno test --allow-all --no-run`, `deno task check`, and `git diff --check`
+  all passed. Package surface reports 311 production modules after deleting
+  `runtime/memory/repository.ts`.
+
+10D3, 10D4, and 10D5 implementations are closed locally.
+
+10D4 implementation progress:
+
+- `scheduledJobCollection` now uses the canonical
+  `@copilotz/copilotz/collections` definition API instead of importing through
+  `runtime/domain`. The strict schedule schema accounts for the Collection
+  kernel's persisted `namespace` envelope field and no longer carries the
+  old-only `keys` descriptor.
+- Due-event workflow dispatch now belongs to the schedule plugin as the
+  `copilotz.scheduled-jobs.dispatch` Feature. The durable
+  `scheduled_jobs.dispatch` Processor reacts to `scheduled_job.due` and
+  delegates to that Feature, so business workflow is no longer inline in the
+  Processor.
+- Normal lifecycle business logic now belongs to the schedule plugin as the
+  `copilotz.scheduled-jobs.lifecycle` Feature. The `scheduled_jobs` Tool calls
+  that Feature for create, list, get, update, pause, resume, and cancel, using
+  ordinary property context/Feature invocation instead of the broad
+  `processor.schedules` lifecycle facade. Raw tool content is prepared at the
+  tool boundary and handed to the scheduled job Collection's declared
+  `run.content` field for kernel assetization.
+- Cron/status/record normalization moved into `runtime/schedules/model.ts`, so
+  new Feature code no longer imports the old repository just to share schedule
+  model rules.
+- `scheduledJobCollection.commands.due` now emits the final-style
+  `scheduled_job.due` event through the Collection kernel. The command
+  atomically advances the scheduled job record under the Collection lock, and
+  the dispatch Processor reconstructs the occurrence from resolved
+  `event.data.record`.
+- The old schedule repository and broad lifecycle facade were deleted.
+  `application.schedules` and `processor.schedules` now expose only the narrow
+  host/processor trigger surface (`tick` at the host, `runNow` where already
+  used by tools). The trigger implementation lives in
+  `runtime/schedules/trigger.ts` and calls the `due` Collection command; it does
+  not commit custom schedule events through the raw event coordinator.
+- Feature context now exposes `context.now()`, backed by the engine's injected
+  clock. Schedule lifecycle Features use this clock instead of ambient wall
+  time.
+
+Focused verification:
+
+- `deno check runtime/schedules/collection.ts runtime/schedules/lifecycle.ts
+  runtime/schedules/model.ts runtime/schedules/plugin.ts
+  runtime/schedules/trigger.ts runtime/schedules/tool.ts
+  runtime/schedules/schedules.test.ts`
+  — passed.
+- `deno test --allow-all runtime/schedules/schedules.test.ts
+  contracts/v3/phase-0/inventory.test.ts`
+  — 11 passed, 0 failed. The schedule test now includes a direct
+  Collection-command due trigger proof.
+- Broad verification after this cut: `deno test --allow-all --no-run`,
+  `deno task check`, and `git diff --check` all passed.
+
+10D4 and 10D5 are closed locally. 10D6 is in progress.
 
 ### 11.1 Domain clarifications
 
@@ -2376,13 +2770,56 @@ Every slice follows the same recipe:
   enters the final runtime contract.
 - Schedule occurrence identity derives from the stable command operation/event
   identity. Do not add a scheduler kernel or occurrence service.
-- Goals use one cohesive `ConversationRunner` contract around `run()` and
-  `RunHandle`. Cancellation comes from the action signal and `RunHandle.cancel`.
-  Do not decompose application access into a family of plumbing resources.
+- Goals use the unified application session primitive. Cancellation comes from
+  the action signal and the returned send/session handle. Do not introduce a
+  separate `ConversationRunner` resource.
 - Prompt/transcript migration belongs to 10E1 with agents and context policy.
   Phase 11 does not own source-architecture cleanup.
 
-## 12. Slice 10D5 — Stream semantic/plugin cutover
+## 12. Slice 10D5 — runtime-native progressive content
+
+The earlier local 10D5 implementation and notes below described Stream as a core
+plugin Collection plus Feature (`stream.created`, `stream.updated`,
+`streamFeature.open/follow`). That implementation is unreleased refactor-branch
+work and is superseded by
+[runtime-native progressive streams](docs/v3/runtime-native-progressive-streams.md).
+Treat the previous 10D5 proof log as historical evidence only.
+
+The replacement 10D5 objective is:
+
+- move Stream from semantic plugin/resource vocabulary into scoped content as
+  runtime-native progressive Body production;
+- delete the Stream Collection, Stream Feature, `stream.created` /
+  `stream.updated` durable event contract, and plugin/resource exports;
+- expose live output as ephemeral runtime/attachment projection rather than
+  durable Stream graph state;
+- keep Asset metadata protected and graph-native, but create Asset nodes only
+  when a ready Body is adopted by Collection-declared assetization or standalone
+  publish; and
+- prove closed-but-unadopted ready Bodies are protected operational orphans that
+  are eventually collected, not staging Assets.
+
+Replacement implementation progress:
+
+- `runtime/content/stream.ts` now provides the runtime-native progressive
+  content API: `open`, writer `append`/`close`/`abort`, and `follow`.
+- Processor and Feature contexts expose the stream under
+  `context.content.stream`.
+- Core LLM live output and workflow-tool live output use the runtime-native
+  content stream API and no longer call `streamFeature.open` for output streams.
+- Attachment outputs follow ephemeral runtime `stream.output` events and read
+  bytes through the scoped content stream follower.
+- Engine maintenance now fences and aborts only expired progressive Body writers
+  through the BodyStore. It does not inspect a semantic Stream record or choose
+  a plugin-owned terminal outcome.
+- The old Stream Collection, Stream Feature, `runtime/streams/*`, root export,
+  durable stream-event follower path, and their superseded tests are deleted.
+
+Session transcript ingress is explicitly deferred to 10E1. It must introduce a
+direct application/session protocol; it must not recreate a Stream Collection or
+thread/lane discovery index.
+
+### 12.0 Historical superseded notes
 
 10B2 has already migrated every byte caller and adapter to the frozen BodyStore,
 deleted the intermediate body API/schema, and proved all implementations. 10D5
@@ -2390,6 +2827,197 @@ changes only Stream semantics, ownership, public API, recovery policy, and
 plugin placement. It adds no body abstraction, capability negotiation, or table.
 It also replaces the inventoried `context.streams` callers from 10B3 with an
 ordinary declared Stream Feature alias and deletes that last context exception.
+
+10D5 implementation result:
+
+- The low-level Stream writer now exposes the target writer verbs:
+  `append({ bytes, appendId })` and `settle({ outcome, ... })`. `append`
+  projects BodyStore append receipts down to `{ startOffset, endOffset }`, so
+  protection and writer-generation details remain private.
+- First-party Stream writer call sites in the core text processor, tool
+  executor, and attachment tests now use `append`/`settle` instead of `write`,
+  `finalize`, `fail`, or `abandon`.
+- The core plugin now declares and exports `copilotz.core.stream` with the final
+  `open` and `follow` action names. The Feature uses a protected content-scoped
+  Stream runtime backed by `streamCollection` plus BodyStore; it no longer
+  depends on a hidden engine `streams` handle.
+- Core text live-output and attachment test processors now call
+  `context.feature(streamFeature).open/follow` instead of direct
+  `context.streams.write/follow`.
+- Runtime tool execution no longer reaches into `context.streams`; the core
+  `execute-tool` Processor supplies an `openStream` function backed by
+  `streamFeature.open`. The tools runtime owns only the small callback seam, not
+  the Stream Feature or a core import.
+- `CopilotzProcessorCapabilities` no longer exposes public `streams`, and the
+  old exported `ScopedStreams` / `ScopedStreamWriteInput` engine types are gone.
+- The old Oxian Stream workload/protocol branch is deleted. `runtime/streams` no
+  longer exports `copilotz.stream.v1` dispatch/result metadata, the engine no
+  longer reserves or installs a Stream workload/local worker, and WebSocket
+  topology tests now prove ordinary durable/live processor placement without
+  proxying Stream chunks through Oxian.
+- Successful Stream settlement now seals the progressive Body, submits it as a
+  ready-Body prepared-content candidate through the Stream Collection's declared
+  `content` field, unsets `bodyId`, and transfers the Body-reference pin from
+  the Stream record to the protected Asset metadata without copying bytes.
+- Stream settlement now checks durable terminal graph state before mutating the
+  Body. Retrying the same terminal outcome returns the durable record,
+  conflicting terminal outcomes reject without sealing/aborting the Body, and
+  failed or abandoned streams expose no readable bytes or body-reference pin.
+- `runtime/streams/recovery.ts` now provides the host-local Stream recovery
+  primitive. It reads committed Stream state plus BodyStore state, reuses the
+  same ready-Body prepared-content path as normal close, defers while a writer
+  lease is live, compare-takes over expired open/sealing bodies before aborting
+  and abandoning, closes open Streams whose Body is already ready, and fails
+  open Streams whose Body is missing. It introduces no Stream dispatcher, Oxian
+  workload, byte proxy, or recovery-only BodyStore method.
+- Engine maintenance now scans open Stream records by namespace, invokes the
+  host-local recovery primitive, reports bounded Stream recovery counters, and
+  leaves live writer leases deferred. This is the recovery scheduling/wiring;
+  there is no eager `stream.created` recovery Processor.
+- Stream body/Asset identity is deterministic from the Stream id, so retrying a
+  Stream settlement uses the same Body key and protected Asset id instead of a
+  second random id.
+- Public Stream writer methods accept optional append/settle options at the type
+  boundary. Aborted signals reject before mutating, and settlement
+  `operationKey` maps into the nested Collection identity.
+- Engine recovery now has a vertical proof for the synthesized database
+  BodyStore and one explicit application BodyStore override.
+
+Focused verification for this checkpoint:
+
+- `deno check runtime/content/progressive.ts runtime/streams/writer.ts
+  runtime/streams/follower.ts runtime/tools/executor.ts
+  plugins/core/resources/processors/text.ts runtime/streams/writer.test.ts
+  runtime/attachments/attachment.test.ts`
+  — passed.
+- `deno test --allow-all runtime/streams/writer.test.ts
+  runtime/attachments/attachment.test.ts`
+  — 15 passed, 0 failed.
+- `deno task check` — passed; package surface reports 34 exports and 314
+  production modules.
+- `deno check plugins/core/resources/features/stream.ts plugins/core/plugin.ts
+  plugins/core/index.ts plugins/core/resources/processors/text.ts
+  runtime/attachments/attachment.test.ts runtime/tools/executor.test.ts
+  runtime/streams/writer.ts runtime/content/progressive.ts`
+  — passed.
+- `deno test --allow-all runtime/streams/writer.test.ts
+  runtime/attachments/attachment.test.ts plugins/core/text.test.ts
+  runtime/tools/executor.test.ts`
+  — 35 passed, 0 failed.
+- Re-run after adding the explicit public Stream Feature type:
+  `deno check plugins/core/resources/features/stream.ts plugins/core/plugin.ts
+  plugins/core/index.ts plugins/core/resources/processors/text.ts
+  runtime/attachments/attachment.test.ts runtime/tools/executor.test.ts
+  runtime/streams/writer.ts runtime/content/progressive.ts`,
+  `deno task check`, and `git diff --check` all passed. Package surface reports
+  34 exports and 314 production modules.
+- After removing public `context.streams`:
+  `deno check runtime/engine/types.ts runtime/engine/context.ts
+  plugins/core/resources/features/stream.ts
+  plugins/core/resources/processors/text.ts runtime/tools/executor.ts
+  runtime/tools/executor.test.ts runtime/attachments/attachment.test.ts`
+  — passed;
+  `deno test --allow-all runtime/tools/executor.test.ts
+  plugins/core/text.test.ts runtime/attachments/attachment.test.ts
+  runtime/engine/feature-context.regression.test.ts`
+  — 33 passed, 0 failed; `deno task check` and `git diff --check` passed.
+- After deleting the Stream workload/protocol branch:
+  `deno check runtime/engine/engine.ts runtime/engine/types.ts
+  runtime/execution/protocol.ts plugins/core/session.test.ts
+  plugins/core/text.test.ts runtime/application/topology.test.ts`
+  — passed;
+  `deno test --allow-all runtime/streams/writer.test.ts plugins/core/text.test.ts
+  plugins/core/session.test.ts runtime/attachments/attachment.test.ts
+  runtime/application/topology.test.ts`
+  — 33 passed before the sandbox blocked the loopback WebSocket listener, then
+  `deno test --allow-all runtime/application/topology.test.ts` passed with
+  loopback permission.
+- After removing the internal Stream Feature bridge:
+  `deno check runtime/features/types.ts runtime/engine/context.ts
+  runtime/engine/database-scope.ts runtime/engine/types.ts
+  runtime/engine/index.ts runtime/engine/public.ts runtime/tools/executor.ts
+  plugins/core/resources/features/stream.ts
+  plugins/core/resources/processors/text.ts runtime/attachments/attachment.test.ts`
+  — passed;
+  `deno test --allow-all runtime/streams/writer.test.ts
+  plugins/core/text.test.ts plugins/core/session.test.ts
+  runtime/attachments/attachment.test.ts runtime/tools/executor.test.ts
+  runtime/engine/feature-context.regression.test.ts`
+  — 38 passed, 0 failed.
+- `deno task check` — passed; package surface reports 34 exports and 313
+  production modules.
+- After wiring successful settlement through ready-Body assetization:
+  `deno check runtime/content/types.ts runtime/content/database-repository.ts
+  runtime/streams/writer.ts runtime/streams/follower.ts
+  plugins/core/resources/collections/stream.ts runtime/streams/writer.test.ts
+  plugins/core/text.test.ts runtime/attachments/attachment.test.ts`
+  — passed;
+  `deno test --allow-all runtime/streams/writer.test.ts plugins/core/text.test.ts
+  plugins/core/session.test.ts runtime/attachments/attachment.test.ts
+  runtime/tools/executor.test.ts runtime/engine/feature-context.regression.test.ts`
+  — 38 passed, 0 failed; `deno task check` passed.
+- After terminal/failure hardening:
+  `deno check runtime/streams/writer.ts runtime/streams/follower.ts
+  runtime/streams/writer.test.ts plugins/core/text.test.ts
+  runtime/attachments/attachment.test.ts`
+  — passed;
+  `deno test --allow-all runtime/streams/writer.test.ts plugins/core/text.test.ts
+  plugins/core/session.test.ts runtime/attachments/attachment.test.ts
+  runtime/tools/executor.test.ts runtime/engine/feature-context.regression.test.ts`
+  — 40 passed, 0 failed.
+- After adding the host-local recovery primitive:
+  `deno check runtime/streams/recovery.ts runtime/streams/writer.ts
+  runtime/streams/follower.ts runtime/streams/writer.test.ts`
+  — passed; `deno test --allow-all runtime/streams/writer.test.ts` — 9 passed, 0
+  failed.
+- Broader recovery checkpoint verification:
+  `deno check runtime/streams/recovery.ts runtime/streams/writer.ts
+  runtime/streams/follower.ts runtime/streams/writer.test.ts
+  plugins/core/text.test.ts runtime/attachments/attachment.test.ts`
+  — passed;
+  `deno test --allow-all runtime/streams/writer.test.ts plugins/core/text.test.ts
+  plugins/core/session.test.ts runtime/attachments/attachment.test.ts
+  runtime/tools/executor.test.ts runtime/engine/feature-context.regression.test.ts`
+  — 44 passed, 0 failed; `deno task check` and `git diff --check` passed.
+- After wiring maintenance-driven recovery:
+  `deno check runtime/streams/recovery.ts runtime/streams/writer.test.ts
+  runtime/engine/database-scope.ts runtime/engine/types.ts
+  runtime/engine/engine.test.ts`
+  — passed;
+  `deno test --allow-all
+  runtime/streams/writer.test.ts runtime/engine/engine.test.ts`
+  — 16 passed, 0 failed.
+- Broader maintenance-recovery verification:
+  `deno check runtime/streams/recovery.ts runtime/streams/writer.test.ts
+  runtime/engine/database-scope.ts runtime/engine/types.ts
+  runtime/engine/engine.test.ts plugins/core/text.test.ts
+  runtime/attachments/attachment.test.ts`
+  — passed;
+  `deno test --allow-all
+  runtime/streams/writer.test.ts runtime/engine/engine.test.ts
+  plugins/core/text.test.ts plugins/core/session.test.ts
+  runtime/attachments/attachment.test.ts runtime/tools/executor.test.ts
+  runtime/engine/feature-context.regression.test.ts`
+  — 51 passed, 0 failed; `deno task check` and `git diff --check` passed.
+- Final 10D5 closure verification after deterministic Stream Asset ids, writer
+  option handling, and explicit BodyStore override proof:
+  `deno check runtime/streams/writer.ts plugins/core/resources/features/stream.ts
+  runtime/streams/writer.test.ts runtime/engine/engine.test.ts
+  runtime/engine/database-scope.ts`
+  — passed;
+  `deno test --allow-all runtime/streams/writer.test.ts
+  runtime/engine/engine.test.ts`
+  — 17 passed, 0 failed;
+  `deno test --allow-all runtime/application/topology.test.ts` — 3 passed, 0
+  failed with loopback permission;
+  `deno test --allow-all runtime/content/progressive.test.ts
+  runtime/content/progressive-reservation.regression.test.ts
+  runtime/content/database-repository.test.ts`
+  — 22 passed, 0 failed with loopback permission for the local S3 fixture; broad
+  non-S3 bundle — 72 passed before sandbox blocked the local S3 fixture;
+  `deno task check` and `git diff --check` passed.
+
+10D5 implementation is closed locally.
 
 ### 12.1 Stream declaration and API
 
@@ -2487,8 +3115,8 @@ sidecar used by successful settlement therefore exists only inside that
 settlement root.
 
 The token never appears in a Stream record or event. Possessing only a Stream ID
-is insufficient to append or settle. Writer methods and the selected recovery
-Processor reuse one plugin-owned lifecycle helper over their declared
+is insufficient to append or settle. Writer methods and maintenance-driven
+recovery reuse one plugin-owned lifecycle helper over their scoped
 Collection/content handles; neither receives a raw kernel/admin handle or adds a
 public settlement action. A Stream moves from open to one terminal outcome
 exactly once; retrying the same outcome is idempotent and a conflicting outcome
@@ -2516,7 +3144,7 @@ SQL open and never emit semantic events.
 Successful settlement:
 
 1. seal and verify the Body;
-2. call the protected `context.content.prepareBody` with the returned
+2. create the protected ready-Body prepared-content candidate with the returned
    `ReadyBody`, retry-stable `assetId`, and semantic ref metadata;
 3. using the fresh seal protection, or the still-locked Stream Body-reference
    pin during recovery, use one graph transaction to insert/verify protected
@@ -2536,24 +3164,21 @@ between leaves an open Stream pointing to an aborted Body; recovery completes
 the semantic transition. A stale writer can therefore settle no outcome after
 takeover.
 
-Recovery is plugin-owned and introduces no dispatcher or workload. The Stream
-plugin's detached static `stream.created` Processor delivery is itself the
-durable recovery obligation. Its handler reads the Stream and Body through only
-its declared `streamActionRequires` Collection/content dependencies and sets
-`settlement: "detached"`. While the current writer lease is live, it waits
-abortably for the store-reported remaining duration and reads again; it holds no
-graph transaction or byte buffer while waiting. The ordinary delivery heartbeat,
-cancellation, and retry path preserves that one obligation across process loss.
-It succeeds only after the Stream is terminal and its physical consequence is
-verified or completed.
+Recovery introduces no dispatcher, workload, or eager `stream.created` recovery
+Processor. Engine maintenance owns the bounded scheduling point: it scans
+committed open Stream records, invokes the host-local Stream recovery helper for
+each namespace, reports Stream recovery counters, and holds no graph transaction
+or byte buffer while inspecting BodyStore state. A live writer lease produces a
+deferred result, not a delivery retry or dead letter. The next maintenance pass
+tries again after the writer has either settled or its store-clock lease has
+expired. Generic Body maintenance still never branches on Stream state.
 
 For an expired open/sealing generation, recovery first calls
 `reserve({ bodyId, mediaType, expectedGeneration })`. Only the atomic takeover
 winner receives the new fenced writer capability. It calls `abort` with that
 capability, then conditionally commits the open-to-abandoned Stream transition
 and unsets `bodyId`. If another generation or terminal transition won, it
-rereads instead of mutating stale state. Generic maintenance and the runtime
-never branch on Stream state.
+rereads instead of mutating stale state.
 
 Recovery needs only these cases:
 
@@ -2622,7 +3247,54 @@ suite proving:
 - identical Stream behavior through the database default and one explicit
   application BodyStore override.
 
-## 13. Slices 10E1–10E5 — remaining capability plugins
+## 13. Slice 10D6 — unified application session
+
+10D6 replaces the public interaction split with one application session shape.
+The target surface is `send(pluginInputEnvelope)`, `observe()`, and `close()`.
+`events` remains the durable event-store API. Runtime still owns the attachment
+internals as private plumbing, but application and channel callers use the
+unified session.
+
+Implementation progress:
+
+- `CopilotzApplication` now exposes `send(inputEnvelope)`, `observe()`,
+  `events`, and `close()`.
+- `events` keeps only the durable event-store API. `observe()` returns the live
+  session output stream and observes committed semantic events plus runtime
+  stream outputs.
+- `send(inputEnvelope)` appends one durable plugin input event, waits for that
+  event's settlement scope, pumps matching correlation outputs into the
+  application observation stream, and returns a per-send handle with `eventId`,
+  `correlationId`, bounded `outputs`, `done`, and `cancel`.
+- Core defines the `copilotz.core.message.input` event and typed
+  `core.message(...)` helper. Runtime treats both as opaque plugin data; the
+  Core processor resolves thread/participant references and prepares content.
+- Channels now dispatch through `application.send(...)`; the channel runtime no
+  longer opens `application.connect(...)`, exposes `ThreadAttachment`, or closes
+  attachment handles.
+- `CopilotzApplication` no longer exports public `connect(...)` or `run(...)`
+  methods. Gateway, embedded, CLI, server, channel, and contract callers use
+  `send(...)`.
+- `RunHandle.events` is gone; private run internals expose `outputs` only until
+  their owning cleanup slice deletes the old attachment plumbing.
+- Gateway and embedded application wrappers override `send` and `close` so
+  persistence, transport, and worker lifecycle are closed at the correct role
+  boundary.
+
+Current proof:
+
+- `deno task check` — passed.
+- `deno test --allow-all runtime/application/application.test.ts
+  runtime/channels/runtime.test.ts server/event-native.test.ts
+  plugins/goals/goal.test.ts contracts/v3/application.contract.test.ts
+  contracts/v3/downstream-embedding.contract.test.ts`
+  — 26 passed, 0 failed.
+- Escalated local-listen verification:
+  `deno test --allow-all runtime/application/topology.test.ts` — 3 passed, 0
+  failed.
+- `git diff --check` — passed.
+
+## 14. Slices 10E1–10E5 — remaining capability plugins
 
 10B3 has already replaced the fixed registry buckets with real contracts and
 bindings. The architecture is still incomplete while the business semantics for
@@ -2657,7 +3329,7 @@ Do not preserve a removed subpath by re-exporting it from another file. Keep a
 semantic subpath only when it is part of the final API, and repoint it directly
 to the owning plugin.
 
-## 14. Slice 10F — production convergence
+## 15. Slice 10F — production convergence
 
 Each 10D/10E slice removes its own old construction path. 10F is the final
 mechanical proof and residual deletion pass:
@@ -2692,7 +3364,7 @@ directory exists, every valid selected plugin set composes, omission fails
 clearly, and forbidden-import/symbol checks prevent the removed architecture
 from returning.
 
-## 15. Reusable proof strategy
+## 16. Reusable proof strategy
 
 Phase 10 adds a small set of reusable conformance suites rather than custom
 tests for every declaration:
@@ -2716,7 +3388,7 @@ of intended business behavior. Every slice also runs:
 Every slice handoff records the exact scope, migrated callers/data, deleted
 paths, proof, and “next slice not started.” Do not commit unless requested.
 
-## 16. Phase 11 and later work
+## 17. Phase 11 and later work
 
 Phase 11 begins only after the final Phase 10 schema freeze. It owns:
 
@@ -2749,7 +3421,7 @@ Later demand-driven extensions—not incomplete refactor work—include:
 - progressive external-store hardening or mixed-deployment negotiation beyond
   what the common conformance suite currently proves.
 
-## 17. Explicit non-goals
+## 18. Explicit non-goals
 
 Phase 10 does not:
 

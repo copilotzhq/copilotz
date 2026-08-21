@@ -1,18 +1,18 @@
 # Realtime Attachments
 
-`connect()` creates a persistent participant attachment to an existing thread.
-`send()` is the only ingress API for messages, discrete controls, and raw media
-streams.
+`createCopilotz()` creates the application session. The session itself is the
+connection: `send()` is the only ingress API for plugin input envelopes, and
+`observe()` is the live observation surface for semantic events and runtime
+stream outputs.
 
 ```ts
-const attachment = await app.connect({
-  thread: "thread-1",
-  participant: "user-1",
-  recipientIds: ["agent-realtime"],
-});
+import { createCopilotz } from "@copilotz/copilotz";
+import { core } from "@copilotz/copilotz/core";
+
+const app = await createCopilotz({ namespace: "tenant-a" });
 
 const consume = (async () => {
-  for await (const output of attachment.outputs) {
+  for await (const output of app.observe()) {
     if (output.type === "stream.output") {
       console.log(output.participant, output.mediaType, output.streamId);
       for await (const chunk of output.payload) play(chunk);
@@ -22,24 +22,26 @@ const consume = (async () => {
   }
 })();
 
-const audio = await attachment.send({
-  type: "audio.input",
-  mediaType: "audio/pcm;rate=24000",
-  payload: microphoneStream,
-});
+const sent = await app.send(core.message({
+  thread: "thread-1",
+  participant: "user-1",
+  recipientIds: ["agent-realtime"],
+  content: "Hello",
+}));
 
-await audio.done;
-await attachment.close();
+await sent.done;
+await app.close();
 await consume;
 ```
 
-Calling `send()` with a stream returns after Oxian accepts it. The returned
-handle contains `streamId`, `eventId`, `correlationId`, `done`, and `cancel`;
-acceptance does not wait for the source stream to finish.
+Calling `send()` returns after the runtime accepts the ingress command. The
+returned handle contains `eventId`, `correlationId`, a bounded `outputs` stream
+for request-bound adapters, `done`, and `cancel`; acceptance does not wait for
+causally produced work to finish.
 
 ## Output
 
-`attachment.outputs` yields either:
+`app.observe()` yields either:
 
 - a semantic durable/ephemeral event; or
 - `stream.output` with participant identity, media type, stream ID, causation,
@@ -50,10 +52,12 @@ label rather than being mixed into a synthetic speaker channel.
 
 ## Persistence boundary
 
-Raw input/output chunks remain ephemeral and respect Web Stream backpressure.
-`stream.opened`, `stream.closed`, `stream.cancelled`, interruptions, final
+Raw input/output chunks respect Web Stream backpressure. Progressive stream
+bytes are durable through the runtime BodyStore while the stream is active or
+until they are adopted as canonical content; semantic collections create the
+Asset node when declared content adopts a closed stream. Interruptions, final
 transcripts/messages, tool execution, public agent ask, and errors are semantic
-events. Final media may be stored through canonical assets.
+events.
 
 Realtime provider resources receive typed `context.send()`, `context.tool()`,
 and `context.ask()` capabilities. This lets an audio model call tools or other

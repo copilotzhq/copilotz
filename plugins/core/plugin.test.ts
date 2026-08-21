@@ -1,7 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 
 import { createCollectionRuntime } from "@copilotz/copilotz/collections";
-import { createPluginRegistry } from "@copilotz/copilotz/plugins";
+import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
 import { createCopilotz } from "../../create-copilotz.ts";
 import {
   CORE_COLLECTION_NAMES,
@@ -83,46 +83,35 @@ Deno.test("application llm resources override core adapters by stable ID", async
   };
   const registry = await createPluginRegistry({
     core: corePlugin,
-    plugins: [{
-      manifest: {
-        id: "test.providers",
-        version: "1.0.0",
-        provides: { llm: ["openai"] },
-      },
-      resources: { llm: [replacement] },
-    }],
+    plugins: [definePlugin({
+      id: "test.providers",
+      version: "1.0.0",
+      llm: [replacement],
+    })],
   });
-  assertEquals(registry.require("llm", "openai"), replacement);
-  assertEquals(registry.origin("llm", "openai")?.pluginId, "test.providers");
+  assertEquals(registry.context.llm.openai, replacement);
 });
 
 Deno.test("core plugin collections win until a later plugin replaces a stable ID", async () => {
   const replacement = {
-    name: "stream",
+    name: "message",
     schema: { type: "object", properties: {} },
   };
   const registry = await createPluginRegistry({
     core: corePlugin,
-    plugins: [{
-      manifest: {
-        id: "acme.streams",
-        version: "1.0.0",
-        provides: { collections: ["stream"] },
-      },
-      resources: { collections: [replacement] },
-    }],
+    plugins: [definePlugin({
+      id: "acme.messages",
+      version: "1.0.0",
+      collections: [replacement],
+    })],
   });
   assertEquals(
-    registry.require("collections", "participant"),
+    registry.collections.require("participant"),
     corePlugin.resources.collections?.find((item) =>
       (item as { name: string }).name === "participant"
     ),
   );
-  assertEquals(registry.require("collections", "stream"), replacement);
-  assertEquals(
-    registry.origin("collections", "stream")?.pluginId,
-    "acme.streams",
-  );
+  assertEquals(registry.collections.require("message"), replacement);
 });
 
 Deno.test("package-root createCopilotz injects corePlugin before optional built-ins", async () => {
@@ -132,8 +121,11 @@ Deno.test("package-root createCopilotz injects corePlugin before optional built-
   });
   try {
     assertEquals(application.config.corePluginIds[0], "@copilotz/core");
-    assert(application.plugins.get("collections", "participant"));
-    assertEquals(application.plugins.list("embedding").length, 0);
+    assert(application.plugins.collections.get("participant"));
+    assertEquals(
+      Object.keys(application.plugins.context.embeddings ?? {}).length,
+      0,
+    );
   } finally {
     await application.shutdown();
   }
@@ -146,14 +138,20 @@ Deno.test("core plugin production files import Copilotz through public subpaths"
     "resources/llm/index.ts",
     "resources/features/thread-message.ts",
     "resources/processors/helpers.ts",
-    "resources/processors/text.ts",
-    "resources/processors/ask.ts",
+    "resources/processors/index.ts",
+    "resources/processors/message-router.ts",
+    "resources/processors/execute-text-attempt.ts",
+    "resources/processors/execute-tool.ts",
+    "resources/processors/project-text-result.ts",
+    "resources/processors/project-tool-result.ts",
+    "resources/processors/complete-ask.ts",
+    "resources/processors/fail-ask.ts",
+    "resources/tools/ask.ts",
     "resources/collections/participant.ts",
     "resources/collections/thread.ts",
     "resources/collections/message.ts",
     "resources/collections/llm-attempt.ts",
     "resources/collections/tool-execution.ts",
-    "resources/collections/stream.ts",
   ];
   for (const file of files) {
     const source = await Deno.readTextFile(new URL(file, import.meta.url));

@@ -1,13 +1,11 @@
-import type { ScopedPluginResources } from "../engine/index.ts";
-import {
-  isCrossResourceFailover,
-} from "./errors.ts";
+import { isCrossResourceFailover } from "./errors.ts";
 import {
   invocationFromChat,
   type LlmFrame,
   type LlmGenerate,
   type LlmGenerateInput,
   type LlmInvocation,
+  type LlmResourceContext,
   type LlmSession,
   type LlmSessionInput,
   requireLlmGenerate,
@@ -94,14 +92,14 @@ export function generateTargetsFromConfig(
 }
 
 export function generateChainFromResources(
-  resources: ScopedPluginResources,
+  context: LlmResourceContext,
   config: ProviderConfig,
 ): GenerateChainTarget[] {
   return generateTargetsFromConfig(config).map((target) => ({
     config: target,
     generate: (input) =>
       requireLlmGenerate(
-        requireLlmResource(resources, String(target.provider)),
+        requireLlmResource(context, String(target.provider)),
       )(input),
   }));
 }
@@ -152,14 +150,14 @@ export function runGenerateChain(
 }
 
 export function sessionChainFromResources(
-  resources: ScopedPluginResources,
+  context: LlmResourceContext,
   config: ProviderConfig,
 ): SessionChainTarget[] {
   return generateTargetsFromConfig(config).map((target) => ({
     config: target,
     session: (input) =>
       requireLlmSession(
-        requireLlmResource(resources, String(target.provider)),
+        requireLlmResource(context, String(target.provider)),
       )(input),
   }));
 }

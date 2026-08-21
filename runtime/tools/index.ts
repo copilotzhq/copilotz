@@ -42,25 +42,26 @@ export type {
   WorkflowToolOutcome,
 } from "./executor.ts";
 export {
-  extractToolResultAssets,
   type ExtractedToolResult,
+  extractToolResultAssets,
   type ExtractToolResultAssetsOptions,
   type ToolResultAssetError,
   type ToolResultAssetErrorCode,
 } from "./result-assets.ts";
 export {
-  isWorkflowTool,
   type CreateWorkflowToolCatalogOptions,
   type DeferredWorkflowToolResult,
   type DeferWorkflowToolOptions,
   type GenerateApiWorkflowTools,
   type GenerateMcpWorkflowTools,
+  isWorkflowTool,
   type ResolveWorkflowAgentTools,
   type WorkflowJqEvaluator,
   type WorkflowPipelineAdvance,
   type WorkflowPipelineMetadata,
   type WorkflowTool,
   type WorkflowToolCatalog,
+  type WorkflowToolCatalogContext,
   type WorkflowToolExecutionContext,
   type WorkflowToolOutputOptions,
   type WorkflowToolResult,

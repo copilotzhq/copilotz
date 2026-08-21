@@ -36,6 +36,8 @@ export type CollectionMutatePatch<TRecord> = Readonly<{
 
 export type CollectionCommandDefinition<TRecord = Record<string, unknown>> =
   Readonly<{
+    /** Optional semantic event type for this command. Defaults to `<collection>.updated`. */
+    event?: string;
     input?: JsonSchema;
     mutate(
       context: CollectionMutateContext<TRecord>,
@@ -231,7 +233,16 @@ export function defineCollection<S extends JsonSchema>(
             `Collection command '${commandName}' requires a mutate function.`,
           );
         }
-        return [commandName, Object.freeze({ ...definition })];
+        const event = definition.event?.trim();
+        if (event !== undefined && !/^[a-z][a-z0-9_.-]*$/i.test(event)) {
+          throw new TypeError(
+            `Collection command '${commandName}' has invalid event type '${event}'.`,
+          );
+        }
+        return [
+          commandName,
+          Object.freeze({ ...definition, ...(event ? { event } : {}) }),
+        ];
       }),
     ))
     : undefined;

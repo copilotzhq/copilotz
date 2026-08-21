@@ -112,6 +112,7 @@ export const messageCollection: CollectionDefinition = defineCollection({
     content: [],
     metadata: {},
   },
+  content: { fields: ["content"] },
   identity: {
     sourceType: "thread",
     sourceField: "threadId",

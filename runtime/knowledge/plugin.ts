@@ -12,6 +12,7 @@ import {
   knowledgeChunkCollection,
   knowledgeDocumentCollection,
 } from "./collections.ts";
+import { knowledgeFeature } from "./features.ts";
 import { embedKnowledgeTexts } from "./resources.ts";
 import {
   createDefaultKnowledgeSourceLoader,
@@ -187,13 +188,13 @@ function createIndexProcessor(
     async handle(event, context) {
       if (!event.durable || !event.subject) return;
       const id = event.subject.id;
-      let document = await context.knowledge.get(id);
+      let document = await context.collections.document.get({ id }) as
+        | KnowledgeDocument
+        | null;
       if (!document) throw new Error(`Knowledge document '${id}' vanished.`);
       let settled = false;
       try {
-        document = (await context.knowledge.begin(id, {
-          operationKey: `index:${id}:begin`,
-        })).value!;
+        document = await context.feature(knowledgeFeature).beginIndex({ id });
         const loaded = await loadSource(document, context, options.loader);
         context.signal.throwIfAborted();
         const text = (await options.extractor({
@@ -205,15 +206,17 @@ function createIndexProcessor(
         const hash = await digestContent(loaded.bytes);
         const canonical = document.forceReindex
           ? null
-          : await context.knowledge.getByHash(hash);
+          : (await context.collections.document.queries.byContentHash({
+            contentHash: hash,
+          }))[0] as KnowledgeDocument | undefined;
         if (canonical && canonical.id !== document.id) {
-          document = (await context.knowledge.markDuplicate({
+          document = await context.feature(knowledgeFeature).markDuplicate({
             id,
             duplicateOfDocumentId: canonical.id,
             source: canonical.source,
             mediaType: canonical.mediaType ?? loaded.mediaType,
             contentHash: hash,
-          }, { operationKey: `index:${id}:duplicate` })).value!;
+          });
           settled = true;
           await announce(context, document, {
             status: "duplicate",
@@ -237,7 +240,7 @@ function createIndexProcessor(
           context.signal.throwIfAborted();
           const batch = chunks.slice(offset, offset + batchSize);
           const response = await embedKnowledgeTexts(
-            context.resources,
+            context,
             options.embedding,
             batch.map((item) => item.content),
             {
@@ -259,7 +262,7 @@ function createIndexProcessor(
             role: "document.source",
             ...(loaded.title ? { name: loaded.title } : {}),
           }, { operationKey: `index:${id}:source` });
-        document = (await context.knowledge.complete({
+        document = await context.feature(knowledgeFeature).completeIndex({
           id,
           title: loaded.title ?? document.title,
           mediaType: loaded.mediaType,
@@ -277,7 +280,7 @@ function createIndexProcessor(
               ...(dimensions ? { embeddingDimensions: dimensions } : {}),
             },
           })),
-        }, { operationKey: `index:${id}:complete` })).value!;
+        });
         settled = true;
         await announce(context, document, {
           status: "indexed",
@@ -287,14 +290,14 @@ function createIndexProcessor(
         });
       } catch (error) {
         if (!settled) {
-          const failed = await context.knowledge.fail({
+          const failed = await context.feature(knowledgeFeature).failIndex({
             id,
             error: {
               code: errorCode(error),
               message: errorMessage(error),
             },
-          }, { operationKey: `index:${id}:fail` }).catch(() => undefined);
-          document = failed?.value ?? document;
+          }).catch(() => undefined);
+          document = failed ?? document;
           if (context.delivery.attempts >= context.delivery.maxAttempts) {
             await announce(context, document, {
               status: "failed",
@@ -326,22 +329,11 @@ export function createKnowledgePlugin(
     createDeleteDocumentTool(input.tools?.deleteId),
   ];
   return definePlugin({
-    manifest: {
-      id: pluginId,
-      version: input.version?.trim() || DEFAULT_VERSION,
-      provides: {
-        collections: [
-          knowledgeDocumentCollection.name,
-          knowledgeChunkCollection.name,
-        ],
-        processors: [processor.id],
-        ...(tools.length ? { tools: tools.map((item) => item.key) } : {}),
-      },
-    },
-    resources: {
-      collections: [knowledgeDocumentCollection, knowledgeChunkCollection],
-      processors: [processor],
-      ...(tools.length ? { tools } : {}),
-    },
+    id: pluginId,
+    version: input.version?.trim() || DEFAULT_VERSION,
+    collections: [knowledgeDocumentCollection, knowledgeChunkCollection],
+    features: [knowledgeFeature],
+    processors: [processor],
+    ...(tools.length ? { tools } : {}),
   });
 }

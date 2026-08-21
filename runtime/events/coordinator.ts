@@ -12,15 +12,17 @@ import type {
 } from "./store.ts";
 import type { CopilotzEvent, DurableEventDraft } from "./types.ts";
 
-export type CoordinatedMutationOptions<T> = Omit<
-  CommitEventMutationOptions<T>,
-  "consumers"
-> & Readonly<{
-  /** When false, insert deliveries but do not publish or dispatch yet. */
-  dispatch?: boolean;
-  /** Prepared JSON body used for precommit matching. Not persisted. */
-  matchData?: unknown;
-}>;
+export type CoordinatedMutationOptions<T> =
+  & Omit<
+    CommitEventMutationOptions<T>,
+    "consumers"
+  >
+  & Readonly<{
+    /** When false, insert deliveries but do not publish or dispatch yet. */
+    dispatch?: boolean;
+    /** Prepared JSON body used for precommit matching. Not persisted. */
+    matchData?: unknown;
+  }>;
 
 export type EventDispatchReport = Readonly<{
   handles: readonly DeliveryExecutionHandle[];
@@ -136,7 +138,7 @@ export function createEventCoordinator(
     // Durable filters are synchronous so the complete obligation set is known
     // before entering the database transaction.
     const enableDispatch = mutation.dispatch !== false;
-    const consumers = options.registry.durableConsumers(
+    const consumers = options.registry.processors.durableConsumers(
       mutation.draft,
       mutation.matchData,
     );

@@ -12,7 +12,7 @@ import {
   digestContent,
   formatAssetRef,
 } from "./index.ts";
-import { PLUGIN_RESOURCE_TYPES } from "../plugins/index.ts";
+import { definePlugin } from "../plugins/index.ts";
 
 function createFixture() {
   let nextId = 0;
@@ -41,10 +41,13 @@ Deno.test("configured BodyStore is scoped infrastructure, not a plugin resource"
     storage: { type: "memory", config: { backendId: "memory:test" } },
   });
   assert(runtime.adapter);
-  assertEquals(PLUGIN_RESOURCE_TYPES.includes("storage"), true);
   assertEquals(
-    PLUGIN_RESOURCE_TYPES.includes("bodyStore" as never),
-    false,
+    (definePlugin({
+      id: "test.body-store-is-infrastructure",
+      version: "1.0.0",
+      bodyStore: [{ id: "not-a-plugin-resource" }],
+    } as never).manifest.provides as Record<string, unknown>).bodyStore,
+    undefined,
   );
   const scoped = runtime.adapter.forScope({
     namespace: "tenant-a",

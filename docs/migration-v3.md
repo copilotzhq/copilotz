@@ -8,7 +8,7 @@ plugins/processors, database state, and HTTP clients explicitly.
 
 | Removed v0.x concept                                                   | v3 replacement                                                                          |
 | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `ResourceManifest` and filesystem resource loader                      | `PluginManifest`, `definePlugin()`, and an injected `PluginResolver`                    |
+| `ResourceManifest` and filesystem resource loader                      | explicit TypeScript imports plus concrete `definePlugin()` values                       |
 | `ProcessorDeps`, priority, `shouldProcess`, and `producedEvents`       | independent `defineProcessor({ id, on, delivery, filter, handle })` subscriptions       |
 | `queueId`, queue TTL/ack settings, run generations, and queue recovery | causal `eventId`, `correlationId`, durable deliveries, `recover()`, and `maintenance()` |
 | uppercase internal event vocabulary                                    | semantic lowercase durable events plus ephemeral deltas                                 |

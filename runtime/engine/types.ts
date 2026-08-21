@@ -1,23 +1,22 @@
 import type {
-  BodyStore,
   AssetOrigin,
   AssetRecord,
+  AuthorizeContent,
   BodyStorageOptions,
   BodyStorageRuntime,
-  AuthorizeContent,
+  BodyStore,
   ContentInput,
   ContentPreparer,
   ContentRef,
   ContentResolver,
   ContentSequence,
+  ContentStreamRuntime,
   DatabaseAssetRepository,
   DurableContentInput,
   PreparedContent,
-  ProgressiveBodyFollower,
   PublishAssetInput,
   ResolvedContent,
 } from "../content/index.ts";
-import type { StreamWriter } from "../streams/writer.ts";
 import type {
   AddThreadParticipantInput,
   CancelLlmAttemptInput,
@@ -67,9 +66,7 @@ import type {
   EventDelivery,
   EventDispatchReport,
   EventPublisher,
-  EventRouting,
   EventStore,
-  EventVisibility,
   SqlExecutor,
   SqlSession,
 } from "../events/index.ts";
@@ -90,15 +87,10 @@ import type {
 import type {
   AnyFeatureDefinition,
   FeatureActionsFor,
+  FeatureContextValues,
   FeatureInvoker,
 } from "../features/index.ts";
-import type {
-  PluginRegistry,
-  PluginResource,
-  PluginResourceOrigin,
-  PluginResourceType,
-  Processor,
-} from "../plugins/index.ts";
+import type { PluginRegistry, Processor } from "../plugins/index.ts";
 import type {
   ConnectAttachmentInput,
   RunHandle,
@@ -106,17 +98,11 @@ import type {
   ThreadAttachment,
 } from "../attachments/index.ts";
 import type {
-  ScheduledJobRepository,
-  ScopedScheduledJobs,
+  ScheduledJobTrigger,
+  ScopedScheduledJobTrigger,
 } from "../schedules/index.ts";
-import type {
-  KnowledgeRepository,
-  ScopedKnowledge,
-} from "../knowledge/types.ts";
-import type {
-  MemoryConsolidationRepository,
-  ScopedMemoryConsolidation,
-} from "../memory/repository.ts";
+import type { ProgressiveBodyMaintenanceResult } from "../content/index.ts";
+import type { MemoryKindDefinition } from "../memory/ontology.ts";
 
 export type ScopedMutationOptions = Readonly<{
   operationKey?: string;
@@ -174,25 +160,8 @@ export type ScopedContent = Readonly<{
   resolve(ref: ContentRef): Promise<ResolvedContent>;
   resolveMany(refs: readonly ContentRef[]): Promise<readonly ResolvedContent[]>;
   open(ref: ContentRef): Promise<ReadableStream<Uint8Array>>;
-}>;
-
-export type ScopedStreamWriteInput = Readonly<{
-  threadId: string;
-  lane: string;
-  mediaType: string;
-  participantId?: string;
-  metadata?: Record<string, unknown>;
-  id?: string;
-  routing?: EventRouting;
-  visibility?: EventVisibility;
-}>;
-
-export type ScopedStreams = Readonly<{
-  write(input: ScopedStreamWriteInput): Promise<StreamWriter>;
-  follow(input: {
-    streamId: string;
-    offset?: number;
-  }): Promise<ProgressiveBodyFollower>;
+  /** Runtime-native progressive content production. Creates no graph state. */
+  stream?: ContentStreamRuntime;
 }>;
 
 export type ScopedConversation = Readonly<{
@@ -335,43 +304,23 @@ export type ScopedRelations = Readonly<{
   ): Promise<readonly DomainRelation[]>;
 }>;
 
-export type ScopedPluginResources = Readonly<{
-  list<T extends PluginResource = PluginResource>(
-    type: PluginResourceType,
-  ): readonly T[];
-  get<T extends PluginResource = PluginResource>(
-    type: PluginResourceType,
-    id: string,
-  ): T | undefined;
-  require<T extends PluginResource = PluginResource>(
-    type: PluginResourceType,
-    id: string,
-  ): T;
-  origin(
-    type: PluginResourceType,
-    id: string,
-  ): PluginResourceOrigin | undefined;
-}>;
-
-export type CopilotzProcessorCapabilities = Readonly<{
-  namespace: string;
-  events: ScopedEvents;
-  resources: ScopedPluginResources;
-  content: ScopedContent;
-  streams: ScopedStreams;
-  collections: ScopedCollections;
-  relations: ScopedRelations;
-  schedules: ScopedScheduledJobs;
-  knowledge: ScopedKnowledge;
-  /** Internal typed aggregate used by semantic-memory consolidation. */
-  memory: ScopedMemoryConsolidation;
-  /** Reusable plugin commands. Joins this delivery's collection runtime. */
-  features: FeatureInvoker;
-  /** Invoke a Feature by definition. Consumer-local aliases live on `features`. */
-  feature<F extends AnyFeatureDefinition>(
-    definition: F,
-  ): FeatureActionsFor<F>;
-}>;
+export type CopilotzProcessorCapabilities =
+  & FeatureContextValues
+  & Readonly<{
+    namespace: string;
+    events: ScopedEvents;
+    content: ScopedContent;
+    collections: ScopedCollections;
+    relations: ScopedRelations;
+    schedules: ScopedScheduledJobTrigger;
+    memoryKinds: Readonly<Record<string, MemoryKindDefinition | undefined>>;
+    /** Reusable plugin commands. Joins this delivery's collection runtime. */
+    features: FeatureInvoker;
+    /** Invoke a Feature by definition. Consumer-local aliases live on `features`. */
+    feature<F extends AnyFeatureDefinition>(
+      definition: F,
+    ): FeatureActionsFor<F>;
+  }>;
 
 export type CopilotzProcessorContext =
   & DeliveryContextBase
@@ -412,12 +361,6 @@ export type CopilotzEngineExecutionOptions = Omit<
 >;
 
 export type CopilotzEngineAttachmentOptions = Readonly<{
-  /** Logical Oxian workload used for durable stream write/follow. */
-  streamWorkload?: string;
-  /** Capacity of the separate embedded stream worker. */
-  streamCapacity?: number;
-  /** Stable worker ID for the separate embedded stream worker. */
-  streamWorkerId?: string;
   /** Poll interval used while observing delivery settlement. */
   settlementPollMs?: number;
 }>;
@@ -457,6 +400,7 @@ export type CopilotzEngineMaintenanceResult = Readonly<{
   recovered: number;
   dispatchFailures: number;
   compacted: Readonly<{ events: number; deliveries: number }>;
+  progressiveBodies: ProgressiveBodyMaintenanceResult;
   assets: Readonly<{
     retriedDeletions: number;
     orphanedBodiesDeleted: number;
@@ -473,8 +417,7 @@ export type CopilotzEngineDatabaseScope = Readonly<{
   collections: EventCollections;
   collectionRuntime: CollectionRuntime;
   relations: DomainRelationRepository;
-  schedules: ScheduledJobRepository;
-  knowledge: KnowledgeRepository;
+  schedules: ScheduledJobTrigger;
   connect(input: ConnectAttachmentInput): Promise<ThreadAttachment>;
   run(input: RunInput): Promise<RunHandle>;
   /** Terminates active text/realtime attachments without shutting down execution. */
@@ -504,7 +447,6 @@ export type CopilotzEngine = Readonly<{
     ownership: DeliveryExecutorOwnership;
     workload: string;
     liveWorkload: string;
-    streamWorkload: string;
     /** Register these closures in a worker created within this runtime. */
     workloads: Readonly<Record<string, DeliveryWorkload>>;
     dispatchWork(input: ExecutionWorkInput): Promise<ExecutionWorkHandle>;
@@ -517,8 +459,7 @@ export type CopilotzEngine = Readonly<{
   collections: EventCollections;
   collectionRuntime: CollectionRuntime;
   relations: DomainRelationRepository;
-  schedules: ScheduledJobRepository;
-  knowledge: KnowledgeRepository;
+  schedules: ScheduledJobTrigger;
   connect(input: ConnectAttachmentInput): Promise<ThreadAttachment>;
   run(input: RunInput): Promise<RunHandle>;
   disconnectAttachments(error?: unknown): Promise<void>;
@@ -605,9 +546,7 @@ export type CreateCopilotzProcessorCapabilitiesOptions = Readonly<{
   resolver: ContentResolver;
   collections: EventCollections;
   relations: DomainRelationRepository;
-  schedules: ScheduledJobRepository;
-  knowledge: KnowledgeRepository;
-  memory: MemoryConsolidationRepository;
+  schedules: ScheduledJobTrigger;
   eventHub: CopilotzEventHub;
   publishEvent?: (event: CopilotzEvent) => Promise<void>;
   eventStore: Pick<EventStore, "listDeliveries" | "listEvents" | "tables">;

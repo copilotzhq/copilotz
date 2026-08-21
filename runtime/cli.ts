@@ -1,10 +1,22 @@
-import type { RunHandle, RunInput } from "./attachments/index.ts";
+import type {
+  AttachmentOutput,
+  AttachmentStreamOutput,
+  RunInput,
+} from "./attachments/index.ts";
 import type { ContentInput } from "./content/index.ts";
 import type { CopilotzEvent } from "./events/index.ts";
 
+export type CliRunHandle = Readonly<{
+  eventId: string;
+  correlationId: string;
+  outputs: ReadableStream<AttachmentOutput>;
+  done: Promise<void>;
+  cancel(reason?: string): Promise<void>;
+}>;
+
 export type CliPerformRun = (
   input: RunInput,
-) => Promise<RunHandle>;
+) => Promise<CliRunHandle>;
 
 export type CliRunScope = Readonly<
   Omit<
@@ -98,6 +110,17 @@ function eventPayload(event: CopilotzEvent): Record<string, unknown> {
       !Array.isArray(event.payload)
     ? event.payload as Record<string, unknown>
     : {};
+}
+
+function isStreamOutput(
+  output: AttachmentOutput,
+): output is AttachmentStreamOutput {
+  return output.type === "stream.output" && "payload" in output &&
+    Boolean(
+      output.payload && typeof output.payload === "object" &&
+        typeof (output.payload as { getReader?: unknown }).getReader ===
+          "function",
+    );
 }
 
 function eventAgentName(event: CopilotzEvent): string {
@@ -335,6 +358,32 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
     }
   };
 
+  const renderOutput = async (output: AttachmentOutput): Promise<void> => {
+    if (!isStreamOutput(output)) {
+      renderEvent(output);
+      return;
+    }
+    const decoder = new TextDecoder();
+    const reader = output.payload.getReader();
+    try {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        const chunk = decoder.decode(next.value, { stream: true });
+        if (!chunk) continue;
+        sawVisibleOutput = true;
+        io.write(chunk);
+      }
+      const tail = decoder.decode();
+      if (tail) {
+        sawVisibleOutput = true;
+        io.write(tail);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  };
+
   const send = async (
     content: ContentInput | readonly ContentInput[],
     historyLabel?: string,
@@ -355,7 +404,7 @@ export function createInteractiveCli(options: InteractiveCliOptions): Readonly<{
       at: now().toISOString(),
       eventId: handle.eventId,
     });
-    for await (const event of handle.events) renderEvent(event);
+    for await (const output of handle.outputs) await renderOutput(output);
     await handle.done;
     if (inReasoning || sawVisibleOutput) io.write("\n");
     printLine(color("─".repeat(60), "dim"));

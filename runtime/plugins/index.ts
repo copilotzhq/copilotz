@@ -28,19 +28,16 @@ export type {
   CreatePluginRegistryOptions,
   PluginRegistry,
 } from "./registry.ts";
-export {
-  definePlugin,
-  parsePluginSelector,
-  PLUGIN_RESOURCE_TYPES,
-  pluginResourceId,
-} from "./types.ts";
+export { definePlugin } from "./types.ts";
 export type {
   CopilotzPlugin,
+  DefinePluginInput,
+  PluginContextContribution,
+  PluginContextValues,
+  PluginDeclarationResources,
+  PluginDeclarationResourceType,
   PluginManifest,
-  PluginResolver,
   PluginResource,
-  PluginResourceOrigin,
   PluginResources,
   PluginResourceType,
-  PluginSource,
 } from "./types.ts";

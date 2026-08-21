@@ -83,7 +83,9 @@ export async function queryCollectionRecords(
     for (const name of query.include) {
       const relation = definition.relations?.[name];
       if (!relation) {
-        throw new TypeError(`Unknown relation '${name}' on '${definition.name}'.`);
+        throw new TypeError(
+          `Unknown relation '${name}' on '${definition.name}'.`,
+        );
       }
       if (relation.type === "belongsTo") {
         const parentId = value[relation.foreignKey];

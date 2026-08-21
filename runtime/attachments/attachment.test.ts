@@ -62,20 +62,10 @@ async function registryFor(options: {
     plugins: [
       coreCollectionsPlugin,
       definePlugin({
-        manifest: {
-          id: "test.attachments",
-          version: "1.0.0",
-          provides: {
-            agents: agents.map((resource) => resource.id),
-            ...(processors.length
-              ? { processors: processors.map((resource) => resource.id) }
-              : {}),
-          },
-        },
-        resources: {
-          agents,
-          ...(processors.length ? { processors } : {}),
-        },
+        id: "test.attachments",
+        version: "1.0.0",
+        agents,
+        ...(processors.length ? { processors } : {}),
       }),
     ],
   });
@@ -189,11 +179,14 @@ Deno.test("event-native run is a temporary attachment over one causal scope", as
     assertEquals(run.correlationId, "run-a");
     assert(!("queueId" in run));
 
-    const event = await run.events.getReader().read();
+    const event = await run.outputs.getReader().read();
     assertEquals(event.done, false);
-    assertEquals(event.value?.type, "message.created");
-    assert(event.value?.durable);
-    assertEquals(event.value.id, run.eventId);
+    const output = event.value;
+    assertExists(output);
+    assert(!isStreamOutput(output));
+    assertEquals(output.type, "message.created");
+    assert(output.durable);
+    assertEquals(output.id, run.eventId);
 
     let settled = false;
     run.done.then(() => settled = true).catch(() => undefined);
@@ -203,7 +196,7 @@ Deno.test("event-native run is a temporary attachment over one causal scope", as
     await run.done;
     assertEquals(settled, true);
 
-    const messageId = event.value?.durable ? event.value.subject?.id : null;
+    const messageId = output.subject?.id;
     assertExists(messageId);
     const message = await projectMessageById(
       fixture.engine,
@@ -517,20 +510,27 @@ Deno.test("ephemeral attachment handles settle with independent live processors"
   }
 });
 
-Deno.test("attachment outputs follow stream.created as a live byte stream", async () => {
+Deno.test("attachment outputs follow runtime content streams as live bytes", async () => {
   const processor = defineProcessor<CopilotzProcessorContext>({
-    id: "test.attachment-stream-write",
+    id: "test.attachment-content-stream-write",
     on: [{ eventType: "message.created" }],
     async handle(event, context) {
       if (!event.durable || !event.threadId) return;
-      const writer = await context.streams.write({
+      const stream = context.content.stream;
+      if (!stream) throw new Error("Runtime content stream is not configured.");
+      const writer = await stream.open({
+        id: "runtime-stream-a",
         threadId: event.threadId,
-        lane: "content",
+        role: "content",
         mediaType: "text/plain",
         participantId: event.routing.senderId,
+        correlationId: event.correlationId,
       });
-      await writer.write(new TextEncoder().encode("hello stream"));
-      await writer.finalize();
+      await writer.append({
+        bytes: new TextEncoder().encode("hello stream"),
+        appendId: "test-stream:1",
+      });
+      await writer.close({ assetId: "runtime-stream-a" });
     },
   });
   const fixture = await createFixture({
@@ -547,14 +547,11 @@ Deno.test("attachment outputs follow stream.created as a live byte stream", asyn
     const sent = attachment.send({
       content: [{ type: "text", text: "Start a stream." }],
     });
-    const created = await nextSemanticType(reader, "stream.created");
-    assert(created.durable);
-    assertEquals(created.subject?.type, "stream");
     const output = await nextStreamOutput(reader);
     assertEquals(output.type, "stream.output");
-    assertEquals(output.streamId, created.subject?.id);
+    assertEquals(output.streamId, "runtime-stream-a");
     assertEquals(output.mediaType, "text/plain");
-    assertEquals(output.metadata.lane, "content");
+    assertEquals(output.metadata.role, "content");
     const pending = output.payload.getReader();
     const chunks: Uint8Array[] = [];
     const reading = (async () => {
@@ -631,79 +628,6 @@ Deno.test("attachment reconnects from afterPosition and streamOffsets", async ()
     await second.done;
     await skippedReader.cancel();
     await skipped.close();
-  } finally {
-    await closeFixture(fixture);
-  }
-});
-
-Deno.test("attachment follows in-flight streams from a byte offset after stream.created", async () => {
-  const processor = defineProcessor<CopilotzProcessorContext>({
-    id: "test.attachment-stream-resume",
-    on: [{ eventType: "message.created" }],
-    async handle(event, context) {
-      if (!event.durable || !event.threadId) return;
-      const writer = await context.streams.write({
-        threadId: event.threadId,
-        lane: "content",
-        mediaType: "text/plain",
-        participantId: event.routing.senderId,
-      });
-      await writer.write(new TextEncoder().encode("hello stream"));
-      await writer.finalize();
-    },
-  });
-  const fixture = await createFixture({
-    registry: await registryFor({ processors: [processor] }),
-  });
-  try {
-    await createThread(fixture.engine);
-    const first = await fixture.engine.connect({
-      namespace: NAMESPACE,
-      thread: "thread-a",
-      participant: "user-a",
-    });
-    const firstReader = first.outputs.getReader();
-    const sent = first.send({
-      content: [{ type: "text", text: "Start a stream." }],
-    });
-    const created = await nextSemanticType(firstReader, "stream.created");
-    assert(created.durable);
-    const output = await nextStreamOutput(firstReader);
-    assertEquals(output.streamId, created.subject?.id);
-    await (await sent).done;
-    await firstReader.cancel();
-    await first.close();
-
-    const resumed = await fixture.engine.connect({
-      namespace: NAMESPACE,
-      thread: "thread-a",
-      participant: "user-a",
-      afterPosition: created.position,
-      streamOffsets: Object.freeze({
-        [created.subject!.id]: 6,
-      }),
-    });
-    const resumedReader = resumed.outputs.getReader();
-    const resumedOutput = await nextStreamOutput(resumedReader);
-    assertEquals(resumedOutput.streamId, created.subject?.id);
-    const rest = resumedOutput.payload.getReader();
-    const chunks: Uint8Array[] = [];
-    while (true) {
-      const next = await rest.read();
-      if (next.done) break;
-      chunks.push(next.value);
-    }
-    const bytes = new Uint8Array(
-      chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0),
-    );
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    assertEquals(new TextDecoder().decode(bytes), "stream");
-    await resumedReader.cancel();
-    await resumed.close();
   } finally {
     await closeFixture(fixture);
   }

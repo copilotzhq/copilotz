@@ -357,12 +357,6 @@ function applicationForDatabaseScope(
       ...application.config,
       databaseSchema: scope.databaseSchema,
     }),
-    goal(input) {
-      return application.goal({
-        ...input,
-        databaseSchema: input.databaseSchema ?? scope.databaseSchema,
-      });
-    },
   });
 }
 
@@ -960,9 +954,12 @@ async function handleFeatures(
   if (path.length !== 2) {
     throw appError(404, "route_not_found", "Feature route was not found.");
   }
-  const feature = application.plugins.list<FeatureResource>(
-    "features",
-  ).find((candidate) => featureId(candidate) === path[0]);
+  const feature = Object.values(
+    application.plugins.context.featureDefinitions ?? {},
+  ).find((candidate): candidate is FeatureResource =>
+    !!candidate && typeof candidate === "object" &&
+    featureId(candidate as FeatureResource) === path[0]
+  );
   if (!feature?.actions[path[1]]) {
     throw appError(404, "feature_not_found", "Feature action was not found.");
   }
@@ -1179,7 +1176,11 @@ export function createEventNativeApp(
           }
           return {
             status: 200,
-            data: scoped.plugins.list<Agent>("agents").map(publicAgent),
+            data: Object.values(scoped.plugins.context.agents ?? {})
+              .filter((candidate): candidate is Agent =>
+                !!candidate && typeof candidate === "object"
+              )
+              .map(publicAgent),
           };
         case "assets":
           return await handleAssets(scoped, namespace, request, path);

@@ -73,12 +73,9 @@ async function createFixture(): Promise<Fixture> {
   });
   const registry = await createPluginRegistry({
     plugins: [definePlugin({
-      manifest: {
-        id: "test.conversation",
-        version: "1.0.0",
-        provides: { processors: [processor.id] },
-      },
-      resources: { processors: [processor] },
+      id: "test.conversation",
+      version: "1.0.0",
+      processors: [processor],
     })],
   });
   const executor = createDeliveryExecutor({

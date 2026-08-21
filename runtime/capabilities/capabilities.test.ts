@@ -49,15 +49,10 @@ function agents(): readonly Agent[] {
 async function registry() {
   const values = agents();
   const application = definePlugin({
-    manifest: {
-      id: "test.capabilities.application",
-      version: "1.0.0",
-      provides: {
-        agents: values.map((agent) => agent.id),
-        tools: [clock.key],
-      },
-    },
-    resources: { agents: values, tools: [clock] },
+    id: "test.capabilities.application",
+    version: "1.0.0",
+    agents: values,
+    tools: [clock],
   });
   return await createPluginRegistry({
     plugins: [
@@ -108,10 +103,8 @@ Deno.test("resolver derives ask and skill mechanisms from higher-level grants", 
       ["read_skill_resource", "derived"],
     ],
   );
-  assertEquals(
-    resolved.tools[0].origin?.pluginId,
-    "test.capabilities.application",
-  );
+  assertEquals(resolved.tools[0].resource.key, "clock");
+  assertEquals("origin" in resolved.tools[0], false);
 
   const restricted = await resolver.resolve({ agent: "researcher" });
   assertEquals(restricted.tools, []);
@@ -128,12 +121,9 @@ Deno.test("resolver rejects unknown grants instead of silently broadening access
     capabilities: { tools: ["missing"] },
   };
   const overriding = definePlugin({
-    manifest: {
-      id: "test.capabilities.invalid",
-      version: "1.0.0",
-      provides: { agents: [invalid.id] },
-    },
-    resources: { agents: [invalid] },
+    id: "test.capabilities.invalid",
+    version: "1.0.0",
+    agents: [invalid],
   });
   const combined = await createPluginRegistry({
     plugins: [...resources.plugins, overriding],

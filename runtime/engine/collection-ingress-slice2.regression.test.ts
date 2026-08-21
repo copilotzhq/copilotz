@@ -162,18 +162,10 @@ Deno.test("createMessage ensures a new sender through the thread-message feature
 
 Deno.test("createMessage fails when the thread-message feature is not bound", async () => {
   const collectionsOnly = definePlugin({
-    manifest: {
-      ...coreCollectionsPlugin.manifest,
-      id: "test.core-collections-without-thread-message",
-      provides: {
-        ...coreCollectionsPlugin.manifest.provides,
-        features: [],
-      },
-    },
-    resources: {
-      ...coreCollectionsPlugin.resources,
-      features: [],
-    },
+    id: "test.core-collections-without-thread-message",
+    version: coreCollectionsPlugin.manifest.version,
+    collections: coreCollectionsPlugin.resources.collections,
+    features: [],
   });
   const db = await createTestDatabase({ url: ":memory:" });
   const engine = await createCopilotzEngine({

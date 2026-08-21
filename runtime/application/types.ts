@@ -1,19 +1,12 @@
 import type { AgentCapabilityResolver } from "../capabilities/index.ts";
-import type {
-  ConnectAttachmentInput,
-  RunHandle,
-  RunInput,
-  ThreadAttachment,
-} from "../attachments/index.ts";
+import type { AttachmentOutput } from "../attachments/index.ts";
 import type {
   CopilotzEngine,
   CreateCopilotzEngineOptions,
 } from "../engine/index.ts";
 import type {
   CopilotzPlugin,
-  PluginResolver,
-  PluginResources,
-  PluginSource,
+  PluginContextContribution,
 } from "../plugins/index.ts";
 import type { CreateLongTermMemoryPluginOptions } from "../memory/index.ts";
 import type {
@@ -21,13 +14,11 @@ import type {
   CreateFinanceToolsPluginOptions,
   CreateWebToolsPluginOptions,
 } from "../tools/index.ts";
-import type { CreateUsageWorkflowPluginOptions } from "../usage/index.ts";
 import type { CreateScheduledJobsPluginOptions } from "../schedules/index.ts";
-import type { CreateKnowledgePluginOptions } from "../knowledge/index.ts";
-import type { GoalHandle, GoalInput } from "../goals/index.ts";
 import type { WorkflowToolCatalog } from "../tools/index.ts";
 import type { CopilotzPersistenceOptions } from "./persistence.ts";
 import type { BodyStorageOptions } from "../content/index.ts";
+import type { EventVisibility } from "../events/index.ts";
 
 export type CorePluginSetting<T> = false | Readonly<T>;
 
@@ -37,10 +28,7 @@ export type CopilotzCorePluginOptions = Readonly<{
   webTools?: CorePluginSetting<CreateWebToolsPluginOptions>;
   finance?: CorePluginSetting<CreateFinanceToolsPluginOptions>;
   memory?: CorePluginSetting<CreateLongTermMemoryPluginOptions>;
-  usage?: CorePluginSetting<CreateUsageWorkflowPluginOptions>;
   schedules?: CorePluginSetting<CreateScheduledJobsPluginOptions>;
-  /** Opt-in because an embedding provider resource is required. */
-  knowledge?: CorePluginSetting<CreateKnowledgePluginOptions>;
 }>;
 
 export type CreateCopilotzApplicationOptions =
@@ -52,9 +40,8 @@ export type CreateCopilotzApplicationOptions =
     core?: false | CopilotzCorePluginOptions;
     /** Static canonical plugins. Package root defaults this to `[corePlugin]`. */
     canonicalCore?: readonly CopilotzPlugin[];
-    plugins?: readonly PluginSource[];
-    resources?: PluginResources;
-    pluginResolver?: PluginResolver;
+    plugins?: readonly CopilotzPlugin[];
+    context?: PluginContextContribution;
     /** Canonical static/generated tool catalog shared by execution and introspection. */
     toolCatalog?: WorkflowToolCatalog;
     /** Canonical asset body policy shared by every database scope. */
@@ -75,8 +62,6 @@ export type CopilotzComposition = Pick<
   CreateCopilotzApplicationOptions,
   | "core"
   | "plugins"
-  | "resources"
-  | "pluginResolver"
   | "toolCatalog"
   | "assets"
 >;
@@ -89,29 +74,45 @@ export type CopilotzApplicationConfig = Readonly<{
   databaseOwnership: "application" | "injected";
 }>;
 
-export type ApplicationConnectInput =
-  & Omit<
-    ConnectAttachmentInput,
-    "namespace"
-  >
-  & Readonly<{ namespace?: string }>;
+export type CopilotzInputEnvelope<
+  TType extends string = string,
+  TPayload = unknown,
+> = Readonly<{
+  type: TType;
+  payload?: TPayload;
+  namespace?: string;
+  databaseSchema?: string;
+  correlationId?: string;
+  causationId?: string;
+  deduplicationId?: string;
+  metadata?: Record<string, unknown>;
+  visibility?: EventVisibility;
+}>;
 
-export type ApplicationRunInput =
-  & Omit<RunInput, "namespace">
-  & Readonly<{ namespace?: string }>;
+export type ApplicationSendInput = CopilotzInputEnvelope;
+
+export type ApplicationSendHandle = Readonly<{
+  eventId: string;
+  correlationId: string;
+  outputs: ReadableStream<AttachmentOutput>;
+  done: Promise<void>;
+  cancel(reason?: string): Promise<void>;
+}>;
+
+export type CopilotzApplicationObservation = ReadableStream<AttachmentOutput>;
 
 export type CopilotzApplication =
   & Omit<
     CopilotzEngine,
-    "connect" | "run" | "shutdown" | "execution"
+    "connect" | "events" | "run" | "shutdown" | "execution"
   >
   & Readonly<{
     config: CopilotzApplicationConfig;
     capabilities: AgentCapabilityResolver;
-    connect(input: ApplicationConnectInput): Promise<ThreadAttachment>;
-    run(input: ApplicationRunInput): Promise<RunHandle>;
-    /** Runs a bounded target/simulator/judge conversation through normal runs. */
-    goal(input: GoalInput): Promise<GoalHandle>;
+    events: CopilotzEngine["events"];
+    send(input: ApplicationSendInput): Promise<ApplicationSendHandle>;
+    observe(): CopilotzApplicationObservation;
+    close(reason?: string): Promise<void>;
     shutdown(reason?: string): Promise<void>;
   }>;
 

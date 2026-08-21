@@ -18,7 +18,6 @@ import {
 import {
   asRecord,
   contentSequence,
-  linkContent,
   persistRoleContent,
   preparedContent,
   requiredText,
@@ -38,9 +37,7 @@ async function createRecord(
     const supplied = data.arguments as DurableContentInput | undefined;
     const content = supplied === undefined
       ? contentSequence(data.content)
-      : await persistRoleContent(
-        context,
-        { type: "tool_execution", id, threadId },
+      : persistRoleContent(
         contentSequence(data.content),
         [{
           role: TOOL_CONTENT_ROLE.arguments,
@@ -64,7 +61,6 @@ async function createRecord(
         ? { routing: { senderId: data.participantId.trim() } }
         : {}),
     });
-    await linkContent(context, id, content);
     return created;
   });
 }
@@ -135,9 +131,7 @@ async function complete(
   const metadata = asRecord(data.metadata);
   const eventMetadata = { ...asRecord(record.metadata), ...metadata };
   return await context.transaction(async (tx) => {
-    const content = await persistRoleContent(
-      context,
-      { type: "tool_execution", id, threadId },
+    const content = persistRoleContent(
       contentSequence(record.content),
       [
         {
@@ -167,7 +161,6 @@ async function complete(
         : {}),
       ...(Object.keys(metadata).length ? { metadata: eventMetadata } : {}),
     }, { threadId, identity: { metadata: eventMetadata } });
-    await linkContent(context, id, content);
     return updated;
   });
 }
@@ -179,9 +172,7 @@ async function fail(
   const { data, id, record, threadId } = await current(input, context);
   const safeError = asRecord(data.safeError);
   return await context.transaction(async (tx) => {
-    const content = await persistRoleContent(
-      context,
-      { type: "tool_execution", id, threadId },
+    const content = persistRoleContent(
       contentSequence(record.content),
       [
         {
@@ -207,7 +198,6 @@ async function fail(
         ? { historyVisibility: data.historyVisibility }
         : {}),
     }, { threadId, identity: { metadata: asRecord(record.metadata) } });
-    await linkContent(context, id, content);
     return updated;
   });
 }
@@ -218,9 +208,7 @@ async function cancel(
 ): Promise<CollectionRecord> {
   const { data, id, record, threadId } = await current(input, context);
   return await context.transaction(async (tx) => {
-    const content = await persistRoleContent(
-      context,
-      { type: "tool_execution", id, threadId },
+    const content = persistRoleContent(
       contentSequence(record.content),
       [
         {
@@ -245,7 +233,6 @@ async function cancel(
         ? { historyVisibility: data.historyVisibility }
         : {}),
     }, { threadId, identity: { metadata: asRecord(record.metadata) } });
-    await linkContent(context, id, content);
     return updated;
   });
 }
@@ -258,9 +245,7 @@ async function patch(
   const metadataPatch = asRecord(data.metadataPatch);
   const metadata = { ...asRecord(record.metadata), ...metadataPatch };
   return await context.transaction(async (tx) => {
-    const content = await persistRoleContent(
-      context,
-      { type: "tool_execution", id, threadId },
+    const content = persistRoleContent(
       contentSequence(record.content),
       [{
         role: TOOL_CONTENT_ROLE.projectedOutput,
@@ -275,7 +260,6 @@ async function patch(
         ...(Object.keys(metadataPatch).length ? { metadata } : {}),
       },
     }, { threadId, identity: { metadata } });
-    await linkContent(context, id, content);
     return updated;
   });
 }

@@ -73,7 +73,29 @@ export function startInteractiveCli(
     return startPortableInteractiveCli({
       ...portable,
       io: createInteractiveCliIo(),
-      performRun: (input) => application.run(input),
+      performRun: (input) =>
+        application.send({
+          type: "copilotz.core.message.input",
+          payload: {
+            thread: typeof input.thread === "string"
+              ? input.thread
+              : input.thread.id,
+            participant: input.participant,
+            recipientIds: input.recipientIds,
+            content: input.content,
+            ...(input.messageId ? { id: input.messageId } : {}),
+            ...(input.metadata ? { metadata: input.metadata } : {}),
+            ...(input.visibility ? { visibility: input.visibility } : {}),
+          },
+          ...(input.correlationId
+            ? { correlationId: input.correlationId }
+            : {}),
+          ...(input.deduplicationId
+            ? { deduplicationId: input.deduplicationId }
+            : {}),
+          ...(input.databaseSchema ? { databaseSchema: input.databaseSchema } : {}),
+          namespace: input.namespace,
+        }),
       async inspect() {
         const resolved = await application.capabilities.resolve({ agent });
         return Object.freeze({

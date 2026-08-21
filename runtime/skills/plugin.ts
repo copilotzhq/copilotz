@@ -37,17 +37,9 @@ export function createSkillsPlugin(
     maximumTextBytes: options.maximumTextBytes,
   });
   return definePlugin({
-    manifest: {
-      id: options.id ?? "@copilotz/skills",
-      version: options.version ?? "0.57.0",
-      provides: {
-        skills: skills.map((skill) => skill.name),
-        ...(tools.length ? { tools: tools.map((tool) => tool.key) } : {}),
-      },
-    },
-    resources: {
-      skills,
-      ...(tools.length ? { tools } : {}),
-    },
+    id: options.id ?? "@copilotz/skills",
+    version: options.version ?? "0.57.0",
+    skills,
+    ...(tools.length ? { tools } : {}),
   });
 }

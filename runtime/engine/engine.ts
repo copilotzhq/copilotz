@@ -28,10 +28,6 @@ import {
   matchProcessor,
   type Processor,
 } from "../plugins/index.ts";
-import {
-  COPILOTZ_STREAM_WORKLOAD,
-  createStreamWorkload,
-} from "../streams/index.ts";
 import { createCopilotzProcessorCapabilities } from "./context.ts";
 import {
   createDatabaseScope,
@@ -60,15 +56,6 @@ async function prepareDefaultDatabaseSchema(
   await provisionCopilotzSchema(options.session, schema);
 }
 
-function streamWorkloadName(value: string | undefined): string {
-  if (value === undefined) return COPILOTZ_STREAM_WORKLOAD;
-  const workload = value.trim();
-  if (!workload) {
-    throw new TypeError("Stream workload must be non-empty.");
-  }
-  return workload;
-}
-
 /** Composes the event-native Copilotz core without taking session ownership. */
 export async function createCopilotzEngine(
   options: CreateCopilotzEngineOptions,
@@ -84,9 +71,6 @@ export async function createCopilotzEngine(
   const now = options.now ?? (() => new Date());
   const eventHub = options.eventHub ?? createCopilotzEventHub();
   const ownsEventHub = options.eventHub === undefined;
-  const streamWorkload = streamWorkloadName(
-    options.attachments?.streamWorkload,
-  );
 
   const configuredTransients = () =>
     createTransientProcessorSet(options.transientProcessors ?? []);
@@ -126,7 +110,6 @@ export async function createCopilotzEngine(
   let resolveAdditionalScope: (
     databaseSchema: string,
   ) => Promise<AdditionalDatabaseScope>;
-  let defaultScope: DatabaseScopeRuntime | undefined;
 
   let capabilities: DatabaseScopeRuntime["capabilities"] | undefined;
   const preparer = createContentPreparer({
@@ -196,61 +179,24 @@ export async function createCopilotzEngine(
 
   const configuredWorkloads = options.execution?.workloads ?? {};
   const configuredLocalWorkers = options.execution?.localWorkloadWorkers ?? {};
-  for (const reserved of [streamWorkload, COPILOTZ_LIVE_WORKLOAD]) {
+  for (const reserved of [COPILOTZ_LIVE_WORKLOAD]) {
     if (Object.prototype.hasOwnProperty.call(configuredWorkloads, reserved)) {
       throw new TypeError(
         `Execution workload '${reserved}' is reserved by the Copilotz engine.`,
       );
     }
   }
-  if (
-    !options.execution?.dispatcher &&
-    Object.prototype.hasOwnProperty.call(
-      configuredLocalWorkers,
-      streamWorkload,
-    )
-  ) {
-    throw new TypeError(
-      `Local workload worker '${streamWorkload}' is configured through engine attachments.`,
-    );
-  }
   const executor: DeliveryExecutor = createDeliveryExecutor({
     ...(options.execution ?? {}),
     workloads: Object.freeze({
       ...configuredWorkloads,
-      [streamWorkload]: createStreamWorkload({
-        async resolve(requestedDatabaseSchema) {
-          const requested = requestedDatabaseSchema.trim();
-          const runtime = requested === databaseSchema
-            ? defaultScope
-            : (await resolveAdditionalScope(requested)).runtime;
-          if (!runtime) {
-            throw new Error("Copilotz stream workload is not initialized.");
-          }
-          if (!runtime.public.collectionRuntime.get("stream")) {
-            throw new TypeError("Stream collection is not bound.");
-          }
-          return {
-            collectionRuntime: runtime.public.collectionRuntime,
-            store: runtime.streamBodyStore,
-          };
-        },
-      }),
       [COPILOTZ_LIVE_WORKLOAD]: createLiveProcessorWorkload({
         registry: options.registry,
         transients,
         createContext: createLiveContext,
       }),
     }),
-    localWorkloadWorkers: options.execution?.dispatcher
-      ? configuredLocalWorkers
-      : Object.freeze({
-        ...configuredLocalWorkers,
-        [streamWorkload]: Object.freeze({
-          workerId: options.attachments?.streamWorkerId,
-          capacity: options.attachments?.streamCapacity,
-        }),
-      }),
+    localWorkloadWorkers: configuredLocalWorkers,
     resolveStore: async (requestedDatabaseSchema) =>
       requestedDatabaseSchema === databaseSchema
         ? store
@@ -370,7 +316,6 @@ export async function createCopilotzEngine(
       publishLive: (event, settlementScopeId) =>
         publishLive(event, { settlementScopeId }),
     });
-    defaultScope = scope;
     capabilities = scope.capabilities;
     resolver = scope.public.content.resolver;
     attachmentRuntime = scope.attachmentRuntime;
@@ -436,7 +381,6 @@ export async function createCopilotzEngine(
         ownership: executor.ownership,
         workload: executor.workload,
         liveWorkload: liveDispatcher.workload,
-        streamWorkload,
         workloads: executor.workloads,
         dispatchWork: (input) => executor.dispatchWork(input),
       }),

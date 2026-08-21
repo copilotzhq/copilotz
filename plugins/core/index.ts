@@ -7,6 +7,15 @@ import { toolExecutionFeature } from "./resources/features/tool-execution.ts";
 export { corePluginManifest } from "./manifest.ts";
 export { coreCollectionsPlugin, corePlugin } from "./plugin.ts";
 export {
+  core,
+  CORE_MESSAGE_INPUT_EVENT,
+  message,
+} from "./resources/inputs/index.ts";
+export type {
+  CoreMessageInput,
+  CoreMessageInputEnvelope,
+} from "./resources/inputs/index.ts";
+export {
   THREAD_MESSAGE_FEATURE_ID,
   threadMessageFeature,
 } from "./resources/features/thread-message.ts";
@@ -33,7 +42,6 @@ export {
   messageRevisionFrom,
   participantCollection,
   projectActiveMessageBranch,
-  streamCollection,
   threadCollection,
   toolExecutionCollection,
 } from "./resources/collections/index.ts";

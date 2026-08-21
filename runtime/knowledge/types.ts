@@ -1,17 +1,9 @@
 import type {
   ContentInput,
-  ContentPreparer,
   ContentSequence,
-  DatabaseAssetRepository,
   DurableContentInput,
 } from "../content/index.ts";
 import type { CollectionRecord, MutationIdentity } from "../domain/index.ts";
-import type {
-  CoordinatedMutationResult,
-  EventCoordinator,
-  EventStore,
-  SqlExecutor,
-} from "../events/index.ts";
 
 export type KnowledgeDocumentStatus =
   | "pending"
@@ -155,101 +147,6 @@ export type KnowledgeSearchResult = Readonly<{
   similarity: number;
 }>;
 
-export type KnowledgeRepository = Readonly<{
-  create(
-    input: CreateKnowledgeDocumentInput,
-  ): Promise<CoordinatedMutationResult<KnowledgeDocument>>;
-  begin(
-    namespace: string,
-    id: string,
-    identity?: MutationIdentity,
-  ): Promise<CoordinatedMutationResult<KnowledgeDocument>>;
-  complete(
-    input: CompleteKnowledgeDocumentInput,
-  ): Promise<CoordinatedMutationResult<KnowledgeDocument>>;
-  markDuplicate(
-    input: MarkKnowledgeDocumentDuplicateInput,
-  ): Promise<CoordinatedMutationResult<KnowledgeDocument>>;
-  fail(
-    input: FailKnowledgeDocumentInput,
-  ): Promise<CoordinatedMutationResult<KnowledgeDocument>>;
-  delete(
-    namespace: string,
-    id: string,
-    identity?: MutationIdentity,
-  ): Promise<CoordinatedMutationResult<{ id: string; deleted: true }>>;
-  get(namespace: string, id: string): Promise<KnowledgeDocument | null>;
-  getByHash(
-    namespace: string,
-    contentHash: string,
-  ): Promise<KnowledgeDocument | null>;
-  getBySourceUri(
-    namespace: string,
-    sourceUri: string,
-  ): Promise<KnowledgeDocument | null>;
-  list(
-    namespace: string,
-    options?: Readonly<{
-      status?: KnowledgeDocumentStatus;
-      after?: string;
-      limit?: number;
-    }>,
-  ): Promise<readonly KnowledgeDocument[]>;
-  listChunks(
-    namespace: string,
-    documentId: string,
-  ): Promise<readonly KnowledgeChunk[]>;
-  search(
-    input: KnowledgeSearchInput,
-  ): Promise<readonly KnowledgeSearchResult[]>;
-}>;
-
-export type KnowledgeMutationOptions = Readonly<{
-  operationKey?: string;
-  metadata?: Record<string, unknown>;
-}>;
-
-export type ScopedKnowledge = Readonly<{
-  create(
-    input: Omit<CreateKnowledgeDocumentInput, "namespace" | "identity">,
-    options?: KnowledgeMutationOptions,
-  ): Promise<CoordinatedMutationResult<KnowledgeDocument>>;
-  begin(
-    id: string,
-    options?: KnowledgeMutationOptions,
-  ): Promise<CoordinatedMutationResult<KnowledgeDocument>>;
-  complete(
-    input: Omit<CompleteKnowledgeDocumentInput, "namespace" | "identity">,
-    options?: KnowledgeMutationOptions,
-  ): Promise<CoordinatedMutationResult<KnowledgeDocument>>;
-  markDuplicate(
-    input: Omit<MarkKnowledgeDocumentDuplicateInput, "namespace" | "identity">,
-    options?: KnowledgeMutationOptions,
-  ): Promise<CoordinatedMutationResult<KnowledgeDocument>>;
-  fail(
-    input: Omit<FailKnowledgeDocumentInput, "namespace" | "identity">,
-    options?: KnowledgeMutationOptions,
-  ): Promise<CoordinatedMutationResult<KnowledgeDocument>>;
-  delete(
-    id: string,
-    options?: KnowledgeMutationOptions,
-  ): Promise<CoordinatedMutationResult<{ id: string; deleted: true }>>;
-  get(id: string): Promise<KnowledgeDocument | null>;
-  getByHash(contentHash: string): Promise<KnowledgeDocument | null>;
-  getBySourceUri(sourceUri: string): Promise<KnowledgeDocument | null>;
-  list(
-    options?: Readonly<{
-      status?: KnowledgeDocumentStatus;
-      after?: string;
-      limit?: number;
-    }>,
-  ): Promise<readonly KnowledgeDocument[]>;
-  listChunks(documentId: string): Promise<readonly KnowledgeChunk[]>;
-  search(
-    input: Omit<KnowledgeSearchInput, "namespace">,
-  ): Promise<readonly KnowledgeSearchResult[]>;
-}>;
-
 export type KnowledgeEmbeddingRequest = Readonly<{
   texts: readonly string[];
   model?: string;
@@ -294,19 +191,6 @@ export type KnowledgeTextExtractor = (
     signal: AbortSignal;
   }>,
 ) => Promise<string>;
-
-export type CreateKnowledgeRepositoryOptions = Readonly<{
-  coordinator: EventCoordinator;
-  session: SqlExecutor;
-  eventStore: Pick<EventStore, "tables">;
-  assets: Pick<
-    DatabaseAssetRepository,
-    "materialize" | "resolvePrepared" | "linkOwner" | "syncOwner"
-  >;
-  preparer: ContentPreparer;
-  createId?: () => string;
-  now?: () => Date;
-}>;
 
 export type CreateKnowledgePluginOptions = Readonly<{
   id?: string;

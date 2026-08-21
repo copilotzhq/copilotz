@@ -1,4 +1,7 @@
-import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
+import {
+  coreFeatureAliases,
+  message as coreMessage,
+} from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   createCopilotzGateway,
@@ -13,11 +16,6 @@ import type { CopilotzProcessorContext } from "../engine/index.ts";
 import type { CopilotzDatabase } from "./persistence.ts";
 import { isCopilotzPersistenceError } from "./persistence.ts";
 import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
-import {
-  COPILOTZ_STREAM_WORKLOAD,
-  jsonStreamDispatchMetadata,
-} from "../streams/index.ts";
-import { relayCopilotzWorkHandle } from "../execution/index.ts";
 import { createTestDomainContext } from "../testing/domain-context.ts";
 import {
   projectLlmAttempts,
@@ -32,9 +30,6 @@ import {
 } from "../testing/projections.ts";
 
 const namespace = "copilotz-topology-test";
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
-
 function cascadingPlugin(): CopilotzPlugin {
   const first = defineProcessor<CopilotzProcessorContext>({
     id: "topology.first",
@@ -88,38 +83,10 @@ function cascadingPlugin(): CopilotzPlugin {
     },
   });
   return definePlugin({
-    manifest: {
-      id: "@copilotz/topology-test",
-      version: "1.0.0",
-      provides: { processors: [first.id, second.id] },
-    },
-    resources: { processors: [first, second] },
+    id: "@copilotz/topology-test",
+    version: "1.0.0",
+    processors: [first, second],
   });
-}
-
-function byteStream(value: string): ReadableStream<Uint8Array> {
-  return new ReadableStream({
-    start(controller) {
-      controller.enqueue(encoder.encode(value));
-      controller.close();
-    },
-  });
-}
-
-async function readText(stream: ReadableStream<Uint8Array>): Promise<string> {
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for await (const chunk of stream) {
-    chunks.push(chunk);
-    size += chunk.byteLength;
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return decoder.decode(bytes);
 }
 
 async function collect<T>(stream: ReadableStream<T>): Promise<T[]> {
@@ -193,13 +160,13 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
           agentId: "topology-second-agent",
         }],
       });
-    const run = await gateway.run({
+    const run = await gateway.send(coreMessage({
       thread: "topology-thread",
       participant: "topology-user",
       recipientIds: ["topology-agent"],
       content: "start",
-    });
-    const events = collect(run.events);
+    }));
+    const events = collect(run.outputs);
     await run.done;
 
     const observed = await events;
@@ -421,13 +388,13 @@ Deno.test({
             agentId: "topology-second-agent",
           }],
         });
-      const run = await gateway.run({
+      const run = await gateway.send(coreMessage({
         thread: "topology-thread",
         participant: "topology-user",
         recipientIds: ["topology-agent"],
         content: "start",
-      });
-      const events = collect(run.events);
+      }));
+      const events = collect(run.outputs);
       await run.done;
       const observed = await events;
       assertEquals(
@@ -439,46 +406,6 @@ Deno.test({
         1,
       );
       assertEquals(worker.snapshot().transport, "websocket");
-
-      await createTestDomainContext(gateway, namespace, coreFeatureAliases)
-        .features.thread.create({
-          id: "topology-stream-thread",
-          participants: [{
-            id: "topology-stream-user",
-            externalId: "topology-stream-user",
-            participantType: "human",
-          }],
-        });
-      const dispatched = await gateway.hypervisor!.dispatch({
-        workload: COPILOTZ_STREAM_WORKLOAD,
-        target: { workerId },
-        metadata: jsonStreamDispatchMetadata({
-          schema: "copilotz.stream.dispatch.v1",
-          databaseSchema: "public",
-          action: "write",
-          namespace,
-          threadId: "topology-stream-thread",
-          lane: "content",
-          mediaType: "text/plain",
-        }),
-        body: byteStream("stream over websocket"),
-      });
-      const work = relayCopilotzWorkHandle(dispatched);
-      const result = await work.metadata;
-      assertEquals(result.schema, "copilotz.stream.result.v1");
-      assertEquals(typeof result.streamId, "string");
-      assertEquals(await readText(work.output), "stream over websocket");
-      assertEquals((await work.completed).status, "completed");
-      const persisted = await gateway.events.list({
-        namespace,
-        threadId: "topology-stream-thread",
-      });
-      assertEquals(
-        persisted.filter((event) => event.type.startsWith("stream.")).map(
-          (event) => event.type,
-        ),
-        ["stream.created", "stream.updated"],
-      );
     } finally {
       await Promise.allSettled([
         gateway.shutdown("WebSocket topology test complete"),

@@ -22,6 +22,7 @@ import { createBodyStorageRuntime } from "./storage.ts";
 import type {
   AssetBody,
   AssetBodyLocation,
+  AssetManifestEntry,
   AssetOrigin,
   AssetRecord,
   AssetRepository,
@@ -33,9 +34,8 @@ import type {
   PreparedContent,
   PublishAssetInput,
 } from "./types.ts";
+import { ASSET_BODY_OWNER_KIND } from "./types.ts";
 import type { BodyStorageRuntime, BodyStore } from "./body-store.ts";
-
-const ASSET_BODY_OWNER_KIND = "@copilotz/asset/v1";
 
 type AssetNodeRow = Record<string, unknown> & {
   id: string;
@@ -75,6 +75,16 @@ export type DatabaseAssetRepository =
       context: EventMutationContext,
       input: AssetMutationInput,
     ): Promise<ContentSequence>;
+    /** Makes prepared bodies durable and reports replay metadata for new Assets. */
+    materializeWithManifest(
+      context: EventMutationContext,
+      input: AssetMutationInput,
+    ): Promise<
+      Readonly<{
+        content: ContentSequence;
+        assets: readonly AssetManifestEntry[];
+      }>
+    >;
     /** Resolves a replay to existing bodies without writing. */
     resolvePrepared(
       context: EventMutationContext,
@@ -329,6 +339,27 @@ function assetBodyId(asset: AssetRecord): string | undefined {
   return "key" in asset.location ? asset.location.key : undefined;
 }
 
+function assetManifestEntry(asset: AssetRecord): AssetManifestEntry {
+  const bodyId = assetBodyId(asset);
+  if (!bodyId) {
+    throw createContentError(
+      "asset_corrupted",
+      `Asset body location is missing a body id: ${asset.id}`,
+      { namespace: asset.namespace, assetId: asset.id },
+    );
+  }
+  return Object.freeze({
+    assetId: asset.id,
+    bodyId,
+    mediaType: asset.mediaType,
+    byteLength: asset.byteLength,
+    digest: asset.digest,
+    ...(asset.origin ? { origin: structuredClone(asset.origin) } : {}),
+    ...(asset.metadata ? { metadata: structuredClone(asset.metadata) } : {}),
+    createdAt: asset.createdAt,
+  });
+}
+
 /** Creates the graph-native database asset repository and aggregate seam. */
 export function createDatabaseAssetRepository(
   options: CreateDatabaseAssetRepositoryOptions,
@@ -418,6 +449,38 @@ export function createDatabaseAssetRepository(
         { namespace, assetId: candidate.id },
       );
     }
+    if (candidate.readyBody) {
+      if (!candidate.location) {
+        throw createContentError(
+          "content_invalid",
+          `Prepared ready body requires a location: ${candidate.id}`,
+          { namespace, assetId: candidate.id },
+        );
+      }
+      if (
+        candidate.readyBody.state !== "ready" ||
+        candidate.readyBody.mediaType !== candidate.mediaType ||
+        candidate.readyBody.byteLength !== candidate.byteLength ||
+        candidate.readyBody.digest !== candidate.digest ||
+        assetBodyId({
+          id: candidate.id,
+          namespace,
+          mediaType: candidate.mediaType,
+          byteLength: candidate.byteLength,
+          digest: candidate.digest,
+          state: "ready",
+          location: candidate.location,
+          createdAt: "",
+        }) !== candidate.readyBody.bodyId
+      ) {
+        throw createContentError(
+          "asset_corrupted",
+          `Prepared ready body integrity does not match: ${candidate.id}`,
+          { namespace, assetId: candidate.id },
+        );
+      }
+      return;
+    }
     if (!(candidate.body instanceof Uint8Array)) {
       throw createContentError(
         "content_invalid",
@@ -449,6 +512,7 @@ export function createDatabaseAssetRepository(
     namespace: string,
     candidate: PreparedAsset,
     fallbackOrigin?: AssetOrigin,
+    manifest?: AssetManifestEntry[],
   ): Promise<AssetRecord> => {
     const key = candidate.idempotencyKey?.trim() || undefined;
     if (key) {
@@ -476,40 +540,52 @@ export function createDatabaseAssetRepository(
       );
     }
     const origin = candidate.origin ?? fallbackOrigin;
-    const keyForBody = assetBodyKey({
-      prefix: storage.prefix,
-      databaseSchema: options.databaseSchema,
-      namespace,
-      assetId: candidate.id,
-      origin,
-    });
-    const configuredWriter = storage.writer!;
-    const writer = configuredWriter.kind === "database"
-      ? createDatabaseBodyStore({
-        session: context.transaction,
-        schema: options.databaseSchema,
-        backendId: configuredWriter.backendId,
-      })
-      : configuredWriter;
-    const head = await writer.put({
-      bodyId: keyForBody,
-      bytes: candidate.body,
-      mediaType: candidate.mediaType,
-      digest: candidate.digest,
-      ifAbsent: true,
-    });
-    const storedLocation: AssetBodyLocation = writer.kind === "object"
-      ? {
-        kind: "object",
-        backendId: writer.backendId,
-        key: keyForBody,
-        ...(head.etag ? { etag: head.etag } : {}),
-      }
-      : writer.kind === "filesystem"
-      ? { kind: "filesystem", backendId: writer.backendId, key: keyForBody }
-      : writer.kind === "database"
-      ? { kind: "database", key: keyForBody }
-      : { kind: "memory", backendId: writer.backendId, key: keyForBody };
+    const storedLocation: AssetBodyLocation = candidate.readyBody
+      ? candidate.location!
+      : await (async () => {
+        const keyForBody = assetBodyKey({
+          prefix: storage.prefix,
+          databaseSchema: options.databaseSchema,
+          namespace,
+          assetId: candidate.id,
+          origin,
+        });
+        const configuredWriter = storage.writer!;
+        const writer = configuredWriter.kind === "database"
+          ? createDatabaseBodyStore({
+            session: context.transaction,
+            schema: options.databaseSchema,
+            backendId: configuredWriter.backendId,
+          })
+          : configuredWriter;
+        const head = await writer.put({
+          bodyId: keyForBody,
+          bytes: candidate.body,
+          mediaType: candidate.mediaType,
+          digest: candidate.digest,
+          ifAbsent: true,
+        });
+        return writer.kind === "object"
+          ? {
+            kind: "object" as const,
+            backendId: writer.backendId,
+            key: keyForBody,
+            ...(head.etag ? { etag: head.etag } : {}),
+          }
+          : writer.kind === "filesystem"
+          ? {
+            kind: "filesystem" as const,
+            backendId: writer.backendId,
+            key: keyForBody,
+          }
+          : writer.kind === "database"
+          ? { kind: "database" as const, key: keyForBody }
+          : {
+            kind: "memory" as const,
+            backendId: writer.backendId,
+            key: keyForBody,
+          };
+      })();
     const readyAt = now().toISOString();
     let data: string;
     try {
@@ -555,6 +631,7 @@ export function createDatabaseAssetRepository(
         [namespace, bodyId, ASSET_BODY_OWNER_KIND, asset.id],
       );
     }
+    manifest?.push(assetManifestEntry(asset));
     return asset;
   };
 
@@ -562,6 +639,7 @@ export function createDatabaseAssetRepository(
     context: EventMutationContext,
     input: AssetMutationInput,
     write: boolean,
+    manifest?: AssetManifestEntry[],
   ): Promise<ContentSequence> => {
     const namespace = requiredText(input.namespace, "Asset namespace");
     const prepared = preparedInput(input.content);
@@ -596,6 +674,7 @@ export function createDatabaseAssetRepository(
           namespace,
           candidate,
           input.origin,
+          manifest,
         );
       } else {
         const row = candidate.idempotencyKey?.trim()
@@ -1115,6 +1194,15 @@ export function createDatabaseAssetRepository(
 
     materialize(context, input) {
       return canonicalize(context, input, true);
+    },
+
+    async materializeWithManifest(context, input) {
+      const assets: AssetManifestEntry[] = [];
+      const content = await canonicalize(context, input, true, assets);
+      return Object.freeze({
+        content,
+        assets: Object.freeze(assets),
+      });
     },
 
     resolvePrepared(context, input) {

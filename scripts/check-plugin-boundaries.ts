@@ -41,7 +41,6 @@ function resolvedImport(fromFile: string, spec: string): string | undefined {
 
 const importSpec = /from\s+["']([^"']+)["']/g;
 const failures: string[] = [];
-let pluginResourceTypeDefs = 0;
 
 for await (const file of productionSources(repositoryRoot)) {
   if (file.path === "scripts/check-plugin-boundaries.ts") continue;
@@ -66,21 +65,9 @@ for await (const file of productionSources(repositoryRoot)) {
       failures.push(`${file.path}: plugin relative-imports runtime (${spec})`);
     }
   }
-  if (
-    file.path !== "runtime/plugins/types.ts" &&
-    /export const PLUGIN_RESOURCE_TYPES/.test(file.text)
-  ) {
-    failures.push(`${file.path}: duplicate PLUGIN_RESOURCE_TYPES`);
-  }
   if (/export const PLUGIN_RESOURCE_TYPES/.test(file.text)) {
-    pluginResourceTypeDefs += 1;
+    failures.push(`${file.path}: exported PLUGIN_RESOURCE_TYPES`);
   }
-}
-
-if (pluginResourceTypeDefs !== 1) {
-  failures.push(
-    `PLUGIN_RESOURCE_TYPES must be defined once, found ${pluginResourceTypeDefs}`,
-  );
 }
 
 if (failures.length) {

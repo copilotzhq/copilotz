@@ -1,10 +1,5 @@
-import type { Agent } from "../resources/index.ts";
-import {
-  mapMessageRecord,
-  mapParticipantRecord,
-  mapThreadRecord,
-} from "../engine/collection-graph.ts";
-import type { CollectionRecord } from "../collections/index.ts";
+import type { Agent } from "@copilotz/copilotz/resources";
+import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import type {
   CreateGoalRuntimeOptions,
   GoalAssessment,
@@ -23,15 +18,27 @@ import type {
   GoalThreadRef,
   GoalTranscriptMessage,
 } from "./types.ts";
-import type { ContentInput, ResolvedContent } from "../content/index.ts";
+import type {
+  ContentInput,
+  ContentSequence,
+  ResolvedContent,
+} from "@copilotz/copilotz/content";
 import type {
   ConversationMessage,
   ConversationThread,
   Participant,
   ParticipantInput,
-} from "../domain/index.ts";
-import type { RunHandle } from "../attachments/index.ts";
-import { requireFeatureActions } from "../features/context.ts";
+} from "@copilotz/copilotz/domain";
+import type {
+  AttachmentOutput,
+  AttachmentStreamOutput,
+  RunHandle,
+} from "@copilotz/copilotz/attachments";
+import type {
+  AnyFeatureDefinition,
+  FeatureActionsFor,
+  FeatureHostContext,
+} from "@copilotz/copilotz/features";
 
 const GOAL_METADATA_KEY = "copilotzGoal";
 const DEFAULT_MAX_TURNS = 20;
@@ -56,6 +63,17 @@ type PreparedGoal = Readonly<{
   lead: Participant;
 }>;
 
+function isAttachmentStreamOutput(
+  output: AttachmentOutput,
+): output is AttachmentStreamOutput {
+  return output.type === "stream.output" && "payload" in output &&
+    Boolean(
+      output.payload && typeof output.payload === "object" &&
+        typeof (output.payload as { getReader?: unknown }).getReader ===
+          "function",
+    );
+}
+
 function requiredText(value: string | undefined, name: string): string {
   const normalized = value?.trim();
   if (!normalized) throw new TypeError(`${name} must be non-empty.`);
@@ -65,6 +83,141 @@ function requiredText(value: string | undefined, name: string): string {
 function optionalText(value: string | undefined, name: string) {
   if (value === undefined) return undefined;
   return requiredText(value, name);
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function optionalRecordText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function recordTextArray(value: unknown): readonly string[] {
+  return Array.isArray(value)
+    ? Object.freeze(
+      value.filter((item): item is string =>
+        typeof item === "string" && Boolean(item.trim())
+      ),
+    )
+    : Object.freeze([]);
+}
+
+function recordContent(value: unknown): ContentSequence {
+  return Array.isArray(value)
+    ? Object.freeze(value) as ContentSequence
+    : Object.freeze([]);
+}
+
+// Goals consume canonical Collection records through public contracts. These
+// projections are intentionally local: runtime engine helpers are not a plugin
+// dependency and no plugin imports runtime implementation files.
+function mapParticipantRecord(recordValue: CollectionRecord): Participant {
+  return Object.freeze({
+    id: String(recordValue.id),
+    namespace: String(recordValue.namespace),
+    externalId: String(recordValue.externalId ?? recordValue.id),
+    participantType: recordValue
+      .participantType as Participant["participantType"],
+    ...(optionalRecordText(recordValue.name)
+      ? { name: optionalRecordText(recordValue.name) }
+      : {}),
+    ...(optionalRecordText(recordValue.email)
+      ? { email: optionalRecordText(recordValue.email) }
+      : {}),
+    ...(optionalRecordText(recordValue.agentId)
+      ? { agentId: optionalRecordText(recordValue.agentId) }
+      : {}),
+    metadata: record(recordValue.metadata),
+    createdAt: String(recordValue.createdAt),
+    updatedAt: String(recordValue.updatedAt),
+  });
+}
+
+function mapThreadRecord(
+  recordValue: CollectionRecord,
+  participants: readonly Participant[],
+): ConversationThread {
+  return Object.freeze({
+    id: String(recordValue.id),
+    namespace: String(recordValue.namespace),
+    ...(optionalRecordText(recordValue.externalId)
+      ? { externalId: optionalRecordText(recordValue.externalId) }
+      : {}),
+    ...(optionalRecordText(recordValue.name)
+      ? { name: optionalRecordText(recordValue.name) }
+      : {}),
+    ...(optionalRecordText(recordValue.description)
+      ? { description: optionalRecordText(recordValue.description) }
+      : {}),
+    status: String(recordValue.status ?? "active"),
+    ...(optionalRecordText(recordValue.parentThreadId)
+      ? { parentThreadId: optionalRecordText(recordValue.parentThreadId) }
+      : {}),
+    metadata: record(recordValue.metadata),
+    participants,
+    ...(recordValue.activeMessageBranch &&
+        typeof recordValue.activeMessageBranch === "object"
+      ? {
+        activeMessageBranch: recordValue
+          .activeMessageBranch as ConversationThread["activeMessageBranch"],
+      }
+      : {}),
+    ...(optionalRecordText(recordValue.lastEventId)
+      ? { lastEventId: optionalRecordText(recordValue.lastEventId) }
+      : {}),
+    ...(optionalRecordText(recordValue.lastEventPosition)
+      ? { lastEventPosition: optionalRecordText(recordValue.lastEventPosition) }
+      : {}),
+    ...(optionalRecordText(recordValue.lastEventAt)
+      ? { lastEventAt: optionalRecordText(recordValue.lastEventAt) }
+      : {}),
+    createdAt: String(recordValue.createdAt),
+    updatedAt: String(recordValue.updatedAt),
+  });
+}
+
+function mapMessageRecord(
+  recordValue: CollectionRecord,
+  sender: Participant,
+): ConversationMessage {
+  return Object.freeze({
+    id: String(recordValue.id),
+    namespace: String(recordValue.namespace),
+    threadId: String(recordValue.threadId),
+    sender,
+    recipientIds: recordTextArray(recordValue.recipientIds),
+    content: recordContent(recordValue.content),
+    metadata: record(recordValue.metadata),
+    ...(recordValue.revision && typeof recordValue.revision === "object"
+      ? { revision: recordValue.revision as ConversationMessage["revision"] }
+      : {}),
+    createdAt: String(recordValue.createdAt),
+    updatedAt: String(recordValue.updatedAt),
+  });
+}
+
+function requireAgentContext(
+  options: CreateGoalRuntimeOptions,
+  id: string,
+): Agent {
+  const agents = (options.registry.context.agents ?? {}) as Readonly<
+    Record<string, Agent | undefined>
+  >;
+  const agent = agents[id];
+  if (!agent) throw new Error(`Unknown agent context '${id}'.`);
+  return agent;
+}
+
+function requireFeatureActionsById(
+  context: FeatureHostContext,
+  id: string,
+): FeatureActionsFor<AnyFeatureDefinition> {
+  const definition = context.featureDefinitions[id];
+  if (!definition) throw new Error(`Feature '${id}' is not registered.`);
+  return context.feature(definition);
 }
 
 function namespaceFor(input: GoalInput, fallback: string | undefined): string {
@@ -414,7 +567,7 @@ async function ensureParticipant(
       participant: requireCompatibleParticipant(existing, input),
     });
   }
-  await requireFeatureActions(
+  await requireFeatureActionsById(
     options.features(namespace),
     "copilotz.core.thread",
   )
@@ -471,7 +624,7 @@ async function createOrLoadTargetThread(
     : null;
   if (existing) return existing;
   const id = descriptor.id?.trim() || `${goalId}:target`;
-  const record = await requireFeatureActions(
+  const record = await requireFeatureActionsById(
     options.features(namespace),
     "copilotz.core.thread",
   ).create({
@@ -528,7 +681,7 @@ async function createPrivateThread(
   if (existing) return existing;
   const label = input.suffix ? `${input.role}:${input.suffix}` : input.role;
   const id = descriptor.id?.trim() || `${input.goalId}:${label}`;
-  const record = await requireFeatureActions(
+  const record = await requireFeatureActionsById(
     options.features(input.namespace),
     "copilotz.core.thread",
   ).create({
@@ -566,8 +719,8 @@ async function prepareGoal(
   );
   const targetAgentId = requiredText(input.target, "Goal target agent");
   const leadAgentId = requiredText(input.sender.usingAgent, "Goal lead agent");
-  const targetAgent = options.registry.require<Agent>("agents", targetAgentId);
-  const leadAgent = options.registry.require<Agent>("agents", leadAgentId);
+  const targetAgent = requireAgentContext(options, targetAgentId);
+  const leadAgent = requireAgentContext(options, leadAgentId);
   const senderInput = senderParticipant(input.sender);
   const targetInput = agentParticipant(targetAgent);
   let targetThread = await createOrLoadTargetThread(
@@ -699,7 +852,14 @@ export function createGoalRuntime(
       const runEvents: GoalObservedEvent[] = [];
       let finalMessage: GoalTranscriptMessage | undefined;
       try {
-        for await (const event of run.events) {
+        for await (const output of run.outputs) {
+          if (isAttachmentStreamOutput(output)) {
+            await output.payload.cancel("goal_run_stream_output_ignored").catch(
+              () => undefined,
+            );
+            continue;
+          }
+          const event = output;
           const observation: GoalObservedEvent = Object.freeze({
             type: "goal.event",
             payload: Object.freeze({ goalId, turn, phase, event }),
@@ -894,10 +1054,7 @@ export function createGoalRuntime(
               judgeInput.target,
               "Goal judge agent",
             );
-            const judgeAgent = options.registry.require<Agent>(
-              "agents",
-              judgeAgentId,
-            );
+            const judgeAgent = requireAgentContext(options, judgeAgentId);
             const judgeSenderInput: ParticipantInput = judgeInput.sender ?? {
               externalId: `${goalId}:judge:${judgeRuns}:evaluator`,
               participantType: "human",

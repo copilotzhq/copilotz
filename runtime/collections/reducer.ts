@@ -1,6 +1,8 @@
 import type { EventMutationContext, SqlExecutor } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import type { CollectionEventBody, CollectionRecord } from "./types.ts";
+import { ASSET_BODY_OWNER_KIND } from "../content/index.ts";
+import type { AssetManifestEntry, ContentRef } from "../content/index.ts";
 
 export type NodeRow = Record<string, unknown> & {
   id: string;
@@ -222,6 +224,130 @@ function bodyReferenceIds(
   return Object.freeze([...ids]);
 }
 
+function contentRefs(value: unknown): readonly ContentRef[] {
+  return Array.isArray(value) ? value as ContentRef[] : [];
+}
+
+function declaredContentAssetIds(
+  definition: CollectionDefinition,
+  value: Record<string, unknown>,
+): readonly string[] {
+  const ids = new Set<string>();
+  for (const field of definition.content?.fields ?? []) {
+    const raw = getPath(value, field);
+    for (const ref of contentRefs(raw)) {
+      if (typeof ref.assetId === "string" && ref.assetId.trim()) {
+        ids.add(ref.assetId.trim());
+      }
+    }
+  }
+  return Object.freeze([...ids]);
+}
+
+function getPath(
+  value: Record<string, unknown>,
+  path: string,
+): unknown {
+  let current: unknown = value;
+  for (const part of path.split(".").filter(Boolean)) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
+async function synchronizeContentAssetEdges(
+  context: EventMutationContext,
+  definition: CollectionDefinition,
+  namespace: string,
+  ownerId: string,
+  value: Record<string, unknown>,
+): Promise<void> {
+  if (!definition.content?.fields.length) return;
+  const assetIds = declaredContentAssetIds(definition, value);
+  await context.transaction.query(
+    `DELETE FROM ${context.tables.edges}
+      WHERE namespace = $1
+        AND source_node_id = $2
+        AND type = 'has_asset'
+        AND NOT (target_node_id = ANY($3::text[]))`,
+    [namespace, ownerId, assetIds],
+  );
+  for (const assetId of assetIds) {
+    await context.transaction.query(
+      `INSERT INTO ${context.tables.edges} (
+         id, namespace, source_node_id, target_node_id, type, data, weight
+       ) VALUES ($1, $2, $3, $4, 'has_asset', '{}'::jsonb, 1)
+       ON CONFLICT DO NOTHING`,
+      [
+        edgeId(namespace, "has_asset", ownerId, assetId),
+        namespace,
+        ownerId,
+        assetId,
+      ],
+    );
+  }
+}
+
+async function projectAssetManifestEntry(
+  context: EventMutationContext,
+  namespace: string,
+  entry: AssetManifestEntry,
+): Promise<void> {
+  const data = JSON.stringify({
+    mediaType: entry.mediaType,
+    byteLength: entry.byteLength,
+    digest: entry.digest,
+    state: "ready",
+    bodyId: entry.bodyId,
+    // Transitional runtime metadata: current Asset readers still expect a
+    // location object. The event manifest remains locator-free; final BodyStore
+    // readers consume bodyId directly.
+    location: { kind: "database", key: entry.bodyId },
+    readyAt: entry.createdAt,
+    ...(entry.origin ? { origin: structuredClone(entry.origin) } : {}),
+    metadata: structuredClone(entry.metadata ?? {}),
+  });
+  const existing = await context.transaction.query<NodeRow>(
+    `SELECT * FROM ${context.tables.nodes}
+     WHERE id = $1 LIMIT 1`,
+    [entry.assetId],
+  );
+  const row = existing.rows[0];
+  if (row && (row.namespace !== namespace || row.type !== "asset")) {
+    throw new Error(
+      `Asset manifest id conflicts with a non-Asset node: ${entry.assetId}`,
+    );
+  }
+  if (!row) {
+    await context.transaction.query(
+      `INSERT INTO ${context.tables.nodes} (
+         id, namespace, type, name, data, source_type, source_id
+       ) VALUES ($1, $2, 'asset', $3, $4::jsonb, NULL, NULL)`,
+      [entry.assetId, namespace, entry.mediaType, data],
+    );
+  }
+  await context.transaction.query(
+    `INSERT INTO ${context.tables.body_references} (
+       namespace, body_id, owner_kind, owner_id
+     ) VALUES ($1, $2, $3, $4)
+     ON CONFLICT DO NOTHING`,
+    [namespace, entry.bodyId, ASSET_BODY_OWNER_KIND, entry.assetId],
+  );
+}
+
+async function projectAssetManifest(
+  context: EventMutationContext,
+  namespace: string,
+  assets: readonly AssetManifestEntry[],
+): Promise<void> {
+  for (const entry of assets) {
+    await projectAssetManifestEntry(context, namespace, entry);
+  }
+}
+
 export async function synchronizeBodyReferences(
   context: EventMutationContext,
   definition: CollectionDefinition,
@@ -257,6 +383,7 @@ export async function projectCollectionEvent(
 ): Promise<CollectionRecord> {
   const namespace = body.record.namespace;
   const id = body.record.id;
+  await projectAssetManifest(context, namespace, body.assets);
   if (body.operation === "delete") {
     if (definition.bodyRefs?.fields.length) {
       await context.transaction.query(
@@ -320,6 +447,13 @@ export async function projectCollectionEvent(
   }
   await synchronizeRelations(context, definition, namespace, id, body.record);
   await synchronizeBodyReferences(
+    context,
+    definition,
+    namespace,
+    id,
+    body.record,
+  );
+  await synchronizeContentAssetEdges(
     context,
     definition,
     namespace,

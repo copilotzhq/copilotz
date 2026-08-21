@@ -23,11 +23,8 @@ export function createFinanceToolsPlugin(
     execute: tool.execute,
   }) as WorkflowTool;
   return definePlugin({
-    manifest: {
-      id: options.id ?? "@copilotz/finance-tools",
-      version: options.version ?? "3.0.0",
-      provides: { tools: [workflowTool.key] },
-    },
-    resources: { tools: [workflowTool] },
+    id: options.id ?? "@copilotz/finance-tools",
+    version: options.version ?? "3.0.0",
+    tools: [workflowTool],
   });
 }

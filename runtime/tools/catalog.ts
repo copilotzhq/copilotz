@@ -1,10 +1,10 @@
 import { resolveToolGrants } from "../capabilities/index.ts";
 import type { Agent, API, MCPServer, Skill } from "../resources/index.ts";
-import type { ScopedPluginResources } from "../engine/index.ts";
 import { isWorkflowTool, type WorkflowTool } from "./types.ts";
 import type {
   CreateWorkflowToolCatalogOptions,
   WorkflowToolCatalog,
+  WorkflowToolCatalogContext,
 } from "./types.ts";
 
 type CatalogEntry = {
@@ -52,11 +52,15 @@ function composeTools(
 function filterAgentTools(
   tools: readonly WorkflowTool[],
   agent: Agent,
-  resources: ScopedPluginResources,
+  context: WorkflowToolCatalogContext,
 ): readonly WorkflowTool[] {
   return resolveToolGrants(agent, tools, {
-    agents: resources.list<Agent>("agents"),
-    skills: resources.list<Skill>("skills"),
+    agents: Object.values(context.agents).filter((value): value is Agent =>
+      !!value
+    ),
+    skills: Object.values(context.skills).filter((value): value is Skill =>
+      !!value
+    ),
   });
 }
 
@@ -75,10 +79,14 @@ export function createWorkflowToolCatalog(
   const entries: CatalogEntry[] = [];
 
   const generated = (
-    resources: ScopedPluginResources,
+    context: WorkflowToolCatalogContext,
   ): Promise<readonly WorkflowTool[]> => {
-    const apis = resources.list<API>("api");
-    const mcpServers = resources.list<MCPServer>("mcp");
+    const apis = Object.values(context.apis).filter((value): value is API =>
+      !!value
+    );
+    const mcpServers = Object.values(context.mcp).filter((
+      value,
+    ): value is MCPServer => !!value);
     const cached = entries.find((entry) =>
       sameResources(entry.apis, apis) &&
       sameResources(entry.mcpServers, mcpServers)
@@ -108,22 +116,20 @@ export function createWorkflowToolCatalog(
   };
 
   const all = async (
-    resources: ScopedPluginResources,
+    context: WorkflowToolCatalogContext,
   ): Promise<readonly WorkflowTool[]> => {
-    const staticTools = resources.list<WorkflowTool>("tools").filter(
-      isWorkflowTool,
-    );
-    const generatedTools = await generated(resources);
+    const staticTools = Object.values(context.tools).filter(isWorkflowTool);
+    const generatedTools = await generated(context);
     return composeTools(staticTools, generatedTools, []);
   };
 
   return Object.freeze({
     all,
-    async forAgent(resources, agent) {
-      return filterAgentTools(await all(resources), agent, resources);
+    async forAgent(context, agent) {
+      return filterAgentTools(await all(context), agent, context);
     },
-    async get(resources, key) {
-      return (await all(resources)).find((tool) => tool.key === key);
+    async get(context, key) {
+      return (await all(context)).find((tool) => tool.key === key);
     },
     clear() {
       entries.splice(0, entries.length);

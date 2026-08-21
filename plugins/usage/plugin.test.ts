@@ -4,6 +4,7 @@ import {
   createUsageWorkflowPlugin,
   type CreateUsageWorkflowPluginOptions,
 } from "./index.ts";
+import { createCopilotz } from "../../index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import { waitForTestDelivery } from "../../runtime/testing/deliveries.ts";
 import {
@@ -17,11 +18,17 @@ import {
   projectToolExecutionById,
   projectToolExecutions,
 } from "../../runtime/testing/projections.ts";
-import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
-import { type CopilotzEngine, createCopilotzEngine } from "../engine/index.ts";
-import { createSqlSession } from "../events/index.ts";
-import { createPluginRegistry } from "../plugins/index.ts";
-import { coreCollectionsPlugin } from "../../plugins/core/plugin.ts";
+import {
+  createTestDatabase,
+  type TestDatabase,
+} from "../../runtime/testing/ominipg.ts";
+import {
+  type CopilotzEngine,
+  createCopilotzEngine,
+} from "../../runtime/engine/index.ts";
+import { createSqlSession } from "../../runtime/events/index.ts";
+import { createPluginRegistry } from "../../runtime/plugins/index.ts";
+import { coreCollectionsPlugin } from "../core/plugin.ts";
 
 const NAMESPACE = "tenant-a";
 const THREAD_ID = "thread-a";
@@ -94,6 +101,29 @@ Deno.test("usage workflow is a factory-created plugin and can disable metering",
   assertEquals(disabled.manifest.provides.collections, ["usage"]);
   assertEquals(disabled.manifest.provides.processors, undefined);
   assertEquals(disabled.resources.processors, undefined);
+});
+
+Deno.test("package-root core.usage composes the usage plugin without runtime ownership", async () => {
+  const application = await createCopilotz({
+    namespace: "usage-root",
+    core: {
+      tools: false,
+      webTools: false,
+      finance: false,
+      memory: false,
+      schedules: false,
+      usage: { enabled: false },
+    },
+  });
+  try {
+    assert(application.plugins.collections.get("usage"));
+    assertEquals(
+      application.config.declaredPluginIds.includes("@copilotz/core-usage"),
+      true,
+    );
+  } finally {
+    await application.shutdown();
+  }
 });
 
 Deno.test("usage workflow records physical provider attempts and tools once without payload copies", async () => {

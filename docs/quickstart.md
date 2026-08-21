@@ -6,23 +6,26 @@ infrastructure.
 
 ```ts
 import { createCopilotz } from "jsr:@copilotz/copilotz@^0.61.0";
+import { core } from "jsr:@copilotz/copilotz@^0.61.0/core";
 
 const namespace = "acme";
 const app = await createCopilotz({
   namespace,
   database: { url: ":memory:" },
-  resources: {
-    agents: [{
-      id: "support",
-      name: "Support",
-      role: "Answer clearly and use tools when useful.",
-      capabilities: {},
-      runtime: {
-        provider: "openai",
-        model: "gpt-5-mini",
-        apiKey,
+  context: {
+    agents: {
+      support: {
+        id: "support",
+        name: "Support",
+        role: "Answer clearly and use tools when useful.",
+        capabilities: {},
+        runtime: {
+          provider: "openai",
+          model: "gpt-5-mini",
+          apiKey,
+        },
       },
-    }],
+    },
   },
 });
 
@@ -40,17 +43,18 @@ await app.conversation.createThread({
   ],
 });
 
-const run = await app.run({
+const sent = await app.send(core.message({
   thread: "thread-1",
   participant: "user-1",
   recipientIds: ["support-1"],
   content: "How can you help me?",
-});
+}));
 
-for await (const event of run.events) {
-  console.log(event.type, event.correlationId);
+for await (const output of app.observe()) {
+  console.log(output.type, output.correlationId);
+  if (output.correlationId === sent.correlationId) break;
 }
-await run.done;
+await sent.done;
 
 const messages = await app.conversation.listMessages(namespace, "thread-1");
 const answer = messages.at(-1);
@@ -74,44 +78,41 @@ await app.shutdown();
 
 ## Add a plugin
 
-Use plugins for reusable packages and explicit top-level resources for
-application-local overrides.
+Use plugins for reusable packages and explicit top-level context for
+application-local values.
 
 ```ts
 import { definePlugin } from "jsr:@copilotz/copilotz@^0.61.0/plugins";
 
 const customerPlugin = definePlugin({
-  manifest: {
-    id: "@acme/customer-support",
-    version: "1.0.0",
-    provides: { tools: ["lookup_customer"] },
-  },
-  resources: {
-    tools: [{
-      id: "lookup_customer",
-      key: "lookup_customer",
-      name: "Lookup customer",
-      description: "Fetch a customer by ID.",
-      inputSchema: {
-        type: "object",
-        properties: { id: { type: "string" } },
-        required: ["id"],
-      },
-      execute: async (input) => lookupCustomer(input),
-    }],
-  },
+  id: "@acme/customer-support",
+  version: "1.0.0",
+  tools: [{
+    id: "lookup_customer",
+    key: "lookup_customer",
+    name: "Lookup customer",
+    description: "Fetch a customer by ID.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+    },
+    execute: async (input) => lookupCustomer(input),
+  }],
 });
 
 const app = await createCopilotz({
   namespace: "acme",
   plugins: [customerPlugin],
-  resources: {
-    agents: [{
-      id: "support",
-      name: "Support",
-      role: "Customer support",
-      capabilities: { tools: ["lookup_customer"] },
-    }],
+  context: {
+    agents: {
+      support: {
+        id: "support",
+        name: "Support",
+        role: "Customer support",
+        capabilities: { tools: ["lookup_customer"] },
+      },
+    },
   },
 });
 ```

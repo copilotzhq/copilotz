@@ -39,8 +39,11 @@ function context(
   resources: readonly ReturnType<typeof defineContextResource>[],
 ): CopilotzProcessorContext {
   return {
+    promptContext: Object.fromEntries(
+      resources.map((resource) => [resource.id, resource]),
+    ),
     resources: {
-      list: (type: string) => type === "context" ? resources : [],
+      list: () => [],
     },
     collections: { workspace: {} },
     signal: new AbortController().signal,

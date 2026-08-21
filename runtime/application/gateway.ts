@@ -142,8 +142,7 @@ export async function createCopilotzGateway(
       core: options.core,
       canonicalCore: options.canonicalCore,
       plugins: options.plugins,
-      resources: options.resources,
-      pluginResolver: options.pluginResolver,
+      context: options.context,
       toolCatalog: options.toolCatalog,
       assets: options.assets,
       database: persistence.database,
@@ -218,19 +217,12 @@ export async function createCopilotzGateway(
       await persistence.recovery?.admit();
       return await application!.databaseScope(databaseSchema);
     },
-    async connect(input: Parameters<CopilotzApplication["connect"]>[0]) {
+    async send(input: Parameters<CopilotzApplication["send"]>[0]) {
       await persistence.recovery?.admit();
-      return await application!.connect(input);
-    },
-    async run(input: Parameters<CopilotzApplication["run"]>[0]) {
-      await persistence.recovery?.admit();
-      return await application!.run(input);
-    },
-    async goal(input: Parameters<CopilotzApplication["goal"]>[0]) {
-      await persistence.recovery?.admit();
-      return await application!.goal(input);
+      return await application!.send(input);
     },
     fetch: (request: Request) => fetchApplication(request),
+    close: shutdown,
     shutdown,
   });
 }

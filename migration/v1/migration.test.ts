@@ -17,21 +17,19 @@ import {
   type TestDatabase,
 } from "../../runtime/testing/ominipg.ts";
 import {
-  createContentPreparer,
+  type ContentRef,
   createContentResolver,
   createDatabaseAssetRepository,
 } from "../../runtime/content/index.ts";
 import {
   createConversationRepository,
-  createEventCollectionRepository,
   createLlmAttemptRepository,
   createToolExecutionRepository,
   llmAttemptContent,
   toolExecutionContent,
 } from "../../runtime/domain/index.ts";
 import { createDeliveryExecutor } from "../../runtime/execution/index.ts";
-import { createKnowledgeRepository } from "../../runtime/knowledge/index.ts";
-import { longTermMemoryCollection } from "../../runtime/memory/index.ts";
+import type { KnowledgeDocument } from "../../runtime/knowledge/index.ts";
 import { createPluginRegistry } from "../../runtime/plugins/index.ts";
 import {
   discoverV1Schemas,
@@ -163,31 +161,70 @@ async function createV3Readers(session: SqlSession, schema: string) {
     assets,
     createId: () => `migration-reader-attempt-${++id}`,
   });
-  const preparer = createContentPreparer({
-    createId: () => `migration-reader-content-${++id}`,
+  const documents = Object.freeze({
+    async get(
+      namespace: string,
+      documentId: string,
+    ): Promise<KnowledgeDocument | null> {
+      const result = await session.query<{
+        id: string;
+        namespace: string;
+        data: unknown;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `SELECT id, namespace, data, created_at, updated_at
+         FROM ${store.tables.nodes}
+         WHERE namespace = $1 AND id = $2 AND type = 'document'
+         LIMIT 1`,
+        [namespace, documentId],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+      return Object.freeze({
+        ...(row.data as Record<string, unknown>),
+        id: row.id,
+        namespace: row.namespace,
+        createdAt: new Date(row.created_at).toISOString(),
+        updatedAt: new Date(row.updated_at).toISOString(),
+      }) as KnowledgeDocument;
+    },
   });
-  const knowledge = createKnowledgeRepository({
-    coordinator,
-    session,
-    eventStore: store,
-    assets,
-    preparer,
-    createId: () => `migration-reader-knowledge-${++id}`,
-  });
-  const memories = createEventCollectionRepository({
-    definition: longTermMemoryCollection,
-    coordinator,
-    session,
-    eventStore: store,
-    assets,
-    createId: () => `migration-reader-memory-${++id}`,
+  const memories = Object.freeze({
+    async get(
+      namespace: string,
+      memoryId: string,
+    ): Promise<Readonly<Record<string, unknown>> | null> {
+      const result = await session.query<{
+        id: string;
+        namespace: string;
+        data: unknown;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `SELECT id, namespace, data, created_at, updated_at
+         FROM ${store.tables.nodes}
+         WHERE namespace = $1 AND id = $2 AND type = 'long_term_memory'
+         LIMIT 1`,
+        [namespace, memoryId],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+      return Object.freeze({
+        ...(row.data as Record<string, unknown>),
+        id: row.id,
+        namespace: row.namespace,
+        createdAt: new Date(row.created_at).toISOString(),
+        updatedAt: new Date(row.updated_at).toISOString(),
+      });
+    },
   });
   return {
     assets,
     attempts,
     conversation,
     executor,
-    knowledge,
+    documents,
     memories,
     resolver: createContentResolver({ assets }),
     tools,
@@ -1165,16 +1202,17 @@ Deno.test("A28 multi-tenant upgrade preserves graph domains and translates settl
           `legacy-image-${suffix}`,
         );
 
-        const document = await readers.knowledge.get(
+        const document = await readers.documents.get(
           namespace,
           `document-${suffix}`,
         );
-        assertEquals(document?.source[0]?.assetId, `asset-${suffix}`);
+        const documentSource = document?.source[0] as ContentRef | undefined;
+        assertEquals(documentSource?.assetId, `asset-${suffix}`);
         assertEquals(document?.mediaType, "image/png");
         assertEquals(document?.threadId, `thread-root-${suffix}`);
         assertEquals(
           new TextDecoder().decode(
-            (await readers.resolver.get(document!.source[0], { namespace }))
+            (await readers.resolver.get(documentSource!, { namespace }))
               .bytes,
           ),
           `legacy-image-${suffix}`,

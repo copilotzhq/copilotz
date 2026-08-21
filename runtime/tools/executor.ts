@@ -1,10 +1,10 @@
 import type { CollectionRecord } from "../collections/index.ts";
 import type { Agent } from "../resources/index.ts";
 import { assetIdFromRef } from "../content/index.ts";
-import type { PreparedContent } from "../content/index.ts";
+import type { ContentStreamWriter, PreparedContent } from "../content/index.ts";
 import type { ToolExecution } from "../domain/index.ts";
+import type { EventRouting, EventVisibility } from "../events/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
-import type { StreamWriter } from "../streams/index.ts";
 import {
   loadParticipantRecord,
   loadThreadRecord,
@@ -91,9 +91,25 @@ export type WorkflowToolExecutor = (
   }>,
 ) => Promise<WorkflowToolOutcome>;
 
+export type OpenWorkflowToolOutputStreamInput = Readonly<{
+  threadId: string;
+  lane: string;
+  mediaType: string;
+  participantId?: string;
+  metadata?: Record<string, unknown>;
+  id?: string;
+  routing?: EventRouting;
+  visibility?: EventVisibility;
+}>;
+
+export type OpenWorkflowToolOutputStream = (
+  input: OpenWorkflowToolOutputStreamInput,
+) => Promise<ContentStreamWriter>;
+
 export type CreateWorkflowToolExecutorOptions = Readonly<{
   defaultTimeoutMs?: number;
   timeoutsMs?: Readonly<Record<string, number | undefined>>;
+  openStream?: OpenWorkflowToolOutputStream;
 }>;
 
 function errorText(error: unknown): string {
@@ -206,9 +222,7 @@ function createExecutor(
     tool,
     arguments: args,
     context,
-    availableTools = context.resources.list<WorkflowTool>("tools").filter(
-      isWorkflowTool,
-    ),
+    availableTools = Object.values(context.tools).filter(isWorkflowTool),
   }) => {
     const started = Date.now();
     const toolId = typeof execution.tool.id === "string"
@@ -253,20 +267,23 @@ function createExecutor(
       candidate.participantType === "human"
     );
     const agent = execution.agentId
-      ? context.resources.get<Agent>("agents", execution.agentId)
+      ? context.agents[execution.agentId]
       : undefined;
     let rejectCancellation: ((reason: Error) => void) | undefined;
     let outputSequence = 0;
     let emittedResult = false;
     let outputEmissionError: unknown;
     let outputEmission = Promise.resolve();
-    const writers = new Map<string, Promise<StreamWriter>>();
-    let sealMode: "finalize" | "fail" | "abandon" = "finalize";
+    const writers = new Map<string, Promise<ContentStreamWriter>>();
+    let sealMode: "closed" | "failed" | "abandoned" = "closed";
     const writerFor = () => {
       const key = "tool_output:application/x-ndjson";
       const existing = writers.get(key);
       if (existing) return existing;
-      const created = context.streams.write({
+      if (!options.openStream) {
+        throw new Error("Workflow tool live output stream is not configured.");
+      }
+      const created = options.openStream({
         threadId: execution.threadId,
         lane: "tool_output",
         mediaType: "application/x-ndjson",
@@ -304,15 +321,20 @@ function createExecutor(
         if (outputEmissionError !== undefined) throw outputEmissionError;
         try {
           const writer = await writerFor();
-          await writer.write(outputEncoder.encode(
-            `${JSON.stringify({
-              channel,
-              mode,
-              ...(mediaType ? { mediaType } : {}),
-              sequence,
-              delta,
-            })}\n`,
-          ));
+          await writer.append({
+            bytes: outputEncoder.encode(
+              `${
+                JSON.stringify({
+                  channel,
+                  mode,
+                  ...(mediaType ? { mediaType } : {}),
+                  sequence,
+                  delta,
+                })
+              }\n`,
+            ),
+            appendId: `tool-output:${sequence}`,
+          });
         } catch (error) {
           outputEmissionError = error;
           throw error;
@@ -328,17 +350,21 @@ function createExecutor(
       await Promise.all(pending.map(async (opened) => {
         const writer = await opened.catch(() => undefined);
         if (!writer) return;
-        if (sealMode === "finalize") {
-          await writer.finalize().catch(() => undefined);
+        if (sealMode === "closed") {
+          await writer.close({ assetId: `stream:${writer.id}` }).catch(() =>
+            undefined
+          );
           return;
         }
-        if (sealMode === "fail") {
-          await writer.fail(
-            errorText(outputEmissionError ?? "Stream failed"),
-          ).catch(() => undefined);
+        if (sealMode === "failed") {
+          await writer.abort({
+            reason: errorText(outputEmissionError ?? "Stream failed"),
+          }).catch(() => undefined);
           return;
         }
-        await writer.abandon().catch(() => undefined);
+        await writer.abort({ reason: "Tool output abandoned." }).catch(() =>
+          undefined
+        );
       }));
     };
     const cancellationPromise = new Promise<never>((_, reject) => {
@@ -357,7 +383,9 @@ function createExecutor(
       senderType: "agent",
       userExternalId: human?.externalId,
       agent: agent ?? null,
-      agents: [...context.resources.list<Agent>("agents")],
+      agents: Object.values(context.agents).filter((value): value is Agent =>
+        !!value
+      ),
       tools: [...availableTools],
       collections: context.collections,
       userMetadata: human?.metadata,
@@ -447,7 +475,7 @@ function createExecutor(
       await outputEmission;
       const error = outputEmissionError ?? caught;
       if (cancellation.cancelled()) {
-        sealMode = "abandon";
+        sealMode = "abandoned";
         await sealWriters();
         const reason = cancellation.reason() ?? errorText(error);
         const timedOut = reason.startsWith("timeout:");
@@ -460,7 +488,7 @@ function createExecutor(
           durationMs: elapsed(started),
         });
       }
-      sealMode = "fail";
+      sealMode = "failed";
       await sealWriters();
       return Object.freeze({
         status: "failed" as const,

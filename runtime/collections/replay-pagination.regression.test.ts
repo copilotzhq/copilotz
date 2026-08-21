@@ -2,17 +2,33 @@ import { assertEquals } from "@std/assert";
 
 import { digestContent } from "../content/digest.ts";
 import type { DurableEvent, EventStore, SqlExecutor } from "../events/index.ts";
+import { defineCollection } from "./definition.ts";
 import { loadCollectionEventBodies } from "./replay.ts";
 
 const EVENT_COUNT = 10_001;
 const EVENT_BODY = JSON.stringify({
   operation: "create",
+  assets: [],
   record: {
     id: "shared-record",
     namespace: "tenant-replay",
     createdAt: "2026-08-19T00:00:00.000Z",
     updatedAt: "2026-08-19T00:00:00.000Z",
   },
+});
+
+const auditRecordCollection = defineCollection({
+  name: "audit_record",
+  schema: {
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      namespace: { type: "string" },
+      createdAt: { type: "string" },
+      updatedAt: { type: "string" },
+    },
+    required: ["id", "namespace", "createdAt", "updatedAt"],
+  } as const,
 });
 
 function canonical(value: unknown): string {
@@ -101,7 +117,7 @@ Deno.test("collection replay reads every event page beyond 10,000 events", async
     executor,
     store,
     "tenant-replay",
-    "audit_record",
+    auditRecordCollection,
   );
 
   assertEquals(bodies.length, EVENT_COUNT);

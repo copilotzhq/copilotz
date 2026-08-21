@@ -223,28 +223,15 @@ async function createFixture(): Promise<Fixture> {
   });
   const registry = await createPluginRegistry({
     plugins: [definePlugin({
-      manifest: {
-        id: "test.event-collections",
-        version: "1.0.0",
-        provides: {
-          processors: [processor.id],
-          collections: [
-            parentDefinition.name,
-            childDefinition.name,
-            auditDefinition.name,
-            counterDefinition.name,
-          ],
-        },
-      },
-      resources: {
-        processors: [processor],
-        collections: [
-          parentDefinition,
-          childDefinition,
-          auditDefinition,
-          counterDefinition,
-        ],
-      },
+      id: "test.event-collections",
+      version: "1.0.0",
+      processors: [processor],
+      collections: [
+        parentDefinition,
+        childDefinition,
+        auditDefinition,
+        counterDefinition,
+      ],
     })],
   });
   const executor = createDeliveryExecutor({

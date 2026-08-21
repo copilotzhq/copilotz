@@ -1,4 +1,7 @@
-import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
+import {
+  coreFeatureAliases,
+  message as coreMessage,
+} from "@copilotz/copilotz/plugins/core";
 import { assertEquals, assertExists } from "@std/assert";
 import {
   type CopilotzProcessorContext,
@@ -7,7 +10,6 @@ import {
   defineLlmProviderResource,
   definePlugin,
   defineProcessor,
-  type LlmProviderResource,
 } from "../../index.ts";
 import { createTestDomainContext } from "../../runtime/testing/domain-context.ts";
 import {
@@ -63,25 +65,16 @@ function migratedApplicationPlugin() {
     },
   });
   return definePlugin({
-    manifest: {
-      id: "@downstream/application",
-      version: "3.0.0",
-      provides: {
-        agents: ["support"],
-        llm: [provider.id],
-        processors: [processor.id],
-      },
-    },
-    resources: {
-      agents: [{
-        id: "support",
-        name: "Support",
-        role: "Support agent",
-        runtime: { provider: provider.id, model: "injected" },
-      }],
-      llm: [provider],
-      processors: [processor],
-    },
+    id: "@downstream/application",
+    version: "3.0.0",
+    agents: [{
+      id: "support",
+      name: "Support",
+      role: "Support agent",
+      runtime: { provider: provider.id, model: "injected" },
+    }],
+    llm: [provider],
+    processors: [processor],
   });
 }
 
@@ -126,10 +119,9 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
     assertEquals("engine" in application, false);
     assertEquals("execution" in application, false);
     assertEquals(
-      application.plugins.require<LlmProviderResource>(
-        "llm",
-        "downstream-injected",
-      ).id,
+      (application.plugins.context.llm["downstream-injected"] as {
+        id: string;
+      }).id,
       "downstream-injected",
     );
     await createTestDomainContext(application, NAMESPACE, coreFeatureAliases)
@@ -151,12 +143,12 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
           },
         ],
       });
-    const run = await application.run({
+    const run = await application.send(coreMessage({
       thread: "downstream-thread",
       participant: "downstream-user",
       recipientIds: ["downstream-agent"],
       content: "hello",
-    });
+    }));
     await run.done;
     assertEquals(
       (await projectMessages(application, NAMESPACE, "downstream-thread"))

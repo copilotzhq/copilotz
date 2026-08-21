@@ -37,7 +37,10 @@ Deno.test("resolveAgentRuntime selects session independently of generate", () =>
     { mode: "session", provider: "realtime.echo", voice: "alloy" },
   ]);
   assertEquals(resolveAgentRuntime(resource, "generate")?.provider, "openai");
-  assertEquals(resolveAgentRuntime(resource, "session")?.provider, "realtime.echo");
+  assertEquals(
+    resolveAgentRuntime(resource, "session")?.provider,
+    "realtime.echo",
+  );
   assertEquals(agentTextBaseConfig(resource).provider, "openai");
 });
 
@@ -51,7 +54,10 @@ Deno.test("staticAgentSessionConfig requires a session provider", () => {
 
 Deno.test("staticAgentTextConfig requires a generate provider", () => {
   assertThrows(
-    () => staticAgentTextConfig(agent({ mode: "session", provider: "realtime.echo" })),
+    () =>
+      staticAgentTextConfig(
+        agent({ mode: "session", provider: "realtime.echo" }),
+      ),
     Error,
     "has no generate runtime provider",
   );

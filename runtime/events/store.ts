@@ -689,7 +689,9 @@ export function createEventStore(
       }
       return mutation.transaction
         ? await recoverOn(mutation.transaction, error)
-        : await session.transaction((transaction) => recoverOn(transaction, error));
+        : await session.transaction((transaction) =>
+          recoverOn(transaction, error)
+        );
     }
   };
 

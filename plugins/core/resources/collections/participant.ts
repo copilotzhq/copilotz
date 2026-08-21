@@ -1,6 +1,6 @@
 import {
-  defineCollection,
   type CollectionDefinition,
+  defineCollection,
 } from "@copilotz/copilotz/collections";
 import { metadataSchema, timestampsSchema } from "./schema.ts";
 

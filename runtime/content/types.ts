@@ -20,6 +20,20 @@ export type AssetOrigin = Readonly<{
   inferred?: boolean;
 }>;
 
+export const ASSET_BODY_OWNER_KIND = "@copilotz/asset/v1" as const;
+
+/** Replay authority for one Asset materialized by a stable graph mutation. */
+export type AssetManifestEntry = Readonly<{
+  assetId: string;
+  bodyId: string;
+  mediaType: string;
+  byteLength: number;
+  digest: `sha256:${string}`;
+  origin?: AssetOrigin;
+  metadata?: Readonly<Record<string, unknown>>;
+  createdAt: string;
+}>;
+
 /** Physical placement of an asset body. */
 export type AssetBodyLocation =
   | {
@@ -103,7 +117,11 @@ export type PreparedAsset = Readonly<{
   id: AssetId;
   namespace: string;
   mediaType: string;
+  /** Byte-backed candidates come from ingress preparation. */
   body: Uint8Array;
+  /** Ready Body-backed candidates come from protected workflow settlement. */
+  readyBody?: import("./body-store.ts").BodyHead;
+  location?: AssetBodyLocation;
   byteLength: number;
   digest: `sha256:${string}`;
   idempotencyKey?: string;

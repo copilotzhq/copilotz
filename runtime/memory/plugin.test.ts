@@ -41,7 +41,7 @@ import {
   coreFeatureAliases,
   corePlugin,
 } from "@copilotz/copilotz/plugins/core";
-import { executeToolProcessor } from "../../plugins/core/resources/processors/text.ts";
+import { executeToolProcessor } from "../../plugins/core/resources/processors/execute-tool.ts";
 import {
   defineLlmProviderResource,
   generateFromChat,
@@ -85,12 +85,9 @@ type FixtureOptions = Readonly<{
 }>;
 
 const coreExecuteToolPlugin = definePlugin({
-  manifest: {
-    id: "test.core.execute-tool",
-    version: "1.0.0",
-    provides: { processors: ["copilotz.core.execute-tool"] },
-  },
-  resources: { processors: [executeToolProcessor] },
+  id: "test.core.execute-tool",
+  version: "1.0.0",
+  processors: [executeToolProcessor],
 });
 
 Deno.test("memory consolidation starts in a detached durable settlement scope", () => {
@@ -151,18 +148,10 @@ async function createFixture(
     });
     const configuredAgent = options.agent ?? agent;
     const resources = definePlugin({
-      manifest: {
-        id: "test.memory.resources",
-        version: "1.0.0",
-        provides: {
-          agents: [configuredAgent.id],
-          llm: [provider.id],
-        },
-      },
-      resources: {
-        agents: [configuredAgent],
-        llm: [provider],
-      },
+      id: "test.memory.resources",
+      version: "1.0.0",
+      agents: [configuredAgent],
+      llm: [provider],
     });
     stage = "registry";
     const registry = await createPluginRegistry({
@@ -552,12 +541,9 @@ Deno.test("frozen application evidence is captured once and reused across repair
     },
   });
   const plugin = definePlugin({
-    manifest: {
-      id: "test.compass",
-      version: "1.0.0",
-      provides: { context: [workspace.id] },
-    },
-    resources: { context: [workspace] },
+    id: "test.compass",
+    version: "1.0.0",
+    context: { promptContext: { [workspace.id]: workspace } },
   });
   const fixture = await createFixture(
     (request, index) =>
@@ -759,12 +745,9 @@ Deno.test("failed context capture retries before provider execution and freezes 
     },
   });
   const plugin = definePlugin({
-    manifest: {
-      id: "test.retrying-context",
-      version: "1.0.0",
-      provides: { context: [resource.id] },
-    },
-    resources: { context: [resource] },
+    id: "test.retrying-context",
+    version: "1.0.0",
+    context: { promptContext: { [resource.id]: resource } },
   });
   const fixture = await createFixture(
     (request) => response(request, [call("settle", { outcome: "no_changes" })]),
@@ -936,12 +919,9 @@ Deno.test("overridden memory-kind schemas use ordinary tool failure and repair",
     },
   };
   const plugin = definePlugin({
-    manifest: {
-      id: "test.memory-kind",
-      version: "1.0.0",
-      provides: { memoryKinds: [kind.id] },
-    },
-    resources: { memoryKinds: [kind] },
+    id: "test.memory-kind",
+    version: "1.0.0",
+    context: { memoryKinds: { [kind.id]: kind } },
   });
   const fixture = await createFixture(
     (request, index) =>
@@ -1070,7 +1050,7 @@ Deno.test("memory query tools enforce thread access, explain provenance, and pre
         agentId: "north",
         sourceStartMessageId: "source-message",
         sourceEndMessageId: "source-message",
-        content: null,
+        content: [],
       });
     }
     const memoryInput = (
@@ -1130,7 +1110,7 @@ Deno.test("memory query tools enforce thread access, explain provenance, and pre
       correlationId: "memory-query",
     });
     const observed = (async () => {
-      for await (const _event of run.events) {
+      for await (const _output of run.outputs) {
         // Drain request-bound output while the causal scope settles.
       }
     })();

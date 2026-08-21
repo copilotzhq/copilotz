@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import {
   createPluginRegistry,
   createTransientProcessorSet,
@@ -12,43 +12,25 @@ function plugin(input: {
   agents?: readonly object[];
   tools?: readonly object[];
   processors?: readonly Processor[];
-  presets?: Readonly<Record<string, readonly string[]>>;
+  plugins?: Parameters<typeof definePlugin>[0]["plugins"];
+  context?: Parameters<typeof definePlugin>[0]["context"];
 }) {
   return definePlugin({
-    manifest: {
-      id: input.id,
-      version: "1.0.0",
-      provides: {
-        ...(input.agents
-          ? {
-            agents: input.agents.map((agent) => (agent as { id: string }).id),
-          }
-          : {}),
-        ...(input.tools
-          ? {
-            tools: input.tools.map((tool) => (tool as { key: string }).key),
-          }
-          : {}),
-        ...(input.processors
-          ? { processors: input.processors.map((processor) => processor.id) }
-          : {}),
-      },
-      presets: input.presets,
-    },
-    resources: {
-      agents: input.agents,
-      tools: input.tools,
-      processors: input.processors,
-    },
+    id: input.id,
+    version: "1.0.0",
+    plugins: input.plugins,
+    context: input.context,
+    agents: input.agents,
+    tools: input.tools,
+    processors: input.processors,
   });
 }
 
-Deno.test("plugin manifests and presets validate stable provided resources", () => {
+Deno.test("plugin manifests validate stable provided resources", () => {
   const valid = plugin({
     id: "acme.valid",
     agents: [{ id: "support", name: "Support" }],
     tools: [{ id: "random-database-id", key: "lookup", name: "Lookup" }],
-    presets: { core: ["agents.support", "tools.lookup"] },
   });
   assert(Object.isFrozen(valid));
   assert(Object.isFrozen(valid.manifest.provides.tools));
@@ -57,33 +39,16 @@ Deno.test("plugin manifests and presets validate stable provided resources", () 
   assertThrows(
     () =>
       definePlugin({
-        manifest: {
-          id: "acme.invalid",
-          version: "1.0.0",
-          provides: { agents: ["missing"] },
-        },
-        resources: { agents: [{ id: "present" }] },
+        id: "acme.invalid",
+        version: "1.0.0",
+        agents: [{ id: "present" }, { id: "present" }],
       }),
     TypeError,
-    "mismatch",
-  );
-  assertThrows(
-    () =>
-      definePlugin({
-        manifest: {
-          id: "acme.invalid-preset",
-          version: "1.0.0",
-          provides: { agents: ["present"] },
-          presets: { broken: ["agents.missing"] },
-        },
-        resources: { agents: [{ id: "present" }] },
-      }),
-    TypeError,
-    "unknown resource",
+    "duplicate",
   );
 });
 
-Deno.test("plugin composition precedence is core, declaration order, then application", async () => {
+Deno.test("plugin composition precedence is core, declaration order, then application context", async () => {
   const core = plugin({
     id: "@copilotz/core",
     agents: [{ id: "support", name: "Core" }],
@@ -102,29 +67,127 @@ Deno.test("plugin composition precedence is core, declaration order, then applic
   const registry = await createPluginRegistry({
     core,
     plugins: [first, second],
-    resources: { agents: [{ id: "support", name: "Application" }] },
+    context: { agents: { support: { id: "support", name: "Application" } } },
   });
 
   assertEquals(
-    registry.require<{ id: string; name: string }>("agents", "support").name,
+    (registry.context.agents.support as { id: string; name: string }).name,
     "Application",
   );
   assertEquals(
-    registry.list<{ id: string; name: string }>("agents").map((agent) =>
-      agent.id
-    ),
-    ["research", "support"],
+    (registry.context.agents.research as { id: string; name: string }).name,
+    "Research",
   );
-  assertEquals(registry.origin("agents", "support"), {
-    pluginId: "@copilotz/application",
-  });
-  assertEquals(registry.origin("agents", "research"), {
-    pluginId: "acme.first",
-    pluginVersion: "1.0.0",
-  });
 });
 
-Deno.test("context and memory-kind resources follow the same stable-ID override rules", async () => {
+Deno.test("plugin dependencies compose before the declaring plugin", async () => {
+  const base = plugin({
+    id: "acme.base",
+    agents: [{ id: "support", name: "Base" }],
+    tools: [{ key: "lookup", name: "Lookup" }],
+  });
+  const child = plugin({
+    id: "acme.child",
+    plugins: [base],
+    agents: [{ id: "support", name: "Child" }],
+  });
+  const sibling = plugin({
+    id: "acme.sibling",
+    plugins: [base],
+    agents: [{ id: "research", name: "Research" }],
+  });
+  const registry = await createPluginRegistry({
+    plugins: [child, sibling],
+  });
+
+  assertEquals(
+    registry.plugins.map((registered) => registered.manifest.id),
+    ["acme.base", "acme.child", "acme.sibling"],
+  );
+  assertEquals(
+    (registry.context.agents.support as { name: string }).name,
+    "Child",
+  );
+  assertEquals(
+    (registry.context.tools.lookup as { name: string }).name,
+    "Lookup",
+  );
+  assertEquals(
+    (registry.context.agents.support as { name: string }).name,
+    "Child",
+  );
+  assertEquals(
+    (registry.context.tools.lookup as { name: string }).name,
+    "Lookup",
+  );
+});
+
+Deno.test("plugin property context composes with dependency and application precedence", async () => {
+  const dependencySearch = Object.freeze({
+    key: "provider-search",
+    name: "Provider Search",
+  });
+  const childSearch = Object.freeze({
+    key: "child-search",
+    name: "Child Search",
+  });
+  const applicationSearch = Object.freeze({
+    key: "application-search",
+    name: "Application Search",
+  });
+  const base = plugin({
+    id: "acme.context-base",
+    context: { tools: { search: dependencySearch } },
+  });
+  const child = plugin({
+    id: "acme.context-child",
+    plugins: [base],
+    context: {
+      tools: { search: childSearch },
+      agents: { assistant: { id: "assistant" } },
+    },
+  });
+  const registry = await createPluginRegistry({
+    plugins: [child],
+    context: { tools: { search: applicationSearch } },
+  });
+
+  assertEquals(registry.context.tools.search, applicationSearch);
+  assertEquals(registry.context.agents.assistant, { id: "assistant" });
+});
+
+Deno.test("plugin dependency cycles and duplicate identities fail", async () => {
+  const first: Record<string, unknown> = {
+    id: "acme.first",
+    version: "1.0.0",
+  };
+  const second: Record<string, unknown> = {
+    id: "acme.second",
+    version: "1.0.0",
+    plugins: [first],
+  };
+  first.plugins = [second];
+
+  assertThrows(
+    () => definePlugin(first as Parameters<typeof definePlugin>[0]),
+    TypeError,
+    "cycle",
+  );
+
+  assertThrows(
+    () =>
+      createPluginRegistry({
+        plugins: [
+          plugin({ id: "acme.duplicate" }),
+          plugin({ id: "acme.duplicate" }),
+        ],
+      }),
+    TypeError,
+    "declared more than once",
+  );
+});
+
+Deno.test("prompt context and memory-kind context follow stable override rules", async () => {
   const contextA = {
     id: "workspace",
     type: "context",
@@ -138,14 +201,18 @@ Deno.test("context and memory-kind resources follow the same stable-ID override 
     description: "first",
   };
   const kindB = { ...kindA, description: "replacement" };
-  const resourcePlugin = (id: string, context: object, kind: object) =>
+  const resourcePlugin = (
+    id: string,
+    context: object,
+    kind: { id: string },
+  ) =>
     definePlugin({
-      manifest: {
-        id,
-        version: "1.0.0",
-        provides: { context: ["workspace"], memoryKinds: ["acme.signal"] },
+      id,
+      version: "1.0.0",
+      context: {
+        promptContext: { [(context as { id: string }).id]: context },
+        memoryKinds: { [kind.id as string]: kind },
       },
-      resources: { context: [context], memoryKinds: [kind] },
     });
   const registry = await createPluginRegistry({
     plugins: [
@@ -154,63 +221,11 @@ Deno.test("context and memory-kind resources follow the same stable-ID override 
     ],
   });
 
-  assertEquals(registry.require("context", "workspace"), contextB);
+  assertEquals(registry.context.promptContext.workspace, contextB);
   assertEquals(
-    registry.require<{ description: string }>("memoryKinds", "acme.signal")
+    (registry.context.memoryKinds["acme.signal"] as { description: string })
       .description,
     "replacement",
-  );
-  assertEquals(
-    registry.origin("memoryKinds", "acme.signal")?.pluginId,
-    "second",
-  );
-});
-
-Deno.test("resolver-loaded plugins support named imports and presets", async () => {
-  const remote = plugin({
-    id: "acme.remote",
-    agents: [
-      { id: "support", name: "Support" },
-      { id: "sales", name: "Sales" },
-    ],
-    tools: [
-      { key: "lookup", name: "Lookup" },
-      { key: "write", name: "Write" },
-    ],
-    presets: { support: ["agents.support", "tools.lookup"] },
-  });
-  const resolved: string[] = [];
-  const registry = await createPluginRegistry({
-    plugins: [{
-      source: "jsr:@acme/copilotz-plugin@^2",
-      presets: ["support"],
-      imports: ["agents.sales"],
-    }],
-    resolver: {
-      resolve(source) {
-        resolved.push(source);
-        return Promise.resolve({ default: remote });
-      },
-    },
-  });
-
-  assertEquals(resolved, ["jsr:@acme/copilotz-plugin@^2"]);
-  assertEquals(
-    registry.list<{ id: string }>("agents").map((agent) => agent.id),
-    ["support", "sales"],
-  );
-  assertEquals(
-    registry.list<{ key: string }>("tools").map((tool) => tool.key),
-    ["lookup"],
-  );
-  await assertRejects(
-    () =>
-      createPluginRegistry({
-        plugins: [{ source: "remote", imports: ["tools.missing"] }],
-        resolver: { resolve: () => Promise.resolve(remote) },
-      }),
-    TypeError,
-    "does not provide",
   );
 });
 
@@ -250,16 +265,19 @@ Deno.test("processor stable IDs override while different IDs remain independent"
     payload: { id: "message-a" },
   } as const;
 
-  assertEquals(registry.matchDurable(draft), [replacement, independent]);
-  assertEquals(registry.durableConsumers(draft), [
+  assertEquals(registry.processors.matchDurable(draft), [
+    replacement,
+    independent,
+  ]);
+  assertEquals(registry.processors.durableConsumers(draft), [
     { consumerId: "processor:memory.observe", settlement: "inherit" },
     { consumerId: "processor:audit.observe", settlement: "detached" },
   ]);
   assertEquals(
-    registry.processorForConsumer("processor:memory.observe"),
+    registry.processors.processorForConsumer("processor:memory.observe"),
     replacement,
   );
-  for (const processor of registry.matchDurable(draft)) {
+  for (const processor of registry.processors.matchDurable(draft)) {
     await processor.handle({
       durable: true,
       id: "event-a",
@@ -315,7 +333,7 @@ Deno.test("transient processors observe events without durable matching", async 
   } as const;
   assertEquals(transients.match(event), [live]);
   assertEquals(
-    registry.matchDurable({
+    registry.processors.matchDurable({
       type: "audio.delta",
       namespace: "tenant-a",
       payload: {},

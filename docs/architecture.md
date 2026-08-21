@@ -4,7 +4,7 @@ Copilotz separates durable meaning from execution placement.
 
 ```mermaid
 flowchart TD
-  A["Application or channel"] --> B["run() / persistent attachment"]
+  A["Application or channel"] --> B["send() / application events"]
   B --> C["Typed graph/domain mutation"]
   C --> D["Atomic Ominipg transaction"]
   D --> E["nodes + edges"]

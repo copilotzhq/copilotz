@@ -1,4 +1,3 @@
-import type { ScopedPluginResources } from "../engine/index.ts";
 import type {
   KnowledgeEmbeddingConfig,
   KnowledgeEmbeddingProviderResource,
@@ -54,13 +53,15 @@ function finiteVector(
 
 /** Resolves and invokes the configured embedding resource inside the worker. */
 export async function embedKnowledgeTexts(
-  resources: ScopedPluginResources,
+  context: Readonly<{
+    embeddings: Readonly<Record<string, unknown | undefined>>;
+  }>,
   config: KnowledgeEmbeddingConfig,
   texts: readonly string[],
   options: Readonly<{ signal: AbortSignal; idempotencyKey: string }>,
 ): Promise<KnowledgeEmbeddingResponse> {
   const id = required(config.provider, "Embedding provider resource ID");
-  const candidate = resources.get("llm", id);
+  const candidate = context.embeddings[id];
   if (!isKnowledgeEmbeddingProvider(candidate)) {
     throw new Error(`Embedding provider resource '${id}' was not found.`);
   }

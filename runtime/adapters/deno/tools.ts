@@ -91,12 +91,9 @@ export function createWorkspaceToolsPlugin(
     workspaceDefinitions,
   );
   return definePlugin({
-    manifest: {
-      id: options.id ?? "@copilotz/workspace-tools",
-      version: options.version ?? "3.0.0",
-      provides: { tools: tools.map((tool) => tool.key) },
-    },
-    resources: { tools },
+    id: options.id ?? "@copilotz/workspace-tools",
+    version: options.version ?? "3.0.0",
+    tools,
   });
 }
 
@@ -111,11 +108,8 @@ export function createProcessToolsPlugin(
     processDefinitions,
   );
   return definePlugin({
-    manifest: {
-      id: options.id ?? "@copilotz/process-tools",
-      version: options.version ?? "3.0.0",
-      provides: { tools: tools.map((tool) => tool.key) },
-    },
-    resources: { tools },
+    id: options.id ?? "@copilotz/process-tools",
+    version: options.version ?? "3.0.0",
+    tools,
   });
 }

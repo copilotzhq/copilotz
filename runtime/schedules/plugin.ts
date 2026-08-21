@@ -1,14 +1,21 @@
 import type { Agent } from "../resources/index.ts";
 import type { CollectionRecord } from "../domain/index.ts";
+import type { CollectionEventBody } from "../collections/index.ts";
 import type { CopilotzProcessorContext } from "../engine/index.ts";
+import {
+  defineFeature,
+  type FeatureExecuteContext,
+} from "../features/index.ts";
 import { requireFeatureActions } from "../features/context.ts";
 import {
   type CopilotzPlugin,
   definePlugin,
   defineProcessor,
   type Processor,
+  type ProcessorEvent,
 } from "../plugins/index.ts";
 import { scheduledJobCollection } from "./collection.ts";
+import { scheduledJobsLifecycleFeature } from "./lifecycle.ts";
 import type {
   CreateScheduledJobsPluginOptions,
   ScheduledJobOccurrence,
@@ -29,7 +36,7 @@ function stringArray(value: unknown): readonly string[] {
 }
 
 async function byExternalId(
-  context: CopilotzProcessorContext,
+  context: FeatureExecuteContext,
   collection: "participant" | "thread",
   externalId: string,
 ): Promise<CollectionRecord | null> {
@@ -38,14 +45,12 @@ async function byExternalId(
   }))[0] ?? null;
 }
 
-function occurrence(value: unknown): ScheduledJobOccurrence {
+function payloadOccurrence(value: unknown): ScheduledJobOccurrence | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError("Scheduled due event payload must be an object.");
+    return undefined;
   }
   const input = value as Partial<ScheduledJobOccurrence>;
-  if (!input.run || !Array.isArray(input.run.content)) {
-    throw new TypeError("Scheduled due event requires canonical run content.");
-  }
+  if (!input.run || !Array.isArray(input.run.content)) return undefined;
   return Object.freeze({
     jobId: required(input.jobId, "Scheduled job ID"),
     jobName: required(input.jobName, "Scheduled job name"),
@@ -55,9 +60,59 @@ function occurrence(value: unknown): ScheduledJobOccurrence {
   });
 }
 
+function collectionBodyOccurrence(
+  event: ProcessorEvent,
+): ScheduledJobOccurrence {
+  const body = event.data as Partial<CollectionEventBody<CollectionRecord>>;
+  if (!body || typeof body !== "object" || !body.record) {
+    throw new TypeError("Scheduled due event data must include a job record.");
+  }
+  const job = body.record as CollectionRecord;
+  const run = job.run as ScheduledJobOccurrence["run"] | undefined;
+  if (!run || !Array.isArray(run.content)) {
+    throw new TypeError("Scheduled due event requires canonical run content.");
+  }
+  const scheduledFor = required(
+    job.lastRunAt,
+    "Scheduled occurrence time",
+  );
+  const manual = event.metadata?.scheduledJob &&
+    typeof event.metadata.scheduledJob === "object" &&
+    (event.metadata.scheduledJob as { manual?: unknown }).manual === true;
+  const deduplicationId = "deduplicationId" in event &&
+      typeof event.deduplicationId === "string"
+    ? event.deduplicationId
+    : undefined;
+  const occurrenceId = manual
+    ? `${job.id}:manual:${
+      encodeURIComponent(deduplicationId ?? event.correlationId)
+    }`
+    : `${job.id}:${
+      typeof job.lastRunAtMs === "number"
+        ? job.lastRunAtMs
+        : new Date(scheduledFor).getTime()
+    }`;
+  return Object.freeze({
+    jobId: job.id,
+    jobName: required(job.name, "Scheduled job name"),
+    occurrenceId,
+    scheduledFor,
+    run: Object.freeze(structuredClone(run)),
+  });
+}
+
+function occurrence(event: ProcessorEvent): ScheduledJobOccurrence {
+  const fromPayload = payloadOccurrence(event.payload);
+  if (fromPayload) return fromPayload;
+  if (!event.durable) {
+    throw new TypeError("Scheduled due event payload must be an object.");
+  }
+  return collectionBodyOccurrence(event);
+}
+
 async function sender(
   item: ScheduledJobOccurrence,
-  context: CopilotzProcessorContext,
+  context: FeatureExecuteContext,
 ): Promise<CollectionRecord> {
   const descriptor = item.run.sender;
   const externalId = descriptor?.externalId?.trim() || item.jobId;
@@ -87,7 +142,7 @@ async function sender(
 
 async function agentParticipant(
   agent: Agent,
-  context: CopilotzProcessorContext,
+  context: FeatureExecuteContext,
 ): Promise<CollectionRecord> {
   const externalId = agent.externalId?.trim() || agent.id;
   const existing = await byExternalId(context, "participant", externalId);
@@ -109,13 +164,13 @@ async function agentParticipant(
 
 async function recipient(
   reference: string,
-  context: CopilotzProcessorContext,
+  context: FeatureExecuteContext,
 ): Promise<CollectionRecord> {
   const id = required(reference, "Scheduled recipient");
   const existing = await context.collections.participant.get({ id }) ??
     await byExternalId(context, "participant", id);
   if (existing) return existing;
-  const agent = context.resources.get<Agent>("agents", id);
+  const agent = context.agents[id];
   if (agent) return await agentParticipant(agent, context);
   throw new Error(`Scheduled recipient '${id}' was not found.`);
 }
@@ -124,7 +179,7 @@ async function resolveThread(
   item: ScheduledJobOccurrence,
   senderParticipant: CollectionRecord,
   recipients: readonly CollectionRecord[],
-  context: CopilotzProcessorContext,
+  context: FeatureExecuteContext,
 ): Promise<CollectionRecord> {
   const descriptor = item.run.thread;
   let thread = descriptor?.id
@@ -166,7 +221,7 @@ async function resolveThread(
 
 async function dispatchOccurrence(
   item: ScheduledJobOccurrence,
-  context: CopilotzProcessorContext,
+  context: FeatureExecuteContext,
 ): Promise<void> {
   const sendingParticipant = await sender(item, context);
   let recipients = await Promise.all(
@@ -213,13 +268,29 @@ async function dispatchOccurrence(
   }, { operationKey: `scheduled-message:${item.occurrenceId}` });
 }
 
+const scheduledJobsDispatchFeature = defineFeature({
+  id: "copilotz.scheduled-jobs.dispatch",
+  actions: {
+    dispatch: {
+      execute(
+        input: ScheduledJobOccurrence,
+        context: FeatureExecuteContext,
+      ) {
+        return dispatchOccurrence(input, context);
+      },
+    },
+  },
+});
+
 const scheduledJobsDispatchProcessor: Processor<CopilotzProcessorContext> =
   defineProcessor<CopilotzProcessorContext>({
     id: "scheduled_jobs.dispatch",
     on: [{ eventType: "scheduled_job.due" }],
     async handle(event, context) {
       if (!event.durable) return;
-      await dispatchOccurrence(occurrence(event.payload), context);
+      await context.feature(scheduledJobsDispatchFeature).dispatch(
+        occurrence(event),
+      );
     },
   });
 
@@ -229,19 +300,11 @@ export function createScheduledJobsPlugin(
 ): CopilotzPlugin {
   const tool = createScheduledJobsTool(options.toolId);
   return definePlugin({
-    manifest: {
-      id: options.id?.trim() || "@copilotz/scheduled-jobs",
-      version: options.version?.trim() || "3.0.0",
-      provides: {
-        collections: [scheduledJobCollection.name],
-        processors: [scheduledJobsDispatchProcessor.id],
-        tools: [tool.key],
-      },
-    },
-    resources: {
-      collections: [scheduledJobCollection],
-      processors: [scheduledJobsDispatchProcessor],
-      tools: [tool],
-    },
+    id: options.id?.trim() || "@copilotz/scheduled-jobs",
+    version: options.version?.trim() || "3.0.0",
+    collections: [scheduledJobCollection],
+    features: [scheduledJobsLifecycleFeature, scheduledJobsDispatchFeature],
+    processors: [scheduledJobsDispatchProcessor],
+    tools: [tool],
   });
 }

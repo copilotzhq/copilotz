@@ -21,7 +21,7 @@ export type ConnectAttachmentInput = Readonly<{
   databaseSchema?: string;
   /** Resume after this durable event position. SSE `id:` / Last-Event-ID. */
   afterPosition?: string;
-  /** Byte offsets for in-flight `stream.created` followers, keyed by stream id. */
+  /** Byte offsets for observed live stream outputs, keyed by stream id. */
   streamOffsets?: Readonly<Record<string, number>>;
 }>;
 
@@ -123,7 +123,7 @@ export type RunHandle = Readonly<{
   eventId: string;
   threadId: string;
   correlationId: string;
-  events: ReadableStream<CopilotzEvent>;
+  outputs: ReadableStream<AttachmentOutput>;
   done: Promise<void>;
   cancel(reason?: string): Promise<void>;
 }>;

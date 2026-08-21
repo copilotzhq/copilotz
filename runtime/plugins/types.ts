@@ -1,10 +1,31 @@
 import { isProcessor } from "./processor.ts";
 
-export const PLUGIN_RESOURCE_TYPES = [
+export type PluginResource = object;
+
+export type PluginResources = Readonly<
+  Partial<{
+    agents: readonly PluginResource[];
+    collections: readonly PluginResource[];
+    processors: readonly PluginResource[];
+    llm: readonly PluginResource[];
+    embedding: readonly PluginResource[];
+    tools: readonly PluginResource[];
+    skills: readonly PluginResource[];
+    features: readonly PluginResource[];
+    storage: readonly PluginResource[];
+    mcp: readonly PluginResource[];
+    api: readonly PluginResource[];
+    channels: readonly PluginResource[];
+    memoryKinds: readonly PluginResource[];
+  }>
+>;
+
+export type PluginResourceType = keyof PluginResources;
+
+export const INTERNAL_PLUGIN_RESOURCE_TYPES = [
   "agents",
   "collections",
   "processors",
-  "context",
   "llm",
   "embedding",
   "tools",
@@ -15,54 +36,49 @@ export const PLUGIN_RESOURCE_TYPES = [
   "api",
   "channels",
   "memoryKinds",
-] as const;
+] as const satisfies readonly PluginResourceType[];
 
-export type PluginResourceType = typeof PLUGIN_RESOURCE_TYPES[number];
-export type PluginResource = object;
+export type PluginDeclarationResourceType = PluginResourceType;
 
-export type PluginResources = Partial<
-  Record<PluginResourceType, readonly PluginResource[]>
+export type PluginDeclarationResources = PluginResources;
+
+export type PluginContextContribution = Readonly<
+  Record<string, Readonly<Record<string, unknown>>>
 >;
+
+export type PluginContextValues = PluginContextContribution;
 
 export type PluginManifest = Readonly<{
   id: string;
   version: string;
   provides: Partial<Record<PluginResourceType, readonly string[]>>;
-  presets?: Readonly<Record<string, readonly string[]>>;
 }>;
 
 export type CopilotzPlugin = Readonly<{
   manifest: PluginManifest;
   resources: PluginResources;
+  plugins: readonly CopilotzPlugin[];
+  context: PluginContextValues;
 }>;
 
-export type PluginSource =
-  | string
-  | Readonly<{
-    source: string;
-    imports?: readonly string[];
-    presets?: readonly string[];
-  }>
-  | CopilotzPlugin;
-
-/** Runtime adapter for local paths, JSR, npm, or application-owned sources. */
-export type PluginResolver = {
-  resolve(source: string): Promise<unknown>;
-};
-
-export type PluginResourceOrigin = Readonly<{
-  pluginId: string;
-  pluginVersion?: string;
-}>;
+export type DefinePluginInput = Readonly<
+  & {
+    id: string;
+    version: string;
+    plugins?: readonly (DefinePluginInput | CopilotzPlugin)[];
+    context?: PluginContextContribution;
+  }
+  & PluginDeclarationResources
+>;
 
 function resourceType(value: string): PluginResourceType {
-  if (!PLUGIN_RESOURCE_TYPES.includes(value as PluginResourceType)) {
+  if (!INTERNAL_PLUGIN_RESOURCE_TYPES.includes(value as PluginResourceType)) {
     throw new TypeError(`Unknown plugin resource type '${value}'.`);
   }
   return value as PluginResourceType;
 }
 
-export function pluginResourceId(
+export function stablePluginResourceId(
   type: PluginResourceType,
   value: unknown,
 ): string {
@@ -75,27 +91,13 @@ export function pluginResourceId(
     : type === "collections"
     ? resource.name ?? resource.id
     : type === "skills" || type === "channels" || type === "features" ||
-        type === "storage" || type === "context" || type === "memoryKinds"
+        type === "storage" || type === "memoryKinds"
     ? resource.name ?? resource.id
     : resource.id ?? resource.name;
   if (typeof candidate !== "string" || !candidate.trim()) {
     throw new TypeError(`${type} resources require a stable ID.`);
   }
   return candidate.trim();
-}
-
-export function parsePluginSelector(selector: string): {
-  type: PluginResourceType;
-  id?: string;
-} {
-  const normalized = selector.trim();
-  const separator = normalized.indexOf(".");
-  const rawType = separator < 0 ? normalized : normalized.slice(0, separator);
-  const type = resourceType(rawType);
-  if (separator < 0) return { type };
-  const id = normalized.slice(separator + 1).trim();
-  if (!id) throw new TypeError(`Invalid plugin selector '${selector}'.`);
-  return { type, id };
 }
 
 function frozenProvides(
@@ -129,7 +131,7 @@ function frozenResources(resources: PluginResources): PluginResources {
     if (!Array.isArray(values)) {
       throw new TypeError(`Plugin resources '${type}' must be an array.`);
     }
-    const ids = values.map((value) => pluginResourceId(type, value));
+    const ids = values.map((value) => stablePluginResourceId(type, value));
     if (type === "processors" && values.some((value) => !isProcessor(value))) {
       throw new TypeError("Plugin processors must be defined subscriptions.");
     }
@@ -141,14 +143,47 @@ function frozenResources(resources: PluginResources): PluginResources {
   return Object.freeze(result);
 }
 
+function frozenContext(
+  context: PluginContextContribution | undefined,
+  label: string,
+): PluginContextValues {
+  if (!context) return Object.freeze({});
+  const result: Record<string, Readonly<Record<string, unknown>>> = {};
+  for (const [rawNamespace, values] of Object.entries(context)) {
+    const namespace = rawNamespace.trim();
+    if (!namespace) {
+      throw new TypeError(`${label} contains an empty context namespace.`);
+    }
+    if (!values || typeof values !== "object" || Array.isArray(values)) {
+      throw new TypeError(
+        `${label} context namespace '${namespace}' must be an object.`,
+      );
+    }
+    const entries: Record<string, unknown> = {};
+    for (const [rawKey, value] of Object.entries(values)) {
+      const key = rawKey.trim();
+      if (!key) {
+        throw new TypeError(
+          `${label} context namespace '${namespace}' contains an empty key.`,
+        );
+      }
+      entries[key] = value;
+    }
+    result[namespace] = Object.freeze(entries);
+  }
+  return Object.freeze(result);
+}
+
 function assertManifestMatchesResources(
   manifest: PluginManifest,
   resources: PluginResources,
 ): void {
-  for (const type of PLUGIN_RESOURCE_TYPES) {
+  for (const type of INTERNAL_PLUGIN_RESOURCE_TYPES) {
     const declared = new Set(manifest.provides[type] ?? []);
     const actual = new Set(
-      (resources[type] ?? []).map((value) => pluginResourceId(type, value)),
+      (resources[type] ?? []).map((value) =>
+        stablePluginResourceId(type, value)
+      ),
     );
     const missing = [...actual].filter((id) => !declared.has(id));
     const absent = [...declared].filter((id) => !actual.has(id));
@@ -160,48 +195,72 @@ function assertManifestMatchesResources(
   }
 }
 
-function frozenPresets(
-  pluginId: string,
-  presets: PluginManifest["presets"],
-  provides: PluginManifest["provides"],
-): PluginManifest["presets"] {
-  if (!presets) return undefined;
-  const result: Record<string, readonly string[]> = {};
-  for (const [name, selectors] of Object.entries(presets)) {
-    if (!name.trim() || !Array.isArray(selectors)) {
-      throw new TypeError(`Plugin '${pluginId}' contains an invalid preset.`);
-    }
-    const normalized = selectors.map((selector) => selector.trim());
-    for (const selector of normalized) {
-      const parsed = parsePluginSelector(selector);
-      if (
-        parsed.id && !(provides[parsed.type] ?? []).includes(parsed.id)
-      ) {
-        throw new TypeError(
-          `Plugin '${pluginId}' preset '${name}' references unknown resource '${selector}'.`,
-        );
-      }
-    }
-    result[name] = Object.freeze(normalized);
-  }
-  return Object.freeze(result);
+function isDefinedPlugin(value: unknown): value is CopilotzPlugin {
+  if (!value || typeof value !== "object") return false;
+  const plugin = value as Partial<CopilotzPlugin>;
+  return !!plugin.manifest && !!plugin.resources &&
+    Array.isArray(plugin.plugins) && !!plugin.context;
 }
 
-export function definePlugin(plugin: CopilotzPlugin): CopilotzPlugin {
-  const id = plugin.manifest?.id?.trim();
-  const version = plugin.manifest?.version?.trim();
+function derivedProvides(
+  resources: PluginResources,
+): PluginManifest["provides"] {
+  const provides: Partial<Record<PluginResourceType, readonly string[]>> = {};
+  for (const type of INTERNAL_PLUGIN_RESOURCE_TYPES) {
+    const values = resources[type];
+    if (!values?.length) continue;
+    provides[type] = Object.freeze(
+      values.map((value) => stablePluginResourceId(type, value)),
+    );
+  }
+  return Object.freeze(provides);
+}
+
+function normalizePlugin(
+  plugin: DefinePluginInput | CopilotzPlugin,
+  stack: readonly string[],
+): CopilotzPlugin {
+  if (isDefinedPlugin(plugin)) {
+    const id = plugin.manifest.id;
+    if (stack.includes(id)) {
+      throw new TypeError(
+        `Plugin dependency cycle detected: ${[...stack, id].join(" -> ")}.`,
+      );
+    }
+    return plugin;
+  }
+  const id = plugin.id?.trim();
+  const version = plugin.version?.trim();
   if (!id) throw new TypeError("Plugin id is required.");
   if (!version) throw new TypeError(`Plugin '${id}' requires a version.`);
-  const provides = frozenProvides(plugin.manifest.provides ?? {});
-  const resources = frozenResources(plugin.resources ?? {});
+  if (stack.includes(id)) {
+    throw new TypeError(
+      `Plugin dependency cycle detected: ${[...stack, id].join(" -> ")}.`,
+    );
+  }
+  const resources = frozenResources({
+    ...Object.fromEntries(
+      INTERNAL_PLUGIN_RESOURCE_TYPES.flatMap((type) =>
+        plugin[type] ? [[type, plugin[type]]] : []
+      ),
+    ),
+  } as PluginResources);
+  const context = frozenContext(plugin.context, `Plugin '${id}'`);
+  const provides = frozenProvides(derivedProvides(resources));
   const manifest: PluginManifest = Object.freeze({
     id,
     version,
     provides,
-    ...(plugin.manifest.presets
-      ? { presets: frozenPresets(id, plugin.manifest.presets, provides) }
-      : {}),
   });
   assertManifestMatchesResources(manifest, resources);
-  return Object.freeze({ manifest, resources });
+  const plugins = Object.freeze(
+    (plugin.plugins ?? []).map((dependency) =>
+      normalizePlugin(dependency, [...stack, id])
+    ),
+  );
+  return Object.freeze({ manifest, resources, plugins, context });
+}
+
+export function definePlugin(plugin: DefinePluginInput): CopilotzPlugin {
+  return normalizePlugin(plugin, []);
 }

@@ -1,4 +1,7 @@
-import { coreFeatureAliases } from "@copilotz/copilotz/plugins/core";
+import {
+  coreFeatureAliases,
+  message as coreMessage,
+} from "@copilotz/copilotz/plugins/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   loadMessageRecord,
@@ -64,12 +67,9 @@ function replyPlugin() {
     },
   });
   return definePlugin({
-    manifest: {
-      id: "test.channel-reply",
-      version: "1.0.0",
-      provides: { processors: [processor.id] },
-    },
-    resources: { processors: [processor] },
+    id: "test.channel-reply",
+    version: "1.0.0",
+    processors: [processor],
   });
 }
 
@@ -89,7 +89,7 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
       replyPlugin(),
       createWebChannelPlugin({ defaultAgentIds: [supportAgent.id] }),
     ],
-    resources: { agents: [supportAgent] },
+    context: { agents: { [supportAgent.id]: supportAgent } },
   });
   const runtime = createChannelRuntime(application);
   try {
@@ -117,17 +117,27 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
           name: "Web User",
         },
         input: {
-          content: [
-            { type: "text", text: "Channel input" },
-            {
-              type: "image",
-              dataBase64: btoa("image-bytes"),
-              mediaType: "image/png",
-              name: "fixture.png",
-            },
-          ],
-          id: "channel-message-a",
+          type: "copilotz.core.message.input",
           correlationId: "channel-run-a",
+          payload: {
+            thread: "web-thread-a",
+            participant: {
+              externalId: "web-user-a",
+              participantType: "human",
+              name: "Web User",
+            },
+            recipientIds: [supportAgent.id],
+            content: [
+              { type: "text", text: "Channel input" },
+              {
+                type: "image",
+                dataBase64: btoa("image-bytes"),
+                mediaType: "image/png",
+                name: "fixture.png",
+              },
+            ],
+            id: "channel-message-a",
+          },
         },
       },
       route: { ingress: "web", egress: "web" },
@@ -198,10 +208,16 @@ Deno.test("channel runtime normalizes web ingress, bootstraps graph identities, 
           externalId: "web-user-a",
           participantType: "human",
         },
-        input: {
+        input: coreMessage({
+          thread: "web-thread-a",
+          participant: {
+            externalId: "web-user-a",
+            participantType: "human",
+          },
+          recipientIds: [supportAgent.id],
           content: "Second input",
           id: "channel-message-b",
-        },
+        }),
       },
       context: { callback() {} },
     });
@@ -254,7 +270,12 @@ Deno.test("request-bound channel delivery reports missing callbacks through done
         body: {
           thread: "thread-a",
           participant: "user-a",
-          input: { content: "No callback", id: "message-no-callback" },
+          input: coreMessage({
+            thread: "thread-a",
+            participant: "user-a",
+            content: "No callback",
+            id: "message-no-callback",
+          }),
         },
         route: { ingress: "web", egress: "web" },
       },

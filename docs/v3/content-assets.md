@@ -468,12 +468,12 @@ message.
 Existing ergonomic inputs remain accepted at boundaries:
 
 ```ts
-await copilotz.run({
+await copilotz.send({
   content: "Hello",
   sender: user,
 });
 
-await attachment.send({
+await copilotz.send({
   content: [
     { type: "text", text: "What is in this image?" },
     { type: "image", asset: imageRef, alt: "A receipt" },
@@ -489,7 +489,7 @@ The input normalizer accepts:
 - `asset://` references and canonical `ContentRef` values;
 - URLs or data URLs only under an explicit fetch/ingress policy;
 - byte arrays/blobs/files in runtimes that provide them; and
-- one stream-bearing input through `attachment.send()`.
+- stream-bearing input through plugin-owned ingress commands.
 
 It writes or validates assets and returns a canonical `ContentSequence` before
 the domain mutation commits. Internal code does not continue carrying all legacy
@@ -499,10 +499,10 @@ unions after normalization.
 
 ### Ingress
 
-`attachment.send()` remains the only ingress method:
+`copilotz.send()` is the application ingress method:
 
 ```ts
-const input = await attachment.send({
+const input = await copilotz.send({
   type: "audio.input",
   mediaType: "audio/pcm;rate=24000",
   payload: microphoneStream,
@@ -524,7 +524,7 @@ metadata, not frames.
 
 ### Output
 
-`attachment.outputs` yields semantic events or participant-labelled streams:
+`copilotz.observe()` yields semantic events or participant-labelled streams:
 
 ```ts
 type AttachmentOutput =

@@ -61,19 +61,22 @@ async function createFixture(): Promise<Fixture> {
   const observed: string[] = [];
   const processor = defineProcessor({
     id: "llm.lifecycle.observe",
-    on: [{ eventType: "llm_attempt.created" }, { eventType: "llm_attempt.updated" }, { eventType: "llm_attempt.completed" }, { eventType: "llm_attempt.failed" }, { eventType: "llm_attempt.cancelled" }],
+    on: [
+      { eventType: "llm_attempt.created" },
+      { eventType: "llm_attempt.updated" },
+      { eventType: "llm_attempt.completed" },
+      { eventType: "llm_attempt.failed" },
+      { eventType: "llm_attempt.cancelled" },
+    ],
     handle(event) {
       observed.push(event.type);
     },
   });
   const registry = await createPluginRegistry({
     plugins: [definePlugin({
-      manifest: {
-        id: "test.llm-attempts",
-        version: "1.0.0",
-        provides: { processors: [processor.id] },
-      },
-      resources: { processors: [processor] },
+      id: "test.llm-attempts",
+      version: "1.0.0",
+      processors: [processor],
     })],
   });
   const executor = createDeliveryExecutor({

@@ -6,23 +6,23 @@ agent in the same thread. The answer is another public participant message.
 Causation metadata resumes the asking agent after the answer settles.
 
 ```ts
-resources: {
-  agents: [
-    {
+context: {
+  agents: {
+    coordinator: {
       id: "coordinator",
       name: "Coordinator",
       role: "Coordinate specialists and synthesize the final answer.",
       capabilities: { agents: ["researcher", "writer"] },
       runtime: { provider: "openai" },
     },
-    {
+    researcher: {
       id: "researcher",
       name: "Researcher",
       role: "Research facts and answer peers publicly.",
       capabilities: { agents: ["coordinator"] },
       runtime: { provider: "openai" },
     },
-  ],
+  },
 }
 ```
 

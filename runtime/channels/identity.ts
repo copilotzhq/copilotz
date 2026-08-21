@@ -298,7 +298,9 @@ export async function resolveChannelParticipant(
     const existing = await getParticipant(runtime, namespace, id) ??
       await getParticipantByExternalId(runtime, namespace, id);
     if (existing) return existing;
-    const agent = application.plugins.get<Agent>("agents", id);
+    const agent = (application.plugins.context.agents ?? {})[id] as
+      | Agent
+      | undefined;
     if (agent) return await agentParticipant(application, namespace, agent);
     throw new Error(`Channel participant '${id}' was not found.`);
   }

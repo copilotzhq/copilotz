@@ -142,18 +142,10 @@ async function createFixture(
     generate: generateFromChat(chat),
   });
   const app = definePlugin({
-    manifest: {
-      id: "test.agent-ask.resources",
-      version: "1.0.0",
-      provides: {
-        agents: agents.map((candidate) => candidate.id),
-        llm: [provider.id],
-      },
-    },
-    resources: {
-      agents: [...agents],
-      llm: [provider],
-    },
+    id: "test.agent-ask.resources",
+    version: "1.0.0",
+    agents: [...agents],
+    llm: [provider],
   });
   const registry = await createPluginRegistry({
     plugins: [

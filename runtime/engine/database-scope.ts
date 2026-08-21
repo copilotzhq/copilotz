@@ -5,9 +5,11 @@ import {
 import {
   type BodyStore,
   type ContentPreparer,
+  createContentStreamRuntime,
   createContentResolver,
-  createDatabaseBodyStore,
   createDatabaseAssetRepository,
+  createDatabaseBodyStore,
+  maintainProgressiveBodies,
   type DatabaseAssetRepository,
 } from "../content/index.ts";
 import {
@@ -15,6 +17,7 @@ import {
   createEventCollections,
   type DomainRelationRepository,
   type EventCollections,
+  projectDomainRelation,
 } from "../domain/index.ts";
 import {
   type CopilotzEvent,
@@ -23,7 +26,9 @@ import {
   createEventCoordinator,
   createEventStore,
   type EventCoordinator,
+  type EventRouting,
   type EventStore,
+  type EventVisibility,
   type SqlExecutor,
   waitForCopilotzEvent,
 } from "../events/index.ts";
@@ -31,14 +36,6 @@ import type {
   DeliveryExecutor,
   LiveEventDispatchHandle,
 } from "../execution/index.ts";
-import {
-  createKnowledgeRepository,
-  type KnowledgeRepository,
-} from "../knowledge/index.ts";
-import {
-  createMemoryConsolidationRepository,
-  type MemoryConsolidationRepository,
-} from "../memory/repository.ts";
 import {
   activeCollectionTransaction,
   type CollectionDefinition,
@@ -51,8 +48,8 @@ import type {
   TransientProcessorSet,
 } from "../plugins/index.ts";
 import {
-  createScheduledJobRepository,
-  type ScheduledJobRepository,
+  createScheduledJobTrigger,
+  type ScheduledJobTrigger,
 } from "../schedules/index.ts";
 import type {
   CopilotzEngineDatabaseScope,
@@ -65,9 +62,7 @@ export type DatabaseScopeCapabilities = Readonly<{
   session: SqlExecutor;
   collections: EventCollections;
   relations: DomainRelationRepository;
-  schedules: ScheduledJobRepository;
-  knowledge: KnowledgeRepository;
-  memory: MemoryConsolidationRepository;
+  schedules: ScheduledJobTrigger;
   collectionRuntime: CollectionRuntime;
   streamBodyStore: BodyStore;
 }>;
@@ -158,6 +153,7 @@ export function createDatabaseScope(
     coordinator,
     session: engine.session,
     eventStore: store,
+    assets,
     createId: engine.createId,
     now: options.now,
   });
@@ -173,7 +169,7 @@ export function createDatabaseScope(
     createId: engine.createId,
     now: engine.now,
   });
-  for (const resource of options.registry.list("collections")) {
+  for (const resource of options.registry.collections.list()) {
     if (isKernelCollection(resource)) collectionRuntime.bind(resource);
   }
   const relations = createDomainRelationRepository({
@@ -182,15 +178,58 @@ export function createDatabaseScope(
     eventStore: store,
     createId: engine.createId,
   });
+  const streamBodyStore = engine.assetStorage?.adapter?.forScope({
+    namespace: "@copilotz/stream",
+    databaseSchema,
+  }) ?? engine.assetStorage?.writer ??
+    createDatabaseBodyStore({
+      session: engine.session,
+      schema: databaseSchema,
+    });
   const featureBindings: Omit<FeatureContextBindings, "namespace"> = Object
     .freeze({
       plugins: options.registry,
       collections,
       collectionRuntime,
+      now: options.now,
       contentResolver: resolver,
       content: (namespace) =>
         Object.freeze({
           resolver,
+          stream: createContentStreamRuntime({
+            namespace,
+            store: streamBodyStore,
+            createId: engine.createId,
+            async onOpen(output) {
+              if (!output.threadId) return;
+              const event = createEphemeralEvent({
+                type: "stream.output",
+                namespace,
+                threadId: output.threadId,
+                streamId: output.id,
+                payload: {
+                  streamId: output.id,
+                  mediaType: output.mediaType,
+                  role: output.role,
+                  ...(output.participantId
+                    ? { participantId: output.participantId }
+                    : {}),
+                },
+                routing: output.routing as EventRouting | undefined,
+                visibility: (output.visibility as EventVisibility | undefined) ??
+                  { kind: "public" },
+                correlationId: output.correlationId ??
+                  `content-stream:${output.id}`,
+                metadata: {
+                  ...structuredClone(output.metadata),
+                  contentStream: true,
+                  role: output.role,
+                },
+              }, options.now);
+              await options.publishLive(event);
+            },
+          }),
+          bodies: streamBodyStore,
           materialize: (input, materializeOptions = {}) =>
             assets.materialize({
               transaction: activeCollectionTransaction(collectionRuntime) ??
@@ -216,47 +255,29 @@ export function createDatabaseScope(
       },
       relations: {
         list: (listOptions) => relations.list(listOptions),
+        upsert: (input) => {
+          const tx = activeCollectionTransaction(collectionRuntime);
+          if (!tx) {
+            throw new Error(
+              "Feature transaction relation projection requires an active transaction.",
+            );
+          }
+          return projectDomainRelation(tx, store.tables, input);
+        },
       },
     });
-  const schedules = createScheduledJobRepository({
-    collections,
-    coordinator,
+  const schedules = createScheduledJobTrigger({
+    collectionRuntime,
     session: engine.session,
     eventStore: store,
-    preparer: options.preparer,
     now: options.now,
   });
-  const knowledge = createKnowledgeRepository({
-    coordinator,
-    session: engine.session,
-    eventStore: store,
-    assets,
-    preparer: options.preparer,
-    createId: engine.createId,
-    now: options.now,
-  });
-  const memory = createMemoryConsolidationRepository({
-    coordinator,
-    eventStore: store,
-    assets,
-    validate: engine.validateCollection,
-  });
-  const streamBodyStore = engine.assetStorage?.adapter?.forScope({
-    namespace: "@copilotz/stream",
-    databaseSchema,
-  }) ?? engine.assetStorage?.writer ??
-    createDatabaseBodyStore({
-      session: engine.session,
-      schema: databaseSchema,
-    });
   const capabilities: DatabaseScopeCapabilities = Object.freeze({
     assets,
     session: engine.session,
     collections,
     relations,
     schedules,
-    knowledge,
-    memory,
     collectionRuntime,
     streamBodyStore,
   });
@@ -361,10 +382,14 @@ export function createDatabaseScope(
       orphanAfterMs: maintenanceOptions.assetOrphanAfterMs,
       limit: maintenanceOptions.limit,
     });
+    const progressiveBodies = await maintainProgressiveBodies(streamBodyStore, {
+      limit: maintenanceOptions.limit,
+    });
     const result: CopilotzEngineMaintenanceResult = Object.freeze({
       recovered: recovery.handles.length,
       dispatchFailures: recovery.failures.length,
       compacted: Object.freeze(compacted),
+      progressiveBodies,
       assets: assetMaintenance,
     });
     return result;
@@ -376,7 +401,6 @@ export function createDatabaseScope(
     collectionRuntime,
     relations,
     schedules,
-    knowledge,
     connect(input) {
       return attachmentRuntime.connect({
         ...input,

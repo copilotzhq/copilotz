@@ -1,8 +1,14 @@
-import type { ContentKind, ContentRef } from "../content/index.ts";
+import type {
+  ContentInput,
+  ContentKind,
+  ContentRef,
+  DurableContentInput,
+} from "../content/index.ts";
 import type {
   WorkflowTool,
   WorkflowToolExecutionContext,
 } from "../tools/index.ts";
+import { knowledgeFeature } from "./features.ts";
 import { embedKnowledgeTexts } from "./resources.ts";
 import type {
   KnowledgeDocumentSourceInput,
@@ -29,10 +35,10 @@ function optional(value: unknown, name: string): string | undefined {
   return required(value, name);
 }
 
-function context(
+function processorContext(
   value: WorkflowToolExecutionContext | undefined,
 ): WorkflowToolExecutionContext {
-  if (!value?.processor?.knowledge) {
+  if (!value?.processor) {
     throw new Error("This tool requires an event-native Copilotz context.");
   }
   return value;
@@ -84,6 +90,37 @@ function searchScope(value: unknown): KnowledgeSearchScope | undefined {
       ? { documentIds: stringList(input.documentIds, "Document ID") }
       : {}),
   });
+}
+
+function sourceTitle(
+  input: Readonly<{
+    title?: string;
+    source?: string;
+    assetId?: string;
+  }>,
+): string {
+  if (input.title?.trim()) return input.title.trim();
+  const source = input.source?.trim();
+  if (!source) return "Document";
+  if (source.startsWith("text:")) return "Document";
+  if (/^https?:\/\//i.test(source)) {
+    try {
+      const parsed = new URL(source);
+      return parsed.pathname.split("/").filter(Boolean).at(-1) ||
+        parsed.hostname;
+    } catch {
+      return source;
+    }
+  }
+  return source.split(/[\\/]/).filter(Boolean).at(-1) || source ||
+    input.assetId || "Document";
+}
+
+function sourceType(source: string | undefined, assetId: string | undefined) {
+  if (assetId) return "asset" as const;
+  if (!source) return "text" as const;
+  if (source.startsWith("text:")) return "text" as const;
+  return /^https?:\/\//i.test(source) ? "url" as const : "file" as const;
 }
 
 function boundedNumber(
@@ -145,7 +182,7 @@ export function createIngestDocumentTool(
       oneOf: [{ required: ["source"] }, { required: ["assetId"] }],
     },
     async execute(raw, value) {
-      const ctx = context(value);
+      const ctx = processorContext(value);
       const input = record(raw);
       const source = optional(input.source, "Document source");
       const assetId = optional(input.assetId, "Document asset ID");
@@ -153,6 +190,7 @@ export function createIngestDocumentTool(
         throw new TypeError("Provide exactly one of source or assetId.");
       }
       let sourceInput: KnowledgeDocumentSourceInput;
+      let content: DurableContentInput = [];
       if (assetId) {
         const asset = await ctx.processor.content.get(assetId);
         if (!asset) throw new Error(`Asset '${assetId}' was not found.`);
@@ -168,16 +206,23 @@ export function createIngestDocumentTool(
           sourceType: "asset" as const,
           sourceUri: `asset:${assetId}`,
         };
+        content = await ctx.processor.content.prepare(ref, {
+          operationKey: "ingest_document:source",
+        });
       } else if (source!.startsWith("text:")) {
+        const sourceContent: ContentInput = {
+          type: "text" as const,
+          text: source!.slice("text:".length),
+          role: "document.source",
+        };
         sourceInput = {
           kind: "content" as const,
-          content: {
-            type: "text" as const,
-            text: source!.slice("text:".length),
-            role: "document.source",
-          },
+          content: sourceContent,
           sourceType: "text" as const,
         };
+        content = await ctx.processor.content.prepare(sourceContent, {
+          operationKey: "ingest_document:source",
+        });
       } else {
         sourceInput = { kind: "uri" as const, uri: source! };
       }
@@ -195,30 +240,51 @@ export function createIngestDocumentTool(
           ...suppliedScope,
         },
       };
-      const result = await ctx.processor.knowledge.create({
-        id: `document:${ctx.execution.id}`,
-        ...(optional(input.title, "Document title")
-          ? { title: optional(input.title, "Document title") }
-          : {}),
-        source: sourceInput,
+      const externalId = optional(input.externalId, "Document external ID");
+      if (
+        externalId && ctx.processor.collections.document.queries.byExternalId
+      ) {
+        const [existing] = await ctx.processor.collections.document.queries
+          .byExternalId({ externalId });
+        if (existing) {
+          throw new Error(
+            `Document external ID '${externalId}' already exists.`,
+          );
+        }
+      }
+      const documentId = `document:${ctx.execution.id}`;
+      const title = sourceTitle({
+        title: optional(input.title, "Document title"),
+        source,
+        assetId,
+      });
+      const created = await ctx.processor.collections.document.create({
+        id: documentId,
+        sourceType: sourceType(source, assetId),
+        sourceUri: sourceInput.kind === "uri"
+          ? sourceInput.uri
+          : sourceInput.sourceUri ?? (assetId ? `asset:${assetId}` : null),
+        title,
+        mediaType: null,
+        contentHash: null,
+        source: content,
+        status: "pending",
+        chunkCount: 0,
+        duplicateOfDocumentId: null,
         threadId: ctx.execution.threadId,
-        ...(ctx.execution.participantId
-          ? { requestedByParticipantId: ctx.execution.participantId }
-          : {}),
+        requestedByParticipantId: ctx.execution.participantId ?? null,
         forceReindex: input.forceReindex === true,
-        ...(optional(input.externalId, "Document external ID")
-          ? { externalId: optional(input.externalId, "Document external ID") }
-          : {}),
+        error: null,
+        externalId: externalId ?? null,
         metadata,
       }, { operationKey: "ingest_document" });
       return {
         status: "pending",
-        message: `Document "${result.value!.title}" accepted for ingestion.`,
-        documentId: result.value!.id,
+        message: `Document "${created.title}" accepted for ingestion.`,
+        documentId: created.id,
         source: source ?? `asset:${assetId}`,
-        title: result.value!.title,
+        title: created.title,
         namespace: ctx.namespace,
-        eventId: result.event.id,
       };
     },
   });
@@ -259,12 +325,12 @@ export function createSearchKnowledgeTool(
       required: ["query"],
     },
     async execute(raw, value) {
-      const ctx = context(value);
+      const ctx = processorContext(value);
       const input = record(raw);
       const query = required(input.query, "Knowledge query");
       const explicitScope = searchScope(input.scope);
       const response = await embedKnowledgeTexts(
-        ctx.processor.resources,
+        ctx.processor,
         embedding,
         [query],
         {
@@ -272,28 +338,33 @@ export function createSearchKnowledgeTool(
           idempotencyKey: `${ctx.idempotencyKey}:knowledge-query`,
         },
       );
-      const results = await ctx.processor.knowledge.search({
-        embedding: response.embeddings[0],
-        scope: {
-          threadId: ctx.execution.threadId,
-          ...(ctx.execution.agentId ? { agentId: ctx.execution.agentId } : {}),
-          ...explicitScope,
-        },
-        limit: boundedInteger(
-          input.limit,
-          5,
-          "Knowledge result limit",
-          1,
-          20,
-        ),
-        threshold: boundedNumber(
-          input.threshold,
-          0.5,
-          "Knowledge similarity threshold",
-          -1,
-          1,
-        ),
-      });
+      const results = await ctx.processor.feature(knowledgeFeature)
+        .searchDocuments({
+          embedding: response.embeddings[0],
+          scope: {
+            threadId: ctx.execution.threadId,
+            ...(ctx.execution.agentId
+              ? { agentId: ctx.execution.agentId }
+              : {}),
+            ...explicitScope,
+          },
+          limit: boundedInteger(
+            input.limit,
+            5,
+            "Knowledge result limit",
+            1,
+            20,
+          ),
+          threshold: boundedNumber(
+            input.threshold,
+            0.5,
+            "Knowledge similarity threshold",
+            -1,
+            1,
+          ),
+        }, {
+          operationKey: "search_knowledge",
+        });
       if (results.length === 0) {
         return {
           results: [],
@@ -340,36 +411,19 @@ export function createDeleteDocumentTool(
       oneOf: [{ required: ["documentId"] }, { required: ["sourceUri"] }],
     },
     async execute(raw, value) {
-      const ctx = context(value);
+      const ctx = processorContext(value);
       const input = record(raw);
       const documentId = optional(input.documentId, "Document ID");
       const sourceUri = optional(input.sourceUri, "Document source URI");
       if (Boolean(documentId) === Boolean(sourceUri)) {
         throw new TypeError("Provide exactly one of documentId or sourceUri.");
       }
-      const document = documentId
-        ? await ctx.processor.knowledge.get(documentId)
-        : await ctx.processor.knowledge.getBySourceUri(sourceUri!);
-      if (!document) {
-        return {
-          success: false,
-          message: documentId
-            ? `Document with ID "${documentId}" not found.`
-            : `Document with source "${sourceUri}" not found.`,
-        };
-      }
-      const result = await ctx.processor.knowledge.delete(document.id, {
+      return await ctx.processor.feature(knowledgeFeature).deleteDocument({
+        ...(documentId ? { documentId } : {}),
+        ...(sourceUri ? { sourceUri } : {}),
+      }, {
         operationKey: "delete_document",
       });
-      const title = document.title || document.sourceUri || document.id;
-      return {
-        success: true,
-        message: `Document "${title}" deleted.`,
-        documentId: document.id,
-        title,
-        namespace: document.namespace,
-        eventId: result.event.id,
-      };
     },
   });
 }

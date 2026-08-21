@@ -7,7 +7,7 @@ import {
   type FeatureExecuteContext,
 } from "@copilotz/copilotz/features";
 import type { EventVisibility } from "@copilotz/copilotz/events";
-import { asRecord, contentSequence, requiredText } from "./content-policy.ts";
+import { asRecord, requiredText } from "./content-policy.ts";
 
 export const MESSAGE_FEATURE_ID = "copilotz.core.message";
 
@@ -63,21 +63,12 @@ async function revise(
     if (supplied === undefined) {
       throw new TypeError("Edited content is required.");
     }
-    const materialized = !Array.isArray(supplied);
-    const content = !materialized
-      ? contentSequence(supplied)
-      : await context.content.materialize(supplied, {
-        origin: {
-          scope: { type: "thread", id: threadId },
-          producer: { type: "message", id },
-        },
-      });
     const created = await tx.collections.message.create({
       id,
       threadId,
       senderId: sender.id,
       recipientIds,
-      content,
+      content: supplied,
       metadata: structuredClone(
         Object.keys(asRecord(data.metadata)).length
           ? asRecord(data.metadata)
@@ -102,9 +93,6 @@ async function revise(
         },
       },
     }, { threadId });
-    if (materialized && content.length) {
-      await context.content.linkOwner(id, content);
-    }
     return Object.freeze({
       message: created,
       rootMessageId: revision.rootMessageId,

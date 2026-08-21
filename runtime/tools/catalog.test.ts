@@ -5,6 +5,8 @@ import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
 import { createWorkflowToolCatalog } from "./catalog.ts";
 import type { WorkflowTool } from "./types.ts";
 
+type TestRegistry = Awaited<ReturnType<typeof createPluginRegistry>>;
+
 function tool(key: string, source: string): WorkflowTool {
   return {
     id: `${source}:${key}`,
@@ -28,25 +30,40 @@ const mcpServer: MCPServer = {
   transport: { type: "contract" },
 };
 
+function catalogContext(resources: TestRegistry) {
+  return Object.freeze({
+    agents: (resources.context.agents ?? Object.freeze({})) as Record<
+      string,
+      Agent | undefined
+    >,
+    skills: Object.freeze({}),
+    tools: (resources.context.tools ?? Object.freeze({})) as Record<
+      string,
+      WorkflowTool | undefined
+    >,
+    apis: (resources.context.apis ?? Object.freeze({})) as Record<
+      string,
+      API | undefined
+    >,
+    mcp: (resources.context.mcp ?? Object.freeze({})) as Record<
+      string,
+      MCPServer | undefined
+    >,
+  });
+}
+
 Deno.test("worker-local tool catalog caches descriptors and keeps explicit-tool precedence", async () => {
   const explicit = tool("collision", "explicit");
   const plugin = definePlugin({
-    manifest: {
-      id: "contract.catalog",
-      version: "1.0.0",
-      provides: {
-        tools: [explicit.key],
-        api: [api.id],
-        mcp: [mcpServer.id],
-      },
-    },
-    resources: {
-      tools: [explicit],
-      api: [api],
-      mcp: [mcpServer],
-    },
+    id: "contract.catalog",
+    version: "1.0.0",
+    tools: [explicit],
+    api: [api],
+    mcp: [mcpServer],
   });
-  const resources = await createPluginRegistry({ plugins: [plugin] });
+  const resources = catalogContext(
+    await createPluginRegistry({ plugins: [plugin] }),
+  );
   let apiGenerations = 0;
   let mcpGenerations = 0;
   const catalog = createWorkflowToolCatalog({
@@ -94,7 +111,7 @@ Deno.test("worker-local tool catalog caches descriptors and keeps explicit-tool 
 });
 
 Deno.test("worker-local tool catalog rejects unknown explicit grants", async () => {
-  const resources = await createPluginRegistry();
+  const resources = catalogContext(await createPluginRegistry());
   const catalog = createWorkflowToolCatalog({
     generateApiTools: () => [],
     generateMcpTools: () => [],
@@ -116,14 +133,13 @@ Deno.test("worker-local tool catalog rejects unknown explicit grants", async () 
 Deno.test("worker-local tool catalog installs tools without ambient agent grants", async () => {
   const explicit = tool("portable", "application");
   const plugin = definePlugin({
-    manifest: {
-      id: "contract.static-catalog",
-      version: "1.0.0",
-      provides: { tools: [explicit.key] },
-    },
-    resources: { tools: [explicit] },
+    id: "contract.static-catalog",
+    version: "1.0.0",
+    tools: [explicit],
   });
-  const resources = await createPluginRegistry({ plugins: [plugin] });
+  const resources = catalogContext(
+    await createPluginRegistry({ plugins: [plugin] }),
+  );
   const catalog = createWorkflowToolCatalog();
   assertEquals(await catalog.all(resources), [explicit]);
   assertEquals(

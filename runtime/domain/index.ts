@@ -3,7 +3,10 @@ export { createEventCollectionRepository } from "./collections.ts";
 export { createEventCollections } from "./collection-manager.ts";
 export { createLlmAttemptRepository } from "./llm-attempts.ts";
 export { createToolExecutionRepository } from "./tool-executions.ts";
-export { createDomainRelationRepository } from "./relations.ts";
+export {
+  createDomainRelationRepository,
+  projectDomainRelation,
+} from "./relations.ts";
 export {
   collectionIndex,
   collectionRelation,
@@ -29,6 +32,7 @@ export type {
   DomainRelation,
   DomainRelationRepository,
   ListDomainRelationsOptions,
+  ProjectDomainRelationInput,
 } from "./relations.ts";
 export type {
   CollectionListOptions,
@@ -77,10 +81,7 @@ export type {
   UpdateParticipantInput,
   UpdateThreadInput,
 } from "./types.ts";
-export {
-  composeRoleContent,
-  replaceContentRoles,
-} from "./workflow-content.ts";
+export { composeRoleContent, replaceContentRoles } from "./workflow-content.ts";
 export type { RoleContentInput } from "./workflow-content.ts";
 export {
   LLM_CONTENT_ROLE,

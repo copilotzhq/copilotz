@@ -50,8 +50,8 @@ const worker = await createCopilotzWorker({
 await worker.ready;
 
 // Application work enters through the Gateway.
-const run = await gateway.run(input);
-await run.done;
+const sent = await gateway.send(input);
+await sent.done;
 
 await Promise.all([gateway.shutdown(), worker.stop()]);
 await persistence.close();

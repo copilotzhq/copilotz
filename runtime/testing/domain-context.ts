@@ -55,6 +55,7 @@ export function createTestDomainContext(
   host: TestDomainHost,
   namespace: string,
   featureAliases: Readonly<Record<string, AnyFeatureDefinition>> = {},
+  options: Readonly<{ now?: () => Date }> = {},
 ): FeatureContext {
   return createFeatureContext({
     namespace,
@@ -62,6 +63,7 @@ export function createTestDomainContext(
     collections: host.collections,
     collectionRuntime: host.collectionRuntime,
     featureAliases,
+    now: options.now,
     contentResolver: host.content.resolver,
     content: (scopedNamespace) =>
       Object.freeze({

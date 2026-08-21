@@ -31,6 +31,38 @@ function fixture(
   const preparer = createContentPreparer({
     createId: () => `extracted-${++assetId}`,
   });
+  const openStream = () =>
+    Promise.resolve({
+      id: "stream-a",
+      offset() {
+        return 0;
+      },
+      append(input: { bytes: Uint8Array; appendId: string }) {
+        const bytes = input.bytes;
+        const text = new TextDecoder().decode(bytes);
+        for (const line of text.split("\n")) {
+          if (!line.trim()) continue;
+          chunks.push(JSON.parse(line) as Record<string, unknown>);
+        }
+        return Promise.resolve({
+          startOffset: 0,
+          endOffset: bytes.byteLength,
+        });
+      },
+      close() {
+        finalized += 1;
+        return Promise.resolve({
+          content: [],
+          assets: [],
+        });
+      },
+      abort() {
+        return Promise.resolve();
+      },
+      [Symbol.asyncDispose]() {
+        return Promise.resolve();
+      },
+    });
   const context = {
     namespace: "tenant-a",
     databaseSchema: "copilotz_test",
@@ -70,34 +102,16 @@ function fixture(
         return Promise.resolve(events.at(-1)!);
       },
     },
-    streams: {
-      write() {
-        return Promise.resolve({
-          write(bytes: Uint8Array) {
-            const text = new TextDecoder().decode(bytes);
-            for (const line of text.split("\n")) {
-              if (!line.trim()) continue;
-              chunks.push(JSON.parse(line) as Record<string, unknown>);
-            }
-            return Promise.resolve();
-          },
-          finalize() {
-            finalized += 1;
-            return Promise.resolve({});
-          },
-          fail() {
-            return Promise.resolve();
-          },
-          abandon() {
-            return Promise.resolve();
-          },
-        });
-      },
-    },
     resources: {
       list: () => [tool],
       get: () => undefined,
     },
+    agents: {},
+    tools: { terminal: tool },
+    llm: {},
+    apis: {},
+    mcp: {},
+    skills: {},
     conversation: {
       getParticipant: () =>
         Promise.resolve({ id: "agent-a", externalId: "north" }),
@@ -127,7 +141,7 @@ function fixture(
     },
   } as unknown as CopilotzProcessorContext;
   return Object.freeze({
-    run: createWorkflowToolExecutor(),
+    run: createWorkflowToolExecutor({ openStream }),
     tool,
     context,
     events,

@@ -35,12 +35,19 @@ Deno.test("phase-0 conversation fixture captures native graph, events, branch, a
     await seedPhase0Conversation(fixture);
     const snapshot = await snapshotPhase0Conversation(fixture);
     assertEquals(snapshot.eventTypes, EXPECTED_EVENT_TYPES);
-    assertEquals(snapshot.participantExternalIds, ["alice", "research", "support"]);
+    assertEquals(snapshot.participantExternalIds, [
+      "alice",
+      "research",
+      "support",
+    ]);
     assertEquals(snapshot.threadExternalId, "customer-thread-42");
     assertEquals(snapshot.activeMessageIds.includes("message-user"), false);
     assertEquals(snapshot.activeMessageIds[0], "message-user-revised");
     assertEquals(snapshot.allMessageIds.includes("message-user"), true);
-    assertEquals(snapshot.revisionIds, ["message-user", "message-user-revised"]);
+    assertEquals(snapshot.revisionIds, [
+      "message-user",
+      "message-user-revised",
+    ]);
     assertEquals(snapshot.lastEventType, "message.revised");
     assertExists(snapshot.lastEventId);
     assertEquals(snapshot.nodeCounts.participant, 3);
@@ -76,7 +83,11 @@ Deno.test("phase-0 conversation fixture survives persistent PGlite close and reo
     try {
       const after = await snapshotPhase0Conversation(reopened);
       assertEquals(after.eventTypes, EXPECTED_EVENT_TYPES);
-      assertEquals(after.participantExternalIds, ["alice", "research", "support"]);
+      assertEquals(after.participantExternalIds, [
+        "alice",
+        "research",
+        "support",
+      ]);
       assertEquals(after.threadExternalId, "customer-thread-42");
       assertEquals(after.activeMessageIds[0], "message-user-revised");
       assertEquals(after.allMessageIds.includes("message-user"), true);

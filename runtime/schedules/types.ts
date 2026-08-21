@@ -1,15 +1,7 @@
-import type { CollectionRecord, EventCollections } from "../domain/index.ts";
-import type {
-  ContentInput,
-  ContentPreparer,
-  ContentSequence,
-} from "../content/index.ts";
-import type {
-  CoordinatedMutationResult,
-  EventCoordinator,
-  EventStore,
-  SqlExecutor,
-} from "../events/index.ts";
+import type { ContentSequence } from "../content/index.ts";
+import type { CollectionRecord } from "../collections/index.ts";
+import type { CollectionRuntime } from "../collections/index.ts";
+import type { EventStore, SqlExecutor } from "../events/index.ts";
 import type { MutationIdentity, ParticipantInput } from "../domain/index.ts";
 
 export type ScheduledJobStatus = "active" | "paused" | "cancelled";
@@ -54,34 +46,6 @@ export type ScheduledJob =
     metadata?: Readonly<Record<string, unknown>>;
   }>;
 
-export type ScheduledJobRunInput =
-  & Omit<ScheduledJobRun, "content">
-  & Readonly<{ content: ContentInput | readonly ContentInput[] }>;
-
-export type CreateScheduledJobInput = Readonly<{
-  namespace: string;
-  id?: string;
-  name: string;
-  status?: Exclude<ScheduledJobStatus, "cancelled">;
-  schedule: ScheduledJobSchedule;
-  run: ScheduledJobRunInput;
-  metadata?: Record<string, unknown>;
-  identity?: MutationIdentity;
-}>;
-
-export type UpdateScheduledJobInput = Readonly<{
-  namespace: string;
-  id: string;
-  patch: Readonly<{
-    name?: string;
-    status?: ScheduledJobStatus;
-    schedule?: ScheduledJobSchedule;
-    run?: Partial<ScheduledJobRunInput>;
-    metadata?: Record<string, unknown>;
-  }>;
-  identity?: MutationIdentity;
-}>;
-
 export type ScheduledJobOccurrence = Readonly<{
   jobId: string;
   jobName: string;
@@ -119,11 +83,6 @@ export type ScheduledJobTickResult = Readonly<{
   jobs: readonly ScheduledJobTickItem[];
 }>;
 
-export type ScheduledJobMutationOptions = Readonly<{
-  operationKey?: string;
-  metadata?: Record<string, unknown>;
-}>;
-
 export type ScheduledJobRunNowOptions = Readonly<{
   namespace: string;
   id: string;
@@ -144,90 +103,33 @@ export type ScheduledJobRunNowResult = Readonly<{
   dispatchFailures: number;
 }>;
 
-export type ScheduledJobRepository = Readonly<{
-  create(
-    input: CreateScheduledJobInput,
-  ): Promise<CoordinatedMutationResult<ScheduledJob>>;
-  update(
-    input: UpdateScheduledJobInput,
-  ): Promise<CoordinatedMutationResult<ScheduledJob>>;
-  pause(
-    namespace: string,
-    id: string,
-    identity?: MutationIdentity,
-  ): Promise<CoordinatedMutationResult<ScheduledJob>>;
-  resume(
-    namespace: string,
-    id: string,
-    identity?: MutationIdentity,
-  ): Promise<CoordinatedMutationResult<ScheduledJob>>;
-  cancel(
-    namespace: string,
-    id: string,
-    identity?: MutationIdentity,
-  ): Promise<CoordinatedMutationResult<ScheduledJob>>;
-  get(namespace: string, id: string): Promise<ScheduledJob | null>;
-  list(
-    namespace: string,
-    options?: Readonly<{
-      status?: ScheduledJobStatus;
-      after?: string;
-      limit?: number;
-    }>,
-  ): Promise<readonly ScheduledJob[]>;
+export type ScheduledJobTrigger = Readonly<{
   runNow(
     options: ScheduledJobRunNowOptions,
   ): Promise<ScheduledJobRunNowResult>;
   tick(options: ScheduledJobTickOptions): Promise<ScheduledJobTickResult>;
 }>;
 
-/** Scheduled-job mutations bound to one processor delivery namespace. */
-export type ScopedScheduledJobs = Readonly<{
-  create(
-    input: Omit<CreateScheduledJobInput, "namespace" | "identity">,
-    options?: ScheduledJobMutationOptions,
-  ): Promise<CoordinatedMutationResult<ScheduledJob>>;
-  update(
-    input: Omit<UpdateScheduledJobInput, "namespace" | "identity">,
-    options?: ScheduledJobMutationOptions,
-  ): Promise<CoordinatedMutationResult<ScheduledJob>>;
-  pause(
-    id: string,
-    options?: ScheduledJobMutationOptions,
-  ): Promise<CoordinatedMutationResult<ScheduledJob>>;
-  resume(
-    id: string,
-    options?: ScheduledJobMutationOptions,
-  ): Promise<CoordinatedMutationResult<ScheduledJob>>;
-  cancel(
-    id: string,
-    options?: ScheduledJobMutationOptions,
-  ): Promise<CoordinatedMutationResult<ScheduledJob>>;
-  get(id: string): Promise<ScheduledJob | null>;
-  list(
-    options?: Readonly<{
-      status?: ScheduledJobStatus;
-      after?: string;
-      limit?: number;
-    }>,
-  ): Promise<readonly ScheduledJob[]>;
+/** Scheduled-job trigger bound to one processor delivery namespace. */
+export type ScopedScheduledJobTrigger = Readonly<{
   runNow(
     id: string,
     options?:
       & Omit<ScheduledJobRunNowOptions, "namespace" | "id" | "identity">
-      & ScheduledJobMutationOptions,
+      & Readonly<{ operationKey?: string; metadata?: Record<string, unknown> }>,
   ): Promise<ScheduledJobRunNowResult>;
 }>;
 
-export type CreateScheduledJobRepositoryOptions = Readonly<{
-  collections: EventCollections;
-  coordinator: EventCoordinator;
+export type CreateScheduledJobTriggerOptions = Readonly<{
+  collectionRuntime: CollectionRuntime;
   session: SqlExecutor;
   eventStore: Pick<
     EventStore,
-    "tables" | "scopeSettlement" | "getEventByDeduplicationId"
+    | "tables"
+    | "scopeSettlement"
+    | "getEventByDeduplicationId"
+    | "listDeliveries"
   >;
-  preparer: ContentPreparer;
   nextRunAt?: (schedule: ScheduledJobSchedule, from: Date) => Date;
   now?: () => Date;
 }>;

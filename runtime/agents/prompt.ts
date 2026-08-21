@@ -28,7 +28,10 @@ import {
 import { getPublicThreadMetadata } from "../thread-metadata.ts";
 import { formatToolsForPrompt } from "../tools/format-tools-for-prompt.ts";
 import { buildTextTranscript } from "./transcript.ts";
-import type { AgentTextPrompt, WorkflowPromptContextContribution } from "../llm/chat-types.ts";
+import type {
+  AgentTextPrompt,
+  WorkflowPromptContextContribution,
+} from "../llm/chat-types.ts";
 import type { CreateTextWorkflowPluginOptions } from "../llm/chat-types.ts";
 import type { WorkflowTool } from "../tools/types.ts";
 
@@ -93,7 +96,7 @@ function grantedSkills(
 ): readonly Skill[] {
   return resolveSkillGrants(
     agent,
-    context.resources.list<Skill>("skills"),
+    Object.values(context.skills).filter((value): value is Skill => !!value),
   );
 }
 
@@ -352,7 +355,9 @@ export async function buildAgentTextPrompt(
     systemSections?: readonly string[];
   }>,
 ): Promise<AgentTextPrompt> {
-  const participant = mapParticipantRecord(input.participant as CollectionRecord);
+  const participant = mapParticipantRecord(
+    input.participant as CollectionRecord,
+  );
   const attempt = mapLlmAttemptRecord(input.attempt as CollectionRecord);
   const thread = await loadThreadRecord(context, attempt.threadId);
   if (!thread) {
@@ -429,7 +434,9 @@ export async function buildAgentTextPrompt(
     instructions,
     thread,
     participant,
-    agents: context.resources.list<Agent>("agents"),
+    agents: Object.values(context.agents).filter((value): value is Agent =>
+      !!value
+    ),
     skills: input.tools.some((tool) => tool.key === "load_skill")
       ? grantedSkills(context, input.agent)
       : Object.freeze([]),

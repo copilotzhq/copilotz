@@ -1,13 +1,15 @@
-import type { CopilotzProcessorContext } from "../engine/index.ts";
-import type { CopilotzEvent } from "../events/index.ts";
+import type {
+  CollectionRecord,
+  ScopedCollection,
+} from "@copilotz/copilotz/collections";
+import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
+import type { CopilotzEvent } from "@copilotz/copilotz/events";
 import {
   type CopilotzPlugin,
   definePlugin,
   defineProcessor,
   type Processor,
-} from "../plugins/index.ts";
-import type { CollectionRecord } from "../domain/index.ts";
-import type { ScopedCollection } from "../collections/index.ts";
+} from "@copilotz/copilotz/plugins";
 import { usageCollection } from "./collection.ts";
 import type { UsageCost, UsageOptions, UsageRecord } from "./types.ts";
 
@@ -393,19 +395,9 @@ export function createUsageWorkflowPlugin(
       toolUsageProcessor(options),
     ]);
   return definePlugin({
-    manifest: {
-      id: options.id ?? DEFAULT_PLUGIN_ID,
-      version: options.version ?? DEFAULT_PLUGIN_VERSION,
-      provides: {
-        collections: [usageCollection.name],
-        ...(processors.length
-          ? { processors: processors.map((processor) => processor.id) }
-          : {}),
-      },
-    },
-    resources: {
-      collections: [usageCollection],
-      ...(processors.length ? { processors } : {}),
-    },
+    id: options.id ?? DEFAULT_PLUGIN_ID,
+    version: options.version ?? DEFAULT_PLUGIN_VERSION,
+    collections: [usageCollection],
+    ...(processors.length ? { processors } : {}),
   });
 }

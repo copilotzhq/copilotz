@@ -68,6 +68,16 @@ export type CreateDomainRelationRepositoryOptions = Readonly<{
   createId?: () => string;
 }>;
 
+export type ProjectDomainRelationInput = Readonly<{
+  namespace: string;
+  id: string;
+  type: string;
+  source: DomainNodeRef;
+  target: DomainNodeRef;
+  metadata?: Record<string, unknown>;
+  weight?: number;
+}>;
+
 type EdgeRow = Readonly<{
   id: string;
   namespace: string;
@@ -149,6 +159,129 @@ function boundedLimit(value: number | undefined): number {
     throw new TypeError("Relation limit must be a positive integer.");
   }
   return Math.min(value, 1_000);
+}
+
+function uniqueJsonValues(values: readonly unknown[]): readonly unknown[] {
+  const seen = new Set<string>();
+  return Object.freeze(values.filter((value) => {
+    const key = JSON.stringify(value);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }));
+}
+
+/**
+ * Projects a graph relation inside an already-open aggregate transaction.
+ *
+ * This does not emit a separate `relation.created` event. It is for Collection
+ * or Feature transactions whose parent event owns the semantic mutation.
+ */
+export async function projectDomainRelation(
+  transaction: SqlExecutor,
+  tables: Pick<EventStore, "tables">["tables"],
+  input: ProjectDomainRelationInput,
+): Promise<DomainRelation> {
+  const namespace = requiredText(input.namespace, "Namespace");
+  const id = requiredText(input.id, "Relation ID");
+  const type = relationType(input.type);
+  const source = nodeRef(input.source, "Relation source");
+  const target = nodeRef(input.target, "Relation target");
+  if (source.id === target.id) {
+    throw new TypeError("A relation cannot connect a node to itself.");
+  }
+  const metadata = jsonRecord(input.metadata);
+  const weight = input.weight ?? 1;
+  if (!Number.isFinite(weight)) {
+    throw new TypeError("Relation weight must be finite.");
+  }
+  for (
+    const [label, ref] of [["source", source], ["target", target]] as const
+  ) {
+    const result = await transaction.query<{ id: string }>(
+      `SELECT id FROM ${tables.nodes}
+       WHERE namespace = $1 AND id = $2 AND type = $3 LIMIT 1`,
+      [namespace, ref.id, ref.type],
+    );
+    if (!result.rows[0]) {
+      throw new Error(
+        `Relation ${label} ${ref.type} '${ref.id}' was not found.`,
+      );
+    }
+  }
+  const inserted = await transaction.query<EdgeRow>(
+    `INSERT INTO ${tables.edges} (
+       id, namespace, source_node_id, target_node_id, type, data, weight
+     ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+     ON CONFLICT (id) DO NOTHING
+     RETURNING *`,
+    [
+      id,
+      namespace,
+      source.id,
+      target.id,
+      type,
+      JSON.stringify({
+        sourceType: source.type,
+        targetType: target.type,
+        metadata,
+      }),
+      weight,
+    ],
+  );
+  if (inserted.rows[0]) return mapEdge(inserted.rows[0]);
+
+  const existing = await transaction.query<EdgeRow>(
+    `SELECT * FROM ${tables.edges}
+     WHERE namespace = $1 AND id = $2 LIMIT 1`,
+    [namespace, id],
+  );
+  const row = existing.rows[0];
+  const data = jsonRecord(row?.data);
+  if (
+    !row || row.source_node_id !== source.id ||
+    row.target_node_id !== target.id ||
+    row.type !== type ||
+    data.sourceType !== source.type ||
+    data.targetType !== target.type ||
+    Number(row.weight ?? 1) !== weight
+  ) {
+    throw new Error(`Relation ID '${id}' conflicts with an edge.`);
+  }
+
+  const previous = jsonRecord(data.metadata);
+  const checkpoints = uniqueJsonValues([
+    ...(Array.isArray(previous.checkpointIds) ? previous.checkpointIds : []),
+    previous.checkpointId,
+    ...(Array.isArray(metadata.checkpointIds) ? metadata.checkpointIds : []),
+    metadata.checkpointId,
+  ].filter((value) => value !== undefined));
+  const sources = uniqueJsonValues([
+    ...(Array.isArray(previous.sources) ? previous.sources : []),
+    ...(Array.isArray(metadata.sources) ? metadata.sources : []),
+  ]);
+  const merged = {
+    ...previous,
+    ...metadata,
+    ...(checkpoints.length ? { checkpointIds: checkpoints } : {}),
+    ...(sources.length ? { sources } : {}),
+  };
+  const updated = await transaction.query<EdgeRow>(
+    `UPDATE ${tables.edges}
+     SET data = $1::jsonb
+     WHERE namespace = $2 AND id = $3
+     RETURNING *`,
+    [
+      JSON.stringify({
+        sourceType: source.type,
+        targetType: target.type,
+        metadata: merged,
+      }),
+      namespace,
+      id,
+    ],
+  );
+  return mapEdge(updated.rows[0]);
 }
 
 /** Creates direct graph relationships through a typed event-native boundary. */

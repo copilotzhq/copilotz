@@ -3,7 +3,6 @@ import {
   assertRejects,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import type { ScopedPluginResources } from "../engine/index.ts";
 import {
   generateChainFromResources,
   generateFromFactory,
@@ -17,6 +16,7 @@ import {
 import type {
   LlmFrame,
   LlmGenerate,
+  LlmResourceContext,
   LlmResult,
   ProviderConfig,
   ProviderRegistry,
@@ -61,7 +61,7 @@ function sse(events: unknown[]): Response {
   });
 }
 
-function llmResources(source: ProviderRegistry): ScopedPluginResources {
+function llmResources(source: ProviderRegistry): LlmResourceContext {
   const items = Object.fromEntries(
     Object.entries(source).map(([id, factory]) => [id, {
       id,
@@ -69,16 +69,7 @@ function llmResources(source: ProviderRegistry): ScopedPluginResources {
       generate: generateFromFactory(id, factory),
     }]),
   );
-  return {
-    list: (type) => type === "llm" ? Object.values(items) : [],
-    get: (type, id) => type === "llm" ? items[id] : undefined,
-    require: (type, id) => {
-      const resource = type === "llm" ? items[id] : undefined;
-      if (!resource) throw new Error(`LLM resource '${id}' is not registered.`);
-      return resource;
-    },
-    origin: () => undefined,
-  } as ScopedPluginResources;
+  return Object.freeze({ llm: Object.freeze(items) });
 }
 
 function chainResult(
@@ -106,37 +97,40 @@ Deno.test("generateTargetsFromConfig groups consecutive same-id fallbacks", () =
     ],
   });
 
-  assertEquals(targets.map((target) => ({
-    provider: target.provider,
-    model: target.model,
-    fallbacks: target.fallbacks?.map((fallback) => fallback.model),
-    apiKey: target.apiKey,
-  })), [
-    {
-      provider: "openai",
-      model: "a",
-      fallbacks: ["b"],
-      apiKey: "openai-secret",
-    },
-    {
-      provider: "anthropic",
-      model: "c",
-      fallbacks: undefined,
-      apiKey: undefined,
-    },
-    {
-      provider: "openai",
-      model: "d",
-      fallbacks: undefined,
-      apiKey: "openai-secret",
-    },
-  ]);
+  assertEquals(
+    targets.map((target) => ({
+      provider: target.provider,
+      model: target.model,
+      fallbacks: target.fallbacks?.map((fallback) => fallback.model),
+      apiKey: target.apiKey,
+    })),
+    [
+      {
+        provider: "openai",
+        model: "a",
+        fallbacks: ["b"],
+        apiKey: "openai-secret",
+      },
+      {
+        provider: "anthropic",
+        model: "c",
+        fallbacks: undefined,
+        apiKey: undefined,
+      },
+      {
+        provider: "openai",
+        model: "d",
+        fallbacks: undefined,
+        apiKey: "openai-secret",
+      },
+    ],
+  );
 });
 
 Deno.test("runGenerateChain continues only on LLMCrossResourceFailover", async () => {
   const called: string[] = [];
-  const generate = (id: string, result: Promise<LlmResult>): LlmGenerate =>
-    (input) => {
+  const generate =
+    (id: string, result: Promise<LlmResult>): LlmGenerate => (input) => {
       called.push(`${id}:${input.hasExternalFallback === true}`);
       return invocationFromChat(result);
     };
@@ -187,10 +181,12 @@ Deno.test("runGenerateChain does not continue on a generic throw", async () => {
             config: { provider: "openai", model: "a" },
             generate: () =>
               invocationFromChat(
-                Promise.reject(new LLMProviderError("boom", {
-                  reason: "provider_error",
-                  provider: "openai",
-                })),
+                Promise.reject(
+                  new LLMProviderError("boom", {
+                    reason: "provider_error",
+                    provider: "openai",
+                  }),
+                ),
               ),
           },
           {
@@ -514,7 +510,10 @@ Deno.test("sessionFromHandler and runSessionChain expose live frames", async () 
     }
     const text = chunks.join("");
     emit({ type: "text", payload: text });
-    emit({ type: "audio", payload: { bytes: encoder.encode("pcm"), mediaType: "audio/pcm" } });
+    emit({
+      type: "audio",
+      payload: { bytes: encoder.encode("pcm"), mediaType: "audio/pcm" },
+    });
     return {
       prompt: input.request.messages,
       answer: text,
@@ -550,6 +549,9 @@ Deno.test("sessionFromHandler and runSessionChain expose live frames", async () 
   assertEquals(result.answer, "hello");
   assertEquals(frames, [
     { type: "text", payload: "hello" },
-    { type: "audio", payload: { bytes: encoder.encode("pcm"), mediaType: "audio/pcm" } },
+    {
+      type: "audio",
+      payload: { bytes: encoder.encode("pcm"), mediaType: "audio/pcm" },
+    },
   ]);
 });

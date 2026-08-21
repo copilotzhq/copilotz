@@ -11,15 +11,12 @@ import {
 } from "./processor.ts";
 import {
   type CopilotzPlugin,
-  definePlugin,
-  parsePluginSelector,
-  PLUGIN_RESOURCE_TYPES,
-  type PluginResolver,
-  pluginResourceId,
-  type PluginResourceOrigin,
+  INTERNAL_PLUGIN_RESOURCE_TYPES,
+  type PluginContextContribution,
+  type PluginContextValues,
   type PluginResources,
   type PluginResourceType,
-  type PluginSource,
+  stablePluginResourceId,
 } from "./types.ts";
 
 function rejectStaticWildcardProcessor(value: object, id: string): void {
@@ -31,142 +28,113 @@ function rejectStaticWildcardProcessor(value: object, id: string): void {
   }
 }
 
-type RegistryEntry = {
-  value: object;
-  origin: PluginResourceOrigin;
-};
+function contextNamespaceForResourceType(
+  type: PluginResourceType,
+): string | undefined {
+  switch (type) {
+    case "agents":
+      return "agents";
+    case "tools":
+      return "tools";
+    case "llm":
+      return "llm";
+    case "api":
+      return "apis";
+    case "mcp":
+      return "mcp";
+    case "skills":
+      return "skills";
+    case "features":
+      return "featureDefinitions";
+    case "embedding":
+      return "embeddings";
+    case "memoryKinds":
+      return "memoryKinds";
+    case "channels":
+      return "channels";
+    default:
+      return undefined;
+  }
+}
 
 export type PluginRegistry = Readonly<{
   plugins: readonly CopilotzPlugin[];
-  list<T extends object = object>(type: PluginResourceType): readonly T[];
-  get<T extends object = object>(
-    type: PluginResourceType,
-    id: string,
-  ): T | undefined;
-  require<T extends object = object>(
-    type: PluginResourceType,
-    id: string,
-  ): T;
-  origin(
-    type: PluginResourceType,
-    id: string,
-  ): PluginResourceOrigin | undefined;
-  matchDurable(
-    draft: DurableEventDraft,
-    data?: unknown,
-  ): readonly Processor[];
-  durableConsumers(
-    draft: DurableEventDraft,
-    data?: unknown,
-  ): readonly DurableConsumerObligation[];
-  processorForConsumer(consumerId: string): Processor | undefined;
+  context: PluginContextValues;
+  collections: Readonly<{
+    list(): readonly object[];
+    get(id: string): object | undefined;
+    require(id: string): object;
+  }>;
+  processors: Readonly<{
+    list(): readonly Processor[];
+    get(id: string): Processor | undefined;
+    matchDurable(
+      draft: DurableEventDraft,
+      data?: unknown,
+    ): readonly Processor[];
+    durableConsumers(
+      draft: DurableEventDraft,
+      data?: unknown,
+    ): readonly DurableConsumerObligation[];
+    processorForConsumer(consumerId: string): Processor | undefined;
+  }>;
 }>;
 
 export type CreatePluginRegistryOptions = {
   core?: CopilotzPlugin | readonly CopilotzPlugin[];
-  plugins?: readonly PluginSource[];
-  resources?: PluginResources;
-  resolver?: PluginResolver;
+  plugins?: readonly CopilotzPlugin[];
+  context?: PluginContextContribution;
 };
-
-function normalizePluginModule(value: unknown, source: string): CopilotzPlugin {
-  const module = value && typeof value === "object"
-    ? value as Record<string, unknown>
-    : {};
-  const candidate = module.default ?? module.plugin ?? module;
-  if (!candidate || typeof candidate !== "object") {
-    throw new TypeError(`Plugin '${source}' did not export a plugin object.`);
-  }
-  const plugin = candidate as Partial<CopilotzPlugin>;
-  if (!plugin.manifest || !plugin.resources) {
-    throw new TypeError(
-      `Plugin '${source}' must export { manifest, resources }.`,
-    );
-  }
-  return definePlugin(plugin as CopilotzPlugin);
-}
-
-function selectedResources(
-  plugin: CopilotzPlugin,
-  imports: readonly string[] | undefined,
-  presets: readonly string[] | undefined,
-): PluginResources {
-  const selectors = [
-    ...(presets ?? []).flatMap((preset) => {
-      const selected = plugin.manifest.presets?.[preset];
-      if (!selected) {
-        throw new TypeError(
-          `Plugin '${plugin.manifest.id}' does not define preset '${preset}'.`,
-        );
-      }
-      return selected;
-    }),
-    ...(imports ?? []),
-  ];
-  if (selectors.length === 0) return plugin.resources;
-
-  const all = new Set<PluginResourceType>();
-  const named = new Map<PluginResourceType, Set<string>>();
-  for (const selector of selectors) {
-    const parsed = parsePluginSelector(selector);
-    if (!parsed.id) {
-      all.add(parsed.type);
-      named.delete(parsed.type);
-      continue;
-    }
-    if (!(plugin.manifest.provides[parsed.type] ?? []).includes(parsed.id)) {
-      throw new TypeError(
-        `Plugin '${plugin.manifest.id}' does not provide '${selector}'.`,
-      );
-    }
-    if (!all.has(parsed.type)) {
-      const ids = named.get(parsed.type) ?? new Set<string>();
-      ids.add(parsed.id);
-      named.set(parsed.type, ids);
-    }
-  }
-
-  const result: PluginResources = {};
-  for (const type of PLUGIN_RESOURCE_TYPES) {
-    const values = plugin.resources[type];
-    if (!values?.length) continue;
-    const ids = named.get(type);
-    if (!all.has(type) && !ids?.size) continue;
-    (result as Record<string, unknown>)[type] = Object.freeze(
-      all.has(type)
-        ? [...values]
-        : values.filter((value) => ids!.has(pluginResourceId(type, value))),
-    );
-  }
-  return Object.freeze(result);
-}
 
 /**
  * Composes core, declared plugins in order, then explicit application
  * resources. A later stable ID replaces an earlier one for that resource type.
  */
-export async function createPluginRegistry(
+export function createPluginRegistry(
   options: CreatePluginRegistryOptions = {},
-): Promise<PluginRegistry> {
-  const maps = new Map<PluginResourceType, Map<string, RegistryEntry>>();
-  for (const type of PLUGIN_RESOURCE_TYPES) maps.set(type, new Map());
+): PluginRegistry {
+  const maps = new Map<PluginResourceType, Map<string, object>>();
+  for (const type of INTERNAL_PLUGIN_RESOURCE_TYPES) {
+    maps.set(type, new Map());
+  }
+  const contextMaps = new Map<string, Map<string, unknown>>();
   const plugins: CopilotzPlugin[] = [];
-  const pluginIds = new Set<string>();
+  const pluginIds = new Map<string, CopilotzPlugin>();
 
-  const add = (
-    resources: PluginResources,
-    origin: PluginResourceOrigin,
-  ): void => {
-    const stableOrigin = Object.freeze({ ...origin });
-    for (const type of PLUGIN_RESOURCE_TYPES) {
+  const add = (resources: PluginResources): void => {
+    for (const type of INTERNAL_PLUGIN_RESOURCE_TYPES) {
       const values = resources[type];
       if (!values) continue;
       const map = maps.get(type)!;
       for (const value of values) {
-        const id = pluginResourceId(type, value);
+        const id = stablePluginResourceId(type, value);
         if (type === "processors") rejectStaticWildcardProcessor(value, id);
         map.delete(id);
-        map.set(id, { value, origin: stableOrigin });
+        map.set(id, value);
+      }
+    }
+  };
+
+  const addResourceContext = (resources: PluginResources): void => {
+    for (const type of INTERNAL_PLUGIN_RESOURCE_TYPES) {
+      const namespace = contextNamespaceForResourceType(type);
+      if (!namespace) continue;
+      const values = resources[type];
+      if (!values) continue;
+      const map = contextMaps.get(namespace) ?? new Map<string, unknown>();
+      contextMaps.set(namespace, map);
+      for (const value of values) {
+        map.set(stablePluginResourceId(type, value), value);
+      }
+    }
+  };
+
+  const addContext = (context: PluginContextContribution): void => {
+    for (const [namespace, values] of Object.entries(context)) {
+      const map = contextMaps.get(namespace) ?? new Map<string, unknown>();
+      contextMaps.set(namespace, map);
+      for (const [key, value] of Object.entries(values)) {
+        map.set(key, value);
       }
     }
   };
@@ -174,19 +142,30 @@ export async function createPluginRegistry(
   const register = (
     pluginInput: CopilotzPlugin,
     resources = pluginInput.resources,
+    stack: readonly string[] = [],
   ): CopilotzPlugin => {
-    const plugin = definePlugin(pluginInput);
-    if (pluginIds.has(plugin.manifest.id)) {
+    const plugin = pluginInput;
+    const id = plugin.manifest.id;
+    if (stack.includes(id)) {
       throw new TypeError(
-        `Plugin '${plugin.manifest.id}' was declared more than once.`,
+        `Plugin dependency cycle detected: ${[...stack, id].join(" -> ")}.`,
       );
     }
-    pluginIds.add(plugin.manifest.id);
+    const existing = pluginIds.get(id);
+    if (existing) {
+      if (existing === plugin) return existing;
+      throw new TypeError(
+        `Plugin '${id}' was declared more than once.`,
+      );
+    }
+    for (const dependency of plugin.plugins) {
+      register(dependency, dependency.resources, [...stack, id]);
+    }
+    pluginIds.set(id, plugin);
     plugins.push(plugin);
-    add(resources, {
-      pluginId: plugin.manifest.id,
-      pluginVersion: plugin.manifest.version,
-    });
+    add(resources);
+    addResourceContext(resources);
+    addContext(plugin.context);
     return plugin;
   };
 
@@ -195,37 +174,21 @@ export async function createPluginRegistry(
     : [];
   for (const plugin of corePlugins) register(plugin);
 
-  for (const input of options.plugins ?? []) {
-    if (typeof input === "object" && "manifest" in input) {
-      register(input);
-      continue;
-    }
-    const source = typeof input === "string" ? input : input.source;
-    if (!options.resolver) {
-      throw new TypeError(
-        `A plugin resolver is required to load '${source}'.`,
-      );
-    }
-    const plugin = normalizePluginModule(
-      await options.resolver.resolve(source),
-      source,
-    );
-    const selected = selectedResources(
-      plugin,
-      typeof input === "string" ? undefined : input.imports,
-      typeof input === "string" ? undefined : input.presets,
-    );
-    register(plugin, selected);
+  for (const plugin of options.plugins ?? []) register(plugin);
+
+  if (options.context) {
+    addContext(options.context);
   }
 
-  if (options.resources) {
-    add(options.resources, { pluginId: "@copilotz/application" });
-  }
+  const context = Object.freeze(Object.fromEntries(
+    [...contextMaps.entries()].map(([namespace, values]) => [
+      namespace,
+      Object.freeze(Object.fromEntries(values.entries())),
+    ]),
+  )) as PluginContextValues;
 
   const listProcessors = (): readonly Processor[] =>
-    [...maps.get("processors")!.values()]
-      .map((entry) => entry.value)
-      .filter(isProcessor);
+    [...maps.get("processors")!.values()].filter(isProcessor);
 
   const matchDurable = (
     draft: DurableEventDraft,
@@ -252,29 +215,34 @@ export async function createPluginRegistry(
 
   const registry: PluginRegistry = {
     plugins: Object.freeze([...plugins]),
-    list<T extends object = object>(type: PluginResourceType): readonly T[] {
-      return Object.freeze(
-        [...maps.get(type)!.values()].map((entry) => entry.value as T),
-      );
-    },
-    get<T extends object = object>(type: PluginResourceType, id: string) {
-      return maps.get(type)!.get(id)?.value as T | undefined;
-    },
-    require<T extends object = object>(type: PluginResourceType, id: string) {
-      const value = maps.get(type)!.get(id)?.value;
-      if (!value) throw new Error(`Unknown ${type} resource '${id}'.`);
-      return value as T;
-    },
-    origin(type, id) {
-      return maps.get(type)!.get(id)?.origin;
-    },
-    matchDurable,
-    durableConsumers,
-    processorForConsumer(consumerId) {
-      const id = processorIdFromConsumer(consumerId);
-      const value = id ? maps.get("processors")!.get(id)?.value : undefined;
-      return isProcessor(value) ? value : undefined;
-    },
+    context,
+    collections: Object.freeze({
+      list(): readonly object[] {
+        return Object.freeze([...maps.get("collections")!.values()]);
+      },
+      get(id: string): object | undefined {
+        return maps.get("collections")!.get(id);
+      },
+      require(id: string): object {
+        const value = maps.get("collections")!.get(id);
+        if (!value) throw new Error(`Unknown collection '${id}'.`);
+        return value;
+      },
+    }),
+    processors: Object.freeze({
+      list: listProcessors,
+      get(id: string): Processor | undefined {
+        const value = maps.get("processors")!.get(id);
+        return isProcessor(value) ? value : undefined;
+      },
+      matchDurable,
+      durableConsumers,
+      processorForConsumer(consumerId) {
+        const id = processorIdFromConsumer(consumerId);
+        const value = id ? maps.get("processors")!.get(id) : undefined;
+        return isProcessor(value) ? value : undefined;
+      },
+    }),
   };
   return Object.freeze(registry);
 }

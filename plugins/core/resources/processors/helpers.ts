@@ -3,23 +3,36 @@ import type {
   ScopedCollection,
 } from "@copilotz/copilotz/collections";
 import type {
+  ContentInput,
+  ContentSequence,
+  ResolvedContent,
+} from "@copilotz/copilotz/content";
+import type {
   ConversationMessage,
   ConversationThread,
   LlmAttempt,
   Participant,
+  SafeWorkflowError,
   ToolExecution,
 } from "@copilotz/copilotz/domain";
 import type { CopilotzProcessorContext } from "@copilotz/copilotz/engine";
-import type { ContentSequence } from "@copilotz/copilotz/content";
 import {
+  type CreateTextWorkflowPluginOptions,
   isLlmResource,
   type LlmResource,
   requireLlmResource,
 } from "@copilotz/copilotz/llm";
+import type { Agent } from "@copilotz/copilotz/resources";
+import {
+  createWorkflowToolCatalog,
+  type WorkflowToolCatalog,
+} from "@copilotz/copilotz/tools";
 import {
   type MessageBranch,
   projectActiveMessageBranch,
 } from "../collections/message.ts";
+
+const defaultToolCatalog = createWorkflowToolCatalog();
 
 export function requiredText(value: string | undefined, name: string): string {
   const normalized = value?.trim();
@@ -63,13 +76,13 @@ export function llmResource(
   context: CopilotzProcessorContext,
   provider: string,
 ): LlmResource {
-  return requireLlmResource(context.resources, provider);
+  return requireLlmResource(context, provider);
 }
 
 export function firstLlmResource(
   context: CopilotzProcessorContext,
 ): LlmResource | undefined {
-  return context.resources.list("llm").find(isLlmResource);
+  return Object.values(context.llm).find(isLlmResource);
 }
 
 export function collectionEventRecord(
@@ -288,4 +301,84 @@ export async function listThreadMessages(
     records,
     thread?.activeMessageBranch as MessageBranch | undefined,
   );
+}
+
+export function recordThreadId(record: CollectionRecord): string {
+  return requiredText(optionalText(record.threadId), "thread id");
+}
+
+export function toolField(record: CollectionRecord, field: string): unknown {
+  return asRecord(record.tool)[field];
+}
+
+export function historyVisibilityOf(record: CollectionRecord): string {
+  return optionalText(record.historyVisibility) ?? "public_status";
+}
+
+export function toolCatalogFor(
+  _context: CopilotzProcessorContext,
+  agent?: Agent,
+): WorkflowToolCatalog {
+  const extra = agent as
+    | Agent & Partial<CreateTextWorkflowPluginOptions>
+    | undefined;
+  return extra?.toolCatalog ?? defaultToolCatalog;
+}
+
+export function policyFromAgent(agent: Agent): CreateTextWorkflowPluginOptions {
+  return agent as Agent & CreateTextWorkflowPluginOptions;
+}
+
+export function policyOptions(
+  agent: Agent,
+): CreateTextWorkflowPluginOptions {
+  return policyFromAgent(agent);
+}
+
+export function safeError(
+  code: string,
+  message: string,
+  error?: unknown,
+): SafeWorkflowError {
+  return Object.freeze({
+    name: error instanceof Error ? error.name : undefined,
+    message,
+    code,
+    retryable: false,
+  });
+}
+
+export function parseJsonText(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+export function resolvedValue(resolved: ResolvedContent): unknown {
+  if (resolved.value !== undefined) return resolved.value;
+  const text = resolved.text ?? new TextDecoder().decode(resolved.bytes);
+  return resolved.ref.kind === "json" ? parseJsonText(text) : text;
+}
+
+export function valueContent(value: unknown, role: string): ContentInput {
+  if (typeof value === "string") return { type: "text", text: value, role };
+  if (value instanceof Uint8Array) {
+    return {
+      type: "file",
+      bytes: value,
+      mediaType: "application/octet-stream",
+      role,
+      disposition: "attachment",
+    };
+  }
+  return { type: "json", value, role };
+}
+
+export async function loadParticipant(
+  context: CopilotzProcessorContext,
+  id: string,
+): Promise<CollectionRecord | null> {
+  return await requireCollection(context, "participant").get({ id });
 }

@@ -1,9 +1,6 @@
 import { type CopilotzPlugin, definePlugin } from "../plugins/index.ts";
 import { assetIdFromRef, formatAssetRef } from "../content/index.ts";
-import type {
-  WorkflowTool,
-  WorkflowToolExecutionContext,
-} from "./types.ts";
+import type { WorkflowTool, WorkflowToolExecutionContext } from "./types.ts";
 
 export type PersistentTerminalScope = "agent" | "project" | "tenant";
 
@@ -210,11 +207,8 @@ export function createPersistentTerminalToolsPlugin(
   }
   const tool = createPersistentTerminalTool(options);
   return definePlugin({
-    manifest: {
-      id: options.id ?? "@copilotz/persistent-terminal-tools",
-      version: options.version ?? "3.0.0",
-      provides: { tools: [tool.key] },
-    },
-    resources: { tools: [tool] },
+    id: options.id ?? "@copilotz/persistent-terminal-tools",
+    version: options.version ?? "3.0.0",
+    tools: [tool],
   });
 }

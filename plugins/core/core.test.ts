@@ -11,7 +11,6 @@ import {
   messageRevisionFrom,
   participantCollection,
   projectActiveMessageBranch,
-  streamCollection,
   threadCollection,
   toolExecutionCollection,
 } from "./index.ts";
@@ -32,6 +31,10 @@ import {
   createDeliveryExecutor,
   type DeliveryExecutor,
 } from "../../runtime/execution/index.ts";
+import {
+  createBodyStorageRuntime,
+  createDatabaseAssetRepository,
+} from "../../runtime/content/index.ts";
 import {
   createPluginRegistry,
   definePlugin,
@@ -63,7 +66,6 @@ type Fixture = Readonly<{
   messages: ReturnType<ReturnType<typeof createCollectionRuntime>["bind"]>;
   attempts: ReturnType<ReturnType<typeof createCollectionRuntime>["bind"]>;
   tools: ReturnType<ReturnType<typeof createCollectionRuntime>["bind"]>;
-  streams: ReturnType<ReturnType<typeof createCollectionRuntime>["bind"]>;
 }>;
 
 async function count(
@@ -98,12 +100,9 @@ async function createFixture(url: string, schema: string): Promise<Fixture> {
   });
   const registry = await createPluginRegistry({
     plugins: [definePlugin({
-      manifest: {
-        id: "test.core-collections",
-        version: "1.0.0",
-        provides: { processors: [processor.id] },
-      },
-      resources: { processors: [processor] },
+      id: "test.core-collections",
+      version: "1.0.0",
+      processors: [processor],
     })],
   });
   const executor = createDeliveryExecutor({
@@ -112,11 +111,27 @@ async function createFixture(url: string, schema: string): Promise<Fixture> {
     workerId: "core-collections-test",
   });
   const coordinator = createEventCoordinator({ store, registry, executor });
+  const assets = createDatabaseAssetRepository({
+    coordinator,
+    session,
+    eventStore: store,
+    databaseSchema: schema,
+    storage: createBodyStorageRuntime({ storage: { type: "database" } }),
+  });
+  for (const id of ["asset-body", "asset-revised"]) {
+    await assets.publish({
+      namespace: NAMESPACE,
+      id,
+      mediaType: "text/plain",
+      body: new TextEncoder().encode(id),
+    });
+  }
   let nextId = 0;
   const runtime = createCollectionRuntime({
     coordinator,
     session,
     eventStore: store,
+    assets,
     createId: () => `core-${++nextId}`,
     now: () => new Date(NOW),
   });
@@ -132,7 +147,6 @@ async function createFixture(url: string, schema: string): Promise<Fixture> {
     messages: runtime.bind(messageCollection),
     attempts: runtime.bind(llmAttemptCollection),
     tools: runtime.bind(toolExecutionCollection),
-    streams: runtime.bind(streamCollection),
   });
 }
 
@@ -141,19 +155,14 @@ async function closeFixture(fixture: Fixture): Promise<void> {
   await fixture.db.close();
 }
 
-Deno.test("core collections cover the six native names and have no relation collection", () => {
+Deno.test("core collections cover the five native names and have no relation collection", () => {
   assertEquals([...CORE_COLLECTION_NAMES], [
     "participant",
     "thread",
     "message",
     "llm_attempt",
     "tool_execution",
-    "stream",
   ]);
-  assertEquals(
-    Object.keys(streamCollection.commands ?? {}).sort(),
-    ["abandon", "close", "fail"],
-  );
   assertEquals(
     CORE_COLLECTION_NAMES.includes(
       "relation" as typeof CORE_COLLECTION_NAMES[number],
@@ -171,7 +180,6 @@ async function runCoreSuite(url: string, schema: string): Promise<void> {
     messages,
     attempts,
     tools,
-    streams,
     store,
     session,
   } = fixture;
@@ -456,47 +464,6 @@ async function runCoreSuite(url: string, schema: string): Promise<void> {
       "already 'completed'",
     );
 
-    const opened = await streams.create({
-      id: "stream-1",
-      threadId: "thread-a",
-      lane: "content",
-      mediaType: "text/plain",
-      content: [{
-        assetId: "asset-stream-1",
-        kind: "text",
-        role: "body",
-        mediaType: "text/plain",
-      }],
-    }, { namespace: NAMESPACE });
-    await Promise.all(opened.dispatch.handles.map((handle) => handle.done));
-    assertEquals(opened.event.eventType, "stream.created");
-    assertEquals(opened.record.state, "open");
-    const closed = await streams.mutate("stream-1", "close", {}, {
-      namespace: NAMESPACE,
-    });
-    if (!closed.noop) {
-      assertEquals(closed.event.eventType, "stream.updated");
-      assertEquals(closed.record.state, "closed");
-    }
-    await assertRejects(
-      () => streams.mutate("stream-1", "abandon", {}, { namespace: NAMESPACE }),
-      Error,
-      "already 'closed'",
-    );
-    assertEquals(
-      (await streams.query.byThreadId(NAMESPACE, { threadId: "thread-a" }))
-        .map((row) => row.id),
-      ["stream-1"],
-    );
-    assertEquals(
-      (await streams.query.byThreadLaneState(NAMESPACE, {
-        threadId: "thread-a",
-        lane: "content",
-        state: "closed",
-      })).map((row) => row.id),
-      ["stream-1"],
-    );
-
     assertEquals(await runtime.verify(messageCollection, NAMESPACE), {
       ok: true,
     });
@@ -504,9 +471,6 @@ async function runCoreSuite(url: string, schema: string): Promise<void> {
       ok: true,
     });
     assertEquals(await runtime.verify(toolExecutionCollection, NAMESPACE), {
-      ok: true,
-    });
-    assertEquals(await runtime.verify(streamCollection, NAMESPACE), {
       ok: true,
     });
 
@@ -523,7 +487,6 @@ async function runCoreSuite(url: string, schema: string): Promise<void> {
     await runtime.rebuild(messageCollection, NAMESPACE);
     await runtime.rebuild(llmAttemptCollection, NAMESPACE);
     await runtime.rebuild(toolExecutionCollection, NAMESPACE);
-    await runtime.rebuild(streamCollection, NAMESPACE);
     assertEquals(await runtime.verify(messageCollection, NAMESPACE), {
       ok: true,
     });
@@ -537,9 +500,6 @@ async function runCoreSuite(url: string, schema: string): Promise<void> {
       ok: true,
     });
     assertEquals(await runtime.verify(toolExecutionCollection, NAMESPACE), {
-      ok: true,
-    });
-    assertEquals(await runtime.verify(streamCollection, NAMESPACE), {
       ok: true,
     });
     assertEquals(

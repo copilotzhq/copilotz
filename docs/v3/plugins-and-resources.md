@@ -30,13 +30,9 @@ const audit = defineProcessor({
 });
 
 const plugin = definePlugin({
-  manifest: {
-    id: "@acme/copilotz-audit",
-    version: "2.0.0",
-    provides: { processors: [audit.id] },
-    presets: { default: ["processors.audit.message-created"] },
-  },
-  resources: { processors: [audit] },
+  id: "@acme/copilotz-audit",
+  version: "2.0.0",
+  processors: [audit],
 });
 
 const registry = await createPluginRegistry({ plugins: [plugin] });
@@ -44,22 +40,22 @@ const registry = await createPluginRegistry({ plugins: [plugin] });
 
 ## Composition
 
-Resources compose in this order:
+Plugins compose in this order:
 
 1. built-in core plugin;
 2. declared plugins, in declaration order;
-3. explicit application resources.
+3. explicit application context/resources.
 
 Within one resource kind, a later resource with the same stable ID replaces the
 earlier resource. Resources with different IDs remain independent. The registry
 records the winning resource's plugin origin and exposes `list`, `get`, and
 `require` lookups.
 
-A plugin manifest must exactly describe its provided resources. Presets and
-named imports use selectors such as `agents.support`, `tools.lookup`, or the
-whole resource kind `channels`. A runtime adapter resolves string sources such
-as local paths, JSR, or npm; the core registry imports no filesystem, server,
-Deno, Node, or Bun APIs.
+A plugin declares resources once through `definePlugin()`, and the manifest is
+derived. A plugin can depend on other plugins with `plugins: [...]`; dependency
+plugins compose before the declaring plugin. Composition receives concrete
+plugin objects only. There are no string sources, named imports, presets, or
+runtime module resolver.
 
 Built-in resources use the same mechanism. Skills are optional plugin resources,
 not a default development catalog. `createSkillsPlugin()` packages portable

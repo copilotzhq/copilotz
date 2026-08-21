@@ -76,12 +76,9 @@ async function createFixture(options?: {
     },
   });
   const plugin = definePlugin({
-    manifest: {
-      id: "test.execution",
-      version: "1.0.0",
-      provides: { processors: [processor.id] },
-    },
-    resources: { processors: [processor] },
+    id: "test.execution",
+    version: "1.0.0",
+    processors: [processor],
   });
   const registry = await createPluginRegistry({ plugins: [plugin] });
   return Object.freeze({ db, store, registry, calls });
@@ -96,7 +93,9 @@ async function appendMessage(fixture: Fixture) {
   } as const;
   return await fixture.store.append(
     draft,
-    fixture.registry.durableConsumers(draft).map((item) => item.consumerId),
+    fixture.registry.processors.durableConsumers(draft).map((item) =>
+      item.consumerId
+    ),
   );
 }
 

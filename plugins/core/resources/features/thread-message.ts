@@ -207,16 +207,7 @@ async function createThreadMessageAction(
   const metadata = structuredClone(asRecord(data.metadata));
   return await context.transaction(async (tx) => {
     const suppliedContent = data.content as DurableContentInput | undefined;
-    const materialized = suppliedContent !== undefined &&
-      !Array.isArray(suppliedContent);
-    const content = !materialized
-      ? contentSequence(suppliedContent)
-      : await context.content.materialize(suppliedContent, {
-        origin: {
-          scope: { type: "thread", id: threadId },
-          producer: { type: "message", id },
-        },
-      });
+    const content = suppliedContent ?? contentSequence(suppliedContent);
     const collections = tx.collections;
     if (!collections.message) {
       throw new Error("Collection 'message' is not bound.");
@@ -248,9 +239,6 @@ async function createThreadMessageAction(
       threadId,
       ensured.id,
     );
-    if (materialized && content.length) {
-      await context.content.linkOwner(id, content);
-    }
     return created;
   });
 }

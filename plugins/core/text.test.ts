@@ -49,9 +49,9 @@ import {
   createCopilotzEngine,
 } from "../../runtime/engine/index.ts";
 import {
-  COPILOTZ_STREAM_WORKLOAD,
-  jsonStreamDispatchMetadata,
-} from "../../runtime/streams/index.ts";
+  createContentStreamRuntime,
+  createDatabaseBodyStore,
+} from "../../runtime/content/index.ts";
 import {
   createPluginRegistry,
   definePlugin,
@@ -282,44 +282,29 @@ async function createFixture(
     generate: generateFromChat(chat),
   });
   const app = definePlugin({
-    manifest: {
-      id: "test.text-workflow.resources",
-      version: "1.0.0",
-      provides: {
-        agents: [policyAgent, ...additionalAgents].map((candidate) =>
-          candidate.id
-        ),
-        tools: [tool, ...(generatedResources.tools ?? [])].map((candidate) =>
-          candidate.key
-        ),
-        llm: [provider.id],
-        ...(generatedResources.apis?.length
-          ? { api: generatedResources.apis.map((api) => api.id) }
-          : {}),
-        ...(generatedResources.mcpServers?.length
-          ? {
-            mcp: generatedResources.mcpServers.map((server) => server.id),
-          }
-          : {}),
-        ...(generatedResources.context?.length
-          ? { context: generatedResources.context.map((item) => item.id) }
-          : {}),
-      },
-    },
-    resources: {
-      agents: [policyAgent, ...additionalAgents],
-      tools: [tool, ...(generatedResources.tools ?? [])],
-      llm: [provider],
-      ...(generatedResources.apis?.length
-        ? { api: [...generatedResources.apis] }
-        : {}),
-      ...(generatedResources.mcpServers?.length
-        ? { mcp: [...generatedResources.mcpServers] }
-        : {}),
-      ...(generatedResources.context?.length
-        ? { context: [...generatedResources.context] }
-        : {}),
-    },
+    id: "test.text-workflow.resources",
+    version: "1.0.0",
+    agents: [policyAgent, ...additionalAgents],
+    tools: [tool, ...(generatedResources.tools ?? [])],
+    llm: [provider],
+    ...(generatedResources.apis?.length
+      ? { api: [...generatedResources.apis] }
+      : {}),
+    ...(generatedResources.mcpServers?.length
+      ? { mcp: [...generatedResources.mcpServers] }
+      : {}),
+    ...(generatedResources.context?.length
+      ? {
+        context: {
+          promptContext: Object.fromEntries(
+            generatedResources.context.map((resource) => [
+              resource.id,
+              resource,
+            ]),
+          ),
+        },
+      }
+      : {}),
   });
   const registry = await createPluginRegistry({
     plugins: [
@@ -553,22 +538,19 @@ async function readAllBytes(
   return bytes;
 }
 
-async function followStream(
+async function followContentStream(
   fixture: Fixture,
   streamId: string,
 ): Promise<string> {
-  const work = await fixture.engine.execution.dispatchWork({
-    workload: COPILOTZ_STREAM_WORKLOAD,
-    metadata: jsonStreamDispatchMetadata({
-      schema: "copilotz.stream.dispatch.v1",
-      databaseSchema: TEST_SCHEMA,
-      action: "follow",
-      namespace: "tenant-a",
-      threadId: "thread-a",
-      streamId,
+  const runtime = createContentStreamRuntime({
+    namespace: "tenant-a",
+    store: createDatabaseBodyStore({
+      session: fixture.db,
+      schema: TEST_SCHEMA,
     }),
   });
-  return decoder.decode(await readAllBytes(work.output));
+  const follower = await runtime.follow({ id: streamId });
+  return decoder.decode(await readAllBytes(follower.body));
 }
 
 async function messageText(
@@ -612,9 +594,9 @@ Deno.test("text workflow writes ordered content, reasoning, and tool-call stream
       });
     },
   );
-  const createdReader = fixture.engine.events.subscribe({
+  const outputReader = fixture.engine.events.subscribe({
     namespace: "tenant-a",
-    types: ["stream.created"],
+    types: ["stream.output"],
   }).getReader();
   const deltaReader = fixture.engine.events.subscribe({
     namespace: "tenant-a",
@@ -625,19 +607,17 @@ Deno.test("text workflow writes ordered content, reasoning, and tool-call stream
     await waitForRun(fixture, root.event.id, 2);
     const created: Array<{ id: string; lane: string }> = [];
     for (let index = 0; index < 3; index += 1) {
-      const next = await createdReader.read();
+      const next = await outputReader.read();
       assertEquals(next.done, false);
       assertExists(next.value);
-      assert(next.value.durable);
-      assertEquals(next.value.type, "stream.created");
-      const streamId = next.value.subject?.id;
+      assert(!next.value.durable);
+      assertEquals(next.value.type, "stream.output");
+      const streamId = next.value.streamId;
       assertExists(streamId);
-      const record = await boundCollection(fixture.engine, "stream").get(
-        streamId,
-        "tenant-a",
-      );
-      assertExists(record);
-      created.push({ id: streamId, lane: String(record.lane) });
+      const payload = next.value.payload && typeof next.value.payload === "object"
+          ? next.value.payload as Record<string, unknown>
+          : {};
+      created.push({ id: streamId, lane: String(payload.role) });
     }
     const byLane = Object.fromEntries(
       created.map((item) => [item.lane, item.id]),
@@ -647,13 +627,16 @@ Deno.test("text workflow writes ordered content, reasoning, and tool-call stream
       "reasoning",
       "tool_call",
     ]);
-    assertEquals(await followStream(fixture, byLane.content), "Visible token");
     assertEquals(
-      await followStream(fixture, byLane.reasoning),
+      await followContentStream(fixture, byLane.content),
+      "Visible token",
+    );
+    assertEquals(
+      await followContentStream(fixture, byLane.reasoning),
       "Private thought",
     );
     assertEquals(
-      JSON.parse((await followStream(fixture, byLane.tool_call)).trim()),
+      JSON.parse((await followContentStream(fixture, byLane.tool_call)).trim()),
       {
         providerAttemptId: "provider-attempt-a",
         draftId: "draft-a",
@@ -671,11 +654,11 @@ Deno.test("text workflow writes ordered content, reasoning, and tool-call stream
     });
     assertEquals(
       durable.filter((event) => event.type === "stream.created").length,
-      3,
+      0,
     );
     assertEquals(
       durable.filter((event) => event.type === "stream.updated").length,
-      3,
+      0,
     );
     assertEquals(
       durable.some((event) =>
@@ -693,7 +676,7 @@ Deno.test("text workflow writes ordered content, reasoning, and tool-call stream
     ]);
     assertEquals(firstDelta.done, true);
   } finally {
-    await createdReader.cancel();
+    await outputReader.cancel();
     await deltaReader.cancel();
     await closeFixture(fixture);
   }
